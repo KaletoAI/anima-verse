@@ -150,6 +150,8 @@ export interface PhotoDialogControl {
   subjects: string[]
   /** Everyone selectable as a subject: those present plus the avatar. */
   available: string[]
+  /** The active avatar — the character the "photo" routing resolves for. */
+  avatar: string
   /** Generate: posts `/play/scene-photo` and closes the dialog. */
   onSubmit: (payload: ScenePhotoSubmit) => void | Promise<void>
   /** Dismiss without generating. */
@@ -782,6 +784,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
         prompt: photoDlg.prompt,
         subjects: photoDlg.subjects,
         available: Array.from(new Set([...photoDlg.present, ...(avatar ? [avatar] : [])])),
+        avatar,
         onSubmit: submitPhoto,
         onClose: () => setPhotoDlg(null),
       })}

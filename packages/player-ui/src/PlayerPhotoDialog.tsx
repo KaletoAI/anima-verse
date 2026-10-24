@@ -9,16 +9,22 @@
  * the same flow, reduced to what a player decides in the moment.
  *
  * FIELD INVENTORY — `ScenePhotoSubmit` (ScenePanel.tsx) has six fields; this
- * dialog surfaces four of them and deliberately leaves two to the admin dialog:
+ * dialog surfaces five of them and deliberately leaves one to the admin dialog:
  *   · `prompt`          → textarea, prefilled with the distilled `ctl.prompt`
  *   · `character_names` → one toggle chip per name (`ctl.subjects` pre-selected)
  *   · `use_room`        → checkbox, on by default (matches the server default,
  *                         ScenePanel sends `use_room !== false`)
  *   · `negative_prompt` → one-line field, empty by default
- *   · `backend`         → NOT offered — picking a model/backend is authoring,
- *                         omitted means the routed default
- *   · `loras`           → NOT offered — same reason (LoRA library is an admin
- *                         surface, scoped per backend)
+ *   · `backend`         → select, "Auto (routing)" preselected (user request
+ *                         2026-10-24). Auto sends no backend — the server
+ *                         routes the "photo" occasion for the avatar with its
+ *                         fallback; any other entry is an explicit pick that
+ *                         renders there or nowhere. The list is
+ *                         `GET /world/imagegen-options?occasion=photo`, the same
+ *                         answer the /play dialog reads (already filtered to
+ *                         ordinary image generators by the server).
+ *   · `loras`           → NOT offered — picking LoRAs is authoring (the LoRA
+ *                         library is an admin surface, scoped per backend)
  * Nothing beyond those fields belongs here; image size and the reference-slot
  * budget are admin-dialog territory and are not part of this payload at all.
  *
@@ -39,13 +45,25 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { apiGet } from './api'
 import { useI18n } from './I18nProvider'
 import type { PhotoDialogControl, ScenePhotoSubmit } from './ScenePanel'
+
+/** One backend entry of `GET /world/imagegen-options` — the fields read here. */
+interface BackendOption { name: string; label?: string; available?: boolean }
+
+interface BackendOptions {
+  options?: BackendOption[]
+  /** What "Auto (routing)" resolves the "photo" occasion to right now. */
+  resolved?: string | null
+  media_generation_enabled?: boolean
+}
 
 export function PlayerPhotoDialog({
   prompt: initialPrompt,
   subjects,
   available,
+  avatar,
   onSubmit,
   onClose,
 }: PhotoDialogControl) {
@@ -54,11 +72,29 @@ export function PlayerPhotoDialog({
   const [negative, setNegative] = useState('')
   const [selected, setSelected] = useState<string[]>(subjects)
   const [useRoom, setUseRoom] = useState(true)
+  const [backend, setBackend] = useState('')  // '' = Auto (routing)
+  const [backends, setBackends] = useState<BackendOptions | null>(null)
   const [busy, setBusy] = useState(false)
   // The host unmounts this dialog inside its own onSubmit (ScenePanel clears
   // the prepared payload first), so the promise usually resolves after unmount.
   const alive = useRef(true)
   useEffect(() => () => { alive.current = false }, [])
+
+  useEffect(() => {
+    let stale = false
+    const q = `?occasion=photo${avatar ? `&character=${encodeURIComponent(avatar)}` : ''}`
+    apiGet<BackendOptions>(`/world/imagegen-options${q}`)
+      .then((d) => { if (!stale) setBackends(d || {}) })
+      .catch(() => { if (!stale) setBackends({}) })
+    return () => { stale = true }
+  }, [avatar])
+  // Reachable backends first; offline ones keep the server's "(offline?)" label.
+  const backendList = useMemo(() => {
+    const list = backends?.options || []
+    return [...list.filter((o) => o.available !== false),
+            ...list.filter((o) => o.available === false)]
+  }, [backends])
+  const mediaOff = backends?.media_generation_enabled === false
 
   // Everyone offerable: the distiller's subjects may name someone the scene
   // payload no longer lists, and dropping such a name silently would change
@@ -81,10 +117,11 @@ export function PlayerPhotoDialog({
       : [...prev, name]))
 
   const submit = useCallback(async () => {
-    if (busy || !prompt.trim() || noneSelected) return
+    if (busy || !prompt.trim() || noneSelected || mediaOff) return
     setBusy(true)
     const payload: ScenePhotoSubmit = {
       prompt: prompt.trim(),
+      backend,
       character_names: selected,
       use_room: useRoom,
       negative_prompt: negative.trim(),
@@ -94,7 +131,7 @@ export function PlayerPhotoDialog({
     } finally {
       if (alive.current) setBusy(false)
     }
-  }, [busy, prompt, selected, useRoom, negative, noneSelected, onSubmit])
+  }, [busy, prompt, selected, useRoom, negative, noneSelected, mediaOff, backend, onSubmit])
 
   // Esc closes — same one-liner the Lightbox uses, and the only Esc mechanism
   // in this package. A generation in flight is not interrupted by it.
@@ -140,6 +177,26 @@ export function PlayerPhotoDialog({
             )}
           </div>
 
+          <label className="ga-field" style={{ marginBottom: 10 }}>
+            <span className="ga-field-caption">{t('Backend')}</span>
+            <select className="ga-input" value={backend} disabled={busy || !backends}
+              onChange={(e) => setBackend(e.target.value)}>
+              <option value="">
+                {!backends ? t('Loading…')
+                  : backends.resolved ? `${t('Auto (routing)')} → ${backends.resolved}`
+                    : t('Auto (routing) — no backend available')}
+              </option>
+              {backendList.map((o) => (
+                <option key={o.name} value={o.name}>{o.label || o.name}</option>
+              ))}
+            </select>
+            {mediaOff && (
+              <div className="player-photo-hint">
+                {t('Media generation is disabled for this world (Admin → Settings → Media Generation)')}
+              </div>
+            )}
+          </label>
+
           <label className="player-photo-check">
             <input type="checkbox" checked={useRoom} disabled={busy}
               onChange={(e) => setUseRoom(e.target.checked)} />
@@ -157,7 +214,7 @@ export function PlayerPhotoDialog({
               {t('Cancel')}
             </button>
             <button type="button" className="player-btn-primary" onClick={submit}
-              disabled={busy || !prompt.trim() || noneSelected}>
+              disabled={busy || !prompt.trim() || noneSelected || mediaOff}>
               {busy ? t('Generating…') : t('Generate')}
             </button>
           </div>
