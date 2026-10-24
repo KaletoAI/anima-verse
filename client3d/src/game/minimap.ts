@@ -53,6 +53,9 @@ export interface MinimapDot {
   z: number;
 }
 
+/** Identity accompanies each dot so a HUD pick names the server destination. */
+export interface MinimapPlace extends MinimapDot { id: string; name: string }
+
 /**
  * The world RELIEF as a finished shading layer, plus where its rectangle sits.
  *
@@ -86,7 +89,7 @@ export interface MinimapState {
    *  its field has not arrived */
   relief: MinimapRelief | null;
   /** the places the avatar knows about */
-  locations: MinimapDot[];
+  locations: MinimapPlace[];
   /** the avatar's metre position, or null while no figure stands on the map */
   avatar: MinimapDot | null;
   /** camera yaw in radians — the avatar looks where the follow cam looks */

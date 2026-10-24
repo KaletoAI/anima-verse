@@ -867,3 +867,16 @@ export async function getSurfaceTextures(): Promise<ApiSurfaceTexture[]> {
 // payload carries the rendered world clock (`game_time`, § A11) on the poll
 // that runs every 3 s regardless, and `main.ts` takes the sun's hour from
 // there. One source, and no client ever parses a game stamp.
+
+/** Travel remains server-authoritative: preserve its refusal text for the HUD. */
+export async function travelTo(targetId: string): Promise<void> {
+  const res = await fetch('/play/travel', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target_id: targetId }) });
+  if (!res.ok) throw await refusal(res);
+}
+
+export async function cancelTravel(): Promise<void> {
+  const res = await fetch('/play/travel/cancel', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  if (!res.ok) throw await refusal(res);
+}

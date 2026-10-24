@@ -53,7 +53,7 @@ import { loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
 import type { Prefs } from './game/prefs';
 import { SHOW_ALL_KEY } from './game/prefs';
 import { hillshadeImage, MAP_RELIEF_Z_FACTOR } from '@anima/scene-render';
-import type { MinimapArea, MinimapDot, MinimapRelief } from './game/minimap';
+import type { MinimapArea, MinimapPlace, MinimapDot, MinimapRelief } from './game/minimap';
 import {
   footprintSignature, locationsSignature, minimapAnchor, minimapFollowStepM,
   minimapRadius, terrainColor, MINIMAP_SIZE_PX,
@@ -2068,8 +2068,10 @@ async function startApp(username: string, role: string) {
     const tile = places.get(id);
     if (!tile) return;
     const chars = (lastMap?.characters ?? []).filter((c) => c.location_id === id);
+    const me = lastMap?.characters.find(c => c.name === avatarName);
     setGameState({ info: infoPanelData(tile.loc, chars, lastMap?.events_by_location?.[id] ?? [], roomOf,
-      { openable: !!residency.get(id) && openable(residency.get(id)!.tile), open: openLocationId === id }) });
+      { openable: !!residency.get(id) && openable(residency.get(id)!.tile), open: openLocationId === id },
+      me ? { locationId: me.location_id, pos: me.pos ?? null } : undefined) });
   };
   /** Fly-in distance of the panel buttons: never FARTHER than where the camera
    *  already stands. `flyTo` sets the distance unconditionally, so a fixed
@@ -3470,9 +3472,9 @@ async function startApp(username: string, role: string) {
       polygon: a.polygon,
       color: terrainColor(a.kind, colors),
     }));
-    const dots: MinimapDot[] = mapLocations
+    const dots: MinimapPlace[] = mapLocations
       .filter((l) => l.pos_x != null && l.pos_z != null)
-      .map((l) => ({ x: l.pos_x as number, z: l.pos_z as number }));
+      .map((l) => ({ id: l.id, name: l.name || l.id, x: l.pos_x as number, z: l.pos_z as number }));
     setMinimap({
       areas,
       relief,

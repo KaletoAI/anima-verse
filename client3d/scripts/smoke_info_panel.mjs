@@ -19,3 +19,11 @@ assert.equal(data.description, '');
 assert.deepEqual(infoPanelData(loc, [], [], rooms, { openable: true, open: false }).view, { openable: true, open: false });
 assert.deepEqual(JSON.parse(JSON.stringify(data)), data);
 console.log('info panel: PASS (areas, rooms, present order, travel, events, view, JSON)');
+
+const avatar = { locationId: 'L2', pos: { x: 3, z: 4 } };
+const placed = { ...loc, id: 'L1', pos_x: 0, pos_z: 0 };
+assert.equal(infoPanelData(placed, [], [], rooms, undefined, avatar).travel.distanceM, 5);
+assert.equal(infoPanelData({ ...placed, id: 'L2' }, [], [], rooms, undefined, avatar).travel, null);
+assert.equal(infoPanelData(placed, [], [], rooms).travel, null);
+assert.equal(infoPanelData(loc, [], [], rooms, undefined, avatar).travel.distanceM, null);
+console.log('info travel: PASS (distance, current location, missing avatar/position)');

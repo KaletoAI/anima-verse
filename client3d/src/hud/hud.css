@@ -38,7 +38,7 @@
   transform: translateX(-50%);
 }
 
-/* ---- Party strip: who travels with the avatar (Etappe 6) ----
+/* ---- Party strip: who travels with the avatar (stage 6) ----
    Top centre, in a lane of its OWN below both things that already sit there:
    the mode chip (top 58px, ends ~81px, embodied only) and the open-view badge
    (hud.css, top 46px, ends ~79px, overview only). The two modes are
@@ -1116,7 +1116,7 @@
   color: var(--danger, #f85149);
 }
 
-/* ---- Performance readout (Etappe 5, plan-3d-lod-und-betreten.md) ----
+/* ---- Performance readout (stage 5, plan-3d-lod-und-betreten.md) ----
    Top-left under the top bar (z 10, ~40px): the mode chip is centred,
    the info panel sits right, the chat docks bottom-left — this corner is the
    only one nothing else claims.
@@ -1157,7 +1157,7 @@
   white-space: nowrap;
 }
 
-/* ---- Minimap (Etappe 5, task 3) ----
+/* ---- Minimap (stage 5, task 3) ----
    Top-right, mirroring the performance readout in the opposite corner. It is
    READ-ONLY — no pointer exception above, so a click on the map still reaches
    the scene and turns the camera.
@@ -1403,3 +1403,30 @@
   z-index: 2000;
 }
 .place-menu { max-width: 100vw; max-height: 100vh; overflow: auto; }
+
+/* The existing bottom stack keeps travel and offers in normal flow. Theme
+   variables let this control share the surrounding HUD's palette. */
+#hud .hud-travel {
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  max-width: 440px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-container);
+  color: var(--text);
+}
+#hud .hud-travel button {
+  cursor: pointer;
+  color: var(--text);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 9px;
+}
+#hud .hud-travel button:disabled { opacity: 0.5; cursor: default; }
+#hud .hud-minimap canvas { pointer-events: auto; cursor: pointer; }

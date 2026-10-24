@@ -1,5 +1,5 @@
 /**
- * The minimap of the embodied mode (Etappe 5, task 3).
+ * The minimap of the embodied mode (stage 5, task 3).
  *
  * ONE canvas, top right, north up: a WINDOW around the avatar as wide as one
  * can see (`MINIMAP_VIEW_RADIUS_M` — the scene's own fog end), with the figure
@@ -29,6 +29,7 @@ import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useI18n } from '@anima/player-ui';
 import { minimapView, worldToPx, yawToCompassDeg, MINIMAP_SIZE_PX } from '../game/minimap';
 import type { MinimapRelief } from '../game/minimap';
+import { pickPlaceAt, type TravelPick } from '../game/travelPick';
 import { getMinimap, subscribeMinimap } from './bus';
 
 /** Canvas backdrop — whatever nothing is painted over stays this. Dark and
@@ -77,7 +78,7 @@ function reliefBitmap(relief: MinimapRelief): HTMLCanvasElement | null {
   return src;
 }
 
-export function Minimap() {
+export function Minimap({ onPick }: { onPick: (pick: TravelPick) => void }) {
   const { t } = useI18n();
   const state = useSyncExternalStore(subscribeMinimap, getMinimap);
   const ref = useRef<HTMLCanvasElement | null>(null);
@@ -224,7 +225,18 @@ export function Minimap() {
 
   return (
     <div className="hud-minimap">
-      <canvas ref={ref} role="img" aria-label={t('Minimap')}
+      <canvas ref={ref} onClick={event => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        const layout = minimapView(state.avatar, state.bounds, MINIMAP_SIZE_PX);
+        if (layout.scale <= 0) return;
+        /* Drawing uses CSS pixels even on a high-DPI backing canvas. */
+        const id = pickPlaceAt(state.locations, layout,
+          (event.clientX - rect.left) * MINIMAP_SIZE_PX / rect.width,
+          (event.clientY - rect.top) * MINIMAP_SIZE_PX / rect.height);
+        const place = state.locations.find(p => p.id === id);
+        if (place) onPick({ id: place.id, name: place.name,
+          distanceM: state.avatar ? Math.hypot(place.x - state.avatar.x, place.z - state.avatar.z) : null });
+      }} role="img" aria-label={t('Minimap')}
         style={{ width: MINIMAP_SIZE_PX, height: MINIMAP_SIZE_PX }} />
     </div>
   );

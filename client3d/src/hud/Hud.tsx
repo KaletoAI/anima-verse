@@ -40,6 +40,8 @@ import { ChatPortraits } from './ChatPortraits';
 import { GameMenu } from './GameMenu';
 import { InfoPanel } from './InfoPanel';
 import { PlaceMenu } from './PlaceMenu';
+import { TravelBar } from './TravelBar';
+import type { TravelPick } from '../game/travelPick';
 import { Minimap } from './Minimap';
 import { PerfOverlay } from './PerfOverlay';
 import { ttsSpeak, ttsStatus } from '../api';
@@ -250,7 +252,7 @@ export function Hud({ avatar, username, role }: {
    *  through overlayOpen, never through a full-screen hit rectangle. */
   useEffect(() => {
     const selector = '.hud-rail, .hud-dock, .hud-panel, .hud-mode, .hud-party, '
-      + '.hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
+      + '.hud-travel, .hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
       + '.hud-top, .hud-hints, .info-panel, .open-view-badge';
     let frame = 0;
     const observed = new Set<Element>();
@@ -587,6 +589,11 @@ export function Hud({ avatar, username, role }: {
 
   const { data, refresh: refreshScene } = usePoll<SceneData>(
     'play-scene', () => apiGet<SceneData>('/play/scene'), SYNC_ENDPOINTS.scene);
+
+  const [travelPick, setTravelPick] = useState<TravelPick | null>(null);
+  useEffect(() => {
+    if (data?.travel || (travelPick && data?.location_id === travelPick.id)) setTravelPick(null);
+  }, [data?.travel, data?.location_id, travelPick]);
 
   // Capability gating, same derivation as /play: a missing list (initial
   // load) shows everything — no flash-hiding.
@@ -1029,7 +1036,7 @@ export function Hud({ avatar, username, role }: {
       <div className="hud-hints">{game.mode === 'embodied'
         ? t('🖱 Drag: turn/tilt the view · Click on the ground: walk there · Wheel: zoom · WASD: move · Q/E: 45° turn · Esc: hand back control')
         : t('🖱 Drag: pan · Middle or Shift+drag: turn/tilt · Wheel: zoom (closest = figures) · Q/E: 45° turn · Click: open place')}</div>
-      {game.info && <InfoPanel info={game.info} />}
+      {game.info && <InfoPanel info={game.info} onPick={setTravelPick} />}
       {game.openView?.trim() && game.mode !== 'embodied' && <div className="open-view-badge">
         <span className="ovb-name">{game.openView}</span>
         <button className="ovb-close" title={t('Close view')} onClick={() => gameActions.closeOpenView?.()}>✕</button>
@@ -1043,7 +1050,7 @@ export function Hud({ avatar, username, role }: {
           Only in the embodied mode — in the overview one IS looking at the
           map, and a second small copy of it would say nothing. The switch in
           the game menu is the other half of the condition. */}
-      {game.mode === 'embodied' && minimapOn && <Minimap />}
+      {game.mode === 'embodied' && minimapOn && <Minimap onPick={setTravelPick} />}
 
       {/* Mode indicator (E3-T2): the ONLY sign of the embodied mode in the HUD
           chrome — one chip below the top bar that also leaves again.
@@ -1312,6 +1319,10 @@ export function Hud({ avatar, username, role }: {
           prompt out of place. The prompt is read, not operated, so it stays
           pointer-transparent (see the pointer rule in hud.css). */}
       <div className="hud-bottom">
+        {/* Travel shares the bottom stack above offers so growing status text
+            cannot overlap them; chat and minimap keep their corner positions. */}
+        <TravelBar pick={travelPick} clear={() => setTravelPick(null)} travel={data?.travel}
+          locked={game.movementLocked} leader={game.partyLeader} />
         {boot.note?.kind === 'characters' && (
           <div className="hud-talk" role="status">{t('Loading characters…')}</div>
         )}

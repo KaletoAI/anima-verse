@@ -1,14 +1,18 @@
 import { useI18n } from '@anima/player-ui';
 import type { InfoPanelData } from '../game/infoPanel';
+import type { TravelPick } from '../game/travelPick';
 import { gameActions } from './bus';
 
 /** The scene owns both the information and the detail-view button state. */
-export function InfoPanel({ info }: { info: InfoPanelData }) {
+export function InfoPanel({ info, onPick }: { info: InfoPanelData; onPick: (pick: TravelPick) => void }) {
   const { t } = useI18n();
   const kind = !info.view?.openable ? 'zoom' : info.view.open ? 'closeView' : 'lookInside';
   return <div className="info-panel">
     <button className="panel-close" title={t('Close')} onClick={() => gameActions.closeInfo?.()}>✕</button>
     <h2>{info.name}</h2>
+    {info.travel && <button className="panel-zoom" onClick={() => onPick({
+      id: info.id, name: info.name, distanceM: info.travel!.distanceM,
+    })}>{t('Travel here')}</button>}
     {info.description && <p className="desc">{info.description}</p>}
     {!!info.rooms.length && <><h3>{t('Rooms')}</h3><ul>{info.rooms.map((room, i) =>
       <li key={i}>{room.name}{!!room.who.length && <span className="who"> · {room.who.join(', ')}</span>}</li>)}</ul></>}
