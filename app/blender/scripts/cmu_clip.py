@@ -829,6 +829,10 @@ def run(job):
         "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. "
                   "The database was created with funding from NSF EIA-0196217.",
     }
+    if start_s or end_s is not None:
+        # the source window (SOURCE seconds) — without it a cut cannot be
+        # reproduced: loop.cut_s counts inside this window
+        source["window_s"] = [round(start_s, 3), None if end_s is None else round(float(end_s), 3)]
     return run_takes(takes, args, fps, source)
 
 

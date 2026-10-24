@@ -4,23 +4,67 @@
  "roles": [],
  "fps": 30,
  "source_fps": 120.0,
- "frames": 662,
- "duration_s": 22.067,
- "loop": false,
+ "frames": 659,
+ "duration_s": 21.967,
+ "loop": true,
  "speed": 1.0,
  "geometry": {
   "floor_shift_cm": -3.36,
+  "loop": {
+   "min_s": 12.0,
+   "cut_frames": [
+    0,
+    659
+   ],
+   "cut_s": [
+    0.0,
+    21.967
+   ],
+   "seam_distance": 1.142,
+   "blend_frames": 8
+  },
   "hips_scale": [
    1.1135
   ],
+  "foot_plant": {
+   "LeftFoot": {
+    "frames": 630,
+    "max_cm": 2.25
+   },
+   "RightFoot": {
+    "frames": 659,
+    "max_cm": 2.64
+   }
+  },
   "rig_floor_shift_cm": 3.77,
-  "rig_floor_min_cm": -0.73,
+  "rig_floor_min_cm": -0.0,
   "root_motion": {
    "mode": "strip",
    "travel_m": [
-    0.0,
-    0.0
-   ]
+    -0.0,
+    -0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     21.933
+    ]
+   ],
+   "max_drift_cm": 25.46
+  },
+  "despiked": {
+   "solo": {
+    "LeftHand": [
+     407
+    ],
+    "RightHand": [
+     308
+    ],
+    "LeftLeg": [
+     521
+    ]
+   }
   }
  },
  "source": {
@@ -31,7 +75,7 @@
   "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217.",
   "roll_repair_reason": "CMU/ASF gives the radius no twist dof, so the source folds all pronation into the humerus (forearm roll exactly 0); the balanced split hands it back",
   "roll_repaired": true,
-  "roll_repaired_at": "2026-09-03",
+  "roll_repaired_at": "2026-10-24",
   "roll_repaired_files": [
    "standing wash-self.fbx"
   ],
@@ -46,17 +90,6 @@
     "L": 7.75,
     "R": -12.75
    }
-  },
-  "despiked": {
-   "standing wash-self.fbx": {
-    "LeftHand": [
-     407
-    ],
-    "RightHand": [
-     308
-    ]
-   }
-  },
-  "despiked_at": "2026-10-24"
+  }
  }
 }
