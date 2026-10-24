@@ -1,3 +1,4 @@
+import { createPropLightPool } from './lightPool';
 import { FOG_NEAR_M, FOG_FAR_M } from './fogConstants';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
@@ -52,6 +53,7 @@ const SCRATCH = {
   right: new THREE.Vector3(),
   off: new THREE.Vector3(),
   sunOff: new THREE.Vector3(),
+  surfaceSky: new THREE.Color(),
 };
 
 /**
@@ -60,6 +62,7 @@ const SCRATCH = {
  */
 export class Engine {
   scene = new THREE.Scene();
+  lightPool = createPropLightPool(this.scene);
   camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer;
   labelRenderer: CSS2DRenderer;
@@ -68,6 +71,29 @@ export class Engine {
   fill!: THREE.DirectionalLight;
   /** neutral IBL for server models that carry a real metal-roughness texture */
   modelEnv: THREE.Texture;
+  private ambienceDaylight = 1;
+  private ambienceTint = new THREE.Color(0xffffff);
+  /** Clock-computed base values; applied lighting is base × ambience. */
+  private baseLights?: {
+    sun: THREE.Color; sky: THREE.Color; hemi: THREE.Color; ground: THREE.Color;
+    fill: THREE.Color; sunIntensity: number; hemiIntensity: number; fillIntensity: number;
+  };
+  /** Apply base × ambience each frame without accumulating tint or dimming. */
+  applyAmbience(daylight: number, tint: THREE.Color) {
+    this.ambienceDaylight = daylight;
+    this.ambienceTint.copy(tint);
+    const b = this.baseLights;
+    if (!b) return;
+    this.sun.intensity = b.sunIntensity * daylight;
+    this.hemi.intensity = b.hemiIntensity * daylight;
+    this.fill.intensity = b.fillIntensity * daylight;
+    this.sun.color.copy(b.sun).multiply(tint);
+    this.hemi.color.copy(b.hemi).multiply(tint);
+    this.hemi.groundColor.copy(b.ground).multiply(tint);
+    this.fill.color.copy(b.fill).multiply(tint);
+    // Water mirrors the sky through Fresnel; ambience scales and tints that reflection.
+    setSurfaceSky(SCRATCH.surfaceSky.copy(b.sky).multiplyScalar(daylight).multiply(tint).getHex());
+  }
   /** Sun position from the game time (0..24); drives light, colours, sky. */
   private sunAngle = Math.PI * 0.35;   // default: late morning
   /**
@@ -282,9 +308,14 @@ export class Engine {
     // it out of the scene, and a colour written into nothing would crash the
     // next world-clock poll.
     if (this.scene.fog) this.scene.fog.color.copy(sky);
-    // Water surfaces mirror the sky (Fresnel in the shared material) — that
-    // alone turns the lake orange in the evening and dark at night.
-    setSurfaceSky(sky.getHex());
+    this.baseLights = {
+      sun: sunColor.clone(), sky: sky.clone(),
+      hemi: this.baseLights?.hemi ?? this.hemi.color.clone(),
+      ground: this.baseLights?.ground ?? this.hemi.groundColor.clone(),
+      fill: this.baseLights?.fill ?? this.fill.color.clone(),
+      sunIntensity: .25 + day * 2, hemiIntensity: .35 + day * 1.2,
+      fillIntensity: .15 + day * .4,
+    };
     // …and so does the exploration veil: haze is the air between the eye and
     // the ground, so it takes the colour of that air rather than a grey of its
     // own that would be wrong twice a day (`scene/fogVeil.ts`).
@@ -292,6 +323,7 @@ export class Engine {
 
     this.nightFactor = THREE.MathUtils.clamp(1 - day * 3, 0, 1);
     this.onDayNight?.(this.nightFactor);
+    this.applyAmbience(this.ambienceDaylight, this.ambienceTint);
   }
 
   addFrameHook(fn: (dt: number) => void) {

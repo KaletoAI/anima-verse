@@ -1,3 +1,4 @@
+import { ambienceTarget, stepAmbience } from './scene/ambience';
 import { pushSeq, isOwnEcho, avatarDriver, NO_CANCEL, suppressedJourney, answerApplies, type DriverState, type Cancelled } from './game/posEcho';
 import { avatarWaitsForPlace, holdFor, holdSnap, clearApproach, clearSnap, trySnap, enterWhenReady, type PendingSnap, type ReadinessDeps } from './game/readiness';
 import { createFocusQueue } from './game/focusQueue';
@@ -6148,6 +6149,8 @@ async function startApp(username: string, role: string) {
 
   // --- Frame hook: detail view (singleton), NPC animation, pin bobbing ---
   let bob = 0;
+  let currentAmbience = ambienceTarget();
+  const ambienceTint = new THREE.Color();
   engine.addFrameHook((dt) => {
     // Who owns the open view this frame (Stage 3):
     //  - EMBODIED, a building auto-opens on entering its location. A persistent
@@ -6267,6 +6270,24 @@ async function startApp(username: string, role: string) {
     for (const { tile } of residency.values()) {
       if (tile.roomGroups.size) applyRoomVisibility(tile);
     }
+
+    const lightFocus = getGameState().mode === 'embodied'
+      ? npcs.positionOf(avatarName) ?? engine.target : engine.target;
+    const visibleLightRooms = new Set<string>();
+    for (const { tile } of residency.values()) {
+      for (const [id, group] of tile.roomGroups) {
+        if (group.visible) visibleLightRooms.add(`${tile.loc.id}:${id}`);
+      }
+    }
+    engine.lightPool.update(dt, lightFocus, engine.nightFactor, visibleLightRooms);
+    const ambienceTile = openLocationId ? residency.get(openLocationId)?.tile : undefined;
+    const ambienceRoom = ambienceTile
+      ? roomAt(ambienceTile, lightFocus.x, lightFocus.z) ?? corridorAt(ambienceTile, lightFocus.x, lightFocus.z) : null;
+    const roomAmbience = openLocationId && ambienceRoom
+      ? scenes.get(openLocationId)?.rooms.find(r => r.room_id === ambienceRoom)?.ambience : undefined;
+    currentAmbience = stepAmbience(currentAmbience, ambienceTarget(roomAmbience), dt);
+    ambienceTint.setRGB(...currentAmbience.tint, THREE.SRGBColorSpace);
+    engine.applyAmbience(currentAmbience.daylight, ambienceTint);
 
     // The LOCKED look of a threshold is bound here, not at build time: it
     // follows the avatar's `/play/scene` poll — its lock map, the location that

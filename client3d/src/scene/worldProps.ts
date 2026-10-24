@@ -1,3 +1,4 @@
+import { propLightPool, type LightHandle } from './lightPool';
 /**
  * worldProps — die EINZELN gesetzten Props der Weltebene (§ A9a).
  *
@@ -35,7 +36,8 @@ import { SubmergedGhost } from './submergedGhost';
 import { ghostCutY, ghostWaterLevel } from '../game/walk';
 import type { WorldWater } from './tiles';
 import { waterInside } from './waterShade';
-import type { WorldPropSpec } from '../types';
+import type { WorldPropSpec as BaseWorldPropSpec } from '../types';
+type WorldPropSpec = BaseWorldPropSpec & { light?: SceneModelSpec['light'] };
 
 /**
  * Wie viel weiter ein HANDGESETZTES Prop seine Stufen behält als ein
@@ -80,6 +82,8 @@ export const worldPropLodCfg = (base: ScatterLodCfg): ScatterLodCfg => ({
 
 interface PropRecord {
   spec: WorldPropSpec;
+  lightHandle?: LightHandle;
+  lightKey?: string;
   /** Das eingehängte Objekt (null, solange nichts geladen ist). */
   node: THREE.Group | null;
   lease?: GlbLease;
@@ -120,6 +124,7 @@ export function worldPropSceneSpec(wp: WorldPropSpec,
                                   bottomY: number): SceneModelSpec {
   return {
     role: 'prop',
+    ...(wp.light ? { light: wp.light } : {}),
     id: wp.prop_id,
     level: 0,
     variants: wp.variants || {},
@@ -226,6 +231,7 @@ export function createWorldProps(
         rec.ghost.set(ghostLevelOf(rec, bottom));
         node.visible = rec.tier !== 2;
         group.add(node);
+        redrapeOne(rec);
         handedOff = true;
       } finally {
         if (!handedOff) {
@@ -262,6 +268,7 @@ export function createWorldProps(
           // Takt weiß, wo die Kamera steht, dieser Poll nicht.
           tier: 1,
         });
+        redrapeOne(records.get(wp.id)!);
         continue;
       }
       const reshape = shapeKey(cur.spec) !== shapeKey(wp);
@@ -270,6 +277,7 @@ export function createWorldProps(
         // Ein anderes Prop, eine andere Größe, ein anderer Yaw: neu bauen.
         drop(cur);
         cur.wantedUrl = '';
+        redrapeOne(cur);
       } else {
         // Nur verschoben — das ist eine Translation, kein Neuaufbau.
         redrapeOne(cur);
@@ -278,11 +286,24 @@ export function createWorldProps(
     for (const [id, rec] of Array.from(records)) {
       if (seen.has(id)) continue;
       drop(rec);
+      rec.lightHandle?.remove();
       records.delete(id);
     }
   }
 
   function redrapeOne(rec: PropRecord): void {
+    const light = rec.spec.light;
+    const key = JSON.stringify(light);
+    if (rec.lightKey !== key) {
+      rec.lightHandle?.remove(); rec.lightHandle = undefined; rec.lightKey = key;
+    }
+    if (light) {
+      const pos = {x: rec.spec.x + light.offset_m[0],
+        y: worldPropBottom(rec.spec, heightAt(rec.spec.x, rec.spec.z)) + light.height_m,
+        z: rec.spec.z + light.offset_m[1]};
+      if (rec.lightHandle) rec.lightHandle.move(pos);
+      else rec.lightHandle = propLightPool?.register(light, pos);
+    }
     if (!rec.node) return;
     const bottom = worldPropBottom(rec.spec, heightAt(rec.spec.x, rec.spec.z));
     // `placeModelSpec` hat die Unterkante auf `placedBottom` gesetzt und dabei
@@ -333,7 +354,7 @@ export function createWorldProps(
     setLod(next: ScatterLodCfg) { cfg = worldPropLodCfg(next); },
     dispose() {
       disposed = true;
-      for (const rec of records.values()) drop(rec);
+      for (const rec of records.values()) { drop(rec); rec.lightHandle?.remove(); }
       records.clear();
       group.parent?.remove(group);
     },

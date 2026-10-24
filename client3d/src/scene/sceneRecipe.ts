@@ -1,3 +1,4 @@
+import { propLightPool, placementLightPosition, type LightHandle } from './lightPool';
 import { createFocusQueue } from '../game/focusQueue';
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
@@ -33,7 +34,7 @@ import { ghostCutY, ghostWaterLevel } from '../game/walk';
 import { waterInside } from './waterShade';
 
 export type Layer = 'shell' | 'detail';
-export type PlacedSceneModel = BasePlacedSceneModel & { layer: Layer; lease?: GlbLease; swapPromise?: Promise<void> };
+export type PlacedSceneModel = BasePlacedSceneModel & { layer: Layer; lease?: GlbLease; lightHandle?: LightHandle; swapPromise?: Promise<void> };
 const detailReports = new WeakMap<Tile, VerifyReport | null>();
 
 /** Verification for the currently mounted detail layer; null when disabled or absent. */
@@ -97,6 +98,17 @@ function reliftPlacement(tile: Tile, rec: PlacedSceneModel): number {
   if (rec.spec.surface) {
     if (!rec.surface) rec.surface = tile.surfaces.find((e) => e.spec === rec.spec);
     if (rec.surface) rec.surface.lift = step.lift;
+  }
+  if (rec.spec.light) {
+    const pos = placementLightPosition(rec.parent ?? tile.group, rec.spec.anchor,
+      rec.spec.bottom_y + step.lift, rec.spec.light);
+    if (rec.lightHandle) rec.lightHandle.move(pos);
+    else rec.lightHandle = propLightPool?.register(rec.spec.light, pos,
+      rec.spec.room_id && !isOutdoorSpec(tile, rec.spec) ? `${tile.loc.id}:${rec.spec.room_id}` : undefined,
+      (halo) => {
+        ownPrimitive(tile, halo, rec.layer);
+        return () => releaseOwnedMesh(tile, halo, rec.layer);
+      });
   }
   return step.lift;
 }
@@ -772,7 +784,7 @@ interface SceneOwned {
  *  `Object3D.copy` JSON round-trips userData and the far-view shell clones
  *  exactly these meshes. */
 interface OwnedTag {
-  geometry: THREE.BufferGeometry;
+  geometry?: THREE.BufferGeometry;
   materials: THREE.Material[];
   textures: THREE.Texture[];
 }
@@ -795,21 +807,23 @@ function ownedOf(tile: Tile, layer: Layer): SceneOwned {
  *  `map`, the ONE slot these materials ever get a texture in — a shared normal
  *  map that `surfaceMaterial` may hang on a water surface is not ours and is
  *  deliberately never read back out of the material. */
-function ownPrimitive(tile: Tile, mesh: THREE.Mesh, layer: Layer): void {
+function ownPrimitive(tile: Tile, mesh: THREE.Mesh | THREE.Sprite, layer: Layer): void {
   const owned = ownedOf(tile, layer);
-  owned.geometries.add(mesh.geometry);
+  // Sprite geometry and the radial map are shared by Three.js / the pool.
+  const geometry = mesh instanceof THREE.Sprite ? undefined : mesh.geometry;
+  if (geometry) owned.geometries.add(geometry);
   const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   const textures: THREE.Texture[] = [];
   for (const mat of mats) {
     if (!mat) continue;
     owned.materials.add(mat);
     const map = (mat as THREE.MeshStandardMaterial).map;
-    if (map) {
+    if (map && !(mesh instanceof THREE.Sprite)) {
       owned.textures.add(map);
       textures.push(map);
     }
   }
-  ownedTag.set(mesh, { geometry: mesh.geometry, materials: mats.filter(Boolean), textures });
+  ownedTag.set(mesh, { geometry, materials: mats.filter(Boolean), textures });
 }
 
 /** Give ONE registered primitive back before the unmount (the tier swap
@@ -822,8 +836,10 @@ function releaseOwnedMesh(tile: Tile, mesh: THREE.Object3D, layer: Layer): void 
   if (!tag) return;
   ownedTag.delete(mesh);
   const owned = sceneOwned.get(tile)?.[layer];
-  owned?.geometries.delete(tag.geometry);
-  tag.geometry.dispose();
+  if (tag.geometry) {
+    owned?.geometries.delete(tag.geometry);
+    tag.geometry.dispose();
+  }
   for (const mat of tag.materials) {
     owned?.materials.delete(mat);
     mat.dispose();
@@ -1703,6 +1719,8 @@ function dropLayerModels(tile: Tile, layer: Layer): void {
   tile.doorProps = tile.doorProps?.filter((door) => !objects.has(door.group));
   for (const rec of (tile.placedModels ?? []) as PlacedSceneModel[]) {
     if (rec.layer !== layer) continue;
+    rec.lightHandle?.remove();
+    rec.lightHandle = undefined;
     dropPlacementGhost(rec);
     disposeSlotMaterials(rec.slotMats);
     rec.slotMats = undefined;
@@ -1795,8 +1813,10 @@ async function mountModels(tile: Tile, scene: ScenePayload, specs: SceneModelSpe
       if (stale()) return;
       if (!source) {
         // Count missing meshes, retaining a record so later tier swaps can retry.
-        placements.push({ layer, spec, url, object: null,
-                          parent: parentFor(spec.room_id), lift: 0 });
+        const missing: PlacedSceneModel = { layer, spec, url, object: null,
+                          parent: parentFor(spec.room_id), lift: 0 };
+        placements.push(missing);
+        reliftPlacement(tile, missing);
         verify.skip(spec);
         return;
       }
@@ -1884,6 +1904,7 @@ async function mountModels(tile: Tile, scene: ScenePayload, specs: SceneModelSpe
           if (tile.serverModel === placed) tile.serverModel = undefined;
         }
         if (pendingRec) {
+          pendingRec.lightHandle?.remove();
           dropPlacementGhost(pendingRec);
           disposeSlotMaterials(pendingRec.slotMats);
           const index = placements.indexOf(pendingRec);
