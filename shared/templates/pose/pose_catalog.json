@@ -1084,7 +1084,8 @@
       "group": "stand",
       "solo": false,
       "places": 2,
-      "yaw_offset": 0
+      "yaw_offset": 0,
+      "label_de": "Umarmung"
     },
     "kissing": {
       "prompt": "two people kissing, standing close, one with hands on the other's waist, the other with arms around the partner's neck, eyes closed",
@@ -1107,7 +1108,8 @@
       "group": "stand",
       "solo": false,
       "places": 2,
-      "yaw_offset": 0
+      "yaw_offset": 0,
+      "label_de": "Küssen"
     },
     "greeting handshake": {
       "prompt": "two people shaking hands in greeting, standing face to face, right hands clasped, a slight nod, friendly eye contact",
@@ -1130,7 +1132,8 @@
       "group": "stand",
       "solo": false,
       "places": 2,
-      "yaw_offset": 0
+      "yaw_offset": 0,
+      "label_de": "Händedruck"
     },
     "phone call": {
       "prompt": "standing and talking on the phone, holding a phone to one ear, the other arm relaxed, attentive expression",
