@@ -57,8 +57,8 @@ def main():
                               animation_data=SimpleNamespace(action=SimpleNamespace(frame_range=(1, 40), fcurves=curves)))
         scene = SimpleNamespace(render=SimpleNamespace(fps=30, fps_base=1), objects=[arm], frame_set=lambda f: None)
         bpy = SimpleNamespace(context=SimpleNamespace(scene=scene, view_layer=SimpleNamespace(update=lambda: None)),
-                              ops=SimpleNamespace(wm=SimpleNamespace(read_factory_settings=lambda **kw: None),
-                                                  import_scene=SimpleNamespace(fbx=lambda **kw: None)))
+                              ops=SimpleNamespace(wm=SimpleNamespace(read_factory_settings=lambda **kw: None,
+                                                                     fbx_import=lambda **kw: None)))
         def elem(kind, props=(), children=()):
             return SimpleNamespace(id=kind, props=list(props), elems=list(children))
         objects = [elem(b"Model", (1, b"mixamorig:Hips\x00\x01Model", b"LimbNode")),
