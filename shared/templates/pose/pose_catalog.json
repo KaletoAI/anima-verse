@@ -299,7 +299,7 @@
       "solo": true
     },
     "gardening": {
-      "prompt": "standing over a flower bed, bent forward from the hips, a young plant in one hand, soil on the other, sun hat on",
+      "prompt": "kneeling in a flower bed, bent forward, both hands pressing the soil around a young plant, gardening gloves",
       "synonyms": [
         "gaertnern",
         "im garten",
@@ -309,10 +309,16 @@
         "kniet im beet",
         "blumen pflanzen",
         "pflanzen gießen",
-        "unkraut jäten"
+        "unkraut jäten",
+        "pflanzen",
+        "einpflanzen",
+        "erde andrücken",
+        "planting",
+        "kneeling in the garden"
       ],
-      "animation": "plant",
-      "group": "stand"
+      "animation": "gardening",
+      "group": "ground",
+      "solo": true
     },
     "shopping": {
       "prompt": "walking with bags in hand, browsing posture, one hand reaching toward shelf",
