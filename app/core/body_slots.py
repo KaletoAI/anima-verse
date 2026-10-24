@@ -124,6 +124,26 @@ def slots_for_character(character_name: str,
     return specs
 
 
+def template_slot_specs(template_name: str) -> List[Any]:
+    """Every BodySlotSpec the species packages declare for a template, WITHOUT
+    the per-slot ``applies_to`` filter — for callers that describe the slots
+    before a character exists (the World-Dev prompt shows the condition)."""
+    specs: List[Any] = []
+    for pkg in _species_packages_for({"template": template_name}):
+        specs.extend(pkg.body_slots)
+    return specs
+
+
+def llm_fillable_attributes(spec) -> Dict[str, Dict[str, Any]]:
+    """The attributes of a slot an LLM may propose values for: everything but
+    ``lora_select`` (LoRA names come from the backend library, not from a
+    model's imagination) and the ``mesh_part`` switch (it schedules a mesh
+    regeneration — a deliberate user action)."""
+    switch = spec.mesh_part.switch if spec.mesh_part else None
+    return {key: decl for key, decl in spec.attributes.items()
+            if key != switch and str(decl.get("type", "select")) != "lora_select"}
+
+
 # ---------------------------------------------------------------------------
 # Values (per character, in the profile — master data, not runtime state)
 # ---------------------------------------------------------------------------

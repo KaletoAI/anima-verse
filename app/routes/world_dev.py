@@ -107,6 +107,9 @@ def _format_generable_fields_for_templates(selected_template: str = "") -> str:
 
         if fields_desc:
             sections.append(f"### {label} (`{tname}`)\n\n" + "\n".join(fields_desc))
+        body_slots = _format_body_slots_for_template(tname)
+        if body_slots:
+            sections.append(body_slots)
 
     # Always-available fields
     always = [
@@ -117,6 +120,98 @@ def _format_generable_fields_for_templates(selected_template: str = "") -> str:
     header = "### Immer verfuegbare Felder\n\n" + "\n".join(always)
 
     return header + "\n\n" + "\n\n".join(sections)
+
+
+def _format_conditions(conditions: Dict[str, Any]) -> str:
+    """`` (only when gender=male)`` for an ``applies_to`` map, else "".
+    An ``attributes.<key>`` condition reads as the sibling attribute's name;
+    a null entry ("or still unset") is not worth a word to the LLM."""
+    parts = []
+    for key, values in (conditions or {}).items():
+        shown = [str(v) for v in values if v is not None]
+        if shown:
+            parts.append(f"{key.removeprefix('attributes.')}={'/'.join(shown)}")
+    return f" (only when {', '.join(parts)})" if parts else ""
+
+
+def _format_body_slots_for_template(template_name: str) -> str:
+    """The `body_slots` block of the field list: every slot the species
+    packages declare for the template, with the attributes an LLM may fill.
+    Empty without species packages. Body details live in these slots, not in
+    template fields — without this block the LLM never learns of them and a
+    World-Dev character starts with an empty body editor."""
+    from app.core.body_slots import llm_fillable_attributes, template_slot_specs
+    lines: List[str] = []
+    for spec in template_slot_specs(template_name):
+        attrs = llm_fillable_attributes(spec)
+        if not attrs:
+            continue
+        lines.append(f"- `{spec.id}`{_format_conditions(spec.applies_to)}:")
+        for key, decl in attrs.items():
+            options = [str(o) for o in (decl.get("options") or [])]
+            if options:
+                type_info = "one of: " + " | ".join(options)
+                if decl.get("allow_custom"):
+                    type_info += " (another short English value is allowed)"
+            else:
+                type_info = "short English text"
+            cond = _format_conditions(decl.get("applies_to") or {})
+            lines.append(f"  - `{key}`{cond}: {type_info}")
+    if not lines:
+        return ""
+    return (
+        f"### Body (`body_slots`, template `{template_name}`)\n\n"
+        "Nested object `\"body_slots\": {\"<slot>\": {\"<attribute>\": \"<value>\"}}`. "
+        "Set EVERY slot and attribute below that applies to the character — skip one "
+        "only when its \"only when\" condition does not hold. Values in English. "
+        "These details render from the slots into every image prompt, so do NOT "
+        "repeat them in `character_appearance` / `face_appearance`.\n\n"
+        + "\n".join(lines))
+
+
+def _apply_body_slots(char_name: str, raw: Any) -> List[str]:
+    """Stores LLM-proposed body-slot values through the editor setter
+    (``character_ops.apply_body_slot_values``, merge per attribute). Only the
+    slots that apply to the character and the attributes offered in the prompt
+    are taken; everything skipped comes back as a warning."""
+    if not raw:
+        return []
+    if not isinstance(raw, dict):
+        return ["body_slots is not an object — skipped."]
+    from app.core.body_slots import llm_fillable_attributes, slots_for_character
+    from app.core.character_ops import apply_body_slot_values
+    specs = {spec.id: spec for spec in slots_for_character(char_name)}
+    warnings: List[str] = []
+    for slot_id, values in raw.items():
+        spec = specs.get(str(slot_id))
+        if spec is None or not isinstance(values, dict):
+            warnings.append(f"Body slot '{slot_id}' does not apply to "
+                            f"{char_name} — skipped.")
+            continue
+        allowed = llm_fillable_attributes(spec)
+        clean: Dict[str, str] = {}
+        for key, value in values.items():
+            decl = allowed.get(key)
+            text = str(value if value is not None else "").strip()
+            if decl is None:
+                warnings.append(f"Body slot '{slot_id}': attribute '{key}' "
+                                "cannot be set here — skipped.")
+                continue
+            if not text:
+                continue
+            options = [str(o) for o in (decl.get("options") or [])]
+            if options and not decl.get("allow_custom") and text not in options:
+                warnings.append(f"Body slot '{slot_id}': '{text}' is not a valid "
+                                f"{key} — skipped.")
+                continue
+            clean[key] = text
+        if not clean:
+            continue
+        try:
+            apply_body_slot_values(char_name, spec.id, clean)
+        except HTTPException as e:
+            warnings.append(f"Body slot '{slot_id}': {e.detail}")
+    return warnings
 
 
 def _format_existing_outfit_types() -> str:
@@ -1515,7 +1610,10 @@ def _apply_character_internal(char_data: Dict[str, Any],
         seed_default_skills(char_name)
 
     outfits_applied = []
-    apply_warnings: List[str] = []
+    # After the profile save: the slots that apply depend on the stored
+    # template and gender.
+    apply_warnings: List[str] = _apply_body_slots(char_name,
+                                                  char_data.get("body_slots"))
     raw_outfits = char_data.get("outfits", []) or []
     if raw_outfits and not _template_has_wardrobe(template):
         apply_warnings.append(
@@ -1752,6 +1850,10 @@ def _apply_profile_patch_data_sync(data: Any):
         raise HTTPException(status_code=400, detail="character_name erforderlich")
     if not isinstance(fields, dict) or not fields:
         raise HTTPException(status_code=400, detail="fields (dict) erforderlich")
+    # Body slots merge per attribute through the editor setter — written raw,
+    # the patch would replace the whole slot object and skip its validation.
+    fields = dict(fields)
+    body_slots = fields.pop("body_slots", None)
     with keyed_lock("character_profile", char_name):
         profile = get_character_profile(char_name)
         if not profile.get("character_name"):
@@ -1776,13 +1878,18 @@ def _apply_profile_patch_data_sync(data: Any):
                 continue
             profile[k] = v
             applied[k] = v
-        stored = save_character_profile(char_name, profile)
-    if stored:
+        stored = save_character_profile(char_name, profile) if applied else True
+    if stored and applied:
         from app.core import sync_topics
         sync_topics.profile_patched(char_name, {k: before[k] for k in applied}, applied)
-    logger.info("WorldDev: profile patch for '%s' (%d fields)", char_name, len(applied))
+    # After the profile save, which would otherwise write the pre-patch slots back.
+    warnings = _apply_body_slots(char_name, body_slots)
+    applied_fields = list(applied.keys())
+    if body_slots:
+        applied_fields.append("body_slots")
+    logger.info("WorldDev: profile patch for '%s' (%d fields)", char_name, len(applied_fields))
     return {"status": "success", "character": char_name,
-            "applied_fields": list(applied.keys())}
+            "applied_fields": applied_fields, "warnings": warnings}
 
 
 @router.post("/cleanup")

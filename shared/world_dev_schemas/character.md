@@ -142,7 +142,7 @@ Pieces are added to the character's inventory automatically. If a piece with the
 ### EVERY field MUST be present in the JSON
 - You MUST set **EVERY SINGLE** field from the field list above in the JSON — no exceptions.
 - Fields with `[config]` (`popularity`, `trustworthiness`, `social_dialog_probability`) MUST be set with sensible values (0-100) — do NOT omit!
-- For `human-roleplay`: EVERY body-detail field (`size`, `body_type`, `hair_color`, `hair_length`, `eye_color`, `skin_color`) and EVERY gender-specific field MUST be set.
+- If the field list has a **Body (`body_slots`)** block: `body_slots` MUST be set, with EVERY slot and attribute that applies to the character's gender. Hair, eyes, skin, build etc. go there — `character_appearance` / `face_appearance` keep only what no slot covers (distinctive marks, hairstyle details, posture), with `{age}` / `{gender}` placeholders instead of literal values.
 - For `animal-default`: EVERY animal-detail field MUST be set.
 - `outfits`: at least 2-3 outfits.
 - If a field has a default value, that value MUST be preserved (extended if needed, but NOT replaced or removed). This applies in particular to `roleplay_instructions`.
@@ -234,7 +234,7 @@ Allowed sections: `personality`, `tasks`, `roleplay_rules`, `beliefs`, `lessons`
 }
 ```
 
-All fields except soul fields (those need `json:soul`). Suitable for small corrections like `popularity`, `trustworthiness`, `face_appearance`, `current_feeling`, individual body details, etc. `current_feeling` uses canonical English mood IDs from `shared/config/moods.json`.
+All fields except soul fields (those need `json:soul`). Suitable for small corrections like `popularity`, `trustworthiness`, `face_appearance`, `current_feeling`, etc. Body details go in as `"body_slots": {"<slot>": {"<attribute>": "<value>"}}` — only the attributes you name change, the rest of each slot stays. `current_feeling` uses canonical English mood IDs from `shared/config/moods.json`.
 
 **Rule:** use the sub-markers when the user explicitly says "just the outfit", "just the personality", "just the courage value" etc. For broader changes (multiple areas at once) stay with ```json:character.
 
