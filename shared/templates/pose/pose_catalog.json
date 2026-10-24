@@ -392,7 +392,7 @@
       "group": "stand"
     },
     "talking": {
-      "prompt": "standing relaxed, one hand gesturing while speaking, open expressive posture",
+      "prompt": "standing and talking, one hand gesturing with an open palm, engaged expression, mid-sentence",
       "synonyms": [
         "reden",
         "redend",
@@ -410,10 +410,15 @@
         "plaudern",
         "quatschen",
         "ein gespräch führen",
-        "mit jemandem reden"
+        "mit jemandem reden",
+        "gestikulieren",
+        "erzählt",
+        "erklärt etwas",
+        "gesturing while talking"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "talking",
+      "group": "stand",
+      "solo": true
     },
     "showering": {
       "prompt": "standing under water, head tilted back, eyes closed, arms raised to hair",
