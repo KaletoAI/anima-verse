@@ -405,17 +405,22 @@
       "solo": true
     },
     "singing": {
-      "prompt": "standing upright, mouth open, one hand near chest, other hand gesturing",
+      "prompt": "standing and singing with feeling, one hand on the chest, the other open to the side, head raised",
       "synonyms": [
         "singen",
         "singend",
         "performing",
         "singt",
         "ein lied singen",
-        "mitsingen"
+        "mitsingen",
+        "ein lied vortragen",
+        "trällern",
+        "singing a song",
+        "performing a song"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "singing",
+      "group": "stand",
+      "solo": true
     },
     "playing": {
       "prompt": "playful dynamic pose, arms outstretched, light bouncy stance",

@@ -1,0 +1,50 @@
+{
+ "kind": "singing",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 181,
+ "duration_s": 6.033,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": -0.03,
+  "hips_scale": [
+   1.0
+  ],
+  "foot_plant": {
+   "LeftFoot": {
+    "frames": 181,
+    "max_cm": 0.04
+   },
+   "RightFoot": {
+    "frames": 181,
+    "max_cm": 0.04
+   }
+  },
+  "rig_floor_shift_cm": -0.04,
+  "rig_floor_min_cm": 0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     6.0
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/singing.py",
+  "spec_sha": "4508ed019e9852cb44d5d6ac9f864fc069a4254a99db9fcd77daec9156f65dae"
+ }
+}
