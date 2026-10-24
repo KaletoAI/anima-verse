@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ConfirmDialog } from '../../components/ConfirmDialog'
-import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
-import { useToast } from '../../lib/Toast'
+import { ConfirmDialog } from './ConfirmDialog'
+import { useI18n } from '../I18nProvider'
+import { apiGet, apiPost } from '../api'
+import { useToast } from '../Toast'
 
 /**
  * Faithful React port of the legacy SoulEditor: a file bar (one button per
@@ -166,7 +166,7 @@ export function SoulEditor({ character }: { character: string }) {
       <div className="soul-files-bar">
         {files.map((f) => {
           const lock = f.file_default === 'editable' ? '🟢' : '🔒'
-          // Freundliches Label aus dem Template (DE/EN) statt der Roh-Section-ID.
+          // Friendly label from the template (DE/EN) instead of the raw section ID.
           const name =
             (lang === 'de' && f.label_de) ||
             f.label ||

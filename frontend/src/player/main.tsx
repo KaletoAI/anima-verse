@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { PlayerApp } from './PlayerApp.tsx'
+import { CharacterFormHostProvider } from '../help/CharacterFormHostProvider'
 import { ErrorBoundary } from './ErrorBoundary.tsx'
 import { I18nProvider } from '../i18n/I18nProvider.tsx'
 import { ToastProvider } from '../lib/Toast.tsx'
@@ -21,7 +22,9 @@ createRoot(document.getElementById('root')!).render(
         <AuthGate>
           <AvatarGate>
             <ErrorBoundary>
-              <PlayerApp />
+              <CharacterFormHostProvider>
+                <PlayerApp />
+              </CharacterFormHostProvider>
             </ErrorBoundary>
           </AvatarGate>
         </AuthGate>

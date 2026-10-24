@@ -37,7 +37,7 @@
  */
 import { useCallback, useMemo, useState } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import { ModelPicker } from '../../components/ModelPicker'
 import type { PickerOption } from '../../components/ModelPicker'
 import { useI18n } from '../../i18n/I18nProvider'

@@ -82,7 +82,7 @@ A) SELF-TEST of the extractor, against six hand-written snippets whose
 B) no de.json key contains ``${`` (see PLACEHOLDERS above).
 C) POSITIVE CONTROL: the key "The new password must be at least 8 characters
    long." is present in de.json and found in
-   frontend/src/player/AvatarSettingsPanel.tsx, where it is a literal inside a
+   packages/player-ui/src/AvatarSettingsPanel.tsx, where it is a literal inside a
    ``t(...)`` call. A scan that cannot find it is broken, not clean.
    NEGATIVE CONTROL: a fake key is injected into the map in memory and MUST be
    reported as an orphan.
@@ -340,7 +340,7 @@ def check(label, ok, detail=""):
 
 
 POSITIVE_KEY = "The new password must be at least 8 characters long."
-POSITIVE_FILE = "frontend/src/player/AvatarSettingsPanel.tsx"
+POSITIVE_FILE = "packages/player-ui/src/AvatarSettingsPanel.tsx"
 FAKE_KEY = "ZZ this string exists in no source file ZZ"
 
 # The last commit before this guard landed; its de.json still holds the orphans.

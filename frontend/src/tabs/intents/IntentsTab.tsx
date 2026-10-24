@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { CleanupDialog } from './CleanupDialog'
 import { cleanupCounts } from './cleanup'
-import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'

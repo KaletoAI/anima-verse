@@ -10,13 +10,14 @@
  * shared Lightbox on click.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
-import { useToast } from '../../lib/Toast'
-import { ImageGenDialog, type ImageGenSubmit } from '../../components/ImageGenDialog'
-import { useEnlarge } from '../../components/ZoomButton'
+import { useI18n } from '../I18nProvider'
+import { apiGet, apiPost } from '../api'
+import { useToast } from '../Toast'
+import { useCharacterFormHost, type FieldImageSubmit } from './CharacterFormHost'
+import { useEnlarge } from '../ZoomButton'
 
 export function FieldImage({ character, kind }: { character: string; kind: string }) {
+  const host = useCharacterFormHost()
   const { t } = useI18n()
   const { toast } = useToast()
   const enlarge = useEnlarge()
@@ -116,7 +117,7 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
   // Profile image: comes from the ImageGenDialog (backend/LoRAs selectable)
   // -> /generate-profile-image with the dialog params. Empty prompt =
   // server uses the appearance.
-  const submitGenerate = useCallback(async (payload: ImageGenSubmit) => {
+  const submitGenerate = useCallback(async (payload: FieldImageSubmit) => {
     setGenOpen(false)
     setBusy(true)
     try {
@@ -165,10 +166,10 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
         <div className="tpl-field-image-empty">{t('No image yet')}</div>
       )}
       <div style={{ display: 'flex', gap: 6 }}>
-        <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
+        {host.renderImageDialog ? <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
           onClick={kind === 'profile' ? openProfileDialog : generate}>
           {busy ? t('Generating…') : t('Generate')}
-        </button>
+        </button> : null}
         {kind === 'profile' ? (
           <>
             <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => fileRef.current?.click()}>
@@ -188,20 +189,13 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
           </>
         ) : null}
       </div>
-      {kind === 'profile' && genOpen ? (
-        <ImageGenDialog
-          open
-          title={t('Generate profile image')}
-          defaultPrompt={genPrompt}
-          occasion="profile"
-          occasionCharacter={character}
-          sourceImageUrl={src || undefined}
-          defaultUseSource={false}
-          sourceReferenceLabel={t('Use current portrait as reference')}
-          onSubmit={submitGenerate}
-          onClose={() => setGenOpen(false)}
-        />
-      ) : null}
+      {kind === 'profile' && genOpen ? host.renderImageDialog?.({
+        prompt: genPrompt,
+        character,
+        sourceImageUrl: src || undefined,
+        onSubmit: submitGenerate,
+        onClose: () => setGenOpen(false),
+      }) : null}
     </div>
   )
 }

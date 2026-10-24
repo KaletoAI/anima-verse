@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet } from '../../lib/api'
+import { useI18n } from '../I18nProvider'
+import { apiGet } from '../api'
 
 /** Effective prompt preview for the admin: how the person description,
  * face prompt and outfit line render RIGHT NOW — body-slot fragments

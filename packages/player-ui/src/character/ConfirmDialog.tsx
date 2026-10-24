@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { useI18n } from '../i18n/I18nProvider'
+import { useI18n } from '../I18nProvider'
 
 /**
  * The one confirmation dialog of the admin UI — `window.confirm` is not an

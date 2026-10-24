@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
+import { useI18n } from '../I18nProvider'
+import { apiGet, apiPost } from '../api'
 import { PromptPreview } from './PromptPreview'
-import { bodyAttributeVisible, type BodyConditions } from '../../lib/bodyAttributeVisibility'
+import { bodyAttributeVisible, type BodyConditions } from './bodyAttributeVisibility'
 
 /** Generic body-slot editor — renders whatever the character's species
  * package declares (attributes + options).

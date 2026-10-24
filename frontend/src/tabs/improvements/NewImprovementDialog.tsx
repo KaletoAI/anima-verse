@@ -18,7 +18,7 @@ import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
 import { apiGet } from '../../lib/api'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import { createImprovement, previewImprovement } from './api'
 import type { ImprovementType, ParamField, PreviewResult } from './types'
 

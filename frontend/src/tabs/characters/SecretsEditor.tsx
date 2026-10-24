@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { Field } from '../../components/Field'
-import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { Field } from '@anima/player-ui'
+import { ConfirmDialog } from '@anima/player-ui'
 
 /**
  * Per-character secrets editor (Characters → Secrets), ported from the legacy

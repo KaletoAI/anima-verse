@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from './i18n/I18nProvider'
 import { TABS, isTabId, type TabId } from './tabs/registry'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { CharacterFormHostProvider } from './help/CharacterFormHostProvider'
 import { GenerationIndicator } from './components/GenerationIndicator'
 import { FreezeToggle } from './components/FreezeToggle'
 import { SleepToggle } from './components/SleepToggle'
@@ -75,6 +76,7 @@ export default function App() {
 
   return (
     <HelpProvider>
+    <CharacterFormHostProvider>
     <div className="ga-shell">
       <header className="ga-header">
         <a className="ga-back" href="/" title={t('Back to chat')}>
@@ -153,6 +155,7 @@ export default function App() {
       <PromptHelpPanel />
       <SidePanelDock />
     </div>
+    </CharacterFormHostProvider>
     </HelpProvider>
   )
 }

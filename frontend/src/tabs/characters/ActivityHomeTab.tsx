@@ -1,5 +1,5 @@
 import { useI18n } from '../../i18n/I18nProvider'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import type { LocationRef } from '../../lib/refs'
 import { roomLabel } from '../world/worldTypes'
 import { FieldSet } from './FieldSet'

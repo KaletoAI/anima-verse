@@ -11,7 +11,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../../lib/api'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
-import { PromptPreview } from './PromptPreview'
+import { PromptPreview } from '@anima/player-ui'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
 
 // Anchor positions (x%, y%) in the image coordinate system (silhouette.svg).

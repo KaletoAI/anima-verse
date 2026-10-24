@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useHelp } from '../help/HelpContext'
+import { useCharacterFormHost } from './CharacterFormHost'
 
 /**
  * Caption above a form field. Captions never end with a colon — the
@@ -45,7 +45,7 @@ export function Field({
   promptContext?: string
   children: ReactNode
 }) {
-  const { setTopic } = useHelp()
+  const { setTopic } = useCharacterFormHost()
   const cls = ['ga-field']
   if (inline) cls.push('ga-field-inline')
   if (compact) cls.push('ga-field-compact')
@@ -61,7 +61,7 @@ export function Field({
         className="ga-field-control"
         data-help={help || undefined}
         data-prompt-context={promptContext || undefined}
-        onFocusCapture={() => setTopic(help || null)}
+        onFocusCapture={() => setTopic?.(help || null)}
       >{children}</div>
       {hint ? <div className="ga-field-hint">{hint}</div> : null}
     </div>

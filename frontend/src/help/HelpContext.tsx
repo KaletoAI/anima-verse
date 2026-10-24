@@ -1,14 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 
-/** One help item: static hint (from the server) or dynamic insert token. */
-export interface HelpItem { code?: string; text: string; copy?: boolean; insert?: string }
-
-interface HelpOpts {
-  /** Dynamic items (e.g. {token} placeholders of a prompt field). */
-  items?: HelpItem[]
-  /** Inserts text at the cursor position of the focused field. */
-  insert?: (text: string) => void
-}
+import type { HelpItem, HelpOpts } from '@anima/player-ui'
 
 /** The side panels docked to the right edge — at most one is open at a time. */
 export type SidePanelId = 'help' | 'translate' | 'prompt'

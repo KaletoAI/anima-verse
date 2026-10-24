@@ -24,7 +24,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import { SliderInput } from '../../components/SliderInput'
 import type { PropRef } from '../../lib/refs'
 import { NpcSlotsEditor } from '../world/NpcSlotsEditor'

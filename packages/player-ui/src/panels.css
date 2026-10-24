@@ -1,3 +1,5 @@
+@import './character/character.css';
+
 /* Structure styles of the shared player panels (scene/self/others + EmptyState).
    Moved verbatim out of frontend/src/player/player.css in plan-3d-game stage 2
    task 4 — colours stay `var(--x, <today's hex>)`, so a host can retheme the

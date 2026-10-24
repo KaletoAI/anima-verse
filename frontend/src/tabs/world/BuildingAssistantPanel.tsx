@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiGet, apiPost } from '../../lib/api'
 import { LayoutDraftPreview, type LayoutDraftNormalized, type LayoutDraftWarning } from '../world-dev/LayoutDraftPreview'

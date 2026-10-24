@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { StoryArcsPanel } from './StoryArcsPanel'
 

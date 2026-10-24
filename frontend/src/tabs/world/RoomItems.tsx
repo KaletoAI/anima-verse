@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost, apiPatch } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { Field } from '../../components/Field'
-import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { Field } from '@anima/player-ui'
+import { ConfirmDialog } from '@anima/player-ui'
 import { type ItemRef } from '../../lib/refs'
 
 // ── Room items panel ───────────────────────────────────────────────────────

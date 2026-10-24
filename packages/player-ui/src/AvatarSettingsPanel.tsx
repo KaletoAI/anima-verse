@@ -17,13 +17,13 @@
  * `allowed_characters`, so /characters/{avatar}/* is allowed.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useI18n } from '../i18n/I18nProvider'
-import { ApiError, apiGet, apiPost } from '../lib/api'
-import { TemplateTab } from '../tabs/characters/TemplateTab'
-import { BodyEditor } from '../tabs/characters/BodyEditor'
-import { type DynamicData } from '../tabs/characters/TemplateField'
-import { type TmplSection } from '../tabs/characters/TemplateSectionForm'
-import { SoulEditor } from '../tabs/characters/SoulEditor'
+import { useI18n } from './I18nProvider'
+import { ApiError, apiGet, apiPost } from './api'
+import { TemplateTab } from './character/TemplateTab'
+import { BodyEditor } from './character/BodyEditor'
+import { type DynamicData } from './character/TemplateField'
+import { type TmplSection } from './character/TemplateSectionForm'
+import { SoulEditor } from './character/SoulEditor'
 
 interface TmplSectionRaw extends TmplSection {
   special?: unknown

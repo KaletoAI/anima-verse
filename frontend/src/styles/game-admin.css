@@ -1,3 +1,5 @@
+@import '../../../packages/player-ui/src/character/character.css';
+
 /* Game Admin shell styles. Theme variables (--bg, --text, --border, etc.)
    come from /static/themes/base.css + /static/themes/dark.css, which are
    loaded via <link> tags in index.html so the FastAPI server serves them
@@ -544,87 +546,6 @@ a.ga-btn {
   white-space: nowrap;
 }
 
-/* Field caption + control. Captions never end with a colon — the
-   line break does the separation. */
-.ga-field {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.ga-field-inline {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-}
-
-.ga-field-caption {
-  font-size: 11px;
-  color: var(--text-muted, #8b949e);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  /* One line. Keeps controls aligned at the same Y across a row. */
-  min-height: 14px;
-  line-height: 14px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ga-field-inline .ga-field-caption {
-  text-transform: none;
-  letter-spacing: 0;
-  font-size: 12px;
-  white-space: nowrap;
-  min-width: 110px;
-}
-
-.ga-field-control {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  min-width: 0;
-}
-
-/* Inputs, selects and textareas in a Field always fill the field — keeps
-   widths predictable across rows. Compact fields use a fixed width via
-   `compact` + inline `style={{ width }}` on the input itself. */
-.ga-field-control > .ga-input,
-.ga-field-control > .ga-textarea {
-  width: 100%;
-}
-
-.ga-field-compact .ga-field-control > .ga-input,
-.ga-field-compact .ga-field-control > .ga-textarea {
-  width: auto;
-}
-
-.ga-field-control > * { min-width: 0; }
-
-.ga-field-inline .ga-field-control { flex: 1; }
-
-.ga-field-hint {
-  font-size: 10px;
-  color: var(--text-muted, #8b949e);
-  line-height: 1.4;
-}
-
-/* The same help as a hint, but out of the layout: a glyph beside the caption
-   with the text in the native tooltip. In a crowded row a hint paragraph is
-   what decides the column width — this decides nothing. */
-.ga-field-tip {
-  color: var(--text-muted, #8b949e);
-  cursor: help;
-  margin-left: 4px;
-}
-
-/* A field value that decides nothing — amber, not red: the value is saved
-   and readable, it simply matches no entry, so a default takes over. */
-.ga-field-warn {
-  color: #d29922;
-}
-
 .ga-list {
   list-style: none;
   margin: 0;
@@ -709,18 +630,6 @@ a.ga-btn {
 
 .ga-source-shared { background: #1f3a5f; color: #79c0ff; }
 .ga-source-world  { background: #3a2f5f; color: #d2a8ff; }
-
-/* Right-column edit form. Parent (.ga-twocol-right) handles scrolling so
-   the form just lays out its children naturally — no nested scrollbars. */
-.ga-form {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px;
-  border: 1px solid var(--border, #30363d);
-  border-radius: var(--radius, 6px);
-  background: var(--bg-container, #161b22);
-}
 
 /* Stacked form panels in a detail column keep a gap between them. */
 .ga-twocol-right > .ga-form + .ga-form { margin-top: 8px; }
@@ -826,25 +735,6 @@ a.ga-btn {
   .ga-detail-cols-3 { grid-template-columns: 1fr; }
 }
 
-.ga-form-row {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-
-/* Within a row, every Field shares width equally by default. Use the
-   `compact` prop on <Field> for fields that should size to their content
-   (narrow numbers, checkboxes, fixed-width selects). */
-.ga-form-row > .ga-field {
-  flex: 1 1 0;
-  min-width: 0;
-}
-
-.ga-form-row > .ga-field.ga-field-compact {
-  flex: 0 0 auto;
-}
-
 /* Template-Auswahl-Leiste über der Sub-Tab-Navigation. */
 .ga-template-bar {
   display: flex;
@@ -873,157 +763,6 @@ a.ga-btn {
 .ga-template-diff-add { color: #3fb950; }
 .ga-template-diff-rem { color: #e05656; text-decoration: line-through; opacity: 0.85; }
 
-/* Template-Tab: Spalten nebeneinander (column-Bereich des Tabs), je Spalte die
-   Sections gestapelt, Felder untereinander. */
-.tpl-tab-cols {
-  display: flex;
-  flex-direction: row;   /* overrides .ga-form (column) — columns side by side */
-  flex-wrap: nowrap;
-  gap: 22px;
-  /* Stretch, so a column HAS a height a section can claim (see
-     .tpl-tab-section--grow). The sections themselves stay top-aligned, so a
-     column without a growing section looks exactly as it did. */
-  align-items: stretch;
-}
-.tpl-tab-col {
-  flex: 1 1 0;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.tpl-tab-section .ga-field {
-  margin-bottom: 8px;
-}
-/* A section that declares `grow` in its template takes the height its column
-   has left over, and hands it to its single slot child. */
-.tpl-tab-section--grow {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.tpl-tab-section--grow > :not(.ga-fieldset-title) {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-/* Avatar-Panel (Aussehen/Physique): erste Spalte (Felder) schmal = 25%, der
-   Rest geht an die Prompt-Spalte (Prompt → Preview → Bild untereinander). */
-.avatar-aussehen-tab .tpl-tab-col:first-child {
-  flex: 0 0 25%;
-  max-width: 25%;
-}
-/* Avatar-Panel Body-Untertab: Body-Editor und Appearance-Prompt teilen
-   sich die Breite 50/50. */
-.avatar-body-tab .tpl-tab-col {
-  flex: 1 1 50%;
-  max-width: 50%;
-}
-/* Nur auf sehr schmalen Fenstern untereinander. */
-@media (max-width: 560px) {
-  .tpl-tab-cols { flex-direction: column; }
-  .avatar-aussehen-tab .tpl-tab-col:first-child { flex: 1 1 auto; max-width: none; }
-  .avatar-body-tab .tpl-tab-col { flex: 1 1 auto; max-width: none; }
-}
-
-/* Prompt-Feld: eigener vertikaler Container, weil .ga-field-control ein
-   Flex-ROW ist — so steht die Resolved-Preview UNTER der Textarea, nicht daneben. */
-.ga-prompt-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  width: 100%;
-  min-width: 0;
-}
-.ga-prompt-field > .ga-input {
-  width: 100%;
-}
-
-/* Live-Vorschau der Token-Ersetzungen unter einem Prompt-Feld. */
-.tpl-token-preview {
-  margin-top: 4px;
-  padding: 6px 9px;
-  border-left: 2px solid var(--accent, #58a6ff);
-  background: rgba(88, 166, 255, 0.07);
-  border-radius: 0 6px 6px 0;
-  font-size: 12px;
-  line-height: 1.4;
-  color: #c9d1d9;
-  white-space: pre-wrap;
-}
-/* Bild + Generieren-Button unter einem Aussehen-Prompt-Feld. */
-.tpl-field-image {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: flex-start;
-}
-.tpl-field-image img {
-  max-width: 100%;
-  max-height: 320px;
-  border-radius: 8px;
-  border: 1px solid var(--border, #30363d);
-  background: rgba(255, 255, 255, 0.04);
-  object-fit: contain;
-}
-.tpl-field-image-empty {
-  width: 100%;
-  padding: 28px 8px;
-  text-align: center;
-  color: var(--text-muted, #8b949e);
-  font-size: 12px;
-  border: 1px dashed var(--border, #30363d);
-  border-radius: 8px;
-}
-
-.tpl-token-preview-label {
-  display: block;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  color: var(--text-muted, #8b949e);
-  margin-bottom: 2px;
-}
-
-/* Prompt + image side by side (avatar panel): prompt/chips/preview left,
-   image right. Wraps to stacked on narrow panels. */
-.tpl-prompt-beside {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  align-items: flex-start;
-}
-.tpl-prompt-beside-text {
-  flex: 1 1 260px;
-  min-width: 0;
-}
-.tpl-prompt-beside-image {
-  flex: 0 1 240px;
-  min-width: 180px;
-}
-.tpl-prompt-beside-image .tpl-field-image {
-  margin-top: 0;
-}
-
-/* Generic template-section form: fields wrap into a grid; single-line fields
-   share a min width, multiline (text) fields span the whole row. */
-.ga-form-row-wrap-tpl {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: flex-start;
-}
-.ga-form-row-wrap-tpl > .tpl-field {
-  flex: 1 1 220px;
-  max-width: 320px;
-  min-width: 0;
-}
-.ga-form-row-wrap-tpl > .tpl-field-wide {
-  flex: 1 1 100%;
-  min-width: 0;
-}
-
 .ga-form-check {
   display: flex;
   align-items: center;
@@ -1039,17 +778,6 @@ a.ga-btn {
   text-transform: uppercase;
   letter-spacing: 0.3px;
   margin-top: 8px;
-}
-
-/* Sub-tab bar inside a detail panel (e.g. Characters detail: General / Soul /
-   Behavior / …). A simple wrapping row of pill buttons. */
-.ga-subtabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 12px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border, #30363d);
 }
 
 .ga-form-hint {
@@ -1539,12 +1267,6 @@ a.ga-btn {
   font-size: 12px;
 }
 
-.ga-section {
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border, #30363d);
-}
-
 .ga-tags-row {
   display: flex;
   flex-wrap: wrap;
@@ -1688,7 +1410,6 @@ a.ga-btn {
   cursor: zoom-in;
   padding: 0;
 }
-
 
 .ga-gallery-thumb img {
   width: 100%;
@@ -2647,7 +2368,6 @@ a.ga-btn {
   text-align: center;
 }
 
-
 /* The ONE line under the plan: scale bar plus a short word on what the
    findings tab is holding. */
 .ga-plan-status {
@@ -2846,99 +2566,7 @@ a.ga-btn {
   white-space: pre-wrap;
 }
 
-/* ============================================================
-   Soul editor (Characters → Soul) — file bar + markdown editor +
-   structured preview with editable/locked section badges.
-   ============================================================ */
-.soul-tab { display: flex; flex-direction: column; gap: 10px; }
-.soul-files-bar { display: flex; flex-wrap: wrap; gap: 6px; }
-.soul-file-btn {
-  font: inherit; font-size: 12px; cursor: pointer;
-  background: var(--bg-secondary, #1c2128); color: var(--text, #e6edf3);
-  border: 1px solid var(--border, #30363d); border-radius: var(--radius, 6px);
-  padding: 4px 10px;
-}
-.soul-file-btn:hover { background: var(--bg-hover, #262c36); }
-.soul-file-btn.active { border-color: var(--accent, #2f81f7); background: var(--bg-hover, #262c36); }
-
-.soul-editor-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 360px; }
-.soul-editor-col, .soul-preview-col { display: flex; flex-direction: column; min-width: 0; }
-.soul-col-header {
-  display: flex; align-items: center; justify-content: space-between;
-  font-size: 12px; color: var(--text-muted, #8b949e); margin-bottom: 4px;
-}
-.soul-editor {
-  flex: 1; min-height: 340px; resize: vertical;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.5;
-  background: var(--bg, #0d1117); color: var(--text, #e6edf3);
-  border: 1px solid var(--border, #30363d); border-radius: var(--radius, 6px); padding: 8px;
-}
-.soul-preview {
-  flex: 1; overflow-y: auto; min-height: 340px;
-  background: var(--bg, #0d1117); border: 1px solid var(--border, #30363d);
-  border-radius: var(--radius, 6px); padding: 8px;
-}
-.soul-h1 { font-size: 14px; margin: 4px 0 6px; color: var(--text, #e6edf3); }
-.soul-h2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; margin: 0 0 4px; }
-.soul-section { border-left: 3px solid var(--border, #30363d); padding: 6px 10px; margin: 0 0 8px; border-radius: 0 4px 4px 0; }
-.soul-section.soul-editable { border-left-color: #3fb950; background: rgba(63, 185, 80, 0.06); }
-.soul-section.soul-locked { border-left-color: var(--text-muted, #8b949e); background: rgba(139, 148, 158, 0.05); }
-.soul-section-badge { font-size: 11px; color: var(--text-muted, #8b949e); white-space: nowrap; }
-.soul-body { font-size: 12.5px; line-height: 1.5; color: var(--text, #e6edf3); white-space: pre-wrap; }
-.soul-body.soul-empty { color: var(--text-muted, #8b949e); font-style: italic; }
-.soul-legend { display: flex; gap: 10px; font-size: 11px; }
-.soul-legend-item::before { content: '■ '; }
-.soul-legend-editable { color: #3fb950; }
-.soul-legend-locked { color: var(--text-muted, #8b949e); }
-
-@media (max-width: 900px) { .soul-editor-grid { grid-template-columns: 1fr; } }
-
-/* ============================================================
-   Tagesablauf (Characters → Activity & Home) — drag-to-paint
-   24h grid: rows = Sleep + locations + roles, columns = hours.
-   ============================================================ */
-.tagesablauf { display: flex; flex-direction: column; gap: 6px; }
-.tagesablauf-enabled { display: flex; align-items: center; gap: 6px; font-size: 13px; }
-.tagesablauf-grid { overflow-x: auto; }
-.tagesablauf-table { border-collapse: collapse; font-size: 11px; user-select: none; }
-.tagesablauf-table th {
-  font-weight: 500; color: var(--text-muted, #8b949e); padding: 2px 0; text-align: center;
-  min-width: 22px;
-}
-.tagesablauf-corner { min-width: 130px; }
-.tagesablauf-row-label {
-  padding: 2px 8px 2px 4px; white-space: nowrap; color: var(--text, #e6edf3);
-  border: 1px solid var(--border, #30363d); background: var(--bg-secondary, #1c2128);
-}
-.tagesablauf-loc-header td {
-  padding: 4px 6px; font-size: 11px; color: var(--text-muted, #8b949e);
-  background: var(--bg-alt, #161b22); border: 1px solid var(--border, #30363d);
-}
-.tagesablauf-cell {
-  width: 22px; height: 20px; border: 1px solid var(--border, #30363d);
-  cursor: pointer; background: var(--bg, #0d1117);
-}
-.tagesablauf-cell:hover { background: var(--bg-hover, #262c36); }
-.tagesablauf-filled { background: var(--accent, #2f81f7); }
-.tagesablauf-filled:hover { background: var(--accent, #2f81f7); filter: brightness(1.1); }
-.tagesablauf-sleep { background: #8957e5; }
 .tagesablauf-preview { background: rgba(47, 129, 247, 0.35); }
-
-/* Framed group of related fields (Characters detail sections, e.g. Speech). */
-.ga-fieldset {
-  border: 1px solid var(--border, #30363d);
-  border-radius: var(--radius, 6px);
-  background: var(--bg-container, #161b22);
-  padding: 10px 12px 12px;
-  margin: 0 0 12px;
-}
-.ga-fieldset-title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-  color: var(--text-muted, #8b949e);
-  margin: 0 0 8px;
-}
 
 /* Image override tab — render-match chips. */
 .ga-img-matches { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 28px; }

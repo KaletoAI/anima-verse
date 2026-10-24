@@ -12,10 +12,10 @@
  * hardcoding — everything comes from the template definition.
  */
 import { useCallback, useEffect, useState } from 'react'
-import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
-import { useToast } from '../../lib/Toast'
-import { Field } from '../../components/Field'
+import { useI18n } from '../I18nProvider'
+import { apiGet, apiPost } from '../api'
+import { useToast } from '../Toast'
+import { Field } from './Field'
 import { TemplateField, tmplText, type TmplFieldDef, type DynamicData } from './TemplateField'
 
 // The identity key: never editable (a rename would break the DB key).

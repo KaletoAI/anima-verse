@@ -24,7 +24,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { StatHistory } from './StatHistory'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 
 interface BarMeta {
   name?: string

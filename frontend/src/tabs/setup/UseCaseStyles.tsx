@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'

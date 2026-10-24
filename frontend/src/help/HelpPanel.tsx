@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { useHelp, type HelpItem } from './HelpContext'
+import { useHelp } from './HelpContext'
+import type { HelpItem } from '@anima/player-ui'
 import { useI18n } from '../i18n/I18nProvider'
 import { apiGet } from '../lib/api'
 import { SidePanelShell, CopyBtn } from './SidePanelShell'

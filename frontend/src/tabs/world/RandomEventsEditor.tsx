@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { apiGet } from '../../lib/api'
 import { useI18n } from '../../i18n/I18nProvider'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import { EVENT_CATEGORIES, type EventSettings } from './worldTypes'
 import { CommaListInput } from '../../components/CommaListInput'
 

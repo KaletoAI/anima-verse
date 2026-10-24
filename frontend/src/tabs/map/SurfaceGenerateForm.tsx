@@ -11,7 +11,7 @@
  * prompts and starts a run from there, like every other generated thing in
  * the game.
  */
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { SURFACE_PROMPT_CONTEXT } from './surfaceTypes'
 import type { BackendInfo } from './surfaceTypes'

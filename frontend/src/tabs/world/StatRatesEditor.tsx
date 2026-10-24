@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import type { StatRate } from './worldTypes'
 
 export function StatRatesEditor({ value, onChange }: {

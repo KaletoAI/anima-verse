@@ -49,7 +49,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FIGURE_HEIGHT_M } from '@anima/scene-render'
 import { DetailToolbar } from '../../components/DetailToolbar'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { SliderInput } from '../../components/SliderInput'
 import { useEnlarge } from '../../components/ZoomButton'

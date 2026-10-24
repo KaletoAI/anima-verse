@@ -13,11 +13,11 @@
  * never a frontend re-implementation.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
-import { useHelp } from '../../help/HelpContext'
-import { useToast } from '../../lib/Toast'
-import { Field } from '../../components/Field'
+import { useI18n } from '../I18nProvider'
+import { apiGet, apiPost } from '../api'
+import { useCharacterFormHost } from './CharacterFormHost'
+import { useToast } from '../Toast'
+import { Field } from './Field'
 import { TemplateField, tmplText, type TmplFieldDef, type DynamicData } from './TemplateField'
 import type { TmplSection } from './TemplateSectionForm'
 import { FieldImage } from './FieldImage'
@@ -87,7 +87,7 @@ function PromptField({
   onCommit: (v: string) => void
 }) {
   const { t } = useI18n()
-  const { setHelp } = useHelp()
+  const { setHelp } = useCharacterFormHost()
   const [local, setLocal] = useState(String(value ?? ''))
   const [resolved, setResolved] = useState('')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -122,7 +122,7 @@ function PromptField({
   // Announce tokens + the insert function to the help panel (on focus). The
   // topic comes from the template's `help` key (e.g. image_prompt for the
   // appearance), otherwise there is no topic.
-  const announceHelp = () => setHelp(
+  const announceHelp = () => setHelp?.(
     typeof field.help === 'string' ? field.help : null,
     {
       items: tokens.map((tk) => ({ code: `{${tk.token}}`, text: tk.label, insert: `{${tk.token}}` })),
@@ -389,7 +389,7 @@ export function TemplateTab({
         onCommit={(v) => commit(f, v)}
       />
     )
-    // Side-by-side (Avatar-Panel): Prompt + Chips + Preview links, Bild rechts.
+    // Side by side (avatar panel): prompt + chips + preview left, image right.
     if (imageBeside && isPrompt && imagePreview) {
       return (
         <div key={fkey} className="tpl-prompt-beside">
@@ -414,9 +414,9 @@ export function TemplateTab({
     )
   }
 
-  // Spalten nebeneinander (eine pro tab.column); je Spalte die Sektionen
-  // gestapelt, je Sektion die Felder untereinander. In einem Prompt-Feld stehen
-  // Prompt → Resolved-Preview → Bild untereinander (siehe PromptField/renderField).
+  // Columns sit side by side (one per tab.column), with sections stacked
+  // in each column and fields stacked in each section. Prompt fields stack
+  // prompt → resolved preview → image (see PromptField/renderField).
   return (
     <div className="ga-form tpl-tab-cols">
       {cols.map((col) => {

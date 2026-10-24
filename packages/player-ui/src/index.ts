@@ -40,3 +40,16 @@ export * from './syncEndpoints';
 
 export * from './NoticeBanner';
 export * from './openTopics';
+
+export * from './AvatarSettingsPanel';
+export * from './character/CharacterFormHost';
+export * from './character/TemplateTab';
+export * from './character/TemplateField';
+export * from './character/TemplateSectionForm';
+export * from './character/FieldImage';
+export * from './character/SoulEditor';
+export * from './character/BodyEditor';
+export * from './character/PromptPreview';
+export * from './character/bodyAttributeVisibility';
+export * from './character/Field';
+export * from './character/ConfirmDialog';

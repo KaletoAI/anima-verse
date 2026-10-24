@@ -9,7 +9,7 @@
  */
 import type { ReactNode } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import { SurfaceMaterialPreview } from './SurfaceMaterialPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { CLASS_DEFAULTS, CLASS_DIALS, CLASS_HINTS, SURFACE_PROMPT_CONTEXT,

@@ -8,7 +8,7 @@
  * to a free-text field (like the old UI).
  */
 import { useEffect, useState } from 'react'
-import { useI18n } from '../../i18n/I18nProvider'
+import { useI18n } from '../I18nProvider'
 
 export interface TmplFieldDef {
   [k: string]: unknown

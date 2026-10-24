@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 
 /**
  * Per-character skill manager (Characters → Skills), ported from the legacy

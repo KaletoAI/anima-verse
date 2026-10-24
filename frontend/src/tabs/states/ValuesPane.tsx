@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 
 type Source = 'shared' | 'world'
 interface Rate { condition: string; per_hour: number; label: string }

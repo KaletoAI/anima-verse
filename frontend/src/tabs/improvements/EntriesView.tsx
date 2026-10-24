@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
-import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { ConfirmDialog } from '@anima/player-ui'
 import { SortableList } from '../../components/SortableList'
 import { NewImprovementDialog } from './NewImprovementDialog'
 import { EntryDetail } from './EntryDetail'

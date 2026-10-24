@@ -15,7 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
 import { openLightbox } from '../../components/Lightbox'

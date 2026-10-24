@@ -31,7 +31,7 @@ import {
   SYNC_ENDPOINTS, apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
   ScenePanel, SelfPanel, OthersPanel, PartyStrip,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
-  GalleryPanel, InstagramPanel, NoticeBanner, useOpenTopics,
+  AvatarSettingsPanel, GalleryPanel, InstagramPanel, NoticeBanner, useOpenTopics,
   PlayerPhotoDialog, SCENE_ROW_ID_ATTR,
   type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
@@ -74,13 +74,14 @@ import './theme-fantasy.css';
 
 type PanelId = 'chat' | 'self' | 'others' | 'menu'
   | 'belongings' | 'mind' | 'phone' | 'news' | 'tasks' | 'quests' | 'gallery'
-  | 'instagram';
+  | 'instagram' | 'avatar';
 
 /** `requires` = the skill id the panel is bound to, exactly as in /play's
  *  PANEL_META: without the skill package the button is gone, so removing a
  *  package degrades the HUD by itself instead of leaving a dead button. */
 const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: string }> = [
   { id: 'chat', icon: 'chat', title: 'Chat' },
+  { id: 'avatar', icon: 'avatar', title: 'Avatar' },
   { id: 'self', icon: 'self', title: 'Self' },
   { id: 'others', icon: 'others', title: 'Others' },
   { id: 'belongings', icon: 'backpack', title: 'Inventory' },
@@ -106,7 +107,7 @@ const PANELS: Array<{ id: PanelId; icon: IconName; title: string; requires?: str
  *  all the others; self/others/menu keep stacking freely as before. */
 const CONTENT_PANELS = new Set<PanelId>([
   'belongings', 'mind', 'phone', 'news', 'tasks', 'quests', 'gallery',
-  'instagram']);
+  'instagram', 'avatar']);
 
 /** Panels that need more than the dock's 320px (user finding, acceptance of
  *  stage 6 part 1): the inventory is a table of item rows, and MindPanel puts
@@ -121,7 +122,7 @@ const CONTENT_PANELS = new Set<PanelId>([
  *  it visible at once. Instagram is the fifth for the plainest reason of all:
  *  a post is a full-width picture, so the dock width IS the picture width. */
 const WIDE_PANELS = new Set<PanelId>(['belongings', 'mind', 'quests', 'gallery',
-  'instagram']);
+  'instagram', 'avatar']);
 
 /** Storage key of the dock width the user dragged for themselves. Absent =
  *  the widths above decide, which is what every fresh browser starts with. */
@@ -177,7 +178,7 @@ export function Hud({ avatar, username, role }: {
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
     chat: true, self: false, others: false, menu: false,
     belongings: false, mind: false, phone: false, news: false, tasks: false,
-    quests: false, gallery: false, instagram: false,
+    quests: false, gallery: false, instagram: false, avatar: false,
   });
   const unread = useOpenTopics(open.instagram);
   /** `open.chat` for callbacks that must not re-subscribe on every toggle. */
@@ -1170,7 +1171,7 @@ export function Hud({ avatar, username, role }: {
 
       {(open.self || open.others || open.menu || open.belongings || open.mind
         || open.phone || open.news || open.tasks || open.quests || open.gallery
-        || open.instagram) && (
+        || open.instagram || open.avatar) && (
         <div ref={dockRef}
           className={'hud-dock'
             + ([...WIDE_PANELS].some((id) => open[id]) ? ' hud-dock-wide' : '')}
@@ -1266,6 +1267,16 @@ export function Hud({ avatar, username, role }: {
                     the slot the button is simply not there. Browsing, paging
                     and deleting work in full. */}
                 <ErrorBoundary inline label="Gallery"><GalleryPanel /></ErrorBoundary>
+              </div>
+            </section>
+          )}
+          {open.avatar && (
+            <section className="hud-panel">
+              {panelHead('avatar', 'avatar', t('Avatar'))}
+              <div className="hud-panel-body">
+                <ErrorBoundary inline label="Avatar">
+                  <AvatarSettingsPanel avatar={avatarName} />
+                </ErrorBoundary>
               </div>
             </section>
           )}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { Field } from '../../components/Field'
+import { Field } from '@anima/player-ui'
 
 /**
  * Game-Admin "New character" dialog. A real in-app modal (no window.prompt) with

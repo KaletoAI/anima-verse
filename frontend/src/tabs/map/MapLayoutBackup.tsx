@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiUpload } from '../../lib/api'
 import { downloadBlob } from '../../lib/download'
