@@ -34,6 +34,8 @@ def catalog_entry(anim) -> Dict:
     entry = {"prompt": str(c.prompt).strip(),
              "synonyms": [s.strip().lower() for s in c.synonyms if str(s).strip()],
              "animation": anim.kind, "group": c.group, "solo": not _is_pair(anim)}
+    if str(c.label_de).strip():
+        entry["label_de"] = str(c.label_de).strip()
     if _is_pair(anim):
         # The pair takes one place of two slots; clip +X lies along the
         # facing of a marker (docs/schnittstellen-3d.md § A8a).

@@ -60,6 +60,7 @@ B = Role(
 ANIM = PairAnimation(
     kind="comforting", duration_s=4.8, loop=True, distance_m=0.60, stagger_m=0.0, anchor_s=1.2,
     catalog=Catalog(
+        label_de='Trösten',
         key="comforting", group="stand", repoint=True,
         prompt="one person comforting another, both hands on the sad person's shoulders, the "
                "other with the head bowed, consoling",

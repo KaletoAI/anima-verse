@@ -4,10 +4,14 @@ pose_catalog.resolve_to_catalog (development_instructions/plan-decision-models.m
 
 Usage:  ./.venv/bin/python scripts/smoke_decision_pose_match.py
 
-decide() is stubbed (no network); the catalogs are the real shared ones.
+decide() is stubbed (no network). The pose catalog is the real shared one
+PINNED at commit 1010e7d1 (read with `git show`, written to a temp file the
+catalog reads) — the working tree's file carries local-only entries and
+grows with every new pose, which would move every spread below; the
+expression catalog is the working tree's.
 
-EXPECTATIONS, DERIVED BY HAND (shared/templates/pose/pose_catalog.json today:
-groups stand 37 / seat 14 / ground 3 / lie 2 entries, every entry grouped;
+EXPECTATIONS, DERIVED BY HAND (the pose catalog at 1010e7d1:
+groups stand 43 / seat 14 / ground 5 / lie 3 entries, every entry grouped;
 expression catalog: 8 entries, no groups):
 Q1 catalog_questions("pose") -> first question "group" with the 4 group ids,
    and a then(); then({"group": seat}) -> "entry" with the 14 seat keys + "none"
@@ -30,19 +34,20 @@ T1 _option_budget: 4 -> 220 (1400//4 = 350, capped), 9 -> 155, 38 -> 80 (1400//3
 T2 group question instructions = "Which body position does the text describe? Each option
    lists poses of that position."; examples = the default, then k <= 9 (10 in all) keys
    spread evenly over the rest: rest index round_half_up(i * (len(rest)-1) / (k-1)).
-   Group "stand" (label "Standing spot", default "standing"; rest = the 36 other keys
-   alphabetical, rest[0] bathing .. rest[35] washing_dishes), k = 9, step 35/8 = 4.375:
-   i=0 -> 0 bathing, 1 -> 4.375 -> 4 cleaning surface, 2 -> 8.75 -> 9 dancing together,
-   3 -> 13.125 -> 13 flirting, 4 -> 17.5 -> 18 making_coffee, 5 -> 21.875 -> 22 presenting,
-   6 -> 26.25 -> 26 shooting, 7 -> 30.625 -> 31 thinking, 8 -> 35 washing_dishes.
-   Length: "Standing spot: " 15 + standing 23 + bathing 32 + cleaning surface 50 +
-   dancing together 68 + flirting 78 + making_coffee 93 + presenting 105 + shooting 115 +
-   thinking 125 + washing_dishes 141 <= 220, so all 10 fit ->
-   "Standing spot: standing, bathing, cleaning surface, dancing together, flirting,
-   making_coffee, presenting, shooting, thinking, washing_dishes".
-   Group "lie" (label "Lying place", rest = [sleeping], k = 1 -> rest[0]) ->
-   exactly "Lying place: lying, sleeping"; "ground" (rest meditating, yoga; k = 2 -> 0, 1)
-   -> "Ground: kneeling, meditating, yoga"; no group option longer than _option_budget(4)=220.
+   Group "stand" (label "Standing spot", default "standing"; rest = the 42 other keys
+   alphabetical, rest[0] celebrating .. rest[41] washing_dishes), k = 9, step 41/8 = 5.125:
+   i=0 -> 0 celebrating, 1 -> 5.125 -> 5 comforting, 2 -> 10.25 -> 10 digging,
+   3 -> 15.375 -> 15 forehead-wiping, 4 -> 20.5 -> 21 leaning, 5 -> 25.625 -> 26 picking up,
+   6 -> 30.75 -> 31 shooting, 7 -> 35.875 -> 36 talking, 8 -> 41 washing_dishes.
+   Length: "Standing spot: " 15 + standing 23 + celebrating 36 + comforting 48 + digging 57 +
+   forehead-wiping 74 + leaning 83 + picking up 95 + shooting 105 + talking 114 +
+   washing_dishes 130 <= 220, so all 10 fit ->
+   "Standing spot: standing, celebrating, comforting, digging, forehead-wiping, leaning,
+   picking up, shooting, talking, washing_dishes".
+   Group "lie" (label "Lying place", rest = [sleeping, sleeping on back], k = 2 -> 0, 1) ->
+   exactly "Lying place: lying, sleeping, sleeping on back"; "ground" (rest bathing,
+   gardening, meditating, yoga; k = 4 -> 0, 1, 2, 3) -> "Ground: kneeling, bathing,
+   gardening, meditating, yoga"; no group option longer than _option_budget(4)=220.
 T3 expression entry question has 9 options (8 + none) -> budget 155. neutral: prefix
    "neutral: calm neutral face, relaxed brow, soft mouth, attentive eyes; e.g. " = 75 chars,
    then synonyms while <= 155: focused 82, thoughtful 94, curious 103, determined 115,
@@ -50,10 +55,11 @@ T3 expression entry question has 9 options (8 + none) -> budget 155. neutral: pr
    So the option is the prefix + "focused, thoughtful, curious, determined, calm, relaxed,
    creative, in control" (152 chars). Every expression option starts with "<key>: " and
    contains its prompt; the none option reads "none of these fits the text".
-T4 pose group "stand" entry question: 37 + none = 38 options -> budget 80; no option longer
-   than 80, none contains its pose prompt, each starts with "<key>: " or is just the key.
-T5 pose group "lie" entry question: 2 + none = 3 options (<= 12) -> the pose prompt IS
-   offered: the options of lying and sleeping each contain their pose prompt.
+T4 pose group "stand" entry question: 43 + none = 44 options -> budget 80 (1400//44 = 31,
+   floored); no option longer than 80, none contains its pose prompt, each starts with
+   "<key>: " or is just the key.
+T5 pose group "lie" entry question: 3 + none = 4 options (<= 12) -> the pose prompt IS
+   offered: the options of lying, sleeping and sleeping on back each contain their prompt.
 """
 import sys
 import tempfile
@@ -68,6 +74,16 @@ from app.core.db import init_schema  # noqa: E402
 init_schema()
 
 from app.core import decision, decision_points as DP, pose_catalog as PC  # noqa: E402
+import subprocess  # noqa: E402
+
+PINNED = "1010e7d1"
+_PINNED_CATALOG = _TMP / "pose_catalog.json"
+_PINNED_CATALOG.write_text(subprocess.run(
+    ["git", "-C", str(ROOT), "show", f"{PINNED}:shared/templates/pose/pose_catalog.json"],
+    capture_output=True, text=True, check=True, encoding="utf-8").stdout, encoding="utf-8")
+PC.catalog_path = lambda axis, _orig=PC.catalog_path: (
+    _PINNED_CATALOG if axis == "pose" else _orig(axis))
+PC.reload_catalogs()
 
 FAILS = []
 
@@ -101,10 +117,11 @@ gq = first["group"]
 check("T2 group instructions", gq.instructions,
       "Which body position does the text describe? Each option lists poses of that position.")
 check("T2 stand option spread", gq.options["stand"],
-      "Standing spot: standing, bathing, cleaning surface, dancing together, flirting, "
-      "making_coffee, presenting, shooting, thinking, washing_dishes")
-check("T2 lie option", gq.options["lie"], "Lying place: lying, sleeping")
-check("T2 ground option", gq.options["ground"], "Ground: kneeling, meditating, yoga")
+      "Standing spot: standing, celebrating, comforting, digging, forehead-wiping, leaning, "
+      "picking up, shooting, talking, washing_dishes")
+check("T2 lie option", gq.options["lie"], "Lying place: lying, sleeping, sleeping on back")
+check("T2 ground option", gq.options["ground"],
+      "Ground: kneeling, bathing, gardening, meditating, yoga")
 check("T2 no group option over budget(4)",
       [g for g, o in gq.options.items() if len(o) > DP._option_budget(4)], [])
 eq = first_e["entry"]
@@ -120,7 +137,7 @@ check("T3 expression options within budget",
       [k for k, o in eq.options.items() if len(o) > DP._option_budget(len(eq.options))], [])
 check("T3 none text", eq.options[DP.NONE_KEY], "none of these fits the text")
 stand_q = then({"group": decision.Answer("stand", None, 0.9, {})})["entry"]
-check("T4 stand entry options", len(stand_q.options), 38)
+check("T4 stand entry options", len(stand_q.options), 44)
 pose = PC.get_catalog("pose")
 check("T4 stand entries within budget",
       [k for k, o in stand_q.options.items() if len(o) > DP._option_budget(len(stand_q.options))], [])
@@ -130,7 +147,7 @@ check("T4 stand entries without prompt",
 check("T4 stand entries start with key",
       [k for k, o in stand_q.options.items() if k != DP.NONE_KEY and not (o == k or o.startswith(f"{k}: "))], [])
 lie_q = then({"group": decision.Answer("lie", None, 0.9, {})})["entry"]
-check("T5 lie options", sorted(lie_q.options), ["lying", DP.NONE_KEY, "sleeping"])
+check("T5 lie options", sorted(lie_q.options), ["lying", DP.NONE_KEY, "sleeping", "sleeping on back"])
 check("T5 lie entries carry their prompt",
       [k for k, o in lie_q.options.items()
        if k != DP.NONE_KEY and not ((pose.get(k) or {}).get("prompt")

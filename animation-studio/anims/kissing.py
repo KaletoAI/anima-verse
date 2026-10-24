@@ -92,6 +92,7 @@ B = Role(
 ANIM = PairAnimation(
     kind="kissing", duration_s=5.0, loop=False, distance_m=0.44, stagger_m=0.0, anchor_s=2.5,
     catalog=Catalog(
+        label_de='Küssen',
         key="kissing",
         group="stand",
         prompt="two people kissing, standing close, one with hands on the other's waist, "

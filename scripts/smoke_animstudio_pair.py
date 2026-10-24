@@ -35,7 +35,8 @@ from animation-studio/rig_rest.json.
 [4] validation: a PartnerTarget on "LeftHand" (not a torso bone) raises
     StudioError; a PartnerTarget in a SOLO Animation raises StudioError at
     compile; validate_pair accepts stagger -0.5 and 0.5 and refuses 0.6
-    and -0.6 (bounds -0.5..0.5); a take_over synonym that is not among the synonyms raises
+    and -0.6 (bounds -0.5..0.5) and refuses a pair whose catalog has no
+    label_de (the controller labels shipped pair poses from it); a take_over synonym that is not among the synonyms raises
     StudioError on publish.
 [5] publish of a fake pair build (kind "demo-hug", key "hug-demo",
     synonyms ("hug demo", "umarmen-demo"), take_over ("umarmen-demo",))
@@ -45,7 +46,7 @@ from animation-studio/rig_rest.json.
     "local-extra" to "demo-owner" (never committed):
     - the library holds demo-hug__a.fbx, demo-hug__b.fbx, demo-hug.json;
     - HEAD's entry "hug-demo" = solo false, places 2, yaw_offset 0,
-      animation "demo-hug";
+      animation "demo-hug", label_de "Umarmung (Demo)";
     - HEAD's "demo-owner" = ["trösten-demo"] (no "local-extra"); the
       working tree's "demo-owner" keeps "local-extra" and lost
       "umarmen-demo";
@@ -84,7 +85,7 @@ from animstudio.dsl import (Animation, Catalog, PairAnimation, PartnerTarget, Po
 FAIL = []
 CAT_REL = "shared/templates/pose/pose_catalog.json"
 REST = rig.load_rest()
-CAT = Catalog(key="x", group="stand", prompt="p")
+CAT = Catalog(key="x", group="stand", prompt="p", label_de="X")
 
 
 def near(label, got, want, tol):
@@ -148,6 +149,13 @@ try:
         FAIL.append("[4] solo PartnerTarget accepted")
     except StudioError:
         pass
+    try:
+        validate_pair(PairAnimation(kind="t", duration_s=0.1, loop=False,
+                                    catalog=Catalog(key="x", group="stand", prompt="p"),
+                                    a=Role(), b=Role(), distance_m=0.4))
+        FAIL.append("[4] pair without label_de accepted")
+    except StudioError:
+        pass
     for s_m, ok in ((-0.5, True), (0.5, True), (0.6, False), (-0.6, False)):
         try:
             validate_pair(pair(0.4, s_m))
@@ -190,6 +198,7 @@ try:
             "from animstudio.dsl import Catalog, PairAnimation, Role\n"
             f"ANIM = PairAnimation(kind={kind!r}, duration_s=1.0, loop=False, distance_m=0.4,\n"
             "    catalog=Catalog(key='hug-demo', group='stand', prompt='two people hugging',\n"
+            "        label_de='Umarmung (Demo)',\n"
             f"        synonyms=('hug demo', 'umarmen-demo'), take_over={tuple(take_over)!r}),\n"
             "    a=Role(), b=Role())\n")
         out = animstudio.OUT / kind
@@ -218,8 +227,8 @@ try:
             FAIL.append(f"[5] {name} missing in the library")
     head = json.loads(git("show", f"HEAD:{CAT_REL}"))["entries"]
     e = head.get("hug-demo") or {}
-    if (e.get("solo"), e.get("places"), e.get("yaw_offset"), e.get("animation")) != \
-            (False, 2, 0, "demo-hug"):
+    if (e.get("solo"), e.get("places"), e.get("yaw_offset"), e.get("animation"),
+            e.get("label_de")) != (False, 2, 0, "demo-hug", "Umarmung (Demo)"):
         FAIL.append(f"[5] HEAD entry {e}")
     if head["demo-owner"]["synonyms"] != [x for x in shipped if x != "umarmen-demo"]:
         FAIL.append(f"[5] HEAD demo-owner {head['demo-owner']['synonyms']}")

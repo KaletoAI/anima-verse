@@ -72,6 +72,7 @@ ANIM = PairAnimation(
     kind="greeting-handshake", duration_s=3.5, loop=False,
     distance_m=DISTANCE, stagger_m=STAGGER, anchor_s=1.5,
     catalog=Catalog(
+        label_de='Händedruck',
         key="greeting handshake",
         group="stand",
         prompt="two people shaking hands in greeting, standing face to face, right hands "

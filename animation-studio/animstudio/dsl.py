@@ -127,6 +127,10 @@ class Catalog:
     #: as ``label_de`` kept, the new synonyms added) instead of refusing the
     #: taken key.
     repoint: bool = False
+    #: German display label (the Poses tab shows it). REQUIRED for a pair
+    #: pose — the controller labels shipped pair poses from it
+    #: (scripts/smoke_pose_labels.py).
+    label_de: str = ""
 
 
 @dataclass
@@ -199,6 +203,8 @@ def validate_pair(pair: PairAnimation) -> None:
         raise StudioError("stagger_m must be within -0.5..0.5")
     if not 0.0 <= pair.anchor_s <= pair.duration_s:
         raise StudioError("anchor_s must lie within [0, duration]")
+    if not str(pair.catalog.label_de).strip():
+        raise StudioError("a pair pose needs catalog.label_de (its German display label)")
     for role in ("a", "b"):
         try:
             validate(pair.role_anim(role))

@@ -71,6 +71,7 @@ ANIM = PairAnimation(
     kind="dancing-together", duration_s=4.0, loop=True, distance_m=DIST, stagger_m=0.0,
     anchor_s=0.0,
     catalog=Catalog(
+        label_de='Tanzen',
         key="dancing together", group="stand", repoint=True,
         prompt="a couple dancing salsa together in closed hold, one hand on the partner's back, "
                "the other hands clasped, hips swaying",

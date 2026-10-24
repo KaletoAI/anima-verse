@@ -102,6 +102,7 @@ B = Role(
 ANIM = PairAnimation(
     kind="greeting-hug", duration_s=4.0, loop=False, distance_m=0.40, stagger_m=0.14, anchor_s=1.8,
     catalog=Catalog(
+        label_de='Umarmung',
         key="hugging",
         group="stand",
         prompt="two people hugging in greeting, arms wrapped around each other, "
