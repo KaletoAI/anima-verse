@@ -2275,12 +2275,17 @@ def _is_respond_eligible(character_name: str) -> bool:
     return True
 
 
+_ticket_credit: dict[str, float] = {}
+
+
 def _build_round_tickets() -> List[str]:
     """Fresh tickets list for one scheduling round.
 
-    Each eligible character contributes ``importance`` tickets (1/2/3).
+    Each eligible character contributes importance times its rule factor.
+    Fractional tickets carry to the next round without rounding away small
+    weights; ineligible characters lose their credit.
     The list is shuffled so order within a round varies, but the count
-    guarantees High runs 3x as often as Low across rounds.
+    guarantees High runs 3x as often as Low at equal modifier factors.
     """
     try:
         from app.models.character import (
@@ -2289,7 +2294,11 @@ def _build_round_tickets() -> List[str]:
         logger.error("AgentLoop: cannot list characters: %s", e)
         return []
 
+    from app.core.modifiers import factor, modify_rules
+    import math
+    rules = modify_rules()  # one load for the whole round
     tickets: List[str] = []
+    eligible = set()
     for name in list_available_characters():
         if not _is_agent_eligible(name):
             continue
@@ -2303,7 +2312,14 @@ def _build_round_tickets() -> List[str]:
             weight = max(_MIN_IMPORTANCE, min(_MAX_IMPORTANCE, weight))
         except Exception:
             weight = 1
-        tickets.extend([name] * weight)
+        eligible.add(name)
+        credit = _ticket_credit.get(name, 0.0) + weight * factor(name, "thought_frequency", rules=rules)
+        count = math.floor(credit + 1e-9)
+        _ticket_credit[name] = max(0.0, credit - count)
+        tickets.extend([name] * count)
+
+    for name in _ticket_credit.keys() - eligible:
+        del _ticket_credit[name]
 
     random.shuffle(tickets)
     return tickets

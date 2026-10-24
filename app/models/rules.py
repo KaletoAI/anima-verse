@@ -1,4 +1,4 @@
-"""World rules: configurable location and skill blocks and forced actions.
+"""World rules: configurable blocks, forced actions, discovery and modifiers.
 
 Conditions use the activity expression syntax. Rules are stored in world.db
 with a shared baseline from shared/rules/rules.json."""
@@ -87,6 +87,17 @@ def _load_world_rules() -> List[Dict[str, Any]]:
         return []
 
 
+def _normalize_modifiers(rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Clamp modify factors for shared data, world data and API writes alike."""
+    from app.core.modifiers import clamp_factor
+    for rule in rules:
+        if rule.get("type") == "modify":
+            modifier = rule.get("modify") or {}
+            rule["modify"] = {"quantity": str(modifier.get("quantity") or ""),
+                              "factor": clamp_factor(modifier.get("factor", 1))}
+    return rules
+
+
 def load_rules() -> List[Dict[str, Any]]:
     """Merge the shared baseline with the world overlay by ID.
 
@@ -94,9 +105,9 @@ def load_rules() -> List[Dict[str, Any]]:
     shared = _load_shared_rules()
     world = _load_world_rules()
     if not world:
-        return shared
+        return _normalize_modifiers(shared)
     if not shared:
-        return world
+        return _normalize_modifiers(world)
 
     by_id: Dict[str, Dict[str, Any]] = {}
     for r in shared:
@@ -111,7 +122,7 @@ def load_rules() -> List[Dict[str, Any]]:
             r = dict(r)
             r["_origin"] = "world override"
         by_id[rid] = r
-    return list(by_id.values())
+    return _normalize_modifiers(list(by_id.values()))
 
 
 def save_rules(rules: List[Dict[str, Any]], target_dir: str = "world"):
@@ -120,6 +131,7 @@ def save_rules(rules: List[Dict[str, Any]], target_dir: str = "world"):
     ``target_dir="world"`` replaces the world layer, deleting absent IDs.
     ``target_dir="shared"`` replaces shared/rules/rules.json for all worlds.
     """
+    rules = _normalize_modifiers(rules)
     if target_dir == "shared":
         try:
             _save_shared_rules(rules)
@@ -217,6 +229,7 @@ def add_rule(rule: Dict[str, Any], target_dir: str = "world") -> Dict[str, Any]:
     """Upsert a rule by ID into the world or shared layer.
 
     Moving a rule requires deleting its old layer and posting to the new one."""
+    _normalize_modifiers([rule])
     if not rule.get("id"):
         rule["id"] = f"rule_{uuid.uuid4().hex[:8]}"
     rule_id = rule["id"]
@@ -773,7 +786,7 @@ def check_discover_rules(character_name: str) -> Optional[Dict[str, Any]]:
     pos = get_character_pos(character_name)
     if pos is None:
         return None
-    range_m = get_discovery_range_m()
+    range_m = get_discovery_range_m(character_name)
     if range_m <= 0:
         return None
     # May be empty (the wilderness) — it is context for the condition, not a
@@ -896,6 +909,11 @@ def _find_nearest_sleep(character_name: str) -> Tuple[str, str]:
 
 def _rules_changed(old_rules, new_rules) -> None:
     """Notify removed, added and both scopes of changed rules, by stored id."""
+    try:
+        from app.core.modifiers import invalidate_cache
+        invalidate_cache()
+    except Exception:
+        pass
     try:
         from app.core import sync_topics
         def indexed(rules):

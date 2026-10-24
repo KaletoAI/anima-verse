@@ -155,6 +155,15 @@ _real_get_profile = character_model.get_character_profile
 LOADED = []
 
 
+# The shipped modify rules stay ACTIVE: the discovery pass asks every
+# character's discovery factor. modifiers.factor caches its answer (30 s,
+# cleared on rule changes), so the steady-state tick measured below costs no
+# extra profile load for it — warm that cache once, as a running server has.
+from app.core.modifiers import factor as _modifier_factor  # noqa: E402
+for _n in NAMES:
+    _modifier_factor(_n, "discovery")
+
+
 def counting_get_profile(name):
     LOADED.append(name)
     return _real_get_profile(name)

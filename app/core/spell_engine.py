@@ -179,7 +179,9 @@ def execute_cast(avatar_name: str, target_name: str,
 
     Cost refusal preserves the regular result keys and consumes no item.
     Eligible attempts pay once regardless of the roll or subsequent effects."""
-    chance = max(0, min(100, int(spell.get("success_chance", 100))))
+    from app.core.modifiers import factor
+    chance = max(0, min(100, round(int(spell.get("success_chance", 100))
+                                   * factor(avatar_name, "spell_success"))))
     from app.models.character import get_character_profile, adjust_status_effects
     from app.core.keyed_lock import keyed_lock
     # Keep eligibility and payment together; no external work runs under this lock.

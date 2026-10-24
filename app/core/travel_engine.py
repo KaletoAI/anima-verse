@@ -459,7 +459,7 @@ def _thin_points(points: List[Point]) -> List[Point]:
 
 
 def _bake_route(start: Point, goal: Point,
-                current_loc: Optional[Dict[str, Any]]
+                current_loc: Optional[Dict[str, Any]], *, character_name: str = ""
                 ) -> Tuple[Optional[List[List[float]]], float]:
     """``(waypoints, speed)`` for the walk ``start`` → ``goal``, or
     ``(None, speed)`` when there is no walkable polyline.
@@ -479,7 +479,13 @@ def _bake_route(start: Point, goal: Point,
     """
     from app.core.nav_grid import build_nav_context, route, segment_costs
 
-    speed = get_travel_speed_m_s()
+    from app.core.modifiers import factor
+    from app.core.party_engine import party_followers
+    pace = 1.0
+    if character_name:
+        pace = min(factor(name, "travel_speed")
+                   for name in [character_name, *party_followers(character_name)])
+    speed = min(_MAX_SPEED_M_S, max(_MIN_SPEED_M_S, get_travel_speed_m_s() * pace))
     ctx = build_nav_context()               # ONE context for the whole start
     legs: List[List[Point]] = []
     own_opening = (_opening_point(current_loc, goal)
@@ -715,7 +721,7 @@ def start_journey(character_name: str, target_id: str,
         return None, "no_route"
     entry_edge, goal = arrival
 
-    waypoints, speed = _bake_route(start, goal, current_loc)
+    waypoints, speed = _bake_route(start, goal, current_loc, character_name=character_name)
     if waypoints is None:
         return None, "no_route"
     waypoints = _with_seat_leg(waypoints, seat)
@@ -831,7 +837,7 @@ def start_journey_to_point(character_name: str, x: float,
         return None, "no_route"
     seat, start = _seat_leg(character_name, start, current_id)
 
-    waypoints, speed = _bake_route(start, (gx, gz), current_loc)
+    waypoints, speed = _bake_route(start, (gx, gz), current_loc, character_name=character_name)
     if waypoints is None:
         return None, "no_route"
     waypoints = _with_seat_leg(waypoints, seat)

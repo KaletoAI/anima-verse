@@ -2847,6 +2847,18 @@
     "Spell cost": "Zauberkosten",
     "Deducted from the caster on every attempt, including failed casts.": "Bei jedem Versuch vom Wirkenden abgezogen, auch bei fehlgeschlagenen Zaubern.",
     "Cost amount": "Kostenhöhe",
-    "Add cost": "Kosten hinzufügen"
+    "Add cost": "Kosten hinzufügen",
+    "Modify": "Anpassen",
+    "Factor": "Faktor",
+    "Travel speed": "Reisetempo",
+    "Discovery": "Entdeckung",
+    "Spell success": "Zaubererfolg",
+    "Thought frequency": "Gedankenhäufigkeit",
+    "Walking speed at journey start; a party uses its slowest member.": "Gehgeschwindigkeit beim Reisestart; eine Party richtet sich nach ihrem langsamsten Mitglied.",
+    "Item discovery value and outdoor discovery range.": "Entdeckungswert für Gegenstände und Entdeckungsreichweite im Freien.",
+    "Spell success chance, capped at 100%.": "Erfolgschance von Zaubern, begrenzt auf 100 %.",
+    "Relative weight of regular autonomous thought turns.": "Relatives Gewicht regulärer selbstständiger Gedanken-Turns.",
+    "Matching rule factors multiply. Each factor ranges from 0.1 to 5.": "Faktoren zutreffender Regeln werden multipliziert. Jeder Faktor liegt zwischen 0,1 und 5.",
+    "Modified quantity": "Stellgröße"
   }
 }

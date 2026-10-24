@@ -44,7 +44,7 @@ _MIN_DISCOVERY_RANGE_M = 0.0
 _MAX_DISCOVERY_RANGE_M = 1000.0
 
 
-def get_discovery_range_m() -> float:
+def get_discovery_range_m(character_name: str = "") -> float:
     """How close a character has to come before a place is discovered, in
     world metres, from the world setting ``game.discovery_range_m``.
 
@@ -58,6 +58,12 @@ def get_discovery_range_m() -> float:
       * anything above 1000 m is clamped down; at that point the whole map is
         in sight anyway and the number only costs distance checks.
     """
+    from app.core.modifiers import factor
+    return _base_discovery_range_m() * (factor(character_name, "discovery") if character_name else 1.0)
+
+
+def _base_discovery_range_m() -> float:
+    """Validated world range before the character's rule multiplier."""
     from app.core import config
     raw = config.get("game.discovery_range_m", DEFAULT_DISCOVERY_RANGE_M)
     if raw is None:
@@ -136,7 +142,7 @@ def discover_in_range(character_name: str, x: float, z: float, *,
     from app.models.character import add_known_location, get_known_locations
     if not character_name:
         return []
-    range_m = get_discovery_range_m()
+    range_m = get_discovery_range_m(character_name)
     if range_m <= 0:
         return []
     known = get_known_locations(character_name)

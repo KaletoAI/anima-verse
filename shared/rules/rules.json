@@ -68,6 +68,39 @@
       "condition": "courage<40",
       "message": "Too scared to go there.",
       "message_de": "Zu ängstlich, um dorthin zu gehen."
+    },
+    {
+      "id": "default_tired_legs",
+      "name": "Tired legs",
+      "name_de": "Müde Beine",
+      "type": "modify",
+      "condition": "stamina<30",
+      "modify": {
+        "quantity": "travel_speed",
+        "factor": 0.7
+      }
+    },
+    {
+      "id": "default_distracted_eyes",
+      "name": "Distracted eyes",
+      "name_de": "Unaufmerksame Augen",
+      "type": "modify",
+      "condition": "attention<25",
+      "modify": {
+        "quantity": "discovery",
+        "factor": 0.6
+      }
+    },
+    {
+      "id": "default_alert_eyes",
+      "name": "Alert eyes",
+      "name_de": "Wachsame Augen",
+      "type": "modify",
+      "condition": "attention>75",
+      "modify": {
+        "quantity": "discovery",
+        "factor": 1.3
+      }
     }
   ]
 }

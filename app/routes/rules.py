@@ -1,4 +1,4 @@
-"""HTTP routes for world block and force rules."""
+"""HTTP routes for world rules."""
 import io
 from typing import Any, Dict
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Query
@@ -31,6 +31,13 @@ def skill_options_route() -> list[dict]:
     from app.core.dependencies import get_skill_manager
     return [{"id": skill.SKILL_ID, "name": skill.name}
             for skill in get_skill_manager().skills if skill.SKILL_ID]
+
+
+@router.get("/quantities")
+def quantities_route() -> list[dict]:
+    """Core and package quantities for modify rules."""
+    from app.core.modifiers import quantities
+    return quantities()
 
 
 @router.get("/{rule_id}")

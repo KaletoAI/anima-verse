@@ -630,7 +630,7 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # (app/core/discovery.py) — one "how far do I see outdoors" setting, not a
     # second one beside it; 0 switches sight off. Read once per request, like
     # the avatar's own point the distance is measured from.
-    _sight_m = get_discovery_range_m() if (fogged and avatar) else 0.0
+    _sight_m = get_discovery_range_m(avatar) if (fogged and avatar) else 0.0
     # The avatar's own point — read whenever there IS an avatar and a filter,
     # because the veil gate below needs it too (its near view), not only the
     # sight rule. `_in_sight` therefore says out loud that a range of 0 is no

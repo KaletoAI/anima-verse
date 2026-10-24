@@ -11,8 +11,14 @@ import { ListPane } from '../../components/ListPane'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 import { roomLabel } from '../world/worldTypes'
 
-type RuleType = 'block' | 'force' | 'discover'
+type RuleType = 'block' | 'force' | 'discover' | 'modify'
 type TargetScope = 'location' | 'any_room' | 'danger_level' | 'skill'
+
+interface Quantity {
+  id: string
+  label: string
+  description: string
+}
 
 interface ForceAction {
   go_to?: 'stay' | 'home'
@@ -36,6 +42,7 @@ interface Rule {
   type?: RuleType
   character?: string
   target?: RuleTarget
+  modify?: { quantity: string; factor: number }
   force_action?: ForceAction
   /** The field the server reads (`rules.check_discover_rules`), top-level. */
   probability?: number
@@ -62,6 +69,8 @@ interface DraftRule {
   target_min_danger: number
   force_go_to: 'stay' | 'home'
   force_sleep: '' | 'sleep' | 'wake'
+  modify_quantity: string
+  modify_factor: number
   discover_probability: number
   condition: string
   message: string
@@ -83,6 +92,8 @@ const EMPTY_DRAFT: DraftRule = {
   target_min_danger: 3,
   force_go_to: 'stay',
   force_sleep: '',
+  modify_quantity: 'travel_speed',
+  modify_factor: 1,
   discover_probability: 0.05,
   condition: '',
   message: '',
@@ -108,6 +119,8 @@ function ruleToDraft(r: Rule): DraftRule {
     force_go_to: force.go_to || 'stay',
     force_sleep: force.set_flags?.is_sleeping === true ? 'sleep'
       : force.set_flags?.is_sleeping === false ? 'wake' : '',
+    modify_quantity: r.modify?.quantity || 'travel_speed',
+    modify_factor: r.modify?.factor ?? 1,
     // The contract field first; the old nested one only so a rule written by
     // an earlier version of this tab opens with the number its author meant
     // instead of the default. Form pre-fill only — nothing reads the nested
@@ -147,6 +160,8 @@ function draftToRule(d: DraftRule): Rule {
     if (d.force_sleep) {
       r.force_action.set_flags = { is_sleeping: d.force_sleep === 'sleep' }
     }
+  } else if (d.type === 'modify') {
+    r.modify = { quantity: d.modify_quantity, factor: Math.max(0.1, Math.min(5, d.modify_factor)) }
   } else if (d.type === 'discover') {
     // TOP-LEVEL, because that is what the server reads
     // (`app/models/rules.py`, and shared/rules/rules.json writes it that way
@@ -164,6 +179,7 @@ export function RulesTab() {
   const [draft, setDraft] = useState<DraftRule | null>(null)
   const [locations, setLocations] = useState<LocationRef[]>([])
   const [skills, setSkills] = useState<{ id: string; name: string }[]>([])
+  const [quantities, setQuantities] = useState<Quantity[]>([])
   const [characters, setCharacters] = useState<CharacterRef[]>([])
 
   const reload = useCallback(async () => {
@@ -180,6 +196,7 @@ export function RulesTab() {
   }, [reload])
 
   useEffect(() => {
+    apiGet<Quantity[]>('/rules/quantities').then(setQuantities).catch(() => setQuantities([]))
     apiGet<{ id: string; name: string }[]>('/rules/skill-options').then(setSkills).catch(() => setSkills([]))
     loadLocations().then(setLocations).catch(() => setLocations([]))
     loadCharacters().then(setCharacters).catch(() => setCharacters([]))
@@ -388,6 +405,7 @@ export function RulesTab() {
             />
             <RuleForm
               draft={draft}
+              quantities={quantities}
               skills={skills}
               locations={locations}
               characters={characters}
@@ -419,6 +437,7 @@ export function RulesTab() {
 }
 
 interface RuleFormProps {
+  quantities: Quantity[]
   draft: DraftRule
   skills: { id: string; name: string }[]
   locations: LocationRef[]
@@ -426,7 +445,7 @@ interface RuleFormProps {
   onUpdate: <K extends keyof DraftRule>(key: K, value: DraftRule[K]) => void
 }
 
-function RuleForm({ draft, locations, characters, skills, onUpdate }: RuleFormProps) {
+function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }: RuleFormProps) {
   const { t } = useI18n()
   const selectedLocation = locations.find((l) => l.id === draft.target_location)
   const rooms = selectedLocation?.rooms || []
@@ -461,6 +480,7 @@ function RuleForm({ draft, locations, characters, skills, onUpdate }: RuleFormPr
             <option value="block">{t('Block')}</option>
             <option value="force">{t('Force')}</option>
             <option value="discover">{t('Discover')}</option>
+            <option value="modify">{t('Modify')}</option>
           </select>
         </Field>
         <Field
@@ -495,6 +515,25 @@ function RuleForm({ draft, locations, characters, skills, onUpdate }: RuleFormPr
           <option value="shared">{t('Shared (all worlds)')}</option>
         </select>
       </Field>
+
+      {draft.type === 'modify' ? (
+        <div className="ga-form-row">
+          <Field label={t('Modified quantity')} hint={t(quantities.find((q) => q.id === draft.modify_quantity)?.description || '')}>
+            <select className="ga-input" value={draft.modify_quantity}
+              onChange={(e) => onUpdate('modify_quantity', e.target.value)}>
+              {!quantities.some((q) => q.id === draft.modify_quantity) && (
+                <option value={draft.modify_quantity}>{draft.modify_quantity}</option>
+              )}
+              {quantities.map((q) => <option key={q.id} value={q.id}>{t(q.label)}</option>)}
+            </select>
+          </Field>
+          <Field label={t('Factor')} hint={t('Matching rule factors multiply. Each factor ranges from 0.1 to 5.')}>
+            <input className="ga-input" type="number" min={0.1} max={5} step={0.05}
+              value={draft.modify_factor}
+              onChange={(e) => onUpdate('modify_factor', Number(e.target.value))} />
+          </Field>
+        </div>
+      ) : null}
 
       {draft.type === 'block' ? (
         <div className="ga-form-row" style={{ alignItems: 'flex-start' }}>

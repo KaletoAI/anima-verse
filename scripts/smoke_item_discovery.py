@@ -54,6 +54,11 @@ def main():
         from app.routes.play import _items_here
         from app.core.thought_context import _build_room_items_block
         init_schema()
+        # This fixture tests base discovery and boosts; rule multipliers have
+        # their own smoke and must not change the hand-derived values here.
+        from app.models.rules import load_rules, save_rules
+        save_rules([{'id': rule['id'], 'type': 'info'} for rule in load_rules()
+                    if rule.get('type') == 'modify'])
         set_game_factor(0)
         t = GameTime.parse("Y0001-D002T12:00:00")
         set_game_time(t)

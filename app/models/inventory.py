@@ -908,7 +908,11 @@ def discovery_value(viewer: str, *, profile: dict | None = None) -> int:
     from app.models.character import get_character_profile
     if profile is None:
         profile = get_character_profile(viewer) or {}
-    return effective_stat(profile, config.get("inventory.discovery_stat", "attention")) or 0
+    from app.core.modifiers import factor
+    from app.core.config_schema import field_default
+    stat = config.get("inventory.discovery_stat", field_default("inventory", "discovery_stat"))
+    value = effective_stat(profile, stat) or 0
+    return round(value * factor(viewer, "discovery", profile=profile))
 
 
 def discovered_by(location_id: str, room_id: str, item_id: str) -> list[str]:
