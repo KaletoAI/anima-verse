@@ -1,0 +1,40 @@
+{
+ "kind": "eating",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 181,
+ "duration_s": 6.033,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": 0.01,
+  "hips_scale": [
+   1.0
+  ],
+  "rig_floor_shift_cm": -0.0,
+  "rig_floor_min_cm": 0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     6.0
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/eating.py",
+  "spec_sha": "25dfef3d1516fbc832f4f88c7848d1eeb8866ac6708719bf21c4b38edaa1bce2"
+ }
+}

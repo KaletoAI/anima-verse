@@ -164,7 +164,7 @@
       "group": "stand"
     },
     "eating": {
-      "prompt": "sitting at table, fork in hand, leaning slightly toward plate, napkin on lap",
+      "prompt": "sitting at a table eating, fork raised to the mouth, the other hand holding a knife, a plate in front",
       "synonyms": [
         "essen",
         "essend",
@@ -173,10 +173,14 @@
         "zu abend essen",
         "frühstücken",
         "eine mahlzeit essen",
-        "am tisch essen"
+        "am tisch essen",
+        "speisen",
+        "having a meal",
+        "eating a meal"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "eating",
+      "group": "seat",
+      "solo": true
     },
     "drinking": {
       "prompt": "holding glass near lips, elbow raised, other hand resting on table",
