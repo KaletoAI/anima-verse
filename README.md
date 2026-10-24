@@ -176,8 +176,18 @@ stops acting autonomously).
 - **Parties:** one leader plus followers travel as one — only the leader moves, followers are pulled
   along, and joining is an LLM tool call, never a keyword match.
 - Locations → rooms, with an `entry_room`, per-room floor plans, indoor/outdoor, decency, swim rules,
-  `known_locations` discovery and rule-based access control (**Block / Force / Discover** rules with
-  free-text conditions such as `has_item:item_a1b2c3d4 OR courage>50`).
+  `known_locations` discovery and rule-based access control (**Block / Force / Discover / Modify**
+  rules with free-text conditions such as `has_item:item_a1b2c3d4 OR courage>50`). A block rule can
+  also target **skills** (the tool disappears with a reason), a modify rule scales travel speed,
+  discovery, spell success or thought frequency.
+- **Status values with consequences:** values declared by a template (the `rp` package ships
+  energy, attention and courage) drift each game hour by a base rate, conditional rates (sleep at
+  home, travelling, dangerous places, good company, per-location/room rates) and an optional pull
+  toward a rest value. Chat beats, activities, resolved events, finished plans, gifts, items,
+  spells and skills move them; every change is in a per-character history with its cause.
+  Threshold bands turn a value into behaviour text in the prompt, band states (tired, alert,
+  scared, …) into image cues and icons, and declared needs into the thought turn's decision order.
+  World tuning lives in Game-Admin → States → **Values**.
 - **Building hulls from floor plans** — five textured styles including Modern, non-enterable facade storeys with blind windows, editable seed/overrides and world style JSON in Game-Admin; deterministic full/low models with interior cutouts and explicit stale rebuilds ([details](docs/llm-blender-models.md#building-hull)).
 - **Automatic NPCs:** slots on locations and painted areas, home areas, time windows and a pool of
   reusable profiles spawn short-lived NPCs that talk to each other and disappear again.

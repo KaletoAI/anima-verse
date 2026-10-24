@@ -125,6 +125,43 @@ Condition expressions also accept `at_home`, `offmap`, `travelling`,
 `location_danger>N` (also `<` and `=`), and `state:<id>`. Location atoms read the
 character's own current location/position, even during target access checks.
 
+A state never fires on a stat the character does not have (inside
+`activity_engine.missing_stats_fail()` a missing stat is "not met"); rule
+conditions keep "missing counts as 100".
+
+## Skill gate — `app.core.skill_gate` ⚠
+
+Rules of type `block` with `target.scope = "skill"` and the world setting
+`skill_costs` decide whether a character may use a skill right now. The core
+applies the gate to the tool list and every execution path; a package only needs
+it for its own direct calls.
+
+| Function | Semantics |
+|---|---|
+| `blocked_reason(name, skill_id, *, profile=None, rules=None) -> str` | Rule message or cost shortfall; `""` = allowed |
+| `blocked_skills(name, skill_ids) -> dict` | Reasons for the blocked ids only (one rules load) |
+| `run_gated(name, skill_id, call) -> result` | Recheck, run, charge the cost after a non-error result; blocked → `"Error: <reason>"` |
+| `charge(name, skill_id) -> dict` | Deduct the configured cost (source `skill:<id>`) |
+| `stat_costs_shortfall(profile, costs) -> str|None` | Generic "needs N <stat>" check; stats the character lacks are free |
+
+## Modifiers — `app.core.modifiers` ⚠
+
+Rules of type `modify` (`{"modify": {"quantity", "factor"}}`, factor 0.1..5)
+scale a registered quantity while their condition holds; matching rules multiply.
+Core quantities: `travel_speed`, `discovery`, `spell_success`, `thought_frequency`.
+
+| Function | Semantics |
+|---|---|
+| `register_quantity(qid, label, description)` | Register a package quantity (call in `on_load`); appears in the Rules tab |
+| `factor(name, qid, *, profile=None, rules=None) -> float` | Product of matching rules (1.0 without); a missing stat never fires; cached 30 s, cleared on every rule change |
+| `modify_rules() -> list` | Load once when asking about many characters |
+
+## Rewards — `app.core.stat_rewards`
+
+| Function | Semantics |
+|---|---|
+| `apply_reward(name, occasion) -> dict` | Apply the world setting `rewards[occasion]` (fixed deltas) |
+
 ## Body-Slots — `app.core.body_slots` ✅ (Spezies-Pakete)
 
 | Funktion | Semantik |
@@ -677,6 +714,9 @@ alle Tool-Namen mit einem gesetzten Flag) — im Manifest setzbar:
 `SINGLETON`, `SUPPRESS_IN_PERSON`, `CASCADE_BRAKE`, `SEARCH_INTENT`,
 `DELIVERS_SPEECH`, `USER_NOTIFICATION`, `REMOTE_COMM`, `PROGRESS_TYPE`
 (`skill_manager.progress_type_for_tool(tool_name)`).
+`PLAYER_ACTION` (class attribute, e.g. `"travel"`, `"scene_photo"`) names the
+/play action a skill stands behind, so the player route is gated and charged
+by that skill without the core naming it.
 
 Nur als **Klassenattribut** (sie ändern den Ausführungszeitpunkt, nicht bloß Metadaten):
 `ALWAYS_LOAD`, `DEFERRED` (Tool läuft erst nach der Chat-Antwort),
