@@ -133,12 +133,10 @@ F) NO PLAYER SURFACE POSTS TO AN ADMIN-ONLY PATH — a source scan, not a
    ``apiDelete``/``apiUpload`` and ``fetch(url, { method: ... })``) in the
    files a logged-in PLAYER can reach:
 
-     packages/player-ui/src/**            the shared player panels
+     packages/player-ui/src/**            the shared player panels, incl. the
+                                          character forms of AvatarSettingsPanel
      frontend/src/player/**               the /play shell
      frontend/src/components/ImageGenDialog.tsx   slotted into /play
-     frontend/src/tabs/characters/{TemplateTab,TemplateSectionForm,BodyEditor,
-                                    SoulEditor,FieldImage}.tsx
-                                          pulled in by AvatarSettingsPanel
      client3d/src/**                      the 3D client
 
    and asserts that none of their URL literals is admin-only under the rules
@@ -642,11 +640,6 @@ PLAYER_TREES = [
 ]
 PLAYER_FILES = [
     REPO / "frontend" / "src" / "components" / "ImageGenDialog.tsx",
-    REPO / "frontend" / "src" / "tabs" / "characters" / "TemplateTab.tsx",
-    REPO / "frontend" / "src" / "tabs" / "characters" / "TemplateSectionForm.tsx",
-    REPO / "frontend" / "src" / "tabs" / "characters" / "BodyEditor.tsx",
-    REPO / "frontend" / "src" / "tabs" / "characters" / "SoulEditor.tsx",
-    REPO / "frontend" / "src" / "tabs" / "characters" / "FieldImage.tsx",
 ]
 # Write calls whose URL IS admin-only but which no player can trigger. Each
 # entry needs a reason that was verified in the source, not a hunch.

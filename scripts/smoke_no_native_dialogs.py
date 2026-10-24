@@ -16,7 +16,7 @@ BROWSER, not of the app: it cannot be styled, it cannot be translated through
 grid and in the 3D client's HUD that thread is the render loop, and while the
 pointer is locked (the 3D client's normal state) the browser suppresses the
 dialog outright — the click then appears to do nothing at all.  The
-replacements exist: `frontend/src/components/ConfirmDialog.tsx` for a yes/no
+replacements exist: `packages/player-ui/src/character/ConfirmDialog.tsx` for a yes/no
 question, `frontend/src/components/PromptDialog.tsx` for one value, and the
 inline confirmation strip of `packages/player-ui/src/GalleryPanel.tsx` inside
 the player panels.

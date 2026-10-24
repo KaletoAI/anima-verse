@@ -20,7 +20,7 @@ if (!process.env.BODY_VISIBILITY_BUNDLED) {
     process.exitCode = run.status ?? 1
   } finally { rmSync(tmp, { recursive: true, force: true }) }
 } else {
-  const { bodyAttributeVisible } = await import('../frontend/src/lib/bodyAttributeVisibility.ts')
+  const { bodyAttributeVisible } = await import('../packages/player-ui/src/character/bodyAttributeVisibility.ts')
   const conditions = { 'attributes.type': ['inset', null], category: ['neutral'] }
   const values = { type: 'inset', inner_size: 'medium' }
   assert.equal(bodyAttributeVisible(conditions, values, { category: 'neutral' }), true)
