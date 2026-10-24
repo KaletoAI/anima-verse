@@ -372,7 +372,7 @@
       "group": "seat"
     },
     "studying": {
-      "prompt": "hunched over books at desk, pen in hand, chin resting on other hand",
+      "prompt": "sitting hunched over books at a desk, writing with a pen, the chin resting on the other hand",
       "synonyms": [
         "lernen",
         "lernend",
@@ -380,9 +380,13 @@
         "lernt",
         "für die prüfung lernen",
         "hausaufgaben machen",
-        "büffeln"
+        "büffeln",
+        "notizen machen",
+        "mitschreiben",
+        "taking notes",
+        "doing homework"
       ],
-      "animation": "sit",
+      "animation": "studying",
       "group": "seat",
       "solo": true
     },
