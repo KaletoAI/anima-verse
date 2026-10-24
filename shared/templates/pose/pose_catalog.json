@@ -141,7 +141,7 @@
       "group": "stand"
     },
     "running": {
-      "prompt": "dynamic running pose, one foot forward, arms pumping, leaning forward",
+      "prompt": "jogging at an easy pace, arms bent and swinging, leaning slightly forward, athletic stride",
       "synonyms": [
         "laufen",
         "laufend",
@@ -152,9 +152,11 @@
         "läuft",
         "joggt",
         "sprinten",
-        "joggen gehen"
+        "joggen gehen",
+        "dauerlauf",
+        "jogging along"
       ],
-      "animation": "run",
+      "animation": "running",
       "group": "stand",
       "solo": true
     },
