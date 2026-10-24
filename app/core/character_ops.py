@@ -3175,7 +3175,7 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
 
 
 def build_stat_history(character_name: str, limit: int = 50) -> dict:
-    """Return the newest effects rows with recorded causes and game stamps."""
+    """Return the newest effects rows with recorded causes, game stamps and labels."""
     import json
     from app.core.db import get_connection
     from app.core.stat_rules import describe_source
@@ -3190,6 +3190,7 @@ def build_stat_history(character_name: str, limit: int = 50) -> dict:
         metadata = state.get('metadata') or {}
         source = metadata.get('source') or state.get('value') or ''
         entry = {'id': row['id'], 'ts': row['ts'], 'game_ts': row['game_ts'],
+                 'game_label': game_label(row['game_ts'] or ''),
                  'source': source, 'label': describe_source(source, metadata),
                  'changes': metadata.get('changes') or {}}
         if 'parts' in metadata:

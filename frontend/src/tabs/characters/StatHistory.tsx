@@ -1,40 +1,20 @@
-import { useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet } from '../../lib/api'
+import { useStatHistory } from './statHistoryData'
 
-interface HistoryRow {
-  id: number
-  game_ts: string
-  label: string
-  changes: Record<string, { old: number; new: number }>
-}
-
+/** One compact sparkline per stat over the recorded history. The row-by-row
+ *  list lives in the Mind tab. */
 export function StatHistory({ character, revision, label }: {
   character: string; revision: string; label: (key: string) => string
 }) {
   const { t } = useI18n()
-  const [rows, setRows] = useState<HistoryRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [attempt, setAttempt] = useState(0)
-  useEffect(() => {
-    let alive = true
-    setRows([])
-    setLoading(true)
-    setError('')
-    apiGet<{ rows: HistoryRow[] }>(`/characters/${encodeURIComponent(character)}/stat-history?limit=30`)
-      .then(result => { if (alive) setRows(result.rows) })
-      .catch(error => { if (alive) setError((error as Error).message) })
-      .finally(() => { if (alive) setLoading(false) })
-    return () => { alive = false }
-  }, [character, revision, attempt])
+  const { rows, loading, error, retry } = useStatHistory(character, revision)
   const chronological = [...rows].reverse()
   const keys = [...new Set(chronological.flatMap(row => Object.keys(row.changes)))]
   return <section className="ga-section">
     <h3>{t('History')}</h3>
     {loading ? <div className="ga-loading">{t('Loading…')}</div> : error ? <div role="alert">
       {t('Could not load stat history.')} {error}{' '}
-      <button type="button" className="ga-btn ga-btn-sm" onClick={() => setAttempt(n => n + 1)}>{t('Retry')}</button>
+      <button type="button" className="ga-btn ga-btn-sm" onClick={retry}>{t('Retry')}</button>
     </div> : !rows.length ? <p className="ga-hint">{t('No stat changes recorded.')}</p> : <>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
         {keys.map(key => {
@@ -59,10 +39,7 @@ export function StatHistory({ character, revision, label }: {
           </figure>
         })}
       </div>
-      <ul>{rows.map(row => <li key={row.id}>
-        <time>{row.game_ts}</time>{' · '}{row.label}{' · '}
-        {Object.entries(row.changes).map(([key, change]) => `${label(key)} ${change.old}→${change.new}`).join(', ')}
-      </li>)}</ul>
+      <p className="ga-hint">{t('The list of changes with their causes is in the Mind tab.')}</p>
     </>}
   </section>
 }

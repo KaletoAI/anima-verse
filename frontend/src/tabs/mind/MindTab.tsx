@@ -6,6 +6,7 @@ import { MindPanel } from '../../player/MindPanel'
 import { DecencyExemptToggle } from '../../components/DecencyExemptToggle'
 import { clockSettings, formatDate, formatTime, sameZoneDay,
   useClockSettings } from '../../lib/clockFormat'
+import { useStatHistory, useStatLabels } from '../characters/statHistoryData'
 
 /**
  * Mind tab — debug any (non-avatar) character's inner state in the Game-Admin.
@@ -57,6 +58,50 @@ function fmtGameClock(gameLabel?: string): string {
   return m ? m[1].trim() : ''
 }
 
+/** Status-value changes with their causes, newest first — the list behind the
+ *  sparklines in the Character tab. Reloads with the tab's Refresh. */
+function StatHistoryCard({ character, revision }: { character: string; revision: number }) {
+  const { t } = useI18n()
+  const label = useStatLabels(character)
+  const { rows, loading, error, retry } = useStatHistory(character, String(revision), 50)
+  return (
+    <div className="ga-mind-card">
+      <h4>{t('Status value history')}</h4>
+      {loading ? (
+        <div className="ga-mind-empty">{t('Loading…')}</div>
+      ) : error ? (
+        <div className="ga-mind-empty" role="alert">
+          {t('Could not load stat history.')}{' '}
+          <button type="button" className="ga-btn ga-btn-sm" onClick={retry}>{t('Retry')}</button>
+        </div>
+      ) : rows.length > 0 ? (
+        <ul className="ga-mind-list">
+          {rows.map((row) => (
+            <li key={row.id}>
+              <span className="ts">
+                {fmtTs(row.ts)}
+                {row.game_label ? (
+                  <span title={`${t('Game time')}: ${row.game_label}`}>
+                    {' · 🕰 '}{fmtGameClock(row.game_label) || row.game_label}
+                  </span>
+                ) : null}
+              </span>
+              {Object.entries(row.changes).map(([key, change]) => (
+                <span key={key} style={{ marginRight: 8, whiteSpace: 'nowrap' }}>
+                  {label(key)} {change.old}→<b>{change.new}</b>
+                </span>
+              ))}
+              {row.label ? <span style={{ opacity: 0.55 }}> · {row.label}</span> : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="ga-mind-empty">{t('No stat changes recorded.')}</div>
+      )}
+    </div>
+  )
+}
+
 export function MindTab() {
   // Subscribe to the shared clock settings so the stamps above re-render
   // once the server-configured format and timezone arrive.
@@ -67,6 +112,7 @@ export function MindTab() {
   const [selected, setSelected] = useState('')
   const [dbg, setDbg] = useState<DebugActivity | null>(null)
   const [loading, setLoading] = useState(false)
+  const [revision, setRevision] = useState(0)
 
   useEffect(() => {
     apiGet<{ characters?: { name: string }[] }>('/characters/list')
@@ -77,6 +123,7 @@ export function MindTab() {
   const loadDebug = useCallback(async (name: string) => {
     if (!name) { setDbg(null); return }
     setLoading(true)
+    setRevision((n) => n + 1)
     try {
       setDbg(await apiGet<DebugActivity>(`/characters/${encodeURIComponent(name)}/debug-activity`))
     } catch (e) {
@@ -204,6 +251,8 @@ export function MindTab() {
                 ) : null}
               </div>
             ) : null}
+
+            <StatHistoryCard character={selected} revision={revision} />
 
             {/* Recent thoughts */}
             <div className="ga-mind-card">
