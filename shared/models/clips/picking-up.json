@@ -46,6 +46,17 @@
     "L": 19.75,
     "R": -13.5
    }
-  }
+  },
+  "despiked": {
+   "picking-up.fbx": {
+    "RightToeBase": [
+     39,
+     40,
+     41,
+     42
+    ]
+   }
+  },
+  "despiked_at": "2026-10-24"
  }
 }

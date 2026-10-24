@@ -46,6 +46,15 @@
     "L": 20.5,
     "R": -19.25
    }
-  }
+  },
+  "despiked": {
+   "standing washing.fbx": {
+    "LeftHand": [
+     217,
+     218
+    ]
+   }
+  },
+  "despiked_at": "2026-10-24"
  }
 }

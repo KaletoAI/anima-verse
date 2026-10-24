@@ -568,6 +568,119 @@ def best_loop_window(poses: Sequence[Pose], fps: float, min_s: float):
     return best
 
 
+# ------------------------------------------------------------ spike repair
+
+#: A joint that turns more than this into a frame AND back out of it is a
+#: glitch, not motion: a real limb does not reverse 10 deg inside one 33 ms
+#: frame and land where it started. Measured on the converted library the
+#: glitches come from the retarget (a leg IK that flips the knee for one
+#: frame, a toe that snaps), not from the capture.
+SPIKE_DEG = 10.0
+
+
+def _q_angle(a: Sequence[float], b: Sequence[float]) -> float:
+    """Angle (deg) between two unit quaternions (w, x, y, z), sign-blind."""
+    d = abs(sum(x * y for x, y in zip(a, b)))
+    return math.degrees(2.0 * math.acos(min(1.0, d)))
+
+
+def _q_blend(a: Sequence[float], b: Sequence[float], w: float) -> List[float]:
+    """Slerp a → b at weight ``w`` (sign-aligned, the short way round)."""
+    d = sum(x * y for x, y in zip(a, b))
+    if d < 0.0:
+        b, d = [-c for c in b], -d
+    if d > 0.9995:                       # nearly equal: lerp is exact enough
+        q = [x * (1.0 - w) + y * w for x, y in zip(a, b)]
+    else:
+        th = math.acos(d)
+        sa, sb = math.sin((1.0 - w) * th), math.sin(w * th)
+        q = [(x * sa + y * sb) / math.sin(th) for x, y in zip(a, b)]
+    n = math.sqrt(sum(c * c for c in q)) or 1.0
+    return [c / n for c in q]
+
+
+#: A single step of more than SNAP_FACTOR * SPIKE_DEG that the joint does not
+#: undo, between frames where it barely moves, is a SNAP (the IK switching
+#: solutions, a foot flipping 65 deg in one frame): it is spread over
+#: SNAP_SPREAD frames on each side.
+SNAP_FACTOR = 2.0
+SNAP_SPREAD = 3
+#: A step this large is a WRONG SOLUTION (a hand turned upside down), not a
+#: glitch: spreading it would only turn the flip into a fast spin.
+SNAP_MAX_DEG = 90.0
+#: "Calm" = the steps around an event are below this share of the event.
+CALM = 0.5
+
+
+def despike(qs: List[List[float]], max_deg: float = SPIKE_DEG) -> List[int]:
+    """Repairs one joint's rotation series IN PLACE (a list of (w, x, y, z)
+    per frame, PARENT-relative, so replacing a key moves only this joint and
+    what hangs on it); returns the changed frame indices.
+
+    Every event must be ISOLATED — the steps just before and just after it
+    stay below CALM times the event — so fast real motion, which keeps
+    moving around its turning points, never trips it (a running knee turns
+    15 deg per frame on both sides of its peak).
+
+    * spike: the joint turns more than ``max_deg`` into frame i and more
+      than ``max_deg`` out of it, frames i-1 and i+1 lie within CALM of the
+      smaller turn of each other (out and back) → the key becomes the blend
+      of its neighbours. The same over two frames (i, i+1 between i-1 and
+      i+2).
+    * snap: one step between SNAP_FACTOR * ``max_deg`` and SNAP_MAX_DEG
+      that stays
+      (SNAP_SPREAD frames later the joint is still more than 3/4 of the
+      step away from where it came from) →
+      the keys SNAP_SPREAD frames on each side are re-blended from the two
+      calm ends, so the turn takes 2 * SNAP_SPREAD frames instead of one.
+    * edges: the first/last key jumping more than ``max_deg`` onto a
+      neighbour that moves less than a quarter of that onwards takes the
+      neighbour's value."""
+    n = len(qs)
+    if n < 3:
+        return []
+    step = lambda a, b: _q_angle(qs[a], qs[b]) if 0 <= a < n and 0 <= b < n else 0.0  # noqa: E731
+    fixed: List[int] = []
+    i = 1
+    while i < n - 1:
+        into, out = step(i - 1, i), step(i, i + 1)
+        lim = CALM * min(into, out)
+        if into > max_deg and out > max_deg and step(i - 1, i + 1) < lim \
+                and step(i - 2, i - 1) < lim and step(i + 1, i + 2) < lim:
+            qs[i] = _q_blend(qs[i - 1], qs[i + 1], 0.5)
+            fixed.append(i)
+            i += 2
+            continue
+        if i < n - 2:
+            out2 = step(i + 1, i + 2)
+            lim2 = CALM * min(into, out2)
+            if into > max_deg and out2 > max_deg and step(i - 1, i + 2) < lim2 \
+                    and step(i - 2, i - 1) < lim2 and step(i + 2, i + 3) < lim2:
+                a, b = qs[i - 1], qs[i + 2]
+                qs[i], qs[i + 1] = _q_blend(a, b, 1 / 3), _q_blend(a, b, 2 / 3)
+                fixed += [i, i + 1]
+                i += 3
+                continue
+        jump = out
+        if SNAP_FACTOR * max_deg < jump < SNAP_MAX_DEG and into < CALM * max_deg \
+                and step(i + 1, i + 2) < CALM * max_deg \
+                and step(i, min(n - 1, i + SNAP_SPREAD)) > (1.0 - CALM / 2) * jump:
+            lo, hi = max(0, i - SNAP_SPREAD + 1), min(n - 1, i + SNAP_SPREAD)
+            a, b = list(qs[lo]), list(qs[hi])
+            for k in range(lo + 1, hi):
+                qs[k] = _q_blend(a, b, (k - lo) / (hi - lo))
+                fixed.append(k)
+            i = hi + 1
+            continue
+        i += 1
+    for edge, nb, nb2 in ((0, 1, 2), (n - 1, n - 2, n - 3)):
+        jump = step(edge, nb)
+        if jump > max_deg and step(nb, nb2) < 0.25 * jump:
+            qs[edge] = list(qs[nb])
+            fixed.append(edge)
+    return sorted(set(fixed))
+
+
 def resample_indices(n_frames: int, source_fps: float, fps: float,
                      start_s: float = 0.0, end_s: Optional[float] = None,
                      speed: float = 1.0) -> List[int]:

@@ -46,6 +46,17 @@
     "L": 7.75,
     "R": -12.75
    }
-  }
+  },
+  "despiked": {
+   "standing wash-self.fbx": {
+    "LeftHand": [
+     407
+    ],
+    "RightHand": [
+     308
+    ]
+   }
+  },
+  "despiked_at": "2026-10-24"
  }
 }

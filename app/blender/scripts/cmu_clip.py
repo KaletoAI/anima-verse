@@ -91,6 +91,7 @@ import json
 import math
 import sys
 from pathlib import Path
+from typing import Optional
 
 _SCRIPTS_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPTS_DIR)
@@ -628,7 +629,8 @@ def _pin_feet(arm, sol, plan: _Plan, path) -> dict:
 
 def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
           hips_scale: float = 1.0, offset=(0.0, 0.0), loop: bool = False,
-          stand_cm: float = 100.0, travel_scale: float = 1.0):
+          stand_cm: float = 100.0, travel_scale: float = 1.0,
+          despiked: Optional[dict] = None):
     """Writes the solved frames into a fresh action on ``arm``.
 
     Every frame is moved as a whole (rotations untouched): the hips height is
@@ -637,7 +639,10 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
     the rig's longer legs dangling in the air), the whole take is shifted by
     ``offset`` (x, z) cm (the pair's contact fit) and lifted by ``-floor_cm``
     so the planted foot touches y = 0. ``travel_scale`` multiplies the hips'
-    horizontal travel (root_motion keep)."""
+    horizontal travel (root_motion keep). Every joint's rotation series is
+    cleared of one- and two-frame glitches (``_cmu.despike``) before the loop
+    blend; ``despiked`` (when given) receives short bone name -> repaired
+    frame indices (0-based)."""
     seen, rest, frames, _low = solved
     action = bpy.data.actions.new(name=f"Armature|{take.role or 'solo'}")
     arm.animation_data_create()
@@ -679,6 +684,17 @@ def _bake(arm, take: _Take, fps: int, solved, floor_cm: float,
                 lpath = f'pose.bones["{b.name}"].location'
                 for i, v in enumerate((t.x, t.y, t.z)):
                     keys.setdefault((lpath, i), []).append(v)
+    if despiked is not None:
+        despiked.clear()
+    for path in [k[0] for k in keys if k[0].endswith("rotation_quaternion") and k[1] == 0]:
+        comps = [keys[(path, c)] for c in range(4)]
+        qs = [[comps[c][f] for c in range(4)] for f in range(nframes)]
+        fixed = _cmu.despike(qs)
+        for f in fixed:
+            for c in range(4):
+                comps[c][f] = qs[f][c]
+        if fixed and despiked is not None:
+            despiked[_short(path.split('"')[1])] = fixed
     if loop and nframes > 2 * LOOP_BLEND_FRAMES:
         # Ease the tail into the head: the last K keys blend towards key 0
         # (quaternions slerped per bone, the hips location lerped), so frame
@@ -924,7 +940,9 @@ def run_takes(takes, args, fps, source):
     floor_cm, lows = _rig_floor(solved, scales, stands)
     geometry["rig_floor_shift_cm"] = round(-floor_cm, 2)
     geometry["rig_floor_min_cm"] = round(lows[0] - floor_cm, 2) if lows else 0.0
+    spikes = {}
     for take, sol, k, off, stand in zip(takes, solved, scales, offsets, stands):
+        fixed = {}
         DRIVEN.clear()
         DRIVEN.update(m for m, c in BONE_MAP.items() if c in take.sk.bones)
         arm = _load_rig(args["rig"])
@@ -933,7 +951,7 @@ def run_takes(takes, args, fps, source):
         seen, rest, frames, low, _ratio = sol
         seen = [arm.data.bones[n] for n in seen]
         _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop, stand,
-              travel_scale=k if mode == "keep" else 1.0)
+              travel_scale=k if mode == "keep" else 1.0, despiked=fixed)
         if mode == "foot_lock" and plan is not None and plan.weights:
             # PIN: the root path of the planted result pins every planted
             # run of a foot to one world spot (``_pin_feet``), the frames are
@@ -947,7 +965,9 @@ def run_takes(takes, args, fps, source):
             arm = _load_rig(args["rig"])
             seen = [arm.data.bones[n] for n in sol[0]]
             _bake(arm, take, fps, (seen, rest, frames, low), floor_cm, k, off, loop, stand,
-                  travel_scale=k if mode == "keep" else 1.0)
+                  travel_scale=k if mode == "keep" else 1.0, despiked=fixed)
+        if fixed:
+            spikes[take.role or "solo"] = fixed
         if len(takes) == 1:
             # Last pass before export: measure (strip/keep) or rebuild
             # (foot_lock) the horizontal travel — SOLO only, a pair's roots
@@ -957,6 +977,9 @@ def run_takes(takes, args, fps, source):
         path = out_dir / f"{stem}.fbx"
         _export(arm, path)
         outputs[stem] = str(path)
+    if spikes:
+        # provenance: role ("solo" for one take) -> bone -> repaired frames
+        geometry["despiked"] = spikes
     sidecar = {
         "kind": kind,
         "pair": len(takes) == 2,

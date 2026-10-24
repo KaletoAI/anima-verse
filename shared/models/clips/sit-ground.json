@@ -41,6 +41,16 @@
   "takes": [
    "82_05"
   ],
-  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217."
+  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217.",
+  "despiked": {
+   "sit-ground.fbx": {
+    "RightHand": [
+     115,
+     119,
+     126
+    ]
+   }
+  },
+  "despiked_at": "2026-10-24"
  }
 }

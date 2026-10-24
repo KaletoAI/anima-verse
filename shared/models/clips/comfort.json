@@ -78,6 +78,18 @@
     "L": -28.75,
     "R": 18.75
    }
-  }
+  },
+  "despiked": {
+   "comfort__b.fbx": {
+    "LeftToeBase": [
+     32,
+     33
+    ],
+    "RightToeBase": [
+     0
+    ]
+   }
+  },
+  "despiked_at": "2026-10-24"
  }
 }
