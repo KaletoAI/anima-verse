@@ -2912,6 +2912,15 @@
     "Add bonus": "Bonus hinzufügen",
     "Status value history": "Verlauf der Statuswerte",
     "The list of changes with their causes is in the Mind tab.": "Die Liste der Änderungen mit ihren Ursachen steht im Mind-Tab.",
-    "Travel here": "Hierher reisen"
+    "Travel here": "Hierher reisen",
+    "Regenerate image": "Bild neu generieren",
+    "Enter a prompt.": "Gib einen Prompt ein.",
+    "Use source image as reference": "Quellbild als Referenz verwenden",
+    "Length in seconds (empty = backend default)": "Länge in Sekunden (leer = Backend-Standard)",
+    "Generation failed.": "Generierung fehlgeschlagen.",
+    "Suggestion failed.": "Vorschlag fehlgeschlagen.",
+    "Re-animate": "Erneut animieren",
+    "Animate": "Animieren",
+    "Suggest": "Vorschlagen"
   }
 }

@@ -17,22 +17,22 @@
  * in /play): ScenePanel receives data + refresh as props and never polls
  * itself. The `photoDialog` slot is filled with `PlayerPhotoDialog` (stage 6),
  * the package's slim player-side dialog — the big game-admin `ImageGenDialog`
- * that /play slots in stays where it is. The gallery and Instagram panels
- * followed in stage 6 part 2 WITHOUT their dialog slots: regenerating an image
- * (and animating a post) needs those same admin dialogs, so the HUD simply
- * does not offer the buttons.
+ * that /play slots in stays where it is. Gallery regeneration, Instagram
+ * regeneration/animation and profile portraits use slim player dialogs too.
+ * One character-form host provides the portrait dialog throughout this HUD.
  *
  * The CHAT panel additionally runs in an auto mode (E3 acceptance) — it shows
  * itself when something is said and withdraws when the room stays silent; see
  * the block around CHAT_IDLE_MS below. Self/Others stay purely manual.
  */
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   SYNC_ENDPOINTS, apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
   ScenePanel, SelfPanel, OthersPanel, PartyStrip,
   BelongingsPanel, MindPanel, PhonePanel, NewsPanel, TaskPanel, QuestsPanel,
   AvatarSettingsPanel, GalleryPanel, InstagramPanel, NoticeBanner, useOpenTopics,
-  PlayerPhotoDialog, SCENE_ROW_ID_ATTR,
+  PlayerPhotoDialog, PlayerRegenDialog, PlayerAnimateDialog, PlayerProfileImageDialog,
+  CharacterFormHostContext, type CharacterFormHost, SCENE_ROW_ID_ATTR,
   type SceneData, type SceneLine, type IconName,
 } from '@anima/player-ui';
 import { CharacterPlaque } from './CharacterPlaque';
@@ -173,6 +173,9 @@ export function Hud({ avatar, username, role }: {
   avatar: string; username: string; role: string;
 }) {
   const { t } = useI18n();
+  const characterFormHost = useMemo<CharacterFormHost>(() => ({
+    renderImageDialog: (ctl) => <PlayerProfileImageDialog ctl={ctl} />,
+  }), []);
   const game = useSyncExternalStore(subscribeGameState, getGameState);
   const boot = useSyncExternalStore(subscribeBoot, getBoot).state;
   const [open, setOpen] = useState<Record<PanelId, boolean>>({
@@ -1024,7 +1027,7 @@ export function Hud({ avatar, username, role }: {
   const offer = nearestOffer(game);
 
   return (
-    <>
+    <CharacterFormHostContext.Provider value={characterFormHost}>
       <div className="hud-top">
         <div className="hud-title">⚜ Anima Verse — {t('World map')}</div>
         <div className="hud-right">
@@ -1262,11 +1265,9 @@ export function Hud({ avatar, username, role }: {
             <section className="hud-panel">
               {panelHead('gallery', 'gallery', t('Gallery'))}
               <div className="hud-panel-body">
-                {/* No `regenDialog`: the regenerate flow needs the game-admin
-                    image dialog, which is not part of the package — without
-                    the slot the button is simply not there. Browsing, paging
-                    and deleting work in full. */}
-                <ErrorBoundary inline label="Gallery"><GalleryPanel /></ErrorBoundary>
+                <ErrorBoundary inline label="Gallery">
+                  <GalleryPanel regenDialog={(ctl) => <PlayerRegenDialog ctl={ctl} />} />
+                </ErrorBoundary>
               </div>
             </section>
           )}
@@ -1284,12 +1285,11 @@ export function Hud({ avatar, username, role }: {
             <section className="hud-panel">
               {panelHead('instagram', 'instagram', t('Instagram'))}
               <div className="hud-panel-body">
-                {/* Neither `imageGenDialog` nor `animateDialog`: regenerating
-                    and animating a post need the game-admin dialogs, which are
-                    not part of the package — without the slots those two
-                    buttons are simply not there. Reading, liking, commenting
-                    and deleting work in full. */}
-                <ErrorBoundary inline label="Instagram"><InstagramPanel /></ErrorBoundary>
+                <ErrorBoundary inline label="Instagram">
+                  <InstagramPanel
+                    imageGenDialog={(ctl) => <PlayerRegenDialog ctl={ctl} />}
+                    animateDialog={(ctl) => <PlayerAnimateDialog ctl={ctl} />} />
+                </ErrorBoundary>
               </div>
             </section>
           )}
@@ -1400,6 +1400,6 @@ export function Hud({ avatar, username, role }: {
             selection — the plaque is driven by the bus, not by panel state. */}
         <CharacterPlaque />
       </div>
-    </>
+    </CharacterFormHostContext.Provider>
   );
 }

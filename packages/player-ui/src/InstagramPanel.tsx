@@ -8,10 +8,9 @@
  * Source: /instagram/feed (+ /post/{id}/like|comment, DELETE /post/{id}).
  *
  * Moved into @anima/player-ui in stage 6 so the 3D client's HUD mounts the
- * same panel. Everything it needs came along, except the TWO large dialogs of
- * the regenerate and animate flows — both belong to the game-admin UI, so the
- * host slots them in via `imageGenDialog` and `animateDialog`. Zooming a post
- * uses the package Lightbox, so it needs no overlay of its own.
+ * same panel. Hosts fill `imageGenDialog` and `animateDialog` with their
+ * generation UI: admin dialogs or the slim player dialogs in the 3D HUD.
+ * Zooming a post uses the package Lightbox.
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useI18n } from './I18nProvider'
@@ -128,18 +127,14 @@ export interface InstagramAnimateControl {
 
 export interface InstagramPanelProps {
   /**
-   * Renders the image-generation dialog of the regenerate flow. The dialog
-   * itself lives in the game-admin UI (four admin tabs share it), so it is not
-   * part of this package — the host slots it in. Left unset, the regenerate
-   * button is not rendered at all and the flow is unreachable: that is the 3D
-   * HUD's documented v1 state, not a defect.
+   * Hosts choose the regeneration dialog. Without this slot the regenerate
+   * button is hidden; the 3D HUD supplies PlayerRegenDialog.
    */
   imageGenDialog?: (ctl: InstagramImageGenControl) => ReactNode
   /**
-   * Renders the animate dialog (image → video). Game-admin UI as well, same
-   * rule: without the slot the animate button is not rendered. Deleting an
-   * existing animation stays available either way — that is a plain DELETE,
-   * not a generation dialog.
+   * Renders the animate dialog (image → video). Without the slot the animate
+   * button is hidden. Deleting an existing animation stays available either
+   * way — that is a plain DELETE, not a generation dialog.
    */
   animateDialog?: (ctl: InstagramAnimateControl) => ReactNode
 }
@@ -492,7 +487,7 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
                 ♥ <span>{p.likes || 0}</span>
               </button>
               <button className="ig-act">💬 {comments.length}</button>
-              {/* Regenerate + animate need the host's game-admin dialogs. No
+              {/* Regenerate + animate need the host's generation dialogs. No
                   slot, no button — the flow is simply not offered there. */}
               {imageGenDialog ? (
                 <button

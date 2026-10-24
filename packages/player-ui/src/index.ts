@@ -53,3 +53,7 @@ export * from './character/PromptPreview';
 export * from './character/bodyAttributeVisibility';
 export * from './character/Field';
 export * from './character/ConfirmDialog';
+
+export { PlayerRegenDialog } from './PlayerRegenDialog';
+export { PlayerAnimateDialog } from './PlayerAnimateDialog';
+export { PlayerProfileImageDialog } from './PlayerProfileImageDialog';

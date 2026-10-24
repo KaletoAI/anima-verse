@@ -7,9 +7,8 @@
  * Sources: GET /play/galleries (list), GET /play/gallery[/{character}] (images).
  *
  * Moved into @anima/player-ui in stage 6 so the 3D client's HUD mounts the
- * same panel. Everything it needs came along, except the large
- * image-generation dialog of the regenerate flow, which belongs to the
- * game-admin UI — the host slots it in via the `regenDialog` prop.
+ * same panel. Hosts fill `regenDialog` with their image-generation UI: the
+ * admin dialog in Game-Admin or the slim player dialog in the 3D HUD.
  *
  * The panel keeps its OWN detail overlay (not the package Lightbox): it is not
  * just a big image but image plus info column, delete/regenerate actions and
@@ -74,11 +73,8 @@ export interface GalleryRegenControl {
 
 export interface GalleryPanelProps {
   /**
-   * Renders the image-generation dialog of the regenerate flow. The dialog
-   * itself lives in the game-admin UI (four admin tabs share it), so it is not
-   * part of this package — the host slots it in. Left unset, the regenerate
-   * button is not rendered at all and the flow is unreachable: that is the 3D
-   * HUD's documented v1 state, not a defect.
+   * Hosts choose the regeneration dialog. Without this slot the regenerate
+   * button is hidden; the 3D HUD supplies PlayerRegenDialog.
    */
   regenDialog?: (ctl: GalleryRegenControl) => ReactNode
 }
