@@ -233,7 +233,7 @@
       "group": "stand"
     },
     "meditating": {
-      "prompt": "cross-legged on floor, hands on knees palms up, straight back, eyes closed",
+      "prompt": "sitting cross-legged on the floor in meditation, upright back, hands resting palms up on the knees, eyes closed, serene expression",
       "synonyms": [
         "meditieren",
         "meditierend",
@@ -241,10 +241,14 @@
         "im schneidersitz sitzen",
         "auf dem boden sitzen",
         "am boden sitzen",
-        "zur ruhe kommen"
+        "zur ruhe kommen",
+        "in meditation",
+        "meditation",
+        "sitting cross-legged"
       ],
-      "animation": "sit-ground",
-      "group": "ground"
+      "animation": "meditating",
+      "group": "ground",
+      "solo": true
     },
     "painting": {
       "prompt": "standing at easel, brush in one hand, palette in other, stepping back to look",
