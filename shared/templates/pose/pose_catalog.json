@@ -825,7 +825,7 @@
       "yaw_offset": 0
     },
     "comforting": {
-      "prompt": "one person comforting another, both hands on the other's shoulders, leaning in with a caring expression",
+      "prompt": "one person comforting another, both hands on the sad person's shoulders, the other with the head bowed, consoling",
       "label_de": "Trösten",
       "synonyms": [
         "comfort",
@@ -836,9 +836,12 @@
         "hände auf die schultern",
         "reassure",
         "jemanden trösten",
-        "beruhigen"
+        "beruhigen",
+        "consoling",
+        "comforting someone",
+        "jemandem trost spenden"
       ],
-      "animation": "comfort",
+      "animation": "comforting",
       "solo": false,
       "group": "stand",
       "places": 2,

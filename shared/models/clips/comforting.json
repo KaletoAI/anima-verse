@@ -1,0 +1,63 @@
+{
+ "kind": "comforting",
+ "pair": true,
+ "roles": [
+  "a",
+  "b"
+ ],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 145,
+ "duration_s": 4.833,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "anchor_frame": 36,
+  "anchor_s": 1.2,
+  "root_distance_m": 0.6,
+  "floor_shift_cm": 1.1,
+  "roles": {
+   "a": {
+    "start_xz_m": [
+     -0.3,
+     0.0
+    ],
+    "anchor_xz_m": [
+     -0.3,
+     0.0
+    ]
+   },
+   "b": {
+    "start_xz_m": [
+     0.3,
+     0.0
+    ],
+    "anchor_xz_m": [
+     0.3,
+     0.0
+    ]
+   }
+  },
+  "hips_scale": [
+   1.0,
+   1.0
+  ],
+  "contact": {
+   "hands": [
+    "LeftHand",
+    "RightArm"
+   ],
+   "actor_distance_m": 0.121,
+   "rig_distance_m": 0.121,
+   "shift_m": 0.0
+  },
+  "rig_floor_shift_cm": -0.0,
+  "rig_floor_min_cm": 0.0
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/comforting.py",
+  "spec_sha": "af1d1866b8e8b8089c5e58a0742d9172d9759930a10c0312993eea12a419eef1"
+ }
+}
