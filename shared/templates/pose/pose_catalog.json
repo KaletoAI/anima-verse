@@ -156,7 +156,7 @@
         "dauerlauf",
         "jogging along"
       ],
-      "animation": "running",
+      "animation": "run",
       "group": "stand",
       "solo": true
     },
