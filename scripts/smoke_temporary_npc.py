@@ -722,12 +722,20 @@ print("\n[9] The generation schema comes out fully resolved")
 # a field list that reads "{generable_fields}". A leftover brace is therefore a
 # hard failure, not cosmetics. (`{` inside the JSON examples is fine; the check
 # looks only for the `{lower_snake_case}` placeholder shape.)
+# `{gender}` and `{age}` are NOT schema placeholders: since 127c1152 the schema
+# tells the LLM to write them literally into `face_appearance`, and the prompt
+# builder fills them from the profile at render time. They must survive the
+# schema load; every other `{name}` must not.
 import re as _re  # noqa: E402
 from app.core.npc_ops import build_npc_schema_text, npc_generable_fields  # noqa: E402
 
+_LITERAL_PROFILE_TOKENS = {"{gender}", "{age}"}
 schema = build_npc_schema_text("cafe", "back_room")
-leftovers = sorted(set(_re.findall(r"\{[a-z_][a-z0-9_]*\}", schema)))
+_found = set(_re.findall(r"\{[a-z_][a-z0-9_]*\}", schema))
+leftovers = sorted(_found - _LITERAL_PROFILE_TOKENS)
 check("no unresolved placeholders", leftovers, [])
+check("the literal face tokens reach the LLM", sorted(_found & _LITERAL_PROFILE_TOKENS),
+      ["{age}", "{gender}"])
 check("the field list is in there", "`standing_task`" in schema, True)
 check("outfit_description is offered", "`outfit_description`" in schema, True)
 # The list is derived from the template, so a field added to the JSON reaches
