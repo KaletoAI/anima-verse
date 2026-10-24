@@ -78,7 +78,7 @@
       "group": "seat"
     },
     "cooking": {
-      "prompt": "standing at kitchen counter, one hand stirring, slightly leaned forward, apron on",
+      "prompt": "standing at the stove cooking, stirring a pot with a wooden spoon, the other hand on the pot handle, steam rising",
       "synonyms": [
         "kochen",
         "kochend",
@@ -88,10 +88,14 @@
         "essen kochen",
         "das essen zubereiten",
         "am herd stehen",
-        "mittagessen kochen"
+        "mittagessen kochen",
+        "umrühren",
+        "rührt im topf",
+        "stirring a pot"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "cooking",
+      "group": "stand",
+      "solo": true
     },
     "sleeping": {
       "prompt": "lying on side, head on pillow, eyes closed, relaxed curled body",
