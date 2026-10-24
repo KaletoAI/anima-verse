@@ -665,7 +665,7 @@
       "group": "stand"
     },
     "making_coffee": {
-      "prompt": "standing upright, leaning slightly forward at a counter, hands operating the coffee machine or pitcher, focused posture",
+      "prompt": "standing at a counter making coffee, holding a cup under the machine, pouring milk",
       "synonyms": [
         "kaffee zubereiten",
         "brewing fresh coffee",
@@ -680,10 +680,13 @@
         "einen kaffee machen",
         "kaffee aufbrühen",
         "espresso machen",
-        "an der kaffeemaschine stehen"
+        "an der kaffeemaschine stehen",
+        "brewing coffee",
+        "at the coffee machine"
       ],
-      "animation": "idle",
-      "group": "stand"
+      "animation": "making-coffee",
+      "group": "stand",
+      "solo": true
     },
     "serving": {
       "prompt": "waiter serving, a tray balanced on one hand, the other hand setting a glass down on a table, polite smile",
