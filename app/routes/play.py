@@ -2684,11 +2684,14 @@ def build_belongings(character_name: str) -> dict:
     from app.models.inventory import (get_character_inventory, get_equipped_pieces,
                                       get_item)
     from app.models.character import get_character_outfits
+    from app.core.spell_engine import cast_blocked_reason
+    from app.models.character import get_character_profile
+    caster_profile = get_character_profile(avatar) or {}
     spells = {}
     try:
         from app.core.spell_engine import build_spell_catalog
         for s in (build_spell_catalog(avatar) or []):
-            spells[s.get("clone_item_id") or s.get("id")] = s
+            spells[s.get("id")] = s
     except Exception as e:
         logger.debug("belongings spell catalog failed: %s", e)
     try:
@@ -2716,6 +2719,7 @@ def build_belongings(character_name: str) -> dict:
                 "is_outfit": bool(op), "slots": op.get("slots") or [],
                 "outfit_types": op.get("outfit_types") or [],
                 "is_spell": bool(sp),
+                "cast_blocked": cast_blocked_reason(caster_profile, sp) if sp else "",
                 "incantation": (sp or {}).get("incantation", "") if sp else "",
                 "image": bool(it.get("image")), "rarity": (it.get("rarity") or ""),
             })
@@ -2988,7 +2992,8 @@ async def _cast_from_inventory(avatar: str, target: str, item_id: str) -> dict:
             "success": bool(res.get("success")),
             "chance": int(res.get("chance") or 0), "roll": int(res.get("roll") or 0),
             "delivered_item_name": res.get("delivered_item_name") or "",
-            "hint": res.get("hint") or ""}
+            "hint": res.get("hint") or "",
+            **({"reason": res["reason"]} if res.get("reason") else {})}
 
 
 @router.post("/play/cast")
@@ -3147,6 +3152,8 @@ def play_item_detail(item_id: str, user=Depends(get_current_user)):
     """Detail of ONE item the avatar owns — description, category/slots,
     effects, rarity and the image URL. Anything not in the avatar's inventory
     is a 404: the player surface never browses the world item catalogue."""
+    from app.core.spell_engine import cast_blocked_reason
+    from app.models.character import get_character_profile
     from app.core.i18n import localized
     from app.models.account import get_active_character
     from app.models.character import get_character_language
@@ -3185,6 +3192,7 @@ def play_item_detail(item_id: str, user=Depends(get_current_user)):
         "outfit_types": op.get("outfit_types") or [],
         "covers": op.get("covers") or [],
         "is_spell": bool(spell),
+        "cast_blocked": cast_blocked_reason(get_character_profile(avatar) or {}, spell) if spell else "",
         "incantation": (spell or {}).get("incantation", "") if spell else "",
         "effects": item.get("effects") or {},
         "image_url": (f"/inventory/items/{item_id}/image" if item.get("image") else ""),

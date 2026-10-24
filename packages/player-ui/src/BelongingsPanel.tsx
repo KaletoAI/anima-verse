@@ -63,7 +63,7 @@ function ItemIcon({ itemId, hasImage, emoji, size }: { itemId: string; hasImage:
 interface Item {
   item_id: string; name: string; description: string; quantity: number; category: string
   consumable: boolean; equipped: boolean; is_outfit: boolean; slots: string[]
-  outfit_types: string[]; is_spell: boolean; incantation: string
+  outfit_types: string[]; is_spell: boolean; cast_blocked?: string; incantation: string
   image: boolean; rarity: string
 }
 
@@ -110,7 +110,7 @@ interface ItemDetail {
   item_id: string; name: string; description: string; category: string
   rarity: string; quantity: number; equipped: boolean; consumable: boolean
   transferable: boolean; is_outfit: boolean; slots: string[]
-  outfit_types: string[]; covers: string[]; is_spell: boolean; incantation: string
+  outfit_types: string[]; covers: string[]; is_spell: boolean; cast_blocked?: string; incantation: string
   effects: Record<string, unknown>; image_url: string
 }
 
@@ -160,9 +160,10 @@ function ItemDetailModal({ itemId, slotLabels, onClose, onChanged }: {
     if (busy) return
     setBusy(true)
     try {
-      await apiPost(url, body)
-      toast(okMsg, 'success')
-      onChanged(closePanel)
+      const result = await apiPost<{ success?: boolean; hint?: string }>(url, body)
+      const castFailed = url === '/play/cast' && result.success === false
+      toast(castFailed ? result.hint || okMsg : okMsg, castFailed ? 'info' : 'success')
+      onChanged(closePanel && !castFailed)
       onClose()
     } catch (e) {
       toast((e as Error).message, 'error')
@@ -233,7 +234,9 @@ function ItemDetailModal({ itemId, slotLabels, onClose, onChanged }: {
                     <option value="">{t('Yourself')}</option>
                     {present.map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
-                  <button className="ga-btn" disabled={busy}
+                  <button className="ga-btn" disabled={busy || !!item.cast_blocked}
+                    title={item.cast_blocked || undefined}
+                    style={item.cast_blocked ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
                     onClick={() => run('/play/cast', { item_id: item.item_id, target: castTarget },
                       t('Spell cast'), true)}>{t('Cast')}</button>
                 </div>

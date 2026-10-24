@@ -153,6 +153,7 @@ export function extractConditionFromEffects(eff: Item['effects']): {
 // category "spell". Sending them for other categories turned a copied spell
 // into a consumable that still cast/displayed as a spell.
 export const SPELL_EXTRA_KEYS = [
+  'cost',
   'incantation',
   'spell_mode',
   'clone_item_id',

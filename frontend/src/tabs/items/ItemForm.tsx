@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
+import { apiGet } from '../../lib/api'
 import { Field } from '../../components/Field'
 import { EffectsEditor } from '../../components/EffectsEditor'
 import {
@@ -134,6 +135,47 @@ function OutfitPieceFields({
   )
 }
 
+function SpellCostEditor({ value, onChange }: {
+  value: Record<string, number>
+  onChange: (cost: Record<string, number>) => void
+}) {
+  const { t } = useI18n()
+  const [keys, setKeys] = useState<string[]>([])
+  const [failed, setFailed] = useState(false)
+  const [rows, setRows] = useState(() => Object.entries(value))
+  useEffect(() => {
+    let active = true
+    apiGet<{ keys: string[] }>('/world/stat-keys')
+      .then(data => { if (active) setKeys(data.keys) })
+      .catch(() => { if (active) setFailed(true) })
+    return () => { active = false }
+  }, [])
+  function update(next: [string, number][]) {
+    setRows(next)
+    onChange(Object.fromEntries(next.filter(([key]) => key)))
+  }
+  return <Field label={t('Spell cost')} hint={t('Deducted from the caster on every attempt, including failed casts.')}>
+    {failed && <p role="alert">{t('Could not load stat keys.')}</p>}
+    {rows.map(([stat, amount], index) => <div className="ga-form-row" key={index}>
+      <select className="ga-input" aria-label={t('Stat')} value={stat}
+        onChange={e => update(rows.map((row, i) => i === index ? [e.target.value, amount] : row))}>
+        <option value="">{t('Select stat')}</option>
+        {stat && !keys.includes(stat) && <option value={stat}>{stat}</option>}
+        {keys.filter(key => key === stat || !rows.some(([used]) => used === key))
+          .map(key => <option key={key} value={key}>{key}</option>)}
+      </select>
+      <input className="ga-input" type="number" min={1} max={100} step={1}
+        aria-label={t('Cost amount')} value={amount}
+        onChange={e => update(rows.map((row, i) => i === index
+          ? [stat, Math.max(1, Math.min(100, Math.trunc(Number(e.target.value) || 1)))] : row))} />
+      <button type="button" className="ga-btn ga-btn-sm"
+        onClick={() => update(rows.filter((_, i) => i !== index))}>{t('Remove')}</button>
+    </div>)}
+    <button type="button" className="ga-btn ga-btn-sm"
+      onClick={() => update([...rows, ['', 1]])}>{t('Add cost')}</button>
+  </Field>
+}
+
 interface SpellFieldsProps {
   extras: Record<string, unknown>
   items: Item[]
@@ -152,6 +194,8 @@ function SpellFields({ extras, items, draftId, onUpdateExtra }: SpellFieldsProps
   return (
     <div className="ga-section">
       <div className="ga-form-section-label">{t('Spell')}</div>
+      <SpellCostEditor key={draftId} value={(extras.cost as Record<string, number>) || {}}
+        onChange={cost => onUpdateExtra('cost', cost)} />
       <Field
         label={t('Incantation')}
         hint={t('Trigger phrase the avatar must say in chat. Detected case-insensitively.')}

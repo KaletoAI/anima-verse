@@ -54,6 +54,20 @@
       "message_de": "Aus dem Augenwinkel fällt dir ein Ort auf, den du noch nicht kanntest.",
       "probability": 0.3,
       "id": "rule_04d219e2"
+    },
+    {
+      "id": "default_courage_danger_gate",
+      "name": "Too scared for danger",
+      "name_de": "Zu ängstlich für Gefahr",
+      "type": "block",
+      "target": {
+        "scope": "danger_level",
+        "min_danger_level": 3,
+        "action": "enter"
+      },
+      "condition": "courage<40",
+      "message": "Too scared to go there.",
+      "message_de": "Zu ängstlich, um dorthin zu gehen."
     }
   ]
 }

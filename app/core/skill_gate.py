@@ -25,15 +25,23 @@ def _stat_label(key: str) -> str:
     return key
 
 
-def _cost_reason(name: str, skill_id: str, profile: dict) -> str:
+def stat_costs_shortfall(profile: dict, costs: dict) -> str | None:
+    """Describe the first unmet cost; stats absent from the profile are free."""
     from app.core.stat_boosts import effective_stat
-    from app.core.dependencies import get_skill_manager
-    for key, amount in costs(skill_id).items():
+    for key, amount in costs.items():
         value = effective_stat(profile, key)
         if value is not None and value < amount:
-            skill = get_skill_manager().get_skill(skill_id)
-            tool_name = skill.name if skill else skill_id
-            return f'Too exhausted for {tool_name} (needs {amount} {_stat_label(key)})'
+            return f'needs {amount} {_stat_label(key)}'
+    return None
+
+
+def _cost_reason(name: str, skill_id: str, profile: dict) -> str:
+    from app.core.dependencies import get_skill_manager
+    shortfall = stat_costs_shortfall(profile, costs(skill_id))
+    if shortfall:
+        skill = get_skill_manager().get_skill(skill_id)
+        tool_name = skill.name if skill else skill_id
+        return f'Too exhausted for {tool_name} ({shortfall})'
     return ''
 
 

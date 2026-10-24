@@ -213,7 +213,7 @@ def _create_item_route_sync(body: Any) -> Dict[str, Any]:
         "incantation", "spell_mode", "clone_item_id",
         "success_chance", "copy_on_give",
         "success_text", "fail_text", "cast_activity",
-        "anchor_item_id", "teleport_subject",
+        "anchor_item_id", "teleport_subject", "cost",
         "tracks_character",
     ) if k in body}
     if _extras:

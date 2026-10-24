@@ -1,29 +1,8 @@
-"""Spell-Engine — Magie als Item-Mechanik.
+"""Spell items use the inventory system for direct effects, gifts and anchor teleports.
 
-Magie ist kein eigenes System, sondern eine besondere Klasse von Items
-mit folgenden meta-Feldern:
-
-    incantation         — Phrase/Stichworte; vom Tool-LLM erkannt
-    spell_mode          — "force" (Zauber) oder "gift" (Schriftrolle/Trank)
-    clone_item_id       — Item das beim Ziel aktiviert wird (das "Effekt"-Item).
-                          Default: Item selbst (z.B. ein Trank wirkt direkt).
-    success_chance      — int 0-100 (default 100)
-    copy_on_give        — bool. True = Quell-Item beim Caster wird beim
-                          Uebergeben *kopiert* (Caster behaelt seine Instanz —
-                          gelernter Zauberspruch). False = Quell-Item wird
-                          beim Caster verbraucht (Einmal-Schriftrolle/Trank).
-    success_text        — narrative Hinweis-Schnipsel fuer NPC bei Erfolg
-    fail_text           — narrative Hinweis-Schnipsel fuer NPC bei Fehlschlag
-
-Das eigentliche Wirken passiert ueber das bestehende Item-System
-(``inventory.give_item`` mit mode=force fuer Zauber, mode=gift fuer
-Schriftrollen). ``apply_condition`` etc. greift wie gewohnt.
-
-Public API:
-    build_spell_catalog(character) -> List[Dict]
-    detect_cast(avatar, target, message) -> Optional[Dict]  (LLM call)
-    execute_cast(avatar, target, spell_item) -> Dict (success/fail + hint text)
-"""
+Items define an incantation, success chance, optional effect item, cost,
+consumption policy and narrative success/failure text. Detection uses the
+configured tool LLM; execution applies costs before rolling."""
 import json
 import random as _random
 import re
@@ -35,12 +14,7 @@ logger = get_logger("spell_engine")
 
 
 def build_spell_catalog(character_name: str) -> List[Dict[str, Any]]:
-    """Sammelt alle Spell-Items aus dem Inventar des Character.
-
-    Spell-Item = jedes Inventar-Item dessen Definition ein
-    ``incantation``-Feld hat. Funktioniert fuer Avatar (Zauber-Casting)
-    genauso wie fuer NPCs (falls Du spaeter NPCs zaubern lassen willst).
-    """
+    """Collect castable inventory items, including costs and teleport metadata."""
     try:
         from app.models.inventory import get_character_inventory, get_item
         inv = get_character_inventory(character_name, include_equipped=True) or {}
@@ -63,6 +37,7 @@ def build_spell_catalog(character_name: str) -> List[Dict[str, Any]]:
                 "clone_item_id": (item.get("clone_item_id") or iid).strip(),
                 "success_chance": int(item.get("success_chance") or 100),
                 "copy_on_give": bool(item.get("copy_on_give", False)),
+                "cost": item.get("cost") or {},
                 "success_text": (item.get("success_text") or "").strip(),
                 "fail_text": (item.get("fail_text") or "").strip(),
                 "cast_activity": (item.get("cast_activity") or "").strip(),
@@ -77,13 +52,9 @@ def build_spell_catalog(character_name: str) -> List[Dict[str, Any]]:
 
 
 def has_spell_detect_routing(avatar_name: str = "") -> bool:
-    """True wenn der ``spell_detect``-Task ein gemapptes LLM hat.
+    """Return whether the spell detection task has a routed LLM.
 
-    Pre-check fuer den Chat-Flow: wenn der Avatar Spell-Items hat aber
-    der Task nicht geroutet ist, kann detect_cast nie feuern (resolve_llm
-    liefert None, der try/except schluckt). Frontend kann mit dem
-    Ergebnis eine sichtbare Warnung anzeigen.
-    """
+    The chat flow can use this to explain why incantations cannot be detected."""
     try:
         from app.core.llm_router import resolve_llm
         return resolve_llm("spell_detect", agent_name=avatar_name) is not None
@@ -92,7 +63,7 @@ def has_spell_detect_routing(avatar_name: str = "") -> bool:
 
 
 def _format_catalog(catalog: List[Dict[str, Any]]) -> str:
-    """Formatiert den Spell-Katalog fuer das LLM-Prompt-Template."""
+    """Format the spell catalogue for the detection prompt."""
     lines: List[str] = []
     for s in catalog:
         line = f"- id={s['id']} | incantation: \"{s['incantation']}\""
@@ -105,18 +76,11 @@ def _format_catalog(catalog: List[Dict[str, Any]]) -> str:
 def detect_cast(avatar_name: str, target_name: str, message: str,
                 catalog: Optional[List[Dict[str, Any]]] = None,
                 volume: str = "normal") -> Optional[Dict[str, Any]]:
-    """Tool-LLM-Detection: hat der Avatar einen Zauber gewirkt?
+    """Detect an incantation conservatively with the tool LLM.
 
-    Returns das Spell-Catalog-Dict bei Match (mit confidence), sonst None.
-    Confidence-Schwelle: >= 60. Darunter wird's verworfen — Erkennung
-    soll konservativ sein, lieber missen als falsch positiv.
-
-    Hard pre-filter: das Tool-LLM wird nur aufgerufen, wenn mindestens ein
-    Incantation-Token (>=3 Zeichen, case-insensitive) im Text vorkommt.
-    Sonst false-positives, weil das LLM thematisch verwandte Saetze
-    ("Energie", "Magie") als Cast interpretiert obwohl die eigentliche
-    Beschwoerung gar nicht gesprochen wurde.
-    """
+    Return the catalogue entry with confidence and narration, or None.
+    Require matching incantation tokens before calling the LLM and discard
+    confidence below 60 to avoid treating related conversation as a cast."""
     if not message or not avatar_name:
         return None
     if catalog is None:
@@ -130,9 +94,7 @@ def detect_cast(avatar_name: str, target_name: str, message: str,
         inc = (s.get("incantation") or "").strip()
         if not inc:
             continue
-        # Tokenize incantation, ignore short/filler tokens. Alle ueber 3 Zeichen
-        # muessen vorkommen — die Beschwoerung ist in der Regel ein 1-3 Wort
-        # Kunstwort, das im Alltagsgespraech nicht vorkommt.
+        # Match significant incantation tokens, ignoring short filler words.
         toks = [t for t in re.findall(r"[\wÄÖÜäöüß]+", inc.lower()) if len(t) >= 3]
         if toks and all(t in msg_lower for t in toks):
             incantation_match = True
@@ -173,12 +135,12 @@ def detect_cast(avatar_name: str, target_name: str, message: str,
         logger.debug("spell_detect llm_call failed: %s", e)
         return None
 
-    # Robustes JSON-Parsing
+    # Parse JSON defensively.
     try:
-        # Markdown-Fences strippen
+        # Strip Markdown fences.
         if raw.startswith("```"):
             raw = "\n".join(ln for ln in raw.split("\n") if not ln.strip().startswith("```"))
-        # Erstes balanced JSON-Object suchen
+        # Find the first balanced JSON object.
         import re as _re
         m = _re.search(r"\{[^{}]*\}", raw)
         data = json.loads(m.group(0) if m else raw)
@@ -203,20 +165,38 @@ def detect_cast(avatar_name: str, target_name: str, message: str,
     return {**matched, "confidence": confidence, "chat_substitute": chat_substitute}
 
 
+def cast_blocked_reason(profile: dict, spell: Dict[str, Any]) -> str:
+    """Use the shared effective-stat cost gate for casts and their buttons."""
+    from app.core.skill_gate import stat_costs_shortfall
+    if stat_costs_shortfall(profile, spell.get("cost") or {}):
+        return f"Too exhausted to cast {spell.get('name') or spell.get('id') or ''}."
+    return ""
+
+
 def execute_cast(avatar_name: str, target_name: str,
                  spell: Dict[str, Any]) -> Dict[str, Any]:
-    """Wuerfelt Erfolg, klont das Effekt-Item auf das Ziel, verbraucht
-    optional das Quell-Item, returns ein Result-Dict mit dem Hint-Text
-    der dem NPC mitgegeben wird.
+    """Check and charge the caster, roll success, then apply the spell.
 
-    Result keys:
-        success      : bool
-        hint         : str  (vorbereiteter Text fuer NPC-Prompt)
-        spell_id     : str
-        chance       : int
-        roll         : int
-    """
+    Cost refusal preserves the regular result keys and consumes no item.
+    Eligible attempts pay once regardless of the roll or subsequent effects."""
     chance = max(0, min(100, int(spell.get("success_chance", 100))))
+    from app.models.character import get_character_profile, adjust_status_effects
+    from app.core.keyed_lock import keyed_lock
+    # Keep eligibility and payment together; no external work runs under this lock.
+    with keyed_lock("character_profile", avatar_name):
+        reason = cast_blocked_reason(get_character_profile(avatar_name) or {}, spell)
+        if reason:
+            return {
+                "success": False, "hint": reason, "reason": "cost",
+                "spell_id": spell.get("id") or "",
+                "spell_name": spell.get("name") or spell.get("id") or "",
+                "chance": chance, "roll": None,
+                "delivered_item_id": "", "delivered_item_name": "", "teleport": {},
+                "chat_substitute": (spell.get("chat_substitute") or "").strip(),
+            }
+        adjust_status_effects(avatar_name,
+                              {key: -value for key, value in (spell.get("cost") or {}).items()},
+                              source=f"spell:{spell.get('name') or spell.get('id') or ''}")
     roll = _random.randint(1, 100)
     success = roll <= chance
     hint = ""
@@ -230,12 +210,8 @@ def execute_cast(avatar_name: str, target_name: str,
     delivered_item_name = ""
     teleport_info: Dict[str, Any] = {}
 
-    # Anker-Teleport-Pfad: ueberschreibt die normale give_item / effect-Logik.
-    # Spell hat ein Anker-Item -> wir suchen seinen Standort, bewegen entweder
-    # den Caster dorthin (subject=caster) oder holen den Anker-Traeger zum
-    # Caster (subject=anchor_holder). Ist der Anker in einem Raum statt bei
-    # einer Person, funktioniert nur subject=caster — anchor_holder failed
-    # weil's keinen Traeger gibt (Feature, kein Bug).
+    # Anchor teleports override ordinary item delivery. Room anchors support
+    # caster travel only; pulling an anchor holder requires a character.
     if success and anchor_item_id:
         try:
             from app.models.inventory import find_item_location
@@ -244,8 +220,7 @@ def execute_cast(avatar_name: str, target_name: str,
                 get_character_current_room,
                 save_character_current_location,
                 save_character_current_room)
-            # Caster nicht als Anker-Inhaber zaehlen — sonst "springt" er
-            # zu sich selbst und nichts passiert.
+            # Exclude the caster to prevent a teleport to the same character.
             anchor = find_item_location(anchor_item_id, exclude_character=avatar_name)
             if not anchor:
                 logger.info("Cast %s: Anker %s nirgends gefunden — Fail",
@@ -253,7 +228,7 @@ def execute_cast(avatar_name: str, target_name: str,
                 success = False
             else:
                 if teleport_subject == "anchor_holder":
-                    # Anker-Traeger zum Caster ziehen. Geht nur bei character-Anker.
+                    # Pull a character holding the anchor to the caster.
                     if anchor["kind"] != "character":
                         logger.info("Cast %s: subject=anchor_holder aber Anker im Raum — Fail",
                                     spell_id)
@@ -273,7 +248,7 @@ def execute_cast(avatar_name: str, target_name: str,
                             "subject": "anchor_holder",
                         }
                 else:
-                    # Caster zum Anker-Standort
+                    # Move the caster to the anchor location.
                     if anchor["kind"] == "character":
                         holder = anchor["character"]
                         dest_loc = get_character_current_location(holder) or ""
@@ -297,8 +272,7 @@ def execute_cast(avatar_name: str, target_name: str,
         except Exception as e:
             logger.error("anchor teleport failed: %s", e)
             success = False
-        # Quell-Item ggf. verbrauchen (Schriftrolle einmalig, gelernter Spruch
-        # bleibt). Nur wenn der Teleport tatsaechlich erfolgreich war.
+        # Consume single-use spells only after a successful teleport.
         if success and not spell.get("copy_on_give"):
             try:
                 from app.models.inventory import remove_from_inventory
@@ -307,44 +281,33 @@ def execute_cast(avatar_name: str, target_name: str,
                 logger.debug("spell consume failed: %s", e)
 
     elif success:
-        # Klassischer Pfad ohne Anker: Effekt-Item ans Ziel verteilen.
-        # Quell-Item verbrauchen wenn nicht "kopiert beim Uebergeben".
-        # copy_on_give=False (Default) heisst: Caster verliert sein Item
-        # beim Wirken (Schriftrolle/Trank). copy_on_give=True heisst:
-        # Caster behaelt seine Instanz (gelernter Zauberspruch).
+        # Deliver ordinary effects; copy_on_give preserves learned spells.
         if not spell.get("copy_on_give"):
             try:
                 from app.models.inventory import remove_from_inventory
                 remove_from_inventory(avatar_name, spell_id, quantity=1, force=True)
             except Exception as e:
                 logger.debug("spell consume failed: %s", e)
-        # Direkt-Effekt-Spruch: KEIN separates Clone-Item (clone_item_id leer →
-        # clone_id == spell_id). Dann wirkt der Spruch seine EIGENEN effects
-        # DIREKT auf das Ziel — egal ob Self- oder Fremd-Cast. Sonst bekäme das
-        # Ziel eine castbare Kopie des Spruchs (sinnlos für einen Buff/Debuff),
-        # und die Stat-Effekte (stamina_change etc.) griffen gar nicht, weil
-        # add_to_inventory beim give nur apply_condition feuert. Zusätzlich
-        # korrumpiert give_item zu sich selbst das UNIQUE(character,item)-Schema.
-        # Nur wenn ein eigenes Effekt-Item existiert (clone_id != spell_id) wird
-        # es per give_item ans Ziel übergeben (Trank/Schriftrolle/Verwandlung).
+        # Without a separate effect item, apply effects directly to the target.
+        # Giving the spell itself would create a castable copy and self-gifts
+        # would conflict with the unique character/item inventory key.
         is_direct_effect = (clone_id == spell_id)
         try:
             from app.models.inventory import give_item, get_item, apply_item_effects
             if is_direct_effect:
-                # Caster = Schenkender → Condition merkt sich source_character.
+                # Attribute the condition to the caster as its giver.
                 apply_item_effects(target_name, clone_id, giver=avatar_name)
                 _eff_item = get_item(clone_id) or {}
                 delivered_item_id = clone_id
                 delivered_item_name = (_eff_item.get("name") or clone_id).strip()
             else:
-                # Effekt-Item ans Ziel — bei mode=force wird locked=True gesetzt
-                # und apply_condition feuert sofort (siehe inventory.add_to_inventory)
+                # Force delivery locks the item and applies its condition.
                 ok = give_item(
                     from_character=avatar_name,
                     to_character=target_name,
                     item_id=clone_id,
-                    mode=mode,                  # "force" oder "gift"
-                    consume_source=False,       # haben wir oben schon erledigt
+                    mode=mode,                  # "force" or "gift"
+                    consume_source=False,       # already consumed above
                 )
                 if ok:
                     delivered_item_id = clone_id
@@ -406,28 +369,19 @@ def execute_cast(avatar_name: str, target_name: str,
         "roll": roll,
         "delivered_item_id": delivered_item_id,
         "delivered_item_name": delivered_item_name,
-        # Anker-Teleport-Info (leer wenn kein anchor_item_id am Spell).
-        # Frontend kann darauf reagieren (Map refresh, Toast "X wurde
-        # versetzt nach Y") — oder ignorieren.
+        # Optional teleport details for map refresh and player feedback.
         "teleport": teleport_info,
-        # Vom LLM gelieferter narrativer Ersatztext (statt Beschwoerung).
-        # Wird in chat.py als user_input verwendet, damit das RP-LLM nicht
-        # auf die rohe Incantation reagiert.
+        # Use LLM narration instead of the raw incantation in chat.
         "chat_substitute": (spell.get("chat_substitute") or "").strip(),
     }
 
 
 def detect_and_cast(avatar_name: str, target_name: str,
                     message: str, volume: str = "normal") -> Optional[Dict[str, Any]]:
-    """Bequeme Combo: wenn der Avatar einen Spell wirkt, sofort ausfuehren.
+    """Detect an incantation and execute it, or return None.
 
-    ``volume`` (whisper/normal/shout) fliesst in die Beschwoerungs-Narration
-    (chat_substitute) ein, damit Fluestern nicht als "deutlich" beschrieben wird.
-
-    Returns das Result-Dict (siehe execute_cast) bei Match, sonst None.
-    Aufrufer kann das ``hint``-Feld an den naechsten NPC-System-Prompt
-    anhaengen, damit der Char narrativ darauf reagiert.
-    """
+    Volume informs the detection narration. Callers can pass the returned hint
+    to the target's next prompt."""
     detected = detect_cast(avatar_name, target_name, message, volume=volume)
     if not detected:
         return None

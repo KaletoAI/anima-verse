@@ -2843,6 +2843,10 @@
     "Override world effects": "Welteffekte überschreiben",
     "No immediate effects.": "Keine Soforteffekte.",
     "Add effect": "Effekt hinzufügen",
-    "Select the skills this rule blocks. Use state:<id> to check an active state.": "Wähle die Fähigkeiten, die diese Regel sperrt. Mit state:<id> prüfst du einen aktiven Zustand."
+    "Select the skills this rule blocks. Use state:<id> to check an active state.": "Wähle die Fähigkeiten, die diese Regel sperrt. Mit state:<id> prüfst du einen aktiven Zustand.",
+    "Spell cost": "Zauberkosten",
+    "Deducted from the caster on every attempt, including failed casts.": "Bei jedem Versuch vom Wirkenden abgezogen, auch bei fehlgeschlagenen Zaubern.",
+    "Cost amount": "Kostenhöhe",
+    "Add cost": "Kosten hinzufügen"
   }
 }

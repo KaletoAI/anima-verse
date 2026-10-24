@@ -593,7 +593,7 @@ def update_item(item_id: str,
         "incantation", "spell_mode", "clone_item_id",
         "success_chance", "copy_on_give",
         "success_text", "fail_text", "cast_activity",
-        "anchor_item_id", "teleport_subject",
+        "anchor_item_id", "teleport_subject", "cost",
     }
     allowed = {
         "name", "description", "owner", "pages_source", "portable",
@@ -634,6 +634,12 @@ def update_item(item_id: str,
         # Same guard as outfit_piece: an edit (or the create route's
         # extras pass-through) must not smuggle spell fields onto a
         # non-spell item.
+        if item.get("category") == "spell" and "cost" in item:
+            raw_cost = item["cost"]
+            item["cost"] = {key: value for key, value in raw_cost.items()
+                            if isinstance(key, str) and key.strip()
+                            and isinstance(value, int) and not isinstance(value, bool)
+                            and 1 <= value <= 100} if isinstance(raw_cost, dict) else {}
         if item.get("category") != "spell":
             for key in spell_only:
                 item.pop(key, None)
