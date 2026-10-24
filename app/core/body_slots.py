@@ -514,17 +514,20 @@ def being_for_character(character_name: str) -> str:
 def appearance_suffix(character_name: str, face_only: bool = False,
                       profile: Optional[Dict[str, Any]] = None,
                       back_view: bool = False,
-                      mesh_input: bool = False) -> str:
+                      mesh_input: bool = False,
+                      include_exposed: bool = True) -> str:
     """Combined fragment text appended to the character's appearance
     (PromptBuilder; face_only for portrait/expression prompts; ``profile``
     overrides the stored profile for dry-run previews). Empty without
     species packages — safe no-op.
 
     ``back_view=True`` is a render seen from behind: only exposed fragments
-    of slots declared ``back: true`` survive."""
+    of slots declared ``back: true`` survive. ``include_exposed=False``
+    leaves the exposed fragments out for a caller that names them on their
+    own (the "uncovered:" part of what a character sees of the others)."""
     frags = prompt_fragments(character_name, face_only=face_only,
                              profile=profile, back_view=back_view, mesh_input=mesh_input)
-    parts = frags["general"] + frags["exposed"]
+    parts = frags["general"] + (frags["exposed"] if include_exposed else [])
     return ", ".join(parts)
 
 

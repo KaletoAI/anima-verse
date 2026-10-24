@@ -1003,19 +1003,35 @@ def _visible_activity(name: str) -> str:
 
 def present_people_details(entries, location_id: str = "",
                            with_activity: bool = False) -> str:
-    """Visible-detail lines for present characters — worn outfit (short)
-    plus visibly triggered states. ``entries`` = [(name, display_label)].
-    Shared by the thought context AND the chat system prompt (R5): what a
-    character can SEE of the people around them."""
+    """Visible-detail lines for present characters. ``entries`` =
+    [(name, display_label)]. Shared by the thought context AND the chat
+    scene state (R5): what a character can SEE of the people around it.
+
+    Per person: the person description WITHOUT exposed body fragments and
+    state additions, capped; then, never capped, ``uncovered: …`` (the
+    exposed fragments, or the undressed word when nothing is worn) and
+    ``looks: …`` (the additive image_modifier text of triggered states).
+    Both used to ride at the end of the capped description, where the cap
+    cut them off ("exposed large breasts, expos…"). A state's NAME never
+    goes in: it is an internal label ("Drunk — clouded memory"), what
+    others see of it is its image_modifier."""
     lines = []
     for n, label in entries[:8]:
         details = []
         try:
+            from app.core.prompt_filters import (apply_image_replacements,
+                                                 collect_image_modifiers)
+            replacements, additive = collect_image_modifiers(n, location_id)
+        except Exception:
+            replacements, additive = [], []
+        try:
             # The REAL person description (appearance + body-slot fragments +
-            # worn outfit + state modifiers) — same function the scene
-            # renderer uses for text persons; capped per person.
-            from app.core.scene_render import _appearance_text
-            desc = (_appearance_text(n) or "").strip()
+            # worn outfit) — same composition the scene renderer uses for
+            # text persons; the state replacements rewrite it the same way.
+            from app.core.prompt_builder import person_description
+            desc = person_description(n, include_outfit=True, include_exposed=False,
+                                      apply_state_modifiers=False)
+            desc = " ".join(apply_image_replacements(desc, replacements).split()).strip()
             if desc:
                 if len(desc) > 180:
                     desc = desc[:180].rstrip(", ") + "…"
@@ -1023,12 +1039,14 @@ def present_people_details(entries, location_id: str = "",
         except Exception:
             pass
         try:
-            from app.core.prompt_filters import triggered_state_labels
-            states = triggered_state_labels(n, location_id)
-            if states:
-                details.append("visibly " + ", ".join(states[:4]))
+            from app.core.outfit_renderer import uncovered_summary
+            uncovered = uncovered_summary(n, replacements=replacements)
+            if uncovered:
+                details.append("uncovered: " + uncovered)
         except Exception:
             pass
+        if additive:
+            details.append("looks: " + ", ".join(additive))
         if with_activity:
             activity = _visible_activity(n)
             if activity:
@@ -1064,10 +1082,11 @@ def _build_presence(character_name: str, location_id: str,
     with a person who was at the other end of the map. Silence is not
     "alone"; the prompt has to say it.
 
-    Each same-room person carries what the character can SEE: a short
-    outfit line (worn pieces) and visibly triggered states ('drunk',
-    'aroused', ...) — without this, an NPC never knows what the people
-    around it look like right now.
+    Each same-room person carries what the character can SEE
+    (``present_people_details``): the person description with the worn
+    outfit, what is uncovered, and how triggered states make them look —
+    without this, an NPC never knows what the people around it look like
+    right now.
 
     OUTSIDE every location (E6) the same three answers come from the hearing
     radius instead of the room: everyone within it is "here", there is no

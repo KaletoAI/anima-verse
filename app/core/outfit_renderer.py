@@ -381,38 +381,70 @@ def undressed_line(character_name: str = "",
     return ", ".join(p for p in parts if p)
 
 
-def render_unworn_slots(
-    profile: Optional[Dict[str, Any]] = None,
-    *,
-    character_name: str = "",
-) -> str:
-    """Collects prompt fragments for empty AND uncovered slots.
+def uncovered_state(character_name: str,
+                    profile: Optional[Dict[str, Any]] = None,
+                    replacements: Optional[List[Tuple[str, str]]] = None
+                    ) -> Tuple[bool, str]:
+    """``(wears_nothing, uncovered)`` — what an LLM must know about a body
+    nobody covers, for the character itself and for whoever sees it.
 
-    Unlike render_outfit().fallback this holds ALL uncovered/empty slots
-    (underwear slots too while the outer one is empty), because the chat
-    path extends the appearance line — a character wearing nothing should
-    show the LLM prompt "topless, no panties".
-
-    Returns a comma-separated list of the fragments.
-    """
-    from app.models.inventory import VALID_PIECE_SLOTS
+    ``uncovered`` is the exposed body-slot fragments of the species packages
+    (comma-joined, the state replacements applied like in the person
+    description — pass ``replacements`` when the caller already holds them).
+    ``wears_nothing`` is true for an undressed free-text wardrobe, and for a
+    wardrobe character without a single worn piece — but only when a
+    package says something about that bare body (an exposed fragment or an
+    ``undressed_prompt``): a species that is never "dressed" (a cat without
+    its collar) is not naked in any sense a prompt should mention."""
     if profile is None and character_name:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     profile = profile or {}
+    frags: List[str] = []
+    try:
+        from app.core.body_slots import prompt_fragments
+        frags = list(prompt_fragments(character_name, profile=profile)["exposed"])
+    except Exception:
+        frags = []
+    if frags:
+        try:
+            from app.core.prompt_filters import (apply_image_replacements,
+                                                 collect_image_modifiers)
+            if replacements is None:
+                replacements = collect_image_modifiers(character_name)[0]
+            frags = [apply_image_replacements(f, replacements) for f in frags]
+        except Exception:
+            pass
+    if is_free_text_wardrobe(profile):
+        nothing = not is_outfit_worn(profile)
+    else:
+        out = render_outfit(profile, character_name=character_name)
+        declared = bool(frags)
+        if not declared:
+            try:
+                from app.core.body_slots import undressed_prompt
+                declared = bool(undressed_prompt(profile))
+            except Exception:
+                declared = False
+        # Equipped piece ids count even when one no longer resolves to a
+        # name — the slot coverage (is_slot_exposed) counts them too.
+        worn = out.get("pieces") or any((profile.get("equipped_pieces") or {}).values())
+        nothing = declared and not worn
+    return nothing, ", ".join(f for f in frags if f)
 
-    pieces = profile.get("equipped_pieces") or {}
-    covered = collect_covered_slots(pieces)
 
-    # Exposed-anatomy fragments come from the body-slot packages
-    # (appearance_suffix exposed prompts) — only the legacy underwear
-    # fallback fields remain here.
-    parts: List[str] = []
-    for slot in VALID_PIECE_SLOTS:
-        if pieces.get(slot):
-            continue
-        if slot in covered:
-            continue
-        # Exposed anatomy comes from the body-slot packages — the legacy
-        # underwear fallback fields are retired.
+def uncovered_summary(character_name: str,
+                      profile: Optional[Dict[str, Any]] = None,
+                      replacements: Optional[List[Tuple[str, str]]] = None) -> str:
+    """One phrase for what is uncovered on a character ("" = nothing): the
+    undressed text when nothing is worn, then the exposed fragments — what
+    the others see of them ("uncovered: …") and what a package may build on
+    (``chat.moment_facts``)."""
+    if profile is None and character_name:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    nothing, frags = uncovered_state(character_name, profile, replacements=replacements)
+    parts = [undressed_text(profile)] if nothing else []
+    if frags:
+        parts.append(frags)
     return ", ".join(parts)

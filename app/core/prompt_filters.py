@@ -239,27 +239,6 @@ def active_modifiers(character_name: str, location_id: str = "") -> List[str]:
     return out
 
 
-def triggered_state_labels(character_name: str,
-                           location_id: str = "") -> List[str]:
-    """Labels of the character's currently TRIGGERED states (tag OR
-    condition) — used to show visible states of OTHER present characters
-    in thought prompts ('aroused', 'drunk', ...)."""
-    out: List[str] = []
-    try:
-        for f in load_filters():
-            if not f.get("enabled", True):
-                continue
-            fid = (f.get("id") or "").strip()
-            condition = (f.get("condition") or "").strip()
-            triggered = (fid and _has_tag_condition(character_name, fid)) \
-                or (bool(condition) and _evaluate(condition, character_name, location_id))
-            if triggered:
-                out.append((f.get("label") or fid or "").strip())
-    except Exception as e:
-        logger.debug("triggered_state_labels(%s) failed: %s", character_name, e)
-    return [l for l in out if l]
-
-
 _state_evaluations = ContextVar("state_evaluations", default=frozenset())
 
 
@@ -373,6 +352,18 @@ def collect_image_modifiers(character_name: str,
     return replacements, additive
 
 
+def apply_image_replacements(text: str,
+                             replacements: List[Tuple[str, str]]) -> str:
+    """The replacement half of the image directives ("A -> B",
+    case-insensitive) over ``text`` — for a caller that renders parts of a
+    person description separately and must rewrite each part the same way
+    (thought_context.present_people_details)."""
+    out = text or ""
+    for find, repl in replacements:
+        out = re.sub(re.escape(find), repl, out, flags=re.IGNORECASE)
+    return out
+
+
 def apply_image_modifiers(character_name: str, text: str,
                           location_id: str = "") -> str:
     """Apply the triggered states' image directives to a person
@@ -381,9 +372,7 @@ def apply_image_modifiers(character_name: str, text: str,
     through unchanged."""
     try:
         replacements, additive = collect_image_modifiers(character_name, location_id)
-        out = text or ""
-        for find, repl in replacements:
-            out = re.sub(re.escape(find), repl, out, flags=re.IGNORECASE)
+        out = apply_image_replacements(text or "", replacements)
         if additive:
             extra = ", ".join(additive)
             out = f"{out}, {extra}" if out.strip() else extra

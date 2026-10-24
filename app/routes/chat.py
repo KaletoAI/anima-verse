@@ -18,7 +18,7 @@ from app.core.perception import STORYTELLER_SPEAKER
 logger = get_logger("chat")
 from app.core.dependencies import get_skill_manager
 from app.models.account import get_user_appearance
-from app.core.outfit_renderer import render_outfit, render_unworn_slots, undressed_line
+from app.core.outfit_renderer import render_outfit, uncovered_state, undressed_line
 from app.models.character import (
     get_character_config,
     get_character_profile,
@@ -1009,15 +1009,6 @@ def _build_chat_prompt(character_name: str,
                     p_app = resolve_profile_tokens(
                         p_app, partner_profile, template=partner_template,
                         target_key="character_appearance")
-                # Append the slot fragments of uncovered, unworn slots (same
-                # logic as the variant image), so the LLM knows what would be
-                # visible under the outfit.
-                try:
-                    _slot_extras = render_unworn_slots(profile=partner_profile)
-                    if _slot_extras:
-                        p_app = (p_app + ", " + _slot_extras).strip(", ").strip()
-                except Exception:
-                    pass
                 partner_profile["character_appearance"] = p_app
                 p_loc_id = partner_profile.get("current_location", "")
                 if p_loc_id:
@@ -1068,8 +1059,25 @@ def _build_chat_prompt(character_name: str,
             t = t[len("wearing:"):].lstrip()
         return t
 
+    def _uncovered_lines(_cname: str, _label: str) -> list:
+        """What nobody covers on that body — a wardrobe character with
+        nothing on used to get NO line at all, so it went on describing a
+        dress it was not wearing."""
+        nothing, uncovered = uncovered_state(_cname)
+        _is_self = (_label == "You")
+        if nothing:
+            body = "your" if _is_self else "their"
+            line = (f"{_label} {'are' if _is_self else 'is'} wearing nothing — "
+                    f"everyone here can see {body} bare body.")
+            return [line + (f" Uncovered: {uncovered}." if uncovered else "")]
+        if uncovered:
+            return [f"Uncovered, for everyone here to see: {uncovered}." if _is_self
+                    else f"Uncovered on {_label}: {uncovered}."]
+        return []
+
     def _build_wearing_block(_cname: str, _label: str,
-                             include_inventory: bool) -> str:
+                             include_inventory: bool,
+                             with_uncovered: bool = True) -> str:
         try:
             from app.models.inventory import (
                 get_character_inventory, get_equipped_item_ids)
@@ -1082,8 +1090,11 @@ def _build_chat_prompt(character_name: str,
             _v_carry = "have" if _is_self else "has"
             if undressed:
                 lines.append(f"{_label} {_v_wear} undressed: {undressed}")
-            elif wearing:
-                lines.append(f"{_label} {_v_wear} currently wearing this clothing and equipment: {wearing}")
+            else:
+                if wearing:
+                    lines.append(f"{_label} {_v_wear} currently wearing this clothing and equipment: {wearing}")
+                if with_uncovered:
+                    lines.extend(_uncovered_lines(_cname, _label))
             if include_inventory:
                 inv = get_character_inventory(_cname).get("inventory", [])
                 equipped_set = set(get_equipped_item_ids(_cname))
@@ -1101,8 +1112,11 @@ def _build_chat_prompt(character_name: str,
     self_wearing = _build_wearing_block(character_name, "You", include_inventory=True)
     partner_wearing = ""
     if _partner_name and _partner_name != character_name and not skip_partner:
+        # What is uncovered on a partner only counts face to face; in room
+        # mode the presence lines below carry it for everyone present.
         partner_wearing = _build_wearing_block(_partner_name, _partner_name,
-                                                include_inventory=False)
+                                                include_inventory=False,
+                                                with_uncovered=medium == "in_person")
 
     # ---- Focused room items (in_person + room_item_ids) ---------------
     focused_items = ""
@@ -1129,14 +1143,6 @@ def _build_chat_prompt(character_name: str,
             appearance = resolve_profile_tokens(
                 appearance, char_profile, template=char_template,
                 target_key="character_appearance")
-        # Append the slot fragments of uncovered, unworn slots — same logic
-        # as in the partner block + variant image.
-        try:
-            _slot_extras = render_unworn_slots(profile=char_profile)
-            if _slot_extras:
-                appearance = (appearance + ", " + _slot_extras).strip(", ").strip()
-        except Exception:
-            pass
         char_profile["character_appearance"] = appearance
         current_outfit = (render_outfit(character_name=character_name).get("full", "") or "").removeprefix("wearing: ")
         if current_outfit:
@@ -1413,6 +1419,10 @@ def _build_chat_prompt(character_name: str,
                     [(n, n) for n in _others], _loc)
             except Exception:
                 _present_details = ""
+            if partner_wearing:
+                partner_wearing = _build_wearing_block(
+                    _partner_name, _partner_name, include_inventory=False,
+                    with_uncovered=False)
 
     # ---- Scenes as the canonical "earlier conversations" --------------
     # scene_store consolidation (conversation -> scene). Closes the loop and
@@ -1554,6 +1564,30 @@ def _build_chat_prompt(character_name: str,
     package_moment = prompt_lines(character_name)
     emit("character.prompt_context", character_name=character_name, mode="chat",
          blocks=package_moment)
+    # What is uncovered on the bodies in sight, as facts a package may turn
+    # into a "This moment" line — that is where the model looks last before
+    # it answers (an early note in the block barely moved it, replay
+    # 2026-10-24). The core only collects; it says nothing about how to
+    # treat it.
+    moment_facts: list = []
+    try:
+        from app.core.outfit_renderer import uncovered_summary
+        if partner_mode == "room":
+            _in_sight = [c for c in dict.fromkeys(present_characters or [])
+                         if c and c != character_name]
+        elif (partner_mode == "character" and medium == "in_person"
+              and _partner_name and _partner_name != character_name):
+            _in_sight = [_partner_name]
+        else:
+            _in_sight = []
+        uncovered = [(label, text) for label, text in
+                     [("you", uncovered_summary(character_name))]
+                     + [(n, uncovered_summary(n)) for n in _in_sight] if text]
+        if uncovered:
+            emit("chat.moment_facts", character_name=character_name,
+                 uncovered=uncovered, facts=moment_facts)
+    except Exception as e:
+        logger.debug("moment facts for %s failed: %s", character_name, e)
     moment = render(
         "chat/chat_moment.md",
         character_name=character_name,
@@ -1579,6 +1613,7 @@ def _build_chat_prompt(character_name: str,
         memory_section=memory_section,
         relationships_section=relationships_section,
         reply_shape_section=reply_shape_section,
+        moment_facts=moment_facts,
         addressed_to_me=addressed_to_me,
         addressed_names=addressed_names,
         respond_opportunity=respond_opportunity,

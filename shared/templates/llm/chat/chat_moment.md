@@ -26,6 +26,8 @@
      events_section, assignment_section, recent_activity_section
      memory_section, relationships_section
      reply_shape_section — "This moment" facts
+     moment_facts: list[str] — more "This moment" lines, from packages
+       (hook chat.moment_facts; one "- " bullet each, after the reply shape)
 
    FLAGS / NAMES:
      character_name, partner_mode, partner_name
@@ -124,11 +126,12 @@ FOCUSED ITEMS IN THE ROOM (the person you're talking to has drawn attention to t
 {% if partner_address %}How you address {{ partner_name }}: {{ partner_address }}. Keep that form of address; do not drift into another one mid-conversation.
 {% endif %}
 {% endif %}
-{% if reply_shape_section %}
+{% if reply_shape_section or moment_facts %}
 
 This moment:
-{{ reply_shape_section }}
-{% endif %}
+{% if reply_shape_section %}{{ reply_shape_section }}
+{% endif %}{% for fact in moment_facts %}- {{ fact }}
+{% endfor %}{% endif %}
 {% if winding_down %}
 
 === The conversation is winding down ===

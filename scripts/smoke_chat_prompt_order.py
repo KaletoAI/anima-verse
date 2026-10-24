@@ -179,7 +179,7 @@ def _moment(**over):
         inventory_room_section="", focused_items="", known_activities="PLACES",
         events_section="", assignment_section="", recent_activity_section="",
         memory_section="MEMORY", relationships_section="RELATIONS",
-        reply_shape_section="- brief", addressed_to_me=True, addressed_names="",
+        reply_shape_section="- brief", moment_facts=[], addressed_to_me=True, addressed_names="",
         respond_opportunity=False, winding_down=True)
     ctx.update(over)
     return render("chat/chat_moment.md", **ctx)

@@ -47,11 +47,13 @@ class Focus(unittest.TestCase):
         for profile, expected in cases:
             with self.subTest(profile=profile), \
                     patch("app.models.character.get_character_profile", return_value=profile), \
-                    patch("app.core.scene_render._appearance_text", return_value="appearance"), \
-                    patch("app.core.prompt_filters.triggered_state_labels", return_value=["calm"]), \
+                    patch("app.core.prompt_builder.person_description", return_value="appearance"), \
+                    patch("app.core.prompt_filters.collect_image_modifiers",
+                          return_value=([], ["relaxed shoulders"])), \
+                    patch("app.core.outfit_renderer.uncovered_summary", return_value=""), \
                     patch.object(tc, "_room_presence", return_value=(["Lukas"], [])), \
                     patch("app.models.account.get_active_character", return_value=""):
-                base = "- Lukas: appearance; visibly calm"
+                base = "- Lukas: appearance; looks: relaxed shoulders"
                 block, elsewhere, alone = tc._build_presence("Kira", "demo", "room")
                 self.assertEqual(block, base + ("; doing: " + expected if expected else ""))
                 self.assertEqual((elsewhere, alone), ("", False))

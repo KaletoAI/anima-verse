@@ -242,7 +242,8 @@ def person_description(name: str, *,
                        apply_state_modifiers: bool = True,
                        back_view: bool = False,
                        mesh_input: bool = False,
-                       body_profile: Optional[Dict[str, Any]] = None) -> str:
+                       body_profile: Optional[Dict[str, Any]] = None,
+                       include_exposed: bool = True) -> str:
     """THE text description of a person for image prompts.
 
     Every path that describes a person — PromptBuilder (chat images,
@@ -253,7 +254,8 @@ def person_description(name: str, *,
     Layers: appearance (profile tokens resolved, whitespace collapsed)
     → body-slot suffix (species packages; exposed fragments only while
     uncovered, and in a ``back_view`` render only from slots visible from
-    behind) → optionally the worn-outfit line → triggered
+    behind; left out with ``include_exposed=False``) → optionally the
+    worn-outfit line → triggered
     image_modifier directives over the composed text (with the outfit
     included, a replacement may rewrite outfit text too — scene-render
     semantics) → in a ``back_view`` render, every segment naming a facial
@@ -277,7 +279,8 @@ def person_description(name: str, *,
     # Empty without species packages — safe no-op.
     try:
         from app.core.body_slots import appearance_suffix
-        suffix = appearance_suffix(name, profile=body_profile, back_view=back_view, mesh_input=mesh_input)
+        suffix = appearance_suffix(name, profile=body_profile, back_view=back_view,
+                                   mesh_input=mesh_input, include_exposed=include_exposed)
     except Exception:
         suffix = ""
     if suffix:
