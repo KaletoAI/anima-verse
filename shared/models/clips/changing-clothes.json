@@ -1,0 +1,50 @@
+{
+ "kind": "changing-clothes",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 151,
+ "duration_s": 5.033,
+ "loop": true,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": -0.02,
+  "hips_scale": [
+   1.0
+  ],
+  "foot_plant": {
+   "LeftFoot": {
+    "frames": 151,
+    "max_cm": 0.03
+   },
+   "RightFoot": {
+    "frames": 151,
+    "max_cm": 0.03
+   }
+  },
+  "rig_floor_shift_cm": -0.03,
+  "rig_floor_min_cm": 0.0,
+  "root_motion": {
+   "mode": "strip",
+   "travel_m": [
+    0.0,
+    0.0
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     5.0
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/changing-clothes.py",
+  "spec_sha": "d8fa6c2a40e48add82c19c2addf84f1c44c91554c46387eb1136d42d488e636a"
+ }
+}

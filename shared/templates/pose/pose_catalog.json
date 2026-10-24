@@ -680,7 +680,7 @@
       "group": "stand"
     },
     "changing_clothes": {
-      "prompt": "standing with one leg slightly bent, arms reaching behind the head or holding a garment, torso slightly twisted",
+      "prompt": "standing and changing clothes, pulling a top over the head",
       "synonyms": [
         "umkleiden",
         "sich umkleiden",
@@ -689,9 +689,13 @@
         "sich umziehen",
         "zieht sich um",
         "kleider wechseln",
-        "sich anziehen"
+        "sich anziehen",
+        "ein oberteil anziehen",
+        "pulli anziehen",
+        "getting dressed",
+        "putting on a top"
       ],
-      "animation": "putting on a dress",
+      "animation": "changing-clothes",
       "group": "stand",
       "solo": true
     },
