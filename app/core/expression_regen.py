@@ -274,6 +274,58 @@ def find_nearest_expression(character_name: str, mood: str,
     return best[1] if best is not None else None
 
 
+def find_same_outfit_expression(character_name: str, mood: str, pose_key: str,
+                                equipped_pieces: Optional[Dict[str, str]] = None,
+                                equipped_items: Optional[list] = None) -> Optional[Path]:
+    """Reference fallback for a render: the cached variant of the SAME outfit
+    combination that is closest to the wanted moment — when the exact variant
+    (mood + pose + outfit + state) has not been rendered yet.
+
+    "Same outfit" is exact and uses the one hash rule: re-keying the variant
+    with the CURRENT outfit (its own expression, pose and state axes kept)
+    must reproduce its file stem. A variant of any other combination never
+    qualifies — unlike :func:`find_nearest_expression`, which serves the most
+    SIMILAR outfit to the UI.
+
+    Ranking among them: equal state fingerprint first (a state rewrites the
+    appearance the reference supplies), then equal pose key, then equal
+    expression key, then the newest file. Read-only — no sidecar touch, no
+    generation trigger. None when no variant of this outfit exists.
+    """
+    from app.core.model_refs import outfit_signature_raw, state_fingerprint
+    expr_dir = _get_expressions_dir(character_name)
+    if not expr_dir.is_dir():
+        return None
+    outfit_raw = outfit_signature_raw(equipped_pieces, equipped_items, character_name)
+    want_state = state_fingerprint(character_name)
+    want_pose = _canonical_pose_key(pose_key)
+    want_expression = resolve_expression_key(mood)
+    best = None
+    for sidecar in expr_dir.glob(f"{_safe_name(character_name)}_*.json"):
+        img = next((sidecar.with_suffix(ext)
+                    for ext in (".png", ".jpg", ".webp")
+                    if sidecar.with_suffix(ext).exists()), None)
+        if img is None:
+            continue
+        try:
+            meta = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        expression_key = str(meta.get("expression_key") or "")
+        if not expression_key:
+            continue  # legacy sidecar — its key axes are unknown
+        pose = _canonical_pose_key(str(meta.get("pose_key") or ""))
+        state = str(meta.get("state_fingerprint") or "")
+        if variant_stem(character_name, expression_key, pose, outfit_raw,
+                        state) != sidecar.stem:
+            continue  # rendered for another outfit combination
+        rank = (state == want_state, pose == want_pose,
+                expression_key == want_expression, img.stat().st_mtime)
+        if best is None or rank > best[0]:
+            best = (rank, img)
+    return best[1] if best is not None else None
+
+
 def _touch_sidecar(sidecar_path: Path) -> None:
     """Best-effort update of last_used_at/use_count in a variant sidecar JSON.
 

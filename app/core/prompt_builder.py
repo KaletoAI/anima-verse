@@ -808,6 +808,20 @@ class PromptBuilder:
             if cached and cached.exists():
                 logger.debug("RefImage [%s]: Expression-Variante", person.name)
                 return str(cached)
+            # Prio 1b: the closest variant of the SAME outfit (another mood or
+            # pose) — it shows the body as dressed now, the profile portrait
+            # does not. Skipped when the equipped state could not be read:
+            # "nothing equipped" would match the undressed variants.
+            if eq_p is not None:
+                from app.core.expression_regen import find_same_outfit_expression
+                nearest = find_same_outfit_expression(
+                    person.name, mood, pose_key,
+                    equipped_pieces=eq_p, equipped_items=eq_i)
+                if nearest:
+                    logger.info("RefImage [%s]: no variant for this moment yet, "
+                                "nearest of the same outfit: %s",
+                                person.name, nearest.name)
+                    return str(nearest)
         except (ImportError, Exception):
             pass
 
