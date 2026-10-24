@@ -386,13 +386,11 @@ try:
     )
     from app.core.expression_regen import _cache_key
 
-    # Verbatim from the catalog file. The wording follows the CLIP: `plant`
-    # (CMU 80_20 "planting") measures hips 109.75 cm against the standing
-    # reference idle 110.18 cm - a STANDING motion - so the entry describes a
-    # standing gardener, not the kneeling one it claimed while it played
-    # `idle`.
-    _GARDENING = ("standing over a flower bed, bent forward from the hips, "
-                  "a young plant in one hand, soil on the other, sun hat on")
+    # Verbatim from the catalog file. The wording follows the CLIP: since
+    # 2026-10-24 `gardening` plays the studio clip `gardening` (kneeling in
+    # the bed, bent over it, place type ground) instead of the standing CMU
+    # `plant`, and the prompt says so.
+    _GARDENING = ("kneeling in a flower bed, bent forward, both hands pressing the soil around a young plant, gardening gloves")
     _STANDING = ("standing with one hand on hip, weight shifted to one leg, "
                  "shoulder slightly raised, chin up")
     assert get_pose_prompt("gardening") == _GARDENING, get_pose_prompt("gardening")
