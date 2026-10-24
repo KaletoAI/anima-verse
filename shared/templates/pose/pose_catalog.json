@@ -509,7 +509,7 @@
       "group": "ground"
     },
     "meeting": {
-      "prompt": "sitting at conference table, hands folded, upright posture, attentive engaged pose",
+      "prompt": "sitting at a conference table in a meeting, hands folded, attentive, making a point",
       "synonyms": [
         "besprechung",
         "konferenz",
@@ -517,10 +517,15 @@
         "in einer besprechung sitzen",
         "am konferenztisch sitzen",
         "teambesprechung",
-        "sitzung"
+        "sitzung",
+        "am tisch besprechen",
+        "in der sitzung",
+        "in a meeting",
+        "discussing at a table"
       ],
-      "animation": "sit",
-      "group": "seat"
+      "animation": "meeting",
+      "group": "seat",
+      "solo": true
     },
     "presenting": {
       "prompt": "standing and giving a presentation, notes in one hand, the other pointing to a screen, confident",
