@@ -777,16 +777,7 @@
     "shaking hands": {
       "prompt": "two people shaking hands, firm handshake, standing face to face, friendly eye contact",
       "label_de": "Händeschütteln",
-      "synonyms": [
-        "handshake",
-        "shake hands",
-        "händeschütteln",
-        "hände schütteln",
-        "die hand geben",
-        "begrüßung per handschlag",
-        "sich die hand geben",
-        "jemandem die hand schütteln"
-      ],
+      "synonyms": [],
       "animation": "handshake",
       "solo": false,
       "group": "stand",
@@ -825,10 +816,6 @@
         "hände auf die schultern",
         "reassure",
         "jemanden trösten",
-        "umarmen",
-        "jemanden umarmen",
-        "eine umarmung",
-        "in den arm nehmen",
         "beruhigen"
       ],
       "animation": "comfort",
@@ -933,6 +920,76 @@
       "animation": "forehead-wiping",
       "solo": true,
       "group": "stand"
+    },
+    "hugging": {
+      "prompt": "two people hugging in greeting, arms wrapped around each other, one arm over the shoulder and one around the waist, heads side by side, warm smiles",
+      "synonyms": [
+        "hug",
+        "hugging",
+        "embrace",
+        "hug hello",
+        "greeting hug",
+        "umarmen",
+        "umarmung",
+        "jemanden umarmen",
+        "eine umarmung",
+        "in den arm nehmen",
+        "zur begrüßung umarmen",
+        "umarmt",
+        "sich umarmen",
+        "fest umarmen"
+      ],
+      "animation": "greeting-hug",
+      "group": "stand",
+      "solo": false,
+      "places": 2,
+      "yaw_offset": 0
+    },
+    "kissing": {
+      "prompt": "two people kissing, standing close, one with hands on the other's waist, the other with arms around the partner's neck, eyes closed",
+      "synonyms": [
+        "kiss",
+        "kissing",
+        "kiss each other",
+        "a kiss",
+        "romantic kiss",
+        "küssen",
+        "kuss",
+        "sich küssen",
+        "einen kuss geben",
+        "jemanden küssen",
+        "küsst",
+        "ein kuss",
+        "innig küssen"
+      ],
+      "animation": "kissing",
+      "group": "stand",
+      "solo": false,
+      "places": 2,
+      "yaw_offset": 0
+    },
+    "greeting handshake": {
+      "prompt": "two people shaking hands in greeting, standing face to face, right hands clasped, a slight nod, friendly eye contact",
+      "synonyms": [
+        "handshake",
+        "shake hands",
+        "händeschütteln",
+        "hände schütteln",
+        "die hand geben",
+        "begrüßung per handschlag",
+        "sich die hand geben",
+        "jemandem die hand schütteln",
+        "hand geben",
+        "handschlag",
+        "zur begrüßung die hand geben",
+        "shaking hands in greeting",
+        "greet with a handshake"
+      ],
+      "animation": "greeting-handshake",
+      "group": "stand",
+      "solo": false,
+      "places": 2,
+      "yaw_offset": 0
     }
   }
 }

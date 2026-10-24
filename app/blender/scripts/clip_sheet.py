@@ -6,6 +6,10 @@ left, at a few frames.
 Invoked through ``runner.run("clip_sheet", inputs={"clip": fbx},
 params={"frames": [...], "views": ["front", "side"], "size": [w, h],
 "engine": "BLENDER_WORKBENCH"})``. Left limbs blue, right limbs orange.
+A PAIR passes its second half as ``inputs.clip_b`` (both halves share one
+frame, so they are imported side by side as they are); B's left limbs are
+green, its right limbs violet. Views: ``front`` / ``side`` as above,
+``diag`` (front-left, 45° — sees both bodies of a pair), ``top``.
 Engine CYCLES (CPU, 8 samples) is the fallback for a host without a GL
 context — the caller retries with it when the first run fails.
 """
@@ -23,7 +27,9 @@ import bpy                                                    # noqa: E402
 from mathutils import Matrix, Vector                          # noqa: E402
 
 COLORS = {"Left": (0.25, 0.45, 0.85, 1.0), "Right": (0.90, 0.50, 0.20, 1.0),
-          "": (0.80, 0.80, 0.80, 1.0)}
+          "": (0.80, 0.80, 0.80, 1.0),
+          "bLeft": (0.20, 0.65, 0.35, 1.0), "bRight": (0.60, 0.30, 0.75, 1.0),
+          "b": (0.55, 0.55, 0.55, 1.0)}
 RADIUS_CM = {"Hips": 9.0, "Spine": 9.0, "Spine1": 10.0, "Spine2": 11.0, "Neck": 4.0,
              "Shoulder": 3.5, "Arm": 4.5, "ForeArm": 3.5, "Hand": 3.0,
              "UpLeg": 7.0, "Leg": 5.0, "Foot": 4.0, "ToeBase": 3.0}
@@ -95,7 +101,7 @@ def _link(arm, bone, a, b, radius, mat):
     return obj
 
 
-def _mannequin(arm, engine):
+def _mannequin(arm, engine, tint=""):
     for bone in arm.data.bones:
         short = bone.name.split(":")[-1]
         if any(s in short for s in SKIP) or short.endswith("4") or bone.length < 0.5:
@@ -103,41 +109,50 @@ def _mannequin(arm, engine):
         key = next((k for k in sorted(RADIUS_CM, key=len, reverse=True)
                     if short.endswith(k)), None)
         radius = RADIUS_CM.get(key, 0.9)
-        _limb(arm, bone, radius, bone.length, _material(_side(short), engine))
+        _limb(arm, bone, radius, bone.length, _material(tint + _side(short), engine))
         if short.endswith("UpLeg") and bone.parent is not None:
             _link(arm, bone.parent, bone.parent.head_local, bone.head_local,
-                  radius, _material(_side(short), engine))
+                  radius, _material(tint + _side(short), engine))
     head = arm.data.bones.get("mixamorig:Head")
     if head is not None:
         bpy.ops.mesh.primitive_uv_sphere_add(radius=10.0, segments=16, ring_count=8)
         s = bpy.context.active_object
-        s.data.materials.append(_material("", engine))
+        s.data.materials.append(_material(tint, engine))
         s.parent, s.parent_type, s.parent_bone = arm, "BONE", head.name
         s.matrix_parent_inverse = Matrix.Identity(4)
         s.location = (0.0, 2.0, 0.0)
 
 
-def _bbox(arm, frames):
+def _bbox(arms, frames):
     lo = Vector((1e9, 1e9, 1e9))
     hi = Vector((-1e9, -1e9, -1e9))
     for f in frames:
         bpy.context.scene.frame_set(f)
-        for pb in arm.pose.bones:
-            for p in (arm.matrix_world @ pb.head, arm.matrix_world @ pb.tail):
-                lo = Vector(map(min, lo, p))
-                hi = Vector(map(max, hi, p))
+        for arm in arms:
+            for pb in arm.pose.bones:
+                for p in (arm.matrix_world @ pb.head, arm.matrix_world @ pb.tail):
+                    lo = Vector(map(min, lo, p))
+                    hi = Vector(map(max, hi, p))
     return lo, hi
+
+
+def _import(path):
+    before = set(bpy.data.objects)
+    bpy.ops.wm.fbx_import(filepath=path, global_scale=1.0)
+    return next(o for o in bpy.data.objects if o.type == "ARMATURE" and o not in before)
 
 
 def run(job):
     params = dict(job.get("params") or {})
     engine = params.get("engine", "BLENDER_WORKBENCH")
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    bpy.ops.wm.fbx_import(filepath=job["inputs"]["clip"], global_scale=1.0)
-    arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
+    arms = [_import(job["inputs"]["clip"])]
+    _mannequin(arms[0], engine)
+    if job["inputs"].get("clip_b"):
+        arms.append(_import(job["inputs"]["clip_b"]))
+        _mannequin(arms[1], engine, tint="b")
     frames = [int(f) for f in params["frames"]]
-    _mannequin(arm, engine)
-    lo, hi = _bbox(arm, frames)
+    lo, hi = _bbox(arms, frames)
     center = (lo + hi) / 2
     extent = max(hi.z - lo.z, hi.x - lo.x, hi.y - lo.y)
     bpy.ops.mesh.primitive_plane_add(size=max(4.0, extent * 2), location=(center.x, center.y, 0.0))
@@ -163,8 +178,12 @@ def run(job):
     scene.camera = cam
     # The armature object turns +90 deg about X: the figure's front (+Z in
     # armature space) faces world -Y, its left (+X) is world +X, up is +Z.
+    r = 10.0 / math.sqrt(2.0)
     views = {"front": ((0.0, -10.0, 0.0), (math.pi / 2, 0.0, 0.0)),
-             "side": ((10.0, 0.0, 0.0), (math.pi / 2, 0.0, math.pi / 2))}
+             "side": ((10.0, 0.0, 0.0), (math.pi / 2, 0.0, math.pi / 2)),
+             # front-left at 45°, looking slightly down
+             "diag": ((r, -r, 3.0), (math.radians(73.0), 0.0, math.pi / 4)),
+             "top": ((0.0, 0.0, 10.0), (0.0, 0.0, 0.0))}
     outputs = {}
     out_dir = Path(job["out_dir"])
     for view in params.get("views", ["front", "side"]):

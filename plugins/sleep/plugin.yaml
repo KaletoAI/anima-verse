@@ -9,10 +9,12 @@ skills:
     class: SleepWakeSkill
     params: {asleep: true}
     always_load: true
+    default_enabled: true
   - skill_id: wakeup
     class: SleepWakeSkill
     params: {asleep: false}
     always_load: true
+    default_enabled: true
 
 templates:
   llm: templates/llm

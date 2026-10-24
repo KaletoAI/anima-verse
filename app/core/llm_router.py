@@ -47,6 +47,8 @@ class LLMInstance:
     temperature: float = 0.7
     max_tokens: Optional[int] = None
     chat_template: Optional[str] = None
+    # The entry's repetition_penalty; None = not sent (see LLMClient).
+    repetition_penalty: Optional[float] = None
     _provider: Optional[Provider] = field(default=None, repr=False)
     pinned: bool = False
 
@@ -95,6 +97,8 @@ class LLMInstance:
         timeout = provider_timeout or int(os.environ.get("LLM_REQUEST_TIMEOUT", "120"))
         frequency_penalty = overrides.get("frequency_penalty")
         top_p = overrides.get("top_p")
+        repetition_penalty = overrides.get("repetition_penalty",
+                                           self.repetition_penalty)
 
         if self._provider and self._provider.type == "anthropic":
             client = AnthropicLLMClient(
@@ -115,7 +119,8 @@ class LLMInstance:
                 chat_template=(overrides.get("chat_template")
                                or self.chat_template),
                 frequency_penalty=frequency_penalty,
-                top_p=top_p)
+                top_p=top_p,
+                repetition_penalty=repetition_penalty)
         client.provider_name = self.provider_name
         return client
 
@@ -391,6 +396,11 @@ def _instance_for(task: str, entry: dict, provider: Provider) -> LLMInstance:
         max_tokens = None
     else:
         max_tokens = int(max_tokens)
+    # Empty / 0 = the entry sends no repetition_penalty at all.
+    try:
+        repetition_penalty = float(entry.get("repetition_penalty") or 0) or None
+    except (TypeError, ValueError):
+        repetition_penalty = None
 
     return LLMInstance(
         provider_name=provider_name,
@@ -399,6 +409,7 @@ def _instance_for(task: str, entry: dict, provider: Provider) -> LLMInstance:
         temperature=temperature,
         max_tokens=max_tokens,
         chat_template=(entry.get("chat_template") or "") or None,
+        repetition_penalty=repetition_penalty,
         _provider=provider)
 
 

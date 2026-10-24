@@ -234,7 +234,8 @@ class LLMClient:
         request_timeout: int = 120,
         chat_template: Optional[str] = None,
         frequency_penalty: Optional[float] = None,
-        top_p: Optional[float] = None):
+        top_p: Optional[float] = None,
+        repetition_penalty: Optional[float] = None):
         self.model = model
         self.model_name = model
         self.openai_api_key = api_key
@@ -256,6 +257,11 @@ class LLMClient:
         # Without it every temperature increase lifts the least likely tokens
         # the most — that is how a raised temperature turns into script salad.
         self.top_p = top_p
+        # vLLM-style repetition penalty (1.0 = neutral), sent via extra_body
+        # because it is not an OpenAI parameter. Unlike frequency_penalty it
+        # also counts the PROMPT tokens, so it is what reaches a reply copied
+        # from the history. None = do not send it (the routing entry has none).
+        self.repetition_penalty = repetition_penalty
 
         client_kwargs = {
             "api_key": api_key,
@@ -294,6 +300,8 @@ class LLMClient:
                 extra_body["chat_template_kwargs"] = {"enable_thinking": False}
         if self.chat_template:
             extra_body["chat_template"] = self.chat_template
+        if self.repetition_penalty is not None:
+            extra_body["repetition_penalty"] = float(self.repetition_penalty)
         if extra_body:
             kwargs["extra_body"] = extra_body
         return kwargs

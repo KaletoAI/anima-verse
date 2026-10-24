@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 from app.core.db import get_connection, transaction
@@ -119,15 +119,41 @@ def get_time_based_history(
 _FUZZY_MARKER_RE = re.compile(
     r'\*\*I\s+(?:feel|do|am\s+at)\s+[^*]+\*\*', re.IGNORECASE)
 _FUZZY_NONALNUM_RE = re.compile(r'[^a-z0-9äöüß]+')
-# Sentence boundary: an end-of-sentence mark followed by whitespace, or a line
-# break. Good enough for prose — the parts are only ever compared to each other.
-_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?…])\s+|\n+')
+# Sentence boundary: an end-of-sentence mark followed by whitespace, a line
+# break, a dialogue quote or an asterisk (RP action markup). The quotes matter:
+# in `„Deine Lippen sind kantig.“ Meine Finger gleiten …` the closing quote
+# sits between the full stop and the space, so without them the spoken line
+# and the narration that follows it were ONE part — and the same line followed
+# by a different gesture never matched (measured 2026-10-23: a reply that
+# reused 90% of the previous one counted as no repetition). The parts are only
+# ever compared to each other, so a crude split is good enough.
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?…])\s+|\n+|[„“”"«»]|\*+')
 
 # A verbatim sentence needs at least this many normalized characters before it
-# counts as a repetition marker. Derived from the echo measurement in
-# task-A1.1-report.md section 2.5, which measured verbatim sentences >= 60
-# characters; shorter sentences ("I nod slowly.") recur in normal prose.
-REPETITION_SENTENCE_MIN_CHARS = 60
+# counts as a repetition marker. 60 until 2026-10-23, from the echo measurement
+# in task-A1.1-report.md section 2.5 — when the split still glued speech and
+# narration together, so every part was long. With the quote split, RP lines
+# are 30-50 characters; over the 121 logged chat calls that carried their
+# message list, every sentence of >= 30 characters that recurred was a real
+# verbatim repetition ("ich trete nah mein kern leuchtet sanft", "meine finger
+# krallen sich in den teppich"). Truly short lines ("I nod slowly.", 12) stay
+# below it.
+REPETITION_SENTENCE_MIN_CHARS = 30
+
+# Paraphrase loops: the same reply with its sentences re-ordered or one word
+# changed shares no exact sentence, but most of its word 4-grams. A reply
+# counts as a repetition when at least this share of its 4-grams already
+# occurred in the window. Over the same 121 calls this flagged 11 calls the
+# sentence keys missed, all of them genuine (a drunk NPC re-saying one line in
+# a new order, a scene description copied into the next turn).
+_WORD_RE = re.compile(r'[a-z0-9äöüß]+')
+REPETITION_SHINGLE_WORDS = 4
+REPETITION_SHINGLE_SHARE = 0.3
+
+# Shipped defaults of the reactive repetition_penalty bump (config_schema
+# ``chat.anti_rep_rp_step`` / ``chat.anti_rep_rp_max``).
+RP_STEP_DEFAULT = 0.01
+RP_MAX_DEFAULT = 1.05
 
 
 def _normalize_fuzzy(text: str) -> str:
@@ -150,7 +176,7 @@ def fuzzy_signature(content: str, length: int = 60) -> str:
     gets DELETED from the prompt (see ``chat_engine.dedupe_assistant_repeats``),
     so a false positive costs real context. The repetition COUNTER uses the
     wider ``repetition_keys`` instead, where a false positive only costs a bit
-    of temperature.
+    of penalty.
     """
     if not content:
         return ""
@@ -173,7 +199,7 @@ def repetition_keys(
       only visible at sentence level).
 
     Deliberately more sensitive than ``fuzzy_signature``: here a false positive
-    only raises the temperature a notch, while a miss lets the loop run.
+    only raises the penalty a notch, while a miss lets the loop run.
     """
     if not content:
         return set()
@@ -188,15 +214,27 @@ def repetition_keys(
     return keys
 
 
+def repetition_shingles(content: str,
+                        words: int = REPETITION_SHINGLE_WORDS) -> set:
+    """Word n-grams of a reply (markers removed) — the paraphrase half of the
+    repetition COUNTER. A reply shorter than ``words`` words has none; the
+    opening signature carries those."""
+    if not content:
+        return set()
+    tokens = _WORD_RE.findall(_FUZZY_MARKER_RE.sub("", content).lower())
+    return {tuple(tokens[i:i + words]) for i in range(len(tokens) - words + 1)}
+
+
 def count_assistant_repetitions(messages: List[Dict[str, str]],
                                  lookback: int = 6) -> int:
     """Counts how many of the last ``lookback`` assistant replies repeat
     something an earlier one in that window already said.
 
-    A reply counts once, no matter how much of it is old — either its opening
-    signature or one of its long sentences was seen before (see
-    ``repetition_keys``). Example: 4 replies opening the same way + 1 + 1
-    → 3 repetitions. The result drives the graduated temperature bump
+    A reply counts once, no matter how much of it is old — its opening
+    signature or one of its sentences was seen before (see
+    ``repetition_keys``), or at least ``REPETITION_SHINGLE_SHARE`` of its word
+    4-grams were (``repetition_shingles``). Example: 4 replies opening the same
+    way + 1 + 1 → 3 repetitions. The result drives the graduated penalty bump
     (base + step * count, see ``anti_repetition_overrides``).
 
     ``messages`` is a chat-ordered list (oldest first); only entries with
@@ -204,23 +242,28 @@ def count_assistant_repetitions(messages: List[Dict[str, str]],
     """
     if not messages:
         return 0
-    window: List[set] = []
+    window: List[Tuple[set, set]] = []
     for msg in reversed(messages):
         if msg.get("role") != "assistant":
             continue
-        keys = repetition_keys(msg.get("content", ""))
+        content = msg.get("content", "")
+        keys = repetition_keys(content)
         if keys:
-            window.append(keys)
+            window.append((keys, repetition_shingles(content)))
         if len(window) >= lookback:
             break
     window.reverse()  # oldest first again — "seen before" needs the real order
 
     seen: set = set()
+    seen_shingles: set = set()
     repetitions = 0
-    for keys in window:
-        if keys & seen:
+    for keys, shingles in window:
+        reused = (len(shingles & seen_shingles) / len(shingles)
+                  if shingles else 0.0)
+        if keys & seen or reused >= REPETITION_SHINGLE_SHARE:
             repetitions += 1
         seen |= keys
+        seen_shingles |= shingles
     return repetitions
 
 
@@ -228,14 +271,25 @@ def anti_repetition_overrides(
         recent_outputs: List[Dict[str, str]],
         base_temperature: float,
         agent_name: str = "",
-        with_frequency_penalty: bool = True) -> Dict[str, Any]:
+        with_frequency_penalty: bool = True,
+        base_repetition_penalty: Optional[float] = None) -> Dict[str, Any]:
     """The reactive anti-loop net, shared by the chat and the thought path.
 
     A safety net, not a sampling setting: when a character starts repeating
-    itself, the **repetition penalty** is raised by
-    ``chat.anti_rep_penalty_step`` per detected repetition, capped at
-    ``chat.anti_rep_penalty_max``. The penalty is the targeted instrument —
-    it acts on the tokens that are actually being repeated.
+    itself, the penalties are raised per detected repetition.
+
+    - ``repetition_penalty`` (``chat.anti_rep_rp_step``, capped at
+      ``chat.anti_rep_rp_max``) is the instrument that reaches an echo of the
+      HISTORY: vLLM applies it to every token of the prompt and the reply.
+      It is raised only from the base value of the LLM entry
+      (``base_repetition_penalty``) — an entry without one is on a backend
+      that may not know the parameter, so nothing is sent there.
+    - ``frequency_penalty`` (``chat.anti_rep_penalty_step``, capped at
+      ``chat.anti_rep_penalty_max``) is the OpenAI parameter every backend
+      takes. vLLM counts only the tokens of the reply being generated, so it
+      curbs a loop inside one reply and does not see a line copied from the
+      history (measured 2026-10-23: at 0.45 a 111B model copied its own
+      previous reply verbatim in 2 of 4 samples).
 
     Temperature is NOT that instrument and is off by default
     (``chat.anti_rep_step`` = 0). It was the only lever until 2026-08-03, and
@@ -258,6 +312,9 @@ def anti_repetition_overrides(
             — the STATIC penalty is a configured chat-reply value and stays
             where it was configured for. The reactive bump crosses over
             regardless, starting from 0 instead of from the static value.
+        base_repetition_penalty: the ``repetition_penalty`` of the LLM entry
+            (``LLMInstance.repetition_penalty``); None = the entry sends none,
+            and the net leaves it that way.
 
     Returns:
         kwargs for ``LLMInstance.create_llm``. An empty dict = change nothing.
@@ -278,7 +335,9 @@ def anti_repetition_overrides(
 
     temp_step = float(config.get("chat.anti_rep_step", 0) or 0)
     pen_step = float(config.get("chat.anti_rep_penalty_step", 0.15) or 0)
-    if temp_step <= 0 and pen_step <= 0:
+    rp_step = (float(config.get("chat.anti_rep_rp_step", RP_STEP_DEFAULT) or 0)
+               if base_repetition_penalty is not None else 0.0)
+    if temp_step <= 0 and pen_step <= 0 and rp_step <= 0:
         return overrides  # reactive net disabled
 
     lookback = int(config.get("chat.anti_rep_lookback", 6) or 6)
@@ -292,6 +351,15 @@ def anti_repetition_overrides(
         new_penalty = min(static_penalty + pen_step * count, pen_ceiling)
         overrides["frequency_penalty"] = new_penalty
         parts.append("penalty %.2f → %.2f" % (static_penalty, new_penalty))
+    if rp_step > 0:
+        rp_ceiling = float(config.get("chat.anti_rep_rp_max", RP_MAX_DEFAULT)
+                           or RP_MAX_DEFAULT)
+        # A ceiling below the entry's own base never LOWERS the base.
+        new_rp = max(min(base_repetition_penalty + rp_step * count, rp_ceiling),
+                     base_repetition_penalty)
+        overrides["repetition_penalty"] = new_rp
+        parts.append("repetition_penalty %.2f → %.2f"
+                     % (base_repetition_penalty, new_rp))
     if temp_step > 0:
         ceiling = float(config.get("chat.anti_rep_max", 0.9) or 0.9)
         new_temp = min(base_temperature + temp_step * count, ceiling)

@@ -2,7 +2,8 @@
 very run_takes every other source uses.
 
 Invoked through ``app.blender.runner.run("proc_clip", inputs={"take": …,
-"rig": …}, params={"kind": …, "source": {…}})``.
+"rig": …}, params={"kind": …, "source": {…}})`` — or, for a PAIR, with
+``take_a`` + ``take_b`` instead of ``take`` and ``params.anchor_s``.
 
 The take (``animstudio.compile.take_document``) carries per frame and bone
 the WORLD rotation relative to the rig's rest and the bone's head in cm —
@@ -32,7 +33,7 @@ from fbx_clip import _FakeBone, _FakeSkeleton, _FbxTake       # noqa: E402
 sys.path.remove(_SCRIPTS_DIR)
 
 
-def _take(doc):
+def _take(doc, role=""):
     sk = _FakeSkeleton()
     for short, b in doc["bones"].items():
         inter = cmu_clip.BONE_MAP[short]
@@ -45,13 +46,39 @@ def _take(doc):
             inter = cmu_clip.BONE_MAP[short]
             pose.rot[inter] = [list(r) for r in v["rot"]]
             pose.pos[inter] = tuple(v["pos"])
+        # The pair contact fit looks for a "head" joint (CMU's skull bone);
+        # the rig side of that fit reads the Head bone's head, so the take
+        # names the same point and actor = rig (no shift).
+        if "upperneck" in pose.pos:
+            pose.pos["head"] = pose.pos["upperneck"]
         poses.append(pose)
-    return _FbxTake("", sk, poses)
+    return _FbxTake(role, sk, poses)
+
+
+def _run_pair(job, inputs, params):
+    """PAIR: ``take_a`` / ``take_b`` are already in one frame (A faces +X,
+    B -X); run_takes turns the pair so +X runs from A's hips to B's at
+    ``anchor_s`` and centres it there. No ``lift_cm`` (stand only)."""
+    docs = {r: json.loads(Path(inputs[f"take_{r}"]).read_text(encoding="utf-8"))
+            for r in ("a", "b")}
+    fps = int(docs["a"]["fps"])
+    args = {"kind": params["kind"], "rig": inputs["rig"], "out_dir": job["out_dir"],
+            "fps": fps, "source_fps": float(fps), "loops": bool(docs["a"]["loop"]),
+            "anchor_s": float(params.get("anchor_s") or 0.0)}
+    sidecar, outputs = cmu_clip.run_takes([_take(docs["a"], "a"), _take(docs["b"], "b")],
+                                          args, fps, params["source"])
+    out_dir = Path(job["out_dir"])
+    for r in ("a", "b"):
+        outputs[f"measure_{r}"] = _measure(outputs[f"{params['kind']}__{r}"], out_dir, fps,
+                                           f"measure_{r}.json")
+    return sidecar, outputs
 
 
 def run(job):
     inputs = job.get("inputs") or {}
     params = dict(job.get("params") or {})
+    if "take_a" in inputs:
+        return _run_pair(job, inputs, params)
     doc = json.loads(Path(inputs["take"]).read_text(encoding="utf-8"))
     take = _take(doc)
     fx, fz = _cmu.forward_xz(take.poses[0])
@@ -73,7 +100,7 @@ MEASURED = ["Hips", "Spine2", "Head", "HeadTop_End",
             "LeftArm", "LeftForeArm", "LeftHand", "RightArm", "RightForeArm", "RightHand"]
 
 
-def _measure(fbx: str, out_dir: Path, fps: int) -> str:
+def _measure(fbx: str, out_dir: Path, fps: int, name: str = "measure.json") -> str:
     """Joint heads per frame of the EXPORTED clip (armature space, cm) and
     the number of rotation tracks — what the studio's checks read.
 
@@ -99,7 +126,7 @@ def _measure(fbx: str, out_dir: Path, fps: int) -> str:
         for short in MEASURED:
             row[short] = [float(v) for v in arm.pose.bones[cmu_clip.PREFIX + short].head]
         rows.append(row)
-    path = out_dir / "measure.json"
+    path = out_dir / name
     path.write_text(json.dumps({"tracks": len(tracks), "frames": rows}), encoding="utf-8")
     return str(path)
 

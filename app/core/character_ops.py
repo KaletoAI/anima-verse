@@ -47,6 +47,21 @@ def default_new_character_skills() -> tuple:
     return DEFAULT_NEW_CHARACTER_SKILLS + extra
 
 
+def seed_default_skills(character_name: str) -> None:
+    """Write the default skill set for a NEW character.
+
+    Without these files the ALWAYS_LOAD filter logic
+    (skill_manager._get_agent_skills) turns every always-load skill off, so
+    the fresh character would lack its usual repertoire."""
+    from app.models.character import save_character_skill_config
+    for sid in default_new_character_skills():
+        try:
+            save_character_skill_config(character_name, sid, {"enabled": True})
+        except Exception as e:
+            logger.warning("skill default '%s' not set for %s: %s",
+                           sid, character_name, e)
+
+
 # === Pure helpers ===
 
 def _resolve_face_prompt(profile: dict, character_name: str, tmpl) -> str:
@@ -2217,7 +2232,7 @@ async def create_character_core(request) -> Dict[str, Any]:
     from app.models.account import get_language_settings, set_current_character
     from app.models.character import (list_available_characters,
                                       save_character_profile, get_character_config,
-                                      save_character_config, save_character_skill_config)
+                                      save_character_config)
     from app.core.character_name import (CharacterNameError, localized_message,
                                          validate_character_name)
     from app.core.i18n import t
@@ -2273,16 +2288,7 @@ async def create_character_core(request) -> Dict[str, Any]:
     except Exception as _e:
         logger.warning("create_character: known_locations init failed: %s", _e)
 
-    # Write skill defaults -- without these files the ALWAYS_LOAD filter logic
-    # (skill_manager._get_agent_skills) kicks in and turns all skills off by
-    # default. With the default list the fresh char has the usual repertoire
-    # right away (chat, set_location, consume magic, outfit change, ...).
-    for _sid in default_new_character_skills():
-        try:
-            save_character_skill_config(character_name, _sid, {"enabled": True})
-        except Exception as _e:
-            logger.warning("create_character: skill default '%s' not set: %s",
-                           _sid, _e)
+    seed_default_skills(character_name)
 
     # Auto-assign the new character to the creator's allowed_characters list
     # so they can immediately see and use it without a separate admin step.

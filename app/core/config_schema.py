@@ -298,7 +298,7 @@ SECTIONS = {
                 # sampling setting.
                 "fields": ["name", "preload_on_startup", "provider",
                            "model", "max_concurrent", "accepts_overflow", "temperature",
-                           "max_tokens", "chat_template", "tasks"],
+                           "repetition_penalty", "max_tokens", "chat_template", "tasks"],
                 # Rendered as a click toggle in the collapsed entry header
                 # instead of inside the accordion body.
                 "header_fields": ["enabled"],
@@ -358,6 +358,16 @@ SECTIONS = {
                 "label": "Accepts Overflow",
                 "default": True,
                 "description": "Background calls from a full model higher up a task's chain may move here. Switch off for rate-limited or paid models. The entry still serves as a regular choice either way.",
+            },
+            "repetition_penalty": {
+                "type": "float",
+                "label": "Repetition Penalty",
+                "min": 0,
+                "max": 1.5,
+                "step": 0.01,
+                "placeholder": "not sent",
+                "hide_for_embedding": True,
+                "description": "Penalty on tokens that already occur in the prompt OR the reply (1.0 = neutral), sent via extra_body — a vLLM / llama.cpp parameter, NOT an OpenAI one, so leave it empty (= not sent) for OpenAI, Anthropic and any backend that rejects unknown fields. It is the one sampler that stops a character from copying its own earlier replies out of the history: frequency_penalty only counts the reply being written. Measured 2026-10-23 on a 111B RP model (vLLM) over eight real chat histories, 32 replies per value: 1.03 cut the reuse of earlier sentences from 19% to 10% with no full copy left; on the four most looped histories full copies went 28% → 25% (1.03) → 16% (1.05) → 9% (1.08), but from 1.08 on the share of broken marker lines rose from about 25% to over 40% and English replies appeared. Chat models: 1.03. The reactive anti-loop (Chat / Anti-Repetition) raises it from here when a character repeats itself — only on entries that have a value.",
             },
             "max_tokens": {"type": "int", "label": "Max Tokens", "min": 0, "max": 200000, "placeholder": "provider default", "hide_for_embedding": True, "description": "Completion budget per request. For thinking models (GLM, DeepSeek-R1, …) the HIDDEN reasoning tokens count against it — too small a value cuts the visible answer mid-output. Empty = no cap sent (provider default)."},
             "chat_template": {
@@ -507,10 +517,12 @@ SECTIONS = {
         "scope": "world",
         "world_group": "memory_chat",
         "fields": {
-            "frequency_penalty": {"type": "float", "label": "Frequency Penalty", "default": 0.3, "min": 0, "max": 2, "step": 0.05, "description": "Static token-repetition penalty sent to the chat model on every reply (OpenAI param). 0 = off, 0.3 = light, 0.6+ = strong. This is a global default ON TOP of the per-model base temperature configured in LLM Routing — not a per-model sampling value. Some backends ignore it."},
+            "frequency_penalty": {"type": "float", "label": "Frequency Penalty", "default": 0.3, "min": 0, "max": 2, "step": 0.05, "description": "Static token-repetition penalty sent to the chat model on every reply (OpenAI param). 0 = off, 0.3 = light, 0.6+ = strong. This is a global default ON TOP of the per-model base temperature configured in LLM Routing — not a per-model sampling value. Some backends ignore it. On vLLM it counts only the tokens of the reply being written — it curbs a loop inside one reply but does NOT see a line copied from the chat history; for that, set Repetition Penalty on the LLM entry (LLM Routing › LLMs)."},
             "top_p": {"type": "float", "label": "Nucleus cut-off (top_p)", "default": 0, "min": 0, "max": 1, "step": 0.01, "description": "Nucleus sampling cut-off sent with every chat and thought reply. 0 (the default) = do not send it, the provider default (usually 1.0 = no cut-off) applies. 0.95 keeps the unlikely tail of the distribution closed. Strongly recommended whenever the reactive temperature bump below is enabled: without a cut-off, every temperature step lifts the least likely tokens the most, which is how a raised temperature turns into multi-script gibberish."},
-            "anti_rep_penalty_step": {"type": "float", "label": "Penalty bump per repetition", "default": 0.15, "min": 0, "max": 1, "step": 0.05, "description": "Reactive anti-loop: when the character repeats phrases across its recent replies, the token-repetition penalty is raised by this amount PER detected repetition. This is the targeted instrument — it acts on the tokens actually being repeated. 0 = disable the reactive penalty bump."},
+            "anti_rep_penalty_step": {"type": "float", "label": "Penalty bump per repetition", "default": 0.15, "min": 0, "max": 1, "step": 0.05, "description": "Reactive anti-loop: when the character repeats phrases across its recent replies, the frequency penalty is raised by this amount PER detected repetition. Works on every backend, but on vLLM it only counts the reply being written — the repetition-penalty bump below is what reaches an echo of the history. 0 = disable the reactive frequency-penalty bump."},
             "anti_rep_penalty_max": {"type": "float", "label": "Penalty ceiling", "default": 1.0, "min": 0, "max": 2, "step": 0.05, "description": "Upper bound for the reactively-raised repetition penalty."},
+            "anti_rep_rp_step": {"type": "float", "label": "Repetition-penalty bump per repetition", "default": 0.01, "min": 0, "max": 0.1, "step": 0.005, "description": "Reactive anti-loop on the repetition_penalty: raised by this amount PER detected repetition, starting from the Repetition Penalty of the LLM entry (LLM Routing › LLMs). Entries without a Repetition Penalty are left alone — their backend may not know the parameter. Keep it small: the parameter is multiplicative on every token already in the prompt, and from 1.08 on, a German-speaking 111B model broke its marker lines in over 40% of its replies and started to answer in English (measured 2026-10-23). 0.01 takes an entry at 1.03 to 1.04 on the first repetition and to the 1.05 ceiling on the second. 0 = off."},
+            "anti_rep_rp_max": {"type": "float", "label": "Repetition-penalty ceiling", "default": 1.05, "min": 1, "max": 1.5, "step": 0.01, "description": "Upper bound for the reactively raised repetition_penalty. Never lowers an entry's own value. 1.05 is the highest value measured without side effects on the reference model (full copies of an earlier reply 28% → 16% on looped histories, marker lines and language intact); at 1.08 over 40% of the replies broke their marker lines and English replies appeared."},
             "anti_rep_step": {"type": "float", "label": "Temperature bump per repetition (legacy)", "default": 0, "min": 0, "max": 0.5, "step": 0.05, "description": "Reactive anti-loop via temperature, added on top of the LLM Routing base temperature per detected repetition. Off by default since 2026-08-03: at a raised temperature of 1.10, two of two replies of one model collapsed into multi-script token salad, against zero of 26 at its configured 0.80 in the same window. Prefer the penalty bump above. If you enable this anyway, set the nucleus cut-off as well and keep the ceiling low."},
             "anti_rep_max": {"type": "float", "label": "Temperature ceiling", "default": 0.9, "min": 0.7, "max": 2, "step": 0.05, "description": "Upper bound for the reactively-raised temperature. 0.90 is the highest value for which clean output was actually measured; 1.10 is measurably broken."},
             "anti_rep_lookback": {"type": "int", "label": "Repetition lookback (turns)", "default": 6, "min": 2, "max": 20, "description": "How many of the character's recent replies are fuzzy-checked for near-duplicates to drive the reactive bump. Note for thought turns: these are journal entries, so six of them can span several days — see the age limit below."},

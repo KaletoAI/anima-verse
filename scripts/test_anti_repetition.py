@@ -14,6 +14,14 @@ Covers the three defects fixed in A1:
   3. the counter also sees LATE repetitions — a verbatim sentence in otherwise
      new text (history_manager).
 
+Cases 11-13 (2026-10-23) cover the RP-dialogue loop of one character: the
+counter split sentences only at ". " — with dialogue quotes the closing quote
+sits between the full stop and the space, so speech and narration were one
+part and a reused gesture after a new line never matched; the paraphrase
+rule (word 4-grams) catches re-ordered repeats; and repetition_penalty, the
+one sampler vLLM applies to the PROMPT tokens too, is passed from the LLM entry
+and raised reactively.
+
 Case 9 covers the A2 rebuild: the reactive bump raises the repetition PENALTY
 instead of the temperature, and `chat.top_p` clamps the tail. Background: at a
 reactively raised temperature of 1.10, two of two replies of one model
@@ -47,7 +55,7 @@ from app.core.chat_engine import (  # noqa: E402
     _messages_from_room_stream, dedupe_assistant_repeats)
 from app.utils.history_manager import (  # noqa: E402
     anti_repetition_overrides, count_assistant_repetitions, fuzzy_signature,
-    repetition_keys)
+    repetition_keys, repetition_shingles)
 
 FAILURES = []
 CHECKS = 0
@@ -81,6 +89,8 @@ def _pin_config():
             "anti_rep_lookback": 6,
             "anti_rep_penalty_step": 0.15,
             "anti_rep_penalty_max": 1.0,
+            "anti_rep_rp_step": 0.01,
+            "anti_rep_rp_max": 1.05,
             "top_p": 0,
         }
     }
@@ -94,8 +104,7 @@ def msgs(*contents):
 # --- test material -----------------------------------------------------------
 # The shared sentence has 65 normalized characters (Der3 Marktplatz10 liegt5
 # still5 und3 verlassen9 unter5 dem3 grauen6 Himmel6 von3 Norwich7) and thus
-# clears the 60-character threshold — but only just, so the case really tests
-# the threshold and not a wall of text.
+# clears the sentence threshold (30 since 2026-10-23, 60 before).
 SHARED = ("Der Marktplatz liegt still und verlassen unter dem grauen "
           "Himmel von Norwich.")
 LATE_A = "Ich trete an das Fenster und sehe hinaus in den Regen. " + SHARED
@@ -447,6 +456,157 @@ def case_10_repetition_age_window():
         _pin_config()
 
 
+# Dialogue-style replies (case 11). The narration sentence between the two
+# quotes is shared; it has 42 normalized characters (meine5 finger6 gleiten7
+# über4 das3 nasse5 holz4 der3 theke5) — above 30, below the old 60.
+SHARED_GESTURE = "Meine Finger gleiten über das nasse Holz der Theke."
+SHARED_GESTURE_KEY = "meinefingergleitenüberdasnasseholzdertheke"
+QUOTE_A = "„Steine im Fluss sind nie ganz still.“ " + SHARED_GESTURE + " „Aber du bist es.“"
+QUOTE_B = "„Du hörst mir gar nicht zu.“ " + SHARED_GESTURE + " „Was suchst du hier?“"
+
+# Paraphrase pair (case 12): the same two clauses in swapped order. No shared
+# opening, no shared sentence — only the word sequences inside the clauses.
+PARA_A = ("Ich stelle den Becher ab und schaue zum Fenster hinaus, "
+          "der Regen hört nicht auf.")
+PARA_B = ("Der Regen hört nicht auf, ich stelle den Becher ab und "
+          "schaue zum Fenster hinaus.")
+
+
+def case_11_quote_split():
+    """A gesture reused between two different spoken lines counts."""
+    print("11. dialogue quotes split sentences")
+    # Hand-derived: before 2026-10-23 the split happened only at ". " — in
+    # QUOTE_A the text after "still." is "“ Meine", so "„Steine … still.“
+    # Meine Finger … Theke." was ONE part (71 chars) and differed from
+    # QUOTE_B's first part. With the quote split the gesture is its own part.
+    check("the gesture is a key of its own",
+          SHARED_GESTURE_KEY in repetition_keys(QUOTE_A),
+          f"keys: {repetition_keys(QUOTE_A)}")
+    shared = repetition_keys(QUOTE_A) & repetition_keys(QUOTE_B)
+    check("exactly the gesture is shared", shared == {SHARED_GESTURE_KEY},
+          f"got {shared}")
+    check("opening signatures differ",
+          fuzzy_signature(QUOTE_A) != fuzzy_signature(QUOTE_B))
+    n = count_assistant_repetitions(msgs(QUOTE_A, QUOTE_B))
+    check("counted as 1 repetition", n == 1, f"expected 1, got {n}")
+    # A short line ("Aber du bist es." = 13 chars) stays below 30 — two
+    # replies sharing only that are no repetition.
+    n = count_assistant_repetitions(msgs(
+        "„Aber du bist es.“ Ich drehe mich zum Wasser.",
+        "„Aber du bist es.“ Der Wind trägt den Geruch von Salz herein."))
+    check("short shared line → 0", n == 0, f"expected 0, got {n}")
+
+
+def case_12_paraphrase():
+    """Swapped clauses share most of their word 4-grams → 1 repetition."""
+    print("12. paraphrase via word 4-grams")
+    check("swapped clauses share no sentence key",
+          not (repetition_keys(PARA_A) & repetition_keys(PARA_B)),
+          f"got {repetition_keys(PARA_A) & repetition_keys(PARA_B)}")
+    # Hand-derived: PARA_B has 15 words → 12 4-grams. Shared with PARA_A: the
+    # 7 inside "ich stelle den becher ab und schaue zum fenster hinaus"
+    # (10 words) and the 2 inside "der regen hört nicht auf" (5 words) = 9;
+    # the 3 that span the swapped boundary are new. 9/12 = 0.75 >= 0.3.
+    a, b = repetition_shingles(PARA_A), repetition_shingles(PARA_B)
+    check("12 4-grams in the second reply", len(b) == 12, f"got {len(b)}")
+    check("9 of them already seen", len(a & b) == 9, f"got {len(a & b)}")
+    n = count_assistant_repetitions(msgs(PARA_A, PARA_B))
+    check("counted as 1 repetition", n == 1, f"expected 1, got {n}")
+    check("a reply under 4 words has no 4-grams",
+          repetition_shingles("Ich nicke stumm.") == set())
+
+
+def case_13_repetition_penalty():
+    """repetition_penalty: from the LLM entry through the net to the request."""
+    print("13. repetition_penalty")
+    _pin_config()
+    config._CONFIG["chat"]["anti_rep_step"] = 0  # shipped default
+
+    # No base on the entry → the net never adds the parameter.
+    ov = anti_repetition_overrides(msgs(LATE_A, LATE_B), 0.7, agent_name="Demo")
+    check("no entry base → no repetition_penalty key",
+          "repetition_penalty" not in ov, f"got {ov}")
+    # Hand-derived: 1 repetition → 1.03 + 1 * 0.01 = 1.04.
+    ov = anti_repetition_overrides(msgs(LATE_A, LATE_B), 0.7, agent_name="Demo",
+                                   base_repetition_penalty=1.03)
+    check("1 repetition → 1.04",
+          abs(ov.get("repetition_penalty", 0) - 1.04) < 1e-9, f"got {ov}")
+    # 2 repetitions → 1.03 + 2 * 0.01 = 1.05 (exactly the ceiling).
+    ov = anti_repetition_overrides(msgs(LATE_A, LATE_B, LATE_B), 0.7,
+                                   agent_name="Demo", base_repetition_penalty=1.03)
+    check("2 repetitions → 1.05",
+          abs(ov.get("repetition_penalty", 0) - 1.05) < 1e-9, f"got {ov}")
+    # No repetition → the entry's base is left to the instance, no override.
+    ov = anti_repetition_overrides(msgs(LATE_A, OTHER), 0.7, agent_name="Demo",
+                                   base_repetition_penalty=1.03)
+    check("no repetition → no override", "repetition_penalty" not in ov,
+          f"got {ov}")
+    # Ceiling: 1.03 + 2 * 0.05 = 1.13 → capped at 1.05.
+    config._CONFIG["chat"]["anti_rep_rp_step"] = 0.05
+    ov = anti_repetition_overrides(msgs(LATE_A, LATE_B, LATE_B), 0.7,
+                                   agent_name="Demo", base_repetition_penalty=1.03)
+    check("ceiling 1.05 holds", abs(ov.get("repetition_penalty", 0) - 1.05) < 1e-9,
+          f"got {ov}")
+    # A ceiling below the base never lowers it: base 1.10 (> 1.05) stays 1.10.
+    ov = anti_repetition_overrides(msgs(LATE_A, LATE_B), 0.7, agent_name="Demo",
+                                   base_repetition_penalty=1.10)
+    check("ceiling below base → base kept",
+          abs(ov.get("repetition_penalty", 0) - 1.10) < 1e-9, f"got {ov}")
+    # Step 0 → the frequency-penalty bump stays, no repetition_penalty.
+    config._CONFIG["chat"]["anti_rep_rp_step"] = 0
+    ov = anti_repetition_overrides(msgs(LATE_A, LATE_B), 0.7, agent_name="Demo",
+                                   base_repetition_penalty=1.03)
+    check("rp step 0 → no repetition_penalty, penalty 0.45",
+          "repetition_penalty" not in ov
+          and abs(ov.get("frequency_penalty", 0) - 0.45) < 1e-9, f"got {ov}")
+    _pin_config()
+    config._CONFIG["chat"]["anti_rep_step"] = 0
+
+    # Thought path: journal LATE_A, LATE_B, LATE_B → 2 repetitions → 1.05.
+    from app.models import thought_store
+    from app.core import thoughts as thoughts_mod
+    original = thought_store.list_thoughts
+    thought_store.list_thoughts = lambda character_name, limit=50, before=None: (
+        [{"content": c} for c in (LATE_B, LATE_B, LATE_A)][:limit])
+    try:
+        ov = thoughts_mod.thought_anti_repetition_overrides("Demo", 0.7, 1.03)
+        check("thought path → 1.05",
+              abs(ov.get("repetition_penalty", 0) - 1.05) < 1e-9, f"got {ov}")
+    finally:
+        thought_store.list_thoughts = original
+
+    # Routing entry → LLMInstance → client → request body.
+    from app.core.llm_router import _instance_for
+    inst = _instance_for("chat_stream", {"provider": "p", "model": "m",
+                                         "repetition_penalty": 1.03}, None)
+    check("entry value reaches the instance", inst.repetition_penalty == 1.03,
+          f"got {inst.repetition_penalty}")
+    for empty in (0, "", None):
+        e = _instance_for("chat_stream", {"provider": "p", "model": "m",
+                                          "repetition_penalty": empty}, None)
+        check(f"entry {empty!r} → not sent", e.repetition_penalty is None,
+              f"got {e.repetition_penalty}")
+    client = inst.create_llm(api_key="k", api_base="http://localhost")
+    kw = client._build_kwargs()
+    check("client sends it via extra_body",
+          kw.get("extra_body", {}).get("repetition_penalty") == 1.03, f"got {kw}")
+    check("not a top-level OpenAI kwarg", "repetition_penalty" not in kw,
+          f"got {kw}")
+    bumped = inst.create_llm(api_key="k", api_base="http://localhost",
+                             repetition_penalty=1.05)
+    check("override replaces the base",
+          bumped._build_kwargs()["extra_body"]["repetition_penalty"] == 1.05)
+    plain = _instance_for("chat_stream", {"provider": "p", "model": "m"},
+                          None).create_llm(api_key="k", api_base="http://localhost")
+    check("entry without value → no extra_body key",
+          "repetition_penalty" not in plain._build_kwargs().get("extra_body", {}),
+          f"got {plain._build_kwargs()}")
+    from app.utils.llm_logger import _sampler_info
+    check("the call log records it",
+          _sampler_info(client).get("repetition_penalty") == 1.03,
+          f"got {_sampler_info(client)}")
+
+
 def main() -> int:
     _pin_config()
     for fn in (case_1_late_repetition, case_2_no_false_positive,
@@ -454,7 +614,8 @@ def main() -> int:
                case_5_dedup_in_room_mode, case_6_foreign_line_survives,
                case_6b_dedup_key_stays_narrow, case_7_thought_path_bump,
                case_8_degenerate_input, case_9_sampler_clamp,
-               case_10_repetition_age_window):
+               case_10_repetition_age_window, case_11_quote_split,
+               case_12_paraphrase, case_13_repetition_penalty):
         fn()
     print()
     if FAILURES:

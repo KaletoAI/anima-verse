@@ -14,6 +14,8 @@ Hand-derived expectations: chronological p1..p4, p2 has no secret.
 [f] Unknown/malformed input returns the plain missing-item error; a mixed-case
     name and an ID resolve. A failing provider returns an error, with no read.
     Reading creates no room perception/narrator line.
+[g] As a temporary NPC (no memories), R gets no ReadItem verb in a thought
+    turn and reading is refused with the missing-item error.
 """
 import json
 import os
@@ -123,6 +125,12 @@ def main():
             assert read(iid).startswith("You read in Notebook:")
             narrator.assert_not_called()
             print("PASS [f]")
+            set_game_time(now + GameDuration.of(days=3))
+            with patch("app.models.character.is_temporary_npc", side_effect=lambda name: name == "R"):
+                assert manager.get_agent_tools("R", turn="thought") == []
+                assert read(iid) == error
+            assert [t.name for t in manager.get_agent_tools("R", turn="thought")] == ["ReadItem"]
+            print("PASS [g]")
     print("PASS smoke_read_item_verb")
 
 

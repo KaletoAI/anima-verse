@@ -9,10 +9,12 @@ skills:
     class: WetSkill
     params: {wet: true}
     always_load: true
+    default_enabled: true
   - skill_id: dry_off
     class: WetSkill
     params: {wet: false}
     always_load: true
+    default_enabled: true
 
 templates:
   llm: templates/llm
