@@ -1,4 +1,4 @@
-/** Display names for generated pose clips: which motion model made a clip
+/** Display names for generated and studio clips: which motion model made a clip
  *  (`source.generator` in its sidecar) and a short form of its licence. Names
  *  of models and licences are not translated. */
 const GENERATOR_NAMES: Record<string, string> = { unimate: 'UniMate', kimodo: 'Kimodo' }
@@ -24,4 +24,10 @@ export function generatedBadge(clip: { generator?: string; origin?: string; lice
   if (!clip.generator || clip.origin !== clip.generator) return ''
   const short = licenseShort(clip.license)
   return short ? `${generatorName(clip.generator)} · ${short}` : generatorName(clip.generator)
+}
+
+/** A clip the animation studio wrote as code (the server reports origin
+ *  `studio` for a procedural sidecar). */
+export function isStudioClip(clip: { origin?: string }): boolean {
+  return clip.origin === 'studio'
 }

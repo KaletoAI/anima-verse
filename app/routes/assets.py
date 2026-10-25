@@ -85,7 +85,8 @@ def list_animation_clips() -> Dict[str, Any]:
 
     For the library view every clip also carries what its sidecar knows —
     ``duration_s`` / ``fps`` / ``frames`` (``null`` without a sidecar),
-    ``loop``, ``origin`` (``cmu`` / the skeleton family / ``unknown``) and
+    ``loop``, ``origin`` (``cmu`` / a generator / ``studio`` / the skeleton family /
+    ``unknown``) and
     ``has_sidecar`` — plus ``library`` (= ``source``) and ``rel``, the
     library-relative ``[<set>/]<file>`` the edit routes address it by.
 

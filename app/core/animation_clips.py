@@ -620,12 +620,15 @@ def save_transitions(entries: Any,
 def _origin(meta: Optional[Dict[str, Any]]) -> str:
     """Where the clip came from, in one word: ``cmu`` for a CMU-derived take,
     the generator (``unimate``, ``kimodo``, …) for a clip generated for a
-    pose, otherwise the skeleton family
+    pose, ``studio`` for a clip the animation studio wrote as code
+    (``source.format`` ``procedural``), otherwise the skeleton family
     the FBX import retargeted from
     (``unity-humanoid``, …), ``unknown`` without a sidecar."""
     src = (meta or {}).get("source")
     if not isinstance(src, dict):
         return "unknown"
+    if src.get("format") == "procedural":
+        return "studio"
     if src.get("generated_for_pose") and src.get("generator"):
         return str(src["generator"])
     database = str(src.get("database") or "")

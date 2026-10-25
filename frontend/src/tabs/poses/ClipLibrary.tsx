@@ -55,7 +55,7 @@ import { ApiError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../li
 import { orderSets } from './clipSets'
 import type { ApiClipRow as BaseApiClipRow, ClipListing } from './clipSets'
 import { rootMotionSummary } from './rootMotion'
-import { generatedBadge } from './generatedClip'
+import { generatedBadge, isStudioClip } from './generatedClip'
 
 interface ApiClipRow extends BaseApiClipRow {
   generator?: string
@@ -263,7 +263,9 @@ export function ClipLibrary({
     const q = search.trim().toLowerCase()
     return rows.filter((r) => {
       if (q && !r.kind.toLowerCase().includes(q)) return false
-      if (libFilter && !r.clips.some((c) => libraryOf(c) === libFilter)) return false
+      if (libFilter === 'studio') {
+        if (!r.clips.some(isStudioClip)) return false
+      } else if (libFilter && !r.clips.some((c) => libraryOf(c) === libFilter)) return false
       if (setFilter !== '*' && !r.clips.some((c) => (c.set || '') === setFilter)) return false
       if (onlyUsed && !r.used.length) return false
       if (onlyUnused && r.used.length) return false
@@ -471,6 +473,11 @@ export function ClipLibrary({
             {t('licensed')}
           </span>
         ) : null}
+        {cell.all.some(isStudioClip) ? (
+          <span className="ga-tag ga-tag-tier" title={t('made in the animation studio (written as code)')}>
+            {t('studio')}
+          </span>
+        ) : null}
         {(() => {
           const generated = cell.all.find((clip) => generatedBadge(clip))
           return generated ? (
@@ -499,7 +506,7 @@ export function ClipLibrary({
       clip.duration_s ? `${clip.duration_s.toFixed(1)} s` : '',
       clip.fps ? `${clip.fps} fps` : '',
       clip.frames ? `${clip.frames} ${t('frames')}` : '',
-      clip.origin && clip.origin !== 'unknown' ? clip.origin : '',
+      clip.origin && clip.origin !== 'unknown' && !isStudioClip(clip) ? clip.origin : '',
       mb(clip.size),
       clip.has_sidecar === false ? t('no sidecar') : '',
     ].filter(Boolean)
@@ -510,6 +517,11 @@ export function ClipLibrary({
           <span className={`ga-tag${lib === 'licensed' ? ' ga-tag-tier' : ''}`}>{t(lib)}</span>
           {generatedBadge(clip) ? (
             <span className="ga-tag ga-tag-tier" title={clip.license}>{generatedBadge(clip)}</span>
+          ) : null}
+          {isStudioClip(clip) ? (
+            <span className="ga-tag ga-tag-tier" title={t('made in the animation studio (written as code)')}>
+              {t('studio')}
+            </span>
           ) : null}
         </div>
         <div className="ga-form-hint" style={{ marginTop: 2 }}>{facts.join(' · ')}</div>
@@ -813,6 +825,7 @@ export function ClipLibrary({
             <option value="">{t('all libraries')}</option>
             <option value="free">{t('free')}</option>
             <option value="licensed">{t('licensed')}</option>
+            <option value="studio">{t('studio only')}</option>
           </select>
           <select
             className="ga-input"

@@ -38,7 +38,9 @@ Expected values, derived by hand from that fixture and the layout rules:
   (no sidecar at all).
 * ``origin``: walk.json carries a CMU database string -> "cmu"; hug.json and
   sit.json carry ``source.bone_map`` -> "unity-humanoid"; dance.fbx has no
-  sidecar -> "unknown".
+  sidecar -> "unknown"; a sidecar with ``source.format`` "procedural" (what
+  the animation studio's publish writes) -> "studio", even beside a
+  bone_map.
 * Deleting ``walk.fbx`` leaves 1 file of kind walk (walk_02.fbx), so walk.json
   STAYS; deleting walk_02.fbx afterwards leaves 0, so walk.json goes.
 * Deleting ``run_02.fbx`` takes its OWN run_02.json with it but leaves
@@ -238,6 +240,9 @@ def test_listing() -> None:
            dance["has_sidecar"], dance["origin"])
           == (None, None, None, False, False, "unknown"),
           str(dance["duration_s"]))
+    studio = ac._origin({"source": {"format": "procedural", "author": "animation-studio",
+                                    "bone_map": "unity-humanoid"}})
+    check("procedural sidecar: origin studio", studio == "studio", studio)
     check("dance url carries the licensed/ prefix",
           dance["url"].split("?", 1)[0] == "/assets/animation-clips/licensed/dance.fbx",
           dance["url"].split("?", 1)[0])
