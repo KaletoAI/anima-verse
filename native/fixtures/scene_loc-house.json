@@ -1,0 +1,36 @@
+{
+  "signature": "fixture-house",
+  "k": 1, "extent_m": 14, "storey_m": 3,
+  "levels": [{ "level": 0, "floor_y": 0 }],
+  "style": { "wall_color": "#d8cfc0", "floor_color": "#b8b0a0", "glass_color": "#9cc3e0", "glass_opacity": 0.35 },
+  "plates": [
+    { "level": 1, "outline": [[-4, -3], [4, -3], [4, 3], [-4, 3]], "holes": [], "top_y": 3.0, "thickness": 0.2, "opacity_role": "upper" }
+  ],
+  "walls": [
+    { "level": 0, "from": [-4, -3], "to": [4, -3], "base_y": 0, "height": 3, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [0, -1] }
+  ],
+  "extras": [],
+  "floor_plan": [],
+  "stairs": [],
+  "models": [
+    {
+      "role": "building", "display": "shell", "id": "loc-house",
+      "variants": { "full": "/play/locations/loc-house/model?tier=full" },
+      "level": 0,
+      "fix_euler": { "x": 0, "y": 90, "z": 0 },
+      "yaw_deg": 0,
+      "max_m": 12,
+      "measure": "yawed_xz",
+      "anchor": [1.5, -2.0],
+      "bottom_y": -0.25,
+      "walk_y_world": 0
+    },
+    {
+      "role": "prop", "id": "crate", "variants": { "full": "/assets/props/crate/model" },
+      "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 45,
+      "max_m": 1, "measure": "xyz", "anchor": [2, 2], "bottom_y": 0
+    }
+  ],
+  "figures": { "base_height_m_world": 1.7, "stand_clearance": 0.12 },
+  "markers": [], "doorways": [], "problems": [], "outdoor_rooms": [], "corridors": []
+}

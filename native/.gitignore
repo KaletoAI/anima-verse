@@ -1,0 +1,8 @@
+# Godot editor/import cache and C# build output
+.godot/
+# Locally built native libraries (libmeshoptimizer.so) and dotnet leftovers
+bin/
+obj/
+# Default export target of build.sh
+export/
+*.csproj.user

@@ -1,0 +1,19 @@
+{
+  "avatar": null,
+  "current_location_id": null,
+  "locations": [
+    { "id": "loc-house", "name": "Harbour House", "pos_x": 64.0, "pos_z": 128.0, "yaw_deg": 0.0,
+      "plan_width_m": 12.0, "boundary": [[-6, -6], [6, -6], [6, 6], [-6, 6]], "openings": [] },
+    { "id": "loc-yard", "name": "Stone Yard", "pos_x": -100.0, "pos_z": 50.0, "yaw_deg": 30.0,
+      "plan_width_m": 8.0, "boundary": [[-4, -3], [4, -3], [4, 3], [-4, 3]], "openings": [] },
+    { "id": "loc-template", "name": "Template", "pos_x": null, "pos_z": null, "yaw_deg": 0.0,
+      "plan_width_m": null, "boundary": null, "openings": [] },
+    { "id": "loc-meadow", "name": "Meadow", "pos_x": 300.0, "pos_z": -200.0, "yaw_deg": 0.0,
+      "plan_width_m": null, "boundary": null, "openings": [] }
+  ],
+  "characters": [],
+  "events_by_location": {},
+  "world_bounds": { "min_x": -104.0, "min_z": -203.0, "max_x": 300.0, "max_z": 134.0 },
+  "height_sig": "fixture-s1a",
+  "fogged": false
+}

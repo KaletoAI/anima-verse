@@ -1,0 +1,225 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Threading.Tasks;
+using AnimaNative.Gltf;
+using AnimaNative.World;
+using Godot;
+
+namespace AnimaNative.Check;
+
+/// <summary>
+/// <c>--check</c>: the offline self-test. Runs the online code paths against
+/// <c>native/fixtures/</c> and compares every count with the number derived BY
+/// HAND in <c>native/fixtures/README.md</c> (not with a recording of current
+/// output). Prints one <c>CHECK ok …</c> line and returns 0, or prints
+/// <c>CHECK FAILED …</c> and returns 1.
+/// </summary>
+public static class CheckRunner
+{
+    // ---- Expected values, derived in native/fixtures/README.md ----
+    private const string Goto = "harbour";                         // → loc-house by name substring
+    private static readonly Vector3 ExpectedAnchor = new(64f, 7.5f, 128f);
+    private const int ExpOverviewVertices = 9, ExpOverviewTriangles = 6;
+    private const int ExpTiles = 1, ExpTileVertices = 25;
+    private const int ExpLocations = 3, ExpScenes = 2;
+    private const int ExpBuildings = 1, ExpBuildingsMeshopt = 1;
+    private const int ExpBuildingVertices = 2220, ExpBuildingIndices = 3330;
+    private const int ExpPrimitives = 9, ExpSkipped = 4, ExpDoorPropLeaves = 1;
+    private const float ExpHouseDatum = 4f, ExpYardDatum = 2.91357421875f;
+    private const float ExpPlateArea = 46f;                        // 8 × 6 minus the 2 × 1 hole
+    private const float ExpBuildingMaxM = 12f, ExpBuildingBottom = -0.25f;
+    private static readonly Vector2 ExpBuildingAnchor = new(1.5f, -2f);
+
+    public static async Task<int> RunAsync(Node3D host)
+    {
+        try
+        {
+            var dir = Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures");
+            MeshoptNative.EnsureLoaded();
+            var meshopt = CheckMeshopt(dir);
+
+            var source = new FixtureSource(dir);
+            var world = new Node3D { Name = "CheckWorld" };
+            host.AddChild(world);
+            var stats = await new WorldBuilder(source, line => GD.Print("[check] " + line), strict: true)
+                .BuildAsync(world, Goto);
+
+            Expect("anchor", stats.Anchor.Position.DistanceTo(ExpectedAnchor) < 1e-4f, $"{stats.Anchor.Position}");
+            Expect("anchor location", stats.Anchor.LocationId == "loc-house", stats.Anchor.LocationId ?? "null");
+            CheckAnchorRule(dir);
+            Eq("overview_vertices", stats.OverviewVertices, ExpOverviewVertices);
+            Eq("overview_triangles", stats.OverviewTriangles, ExpOverviewTriangles);
+            Eq("tiles", stats.Tiles, ExpTiles);
+            Eq("tile_vertices", stats.TileVertices, ExpTileVertices);
+            Expect("tile requests", source.TileRequests.SequenceEqual(new[] { "0,0" }), string.Join(";", source.TileRequests));
+            Eq("locations", stats.Locations, ExpLocations);
+            Eq("scenes", stats.Scenes, ExpScenes);
+            Eq("buildings", stats.Buildings, ExpBuildings);
+            Eq("buildings_meshopt", stats.BuildingsCompressed, ExpBuildingsMeshopt);
+            Eq("building_vertices", stats.BuildingVertices, ExpBuildingVertices);
+            Eq("building_indices", stats.BuildingIndices, ExpBuildingIndices);
+            Eq("primitives", stats.Primitives, ExpPrimitives);
+            Eq("skipped", stats.Skipped, ExpSkipped);
+            Eq("door_prop_leaves", stats.DoorPropLeaves, ExpDoorPropLeaves);
+            Eq("failures", stats.Failures, 0);
+
+            // Location frames: datum from the fine tile where loaded, else the overview.
+            var house = world.GetNode<Node3D>("Locations/Loc_loc-house");
+            var yard = world.GetNode<Node3D>("Locations/Loc_loc-yard");
+            Near("house datum", house.Position.Y, ExpHouseDatum);
+            Near("yard datum", yard.Position.Y, ExpYardDatum);
+            Near("yard yaw", yard.Rotation.Y, Mathf.DegToRad(30f));
+
+            // § B2 placement of the building, measured in its location frame.
+            var placed = house.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString().StartsWith("Placed_building"));
+            var box = ModelPlacement.Measure(placed, Transform3D.Identity);
+            Near("building max xz", Math.Max(box.Size.X, box.Size.Z), ExpBuildingMaxM);
+            Near("building bottom", box.Position.Y, ExpBuildingBottom);
+            Near("building anchor x", box.GetCenter().X, ExpBuildingAnchor.X);
+            Near("building anchor z", box.GetCenter().Z, ExpBuildingAnchor.Y);
+
+            // The plate with a hole: area of the hole-free pieces.
+            float area = PlateArea(dir);
+            Near("plate area", area, ExpPlateArea);
+            Expect("recipe mesh", yard.GetNodeOrNull<MeshInstance3D>("Recipe") is not null, "yard has no Recipe mesh");
+            Expect("no recipe under house", house.GetNodeOrNull("Recipe") is null, "house drew its recipe despite the model");
+
+            GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
+                     + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
+                     + $"| meshopt {meshopt}");
+            world.QueueFree();
+            return 0;
+        }
+        catch (Exception e)
+        {
+            GD.PrintErr($"CHECK FAILED {e.GetType().Name}: {e.Message}");
+            GD.Print($"CHECK FAILED {e.GetType().Name}: {e.Message}");
+            return 1;
+        }
+    }
+
+    /// <summary>
+    /// Meshopt round trip on a REAL server delivery copy (fixture provenance in
+    /// the README): the decoded GLB must hold, bufferView for bufferView, the
+    /// original's bytes (the server's codec is lossless and keeps view indices),
+    /// and Godot must import the same vertex/index totals from both.
+    /// </summary>
+    private static string CheckMeshopt(string dir)
+    {
+        var original = File.ReadAllBytes(Path.Combine(dir, "building_original.glb"));
+        var compressed = File.ReadAllBytes(Path.Combine(dir, "building_meshopt.glb"));
+        Expect("fixture is compressed", GlbMeshoptDecoder.IsCompressed(compressed), "building_meshopt.glb has no EXT_meshopt_compression");
+        Expect("original is plain", !GlbMeshoptDecoder.IsCompressed(original), "building_original.glb is compressed");
+        Expect("passthrough", ReferenceEquals(GlbMeshoptDecoder.Decode(original), original), "plain GLB was rewritten");
+
+        var decoded = GlbMeshoptDecoder.Decode(compressed, out var ds);
+        Expect("decoded is plain", !GlbMeshoptDecoder.IsCompressed(decoded), "extension still listed");
+        int views = CompareViews(original, decoded);
+
+        var (origRoot, origCounts) = GlbLoader.Import(original, "building_original.glb");
+        origRoot.Free();
+        var (decRoot, decCounts) = GlbLoader.Import(decoded, "building_meshopt.glb (decoded)");
+        decRoot.Free();
+        var (jsonVerts, jsonIdx) = JsonCounts(original);
+        Eq("json vertices", jsonVerts, ExpBuildingVertices);
+        Eq("json indices", jsonIdx, ExpBuildingIndices);
+        Eq("godot vertices (original)", origCounts.Vertices, ExpBuildingVertices);
+        Eq("godot indices (original)", origCounts.Indices, ExpBuildingIndices);
+        Eq("godot vertices (decoded)", decCounts.Vertices, origCounts.Vertices);
+        Eq("godot indices (decoded)", decCounts.Indices, origCounts.Indices);
+        return $"views={views} decoded={ds.Views} (attr={ds.Attributes} tri={ds.Triangles} seq={ds.Indices}) "
+               + $"vertices={decCounts.Vertices} indices={decCounts.Indices} surfaces={decCounts.Surfaces} "
+               + $"bytes {compressed.Length}->{decoded.Length} (original {original.Length})";
+    }
+
+    /// <summary>Byte equality of every bufferView between two GLBs with the same JSON indices.</summary>
+    private static int CompareViews(byte[] a, byte[] b)
+    {
+        var (ja, ba) = GlbMeshoptDecoder.ReadGlb(a);
+        var (jb, bb) = GlbMeshoptDecoder.ReadGlb(b);
+        using var da = JsonDocument.Parse(ja);
+        using var db = JsonDocument.Parse(jb);
+        var va = da.RootElement.GetProperty("bufferViews").EnumerateArray().ToArray();
+        var vb = db.RootElement.GetProperty("bufferViews").EnumerateArray().ToArray();
+        Eq("bufferView count", vb.Length, va.Length);
+        for (int i = 0; i < va.Length; i++)
+        {
+            ReadOnlySpan<byte> Slice(JsonElement v, byte[] bin)
+            {
+                int off = v.TryGetProperty("byteOffset", out var o) ? o.GetInt32() : 0;
+                return bin.AsSpan(off, v.GetProperty("byteLength").GetInt32());
+            }
+            Expect($"bufferView {i} bytes", Slice(va[i], ba).SequenceEqual(Slice(vb[i], bb)), "decoded bytes differ");
+        }
+        Expect("buffers", db.RootElement.GetProperty("buffers").GetArrayLength() == 1, "fallback buffer kept");
+        return va.Length;
+    }
+
+    /// <summary>Hand-check numbers straight from the glTF JSON: Σ POSITION counts, Σ indices counts.</summary>
+    private static (int Vertices, int Indices) JsonCounts(byte[] glb)
+    {
+        var (json, _) = GlbMeshoptDecoder.ReadGlb(glb);
+        using var doc = JsonDocument.Parse(json);
+        var acc = doc.RootElement.GetProperty("accessors").EnumerateArray().ToArray();
+        int v = 0, idx = 0;
+        foreach (var mesh in doc.RootElement.GetProperty("meshes").EnumerateArray())
+        foreach (var prim in mesh.GetProperty("primitives").EnumerateArray())
+        {
+            v += acc[prim.GetProperty("attributes").GetProperty("POSITION").GetInt32()].GetProperty("count").GetInt32();
+            if (prim.TryGetProperty("indices", out var i)) idx += acc[i.GetInt32()].GetProperty("count").GetInt32();
+        }
+        return (v, idx);
+    }
+
+    /// <summary>The S0 goto rule on its own: id match, origin default, fogged/unplaced = error.</summary>
+    private static void CheckAnchorRule(string dir)
+    {
+        using var map = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "worldmap.json")));
+        using var det = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "locations.json")));
+        using var hf = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "heightfield.json")));
+        var rows = LocationInfo.ParseList(map.RootElement);
+        var details = LocationInfo.ParseList(det.RootElement);
+        var grid = HeightfieldOverview.Parse(hf.RootElement).Grid;
+        var yard = Anchor.Resolve(details, rows, grid, "LOC-YARD");
+        Expect("goto by id", yard.LocationId == "loc-yard"
+               && yard.Position.DistanceTo(new Vector3(-100f, ExpYardDatum, 50f)) < 1e-4f, $"{yard.Position}");
+        var origin = Anchor.Resolve(details, rows, grid, null);
+        Expect("goto default", origin.Position == Vector3.Zero && origin.LocationId is null, $"{origin.Position}");
+        foreach (var bad in new[] { "cellar", "template", "nowhere" })
+        {
+            bool threw = false;
+            try { Anchor.Resolve(details, rows, grid, bad); }
+            catch (InvalidOperationException) { threw = true; }
+            Expect($"goto '{bad}' rejected", threw, "resolved instead of failing");
+        }
+    }
+
+    private static float PlateArea(string dir)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "scene_loc-yard.json")));
+        var plate = ScenePayload.Parse(doc.RootElement).Plates.First(p => p.Holes.Length > 0);
+        var outline = plate.Outline.Select(v => new Vector2((float)v.X, (float)v.Z)).ToArray();
+        var holes = plate.Holes.Select(h => h.Select(v => new Vector2((float)v.X, (float)v.Z)).ToArray()).ToArray();
+        float area = 0;
+        foreach (var poly in RecipeMeshes.PolygonsWithoutHoles(outline, holes))
+        {
+            var idx = Geometry2D.TriangulatePolygon(poly);
+            for (int i = 0; i + 2 < idx.Length; i += 3)
+                area += Math.Abs(RecipeMeshes.Area(new[] { poly[idx[i]], poly[idx[i + 1]], poly[idx[i + 2]] }));
+        }
+        return area;
+    }
+
+    private static void Expect(string what, bool ok, string detail)
+    {
+        if (!ok) throw new InvalidOperationException($"{what}: {detail}");
+    }
+
+    private static void Eq(string what, int got, int want)
+        => Expect(what, got == want, $"got {got}, expected {want}");
+
+    private static void Near(string what, float got, float want, float eps = 1e-3f)
+        => Expect(what, Math.Abs(got - want) <= eps, $"got {got}, expected {want}");
+}

@@ -1,0 +1,27 @@
+<Project Sdk="Godot.NET.Sdk/4.7.2">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <RootNamespace>AnimaNative</RootNamespace>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>12</LangVersion>
+  </PropertyGroup>
+
+  <!-- The vendored meshoptimizer decoder (EXT_meshopt_compression, ruling P2-R5)
+       is compiled into native/bin/libmeshoptimizer.so on every build where it is
+       missing or older than its sources. No cmake on the build box: one g++ call. -->
+  <ItemGroup>
+    <MeshoptSource Include="third_party/meshoptimizer/src/*.cpp" />
+    <MeshoptHeader Include="third_party/meshoptimizer/src/meshoptimizer.h" />
+  </ItemGroup>
+  <PropertyGroup>
+    <MeshoptLibrary>$(MSBuildProjectDirectory)/bin/libmeshoptimizer.so</MeshoptLibrary>
+  </PropertyGroup>
+  <Target Name="BuildMeshoptimizer" BeforeTargets="BeforeBuild"
+          Condition="$([MSBuild]::IsOSPlatform('Linux'))"
+          Inputs="@(MeshoptSource);@(MeshoptHeader)" Outputs="$(MeshoptLibrary)">
+    <MakeDir Directories="$(MSBuildProjectDirectory)/bin" />
+    <Exec Command="g++ -O2 -shared -fPIC -o &quot;$(MeshoptLibrary)&quot; @(MeshoptSource->'&quot;%(FullPath)&quot;', ' ')" />
+  </Target>
+</Project>

@@ -1,0 +1,9 @@
+{
+  "locations": [
+    {"id": "loc-house", "name": "Harbour House", "description": "", "rooms": [], "entry_room": null, "terrain": null, "surface_kind": null, "map3d": {"boundary": [[-6, -6], [6, -6], [6, 6], [-6, 6]]}},
+    {"id": "loc-fogged", "name": "Harbour Cellar (fogged)", "description": "", "rooms": [], "entry_room": null, "terrain": null, "surface_kind": null, "map3d": null},
+    {"id": "loc-yard", "name": "Stone Yard", "description": "", "rooms": [], "entry_room": null, "terrain": null, "surface_kind": null, "map3d": null},
+    {"id": "loc-template", "name": "Template", "description": "", "rooms": [], "entry_room": null, "terrain": null, "surface_kind": null, "map3d": null},
+    {"id": "loc-meadow", "name": "Meadow", "description": "", "rooms": [], "entry_room": null, "terrain": null, "surface_kind": null, "map3d": null}
+  ]
+}

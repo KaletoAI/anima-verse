@@ -1,0 +1,15 @@
+{
+  "origin_x": -256.0, "origin_z": -256.0,
+  "step_m": 256.0, "rows": 3, "cols": 3,
+  "heights": [
+    [0.0, 0.0, 0.0],
+    [0.0, 4.0, 8.0],
+    [0.0, 8.0, 16.0]
+  ],
+  "sig": "fixture-s1a",
+  "tile_m": 256.0, "tile_step_m": 2.0,
+  "tiles": ["0,0", "5,5"],
+  "mip_levels_m": [4.0, 8.0, 16.0, 32.0, 64.0],
+  "tile_stats": {},
+  "tile_stats_complete": true
+}
