@@ -1223,6 +1223,18 @@
       "animation": "picking-up",
       "group": "stand",
       "solo": true
+    },
+    "crawling_rest": {
+      "prompt": "resting on hands and knees on the ground, arms straight under the shoulders, head raised, looking around",
+      "synonyms": [
+        "im vierfüßlerstand",
+        "auf allen vieren innehalten",
+        "on all fours",
+        "resting on hands and knees"
+      ],
+      "animation": "crawl-rest",
+      "group": "ground",
+      "solo": true
     }
   }
 }
