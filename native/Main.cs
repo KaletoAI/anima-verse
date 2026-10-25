@@ -6,6 +6,7 @@ using AnimaNative.Bench;
 using AnimaNative.Check;
 using AnimaNative.Figures;
 using AnimaNative.Gltf;
+using AnimaNative.Scatter;
 using AnimaNative.Ui;
 using AnimaNative.World;
 using Godot;
@@ -25,6 +26,7 @@ public partial class Main : Node3D
     private Label? _status;
     private FlyCamera? _camera;
     private FigureManager? _figures;
+    private ScatterLayer? _scatter;
     private readonly CancellationTokenSource _stop = new();
     private int _focus = -1;
 
@@ -148,6 +150,16 @@ public partial class Main : Node3D
                               + (stats.Failures > 0 ? $", {stats.Failures} locations failed (see log)" : "");
             SetStatus(worldStatus + "   —   loading figures…");
 
+            if (_options.Scatter)
+            {
+                // --scatter: the authored scatter AND the undergrowth (Task S3), anchored on the camera target.
+                SetStatus(worldStatus + "   —   loading scatter…");
+                var cam = _camera!;
+                _scatter = await ScatterLayer.CreateAsync(_api!, builder.Height!, builder.FirstMap!.Value,
+                                                          () => cam.Target, Log);
+                world.AddChild(_scatter);
+            }
+
             _figures = new FigureManager(_api!, builder.Height!, Log, strict: false);
             world.AddChild(_figures);
             await _figures.InitAsync();
@@ -155,10 +167,12 @@ public partial class Main : Node3D
             var timer = new Godot.Timer { WaitTime = 1.0, Autostart = true };
             AddChild(timer);
             timer.Timeout += () => SetStatus($"{worldStatus}, {FigureLine()}"
+                                             + (_scatter is not null ? $"\n{_scatter.Summary()}" : "")
                                              + "   —   drag: orbit, wheel: zoom, WASD: move, F: next figure");
             if (_options.Bench)
             {
                 await _figures.FirstPollDone;
+                if (_scatter is not null) await ScatterSettled(_scatter);
                 StartBench(builder);
             }
         }
@@ -178,14 +192,35 @@ public partial class Main : Node3D
     private void StartBench(WorldBuilder builder)
     {
         var settings = BenchRunner.SettingsFor(_figures!.LatestMap ?? builder.FirstMap!.Value, builder,
-                                               _options!.Goto, _options.Vsync);
+                                               _options!.Goto, _options.Vsync, scatter: _scatter is not null);
         Log($"bench starts ({settings.Path.Keyframes.Length} keyframes)");
         AddChild(new BenchRunner(_camera!, settings, result =>
         {
+            if (_scatter is not null)
+            {
+                // Extra key after the browser's: what both scatter layers drew at the end of the drive.
+                result["scatterLayers"] = _scatter.Summary();
+                Log("bench scatter " + _scatter.Summary());
+            }
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(this, result, file);
             if (_options.QuitAfterBench) GetTree().Quit(0);
         }));
+    }
+
+    /// <summary>
+    /// Before the drive: the prop meshes of the start window have landed and the clearance re-sample is
+    /// done (at most 60 s; a load that never finishes is logged and the run starts anyway). The browser
+    /// starts after boot/arrival with its downloads still running; the warm-up then absorbs them.
+    /// </summary>
+    private async Task ScatterSettled(ScatterLayer layer)
+    {
+        ulong start = Time.GetTicksMsec();
+        do
+        {
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        } while (layer.Field.Busy && Time.GetTicksMsec() - start < 60000);
+        Log($"scatter settled after {(Time.GetTicksMsec() - start) / 1000.0:0.0} s: {layer.Summary()}");
     }
 
     private string FigureLine()

@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using AnimaNative.Bench;
 using AnimaNative.Figures;
 using AnimaNative.Gltf;
+using AnimaNative.Scatter;
 using AnimaNative.Ui;
 using AnimaNative.World;
 using Godot;
@@ -32,6 +33,10 @@ namespace AnimaNative.Check;
 ///     false, vsync};
 ///   • the free camera is handed back (processing on, pose restored);
 ///   • the written file parses to the printed object.
+///
+/// With <c>--scatter</c> (Task S3) the fixture's scatter + undergrowth layers ride along exactly as online
+/// (anchored on the camera target, the browser's LOD cadence): flags.scatter true, the extra
+/// <c>scatterLayers</c> key, the window followed the drive to the end target, LOD passes ran.
 /// </summary>
 public static class BenchCheck
 {
@@ -62,8 +67,20 @@ public static class BenchCheck
             using (var map = await source.GetWorldMapAsync()) await figures.Apply(map.RootElement);
             Log($"world {stats.Summary()} | figures {figures.Stats.Summary()}");
 
+            ScatterLayer? scatter = null;
+            if (options.Scatter)
+            {
+                scatter = await ScatterLayer.CreateAsync(source, builder.Height!, builder.FirstMap!.Value,
+                                                         () => camera.Target, Log);
+                world.AddChild(scatter);
+                ulong t0 = Time.GetTicksMsec();
+                do await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
+                while (scatter.Field.Busy && Time.GetTicksMsec() - t0 < 60000);
+                Expect("scatter settled", !scatter.Field.Busy, "loads still running after 60 s");
+                Log("scatter settled: " + scatter.Summary());
+            }
             var settings = BenchRunner.SettingsFor(builder.FirstMap!.Value, builder, gotoQuery, options.Vsync,
-                                                   Warmup, Duration);
+                                                   Warmup, Duration, scatter: scatter is not null);
             var anchor = settings.Anchor;
             if (options.Goto is null)
                 Expect("anchor", anchor.Position.DistanceTo(new Vector3(64f, 7.5f, 128f)) < 1e-4f
@@ -78,20 +95,22 @@ public static class BenchCheck
             var finished = await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(60)));
             Expect("bench finished", finished == done.Task, "no result within 60 s");
             var result = done.Task.Result;
+            int passesAtEnd = scatter?.LodPasses ?? 0;
+            if (scatter is not null) result["scatterLayers"] = scatter.Summary();
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(host, result, file);
             Expect("panel", host.GetNodeOrNull("BenchResult") is not null, "no result panel");
             Expect("printed line unescaped", BenchOutput.Line(result).Contains("\"backend\":\"godot-forward+\""),
                    BenchOutput.Line(result));
 
-            Expect("keys", result.Select(kv => kv.Key).SequenceEqual(Keys),
+            Expect("keys", result.Select(kv => kv.Key).SequenceEqual(scatter is null ? Keys : Keys.Append("scatterLayers")),
                    string.Join(",", result.Select(kv => kv.Key)));
             Expect("backend", (string?)result["backend"] == "godot-forward+", $"{result["backend"]}");
             Expect("path", (string?)result["path"] == "shared/bench/camera_path_v1.json", $"{result["path"]}");
             Expect("duration/warmup", (double)result["duration"]! == Duration && (double)result["warmup"]! == Warmup, "");
             var flags = result["flags"]!.AsObject();
             Expect("flags", flags.Select(kv => kv.Key).SequenceEqual(new[] { "goto", "scatter", "water", "vsync" })
-                            && (string?)flags["goto"] == gotoQuery && !(bool)flags["scatter"]! && !(bool)flags["water"]!
+                            && (string?)flags["goto"] == gotoQuery && (bool)flags["scatter"]! == (scatter is not null) && !(bool)flags["water"]!
                             && (bool)flags["vsync"]! == options.Vsync, flags.ToJsonString());
             var a = result["anchor"]!.AsObject();
             Expect("anchor object", (string?)a["locationId"] == anchor.LocationId && (string?)a["heightSource"] == Anchor.BenchSource
@@ -120,13 +139,24 @@ public static class BenchCheck
                                          && camera.Target == before.Target && camera.Distance == before.Distance,
                    $"processing={camera.IsProcessing()} target={camera.Target}");
 
+            if (scatter is not null)
+            {
+                // The window follows engine.target: the end target (64, 9, 128) lies in cell (1, 2), so the
+                // 5 × 5 window starts at (-1, 0); the 1 Hz tick ran at least twice in the 2.5 s.
+                var cells = scatter.Field.Cells;
+                Expect("scatter window follows the target", cells.Count == 25 && cells[0] == (-1, 0), string.Join(";", cells.Take(2)));
+                Expect("scatter LOD passes", passesAtEnd >= 3, $"{passesAtEnd}");
+                Expect("scatterLayers key", ((string?)result["scatterLayers"])?.StartsWith("scatter[") == true, $"{result["scatterLayers"]}");
+            }
+
             var written = JsonNode.Parse(File.ReadAllText(file))!;
             Expect("file = printed result", JsonNode.DeepEquals(written, result), file);
 
             GD.Print($"CHECK-BENCH ok frames={frames} seconds={seconds:0.####} fpsMean={(double)result["fpsMean"]!:0.#} "
                      + $"frameMsMedian={(double)result["frameMsMedian"]!:0.###} cpuMsMedian={(double)result["cpuMsMedian"]!:0.###} "
                      + $"draws={result["draws"]} triangles={result["triangles"]} size={result["size"]} "
-                     + $"gpu=null (headless dummy renderer) file={file}");
+                     + $"gpu=null (headless dummy renderer) file={file}"
+                     + (scatter is not null ? $" | {scatter.Summary()}" : ""));
             return 0;
         }
         catch (Exception e)

@@ -20,10 +20,15 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `worldmap_poll2.json` | the second world-map poll of the figure check (characters only) |
 | `rest_reference.json` | the browser's rest-corrected rotations for three rigs — WRITTEN by `rest_reference.mjs` |
 | `rest_reference.mjs` | node script that runs the browser's own `restCorrections` on three's loaders (see below) |
+| `terrain.json` | `GET /play/terrain` (§ A9/§ A9b): one painted wood with two scatter rows, a path painted over it, one prop box |
+| `scatter_reference.json` | the browser's sampler/LOD/undergrowth output for hand-chosen cases and for this fixture world — WRITTEN by `scatter_reference.mjs` |
+| `scatter_reference.mjs` | node script that runs `scatter.ts` / `occupancy.ts` / `scatterLod.ts` / `undergrowth.ts` themselves (see "Scatter") |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
 for the repository root above this directory, then above the working directory):
 `shared/models/clips/idle.fbx`, `shared/models/clips/walk.fbx` (tracked clip library),
+`worlds/demo/props/broadleaf-df5830/model_1792265756.glb` (full) and `…/model_1792265757.glb`
+(low) — the tracked demo world's Broadleaf tree, the scatter prop of `terrain.json`,
 `worlds/demo/characters/Minerva McGonagall/model3d/aa1f6d51558d.glb` (tracked demo-world
 character model), `shared/models/rig/reference.fbx` (served as `/assets/animation-rig`) and,
 for the rest-correction comparison only, the demo bakes of Johanna Falk and Rubeus Hagrid.
@@ -284,3 +289,80 @@ skeleton's pose rotations are within 0.5° of the browser's corrected values (me
 max 0.04°). Example, Minerva idle @ 5 s, RightArm: clip
 (0.5371679, -0.0387975, -0.114042, 0.8348292) → browser-corrected (0.316868, -0.5165012, -0.4071294, 0.6834235) — 72.3° apart, which
 is what the old verbatim copy put on her arm; the check allows 0.5°.
+
+## Scatter (Task S3)
+
+### Reference vectors (`scatter_reference.json`)
+
+    node native/fixtures/scatter_reference.mjs      # from the repo root; needs npm install
+
+The script bundles itself with esbuild (like `rest_reference.mjs`) and runs the
+browser's own functions. Re-run it when `scatter.ts`, `occupancy.ts`,
+`scatterLod.ts`, `undergrowth.ts`, `terrain.json` or the fixture camera change,
+and commit the JSON. `Check/ScatterCheck.cs` demands every instance (x, z, yaw,
+variant) within **1e-6 m** of the TS output:
+
+| case | input | what it exercises |
+|---|---|---|
+| `plain-ring` | concave L ring, 5 / 100 m² | the stream, the ring test |
+| `footprint-hole-clearance` | 50 × 40 box, a 10 × 10 footprint + a prop box turned 30°, clearance 1.5 m | `footprintDistance` / `propBoxFootprint` |
+| `occluder-above` | same box, a triangle painted above | the occluder subtraction |
+| `spacing` | 30 / 100 m², `min_spacing_m` 2.5 | the spacing buckets |
+| `maxpoints-prefix` | the same with `maxPoints` 25 | must be the PREFIX of `spacing` (checked) |
+| `cell-variants-occupancy` | half-painted cell (1, 0), 3 variants, epoch seed `…:e4` (7265 s / 30 min), a pre-filled occupancy with two foreign circles and one of the row's OWN tag, `occupyR` 2 > spacing 1.5 | `scatterCellInstances`, the variant formula, the own-tag exemption |
+| `cell-pinned-aligned` | the same with `variant` 1 and `yaw_mode aligned` 90° | the pin, the aligned yaw without an axis |
+
+Plus `instanceHash`, `undergrowthShade`, FNV-1a seed hashes and the sha256 of the
+64 × 64 blade texture (with four sample texels).
+
+### The fixture world (`terrain.json`, anchor of `--goto=harbour`)
+
+- **Areas**: `area-wood` (forest) `[[8,72],[200,72],[200,200],[8,200],[8,72]]` —
+  `cleanRing` drops the closing duplicate → 192 × 128 m; `area-path` (path) the
+  strip 100…110 × 60…210 painted OVER it (an occluder for both layers).
+  `forest` carries `meta.undergrowth` 0.02 and `sway_m` 0.2; `path` none.
+- **Rows** of the wood: #0 the Broadleaf (`prop_height_m` 8, `min_spacing_m` 3,
+  `sway_factor` 0.5 → wind 0.2 · 0.5 = 0.10 m, `ground_offset_m` −0.1, tiers
+  `full`/`low`), #1 the built-in tuft (no model, h = 0.8).
+- **Window**: anchor (64, 128) lies in cell (1, 2); k = ceil(120 / 64) = 2 →
+  cells x −1…3, z 0…4 = **25**, row-major from (−1, 0). The wood's box 8…200 ×
+  72…200 meets cells x 0…3, z 1…3 = 12 of them.
+- **Wanted per cell**: trees round(4096 / 100 · 1.0) = round(40.96) = **41**,
+  tufts round(61.44) = **61**; undergrowth density 0.8 · 100 · 0.02 = 1.6 per
+  100 m² → round(65.536) = **66** (each per-cell layer must stay ≤ 66).
+- **Footprints**: house ±6 at (64, 128), yaw 0 → the square 58…70 × 122…134
+  (inside the wood); the yard turned 30° at (−100, 50) (outside); the prop box
+  (150, 160), yaw 30°, half 3 × 1.5 → corners (150 + lx·cos30 + lz·sin30,
+  160 − lx·sin30 + lz·cos30) = (146.652, 160.201), (151.848, 157.201),
+  (153.348, 159.799), (148.152, 162.799).
+- **Clearance**: estimated (no mesh yet) tree 8 · 0.5 = **4 m**, tuft 0.8 · 0.5 =
+  0.4 m. Measured from the full GLB's POSITION bounds: x −0.70574…0.76030
+  (1.46604), z −0.64740…0.75268 (1.40008), y −0.95243…0.78964 (1.74207) →
+  spread 1.46604 / 1.74207 = **0.84155**; the low GLB gives 1.43363 / 1.71079 =
+  0.83799; the widest wins → clearM = 0.84155 · 8 / 2 = **3.3662 m**, and the
+  wood is re-sampled once the measurement lands (`noteSpread`).
+- **Heights**: everything stands on tile (0, 0) of `tiles.json`, h = 2·i + j at
+  64 m steps = x/32 + z/64; trees + `ground_offset_m` −0.1.
+- **Triangles per instance**: full tier 17 727 indices / 3 = **5909**, low tier
+  4431 / 3 = **1477** (the GLBs' accessor counts; the sidecar of the low file says
+  `tris 1477, tris_before 5909`); the tuft cone 5 sides + 5 base = **10**; the
+  undergrowth star 3 quads × 2 triangles × 2 windings = **12**.
+- **Undergrowth cells** within 128 m of (64, 128): candidates x −1…3, z 0…4
+  (25). Distance of the anchor to each cell's square per axis: x cells
+  −1/0/1/2/3 → 64/0/0/64/128, z cells 0/1/2/3/4 → 64/0/0/64/128. A cell is in when
+  dx² + dz² ≤ 128²: every pair except those combining 128 with a non-zero other
+  axis — (3, 0), (3, 3), (3, 4), (−1, 4), (2, 4) → **20 cells**, nearest first,
+  ties in string order (`0,1`, `0,2`, `1,1`, `1,2`, …).
+- **Far camera** (2000, 50, 2000): every entry's instance sphere (the wood's,
+  radius ≤ hypot(192, 128)/2 + 8.5 ≈ 124 m) is ~2.6 km away → every entry hidden,
+  undergrowth beyond 60 m → **0 instances drawn**.
+- **Counts after the LOD at the fixture camera** (40, 30, 110), forward (1, 0,
+  0.5), vertical FOV 45°, aspect 16:9: NOT hand-derived — they are the reference
+  script's run of `instanceTier`/`instanceVisible`/`inViewCone` over the TS
+  sampler's points (fresh tiers, full tier mounted): trees 84 low + 16 full, tufts
+  111 low; undergrowth 52 of 370. The check then demands triangles = 84 · 1477 +
+  16 · 5909 + 111 · 10 = **219 722** for the scatter and 52 · 12 = **624** for the
+  undergrowth.
+- **Not in the fixture on purpose**: `along`/`edge`/`center` rows — the native
+  client skips them (S3 report), and a fixture with one would make the browser's
+  occupancy differ from the port's.

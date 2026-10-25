@@ -19,6 +19,7 @@ namespace AnimaNative;
 ///   --size=WxH                  window size (bench default 1920x1080)
 ///   --vsync=on|off              keep V-sync during the bench (default off)
 ///   --quit-after-bench          exit after the result file is written
+///   --scatter                   draw the scatter AND the undergrowth (default off = the browser's &amp;scatter=0)
 ///   --check                     offline self-test from native/fixtures, then quit
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
@@ -30,6 +31,8 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
     public bool Bench { get; init; }
     public bool CheckBench { get; init; }
     public bool QuitAfterBench { get; init; }
+    /// <summary>Both scatter layers on (<c>--scatter</c>); off by default, like the S2 runs (<c>&amp;scatter=0</c>).</summary>
+    public bool Scatter { get; init; }
     /// <summary>true = keep V-sync during the bench run (<c>--vsync=on</c>).</summary>
     public bool Vsync { get; init; }
     /// <summary>Explicit <c>--size</c>; null = the project default (the bench uses <see cref="DefaultBenchSize"/>).</summary>
@@ -41,7 +44,7 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
     {
         string server = DefaultServer;
         string? user = null, gotoQuery = null;
-        bool check = false, bench = false, checkBench = false, quit = false, vsync = false;
+        bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = false;
         Vector2I? size = null;
         foreach (var raw in args)
         {
@@ -50,6 +53,7 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
             else if (arg == "--bench") bench = true;
             else if (arg == "--check-bench") checkBench = true;
             else if (arg == "--quit-after-bench") quit = true;
+            else if (arg == "--scatter") scatter = true;
             else if (TryValue(arg, "--server", out var v)) server = v.TrimEnd('/');
             else if (TryValue(arg, "--user", out v)) user = v;
             else if (TryValue(arg, "--goto", out v)) gotoQuery = v;
@@ -74,6 +78,7 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
             Bench = bench,
             CheckBench = checkBench,
             QuitAfterBench = quit,
+            Scatter = scatter,
             Vsync = vsync,
             Size = size,
         };

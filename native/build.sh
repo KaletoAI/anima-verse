@@ -31,4 +31,4 @@ echo "== export Linux -> $out"
 cp "$here/bin/libmeshoptimizer.so" "$out/"
 
 [ -x "$out/anima-native.x86_64" ] || { echo "export did not produce $out/anima-native.x86_64" >&2; exit 1; }
-echo "== done: $out/anima-native.x86_64 -- --server=http://HOST:8000 [--user=NAME] [--goto=LOCATION] [--bench [--quit-after-bench] [--size=WxH]]"
+echo "== done: $out/anima-native.x86_64 -- --server=http://HOST:8000 [--user=NAME] [--goto=LOCATION] [--bench [--scatter] [--quit-after-bench] [--size=WxH]]"

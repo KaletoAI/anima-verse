@@ -1,0 +1,26 @@
+{
+  "default_kind": "grass",
+  "types": [
+    { "kind": "forest", "name": "Forest", "color": "#3f6e3a", "passable": true, "speed_factor": 0.8,
+      "meta": { "undergrowth": 0.02, "sway_m": 0.2 } },
+    { "kind": "path", "name": "Path", "color": "#a08a60", "passable": true, "speed_factor": 1.0, "meta": {} }
+  ],
+  "areas": [
+    { "id": "area-wood", "kind": "forest", "z_order": 0,
+      "polygon": [[8, 72], [200, 72], [200, 200], [8, 200], [8, 72]],
+      "meta": { "scatter": [
+        { "density_per_100m2": 1.0, "model": "/assets/props/broadleaf/model.glb", "min_spacing_m": 3,
+          "prop_height_m": 8, "sway_factor": 0.5, "ground_offset_m": -0.1,
+          "variants": { "full": "/assets/props/broadleaf/model.glb?tier=full",
+                        "low": "/assets/props/broadleaf/model.glb?tier=low" } },
+        { "density_per_100m2": 1.5 }
+      ] } },
+    { "id": "area-path", "kind": "path", "z_order": 1,
+      "polygon": [[100, 60], [110, 60], [110, 210], [100, 210]],
+      "meta": {} }
+  ],
+  "prop_boxes": [
+    { "id": "pb-bench", "x": 150, "z": 160, "yaw_deg": 30, "half_w": 3, "half_d": 1.5 }
+  ],
+  "sig": "fixture-s3"
+}

@@ -23,6 +23,7 @@ namespace AnimaNative.Check;
 ///   model3d.json      → GET /characters/&lt;name&gt;/model3d (name → answer;
 ///                       null or absent = 404)
 ///   animation_clips.json → GET /assets/animation-clips
+///   terrain.json      → GET /play/terrain (one painted wood with two scatter rows + a path over it)
 /// </summary>
 public sealed class FixtureSource : IWorldSource
 {
@@ -91,6 +92,8 @@ public sealed class FixtureSource : IWorldSource
     }
 
     public Task<JsonDocument> GetAnimationClipsAsync() => Doc("animation_clips.json");
+
+    public Task<JsonDocument> GetTerrainAsync() => Doc("terrain.json");
 
     /// <summary>
     /// A fixture file, or with <c>repo:</c> a repository file: the repository

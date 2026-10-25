@@ -68,12 +68,12 @@ public partial class BenchRunner : Node
     /// path unless overridden (offline smoke only).
     /// </summary>
     public static BenchSettings SettingsFor(JsonElement worldmap, WorldBuilder builder, string? gotoQuery, bool vsync,
-                                            double? warmup = null, double? duration = null)
+                                            double? warmup = null, double? duration = null, bool scatter = false)
     {
         var anchor = World.Anchor.FromWorld(worldmap, builder.Details, builder.Height!.Overview.Grid, gotoQuery,
                                             World.Anchor.BenchSource);
         var path = CameraPath.LoadEmbedded();
-        return new BenchSettings(path, warmup ?? path.Warmup, duration ?? path.Duration, anchor, gotoQuery, vsync);
+        return new BenchSettings(path, warmup ?? path.Warmup, duration ?? path.Duration, anchor, gotoQuery, vsync, scatter);
     }
 
     public BenchRunner(FlyCamera camera, BenchSettings settings, Action<JsonObject> finished)
@@ -134,6 +134,8 @@ public partial class BenchRunner : Node
         var a = _s.Anchor;
         LastPosition = new Vector3((float)(pos[0] + a.X), (float)(pos[1] + a.Y), (float)(pos[2] + a.Z));
         LastTarget = new Vector3((float)(target[0] + a.X), (float)(target[1] + a.Y), (float)(target[2] + a.Z));
+        // engine.target of the browser: the scatter window/undergrowth anchor follows it (restored after).
+        _camera.Target = LastTarget;
         _camera.LookAtFromPosition(LastPosition, LastTarget, Vector3.Up);
     }
 

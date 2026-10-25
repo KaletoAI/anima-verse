@@ -46,6 +46,8 @@ public interface IWorldSource
     Task<JsonDocument?> GetCharacterModelAsync(string name);
     /// <summary><c>GET /assets/animation-clips</c> (§ A7/§ A8): <c>{clips: [{kind, role, set, url, loop, …}], locomotion, …}</c>.</summary>
     Task<JsonDocument> GetAnimationClipsAsync();
+    /// <summary><c>GET /play/terrain</c> (§ A9): painted areas with their scatter rows, the type catalog, prop boxes.</summary>
+    Task<JsonDocument> GetTerrainAsync();
 }
 
 /// <summary>
@@ -121,6 +123,8 @@ public sealed class AnimaApi : IWorldSource, IDisposable
         => GetJsonOrNull($"/characters/{Uri.EscapeDataString(name)}/model3d");
 
     public Task<JsonDocument> GetAnimationClipsAsync() => GetJson("/assets/animation-clips");
+
+    public Task<JsonDocument> GetTerrainAsync() => GetJson("/play/terrain");
 
     /// <summary>§ A7: <c>{format, rotation, offset_*, floors, height_m, signature}</c>, null on 404.</summary>
     public Task<JsonDocument?> GetLocationModelMetaAsync(string locationId)

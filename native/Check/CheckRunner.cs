@@ -108,10 +108,11 @@ public static class CheckRunner
             CheckPlacementRule();
             var figures = await CheckFigures(world, source, builder.Height!);
             var bench = BenchMathCheck.Run(source);
+            var scatter = await ScatterCheck.RunAsync(world, source, builder.Height!, dir);
 
             GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter}");
             world.QueueFree();
             return 0;
         }
