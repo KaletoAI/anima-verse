@@ -341,12 +341,20 @@ def set_active_character(character_name: str):
 
 
 def release_active_character() -> None:
-    """Gibt den Avatar des aktuellen Users frei (Logout/Sitzungsende).
+    """Release the current user's avatar (logout / end of session).
 
-    Leert ``active_character`` + ``current_character`` (damit der Char nicht
-    mehr als gesteuert gilt), behaelt aber ``default_character`` fuer den
-    naechsten Login. Loest die Presence-Transition aus — ein avatar-only
-    Character verschwindet damit beim Logout."""
+    Clears ``active_character`` + ``current_character`` (so the character no
+    longer counts as controlled) but keeps ``default_character`` for the next
+    login, and runs the presence transition — an avatar-only character
+    disappears with the logout.
+
+    Only for a request with a signed-in user: ``/auth/logout`` is public, and
+    an anonymous call used to fall through to the legacy account row (id=1)
+    and release ITS avatar.
+    """
+    from app.core.auth_dependency import get_current_user_from_ctx
+    if not get_current_user_from_ctx():
+        return
     old = _raw_active_character()
     if not old:
         return
@@ -355,13 +363,6 @@ def release_active_character() -> None:
         "current_character": "",
     }):
         apply_presence_transition(old, "")
-        return
-    # Fallback: Account (kein Request-Context)
-    profile = get_user_profile()
-    profile["active_character"] = ""
-    profile["current_character"] = ""
-    save_user_profile(profile)
-    apply_presence_transition(old, "")
 
 
 def restore_avatar_on_login(user: Dict[str, Any]) -> None:
