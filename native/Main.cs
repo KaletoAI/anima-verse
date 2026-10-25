@@ -10,6 +10,7 @@ using AnimaNative.Check;
 using AnimaNative.Figures;
 using AnimaNative.Gltf;
 using AnimaNative.Hud;
+using AnimaNative.Overview;
 using AnimaNative.Scatter;
 using AnimaNative.Ui;
 using AnimaNative.World;
@@ -18,7 +19,7 @@ using Godot;
 namespace AnimaNative;
 
 /// <summary>
-/// Entry scene. Online: login screen → world build → free camera at the anchor;
+/// Entry scene. Online: login screen → world build → the overview camera framing the world;
 /// with <c>--bench</c> the camera drive starts once the world and the first
 /// figures have loaded (Task S2). With <c>-- --check</c> / <c>-- --check-bench</c>:
 /// the offline self-tests, then quit with their exit code. When gdCEF is linked
@@ -34,18 +35,16 @@ public partial class Main : Node3D
     private IWorldSource? _source;
     private WorldBuilder? _builder;
     private Label? _status;
-    private FlyCamera? _camera;
+    private OverviewCamera? _camera;
     private FigureManager? _figures;
     private ScatterLayer? _scatter;
     private string _groundSummary = "ground[plain]";
     private string _waterSummary = "water[none]";
     private bool _waterDrawn;
     private readonly CancellationTokenSource _stop = new();
-    private int _focus = -1;
     private HudOverlay? _hud;
     private string? _selected;
     private int _selectedPoll = -1;
-    private Vector2? _pressAt;
     private bool _leaving;
     /// <summary>The window is set up once per PROCESS: back to the title reloads this scene and must not undo F11.</summary>
     private static bool _windowApplied;
@@ -185,10 +184,15 @@ public partial class Main : Node3D
             LightEnergy = 0.25f,
             RotationDegrees = new Vector3(-35f, 130f, 0f),
         });
-        _camera = new FlyCamera { Name = "Camera" };
+        _camera = new OverviewCamera { Name = "Camera" };
         AddChild(_camera);
         _camera.Current = true;
-        _camera.LookAtAnchor(Vector3.Zero);
+        _camera.JumpTo(Vector3.Zero, OverviewControl.InitialDist);
+        // The pick chain of a click (Task 9 extends it): for now the figure plaque, as before.
+        _camera.Clicked += at =>
+        {
+            if (_hud?.Active == true) PickAt(at);
+        };
 
         var hud = new CanvasLayer { Name = "Hud" };
         AddChild(hud);
@@ -233,7 +237,17 @@ public partial class Main : Node3D
             };
             var stats = await builder.BuildAsync(world, _options!.Goto);
             Anchor = stats.Anchor;
-            _camera!.LookAtAnchor(stats.Anchor.Position() + new Vector3(0, 1.5f, 0));
+            if (_options.Bench || _options.Offline is not null)
+            {
+                // The measuring runs keep the spike's start: the target on the anchor, where the scatter window
+                // settles before the drive (the drive itself sets the camera every frame, BenchRunner).
+                _camera!.JumpTo(stats.Anchor.Position() + new Vector3(0, 1.5f, 0), 40);
+            }
+            else
+            {
+                // main.ts boot framing: the world_bounds centre on the ground, at the fit distance.
+                _camera!.FrameWorld(OverviewControl.WorldBoundsOf(builder.FirstMap!.Value), builder.Height!.GroundAt);
+            }
             Log("world " + stats.Summary());
             var worldStatus = $"{stats.Buildings} buildings, {stats.Tiles} tiles, {stats.Primitives} primitives"
                               + (stats.Failures > 0 ? $", {stats.Failures} locations failed (see log)" : "")
@@ -267,8 +281,8 @@ public partial class Main : Node3D
                 SetStatus($"{worldStatus}, {FigureLine()}"
                           + (_scatter is not null ? $"\n{_scatter.Summary()}" : "")
                           + (_hud?.Active == true
-                              ? "   —   drag: orbit, wheel: zoom, WASD: move, click a figure: plaque, F/Enter: chat, M: menu"
-                              : "   —   drag: orbit, wheel: zoom, WASD: move, F: next figure"));
+                              ? "   —   " + CameraHint + ", click a figure: plaque, F/Enter: chat, M: menu"
+                              : "   —   " + CameraHint));
             };
             if (_options.Offline is not null && !_options.Bench)
             {
@@ -376,29 +390,8 @@ public partial class Main : Node3D
                + $"{s.ClipsLoaded} clips" + (s.UnboundClips > 0 ? $", {s.UnboundClips} unbound" : "");
     }
 
-    /// <summary>
-    /// F: the camera follows the next figure (name order); WASD lets go. With the
-    /// HUD up, F belongs to the chat (HudOverlay answers it first) and a click on a
-    /// figure selects it for the plaque — only clicks the HUD did not take arrive here.
-    /// </summary>
-    public override void _UnhandledInput(InputEvent e)
-    {
-        if (_hud?.Active == true && e is InputEventMouseButton { ButtonIndex: MouseButton.Left } click)
-        {
-            if (click.Pressed) _pressAt = click.Position;
-            else if (_pressAt is { } at && at.DistanceTo(click.Position) < 6f) PickAt(click.Position);
-            if (!click.Pressed) _pressAt = null;
-            return;
-        }
-        if (e is not InputEventKey { Pressed: true, Echo: false, Keycode: Key.F } || _figures is null || _camera is null)
-            return;
-        var list = _figures.Ordered();
-        if (list.Count == 0) return;
-        _focus = (_focus + 1) % list.Count;
-        _camera.Follow = list[_focus];
-        _camera.Distance = 8f;
-        Log($"camera → {list[_focus].CharacterName} ({list[_focus].Rule})");
-    }
+    /// <summary>The overview camera's bindings (engine.ts), for the status line.</summary>
+    private const string CameraHint = "drag: pan, right/middle or Shift+drag: orbit, wheel: zoom, WASD/arrows: move, Q/E: turn, +/-: zoom";
 
     public override void _ExitTree()
     {
@@ -419,6 +412,8 @@ public partial class Main : Node3D
         _camera!.KeysBlocked = () => IsInstanceValid(hud) && hud.KeysToHud;
         hud.Handlers.Clear();
         hud.Handlers["zoomTo"] = args => ZoomTo(args.Count > 0 ? args[0]?.GetValue<string>() : null);
+        // The chat panel's box (HUD CSS px) → the camera's view shift (viewport px).
+        hud.Handlers["setChatBox"] = args => _camera?.SetChatBox(hud.ChatBoxInWindow(args));
         hud.Handlers["clearSelection"] = _ => Select(null);
         hud.Handlers["closeOpenView"] = _ => hud.SetState("openView", null);   // no open location views in the spike
         hud.Handlers["setVolumes"] = _ => { };                                  // no audio in the spike
@@ -487,13 +482,12 @@ public partial class Main : Node3D
         Select(FigurePick.Pick(candidates, click));
     }
 
-    /// <summary>The plaque's "Zoom to": the camera follows that figure.</summary>
+    /// <summary>The plaque's "Zoom to" (main.ts <c>zoomTo</c>): fly to the figure's root + 0.85 m at 4.5 m; no follow.</summary>
     private void ZoomTo(string? name)
     {
         if (name is null || _figures is null || _camera is null) return;
-        if (!_figures.Figures.TryGetValue(name, out var fig)) return;
-        _camera.Follow = fig;
-        _camera.Distance = 8f;
+        if (!_figures.Figures.TryGetValue(name, out var fig) || !IsInstanceValid(fig)) return;
+        _camera.ZoomTo(fig.GlobalPosition);
         Log($"camera → {name} (HUD zoomTo)");
     }
 

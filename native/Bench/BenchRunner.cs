@@ -20,7 +20,7 @@ public sealed record BenchSettings(CameraPath Path, double Warmup, double Durati
 ///
 ///   • warm-up: <see cref="BenchSettings.Warmup"/> s of wall time with the
 ///     camera at keyframe 0; then the drive along the path relative to the anchor;
-///   • the free camera is switched off for the run and its pose restored after;
+///   • the overview camera is switched off for the run and its state restored after;
 ///     V-sync is disabled for the run unless <c>--vsync=on</c>;
 ///   • per frame the raw wall delta (<see cref="Time.GetTicksUsec"/>, never
 ///     clamped; the very first frame has none = 0, like the browser's first
@@ -41,7 +41,7 @@ public partial class BenchRunner : Node
 {
     private enum Phase { Warm, Run, Done }
 
-    private readonly FlyCamera _camera;
+    private readonly OverviewCamera _camera;
     private readonly BenchSettings _s;
     private readonly Action<JsonObject> _finished;
     private readonly List<BenchSample> _samples = new(4096);
@@ -52,7 +52,7 @@ public partial class BenchRunner : Node
     private Rid _viewport;
     private bool _headless;
     private DisplayServer.VSyncMode _oldVsync;
-    private (Vector3 Target, float Distance, float Yaw, float Pitch, Node3D? Follow) _saved;
+    private Overview.OverviewControl.Snapshot _saved;
 
     /// <summary>The last camera pose the drive set (world metres) — for the offline smoke.</summary>
     public Vector3 LastPosition { get; private set; }
@@ -78,7 +78,7 @@ public partial class BenchRunner : Node
                                  water);
     }
 
-    public BenchRunner(FlyCamera camera, BenchSettings settings, Action<JsonObject> finished)
+    public BenchRunner(OverviewCamera camera, BenchSettings settings, Action<JsonObject> finished)
     {
         Name = "Bench";
         _camera = camera;
@@ -95,8 +95,7 @@ public partial class BenchRunner : Node
         _oldVsync = DisplayServer.WindowGetVsyncMode();
         if (!_s.Vsync) DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
 
-        _saved = (_camera.Target, _camera.Distance, _camera.Yaw, _camera.Pitch, _camera.Follow);
-        _camera.Follow = null;
+        _saved = _camera.Control.Save();
         _camera.SetProcess(false);
         _camera.SetProcessUnhandledInput(false);
         PlaceCamera(0);
@@ -168,7 +167,7 @@ public partial class BenchRunner : Node
         // Restore normal play.
         RenderingServer.ViewportSetMeasureRenderTime(_viewport, false);
         if (!_s.Vsync) DisplayServer.WindowSetVsyncMode(_oldVsync);
-        (_camera.Target, _camera.Distance, _camera.Yaw, _camera.Pitch, _camera.Follow) = _saved;
+        _camera.Control.Restore(_saved);
         _camera.SetProcess(true);
         _camera.SetProcessUnhandledInput(true);
 

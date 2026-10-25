@@ -18,7 +18,7 @@ namespace AnimaNative.Scatter;
 ///   · the movement driver (a frame hook): another pass when ≥ 100 ms have passed AND the camera moved
 ///     more than 8 m or turned more than 10° (<c>SCATTER_LOD_MIN_MS / _MOVE_M / _YAW_RAD</c>).
 ///
-/// The anchor is the camera's look-at target (<see cref="Ui.FlyCamera.Target"/>; the bench driver keeps it
+/// The anchor is the camera's look-at target (<see cref="Ui.OverviewCamera.Target"/>; the bench driver keeps it
 /// on the path's target like the browser's <c>engine.target</c>). The browser's movement driver compares
 /// <c>engine.yaw</c>, the orbit yaw, which the bench does not update; this compares the camera's real
 /// heading — at most extra passes, i.e. extra CPU for Godot.

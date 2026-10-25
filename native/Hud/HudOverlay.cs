@@ -387,6 +387,24 @@ public partial class HudOverlay : CanvasLayer
         }
     }
 
+    /// <summary>
+    /// The argument of the HUD's <c>setChatBox(box | null)</c> (Hud.tsx: the chat panel's
+    /// <c>getBoundingClientRect</c>, CSS px of the HUD page) in VIEWPORT px — the unit the camera's view
+    /// shift works in: <c>window = css / cssPerWindowPx + rect origin</c>, the inverse of <see cref="Over"/>.
+    /// null for a closed panel or anything that is not a box of four finite numbers.
+    /// </summary>
+    public HudRect? ChatBoxInWindow(JsonArray args)
+    {
+        if (args.Count == 0 || args[0] is not JsonObject box) return null;
+        static double? N(JsonObject o, string k)
+            => o[k] is JsonValue v && v.TryGetValue<double>(out var d) && double.IsFinite(d) ? d : null;
+        if (N(box, "x") is not double x || N(box, "y") is not double y || N(box, "w") is not double w
+            || N(box, "h") is not double h) return null;
+        double s = _cef is not null && _rect is not null ? CssPerWindowPx : 1.0;
+        var origin = _rect?.GlobalPosition ?? Vector2.Zero;
+        return new HudRect(x / s + origin.X, y / s + origin.Y, w / s, h / s);
+    }
+
     private bool Over(Vector2 pos) => HudRouting.OverHud(Ui, pos.X - _rect!.GlobalPosition.X, pos.Y - _rect.GlobalPosition.Y, CssPerWindowPx);
 
     private void MoveTo(Vector2 pos)

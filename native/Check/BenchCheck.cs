@@ -48,7 +48,7 @@ public static class BenchCheck
         "trisMedian", "fps", "gpuMs", "draws", "triangles", "renderCpuMsMedian", "godot", "gpu", "cpu",
     };
 
-    public static async Task<int> RunAsync(Node3D host, FlyCamera camera, CliOptions options)
+    public static async Task<int> RunAsync(Node3D host, OverviewCamera camera, CliOptions options)
     {
         try
         {
@@ -88,7 +88,7 @@ public static class BenchCheck
                                  && anchor.LocationId == "loc-house", $"{anchor}");
             Expect("anchor label", anchor.Source == Anchor.BenchSource, anchor.Source);
 
-            camera.LookAtAnchor(anchor.Position() + new Vector3(0, 1.5f, 0), 33f);
+            camera.JumpTo(anchor.Position() + new Vector3(0, 1.5f, 0), 33);
             var before = (camera.Target, camera.Distance);
             var done = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
             var runner = new BenchRunner(camera, settings, r => done.TrySetResult(r));

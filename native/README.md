@@ -162,10 +162,13 @@ Arguments after `--` (no .env; all optional):
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
-Camera: drag with the left or right mouse button to orbit, wheel to zoom,
-W/A/S/D to move, F to follow the next figure (name order; W/A/S/D lets go).
-With the HUD up, F and Enter open the chat instead, M opens/closes the menu,
-a click on a figure shows its plaque, and the plaque's "Zoom to" follows it.
+Camera (the browser's overview camera, `Ui/OverviewCamera.cs` + `Core/Overview/OverviewControl.cs`):
+the world starts framed whole (`world_bounds`); left drag pans by grabbing the ground, right/middle drag
+or Shift/Ctrl/Alt + left drag orbits and tilts, the wheel zooms towards the cursor, W/A/S/D and the
+arrows move, Q/E turn by 45°, + / − zoom. A release under 4 px (orbit) / 0.15 m (pan) is a click.
+With the HUD up, F and Enter open the chat, M opens/closes the menu, a click on a figure shows its
+plaque, and the plaque's "Zoom to" flies to it (4.5 m, no follow); an open chat shifts the picture
+out of its way (the browser's view shift, as a Godot frustum offset).
 The status line top left reports what was loaded; per-location
 failures are logged to the console (`[native] …`).
 
@@ -460,13 +463,13 @@ What to look at on the PC with a display:
 3. While typing in the chat, W/A/S/D/M/F type letters and do NOT move the
    camera or open the menu.
 4. The plaque: click a figure in the world → its plaque (name, activity,
-   mood) appears; "Zoom to" makes the camera follow it; the close button or a
+   mood) appears; "Zoom to" flies the camera to it; the close button or a
    click on empty ground clears it.
 5. The menu: M opens it, M or Esc closes it; "Back to title" returns to the
    Godot login screen and a second login brings the HUD back.
 6. A click (and a drag, and the wheel) on a half-transparent chat panel does
-   NOT reach the world: the camera neither orbits nor zooms; a camera drag that
-   starts in the world keeps orbiting when it crosses a panel.
+   NOT reach the world: the camera neither pans nor zooms; a camera drag that
+   starts in the world keeps going when it crosses a panel.
 
 ## Offline checks of the export
 
