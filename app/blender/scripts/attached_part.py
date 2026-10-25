@@ -126,6 +126,62 @@ def parameters(raw):
     return settings
 
 
+class OuterSkin:
+    """BVH over the body's OUTER skin, answering with body polygon indices.
+
+    Some meshers (UniForge) deliver a double-walled body: the outer skin plus an
+    inner wall a few mm below it whose normals face the hollow interior. The
+    skin field takes its sign from the nearest face's normal, so the inner wall
+    turned the body's inside into "outside" and the surface net sprouted
+    fragments inside the body. An inner-wall face is enclosed: every ray of a
+    fan around its normal hits the body again (measured on such a body: inner
+    wall 9 of 9, outer skin at the root 0-4 of 9). A deep crease of outer skin
+    can pass as enclosed too; losing it from the field only coarsens the
+    distance there, while a missed inner-wall face breaks the field's sign.
+    """
+
+    def __init__(self, body, centre, radius):
+        me = body.data
+        verts = [v.co.copy() for v in me.vertices]
+        full = BVHTree.FromPolygons(verts, [p.vertices[:] for p in me.polygons])
+        centre_local = body.matrix_world.inverted() @ centre
+        radius_local = radius / max(body.matrix_world.to_scale())
+        self.index = []
+        self.inner_wall_faces = 0
+        for poly in me.polygons:
+            if (poly.center - centre_local).length < radius_local and self._enclosed(full, poly):
+                self.inner_wall_faces += 1
+                continue
+            self.index.append(poly.index)
+        self.tree = BVHTree.FromPolygons(verts, [me.polygons[i].vertices[:] for i in self.index])
+
+    @staticmethod
+    def _enclosed(tree, poly):
+        n = poly.normal
+        a = Vector((1, 0, 0)) if abs(n.x) < .9 else Vector((0, 1, 0))
+        u = n.cross(a).normalized()
+        w = n.cross(u)
+        origin = poly.center + n * 1e-5
+        if tree.ray_cast(origin, n)[0] is None:
+            return False
+        for angle in (45, 70):
+            c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+            for t in (u, -u, w, -w):
+                if tree.ray_cast(origin, (n * c + t * s).normalized())[0] is None:
+                    return False
+        return True
+
+    def _mapped(self, hit):
+        location, normal, index, distance = hit
+        return location, normal, None if index is None else self.index[index], distance
+
+    def find_nearest(self, co):
+        return self._mapped(self.tree.find_nearest(co))
+
+    def ray_cast(self, origin, direction):
+        return self._mapped(self.tree.ray_cast(origin, direction))
+
+
 def skin_texel_fallback(pixels):
     return np.median(pixels[..., :3].reshape(-1, 3), axis=0)
 
@@ -410,8 +466,8 @@ def build_part(group, companions, output):
             hips_g.add([v.index], cur + take, 'REPLACE')
             moved += 1
     print('root verts moved to hips', moved)
-    dg = bpy.context.evaluated_depsgraph_get()
-    bvh = BVHTree.FromObject(body, dg)
+    bvh = OuterSkin(body, root, .25)
+    print('inner wall faces skipped', bvh.inner_wall_faces)
 
 
     # Sample root-local unions of sweep, ridges, pods and body skin.
@@ -506,6 +562,31 @@ def build_part(group, companions, output):
     near_root = (np.abs(positions[:, 0] - root.x) < settings['hidden_band']['lateral'] * size_factor) & (positions[:, 2] > root.z + settings['hidden_band']['above'] * size_factor) & (np.linalg.norm(positions - np.array(tuple(root)), axis=1) < settings['hidden_band']['radius'] * size_factor)
     keepv = (part_distance < 1.15 * body_blend) & np.where(near_root, skin_distance > -settings['hidden_band']['depth'], skin_distance > .0006)
     quads = quads[keepv[quads].all(1)]
+    # Every visible piece carries part surface (a flat body can split the
+    # shaft from the pods). An island that is all skin fillet comes from a
+    # folded inner wall where the thighs meet the body: drop it.
+    parent_ = np.arange(len(positions))
+
+    def find_(i):
+        while parent_[i] != i:
+            parent_[i] = parent_[parent_[i]]
+            i = parent_[i]
+        return i
+    for face in quads:
+        r0 = find_(face[0])
+        for vi in face[1:]:
+            r1 = find_(vi)
+            if r1 != r0:
+                parent_[r1] = r0
+    stray_faces = 0
+    if len(quads):
+        vertex_roots = np.array([find_(i) for i in range(len(positions))])
+        face_vertices = np.unique(quads)
+        on_part = np.unique(vertex_roots[face_vertices[np.abs(part_distance[face_vertices]) < voxel]])
+        keep_face = np.isin(vertex_roots[quads[:, 0]], on_part)
+        stray_faces = int(np.count_nonzero(~keep_face))
+        quads = quads[keep_face]
+    print('stray faces dropped', stray_faces)
     used = np.unique(quads)
     remap = -np.ones(len(positions), int)
     remap[used] = np.arange(len(used))
@@ -865,6 +946,7 @@ def build_part(group, companions, output):
         'tip_vertices': tip_count,
         'border_vertices': len(final_border),
         'cracked_seam_groups': int(seam_cracks), 'flatten_outward_m': flatten_outward,
+        'inner_wall_faces': bvh.inner_wall_faces, 'stray_faces': stray_faces,
     }
 
 
