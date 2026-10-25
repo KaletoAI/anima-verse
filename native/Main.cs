@@ -34,6 +34,7 @@ public partial class Main : Node3D
     private FlyCamera? _camera;
     private FigureManager? _figures;
     private ScatterLayer? _scatter;
+    private string _groundSummary = "ground[plain]";
     private readonly CancellationTokenSource _stop = new();
     private int _focus = -1;
     private HudOverlay? _hud;
@@ -155,13 +156,16 @@ public partial class Main : Node3D
             MeshoptNative.EnsureLoaded();
             var world = new Node3D { Name = "World" };
             AddChild(world);
-            var builder = new WorldBuilder(_api!, Log, strict: false);
+            var builder = new WorldBuilder(_api!, Log, strict: false) { PlainGround = _options!.PlainGround };
             var stats = await builder.BuildAsync(world, _options!.Goto);
             Anchor = stats.Anchor;
             _camera!.LookAtAnchor(stats.Anchor.Position + new Vector3(0, 1.5f, 0));
             Log("world " + stats.Summary());
             var worldStatus = $"{stats.Buildings} buildings, {stats.Tiles} tiles, {stats.Primitives} primitives"
-                              + (stats.Failures > 0 ? $", {stats.Failures} locations failed (see log)" : "");
+                              + (stats.Failures > 0 ? $", {stats.Failures} locations failed (see log)" : "")
+                              + (stats.Ground.Mode == "layers" ? $", ground {stats.Ground.Layers} layers / {stats.Ground.TexturesLoaded} textures"
+                                                                : ", plain ground");
+            _groundSummary = stats.Ground.Summary();
             SetStatus(worldStatus + "   —   loading figures…");
 
             if (_options.Scatter)
@@ -223,6 +227,8 @@ public partial class Main : Node3D
                 result["scatterLayers"] = _scatter.Summary();
                 Log("bench scatter " + _scatter.Summary());
             }
+            // Extra key (Task S3b): which ground material the run drew — "layers" (the browser's) or "plain".
+            result["ground"] = _groundSummary;
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(this, result, file);
             _ = ReportBench(BenchOutput.Line(result));

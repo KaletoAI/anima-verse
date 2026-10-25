@@ -23,6 +23,13 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `terrain.json` | `GET /play/terrain` (§ A9/§ A9b): one painted wood with two scatter rows, a path painted over it, one prop box |
 | `scatter_reference.json` | the browser's sampler/LOD/undergrowth output for hand-chosen cases and for this fixture world — WRITTEN by `scatter_reference.mjs` |
 | `scatter_reference.mjs` | node script that runs `scatter.ts` / `occupancy.ts` / `scatterLod.ts` / `undergrowth.ts` themselves (see "Scatter") |
+| `terrain_layers.json` | `GET /play/terrain-layers` (§ A16.7) — the index: format, layer table, coarse id mask, tile keys — WRITTEN by `ground_fixture.mjs` |
+| `terrain_layers_tiles.json` | `GET /play/terrain-layers?keys=…` — every tile; the source answers only the requested AND indexed keys — WRITTEN by `ground_fixture.mjs` |
+| `surface_textures.json` | `GET /assets/surface-textures` — the library, a bare array like the server's — WRITTEN by `ground_fixture.mjs` |
+| `ground_grass.png` | a 4 × 2 PNG of ONE colour (60, 140, 50, 255) — the `grass` surface image — WRITTEN by `ground_fixture.mjs` |
+| `ground_fixture.mjs` | plain node script that bakes the cut-down masks in the server's encoding (see "Ground surfaces") |
+| `ground_reference.json` | the browser's layer-cut / want-set / natural-ground / colour-slice values on these fixtures — WRITTEN by `ground_reference.mjs` |
+| `ground_reference.mjs` | node script that runs `layerCut.ts`, `heightTiles.ts` `wantedTiles`, `naturalGroundMath.ts` and three's `Color` themselves |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
 for the repository root above this directory, then above the working directory):
@@ -366,3 +373,77 @@ Plus `instanceHash`, `undergrowthShade`, FNV-1a seed hashes and the sha256 of th
 - **Not in the fixture on purpose**: `along`/`edge`/`center` rows — the native
   client skips them (S3 report), and a fixture with one would make the browser's
   occupancy differ from the port's.
+
+## Ground surfaces (Task S3b)
+
+`node native/fixtures/ground_fixture.mjs` writes the layer bake, the library and the PNG;
+`node native/fixtures/ground_reference.mjs` writes `ground_reference.json` (both deterministic: a re-run is
+byte-identical). `Check/GroundCheck.cs` compares the C# port with the reference (1e-9; pairs, keys, bytes exact)
+and the rest with the numbers below.
+
+**The bake is cut down in ONE place**: `tile_m` = 32 instead of 256 (a 32² id mask and a 64² sd mask per tile;
+32 because `wantedTiles` refuses more than 64 tiles per axis in its 560 m radius). Every other number is the
+server's: id 1 m, sd 0.5 m, band 8 m, zero 128, 127/8 = 15.875 codes per metre,
+`code = clamp(round(sd · 15.875) + 128, 1, 255)`; rule 3 of § A16.7 collapses an id texel to (own, own) when its
+nearest sd texel lies farther from the line than ½ blend(A) + min(0.5, ½ blend(A)) + 1 m (path: 1 m,
+forest: 2.25 m).
+
+Layers: 0 grass (`grass`, 1.5 m), 1 forest (`forest`, 1.5), 2 path (`path_blend`, 0 = hard cut), 3 lake (water,
+bed `grass`, surface `grass`, 1.5), 4 meadow (`meadow_tex`, 1.5). Tiles: 2,3 uniform forest; 3,3 forest | path at
+x = 100 (path painted later = A, sd = x − 100); 4,3 path | forest at x = 140 (sd = 140 − x); 2,4 forest | grass at
+z = 139 (forest = A, sd = 139 − z); 3,4 uniform meadow; 5,3 uniform lake. Overview: origin (32, 64), step 8,
+24 × 24, forest except cell (0, 0) = lake and columns i ≥ 20 (x ≥ 192) = meadow.
+
+Library: `grass` → `ground_grass.png` (4 m), `forest` → `repo:shared/surface_textures/dark_stone_2_1785267141.jpg`
+(6 m; a tracked 1024 × 1024 JPEG, the SOF says so), `path_blend` = a blend (no url), `meadow_tex` → a URL the
+fixture source answers 404, `unused` → never asked for. `terrain.json` types carry `surface`: forest `forest`,
+path `"Path_Blend "` (trimmed + lower-cased → `path_blend`), meadow `meadow_tex`, lake `water`; grass has none.
+
+- **Want set** around the anchor (64, 128), radius 560 m: all six tile keys; distance of the anchor to each
+  32 m square: 2,3 and 2,4 → 0 (the anchor is on their corner), 3,3 and 3,4 → 32 (d² 1024), 4,3 → 64 (4096),
+  5,3 → 96 (9216); ties in string order → **2,3; 2,4; 3,3; 3,4; 4,3; 5,3**, ONE request (≤ 16). Requests:
+  the index (`""`), then that batch.
+- **Window**: tiles x 2…5, z 3…4 → span max(4, 2) = 4 → **idSize 128, sdSize 256, origin (64, 96)**; tile 3,5
+  (z 160…192) lies inside the square window but was never offered → neutral fill (0, 0) with sd byte 255 =
+  (255 − 128)/15.875 = **8 m** → the point (110, 170) is bare ground although the coarse mask says forest.
+- **Block distance 2 cm west of x = 100** at (99.98, 100.2): id texel ix = ⌊99.98 − 64⌋ = 35 → sd texels 70, 71,
+  centres 99.25 / 99.75 → sd −0.75 / −0.25 → codes 128 + round(−11.906) = 116 / 128 + round(−3.969) = 124 →
+  −12/15.875 = −0.755906 / −4/15.875 = −0.251969; fx = (99.98 − 99.25)/0.5 = 1.46 (EXTRAPOLATED past the centre)
+  → sd = −0.755906 + 1.46 · 0.503937 = **−0.020157**. Pair (2, 1) (path, forest), path blend 0 → no noise push,
+  hard cut at a 5 cm pixel: clamp(−0.020157/0.05 + 0.5) = **0.096850**.
+- **Soft edge** at (80.4, 138.6): iz = ⌊138.6 − 96⌋ = 42 → sd texels 84, 85, centres 138.25 / 138.75 → +0.75 / +0.25
+  → 0.755906 / 0.251969; fz = 0.7 → **0.403150**; pair (1, 0), forest blend 1.5 → push cap 0.5 (the noise value
+  and the smoothstep come from the reference).
+- **Far branch** (outside the window x 64…192, z 96…224): (33, 65) → cell (0, 0) → lake 3; (200, 100) → i 21 →
+  meadow 4; (40, 150) → (1, 10) → forest 1; (−100, −100) → clamped to (0, 0) → lake 3; (192, 100) → the window's
+  far edge is exclusive → i 20 → meadow 4; (63.99, 100) → i 3 → forest 1. Distance there = the band, 8 m.
+- **Slices**: 0 grass → `texture:grass`; 1 → `texture:forest`; 2 path → `path_blend` has no image →
+  `colour:#a08a60`; 3 lake → its surface `grass` (the bed's) → `texture:grass`; 4 meadow → the image 404s →
+  `colour:#7a9a50`. Metres per tile = the library `size_m` of `surfaceOf(bed_kind || kind)` when that image
+  loaded, else 3: **(1.5, 4), (1.5, 6), (0, 3), (1.5, 4), (1.5, 3)**, the remaining 59 entries (0, 3).
+  2 textures loaded, 1 failed, 2 colour slices; downloads: exactly the three URLs a layer names.
+- **Colour-slice bytes** (three's `SRGBToLinear` of the hex, × 255, rounded): #a08a60 → r 160/255 = 0.627451 →
+  (0.627451 · 0.947867 + 0.052133)^2.4 = 0.35153 → 89.6 → **90**; g 138 → 0.25415 → **65**; b 96 → 0.11697 →
+  **30**; #7a9a50 → **(50, 82, 20)**. The grass slice is the PNG's one colour everywhere: **(60, 140, 50)**.
+- **Shader parameters**: `lc_near` (64, 96, 1, 128), `lc_near_sd_geom` (64, 96, 0.5, 256), `lc_sd_code`
+  (128, 15.875), `lc_band_m` 8, `lc_far` (32, 64, 8, 0), `lc_far_size` (24, 24), `ng_field` (−256, −256, 256, 0),
+  `ng_field_size` (3, 3), `ng_strength` 1 (the field is not flat: 0…16), `tl_normal_span` = `tile_step_m` 2,
+  `tl_far_geom` (−256, −256, 256, 1), `tl_far_level` (3, 3, 256, 0); the near height window = the loaded tile
+  (0, 0) = 0…256 grown by max(16, 2 · 256) = 512 → **−512…768 at 2 m = 641 × 641**, rect (−512, −512, 768, 768).
+  25 uniform declarations; Godot's dummy renderer runs the shader-language front end, so a shader that does
+  not parse reports none.
+- **AO** on the overview h = 4·i·j (bilinear, exact everywhere inside): at the anchor (64, 128) the four taps of a
+  bilinear field average to the centre → **0**. At (−255, 128): u = (−255 + 256)/256 = 0.00390625, v = 1.5 → own
+  4uv = 0.0234375; tap x + 3 → u 0.015625 → 0.09375; tap x − 3 → u < 0 → CLAMPED to the border texel → 0; the two
+  z taps average to own → ring mean (0.09375 + 0 + 2 · 0.0234375)/4 = 0.03515625 → t = 0.01171875/2 = 0.005859375
+  > 0 → shade −0.12 · t = **−0.000703125**. Outside the raster (−400, 0): **0**.
+- **Shading normal** (span s = 2 m, n = normalize(−Δx h, 2s, −Δz h)): at the anchor the fine tile h = x/32 + z/64 →
+  Δx = 4/32 = 0.125, Δz = 4/64 = 0.0625 → **normalize(−0.125, 4, −0.0625)**; at (−200, −100) (margin of the near
+  window, filled from the overview): h = 4uv, u = 56/256, v = 156/256 → Δx = 16v/256 = 0.0380859375,
+  Δz = 16u/256 = 0.013671875 → **normalize(−0.0380859, 4, −0.0136719)**; at (800, 0) (beyond the near rect → the
+  overview lattice, clamped to its last column, u = 2): Δx = 0, Δz = 4 · 2 · 4/256 = 0.125 →
+  **normalize(0, 4, −0.125)**.
+- **Fallbacks**: `/play/terrain-layers` answering 503 → the plain material stays on the mesh and the log says
+  `ground surfaces failed, keeping the plain material: HTTP 503 …`; the library answering 503 → still the layer
+  material, every slice its catalog colour (grass `#6f9a4a`, forest `#3f6e3a`, path `#a08a60`, lake → bed grass
+  `#6f9a4a`, meadow `#7a9a50`), every tile 3 m; `--plain-ground` → no request at all.

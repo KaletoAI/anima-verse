@@ -7,13 +7,18 @@ quality — no game logic. Task S1a covers login, terrain, buildings, recipe
 shells and a free camera; Task S1b adds the figures with idle/walk clips and
 live positions; Task S2 adds the bench drive (see "Bench" below); Task S3 adds
 the scatter and the undergrowth behind `--scatter` (see "Scatter" below);
-Task S4 lays the React HUD over the world through gdCEF (see "HUD" below).
+Task S4 lays the React HUD over the world through gdCEF (see "HUD" below);
+Task S3b dresses the terrain in the browser's ground surfaces (see "Ground
+surfaces" below).
 
 What it draws after login:
 
 - **terrain** — the `/play/heightfield` overview as one mesh, plus the 2 m tiles
-  (`/play/heightfield/tiles`) within 384 m of the anchor as separate meshes;
-  one neutral vertex colour, no textures/water/LOD;
+  (`/play/heightfield/tiles`) within 384 m of the anchor as separate meshes,
+  no water/LOD; dressed in the browser's ground material — the painted layers
+  cut per texel from the server's masks, the surface textures, colour patches,
+  height AO and the per-fragment shading normal (see "Ground surfaces"); the
+  plain one-colour material when that fails or with `--plain-ground`;
 - **buildings** — per placed location of `/play/worldmap`, the `role: building`
   model of its scene recipe (`/play/locations/{id}/scene`), loaded from
   `/play/locations/{id}/model` and placed by the contract's `place()` (§ B2);
@@ -100,6 +105,7 @@ Arguments after `--` (no .env, no config file):
 | `--vsync=on` | keep V-sync during the bench (default: off for the run, restored after) |
 | `--quit-after-bench` | exit after the result file is written |
 | `--no-scatter` | hide the scatter AND the undergrowth (default on, like the browser; = `&scatter=0`); the bench flags say `scatter: false` |
+| `--plain-ground` | keep the S1a one-colour terrain (no `/play/terrain-layers`, no surface textures); the bench result's `ground` key says `ground[plain: --plain-ground]` |
 | `--no-hud` | no HUD even when gdCEF is linked (the S2/S3 bench numbers were taken without it) |
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
@@ -162,6 +168,49 @@ CPU/GPU time, draws/triangles = `RenderTotalDrawCallsInFrame` /
 `RenderTotalPrimitivesInFrame` (read in `_Process`, so they describe the
 previous rendered frame). V-sync is off during the run unless `--vsync=on`.
 The free camera is switched off for the run and handed back afterwards.
+
+Every result ends with the extra key `ground` (Task S3b): `ground[layers=…]`
+when the browser's ground material was drawn, `ground[plain…]` (with the
+reason) when the plain one was — compare only runs where it says `layers`.
+
+## Ground surfaces (Task S3b)
+
+The terrain meshes of S1a wear ONE Godot spatial shader (`Ground/GroundShader.cs`)
+that is the browser's open-world ground material (`client3d/src/scene/ground.ts`
+`rebuildBase`), fed from the same requests (`Ground/GroundSurfaces.cs`):
+
+- `GET /play/terrain` — the type catalog: colour (`kindColor`, else `#888888`)
+  and library surface per kind (`surfaceOf`);
+- `GET /assets/surface-textures` — the library (`url`, `size_m || 3`; a failure
+  is an empty library; `blend` entries have no image and load nothing, the ground
+  has not read blends since E4);
+- `GET /play/terrain-layers` — the index (format, layer table, coarse id mask,
+  tile keys), then `?keys=…` for `wantedTiles(tile_keys, tile_m, anchor, 560 m)`,
+  nearest first, 16 per request (§ A16.7);
+- the image of every surface a layer names, once per library id, drawn onto a
+  512² slice of ONE texture array (mipmaps, anisotropic); a layer without a
+  loaded image gets a slice of its flat catalog colour — with the browser's
+  three.js quirk: the hex goes through `THREE.Color` (→ linear) and is written
+  into an sRGB-tagged texture, so it comes out darker than the catalog says.
+
+Per fragment, like the browser: the layer cut of `layerCut.ts` (`lcCompose`:
+pair from the id mask — near window, else coarse overview, else bare ground —,
+distance rebuilt from the four sd texels of the own id texel, edge-noise push,
+`smoothstep` of layer A's `edge_blend_m` or the pixel-wide hard cut, two
+`textureGrad` samples per layer = narrow + broad anti-tile), then the natural
+ground's colour patches and height AO (`naturalGround.ts`, overview field in an
+R16F texture), then the shading normal from the height field (`tlodNormalAt`:
+4 × 4 `texelFetch` of the near window at `tile_step_m`, else the overview),
+lit as three's `MeshStandardMaterial` (roughness 0.85, metalness 0.02, Lambert).
+`Ground/LayerCut.cs` and `Ground/TerrainNormal.cs` are the CPU twins `--check`
+compares with the TS functions (`fixtures/ground_reference.mjs`).
+
+Not ported (favours Godot, a little fragment work): the fog-of-war veil
+(`applyFogVeil`) and the basement hole discard (`patchHole`); water is out
+(`&water=0`). The masks are loaded ONCE around the anchor (the browser re-fetches
+as its anchor moves). If anything of the index/masks/texture array fails, the
+plain material stays and the log says why (`ground surfaces failed, …`); a single
+image that fails only turns its slice into the colour slice, like the browser.
 
 ## Scatter (Task S3)
 
@@ -291,8 +340,9 @@ works the same way.
 | `Ui/` | login screen, fly camera (W/A/S/D gated while the HUD types) |
 | `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |
+| `Ground/` | Task S3b: the layer-cut port + payload (`LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`TerrainNormal.cs`), the ground shader (`GroundShader.cs`), the loader that builds slices/masks/material (`GroundSurfaces.cs`) |
 | `Scatter/` | `/play/terrain` payload, the exact sampler port, the LOD/undergrowth maths, prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
 | `Bench/` | camera path (`loadPath`/`samplePath`), statistics (`summarize`/`percentile`), the bench driver and its output |
-| `Check/` | `--check`: fixture source and expectations, bench maths, scatter (`ScatterCheck.cs`), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
-| `fixtures/` | offline payloads (incl. `terrain.json` and the scatter reference vectors) + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
+| `Check/` | `--check`: fixture source and expectations, bench maths, scatter (`ScatterCheck.cs`), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
+| `fixtures/` | offline payloads (incl. `terrain.json`, the scatter reference vectors, the cut-down layer bake + surface library + the ground reference values) + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
 | `third_party/meshoptimizer/` | meshoptimizer v1.3 sources (MIT, `src/*.cpp`, `meshoptimizer.h`, LICENSE) |

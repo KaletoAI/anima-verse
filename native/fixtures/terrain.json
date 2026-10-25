@@ -1,9 +1,15 @@
 {
   "default_kind": "grass",
   "types": [
-    { "kind": "forest", "name": "Forest", "color": "#3f6e3a", "passable": true, "speed_factor": 0.8,
+    { "kind": "forest", "name": "Forest", "color": "#3f6e3a", "passable": true, "speed_factor": 0.8, "surface": "forest",
       "meta": { "undergrowth": 0.02, "sway_m": 0.2 } },
-    { "kind": "path", "name": "Path", "color": "#a08a60", "passable": true, "speed_factor": 1.0, "meta": {} }
+    { "kind": "path", "name": "Path", "color": "#a08a60", "passable": true, "speed_factor": 1.0, "surface": "Path_Blend ",
+      "meta": {} },
+    { "kind": "grass", "name": "Grass", "color": "#6f9a4a", "passable": true, "speed_factor": 1.0, "meta": {} },
+    { "kind": "meadow", "name": "Meadow", "color": "#7a9a50", "passable": true, "speed_factor": 1.0, "surface": "meadow_tex",
+      "meta": {} },
+    { "kind": "lake", "name": "Lake", "color": "#3a6ea5", "passable": false, "speed_factor": 0, "surface": "water",
+      "meta": {} }
   ],
   "areas": [
     { "id": "area-wood", "kind": "forest", "z_order": 0,

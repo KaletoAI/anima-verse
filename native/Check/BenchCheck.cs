@@ -97,13 +97,14 @@ public static class BenchCheck
             var result = done.Task.Result;
             int passesAtEnd = scatter?.LodPasses ?? 0;
             if (scatter is not null) result["scatterLayers"] = scatter.Summary();
+            result["ground"] = stats.Ground.Summary();
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(host, result, file);
             Expect("panel", host.GetNodeOrNull("BenchResult") is not null, "no result panel");
             Expect("printed line unescaped", BenchOutput.Line(result).Contains("\"backend\":\"godot-forward+\""),
                    BenchOutput.Line(result));
 
-            Expect("keys", result.Select(kv => kv.Key).SequenceEqual(scatter is null ? Keys : Keys.Append("scatterLayers")),
+            Expect("keys", result.Select(kv => kv.Key).SequenceEqual((scatter is null ? Keys : Keys.Append("scatterLayers")).Append("ground")),
                    string.Join(",", result.Select(kv => kv.Key)));
             Expect("backend", (string?)result["backend"] == "godot-forward+", $"{result["backend"]}");
             Expect("path", (string?)result["path"] == "shared/bench/camera_path_v1.json", $"{result["path"]}");
@@ -149,6 +150,8 @@ public static class BenchCheck
                 Expect("scatterLayers key", ((string?)result["scatterLayers"])?.StartsWith("scatter[") == true, $"{result["scatterLayers"]}");
             }
 
+            Expect("ground key: the fixture world draws the layer material",
+                   ((string?)result["ground"])?.StartsWith("ground[layers=") == true, $"{result["ground"]}");
             var written = JsonNode.Parse(File.ReadAllText(file))!;
             Expect("file = printed result", JsonNode.DeepEquals(written, result), file);
 
@@ -156,7 +159,7 @@ public static class BenchCheck
                      + $"frameMsMedian={(double)result["frameMsMedian"]!:0.###} cpuMsMedian={(double)result["cpuMsMedian"]!:0.###} "
                      + $"draws={result["draws"]} triangles={result["triangles"]} size={result["size"]} "
                      + $"gpu=null (headless dummy renderer) file={file}"
-                     + (scatter is not null ? $" | {scatter.Summary()}" : ""));
+                     + (scatter is not null ? $" | {scatter.Summary()}" : "") + $" | {stats.Ground.Summary()}");
             return 0;
         }
         catch (Exception e)

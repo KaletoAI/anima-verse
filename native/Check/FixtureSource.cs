@@ -24,6 +24,10 @@ namespace AnimaNative.Check;
 ///                       null or absent = 404)
 ///   animation_clips.json → GET /assets/animation-clips
 ///   terrain.json      → GET /play/terrain (one painted wood with two scatter rows + a path over it)
+///   terrain_layers.json        → GET /play/terrain-layers (the index)
+///   terrain_layers_tiles.json  → GET /play/terrain-layers?keys=… (only the requested AND indexed keys,
+///                                the format block and the table — like the server's batch_payload)
+///   surface_textures.json      → GET /assets/surface-textures
 /// </summary>
 public sealed class FixtureSource : IWorldSource
 {
@@ -33,6 +37,8 @@ public sealed class FixtureSource : IWorldSource
     public List<string> TileRequests { get; } = new();
     public List<string> ByteRequests { get; } = new();
     public List<string> ModelRequests { get; } = new();
+    /// <summary>Every <c>/play/terrain-layers</c> call: "" for the index, else the keys joined by ';'.</summary>
+    public List<string> LayerRequests { get; } = new();
 
     public FixtureSource(string dir)
     {
@@ -94,6 +100,27 @@ public sealed class FixtureSource : IWorldSource
     public Task<JsonDocument> GetAnimationClipsAsync() => Doc("animation_clips.json");
 
     public Task<JsonDocument> GetTerrainAsync() => Doc("terrain.json");
+
+    public Task<JsonDocument> GetTerrainLayersAsync(IReadOnlyList<string> keys)
+    {
+        LayerRequests.Add(string.Join(";", keys));
+        if (keys.Count == 0) return Doc("terrain_layers.json");
+        if (keys.Count > Ground.LayerCut.BatchMax) throw new ArgumentOutOfRangeException(nameof(keys));
+        using var index = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(_dir, "terrain_layers.json")));
+        var indexed = index.RootElement.GetProperty("tile_keys").EnumerateArray().Select(k => k.GetString()).ToHashSet();
+        using var all = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(_dir, "terrain_layers_tiles.json")));
+        var root = all.RootElement;
+        var answer = new Dictionary<string, object>();
+        foreach (var p in root.EnumerateObject())
+            if (p.Name != "tiles") answer[p.Name] = p.Value;
+        var tiles = new Dictionary<string, JsonElement>();
+        foreach (var k in keys)
+            if (indexed.Contains(k) && root.GetProperty("tiles").TryGetProperty(k, out var t)) tiles[k] = t;
+        answer["tiles"] = tiles;
+        return Task.FromResult(JsonDocument.Parse(JsonSerializer.Serialize(answer)));
+    }
+
+    public Task<JsonDocument> GetSurfaceTexturesAsync() => Doc("surface_textures.json");
 
     /// <summary>
     /// A fixture file, or with <c>repo:</c> a repository file: the repository

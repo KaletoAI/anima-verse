@@ -1,0 +1,38 @@
+[
+ {
+  "kind": "grass",
+  "name": "Grass",
+  "url": "/assets/surface-textures/ground_grass.png",
+  "size_m": 4
+ },
+ {
+  "kind": "forest",
+  "name": "Forest",
+  "url": "/assets/surface-textures/dark_stone_2.jpg",
+  "size_m": 6,
+  "material": {
+   "class": "matte"
+  }
+ },
+ {
+  "kind": "path_blend",
+  "name": "Path blend",
+  "blend": {
+   "base": "grass",
+   "over": "forest",
+   "band_m": 2
+  }
+ },
+ {
+  "kind": "meadow_tex",
+  "name": "Meadow",
+  "url": "/assets/surface-textures/meadow_missing.png",
+  "size_m": 5
+ },
+ {
+  "kind": "unused",
+  "name": "Unused",
+  "url": "/assets/surface-textures/unused.png",
+  "size_m": 2
+ }
+]

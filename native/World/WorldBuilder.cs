@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AnimaNative.Api;
+using AnimaNative.Ground;
 using Godot;
 
 namespace AnimaNative.World;
@@ -17,6 +18,8 @@ public sealed class WorldStats
     public int Tiles, TileVertices, TileTriangles;
     public int Locations, Scenes, Buildings, BuildingsCompressed, BuildingVertices, BuildingIndices;
     public int Primitives, Skipped, DoorPropLeaves, Failures;
+    /// <summary>The ground surfaces (Task S3b); Mode "plain" = the S1a vertex colour.</summary>
+    public GroundStats Ground = new();
     public List<string> Problems { get; } = new();
 
     public int TerrainVertices => OverviewVertices + TileVertices;
@@ -26,7 +29,7 @@ public sealed class WorldStats
         + $"tiles={Tiles} tile_vertices={TileVertices} locations={Locations} scenes={Scenes} buildings={Buildings} "
         + $"buildings_meshopt={BuildingsCompressed} building_vertices={BuildingVertices} building_indices={BuildingIndices} "
         + $"primitives={Primitives} skipped={Skipped} door_prop_leaves={DoorPropLeaves} failures={Failures} "
-        + $"anchor=({Anchor.Position.X:0.###},{Anchor.Position.Y:0.###},{Anchor.Position.Z:0.###})";
+        + $"anchor=({Anchor.Position.X:0.###},{Anchor.Position.Y:0.###},{Anchor.Position.Z:0.###}) {Ground.Summary()}";
 }
 
 /// <summary>
@@ -37,7 +40,9 @@ public sealed class WorldStats
 ///      and <c>/world/locations?view=3d</c> (ids/names for the goto match)
 ///   2. the anchor (<see cref="Anchor.FromWorld"/> — the browser bench rule)
 ///   3. the indexed 2 m tiles within <see cref="TileRadiusM"/> of the anchor
-///   4. terrain meshes (overview with the tiled cells left out, one mesh per tile)
+///   4. terrain meshes (overview with the tiled cells left out, one mesh per tile), dressed in the browser's
+///      ground material (<see cref="GroundSurfaces"/>, Task S3b) — or, when that fails or with
+///      <see cref="PlainGround"/>, left in the plain vertex colour
 ///   5. per placed location: a group at (pos_x, ground, pos_z) turned by
 ///      +yaw_deg (§ A1.1, <c>buildTile</c>); its scene recipe's building model
 ///      placed by § B2 — or, when it has none (or only a roof), its recipe
@@ -57,6 +62,10 @@ public sealed class WorldBuilder
     public IReadOnlyList<LocationInfo> Details { get; private set; } = Array.Empty<LocationInfo>();
     /// <summary>The <c>/play/worldmap</c> payload the build used (the anchor's fallback snapshot).</summary>
     public JsonElement? FirstMap { get; private set; }
+    /// <summary>The ground surfaces of the build (null = plain material).</summary>
+    public GroundSurfaces? Ground { get; private set; }
+    /// <summary><c>--plain-ground</c>: keep the S1a vertex-colour terrain (no layer requests at all).</summary>
+    public bool PlainGround { get; init; }
 
     /// <param name="strict">true in <c>--check</c>: any failure aborts; online a broken location is logged and skipped.</param>
     public WorldBuilder(IWorldSource source, Action<string> log, bool strict)
@@ -109,6 +118,7 @@ public sealed class WorldBuilder
         }
         _log($"terrain: overview {stats.OverviewVertices} v / {stats.OverviewTriangles} t, "
              + $"{stats.Tiles} tiles {stats.TileVertices} v / {stats.TileTriangles} t");
+        stats.Ground = await DressGround(terrain, height, stats.Anchor);
 
         var places = new Node3D { Name = "Locations" };
         root.AddChild(places);
@@ -129,6 +139,35 @@ public sealed class WorldBuilder
         }).ToList();
         await Task.WhenAll(tasks);
         return stats;
+    }
+
+    /// <summary>
+    /// The ground surfaces on every terrain mesh. Never fatal: any failure keeps the plain material and is
+    /// logged (and reported in <see cref="GroundStats.Reason"/>), online and in <c>--check</c> alike.
+    /// </summary>
+    private async Task<GroundStats> DressGround(Node3D terrain, WorldHeight height, AnchorInfo anchor)
+    {
+        var (stats, ground) = await DressGroundAsync(_source, terrain, height, anchor, _log, PlainGround);
+        Ground = ground;
+        return stats;
+    }
+
+    /// <summary>The one ground step (also driven directly by the check's fallback cases).</summary>
+    public static async Task<(GroundStats Stats, GroundSurfaces? Ground)> DressGroundAsync(
+        IWorldSource source, Node3D terrain, WorldHeight height, AnchorInfo anchor, Action<string> log, bool plain)
+    {
+        if (plain) return (new GroundStats { Reason = "--plain-ground" }, null);
+        try
+        {
+            var ground = await GroundSurfaces.LoadAsync(source, height, anchor.X, anchor.Z, log);
+            ground.ApplyTo(terrain.GetChildren().OfType<GeometryInstance3D>());
+            return (ground.Stats, ground);
+        }
+        catch (Exception e)
+        {
+            log($"ground surfaces failed, keeping the plain material: {e.Message}");
+            return (new GroundStats { Reason = e.Message }, null);
+        }
     }
 
     private async Task BuildLocation(LocationInfo loc, Node3D parent, WorldHeight height, WorldStats stats)

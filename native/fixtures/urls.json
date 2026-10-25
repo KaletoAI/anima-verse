@@ -5,5 +5,7 @@
   "/assets/animation-clips/walk.fbx?v=fixturewalk00001": "repo:shared/models/clips/walk.fbx",
   "/assets/animation-rig": "repo:shared/models/rig/reference.fbx",
   "/assets/props/broadleaf/model.glb?tier=full": "repo:worlds/demo/props/broadleaf-df5830/model_1792265756.glb",
-  "/assets/props/broadleaf/model.glb?tier=low": "repo:worlds/demo/props/broadleaf-df5830/model_1792265757.glb"
+  "/assets/props/broadleaf/model.glb?tier=low": "repo:worlds/demo/props/broadleaf-df5830/model_1792265757.glb",
+  "/assets/surface-textures/ground_grass.png": "ground_grass.png",
+  "/assets/surface-textures/dark_stone_2.jpg": "repo:shared/surface_textures/dark_stone_2_1785267141.jpg"
 }

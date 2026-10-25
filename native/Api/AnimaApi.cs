@@ -48,6 +48,14 @@ public interface IWorldSource
     Task<JsonDocument> GetAnimationClipsAsync();
     /// <summary><c>GET /play/terrain</c> (§ A9): painted areas with their scatter rows, the type catalog, prop boxes.</summary>
     Task<JsonDocument> GetTerrainAsync();
+    /// <summary>
+    /// <c>GET /play/terrain-layers</c> (§ A16.7): without keys the INDEX (format, layer table, coarse overview
+    /// mask, tile keys), with keys (at most <see cref="Ground.LayerCut.BatchMax"/>, payload spelling
+    /// <c>"tx,tz"</c>) the fine masks of those tiles — <c>fetchTerrainLayers</c> of client3d/src/api.ts.
+    /// </summary>
+    Task<JsonDocument> GetTerrainLayersAsync(IReadOnlyList<string> keys);
+    /// <summary><c>GET /assets/surface-textures</c> (§ A7/§ A9): the bare array <c>[{kind, name, url, size_m, material?} | {kind, name, blend}]</c>.</summary>
+    Task<JsonDocument> GetSurfaceTexturesAsync();
 }
 
 /// <summary>
@@ -160,6 +168,25 @@ public sealed class AnimaApi : IWorldSource, IDisposable
     public Task<JsonDocument> GetAnimationClipsAsync() => GetJson("/assets/animation-clips");
 
     public Task<JsonDocument> GetTerrainAsync() => GetJson("/play/terrain");
+
+    /// <summary>The wire wants <c>tx:tz</c> (the comma separates keys there), URI-encoded like the browser.</summary>
+    public Task<JsonDocument> GetTerrainLayersAsync(IReadOnlyList<string> keys)
+    {
+        if (keys.Count == 0) return GetJson("/play/terrain-layers");
+        if (keys.Count > Ground.LayerCut.BatchMax)
+            throw new ArgumentOutOfRangeException(nameof(keys), $"1..{Ground.LayerCut.BatchMax} keys per call");
+        var query = string.Join(",", keys.Select(k => ReplaceFirst(k, ',', ':')));
+        return GetJson("/play/terrain-layers?keys=" + Uri.EscapeDataString(query));
+    }
+
+    public Task<JsonDocument> GetSurfaceTexturesAsync() => GetJson("/assets/surface-textures");
+
+    /// <summary>JS <c>String.replace(',', ':')</c>: the FIRST occurrence only.</summary>
+    private static string ReplaceFirst(string s, char from, char to)
+    {
+        int i = s.IndexOf(from);
+        return i < 0 ? s : s[..i] + to + s[(i + 1)..];
+    }
 
     /// <summary>§ A7: <c>{format, rotation, offset_*, floors, height_m, signature}</c>, null on 404.</summary>
     public Task<JsonDocument?> GetLocationModelMetaAsync(string locationId)
