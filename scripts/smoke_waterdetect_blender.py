@@ -19,6 +19,11 @@ Mottled patch: a flat 1x1 m blue square at .2 crossed by two white
 Closing radius round(.04/.02)=2 nodes joins the four quadrants; any
 residual crack holes are below .05 m². Expect ONE painted region, NO
 holes, area 1 m² (±10% boundary sampling), film level .21.
+Pale filled tub: sRGB (178,190,196), converted to linear Base Color,
+flat surface at .66, white rim .70: gap .04 m, film .67, bed .66,
+area 1 m². With target 1.2 and measure=xyz, s=1: ONE basin/sure,
+enabled/bath. The same pale surface at .66 as a 1x1 room floor,
+white walls up to 2.5, measure=xz: NO region (pale is props-only).
 Usage: ./.venv/bin/python scripts/smoke_waterdetect_blender.py
 """
 import subprocess
@@ -38,6 +43,10 @@ def mat(name, rgb):
     m.node_tree.nodes.get('Principled BSDF').inputs['Base Color'].default_value = (*rgb, 1)
     return m
 blue = mat('blue', (.02,.25,.6)); white = mat('white', (.8,.8,.8)); grey = mat('grey', (.3,.3,.3))
+def linear(v):
+    v = v / 255
+    return v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4
+pale = mat('pale water', tuple(linear(v) for v in (178,190,196)))
 def box(center, size, material):
     bpy.ops.mesh.primitive_cube_add(size=1, location=center)
     o = bpy.context.object; o.dimensions = size
@@ -69,6 +78,18 @@ box((0,0,.1),(1,1,.2),blue)
 box((0,0,.2005),(1,.02,.001),white)
 box((0,0,.2005),(.02,1,.001),white)
 bpy.ops.export_scene.gltf(filepath=str(out/'mottled-patch.glb'), export_format='GLB')
+reset()
+basin(0,1,1,.70,white)
+box((0,0,.65),(1,1,.02),pale)
+bpy.ops.export_scene.gltf(filepath=str(out/'pale-tub.glb'), export_format='GLB')
+reset()
+# Bottom stays at zero, so the chosen floor height is .66 above box_min.
+box((0,0,.32),(1.2,1.2,.64),white)
+box((0,0,.65),(1,1,.02),pale)
+for sign in (-1,1):
+    box((sign*.55,0,1.25),(.1,1.2,2.5),white)
+    box((0,sign*.55,1.25),(1,.1,2.5),white)
+bpy.ops.export_scene.gltf(filepath=str(out/'pale-room.glb'), export_format='GLB')
 '''
 
 
@@ -117,6 +138,19 @@ def main():
         assert patch['holes'] == [], patch
         assert abs(patch['area_m2'] - 1) <= .1, patch
         assert abs(patch['level'] - .21) <= .021, patch
+        tub, reason = detect_water(root/'pale-tub.glb', {}, target_m=1.2,
+                                    measure='xyz', wait_s=300)
+        assert reason == 'ok', reason
+        assert len(tub['regions']) == 1, tub
+        water = tub['regions'][0]
+        assert water['kind'] == 'basin' and water['confidence'] == 'sure', water
+        assert water['enabled'] and water['look']['preset'] == 'bath', water
+        assert abs(water['level'] - .67) <= .001, water
+        assert abs(water['bed'] - .66) <= .001, water
+        assert abs(water['area_m2'] - 1) <= .1, water
+        pale_room, reason = detect_water(root/'pale-room.glb', {}, target_m=1.2,
+                                         measure='xz', wait_s=300)
+        assert reason == 'ok' and pale_room['regions'] == [], pale_room
     print('smoke_waterdetect_blender: PASS')
 
 

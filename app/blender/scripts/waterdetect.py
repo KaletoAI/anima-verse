@@ -149,6 +149,14 @@ def _blue(rgb):
     return 170 <= h * 360 <= 250 and s >= 0.2 and (v >= 0.2)
 
 
+def _pale(rgb):
+    """Recognize pale clear water in props only (spec § 4.3)."""
+    if rgb is None:
+        return False
+    h, s, v = colorsys.rgb_to_hsv(*rgb)
+    return 170 <= h * 360 <= 250 and 0.05 <= s < 0.20 and v >= 0.40
+
+
 def _neighbors(i, cols, rows):
     """Yield four-connected raster neighbours for spec §§ 4.2–4.3."""
     x, z = (i % cols, i // cols)
@@ -337,7 +345,7 @@ def _outlines(cells, cols, rows, lo, step, scale=1.0):
 
 
 def _regions(
-    heights, normals, blue, cols, rows, lo, step, scale, measure, footprint_area=None
+    heights, normals, blue, cols, rows, lo, step, scale, measure, footprint_area=None, pale=None
 ):
     """Classify shape/colour basins and painted water (spec §§ 4.2–4.5).
 
@@ -405,15 +413,38 @@ def _regions(
         )
         used.update(cells)
 
+    pale = pale if pale is not None and measure == "xyz" else [False] * len(blue)
+    water = [b or p for b, p in zip(blue, pale)]
+    colour_mask = _close_colour(
+        {i for i, b in enumerate(water) if b and heights[i] is not None},
+        heights, cols, rows, max(1, round(0.04 / (step * scale))),
+    )
+    # Recognize modelled water before shape filling can put its level below
+    # the visible surface. Deep colour basins retain their existing precedence.
+    if measure == "xyz":
+        for comp in _components(colour_mask, cols, rows):
+            if len(comp) * cell_area < 0.05:
+                continue
+            rim = {j for i in comp for j in _neighbors(i, cols, rows)
+                   if j not in comp and heights[j] is not None}
+            values = [heights[i] for i in comp]
+            median = _percentile(values, 0.5)
+            r = _percentile([heights[j] for j in rim], 0.1) if rim else median
+            if (0.01 <= (r - median) * scale < 0.10
+                and sum(normals[i] >= 0.97 for i in comp) / len(comp) >= 0.8
+                and (_percentile(values, 0.9) - _percentile(values, 0.1)) * scale <= 0.03):
+                look = "bath" if sum(pale[i] for i in comp) > sum(blue[i] for i in comp) else "pool"
+                add(comp, median + 0.01 / scale, "basin", "sure", look)
+
     if measure == "xyz":
         filled = _flood(heights, cols, rows)
         mask = {
             i
             for i, h in enumerate(heights)
-            if h is not None and (filled[i] - h) * scale >= 0.03
+            if h is not None and i not in used and (filled[i] - h) * scale >= 0.03
         }
         for comp in _components(mask, cols, rows):
-            coloured = sum((blue[i] for i in comp)) / len(comp)
+            coloured = sum((water[i] for i in comp)) / len(comp)
             if len(comp) * cell_area < 0.05 or (
                 len(comp) * cell_area > 0.6 * footprint_area and coloured < 0.5
             ):
@@ -428,10 +459,7 @@ def _regions(
                 "sure" if coloured >= 0.5 else "candidate",
                 "pool" if coloured >= 0.5 else "bath",
             )
-    mask = _close_colour(
-        {i for i, b in enumerate(blue) if b and heights[i] is not None},
-        heights, cols, rows, max(1, round(0.04 / (step * scale))),
-    ) - used
+    mask = colour_mask - used
     for comp in _components(mask, cols, rows):
         area = len(comp) * cell_area
         if area < 0.05:
@@ -544,6 +572,7 @@ def waterdetect(args):
             normals.append(normal.y if normal is not None else 0)
             colours.append(colour)
             blue.append(_blue(colour))
+    pale = [_pale(colour) for colour in colours]
     regions = _regions(
         heights,
         normals,
@@ -555,6 +584,7 @@ def waterdetect(args):
         scale,
         measure,
         (hi[0] - lo[0]) * (hi[2] - lo[2]) * scale * scale,
+        pale=pale,
     )
     outputs = {}
     if p.get("preview"):
