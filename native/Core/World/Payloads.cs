@@ -228,15 +228,17 @@ public sealed record SceneExtra(string Kind, double[] Center, double[] Size, dou
 /// <summary>§ B1 <c>rooms[]</c>: the fields the visibility rules read.</summary>
 public sealed record SceneRoom(string RoomId, int Level, bool AlwaysVisible);
 
-/// <summary>§ B1 <c>models[]</c> — the one placement spec of § B2.</summary>
+/// <summary>
+/// § B1 <c>models[]</c> — the one placement spec of § B2. Numbers are kept as the payload states them (an absent
+/// <c>max_m</c> is 0, an absent / non-numeric <c>variant</c> is NaN); the ports apply the browser's own fallbacks
+/// (<c>max_m || 1</c>, a non-finite variant index is 0 — see AnimaNative.Scene).
+/// </summary>
 public sealed record SceneModelSpec(
     string Role, string Id, string Display, bool RoofOnly,
-    Dictionary<string, string> Variants, List<Dictionary<string, string>>? ModelVariants, int Variant,
+    Dictionary<string, string> Variants, List<Dictionary<string, string>?>? ModelVariants, double Variant,
     double FixX, double FixY, double FixZ, double YawDeg, double MaxM, string Measure,
     double[]? SizeM, double AnchorX, double AnchorZ, double BottomY)
 {
-    private static readonly string[] Tiers = { "full", "low" };
-
     public string RoomId { get; init; } = "";
     public int Level { get; init; }
     public bool PlanHull { get; init; }
@@ -244,25 +246,6 @@ public sealed record SceneModelSpec(
     public (double W, double D, double H)? PlaceholderDims { get; init; }
     /// <summary><c>cutouts</c>: tile-frame polygons the open interior view cuts out of an area/plan-hull model.</summary>
     public (double X, double Z)[][] Cutouts { get; init; } = Array.Empty<(double, double)[]>();
-
-    /// <summary>
-    /// <c>pickModelVariant</c> + <c>pickVariant</c> (types.ts): the model
-    /// variant first (index modulo the count), then the wanted tier, else the
-    /// best tier present. "" = no mesh.
-    /// </summary>
-    public string PickUrl(string tier = "full")
-    {
-        var map = Variants;
-        if (ModelVariants is { Count: > 0 } list)
-        {
-            int n = list.Count;
-            int i = ((Variant % n) + n) % n;
-            map = list[i].Count > 0 ? list[i] : Variants;
-        }
-        foreach (var t in new[] { tier }.Concat(Tiers).Concat(map.Keys))
-            if (map.TryGetValue(t, out var url) && !string.IsNullOrEmpty(url)) return url;
-        return "";
-    }
 }
 
 /// <summary>The scene recipe of one location, reduced to what the native client draws.</summary>
@@ -279,14 +262,17 @@ public sealed class ScenePayload
     public double K { get; private set; } = 1;
     public bool AreaDetail { get; private set; }
     /// <summary><c>floor_plan</c> or <c>markers</c> non-empty — part of <c>hasInterior</c> (mountShell).</summary>
-    public bool HasFloorPlanOrMarkers { get; private set; }
+    public bool HasFloorPlanOrMarkers => FloorPlanCount > 0 || MarkerCount > 0;
+    /// <summary>The lengths of <c>floor_plan</c> and <c>markers</c> (their contents are not parsed).</summary>
+    public int FloorPlanCount { get; private set; }
+    public int MarkerCount { get; private set; }
 
     public static ScenePayload Parse(JsonElement root)
     {
         var s = new ScenePayload
         {
             K = Json.Num(root, "k", 1), AreaDetail = Truthy(root, "area_detail"),
-            HasFloorPlanOrMarkers = Json.Arr(root, "floor_plan").Any() || Json.Arr(root, "markers").Any(),
+            FloorPlanCount = Json.Arr(root, "floor_plan").Count(), MarkerCount = Json.Arr(root, "markers").Count(),
         };
         if (root.TryGetProperty("style", out var style) && style.ValueKind == JsonValueKind.Object)
             foreach (var p in style.EnumerateObject())
@@ -307,7 +293,9 @@ public sealed class ScenePayload
         {
             var from = Json.Vec(w, "from");
             var to = Json.Vec(w, "to");
-            if (from.Length < 2 || to.Length < 2) { s.Walls.Add(Degenerate); continue; }
+            // A wall without both ends keeps its flags (the look reads them) and stands at (0, 0) → (0, 0): length 0,
+            // which the builder counts as degenerate.
+            if (from.Length < 2 || to.Length < 2) { from = new double[] { 0, 0 }; to = new double[] { 0, 0 }; }
             var n = Json.Vec(w, "outward_normal");
             s.Walls.Add(new SceneWall((int)Json.Num(w, "level"), (from[0], from[1]), (to[0], to[1]),
                                       Json.Num(w, "base_y"), Json.Num(w, "height"), Json.Num(w, "thickness"),
@@ -349,8 +337,6 @@ public sealed class ScenePayload
             _ => false,
         };
 
-    private static readonly SceneWall Degenerate = new(0, (0, 0), (0, 0), 0, 0, 0, false, false, false);
-
     private static Dictionary<string, string> UrlMap(JsonElement e)
     {
         var d = new Dictionary<string, string>();
@@ -360,24 +346,37 @@ public sealed class ScenePayload
         return d;
     }
 
+    /// <summary>
+    /// One <c>model_variants</c> entry as <c>list[i] || spec.variants</c> reads it: a falsy entry (null, false, 0,
+    /// "") is missing (null → the plain variants), an object is its URL map, any other truthy value an empty map.
+    /// </summary>
+    private static Dictionary<string, string>? VariantEntry(JsonElement e) => e.ValueKind switch
+    {
+        JsonValueKind.Object => UrlMap(e),
+        JsonValueKind.Null or JsonValueKind.False or JsonValueKind.Undefined => null,
+        JsonValueKind.Number => e.GetDouble() == 0 ? null : new Dictionary<string, string>(),
+        JsonValueKind.String => e.GetString()!.Length == 0 ? null : new Dictionary<string, string>(),
+        _ => new Dictionary<string, string>(),
+    };
+
     /// <summary>One placement spec; shared by the recipe's <c>models[]</c> and the world props (§ A9a).</summary>
     public static SceneModelSpec ParseModel(JsonElement m)
     {
         m.TryGetProperty("fix_euler", out var fix);
         var anchor = Json.Vec(m, "anchor");
         var size = Json.Vec(m, "size_m");
-        List<Dictionary<string, string>>? mv = null;
+        List<Dictionary<string, string>?>? mv = null;
         if (m.TryGetProperty("model_variants", out var mvEl) && mvEl.ValueKind == JsonValueKind.Array)
-            mv = mvEl.EnumerateArray().Select(UrlMap).ToList();
+            mv = mvEl.EnumerateArray().Select(VariantEntry).ToList();
         (double, double, double)? ph = null;
         if (m.TryGetProperty("placeholder_dims", out var pd) && pd.ValueKind == JsonValueKind.Object)
             ph = (Json.Num(pd, "w"), Json.Num(pd, "d"), Json.Num(pd, "h"));
         return new SceneModelSpec(
             Json.Str(m, "role"), Json.Str(m, "id"), Json.Str(m, "display", "shell"), Json.Bool(m, "roof_only"),
             m.TryGetProperty("variants", out var v) ? UrlMap(v) : new Dictionary<string, string>(),
-            mv, (int)Json.Num(m, "variant"),
+            mv, Scene.Js.Number(m.TryGetProperty("variant", out var vr) ? vr : null),
             Json.Num(fix, "x"), Json.Num(fix, "y"), Json.Num(fix, "z"),
-            Json.Num(m, "yaw_deg"), Json.Num(m, "max_m", 1), Json.Str(m, "measure", "xyz"),
+            Json.Num(m, "yaw_deg"), Json.Num(m, "max_m"), Json.Str(m, "measure", "xyz"),
             size.Length >= 2 ? size : null,
             anchor.Length >= 1 ? anchor[0] : 0, anchor.Length >= 2 ? anchor[1] : 0,
             Json.Num(m, "bottom_y"))

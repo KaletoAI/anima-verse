@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using AnimaNative.Gltf;
+using AnimaNative.Scatter;
+using AnimaNative.Scene;
 using Godot;
 
 namespace AnimaNative.World;
@@ -38,7 +40,7 @@ public sealed class ModelStats
 /// Places the model specs of a scene recipe (§ B1 <c>models[]</c>) and the world props (§ A9a) the way the
 /// browser's <c>mountModels</c> / <c>worldProps.mount</c> do:
 ///
-///   • the URL from <c>pickModelVariant(spec, tier)</c> (the model variant first, then the tier, missing tier →
+///   • the URL from <c>pickModelVariant(spec, tier)</c> (<see cref="ModelVariants.PickModelVariant"/>) (the model variant first, then the tier, missing tier →
 ///     the best existing one), loaded once per URL (<see cref="ModelCache"/>);
 ///   • <c>place()</c> (§ B2, <see cref="ModelPlacement"/> — <c>measure: "fit"</c> door/window models included);
 ///   • a spec without a loadable mesh but with <c>placeholder_dims</c> keeps its place as a grey box
@@ -65,7 +67,7 @@ public static class SceneModels
     public static async Task<Node3D?> PlaceAsync(ModelCache cache, SceneModelSpec spec, string tier, string kind,
                                                  Node3D parent, double lift, ModelStats stats, RecipeMaterials? phMaterials)
     {
-        var url = spec.PickUrl(tier);
+        var url = ModelVariants.PickModelVariant(spec, tier);
         ModelCache.Template? template = url.Length > 0 ? await cache.GetAsync(url) : null;
         if (template is null)
         {
@@ -93,29 +95,33 @@ public static class SceneModels
         return placed;
     }
 
-    /// <summary><c>buildPlaceholder</c>: a w × h × d box (each at least 1 cm), its origin at the bottom face's centre.</summary>
+    /// <summary><c>buildPlaceholder</c>: the box of <see cref="PrimitiveMath.PlaceholderBox"/> (each side at least 1 cm), its origin at the bottom face's centre.</summary>
     public static Node3D Placeholder((double W, double D, double H) dims, RecipeMaterials materials)
     {
-        float w = (float)Math.Max(dims.W, 0.01), h = (float)Math.Max(dims.H, 0.01), dd = (float)Math.Max(dims.D, 0.01);
+        var b = PrimitiveMath.PlaceholderBox(dims.W, dims.D, dims.H);
         var root = new Node3D { Name = "Placeholder" };
         root.AddChild(new MeshInstance3D
         {
             Name = "Box",
-            Mesh = new BoxMesh { Size = new Vector3(w, h, dd), Material = materials.Get(RecipeMaterials.Placeholder) },
-            Position = new Vector3(0, h / 2, 0),
+            Mesh = new BoxMesh { Size = ModelPlacement.ToGodot(b.Size), Material = materials.Get(RecipeMaterials.Placeholder) },
+            Position = ModelPlacement.ToGodot(b.Offset),
         });
         return root;
     }
 
     /// <summary>
-    /// The cutouts of an open plan-hull / ground model (<c>applyCutouts</c>, § B1): the browser discards every
-    /// fragment inside any polygon (tile frame). Native twin: every triangle whose centroid lies inside one is
-    /// dropped from a per-placement copy of the mesh — the same pixels, without the per-fragment polygon loop
-    /// (that loop's cost is the browser's alone; it favours Godot). Returns the triangles removed.
+    /// The cutouts of an open plan-hull / ground model (<c>applyCutouts</c>, § B1). THE BROWSER DISCARDS PER FRAGMENT
+    /// in a shader (packages/scene-render/src/cutouts.ts), so a per-triangle cut is NOT what the browser decides and
+    /// this stays an APPROXIMATION until the fragment twin lands (Task 17): every triangle whose CENTROID the
+    /// vector-checked fragment predicate <see cref="ClipMath.CutoutDiscardsPoint"/> discards (same polygon filter and
+    /// limits, same half-open parity) is dropped from a per-placement copy of the mesh. Large triangles at a cutout's
+    /// edge therefore come out differently; GLB padding (<c>interior_cutout_padding_m</c>) is not read natively, so the
+    /// padding is 0. Returns the triangles removed.
     /// </summary>
     public static int ApplyCutouts(Node3D placed, (double X, double Z)[][] cutouts)
     {
-        if (cutouts.Length == 0) return 0;
+        var polys = cutouts.Select(c => (IReadOnlyList<P2>)c.Select(p => new P2(p.X, p.Z)).ToList()).ToList();
+        if (ClipMath.CutoutPolygons(polys).Count == 0) return 0;
         int removed = 0;
         foreach (var mi in Walk(placed).OfType<MeshInstance3D>())
         {
@@ -134,7 +140,7 @@ public static class SceneModels
                 for (int i = 0; i + 2 < idx.Length; i += 3)
                 {
                     var c = xf * ((verts[idx[i]] + verts[idx[i + 1]] + verts[idx[i + 2]]) / 3f);
-                    if (cutouts.Any(poly => LocationView.PointInPolygon(c.X, c.Z, poly))) { removed++; continue; }
+                    if (ClipMath.CutoutDiscardsPoint(new P2(c.X, c.Z), polys)) { removed++; continue; }
                     keep.Add(idx[i]); keep.Add(idx[i + 1]); keep.Add(idx[i + 2]);
                 }
                 if (keep.Count == 0) continue;

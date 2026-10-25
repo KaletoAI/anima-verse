@@ -43,6 +43,7 @@ public static class S3cCheck
 
     public static async Task<string> RunAsync(Node3D host, string fixtures)
     {
+        CheckEuler();
         var dir = Path.Combine(fixtures, "s3c");
         var source = new FixtureSource(dir, fixtures);
         var world = new Node3D { Name = "S3cWorld" };
@@ -171,6 +172,39 @@ public static class S3cCheck
             builder.Models?.FreeAll();
             world.QueueFree();
         }
+    }
+
+    /// <summary>
+    /// The rotations reach Godot as the Core's matrices (<see cref="ModelPlacement.ToBasis"/>), never as a Godot
+    /// Euler. Here the Godot side of that hand-over is pinned: the extra of scene_primitives.json [6] (XYZ 90/90/90,
+    /// centre (10, 20, 30)) must put the local point (1, 2, 3) on (13, 18, 31) through the Godot basis, and
+    /// Godot's own <c>Basis.FromEuler</c> must agree with the Core for the orders the spike used (XYZ for extras,
+    /// YXZ for the model fix) and for the yaw about +y — so a later caller that reaches for FromEuler is not wrong.
+    /// </summary>
+    private static void CheckEuler()
+    {
+        var extra = new SceneExtra("stair_stringer", new double[] { 10, 20, 30 }, new double[] { 2, 4, 6 }, new double[] { 90, 90, 90 });
+        var basis = ModelPlacement.ToBasis(AnimaNative.Scene.PrimitiveMath.ExtraMatrix(extra));
+        var p = basis * new Vector3(1, 2, 3) + new Vector3(10, 20, 30);
+        Expect("euler xyz extra [6]", p.DistanceTo(new Vector3(13, 18, 31)) < 1e-5f, p.ToString());
+        foreach (var (x, y, z) in new[] { (90.0, 90.0, 90.0), (5.0, 110.0, 355.0), (-38.2997, 0.0, 0.0), (0.0, 0.0, 38.2997) })
+        {
+            const double d = Math.PI / 180;
+            var v = new Vector3((float)(x * d), (float)(y * d), (float)(z * d));
+            SameBasis($"euler xyz {x}/{y}/{z}", Basis.FromEuler(v, EulerOrder.Xyz),
+                      ModelPlacement.ToBasis(AnimaNative.Scene.Mat3.EulerXyz(x * d, y * d, z * d)));
+            SameBasis($"euler yxz {x}/{y}/{z}", Basis.FromEuler(v, EulerOrder.Yxz),
+                      ModelPlacement.ToBasis(AnimaNative.Scene.Mat3.EulerYxz(x * d, y * d, z * d)));
+        }
+        SameBasis("yaw 217", new Basis(Vector3.Up, Mathf.DegToRad(217f)),
+                  ModelPlacement.ToBasis(AnimaNative.Scene.Mat3.RotY(217 * Math.PI / 180)));
+    }
+
+    private static void SameBasis(string what, Basis godot, Basis core)
+    {
+        float worst = 0;
+        for (int c = 0; c < 3; c++) worst = Math.Max(worst, (godot[c] - core[c]).Length());
+        Expect(what, worst < 1e-5f, $"Godot {godot} vs Core {core}");
     }
 
     private static int UniformCount(string name) => name switch

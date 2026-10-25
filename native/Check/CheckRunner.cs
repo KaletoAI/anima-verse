@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using AnimaNative.Figures;
 using AnimaNative.Gltf;
 using AnimaNative.World;
+using AnimaNative.Scene;
 using Godot;
 
 namespace AnimaNative.Check;
@@ -520,20 +521,22 @@ public static class CheckRunner
     private static void NearXZ(string what, FigureSpot got, double x, double z)
         => Expect(what, Math.Abs(got.X - x) < 1e-6 && Math.Abs(got.Z - z) < 1e-6, $"got ({got.X}, {got.Z}), expected ({x}, {z})");
 
+    /// <summary>The top face of the yard's holed plate as the native builder makes it (<see cref="RecipeGeometry.Plate"/>).</summary>
     private static float PlateArea(string dir)
     {
         using var doc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "scene_loc-yard.json")));
         var plate = ScenePayload.Parse(doc.RootElement).Plates.First(p => p.Holes.Length > 0);
-        var outline = plate.Outline.Select(v => new Vector2((float)v.X, (float)v.Z)).ToArray();
-        var holes = plate.Holes.Select(h => h.Select(v => new Vector2((float)v.X, (float)v.Z)).ToArray()).ToArray();
-        float area = 0;
-        foreach (var poly in RecipeMeshes.PolygonsWithoutHoles(outline, holes))
+        var mesh = RecipeGeometry.Plate(plate);
+        double area = 0;
+        for (int i = 0; i + 2 < mesh.Indices.Count; i += 3)
         {
-            var idx = Geometry2D.TriangulatePolygon(poly);
-            for (int i = 0; i + 2 < idx.Length; i += 3)
-                area += Math.Abs(RecipeMeshes.Area(new[] { poly[idx[i]], poly[idx[i + 1]], poly[idx[i + 2]] }));
+            var a = mesh.Positions[mesh.Indices[i]];
+            var b = mesh.Positions[mesh.Indices[i + 1]];
+            var c = mesh.Positions[mesh.Indices[i + 2]];
+            if (Math.Abs(a.Y - plate.TopY) > 1e-6 || Math.Abs(b.Y - plate.TopY) > 1e-6 || Math.Abs(c.Y - plate.TopY) > 1e-6) continue;
+            area += Math.Abs((b.X - a.X) * (c.Z - a.Z) - (c.X - a.X) * (b.Z - a.Z)) / 2;
         }
-        return area;
+        return (float)area;
     }
 
     private static void Expect(string what, bool ok, string detail)

@@ -2,13 +2,18 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
+using AnimaNative.Scene;
 using Godot;
 
 namespace AnimaNative.World;
 
-/// <summary>The look of one recipe primitive, decided like <c>plateMaterial</c>/<c>wallMaterial</c>/<c>extraMaterial</c>.</summary>
+/// <summary>
+/// The look of one recipe primitive, decided like <c>plateMaterial</c>/<c>wallMaterial</c>/<c>extraMaterial</c> —
+/// colour, opacity, side and finish come from the Core ports (<see cref="MaterialLooks"/>), the texture choice
+/// and the view overrides (storey opacity, wall cull) from here.
+/// </summary>
 public readonly record struct RecipeLook(
-    string Color, string TextureKind, bool FloorChain, double Opacity, bool DoubleSided,
+    int Color, string TextureKind, bool FloorChain, double Opacity, bool DoubleSided,
     double Roughness, double Metalness, bool WallCull)
 {
     public string Key => string.Create(CultureInfo.InvariantCulture,
@@ -22,9 +27,9 @@ public readonly record struct RecipeLook(
 ///   • a texture kind the library has LOADED → the tiled image (white × map, three's <c>map</c> branch of
 ///     <c>surfaceMaterial</c>); UVs are in tile units already (plates: outline metres / size_m, walls and
 ///     extras: the face's own metres / size_m, <c>applyWorldScaleWallUVs</c>);
-///   • else the payload's style colour (<c>hex()</c>, unusable → white);
-///   • roughness/metalness from the kind's <c>material</c> declaration, else matte 0.85 / 0.02; glass 0.3,
-///     door leaf 0.75 (<c>std()</c>);
+///   • else the payload's style colour (<see cref="MaterialLooks.RecipeHex"/>, unusable → white);
+///   • roughness/metalness from the kind's <c>material</c> declaration (<see cref="MaterialLooks.SurfaceFinish(System.Text.Json.JsonElement?)"/>),
+///     else the look's own (matte 0.85 / 0.02, glass 0.3, door leaf 0.75);
 ///   • translucent = <c>opacity &lt; 1</c> (glass, ghosted upper storeys, the lift cabin);
 ///   • <c>wall_cull</c>: the open location's outline walls (<c>applyWallCulling</c>) — every vertex carries its
 ///     wall's midpoint and outward normal (location frame) in <c>CUSTOM0</c>; with the camera on the outer side
@@ -55,6 +60,7 @@ void vertex() {{
 	// is not an outline wall, which can never pass the test below.
 	if (wall_cull > 0.5) {{
 		vec3 cam = (inverse(MODEL_MATRIX) * vec4(CAMERA_POSITION_WORLD, 1.0)).xyz;
+		// The GPU twin of SceneView.WallVisible (scene_view.json [W]): hidden when (cam - mid) . n > 0.
 		if ((cam.x - CUSTOM0.x) * CUSTOM0.z + (cam.z - CUSTOM0.y) * CUSTOM0.w > 0.0) VERTEX = vec3(0.0);
 	}}
 }}
@@ -117,81 +123,53 @@ void fragment() {{
     public double TileM(RecipeLook look)
         => look.TextureKind.Length > 0 && _library?.SurfaceFor(look.TextureKind, look.FloorChain) is { } t ? t.SizeM : 0;
 
-    /// <summary><c>hex()</c> of sceneRecipe.ts: '#rrggbb' → colour, unusable/missing → white.</summary>
-    public static Color Hex(string? css)
-    {
-        var s = (css ?? "").Replace("#", "");
-        return int.TryParse(s, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int v)
-            ? new Color(((v >> 16) & 255) / 255f, ((v >> 8) & 255) / 255f, (v & 255) / 255f)
-            : Colors.White;
-    }
+    /// <summary>An integer RGB (<see cref="MaterialLooks.RecipeHex"/>) as a Godot colour.</summary>
+    public static Color Hex(int v) => new(((v >> 16) & 255) / 255f, ((v >> 8) & 255) / 255f, (v & 255) / 255f);
 
-    // ── The decisions of the three material functions ────────────────────────
-
-    private double SpecNum(string kind, string field, double fallback)
-    {
-        if (_library?.MaterialSpec(kind) is not { } spec) return fallback;
-        return spec.TryGetProperty(field, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : fallback;
-    }
-
-    private string SpecClass(string kind)
-        => _library?.MaterialSpec(kind) is { } spec && spec.TryGetProperty("class", out var c)
-           && c.ValueKind == JsonValueKind.String ? c.GetString() ?? "matte" : "matte";
-
-    /// <summary><c>surfaceMaterial</c>'s roughness/metalness defaults per class.</summary>
+    /// <summary>The finish of a textured kind: its library declaration through <see cref="MaterialLooks.SurfaceFinish(System.Text.Json.JsonElement?)"/>.</summary>
     private (double R, double M) Finish(string kind)
     {
-        var cls = SpecClass(kind);
-        bool rippled = cls is "water" or "ice";
-        return (SpecNum(kind, "roughness", rippled ? 0.08 : cls == "gloss" ? 0.25 : 0.85),
-                SpecNum(kind, "metalness", rippled ? 0.15 : 0.02));
+        var f = MaterialLooks.SurfaceFinish(_library?.MaterialSpec(kind));
+        return (f.Roughness, f.Metalness);
     }
-
-    private static double StyleNum(ScenePayload s, string key, double fallback)
-        => s.StyleNumbers.TryGetValue(key, out var v) ? v : fallback;
-
-    private static string StyleStr(ScenePayload s, string key, string fallback = "")
-        => s.Style.TryGetValue(key, out var v) ? v : fallback;
 
     /// <summary><c>plateMaterial</c>: floor texture chain, else <c>floor_color</c>; upper storeys ghosted; a bare surface both ways.</summary>
     public RecipeLook Plate(ScenePlate p, ScenePayload s, double? opacityOverride = null)
     {
-        bool upper = p.OpacityRole == "upper";
-        double opacity = opacityOverride ?? (upper ? StyleNum(s, "upper_floor_opacity", 1) : 1);
+        var look = MaterialLooks.PlateLook(p, s);
         var (r, m) = Finish(p.TextureKind);
-        return new RecipeLook(StyleStr(s, "floor_color"), p.TextureKind, true, opacity, !(p.Thickness > 0), r, m, false);
+        return new RecipeLook(look.Color, p.TextureKind, true, opacityOverride ?? look.Opacity, look.Side == 2, r, m, false);
     }
 
-    /// <summary><c>wallMaterial</c>: glass pane, door leaf, else the wall texture or <c>wall_color</c>.</summary>
+    /// <summary><c>wallMaterial</c>: glass pane, door leaf (their own look, never textured), else the wall texture or <c>wall_color</c>.</summary>
     public RecipeLook Wall(SceneWall w, ScenePayload s, bool wallCull, double? opacityOverride = null)
     {
+        var look = MaterialLooks.WallLook(w, s);
         if (w.Glass)
-            return new RecipeLook(StyleStr(s, "glass_color"), "", false, StyleNum(s, "glass_opacity", 0.25), false, 0.3, 0.02, wallCull);
+            return new RecipeLook(look.Color, "", false, look.Opacity, false, look.Roughness, look.Metalness, wallCull);
         if (w.Leaf)
-            return new RecipeLook(StyleStr(s, "door_color", "#4a3a2e"), "", false, opacityOverride ?? 1, false, 0.75, 0.02, wallCull);
-        bool upper = w.OpacityRole == "upper";
-        double opacity = opacityOverride ?? (upper ? StyleNum(s, "upper_wall_opacity", 1) : 1);
+            return new RecipeLook(look.Color, "", false, opacityOverride ?? look.Opacity, false, look.Roughness, look.Metalness, wallCull);
         var (r, m) = Finish(w.TextureKind);
-        return new RecipeLook(StyleStr(s, "wall_color"), w.TextureKind, false, opacity, false, r, m, wallCull);
+        return new RecipeLook(look.Color, w.TextureKind, false, opacityOverride ?? look.Opacity, false, r, m, wallCull);
     }
 
     /// <summary><c>extraMaterial</c>: glass / stair / pad / cabin / frame colours and opacities; a textured extra tiles like a wall.</summary>
     public RecipeLook Extra(SceneExtra e, ScenePayload s)
     {
+        var look = MaterialLooks.ExtraLook(e, s);
         bool glass = e.Kind.EndsWith("_glass", StringComparison.Ordinal);
-        bool cabin = e.Kind == "elevator_cabin";
-        bool stair = e.Kind.StartsWith("stair_", StringComparison.Ordinal);
-        string color = glass ? StyleStr(s, "glass_color")
-            : stair ? StyleStr(s, "stair_color", "#8a7a66")
-            : e.Kind == "elevator_pad" ? StyleStr(s, "elevator_pad_color")
-            : cabin ? StyleStr(s, "elevator_cabin_color") : StyleStr(s, "elevator_frame_color");
-        double opacity = glass ? StyleNum(s, "elevator_glass_opacity", StyleNum(s, "glass_opacity", 0.22))
-            : cabin ? StyleNum(s, "elevator_cabin_opacity", 1) : 1;
         string kind = glass ? "" : e.TextureKind;
-        var (r, m) = kind.Length > 0 && _library?.SurfaceFor(kind, false) is not null ? Finish(kind) : (glass ? 0.3 : 0.85, 0.02);
-        return new RecipeLook(color, kind, false, opacity, false, r, m, false);
+        var (r, m) = kind.Length > 0 && _library?.SurfaceFor(kind, false) is not null ? Finish(kind) : (look.Roughness, look.Metalness);
+        return new RecipeLook(look.Color, kind, false, look.Opacity, false, r, m, false);
     }
 
     /// <summary><c>placeholderMaterial</c>: matte, half translucent grey.</summary>
-    public static RecipeLook Placeholder => new("#9a9a9a", "", false, 0.5, false, 0.9, 0.02, false);
+    public static RecipeLook Placeholder
+    {
+        get
+        {
+            var l = MaterialLooks.PlaceholderLook();
+            return new RecipeLook(l.Color, "", false, l.Opacity, false, l.Roughness, l.Metalness, false);
+        }
+    }
 }

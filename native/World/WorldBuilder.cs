@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Ground;
+using AnimaNative.Scene;
 using Godot;
 
 namespace AnimaNative.World;
@@ -462,17 +463,17 @@ public sealed class WorldBuilder
         var buildings = scene.Models.Where(m => m.Role == "building").ToList();
         bool shellArea = scene.AreaDetail || buildings.Any(m => m.Display == "shell_area");
         bool groundModel = buildings.Any(m => m.Display == "ground");
-        bool hasInterior = scene.Plates.Count > 0 || scene.Walls.Count > 0 || scene.Extras.Count > 0
-                           || scene.HasFloorPlanOrMarkers || scene.Models.Any(m => m.Role != "building");
+        bool hasInterior = SceneView.HasInterior(scene.Plates.Count, scene.FloorPlanCount, scene.Walls.Count, scene.Extras.Count,
+                                                 scene.MarkerCount, scene.Models.Select(m => m.Role));
         // openable(tile) + the singleton: only the location the caller opens is open (fade 1).
-        bool openable = hasInterior && (isBuilding || shellArea || groundModel);
+        bool openable = SceneView.Openable(hasInterior, isBuilding, shellArea, groundModel);
         bool open = wantOpen && openable;
         if (open) stats.OpenLocation = loc.Id;
         var roomLevel = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Level);
         int levelFilter = room is { Length: > 0 } ar && roomLevel.TryGetValue(ar, out var lvl) ? lvl : 0;
         var outdoor = LocationView.OutdoorRoomIds(scene);
         bool RoomShown(string roomId) => outdoor.Contains(roomId)
-            || (!roomLevel.TryGetValue(roomId, out var lv) || lv == levelFilter);
+            || !roomLevel.TryGetValue(roomId, out var lv) || SceneView.RoomVisible(false, lv, levelFilter);
 
         double width = LocationView.FootprintWidth(loc);
         string buildingTier = LocationView.BuildingTier(ring, camera.DistanceTo(group.Position), width);
@@ -493,7 +494,7 @@ public sealed class WorldBuilder
             var nb = ModelPlacement.Measure(node, Transform3D.Identity);
             buildingBox = buildingBox is { } bb ? bb.Merge(nb) : nb;
             if (open && keep && spec.Cutouts.Length > 0) stats.CutoutTriangles += SceneModels.ApplyCutouts(node, spec.Cutouts);
-            if ((await _models.GetAsync(spec.PickUrl(buildingTier))) is { } t)
+            if ((await _models.GetAsync(ModelVariants.PickModelVariant(spec, buildingTier))) is { } t)
             {
                 stats.Buildings++;
                 if (t.Compressed) stats.BuildingsCompressed++;
@@ -512,7 +513,7 @@ public sealed class WorldBuilder
                 if (!open) { models.Interior++; continue; }
                 if (!RoomShown(spec.RoomId)) { models.Storey++; continue; }
             }
-            double lift = spec.Level == 0 ? GroundLift(group, spec, height, datum) : 0;
+            double lift = GroundLift(group, spec, height, datum);
             placements.Add(SceneModels.PlaceAsync(_models, spec, interiorTier, SceneModels.KindOf(spec), group, lift,
                                                   models, _materials));
         }
@@ -520,8 +521,8 @@ public sealed class WorldBuilder
 
         // ── Recipe primitives: outdoor rooms, the open interior, or the far-view shell of a modelless place. ──
         bool farShell = !open && !solidBuildingPlaced
-                        && LocationView.FarShellSource(isBuilding, natureSite, scene.AreaDetail, false,
-                                                       scene.Plates.Count, scene.Walls.Count) == "recipe";
+                        && SceneView.FarShellSource(isBuilding, natureSite, scene.AreaDetail, false,
+                                                    scene.Plates.Count, scene.Walls.Count) == "recipe";
         var kinds = scene.Plates.Select(p => p.TextureKind).Concat(scene.Walls.Select(w => w.TextureKind))
                          .Concat(scene.Extras.Select(e => e.TextureKind)).Where(k => k.Length > 0).Append("floor");
         await _library!.PreloadAsync(kinds);
@@ -700,12 +701,15 @@ public sealed class WorldBuilder
     /// </summary>
     public void TakeDetails(JsonElement locations) => Details = LocationInfo.ParseList(locations);
 
-    /// <summary>§ A16.9 <c>storeyGroundLift</c>: a level-0 spec moves onto the ground under its own anchor.</summary>
+    /// <summary>
+    /// § A16.9 <see cref="StoreyGround.Lift"/>: a level-0 spec moves onto the ground under its own anchor (turned into
+    /// the world by the tile frame, <see cref="SceneView.TileToWorld"/>).
+    /// </summary>
     private static double GroundLift(Node3D group, SceneModelSpec spec, WorldHeight height, double datum)
     {
-        var w = group.Transform * new Vector3((float)spec.AnchorX, 0, (float)spec.AnchorZ);
-        double y = height.GroundAt(w.X, w.Z);
-        return double.IsFinite(y) ? y - datum : 0;
+        var frame = new TileFrame(new Overview.Vec3(group.Position.X, group.Position.Y, group.Position.Z), group.Rotation.Y);
+        var w = SceneView.TileToWorld(frame, spec.AnchorX, spec.AnchorZ);
+        return StoreyGround.Lift(spec.Level, w.X, w.Z, datum, height.GroundAt);
     }
 
     private static void Merge(ModelStats into, ModelStats m)
@@ -755,7 +759,7 @@ public sealed class WorldBuilder
         return parsed with
         {
             Role = "prop", Id = Json.Str(wp, "prop_id"), Measure = "xyz",
-            MaxM = Json.Num(wp, "max_m") is var m && m > 0 ? m : 1,
+            MaxM = Js.Or(Json.Num(wp, "max_m"), 1),
             AnchorX = x, AnchorZ = z, BottomY = bottom, SizeM = null,
         };
     }
