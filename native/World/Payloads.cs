@@ -155,7 +155,7 @@ public sealed class HeightfieldOverview
 /// </summary>
 public sealed record LocationInfo(string Id, string Name, double? PosX, double? PosZ, double YawDeg)
 {
-    public bool IsPlaced => PosX.HasValue && PosZ.HasValue;
+    public bool IsPlaced => PosX is double x && double.IsFinite(x) && PosZ is double z && double.IsFinite(z);
 
     public static List<LocationInfo> ParseList(JsonElement root)
         => Json.Arr(root, "locations")

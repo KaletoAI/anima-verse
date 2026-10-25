@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AnimaNative.Api;
@@ -11,7 +12,7 @@ namespace AnimaNative.World;
 /// <summary>Everything the build produced, for the log line and the check.</summary>
 public sealed class WorldStats
 {
-    public AnchorInfo Anchor = new(Vector3.Zero, null, "world origin");
+    public AnchorInfo Anchor = AnchorInfo.Origin;
     public int OverviewVertices, OverviewTriangles;
     public int Tiles, TileVertices, TileTriangles;
     public int Locations, Scenes, Buildings, BuildingsCompressed, BuildingVertices, BuildingIndices;
@@ -34,7 +35,7 @@ public sealed class WorldStats
 ///
 ///   1. <c>/play/heightfield</c> overview, <c>/play/worldmap</c> (placement)
 ///      and <c>/world/locations?view=3d</c> (ids/names for the goto match)
-///   2. the anchor (<see cref="Anchor.Resolve"/>, the S0 rule)
+///   2. the anchor (<see cref="Anchor.FromWorld"/> — the browser bench rule)
 ///   3. the indexed 2 m tiles within <see cref="TileRadiusM"/> of the anchor
 ///   4. terrain meshes (overview with the tiled cells left out, one mesh per tile)
 ///   5. per placed location: a group at (pos_x, ground, pos_z) turned by
@@ -52,6 +53,10 @@ public sealed class WorldBuilder
     private readonly bool _strict;
 
     public WorldHeight? Height { get; private set; }
+    /// <summary>The <c>/world/locations?view=3d</c> rows of the build (names for the anchor's goto match).</summary>
+    public IReadOnlyList<LocationInfo> Details { get; private set; } = Array.Empty<LocationInfo>();
+    /// <summary>The <c>/play/worldmap</c> payload the build used (the anchor's fallback snapshot).</summary>
+    public JsonElement? FirstMap { get; private set; }
 
     /// <param name="strict">true in <c>--check</c>: any failure aborts; online a broken location is logged and skipped.</param>
     public WorldBuilder(IWorldSource source, Action<string> log, bool strict)
@@ -70,11 +75,13 @@ public sealed class WorldBuilder
         var locations = LocationInfo.ParseList(mapDoc.RootElement);
         using var locDoc = await _source.GetLocations3dAsync();
         var details = LocationInfo.ParseList(locDoc.RootElement);
+        Details = details;
+        FirstMap = mapDoc.RootElement.Clone();
         _log($"heightfield {overview.Grid.Cols}x{overview.Grid.Rows} step {overview.Grid.Step} m, "
              + $"{overview.TileIndex.Count} indexed tiles; worldmap {locations.Count} locations, "
              + $"view=3d {details.Count}");
 
-        stats.Anchor = Anchor.Resolve(details, locations, overview.Grid, gotoQuery);
+        stats.Anchor = Anchor.FromWorld(mapDoc.RootElement, details, overview.Grid, gotoQuery);
         _log($"anchor {stats.Anchor.Position} ({stats.Anchor.Source}{(stats.Anchor.LocationId is { } id ? ", " + id : "")})");
 
         var height = Height = new WorldHeight(overview);

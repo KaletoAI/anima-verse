@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Godot;
 
 namespace AnimaNative.World;
@@ -12,7 +13,7 @@ namespace AnimaNative.World;
 /// <c>worldGroundAt</c> does for a location's datum.
 ///
 /// The BENCH ANCHOR does not use this: it reads the overview only (see
-/// <see cref="Anchor"/>), exactly like Task S0's browser bench, so that loading
+/// <see cref="Anchor"/>), exactly like the browser bench, so that loading
 /// tiles never moves the anchor.
 /// </summary>
 public sealed class WorldHeight
@@ -56,45 +57,100 @@ public sealed class WorldHeight
     }
 }
 
-/// <summary>Where the bench (S2) and the start camera are centred.</summary>
-public sealed record AnchorInfo(Vector3 Position, string? LocationId, string Source);
+/// <summary>Where the bench (S2) and the start camera are centred. Coordinates in world metres.</summary>
+public sealed record AnchorInfo(double X, double Y, double Z, string? LocationId, string Source)
+{
+    public static readonly AnchorInfo Origin = new(0, 0, 0, null, "world origin");
 
+    public Vector3 Position => new((float)X, (float)Y, (float)Z);
+}
+
+/// <summary>
+/// THE bench anchor rule — a line-for-line port of <c>pickBenchAnchor</c>
+/// (client3d/src/bench/benchAnchor.ts, checked by
+/// client3d/scripts/smoke_bench_anchor.mjs; the same cases run in
+/// <c>--check</c>). The world build (start camera, tile ring) and the bench run
+/// use this one implementation.
+///
+///   • rows = the location rows of the CURRENT <c>/play/worldmap</c> snapshot
+///     (authoritative for placement); a row without a name borrows the
+///     <c>/world/locations</c> name (<c>nameOf</c>);
+///   • <c>--goto</c> (trimmed; empty = none): an exact id, case-insensitive,
+///     anywhere in the list beats a case-insensitive name substring;
+///     unknown or unplaced (pos null/non-finite) → error;
+///   • no goto → the avatar's current location (worldmap
+///     <c>characters[name == avatar].location_id</c>) if placed → else the
+///     world origin (no height sampled);
+///   • y = <c>heightAt(x, z)</c> — the bench passes the <c>/play/heightfield</c>
+///     OVERVIEW, bilinear and border-clamped (the browser's
+///     <c>sampleWorldHeight</c>), never the 2 m tiles, so loading tiles never
+///     moves the anchor.
+/// </summary>
 public static class Anchor
 {
-    /// <summary>
-    /// THE anchor rule of Task S0 (client3d/src/main.ts, <c>initBench</c> env):
-    /// <c>--goto</c> is lower-cased; the FIRST location of
-    /// <c>/world/locations?view=3d</c> (in payload order) whose id equals it
-    /// (case-insensitive) or whose name contains it wins. Its position is
-    /// <c>pos_x/pos_z</c>, y = the <c>/play/heightfield</c> OVERVIEW sampled
-    /// bilinearly and border-clamped (<c>sampleWorldHeight</c>). An unknown or
-    /// unplaced <c>--goto</c> is an error, as in the browser. Without
-    /// <c>--goto</c>: the world origin (0, 0, 0).
-    ///
-    /// The position comes from the <c>/play/worldmap</c> row of that id: the
-    /// view=3d rows carry no <c>pos_x/pos_z</c> at all (§ A1.3,
-    /// <c>VIEW_3D_FIELDS</c>), the world map is authoritative for placement —
-    /// the same merge the browser's <c>placeableOf</c> does. A location the
-    /// world map does not list (fogged) or lists without a point is "unplaced".
-    ///
-    /// Deliberate difference to the browser: it falls back to the AVATAR's
-    /// location when no goto is given; this skeleton has no avatar yet and uses
-    /// the origin (task brief S1a). Bench runs pass <c>--goto</c>/<c>&amp;goto=</c>.
-    /// </summary>
-    public static AnchorInfo Resolve(IReadOnlyList<LocationInfo> details, IReadOnlyList<LocationInfo> mapRows,
-                                     HeightGrid overview, string? gotoQuery)
+    /// <summary>The browser's <c>heightSource</c> label, minus its bench suffix.</summary>
+    public const string OverviewSource = "/play/heightfield overview: sampleWorldHeight (bilinear, border-clamped)";
+    /// <summary>The label of the bench run — identical to the browser's string.</summary>
+    public const string BenchSource = OverviewSource + ", frozen at run start";
+
+    /// <summary><c>isPlaced</c>: <c>pos_x</c>/<c>pos_z</c> null or non-finite = unplaced.</summary>
+    public static bool IsPlaced(LocationInfo row)
+        => row.PosX is double x && double.IsFinite(x) && row.PosZ is double z && double.IsFinite(z);
+
+    /// <summary><c>matchGoto</c>: exact id (case-insensitive) first, then the name substring.</summary>
+    public static LocationInfo? MatchGoto(IReadOnlyList<LocationInfo> rows, string gotoQuery,
+                                          Func<string, string?>? nameOf = null)
     {
-        if (string.IsNullOrWhiteSpace(gotoQuery))
-            return new AnchorInfo(Vector3.Zero, null, "world origin");
         var q = gotoQuery.ToLowerInvariant();
-        bool Match(LocationInfo l) => l.Id.ToLowerInvariant() == q
-                                      || l.Name.ToLowerInvariant().Contains(q, StringComparison.Ordinal);
-        var hit = details.FirstOrDefault(Match) ?? mapRows.FirstOrDefault(Match);
-        var placed = hit is null ? null : mapRows.FirstOrDefault(r => r.Id == hit.Id);
-        if (placed is null || !placed.IsPlaced)
-            throw new InvalidOperationException($"Bench goto location is unknown or unplaced: {gotoQuery}");
-        double x = placed.PosX!.Value, z = placed.PosZ!.Value;
-        return new AnchorInfo(new Vector3((float)x, (float)overview.Sample(x, z), (float)z), placed.Id,
-                              "/play/heightfield overview: bilinear, border-clamped");
+        return rows.FirstOrDefault(r => r.Id.ToLowerInvariant() == q)
+               ?? rows.FirstOrDefault(r =>
+               {
+                   var name = !string.IsNullOrEmpty(r.Name) ? r.Name : nameOf?.Invoke(r.Id) ?? "";
+                   return name.ToLowerInvariant().Contains(q, StringComparison.Ordinal);
+               });
+    }
+
+    /// <summary><c>pickBenchAnchor</c>.</summary>
+    public static AnchorInfo Pick(string? gotoQuery, IReadOnlyList<LocationInfo> rows, Func<string, string?>? nameOf,
+                                  string? currentId, Func<double, double, double> heightAt, string heightSource)
+    {
+        var q = gotoQuery?.Trim();
+        bool hasGoto = !string.IsNullOrEmpty(q);
+        var row = hasGoto
+            ? MatchGoto(rows, q!, nameOf)
+            : !string.IsNullOrEmpty(currentId) ? rows.FirstOrDefault(r => r.Id == currentId) : null;
+        if (hasGoto && (row is null || !IsPlaced(row)))
+            throw new InvalidOperationException($"Bench goto location is unknown or unplaced: {q}");
+        if (row is null || !IsPlaced(row)) return AnchorInfo.Origin;
+        double x = row.PosX!.Value, z = row.PosZ!.Value;
+        return new AnchorInfo(x, heightAt(x, z), z, row.Id, heightSource);
+    }
+
+    /// <summary>The avatar's current location id from a worldmap payload (browser: <c>characters.find(name === avatar)</c>).</summary>
+    public static string? AvatarLocation(JsonElement worldmap)
+    {
+        var avatar = Json.Str(worldmap, "avatar");
+        if (avatar.Length == 0) return null;
+        foreach (var c in Json.Arr(worldmap, "characters"))
+            if (c.ValueKind == JsonValueKind.Object && Json.Str(c, "name") == avatar)
+            {
+                var id = Json.Str(c, "location_id");
+                return id.Length > 0 ? id : null;
+            }
+        return null;
+    }
+
+    /// <summary>
+    /// The wiring both callers use: rows and avatar from <paramref name="worldmap"/>,
+    /// names from the view=3d <paramref name="details"/>, y from the overview grid.
+    /// </summary>
+    public static AnchorInfo FromWorld(JsonElement worldmap, IReadOnlyList<LocationInfo> details, HeightGrid overview,
+                                       string? gotoQuery, string heightSource = OverviewSource)
+    {
+        var rows = LocationInfo.ParseList(worldmap);
+        var names = new Dictionary<string, string>();
+        foreach (var d in details) names.TryAdd(d.Id, d.Name);
+        return Pick(gotoQuery, rows, id => names.TryGetValue(id, out var n) && n.Length > 0 ? n : null,
+                    AvatarLocation(worldmap), overview.Sample, heightSource);
     }
 }

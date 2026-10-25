@@ -1,0 +1,144 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Threading.Tasks;
+using AnimaNative.Bench;
+using AnimaNative.Figures;
+using AnimaNative.Gltf;
+using AnimaNative.Ui;
+using AnimaNative.World;
+using Godot;
+
+namespace AnimaNative.Check;
+
+/// <summary>
+/// <c>-- --check-bench</c>: the offline bench smoke. Builds the fixture world
+/// (terrain, tiles, buildings, the first poll's figures — the same code as
+/// online), then runs THE bench driver for a 0.5 s warm-up and a 2 s drive (the
+/// whole 20 s path compressed into it) and checks what can be checked without a
+/// GPU:
+///
+///   • anchor = the fixture's <c>harbour</c> → loc-house (64, 7.5, 128), label =
+///     the browser's bench <c>heightSource</c>;
+///   • measured window: frames &gt; 0, seconds ≥ 2 and less than 2 + the largest
+///     frame interval (the run ends on the first frame that reaches 2 s),
+///     fpsMean = frames / seconds;
+///   • the last camera pose = the path's END keyframe + anchor:
+///     pos (0, 24, 40) + (64, 7.5, 128) = (64, 31.5, 168), target (64, 9, 128);
+///   • the result keys in the browser's order plus the native extras, gpu/render
+///     times null (headless dummy renderer), flags {goto, scatter false, water
+///     false, vsync};
+///   • the free camera is handed back (processing on, pose restored);
+///   • the written file parses to the printed object.
+/// </summary>
+public static class BenchCheck
+{
+    private const double Warmup = 0.5, Duration = 2.0;
+    private static readonly string[] Keys =
+    {
+        "backend", "path", "pathVersion", "duration", "warmup", "flags", "anchor", "size", "frames", "seconds",
+        "fpsMean", "frameMsMedian", "frameMsP95", "cpuMsMedian", "cpuMsP95", "gpuMsMedian", "callsMedian",
+        "trisMedian", "fps", "gpuMs", "draws", "triangles", "renderCpuMsMedian", "godot", "gpu", "cpu",
+    };
+
+    public static async Task<int> RunAsync(Node3D host, FlyCamera camera, CliOptions options)
+    {
+        try
+        {
+            var dir = Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures");
+            MeshoptNative.EnsureLoaded();
+            var source = new FixtureSource(dir);
+            var world = new Node3D { Name = "World" };
+            host.AddChild(world);
+            void Log(string line) => GD.Print("[check-bench] " + line);
+            var gotoQuery = options.Goto ?? "harbour";
+            var builder = new WorldBuilder(source, Log, strict: true);
+            var stats = await builder.BuildAsync(world, gotoQuery);
+            var figures = new FigureManager(source, builder.Height!, Log, strict: true);
+            world.AddChild(figures);
+            await figures.InitAsync();
+            using (var map = await source.GetWorldMapAsync()) await figures.Apply(map.RootElement);
+            Log($"world {stats.Summary()} | figures {figures.Stats.Summary()}");
+
+            var settings = BenchRunner.SettingsFor(builder.FirstMap!.Value, builder, gotoQuery, options.Vsync,
+                                                   Warmup, Duration);
+            var anchor = settings.Anchor;
+            if (options.Goto is null)
+                Expect("anchor", anchor.Position.DistanceTo(new Vector3(64f, 7.5f, 128f)) < 1e-4f
+                                 && anchor.LocationId == "loc-house", $"{anchor}");
+            Expect("anchor label", anchor.Source == Anchor.BenchSource, anchor.Source);
+
+            camera.LookAtAnchor(anchor.Position + new Vector3(0, 1.5f, 0), 33f);
+            var before = (camera.Target, camera.Distance);
+            var done = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var runner = new BenchRunner(camera, settings, r => done.TrySetResult(r));
+            host.AddChild(runner);
+            var finished = await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(60)));
+            Expect("bench finished", finished == done.Task, "no result within 60 s");
+            var result = done.Task.Result;
+            var file = BenchOutput.Emit(result);
+            BenchOutput.ShowPanel(host, result, file);
+            Expect("panel", host.GetNodeOrNull("BenchResult") is not null, "no result panel");
+            Expect("printed line unescaped", BenchOutput.Line(result).Contains("\"backend\":\"godot-forward+\""),
+                   BenchOutput.Line(result));
+
+            Expect("keys", result.Select(kv => kv.Key).SequenceEqual(Keys),
+                   string.Join(",", result.Select(kv => kv.Key)));
+            Expect("backend", (string?)result["backend"] == "godot-forward+", $"{result["backend"]}");
+            Expect("path", (string?)result["path"] == "shared/bench/camera_path_v1.json", $"{result["path"]}");
+            Expect("duration/warmup", (double)result["duration"]! == Duration && (double)result["warmup"]! == Warmup, "");
+            var flags = result["flags"]!.AsObject();
+            Expect("flags", flags.Select(kv => kv.Key).SequenceEqual(new[] { "goto", "scatter", "water", "vsync" })
+                            && (string?)flags["goto"] == gotoQuery && !(bool)flags["scatter"]! && !(bool)flags["water"]!
+                            && (bool)flags["vsync"]! == options.Vsync, flags.ToJsonString());
+            var a = result["anchor"]!.AsObject();
+            Expect("anchor object", (string?)a["locationId"] == anchor.LocationId && (string?)a["heightSource"] == Anchor.BenchSource
+                                    && (double)a["pos"]![1]! == anchor.Y, a.ToJsonString());
+
+            int frames = (int)result["frames"]!;
+            double seconds = (double)result["seconds"]!;
+            double p95 = (double)result["frameMsP95"]!;
+            Expect("frames", frames > 0, $"{frames}");
+            Expect("seconds ≥ duration", seconds >= Duration, $"{seconds}");
+            Expect("fpsMean = frames / seconds", Math.Abs((double)result["fpsMean"]! - frames / seconds) < 1e-9, "");
+            Expect("fps = fpsMean", (double)result["fps"]! == (double)result["fpsMean"]!, "");
+            Expect("headless: gpu null", result["gpuMsMedian"] is null && result["gpuMs"] is null
+                                         && result["renderCpuMsMedian"] is null, result.ToJsonString());
+            Expect("p95 ≤ the run", p95 / 1000 <= seconds, $"{p95}");
+            Expect("samples = frames", runner.Samples.Count == frames, $"{runner.Samples.Count}");
+            Expect("the run ends on the first frame that reaches the duration",
+                   seconds - runner.Samples[^1].Dt < Duration + 1e-9, $"{seconds} - {runner.Samples[^1].Dt}");
+
+            var wantPos = new Vector3(0, 24f, 40f) + anchor.Position;      // end keyframe pos (-0, 24, 40)
+            var wantTarget = new Vector3(0, 1.5f, 0) + anchor.Position;
+            Expect("last camera position = end keyframe + anchor", runner.LastPosition.DistanceTo(wantPos) < 1e-4f,
+                   $"{runner.LastPosition} vs {wantPos}");
+            Expect("last camera target", runner.LastTarget.DistanceTo(wantTarget) < 1e-4f, $"{runner.LastTarget} vs {wantTarget}");
+            Expect("camera handed back", camera.IsProcessing() && camera.IsProcessingUnhandledInput()
+                                         && camera.Target == before.Target && camera.Distance == before.Distance,
+                   $"processing={camera.IsProcessing()} target={camera.Target}");
+
+            var written = JsonNode.Parse(File.ReadAllText(file))!;
+            Expect("file = printed result", JsonNode.DeepEquals(written, result), file);
+
+            GD.Print($"CHECK-BENCH ok frames={frames} seconds={seconds:0.####} fpsMean={(double)result["fpsMean"]!:0.#} "
+                     + $"frameMsMedian={(double)result["frameMsMedian"]!:0.###} cpuMsMedian={(double)result["cpuMsMedian"]!:0.###} "
+                     + $"draws={result["draws"]} triangles={result["triangles"]} size={result["size"]} "
+                     + $"gpu=null (headless dummy renderer) file={file}");
+            return 0;
+        }
+        catch (Exception e)
+        {
+            GD.PrintErr($"CHECK-BENCH FAILED {e.GetType().Name}: {e.Message}");
+            GD.Print($"CHECK-BENCH FAILED {e.GetType().Name}: {e.Message}");
+            return 1;
+        }
+    }
+
+    private static void Expect(string what, bool ok, string detail)
+    {
+        if (!ok) throw new InvalidOperationException($"{what}: {detail}");
+    }
+}

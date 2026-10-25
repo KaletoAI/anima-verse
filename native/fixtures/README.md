@@ -86,17 +86,32 @@ terrain_vertices = 9 + 25 = **34**.
 
 ## Anchor (`--goto=harbour`)
 
-S0 rule: first row of `locations.json` (view=3d order) whose id equals the query
-or whose name contains it → `loc-house` "Harbour House" (the fogged "Harbour
-Cellar" comes second). Position from its `worldmap.json` row: (64, 128).
+The browser bench rule (`pickBenchAnchor`, `World/WorldHeight.cs` `Anchor`):
+rows = the `worldmap.json` locations; no id equals `harbour`, so the first row
+whose name contains it wins → `loc-house` "Harbour House" (the fogged "Harbour
+Cellar" exists only in `locations.json`, which lends names, not rows).
+Position from that worldmap row: (64, 128).
 y = overview, bilinear: fx = (64+256)/256 = 1.25 → i = 1, tx = 0.25;
 fz = (128+256)/256 = 1.5 → j = 1, tz = 0.5.
 north = 4·0.75 + 8·0.25 = 5; south = 8·0.75 + 16·0.25 = 10;
 y = 5·0.5 + 10·0.5 = **7.5** → anchor **(64, 7.5, 128)**.
 
 Extra rule checks: `LOC-YARD` (id, case-insensitive) → (−100, 2.91357421875, 50)
-(overview value, derivation below); no goto → origin; `cellar` (in view=3d, not
-in the world map = fogged), `template` (pos null), `nowhere` → error.
+(overview value, derivation below); no goto → origin (the fixture has no
+avatar); `cellar` (in view=3d, not in the world map = fogged), `template`
+(pos null), `nowhere` → error.
+
+The bench maths (`Check/BenchMathCheck.cs`) use no fixture file: the path is
+the embedded `shared/bench/camera_path_v1.json` (checked byte-identical to the
+repository file), the numbers are the hand values of
+`client3d/scripts/smoke_bench_path.mjs` / `smoke_bench_math.mjs` /
+`smoke_bench_anchor.mjs` (derivations in their docstrings), plus one quarter
+point t = 0.3125 → [3.725, 23.84025, 38.99275] (u = 0.25 between keyframes 0
+and 1), which — unlike the midpoints — rejects cosine easing.
+
+`--check-bench` drives this fixture world: anchor (64, 7.5, 128) with the
+bench label, 0.5 s warm-up + 2 s drive, last camera pose = end keyframe
+(0, 24, 40) + anchor = (64, 31.5, 168), target (64, 9, 128).
 
 ## Locations
 

@@ -5,7 +5,7 @@ renders THE SAME world as the browser 3D client (`client3d/`) so both can be
 timed on the same camera drive (`shared/bench/camera_path_v1.json`). Spike
 quality — no game logic. Task S1a covers login, terrain, buildings, recipe
 shells and a free camera; Task S1b adds the figures with idle/walk clips and
-live positions; the bench drive comes in a later task.
+live positions; Task S2 adds the bench drive (see "Bench" below).
 
 What it draws after login:
 
@@ -49,6 +49,7 @@ cd native
 dotnet build                                  # C# + bin/libmeshoptimizer.so (csproj target)
 $GODOT --headless --path . --import           # first import (creates .godot/)
 $GODOT --headless --path . -- --check         # offline self-test → "CHECK ok …", exit 0
+$GODOT --headless --path . -- --check-bench   # offline bench smoke → "CHECK-BENCH ok …", exit 0
 
 GODOT=/path/to/Godot_v4.7.2-stable_mono_linux.x86_64 ./build.sh [out_dir]
                                               # build + import + export "Linux" preset
@@ -71,31 +72,80 @@ Arguments after `--` (no .env, no config file):
 |---|---|
 | `--server=URL` | Anima server base URL (default `http://localhost:8000`) |
 | `--user=NAME` | pre-fills the login field (the password is typed in, never passed or stored) |
-| `--goto=ID\|NAME` | anchor: location id, or a case-insensitive name substring (the browser bench's `&goto=`) — the start camera looks at it, the 2 m tiles load around it |
+| `--goto=ID\|NAME` | anchor: location id, or a case-insensitive name substring (the browser bench's `&goto=`) — the start camera looks at it, the 2 m tiles load around it; without it the avatar's location, else the world origin |
+| `--bench` | run the camera drive once the world has loaded (see "Bench") |
+| `--size=WxH` | window size; a bench run defaults to `1920x1080` (the result reports the size actually rendered) |
+| `--vsync=on` | keep V-sync during the bench (default: off for the run, restored after) |
+| `--quit-after-bench` | exit after the result file is written |
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
+| `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 |
 
 Camera: drag with the left or right mouse button to orbit, wheel to zoom,
 W/A/S/D to move, F to follow the next figure (name order; W/A/S/D lets go).
 The status line top left reports what was loaded; per-location
 failures are logged to the console (`[native] …`).
 
+## Bench
+
+The same drive as the browser's `client3d/?bench=auto&goto=<loc>`: THE file
+`shared/bench/camera_path_v1.json` (embedded into the assembly from the
+repository at build time — no copy in `native/`), relative to THE same anchor
+(`pickBenchAnchor`: `--goto` exact id beats name substring, position from the
+`/play/worldmap` row, y = the `/play/heightfield` overview bilinear and
+border-clamped, frozen at run start; no goto → the avatar's location → origin),
+the same phase rule (warm-up `warmup` s at keyframe 0, then `duration` s; the
+transition frame establishes t = 0, only later intervals count) and the same
+summary (`summarize`/`percentile` of `client3d/src/bench/benchStats.ts`).
+
+Measuring (on the PC with the GPU; login screen first, the run starts after
+terrain, tiles, buildings and the first poll's figures have loaded):
+
+```bash
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=<loc> --bench
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=<loc> --bench --quit-after-bench --size=1920x1080
+```
+
+Compare with the browser at the same window size:
+`http://192.168.8.244:8000/play?bench=auto&goto=<loc>&scatter=0&water=0` (the
+native client has no scatter/water yet, its flags say `scatter: false, water: false`).
+
+The result is printed as ONE line `[bench] result {json}`, written to
+`user://bench-<yyyyMMdd-HHmmss>.json` (Linux: `~/.local/share/godot/app_userdata/Anima Native/`,
+the path is printed) and shown in a panel (selectable, "Copy JSON"). Keys: the
+browser's (`backend: "godot-forward+"`, `path`, `pathVersion`, `duration`,
+`warmup`, `flags` {goto, scatter, water, vsync}, `anchor` {pos, locationId,
+heightSource}, `size`, `frames`, `seconds`, `fpsMean`, `frameMsMedian`,
+`frameMsP95`, `cpuMsMedian`, `cpuMsP95`, `gpuMsMedian`, `callsMedian`,
+`trisMedian`, `fps`, `gpuMs`, `draws`, `triangles`) plus `renderCpuMsMedian`,
+`godot`, `gpu`, `cpu`. Per frame: `dt` = wall delta (unclamped), `cpuMs` =
+`Performance.TimeProcess`, `renderCpuMs`/`gpuMs` = the viewport's measured render
+CPU/GPU time, draws/triangles = `RenderTotalDrawCallsInFrame` /
+`RenderTotalPrimitivesInFrame` (read in `_Process`, so they describe the
+previous rendered frame). V-sync is off during the run unless `--vsync=on`.
+The free camera is switched off for the run and handed back afterwards.
+
+## Offline checks of the export
+
 The exported build can run the check too: copy `fixtures/` next to the binary
 and start it with `--headless -- --check` from inside the repository (the figure
 fixtures read the clip FBX files and a demo character GLB in place — `repo:`
 entries of `fixtures/urls.json`, resolved above the fixtures directory, then
-above the working directory).
+above the working directory; the bench check compares the embedded camera path
+with `shared/bench/camera_path_v1.json` the same way). `--headless -- --check-bench`
+works the same way.
 
 ## Layout
 
 | Path | Content |
 |---|---|
-| `Main.cs`, `Main.tscn` | entry scene: login → world build → camera; `--check` dispatch |
+| `Main.cs`, `Main.tscn` | entry scene: login → world build → camera → (`--bench`) the drive; `--check`/`--check-bench` dispatch |
 | `Cli.cs` | command-line parameters |
 | `Api/AnimaApi.cs` | HttpClient + cookie session, the server getters, `IWorldSource` |
 | `World/` | payload parsing, height sampling + anchor, terrain, `place()`, recipe meshes, the builder |
 | `Gltf/` | Meshopt decode (P/Invoke) and runtime GLB import |
 | `Figures/` | world-map characters: placement rule, figures + poll loop, clip library (import, pick, retarget), rest-pose correction |
 | `Ui/` | login screen, fly camera |
-| `Check/` | `--check`: fixture source and expectations |
+| `Bench/` | camera path (`loadPath`/`samplePath`), statistics (`summarize`/`percentile`), the bench driver and its output |
+| `Check/` | `--check`: fixture source and expectations, bench maths; `--check-bench`: offline bench smoke |
 | `fixtures/` | offline payloads + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
 | `third_party/meshoptimizer/` | meshoptimizer v1.3 sources (MIT, `src/*.cpp`, `meshoptimizer.h`, LICENSE) |

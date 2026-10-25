@@ -8,6 +8,13 @@
     <LangVersion>12</LangVersion>
   </PropertyGroup>
 
+  <!-- The bench camera path (Task S2): ONE source for browser and native — the
+       repository file is embedded into the assembly, never copied into native/. -->
+  <ItemGroup>
+    <EmbeddedResource Include="../shared/bench/camera_path_v1.json"
+                      LogicalName="AnimaNative.Bench.camera_path_v1.json" />
+  </ItemGroup>
+
   <!-- The vendored meshoptimizer decoder (EXT_meshopt_compression, ruling P2-R5)
        is compiled into native/bin/libmeshoptimizer.so on every build where it is
        missing or older than its sources. No cmake on the build box: one g++ call. -->

@@ -66,6 +66,7 @@ public static class CheckRunner
 
             Expect("anchor", stats.Anchor.Position.DistanceTo(ExpectedAnchor) < 1e-4f, $"{stats.Anchor.Position}");
             Expect("anchor location", stats.Anchor.LocationId == "loc-house", stats.Anchor.LocationId ?? "null");
+            Expect("anchor height source", stats.Anchor.Source == Anchor.OverviewSource, stats.Anchor.Source);
             CheckAnchorRule(dir);
             Eq("overview_vertices", stats.OverviewVertices, ExpOverviewVertices);
             Eq("overview_triangles", stats.OverviewTriangles, ExpOverviewTriangles);
@@ -106,10 +107,11 @@ public static class CheckRunner
 
             CheckPlacementRule();
             var figures = await CheckFigures(world, source, builder.Height!);
+            var bench = BenchMathCheck.Run(source);
 
             GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench}");
             world.QueueFree();
             return 0;
         }
@@ -194,24 +196,23 @@ public static class CheckRunner
         return (v, idx);
     }
 
-    /// <summary>The S0 goto rule on its own: id match, origin default, fogged/unplaced = error.</summary>
+    /// <summary>The anchor rule (<see cref="Anchor.FromWorld"/>) on the fixture world: id match, origin default (no avatar), fogged/unplaced = error.</summary>
     private static void CheckAnchorRule(string dir)
     {
         using var map = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "worldmap.json")));
         using var det = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "locations.json")));
         using var hf = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "heightfield.json")));
-        var rows = LocationInfo.ParseList(map.RootElement);
         var details = LocationInfo.ParseList(det.RootElement);
         var grid = HeightfieldOverview.Parse(hf.RootElement).Grid;
-        var yard = Anchor.Resolve(details, rows, grid, "LOC-YARD");
+        var yard = Anchor.FromWorld(map.RootElement, details, grid, "LOC-YARD");
         Expect("goto by id", yard.LocationId == "loc-yard"
                && yard.Position.DistanceTo(new Vector3(-100f, ExpYardDatum, 50f)) < 1e-4f, $"{yard.Position}");
-        var origin = Anchor.Resolve(details, rows, grid, null);
+        var origin = Anchor.FromWorld(map.RootElement, details, grid, null);
         Expect("goto default", origin.Position == Vector3.Zero && origin.LocationId is null, $"{origin.Position}");
         foreach (var bad in new[] { "cellar", "template", "nowhere" })
         {
             bool threw = false;
-            try { Anchor.Resolve(details, rows, grid, bad); }
+            try { Anchor.FromWorld(map.RootElement, details, grid, bad); }
             catch (InvalidOperationException) { threw = true; }
             Expect($"goto '{bad}' rejected", threw, "resolved instead of failing");
         }

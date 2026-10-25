@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using AnimaNative.Api;
+using AnimaNative.Bench;
 using AnimaNative.Check;
 using AnimaNative.Figures;
 using AnimaNative.Gltf;
@@ -12,8 +13,10 @@ using Godot;
 namespace AnimaNative;
 
 /// <summary>
-/// Entry scene. Online: login screen → world build → free camera at the anchor.
-/// With <c>-- --check</c>: the offline self-test, then quit with its exit code.
+/// Entry scene. Online: login screen → world build → free camera at the anchor;
+/// with <c>--bench</c> the camera drive starts once the world and the first
+/// figures have loaded (Task S2). With <c>-- --check</c> / <c>-- --check-bench</c>:
+/// the offline self-tests, then quit with their exit code.
 /// </summary>
 public partial class Main : Node3D
 {
@@ -48,8 +51,27 @@ public partial class Main : Node3D
             GetTree().Quit(code);
             return;
         }
+        ApplyWindowSize();
         BuildStage();
+        if (_options.CheckBench)
+        {
+            int code = await BenchCheck.RunAsync(this, _camera!, _options);
+            GetTree().Quit(code);
+            return;
+        }
         ShowLogin();
+    }
+
+    /// <summary><c>--size=WxH</c> (a bench run defaults to 1920x1080), centred on the current screen.</summary>
+    private void ApplyWindowSize()
+    {
+        var size = _options!.Size ?? (_options.Bench ? CliOptions.DefaultBenchSize : (Vector2I?)null);
+        if (size is not { } s || DisplayServer.GetName() == "headless") return;
+        DisplayServer.WindowSetMode(DisplayServer.WindowMode.Windowed);
+        DisplayServer.WindowSetSize(s);
+        var usable = DisplayServer.ScreenGetUsableRect(DisplayServer.WindowGetCurrentScreen());
+        DisplayServer.WindowSetPosition(usable.Position + (usable.Size - s) / 2);
+        Log($"window size requested {s.X}x{s.Y}, got {DisplayServer.WindowGetSize().X}x{DisplayServer.WindowGetSize().Y}");
     }
 
     /// <summary>Sky colour, ambient, sun + fill like the browser engine (no fog, no water).</summary>
@@ -134,12 +156,36 @@ public partial class Main : Node3D
             AddChild(timer);
             timer.Timeout += () => SetStatus($"{worldStatus}, {FigureLine()}"
                                              + "   —   drag: orbit, wheel: zoom, WASD: move, F: next figure");
+            if (_options.Bench)
+            {
+                await _figures.FirstPollDone;
+                StartBench(builder);
+            }
         }
         catch (Exception e)
         {
             GD.PrintErr($"[native] world load failed: {e}");
             SetStatus("World load failed: " + e.Message);
+            if (_options!.Bench && _options.QuitAfterBench) GetTree().Quit(1);
         }
+    }
+
+    /// <summary>
+    /// The bench run: anchor from the CURRENT worldmap snapshot (latest poll,
+    /// else the build's), frozen here; the embedded path; result → stdout line,
+    /// <c>user://</c> file, on-screen panel; <c>--quit-after-bench</c> exits.
+    /// </summary>
+    private void StartBench(WorldBuilder builder)
+    {
+        var settings = BenchRunner.SettingsFor(_figures!.LatestMap ?? builder.FirstMap!.Value, builder,
+                                               _options!.Goto, _options.Vsync);
+        Log($"bench starts ({settings.Path.Keyframes.Length} keyframes)");
+        AddChild(new BenchRunner(_camera!, settings, result =>
+        {
+            var file = BenchOutput.Emit(result);
+            BenchOutput.ShowPanel(this, result, file);
+            if (_options.QuitAfterBench) GetTree().Quit(0);
+        }));
     }
 
     private string FigureLine()

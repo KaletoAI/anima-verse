@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using Godot;
 
 namespace AnimaNative;
@@ -14,11 +15,25 @@ namespace AnimaNative;
 ///   --server=http://host:8000   base URL of the Anima server (default localhost)
 ///   --user=NAME                 pre-fills the login field
 ///   --goto=ID|NAME              bench anchor: location id or name substring
+///   --bench                     run the camera drive once the world has loaded
+///   --size=WxH                  window size (bench default 1920x1080)
+///   --vsync=on|off              keep V-sync during the bench (default off)
+///   --quit-after-bench          exit after the result file is written
 ///   --check                     offline self-test from native/fixtures, then quit
+///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
 public sealed record CliOptions(string Server, string? User, string? Goto, bool Check)
 {
     public const string DefaultServer = "http://localhost:8000";
+    public static readonly Vector2I DefaultBenchSize = new(1920, 1080);
+
+    public bool Bench { get; init; }
+    public bool CheckBench { get; init; }
+    public bool QuitAfterBench { get; init; }
+    /// <summary>true = keep V-sync during the bench run (<c>--vsync=on</c>).</summary>
+    public bool Vsync { get; init; }
+    /// <summary>Explicit <c>--size</c>; null = the project default (the bench uses <see cref="DefaultBenchSize"/>).</summary>
+    public Vector2I? Size { get; init; }
 
     public static CliOptions FromGodot() => Parse(OS.GetCmdlineUserArgs());
 
@@ -26,14 +41,26 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
     {
         string server = DefaultServer;
         string? user = null, gotoQuery = null;
-        bool check = false;
+        bool check = false, bench = false, checkBench = false, quit = false, vsync = false;
+        Vector2I? size = null;
         foreach (var raw in args)
         {
             var arg = raw.Trim();
             if (arg == "--check") check = true;
+            else if (arg == "--bench") bench = true;
+            else if (arg == "--check-bench") checkBench = true;
+            else if (arg == "--quit-after-bench") quit = true;
             else if (TryValue(arg, "--server", out var v)) server = v.TrimEnd('/');
             else if (TryValue(arg, "--user", out v)) user = v;
             else if (TryValue(arg, "--goto", out v)) gotoQuery = v;
+            else if (TryValue(arg, "--size", out v)) size = ParseSize(v);
+            else if (TryValue(arg, "--vsync", out v))
+                vsync = v switch
+                {
+                    "on" => true,
+                    "off" => false,
+                    _ => throw new ArgumentException($"--vsync must be on or off, got '{v}'"),
+                };
             else if (arg.StartsWith("--password", StringComparison.Ordinal))
                 throw new ArgumentException("--password is not accepted; type it into the login screen");
             else GD.PushWarning($"[cli] ignoring unknown argument '{arg}'");
@@ -42,7 +69,23 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
             throw new ArgumentException($"--server must be an http(s) URL, got '{server}'");
         return new CliOptions(server, string.IsNullOrWhiteSpace(user) ? null : user,
-                              string.IsNullOrWhiteSpace(gotoQuery) ? null : gotoQuery, check);
+                              string.IsNullOrWhiteSpace(gotoQuery) ? null : gotoQuery, check)
+        {
+            Bench = bench,
+            CheckBench = checkBench,
+            QuitAfterBench = quit,
+            Vsync = vsync,
+            Size = size,
+        };
+    }
+
+    private static Vector2I ParseSize(string v)
+    {
+        var m = Regex.Match(v, @"^(\d{2,5})x(\d{2,5})$");
+        if (!m.Success) throw new ArgumentException($"--size must be WIDTHxHEIGHT, got '{v}'");
+        int w = int.Parse(m.Groups[1].Value), h = int.Parse(m.Groups[2].Value);
+        if (w < 64 || h < 64) throw new ArgumentException($"--size is too small: '{v}'");
+        return new Vector2I(w, h);
     }
 
     private static bool TryValue(string arg, string name, out string value)

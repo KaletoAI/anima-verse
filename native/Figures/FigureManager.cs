@@ -96,6 +96,18 @@ public partial class FigureManager : Node3D
         Stats.ClipsFailed = Clips.ClipsFailed;
     }
 
+    private readonly TaskCompletionSource _firstPoll = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>
+    /// Completes when the FIRST poll's figures and the model loads it started
+    /// are done (failed loads included — they are counted, not awaited again).
+    /// The bench (S2) starts after it.
+    /// </summary>
+    public Task FirstPollDone => _firstPoll.Task;
+
+    /// <summary>The latest polled <c>/play/worldmap</c> payload (null before the first poll) — the bench anchor's snapshot.</summary>
+    public JsonElement? LatestMap { get; private set; }
+
     /// <summary>Online: poll the world map forever (until <paramref name="ct"/>).</summary>
     public async Task PollLoopAsync(CancellationToken ct)
     {
@@ -104,11 +116,16 @@ public partial class FigureManager : Node3D
             try
             {
                 using var doc = await _source.GetWorldMapAsync();
-                _ = Apply(doc.RootElement);
+                bool first = LatestMap is null;
+                LatestMap = doc.RootElement.Clone();
+                var loads = Apply(doc.RootElement);
+                if (first)
+                    _ = loads.ContinueWith(_ => _firstPoll.TrySetResult(), TaskScheduler.Default);
             }
             catch (Exception e)
             {
                 _log($"worldmap poll failed: {e.Message}");
+                _firstPoll.TrySetResult();  // nothing to wait for; the bench runs on what is there
             }
             try { await Task.Delay(TimeSpan.FromSeconds(PollSeconds), ct); }
             catch (TaskCanceledException) { break; }
