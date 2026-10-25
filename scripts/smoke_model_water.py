@@ -71,7 +71,7 @@ def main():
         detected['regions'][0]['id'] = 'r99'
         detected['regions'][0]['outline'] = [[-.8, -.8], [.8, -.8], [.8, .8], [-.8, .8]]
         with patch('app.blender.runner.is_available', return_value=True), \
-             patch('app.blender.runner.run', return_value={'ok': True, 'data': detected}), \
+             patch('app.blender.runner.run', side_effect=lambda *a, **k: {'ok': True, 'data': copy.deepcopy(detected)}), \
              patch('app.blender.refine.take_lod_slot', return_value=True), \
              patch('app.blender.refine.free_lod_slot'):
             merged, reason = w.detect_water(model, {}, target_m=2, measure='xyz')
@@ -82,6 +82,23 @@ def main():
         assert merged['regions'][0]['depth_m'] == 2
         assert merged['regions'][0]['look']['preset'] == 'bath'
         assert merged['regions'][1] == result['regions'][1]
+        # Rewrites preserve choices only in the same orientation frame.
+        model.write_bytes(b'rewritten model')
+        assert w.water_status(model, {})['status'] == 'stale'
+        with patch('app.blender.runner.is_available', return_value=True), \
+             patch('app.blender.runner.run', side_effect=lambda *a, **k: {'ok': True, 'data': copy.deepcopy(detected)}), \
+             patch('app.blender.refine.take_lod_slot', return_value=True), \
+             patch('app.blender.refine.free_lod_slot'):
+            refreshed, reason = w.detect_water(model, {}, target_m=2, measure='xyz')
+            assert reason == 'ok'
+            assert refreshed['regions'] == merged['regions']
+            model.write_bytes(b'rewritten again')
+            rotated, reason = w.detect_water(model, {'x':90}, target_m=2, measure='xyz')
+            assert reason == 'ok'
+            assert len(rotated['regions']) == 1
+            assert rotated['regions'][0]['enabled']
+            assert not rotated['regions'][0]['level_user']
+            assert rotated['regions'][0]['look']['preset'] == 'pool'
         for corrupt in ('level', 'look', 'outline'):
             broken = copy.deepcopy(merged)
             broken['regions'][0][corrupt] = {'level':'0.5', 'look':{'preset':[]},

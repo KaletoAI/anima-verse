@@ -1086,13 +1086,16 @@ def request_surface(location_id: str, room_id: str, *, owner: str = "",
                     src = _gallery(owner, room_id).find(DEFAULT_TIER,
                                                         fallback=False)
                     rot = read_sidecar(src).get("rotation") if src else None
+                    if src:
+                        from app.core.model_water import refresh_after_rewrite
+                        target_m = surface_target_m(location_id, room_id, src)
+                        refresh_after_rewrite(src, rot, target_m=target_m, measure="xz")
                     if src and (run_force or not read_surface(src, rot)):
                         # The world size the diorama is placed at decides the
                         # lattice resolution — a normalised mesh scaled to 10 m
                         # needs a node every 0.25/s of a model unit.
                         bake_surface(src, rot, wait_s=300,
-                                     target_m=surface_target_m(location_id,
-                                                               room_id, src),
+                                     target_m=target_m,
                                      measure="xz")
                         # The walk gate caches a location's lattices for 5 s —
                         # without this the server would keep the old floor.

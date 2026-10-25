@@ -226,12 +226,12 @@ def _detection_scale(data):
     )
 
 
-def _valid(data, model_path, rotation):
+def _valid(data, model_path, rotation, *, check_source=True):
     try:
         if (
             data["version"] != WATER_VERSION
             or not _source_of(model_path)
-            or data["source"] != _source_of(model_path)
+            or (check_source and data["source"] != _source_of(model_path))
             or (_norm_rotation(data["rotation"]) != _norm_rotation(rotation))
         ):
             return False
@@ -337,8 +337,8 @@ def detect_water(model_path, rotation, *, target_m, measure, wait_s=0.0, preview
 
     Return (water, reason), sharing the surface wrapper's unavailable/busy/
     failure handling. Detection runs outside the per-model lock. Publication
-    reads and merges the latest valid file under that lock so concurrent
-    PATCHes are retained. Match each new outline centroid to an old region
+    reads and merges the latest structurally valid file under that lock, even
+    when source identity is stale, so concurrent PATCHes are retained. Match each new outline centroid to an old region
     because raster topology and numbered IDs may change on re-detection.
     Carry enabled/look and explicitly edited levels; copy manual regions."""
     from app.blender import refine, runner
@@ -386,7 +386,9 @@ def detect_water(model_path, rotation, *, target_m, measure, wait_s=0.0, preview
     with keyed_lock("model_water", str(Path(model_path).resolve())):
         if not _valid(data, model_path, rotation):
             return (None, "failed")
-        old = read_water(model_path, rotation) or {"regions": []}
+        old = _load(model_path)
+        if not old or not _valid(old, model_path, rotation, check_source=False):
+            old = {"regions": []}
         for index, region in enumerate(data["regions"], 1):
             region["id"] = f"r{index}"
             centroid_x, centroid_z = _centroid(region["outline"])
@@ -424,6 +426,23 @@ def detect_water(model_path, rotation, *, target_m, measure, wait_s=0.0, preview
             logger.exception("Water not stored: %s", model_path)
             return (None, "unstorable")
     return (data, "ok")
+
+
+def refresh_after_rewrite(model_path, rotation, *, target_m, measure):
+    """Refresh existing water in the caller's surface worker, keeping detection opt-in.
+
+    Reuse the surface worker's resolved file/fix/placement scale: props use
+    max variant dimensions / xyz, room dioramas surface_target_m / xz, exactly
+    as the water routes do. Never remove a sidecar when detection cannot run.
+    A valid file needs no refresh, even if its walking surface needs a bake.
+    """
+    if not water_path(model_path).exists() or read_water(model_path, rotation):
+        return
+    _water, reason = detect_water(
+        model_path, rotation, target_m=target_m, measure=measure, wait_s=300
+    )
+    if reason != "ok":
+        logger.info("Water refresh %s: %s", model_path, reason)
 
 
 def patch_water(model_path, rotation, patch):

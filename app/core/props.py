@@ -3243,6 +3243,10 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
                             continue
                         # The fix is the FILE's (v2 E1), read beside the mesh.
                         fix = file_areas(mp)[ROTATION_KEY]
+                        from app.core.model_water import refresh_after_rewrite
+                        target_m = max(variant_dims(meta, idx).values())
+                        refresh_after_rewrite(mp, fix, target_m=target_m,
+                                              measure="xyz")
                         if not run_force and read_surface(mp, fix):
                             continue
                         # The world size THIS variant renders at decides the
@@ -3252,7 +3256,7 @@ def bake_surfaces(prop_id: str, variant: Any = None, *,
                         # carries (``_prop_models``: max of the variant's three
                         # dims, measured over all three axes).
                         if bake_surface(mp, fix, wait_s=300,
-                                        target_m=max(variant_dims(meta, idx).values()),
+                                        target_m=target_m,
                                         measure="xyz"):
                             baked = True
                     except Exception as e:                  # noqa: BLE001

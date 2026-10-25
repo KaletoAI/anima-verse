@@ -140,6 +140,52 @@ def main():
         with patch('app.blender.runner.is_available', return_value=False):
             workers[0]()
         assert not w._detect_jobs
+        # A rewritten mesh refreshes opt-in water in the surface worker.
+        for index in (0, 1):
+            mp = props.model_path(pid, variant=index)
+            mp.write_bytes(b'rewritten model')
+            with patch.object(surf, 'read_surface', return_value=None), \
+                 patch.object(surf, 'bake_surface', return_value=None), \
+                 patch('app.blender.runner.is_available', return_value=True), \
+                 patch('app.blender.runner.run', return_value={'ok':True, 'data':fixture(mp)}) as run, \
+                 patch('app.blender.refine.take_lod_slot', return_value=True), \
+                 patch('app.blender.refine.free_lod_slot'):
+                props.bake_surfaces(pid, index)
+            assert run.call_count == index
+            if index:
+                assert run.call_args.args == ('waterdetect',)
+                assert run.call_args.kwargs['params']['target_m'] == 2
+                assert run.call_args.kwargs['params']['measure'] == 'xyz'
+                assert w.water_status(mp, {})['status'] == 'valid'
+                assert w.read_water(mp, {})['regions'][0]['level'] == .7
+        stale_bytes = w.water_path(model).read_bytes()
+        model.write_bytes(b'rewritten without Blender')
+        with patch.object(surf, 'read_surface', return_value=None), \
+             patch.object(surf, 'bake_surface', return_value=None), \
+             patch('app.blender.runner.is_available', return_value=False):
+            props.bake_surfaces(pid, 1)
+        assert w.water_path(model).read_bytes() == stale_bytes
+        # Busy detection also preserves stale bytes; a room uses the same worker hook.
+        with patch('app.blender.runner.is_available', return_value=True), \
+             patch('app.blender.refine.take_lod_slot', return_value=False):
+            w.refresh_after_rewrite(model, {}, target_m=2, measure='xyz')
+        assert w.water_path(model).read_bytes() == stale_bytes
+        room_model.write_bytes(b'rewritten room model')
+        workers.clear()
+        with patch.object(lm.threading, 'Thread', Thread):
+            lm.request_surface(loc['id'], 'r')
+        assert len(workers) == 1
+        with patch.object(surf, 'read_surface', return_value=None), \
+             patch.object(surf, 'bake_surface', return_value=None), \
+             patch('app.blender.runner.is_available', return_value=True), \
+             patch('app.blender.runner.run', return_value={'ok':True, 'data':fixture(room_model)}) as run, \
+             patch('app.blender.refine.take_lod_slot', return_value=True), \
+             patch('app.blender.refine.free_lod_slot'):
+            workers[0]()
+        assert run.call_count == 1
+        assert run.call_args.kwargs['params']['target_m'] == 4
+        assert run.call_args.kwargs['params']['measure'] == 'xz'
+        assert w.water_status(room_model, {})['status'] == 'valid'
         # Gallery deletion must collect water alongside its mesh.
         gallery = props.model_gallery(pid, 1)
         assert gallery.delete(model.name)
