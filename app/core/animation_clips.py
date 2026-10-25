@@ -38,16 +38,6 @@ installs a premium pack wants it played. A licensed clip's ``url`` carries a
 
 This module is the ONE place that scans the clip directories; the assets
 route, the animation sets and the pose presets all read from here.
-
-It also owns the LOCOMOTION mapping (``shared/config/locomotion_clips.json``):
-which clip kind every figure — NPC and avatar alike — plays for the three
-locomotion roles ``walk`` / ``run`` / ``idle``. The server never names a
-locomotion clip per character (only the activity pose comes from the catalog),
-so the roles are the client's default vocabulary, and this file is where an
-admin swaps that vocabulary for other kinds of the library. Shared across
-every world like the clips themselves (the model-capabilities rule of
-CLAUDE.md), tracked in git; a ground's own ``move_anim`` / ``idle_anim``
-(``shared/terrain/types.json``) keeps its precedence over these roles.
 """
 import json
 from contextlib import nullcontext
@@ -81,10 +71,6 @@ LIBRARIES = ("free", "licensed")
 #: The cumulative orientation dials a clip sidecar records, in degrees —
 #: what the import baked plus every later ``orient_clip``.
 ORIENT_ANGLES = ("yaw_deg", "tilt_deg", "roll_deg")
-#: The locomotion roles a figure plays without the server naming a clip. The
-#: DEFAULT kind of a role is the role's own name — an empty or missing entry
-#: in the mapping file means exactly that.
-LOCOMOTION_ROLES = ("walk", "run", "idle")
 #: How an import treats the root's horizontal travel — the ONE list the routes
 #: and the import core validate against. ``strip`` keeps the figure on the
 #: spot, ``keep`` bakes the source's travel into the file, ``foot_lock``
@@ -345,105 +331,11 @@ def clip_sets() -> List[str]:
     return sorted({e["set"] for e in clip_entries()} - {""})
 
 
-# ── The locomotion mapping: role → clip kind ─────────────────────────────
-
-def locomotion_clips_path() -> Path:
-    """``shared/config/locomotion_clips.json`` — world-independent like the
-    clips it points at, tracked in git."""
-    return get_config_dir() / "locomotion_clips.json"
-
-
-def _read_locomotion_file(path: Path) -> Dict[str, Any]:
-    """The raw mapping file as a dict; ``{}`` when it is absent or junk (a
-    broken file must never leave every figure without a walk)."""
-    if not path.is_file():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
-        logger.warning("locomotion mapping %s unreadable, using defaults: %s",
-                       path, e)
-        return {}
-    if not isinstance(data, dict):
-        logger.warning("locomotion mapping %s is not an object, using defaults",
-                       path)
-        return {}
-    return data
-
-
-def load_locomotion_clips(path: Optional[Path] = None) -> Dict[str, str]:
-    """The RESOLVED mapping ``{walk, run, idle} → kind`` — every role present,
-    never empty: a missing, empty or non-string entry is the role's own name.
-
-    This is what the API delivers and what the client plays; the file itself
-    may hold ``""`` for "default". ``path`` exists for the smoke check, which
-    must never touch the real file.
-    """
-    raw = _read_locomotion_file(path or locomotion_clips_path())
-    out = {}
-    for role in LOCOMOTION_ROLES:
-        value = raw.get(role)
-        kind = value.strip().lower() if isinstance(value, str) else ""
-        out[role] = kind or role
-    return out
-
-
 def _solo_kinds() -> set:
     """Kinds that exist as a SOLO clip (any set, either library) — a pair
     kind is played by two figures at a shared anchor and cannot be a
-    locomotion clip."""
+    solo transition clip."""
     return {e["kind"] for e in clip_entries() if not e["role"]}
-
-
-def save_locomotion_clips(changes: Dict[str, Any],
-                          path: Optional[Path] = None) -> Dict[str, str]:
-    """Merges ``changes`` (``{role: kind}``) into the mapping file and returns
-    the resolved mapping.
-
-    Only the roles named in ``changes`` are touched. A kind is normalised like
-    a rename target (lowercase, the ``validate_kind`` alphabet) and must exist
-    as a SOLO clip somewhere in the two libraries — a role pointing at a file
-    nobody has would leave every figure standing. ``""`` (or ``None``) resets
-    the role to its default and is NOT validated against the library: the
-    default may legitimately be missing (a library without a ``run`` clip
-    falls back through the client's chain, as it always did). Anything that
-    is not a known role is an error, not silently dropped.
-    """
-    if not isinstance(changes, dict):
-        raise ClipLibraryError("object expected: {walk?, run?, idle?}")
-    unknown = sorted(set(changes) - set(LOCOMOTION_ROLES))
-    if unknown:
-        raise ClipLibraryError(
-            f"unknown locomotion role(s) {', '.join(unknown)} "
-            f"(one of {', '.join(LOCOMOTION_ROLES)})")
-    resolved_changes: Dict[str, str] = {}
-    solo = None
-    for role, raw in changes.items():
-        if raw is None or (isinstance(raw, str) and not raw.strip()):
-            resolved_changes[role] = ""
-            continue
-        if not isinstance(raw, str):
-            raise ClipLibraryError(f"{role}: a clip kind (string) is expected")
-        kind = validate_kind(raw)
-        if solo is None:
-            solo = _solo_kinds()
-        if kind not in solo:
-            raise ClipLibraryError(
-                f"{role}: no solo clip of kind '{kind}' in any library")
-        resolved_changes[role] = kind
-
-    target = path or locomotion_clips_path()
-    data = _read_locomotion_file(target)
-    # Keep only the known roles in the file — an old or hand-edited key has
-    # no reader and would only confuse the next editor.
-    data = {role: data.get(role) if isinstance(data.get(role), str) else ""
-            for role in LOCOMOTION_ROLES}
-    data.update(resolved_changes)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-                      encoding="utf-8")
-    logger.info("locomotion clips saved: %s", data)
-    return load_locomotion_clips(target)
 
 
 # ── Transitions: the clip that has to play BETWEEN two clips ─────────────
@@ -454,14 +346,7 @@ TRANSITION_ANY = "*"
 
 
 def clip_transitions_path() -> Path:
-    """``shared/config/clip_transitions.json`` — beside the locomotion
-    mapping and for the same reason: it points at clips, and the clips are
-    world-independent, so this is too.
-
-    A separate file rather than a key in the locomotion mapping: that file is
-    rewritten to exactly the known roles on every save, so anything else in it
-    would be dropped by the next edit.
-    """
+    """Shared, world-independent clip transition rules."""
     return get_config_dir() / "clip_transitions.json"
 
 

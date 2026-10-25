@@ -3,9 +3,7 @@
 Reading is public, editing is not: everything a client plays is served
 unauthenticated, while the import sources, the two library edit routes
 (``DELETE`` / ``PATCH /assets/animation-clips/{library}/{rel}``, and
-``POST …/orient``, which turns and lifts a clip in the file) and the
-locomotion mapping (``PUT /assets/animation-clips/locomotion``) are
-admin-only.
+``POST …/orient``, which turns and lifts a clip in the file) are admin-only.
 
 Clips live in ``shared/models/clips`` (see the README there for the hard file
 requirements: Mixamo FBX "Without Skin", one rig source, 52-bone rig). They
@@ -55,10 +53,11 @@ from app.core.animation_clips import (CLIP_EXTS, ClipExists,
                                       ClipLibraryError, ClipNotFound,
                                       clip_entries, clip_meta,
                                       clip_role_gender, clip_view, delete_clip,
-                                      load_locomotion_clips, load_transitions,
+                                      load_transitions,
                                       orient_clip, pair_kinds, rename_clip,
-                                      save_locomotion_clips, save_transitions,
+                                      save_transitions,
                                       set_clip_loop, set_clip_role_gender)
+from app.core.movement import movement_pose_kinds
 from app.core.auth_dependency import require_admin
 from app.core.cmu_import import ClipImportError, validate_root_motion
 from app.core.http_files import etag_file_response, glb_file_response, snapshot_response
@@ -93,11 +92,7 @@ def list_animation_clips() -> Dict[str, Any]:
     A set clip's ``url`` carries its directory segment. Clients take the URL
     from this listing opaquely — they never build it from name + set.
 
-    ``locomotion`` is the resolved role → kind mapping (``{walk, run, idle}``,
-    every role filled) every figure plays without a server-named clip — the
-    admin's choice from ``shared/config/locomotion_clips.json``, edited via
-    ``PUT /assets/animation-clips/locomotion``. A ground's own move/idle clip
-    still takes precedence on the client.
+    ``movement_poses`` maps fixed poses to played and shipped clip kinds.
     """
     clips = [clip_view(entry) for entry in clip_entries()]
     from app.core.animation_sets import available_sets
@@ -122,7 +117,7 @@ def list_animation_clips() -> Dict[str, Any]:
             # (female/male/animal, which follow from gender + the humanoid
             # feature) plus any further set found in the files.
             "sets": available_sets(),
-            "locomotion": load_locomotion_clips(),
+            "movement_poses": movement_pose_kinds(),
             # The clip that has to play BETWEEN two clips — an exit ("stand up
             # before walking"), an enter, or the pair of exactly two states.
             "transitions": load_transitions()}
@@ -264,28 +259,6 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips, "seconds": round(time.monotonic() - started, 2)}
-
-
-@router.put("/animation-clips/locomotion")
-async def put_locomotion_clips(request: Request,
-                               _: Dict[str, Any] = Depends(require_admin)
-                               ) -> Dict[str, Any]:
-    """Sets the locomotion clips — the kinds every figure plays for
-    ``walk`` / ``run`` / ``idle`` (world-independent, like the clips).
-
-    Body ``{walk?, run?, idle?}``: only the roles present are touched. A kind
-    must exist as a solo clip in a library (400 otherwise); ``""`` resets a
-    role to its default, the kind of the same name. Answers the resolved
-    mapping, in the shape the listing carries under ``locomotion``.
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="invalid JSON body")
-    try:
-        return {"locomotion": save_locomotion_clips(body)}
-    except ClipLibraryError as e:
-        raise _clip_edit_error(e)
 
 
 @router.put("/animation-clips/transitions")
