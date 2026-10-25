@@ -163,3 +163,6 @@ export { clipOutlinePoints, cutoutPolygons, clipPointInside, clipKeepsPoint,
 export { cutPlaneData } from './depthCutMath'
 export { surfaceFinish } from './materials'
 export type { VerifyPoint, VerifyBox, VerifyMeasurement, VerifyResult } from './verify'
+
+export { buildPropWater } from './propWater'
+export type { ScenePropWater } from './types'

@@ -7,7 +7,7 @@ import { bubbleMs, bubbleText } from '../game/bubble';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
 import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   canRun, movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, sinkForState, standingClipFor,
-  terrainPace, wadeGate,
+  terrainPace, propWaterWord,
   type MovementType, type GroundScope, type GroundSink, type GroundWater } from '../game/walk';
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
@@ -37,6 +37,8 @@ const WAYPOINT_ARRIVE_M = 1.5;
  *  hands in: `main.ts` owns the terrain payload and the footprints, this file
  *  owns neither. */
 export interface GroundMove {
+  /** The unpadded lattice bed is separate from the figure's visual clearance. */
+  propWater?: { y: number; swim_from_m: number; groundY?: number } | null;
   movement: MovementType;
   scope: GroundScope;
   /** The terrain type's raw `speed_factor` at the point (1 = plain ground).
@@ -1266,9 +1268,9 @@ export class NpcManager {
   private groundWordAt(x: number, z: number): { raw: GroundMove; bedY: number; gm: GroundWater } {
     const raw = this.groundMoveAt(x, z);
     const bedY = this.groundY(x, z);
-    const gm = wadeGate({ movement: movementOf(raw.movement, raw.scope),
+    const gm = propWaterWord({ movement: movementOf(raw.movement, raw.scope),
       sink: movementOf(raw.movement, raw.scope) === 'swim' ? raw.sink : {move: 0, idle: 0},
-      water: groundWaterLevel(raw.water, raw.scope) }, bedY, raw.swimFrom);
+      water: groundWaterLevel(raw.water, raw.scope) }, bedY, raw.swimFrom, raw.propWater);
     return { raw, bedY, gm };
   }
 
@@ -1374,10 +1376,10 @@ export class NpcManager {
         // feet on the bed. `goalPos.y` is still the raw terrain height of the
         // point the walk has reached, which is exactly the bed to measure
         // against; it becomes the float height two lines further down.
-        const gm = wadeGate({ movement: movementOf(raw.movement, raw.scope),
+        const gm = propWaterWord({ movement: movementOf(raw.movement, raw.scope),
           sink: movementOf(raw.movement, raw.scope) === 'swim' ? raw.sink : {move: 0, idle: 0},
           water: groundWaterLevel(raw.water, raw.scope) },
-        goalPos.y, raw.swimFrom);
+        goalPos.y, raw.swimFrom, raw.propWater);
         // THE UNDERWATER GHOST, for a traveller as for anybody else (finding
         // H3) — and on the UNGATED water level, because a wader is exactly the
         // figure the opaque surface cuts in half. `goalPos.y` is still the raw
@@ -1386,7 +1388,7 @@ export class NpcManager {
           ghostCutY(goalPos.y, groundWaterLevel(raw.water, raw.scope)));
         const groundIdle = idleClip(gm.movement);
         const sinkM = groundSink(sinkForState(travelling, groundIdle, gm.sink),
-                                 raw.scope);
+                                 raw.propWater ? 'open' : raw.scope);
         goalPos.y = floatRootY(goalPos.y, gm.water, sinkM);
         // The clip this frame asks for below — and the pace the bridge it
         // may open, or the one running, allows (the gate of the step without
@@ -1561,7 +1563,7 @@ export class NpcManager {
         groundWaterLevel(standRaw.water, standRaw.scope)));
       const standIdle = idleClip(standGm.movement);
       const standSink = groundSink(
-        sinkForState(moving, standIdle, standGm.sink), standRaw.scope);
+        sinkForState(moving, standIdle, standGm.sink), standRaw.propWater ? 'open' : standRaw.scope);
       // THE HEIGHT. On a flight of stairs the ride answers it OUTRIGHT: the
       // ramp is a function of where the figure stands (`game/stairs.stairY`),
       // so there is nothing left to ease towards and easing would be the very

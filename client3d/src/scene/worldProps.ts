@@ -1,3 +1,4 @@
+import { waterRegionAt, type WaterHit } from './propWaterMath';
 import { propLightPool, type LightHandle } from './lightPool';
 /**
  * worldProps — die EINZELN gesetzten Props der Weltebene (§ A9a).
@@ -27,7 +28,7 @@ import { propLightPool, type LightHandle } from './lightPool';
  * Reine Deko: kein Nav, keine Kollision, kein Fog (der Block kommt ungefiltert).
  */
 import * as THREE from 'three';
-import { pickModelVariant, placeModelSpec } from '@anima/scene-render';
+import { buildPropWater, pickModelVariant, placeModelSpec } from '@anima/scene-render';
 import type { SceneModelSpec } from '@anima/scene-render';
 import { leaseGlb, type GlbLease } from './propAssets';
 import { instanceTier, SCATTER_LOD_DEFAULTS } from './scatterLod';
@@ -37,7 +38,7 @@ import { ghostCutY, ghostWaterLevel } from '../game/walk';
 import type { WorldWater } from './tiles';
 import { waterInside } from './waterShade';
 import type { WorldPropSpec as BaseWorldPropSpec } from '../types';
-type WorldPropSpec = BaseWorldPropSpec & { light?: SceneModelSpec['light'] };
+type WorldPropSpec = BaseWorldPropSpec & { light?: SceneModelSpec['light']; water?: SceneModelSpec['water'] };
 
 /**
  * Wie viel weiter ein HANDGESETZTES Prop seine Stufen behält als ein
@@ -84,6 +85,8 @@ interface PropRecord {
   spec: WorldPropSpec;
   lightHandle?: LightHandle;
   lightKey?: string;
+  waterKey?: string;
+  waterMeshes?: THREE.Mesh[];
   /** Das eingehängte Objekt (null, solange nichts geladen ist). */
   node: THREE.Group | null;
   lease?: GlbLease;
@@ -112,6 +115,7 @@ export interface WorldPropsLayer {
   tick(camera: THREE.Vector3): void;
   /** Das Relief hat sich bewegt — Höhen nachziehen, sonst nichts. */
   redrape(): void;
+  waterAt(x: number, z: number): WaterHit | null;
   /** Die Sichtweiten-Einstellung des Spielers (dieselbe wie für die Streu). */
   setLod(cfg: ScatterLodCfg): void;
   dispose(): void;
@@ -125,6 +129,7 @@ export function worldPropSceneSpec(wp: WorldPropSpec,
   return {
     role: 'prop',
     ...(wp.light ? { light: wp.light } : {}),
+    ...(wp.water ? { water: wp.water } : {}),
     id: wp.prop_id,
     level: 0,
     variants: wp.variants || {},
@@ -286,12 +291,37 @@ export function createWorldProps(
     for (const [id, rec] of Array.from(records)) {
       if (seen.has(id)) continue;
       drop(rec);
+      dropWater(rec);
       rec.lightHandle?.remove();
       records.delete(id);
     }
   }
 
+  function dropWater(rec: PropRecord): void {
+    for (const mesh of rec.waterMeshes ?? []) {
+      mesh.parent?.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    rec.waterMeshes = undefined;
+  }
+
   function redrapeOne(rec: PropRecord): void {
+    const waterKey = JSON.stringify(rec.spec.water);
+    if (rec.waterKey !== waterKey) {
+      dropWater(rec);
+      rec.waterKey = waterKey;
+    }
+    if (rec.spec.water) {
+      const lift = heightAt(rec.spec.x, rec.spec.z);
+      if (!rec.waterMeshes) {
+        rec.waterMeshes = buildPropWater(THREE, rec.spec.water, lift) as THREE.Mesh[];
+        group.add(...rec.waterMeshes);
+      }
+      rec.waterMeshes.forEach((mesh, i) => {
+        mesh.position.y = rec.spec.water!.regions[i].y + lift;
+        mesh.visible = rec.tier !== 2;
+      });
+    }
     const light = rec.spec.light;
     const key = JSON.stringify(light);
     if (rec.lightKey !== key) {
@@ -334,6 +364,7 @@ export function createWorldProps(
       const d = Math.hypot(dx, dz);
       const tier = instanceTier(d, rec.tier, cfg);
       rec.tier = tier;
+      for (const mesh of rec.waterMeshes ?? []) mesh.visible = tier !== 2;
       if (tier === 2) {
         if (rec.node) rec.node.visible = false;
         continue;
@@ -351,10 +382,14 @@ export function createWorldProps(
     sync,
     tick,
     redrape,
+    waterAt(x, z) {
+      return waterRegionAt(Array.from(records.values(), (rec) => rec.spec), x, z,
+        (spec) => heightAt(spec.x, spec.z));
+    },
     setLod(next: ScatterLodCfg) { cfg = worldPropLodCfg(next); },
     dispose() {
       disposed = true;
-      for (const rec of records.values()) { drop(rec); rec.lightHandle?.remove(); }
+      for (const rec of records.values()) { drop(rec); dropWater(rec); rec.lightHandle?.remove(); }
       records.clear();
       group.parent?.remove(group);
     },

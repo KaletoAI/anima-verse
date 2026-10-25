@@ -5,7 +5,7 @@ import { createFocusQueue } from '../game/focusQueue';
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { applyClipOutline, applyCutouts, applyDepthCut, applySlotMaterials,
-  buildExtra,
+  buildExtra, buildPropWater,
   buildPlaceholder,
   buildPlate, buildWall, CLIP_MAX_POINTS, disposeClipMaterials,
   disposeCutMaterials, disposeSlotMaterials, leafPivot,
@@ -37,7 +37,7 @@ import { ghostCutY, ghostWaterLevel } from '../game/walk';
 import { waterInside } from './waterShade';
 
 export type Layer = 'shell' | 'detail';
-export type PlacedSceneModel = BasePlacedSceneModel & { layer: Layer; lease?: GlbLease; lightHandle?: LightHandle; swapPromise?: Promise<void> };
+export type PlacedSceneModel = BasePlacedSceneModel & { layer: Layer; lease?: GlbLease; lightHandle?: LightHandle; waterMeshes?: THREE.Mesh[]; swapPromise?: Promise<void> };
 const detailReports = new WeakMap<Tile, VerifyReport | null>();
 
 /** Verification for the currently mounted detail layer; null when disabled or absent. */
@@ -85,6 +85,20 @@ function reliftPlacement(tile: Tile, rec: PlacedSceneModel): number {
                                   tile.center.y, worldGroundSampler());
   if (rec.object && step.delta) rec.object.position.y += step.delta;
   rec.lift = step.lift;
+  if (rec.spec.water) {
+    if (!rec.waterMeshes) {
+      rec.waterMeshes = buildPropWater(THREE, rec.spec.water, step.lift) as THREE.Mesh[];
+      for (const mesh of rec.waterMeshes) {
+        // Only geometry is mount-owned; water looks belong to scene-render.
+        ownedOf(tile, rec.layer).geometries.add(mesh.geometry);
+        ownedTag.set(mesh, { geometry: mesh.geometry, materials: [], textures: [] });
+        (rec.parent ?? tile.group).add(mesh);
+      }
+    }
+    rec.waterMeshes.forEach((mesh, i) => {
+      mesh.position.y = rec.spec.water!.regions[i].y + step.lift;
+    });
+  }
   // THE BAKED LATTICE COMES ALONG (v6): it describes where the model stands,
   // so the one funnel that moves the model moves it too — mount, re-drape and
   // tier swap alike. The entry is found ONCE by spec identity and then held on
@@ -1679,6 +1693,8 @@ function dropLayerModels(tile: Tile, layer: Layer): void {
     if (rec.layer !== layer) continue;
     rec.lightHandle?.remove();
     rec.lightHandle = undefined;
+    for (const mesh of rec.waterMeshes ?? []) mesh.parent?.remove(mesh);
+    rec.waterMeshes = undefined;
     dropPlacementGhost(rec);
     disposeSlotMaterials(rec.slotMats);
     rec.slotMats = undefined;
@@ -1863,6 +1879,10 @@ async function mountModels(tile: Tile, scene: ScenePayload, specs: SceneModelSpe
         }
         if (pendingRec) {
           pendingRec.lightHandle?.remove();
+          for (const mesh of pendingRec.waterMeshes ?? []) {
+            mesh.parent?.remove(mesh);
+            releaseOwnedMesh(tile, mesh, layer);
+          }
           dropPlacementGhost(pendingRec);
           disposeSlotMaterials(pendingRec.slotMats);
           const index = placements.indexOf(pendingRec);

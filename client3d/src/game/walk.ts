@@ -441,6 +441,20 @@ export interface GroundWater {
   water: number | null;
 }
 
+/** Prop water overrides the scope-filtered painted ground word, even indoors. */
+export function propWaterWord(word: GroundWater, groundY: number, swimFromM: number,
+                              region?: { y: number; swim_from_m: number; groundY?: number } | null): GroundWater {
+  return region
+    ? wadeGate({ movement: 'swim', sink: { move: 0.35, idle: 1.3 }, water: region.y },
+      region.groundY ?? groundY, region.swim_from_m)
+    : wadeGate(word, groundY, swimFromM);
+}
+
+/** The server step ladder carries a walker on the higher of bed and mirror. */
+export function propWaterCarry(bedY: number, region: { y: number } | null): number {
+  return region ? Math.max(bedY, region.y) : bedY;
+}
+
 /**
  * SWIMMING IS A DEPTH, NOT A KIND (W4c, 2026-08-23) — the SECOND reach rule of
  * the ground contract, next to the scope one above.

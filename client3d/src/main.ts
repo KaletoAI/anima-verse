@@ -1,3 +1,4 @@
+import { waterRegionAt, type WaterHit } from './scene/propWaterMath';
 import { openable as sceneOpenable, buildingTier, interiorTier, doorMarkTransform,
   boundaryMarkTransform, basementHole, neighbourOccludes } from './scene/sceneView';
 import { sampleWorldHeight } from '@anima/scene-render';
@@ -35,7 +36,7 @@ import { openViewShouldClose } from './game/openView';
 import { infoPanelData } from './game/infoPanel';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
-  gateStandY, groundScope, groundStoreyFloors, poseClip, slideBlocked,
+  gateStandY, propWaterCarry, groundScope, groundStoreyFloors, poseClip, slideBlocked,
   slopeBlocks, terrainBlocks, terrainPace, walkDir, type GroundScope,
 } from './game/walk';
 import {
@@ -604,7 +605,9 @@ async function startApp(username: string, role: string) {
   // why the footprints and rooms are asked here and not in the manager.
   npcs.setTerrainMove((x, z) => {
     const type = terrainGround.typeAt(x, z);
-    return { movement: type.movement,
+    const propWater = propWaterAt(x, z);
+    return { propWater: propWater && {...propWater, groundY: gateBedAt(x, z, tileAt(x, z))},
+      movement: type.movement,
       sink: { move: type.move_sink_m, idle: type.idle_sink_m },
       // …and the MIRROR over the point (E4, § G4): where a lake stands here,
       // a figure hangs under its water line instead of under the carved bed
@@ -3224,6 +3227,19 @@ async function startApp(username: string, role: string) {
     return false;
   }
 
+  /** Placement water is local to the tile; world props already use world XZ. */
+  function propWaterAt(x: number, z: number, tile = tileAt(x, z)): WaterHit | null {
+    let hit = worldPropsLayer.waterAt(x, z);
+    if (!tile) return hit;
+    const local = worldToTile(tile, x, z);
+    const placements = (tile.placedModels ?? []).filter((rec) => rec.spec.level === 0);
+    const lifts = new Map(placements.map((rec) => [rec.spec, rec.lift]));
+    const region = waterRegionAt(placements.map((rec) => rec.spec), local.x, local.z,
+      (spec) => (lifts.get(spec) ?? 0) + tile.center.y);
+    if (region && (!hit || region.y > hit.y)) hit = region;
+    return hit;
+  }
+
   /**
    * WHERE THE HEIGHT GATE MEASURES A FIGURE at a world point — the three
    * lookups behind `walk.gateStandY`, which is the client's copy of the
@@ -3257,7 +3273,7 @@ async function startApp(username: string, role: string) {
    * `tile` is passed IN, not looked up: the callers on the frame path have it
    * already, and this used to cost a third `tileAt` per point per frame.
    */
-  function gateStandAt(x: number, z: number, tile: Tile | null): number {
+  function gateBedAt(x: number, z: number, tile: Tile | null): number {
     const terrain = terrainGround.heightAt(x, z);
     if (!tile) return terrain;
     const local = worldToTile(tile, x, z);
@@ -3267,6 +3283,10 @@ async function startApp(username: string, role: string) {
         (id) => tile.roomLevels.get(id)), local.x, local.z) : null;
     return gateStandY(baked,
       declared === null ? null : tile.center.y + declared, terrain);
+  }
+
+  function gateStandAt(x: number, z: number, tile: Tile | null): number {
+    return propWaterCarry(gateBedAt(x, z, tile), propWaterAt(x, z, tile));
   }
 
   /**
