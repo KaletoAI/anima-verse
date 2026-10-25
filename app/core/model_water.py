@@ -30,7 +30,9 @@ import tempfile
 import threading
 from collections import OrderedDict
 from pathlib import Path
-from app.core.model_surface import _norm_rotation, _source_of, block_sig, surface_scale
+from app.core.model_surface import (
+    SURFACE_CLEARANCE_M, _norm_rotation, _source_of, block_sig, surface_scale,
+)
 from app.core.timeutils import utc_now_iso
 from app.core.keyed_lock import keyed_lock
 
@@ -357,6 +359,7 @@ def detect_water(model_path, rotation, *, target_m, measure, wait_s=0.0, preview
                 "target_m": target_m,
                 "measure": measure,
                 "step": 0.02,
+                "clearance": SURFACE_CLEARANCE_M,
                 "max_cells": 250000,
                 "preview": bool(preview),
             },

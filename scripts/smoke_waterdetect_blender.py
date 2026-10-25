@@ -8,6 +8,12 @@ area .25 m², candidate/bath disabled. Blue flat patch 1x1 at .2 ->
 painted film .21, candidate/lake disabled. Levels allow one .02 m step,
 areas allow 10% (boundary sampling). Grey room enclosed by 2.5 m walls,
 measure=xz: no colour evidence, so no regions even though it is a depression.
+Roofed diorama: the same blue 2x1 pool, bed .2 and rim 1.2, under a
+flat grey slab whose underside is .2+2.5=2.7 (2.5 m above the floor).
+Air over bed = 2.5 m and over rim = 1.5 m, both >= 1.2 m clearance.
+With measure=xz and target 2.2, s=1: chosen bed/rim remain .2/1.2,
+so colour basin area = 2 m² (±10%) and level = 1.12 (±.021 m).
+A topmost-hit raster sees only grey and fails this regression.
 Usage: ./.venv/bin/python scripts/smoke_waterdetect_blender.py
 """
 import subprocess
@@ -49,6 +55,10 @@ for s in (-1,1):
     box((s*2,0,1.25),(.1,4.1,2.5),grey)
     box((0,s*2,1.25),(4,.1,2.5),grey)
 bpy.ops.export_scene.gltf(filepath=str(out/'room.glb'), export_format='GLB')
+reset()
+basin(0,2,1,1.2,blue)
+box((0,0,2.75),(2.2,1.2,.1),grey)
+bpy.ops.export_scene.gltf(filepath=str(out/'roofed-pool.glb'), export_format='GLB')
 '''
 
 
@@ -78,6 +88,16 @@ def main():
         assert (root/'preview.png').is_file()
         room, reason = detect_water(root/'room.glb', {}, target_m=4.1, measure='xz', wait_s=300)
         assert reason == 'ok' and room['regions'] == [], room
+        roofed, reason = detect_water(root/'roofed-pool.glb', {}, target_m=2.2,
+                                      measure='xz', wait_s=300, preview=root/'roofed-preview.png')
+        assert reason == 'ok', reason
+        assert len(roofed['regions']) == 1, roofed
+        pool = roofed['regions'][0]
+        assert pool['kind'] == 'basin' and pool['look']['preset'] == 'pool', pool
+        assert pool['confidence'] == 'sure' and pool['enabled'], pool
+        assert abs(pool['area_m2'] - 2) <= .2, pool
+        assert abs(pool['level'] - 1.12) <= .021, pool
+        assert (root/'roofed-preview.png').is_file()
     print('smoke_waterdetect_blender: PASS')
 
 

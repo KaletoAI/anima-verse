@@ -44,7 +44,7 @@ def _srgb(v):
 def _raster_mesh(objects, fix):
     """Build fixed-glTF triangles and UV/colour/material data for spec § 4.1.
 
-    Keep face metadata in BVH triangle order so each top hit samples its face."""
+    Keep face metadata in BVH triangle order so each chosen hit samples its face."""
     verts, tris, faces = ([], [], [])
     depsgraph = bpy.context.evaluated_depsgraph_get()
     for obj in objects:
@@ -78,6 +78,31 @@ def _raster_mesh(objects, fix):
         finally:
             ev.to_mesh_clear()
     return (verts, tris, faces)
+
+
+def _cell_hit(bvh, x, z, top, clearance):
+    """Select heightgrid's cell hit, retaining face data for spec § 4.1.
+
+    Mirror _hits_below's traversal because it discards position, normal and
+    face index needed for colour sampling; reuse _walk_height for the rule.
+    """
+    hits = []
+    origin = Vector((x, top, z))
+    direction = Vector((0.0, -1.0, 0.0))
+    while True:
+        loc, normal, index, _dist = bvh.ray_cast(origin, direction)
+        if loc is None:
+            break
+        hits.append((loc, normal, index))
+        origin = Vector((x, loc.y - _heightgrid.RAY_EPS, z))
+    hits.sort(key=lambda h: h[0].y)
+    height = _heightgrid._walk_height(
+        [(loc.y, normal.y > 0.0) for loc, normal, _index in hits], clearance
+    )
+    return next(
+        (hit for hit in hits if hit[0].y == height and hit[1].y > 0.0),
+        (None, None, None),
+    )
 
 
 def _colour(mat, uvs, cols, weights, images):
@@ -437,7 +462,7 @@ def _preview(path, colours, regions, cols, rows, lo, step):
 def waterdetect(args):
     """Run spec § 4 detection in the shared fixed-glTF frame.
 
-    Scale the world step and enforce the cell cap (§ 4); rasterize top hits
+    Scale the world step and enforce the cell cap (§ 4); rasterize clearance-qualified hits
     and colours (§ 4.1), classify/outline regions (§§ 4.2–4.5), optionally
     write the preview (§ 4.6), and return runner metadata and output paths."""
     p = args.get("params") or {}
@@ -455,6 +480,7 @@ def waterdetect(args):
     extent = max(ext) if measure == "xyz" else max(ext[0], ext[2])
     target = float(p.get("target_m") or 0)
     scale = target / (extent or 1.0) if target > 0 else 1.0
+    clearance = float(p.get("clearance") or 1.2) / scale
     step = float(p.get("step") or 0.02) / scale
     max_cells = max(4, int(p.get("max_cells") or 250000))
     while True:
@@ -469,8 +495,8 @@ def waterdetect(args):
         for i in range(cols):
             x = _heightgrid._inside(lo[0] + i * step, lo[0], hi[0])
             z = _heightgrid._inside(lo[2] + j * step, lo[2], hi[2])
-            hit, normal, index, _ = bvh.ray_cast(
-                Vector((x, hi[1] + 1, z)), Vector((0, -1, 0))
+            hit, normal, index = _cell_hit(
+                bvh, x, z, hi[1] + 1, clearance
             )
             colour = None
             if hit is not None:
