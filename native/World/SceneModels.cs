@@ -18,11 +18,11 @@ public sealed class ModelStats
     public int Placeholders;
     /// <summary>No mesh and no placeholder (the browser's <c>verify.skip</c>).</summary>
     public int Missing;
-    /// <summary>Not in the view: indoor specs of a closed location (they hang in the invisible interior group).</summary>
+    /// <summary>Not mounted: indoor specs of a far-ring location (<c>mountDetail</c> runs for the near ring only).</summary>
     public int Interior;
     /// <summary>Indoor specs of the open location in a room of another storey.</summary>
     public int Storey;
-    /// <summary>A shell building of the OPEN location: the crossfade takes it to opacity 0 (roofParts hidden).</summary>
+    /// <summary>A shell building of the OPEN location (mounted; the crossfade takes it to opacity 0, roofParts hidden).</summary>
     public int Faded;
     /// <summary>World props beyond the landmark cull (360 m from the camera, <c>worldPropLodCfg</c>).</summary>
     public int Culled;
@@ -94,6 +94,9 @@ public static class SceneModels
         else stats.Full++;
         return placed;
     }
+
+    /// <summary>A placement that is the grey stand-in box, not a mesh (<see cref="Placeholder"/>).</summary>
+    public static bool IsPlaceholder(Node3D node) => node.Name.ToString().StartsWith("Placeholder", StringComparison.Ordinal);
 
     /// <summary><c>buildPlaceholder</c>: the box of <see cref="PrimitiveMath.PlaceholderBox"/> (each side at least 1 cm), its origin at the bottom face's centre.</summary>
     public static Node3D Placeholder((double W, double D, double H) dims, RecipeMaterials materials)

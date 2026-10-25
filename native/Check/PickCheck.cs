@@ -51,13 +51,14 @@ namespace AnimaNative.Check;
 ///      again at 9.25 (the bob's offset is gone).
 ///
 /// S3c world (README "S3c world"):
-///   G  loc-closed (−40, 100), datum 4.693359375 (overview, README), yaw 0, square ±4: openable, built closed with
-///      its shell building. A ray straight down at local (0, −2) — the lift pad (centre y 0.05, height 0.1) —
-///      first hits the building. Opened ("Look inside"): the shell fades (not placed), the interior stands: the
-///      same ray hits the pad top at 50 − (4.693359375 + 0.1) = 45.206640625 m; the shelf's URL is asked for.
-///      loc-open closed again: its plan hull stands, the chair (room r-ground) is gone, the bench (garden,
-///      always visible) stays. Auto-close against loc-closed (width 8 → limit max(12, 24) = 24): target 24 m
-///      off → stays, 24.5 m → closes; camera 60.5 m → closes.
+///   G  loc-closed (−40, 100), datum 4.693359375 (overview, README), yaw 0, square ±4: openable, mounted ONCE
+///      (Task 15) with its shell building AND its interior, held at fade 0 (the shelf's URL is asked at the mount).
+///      A ray straight down at local (0, −2) — the lift pad (centre y 0.05, height 0.1) — first hits the building.
+///      Opened ("Look inside"): only the fade target moves (same group, no scene request); the crossfade numbers
+///      (fade, roof transparency, shadow, hidden at 0.95, occlusion, close) are derived where they are checked.
+///      After 0.75 s the same ray hits the pad top at 50 − (4.693359375 + 0.1) = 45.206640625 m. loc-open stays
+///      closed (fade 0: hull whole, cut copy and interior hidden, the bench outside). Auto-close against
+///      loc-closed (width 8 → limit max(12, 24) = 24): target 24 m off → stays, 24.5 m → closes; camera 60.5 m → closes.
 /// </summary>
 public static class PickCheck
 {
@@ -298,30 +299,61 @@ public static class PickCheck
             var view = new OpenView();
             Expect("G boot open", stats.OpenLocation == "loc-open" && view.TryOpen(stats.OpenLocation, true, out _), stats.OpenLocation);
             var closed = builder.Slots["loc-closed"];
+            var openSlot = builder.Slots["loc-open"];
             Expect("G loc-closed openable, closed", closed.Openable && !closed.Open, "");
             Near("G loc-closed datum", closed.Group.Position.Y, ClosedDatum, 1e-4);
             Near("G loc-far shell height", builder.Slots["loc-far"].Height, 3.0, 1e-4);
-            Expect("G closed shows its building", HasChild(closed.Group, "Placed_building_loc-closed"), "");
+            // Mounted once: the building AND the interior (pad, wall, the well outside; the shelf asked for and missing).
+            var building = closed.Group.GetNode<Node3D>("Placed_building_loc-closed");
+            var interior = closed.Group.GetNode<Node3D>("Interior");
+            Expect("G mounted once", building.Visible && !interior.Visible && closed.Fade.Fade == 0
+                   && interior.GetChildren().OfType<MeshInstance3D>().Any() && HasChild(closed.Group, "Placed_prop_well"),
+                   string.Join(",", closed.Group.GetChildren().Select(c => c.Name.ToString())));
+            Expect("G shelf asked at the mount", source.ByteRequests.Contains("/assets/props/shelf/model?tier=full"), "");
             var ray = new Vec3(-40, 50, 98);
             var before = picking.Pick(ray, new Vec3(0, -1, 0));
             Expect("G before: the building", before is { Id: "loc-closed" } b0 && b0.Distance < 50 - (ClosedDatum + 0.1) - 0.5, $"{before}");
 
-            // "Look inside": the singleton moves, both locations rebuild.
+            // "Look inside": the singleton moves, both targets flip — nothing is rebuilt or fetched.
+            var groupBefore = closed.Group;
+            int scenesBefore = source.SceneRequests.Count;
             Expect("G open loc-closed", view.TryOpen("loc-closed", closed.Openable, out var wasOpen) && wasOpen == "loc-open", wasOpen ?? "null");
-            bool okOpen = await builder.SetOpenAsync("loc-closed", true);
-            bool okClose = await builder.SetOpenAsync("loc-open", false);
-            Expect("G rebuilt", okOpen && okClose, $"{okOpen}/{okClose}");
-            Expect("G loc-closed open", closed.Open && !HasChild(closed.Group, "Placed_building_loc-closed")
-                   && HasChild(closed.Group, "Placed_prop_well"), string.Join(",", closed.Group.GetChildren().Select(c => c.Name.ToString())));
-            Expect("G shelf asked", source.ByteRequests.Contains("/assets/props/shelf/model?tier=full"), "");
+            Expect("G targets", builder.SetOpen("loc-open", false) && builder.SetOpen("loc-closed", true) && closed.Open && !openSlot.Open, "");
+            var far = new Vector3(-40, 30, 140);   // a camera no neighbour stands in front of (see the occlusion below)
+            Tick(builder, far, 6);
+            // f = 1 − e^(−0.4) = 0.32967995: interior up, the roof at 1 − 1.4·f → transparency 0.46155194, still casting.
+            Near("G fade 0.1 s", closed.Fade.Fade, 0.32967995396436056, 1e-9);
+            var roofMesh = closed.Fade.RoofMeshes.First();
+            Expect("G 0.1 s: interior up, roof fading", interior.Visible && building.Visible
+                   && roofMesh.CastShadow == GeometryInstance3D.ShadowCastingSetting.On, "");
+            Near("G roof transparency 0.1 s", roofMesh.Transparency, 0.46155193555010476, 1e-6);
+            Tick(builder, far, 39);
+            // 45 frames = 0.75 s: f = 1 − e^(−3) = 0.950213 ≥ 0.95 → the roof is hidden, the shell casts no shadow.
+            Near("G fade 0.75 s", closed.Fade.Fade, 0.950212931632136, 1e-9);
+            Expect("G 0.75 s: roof hidden", !building.Visible && roofMesh.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off, "");
+            Expect("G no rebuild", ReferenceEquals(closed.Group, groupBefore) && source.SceneRequests.Count == scenesBefore, "");
             var after = picking.Pick(ray, new Vec3(0, -1, 0));
             Expect("G after: the lift pad", after?.Id == "loc-closed", $"{after}");
             Near("G pad distance", after!.Value.Distance, 50 - (ClosedDatum + 0.1), 2e-3);
-            var openSlot = builder.Slots["loc-open"];
-            Expect("G loc-open closed", !openSlot.Open && HasChild(openSlot.Group, "Placed_building_loc-open")
-                   && !HasChild(openSlot.Group, "Placed_prop_chair") && HasChild(openSlot.Group, "Placed_prop_bench"),
-                   string.Join(",", openSlot.Group.GetChildren().Select(c => c.Name.ToString())));
-            Expect("G one group per location", world.GetNode("Locations").GetChildren().Count(c => c.Name.ToString().StartsWith("Loc_loc-closed")) >= 1, "");
+            Expect("G loc-open stays closed", openSlot.Fade.Fade == 0 && openSlot.Group.GetNode<Node3D>("Placed_building_loc-open").Visible
+                   && !openSlot.Group.GetNode<Node3D>("Cutout_building_loc-open").Visible
+                   && !openSlot.Group.GetNode<Node3D>("Interior").Visible && HasChild(openSlot.Group, "Placed_prop_bench"), "");
+
+            // Neighbour occlusion: camera C (168, ·, 140), target the open centre (−40, 100) → d = (−208, −40);
+            // loc-open's centre (64, 120) − C = (−104, −20) = d/2 → t = 0.5 ∈ (0.05, 0.92), off the line by 0 <
+            // width · 1.05, and it is taller than 1.5 m → it fades: occl = 1 − e^(−8·n/60). loc-far (600, 128):
+            // (432, −12)·d < 0 → t < 0 → stays.
+            Expect("G loc-open tall", openSlot.Height > 1.5, $"{openSlot.Height}");
+            var behind = new Vector3(168, 30, 140);
+            Tick(builder, behind, 6);
+            Near("G occlusion 0.1 s", openSlot.Fade.Occl, 0.5506710358827784, 1e-9);
+            var hullMesh = openSlot.Fade.Meshes.First(m => openSlot.Group.GetNode<Node3D>("Placed_building_loc-open").IsAncestorOf(m));
+            Near("G occluded transparency", hullMesh.Transparency, 0.5506710358827784, 1e-6);
+            Expect("G occluded still shown", openSlot.Group.Visible && builder.Slots["loc-far"].Fade.Occl == 0, "");
+            Tick(builder, behind, 54);
+            Expect("G occluded hidden", !openSlot.Group.Visible && openSlot.Fade.Occl >= 0.95, $"{openSlot.Fade.Occl}");
+            Tick(builder, far, 60);   // camera back: 0.99966·e^(−8t) falls under 0.02 within 0.49 s → snapped to 0
+            Expect("G occlusion released", openSlot.Group.Visible && openSlot.Fade.Occl == 0 && hullMesh.Transparency == 0, $"{openSlot.Fade.Occl}");
 
             // The overview auto-close against loc-closed: centre (−40, 100), width 8 → 24 m.
             var cx = closed.Group.Position.X;
@@ -330,15 +362,33 @@ public static class PickCheck
             Expect("G 24 m off stays", !OpenView.ShouldClose(15, -40, 124, cx, cz, closed.Width), "");
             Expect("G 24.5 m off closes", OpenView.ShouldClose(15, -40, 124.5, cx, cz, closed.Width), "");
             Expect("G camera 60.5 m closes", OpenView.ShouldClose(60.5, -40, 100, cx, cz, closed.Width), "");
-            Expect("G close", view.Close() == "loc-closed" && await builder.SetOpenAsync("loc-closed", false) && !closed.Open
-                   && HasChild(closed.Group, "Placed_building_loc-closed"), "");
-            return $"look inside {before!.Value.Distance:0.###} → {after.Value.Distance:0.###} m";
+
+            // Close: 165 frames open (f = 1 − e^(−11)), then 60 closed → f·e^(−4) = 0.0183153: interior hidden (≤ 0.03),
+            // the roof back but still at transparency 1.4·f = 0.0256415; 60 more → 0.000335: alpha 0.99953 ≥ 0.999 →
+            // transparency 0, the roof is in the opaque pass again.
+            Expect("G close", view.Close() == "loc-closed" && builder.SetOpen("loc-closed", false) && !closed.Open, "");
+            Tick(builder, far, 60);
+            Near("G fade closing", closed.Fade.Fade, 0.018315332986413725, 1e-9);
+            Expect("G closing: interior hidden, roof back", !interior.Visible && building.Visible, "");
+            Near("G closing roof transparency", roofMesh.Transparency, 0.025641466180979212, 1e-6);
+            Tick(builder, far, 60);
+            Expect("G closed: roof opaque", roofMesh.Transparency == 0 && roofMesh.CastShadow == GeometryInstance3D.ShadowCastingSetting.On,
+                   $"{roofMesh.Transparency}");
+            var again = picking.Pick(ray, new Vec3(0, -1, 0));
+            Expect("G closed again: the building", again is { Id: "loc-closed" } b2 && b2.Distance < 50 - (ClosedDatum + 0.1) - 0.5, $"{again}");
+            return $"look inside {before!.Value.Distance:0.###} → {after.Value.Distance:0.###} m, crossfade 0.75 s, occlusion 1 s";
         }
         finally
         {
             builder.Models?.FreeAll();
             world.QueueFree();
         }
+    }
+
+    /// <summary>The frame hook's view pass, <paramref name="frames"/> frames at 60 fps from <paramref name="camera"/>.</summary>
+    private static void Tick(WorldBuilder builder, Vector3 camera, int frames)
+    {
+        for (int i = 0; i < frames; i++) builder.TickView(1 / 60.0, camera);
     }
 
     /// <summary>

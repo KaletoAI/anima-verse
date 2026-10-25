@@ -182,15 +182,16 @@ public partial class Main : Node3D
     {
         var slot = _builder?.Slots.GetValueOrDefault(id);
         if (!_openView.TryOpen(id, slot?.Openable == true, out var closed)) return;
-        if (closed is not null) _ = _builder!.SetOpenAsync(closed, false);
-        _ = _builder!.SetOpenAsync(id, true);
+        // Opening one location closes the current one — both crossfade off their diverged targets (TickView).
+        if (closed is not null) _builder!.SetOpen(closed, false);
+        _builder!.SetOpen(id, true);
         RefreshOpenBadge();
     }
 
     /// <summary><c>closeOpenLocation()</c>.</summary>
     private void CloseOpenLocation()
     {
-        if (_openView.Close() is { } closed) _ = _builder?.SetOpenAsync(closed, false);
+        if (_openView.Close() is { } closed) _builder?.SetOpen(closed, false);
         RefreshOpenBadge();
     }
 
@@ -255,6 +256,10 @@ public partial class Main : Node3D
         return (row.PosX!.Value, h.GroundAt(row.PosX.Value, row.PosZ!.Value), row.PosZ.Value,
                 EventPinRule.DefaultPlaceHeight(isBuilding, nature, LocationView.DetectStyle(row)));
     }
+
+    /// <summary>A built location the neighbour occlusion has hidden (its group invisible).</summary>
+    private bool OccludedPlace(string id)
+        => _builder?.Slots.GetValueOrDefault(id) is { } slot && IsInstanceValid(slot.Group) && !slot.Group.Visible;
 
     /// <summary>The location labels follow the world's places and their latest rows.</summary>
     private void SyncPlaceLabels()

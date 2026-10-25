@@ -1,13 +1,18 @@
 {
   "signature": "s3c-open", "k": 1, "extent_m": 10, "storey_m": 3,
+  "boundary": [[-5, -5], [5, -5], [5, 5], [-5, 5]],
   "levels": [{ "level": 0, "floor_y": 0 }, { "level": 1, "floor_y": 3 }],
   "style": { "wall_color": "#d0c8b8", "floor_color": "#b8b0a0", "glass_color": "#9cc3e0", "glass_opacity": 0.3,
              "door_color": "#4a3a2e", "upper_wall_opacity": 0.45, "upper_floor_opacity": 0.4,
              "elevator_glass_opacity": 0.22, "stair_color": "#8a7a66" },
   "rooms": [
-    { "room_id": "r-ground", "level": 0, "always_visible": false, "outline": [[-5, -5], [5, -5], [5, 0], [-5, 0]], "openings": [] },
+    { "room_id": "r-ground", "level": 0, "always_visible": false, "outline": [[-5, -5], [5, -5], [5, 0], [-5, 0]],
+      "openings": [{ "edge": 3, "at": 0.65, "width_m": 1.0, "height_m": 2.1, "sill_m": 0, "type": "door", "to": "r-garden", "prop_id": "door:s3c0001", "mirrored": true }],
+      "ambience": { "daylight": 0.6, "tint": "#ffd9a0" } },
     { "room_id": "r-up", "level": 1, "always_visible": false, "outline": [[-5, -5], [5, -5], [5, 0], [-5, 0]], "openings": [] },
-    { "room_id": "r-garden", "level": 0, "always_visible": true, "outline": [[-5, 1], [5, 1], [5, 5], [-5, 5]], "openings": [] }
+    { "room_id": "r-garden", "level": 0, "always_visible": true, "outline": [[-5, 1], [5, 1], [5, 5], [-5, 5]], "openings": [],
+      "overlay": { "centre": [0, 3], "rect": { "x": -5, "z": 1, "w": 10, "d": 4 }, "y": 0.02 },
+      "ambience": { "daylight": 1, "tint": null } }
   ],
   "outdoor_rooms": [],
   "plates": [
@@ -29,9 +34,32 @@
     { "kind": "elevator_glass", "center": [-3, 1.5, -3], "size": [1, 3, 0.02], "level": 0 }
   ],
   "floor_plan": [
-    { "room_id": "r-ground", "polygon_world": [[-5, -5], [5, -5], [5, 0], [-5, 0]], "floor_kind": "", "closed": true }
+    { "room_id": "r-ground", "polygon_world": [[-5, -5], [5, -5], [5, 0], [-5, 0]], "floor_kind": "planks", "closed": true,
+      "map_water": { "area_id": "area-pond", "kind": "lake" } }
   ],
-  "stairs": [], "markers": [], "doorways": [], "problems": [], "corridors": [],
+  "stairs": [
+    { "id": 0, "from_level": 0, "to_level": 1, "at": [2, -1.5], "dir_deg": 180, "run_m": 1.2, "rise_m": 3, "steps": 4,
+      "tread_m": 0.3, "width_m": 1, "foot": [2, 0.01, -0.9], "head": [2, 3.03, -3.1],
+      "footprint": [[1.5, -1.5], [2.5, -1.5], [2.5, -2.7], [1.5, -2.7]] }
+  ],
+  "markers": [
+    { "room_id": "r-ground", "id": "m-chair", "group": "seat", "label": "Chair", "capacity": 1, "at_world": [2, -1],
+      "slots": [[2, -1]], "y_world": 0.45, "root_offset": 0.42, "facing": 90, "anchor": [2, -1], "source": "prop" }
+  ],
+  "doorways": [
+    { "level": 0, "at_world": [-5, -1.5], "along": [0, -1], "type": "door", "width_m": 1, "height_m": 2.1, "base_y": 0,
+      "rooms": ["r-ground"], "outside": true, "hull": true, "outward_normal": [-1, 0] }
+  ],
+  "problems": [
+    { "kind": "no_entrance", "room_id": "r-up", "message": "Room r-up has no entrance", "level": 1, "scope": "editor" },
+    { "kind": "unreachable_rooms", "message": "2 rooms cannot be reached", "room_count": 2, "room_ids": ["r-up", "r-x"], "levels": [1, 2] }
+  ],
+  "corridors": [
+    { "room_id": "__floor__1", "level": 1, "anchor": [0, -2.5], "outline": [[-5, -5], [5, -5], [5, 0], [-5, 0]] }
+  ],
+  "boundary_openings": [
+    { "edge": 2, "at_world": [0, 5], "width_m": 2, "type": "gate", "inward": [0, -1] }
+  ],
   "models": [
     { "role": "building", "display": "shell", "id": "loc-open",
       "variants": { "full": "/play/locations/loc-open/model?tier=full" }, "level": 0,
@@ -45,16 +73,27 @@
     { "role": "prop", "id": "lamp", "room_id": "r-up",
       "variants": { "full": "/assets/props/lamp/model?tier=full" },
       "level": 1, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 1, "measure": "xyz",
-      "anchor": [0, -2], "bottom_y": 3.02 },
+      "anchor": [0, -2], "bottom_y": 3.02, "walkable": true, "width_estimated": true,
+      "cut_plane": { "normal": [0, 0, 1], "constant": 2 },
+      "slots": { "shade": { "preset": "glass" }, "picture": { "image": "/assets/pictures/p1.png" } },
+      "light": { "color": "#ffcc88", "intensity": 2, "range_m": 6, "flicker": "candle", "when": "night", "glow_m": 0.3,
+                 "offset_m": [0, 0.2], "height_m": 1.1 },
+      "surface": { "step": 0.5, "origin": [-0.5, -0.5], "cols": 3, "rows": 2, "values": [10, 20, null, 30, 40, 50],
+                   "box_min": [-0.5, 0, -0.5], "box_max": [0.5, 1, 0.5], "extent_snapped": [1, 1, 1] },
+      "water": { "regions": [{ "outline": [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3]], "holes": [], "y": 0.8, "bed_y": 0.6,
+                               "tint": "#3b6b8a", "opacity": 0.7, "swim_from_m": 1.2 }] },
+      "leaf_bbox": { "min": [0, 0, 0], "max": [1, 1, 1] } },
     { "role": "prop", "id": "door:s3c0001", "room_id": "r-ground",
       "variants": { "full": "/assets/doors/s3c0001/model?tier=full" },
       "level": 0, "fix_euler": null, "yaw_deg": 90, "measure": "fit", "size_m": [1.0, 2.1],
+      "door": { "opening": 0, "hinge": "left", "swing": -1, "leaf_bbox": { "min": [0, 0, -0.025], "max": [1, 2.1, 0.025] } },
       "anchor": [-5, -1.5], "bottom_y": 0 },
     { "role": "prop", "id": "window:s3c0002", "room_id": "r-ground", "variants": {},
       "placeholder_dims": { "w": 1.0, "d": 0.1, "h": 1.2 },
       "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 90, "max_m": 1.2, "measure": "xyz",
       "anchor": [-5, -3.5], "bottom_y": 0.9 },
     { "role": "room", "id": "r-ground", "room_id": "r-ground", "variants": {},
+      "clip_outline": [[-5, -5], [5, -5], [5, 0], [-5, 0]], "walk_y_world": 0.05,
       "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 10, "measure": "xz",
       "anchor": [0, -2.5], "bottom_y": 0 },
     { "role": "prop", "id": "bench", "room_id": "r-garden",

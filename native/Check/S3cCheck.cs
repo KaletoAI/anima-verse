@@ -29,7 +29,10 @@ public static class S3cCheck
     private const int ExpDrawn = 9, ExpPlates = 2, ExpWalls = 5, ExpExtras = 2, ExpShellCopies = 2, ExpCulledWalls = 2;
     private const int ExpDegenerate = 1, ExpInterior = 4, ExpStorey = 3, ExpPanes = 2;
     private const int ExpBuildings = 2, ExpProps = 4, ExpDoors = 1, ExpWorld = 2;
-    private const int ExpPlaceholders = 1, ExpMissing = 1, ExpModelInterior = 1, ExpModelStorey = 1, ExpCulled = 1;
+    // Task 15 mounts the near ring's indoor specs once (hidden at fade 0): loc-closed's shelf is asked for and, having
+    // no fixture, is MISSING (+1) instead of "interior" (README "Models").
+    private const int ExpPlaceholders = 1, ExpMissing = 2, ExpModelInterior = 0, ExpModelStorey = 1, ExpCulled = 1;
+    private const int ExpInteriorMounted = 11;               // loc-open 5 + loc-closed 2 + loc-far 4 (README "Primitives")
     private const int ExpFull = 6, ExpLow = 3;
     private const int ExpBuildingVertices = 2 * 2220, ExpBuildingIndices = 2 * 3330;
     private const float ExpChairBottom = 0.046875f;          // bottom_y 0 + ground(66, 119) 3.921875 − datum 3.875
@@ -70,6 +73,7 @@ public static class S3cCheck
             Eq("s3c interior", r.Interior, ExpInterior);
             Eq("s3c storey", r.Storey, ExpStorey);
             Eq("s3c panes", r.Panes, ExpPanes);
+            Eq("s3c interior mounted", r.InteriorMounted, ExpInteriorMounted);
 
             var m = stats.Models;
             Eq("s3c buildings placed", m.Placed["building"], ExpBuildings);
@@ -95,28 +99,33 @@ public static class S3cCheck
                    && !asked.Contains("/assets/props/post/model.glb?tier=full"), string.Join(";", asked));
             Expect("s3c world prop variant 1 full", asked.Contains("/assets/props/stone/model?variant=1&tier=full"), "");
             Expect("s3c world prop low", asked.Contains("/assets/props/sign/model?tier=low"), "");
-            Expect("s3c hidden specs not loaded", !asked.Any(u => u.Contains("/lamp/") || u.Contains("/shelf/")), "");
+            Expect("s3c storey-hidden lamp not loaded", !asked.Any(u => u.Contains("/lamp/")), "");
+            Expect("s3c near-ring shelf asked at the mount", asked.Contains("/assets/props/shelf/model?tier=full"), "");
 
             // Placements, measured in the location frame (§ B2 + the § A16.9 lift).
             var open = world.GetNode<Node3D>("Locations/Loc_loc-open");
-            var chair = open.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString() == "Placed_prop_chair");
+            // Indoor specs hang in the interior group (mounted once, shown by the crossfade).
+            var openInterior = open.GetNode<Node3D>("Interior");
+            var chair = openInterior.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString() == "Placed_prop_chair");
             Near("s3c chair bottom (lift)", ModelPlacement.Measure(chair, Transform3D.Identity).Position.Y, ExpChairBottom);
-            var door = open.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString() == "Placed_prop_door_s3c0001");
+            var door = openInterior.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString() == "Placed_prop_door_s3c0001");
             var doorBox = ModelPlacement.Measure(door, Transform3D.Identity);
             Near("s3c door bottom", doorBox.Position.Y, ExpDoorBottom);
             Near("s3c door height (fit)", doorBox.Size.Y, ExpDoorHeight);
-            var ph = open.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString().StartsWith("Placeholder"));
+            var ph = openInterior.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString().StartsWith("Placeholder"));
             Near("s3c placeholder y", ph.Position.Y, ExpPlaceholderY);
             Near("s3c placeholder yaw", ph.Rotation.Y, Mathf.DegToRad(90f));
 
-            // The plan hull kept its outside and lost its inside (no remaining centroid in the cutout).
-            var hull = open.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString() == "Placed_building_loc-open");
+            // The plan hull's CUT COPY kept its outside and lost its inside (no remaining centroid in the cutout); the
+            // whole hull stands beside it for the closed view (the crossfade swaps them at 0.03).
+            Expect("s3c whole hull", open.GetChildren().OfType<Node3D>().Count(n => n.Name.ToString() == "Placed_building_loc-open") == 1, "");
+            var hull = open.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString() == "Cutout_building_loc-open");
             Expect("s3c cutout removed triangles", stats.CutoutTriangles > 0 && stats.CutoutTriangles < 3330 / 3,
                    stats.CutoutTriangles.ToString());
             CheckCutoutClean(hull);
 
             // The outline walls of the open location wear the culling material, the glass the translucent one.
-            var recipeMats = open.GetChildren().OfType<MeshInstance3D>()
+            var recipeMats = open.GetChildren().Concat(openInterior.GetChildren()).OfType<MeshInstance3D>()
                 .Select(mi => mi.Mesh.SurfaceGetMaterial(0)).OfType<ShaderMaterial>().ToList();
             Expect("s3c wall-cull material", recipeMats.Any(x => (float)x.GetShaderParameter("wall_cull") > 0.5f), "");
             Expect("s3c translucent glass", recipeMats.Any(x => Math.Abs((float)x.GetShaderParameter("opacity") - 0.3f) < 1e-6), "");

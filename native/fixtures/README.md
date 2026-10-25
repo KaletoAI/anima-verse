@@ -156,6 +156,8 @@ centre xz = (1.5, −2)**. The variant URL maps to `building_meshopt.glb` →
 `models[1]` (the crate) is an OUTDOOR spec (no room) → placed like the browser's `mountShell` does; its URL
 has no fixture → not loadable, no `placeholder_dims` → **models missing = 1**. The house has a (non-roof)
 building model, so its recipe plate/wall stay in the (closed, invisible) interior group → **interior +2**.
+Mounted there since Task 15 (storey 0): the level-0 wall (**interior mounted 1**); the level-1 plate is on
+another storey and is not mounted.
 
 ### Yard scene (no model → its far-view shell, Task S3c)
 
@@ -173,6 +175,10 @@ one a door prop fills) outside; everything else stays in the invisible interior 
 
 primitives = 1 + 6 = **7** (all **7 shell copies**); skipped = degenerate 3 + interior (2 house + 1 + 2) 5 = **8**;
 panes 0.
+
+Interior mounted (Task 15, storey 0, hidden at fade 0): the 4 contour walls + the glass pane + the plain leaf
+(the `door_prop` leaf is a pane a model would fill — not drawn inside, only in the shell) + the tread and the
+stringer = 8; the level-1 plate is not on storey 0. With the house: **interior mounted = 1 + 8 = 9**.
 
 ## Figures (Task S1b)
 
@@ -492,19 +498,25 @@ loc-far (closed, no model → far shell): 2 opaque walls → **shell copies 2**;
 drawn = 6 + 1 + 2 = **9** (plates 2, walls 5, extras 2; shell 2; culled 2); skipped = degenerate 1 + interior 4 +
 storey 3 + panes 2 = **10**.
 
+Interior mounted (Task 15 — every location mounts its interior once, for its storey): loc-open (storey 0) w1, w2,
+the plain glass pane + 2 extras = 5 (the garden plate hangs outside; the panes a model fills are not drawn; L1 is
+another storey); loc-closed the `r-in` wall + the pad = 2; loc-far (far ring: primitives are part of the shell
+mount there too) 3 walls + the riser = 4 → **11**.
+
 ### Models
 
 loc-open: the plan-hull building is KEPT when open (cutouts instead of a fade) → placed, its triangles inside
 the 6 × 6 cutout removed (**> 0 and < 1110**, and no remaining centroid inside); chair (`r-ground`) → prop;
 lamp (`r-up`) → **storey**; the `door:` model (`measure: "fit"`) → door; the `window:` spec has no URL but
 `placeholder_dims` → **placeholder**; the `room` diorama has neither → **missing**; bench (`r-garden`) → prop.
-loc-closed: building; well (no room) → prop; shelf (`r-in`) → **interior**. loc-far: post → prop at **low**.
+loc-closed: building; well (no room) → prop; shelf (`r-in`) → mounted in the hidden interior since Task 15 (near
+ring, `mountDetail`), its URL has no fixture → **missing**. loc-far: post → prop at **low**.
 World props (camera (64, 160), landmark LOD = scatter × 3 = 105 / 135 / 360 m, cold start `low`):
 wp1 (80, 150) d = 18.87 → **full**, variant 1 → `…?variant=1&tier=full`; wp2 (64, 600) d = 440 → **culled**;
 wp3 (200, 160) d = 136 > 135 → **low**.
-→ placed building 2, prop 4, door 1, world 2; placeholders 1, missing 1, interior 1, storey 1, culled 1;
-tiers asked: full 6 (open building, chair, door, bench, well, wp1), low 3 (closed building, post, wp3);
-building GLBs 2 × (2220 / 3330). The hidden lamp/shelf URLs are never requested.
+→ placed building 2, prop 4, door 1, world 2; placeholders 1, missing 2 (diorama, shelf), interior 0, storey 1,
+culled 1; tiers placed: full 6 (open building, chair, door, bench, well, wp1), low 3 (closed building, post, wp3);
+building GLBs 2 × (2220 / 3330). The storey-hidden lamp's URL is never requested; the shelf's is (at the mount).
 
 Heights (§ A16.9 lift = ground(anchor) − datum, level 0, non-building):
 - chair anchor (2, −1) → world (66, 119): tile h = 2x/64 + z/64 → 2.0625 + 1.859375 = 3.921875 → lift
@@ -513,6 +525,42 @@ Heights (§ A16.9 lift = ground(anchor) − datum, level 0, non-building):
   **2.1** (`fit` scales y to `size_m[1]`);
 - placeholder anchor (−5, −3.5) → (59, 116.5): 3.6640625 → y = 0.9 − 0.2109375 = **0.6890625**, yaw 90°;
 - wp1 bottom = tile ground (80, 150) = 2.5 + 2.34375 = 4.84375 + 0.5 − 0.25 = **5.09375**.
+
+### Parser fields (Task 15)
+
+`scene_loc-open.json` carries, by hand, one entry of every § B1 block no native code draws yet, so
+`tests/ScenePayloadParseTests.cs` can read each field back: a top-level `boundary`; `r-ground` an opening (edge 3,
+at 0.65, 1 × 2.1 m door to `r-garden`, prop `door:s3c0001`, mirrored) and an ambience (daylight 0.6, tint
+`#ffd9a0`); `r-garden` an overlay (centre (0, 3), rect x −5 z 1 w 10 d 4, y 0.02) and an ambience with a null
+tint; the floor-plan entry `floor_kind` "planks" and a `map_water` (area-pond, lake); one flight of stairs, one
+prop marker (m-chair), one doorway, two problems (one `scope: "editor"`), one corridor, one boundary opening; on
+models: the door's `door` block (opening 0, left, swing −1, leaf box), the diorama's `clip_outline` and
+`walk_y_world` 0.05, and on the storey-hidden lamp `walkable`, `width_estimated`, `cut_plane`, `slots`, `light`,
+a 3 × 2 `surface`, a `water` region and a top-level `leaf_bbox`. None of them changes a count above: the markers
+and floor plan only feed `hasInterior` of a location that has an interior anyway, the lamp is never placed
+(storey 1), the diorama has no mesh, the door block and the rest are read by no native code yet.
+
+### Verify (§ B5a, Task 15)
+
+`Check/VerifyCheck.cs` builds both worlds and reads each location's report. A plate checks `top_y` (+ `bottom_y`
+for a body), a wall `base_y`, `top_y`, `centre.x`, `centre.z`; a placement `bottom_y` (+ its storey-0 lift),
+`anchor.x/z` and — where every angle keeps the box axis-parallel — `max_m` (or `size_m.w/h` for `fit`); a spec
+that placed nothing one `geladen` row. Measured: every MOUNTED plate/wall (a pane a model fills from its geometry),
+not degenerate pieces nor other storeys. The GLB boxes come from the glTF accessors: `building_*.glb`
+18.845 × 9.14 × 14.4 (x, y, z); every model's scale is chosen so its own measure equals its `max_m` / `size_m`.
+
+- **loc-house**: wall 4 + building 4 (fix 90 and yaw 0 are axis-parallel: bottom, anchor, `max_m` 12) + the crate
+  `geladen` 1 → **9 checked, 1 row**, models 1/2.
+- **loc-yard** (yaw 30°: the box centres turn back exactly, no extent is read): the level-1 plate via its shell
+  copy 2 + 7 walls × 4 = **30, 0 rows**, models 0/0.
+- **loc-open**: garden plate (bare) 1 + walls w1, w2, the glass pane and the two panes a model fills 5 × 4 = 20;
+  building 4, chair 4, door 5 (fit at yaw 90: size 1 × 2.1 × 14.4/18.845 turned → max(x, z) = 1, y = 2.1),
+  window placeholder 4 (max of 1 × 1.2 × 0.1 = 1.2), bench 4, diorama `geladen` 1 → **43, 1 row**, models 5/6.
+- **loc-closed**: plate 2 + wall 4 + building 4 + well 4 + shelf `geladen` 1 → **15, 1 row**, models 2/3.
+- **loc-far**: 3 walls 12 + post 4 → **16, 0 rows**, models 1/1.
+
+Cross-checks: V1 the house's merged interior wall mesh measured on its own (4 numbers, clean) and against a spec
+5 cm higher (base_y/top_y, delta −0.05 each); V2 loc-open's chair against `bottom_y` + 0.1 (one row, −0.1).
 
 ### Water (tile 0, 0)
 

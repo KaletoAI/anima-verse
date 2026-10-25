@@ -33,6 +33,9 @@ public static class CheckRunner
     // skipped: 3 degenerate (2-point plate, zero-length wall, empty shaft) + 5 interior (house plate + wall, yard
     // glass + 2 stair boxes) — README "Recipe primitives".
     private const int ExpPrimitives = 7, ExpSkipped = 8, ExpShellCopies = 7, ExpDegenerate = 3, ExpInterior = 5;
+    // Task 15: every location mounts its interior once (hidden at fade 0) — house wall 1 + yard 6 walls + 2 stair
+    // boxes (README "Yard scene"); the house's level-1 plate and the yard's are not on storey 0.
+    private const int ExpInteriorMounted = 9;
     private const float ExpHouseDatum = 4f, ExpYardDatum = 2.91357421875f;
     private const float ExpPlateArea = 46f;                        // 8 × 6 minus the 2 × 1 hole
     private const float ExpBuildingMaxM = 12f, ExpBuildingBottom = -0.25f;
@@ -54,12 +57,18 @@ public static class CheckRunner
     private const string WalkUrl = "/assets/animation-clips/walk.fbx?v=fixturewalk00001";
     private const string AdaUrl = "/characters/Ada%20Wren/model3d/file?v=fixtureada000001";
 
-    public static async Task<int> RunAsync(Node3D host)
+    public static async Task<int> RunAsync(Node3D host, string? only = null)
     {
         try
         {
             var dir = Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures");
             MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
+            if (only == "verify")
+            {
+                var alone = await VerifyCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             var meshopt = CheckMeshopt(dir);
 
             var source = new FixtureSource(dir);
@@ -90,6 +99,7 @@ public static class CheckRunner
             Eq("degenerate", stats.Recipe.Degenerate, ExpDegenerate);
             Eq("interior", stats.Recipe.Interior, ExpInterior);
             Eq("panes", stats.Recipe.Panes, 0);
+            Eq("interior mounted", stats.Recipe.InteriorMounted, ExpInteriorMounted);
             Eq("missing models", stats.Models.Missing, 1);   // the house's crate: no fixture for its URL
             Eq("failures", stats.Failures, 0);
 
@@ -128,10 +138,11 @@ public static class CheckRunner
             var pick = await PickCheck.RunAsync(host, world, builder, dir);
             var labels = await LabelCheck.RunAsync(host, world, builder, dir);
             var sync = await SyncCheck.RunAsync(source, probe, dir);
+            var verify = await VerifyCheck.RunAsync(host, dir);
 
             GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

@@ -20,7 +20,7 @@ public sealed class WorldStats
     public int Locations, Scenes, Buildings, BuildingsCompressed, BuildingVertices, BuildingIndices;
     /// <summary>Placed locations the browser does not mount at all from this view (ring <c>gone</c>).</summary>
     public int LocationsGone;
-    /// <summary>The open location (the avatar's, interior shown) — "" when none.</summary>
+    /// <summary>The location opened at the boot (the avatar's; its interior fades in) — "" when none.</summary>
     public string OpenLocation = "";
     public int Failures;
     /// <summary>The scene-recipe primitives, drawn and skipped by reason.</summary>
@@ -40,6 +40,8 @@ public sealed class WorldStats
     /// <summary>The ground surfaces (Task S3b); Mode "plain" = the S1a vertex colour.</summary>
     public GroundStats Ground = new();
     public List<string> Problems { get; } = new();
+    /// <summary>§ B5a over every mounted location: locations reported, numbers checked, deviation rows.</summary>
+    public int VerifyLocations, VerifyChecked, VerifyRows;
 
     public int TerrainVertices => OverviewVertices + TileVertices;
     public int Primitives => Recipe.Primitives;
@@ -55,16 +57,19 @@ public sealed class WorldStats
         + $"open={(OpenLocation.Length > 0 ? OpenLocation : "-")} buildings={Buildings} "
         + $"buildings_meshopt={BuildingsCompressed} building_vertices={BuildingVertices} building_indices={BuildingIndices} "
         + $"primitives={Primitives} skipped={Skipped} ({Recipe.SkipSummary()}) shell_copies={Recipe.ShellCopies} "
-        + $"culled_walls={Recipe.CulledWalls} {Models.Summary()} world_props={WorldPropRows} cutout_triangles={CutoutTriangles} "
+        + $"culled_walls={Recipe.CulledWalls} interior_mounted={Recipe.InteriorMounted} {Models.Summary()} world_props={WorldPropRows} cutout_triangles={CutoutTriangles} "
         + $"failures={Failures} anchor=({Anchor.Position().X:0.###},{Anchor.Position().Y:0.###},{Anchor.Position().Z:0.###}) "
-        + $"{WaterSummary()} {Ground.Summary()}";
+        + $"{WaterSummary()} {Ground.Summary()} {VerifySummary()}";
+
+    public string VerifySummary() => $"verify[locations={VerifyLocations} checked={VerifyChecked} rows={VerifyRows}]";
 }
 
 /// <summary>
 /// One built location (the browser's resident TILE): its group in the world (the pick target — every mesh
 /// under it answers <see cref="Loc"/>'s id, as <c>tile.group.userData.locationId</c> does), the facts the
 /// overview needs about it (centre, footprint width, reading height, whether it can be opened) and whether
-/// it is shown open right now. <see cref="Group"/> is replaced when the location is rebuilt open or closed.
+/// it is shown open right now. The location is mounted ONCE (shell, outdoor pieces and its interior held at fade 0);
+/// opening and closing only move <see cref="Fade"/> (<see cref="WorldBuilder.TickView"/>).
 /// </summary>
 public sealed class LocationSlot
 {
@@ -83,9 +88,15 @@ public sealed class LocationSlot
     public bool HeightMeasured { get; set; }
     /// <summary><c>openable(tile)</c>: an interior exists and the place is a building, a shell area or a ground model.</summary>
     public bool Openable { get; set; }
-    /// <summary>Shown open (its interior up, a fading shell left out).</summary>
+    /// <summary>The fade TARGET: the open location (the singleton) fades its interior in, every other one out.</summary>
     public bool Open { get; set; }
-    /// <summary>Bumped by every rebuild; a rebuild that finishes after a newer one started is thrown away.</summary>
+    /// <summary>The crossfade and occlusion state of the mounted group.</summary>
+    public LocationFade Fade { get; init; } = new();
+    /// <summary>The storey the interior is mounted for (the avatar room's level in the avatar's location, else 0).</summary>
+    public int LevelFilter { get; init; }
+    /// <summary>The § B5a report of the mount (<c>window.__sceneVerify[loc]</c>).</summary>
+    public VerifyReport? Verify { get; set; }
+    /// <summary>Bumped when the location is dropped; work for it that finishes later is thrown away.</summary>
     internal int Generation;
 }
 
@@ -99,9 +110,10 @@ public sealed class LocationSlot
 ///   4. terrain meshes (overview with the tiled cells left out, one mesh per tile; a wet tile lifted onto its
 ///      water mirror), dressed in the browser's ground material + its water variant (<see cref="GroundSurfaces"/>)
 ///   5. per placed location in reach (<see cref="LocationView"/>): a group at (pos_x, ground, pos_z) turned by
-///      +yaw_deg (§ A1.1); its scene recipe as the browser shows it — building model(s), outdoor model specs,
-///      the outdoor rooms' primitives, the far-view shell of a place without a model, and for the OPEN location
-///      (the avatar's) its interior: primitives on the shown storey and the indoor model specs
+///      +yaw_deg (§ A1.1); its scene recipe mounted ONCE as the browser mounts it — building model(s), outdoor
+///      model specs, the outdoor rooms' primitives, the far-view shell of a place without a model, and its
+///      interior (primitives on the mounted storey, in the near ring the indoor model specs) held at fade 0 until
+///      it is opened (<see cref="SetOpen"/>, crossfaded by <see cref="TickView"/>); then its § B5a verify
 ///   6. the world props of <c>/play/worldmap</c> (§ A9a)
 /// </summary>
 public sealed class WorldBuilder
@@ -134,6 +146,11 @@ public sealed class WorldBuilder
     public bool PlainGround { get; init; }
     /// <summary><c>--no-water</c>: no lift, no water variant (the browser bench's <c>&amp;water=0</c>).</summary>
     public bool NoWater { get; init; }
+    /// <summary>
+    /// The § B5a log: true = the full table per mounted location (the browser's <c>?verify=1</c>; always in
+    /// <c>--check</c>, <c>--verify</c> in play), false = only a location with deviations is logged.
+    /// </summary>
+    public bool VerifyFull { get; init; }
 
     private readonly Dictionary<string, LocationSlot> _slots = new();
     /// <summary>Every placed location id the world has taken in (built or out of reach) — main.ts <c>places</c>.</summary>
@@ -142,13 +159,12 @@ public sealed class WorldBuilder
     private List<(double X, double Z)> _points = new();
     private Node3D? _places;
     private Vector3 _tierCamera;
-    private (string? LocationId, string? RoomId) _avatarAt;
 
     /// <summary>The built locations by id (the browser's resident tiles). Filled by <see cref="BuildAsync"/>.</summary>
     public IReadOnlyDictionary<string, LocationSlot> Slots => _slots;
 
-    /// <summary>A location group was replaced by <see cref="SetOpenAsync"/> (the pick cache drops its entry).</summary>
-    public event Action<LocationSlot>? Rebuilt;
+    /// <summary>A location group left the world (<see cref="DropVanished"/>; the pick cache drops its entry).</summary>
+    public event Action<LocationSlot>? Dropped;
 
     /// <param name="strict">true in <c>--check</c>: any failure aborts; online a broken location is logged and skipped.</param>
     public WorldBuilder(IWorldSource source, Action<string> log, bool strict)
@@ -156,6 +172,7 @@ public sealed class WorldBuilder
         _source = source;
         _log = log;
         _strict = strict;
+        VerifyFull = strict;
     }
 
     /// <summary>
@@ -260,7 +277,6 @@ public sealed class WorldBuilder
         points.Add(anchorXZ);
         _points = points;
         var camera = _tierCamera = stats.Anchor.Position() + StartCameraOffset;
-        _avatarAt = (avatar.LocationId, avatar.RoomId);
 
         var places = _places = new Node3D { Name = "Locations" };
         root.AddChild(places);
@@ -401,19 +417,6 @@ public sealed class WorldBuilder
     }
 
     /// <summary>
-    /// One location as the browser shows it, built DETACHED (the caller hangs <see cref="LocationSlot.Group"/>
-    /// into the world). <paramref name="wantOpen"/>: show it open if it can be opened (<c>openable(tile)</c>);
-    /// <paramref name="room"/> picks the storey shown (the room's level, else 0). null for a 404 scene.
-    /// </summary>
-    private async Task<LocationSlot?> BuildLocation(LocationInfo loc, WorldHeight height, WorldStats stats,
-                                                    Ring ring, bool wantOpen, string? room, Vector3 camera)
-    {
-        using var doc = await _source.GetLocationSceneAsync(loc.Id);
-        if (doc is null) return null;  // 404: nothing to compose (no plan, no rooms, no model)
-        return await BuildFromScene(loc, doc.RootElement, height, stats, ring, wantOpen, room, camera);
-    }
-
-    /// <summary>
     /// The scene recipes of these locations, at most <see cref="SceneConcurrency"/> requests at a time: id → the
     /// payload (null for a 404). A failed request is counted and logged here (online) and has no entry.
     /// </summary>
@@ -440,7 +443,19 @@ public sealed class WorldBuilder
         return scenes;
     }
 
-    /// <summary>One location from its scene recipe (see <see cref="BuildLocation"/>).</summary>
+    /// <summary>
+    /// One location from its scene recipe, MOUNTED ONCE and built DETACHED (the caller hangs
+    /// <see cref="LocationSlot.Group"/> into the world) — sceneRecipe.ts <c>mountShell</c> + <c>mountDetail</c>:
+    ///
+    ///   • the shell layer: every building model (a fading one — display shell / shell_area / roof_only — is a roof
+    ///     part of the crossfade; a kept plan hull / ground model gets a cut copy for its cutouts), the outdoor
+    ///     specs, the outdoor rooms' primitives and, for a place without a building model, the far-view shell;
+    ///   • the interior group <c>g</c> (hidden at fade 0): the interior primitives of the mounted storey and — in the
+    ///     near ring only, like <c>mountDetail</c> — the indoor specs on that storey.
+    /// <paramref name="wantOpen"/> sets the fade TARGET (the avatar's location at the boot) if it can be opened
+    /// (<c>openable(tile)</c>); <paramref name="room"/> picks the storey (the room's level, else 0). Every mount ends
+    /// with its § B5a verify (<see cref="SceneVerifier"/>).
+    /// </summary>
     private async Task<LocationSlot> BuildFromScene(LocationInfo loc, JsonElement sceneRoot, WorldHeight height,
                                                     WorldStats stats, Ring ring, bool wantOpen, string? room, Vector3 camera)
     {
@@ -465,7 +480,7 @@ public sealed class WorldBuilder
         bool groundModel = buildings.Any(m => m.Display == "ground");
         bool hasInterior = SceneView.HasInterior(scene.Plates.Count, scene.FloorPlanCount, scene.Walls.Count, scene.Extras.Count,
                                                  scene.MarkerCount, scene.Models.Select(m => m.Role));
-        // openable(tile) + the singleton: only the location the caller opens is open (fade 1).
+        // openable(tile) + the singleton: only the location the caller opens fades in.
         bool openable = SceneView.Openable(hasInterior, isBuilding, shellArea, groundModel);
         bool open = wantOpen && openable;
         if (open) stats.OpenLocation = loc.Id;
@@ -479,21 +494,39 @@ public sealed class WorldBuilder
         string buildingTier = LocationView.BuildingTier(ring, camera.DistanceTo(group.Position), width);
         string interiorTier = LocationView.InteriorTier(ring, scene.AreaDetail, open);
         var models = new ModelStats();
+        var fade = new LocationFade { ShellArea = shellArea };
+        var interior = hasInterior ? new Node3D { Name = "Interior" } : null;
+        if (interior is not null) group.AddChild(interior);
+        fade.Interior = interior;
+        var verify = new SceneVerifier();
+        var placedSpecs = new List<(SceneModelSpec Spec, Node3D? Node, double Lift)>();
 
-        // ── Building model(s): the far view, or — open — a kept plan hull / ground model with its cutouts. ──
+        // ── Building model(s): all mounted; a fading one is a roof part, a kept one opens its cutouts. ──
         bool solidBuildingPlaced = false;
         Aabb? buildingBox = null;
         foreach (var spec in buildings)
         {
             bool keep = spec.Display == "ground" || spec.PlanHull;
-            if (open && !keep && !spec.RoofOnly) { models.Faded++; continue; }
-            if (open && spec.RoofOnly) { models.Faded++; continue; }
             var node = await SceneModels.PlaceAsync(_models, spec, buildingTier, "building", group, 0, models, _materials);
+            placedSpecs.Add((spec, node, 0));
             if (node is null) continue;
             if (!spec.RoofOnly) solidBuildingPlaced = true;
             var nb = ModelPlacement.Measure(node, Transform3D.Identity);
             buildingBox = buildingBox is { } bb ? bb.Merge(nb) : nb;
-            if (open && keep && spec.Cutouts.Length > 0) stats.CutoutTriangles += SceneModels.ApplyCutouts(node, spec.Cutouts);
+            if (!keep)
+            {
+                fade.RoofParts.Add(node);
+                if (open) models.Faded++;
+            }
+            else if (spec.Cutouts.Length > 0 && !SceneModels.IsPlaceholder(node))
+            {
+                var cut = (Node3D)node.Duplicate();
+                cut.Name = $"Cutout_building_{spec.Id}";
+                int removed = SceneModels.ApplyCutouts(cut, spec.Cutouts);
+                stats.CutoutTriangles += removed;
+                group.AddChild(cut);
+                fade.Cutouts.Add((node, cut));
+            }
             if ((await _models.GetAsync(ModelVariants.PickModelVariant(spec, buildingTier))) is { } t)
             {
                 stats.Buildings++;
@@ -503,38 +536,63 @@ public sealed class WorldBuilder
             }
         }
 
-        // ── The other specs: outdoor ones always, indoor ones only in the open location on its storey. ──
+        // ── The other specs: outdoor ones off the tile; indoor ones into the interior (near ring, mounted storey). ──
         var placements = new List<Task>();
         foreach (var spec in scene.Models.Where(m => m.Role != "building"))
         {
             bool isOut = LocationView.IsOutdoor(scene, spec.RoomId);
+            Node3D parent = group;
             if (!isOut)
             {
-                if (!open) { models.Interior++; continue; }
+                // mountDetail runs for the near ring only; its parentFor(room) is the interior group.
+                if (ring != Ring.Near || interior is null) { models.Interior++; continue; }
                 if (!RoomShown(spec.RoomId)) { models.Storey++; continue; }
+                parent = interior;
             }
             double lift = GroundLift(group, spec, height, datum);
-            placements.Add(SceneModels.PlaceAsync(_models, spec, interiorTier, SceneModels.KindOf(spec), group, lift,
-                                                  models, _materials));
+            placements.Add(PlaceAndRecord(spec, interiorTier, parent, lift));
         }
         await Task.WhenAll(placements);
 
-        // ── Recipe primitives: outdoor rooms, the open interior, or the far-view shell of a modelless place. ──
-        bool farShell = !open && !solidBuildingPlaced
+        async Task PlaceAndRecord(SceneModelSpec spec, string tier, Node3D parent, double lift)
+        {
+            var node = await SceneModels.PlaceAsync(_models, spec, tier, SceneModels.KindOf(spec), parent, lift, models, _materials);
+            placedSpecs.Add((spec, node, lift));
+        }
+
+        // ── Recipe primitives by layer: outdoor rooms, the interior, the far-view shell of a modelless place. ──
+        bool farShell = !solidBuildingPlaced
                         && SceneView.FarShellSource(isBuilding, natureSite, scene.AreaDetail, false,
                                                     scene.Plates.Count, scene.Walls.Count) == "recipe";
         var kinds = scene.Plates.Select(p => p.TextureKind).Concat(scene.Walls.Select(w => w.TextureKind))
                          .Concat(scene.Extras.Select(e => e.TextureKind)).Where(k => k.Length > 0).Append("floor");
         await _library!.PreloadAsync(kinds);
-        var (meshes, rs) = RecipeMeshes.Build(scene, new RecipeView(open, levelFilter, farShell), _materials, "Recipe");
-        foreach (var m in meshes) group.AddChild(m);
+        var (layers, rs) = RecipeMeshes.Build(scene, new RecipeView(open, levelFilter, farShell), _materials, "Recipe");
+        foreach (var m in layers.Outdoor)
+        {
+            group.AddChild(m);
+            fade.OutdoorCull.Add(m);
+        }
+        foreach (var m in layers.OutdoorClosed)
+        {
+            group.AddChild(m);
+            fade.OutdoorCull.Add(m);
+            fade.ClosedOnly.Add(m);
+        }
+        foreach (var m in layers.Shell)
+        {
+            group.AddChild(m);
+            fade.RoofParts.Add(m);
+        }
+        if (interior is not null)
+            foreach (var m in layers.Interior) interior.AddChild(m);
         // tile.height: the building model(s) measured (a roof-only part together with the rest, as
         // `box.expandByObject(tile.shell)` reads it), else the far shell, else buildPlace's reading height.
         double? measured = buildingBox is { } box && box.Size.Y > 0 ? box.Size.Y : null;
         if (measured is null && farShell)
         {
             Aabb? shellBox = null;
-            foreach (var m in meshes)
+            foreach (var m in layers.Shell)
                 if (m.Mesh is { } mesh)
                 {
                     var b = m.Transform * mesh.GetAabb();
@@ -542,63 +600,147 @@ public sealed class WorldBuilder
                 }
             if (shellBox is { } sh && sh.Size.Y > 0) measured = sh.Size.Y;
         }
+
+        // ── § B5a: every mounted primitive and placement against its spec, in the tile frame. ──
+        var frame = group.Transform;
+        var origin = new Overview.Vec3(group.Position.X, group.Position.Y, group.Position.Z);
+        double yaw = group.Rotation.Y;
+        foreach (var mp in layers.Measured)
+            verify.Primitive(mp.Name, WorldBox(mp.Local, frame), origin, yaw, mp.Targets);
+        verify.Total = placedSpecs.Count;
+        foreach (var (spec, node, lift) in placedSpecs) VerifyPlacement(verify, spec, node, lift, group, origin, yaw);
+        var report = verify.Report(loc.Id);
+        LogVerify(report);
+
+        fade.Collect(group);
         lock (stats)
         {
             stats.Recipe.Add(rs);
             Merge(stats.Models, models);
+            stats.VerifyLocations++;
+            stats.VerifyChecked += report.Checked;
+            stats.VerifyRows += report.Rows.Count;
         }
         if (rs.Primitives > 0 || open)
             _log($"location {loc.Id} ({loc.Name}): ring={ring.ToString().ToLowerInvariant()}{(open ? $" OPEN storey {levelFilter}" : "")}"
-                 + $"{(farShell ? " far-shell" : "")} — {rs.Primitives} primitives, skipped {rs.SkipSummary()}; {models.Summary()}");
+                 + $"{(farShell ? " far-shell" : "")} — {rs.Primitives} primitives, skipped {rs.SkipSummary()}, "
+                 + $"interior mounted {rs.InteriorMounted}; {models.Summary()}");
         return new LocationSlot
         {
             Loc = loc, Ring = ring, Group = group, Width = width, Openable = openable, Open = open,
             Height = measured ?? Overview.EventPinRule.DefaultPlaceHeight(isBuilding, natureSite, LocationView.DetectStyle(loc)),
             HeightMeasured = measured is not null,
+            Fade = fade, LevelFilter = levelFilter, Verify = report,
         };
     }
 
-    /// <summary>
-    /// Show one built location open or closed: rebuild it with the same ring and tiers, hidden until it is
-    /// complete, then swap it in for the old group (the browser crossfades the two; this client cuts).
-    /// Opening shows storey 0, or the avatar's storey in the avatar's own location. A newer call for the same
-    /// location wins; a failure keeps the old group. Returns whether the new group went in.
-    /// </summary>
-    public async Task<bool> SetOpenAsync(string id, bool open)
+    /// <summary>A box of the location frame in the world (three's <c>Box3.applyMatrix4</c>: the AABB of the 8 corners).</summary>
+    public static VBox WorldBox(VBox local, Transform3D frame)
     {
-        if (!_slots.TryGetValue(id, out var slot) || _places is null || Height is null) return false;
-        int gen = ++slot.Generation;
-        LocationSlot? built;
-        try
+        var a = frame * new Aabb(new Vector3((float)local.Min.X, (float)local.Min.Y, (float)local.Min.Z),
+                                 new Vector3((float)(local.Max.X - local.Min.X), (float)(local.Max.Y - local.Min.Y),
+                                             (float)(local.Max.Z - local.Min.Z)));
+        return ToVBox(a);
+    }
+
+    private static VBox ToVBox(Aabb a) => new(new Overview.Vec3(a.Position.X, a.Position.Y, a.Position.Z),
+                                              new Overview.Vec3(a.End.X, a.End.Y, a.End.Z));
+
+    /// <summary>
+    /// <c>verify.placement</c> / <c>verify.skip</c> of one spec (mountModels): nothing placed → the <c>geladen</c> row;
+    /// a mesh or placeholder → its world box and the outer node's world position against the spec (with its
+    /// storey-0 lift); a real mesh with a baked <c>surface</c> (not <c>fit</c>) also gets <c>surface_scale</c> (the
+    /// outer scale against <c>surfaceScale</c>) and <c>surface_box</c> (the fix group's box against the bake's).
+    /// </summary>
+    public static void VerifyPlacement(SceneVerifier v, SceneModelSpec spec, Node3D? node, double lift, Node3D group,
+                                       Overview.Vec3 origin, double yaw)
+    {
+        if (node is null) { v.Skip(spec); return; }
+        v.Placed++;
+        var frame = group.Transform * ChainTo(node.GetParent(), group);
+        if (!SceneModels.IsPlaceholder(node) && spec.Surface is { } surface && spec.Measure != "fit")
         {
-            string? room = open && id == _avatarAt.LocationId ? _avatarAt.RoomId : null;
-            built = await BuildLocation(slot.Loc, Height, new WorldStats(), slot.Ring, open, room, _tierCamera);
+            var obj = $"{spec.Role}:{spec.Id}";
+            v.Check(obj, "surface_scale", node.Transform.Basis.Scale.X,
+                    SurfaceHeight.Scale(surface, new SurfacePlacement(new Scatter.P2(spec.AnchorX, spec.AnchorZ), spec.YawDeg,
+                                                                      spec.BottomY, spec.MaxM, spec.Measure)));
+            if (FixGroupBox(node) is { } fb) v.Check(obj, "surface_box", SceneVerifier.SurfaceBoxDeviation(fb, surface), 0);
         }
-        catch (Exception e)
-        {
-            _log($"location {id}: rebuild {(open ? "open" : "closed")} failed: {e.Message}");
-            return false;
-        }
-        if (built is null || gen != slot.Generation || !GodotObject.IsInstanceValid(_places))
-        {
-            if (built is not null) built.Group.Free();
-            return false;
-        }
-        var old = slot.Group;
-        old.Name = old.Name + "_old";
-        old.QueueFree();
-        _places.AddChild(built.Group);
-        slot.Group = built.Group;
-        slot.Open = built.Open;
-        slot.Openable = built.Openable;
-        if (built.HeightMeasured || !slot.HeightMeasured)
-        {
-            slot.Height = built.Height;
-            slot.HeightMeasured = built.HeightMeasured;
-        }
-        _log($"location {id} ({slot.Loc.Name}) shown {(built.Open ? "OPEN" : "closed")}");
-        Rebuilt?.Invoke(slot);
+        var box = ModelPlacement.Measure(node, frame);
+        var p = frame * node.Position;
+        v.Placement(ToVBox(box), new Overview.Vec3(p.X, p.Y, p.Z), spec, origin, yaw, lift);
+    }
+
+    /// <summary>
+    /// <c>fixGroupBox</c>: the box of the fix group's meshes in the FIT frame (yaw and outer scale stripped, the
+    /// fix kept), its re-seat on the centre taken back out — the box the bake describes. Null without meshes.
+    /// </summary>
+    public static VBox? FixGroupBox(Node3D placed)
+    {
+        if (placed.GetChildCount() == 0 || placed.GetChild(0).GetChildCount() == 0) return null;
+        if (placed.GetChild(0).GetChild(0) is not Node3D fit || fit.GetChildCount() == 0 || fit.GetChild(0) is not Node3D fix) return null;
+        var box = ModelPlacement.Measure(fix, Transform3D.Identity);
+        if (box.Size == Vector3.Zero) return null;
+        var b = ToVBox(box);
+        var o = fix.Position;
+        return new VBox(new Overview.Vec3(b.Min.X - o.X, b.Min.Y - o.Y, b.Min.Z - o.Z), new Overview.Vec3(b.Max.X - o.X, b.Max.Y - o.Y, b.Max.Z - o.Z));
+    }
+
+    /// <summary>The transform from <paramref name="node"/>'s frame up to (not including) <paramref name="ancestor"/>.</summary>
+    private static Transform3D ChainTo(Node? node, Node3D ancestor)
+    {
+        var xf = Transform3D.Identity;
+        for (var n = node; n is not null && n != ancestor; n = n.GetParent())
+            if (n is Node3D n3) xf = n3.Transform * xf;
+        return xf;
+    }
+
+    /// <summary>The verify log: the full table with <see cref="VerifyFull"/>, otherwise only a location that deviates.</summary>
+    private void LogVerify(VerifyReport report)
+    {
+        if (!VerifyFull && report.Clean) return;
+        _log(report.Headline());
+        foreach (var line in report.Table()) _log(line);
+    }
+
+    /// <summary>
+    /// <c>openLocation</c> / <c>closeOpenLocation</c> as the fade TARGET of one built location — nothing is rebuilt;
+    /// <see cref="TickView"/> crossfades it (the caller keeps the singleton, <c>OpenView</c>). Returns whether the
+    /// location exists and can take that state.
+    /// </summary>
+    public bool SetOpen(string id, bool open)
+    {
+        if (!_slots.TryGetValue(id, out var slot)) return false;
+        if (open && !slot.Openable) return false;
+        if (slot.Open == open) return true;
+        slot.Open = open;
+        _log($"location {id} ({slot.Loc.Name}) {(open ? "opens" : "closes")} (crossfade)");
         return true;
+    }
+
+    /// <summary>
+    /// The per-frame view pass of main.ts' frame hook: every openable location steps its crossfade towards its
+    /// target (<c>applyTileFade</c>); the open one, once past fade 0.4, makes every taller neighbour between the
+    /// camera and its centre fade out (<see cref="SceneView.NeighbourOccludes"/>, <c>applyTileOcclusion</c>).
+    /// </summary>
+    public void TickView(double dt, Vector3 camera)
+    {
+        LocationSlot? open = null;
+        foreach (var slot in _slots.Values)
+        {
+            if (!slot.Openable || !GodotObject.IsInstanceValid(slot.Group)) continue;
+            slot.Fade.Step(dt, slot.Open);
+            if (slot.Open && slot.Fade.Fade > 0.4) open = slot;
+        }
+        var cam = new Scatter.P2(camera.X, camera.Z);
+        foreach (var slot in _slots.Values)
+        {
+            if (!GodotObject.IsInstanceValid(slot.Group)) continue;
+            bool hide = open is not null && SceneView.NeighbourOccludes(cam,
+                new Scatter.P2(open.Group.Position.X, open.Group.Position.Z),
+                new Neighbour(slot.Group.Position.X, slot.Group.Position.Z, slot.Width, slot.Height), slot == open);
+            slot.Fade.StepOcclusion(slot.Group, hide, dt);
+        }
     }
 
     // ---- locations that come and go while one plays (main.ts revealLocations / dropVanished) ----------
@@ -689,7 +831,7 @@ public sealed class WorldBuilder
             if (!_slots.Remove(id, out var slot)) continue;
             slot.Generation++;   // a rebuild in flight must not put it back
             if (GodotObject.IsInstanceValid(slot.Group)) slot.Group.QueueFree();
-            Rebuilt?.Invoke(slot);
+            Dropped?.Invoke(slot);
         }
         if (gone.Count > 0) _log($"dropped {gone.Count} location(s) the view no longer carries: {string.Join(", ", gone)}");
         return gone;

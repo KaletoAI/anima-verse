@@ -30,7 +30,9 @@ public readonly record struct RecipeLook(
 ///   • else the payload's style colour (<see cref="MaterialLooks.RecipeHex"/>, unusable → white);
 ///   • roughness/metalness from the kind's <c>material</c> declaration (<see cref="MaterialLooks.SurfaceFinish(System.Text.Json.JsonElement?)"/>),
 ///     else the look's own (matte 0.85 / 0.02, glass 0.3, door leaf 0.75);
-///   • translucent = <c>opacity &lt; 1</c> (glass, ghosted upper storeys, the lift cabin);
+///   • translucent = <c>opacity &lt; 1</c> (glass, ghosted upper storeys, the lift cabin); ALPHA is MULTIPLIED
+///     (<c>ALPHA *= opacity</c>, like StandardMaterial3D's own code), because Godot starts ALPHA at the instance's
+///     fade (<see cref="GeometryInstance3D.Transparency"/>) — the crossfade and the neighbour occlusion ride on it;
 ///   • <c>wall_cull</c>: the open location's outline walls (<c>applyWallCulling</c>) — every vertex carries its
 ///     wall's midpoint and outward normal (location frame) in <c>CUSTOM0</c>; with the camera on the outer side
 ///     all of them collapse to one point, which drops the whole wall exactly like <c>mesh.visible = false</c>
@@ -55,10 +57,14 @@ uniform float roughness_v = 0.85;
 uniform float metallic_v = 0.02;
 uniform float opacity = 1.0;
 uniform float wall_cull = 0.0;
+// Per mesh instance: whether the wall cull runs right now. The interior's meshes keep 1 (they are only shown with
+// the interior up); an outdoor mesh gets 0 while its location is closed and 1 once the crossfade passes 0.03
+// (applyWallCulling runs only then) — LocationFade sets it, no material clone per location.
+instance uniform float cull_active = 1.0;
 void vertex() {{
 	// CUSTOM0 = (mid.x, mid.z, normal.x, normal.z) in the location frame; (0, 0, 0, 0) on everything that
 	// is not an outline wall, which can never pass the test below.
-	if (wall_cull > 0.5) {{
+	if (wall_cull > 0.5 && cull_active > 0.5) {{
 		vec3 cam = (inverse(MODEL_MATRIX) * vec4(CAMERA_POSITION_WORLD, 1.0)).xyz;
 		// The GPU twin of SceneView.WallVisible (scene_view.json [W]): hidden when (cam - mid) . n > 0.
 		if ((cam.x - CUSTOM0.x) * CUSTOM0.z + (cam.z - CUSTOM0.y) * CUSTOM0.w > 0.0) VERTEX = vec3(0.0);
@@ -69,7 +75,7 @@ void fragment() {{
 	ALBEDO = c.rgb;
 	ROUGHNESS = roughness_v;
 	METALLIC = metallic_v;
-{(translucent ? "	ALPHA = opacity;" : "")}
+{(translucent ? "	ALPHA *= opacity;" : "")}
 }}
 ";
 

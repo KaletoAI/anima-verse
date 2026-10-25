@@ -41,6 +41,7 @@ public partial class Main : Node3D
             {
                 PlainGround = _options!.PlainGround,
                 NoWater = _options.NoWater,
+                VerifyFull = _options.Verify,
             };
             // The details go through the conditional cache from the start, so the first re-sync is a 304.
             var source = _source!;
@@ -82,7 +83,8 @@ public partial class Main : Node3D
             AddChild(labelsLayer);
             _labelOverlay = new LabelOverlay { Camera = _camera };
             var placeLabels = _placeLabels;
-            _labelOverlay.Sources.Add(() => placeLabels.Visible(PlaceOf));
+            // `tile.labelObj.visible = tile.group.visible`: a neighbour the occlusion has hidden takes its name along.
+            _labelOverlay.Sources.Add(() => placeLabels.Visible(id => OccludedPlace(id) ? null : PlaceOf(id)));
             labelsLayer.AddChild(_labelOverlay);
             if (_options.Bench || _options.Offline is not null)
             {

@@ -41,6 +41,11 @@ What is written (names as ``native/fixtures/`` uses them, see
                                 tier and variant, surface images, the idle/walk clips)
     summary.json                counts of the dump
 
+Nothing leaves this machine: before the app is imported every outbound socket to
+a non-loopback address is refused (an LLM provider, an image gateway, a hub named
+in the copy's config would otherwise be probed), and the image service is stubbed
+so no route builds a backend pool from that config.
+
 Binary bodies are HARD LINKS to the served file when it lies in the copy (the
 same bytes at no disk cost), else written out. The server's background builders
 are switched off for the run: no Meshopt delivery copies (the source GLB is served,
@@ -97,12 +102,69 @@ def main() -> int:
         shutil.rmtree(instance, ignore_errors=True)
 
 
+def _offline_only() -> None:
+    """Refuse every outbound connection that is not to this machine (see the docstring)."""
+    import ipaddress
+    import socket
+
+    def _local(address) -> bool:
+        host = address[0] if isinstance(address, tuple) else address
+        if isinstance(address, (str, bytes)) and not isinstance(address, tuple):
+            return True  # AF_UNIX path
+        try:
+            return ipaddress.ip_address(str(host).split("%")[0]).is_loopback
+        except ValueError:
+            return str(host) in ("localhost",)
+
+    orig_connect = socket.socket.connect
+    orig_connect_ex = socket.socket.connect_ex
+
+    def _connect(self, address):
+        if not _local(address):
+            raise OSError(f"dump_payloads: offline, refusing a connection to {address!r}")
+        return orig_connect(self, address)
+
+    def _connect_ex(self, address):
+        if not _local(address):
+            raise OSError(f"dump_payloads: offline, refusing a connection to {address!r}")
+        return orig_connect_ex(self, address)
+
+    socket.socket.connect = _connect
+    socket.socket.connect_ex = _connect_ex
+    orig_getaddrinfo = socket.getaddrinfo
+
+    def _getaddrinfo(host, *a, **k):
+        if host not in (None, "localhost", "127.0.0.1", "::1"):
+            raise OSError(f"dump_payloads: offline, refusing to resolve {host!r}")
+        return orig_getaddrinfo(host, *a, **k)
+    socket.getaddrinfo = _getaddrinfo
+
+
+def _no_image_service() -> None:
+    """The image service is never built from the copy's config: routes see a service WITHOUT backends (the
+    model-3d answer lists no riggers), so nothing constructs a backend that would probe its gateway."""
+    from types import SimpleNamespace
+    from app.imagegen import service
+
+    class _Empty:
+        backends: list = []
+        pool = SimpleNamespace(backends=[])
+
+        def __getattr__(self, _name):   # any query (list_*_backends …) answers "none"
+            return lambda *_a, **_k: []
+
+    empty = _Empty()
+    service.get_image_service = lambda *_a, **_k: empty
+
+
 def dump(world: Path, out: Path, instance: Path, as_user: str) -> int:
     # CLAUDE.md: paths.init BEFORE any world-DB module; app.server needs both env vars.
     os.environ["STORAGE_DIR"] = str(world)
     os.environ["INSTANCE_DIR"] = str(instance)
+    _offline_only()
     from app.core import paths
     paths.init(world)
+    _no_image_service()
     from app.server import app  # noqa: E402  (boot: config, schema, migrations on the COPY)
     from app.core import users, glb_delivery, door_models
     from app.blender import refine

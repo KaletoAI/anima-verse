@@ -225,7 +225,9 @@ Arguments after `--` (no .env; all optional):
 | `--no-hud` | no HUD even when gdCEF is linked (the S2/S3 bench numbers were taken without it) |
 | `--no-water` | no water lift / water variant (= the browser's `&water=0`); the bench flags say `water: false` |
 | `--offline=DIR` | build from a payload dump (`tools/dump_payloads.py`) instead of a server: no login, no HUD; prints the world/scatter/figure/shader summary lines and quits (with `--bench`: runs the drive, then quits) |
+| `--verify` | § B5a: log the full verify table of every mounted location (default: only a location with a deviation is logged, like the browser without `?verify=1`) |
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
+| `--check verify` | only the § B5a section of the self-test (both fixture worlds, `Check/VerifyCheck.cs`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
 Camera (the browser's overview camera, `Ui/OverviewCamera.cs` + `Core/Overview/OverviewControl.cs`):
@@ -404,15 +406,42 @@ nothing here is a native choice:
   without the wind).
 
 Not ported (all view-only, counted nowhere): picture/glass slot materials, the
-room clip and the depth cut of props (`clip_outline`, `cut_plane`), door
+room clip and the depth cut of props (`clip_outline`, `cut_plane` — parsed since Task 15), door
 swinging, prop lights, the underwater ghosts, waterfalls, LOD re-evaluation while
 the camera moves (the bench drive keeps its focus on the anchor).
 
 Summary line of a build (online log, `--offline`, `--check`): `primitives=N
 skipped=M (degenerate=… interior=… storey=… panes=…) shell_copies=…
-culled_walls=… models[building=… room=… prop=… door=… window=… world=…
+culled_walls=… interior_mounted=… models[building=… room=… prop=… door=… window=… world=…
 placeholders=… missing=… interior=… storey=… faded=… culled=… full=… low=…]
-… water[…]`.
+… water[…] … verify[locations=… checked=… rows=…]`. `primitives`/`skipped` describe what the browser SHOWS at
+each location's fade target; `interior_mounted` what stands in the interior groups.
+
+### Mounted once, opened by a crossfade (Task 15)
+
+Every location is mounted ONCE (`World/WorldBuilder.cs` `BuildFromScene`, the browser's `mountShell` +
+`mountDetail`): building models, outdoor specs and outdoor primitives off the location group; the interior
+(primitives of the mounted storey and, in the near ring, the indoor specs) in a child `Interior` held at fade 0;
+for a place without a building model the far-shell copies. "Look inside" / "Close view" only flip the fade target
+(`WorldBuilder.SetOpen`); `WorldBuilder.TickView` runs per frame (every run with a world) and drives
+`World/LocationFade.cs` with the Core numbers (`SceneView.FadeStep` 4/s — 95 % in ~0.75 s — `FadeOpacities`, the
+neighbour occlusion `NeighbourOccludes` + `OcclusionStep` 8/s). Opacities go into
+`GeometryInstance3D.Transparency` (one per mesh instance, multiplied by Godot into the material's own alpha; the
+recipe shader writes `ALPHA *= opacity`), set to 0 wherever Godot would draw opaque anyway (fade alpha ≥ 0.999), so a
+mesh is in the transparent pass only while a fade runs. Kept plan-hull / ground models with cutouts carry a cut copy
+the fade swaps in at 0.03. Only shown meshes are pickable. The storey is fixed at the mount (the avatar's room in
+its own location, else 0) until Task 16.
+
+### § B5a verify (Task 15)
+
+After each mount `Core/Scene/SceneVerifier.cs` diffs every mounted plate and wall (its box from the emitted
+vertices, through the location group's transform, back into the tile frame) and every placement (world box +
+outer position, with its storey-0 lift; `surface_scale`/`surface_box` where a spec bakes a surface) against the
+payload through the vector-checked cores of `SceneVerify`; a spec that placed nothing is a `geladen` row (the
+browser's field name). The log line is the browser's, in English: `[verify] <loc>: N numbers checked, no deviation
+> 0.01 m (models P/T)`, or the deviation count plus a table. Differences to `window.__sceneVerify`: one report per
+location (the browser's detail report overwrites its shell report), degenerate pieces and pieces of other storeys
+are not built here and therefore not measured.
 
 ## Offline: the real world without the server (Task S3c)
 
@@ -430,7 +459,8 @@ $GODOT --headless --path native -- --offline=/path/to/dump --goto=LOCATION
 
 The offline run builds the same world as online (`Check/FixtureSource.cs` serves
 the dump) and prints `offline world …`, `offline scatter …`, `offline figures …`
-and the shader lines, then quits.
+and the shader lines, then quits; with `--verify` it also prints every location's verify table. The dump tool
+refuses every non-loopback connection and stubs the image service (a copy's config never makes it probe a gateway).
 
 ## Scatter (Task S3)
 
@@ -570,6 +600,6 @@ works the same way.
 | `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); Task S3c: the water numbers and window (`Water.cs`; the tile field is `Core/Ground/WaterTileField.cs`) |
 | `Scatter/` | (payload, sampler and LOD/undergrowth maths are in `Core/Scatter/`) prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
 | `Bench/` | the bench driver and its output (camera path `loadPath`/`samplePath` and statistics `summarize`/`percentile` are in `Core/Bench/`) |
-| `Check/` | `--check`: fixture source and expectations, the S3c world (`S3cCheck.cs`: view rules, models, world props, water, shaders), bench maths, scatter (`ScatterCheck.cs`), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
+| `Check/` | `--check`: fixture source and expectations, the S3c world (`S3cCheck.cs`: view rules, models, world props, water, shaders), § B5a (`VerifyCheck.cs`), the crossfade and occlusion (`PickCheck.cs` G), bench maths, scatter (`ScatterCheck.cs`), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
 | `fixtures/` | offline payloads (incl. `terrain.json`, the scatter reference vectors, the cut-down layer bake + surface library + the ground reference values) + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
 | `third_party/meshoptimizer/` | meshoptimizer v1.3 sources (MIT, `src/*.cpp`, `meshoptimizer.h`, LICENSE) |

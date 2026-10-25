@@ -28,7 +28,10 @@ namespace AnimaNative;
 ///   --offline=DIR               build the world from a payload dump (native/tools/dump_payloads.py) instead of a
 ///                               server: no login, no HUD; prints the world/scatter/figure summary lines, then quits
 ///                               (with --bench: runs the drive, then quits)
+///   --verify                    § B5a: log the full verify table of every mounted location (default: only
+///                               locations with a deviation, like the browser without ?verify=1)
 ///   --check                     offline self-test from native/fixtures, then quit
+///   --check verify | --check=verify   only the § B5a section of the self-test (fixture world + S3c world)
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
 public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
@@ -52,6 +55,10 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
     public bool Vsync { get; init; }
     /// <summary>Explicit <c>--size</c>; null = the project default (the bench uses <see cref="DefaultBenchSize"/>).</summary>
     public Vector2I? Size { get; init; }
+    /// <summary><c>--verify</c>: the full § B5a table per mounted location (the browser's <c>?verify=1</c>).</summary>
+    public bool Verify { get; init; }
+    /// <summary><c>--check verify</c>: run only that section of the self-test; null = all of it.</summary>
+    public string? CheckOnly { get; init; }
 
     public static CliOptions FromGodot() => Parse(OS.GetCmdlineUserArgs());
 
@@ -60,13 +67,16 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         string? server = null;
         string? user = null, gotoQuery = null;
         bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = true, noHud = false, plainGround = false;
-        bool noWater = false;
-        string? offline = null;
+        bool noWater = false, verify = false;
+        string? offline = null, checkOnly = null;
         Vector2I? size = null;
         foreach (var raw in args)
         {
             var arg = raw.Trim();
             if (arg == "--check") check = true;
+            else if (TryValue(arg, "--check", out var only)) { check = true; checkOnly = CheckSection(only); }
+            else if (check && checkOnly is null && arg == "verify") checkOnly = "verify";
+            else if (arg == "--verify") verify = true;
             else if (arg == "--bench") bench = true;
             else if (arg == "--check-bench") checkBench = true;
             else if (arg == "--quit-after-bench") quit = true;
@@ -106,8 +116,13 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             Offline = string.IsNullOrWhiteSpace(offline) ? null : offline,
             Vsync = vsync,
             Size = size,
+            Verify = verify,
+            CheckOnly = checkOnly,
         };
     }
+
+    private static string CheckSection(string v) => v == "verify"
+        ? v : throw new ArgumentException($"--check= knows only 'verify', got '{v}'");
 
     private static Vector2I ParseSize(string v)
     {

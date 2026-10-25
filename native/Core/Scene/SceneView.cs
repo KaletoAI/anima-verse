@@ -71,6 +71,42 @@ public static class SceneView
     public static FadeLook FadeOpacities(double f)
         => new(Math.Max(0, 1 - f * 1.4), 1 - f * 0.88, f < 0.95, f < 0.4, f > 0.03, f > 0.5);
 
+    /// <summary>A neighbour whose occlusion fade reached this is hidden outright (<c>group.visible = occl &lt; 0.95</c>).</summary>
+    public const double OccludedHideAt = 0.95;
+
+    /// <summary>
+    /// <c>applyTileOcclusion</c>'s step (client3d/src/scene/tiles.ts, inline there — no vector): three's
+    /// <c>MathUtils.lerp(occl, hide ? 1 : 0, 1 − e^(−8·dt))</c>, snapped to 0 below 0.02 once nothing hides it;
+    /// a tile at 0 that nothing hides stays 0 (the early return).
+    /// </summary>
+    public static double OcclusionStep(double occl, bool hide, double dt)
+    {
+        if (occl == 0 && !hide) return 0;
+        double t = 1 - Math.Exp(-8 * dt);
+        double v = (1 - t) * occl + t * (hide ? 1 : 0);
+        return v < 0.02 && !hide ? 0 : v;
+    }
+
+    /// <summary>
+    /// Godot's <c>FADE_ALPHA_PASS_THRESHOLD</c> (servers/rendering/renderer_rd/forward_clustered/
+    /// render_forward_clustered.cpp): an instance whose fade alpha (1 − transparency) is below 0.999 is drawn in the
+    /// transparent pass, at or above it in the opaque pass.
+    /// </summary>
+    public const double OpaqueFadeAlpha = 0.999;
+
+    /// <summary>
+    /// The native form of the two material opacities the browser writes (the roof fade <c>m.opacity = roof</c>
+    /// and the occlusion <c>opacity = base·(1 − occl)</c>): ONE instance transparency per mesh,
+    /// 1 − <paramref name="opacity"/>·(1 − <paramref name="occl"/>), the material's own opacity left to the material
+    /// (Godot multiplies the two). Values the renderer would draw opaque anyway (fade alpha ≥ 0.999) are 0, so an
+    /// opaque mesh goes back to the opaque pass the moment the fade lets it.
+    /// </summary>
+    public static double InstanceTransparency(double opacity, double occl)
+    {
+        double alpha = Math.Clamp(opacity, 0, 1) * (1 - Math.Clamp(occl, 0, 1));
+        return alpha >= OpaqueFadeAlpha ? 0 : 1 - alpha;
+    }
+
     /// <summary><c>roomVisible</c>: always-visible, or on the shown storey (no level = 0).</summary>
     public static bool RoomVisible(bool alwaysVisible, double? level, double shown) => alwaysVisible || (level ?? 0) == shown;
 

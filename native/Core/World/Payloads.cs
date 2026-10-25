@@ -225,8 +225,14 @@ public sealed record SceneExtra(string Kind, double[] Center, double[] Size, dou
     public string TextureKind { get; init; } = "";
 }
 
-/// <summary>§ B1 <c>rooms[]</c>: the fields the visibility rules read.</summary>
-public sealed record SceneRoom(string RoomId, int Level, bool AlwaysVisible);
+/// <summary>§ B1 <c>rooms[]</c>: the visibility fields, plus outline, openings, overlay and ambience.</summary>
+public sealed record SceneRoom(string RoomId, int Level, bool AlwaysVisible)
+{
+    public Scatter.P2[] Outline { get; init; } = Array.Empty<Scatter.P2>();
+    public SceneOpening[] Openings { get; init; } = Array.Empty<SceneOpening>();
+    public SceneRoomOverlay? Overlay { get; init; }
+    public SceneAmbience? Ambience { get; init; }
+}
 
 /// <summary>
 /// § B1 <c>models[]</c> — the one placement spec of § B2. Numbers are kept as the payload states them (an absent
@@ -246,6 +252,26 @@ public sealed record SceneModelSpec(
     public (double W, double D, double H)? PlaceholderDims { get; init; }
     /// <summary><c>cutouts</c>: tile-frame polygons the open interior view cuts out of an area/plan-hull model.</summary>
     public (double X, double Z)[][] Cutouts { get; init; } = Array.Empty<(double, double)[]>();
+    /// <summary><c>clip_outline</c>: the room hull a diorama is clipped to (tile frame); empty when absent.</summary>
+    public Scatter.P2[] ClipOutline { get; init; } = Array.Empty<Scatter.P2>();
+    /// <summary><c>walk_y_world</c>: the declared walking height of a diorama / building; null when absent.</summary>
+    public double? WalkYWorld { get; init; }
+    /// <summary><c>surface</c>: the model's baked walkable lattice; null when absent.</summary>
+    public Scene.SceneSurface? Surface { get; init; }
+    public bool Walkable { get; init; }
+    public bool WidthEstimated { get; init; }
+    /// <summary><c>door</c> (v5): a door prop's opening, hinge, swing and leaf box.</summary>
+    public SceneDoor? Door { get; init; }
+    /// <summary>Top-level <c>leaf_bbox</c> (the browser reads only <c>door.leaf_bbox</c>).</summary>
+    public (Overview.Vec3 Min, Overview.Vec3 Max)? LeafBox { get; init; }
+    /// <summary><c>light</c> (v17).</summary>
+    public ScenePropLight? Light { get; init; }
+    /// <summary><c>water.regions</c> (v18); empty when absent.</summary>
+    public SceneWaterRegion[] Water { get; init; } = Array.Empty<SceneWaterRegion>();
+    /// <summary><c>cut_plane</c>.</summary>
+    public SceneCutPlane? CutPlane { get; init; }
+    /// <summary><c>slots</c>: material slot name → value.</summary>
+    public Dictionary<string, SceneSlotValue> Slots { get; init; } = new();
 }
 
 /// <summary>The scene recipe of one location, reduced to what the native client draws.</summary>
@@ -261,11 +287,29 @@ public sealed class ScenePayload
     public Dictionary<string, double> StyleNumbers { get; } = new();
     public double K { get; private set; } = 1;
     public bool AreaDetail { get; private set; }
+    public string Signature { get; private set; } = "";
+    public double ExtentM { get; private set; }
+    /// <summary><c>storey_m</c>: the storey height (labels, level switch).</summary>
+    public double StoreyM { get; private set; }
+    /// <summary><c>boundary</c> (ignored by the browser, which takes the world-map row's); null when absent.</summary>
+    public Scatter.P2[]? Boundary { get; private set; }
+    public List<SceneLevel> Levels { get; } = new();
+    public List<SceneStairs> Stairs { get; } = new();
+    public List<SceneFloor> FloorPlan { get; } = new();
+    public List<SceneMarker> Markers { get; } = new();
+    public List<SceneDoorway> Doorways { get; } = new();
+    public List<SceneCorridor> Corridors { get; } = new();
+    public List<SceneProblem> Problems { get; } = new();
+    public List<SceneBoundaryOpening> BoundaryOpenings { get; } = new();
+    public SceneFigures? Figures { get; private set; }
     /// <summary><c>floor_plan</c> or <c>markers</c> non-empty — part of <c>hasInterior</c> (mountShell).</summary>
     public bool HasFloorPlanOrMarkers => FloorPlanCount > 0 || MarkerCount > 0;
-    /// <summary>The lengths of <c>floor_plan</c> and <c>markers</c> (their contents are not parsed).</summary>
+    /// <summary>The lengths of <c>floor_plan</c> and <c>markers</c> (the raw array lengths — <c>hasInterior</c> reads them).</summary>
     public int FloorPlanCount { get; private set; }
     public int MarkerCount { get; private set; }
+
+    /// <summary><c>floorYof(level)</c>: the declared floor height of a storey, 0 when it is not declared.</summary>
+    public double FloorY(int level) => Levels.FirstOrDefault(l => l.Level == level)?.FloorY ?? 0;
 
     public static ScenePayload Parse(JsonElement root)
     {
@@ -273,7 +317,21 @@ public sealed class ScenePayload
         {
             K = Json.Num(root, "k", 1), AreaDetail = Truthy(root, "area_detail"),
             FloorPlanCount = Json.Arr(root, "floor_plan").Count(), MarkerCount = Json.Arr(root, "markers").Count(),
+            Signature = Json.Str(root, "signature"), ExtentM = Json.Num(root, "extent_m"), StoreyM = Json.Num(root, "storey_m"),
         };
+        if (root.TryGetProperty("boundary", out var bnd) && bnd.ValueKind == JsonValueKind.Array)
+            s.Boundary = Json.Ring(bnd).Select(p => new Scatter.P2(p.X, p.Z)).ToArray();
+        if (root.TryGetProperty("figures", out var fig) && fig.ValueKind == JsonValueKind.Object)
+            s.Figures = new SceneFigures(Json.Num(fig, "base_height_m_world"), Json.Num(fig, "stand_clearance"));
+        foreach (var e in Json.Arr(root, "levels")) if (e.ValueKind == JsonValueKind.Object) s.Levels.Add(SceneJson.Level(e));
+        foreach (var e in Json.Arr(root, "stairs")) if (e.ValueKind == JsonValueKind.Object) s.Stairs.Add(SceneJson.Stairs(e));
+        foreach (var e in Json.Arr(root, "floor_plan")) if (e.ValueKind == JsonValueKind.Object) s.FloorPlan.Add(SceneJson.Floor(e));
+        foreach (var e in Json.Arr(root, "markers")) if (e.ValueKind == JsonValueKind.Object) s.Markers.Add(SceneJson.Marker(e));
+        foreach (var e in Json.Arr(root, "doorways")) if (e.ValueKind == JsonValueKind.Object) s.Doorways.Add(SceneJson.Doorway(e));
+        foreach (var e in Json.Arr(root, "corridors")) if (e.ValueKind == JsonValueKind.Object) s.Corridors.Add(SceneJson.Corridor(e));
+        foreach (var e in Json.Arr(root, "problems")) if (e.ValueKind == JsonValueKind.Object) s.Problems.Add(SceneJson.Problem(e));
+        foreach (var e in Json.Arr(root, "boundary_openings"))
+            if (e.ValueKind == JsonValueKind.Object) s.BoundaryOpenings.Add(SceneJson.BoundaryOpening(e));
         if (root.TryGetProperty("style", out var style) && style.ValueKind == JsonValueKind.Object)
             foreach (var p in style.EnumerateObject())
             {
@@ -318,7 +376,13 @@ public sealed class ScenePayload
         }
         foreach (var r in Json.Arr(root, "rooms"))
             if (Json.Str(r, "room_id") is { Length: > 0 } id)
-                s.Rooms.Add(new SceneRoom(id, (int)Json.Num(r, "level"), Json.Bool(r, "always_visible")));
+                s.Rooms.Add(new SceneRoom(id, (int)Json.Num(r, "level"), Json.Bool(r, "always_visible"))
+                {
+                    Outline = SceneJson.Ring(r, "outline"),
+                    Openings = Json.Arr(r, "openings").Where(o => o.ValueKind == JsonValueKind.Object).Select(SceneJson.Opening).ToArray(),
+                    Overlay = SceneJson.Overlay(r),
+                    Ambience = SceneJson.Ambience(r),
+                });
         foreach (var o in Json.Arr(root, "outdoor_rooms"))
             if (o.ValueKind == JsonValueKind.String && o.GetString() is { Length: > 0 } id) s.OutdoorRooms.Add(id);
         foreach (var m in Json.Arr(root, "models"))
@@ -386,6 +450,17 @@ public sealed class ScenePayload
             PlanHull = Json.Bool(m, "plan_hull"),
             PlaceholderDims = ph,
             Cutouts = Json.Arr(m, "cutouts").Select(Json.Ring).Where(r => r.Length >= 3).ToArray(),
+            ClipOutline = SceneJson.Ring(m, "clip_outline"),
+            WalkYWorld = Json.NumOrNull(m, "walk_y_world"),
+            Surface = SceneJson.Surface(m),
+            Walkable = Json.Bool(m, "walkable"),
+            WidthEstimated = Json.Bool(m, "width_estimated"),
+            Door = SceneJson.Door(m),
+            LeafBox = SceneJson.TopLeafBox(m),
+            Light = SceneJson.Light(m),
+            Water = SceneJson.Water(m),
+            CutPlane = SceneJson.CutPlane(m),
+            Slots = SceneJson.Slots(m),
         };
     }
 }

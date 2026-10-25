@@ -19,15 +19,17 @@ namespace AnimaNative.World;
 /// click on its bare ground is a click on nothing, in the browser and here.
 ///
 /// TECHNIQUE (Task 9 Step 0, numbers in the report): no physics bodies. Per mesh instance the world AABB
-/// is cached once (locations do not move; a rebuilt location drops its entries), the ray is tested against
+/// is cached once (locations do not move; a dropped location loses its entries), the ray is tested against
 /// those boxes in C#, and only a mesh whose box it meets is asked for triangles: Godot's own
 /// <see cref="TriangleMesh"/> (C++ BVH) of the mesh resource, built lazily on the first such hit and cached
 /// by the <see cref="Mesh"/> itself (<c>Mesh::generate_triangle_mesh</c>), so instances of one GLB share it.
 /// The ray goes into the mesh's local frame; the hit comes back out and is measured in world metres.
 /// Differences to three.js, both without effect on WHICH location answers: Godot's triangle test is
-/// two-sided (three culls back faces of FrontSide materials), and this client never builds what the
-/// browser keeps invisible (a closed location's interior, an open one's faded shell) — three's raycaster
-/// ignores <c>visible</c>, but those meshes sit inside the same location's other geometry.
+/// two-sided (three culls back faces of FrontSide materials), and only SHOWN meshes answer here: the mount keeps
+/// a closed location's interior, an open one's faded roof, an occluded neighbour and the idle half of a cutout
+/// pair as hidden nodes (Task 15), and the pick skips every mesh that is not visible in the tree — three's
+/// raycaster ignores <c>visible</c>, but those meshes sit inside the same location's other geometry, and the
+/// spike (Task 9) showed only what was shown.
 /// </summary>
 public sealed class LocationPicking
 {
@@ -59,7 +61,7 @@ public sealed class LocationPicking
     public LocationPicking(WorldBuilder builder)
     {
         _builder = builder;
-        builder.Rebuilt += slot => _cache.Remove(slot.Loc.Id);
+        builder.Dropped += slot => _cache.Remove(slot.Loc.Id);
     }
 
     /// <summary>The nearest location hit by the ray (world space) and its distance in metres, or null.</summary>
@@ -76,12 +78,16 @@ public sealed class LocationPicking
         var dn = new Vec3(d.X, d.Y, d.Z);
         foreach (var slot in _builder.Slots.Values)
         {
+            // Only what is shown answers: a closed location's interior, a faded roof, an occluded neighbour and the
+            // whole-or-cut half of a model that is not up are hidden nodes (the mount keeps them; the pick skips them).
+            if (!GodotObject.IsInstanceValid(slot.Group) || !slot.Group.Visible) continue;
             var c = Entries(slot);
             if (c is null) continue;
             LastBoxTests++;
             if (RayMath.RayBox(origin, dn, c.Min, c.Max) is not double groupT || groupT >= best) continue;
             foreach (var e in c.Entries)
             {
+                if (!GodotObject.IsInstanceValid(e.Mesh) || !e.Mesh.IsVisibleInTree()) continue;
                 LastBoxTests++;
                 if (RayMath.RayBox(origin, dn, e.Min, e.Max) is not double boxT || boxT >= best) continue;
                 if (Hit(e, o, d) is double t && t < best)

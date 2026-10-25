@@ -118,7 +118,7 @@ public partial class Main : Node3D
         }
         if (_options.Check)
         {
-            int code = await CheckRunner.RunAsync(this);
+            int code = await CheckRunner.RunAsync(this, _options.CheckOnly);
             GetTree().Quit(code);
             return;
         }
@@ -274,6 +274,9 @@ public partial class Main : Node3D
         _tags?.Expire();
         // The performance readout: measured and sent only while the HUD shows it (HudUiState.perfOn).
         if (_hud is { } hudNow && _perf.Frame(hudNow.Active && hudNow.Ui.PerfOn, delta, _world) is { } perf) hudNow.SendPerf(perf);
+        // main.ts' frame hook: the crossfade of every openable location and the neighbour occlusion — in every run
+        // with a world (the measuring runs too: the avatar's location fades in at their start, as in the browser).
+        if (_builder is not null && _camera is not null && _world is not null) _builder.TickView(delta, _camera.GlobalPosition);
         // The overview auto-close of main.ts' frame hook (no auto-reopen). The measuring runs keep their world.
         if (_interactive && _openView.OpenId is { } open && _camera is not null)
         {
