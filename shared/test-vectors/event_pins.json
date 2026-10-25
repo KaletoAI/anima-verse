@@ -1,0 +1,16 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_event_pins.mjs",
+  "cases": [
+    { "label": "[G1] no events list -> no pin", "fn": "pinGlyph", "args": [null], "expect": null },
+    { "label": "[G2] an empty list -> no pin", "fn": "pinGlyph", "args": [[]], "expect": null },
+    { "label": "[G3] one ordinary event -> ❗", "fn": "pinGlyph", "args": [[{ "category": "social" }]], "expect": "❗" },
+    { "label": "[G4] an event without category -> ❗", "fn": "pinGlyph", "args": [[{}]], "expect": "❗" },
+    { "label": "[G5] any danger among them -> 🔥", "fn": "pinGlyph",
+      "args": [[{ "category": "social" }, { "category": "danger" }]], "expect": "🔥" },
+    { "label": "[Y1] flat ground, a 4 m building -> 0 + 4 + 3.5 = 7.5", "fn": "pinY", "args": [0, 4], "expect": 7.5 },
+    { "label": "[Y2] hilltop at 42.25 m, a 4 m building -> 49.75", "fn": "pinY", "args": [42.25, 4], "expect": 49.75 },
+    { "label": "[Y3] lakeside at -3 m, a 0.3 m area -> 0.8", "fn": "pinY", "args": [-3, 0.3], "expect": 0.8 },
+    { "label": "[Y4] no height of its own at 12 m -> 15.5", "fn": "pinY", "args": [12, 0], "expect": 15.5 }
+  ]
+}

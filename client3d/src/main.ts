@@ -28,6 +28,7 @@ import { buildGlyphs, clearPropHighlight, disposeGlyphs, highlightProp, hitPlace
   hitProp, pickableProps, type PickableProp, type PlacedPropRef,
   type PropHighlight } from './scene/placeGlyphs';
 import { installSpotHighlight, setSpot } from './scene/spotHighlight';
+import { pinGlyph, pinY } from './game/eventPins';
 import { infoPanelData } from './game/infoPanel';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
@@ -2295,23 +2296,30 @@ async function startApp(username: string, role: string) {
   function updatePins(map: WorldMap) {
     const wanted = new Map<string, string>();
     for (const [locId, evs] of Object.entries(map.events_by_location ?? {})) {
-      if (!evs.length || !places.has(locId)) continue;
-      wanted.set(locId, evs.some((e) => e.category === 'danger') ? '🔥' : '❗');
+      const glyph = pinGlyph(evs);
+      if (glyph && places.has(locId)) wanted.set(locId, glyph);
     }
     for (const [locId, pin] of eventPins) {
-      if (!wanted.has(locId)) {
+      // A pin whose glyph changed (an event turned into a danger) is rebuilt.
+      if (wanted.get(locId) !== pin.userData.glyph) {
         engine.scene.remove(pin);
+        (pin.material as THREE.SpriteMaterial).map?.dispose();
+        pin.material.dispose();
         eventPins.delete(locId);
       }
     }
-    for (const [locId, emoji] of wanted) {
-      if (eventPins.has(locId)) continue;
+    for (const [locId, glyph] of wanted) {
       const tile = places.get(locId)!;
-      const pin = new THREE.Sprite(new THREE.SpriteMaterial({ map: makePinTexture(emoji), depthTest: false }));
-      pin.scale.setScalar(3);
-      pin.position.copy(tile.center).setY(tile.height + 3.5);
-      engine.scene.add(pin);
-      eventPins.set(locId, pin);
+      let pin = eventPins.get(locId);
+      if (!pin) {
+        pin = new THREE.Sprite(new THREE.SpriteMaterial({ map: makePinTexture(glyph), depthTest: false }));
+        pin.userData.glyph = glyph;
+        pin.scale.setScalar(3);
+        engine.scene.add(pin);
+        eventPins.set(locId, pin);
+      }
+      // Re-placed every poll: the place's ground datum can settle after the pin was made.
+      pin.position.copy(tile.center).setY(pinY(tile.center.y, tile.height));
     }
   }
 

@@ -114,3 +114,4 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 | `view_shift.json` | `client3d/scripts/smoke_view_shift.mjs` | `viewShiftFor` (`client3d/src/scene/viewShift.ts`); the panel is `{x, y, w, h}` or `null` |
 | `overview_hud.json` | `client3d/scripts/smoke_walk_math.mjs` | `bubbleText`, `bubbleMs` (`game/bubble.ts`), `bootProgress` (`game/boot.ts`; the finished stages as a LIST), `infoPanelData` (`game/infoPanel.ts`; `roomOf` as an object name → room, `null` for an absent view / avatar), `checkScatterPrefs`, `scatterLodCfgOf` (`game/prefs.ts`) — all under `client3d/src/` |
 | `poll_schedule.json` | `scripts/smoke_sync_client.mjs` | `pollIntervalMs`, `nextErrorFactor` (`packages/player-ui/src/pollCore.ts`) |
+| `event_pins.json` | `client3d/scripts/smoke_event_pins.mjs` | `pinGlyph`, `pinY` (`client3d/src/game/eventPins.ts`); events are `{category}` objects, `null` = no list |
