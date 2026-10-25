@@ -1248,6 +1248,19 @@
       "animation": "crawl",
       "group": "ground",
       "solo": true
+    },
+    "swimming": {
+      "prompt": "swimming in open water, steady breaststroke, head above the surface, looking ahead",
+      "synonyms": [
+        "schwimmen",
+        "schwimmt",
+        "im wasser schwimmen",
+        "swimming",
+        "swimming in the water"
+      ],
+      "animation": "swim",
+      "group": "stand",
+      "solo": true
     }
   }
 }
