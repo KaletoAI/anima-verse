@@ -12,6 +12,8 @@
  * here — for rooms it lives in the plan (layout.model_offset_y). Full model
  * management (list/select/upload) stays in the room editor's 3D tab.
  */
+import { WaterPanel, useModelWater } from '../props/WaterPanel'
+import { Model3DViewer } from '../characters/Model3DViewer'
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
@@ -64,8 +66,10 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
   const enc = `${encodeURIComponent(locationId)}/rooms/${encodeURIComponent(roomId)}`
   const [model, setModel] = useState<ActiveModel | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [waterOpen, setWaterOpen] = useState(false)
   const [widthDraft, setWidthDraft] = useState('')
   const [walkDraft, setWalkDraft] = useState('')
+  const waterController = useModelWater(model ? `/world/locations/${enc}/model3d/water` : '', `${model?.filename}-${JSON.stringify(model?.rotation)}`)
   const [surface, setSurface] = useState<SurfaceStatus | null>(null)
 
   // ``meta`` is the ACTIVE model's sidecar — the only place that says what the
@@ -336,6 +340,14 @@ export function RoomModelAdjust({ locationId, roomId, roomName,
           )
         })
       ) : null}
+      <details style={{ width: '100%' }} onToggle={e => setWaterOpen(e.currentTarget.open)}>
+        <summary>{t('Water')}</summary>
+        <WaterPanel controller={waterController} />
+        {waterOpen && <Model3DViewer url={`/world/locations/${enc}/model3d/files/${encodeURIComponent(model.filename)}`}
+          format="glb" rotation={model.rotation} height={320}
+          waterRegions={waterController.water} picking={!!waterController.shape}
+          onPickModelPoint={waterController.shape ? waterController.pick : undefined} />}
+      </details>
       <span className="ga-hint">
         {t('Persisted on the active model — preview and 3D client pick it up.')}
       </span>

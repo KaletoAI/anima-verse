@@ -690,3 +690,27 @@ export interface PropAreasInfo {
    *  a failure, and the tab shows the two differently. */
   warning?: string
 }
+
+/** Model-owned water sidecar, in the fixed model frame. */
+export interface WaterRegion {
+  id: string
+  kind: 'basin' | 'painted' | 'manual'
+  confidence: 'sure' | 'candidate'
+  enabled: boolean
+  outline: [number, number][]
+  holes: [number, number][][]
+  level: number
+  bed: number
+  area_m2: number
+  depth_m: number
+  look: { preset: string; tint: string; clarity: number }
+}
+export interface ModelWater {
+  detected_at: string
+  target_m: number
+  measure: 'xyz' | 'xz'
+  box_min: [number, number, number]
+  box_max: [number, number, number]
+  extent_snapped: [number, number, number]
+  regions: WaterRegion[]
+}

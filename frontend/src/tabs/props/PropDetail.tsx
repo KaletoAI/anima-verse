@@ -46,6 +46,7 @@
  * reloads land UNDER the draft (`applyVariantDraft` puts it back on top), so
  * an unsaved size survives a mesh that finishes in the background.
  */
+import { WaterPanel, useModelWater } from './WaterPanel'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { FIGURE_HEIGHT_M } from '@anima/scene-render'
 import { DetailToolbar } from '../../components/DetailToolbar'
@@ -346,6 +347,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
    *  markers and dims are dialled at an angle. Arming the ring turns it on,
    *  because a flat surface is only ringable head-on. */
   const [areaFrontal, setAreaFrontal] = useState(false)
+  const waterController = useModelWater(shownHasMesh ? `/world/props/${enc}/variants/${variant}/water` : '', `${reloadKey}-${JSON.stringify(variantRotation)}`)
+  const { setShape: cancelWaterPlacement } = waterController
   /** The kind the polygon tool is drawing for ('' = not drawing). */
   const [drawKind, setDrawKind] = useState('')
   /** Which picture variant the preview is assembled with (null = the open
@@ -383,14 +386,14 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
       setDrawKind(patch.drawKind)
       // ONE CANVAS, ONE GESTURE: arming the ring disarms the marker pick.
       if (patch.drawKind) {
-        setAreaFrontal(true); setPreviewFile(''); setPlacing(null)
+        setAreaFrontal(true); setPreviewFile(''); setPlacing(null); cancelWaterPlacement(null)
       }
     }
     if (patch.preview !== undefined) {
       setAreaPreview(patch.preview)
       if (patch.preview !== null) setPreviewFile('')
     }
-  }, [])
+  }, [cancelWaterPlacement])
   /** A file picked in the mesh gallery below. It is a DIFFERENT file — its
    *  triangles are not the ones the areas were split against — so the tools
    *  stand down while it is on screen. */
@@ -404,7 +407,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   const armPlacing = useCallback((which: 'add' | 'light' | number) => {
     setPlacing((cur) => (cur === which ? null : which))
     setDrawKind('')
-  }, [])
+    cancelWaterPlacement(null)
+  }, [cancelWaterPlacement])
   /** Every areas call answers the same payload — one place that holds the
    *  lock, hands a fresh payload to the reader above (which drops it if the
    *  admin has moved on) and maps a failure onto a toast. */
@@ -1252,6 +1256,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             }}>{t('Apply to all variants')}</button>
           </section>}
 
+          {shownVariant && shownHasMesh && !previewFile && <WaterPanel controller={waterController} onPlace={() => {
+            setPlacing(null)
+            setDrawKind('')
+            viewerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          }} />}
+
           {/* THE SELECTED VARIANT'S PLACES, dialled against the viewer
               opposite: they are the variant's own (at = a fraction of ITS
               box), so they need the mesh beside them — which is why they
@@ -2019,6 +2029,8 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
               // pose catalog because this prop is UNCOMPOSED — the payload's
               // `root_offset` only exists for a placed one.
               lightPoint={light || undefined}
+              waterRegions={previewFile ? null : waterController.water}
+              onPickModelPoint={waterController.shape && !previewFile ? waterController.pick : undefined}
               markers={markers.map((m) => {
                 const entry = previewEntry(poseCatalog, m.group,
                                            m.id ? previewPose[m.id] : undefined)
@@ -2055,7 +2067,7 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
                 return FIGURE_HEIGHT_M * (maxExtent / maxDim)
               })()}
               scaleFigure={scaleFigure}
-              picking={placing !== null}
+              picking={placing !== null || !!waterController.shape}
               onPickPoint={onPickPoint}
             />
           ) : (

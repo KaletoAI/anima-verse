@@ -2937,6 +2937,26 @@
     "Crawling": "Kriechen",
     "Crawling – rest": "Kriechen – Ruhe",
     "neutral — no {set} clip": "neutral — kein {set}-Clip",
-    "Activity pose": "Tätigkeits-Pose"
+    "Activity pose": "Tätigkeits-Pose",
+    "Water detected": "Wasser erkannt",
+    "Water is stale — detect again": "Wasserdaten veraltet – erneut erkennen",
+    "No water detected": "Kein Wasser erkannt",
+    "Detect water": "Wasser erkennen",
+    "Detecting water…": "Wasser wird erkannt…",
+    "Water detection timed out.": "Zeitüberschreitung bei der Wassererkennung.",
+    "Regions": "Bereiche",
+    "Basin": "Becken",
+    "Painted water": "Aufgemaltes Wasser",
+    "Manual water": "Manuelles Wasser",
+    "Sure": "Sicher",
+    "Bath": "Badewanne",
+    "Pond": "Teich",
+    "Hot spring": "Heiße Quelle",
+    "Lake": "See",
+    "Clarity": "Klarheit",
+    "Water level (cm)": "Wasserstand (cm)",
+    "Add rectangle": "Rechteck hinzufügen",
+    "Add ellipse": "Ellipse hinzufügen",
+    "Depth": "Tiefe"
   }
 }

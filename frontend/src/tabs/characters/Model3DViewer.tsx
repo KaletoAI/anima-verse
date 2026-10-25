@@ -1,3 +1,4 @@
+import type { ModelWater } from '../props/propTypes'
 import { applyPreviewTilt, rateLimitPreviewTilt } from './motionFieldPreview'
 /**
  * Model3DViewer — interactive preview of a generated character mesh.
@@ -251,7 +252,7 @@ export interface TilePlacement {
 
 export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
-  placement, onBounds, markers, lightPoint, dimsOverlay,
+  placement, onBounds, markers, lightPoint, waterRegions, onPickModelPoint, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
   picking = false, onPickPoint,
   frontal = false, onFrontalChange, keepCamera = false,
@@ -294,6 +295,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
       previewKind?: string; previewYawOffset?: number; rootDrop?: number }>
     /** Object-local light dot, refreshed live independently of the scale kit. */
     lightPoint?: { at: [number, number, number]; color: string }
+    waterRegions?: ModelWater | null
+    /** Pick in the fixed model frame, in model units. */
+    onPickModelPoint?: (point: [number, number, number]) => void
     /** Height of a 1.7 m preview figure in MESH units (the caller derives
      *  it from bbox ÷ dims). > 0 shows a posed test figure at every marker
      *  — a sit marker is only judgeable with someone sitting there. */
@@ -442,6 +446,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   onBoundsRef.current = onBounds
   // Marker/dims overlay + pick mode — all live-applied via refs so none of
   // them re-runs the loader effect.
+  const waterRef = useRef(waterRegions)
+  waterRef.current = waterRegions
+  const waterPickRef = useRef(onPickModelPoint)
+  waterPickRef.current = onPickModelPoint
   const lightPointRef = useRef(lightPoint)
   lightPointRef.current = lightPoint
   const markersRef = useRef(markers)
@@ -627,7 +635,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   // Live overlay refresh (markers moved/added, dims typed, a sink dialled)
   // without reload — a typed number must show up while it is being typed.
   useEffect(() => { overlayFnRef.current?.() },
-    [markers, lightPoint, dimsOverlay, figureHeight, scaleFigure, groundOffsetM])
+    [markers, lightPoint, waterRegions, dimsOverlay, figureHeight, scaleFigure, groundOffsetM])
   // Switching the scale kit on widens what has to be in view.
   useEffect(() => { refitFnRef.current?.() }, [scaleFigure])
   // The armed pick tool reads as a crosshair on the canvas.
@@ -1281,6 +1289,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           // live through overlayFnRef — dims typing, marker edits and every
           // ↻ click refresh without a reload.
           const rawMaxDim = Math.max(rawSize.x, rawSize.y, rawSize.z) || 1
+          const waterGroup = new THREE.Group()
+          pivot.add(waterGroup)
           const markerGroup = new THREE.Group()
           pivot.add(markerGroup)
           const dimsGroup = new THREE.Group()
@@ -1528,6 +1538,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           }
           const rebuildOverlay = () => {
             clearGroup(markerGroup)
+            clearGroup(waterGroup)
             clearGroup(dimsGroup)
             clearGroup(figGroup)
             clearGroup(refGroup)
@@ -1703,6 +1714,38 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             }
             // Numbered marker dots at their raw-box fractions.
             const r = rawMaxDim * 0.025
+            const water = waterRef.current
+            if (water) {
+              // Sidecars include the fix; undo it before the parent applies it.
+              const inverse = orient.quaternion.clone().invert()
+              for (const region of water.regions) {
+                if (region.outline.length < 3) continue
+                if (region.enabled) {
+                  const shape = new THREE.Shape(region.outline.map(([x, z]) => new THREE.Vector2(x, -z)))
+                  for (const ring of region.holes || []) {
+                    shape.holes.push(new THREE.Path(ring.map(([x, z]) => new THREE.Vector2(x, -z))))
+                  }
+                  const geometry = new THREE.ShapeGeometry(shape)
+                  geometry.rotateX(-Math.PI / 2)
+                  geometry.translate(0, water.box_min[1] + region.level, 0)
+                  geometry.applyQuaternion(inverse)
+                  waterGroup.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+                    color: region.look.tint, transparent: true, opacity: 1 - 0.6 * region.look.clarity,
+                    side: THREE.DoubleSide, depthWrite: false })))
+                } else {
+                  for (const ring of [region.outline, ...(region.holes || [])]) {
+                    if (!ring.length) continue
+                    const points = [...ring, ring[0]].map(([x, z]) =>
+                      new THREE.Vector3(x, water.box_min[1] + region.level, z).applyQuaternion(inverse))
+                    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),
+                      new THREE.LineDashedMaterial({ color: '#f59e0b', dashSize: rawMaxDim * 0.02,
+                        gapSize: rawMaxDim * 0.01, depthTest: false }))
+                    line.computeLineDistances()
+                    waterGroup.add(line)
+                  }
+                }
+              }
+            }
             const light = lightPointRef.current
             if (light) {
               const dot = new THREE.Mesh(
@@ -1845,6 +1888,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             overlayFnRef.current = null
             figTokenRef.current++
             clearGroup(markerGroup)
+            clearGroup(waterGroup)
             clearGroup(dimsGroup)
             clearGroup(figGroup)
             clearGroup(refGroup)
@@ -1859,7 +1903,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           const onUp = (e: PointerEvent) => {
             const start = downAt
             downAt = null
-            if (!start || !pickingRef.current || !onPickPointRef.current) return
+            if (!start || !pickingRef.current || (!onPickPointRef.current && !waterPickRef.current)) return
             if (Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 5) return
             const rect = renderer.domElement.getBoundingClientRect()
             const ndc = new THREE.Vector2(
@@ -1870,9 +1914,14 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             const hit = ray.intersectObject(object, true)[0]
             if (!hit) return
             const local = pivot.worldToLocal(hit.point.clone())
+            if (waterPickRef.current) {
+              const fixed = local.clone().applyQuaternion(orient.quaternion)
+              waterPickRef.current([fixed.x, fixed.y, fixed.z])
+              return
+            }
             const frac = (v: number, lo: number, span: number) =>
               Math.round(Math.min(Math.max((v - lo) / (span || 1), 0), 1) * 1000) / 1000
-            onPickPointRef.current([
+            onPickPointRef.current?.([
               frac(local.x, rawBox.min.x, rawSize.x),
               frac(local.y, rawBox.min.y, rawSize.y),
               frac(local.z, rawBox.min.z, rawSize.z),

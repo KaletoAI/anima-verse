@@ -23,7 +23,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Object3D, Texture } from 'three'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
-import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildWall,
+import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildPropWater, buildWall,
   anchorFigureBind, clipHipsDrop, figureRootY, hipsTrackMedian,
   pairPoints, pairYaw,
   applyClipOutline, applyDepthCut, applySlotMaterials,
@@ -561,8 +561,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         (x as Material & { map?: Texture | null }).map?.dispose?.()
         x.dispose?.()
       }
-      if (Array.isArray(m)) m.forEach(disposeMat)
-      else if (m) disposeMat(m)
+      if (!o.userData.__sharedMaterial) {
+        if (Array.isArray(m)) m.forEach(disposeMat)
+        else if (m) disposeMat(m)
+      }
       for (const c of o.children) disposeSafe(c)
     }
     // The previous rebuild's cutout clones go before the subtree does — they
@@ -589,9 +591,18 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
       const outer = placeModelSpec(THREE, source, spec)
       // The same lift the 3D client applies (§ A16.9); on this flat stage it
       // is 0 — the call is what matters, not the number it returns today.
-      outer.position.y += groundLiftOf(spec)
+      const lift = groundLiftOf(spec)
+      outer.position.y += lift
       outer.userData.__noDispose = true
       boxes.add(outer)
+      if (spec.water) {
+        for (const water of buildPropWater(THREE, spec.water, lift)) {
+          // Water is already in placement world coordinates. Only its
+          // geometry belongs to us; scene-render owns the shared material.
+          water.userData.__sharedMaterial = true
+          boxes.add(water)
+        }
+      }
       // THE TEXTURE SLOTS of this placement (§ B2 v5) — the SAME routine the
       // 3D client calls, so a poster hangs at the same brightness in both. It
       // runs FIRST of the material passes: the clip and the cut below clone
@@ -1722,8 +1733,10 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
             const mesh = o as Mesh
             mesh.geometry?.dispose?.()
             const m = mesh.material as Material | Material[] | undefined
-            if (Array.isArray(m)) m.forEach((x) => x.dispose?.())
-            else m?.dispose?.()
+            if (!o.userData.__sharedMaterial) {
+              if (Array.isArray(m)) m.forEach((x) => x.dispose?.())
+              else m?.dispose?.()
+            }
             for (const c of o.children) disposeSafe(c)
           }
           disposeSafe(scene)
