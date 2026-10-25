@@ -99,7 +99,7 @@ terrain_vertices = 9 + 25 = **34**.
 
 ## Anchor (`--goto=harbour`)
 
-The browser bench rule (`pickBenchAnchor`, `World/WorldHeight.cs` `Anchor`):
+The browser bench rule (`pickBenchAnchor`, `Core/World/WorldHeight.cs` `Anchor`):
 rows = the `worldmap.json` locations; no id equals `harbour`, so the first row
 whose name contains it wins → `loc-house` "Harbour House" (the fogged "Harbour
 Cellar" exists only in `locations.json`, which lends names, not rows).

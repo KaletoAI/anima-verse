@@ -28,7 +28,7 @@ What it draws after login:
 - **locations** — per placed location in reach, what the browser's overview shows
   of its scene recipe (`/play/locations/{id}/scene`): the `role: building` model
   (loaded from its variant URL, Meshopt-decoded client-side —
-  `Gltf/GlbMeshoptDecoder.cs` + vendored meshoptimizer — and placed by the
+  `Core/Gltf/GlbMeshoptDecoder.cs` + vendored meshoptimizer — and placed by the
   contract's `place()`, § B2), the outdoor model specs (props, door/window models,
   dioramas), the outdoor rooms' primitives, the far-view shell of a place without
   a model, and the avatar's OPEN location with its interior (see "Scene content");
@@ -67,7 +67,8 @@ What it draws after login:
 cd native
 ./link_cef.sh [/path/to/gdcef/cef_artifacts]  # ONCE: links the gdCEF artifacts as res://cef_artifacts/
                                               # (default source $GDCEF_DIR, else /home/dev/tools/gdcef/gdcef/cef_artifacts)
-dotnet build                                  # C# + bin/libmeshoptimizer.so (csproj target)
+dotnet build                                  # C# (+ Core/) + bin/libmeshoptimizer.so (csproj target)
+dotnet test tests                             # xUnit tests of the Godot-free core (no engine needed)
 $GODOT --headless --path . --import           # first import (creates .godot/)
 $GODOT --headless --path . -- --check         # offline self-test → "CHECK ok …", exit 0
 $GODOT --headless --path . -- --check-bench   # offline bench smoke → "CHECK-BENCH ok …", exit 0
@@ -75,7 +76,17 @@ $GODOT --headless --path . -- --check-bench   # offline bench smoke → "CHECK-B
 GODOT=/path/to/Godot_v4.7.2-stable_mono_linux.x86_64 ./build.sh [out_dir]
                                               # build + import + export "Linux" preset
                                               # default out_dir: native/export/
+GODOT=… ./test.sh                             # all checks: dotnet test tests + build + --check, exit ≠ 0 on any failure
 ```
+
+The code is split in two assemblies: `Core/` (`AnimaNative.Core`, a plain
+net8.0 library without any Godot reference — payload parsing, the HUD protocol,
+the ports of the browser's maths, the Meshopt decoder, the embedded bench path)
+and the Godot project around it (`AnimaNative`, a `ProjectReference` on Core).
+`tests/CoreIsGodotFreeTests.cs` keeps Core free of Godot. The Godot project's
+default compile glob excludes `Core/**` and `tests/**`; both folders carry a
+`.gdignore` so the editor does not import them. `build.sh` fails when the
+export lacks `AnimaNative.Core.dll`.
 
 `build.sh` produces `anima-native.x86_64` (PCK embedded), the .NET folder
 `data_AnimaNative_linuxbsd_x86_64/` and `libmeshoptimizer.so`, and — when the
@@ -216,7 +227,7 @@ ground's colour patches and height AO (`naturalGround.ts`, overview field in an
 R16F texture), then the shading normal from the height field (`tlodNormalAt`:
 4 × 4 `texelFetch` of the near window at `tile_step_m`, else the overview),
 lit as three's `MeshStandardMaterial` (roughness 0.85, metalness 0.02, Lambert).
-`Ground/LayerCut.cs` and `Ground/TerrainNormal.cs` are the CPU twins `--check`
+`Core/Ground/LayerCut.cs` and `Core/Ground/TerrainNormal.cs` are the CPU twins `--check`
 compares with the TS functions (`fixtures/ground_reference.mjs`).
 
 Not ported (favours Godot, a little fragment work): the fog-of-war veil
@@ -229,7 +240,7 @@ image that fails only turns its slice into the colour slice, like the browser.
 ## Scene content (Task S3c)
 
 What the browser's overview shows of every location, decided like client3d
-(`World/LocationView.cs`, `World/RecipeMeshes.cs`, `World/SceneModels.cs`) —
+(`Core/World/LocationView.cs`, `World/RecipeMeshes.cs`, `World/SceneModels.cs`) —
 nothing here is a native choice:
 
 - **Reach** (`streamRings.ringFor` over `placeDistance` to the stream points: the
@@ -331,7 +342,7 @@ server already puts the prop's `variants`, `model_variants`, `prop_height_m`,
 footprints) and `game_time.total_seconds`. `/assets/props` is not read: the
 browser's ground does not read it either (§ A9: the row carries the prop facts).
 
-- **Where** — `Scatter/ScatterMath.cs` is an exact port of the shared sampler
+- **Where** — `Core/Scatter/ScatterMath.cs` is an exact port of the shared sampler
   `packages/scene-render/src/scatter.ts` (+ `occupancy.ts`): same PRNG, same
   candidate stream, same verdict order. `--check` compares it with vectors the
   TS function itself wrote (`fixtures/scatter_reference.mjs`) within 1e-6 m.
@@ -441,17 +452,19 @@ works the same way.
 |---|---|
 | `Main.cs`, `Main.tscn` | entry scene: login → world build → camera → (`--bench`) the drive; `--check`/`--check-bench` dispatch |
 | `Cli.cs` | command-line parameters |
-| `Api/AnimaApi.cs` | HttpClient + cookie session, the server getters, `IWorldSource` |
-| `World/` | payload parsing, height sampling + anchor, terrain, `place()`, the view rules (`LocationView.cs`), recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
+| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke) |
+| `tests/` | xUnit project on Core (`dotnet test tests`) |
+| `test.sh` | `dotnet test` + build + headless `--check` |
+| `World/` | the Godot side of the world (payloads, height + anchor and the view rules are in `Core/World/`): terrain, `place()`, recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
 | `tools/dump_payloads.py` | Task S3c: dumps the client's HTTP answers from a COPY of a world for `--offline` |
-| `Gltf/` | Meshopt decode (P/Invoke) and runtime GLB import |
+| `Gltf/` | runtime GLB import (the Meshopt decode is in `Core/Gltf/`) |
 | `Figures/` | world-map characters: placement rule, figures + poll loop, clip library (import, pick, retarget), rest-pose correction |
 | `Ui/` | login screen, fly camera (W/A/S/D gated while the HUD types) |
-| `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
+| `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |
-| `Ground/` | Task S3b: the layer-cut port + payload (`LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); Task S3c: the water field, numbers and window (`Water.cs`) |
-| `Scatter/` | `/play/terrain` payload, the exact sampler port, the LOD/undergrowth maths, prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
-| `Bench/` | camera path (`loadPath`/`samplePath`), statistics (`summarize`/`percentile`), the bench driver and its output |
+| `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); Task S3c: the water numbers and window (`Water.cs`; the tile field is `Core/Ground/WaterTileField.cs`) |
+| `Scatter/` | (payload, sampler and LOD/undergrowth maths are in `Core/Scatter/`) prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
+| `Bench/` | the bench driver and its output (camera path `loadPath`/`samplePath` and statistics `summarize`/`percentile` are in `Core/Bench/`) |
 | `Check/` | `--check`: fixture source and expectations, the S3c world (`S3cCheck.cs`: view rules, models, world props, water, shaders), bench maths, scatter (`ScatterCheck.cs`), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
 | `fixtures/` | offline payloads (incl. `terrain.json`, the scatter reference vectors, the cut-down layer bake + surface library + the ground reference values) + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
 | `third_party/meshoptimizer/` | meshoptimizer v1.3 sources (MIT, `src/*.cpp`, `meshoptimizer.h`, LICENSE) |

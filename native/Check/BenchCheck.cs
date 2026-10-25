@@ -53,7 +53,7 @@ public static class BenchCheck
         try
         {
             var dir = Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures");
-            MeshoptNative.EnsureLoaded();
+            MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
             var source = new FixtureSource(dir);
             var world = new Node3D { Name = "World" };
             host.AddChild(world);
@@ -84,11 +84,11 @@ public static class BenchCheck
                                                    water: stats.WaterMode == "drawn");
             var anchor = settings.Anchor;
             if (options.Goto is null)
-                Expect("anchor", anchor.Position.DistanceTo(new Vector3(64f, 7.5f, 128f)) < 1e-4f
+                Expect("anchor", anchor.Position().DistanceTo(new Vector3(64f, 7.5f, 128f)) < 1e-4f
                                  && anchor.LocationId == "loc-house", $"{anchor}");
             Expect("anchor label", anchor.Source == Anchor.BenchSource, anchor.Source);
 
-            camera.LookAtAnchor(anchor.Position + new Vector3(0, 1.5f, 0), 33f);
+            camera.LookAtAnchor(anchor.Position() + new Vector3(0, 1.5f, 0), 33f);
             var before = (camera.Target, camera.Distance);
             var done = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
             var runner = new BenchRunner(camera, settings, r => done.TrySetResult(r));
@@ -133,8 +133,8 @@ public static class BenchCheck
             Expect("the run ends on the first frame that reaches the duration",
                    seconds - runner.Samples[^1].Dt < Duration + 1e-9, $"{seconds} - {runner.Samples[^1].Dt}");
 
-            var wantPos = new Vector3(0, 24f, 40f) + anchor.Position;      // end keyframe pos (-0, 24, 40)
-            var wantTarget = new Vector3(0, 1.5f, 0) + anchor.Position;
+            var wantPos = new Vector3(0, 24f, 40f) + anchor.Position();      // end keyframe pos (-0, 24, 40)
+            var wantTarget = new Vector3(0, 1.5f, 0) + anchor.Position();
             Expect("last camera position = end keyframe + anchor", runner.LastPosition.DistanceTo(wantPos) < 1e-4f,
                    $"{runner.LastPosition} vs {wantPos}");
             Expect("last camera target", runner.LastTarget.DistanceTo(wantTarget) < 1e-4f, $"{runner.LastTarget} vs {wantTarget}");

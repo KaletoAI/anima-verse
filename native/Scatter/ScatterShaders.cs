@@ -26,7 +26,7 @@ namespace AnimaNative.Scatter;
 public static class ScatterShaders
 {
     public const double SwaySpeed = 1.7;
-    public const double SwayMinM = 0.01, SwayMaxM = 0.5;
+    public const double SwayMinM = TerrainTypeInfo.SwayMinM, SwayMaxM = TerrainTypeInfo.SwayMaxM;
     private static readonly Dictionary<string, Shader> Cache = new();
 
     /// <summary>The literal the browser compiles (<c>applySway</c>): clamped to 0.5, two decimals; 0 = none.</summary>

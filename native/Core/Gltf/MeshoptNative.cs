@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using Godot;
 
 namespace AnimaNative.Gltf;
 
@@ -18,20 +17,35 @@ namespace AnimaNative.Gltf;
 ///   void meshopt_decodeFilterOct/Quat/Exp/Color(void* buffer, size_t count, size_t stride)
 ///
 /// The library is looked up next to the executable (exported build; build.sh
-/// copies it there) and in <c>native/bin/</c> (runs from the project, where
-/// the csproj build target compiles it).
+/// copies it there), in the directories the host registered through
+/// <see cref="EnsureLoaded"/> (the Godot side passes <c>res://bin</c> =
+/// <c>native/bin/</c>, where the csproj build target compiles it, for runs
+/// from the project) and next to this assembly. This class knows no engine:
+/// the host resolves its own paths.
 /// </summary>
 internal static unsafe class MeshoptNative
 {
     private const string Lib = "meshoptimizer";
+
+    private static readonly List<string> SearchDirectories = new();
 
     static MeshoptNative()
     {
         NativeLibrary.SetDllImportResolver(typeof(MeshoptNative).Assembly, Resolve);
     }
 
-    /// <summary>Force the static constructor (resolver registration) before the first call.</summary>
-    public static void EnsureLoaded() => _ = meshopt_decodeVertexVersion(null, 0);
+    /// <summary>
+    /// Register extra directories to search (after the executable's folder) and
+    /// force the static constructor (resolver registration) plus the library
+    /// load before the first real call.
+    /// </summary>
+    public static void EnsureLoaded(params string[] searchDirectories)
+    {
+        lock (SearchDirectories)
+            foreach (var dir in searchDirectories)
+                if (!string.IsNullOrEmpty(dir) && !SearchDirectories.Contains(dir)) SearchDirectories.Add(dir);
+        _ = meshopt_decodeVertexVersion(null, 0);
+    }
 
     private static IntPtr Resolve(string name, Assembly assembly, DllImportSearchPath? path)
     {
@@ -43,11 +57,14 @@ internal static unsafe class MeshoptNative
 
     private static IEnumerable<string> Candidates()
     {
-        var exeDir = Path.GetDirectoryName(OS.GetExecutablePath()) ?? ".";
-        yield return Path.Combine(exeDir, "libmeshoptimizer.so");
-        var res = ProjectSettings.GlobalizePath("res://");
-        if (!string.IsNullOrEmpty(res) && Directory.Exists(res))
-            yield return Path.Combine(res, "bin", "libmeshoptimizer.so");
+        // Environment.ProcessPath is the engine binary — the same path as
+        // Godot's OS.GetExecutablePath(), i.e. the export folder.
+        var exeDir = Path.GetDirectoryName(Environment.ProcessPath ?? "") ?? "";
+        if (exeDir.Length > 0) yield return Path.Combine(exeDir, "libmeshoptimizer.so");
+        string[] registered;
+        lock (SearchDirectories) registered = SearchDirectories.ToArray();
+        foreach (var dir in registered)
+            if (Directory.Exists(dir)) yield return Path.Combine(dir, "libmeshoptimizer.so");
         var asmDir = Path.GetDirectoryName(typeof(MeshoptNative).Assembly.Location);
         if (!string.IsNullOrEmpty(asmDir)) yield return Path.Combine(asmDir, "libmeshoptimizer.so");
     }

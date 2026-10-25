@@ -167,7 +167,7 @@ public partial class Main : Node3D
         SetStatus("Loading world…");
         try
         {
-            MeshoptNative.EnsureLoaded();
+            MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
             var world = new Node3D { Name = "World" };
             AddChild(world);
             var builder = _builder = new WorldBuilder(_source!, Log, strict: false)
@@ -177,7 +177,7 @@ public partial class Main : Node3D
             };
             var stats = await builder.BuildAsync(world, _options!.Goto);
             Anchor = stats.Anchor;
-            _camera!.LookAtAnchor(stats.Anchor.Position + new Vector3(0, 1.5f, 0));
+            _camera!.LookAtAnchor(stats.Anchor.Position() + new Vector3(0, 1.5f, 0));
             Log("world " + stats.Summary());
             var worldStatus = $"{stats.Buildings} buildings, {stats.Tiles} tiles, {stats.Primitives} primitives"
                               + (stats.Failures > 0 ? $", {stats.Failures} locations failed (see log)" : "")

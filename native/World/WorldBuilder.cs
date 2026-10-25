@@ -55,7 +55,7 @@ public sealed class WorldStats
         + $"buildings_meshopt={BuildingsCompressed} building_vertices={BuildingVertices} building_indices={BuildingIndices} "
         + $"primitives={Primitives} skipped={Skipped} ({Recipe.SkipSummary()}) shell_copies={Recipe.ShellCopies} "
         + $"culled_walls={Recipe.CulledWalls} {Models.Summary()} world_props={WorldPropRows} cutout_triangles={CutoutTriangles} "
-        + $"failures={Failures} anchor=({Anchor.Position.X:0.###},{Anchor.Position.Y:0.###},{Anchor.Position.Z:0.###}) "
+        + $"failures={Failures} anchor=({Anchor.Position().X:0.###},{Anchor.Position().Y:0.###},{Anchor.Position().Z:0.###}) "
         + $"{WaterSummary()} {Ground.Summary()}";
 }
 
@@ -129,10 +129,10 @@ public sealed class WorldBuilder
              + $"view=3d {details.Count}");
 
         stats.Anchor = Anchor.FromWorld(mapDoc.RootElement, details, overview.Grid, gotoQuery);
-        _log($"anchor {stats.Anchor.Position} ({stats.Anchor.Source}{(stats.Anchor.LocationId is { } id ? ", " + id : "")})");
+        _log($"anchor {stats.Anchor.Position()} ({stats.Anchor.Source}{(stats.Anchor.LocationId is { } id ? ", " + id : "")})");
 
         var height = Height = new WorldHeight(overview);
-        var keys = height.IndexedTilesNear(stats.Anchor.Position.X, stats.Anchor.Position.Z, TileRadiusM);
+        var keys = height.IndexedTilesNear(stats.Anchor.Position().X, stats.Anchor.Position().Z, TileRadiusM);
         for (int i = 0; i < keys.Count; i += AnimaApi.HeightTileBatchMax)
         {
             var batch = keys.Skip(i).Take(AnimaApi.HeightTileBatchMax).ToList();
@@ -172,7 +172,7 @@ public sealed class WorldBuilder
         var points = new List<(double X, double Z)>();
         if (avatar.Pos is { } ap) points.Add(ap);
         points.Add(anchorXZ);
-        var camera = stats.Anchor.Position + StartCameraOffset;
+        var camera = stats.Anchor.Position() + StartCameraOffset;
 
         var places = new Node3D { Name = "Locations" };
         root.AddChild(places);

@@ -8,11 +8,14 @@
     <LangVersion>12</LangVersion>
   </PropertyGroup>
 
-  <!-- The bench camera path (Task S2): ONE source for browser and native — the
-       repository file is embedded into the assembly, never copied into native/. -->
+  <!-- The Godot-free core (payloads, HUD protocol, math ports, Meshopt decoder,
+       the embedded bench camera path) is its own plain library; its tests live
+       in tests/. Both folders sit under this project directory, so keep their
+       sources (and their obj/ leftovers) out of this project's default glob. -->
   <ItemGroup>
-    <EmbeddedResource Include="../shared/bench/camera_path_v1.json"
-                      LogicalName="AnimaNative.Bench.camera_path_v1.json" />
+    <Compile Remove="Core/**" />
+    <Compile Remove="tests/**" />
+    <ProjectReference Include="Core/AnimaNative.Core.csproj" />
   </ItemGroup>
 
   <!-- The vendored meshoptimizer decoder (EXT_meshopt_compression, ruling P2-R5)

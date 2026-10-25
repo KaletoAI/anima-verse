@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The Godot-free core of the native client: payload parsing, the HUD
+       protocol, the ports of the browser's math (bench, scatter, ground cut),
+       the Meshopt GLB decoder. A plain net8.0 library — it must never
+       reference a Godot package (tests/CoreIsGodotFreeTests.cs), so it can be
+       tested with `dotnet test native/tests` without the engine. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>AnimaNative</RootNamespace>
+    <AssemblyName>AnimaNative.Core</AssemblyName>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>12</LangVersion>
+    <!-- The Godot project builds this reference with its own configurations
+         (Debug / ExportDebug / ExportRelease, see Godot.NET.Sdk's Sdk.props);
+         the plain SDK only knows Debug/Release, so mirror Godot's settings. -->
+    <Configurations>Debug;Release;ExportDebug;ExportRelease</Configurations>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' or '$(Configuration)' == 'ExportDebug' ">
+    <DebugSymbols Condition=" '$(DebugSymbols)' == '' ">true</DebugSymbols>
+    <Optimize Condition=" '$(Optimize)' == '' ">false</Optimize>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'ExportRelease' ">
+    <Optimize Condition=" '$(Optimize)' == '' ">true</Optimize>
+  </PropertyGroup>
+
+  <!-- The bench camera path (Task S2): ONE source for browser and native — the
+       repository file is embedded into the assembly, never copied into native/. -->
+  <ItemGroup>
+    <EmbeddedResource Include="../../shared/bench/camera_path_v1.json"
+                      LogicalName="AnimaNative.Bench.camera_path_v1.json" />
+  </ItemGroup>
+</Project>

@@ -4,7 +4,8 @@
 #   native/build.sh [out_dir]        (default: native/export/)
 #
 # Steps: the gdCEF link (link_cef.sh, once — only when native/cef_artifacts/ is
-# missing and the artifacts exist), dotnet build (its csproj target also
+# missing and the artifacts exist), dotnet build (the Godot project plus its
+# ProjectReference native/Core = AnimaNative.Core.dll; the csproj target also
 # compiles the vendored meshoptimizer into native/bin/libmeshoptimizer.so), a
 # headless import, the Godot export (which copies libgdcef.so + libcef.so next
 # to the binary), then libmeshoptimizer.so and the remaining gdCEF artifacts
@@ -55,6 +56,10 @@ fi
 echo "== export Linux -> $out"
 "$godot" --headless --path "$here" --export-release Linux "$out/anima-native.x86_64"
 cp "$here/bin/libmeshoptimizer.so" "$out/"
+# The Godot-free core is its own assembly; the export's dotnet publish must have
+# carried it along, or the client dies at the first core type it touches.
+[ -f "$out/data_AnimaNative_linuxbsd_x86_64/AnimaNative.Core.dll" ] \
+  || { echo "export lacks data_AnimaNative_linuxbsd_x86_64/AnimaNative.Core.dll" >&2; exit 1; }
 
 if [ -f "$cef/gdcef.gdextension" ]; then
   # gdCEF looks for its subprocess and resources in the folder of libgdcef.so —

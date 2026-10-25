@@ -58,7 +58,7 @@ public static class CheckRunner
         try
         {
             var dir = Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures");
-            MeshoptNative.EnsureLoaded();
+            MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
             var meshopt = CheckMeshopt(dir);
 
             var source = new FixtureSource(dir);
@@ -67,7 +67,7 @@ public static class CheckRunner
             var builder = new WorldBuilder(source, line => GD.Print("[check] " + line), strict: true);
             var stats = await builder.BuildAsync(world, Goto);
 
-            Expect("anchor", stats.Anchor.Position.DistanceTo(ExpectedAnchor) < 1e-4f, $"{stats.Anchor.Position}");
+            Expect("anchor", stats.Anchor.Position().DistanceTo(ExpectedAnchor) < 1e-4f, $"{stats.Anchor.Position()}");
             Expect("anchor location", stats.Anchor.LocationId == "loc-house", stats.Anchor.LocationId ?? "null");
             Expect("anchor height source", stats.Anchor.Source == Anchor.OverviewSource, stats.Anchor.Source);
             CheckAnchorRule(dir);
@@ -220,9 +220,9 @@ public static class CheckRunner
         var grid = HeightfieldOverview.Parse(hf.RootElement).Grid;
         var yard = Anchor.FromWorld(map.RootElement, details, grid, "LOC-YARD");
         Expect("goto by id", yard.LocationId == "loc-yard"
-               && yard.Position.DistanceTo(new Vector3(-100f, ExpYardDatum, 50f)) < 1e-4f, $"{yard.Position}");
+               && yard.Position().DistanceTo(new Vector3(-100f, ExpYardDatum, 50f)) < 1e-4f, $"{yard.Position()}");
         var origin = Anchor.FromWorld(map.RootElement, details, grid, null);
-        Expect("goto default", origin.Position == Vector3.Zero && origin.LocationId is null, $"{origin.Position}");
+        Expect("goto default", origin.Position() == Vector3.Zero && origin.LocationId is null, $"{origin.Position()}");
         foreach (var bad in new[] { "cellar", "template", "nowhere" })
         {
             bool threw = false;

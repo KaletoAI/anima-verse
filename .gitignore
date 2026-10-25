@@ -167,6 +167,8 @@ test_*.py
 !test.py
 # ...but the checks under scripts/ are tracked
 !scripts/test_*.py
+# ...and the native client's xUnit project (its bin/ and obj/ stay ignored through native/.gitignore)
+!native/tests/
 
 # OS
 Thumbs.db

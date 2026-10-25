@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using Godot;
 
 namespace AnimaNative.World;
 
@@ -61,8 +60,6 @@ public sealed class WorldHeight
 public sealed record AnchorInfo(double X, double Y, double Z, string? LocationId, string Source)
 {
     public static readonly AnchorInfo Origin = new(0, 0, 0, null, "world origin");
-
-    public Vector3 Position => new((float)X, (float)Y, (float)Z);
 }
 
 /// <summary>

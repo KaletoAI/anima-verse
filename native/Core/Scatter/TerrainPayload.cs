@@ -13,7 +13,11 @@ public sealed record ScatterEntry(
     Dictionary<string, string> Variants, List<Dictionary<string, string>>? ModelVariants);
 
 /// <summary>A type of the catalog; <c>Surface</c> = <c>surfaceOfType</c> (the library id it wears, trimmed + lower-cased, '' = none).</summary>
-public sealed record TerrainTypeInfo(string Kind, string Color, double Undergrowth, double SwayM, string Surface = "");
+public sealed record TerrainTypeInfo(string Kind, string Color, double Undergrowth, double SwayM, string Surface = "")
+{
+    /// <summary><c>swayFor</c>'s clamp of a type's <c>sway_m</c> (client3d ground.ts <c>SWAY_MIN_M</c>/<c>SWAY_MAX_M</c>); the scatter shaders read the same bounds.</summary>
+    public const double SwayMinM = 0.01, SwayMaxM = 0.5;
+}
 
 /// <summary>A painted area: id, kind, the RAW polygon (junk corners as NaN — <c>cleanRing</c> drops them),
 /// its scatter rows, and how many rows of the kinds the spike does not port (along/edge/center).</summary>
@@ -98,7 +102,7 @@ public sealed class TerrainPayload
             double sway = NumOrNull(meta, "sway_m") ?? double.NaN;
             t.Types[kind.ToLowerInvariant()] = new TerrainTypeInfo(kind, Json.Str(ty, "color"),
                 !double.IsFinite(ug) || ug <= 0 ? 0 : Math.Min(ug, 1),                                  // undergrowthFor
-                !double.IsFinite(sway) || sway <= 0 ? 0 : Math.Min(Math.Max(sway, ScatterShaders.SwayMinM), ScatterShaders.SwayMaxM), // swayFor
+                !double.IsFinite(sway) || sway <= 0 ? 0 : Math.Min(Math.Max(sway, TerrainTypeInfo.SwayMinM), TerrainTypeInfo.SwayMaxM), // swayFor
                 (ty.TryGetProperty("surface", out var sf) && sf.ValueKind == JsonValueKind.String ? sf.GetString() ?? "" : "")
                     .Trim().ToLowerInvariant());                                                         // surfaceOfType
         }
