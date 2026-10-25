@@ -1,12 +1,17 @@
 /** Standalone HUD: API requests share the host origin and cookie session. */
 import * as api from './api';
-import { connectHudSide, postMessageTransport } from './hud/bridge';
+import { connectHudSide, gdcefTransport, postMessageTransport } from './hud/bridge';
 import { getBoot, setBoot, setHudUiState } from './hud/bus';
 import { mountHud, mountTitle } from './hud/mount';
 import type { AuthUser } from './types';
 
 const embedded = window.parent !== window;
-const disconnect = connectHudSide(postMessageTransport(window.parent, location.origin));
+// `?bridge=gdcef`: the native client's Chromium is the host (gdCEF JS binding);
+// otherwise the embedding page, over postMessage.
+const transport = new URLSearchParams(location.search).get('bridge') === 'gdcef'
+  ? gdcefTransport()
+  : postMessageTransport(window.parent, location.origin);
+const disconnect = connectHudSide(transport);
 window.addEventListener('pagehide', disconnect, { once: true });
 let loginOpen = false;
 async function start(user: AuthUser): Promise<void> {

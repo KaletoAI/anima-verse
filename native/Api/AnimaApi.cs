@@ -66,7 +66,11 @@ public sealed class AnimaApi : IWorldSource, IDisposable
     /// <summary>Server cap of <c>/play/heightfield/tiles</c> (§ A16.5, BATCH_MAX).</summary>
     public const int HeightTileBatchMax = 64;
 
+    /// <summary>Name of the session cookie (app/core/sessions.py <c>SESSION_COOKIE_NAME</c>).</summary>
+    public const string SessionCookieName = "av_session";
+
     private readonly HttpClient _http;
+    private readonly CookieContainer _cookies = new();
     public Uri BaseUri { get; }
 
     public AnimaApi(string server)
@@ -74,7 +78,7 @@ public sealed class AnimaApi : IWorldSource, IDisposable
         BaseUri = new Uri(server.TrimEnd('/') + "/");
         var handler = new HttpClientHandler
         {
-            CookieContainer = new CookieContainer(),
+            CookieContainer = _cookies,
             UseCookies = true,
             AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
         };
@@ -97,6 +101,26 @@ public sealed class AnimaApi : IWorldSource, IDisposable
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
         using var res = await _http.PostAsync("auth/login", content);
         return await ReadJson(res, "/auth/login");
+    }
+
+    /// <summary>
+    /// The current value of the HttpOnly session cookie, or null before a login.
+    /// HttpOnly hides it from page scripts, not from this process: the native HUD
+    /// hands this one session to its embedded browser (HudOverlay, Task S4) so both
+    /// channels run on ONE login.
+    /// </summary>
+    public string? SessionToken()
+    {
+        var cookie = _cookies.GetCookies(BaseUri)[SessionCookieName];
+        return cookie is null || cookie.Expired || cookie.Value.Length == 0 ? null : cookie.Value;
+    }
+
+    /// <summary><c>POST /auth/logout</c>: ends the session server-side (both channels share it) and drops the cookie.</summary>
+    public async Task LogoutAsync()
+    {
+        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
+        using var res = await _http.PostAsync("auth/logout", content);
+        await EnsureOk(res, "/auth/logout");
     }
 
     public Task<JsonDocument> GetWorldMapAsync() => GetJson("/play/worldmap");

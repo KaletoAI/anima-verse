@@ -163,6 +163,53 @@ export function postMessageTransport(target: Window, origin: string): BridgeTran
     },
   };
 }
+/** What gdCEF (the native client's Chromium) installs on `window` when the page's
+ *  V8 context is created: `godotMethods.<name>(data)` calls the Godot method
+ *  registered under that name, `godotEvents.on(event, fn)` receives the host's
+ *  `js_emit(event, data)`. There is no `off`, hence the own listener set below. */
+export interface GdcefHost {
+  godotMethods?: Record<string, ((data: string) => unknown) | undefined>;
+  godotEvents?: { on(event: string, fn: (data: unknown) => void): void };
+}
+/** Native host over gdCEF's JS binding: ONE JSON string per message in each
+ *  direction on the channel `hud_bridge` (protocol v1 unchanged — a string
+ *  survives gdCEF's Variant/V8 conversion untouched, an object would not:
+ *  Godot turns integral floats into ints and drops undefined). The binding is
+ *  resolved at use, not at creation, so a page script never races it. */
+export function gdcefTransport(host: GdcefHost = window as unknown as GdcefHost, channel = 'hud_bridge'): BridgeTransport {
+  const listeners = new Set<(msg: unknown) => void>();
+  let attached = false;
+  let warned = false;
+  let tries = 0;
+  const attach = () => {
+    if (attached || !listeners.size) return;
+    if (!host.godotEvents) {
+      // Not installed (yet): look again for up to 10 s while somebody listens.
+      if (tries++ < 200) setTimeout(attach, 50);
+      return;
+    }
+    attached = true;
+    host.godotEvents.on(channel, data => {
+      let msg: unknown = data;
+      if (typeof data === 'string') {
+        try { msg = JSON.parse(data); } catch { msg = data; }   // invalid JSON reaches the validator and is rejected there
+      }
+      for (const fn of [...listeners]) fn(msg);
+    });
+  };
+  return {
+    send: msg => {
+      const method = host.godotMethods?.[channel];
+      if (method) { method(JSON.stringify(msg)); return; }
+      if (!warned) { warned = true; console.warn('[hud bridge] gdCEF binding missing: window.godotMethods is not installed'); }
+    },
+    onMessage: fn => {
+      listeners.add(fn);
+      attach();
+      return () => { listeners.delete(fn); };
+    },
+  };
+}
 /** JSON cloning gives tests independent snapshots, like a real wire transport. */
 export function loopbackPair(): [BridgeTransport, BridgeTransport] {
   const listeners = [new Set<(msg: unknown) => void>(), new Set<(msg: unknown) => void>()];

@@ -108,6 +108,12 @@ public partial class FigureManager : Node3D
     /// <summary>The latest polled <c>/play/worldmap</c> payload (null before the first poll) — the bench anchor's snapshot.</summary>
     public JsonElement? LatestMap { get; private set; }
 
+    /// <summary>The last poll failed (the HUD's <c>connection: 'lost'</c>); false after the next good one.</summary>
+    public bool LastPollFailed { get; private set; }
+
+    /// <summary>Counts finished polls (good or failed) — lets a reader see that <see cref="LatestMap"/> was renewed.</summary>
+    public int PollSerial { get; private set; }
+
     /// <summary>Online: poll the world map forever (until <paramref name="ct"/>).</summary>
     public async Task PollLoopAsync(CancellationToken ct)
     {
@@ -118,6 +124,8 @@ public partial class FigureManager : Node3D
                 using var doc = await _source.GetWorldMapAsync();
                 bool first = LatestMap is null;
                 LatestMap = doc.RootElement.Clone();
+                LastPollFailed = false;
+                PollSerial++;
                 var loads = Apply(doc.RootElement);
                 if (first)
                     _ = loads.ContinueWith(_ => _firstPoll.TrySetResult(), TaskScheduler.Default);
@@ -125,6 +133,8 @@ public partial class FigureManager : Node3D
             catch (Exception e)
             {
                 _log($"worldmap poll failed: {e.Message}");
+                LastPollFailed = true;
+                PollSerial++;
                 _firstPoll.TrySetResult();  // nothing to wait for; the bench runs on what is there
             }
             try { await Task.Delay(TimeSpan.FromSeconds(PollSeconds), ct); }

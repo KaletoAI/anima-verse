@@ -6,7 +6,8 @@ timed on the same camera drive (`shared/bench/camera_path_v1.json`). Spike
 quality — no game logic. Task S1a covers login, terrain, buildings, recipe
 shells and a free camera; Task S1b adds the figures with idle/walk clips and
 live positions; Task S2 adds the bench drive (see "Bench" below); Task S3 adds
-the scatter and the undergrowth behind `--scatter` (see "Scatter" below).
+the scatter and the undergrowth behind `--scatter` (see "Scatter" below);
+Task S4 lays the React HUD over the world through gdCEF (see "HUD" below).
 
 What it draws after login:
 
@@ -44,11 +45,16 @@ What it draws after login:
   and its Linux export templates (`~/.local/share/godot/export_templates/4.7.2.stable.mono/`)
 - .NET **8** SDK (`dotnet` on PATH)
 - `g++` (compiles `third_party/meshoptimizer` into `bin/libmeshoptimizer.so`)
+- for the HUD: the **gdCEF 0.20.0** release artifacts (CEF 151, Linux; the
+  `cef_artifacts/` folder of github.com/Lecrapouille/gdcef, ~560 MB — never
+  committed). Without them everything builds and runs, just without the HUD.
 
 ## Build, check, export
 
 ```bash
 cd native
+./link_cef.sh [/path/to/gdcef/cef_artifacts]  # ONCE: links the gdCEF artifacts as res://cef_artifacts/
+                                              # (default source $GDCEF_DIR, else /home/dev/tools/gdcef/gdcef/cef_artifacts)
 dotnet build                                  # C# + bin/libmeshoptimizer.so (csproj target)
 $GODOT --headless --path . --import           # first import (creates .godot/)
 $GODOT --headless --path . -- --check         # offline self-test → "CHECK ok …", exit 0
@@ -60,8 +66,21 @@ GODOT=/path/to/Godot_v4.7.2-stable_mono_linux.x86_64 ./build.sh [out_dir]
 ```
 
 `build.sh` produces `anima-native.x86_64` (PCK embedded), the .NET folder
-`data_AnimaNative_linuxbsd_x86_64/` and `libmeshoptimizer.so` — keep the three
-together.
+`data_AnimaNative_linuxbsd_x86_64/` and `libmeshoptimizer.so`, and — when the
+gdCEF artifacts are linked (build.sh runs `link_cef.sh` itself if
+`native/cef_artifacts/` is missing and the artifacts exist) — the CEF runtime
+next to them: `libgdcef.so`, `libcef.so` (1.4 GB), `gdCefRenderProcess`,
+`*.pak`, `icudtl.dat`, `v8_context_snapshot.bin`, `libEGL.so`, `libGLESv2.so`,
+`libvk_swiftshader.so`, `libvulkan.so.1`, `vk_swiftshader_icd.json`, `locales/`
+(hard links into the artifact folder where possible, copies otherwise).
+Keep everything in one folder: gdCEF looks for its subprocess and resources
+next to `libgdcef.so`.
+
+Known: with gdCEF linked, Godot 4.7.2's editor-mode `--import` sometimes
+segfaults (exit 139) while the process exits, AFTER the import has finished
+(godot-cpp's static data outliving the engine); `build.sh` tolerates exactly
+that code in exactly that case. The export and the game itself are not
+affected (`--check` exits 0 with the extension loaded).
 
 ## Start
 
@@ -81,11 +100,14 @@ Arguments after `--` (no .env, no config file):
 | `--vsync=on` | keep V-sync during the bench (default: off for the run, restored after) |
 | `--quit-after-bench` | exit after the result file is written |
 | `--scatter` | draw the scatter AND the undergrowth (default off — what the browser's `&scatter=0` hides); the bench flags say `scatter: true` |
+| `--no-hud` | no HUD even when gdCEF is linked (the S2/S3 bench numbers were taken without it) |
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
 Camera: drag with the left or right mouse button to orbit, wheel to zoom,
 W/A/S/D to move, F to follow the next figure (name order; W/A/S/D lets go).
+With the HUD up, F and Enter open the chat instead, M opens/closes the menu,
+a click on a figure shows its plaque, and the plaque's "Zoom to" follows it.
 The status line top left reports what was loaded; per-location
 failures are logged to the console (`[native] …`).
 
@@ -180,6 +202,72 @@ Not drawn (this favours Godot): the impostor billboards beyond 120 m
 `aligned` yaw uses the angle without the surface axis; the undergrowth's layer
 mask gate is the geometric "topmost painted area" test.
 
+## HUD (Task S4)
+
+The browser HUD itself — `client3d/hud.html`, served by the Anima server at
+`/static/client3d/hud.html?bridge=gdcef` — runs in an off-screen Chromium
+(gdCEF) and is drawn over the world (`Hud/HudOverlay.cs`):
+
+- **View**: a full-window `TextureRect` on canvas layer 5 (above the status
+  line, below the login screen), 60 fps. gdCEF never sets a CEF
+  `background_color`, so the windowless page paints with a transparent
+  background and the alpha arrives in the texture; Chromium's alpha is
+  premultiplied, so the rect blends premultiplied. 3 s after the page loaded a
+  log line `hud: transparency probe: … alpha=…` reports the painted alpha
+  outside every HUD surface (0 = transparent) and inside the first one.
+- **Bridge**: protocol v1 of `client3d/src/hud/bridge.ts`, one JSON string per
+  message over gdCEF's JS binding (`window.godotMethods.hud_bridge(json)` →
+  `HudOverlay.hud_bridge`, Godot's `js_emit("hud_bridge", json)` →
+  `window.godotEvents`); the page picks `gdcefTransport` by `?bridge=gdcef`.
+  Godot is the scene side: it sends `boot`, the game state the chat, plaque
+  and menu read (`clock`, `connection`, `mode: overview`, `selected`,
+  `openView`), and `ui` actions; it receives the HUD's ui state
+  (`hitRects`, `typing`, `overlayOpen`, `menuOpen`) and game actions
+  (`zoomTo`, `clearSelection`, `closeOpenView`, `setVolumes` (no-op),
+  `backToTitle`; the others are logged once, and a player-triggered one
+  answers with a toast "Not available in the native client yet").
+- **Input**: a mouse event goes to CEF over a HUD surface (`hitRects`) or
+  anywhere while an overlay is open, otherwise to the camera; the side that
+  got the press keeps the pointer until release; CEF always sees the pointer
+  for hover. Keys go to CEF while the HUD types (or an overlay is open) — the
+  camera's W/A/S/D are gated then — otherwise Enter/F → open chat,
+  M → menu, Esc → close the menu.
+- **One login**: the Godot login screen logs in; its session cookie
+  (`av_session`) is then written into CEF by a script on `/health` (the
+  server's smallest anonymous page, same origin) — gdCEF exposes no cookie
+  manager — and the HUD opens already signed in. CEF runs incognito (no
+  cookie on disk), without a DevTools port; its log (incl. the page's console
+  at "info") is `user://cef/debug.log` (Linux:
+  `~/.local/share/godot/app_userdata/Anima Native/cef/debug.log`). "Back to
+  title" in the menu logs out through the HUD page (CEF drops its cookie),
+  then Godot returns to its login screen.
+
+Start (the HUD is on whenever the gdCEF artifacts are next to the binary):
+
+```bash
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --user=demo --goto=LOCATION
+```
+
+What to look at on the PC with a display:
+
+1. After the login: the HUD appears over the world (rail, chat corner,
+   clock) and the world is visible everywhere between the panels — no grey or
+   black page background; half-transparent panels have no dark fringe. The log
+   line `hud: transparency probe` says `alpha=0` outside the surfaces.
+2. The chat: F or Enter opens it; click into the composer, type a line, send
+   it — the line appears in the transcript and a character answers (the
+   HUD's own requests are signed in).
+3. While typing in the chat, W/A/S/D/M/F type letters and do NOT move the
+   camera or open the menu.
+4. The plaque: click a figure in the world → its plaque (name, activity,
+   mood) appears; "Zoom to" makes the camera follow it; the close button or a
+   click on empty ground clears it.
+5. The menu: M opens it, M or Esc closes it; "Back to title" returns to the
+   Godot login screen and a second login brings the HUD back.
+6. A click (and a drag, and the wheel) on a half-transparent chat panel does
+   NOT reach the world: the camera neither orbits nor zooms; a camera drag that
+   starts in the world keeps orbiting when it crosses a panel.
+
 ## Offline checks of the export
 
 The exported build can run the check too: copy `fixtures/` next to the binary
@@ -200,9 +288,11 @@ works the same way.
 | `World/` | payload parsing, height sampling + anchor, terrain, `place()`, recipe meshes, the builder |
 | `Gltf/` | Meshopt decode (P/Invoke) and runtime GLB import |
 | `Figures/` | world-map characters: placement rule, figures + poll loop, clip library (import, pick, retarget), rest-pose correction |
-| `Ui/` | login screen, fly camera |
+| `Ui/` | login screen, fly camera (W/A/S/D gated while the HUD types) |
+| `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
+| `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |
 | `Scatter/` | `/play/terrain` payload, the exact sampler port, the LOD/undergrowth maths, prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
 | `Bench/` | camera path (`loadPath`/`samplePath`), statistics (`summarize`/`percentile`), the bench driver and its output |
-| `Check/` | `--check`: fixture source and expectations, bench maths, scatter (`ScatterCheck.cs`); `--check-bench [--scatter]`: offline bench smoke |
+| `Check/` | `--check`: fixture source and expectations, bench maths, scatter (`ScatterCheck.cs`), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
 | `fixtures/` | offline payloads (incl. `terrain.json` and the scatter reference vectors) + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
 | `third_party/meshoptimizer/` | meshoptimizer v1.3 sources (MIT, `src/*.cpp`, `meshoptimizer.h`, LICENSE) |

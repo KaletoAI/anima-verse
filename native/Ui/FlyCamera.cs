@@ -28,6 +28,13 @@ public partial class FlyCamera : Camera3D
     public Node3D? Follow { get; set; }
     public float FollowHeight { get; set; } = 1.2f;
 
+    /// <summary>
+    /// true while another surface owns the keyboard (the native HUD while one types
+    /// in the chat). W/A/S/D are POLLED here (<c>Input.IsKeyPressed</c>), so marking
+    /// the key events handled would not stop them — this gate does.
+    /// </summary>
+    public Func<bool>? KeysBlocked { get; set; }
+
     public FlyCamera()
     {
         Fov = 45f;
@@ -68,10 +75,11 @@ public partial class FlyCamera : Camera3D
     public override void _Process(double delta)
     {
         var move = Vector2.Zero;
-        if (Input.IsKeyPressed(Key.W)) move.Y -= 1;
-        if (Input.IsKeyPressed(Key.S)) move.Y += 1;
-        if (Input.IsKeyPressed(Key.A)) move.X -= 1;
-        if (Input.IsKeyPressed(Key.D)) move.X += 1;
+        bool keys = KeysBlocked?.Invoke() != true;
+        if (keys && Input.IsKeyPressed(Key.W)) move.Y -= 1;
+        if (keys && Input.IsKeyPressed(Key.S)) move.Y += 1;
+        if (keys && Input.IsKeyPressed(Key.A)) move.X -= 1;
+        if (keys && Input.IsKeyPressed(Key.D)) move.X += 1;
         if (move != Vector2.Zero) Follow = null;
         if (Follow is not null)
         {

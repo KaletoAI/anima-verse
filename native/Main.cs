@@ -1,4 +1,7 @@
 using System;
+using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using AnimaNative.Api;
@@ -6,6 +9,7 @@ using AnimaNative.Bench;
 using AnimaNative.Check;
 using AnimaNative.Figures;
 using AnimaNative.Gltf;
+using AnimaNative.Hud;
 using AnimaNative.Scatter;
 using AnimaNative.Ui;
 using AnimaNative.World;
@@ -17,7 +21,10 @@ namespace AnimaNative;
 /// Entry scene. Online: login screen → world build → free camera at the anchor;
 /// with <c>--bench</c> the camera drive starts once the world and the first
 /// figures have loaded (Task S2). With <c>-- --check</c> / <c>-- --check-bench</c>:
-/// the offline self-tests, then quit with their exit code.
+/// the offline self-tests, then quit with their exit code. When gdCEF is linked
+/// (and no <c>--no-hud</c>), the React HUD runs over the world (Task S4,
+/// <see cref="HudOverlay"/>); this class is its SCENE side: game state, figure
+/// selection, the scene's game actions.
 /// </summary>
 public partial class Main : Node3D
 {
@@ -29,6 +36,10 @@ public partial class Main : Node3D
     private ScatterLayer? _scatter;
     private readonly CancellationTokenSource _stop = new();
     private int _focus = -1;
+    private HudOverlay? _hud;
+    private string? _selected;
+    private int _selectedPoll = -1;
+    private Vector2? _pressAt;
 
     /// <summary>The bench anchor of the current world (S2 drives its path relative to it).</summary>
     public AnchorInfo? Anchor { get; private set; }
@@ -61,6 +72,7 @@ public partial class Main : Node3D
             GetTree().Quit(code);
             return;
         }
+        if (!_options.NoHud) AttachHud();
         ShowLogin();
     }
 
@@ -128,6 +140,8 @@ public partial class Main : Node3D
             _api?.Dispose();
             _api = new AnimaApi(_options.Server);
             using (await _api.LoginAsync(user, password)) { }
+            // ONE login: the HUD's browser gets this very session (HudOverlay.Start).
+            _hud?.Start(_api.BaseUri, _api.SessionToken());
             layer.QueueFree();
             await LoadWorldAsync();
         };
@@ -164,11 +178,18 @@ public partial class Main : Node3D
             world.AddChild(_figures);
             await _figures.InitAsync();
             _ = _figures.PollLoopAsync(_stop.Token);
+            _hud?.SetBoot(HudProtocol.BootReady());
             var timer = new Godot.Timer { WaitTime = 1.0, Autostart = true };
             AddChild(timer);
-            timer.Timeout += () => SetStatus($"{worldStatus}, {FigureLine()}"
-                                             + (_scatter is not null ? $"\n{_scatter.Summary()}" : "")
-                                             + "   —   drag: orbit, wheel: zoom, WASD: move, F: next figure");
+            timer.Timeout += () =>
+            {
+                PublishHudState();
+                SetStatus($"{worldStatus}, {FigureLine()}"
+                          + (_scatter is not null ? $"\n{_scatter.Summary()}" : "")
+                          + (_hud?.Active == true
+                              ? "   —   drag: orbit, wheel: zoom, WASD: move, click a figure: plaque, F/Enter: chat, M: menu"
+                              : "   —   drag: orbit, wheel: zoom, WASD: move, F: next figure"));
+            };
             if (_options.Bench)
             {
                 await _figures.FirstPollDone;
@@ -230,9 +251,20 @@ public partial class Main : Node3D
                + $"{s.ClipsLoaded} clips" + (s.UnboundClips > 0 ? $", {s.UnboundClips} unbound" : "");
     }
 
-    /// <summary>F: the camera follows the next figure (name order); WASD lets go.</summary>
+    /// <summary>
+    /// F: the camera follows the next figure (name order); WASD lets go. With the
+    /// HUD up, F belongs to the chat (HudOverlay answers it first) and a click on a
+    /// figure selects it for the plaque — only clicks the HUD did not take arrive here.
+    /// </summary>
     public override void _UnhandledInput(InputEvent e)
     {
+        if (_hud?.Active == true && e is InputEventMouseButton { ButtonIndex: MouseButton.Left } click)
+        {
+            if (click.Pressed) _pressAt = click.Position;
+            else if (_pressAt is { } at && at.DistanceTo(click.Position) < 6f) PickAt(click.Position);
+            if (!click.Pressed) _pressAt = null;
+            return;
+        }
         if (e is not InputEventKey { Pressed: true, Echo: false, Keycode: Key.F } || _figures is null || _camera is null)
             return;
         var list = _figures.Ordered();
@@ -243,7 +275,116 @@ public partial class Main : Node3D
         Log($"camera → {list[_focus].CharacterName} ({list[_focus].Rule})");
     }
 
-    public override void _ExitTree() => _stop.Cancel();
+    public override void _ExitTree()
+    {
+        _stop.Cancel();
+        if (_hud is not null && IsInstanceValid(_hud)) _hud.Handlers.Clear();   // the overlay outlives this scene
+        _api?.Dispose();
+    }
+
+    // ---- HUD scene side (Task S4) ---------------------------------------------------
+
+    /// <summary>The overlay (once per process) + the game actions this spike answers.</summary>
+    private void AttachHud()
+    {
+        _hud = HudOverlay.Ensure(GetTree(), Log);
+        if (_hud is null) return;
+        var hud = _hud;
+        _camera!.KeysBlocked = () => IsInstanceValid(hud) && hud.KeysToHud;
+        hud.Handlers.Clear();
+        hud.Handlers["zoomTo"] = args => ZoomTo(args.Count > 0 ? args[0]?.GetValue<string>() : null);
+        hud.Handlers["clearSelection"] = _ => Select(null);
+        hud.Handlers["closeOpenView"] = _ => hud.SetState("openView", null);   // no open location views in the spike
+        hud.Handlers["setVolumes"] = _ => { };                                  // no audio in the spike
+        hud.Handlers["backToTitle"] = args => { _ = BackToTitleAsync(); };
+        // Scene-owned fields the chat, plaque and menu read (minimum viable set).
+        hud.SetState("mode", "overview");
+        hud.SetState("connection", "ok");
+        hud.SetState("clock", "");
+        hud.SetState("selected", null);
+        hud.SetState("openView", null);
+    }
+
+    /// <summary>1 Hz: connection, game clock and the selected figure's fresh row (main.ts does this per poll).</summary>
+    private void PublishHudState()
+    {
+        if (_hud is null || _figures is null) return;
+        _hud.SetState("connection", _figures.LastPollFailed ? "lost" : "ok");
+        if (_figures.LatestMap is not { } map) return;
+        var clock = "";
+        if (map.TryGetProperty("game_time", out var gt) && gt.ValueKind == JsonValueKind.Object)
+            clock = Str(gt, "label_display") is { Length: > 0 } display ? display : Str(gt, "label") ?? "";
+        _hud.SetState("clock", clock);
+        if (_selected is not null && _figures.PollSerial != _selectedPoll) Select(_selected);
+    }
+
+    /// <summary>
+    /// <c>selected = { char, isAvatar }</c> with the character's row of the latest
+    /// worldmap (the HUD's <c>MapCharacter</c>, passed through unchanged); a name
+    /// that is not on the map drops the selection, like main.ts <c>refreshSelection</c>.
+    /// </summary>
+    private void Select(string? name)
+    {
+        if (_hud is null) return;
+        _selected = null;
+        JsonNode? value = null;
+        if (name is not null && _figures?.LatestMap is { } map
+            && map.TryGetProperty("characters", out var chars) && chars.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var row in chars.EnumerateArray())
+            {
+                if (Str(row, "name") != name) continue;
+                value = new JsonObject
+                {
+                    ["char"] = JsonNode.Parse(row.GetRawText()),
+                    ["isAvatar"] = Str(map, "avatar") == name,
+                };
+                _selected = name;
+                _selectedPoll = _figures.PollSerial;
+                break;
+            }
+        }
+        _hud.SetState("selected", value);
+    }
+
+    /// <summary>A click the HUD did not take: the figure under it gets the plaque, a miss clears it.</summary>
+    private void PickAt(Vector2 click)
+    {
+        if (_figures is null || _camera is null) return;
+        var candidates = _figures.Figures.Values
+            .Where(f => IsInstanceValid(f) && !_camera.IsPositionBehind(f.GlobalPosition))
+            .Select(f => new FigurePick.Candidate(
+                f.CharacterName,
+                _camera.UnprojectPosition(f.GlobalPosition),
+                _camera.UnprojectPosition(f.GlobalPosition + new Vector3(0, (float)f.HeightM, 0)),
+                _camera.GlobalPosition.DistanceTo(f.GlobalPosition)));
+        Select(FigurePick.Pick(candidates, click));
+    }
+
+    /// <summary>The plaque's "Zoom to": the camera follows that figure.</summary>
+    private void ZoomTo(string? name)
+    {
+        if (name is null || _figures is null || _camera is null) return;
+        if (!_figures.Figures.TryGetValue(name, out var fig)) return;
+        _camera.Follow = fig;
+        _camera.Distance = 8f;
+        Log($"camera → {name} (HUD zoomTo)");
+    }
+
+    /// <summary>The menu's "Back to title": end the shared session, back to the login screen.</summary>
+    private async Task BackToTitleAsync()
+    {
+        Log("back to title");
+        _stop.Cancel();
+        if (_hud is not null) await _hud.LeaveAsync();
+        try { if (_api is not null) await _api.LogoutAsync(); }
+        catch (Exception e) { Log($"logout: {e.Message}"); }
+        GetTree().ReloadCurrentScene();
+    }
+
+    private static string? Str(JsonElement o, string key)
+        => o.ValueKind == JsonValueKind.Object && o.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
+            ? v.GetString() : null;
 
     private void SetStatus(string text)
     {
