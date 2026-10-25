@@ -639,9 +639,9 @@ def _group_lines(location_id: str, room_id: str,
     "Anywhere here" line below can leave them out instead of naming the same
     pose twice. A row with no free slot offers nothing and therefore covers
     nothing — a standing spot that is taken must not stop anyone standing."""
-    from app.core.pose_catalog import get_catalog, poses_in_group
+    from app.core.pose_catalog import activity_catalog, poses_in_group
     occ = occupancy(location_id, room_id, exclude=viewer)
-    cat = get_catalog("pose")
+    cat = activity_catalog()
     rows: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for p in room_places(location_id, room_id):
         key = (p["label"], p["group"]) if p["source"] == "prop" else (p["id"], p["group"])
@@ -705,7 +705,7 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
 
     A room without markers still gets the last two lines; nothing at all
     yields ``""`` so a template can ``{% if %}`` it away."""
-    from app.core.pose_catalog import get_catalog, poses_without_place
+    from app.core.pose_catalog import activity_catalog, poses_without_place
     from app.models.world import get_room_activity_hint
     if location_id and room_id:
         lines, covered = _group_lines(location_id, room_id, name)
@@ -717,7 +717,7 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
         out += lines[:_OFFER_MAX_LINES]
         if len(lines) > _OFFER_MAX_LINES:
             out.append(f"…and {len(lines) - _OFFER_MAX_LINES} more")
-    cat = get_catalog("pose")
+    cat = activity_catalog()
     anywhere = [k if cat[k]["solo"] else f"{k} (with partner)"
                 for k in poses_without_place() if k not in covered]
     if anywhere:

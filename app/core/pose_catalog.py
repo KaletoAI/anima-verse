@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from app.core.movement import MOVEMENT_ONLY_POSES
 from app.core.log import get_logger
 
 logger = get_logger("pose_catalog")
@@ -507,6 +508,12 @@ def get_catalog(axis: str) -> Dict[str, dict]:
         return _cache[axis]
 
 
+def activity_catalog(axis: str = "pose") -> Dict[str, Dict]:
+    """Catalog entries eligible for activities, excluding movement-only poses."""
+    return {key: entry for key, entry in get_catalog(axis).items()
+            if axis != "pose" or key not in MOVEMENT_ONLY_POSES}
+
+
 def reload_catalogs() -> None:
     global _generation
     with _lock:
@@ -561,7 +568,7 @@ def poses_in_group(group: str) -> List[str]:
     """Keys of the group, the group's default first, the rest alphabetical."""
     g = (group or "").strip().lower()
     default = (get_groups().get(g) or {}).get("default", "")
-    keys = sorted(k for k, e in get_catalog("pose").items() if e.get("group") == g)
+    keys = sorted(k for k, e in activity_catalog().items() if e.get("group") == g)
     if default in keys:
         keys.remove(default)
         keys.insert(0, default)
@@ -652,7 +659,7 @@ from app.core.embedding import cosine_similarity  # noqa: E402
 def _alias_index(axis: str) -> Dict[str, str]:
     """alias (key or synonym, lowercased) -> entry key."""
     index: Dict[str, str] = {}
-    for key, entry in get_catalog(axis).items():
+    for key, entry in activity_catalog(axis).items():
         for alias in [key] + entry["synonyms"]:
             index.setdefault(alias, key)
     return index
@@ -762,7 +769,7 @@ def _decide_catalog_key(cleaned: str, axis: str) -> Tuple[Optional[Tuple[str, st
             decision.mark_taken(point, dkey)
             record_candidate(axis, cleaned, "", None)
             return (get_default_key(axis), "decision_none"), point, dkey
-        if entry.value in get_catalog(axis):
+        if entry.value in activity_catalog(axis):
             decision.mark_taken(point, dkey)
             return (entry.value, "decision"), point, dkey
         return None, point, dkey

@@ -23,16 +23,18 @@ falls back to the default pose there until its next pose change.
 import json
 from typing import Any, Dict, List, Tuple
 
+from app.core.movement import MOVEMENT_POSES
 from app.core.log import get_logger
 
 logger = get_logger(__name__)
 
 #: Keys the server code names literally — renaming one would silently break
-#: that code path: ``standing`` is the fallback default
-#: (``pose_catalog._FALLBACK_DEFAULT``), ``sleeping`` is what
-#: ``character.get_effective_pose_key`` returns for a sleeper, ``walking`` is
-#: what a roaming NPC walks in (``npc_actions``).
-CODE_NAMED_POSE_KEYS = frozenset({"standing", "sleeping", "walking"})
+#: that code path: ``sleeping`` is what ``character.get_effective_pose_key``
+#: returns for a sleeper, and the movement poses (``movement.MOVEMENT_POSES``)
+#: are what the movement types play — ``standing`` is also the fallback
+#: default (``pose_catalog._FALLBACK_DEFAULT``), ``walking`` what a roaming
+#: NPC walks in (``npc_actions``).
+CODE_NAMED_POSE_KEYS = frozenset({"sleeping", *MOVEMENT_POSES})
 
 _IMAGE_EXTS = (".png", ".jpg", ".webp")
 

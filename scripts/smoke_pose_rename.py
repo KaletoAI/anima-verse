@@ -105,6 +105,8 @@ try:
     pc.catalog_path = lambda a: cat if a == "pose" else _orig_path(a)
     pc.reload_catalogs()
 
+    from app.core import animation_clips as ac
+    ac.clip_transitions_path = lambda: Path(_tmp) / "transitions.json"
     from app.routes import poses as R
     from app.models import character as ch
     from app.core.model_refs import outfit_signature_raw

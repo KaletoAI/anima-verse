@@ -131,8 +131,8 @@ def strip_subject(text: str, npc_name: str) -> str:
 def _solo_pose_keys() -> List[str]:
     """The catalog's solo pose keys, in catalog order — the menu the director
     picks from. Pair poses are left out: a lone NPC has nobody to bind."""
-    from app.core.pose_catalog import get_catalog
-    return [k for k, e in get_catalog("pose").items() if e.get("solo", True)]
+    from app.core.pose_catalog import activity_catalog
+    return [k for k, e in activity_catalog().items() if e.get("solo", True)]
 
 
 def _pose_from_answer(answer: Dict[str, Any], pose_keys: List[str]) -> str:

@@ -227,6 +227,7 @@ def list_entries(axis: str = Query("pose"),
                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """All catalog entries of an axis + the animation kinds that have clips
     (pose only) + the integrity problems of the catalog."""
+    from app.core.movement import MOVEMENT_POSES
     from app.core.pose_rename import CODE_NAMED_POSE_KEYS
     axis = _axis(axis)
     out: List[Dict[str, Any]] = []
@@ -243,6 +244,8 @@ def list_entries(axis: str = Query("pose"),
             # it came from, and the list can show what would be committed.
             "store": entry.get("_store", "shared"),
         }
+        row["movement"] = axis == "pose" and key in MOVEMENT_POSES
+        row["deletable"] = not row["is_default"] and not (row["movement"] and row["store"] == "shared")
         if axis == "pose":
             row["label"] = entry.get("label", "")
             row["label_de"] = entry.get("label_de", "")
@@ -542,12 +545,20 @@ def delete_entry(key: str, axis: str = Query("pose"),
             entry = data["entries"].get(key)
             if entry is None:
                 raise HTTPException(status_code=404, detail="Entry not found")
+            from app.core.movement import MOVEMENT_POSES
+            if axis == "pose" and key in MOVEMENT_POSES and (store == "shared" or entry.get("_default")):
+                raise HTTPException(status_code=400, detail="fixed movement pose")
             if entry.get("_default"):
                 raise HTTPException(status_code=400,
                                     detail="the default entry cannot be deleted")
             data["entries"].pop(key, None)
             write_store(axis, data, store)
-        return {"status": "success", "key": key, "axis": axis, "store": store}
+            transitions_removed = 0
+            if axis == "pose" and key not in pose_catalog.get_catalog(axis):
+                from app.core.animation_clips import drop_transition_pose
+                transitions_removed = drop_transition_pose(key)
+        return {"status": "success", "key": key, "axis": axis, "store": store,
+                "transitions_removed": transitions_removed}
     except CatalogEditError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 
@@ -635,8 +646,11 @@ def _rename_entry_sync(key: str, axis: str, body: Any) -> Dict[str, Any]:
             else:
                 after_write()
         references = pose_rename.rewrite_references(old, new)
+        from app.core.animation_clips import rename_transition_pose
+        transitions_rewritten = rename_transition_pose(old, new)
         return {"status": "success", "old_key": old, "key": new, "axis": axis,
-                "stores": stores, "references": references}
+                "stores": stores, "references": references,
+                "transitions_rewritten": transitions_rewritten}
     except CatalogEditError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e
 

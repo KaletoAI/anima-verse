@@ -797,6 +797,8 @@ try:
 
     # ── Stage 9: the groups route contract (task 2) ──────────────────────
     print("\nStage 9 - groups route")
+    from app.core import animation_clips as _transition_clips
+    _transition_clips.clip_transitions_path = lambda: Path(_tmp_storage) / "transitions.json"
     from app.routes import poses as poses_route
     _FAILURES = []
     _entry_map = {k: dict(v) for k, v in pc.get_catalog("pose").items()}

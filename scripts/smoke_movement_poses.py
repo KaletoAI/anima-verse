@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Smoke movement poses with isolated catalogs, clips and world storage.
 
-Usage: ./.venv/bin/python scripts/smoke_movement_poses.py
+Usage: ./.venv/bin/python scripts/smoke_movement_poses.py [--http]
+The optional --http also checks the admin router through TestClient.
 
 Hand-derived Task 2 expectations: seven poses map to idle/walk/run/swim/
 treading-water/crawl/crawl-rest. Two world overrides affect played kinds
 only. Female walk wins over neutral; licensed walk shadows free walk only
 when licensed clips are allowed. Missing and pair-only kinds resolve to None.
+Task 4: seven fixed keys; four movement-only keys excluded from activities;
+world overrides deletable, shipped movement entries protected; one rename/drop rule.
 Task 3: sleeping→walking expands to two pairs, the seat wildcard to one;
 unknown poses contribute none. Exact beats exit beats enter; accel caps at 8.
 """
@@ -62,6 +65,73 @@ def transition_checks(ac, path, fixture):
     check("same clip skipped", ac.client_transition_rules([dict(fixture[0], to="sleeping")]) == [])
 
 
+def fixed_checks(pc, ac):
+    from app.core.movement import MOVEMENT_POSES, MOVEMENT_ONLY_POSES
+    from app.core.pose_rename import CODE_NAMED_POSE_KEYS
+    check("[F1] code-named", {"running", "swimming", "crawling_rest", "sleeping"} <= CODE_NAMED_POSE_KEYS)
+    activity = pc.activity_catalog()
+    check("[F2] no activity match", pc.resolve_to_catalog("schwimmen", "pose", _embed=lambda _: None)[0] != "swimming" and not MOVEMENT_ONLY_POSES.intersection(activity))
+    check("[F3] still activity", {"standing", "walking", "running"} <= activity.keys())
+    check("place activities", not MOVEMENT_ONLY_POSES.intersection(pc.poses_without_place() + pc.poses_in_group("stand") + pc.poses_in_group("ground")))
+    embedded = pc._alias_embeddings("pose", lambda _: [1.0, 0.0])
+    check("embedding aliases excluded", not ({"schwimmen", *MOVEMENT_ONLY_POSES} & embedded.keys()))
+    from app.core.decision_points import catalog_questions
+    questions, then = catalog_questions("pose")
+    if then:
+        from app.core.decision import Answer
+        options = set()
+        for group in questions["group"].options:
+            followup = then({"group": Answer(value=group, p_yes=None, confidence=1.0, distribution={})})
+            options.update(followup["entry"].options)
+    else:
+        options = set(questions["entry"].options)
+    check("decision activities", not MOVEMENT_ONLY_POSES.intersection(options))
+    from app.core.npc_actions import _solo_pose_keys
+    check("solo activities", not MOVEMENT_ONLY_POSES.intersection(_solo_pose_keys()))
+    from fastapi import HTTPException
+    from app.routes import poses
+    pc.replace_world_entries("pose", {"walking": {"animation": "walk", "prompt": "world walking", "group": "stand"}})
+    pc.reload_catalogs()
+    if "--http" in sys.argv:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from app.core.auth_dependency import require_admin
+        app = FastAPI()
+        app.include_router(poses.router)
+        app.dependency_overrides[require_admin] = lambda: {"role": "admin"}
+        client = TestClient(app)
+        response = client.delete("/poses/walking?axis=pose")
+        check("HTTP world override allowed", response.status_code == 200 and "walking" in pc.get_catalog("pose"))
+        response = client.delete("/poses/swimming?axis=pose")
+        check("HTTP shipped movement refused", response.status_code == 400 and response.json()["detail"] == "fixed movement pose")
+        check("HTTP fixed rename refused", client.post("/poses/crawling/rename?axis=pose", json={"new_key": "x"}).status_code == 400)
+        pc.replace_world_entries("pose", {"walking": {"animation": "walk", "prompt": "world walking", "group": "stand"}})
+        pc.reload_catalogs()
+    rows = {r["key"]: r for r in poses.list_entries("pose", {})["entries"]}
+    check("movement flags", all(rows[k]["movement"] and not rows[k]["renamable"] for k in MOVEMENT_POSES))
+    check("delete flags", rows["walking"]["deletable"] and not rows["swimming"]["deletable"])
+    ac.save_transitions([{"from": "walking", "to": "swimming", "kind": "walk"}])
+    check("[F4] world allowed", poses.delete_entry("walking", "pose", {})["transitions_removed"] == 0 and "walking" in pc.get_catalog("pose") and len(ac.load_transitions()) == 1)
+    for key in MOVEMENT_POSES:
+        try:
+            poses.delete_entry(key, "pose", {})
+        except HTTPException as exc:
+            check("[F4] shipped refused " + key, exc.status_code == 400)
+        else:
+            check("[F4] shipped refused " + key, False)
+        try:
+            poses._rename_entry_sync(key, "pose", {"new_key": "x"})
+        except HTTPException as exc:
+            check("[F5] rename refused " + key, exc.status_code == 400)
+        else:
+            check("[F5] rename refused " + key, False)
+    ac.save_transitions([{"from": "sitting at table", "to": "walking", "kind": "walk"}])
+    response = poses._rename_entry_sync("sitting at table", "pose", {"new_key": "seated"})
+    check("rename transitions", response.get("transitions_rewritten") == 1 and ac.load_transitions()[0]["from"] == "seated")
+    response = poses.delete_entry("seated", "pose", {})
+    check("delete transitions", response.get("transitions_removed") == 1 and ac.load_transitions() == [])
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="movement-poses-") as tmp:
         root = Path(tmp)
@@ -80,10 +150,10 @@ def main():
         kinds = {"standing": "idle", "walking": "walk", "running": "run",
                  "swimming": "swim", "treading_water": "treading-water",
                  "crawling": "crawl", "crawling_rest": "crawl-rest"}
-        entries = {key: {"animation": kind, "prompt": key} for key, kind in kinds.items()}
+        entries = {key: {"animation": kind, "prompt": key, "group": "ground" if key.startswith("crawling") else "stand", "synonyms": ["schwimmen"] if key == "swimming" else []} for key, kind in kinds.items()}
         entries.update({"sleeping": {"animation": "sleeping-side"}, "sitting at table": {"animation": "sitting-at-the-table"}})
         catalog = root / "pose_catalog.json"
-        catalog.write_text(json.dumps({"entries": entries}), encoding="utf-8")
+        catalog.write_text(json.dumps({"entries": entries, "groups": {"stand": {"default": "standing", "needs_place": False}, "ground": {"default": "crawling_rest", "needs_place": False}}}), encoding="utf-8")
         for name in (*kinds.values(), "breast-stroke", "get-up-bed", "get-up-chair", "sleeping-side", "sitting-at-the-table", "pair__a", "pair__b"):
             (free / f"{name}.fbx").write_bytes(b"clip")
         (free / "female").mkdir()
@@ -135,6 +205,7 @@ def main():
             payload = list_animation_clips()
             check("[M7] payload", payload.get("movement_poses") == movement_pose_kinds() and "locomotion" not in payload)
             with patch.object(ac, "clip_transitions_path", return_value=rules_path):
+                fixed_checks(pc, ac)
                 payload = list_animation_clips()
                 check("transition payload", payload["transitions"] == ac.annotated_transitions() and payload["transition_clips"] == ac.client_transition_rules())
         pc.reload_catalogs()

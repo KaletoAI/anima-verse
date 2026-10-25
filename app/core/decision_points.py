@@ -202,8 +202,8 @@ def catalog_questions(axis: str) -> Tuple[Dict[str, Choice], Optional[Callable]]
     NONE_KEY. Option texts share the budget of ``_option_budget(n)``: a group is
     described by its poses, an entry by its ``prompt`` + synonyms in a small
     question (≤ _PROMPT_MAX_OPTIONS options), by its synonyms alone otherwise."""
-    from app.core.pose_catalog import get_catalog, get_groups, poses_in_group
-    entries = get_catalog(axis)
+    from app.core.pose_catalog import activity_catalog, get_groups, poses_in_group
+    entries = activity_catalog(axis)
     grouped: Dict[str, Dict[str, Any]] = {}
     for k, e in entries.items():
         grouped.setdefault(e.get("group") or "", {})[k] = e
