@@ -3065,7 +3065,7 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
     return outfit_id
 
 
-_REMBG_SESSION = None
+_REMBG_SESSIONS: dict = {}
 _REMBG_SESSION_LOCK = None
 
 
@@ -3085,31 +3085,39 @@ def preload_rembg_session() -> None:
     t.start()
 
 
-def _get_rembg_session():
-    """Lazily initialize and cache the rembg/U2Net session.
+def _get_rembg_session(model: str = "u2net"):
+    """Lazily initialize and cache one rembg session per model.
 
     Reusing a session avoids repeated model loads and onnxruntime's
     pthread_setaffinity_np error on new InferenceSessions without explicit
-    intra_op_num_threads in SessionOptions."""
-    global _REMBG_SESSION, _REMBG_SESSION_LOCK
-    if _REMBG_SESSION is not None:
-        return _REMBG_SESSION
+    intra_op_num_threads in SessionOptions. A missing model file is
+    downloaded into U2NET_HOME by rembg on first use."""
+    global _REMBG_SESSION_LOCK
+    if model in _REMBG_SESSIONS:
+        return _REMBG_SESSIONS[model]
     if _REMBG_SESSION_LOCK is None:
         import threading as _t
         _REMBG_SESSION_LOCK = _t.Lock()
     with _REMBG_SESSION_LOCK:
-        if _REMBG_SESSION is not None:
-            return _REMBG_SESSION
+        if model in _REMBG_SESSIONS:
+            return _REMBG_SESSIONS[model]
         # Set OMP_NUM_THREADS before importing rembg to keep onnxruntime
         # from attempting CPU affinity changes that fail inside containers.
         import os
         os.environ.setdefault("OMP_NUM_THREADS",
             os.environ.get("REMBG_OMP_NUM_THREADS", "4"))
         from rembg import new_session
-        _REMBG_SESSION = new_session("u2net")
-        logger.info("rembg-Session initialisiert (u2net, OMP_NUM_THREADS=%s)",
-                    os.environ.get("OMP_NUM_THREADS"))
-    return _REMBG_SESSION
+        _REMBG_SESSIONS[model] = new_session(model)
+        logger.info("rembg session initialised (%s, OMP_NUM_THREADS=%s)",
+                    model, os.environ.get("OMP_NUM_THREADS"))
+    return _REMBG_SESSIONS[model]
+
+
+# Mesh inputs (T-pose and its views) feed image-to-3D, which reads the
+# silhouette from the alpha: u2net leaves a soft halo and background between
+# hair strands there, BiRefNet keeps hair edges (measured 2026-10-25, ~5 s CPU
+# per 1024 px render against a 30-170 s render).
+MESH_INPUT_REMBG_MODEL = "birefnet-portrait"
 
 
 # rembg/u2net leaves near-transparent background specks; ignore alpha <= 16 (~6%).
@@ -3127,11 +3135,14 @@ def trim_transparent_sides(img):
     return img
 
 
-def postprocess_outfit_image(image_path: Path) -> Path:
+def postprocess_outfit_image(image_path: Path, mesh_input: bool = False) -> Path:
     """Remove the background (rembg) and trim transparent margins on the sides.
 
     Args:
         image_path: Path to the outfit image.
+        mesh_input: A T-pose render for image-to-3D: BiRefNet's mask is put
+            on the ORIGINAL colours. rembg's own cutout blends edge pixels
+            toward black, which reads as a dark rim around hair and limbs.
 
     Returns:
         Path to the processed image (possibly renamed to .png).
@@ -3140,12 +3151,19 @@ def postprocess_outfit_image(image_path: Path) -> Path:
         from rembg import remove
         from PIL import Image
 
-        session = _get_rembg_session()
         img_data = image_path.read_bytes()
-        result_data = remove(img_data, session=session)
-        # Save as PNG
         png_path = image_path.with_suffix(".png")
-        png_path.write_bytes(result_data)
+        if mesh_input:
+            import io as _io
+            mask = remove(img_data, session=_get_rembg_session(MESH_INPUT_REMBG_MODEL), only_mask=True)
+            with Image.open(_io.BytesIO(img_data)) as _src:
+                cut = _src.convert("RGB")
+            cut.putalpha(Image.open(_io.BytesIO(mask)).convert("L").resize(cut.size))
+            cut.save(png_path)
+        else:
+            result_data = remove(img_data, session=_get_rembg_session())
+            # Save as PNG
+            png_path.write_bytes(result_data)
 
         # Trim transparent margins on the sides
         try:

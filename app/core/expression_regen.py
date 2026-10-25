@@ -1294,7 +1294,7 @@ def generate_expression_image(character_name: str,
         shutil.move(str(src_path), str(tmp_path))
 
         try:
-            final_tmp = postprocess_outfit_image(tmp_path)
+            final_tmp = postprocess_outfit_image(tmp_path, mesh_input=_mesh_input)
         except Exception as pp_err:
             logger.warning("Post-processing failed, using the original: %s", pp_err)
             final_tmp = tmp_path
