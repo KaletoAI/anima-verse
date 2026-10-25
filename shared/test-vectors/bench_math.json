@@ -1,0 +1,59 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_bench_math.mjs",
+  "fixtures": {
+    "S": [
+      { "dt": 0.01, "cpuMs": 2, "gpuMs": null, "calls": 100, "tris": 1000 },
+      { "dt": 0.02, "cpuMs": 4, "gpuMs": null, "calls": 120, "tris": 1200 },
+      { "dt": 0.03, "cpuMs": 6, "gpuMs": null, "calls": 110, "tris": 1100 },
+      { "dt": 0.04, "cpuMs": 8, "gpuMs": null, "calls": 130, "tris": 1300 }
+    ]
+  },
+  "cases": [
+    { "label": "[1] p50 of 1,2,3,4 = 2.5 (interpolated)", "fn": "percentile",
+      "args": [[1, 2, 3, 4], 50], "expect": 2.5 },
+    { "label": "[1] p0 is the min", "fn": "percentile",
+      "args": [[1, 2, 3, 4], 0], "expect": 1 },
+    { "label": "[1] p100 is the max", "fn": "percentile",
+      "args": [[1, 2, 3, 4], 100], "expect": 4 },
+    { "label": "[1] single sample answers itself", "fn": "percentile",
+      "args": [[5], 95], "expect": 5 },
+    { "label": "[1] p95 of 10..40 = 38.5", "fn": "percentile",
+      "args": [[10, 20, 30, 40], 95], "expect": 38.5 },
+    { "label": "[1] empty list -> 0, not NaN", "fn": "percentile",
+      "args": [[], 50], "expect": 0 },
+
+    { "label": "[2] frames 4", "fn": "summarize",
+      "args": [{ "$fixture": "S" }], "expect": { "frames": 4 } },
+    { "label": "[2] seconds 0.1", "fn": "summarize",
+      "args": [{ "$fixture": "S" }], "expect": { "seconds": 0.1 } },
+    { "label": "[2] fpsMean = frames/seconds = 40", "fn": "summarize",
+      "args": [{ "$fixture": "S" }], "expect": { "fpsMean": 40 } },
+    { "label": "[2] frameMsMedian 25", "fn": "summarize",
+      "args": [{ "$fixture": "S" }], "expect": { "frameMsMedian": 25 } },
+    { "label": "[2] frameMsP95 38.5", "fn": "summarize",
+      "args": [{ "$fixture": "S" }], "expect": { "frameMsP95": 38.5 } },
+    { "label": "[2] cpuMs median 5", "fn": "summarize",
+      "args": [{ "$fixture": "S" }], "expect": { "cpuMsMedian": 5 } },
+    { "label": "[2] cpuMs p95 7.7", "fn": "summarize",
+      "args": [{ "$fixture": "S" }], "expect": { "cpuMsP95": 7.7 } },
+    { "label": "[2] gpuMsMedian null when never resolved", "fn": "summarize",
+      "args": [{ "$fixture": "S" }], "expect": { "gpuMsMedian": null } },
+    { "label": "[2] calls median 115", "fn": "summarize",
+      "args": [{ "$fixture": "S" }], "expect": { "callsMedian": 115 } },
+    { "label": "[2] tris median 1150", "fn": "summarize",
+      "args": [{ "$fixture": "S" }], "expect": { "trisMedian": 1150 } },
+    { "label": "[2] gpuMsMedian ignores unresolved frames (median of 4,5,6 = 5)", "fn": "summarize",
+      "args": [[
+        { "dt": 0.01, "cpuMs": 2, "gpuMs": null, "calls": 100, "tris": 1000 },
+        { "dt": 0.02, "cpuMs": 4, "gpuMs": 4, "calls": 120, "tris": 1200 },
+        { "dt": 0.03, "cpuMs": 6, "gpuMs": 5, "calls": 110, "tris": 1100 },
+        { "dt": 0.04, "cpuMs": 8, "gpuMs": 6, "calls": 130, "tris": 1300 }
+      ]], "expect": { "gpuMsMedian": 5 } },
+
+    { "label": "[3] empty input: zeros and nulls, never NaN", "fn": "summarize",
+      "args": [[]],
+      "expect": { "frames": 0, "seconds": 0, "fpsMean": 0, "frameMsMedian": 0, "frameMsP95": 0,
+                  "cpuMsMedian": 0, "cpuMsP95": 0, "gpuMsMedian": null, "callsMedian": 0, "trisMedian": 0 } }
+  ]
+}
