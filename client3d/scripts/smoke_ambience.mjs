@@ -7,7 +7,8 @@
  * Hand derivations (cases in shared/test-vectors/ambience.json, shared with the
  * native client's C# tests). JSON wrappers: `stepAmbienceN(cur, target, dt, n)`
  * applies stepAmbience n times; `roomAtRects` takes the rectangles as a list of
- * [id, rect] pairs (main.ts hands it the Map).
+ * [id, rect] pairs (main.ts hands it the Map); `worldToTile(tile, x, z)` with tile
+ * {center: {x, z}, yaw} is tiles.ts' worldToTile.
  *
  * [A] ambienceTarget(a): daylight ?? 1; a tint "#rrggbb" → its three bytes / 255,
  *     kept sRGB (the engine converts); no tint → white. A4 #ffcf9a → (1,
@@ -34,6 +35,12 @@
  *     |z − cz| ≤ d/2, the first of equal areas. R4 closet 2×2 at (3, 3) inside
  *     the 10×10 hall: (3.5, 3.5) → closet. R5 (0, 0) → hall. R6 (5, 0) on the
  *     hall's edge → hall. R7 (6, 0) → null. R8 equal areas → the first.
+ * [T] worldToTile(tile, x, z) (tiles.ts → scene-render worldToLocalXZ): the world point
+ *     turned into the tile frame, (dx·c − dz·s, dx·s + dz·c) with d = p − centre,
+ *     c/s = cos/sin(yaw) — the inverse of tileToWorld. T1 centre (10, 20), yaw π/2,
+ *     (12, 20): d = (2, 0) → (0, 2) (and tileToWorld(0, 2) = (10 + 2, 20) back).
+ *     T2 yaw 0: (4, 6) − (1, 2) = (3, 4). T3 yaw π/6, d = (1, 0) → (cos π/6, sin π/6)
+ *     = (0.8660254037844387, 0.5).
  * [C] corridorAtOutline(corridors, x, z): the lowest corridor with level ≥ 0
  *     (the first of equal levels), outline ≥ 3 points, half-open ray cast
  *     (game/polygon.ts pointInPolygon). On the square (0,0) (10,0) (10,10)
@@ -45,11 +52,12 @@
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {loadVectors, runVectors} from '../../shared/test-vectors/vectors.mjs';
-const pure=await build({stdin:{contents:"export * from './client3d/src/scene/ambience.ts'; export * from './client3d/src/game/roomAt.ts';",resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'node',format:'esm',write:false});
-const {ambienceTarget,stepAmbience,nightFactorAt,roomRectOf,roomAtRects,corridorAtOutline}=await import('data:text/javascript;base64,'+Buffer.from(pure.outputFiles[0].text).toString('base64'));
+const pure=await build({stdin:{contents:"export * from './client3d/src/scene/ambience.ts'; export * from './client3d/src/game/roomAt.ts'; export { worldToLocalXZ } from './packages/scene-render/src/scatter.ts';",resolveDir:process.cwd(),loader:'ts'},bundle:true,platform:'node',format:'esm',write:false});
+const {ambienceTarget,stepAmbience,nightFactorAt,roomRectOf,roomAtRects,corridorAtOutline,worldToLocalXZ}=await import('data:text/javascript;base64,'+Buffer.from(pure.outputFiles[0].text).toString('base64'));
 const vectors=runVectors(loadVectors('ambience'),{
   ambienceTarget,stepAmbience,nightFactorAt,roomRectOf,roomAtRects,corridorAtOutline,
   stepAmbienceN:(cur,target,dt,n)=>{for(let i=0;i<n;i++)cur=stepAmbience(cur,target,dt);return cur;},
+  worldToTile:(tile,x,z)=>worldToLocalXZ(tile.center.x,tile.center.z,tile.yaw,x,z),
 });
 assert.equal(vectors.failed,0,`${vectors.failed} ambience vector(s) failed`);
 console.log(`ambience: PASS (${vectors.passed} vectors: targets, exponential easing, night clock, room under the focus)`);

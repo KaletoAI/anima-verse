@@ -54,6 +54,13 @@
     { "label": "[R8] equal areas: the first one met stays", "fn": "roomAtRects",
       "args": [[["a", { "x": 0, "z": 0, "w": 2, "d": 2 }], ["b", { "x": 0, "z": 0, "w": 2, "d": 2 }]], 0, 0], "expect": "a" },
 
+    { "label": "[T1] world → tile: centre (10, 20) turned +90°, (12, 20) -> (0, 2)", "fn": "worldToTile",
+      "args": [{ "center": { "x": 10, "z": 20 }, "yaw": 1.5707963267948966 }, 12, 20], "expect": { "x": 0, "z": 2 }, "eps": 1e-12 },
+    { "label": "[T2] unturned: (4, 6) around (1, 2) -> (3, 4)", "fn": "worldToTile",
+      "args": [{ "center": { "x": 1, "z": 2 }, "yaw": 0 }, 4, 6], "expect": { "x": 3, "z": 4 } },
+    { "label": "[T3] turned π/6: one metre east -> (cos π/6, sin π/6)", "fn": "worldToTile",
+      "args": [{ "center": { "x": 0, "z": 0 }, "yaw": 0.5235987755982988 }, 1, 0], "expect": { "x": 0.8660254037844387, "z": 0.5 }, "eps": 1e-12 },
+
     { "label": "[C1] the lowest storey ≥ 0 decides: level 0 over level 1, the cellar ignored", "fn": "corridorAtOutline",
       "args": [[{ "roomId": "up", "level": 1, "outline": { "$fixture": "SQUARE" } },
                 { "roomId": "ground", "level": 0, "outline": { "$fixture": "SQUARE" } },
