@@ -26,6 +26,12 @@ from mathutils.bvhtree import BVHTree
 # Metres: positional copies at UV seams and creases must deform together.
 # This is independent of the normal-aware segmentation weld and pack params.
 COINCIDENT_EPSILON_M = 1e-5
+# Metres: when the largest colour blobs do not make a mirrored pair, a smaller
+# blob still counts as the tip if it sits this close (front view) to the
+# front-most vertex of its side. Measured: tips half hidden by hair 8 mm,
+# hair or fabric blobs 48 mm and more; accepted primary tips reach 34 mm,
+# which is why this is only the fallback and not a filter on the primary pair.
+MARKER_APEX_REACH_M = .02
 
 PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'band_upper_bone': 'bone',
@@ -416,7 +422,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
                 if hit and hit[1] is not None:
                     cells[i,j] = (x,z,hit[1])
         if len(cells) < 10:
-            return None,'no texture'
+            return [],'no texture'
         keys = sorted(cells)
         rgb = np.array([cells[k][2] for k in keys])
         linear = np.where(rgb<=.04045,rgb/12.92,((rgb+.055)/1.055)**2.4)
@@ -428,7 +434,7 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         score = lab[:,1]-med[1]-p['marker_yellow_weight']*(lab[:,2]-med[2])
         ok = (score>p['marker_score_min'])&(lab[:,0]>p['marker_dark_min']*med[0])&(lab[:,0]<med[0]+p['marker_light_max'])
         pending = {k for k,accepted in zip(keys,ok) if accepted}
-        best = []
+        components = []
         while pending:
             seed = min(pending)
             pending.remove(seed)
@@ -440,21 +446,33 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
                         pending.remove(neighbour)
                         component.append(neighbour)
                         stack.append(neighbour)
-            if len(component) > len(best):
-                best = component
-        if not best:
-            return None,'no marker'
-        points = np.array([cells[k][:2] for k in best])
-        centre = points.mean(axis=0)
-        area = len(best)*step*step
-        note = 'area %.1f cm2'%(area*1e4)
-        if not p['marker_area_min'] <= area <= p['marker_area_max']:
-            return None,note
-        if math.sqrt(((points-centre)**2).sum(axis=1).mean()) > p['marker_spread_max']:
-            return None,'marker spread'
-        marker_areas[0 if sign==1 else 1] = area
-        hit = front(*centre)
-        return (Vector((centre[0],hit[0].y,centre[1])),note) if hit else (None,'centroid miss')
+            components.append(component)
+        if not components:
+            return [],'no marker'
+        # Every plausible blob is a candidate: hair of a similar tone over the
+        # chest can form a blob larger than the tip itself (Lirien: 4.7 cm2
+        # strand edge vs 2.5 cm2 tip). The largest blob stays the primary
+        # choice; the rest only feed the fallback below.
+        candidates,note = [],''
+        components.sort(key=len,reverse=True)
+        for component in components:
+            points = np.array([cells[k][:2] for k in component])
+            centre = points.mean(axis=0)
+            area = len(component)*step*step
+            reason = 'area %.1f cm2'%(area*1e4)
+            hit = None
+            if not p['marker_area_min'] <= area <= p['marker_area_max']:
+                failure = reason
+            elif math.sqrt(((points-centre)**2).sum(axis=1).mean()) > p['marker_spread_max']:
+                failure = 'marker spread'
+            else:
+                hit = front(*centre)
+                failure = '' if hit else 'centroid miss'
+            # The note is always the largest blob's, as the primary choice reports.
+            note = note or failure or reason
+            if hit:
+                candidates.append((Vector((centre[0],hit[0].y,centre[1])),area,reason,component is components[0]))
+        return candidates,note
     if pinned is not None:
         markers = []
         for row in pinned:
@@ -466,13 +484,26 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
         marker_areas = [row['marker_area'] for row in pinned]
         colour = True
     else:
-        markers = [marker(v,sign) for v,sign in zip(frontmost,(1,-1))]
-        colour = all(v is not None for v,_ in markers)
+        found = [marker(v,sign) for v,sign in zip(frontmost,(1,-1))]
+        mirrored = lambda a,b: abs(a[0].z-b[0].z)<p['marker_pair_dz'] and abs((a[0].x-mid)+(b[0].x-mid))<p['marker_pair_dx']
+        # Primary: the largest blob of each side, as long as it is plausible
+        # (an oversized largest blob, e.g. patterned fabric, rules colour out).
+        primary = [cands[0] if cands and cands[0][3] else None for cands,_ in found]
+        pairs = [tuple(primary)] if all(primary) and mirrored(*primary) else []
+        if not pairs and all(c for c,_ in found):
+            # Fallback for a tip partly hidden by hair: a mirrored pair of
+            # blobs at the crest, the front-most one.
+            near = [[c for c in cands if math.hypot(c[0].x-start.x,c[0].z-start.z) <= MARKER_APEX_REACH_M]
+                    for (cands,_),start in zip(found,frontmost)]
+            pairs = sorted(((a,b) for a in near[0] for b in near[1] if mirrored(a,b)),
+                           key=lambda pair:pair[0][0].y+pair[1][0].y)[:1]
+        colour = bool(pairs)
         if colour:
-            a,b = [v for v,_ in markers]
-            colour = abs(a.z-b.z)<p['marker_pair_dz'] and abs((a.x-mid)+(b.x-mid))<p['marker_pair_dx']
-            if not colour:
-                markers = [(v,'pair mismatch; '+note) for v,note in markers]
+            markers = [(c[0],c[2] if c[3] else c[2]+'; at crest') for c in pairs[0]]
+            marker_areas = [c[1] for c in pairs[0]]
+        else:
+            markers = [((c[0] if c else None),('pair mismatch; '+note) if all(primary) else note)
+                       for c,(_,note) in zip(primary,found)]
     K = int(p['boundary_directions'])
     directions = [(math.sin(2*math.pi*k/K),math.cos(2*math.pi*k/K)) for k in range(K)]
     def walls(apexes):
