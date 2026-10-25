@@ -75,4 +75,17 @@ if [ -f "$cef/gdcef.gdextension" ]; then
 fi
 
 [ -x "$out/anima-native.x86_64" ] || { echo "export did not produce $out/anima-native.x86_64" >&2; exit 1; }
+
+# run.sh: a network share may drop the executable bits (the binary AND gdCEF's
+# subprocess — without the latter the HUD silently never starts), and the
+# engine log should land next to the build where the build host can read it.
+cat > "$out/run.sh" <<'RUN'
+#!/bin/sh
+# Usage: sh run.sh --server=http://HOST:8000 [--goto=LOCATION] [--bench [--scatter] [--quit-after-bench]] ...
+here="$(cd "$(dirname "$0")" && pwd)"
+chmod +x "$here/anima-native.x86_64" "$here/gdCefRenderProcess" 2>/dev/null
+mkdir -p "$here/logs"
+exec "$here/anima-native.x86_64" --log-file "$here/logs/native-$(date +%Y%m%d-%H%M%S).log" -- "$@"
+RUN
+chmod +x "$out/run.sh"
 echo "== done: $out/anima-native.x86_64 -- --server=http://HOST:8000 [--user=NAME] [--goto=LOCATION] [--no-hud] [--bench [--scatter] [--quit-after-bench] [--size=WxH]]"

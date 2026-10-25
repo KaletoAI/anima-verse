@@ -124,8 +124,9 @@ public partial class HudOverlay : CanvasLayer
             // takes CEF's lock files — under user://, not next to the binary.
             ["incognito"] = true,
             ["root_cache_path"] = dir,
-            // Console messages of the page (the bridge's own warnings) land here at "info".
-            ["log_file"] = dir + "/debug.log",
+            // Console messages of the page (the bridge's own warnings) land here at "info";
+            // next to the exported binary (run.sh's logs/) so the build host can read them.
+            ["log_file"] = CefLogFile(dir),
             ["log_severity"] = "info",
             ["locale"] = "en-US",
             // No DevTools port: it would let any local process read the session.
@@ -457,4 +458,17 @@ public partial class HudOverlay : CanvasLayer
     }
 
     private static void Log(string line) => GD.Print("[native] " + line);
+
+    /// <summary>
+    /// <c>&lt;binary dir&gt;/logs/cef-debug.log</c> in an export (the folder run.sh logs into, on the
+    /// shared build output), <c>user://cef/debug.log</c> when started from the editor.
+    /// </summary>
+    private static string CefLogFile(string userDir)
+    {
+        if (OS.HasFeature("editor")) return userDir + "/debug.log";
+        var logs = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(OS.GetExecutablePath()) ?? ".", "logs");
+        try { System.IO.Directory.CreateDirectory(logs); }
+        catch (System.Exception) { return userDir + "/debug.log"; }
+        return System.IO.Path.Combine(logs, "cef-debug.log");
+    }
 }
