@@ -3047,9 +3047,9 @@ def resolve_background_path(location_name: str, room: str = "",
     Multi-room: the swap applies to all rooms of the location (consistent
     with the location-wide block rule).
 
-    ``file`` pins a concrete background image (used by the /play frontend so
-    that figure positions stick to the exact displayed image). An active
-    event image takes precedence and ignores ``file``.
+    ``file`` pins a concrete background image so the HUD scene tile shows
+    ONE image steadily between polls, without a random pick per request.
+    An active event image takes precedence and ignores ``file``.
 
     Day/night is NOT a parameter: ``get_background_path`` asks the game
     calendar itself, so no caller (least of all a browser) can decide what

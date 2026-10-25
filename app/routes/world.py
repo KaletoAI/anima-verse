@@ -3042,7 +3042,7 @@ def list_conditions() -> Dict[str, Any]:
 def get_location_background(
     location_name: str,
     room: str = Query("", description="Room ID for image filtering"),
-    file: str = Query("", description="Concrete background file name (bg_id) — pin instead of random pick")):
+    file: str = Query("", description="Concrete background file name (bg_id) — pin ONE image steadily between HUD scene tile polls")):
     """Serves the background image of a location (by ID or name).
 
     While a disruption/danger event with a rendered image_path is active,
@@ -3051,9 +3051,9 @@ def get_location_background(
     Multi-room: the swap applies to every room of the location (consistent
     with the location-wide block rule).
 
-    ``file`` pins a concrete background image (used by the /play frontend so
-    that figure positions stick to exactly the image on screen). An active
-    event image takes precedence and ignores ``file``.
+    ``file`` pins a concrete background image so the HUD scene tile shows
+    ONE image steadily between polls, without a random pick per request.
+    An active event image takes precedence and ignores ``file``.
 
     Day/night is deliberately NOT a query parameter: the selection asks the
     game calendar, not the browser's clock.

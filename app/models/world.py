@@ -2850,8 +2850,8 @@ def get_background_path(location_identifier: str, room: str = "",
             would never notice the change).
         stable: If True the pick inside a category is deterministic instead of
             random — the same (location, room, time of day) always yields the
-            same image. Used by /play, where the displayed image must be
-            stable (figure positions are keyed to the file name).
+            same image. The HUD scene tile uses this to show ONE image
+            steadily between polls, without a random pick per request.
     """
     loc = resolve_location(location_identifier)
     if not loc:
@@ -2912,8 +2912,7 @@ def get_background_path(location_identifier: str, room: str = "",
         return None
 
     # Pick inside a category: random (default, variety) or deterministic
-    # (stable=True, for /play — otherwise the displayed image would jump on
-    # every poll and the figure positions keyed to it would jump along).
+    # (stable=True keeps ONE image steady in the HUD scene tile between polls).
     def _pick(lst: List[str]) -> str:
         return sorted(lst)[0] if stable else _random.choice(lst)
 

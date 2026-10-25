@@ -117,10 +117,10 @@ def _bg_version(location_id: str, room: str) -> str:
 
 def _bg_id(location_id: str, room: str) -> str:
     """File name (``bg_id``) of the currently chosen background image — an
-    event image wins, otherwise the regular selection. The frontend pins the
-    ``<img>`` with it (``/background?file=<bg_id>``) and ties the figure
-    positions to exactly that image. Time of day comes from the GAME
-    calendar inside :func:`get_background_path`, consistent with
+    event image wins, otherwise the regular selection. The HUD scene tile
+    pins the ``<img>`` with it (``/background?file=<bg_id>``) to show ONE image
+    steadily between polls, without a random pick per request. Time of day
+    comes from the GAME calendar inside :func:`get_background_path`, consistent with
     :func:`_bg_version`."""
     try:
         from app.core.event_images import get_effective_background_event
