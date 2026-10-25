@@ -19,7 +19,7 @@ namespace AnimaNative;
 ///   --size=WxH                  window size (bench default 1920x1080)
 ///   --vsync=on|off              keep V-sync during the bench (default off)
 ///   --quit-after-bench          exit after the result file is written
-///   --scatter                   draw the scatter AND the undergrowth (default off = the browser's &amp;scatter=0)
+///   --no-scatter                hide the scatter AND the undergrowth (default on, like the browser; = &amp;scatter=0)
 ///   --no-hud                    no React HUD over the world (default: the HUD via gdCEF when native/cef_artifacts is linked)
 ///   --check                     offline self-test from native/fixtures, then quit
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
@@ -32,7 +32,7 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
     public bool Bench { get; init; }
     public bool CheckBench { get; init; }
     public bool QuitAfterBench { get; init; }
-    /// <summary>Both scatter layers on (<c>--scatter</c>); off by default, like the S2 runs (<c>&amp;scatter=0</c>).</summary>
+    /// <summary>Both scatter layers on — the default, like the browser; <c>--no-scatter</c> = the browser's <c>&amp;scatter=0</c>.</summary>
     public bool Scatter { get; init; }
     /// <summary><c>--no-hud</c>: skip the gdCEF HUD overlay (Task S4) even when the extension is linked.</summary>
     public bool NoHud { get; init; }
@@ -47,7 +47,7 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
     {
         string server = DefaultServer;
         string? user = null, gotoQuery = null;
-        bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = false, noHud = false;
+        bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = true, noHud = false;
         Vector2I? size = null;
         foreach (var raw in args)
         {
@@ -56,6 +56,7 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
             else if (arg == "--bench") bench = true;
             else if (arg == "--check-bench") checkBench = true;
             else if (arg == "--quit-after-bench") quit = true;
+            else if (arg == "--no-scatter") scatter = false;
             else if (arg == "--scatter") scatter = true;
             else if (arg == "--no-hud") noHud = true;
             else if (TryValue(arg, "--server", out var v)) server = v.TrimEnd('/');

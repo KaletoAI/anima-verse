@@ -188,7 +188,8 @@ public partial class HudOverlay : CanvasLayer
         }
         // Before the first page runs a script: messages to an unregistered method are dropped.
         if (!_cef.RegisterMethod(this, Channel)) Log("hud: register_method failed — the HUD cannot reach the scene");
-        _cef.ConnectBrowser(GdCef.SignalPageLoaded, Callable.From<GodotObject>(OnPageLoaded));
+        // gdCEF emits on_page_loaded(http_status, browser) — gdbrowser.cpp, emit_signal("on_page_loaded", httpStatusCode, this).
+        _cef.ConnectBrowser(GdCef.SignalPageLoaded, Callable.From<int, GodotObject>((_, browser) => OnPageLoaded(browser)));
         _cef.ConnectBrowser(GdCef.SignalPageFailed, Callable.From<int, string, GodotObject>(OnPageFailed));
         // gdCEF puts the page's cursor on the rect, which ignores the mouse here; apply it globally instead.
         _cef.ConnectBrowser(GdCef.SignalCursorChanged, Callable.From<int, GodotObject>((shape, _) => _cursor = (Input.CursorShape)shape));

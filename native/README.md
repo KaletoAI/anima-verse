@@ -99,7 +99,7 @@ Arguments after `--` (no .env, no config file):
 | `--size=WxH` | window size; a bench run defaults to `1920x1080` (the result reports the size actually rendered) |
 | `--vsync=on` | keep V-sync during the bench (default: off for the run, restored after) |
 | `--quit-after-bench` | exit after the result file is written |
-| `--scatter` | draw the scatter AND the undergrowth (default off — what the browser's `&scatter=0` hides); the bench flags say `scatter: true` |
+| `--no-scatter` | hide the scatter AND the undergrowth (default on, like the browser; = `&scatter=0`); the bench flags say `scatter: false` |
 | `--no-hud` | no HUD even when gdCEF is linked (the S2/S3 bench numbers were taken without it) |
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
