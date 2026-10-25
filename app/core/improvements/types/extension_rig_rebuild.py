@@ -33,7 +33,6 @@ class ExtensionRigRebuild(ImprovementType):
         from app.models.character import get_character_profile
         name = params["character"]
         profile = get_character_profile(name) or {}
-        declarations = rig_groups_for(name, profile=profile)
         def read_meta(path):
             try:
                 value = json.loads(path.with_suffix(".json").read_text())
@@ -45,9 +44,10 @@ class ExtensionRigRebuild(ImprovementType):
         for path in get_model3d_dir(name).glob("*.glb"):
             if is_state_fork(path.stem):
                 continue
+            meta = read_meta(path)
+            declarations = rig_groups_for(name, profile=profile, mesh_variant=meta.get("mesh_variant") or "")
             fingerprint = extension_rig_fingerprint(
                 declarations, model_extension_overrides(profile, path.stem))
-            meta = read_meta(path)
             state = meta.get("extension_rig") or {}
             if not state.get("attempted") or state.get("fingerprint") != fingerprint or state.get("status") not in (
                     "applied", "not_found", "none_applicable"):

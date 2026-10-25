@@ -73,4 +73,34 @@ with tempfile.TemporaryDirectory() as tmp:
     for condition in ([], {'attributes.missing': ['b']}, {'gender': []}, {'gender': [{}]}):
         attrs['inner']['applies_to'] = condition
         assert _parse_package(Path(tmp)/'fixture', meta, register_tasks=False) is None
-print('PASS inset declarations: mapped .5/0/default, empty motion, build identity, attribute conditions')
+    # Coverage: a slot covered by 'bottom' keeps the part only where the mesh was
+    # rendered for it. Hand-derived table (switch on in every row):
+    #   no pieces, no variant          -> exposed  -> chain = attached_part, sack built
+    #   bottom worn, no variant        -> covered  -> chain stays appendage_chain, no sack
+    #   no pieces, variant ''          -> recorded without the part -> as covered
+    #   bottom worn, variant has token -> the stored mesh decides -> as exposed
+    chain = RigSpec.parse(dict(id='chain', op='appendage_chain', chains=[[
+        {'bone': 'mixamorig:G1', 'parent': 'Hips'}, {'bone': 'mixamorig:G2', 'parent': 'mixamorig:G1'}]]))
+    sack = RigSpec.parse(dict(id='sack', op='attached_part_bone', applies_to={'attributes.switch': ['on']},
+                              chains=[[{'bone': 'mixamorig:S', 'parent': 'Hips'}]]))
+    cattrs = {'switch': attrs['switch']}
+    cpart = dict(switch='switch', tpose_prompt='flat slot', rigs={'chain': {'params': {}, 'attribute_params': {}}})
+    covered = BodySlotSpec('slot', 'fixture', covered_by=['bottom'], attributes=cattrs, rigs=[chain, sack],
+                           mesh_part=MeshPartSpec.parse(cpart, cattrs, [chain, sack]))
+    cpkg = Package('fixture', Path(tmp), {}, body_slots=[covered])
+    token = bs.mesh_variant_token(covered)
+    assert token == '|mesh:fixture.slot=on'
+    naked = {'body_slots': {'slot': {'switch': 'on'}}}
+    dressed = {**naked, 'equipped_pieces': {'bottom': 'item_x'}}
+    with patch.object(bs, '_species_packages_for', return_value=[cpkg]), patch(
+            'app.plugins.registry.packages', return_value=[cpkg]):
+        ops = lambda prof, variant=None: {g['id']: g['op'] for g in er.rig_groups_for('', prof, variant)}
+        assert ops(naked) == {'chain': 'attached_part', 'sack': 'attached_part_bone'}
+        assert ops(dressed) == {'chain': 'appendage_chain'}
+        assert ops(naked, '') == {'chain': 'appendage_chain'}
+        assert ops(dressed, token) == {'chain': 'attached_part', 'sack': 'attached_part_bone'}
+        from app.core.model_refs import mesh_variant
+        assert mesh_variant('', profile=naked) == token and mesh_variant('', profile=dressed) == ''
+        assert er.extension_rig_fingerprint(er.rig_groups_for('', naked, token)) != \
+            er.extension_rig_fingerprint(er.rig_groups_for('', naked, ''))
+print('PASS inset declarations: mapped .5/0/default, empty motion, build identity, attribute conditions, coverage')

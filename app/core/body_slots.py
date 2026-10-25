@@ -305,6 +305,11 @@ def _format_if_complete(text: str, values: Dict[str, str]) -> str:
         return ""
 
 
+def mesh_variant_token(spec) -> str:
+    """The token a model's mesh variant carries for this slot's part."""
+    return f"|mesh:{spec.package_id}.{spec.id}=on"
+
+
 def mesh_part_active(spec, profile: Dict[str, Any]) -> bool:
     """Whether an applicable slot selects its procedural part variant."""
     return bool(spec.mesh_part and _slot_applies(spec, profile)

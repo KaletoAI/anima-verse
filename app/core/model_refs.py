@@ -503,14 +503,14 @@ def outfit_signature(equipped_pieces: Optional[Dict[str, str]],
 
 def mesh_variant(character_name, pieces=None, profile=None):
     """Stable token for exposed, active slot parts; empty preserves historical keys."""
-    from app.core.body_slots import slots_for_character, mesh_part_active, is_slot_exposed
+    from app.core.body_slots import slots_for_character, mesh_part_active, is_slot_exposed, mesh_variant_token
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     profile = dict(profile)
     if pieces is not None:
         profile["equipped_pieces"] = pieces
-    return "".join(f"|mesh:{slot.package_id}.{slot.id}=on" for slot in sorted(
+    return "".join(mesh_variant_token(slot) for slot in sorted(
         slots_for_character(character_name, profile=profile), key=lambda slot: (slot.package_id, slot.id))
         if mesh_part_active(slot, profile) and is_slot_exposed(slot, profile))
 

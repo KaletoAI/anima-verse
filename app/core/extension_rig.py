@@ -9,13 +9,20 @@ def _revision(value):
                                      ensure_ascii=True).encode()).hexdigest()
 
 
-def rig_groups_for(character_name, profile=None):
+def rig_groups_for(character_name, profile=None, mesh_variant=None):
     """Applicable groups, with package physics defaults and ordered chains.
 
     Effective motion layers are resolved separately by motion_payload.
     Conditions use profile fields or ``attributes.<key>`` for this slot.
+    A slot's procedural part (``mesh_part``) counts only where the mesh was
+    rendered for it: ``mesh_variant`` is the token a stored model recorded
+    (``model_refs.mesh_variant``); without it the worn outfit decides, the
+    same rule that token follows. Where the part does not count, the slot's
+    switch reads "off" for every condition, so no part op or part-only group
+    is built over clothing or over anatomy the generator drew itself.
     """
-    from app.core.body_slots import mesh_part_active, normalize_condition_value, slots_for_character
+    from app.core.body_slots import (is_slot_exposed, mesh_part_active, mesh_variant_token,
+                                     normalize_condition_value, slots_for_character)
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
@@ -26,13 +33,19 @@ def rig_groups_for(character_name, profile=None):
     active_slots = {id(slot) for slot in slots_for_character(character_name, profile=profile)}
     groups = []
     for slot in (slot for package in packages() for slot in package.body_slots):
+        values = (profile.get("body_slots") or {}).get(slot.id) or {}
+        part_on = False
+        if slot.mesh_part:
+            part_on = (mesh_variant_token(slot) in mesh_variant if mesh_variant is not None
+                       else mesh_part_active(slot, profile) and is_slot_exposed(slot, profile))
+            if not part_on:
+                values = {**values, slot.mesh_part.switch: "off"}
         for rig in slot.rigs:
             if rig.templates is None:
                 if id(slot) not in active_slots:
                     continue
             elif not template_name or not fragment_applies({"apply_to": rig.templates}, template_name, template):
                 continue
-            values = (profile.get("body_slots") or {}).get(slot.id) or {}
             matches = True
             for key, allowed in rig.applies_to.items():
                 value = (values.get(key[len("attributes."):]) if key.startswith("attributes.")
@@ -43,7 +56,7 @@ def rig_groups_for(character_name, profile=None):
                     break
             if matches:
                 group = asdict(rig)
-                if mesh_part_active(slot, profile) and rig.id in slot.mesh_part.rigs:
+                if part_on and rig.id in slot.mesh_part.rigs:
                     part = slot.mesh_part.rigs[rig.id]
                     if rig.op == "appendage_chain":
                         group["op"] = "attached_part"
@@ -81,7 +94,7 @@ def extension_rig_fingerprint(groups, overrides=None):
     geometry = [{**{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group},
                  **({"build": PART_BUILDS[group["op"]]} if group.get("op") in PART_BUILDS else {})}
                 for group in groups]
-    return _revision({"version": 16, "groups": sorted(geometry, key=lambda g: g["id"]),
+    return _revision({"version": 17, "groups": sorted(geometry, key=lambda g: g["id"]),
                       "overrides": overrides or {}})
 
 
@@ -128,18 +141,19 @@ def migrate_extension_rig_models_once():
     return migrated
 
 
-def resolved_extension_groups(character_name, profile=None, signature=None):
+def resolved_extension_groups(character_name, profile=None, signature=None, mesh_variant=None):
     """Return applicable groups with enabled/flip flags, including disabled ones.
 
     Overrides live per signature in the model options block. They affect mesh
     operations only; package applicability and motion defaults stay independent.
+    ``mesh_variant`` is the stored model's token (see ``rig_groups_for``).
     """
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     overrides = model_extension_overrides(profile, signature)
     result = []
-    for group in rig_groups_for(character_name, profile):
+    for group in rig_groups_for(character_name, profile, mesh_variant):
         override = overrides.get(group["id"]) or {}
         result.append({**group, "enabled": override.get("enabled", True) and all(
             parent["enabled"] for parent in result if parent["id"] == group["depends_on"]),

@@ -918,7 +918,10 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     draft_profile = {**profile, "model3d_opts": {**(profile.get("model3d_opts") or {}), "extension_motion": {}}}
     out["motion_defaults"] = motion_payload(character_name, profile=draft_profile, apply_clothing=False, apply_states=False)["groups"]
     from app.core.extension_rig import rig_groups_for
-    out["extension_groups"] = rig_groups_for(character_name, profile=profile)
+    # The served model's own mesh variant decides its part groups.
+    out["extension_groups"] = rig_groups_for(
+        character_name, profile=profile,
+        mesh_variant=(_read_sidecar(path).get("mesh_variant") or "") if path else None)
     out["options"] = get_model3d_options(character_name)
     from app.blender import runner
     out["blender"] = runner.status()
@@ -1081,7 +1084,10 @@ def _auto_extension_rig(character_name: str, path: Path,
     from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name) or {}
-    declarations = rig_groups_for(character_name, profile=profile)
+    # The part follows how THIS mesh was rendered: a source drawn with
+    # clothing (or anatomy) over the slot never gets a procedural part.
+    mesh_variant = meta.get("mesh_variant") or ""
+    declarations = rig_groups_for(character_name, profile=profile, mesh_variant=mesh_variant)
     overrides = model_extension_overrides(profile, path.stem)
     fingerprint = extension_rig_fingerprint(declarations, overrides)
     previous = meta.get("extension_rig") or {}
@@ -1098,7 +1104,8 @@ def _auto_extension_rig(character_name: str, path: Path,
     if previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
             and source_current and not part_failed)):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
-    groups = [g for g in resolved_extension_groups(character_name, profile=profile, signature=path.stem) if g["enabled"]]
+    groups = [g for g in resolved_extension_groups(character_name, profile=profile, signature=path.stem,
+                                                   mesh_variant=mesh_variant) if g["enabled"]]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
              "group_ops": {g["id"]: g["op"] for g in declarations},
              "group_params": {g["id"]: g["params"] for g in declarations if g["op"] in ("attached_part", "inset_part")},
@@ -1765,7 +1772,8 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         low_metrics = {}
         # Built parts are not extension_bones groups; only captured groups are re-measured.
         from app.core.extension_rig import resolved_extension_groups
-        measured_groups = [g for g in resolved_extension_groups(character_name, signature=path.stem)
+        measured_groups = [g for g in resolved_extension_groups(character_name, signature=path.stem,
+                                                                mesh_variant=meta.get("mesh_variant") or "")
                            if g["op"] not in ("attached_part", "attached_part_bone", "inset_part")]
         if (meta.get("extension_rig") or {}).get("status") == "applied" and measured_groups:
             measured = runner.run("extension_bones", inputs={"model": next(iter(res["outputs"].values()))},

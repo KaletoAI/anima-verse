@@ -1457,8 +1457,14 @@ non-empty glob strings; matching is case insensitive for active exposed mesh
 inputs. Operation-specific parameters are validated at execution. Old singular
 rig and size declarations are rejected. A malformed declaration rejects the package.
 
-When the slot applies and its stored switch equals `"on"`, each declared group
-keeps its ID and chains. An `appendage_chain` becomes `attached_part`; other
+When the slot applies, its stored switch equals `"on"` and the mesh was rendered
+for the part, each declared group keeps its ID and chains. "Rendered for the
+part" means the stored model's `mesh_variant` carries the slot token
+`|mesh:<package>.<slot>=on` — which it only does when the slot was exposed in
+that model's outfit (without a stored model, the worn outfit decides the same
+way). Otherwise the switch reads `"off"` for every rig condition: no part op
+and no group conditioned on `attributes.<switch>: ["on"]` is built over
+clothing or over anatomy the generator drew itself. An `appendage_chain` becomes `attached_part`; other
 operations keep their op. Parameters combine the declared rig parameters and
 mapped attribute values. Build versions are tracked per part operation in the
 mesh fingerprint. `inset_part` permits empty chains and produces no motion group.
