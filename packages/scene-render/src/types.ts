@@ -285,9 +285,24 @@ export interface ScenePropLight {
   height_m: number
 }
 
+/** Composed model-water polygons in tile-local metres, before terrain lift. */
+export interface ScenePropWater {
+  regions: {
+    outline: [number, number][]
+    holes: [number, number][][]
+    /** Tile-local metres, before the storey terrain lift. */
+    y: number
+    bed_y: number
+    tint: string
+    opacity: number
+    swim_from_m: number
+  }[]
+}
+
 /** ONE placement spec for building, room diorama and prop alike — the food of
  *  the contract's single place() routine (§ B2). */
 export interface SceneModelSpec {
+  water?: ScenePropWater
   light?: ScenePropLight
   role: 'building' | 'room' | 'prop'
   /** Building spec only: what the model IS. `shell` = a building that stands

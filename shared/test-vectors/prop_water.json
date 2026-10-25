@@ -1,0 +1,22 @@
+{
+  "regions_specs": [
+    {"level":0,"water":{"regions":[{"outline":[[0,0],[4,0],[4,4],[0,4]],"holes":[[[1,1],[1,2],[2,2],[2,1]]],"y":1.5,"bed_y":0,"swim_from_m":1}]}},
+    {"level":0,"water":{"regions":[{"outline":[[3,3],[5,3],[5,5],[3,5]],"holes":[],"y":2,"bed_y":1.5,"swim_from_m":1}]}}
+  ],
+  "cases": [
+    {"x":0.5,"z":0.5,"expect":{"y":1.5,"bed_y":0,"swim_from_m":1}},
+    {"x":1.5,"z":1.5,"expect":null},
+    {"x":3.5,"z":3.5,"expect":{"y":2,"bed_y":1.5,"swim_from_m":1}},
+    {"x":6,"z":6,"expect":null},
+    {"x":0,"z":0,"expect":{"y":1.5,"bed_y":0,"swim_from_m":1}}
+  ],
+  "wade_swim_cases": [
+    {"bed_y":0,"y":1.5,"swim_from_m":1,"expect_movement":"swim"},
+    {"bed_y":0,"y":0.5,"swim_from_m":1,"expect_movement":"walk_run"},
+    {"bed_y":0,"y":1,"swim_from_m":1,"expect_movement":"swim"}
+  ],
+  "carry_height_cases": [
+    {"bed_y":0,"y":1.5,"expect":1.5},
+    {"bed_y":2,"y":1.5,"expect":2}
+  ]
+}

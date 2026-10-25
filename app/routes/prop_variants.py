@@ -521,3 +521,42 @@ async def prop_variant_generate(prop_id: str, index: int,
     result_payload = {"status": "generating" if started else "already_running"}
     invalidate_prop_lib_token()
     return result_payload
+
+
+# Water belongs to the selected model file, outside the variant draft.
+def _variant_water_model(prop_id: str, index: int):
+    from app.core import props
+    _variant(prop_id, index)
+    mp = props.model_path(prop_id, variant=index)
+    if not mp:
+        raise HTTPException(status_code=404, detail="No model")
+    return (mp, props.file_areas(mp)["rotation"],
+            max(props.variant_dims(props.read_sidecar(prop_id), index).values()), "xyz")
+
+
+@router.get("/props/{prop_id}/variants/{index}/water")
+def prop_variant_water(prop_id: str, index: int,
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core.model_water import read_water, water_status
+    mp, rot, _target, _measure = _variant_water_model(prop_id, index)
+    return {**water_status(mp, rot), "water": read_water(mp, rot)}
+
+
+@router.post("/props/{prop_id}/variants/{index}/water/detect")
+def prop_variant_water_detect(prop_id: str, index: int, wait: bool = False,
+                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core.model_water import request_detection
+    return request_detection(lambda: _variant_water_model(prop_id, index), wait=wait)
+
+
+@router.patch("/props/{prop_id}/variants/{index}/water")
+async def prop_variant_water_patch(prop_id: str, index: int, request: Request,
+                                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    import asyncio
+    from app.core.model_water import patch_water
+    mp, rot, _target, _measure = _variant_water_model(prop_id, index)
+    try:
+        water = await asyncio.to_thread(patch_water, mp, rot, await request.json())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {"status": "valid", "water": water}

@@ -518,6 +518,14 @@ def _build_payload_rows() -> List[Dict[str, Any]]:
             placement_yaw=row["yaw_deg"])
         if light:
             spec["light"] = light
+        from app.core import props as prop_store
+        from app.core.model_water import compose_regions, read_water
+        mp = prop_store.model_path(pid, variant=entry["variant"])
+        water = compose_regions(read_water(mp, facts["rotations"][idx]), {
+            **spec, "anchor": [row["x"], row["z"]],
+            "bottom_y": row["offset_y"] + facts["sink_list"][idx]})
+        if water:
+            spec["water"] = water
         # Only a prop that really HAS more than one variant says so: a
         # one-element list beside an identical `variants` map would be the
         # same fact twice in every payload of every world.

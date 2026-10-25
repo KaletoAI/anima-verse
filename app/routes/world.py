@@ -579,7 +579,7 @@ def get_world_props_route() -> Dict[str, Any]:
     from app.models import world_props
     facts: Dict[str, Dict[str, Any]] = {}
     rows = world_props.list_world_props()
-    lights = {r["id"]: r.get("light") for r in world_props.payload_rows()}
+    payload = {r["id"]: r for r in world_props.payload_rows()}
     for row in rows:
         pid = row["prop_id"]
         if pid not in facts:
@@ -598,8 +598,9 @@ def get_world_props_route() -> Dict[str, Any]:
                 "variants": len(stores),
                 "stores": stores,
             }
-        if lights.get(row["id"]):
-            row["light"] = lights[row["id"]]
+        for key in ("light", "water"):
+            if payload.get(row["id"], {}).get(key):
+                row[key] = payload[row["id"]][key]
         row["name"] = facts[pid]["name"]
         row["variant_count"] = facts[pid]["variants"]
         row["variant_indices"] = facts[pid]["stores"]
@@ -3596,3 +3597,41 @@ def delete_messaging_frame() -> Dict[str, Any]:
         except Exception:
             pass
     return {"status": "deleted"}
+
+
+# Model-owned room water uses the same owner/file/fix as room surfaces.
+def _room_water_model(location_id: str, room_id: str):
+    from app.core.location_model3d import (find_building_model, read_sidecar,
+                                           surface_target_m)
+    _require_room(location_id, room_id)
+    mp = find_building_model(location_id, room_id)
+    if not mp:
+        raise HTTPException(status_code=404, detail="No model")
+    return mp, read_sidecar(mp).get("rotation"), surface_target_m(location_id, room_id, mp), "xz"
+
+
+@router.get("/locations/{location_id}/rooms/{room_id}/model3d/water")
+def room_model3d_water(location_id: str, room_id: str,
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core.model_water import read_water, water_status
+    mp, rot, _target, _measure = _room_water_model(location_id, room_id)
+    return {**water_status(mp, rot), "water": read_water(mp, rot)}
+
+
+@router.post("/locations/{location_id}/rooms/{room_id}/model3d/water/detect")
+def room_model3d_water_detect(location_id: str, room_id: str, wait: bool = False,
+                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core.model_water import request_detection
+    return request_detection(lambda: _room_water_model(location_id, room_id), wait=wait)
+
+
+@router.patch("/locations/{location_id}/rooms/{room_id}/model3d/water")
+async def room_model3d_water_patch(location_id: str, room_id: str, request: Request,
+                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core.model_water import patch_water
+    mp, rot, _target, _measure = _room_water_model(location_id, room_id)
+    try:
+        water = await asyncio.to_thread(patch_water, mp, rot, await request.json())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return {"status": "valid", "water": water}

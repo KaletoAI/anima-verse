@@ -619,7 +619,7 @@ def _scene_specs(location: Dict[str, Any],
                                   room_metas=room_metas,
                                   surface_kinds=library_kinds())
             models = scene.get("models") or []
-            specs = [m for m in models if m.get("surface")]
+            specs = [m for m in models if m.get("surface") or m.get("water")]
             declarations = _room_declarations(scene, models)
     except Exception:          # a broken scene must not block walking
         specs, declarations = [], []
@@ -681,6 +681,10 @@ def stand_height_at(location: Optional[Dict[str, Any]],
     The whole thing is the server's copy of the client's
     ``standY(tileWalkY, worldGround)`` (spec § 7).
 
+    Model water (v18) adds a carry height over those rungs: inside the
+    highest region outside its holes, max(ground, baked/declaration, water.y)
+    carries the step rule. It uses the same storey-0 lift as the lattice.
+
     STOREY 0 ONLY, exactly like the client's GROUND ladder (``tileWalkY``): a
     walker reports a point on the ground plane, and the diorama of an upper
     floor must not be what it is measured against. A figure on an upper floor
@@ -718,6 +722,9 @@ def stand_height_at(location: Optional[Dict[str, Any]],
             g = ground_at(wx, wz)
             return (g - datum) if math.isfinite(g) else 0.0
 
+        from app.core.model_water import water_region_at
+        water = water_region_at(
+            (s for s in specs if int(s.get("level") or 0) == 0), lx, lz, lift_of)
         baked = highest_surface_at(
             (s for s in specs if int(s.get("level") or 0) == 0),
             lx, lz, lift_of)
@@ -732,6 +739,8 @@ def stand_height_at(location: Optional[Dict[str, Any]],
             if dec is not None:
                 baked = (lift_of(dec["spec"])
                          + float(dec["spec"]["walk_y_world"]))
+        if water is not None:
+            baked = max(baked if baked is not None else -math.inf, water["y"])
     except Exception:
         if not _read_warned.get(loc_id):
             _read_warned[loc_id] = True

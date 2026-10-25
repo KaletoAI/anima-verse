@@ -4298,6 +4298,9 @@ holte sie 3×/s zurück.)
 
 **Seit v6 fragt Nr. 8 die STANDHÖHE, nicht die Geländehöhe**
 (`model_surface.stand_height_at`, Nachtrag „Oberflächen-Raster" 2026-08-27):
+In v18, enabled model-water regions add a carry height: inside the highest
+region outside its holes, the gate uses `max(ground, baked/declaration, water.y)`
+with the same storey-0 terrain lift (§ C3, Prop water).
 `max(ground_at(x, z), höchstes antwortendes Oberflächen-Raster der Location)` —
 mit derselben Sample-Formel, die beide Renderer benutzen, und nur mit Rastern
 auf Etage 0, genau wie die Boden-Leiter des Clients. Der Modell-Raycast bleibt
@@ -5712,6 +5715,9 @@ Geometrie-Routinen — „Primitiv bauen" und „Modell platzieren" — und
 keine einzige eigene Geometrie-Entscheidung mehr.
 
 ## B1. `GET /play/locations/{location_id}/scene`
+
+Current scene recipe version: **18** (`SCENE_RECIPE_VERSION = 18`), adding
+model-owned water regions on prop and room diorama specs (see § C3).
 
 **Jede Zahl dieses Payloads ist ein WELT-METER.** Der Composer liefert
 `k = 1` und `extent_m = plan_width_m`; jedes `_m`-Feld ist damit direkt ein
@@ -8784,6 +8790,57 @@ Room entries `rooms[].ambience` optionally carry `{daylight, tint}` in v17:
 (1, null) is omitted. Room ambience dims/tints sun, sky and fill, with point
 lights and halos unaffected. Light and ambience edits invalidate the scene
 fingerprint; light edits also invalidate the world-props signature.
+
+### Prop water (v18)
+
+A prop or room diorama spec whose drawn model has a valid `.water.json`
+sidecar with enabled regions carries:
+
+```json
+"water": {"regions": [{"outline": [[0,0],[2,0],[2,1],[0,1]],
+  "holes": [], "y": 1.5, "bed_y": 0,
+  "tint": "#3aa7c4", "opacity": 0.55, "swim_from_m": 1.0}]}
+```
+
+Outline and holes are tile-local XZ metres; `y` and `bed_y` use the same
+vertical frame as `bottom_y`, **before** the § A16.9 terrain/storey lift.
+`model_water.compose_regions` inverts `surface_height_at`: box centre,
+`max_m / extent_snapped` scale (`xyz` for props, `xz` for dioramas), positive
+placement yaw and anchor. No enabled regions means no `water` field.
+Only the shown variant's model contributes. World-props rows carry the same
+block with XZ composed at their map position and Y relative to their ground
+anchor (offset plus variant ground sink); the renderer adds ground height.
+An eight-hex `block_sig` of each composed block joins the scene signature;
+sidecar writes invalidate the scene fingerprint and the walk gate cache.
+
+The model's fixed glTF frame owns `.water.json`, like `.surface.json`:
+version 1, source size/mtime and orientation fix must match. Invalid files
+read as no water. Re-detection preserves enabled/look and user-set levels
+by containment of the new outline centroid; manual regions survive unchanged.
+Shape basins run only for props (`measure=xyz`); room dioramas use colour
+regions, so enclosing room walls do not flood an ordinary floor.
+
+Admin-only endpoints (all under `/world`, with `require_admin`):
+`GET /props/{id}/variants/{n}/water` returns `{status, water}`, where status
+is `none|valid|stale`. `POST …/water/detect` returns `{started:true}` and
+runs in the background; `?wait=1` waits in the request for scripts.
+`PATCH …/water` accepts `{regions:[{id,enabled?,look?,level?}],
+add?:{shape:"rect"|"ellipse",center:[x,z],size:[w,d],level},remove?:[id]}`.
+Rooms expose the same verbs at
+`/locations/{lid}/rooms/{rid}/model3d/water`. Manual ellipses have 32 points;
+only manual regions may be removed. Levels are clamped between bed and the
+box's top, measured above its bottom. Presets: pool `#3aa7c4`/.75,
+bath `#bfe3ea`/.85, pond `#4f6a3c`/.30, hot_spring `#9fd0d8`/.45,
+lake `#2d6a86`/.50; custom accepts tint and clarity 0..1.
+`opacity = 1 - 0.6 * clarity`.
+
+`water_region_at` chooses the highest containing region, excluding holes,
+with the placement lift. The server's storey-0 gate uses
+`max(ground, baked/declaration, water.y)`: the water surface carries the
+step rule. The client uses the region even in built scope, wades below
+1.0 m depth and swims at/above it, with move/idle sinks .35/1.3.
+Rendering uses the shared animated transparent water material and follows
+the placement's relift. Painted terrain-water behavior is unchanged.
 
 ## C4. Plätze und Marker
 

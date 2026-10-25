@@ -423,6 +423,7 @@ class ModelGallery:
         BEFORE the selection lock is taken."""
         from app.blender.refine import raw_backup_path
         from app.core.model_surface import surface_path
+        from app.core.model_water import water_path
         removed = False
         if filename:
             p = self.file(filename)
@@ -439,6 +440,7 @@ class ModelGallery:
             # the model pattern nor the sidecar suffix — nothing else would
             # ever collect it, and a lattice outliving its mesh would be read
             # back the moment a new file happened to land under the same name.
+            water_path(p).unlink(missing_ok=True)
             lattice = surface_path(p)
             raw = raw_backup_path(p)
             p.unlink()

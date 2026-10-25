@@ -142,7 +142,8 @@ logger = get_logger(__name__)
 #: 15 (2026-10-19): Blender door models, casing anchors and double leaves.
 #: 16 (2026-10-21): Blender window models with glass pane fallback.
 #: 17 (2026-10-24): Prop variant lights and room ambience.
-SCENE_RECIPE_VERSION = 17
+#: 18 (2026-10-25): Model-owned prop and room water regions.
+SCENE_RECIPE_VERSION = 18
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -3137,6 +3138,10 @@ def _diorama_model(recipe: Dict[str, Any], room: Dict[str, Any],
     # sidecar file — the recipe states no geometry of its own here.
     if isinstance(meta.get("surface"), dict):
         spec["surface"] = meta["surface"]
+    from app.core.model_water import compose_regions
+    water = compose_regions(meta.get("water"), spec)
+    if water:
+        spec["water"] = water
     # Opt-in shell clip (§ B1): a diorama may stick out over its floor plan —
     # with the flag the renderer discards everything outside the room shell.
     # The polygon is the room's floor plate, not a second derivation. An
@@ -3372,6 +3377,12 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
         # metres — absent while the mesh has no leaf node.
         if isinstance(entry.get("leaf_bbox"), dict):
             spec["leaf_bbox"] = entry["leaf_bbox"]
+        from app.core.model_water import compose_regions, read_water
+        if has_model:
+            mp = prop_store.model_path(pid, variant=_store_variant_index(placement, model_variants))
+            water = compose_regions(read_water(mp, prop_store.file_areas(mp)["rotation"]), spec)
+            if water:
+                spec["water"] = water
         # WALKABLE (v6): only a prop that carries the tag ships its surface —
         # a table's lattice would be dead weight in every payload.
         tags = [str(t).lower() for t in (prop.get("tags") or [])]
@@ -3989,7 +4000,8 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
                door_prop_sigs: Optional[Dict[str, str]] = None,
                surface_sigs: Optional[Dict[str, str]] = None,
                corridor_levels: Optional[Set[int]] = None,
-               walkable_props: Optional[Dict[str, bool]] = None) -> str:
+               walkable_props: Optional[Dict[str, bool]] = None,
+               water_sigs: Optional[Dict[str, str]] = None) -> str:
     """Change detection for the whole scene — a SUPERSET of the room recipe's
     signature: the room signatures already cover layouts, neighbour openings
     and prop sidecars, and the model metas add every anchor dial (floors,
@@ -4092,7 +4104,7 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
         # md5 it once more would hash the very numbers ``surface_sigs`` has
         # already reduced to eight characters. Dropped, not summarized — the
         # sigs below cover the rooms too.
-        "room_metas": {rid: ({k: v for k, v in meta.items() if k != "surface"}
+        "room_metas": {rid: ({k: v for k, v in meta.items() if k not in ("surface", "water")}
                              if isinstance(meta, dict) else meta)
                        for rid, meta in (room_metas or {}).items()},
         "default_door_prop_id": str(location.get("default_door_prop_id")
@@ -4101,6 +4113,7 @@ def _signature(location: Dict[str, Any], plan_width_m: float,
         "default_window_style": str(location.get("default_window_style") or ""),
         "door_props": door_prop_sigs or {},
         "surfaces": surface_sigs or {},
+        "water": water_sigs or {},
         "corridors": sorted(corridor_levels or ()),
         "walkable_props": walkable_props or {},
     }
@@ -4428,6 +4441,11 @@ def scene_inputs(location: Dict[str, Any], location_id: str,
         meta = get_client_meta(location_id, room_id=rid,
                                with_surface=with_surface) if rid else None
         if meta:
+            from app.core.location_model3d import find_building_model
+            from app.core.model_water import read_water
+            water = read_water(find_building_model(location_id, rid), meta.get("rotation"))
+            if water:
+                meta["water"] = water
             room_metas[rid] = meta
     return (derive_plan_width_m(location_id, map3d),
             get_client_meta(location_id, filename=building_model_file) or {},
@@ -4812,6 +4830,9 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
             block_sig(m["surface"])
         for m in models if isinstance(m, dict) and m.get("surface")}
 
+    water_sigs = {str(i): block_sig(m["water"])
+                  for i, m in enumerate(models) if m.get("water")}
+
     # WHICH PLACED PROPS CARRY THE WALKABLE TAG — collected off the finished
     # specs, exactly like ``door_prop_sigs`` and ``surface_sigs`` above, and
     # handed to the signature and nowhere else. ``"walkable" in tags``
@@ -4827,7 +4848,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
         "signature": _signature(location, plan_width_m, recipes,
                                 building_meta, room_metas, ground_kind,
                                 door_prop_sigs, surface_sigs,
-                                corridor_levels, walkable_props),
+                                corridor_levels, walkable_props, water_sigs),
         "rooms": room_blocks,
         # The location's FOOTPRINT as a polygon in the scene frame (contract
         # v6 Nr. 1 + Nr. 4): the drawn ``map3d.boundary`` where there is one,
