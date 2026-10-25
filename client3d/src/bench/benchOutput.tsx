@@ -1,4 +1,4 @@
-/** Bench diagnostics mount only after a requested run has finished. */
+/** Bench diagnostics (scene-side, not HUD) mount only after a requested run has finished. */
 import { createPortal } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 let root: Root | undefined;

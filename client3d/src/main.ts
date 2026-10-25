@@ -1,5 +1,6 @@
 import { sampleWorldHeight } from '@anima/scene-render';
 import { initBench } from './bench/bench';
+import { pickBenchAnchor } from './bench/benchAnchor';
 import { setTerrainLodDebug } from './scene/terrainLod';
 import { setWaterGhostOff } from './scene/submergedGhost';
 import { ambienceTarget, stepAmbience } from './scene/ambience';
@@ -6563,22 +6564,19 @@ async function startApp(username: string, role: string) {
   // Install after boot/arrival: neither auto-follow nor the arrival fly can
   // replace the bench camera. Manual starts resolve the current location anew.
   initBench(engine, {
-    output: result => { void import('./hud/bench').then(m => m.showBenchResult(result)); },
+    output: result => { void import('./bench/benchOutput').then(m => m.showBenchResult(result)); },
+    // Position from the CURRENT worldmap rows (authoritative for placement),
+    // names may fall back to `/world/locations`; see `bench/benchAnchor.ts`.
     anchor: () => {
-      const query = new URLSearchParams(location.search).get('goto')?.toLowerCase();
-      const rows = [...detailById.values()];
-      const currentId = (lastMap ?? firstMap).characters.find(c => c.name === avatarName)?.location_id;
-      const loc = query
-        ? rows.find(l => l.id.toLowerCase() === query || l.name.toLowerCase().includes(query))
-        : rows.find(l => l.id === currentId);
-      if (query && (!loc || loc.pos_x === null || loc.pos_z === null)) {
-        throw new Error(`Bench goto location is unknown or unplaced: ${query}`);
-      }
-      if (!loc || loc.pos_x === null || loc.pos_z === null) {
-        return {pos: [0, 0, 0], locationId: null, heightSource: 'world origin'};
-      }
-      return {pos: [loc.pos_x, sampleWorldHeight(terrainGround.heightField(), loc.pos_x, loc.pos_z), loc.pos_z],
-        locationId: loc.id, heightSource: '/play/heightfield overview: sampleWorldHeight (bilinear, border-clamped), frozen at run start'};
+      const map = lastMap ?? firstMap;
+      return pickBenchAnchor({
+        goto: new URLSearchParams(location.search).get('goto'),
+        rows: map.locations,
+        nameOf: id => detailById.get(id)?.name,
+        currentId: map.characters.find(c => c.name === avatarName)?.location_id,
+        heightAt: (x, z) => sampleWorldHeight(terrainGround.heightField(), x, z),
+        heightSource: '/play/heightfield overview: sampleWorldHeight (bilinear, border-clamped), frozen at run start',
+      });
     },
     switches: (scatter, water) => {
       // Reuse the existing local LOD preferences; disabling scatter must also
