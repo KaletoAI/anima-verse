@@ -1,0 +1,89 @@
+{
+ "signature": "prop-1",
+ "k": 1,
+ "extent_m": 12,
+ "storey_m": 3,
+ "boundary": [],
+ "levels": [
+  {
+   "level": 0,
+   "floor_y": 0
+  }
+ ],
+ "style": {},
+ "rooms": [],
+ "outdoor_rooms": [],
+ "plates": [],
+ "walls": [],
+ "extras": [],
+ "floor_plan": [],
+ "stairs": [],
+ "markers": [],
+ "doorways": [],
+ "problems": [],
+ "corridors": [],
+ "boundary_openings": [],
+ "models": [
+  {
+   "role": "prop",
+   "id": "table",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 1,
+   "measure": "xyz",
+   "anchor": [
+    1,
+    2
+   ],
+   "bottom_y": 0,
+   "variants": {
+    "full": "/f/box.glb"
+   },
+   "cut_plane": {
+    "normal": [
+     1,
+     0,
+     0
+    ],
+    "constant": -0.5
+   }
+  },
+  {
+   "role": "prop",
+   "id": "crate",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 1,
+   "measure": "xyz",
+   "anchor": [
+    -2,
+    0
+   ],
+   "bottom_y": 0,
+   "placeholder_dims": {
+    "w": 1,
+    "d": 1,
+    "h": 1
+   },
+   "cut_plane": {
+    "normal": [
+     0,
+     0,
+     1
+    ],
+    "constant": 0
+   }
+  }
+ ],
+ "figures": {}
+}

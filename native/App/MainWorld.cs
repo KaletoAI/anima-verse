@@ -144,6 +144,13 @@ public partial class Main : Node3D
             // The boot's own map places the first figures (main.ts npcs.update(firstMap)); the poll takes over.
             _figures.ApplyPolled(builder.FirstMap!.Value);
             StartSync();
+            if (_interactive)
+            {
+                // main.ts `setInterval(requestServerModels, 60_000)`: the scene sweep remounts a location whose signature moved.
+                var sweep = new Godot.Timer { Name = "SceneSweep", WaitTime = WorldBuilder.SweepIntervalS, Autostart = true };
+                AddChild(sweep);
+                sweep.Timeout += () => _ = SweepScenesAsync(builder);
+            }
             var timer = new Godot.Timer { WaitTime = 1.0, Autostart = true };
             AddChild(timer);
             timer.Timeout += () =>
@@ -195,6 +202,21 @@ public partial class Main : Node3D
             SetStatus("World load failed: " + e.Message);
             boot.SetNote(BootNote.Failed);
             if ((_options!.Bench && _options.QuitAfterBench) || _options.Offline is not null) GetTree().Quit(1);
+        }
+    }
+
+    /// <summary>One scene sweep (<see cref="WorldBuilder.SweepAsync"/>); never fatal — a failure waits for the next one.</summary>
+    private async Task SweepScenesAsync(WorldBuilder builder)
+    {
+        try
+        {
+            var remounted = await builder.SweepAsync(() => !_stop.IsCancellationRequested && !Leaving);
+            if (remounted.Count > 0) SyncPlaceLabels();
+        }
+        catch (Exception e)
+        {
+            if (_stop.IsCancellationRequested || Leaving) return;
+            Log($"scene sweep failed: {e.Message}");
         }
     }
 

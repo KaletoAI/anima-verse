@@ -46,6 +46,7 @@ public sealed class LocationPicking
     private sealed class Cached
     {
         public required Node3D Group;
+        public int Version;
         public required List<Entry> Entries;
         public required Vec3 Min, Max;
     }
@@ -114,10 +115,14 @@ public sealed class LocationPicking
         return MeshRay.Query(e.Triangles, e.World, e.Inverse, o, d);
     }
 
-    /// <summary>The cached mesh list of a location (rebuilt when its group changed), null without meshes.</summary>
+    /// <summary>
+    /// The cached mesh list of a location (rebuilt when its group changed — a remount — or its meshes did: a tier swap
+    /// or a re-datum bumps <see cref="LocationSlot.MeshVersion"/>), null without meshes.
+    /// </summary>
     private Cached? Entries(LocationSlot slot)
     {
-        if (_cache.TryGetValue(slot.Loc.Id, out var c) && c.Group == slot.Group) return c.Entries.Count > 0 ? c : null;
+        if (_cache.TryGetValue(slot.Loc.Id, out var c) && c.Group == slot.Group && c.Version == slot.MeshVersion)
+            return c.Entries.Count > 0 ? c : null;
         if (!GodotObject.IsInstanceValid(slot.Group) || !slot.Group.IsInsideTree()) return null;
         var entries = new List<Entry>();
         double minX = double.PositiveInfinity, minY = minX, minZ = minX;
@@ -138,7 +143,7 @@ public sealed class LocationPicking
             minX = Math.Min(minX, lo.X); minY = Math.Min(minY, lo.Y); minZ = Math.Min(minZ, lo.Z);
             maxX = Math.Max(maxX, hi.X); maxY = Math.Max(maxY, hi.Y); maxZ = Math.Max(maxZ, hi.Z);
         }
-        c = new Cached { Group = slot.Group, Entries = entries, Min = new Vec3(minX, minY, minZ), Max = new Vec3(maxX, maxY, maxZ) };
+        c = new Cached { Group = slot.Group, Version = slot.MeshVersion, Entries = entries, Min = new Vec3(minX, minY, minZ), Max = new Vec3(maxX, maxY, maxZ) };
         _cache[slot.Loc.Id] = c;
         return entries.Count > 0 ? c : null;
     }

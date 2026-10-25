@@ -118,13 +118,43 @@ public static class S3cCheck
             Near("s3c placeholder y", ph.Position.Y, ExpPlaceholderY);
             Near("s3c placeholder yaw", ph.Rotation.Y, Mathf.DegToRad(90f));
 
-            // The plan hull's CUT COPY kept its outside and lost its inside (no remaining centroid in the cutout); the
-            // whole hull stands beside it for the closed view (the crossfade swaps them at 0.03).
-            Expect("s3c whole hull", open.GetChildren().OfType<Node3D>().Count(n => n.Name.ToString() == "Placed_building_loc-open") == 1, "");
-            var hull = open.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString() == "Cutout_building_loc-open");
-            Expect("s3c cutout removed triangles", stats.CutoutTriangles > 0 && stats.CutoutTriangles < 3330 / 3,
-                   stats.CutoutTriangles.ToString());
-            CheckCutoutClean(hull);
+            // The plan hull is ONE model whose 8 surfaces wear cut materials (Task 17: per fragment, like cutouts.ts):
+            // the cutout [-3,-3]..[3,3] around loc-open's pin (64, 120), yaw 0 → world x 61..67, z 117..123, no GLB
+            // padding (building_original.glb's node has no extras), the switch OFF at the build (fade 0).
+            Expect("s3c whole hull, no cut copy", open.GetChildren().OfType<Node3D>().Count(n => n.Name.ToString() == "Placed_building_loc-open") == 1
+                   && open.GetNodeOrNull("Cutout_building_loc-open") is null, "");
+            var openSlot = builder.Slots["loc-open"];
+            Expect("s3c one cutout handle", openSlot.Fade.Cutouts.Count == 1, $"{openSlot.Fade.Cutouts.Count}");
+            var handle = openSlot.Fade.Cutouts[0];
+            Expect("s3c cut surfaces (8 primitives, none left uncut)", handle.Entries.Count == 8 && handle.Fallbacks == 0,
+                   $"{handle.Entries.Count} entries, {handle.Fallbacks} fallbacks");
+            Expect("s3c cut stats", stats.CutPlacements == 1 && stats.CutSurfaces == 8 && stats.CutFallbacks == 0, stats.CutSummary());
+            Expect("s3c cutouts start off", !handle.CutoutsOn
+                   && handle.Entries.All(e => (float)e.Material.GetShaderParameter("cut_on") == 0f), "");
+            var e0 = handle.Entries[0].Material;
+            var pts = e0.GetShaderParameter("cut_pts").AsVector2Array();
+            Expect("s3c cutout uniforms in world xz", pts.SequenceEqual(new[] { new Vector2(61, 117), new Vector2(67, 117), new Vector2(67, 123), new Vector2(61, 123) })
+                   && e0.GetShaderParameter("cut_off").AsInt32Array().SequenceEqual(new[] { 0 })
+                   && e0.GetShaderParameter("cut_len").AsInt32Array().SequenceEqual(new[] { 4 }), string.Join(";", pts));
+            // The CPU twin of the injected test on the uniforms as written: the pin (64, 120) and (66.9, 122.9) are inside,
+            // (67.1, 120) is outside; switched off nothing goes — the same answers ClipMath gives (vector-checked).
+            var u0 = handle.Entries[0].Uniforms;
+            var worldPoly = new[] { new Scatter.P2(61, 117), new Scatter.P2(67, 117), new Scatter.P2(67, 123), new Scatter.P2(61, 123) };
+            foreach (var (px, pz, want) in new[] { (64.0, 120.0, true), (66.9, 122.9, true), (67.1, 120.0, false) })
+            {
+                bool got = Scene.CutShader.Discards(u0, new Overview.Vec3(px, 5, pz), true);
+                Expect($"s3c cutout discards ({px},{pz})", got == want
+                       && got == Scene.ClipMath.CutoutDiscardsPoint(new Scatter.P2(px, pz), new[] { worldPoly }),
+                       got.ToString());
+                Expect($"s3c cutout off keeps ({px},{pz})", !Scene.CutShader.Discards(u0, new Overview.Vec3(px, 5, pz), false), "");
+            }
+            Expect("s3c shader cut[std+cutouts]", ShaderSafety.Lines.Contains("shader cut[std+cutouts]: compiled (18 uniforms)"),
+                   string.Join(" | ", ShaderSafety.Lines));
+            // The crossfade opens them at f > 0.03: loc-open is the open location; 1 frame at 1/60 s gives f = 1 − e^(−1/15)
+            // = 0.0645 > 0.03.
+            builder.TickView(1.0 / 60, new Vector3(64, 30, 160));
+            Expect("s3c cutouts open with the fade", handle.CutoutsOn
+                   && handle.Entries.All(e => (float)e.Material.GetShaderParameter("cut_on") == 1f), $"fade {openSlot.Fade.Fade}");
 
             // The outline walls of the open location wear the culling material, the glass the translucent one.
             var recipeMats = Descendants(open).OfType<MeshInstance3D>()
@@ -175,7 +205,7 @@ public static class S3cCheck
             var dry = await NoWaterRun(host, dir, fixtures);
 
             return $"s3c drawn={r.Primitives} skipped={r.Skipped} ({r.SkipSummary()}) shell={r.ShellCopies} "
-                   + $"culled_walls={r.CulledWalls} {m.Summary()} cutout_triangles={stats.CutoutTriangles} "
+                   + $"culled_walls={r.CulledWalls} {m.Summary()} {stats.CutSummary()} "
                    + $"{stats.WaterSummary()} no_water={dry}";
         }
         finally
@@ -242,31 +272,6 @@ public static class S3cCheck
         }
     }
 
-    /// <summary>No triangle of the kept hull has its centroid inside the cutout (location frame).</summary>
-    private static void CheckCutoutClean(Node3D hull)
-    {
-        var poly = new (double X, double Z)[] { (-3, -3), (3, -3), (3, 3), (-3, 3) };
-        int left = 0, inside = 0;
-        foreach (var mi in Walk(hull).OfType<MeshInstance3D>())
-        {
-            var xf = hull.Transform * Rel(mi, hull);
-            var mesh = (ArrayMesh)mi.Mesh;
-            for (int s = 0; s < mesh.GetSurfaceCount(); s++)
-            {
-                var a = mesh.SurfaceGetArrays(s);
-                var v = a[(int)Mesh.ArrayType.Vertex].AsVector3Array();
-                var idx = a[(int)Mesh.ArrayType.Index].AsInt32Array();
-                for (int i = 0; i + 2 < idx.Length; i += 3)
-                {
-                    var c = xf * ((v[idx[i]] + v[idx[i + 1]] + v[idx[i + 2]]) / 3f);
-                    left++;
-                    if (LocationView.PointInPolygon(c.X, c.Z, poly)) inside++;
-                }
-            }
-        }
-        Expect("s3c cutout clean", left > 0 && inside == 0, $"{left} triangles left, {inside} inside the cutout");
-    }
-
     private static async Task<string> NoWaterRun(Node3D host, string dir, string fixtures)
     {
         var source = new FixtureSource(dir, fixtures);
@@ -288,14 +293,6 @@ public static class S3cCheck
             builder.Models?.FreeAll();
             world.QueueFree();
         }
-    }
-
-    private static Transform3D Rel(Node3D node, Node3D ancestor)
-    {
-        var xf = Transform3D.Identity;
-        for (Node? n = node; n is not null && n != ancestor; n = n.GetParent())
-            if (n is Node3D n3) xf = n3.Transform * xf;
-        return xf;
     }
 
     private static IEnumerable<Node> Walk(Node n)

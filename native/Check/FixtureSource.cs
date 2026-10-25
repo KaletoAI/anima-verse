@@ -89,10 +89,13 @@ public sealed class FixtureSource : IWorldSource
         return Task.FromResult(JsonDocument.Parse(JsonSerializer.Serialize(answer)));
     }
 
+    /// <summary>A check's stand-in for a changed server scene: location id → the file answered from now on.</summary>
+    public Dictionary<string, string> SceneFiles { get; } = new();
+
     public Task<JsonDocument?> GetLocationSceneAsync(string locationId)
     {
         SceneRequests.Add(locationId);
-        var path = Path.Combine(_dir, $"scene_{locationId}.json");
+        var path = Path.Combine(_dir, SceneFiles.TryGetValue(locationId, out var file) ? file : $"scene_{locationId}.json");
         return Task.FromResult(File.Exists(path) ? JsonDocument.Parse(File.ReadAllBytes(path)) : null);
     }
 

@@ -51,8 +51,9 @@ public sealed class ModelStats
 ///     (<c>buildPlaceholder</c>: origin at the bottom centre, yaw +rad), otherwise it is missing;
 ///   • the storey-0 terrain lift (§ A16.9 <c>reliftPlacement</c> / <c>storeyGroundLift</c>): a non-building
 ///     spec on level 0 moves by <c>ground(anchor) − datum</c>, the datum being the ground under the pin.
-/// Not ported (counted nowhere, view-only): picture/glass slot materials (<c>fillSlots</c>), the room clip and
-/// the depth cut (<c>clip_outline</c>, <c>cut_plane</c>), door swinging, prop lights.
+/// The room clip, the area cutouts and the depth cut ride on the placement afterwards (<see cref="CutMaterials"/>,
+/// <see cref="WorldBuilder.CutPlacement"/>). Not ported (view-only): picture/glass slot materials (<c>fillSlots</c>),
+/// door swinging, prop lights.
 /// </summary>
 public static class SceneModels
 {
@@ -114,65 +115,5 @@ public static class SceneModels
             Position = ModelPlacement.ToGodot(b.Offset),
         });
         return root;
-    }
-
-    /// <summary>
-    /// The cutouts of an open plan-hull / ground model (<c>applyCutouts</c>, § B1). THE BROWSER DISCARDS PER FRAGMENT
-    /// in a shader (packages/scene-render/src/cutouts.ts), so a per-triangle cut is NOT what the browser decides and
-    /// this stays an APPROXIMATION until the fragment twin lands (Task 17): every triangle whose CENTROID the
-    /// vector-checked fragment predicate <see cref="ClipMath.CutoutDiscardsPoint"/> discards (same polygon filter and
-    /// limits, same half-open parity) is dropped from a per-placement copy of the mesh. Large triangles at a cutout's
-    /// edge therefore come out differently; GLB padding (<c>interior_cutout_padding_m</c>) is not read natively, so the
-    /// padding is 0. Returns the triangles removed.
-    /// </summary>
-    public static int ApplyCutouts(Node3D placed, (double X, double Z)[][] cutouts)
-    {
-        var polys = cutouts.Select(c => (IReadOnlyList<P2>)c.Select(p => new P2(p.X, p.Z)).ToList()).ToList();
-        if (ClipMath.CutoutPolygons(polys).Count == 0) return 0;
-        int removed = 0;
-        foreach (var mi in Walk(placed).OfType<MeshInstance3D>())
-        {
-            if (mi.Mesh is not ArrayMesh mesh) continue;
-            // From the mesh's frame into the location frame (the cutouts' frame): the placed chain up to `placed`
-            // plus `placed` itself (it hangs directly in the location group).
-            var xf = placed.Transform * RelativeTo(mi, placed);
-            var cut = new ArrayMesh();
-            for (int s = 0; s < mesh.GetSurfaceCount(); s++)
-            {
-                var arrays = mesh.SurfaceGetArrays(s);
-                var verts = arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array();
-                var idx = arrays[(int)Mesh.ArrayType.Index].AsInt32Array();
-                if (idx.Length == 0) idx = Enumerable.Range(0, verts.Length).ToArray();
-                var keep = new List<int>(idx.Length);
-                for (int i = 0; i + 2 < idx.Length; i += 3)
-                {
-                    var c = xf * ((verts[idx[i]] + verts[idx[i + 1]] + verts[idx[i + 2]]) / 3f);
-                    if (ClipMath.CutoutDiscardsPoint(new P2(c.X, c.Z), polys)) { removed++; continue; }
-                    keep.Add(idx[i]); keep.Add(idx[i + 1]); keep.Add(idx[i + 2]);
-                }
-                if (keep.Count == 0) continue;
-                arrays[(int)Mesh.ArrayType.Index] = keep.ToArray();
-                cut.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
-                cut.SurfaceSetMaterial(cut.GetSurfaceCount() - 1, mi.GetActiveMaterial(s) ?? mesh.SurfaceGetMaterial(s));
-            }
-            mi.Mesh = cut;
-        }
-        return removed;
-    }
-
-    private static Transform3D RelativeTo(Node3D node, Node3D ancestor)
-    {
-        var xf = Transform3D.Identity;
-        for (Node? n = node; n is not null && n != ancestor; n = n.GetParent())
-            if (n is Node3D n3) xf = n3.Transform * xf;
-        return xf;
-    }
-
-    private static IEnumerable<Node> Walk(Node n)
-    {
-        yield return n;
-        foreach (var c in n.GetChildren())
-        foreach (var d in Walk(c))
-            yield return d;
     }
 }

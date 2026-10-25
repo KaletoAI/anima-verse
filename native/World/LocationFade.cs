@@ -16,8 +16,9 @@ namespace AnimaNative.World;
 ///   • roof parts (a fading building model: display shell / shell_area / roof_only, and the far-shell copies)
 ///     at opacity max(0, 1 − 1.4·f), hidden from f ≥ 0.95;
 ///   • everything outside the interior casts shadows while f &lt; 0.4;
-///   • the cutouts of a kept plan-hull / ground model open at f &gt; 0.03 (not on a shell area), by swapping the
-///     whole model for its cut copy; a ground model hides altogether while a storey below ground is shown
+///   • the cutouts of a building model open at f &gt; 0.03 (not on a shell area): the <c>cut_on</c> uniform of its
+///     cut materials (<see cref="CutHandle.SetCutoutsEnabled"/>, the browser's <c>setTileCutoutsEnabled</c> —
+///     per fragment, no second model); a ground model hides altogether while a storey below ground is shown
 ///     (<see cref="SetGroundHidden"/>, driven by <see cref="LocationStoreys"/>);
 ///   • an outdoor outline wall is camera-culled only while the interior is up (its instance's <c>cull_active</c>);
 ///     which storey's walls stand is <see cref="LocationStoreys"/>' business;
@@ -36,9 +37,9 @@ public sealed class LocationFade
     public Node3D? Interior { get; set; }
     /// <summary>Roof parts: fading building models and far-shell copies (<c>tile.roofParts</c>/<c>roofMats</c>).</summary>
     public List<Node3D> RoofParts { get; } = new();
-    /// <summary>Kept models with cutouts: the whole model and its cut copy (one of the two is shown); Ground = display ground.</summary>
-    public List<(Node3D Whole, Node3D Cut, bool Ground)> Cutouts { get; } = new();
-    /// <summary>Kept display-ground models without cutouts (they only hide in a basement view).</summary>
+    /// <summary>The cutout handles of the building model(s) (<c>tile.cutouts</c>), switched with the fade.</summary>
+    public List<CutHandle> Cutouts { get; } = new();
+    /// <summary>Display-ground models (with or without cutouts): they hide in a basement view.</summary>
     public List<Node3D> GroundModels { get; } = new();
     /// <summary><c>sm.visible = !(f &gt; 0.03 &amp;&amp; levelFilter &lt; 0)</c> for the ground model(s).</summary>
     public bool GroundHidden { get; private set; }
@@ -58,7 +59,7 @@ public sealed class LocationFade
     private readonly List<GeometryInstance3D> _allMeshes = new();
     private readonly HashSet<GeometryInstance3D> _roofSet = new();
     private FadeLook? _look;
-    private double _roof = 1, _appliedRoof = 1, _appliedOccl;
+    private double _roof = 1, _appliedRoof = double.NaN, _appliedOccl = double.NaN;
     private bool? _cutOn, _shadow;
 
     /// <summary>
@@ -82,6 +83,7 @@ public sealed class LocationFade
         _look = null;
         _cutOn = null;
         _shadow = null;
+        _appliedRoof = _appliedOccl = double.NaN;   // every (new) mesh gets its transparency written
         Apply(Fade);
     }
 
@@ -105,7 +107,7 @@ public sealed class LocationFade
     private void Apply(double f)
     {
         var look = SceneView.FadeOpacities(f);
-        if (!ShellArea && _cutOn != f > 0.03)
+        if (_cutOn != f > 0.03)
         {
             _cutOn = f > 0.03;
             ApplyModels();
@@ -136,17 +138,13 @@ public sealed class LocationFade
         ApplyModels();
     }
 
-    /// <summary>The kept models: whole or cut copy by the cutout state, a ground model hidden in a basement view.</summary>
+    /// <summary>The cutouts by the fade state, a ground model hidden in a basement view.</summary>
     private void ApplyModels()
     {
-        bool cut = _cutOn == true;
-        foreach (var (whole, cutCopy, ground) in Cutouts)
-        {
-            bool hide = ground && GroundHidden;
-            whole.Visible = !hide && !cut;
-            cutCopy.Visible = !hide && cut;
-        }
-        foreach (var g in GroundModels) g.Visible = !GroundHidden;
+        bool cut = !ShellArea && _cutOn == true;
+        foreach (var h in Cutouts) h.SetCutoutsEnabled(cut);
+        foreach (var g in GroundModels)
+            if (GodotObject.IsInstanceValid(g)) g.Visible = !GroundHidden;
     }
 
     /// <summary>

@@ -1,0 +1,7 @@
+{
+  "locations": [
+    {"id": "loc-hull", "name": "Hull", "terrain": null, "map3d": null, "rooms": [{"id": "r-hall", "name": "Hall"}]},
+    {"id": "loc-prop", "name": "Workshop", "terrain": null, "map3d": null, "rooms": []},
+    {"id": "loc-area", "name": "Quarry", "terrain": null, "map3d": null, "rooms": []}
+  ]
+}

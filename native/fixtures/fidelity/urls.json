@@ -1,0 +1,7 @@
+{
+  "/f/hull_full.glb": "hull_full.glb",
+  "/f/hull_low.glb": "hull_low.glb",
+  "/f/box.glb": "box.glb",
+  "/assets/surface-textures/ground_grass.png": "../ground_grass.png",
+  "/assets/surface-textures/dark_stone_2.jpg": "repo:shared/surface_textures/dark_stone_2_1785267141.jpg"
+}

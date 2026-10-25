@@ -28,8 +28,8 @@ public sealed class WorldStats
     /// <summary>The model specs (recipe <c>models[]</c> incl. buildings + world props), per kind.</summary>
     public ModelStats Models = new();
     public int WorldPropRows;
-    /// <summary>Triangles the open plan-hull model lost to its cutouts.</summary>
-    public int CutoutTriangles;
+    /// <summary>The per-fragment cuts of the mount (<see cref="CutMaterials"/>): placements cut, surfaces wearing a cut material, surfaces left uncut.</summary>
+    public int CutPlacements, CutSurfaces, CutFallbacks;
     /// <summary>
     /// The water (Wasser v2 K-A has no water mesh — a water body is the terrain lifted onto its mirror): painted
     /// water areas with a carved bed, wet tiles drawn with the water variant, water kinds (look rows), wet lattice
@@ -57,9 +57,11 @@ public sealed class WorldStats
         + $"open={(OpenLocation.Length > 0 ? OpenLocation : "-")} buildings={Buildings} "
         + $"buildings_meshopt={BuildingsCompressed} building_vertices={BuildingVertices} building_indices={BuildingIndices} "
         + $"primitives={Primitives} skipped={Skipped} ({Recipe.SkipSummary()}) shell_copies={Recipe.ShellCopies} "
-        + $"culled_walls={Recipe.CulledWalls} interior_mounted={Recipe.InteriorMounted} {Models.Summary()} world_props={WorldPropRows} cutout_triangles={CutoutTriangles} "
+        + $"culled_walls={Recipe.CulledWalls} interior_mounted={Recipe.InteriorMounted} {Models.Summary()} world_props={WorldPropRows} {CutSummary()} "
         + $"failures={Failures} anchor=({Anchor.Position().X:0.###},{Anchor.Position().Y:0.###},{Anchor.Position().Z:0.###}) "
         + $"{WaterSummary()} {Ground.Summary()} {VerifySummary()}";
+
+    public string CutSummary() => $"cuts[placements={CutPlacements} surfaces={CutSurfaces} fallbacks={CutFallbacks}]";
 
     public string VerifySummary() => $"verify[locations={VerifyLocations} checked={VerifyChecked} rows={VerifyRows}]";
 }
@@ -105,6 +107,42 @@ public sealed class LocationSlot
     public VerifyReport? Verify { get; set; }
     /// <summary>Bumped when the location is dropped; work for it that finishes later is thrown away.</summary>
     internal int Generation;
+    /// <summary>The scene's <c>signature</c> at the mount (the 60 s sweep remounts on a change).</summary>
+    public string? Signature { get; init; }
+    /// <summary>The payload's <c>area_detail</c> (the interior tier of a closed area scene stays low).</summary>
+    public bool AreaDetail { get; init; }
+    /// <summary>
+    /// Every model spec of the mount with what fills it now (the browser's <c>tile.placedModels</c>): the tier swap
+    /// replaces the node in place, the re-lift moves it, the cuts belong to the record.
+    /// </summary>
+    public List<PlacedModel> Placements { get; init; } = new();
+    /// <summary>The tier the building model(s) / the dioramas and props show (<c>buildingTierByLoc</c> / <c>interiorTierByLoc</c>).</summary>
+    public string BuildingTier { get; set; } = "low";
+    public string InteriorTier { get; set; } = "low";
+    /// <summary>The far-view shell copies of a place whose building model did not stand at the mount (dropped when one arrives).</summary>
+    public List<MeshInstance3D> FarShell { get; init; } = new();
+    /// <summary>Counts every change of the meshes under <see cref="Group"/> (tier swap, re-datum): the pick cache follows it.</summary>
+    public int MeshVersion { get; set; }
+}
+
+/// <summary>
+/// One model spec of a mounted scene and what fills it (sceneRecipe.ts <c>PlacedSceneModel</c>): the mesh, the grey
+/// placeholder or nothing (a missing mesh keeps its record, so a later tier swap can still bring one), the URL it was
+/// loaded from, the § A16.9 lift it stands on and its cut materials.
+/// </summary>
+public sealed class PlacedModel
+{
+    public required SceneModelSpec Spec { get; init; }
+    /// <summary>The node it hangs in (room group, interior, the location group).</summary>
+    public required Node3D Parent { get; init; }
+    public Node3D? Node { get; set; }
+    public string Url { get; set; } = "";
+    /// <summary>The URL a swap is loading right now (<c>rec.wantUrl</c>): a newer wish discards an older answer.</summary>
+    public string? WantUrl { get; set; }
+    public double Lift { get; set; }
+    public bool Placeholder { get; set; }
+    public CutHandle? Cut { get; set; }
+    public bool IsBuilding => Spec.Role == "building";
 }
 
 /// <summary>
@@ -124,7 +162,7 @@ public sealed class LocationSlot
 ///      the shown storey, <see cref="SetLevel"/>); then its § B5a verify
 ///   6. the world props of <c>/play/worldmap</c> (§ A9a)
 /// </summary>
-public sealed class WorldBuilder
+public sealed partial class WorldBuilder
 {
     /// <summary><c>HEIGHT_TILE_RADIUS_M</c> = <c>FOG_FAR_M</c> + 40 (client3d/src/scene/heightTiles.ts).</summary>
     public const double TileRadiusM = LayerCut.TileRadiusM;
@@ -286,7 +324,8 @@ public sealed class WorldBuilder
         if (avatar.Pos is { } ap) points.Add(ap);
         points.Add(anchorXZ);
         _points = points;
-        var camera = _tierCamera = stats.Anchor.Position() + StartCameraOffset;
+        var camera = _tierCamera = _viewCamera = stats.Anchor.Position() + StartCameraOffset;
+        _heightRevision = height.Revision;
 
         var places = _places = new Node3D { Name = "Locations" };
         root.AddChild(places);
@@ -341,7 +380,7 @@ public sealed class WorldBuilder
              + $"({stats.Recipe.SkipSummary()}); surfaces {_library.Loaded} loaded / {_library.Failed} failed; "
              + $"{_materials.Count} materials");
         _log($"models: {stats.Models.Summary()}; {_models.Loaded} GLBs loaded ({_models.Bytes / 1048576.0:0.0} MiB), "
-             + $"{_models.Failed} failed");
+             + $"{_models.Failed} failed, {_models.Neutralized} materials' metalness neutralised; {stats.CutSummary()}");
         _log($"water: {stats.WaterSummary()}");
         return stats;
     }
@@ -458,7 +497,7 @@ public sealed class WorldBuilder
     /// <see cref="LocationSlot.Group"/> into the world) — sceneRecipe.ts <c>mountShell</c> + <c>mountDetail</c>:
     ///
     ///   • the shell layer: every building model (a fading one — display shell / shell_area / roof_only — is a roof
-    ///     part of the crossfade; a kept plan hull / ground model gets a cut copy for its cutouts), the outdoor
+    ///     part of the crossfade; its cutouts go on per fragment (CutMaterials)), the outdoor
     ///     specs, the outdoor rooms' primitives and, for a place without a building model, the far-view shell;
     ///   • the interior group <c>g</c> (hidden at fade 0): the interior primitives of every storey and — in the near
     ///     ring only, like <c>mountDetail</c> — the indoor specs, each in its room's group.
@@ -536,38 +575,28 @@ public sealed class WorldBuilder
         Node3D? ParentFor(string roomId, bool isOut)
             => roomId.Length > 0 && storeys.Rooms.TryGetValue(roomId, out var rg) ? rg.Node : isOut ? group : interior;
         var verify = new SceneVerifier();
-        var placedSpecs = new List<(SceneModelSpec Spec, Node3D? Node, double Lift)>();
 
-        // ── Building model(s): all mounted; a fading one is a roof part, a kept one opens its cutouts. ──
+        // ── Building model(s): all mounted; a fading one is a roof part, its cutouts (a kept plan hull / ground model,
+        //    or any building spec that carries them) open with the fade. ──
+        var placements = new List<PlacedModel>();
         bool solidBuildingPlaced = false;
         Aabb? buildingBox = null;
         foreach (var spec in buildings)
         {
-            bool keep = spec.Display == "ground" || spec.PlanHull;
             var node = await SceneModels.PlaceAsync(_models, spec, buildingTier, "building", group, 0, models, _materials);
-            placedSpecs.Add((spec, node, 0));
+            var rec = new PlacedModel
+            {
+                Spec = spec, Parent = group, Node = node, Url = ModelVariants.PickModelVariant(spec, buildingTier),
+                Placeholder = node is not null && SceneModels.IsPlaceholder(node),
+            };
+            placements.Add(rec);
             if (node is null) continue;
             if (!spec.RoofOnly) solidBuildingPlaced = true;
             var nb = ModelPlacement.Measure(node, Transform3D.Identity);
             buildingBox = buildingBox is { } bb ? bb.Merge(nb) : nb;
-            bool isGround = spec.Display == "ground";
-            if (!keep)
-            {
-                fade.RoofParts.Add(node);
-                if (open) models.Faded++;
-            }
-            else if (spec.Cutouts.Length > 0 && !SceneModels.IsPlaceholder(node))
-            {
-                var cut = (Node3D)node.Duplicate();
-                cut.Name = $"Cutout_building_{spec.Id}";
-                int removed = SceneModels.ApplyCutouts(cut, spec.Cutouts);
-                stats.CutoutTriangles += removed;
-                group.AddChild(cut);
-                fade.Cutouts.Add((node, cut, isGround));
-            }
-            else if (isGround) fade.GroundModels.Add(node);
-            var buildingUrl = ModelVariants.PickModelVariant(spec, buildingTier);
-            if (buildingUrl.Length > 0 && (await _models.GetAsync(buildingUrl)) is { } t)
+            ApplyBuildingModel(group, fade, rec);
+            if (spec.Display != "ground" && !spec.PlanHull && open) models.Faded++;
+            if (rec.Url.Length > 0 && (await _models.GetAsync(rec.Url)) is { } t)
             {
                 stats.Buildings++;
                 if (t.Compressed) stats.BuildingsCompressed++;
@@ -577,7 +606,7 @@ public sealed class WorldBuilder
         }
 
         // ── The other specs: outdoor ones off the tile; indoor ones into their room groups (near ring, every storey). ──
-        var placements = new List<Task>();
+        var jobs = new List<Task>();
         foreach (var spec in scene.Models.Where(m => m.Role != "building"))
         {
             bool isOut = LocationView.IsOutdoor(scene, spec.RoomId);
@@ -590,15 +619,28 @@ public sealed class WorldBuilder
             }
             var parent = ParentFor(spec.RoomId, isOut)!;
             double lift = GroundLift(group, spec, height, datum);
-            placements.Add(PlaceAndRecord(spec, interiorTier, parent, lift));
+            var rec = new PlacedModel { Spec = spec, Parent = parent, Url = ModelVariants.PickModelVariant(spec, interiorTier), Lift = lift };
+            placements.Add(rec);
+            jobs.Add(PlaceAndRecord(rec));
         }
-        await Task.WhenAll(placements);
+        await Task.WhenAll(jobs);
 
-        async Task PlaceAndRecord(SceneModelSpec spec, string tier, Node3D parent, double lift)
+        async Task PlaceAndRecord(PlacedModel rec)
         {
-            var node = await SceneModels.PlaceAsync(_models, spec, tier, SceneModels.KindOf(spec), parent, lift, models, _materials);
-            placedSpecs.Add((spec, node, lift));
+            var node = await SceneModels.PlaceAsync(_models, rec.Spec, interiorTier, SceneModels.KindOf(rec.Spec), rec.Parent,
+                                                    rec.Lift, models, _materials);
+            rec.Node = node;
+            rec.Placeholder = node is not null && SceneModels.IsPlaceholder(node);
+            // The depth cut (also on a stand-in box) and the room clip (meshes only), after the node hangs in place.
+            if (node is not null) rec.Cut = CutPlacement(group, rec);
         }
+        foreach (var rec in placements)
+            if (rec.Cut is { } h)
+            {
+                stats.CutPlacements++;
+                stats.CutSurfaces += h.Entries.Count;
+                stats.CutFallbacks += h.Fallbacks;
+            }
 
         // ── Recipe primitives by layer: outdoor rooms, the interior, the far-view shell of a modelless place. ──
         bool farShell = !solidBuildingPlaced
@@ -649,8 +691,8 @@ public sealed class WorldBuilder
         double yaw = group.Rotation.Y;
         foreach (var mp in layers.Measured)
             verify.Primitive(mp.Name, WorldBox(mp.Local, frame), origin, yaw, mp.Targets);
-        verify.Total = placedSpecs.Count;
-        foreach (var (spec, node, lift) in placedSpecs) VerifyPlacement(verify, spec, node, lift, group, origin, yaw);
+        verify.Total = placements.Count;
+        foreach (var rec in placements) VerifyPlacement(verify, rec.Spec, rec.Node, rec.Lift, group, origin, yaw);
         var report = verify.Report(loc.Id);
         LogVerify(report);
 
@@ -675,6 +717,8 @@ public sealed class WorldBuilder
             Height = measured ?? Overview.EventPinRule.DefaultPlaceHeight(isBuilding, natureSite, LocationView.DetectStyle(loc)),
             HeightMeasured = measured is not null,
             Fade = fade, LevelFilter = levelFilter, Verify = report, Storeys = storeys,
+            Signature = scene.Signature, AreaDetail = scene.AreaDetail, Placements = placements,
+            BuildingTier = buildingTier, InteriorTier = interiorTier, FarShell = layers.Shell.ToList(),
         };
     }
 
@@ -830,6 +874,7 @@ public sealed class WorldBuilder
                 new Neighbour(slot.Group.Position.X, slot.Group.Position.Z, slot.Width, slot.Height), slot == open);
             slot.Fade.StepOcclusion(slot.Group, hide, dt);
         }
+        StepModelClock(dt, camera);
     }
 
     /// <summary>

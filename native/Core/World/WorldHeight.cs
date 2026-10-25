@@ -26,8 +26,20 @@ public sealed class WorldHeight
 
     public void AddTiles(IEnumerable<HeightTile> tiles)
     {
-        foreach (var t in tiles) _tiles[t.Key] = t;
+        bool any = false;
+        foreach (var t in tiles)
+        {
+            _tiles[t.Key] = t;
+            any = true;
+        }
+        if (any) Revision++;
     }
+
+    /// <summary>
+    /// <c>terrainGround.heightRevision()</c>: counts up with every batch of tiles that lands, so whatever sampled the
+    /// field before (a location's datum, the § A16.9 lifts) knows to sample again (main.ts <c>tickModelTiers</c>).
+    /// </summary>
+    public int Revision { get; private set; }
 
     public bool HasTile((int, int) key) => _tiles.ContainsKey(key);
 

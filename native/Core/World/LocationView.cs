@@ -90,10 +90,25 @@ public static class LocationView
     /// diagonal, the hysteresis is <see cref="SceneView.BuildingTier"/>.
     /// </summary>
     public static string BuildingTier(Ring ring, double cameraDistanceToCentre, double width)
+        => BuildingTier(ring, cameraDistanceToCentre, width, "low");
+
+    /// <summary>
+    /// <c>wantedBuildingTier</c> at runtime (main.ts <c>tickModelTiers</c>, once a second): far ring → low; near →
+    /// <c>buildingTier(|camera − centre| − width·√½, current)</c> — low → full under 45 m, full → low over 60 m, in
+    /// between the tier the location shows stays (the 45/60 hysteresis of <see cref="SceneView.BuildingTier"/>).
+    /// </summary>
+    public static string BuildingTier(Ring ring, double cameraDistanceToCentre, double width, string current)
     {
         if (ring != Ring.Near) return "low";
-        return SceneView.BuildingTier(cameraDistanceToCentre - width * Math.Sqrt(0.5), "low");
+        return SceneView.BuildingTier(cameraDistanceToCentre - width * Math.Sqrt(0.5), current);
     }
+
+    /// <summary>
+    /// <c>SceneLibrary.sweep</c>'s change test: a scene is remounted when its signature moved — a location that gained
+    /// or lost its scene (404 ↔ payload) counts as moved (<c>(old?.signature ?? null) !== (fresh?.signature ?? null)</c>).
+    /// </summary>
+    public static bool SceneChanged(string? mountedSignature, string? freshSignature)
+        => !string.Equals(mountedSignature, freshSignature, StringComparison.Ordinal);
 
     /// <summary><c>wantedInteriorTier</c>: far → low; near → <see cref="SceneView.InteriorTier"/>.</summary>
     public static string InteriorTier(Ring ring, bool areaDetail, bool open)

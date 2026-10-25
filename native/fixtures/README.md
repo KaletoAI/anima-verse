@@ -32,6 +32,7 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `ground_reference.mjs` | node script that runs `layerCut.ts`, `heightTiles.ts` `wantedTiles`, `naturalGroundMath.ts` and three's `Color` themselves |
 | `s3c/` | Task S3c: a second, hand-written world (avatar, open/closed/far/gone locations, world props, a wet tile) — files missing there (`heightfield.json`, the ground files) are read from this directory; see "S3c world" |
 | `storeys/` | Task 16: a third, hand-written world (a tower with a cellar, two storeys above and an always-visible terrace; a pit with a ground model over a basement) for the storey switch at runtime — the ground files come from this directory; see "Storeys world" |
+| `fidelity/` | Task 17: a fourth, hand-written world (a plan hull with cutouts and padding, a room clip, two depth cuts on a turned location, a shell area, a changed scene for the sweep) — the ground files come from this directory; see "Fidelity world" |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
 for the repository root above this directory, then above the working directory):
@@ -507,8 +508,10 @@ storey …) still describe the view at the build's storey 0.
 
 ### Models
 
-loc-open: the plan-hull building is KEPT when open (cutouts instead of a fade) → placed, its triangles inside
-the 6 × 6 cutout removed (**> 0 and < 1110**, and no remaining centroid inside); chair (`r-ground`) → prop;
+loc-open: the plan-hull building is KEPT when open (cutouts instead of a fade) → placed ONCE, its 8 surfaces wear
+cut materials (Task 17) with the cutout in world xz (61, 117) (67, 117) (67, 123) (61, 123) (pin (64, 120), yaw 0),
+no padding, switched OFF at fade 0 and ON after one 1/60 s frame (f = 1 − e^(−1/15) = 0.0645 > 0.03); the pin and
+(66.9, 122.9) are discarded, (67.1, 120) kept; chair (`r-ground`) → prop;
 lamp (`r-up`, level 1) → mounted in its room group since Task 16 (hidden at storey 0), its URL has no fixture
 → **missing**, still counted **storey**; the `door:` model (`measure: "fit"`) → door; the `window:` spec has no URL but
 `placeholder_dims` → **placeholder**; the `room` diorama has neither → **missing**; bench (`r-garden`) → prop.
@@ -589,7 +592,11 @@ painted area carries a profile → the default look, opaque depth ¾ · 2 = **1.
 
 Every spatial shader goes through the headless front end once and logs one line; the check requires
 `ground`, `ground-water`, `recipe[opaque]`, `recipe[translucent]` and `recipe[opaque,both-sides]` to be
-`compiled (N uniforms)` with N = the shader's own uniform count.
+`compiled (N uniforms)` with N = the shader's own uniform count, and the plan hull's cut shader
+`cut[std+cutouts]` with **18**: the generator's 14 uniforms of a glTF material without emission/normal/AO/alpha
+(albedo, texture_albedo, albedo_texture_size, point_size, roughness, texture_metallic, metallic_texture_channel,
+texture_roughness, specular, metallic, uv1_scale, uv1_offset, uv2_scale, uv2_offset) + cut_pts, cut_off, cut_len,
+cut_on.
 
 ## Storeys world (`storeys/`, Task 16)
 
@@ -656,5 +663,44 @@ wall on its storey (fade > 0.03); a room plate solid on the displayed storey, it
   u = (0.6, 0.8), width 8) → **[−44, 96, −31.2, 110.4]**, its ground model hidden; back at storey 0, or at fade
   exactly 0.03 (the gate is > 0.03).
 - **Switch input** (1600 × 900, camera on the anchor at 20 m → the box centred at (800, 450) ± 1 px): a left click
-  on `1.` → storey 1, the camera's click counter stays 0; a right-drag starting on `EG` turns nothing; a click at
+  on `1.` → storey 1, the camera's click counter stays 0; a right-drag starting on `G` turns nothing; a click at
   (200, 800) → the camera's click (1).
+
+## Fidelity world (`fidelity/`, Task 17)
+
+A fourth small world, hand-written, for model fidelity (`Check/FidelityCheck.cs`, `--check fidelity`). The ground
+files come from this directory (heightfield, tile (0,0) with h[j][i] = 2i + j at 64 m steps, i.e. ground(x, z) =
+2x/64 + z/64 on the tile). The three GLBs are written by `fidelity/make_glbs.py` (stdlib, see its docstring):
+`hull_full.glb` / `hull_low.glb` (a closed 10 × 2 × 10 m box, no metallicFactor, node extras
+`interior_cutout_padding_m: 0.25`) and `box.glb` (1 m cube, metallicFactor 1 with a metallicRoughnessTexture).
+
+| location | pin, yaw | datum | scene |
+|---|---|---|---|
+| loc-hull "Hull" | (64, 120), 0° | tile 2 + 1.875 = **3.875** | plan-hull building (full/low) with the cutout (−3,−3)…(3,3); room diorama `r-hall` (box, max_m 4) with clip (−5,−5)…(5,0) |
+| loc-prop "Workshop" | (−40, 100), 90° | overview **4.693359375** | prop `table` (box, anchor (1, 2)) with cut_plane n (1,0,0) c −0.5; placeholder `crate` (no URL, 1 m dims) with cut_plane n (0,0,1) c 0 |
+| loc-area "Quarry" | (20, 140), 0° | 40/64 + 140/64 = **2.8125** | `area_detail`, display `shell_area` building (hull_full) with the cutout (−2,−2)…(2,2); outdoor prop `stone` (box, anchor (3, 0)) |
+
+`scene_loc-hull.v2.json` is the same hull scene with signature `hull-2` and the diorama's anchor at (0, −1).
+
+- **F1** hull_full's material had no metallicFactor (glTF 1.0, untextured) → **0**; box keeps **1** (textured) →
+  1 neutralised at the boot, **2** once hull_low is loaded by the first swap.
+- **F2** cut shaders: `cut[std+cutouts+pad]` **18** (14 + 4, padding is a define), `cut[std+clip]` **15**,
+  `cut[std+plane]` **15**, the placeholder `cut[shaderN+plane]` **N + 1** with N = the recipe placeholder shader's
+  count. 5 cut placements (hull, diorama, table, crate, area), one surface each, the stone none.
+- **F3** hull: scale 10 / 10 = 1 → padding 0.25 (square 0.0625); world cutout x 61…67, z 117…123: (64, 120) inside,
+  (67.2, 120) and (60.8, 120) 0.2 m outside → discarded by the padding, (67.3, 120) and (64, 123.3) 0.3 m outside →
+  kept; switched off nothing goes. Clip world (59, 115) (69, 115) (69, 120) (59, 120): (64, 118) kept, (64, 121)
+  dropped. Table at yaw 90° (local x → world −z, local z → world +x): plane point (0.5, 0, 0) → world z 99.5,
+  n (0, 0, −1), c **99.5** (z 99 kept, z 100 dropped); crate n (1, 0, 0), c = −(1 · −40) = **40** (x −39 kept, x −41
+  dropped).
+- **F4** both opened, one frame: the hull's cutouts on; the shell area's stay shut and its model is a roof part.
+- **F5** boot camera = anchor (64, overview 7.34375, 120) + (0, 24, 40): |(0, 27.46875, 40)| = 48.5235, − 12·√½ =
+  40.04 < 45 → **full**. Cameras straight behind the pin at d + 12·√½: 70 → **low** (swap), 44 → **full** (swap),
+  50 → stays full (no swap), 61 → **low** (swap); each swap replaces the node in the group, the old one leaves the
+  tree, the cut handle is new and on (the hull is open).
+- **F6** a flat tile (0,0) at 10 m: hull 3.875 → **10**, area 2.8125 → **10** (2 datums), prop unchanged (overview);
+  the stone's lift ground(23, 140) − 2.8125 = 2.90625 − 2.8125 = 0.09375 → **0** (moves by −0.09375, 1 re-lifted);
+  the diorama's anchor is the pin (lift 0 before and after).
+- **F7** a sweep with unchanged signatures remounts nothing (3 scene requests); with `scene_loc-hull.v2.json` only
+  loc-hull is remounted: new slot, signature `hull-2`, still open, its group at today's datum 10, the diorama
+  centred at z −1, the old group freed.

@@ -57,7 +57,7 @@ namespace AnimaNative.Check;
 ///      Opened ("Look inside"): only the fade target moves (same group, no scene request); the crossfade numbers
 ///      (fade, roof transparency, shadow, hidden at 0.95, occlusion, close) are derived where they are checked.
 ///      After 0.75 s the same ray hits the pad top at 50 − (4.693359375 + 0.1) = 45.206640625 m. loc-open stays
-///      closed (fade 0: hull whole, cut copy and interior hidden, the bench outside). Auto-close against
+///      closed (fade 0: hull whole with its cutouts off, interior hidden, the bench outside). Auto-close against
 ///      loc-closed (width 8 → limit max(12, 24) = 24): target 24 m off → stays, 24.5 m → closes; camera 60.5 m → closes.
 /// </summary>
 public static class PickCheck
@@ -336,7 +336,7 @@ public static class PickCheck
             Expect("G after: the lift pad", after?.Id == "loc-closed", $"{after}");
             Near("G pad distance", after!.Value.Distance, 50 - (ClosedDatum + 0.1), 2e-3);
             Expect("G loc-open stays closed", openSlot.Fade.Fade == 0 && openSlot.Group.GetNode<Node3D>("Placed_building_loc-open").Visible
-                   && !openSlot.Group.GetNode<Node3D>("Cutout_building_loc-open").Visible
+                   && openSlot.Fade.Cutouts.All(h => !h.CutoutsOn)
                    && !openSlot.Group.GetNode<Node3D>("Interior").Visible
                    // the always-visible garden's group hangs off the tile, its bench in it (Task 16 room groups)
                    && openSlot.Group.GetNodeOrNull<Node3D>("Room_r-garden/Placed_prop_bench") is { } bench && bench.IsVisibleInTree(), "");

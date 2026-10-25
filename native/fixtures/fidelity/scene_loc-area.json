@@ -1,0 +1,93 @@
+{
+ "signature": "area-1",
+ "k": 1,
+ "extent_m": 12,
+ "storey_m": 3,
+ "boundary": [],
+ "levels": [
+  {
+   "level": 0,
+   "floor_y": 0
+  }
+ ],
+ "style": {},
+ "rooms": [],
+ "outdoor_rooms": [],
+ "plates": [],
+ "walls": [],
+ "extras": [],
+ "floor_plan": [],
+ "stairs": [],
+ "markers": [],
+ "doorways": [],
+ "problems": [],
+ "corridors": [],
+ "boundary_openings": [],
+ "models": [
+  {
+   "role": "building",
+   "display": "shell_area",
+   "id": "loc-area",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 10,
+   "measure": "xz",
+   "anchor": [
+    0,
+    0
+   ],
+   "bottom_y": 0,
+   "variants": {
+    "full": "/f/hull_full.glb"
+   },
+   "cutouts": [
+    [
+     [
+      -2,
+      -2
+     ],
+     [
+      2,
+      -2
+     ],
+     [
+      2,
+      2
+     ],
+     [
+      -2,
+      2
+     ]
+    ]
+   ]
+  },
+  {
+   "role": "prop",
+   "id": "stone",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 1,
+   "measure": "xyz",
+   "anchor": [
+    3,
+    0
+   ],
+   "bottom_y": 0,
+   "variants": {
+    "full": "/f/box.glb"
+   }
+  }
+ ],
+ "figures": {},
+ "area_detail": true
+}

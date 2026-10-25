@@ -22,6 +22,8 @@ public sealed class ModelCache
     private readonly Action<string> _log;
 
     public int Loaded { get; private set; }
+    /// <summary>Template materials whose metalness <see cref="NeutralizeMaterials"/> took back to 0.</summary>
+    public int Neutralized { get; private set; }
     public int Failed { get; private set; }
     public long Bytes { get; private set; }
 
@@ -46,6 +48,7 @@ public sealed class ModelCache
             bool compressed = GlbMeshoptDecoder.IsCompressed(bytes);
             var plain = await Task.Run(() => GlbLoader.Prepare(bytes));
             var (root, counts) = GlbLoader.Import(plain, url);
+            Neutralized += NeutralizeMaterials(root);
             Loaded++;
             Bytes += bytes.Length;
             return new Template(root, counts, compressed, bytes.Length, url);
@@ -56,6 +59,46 @@ public sealed class ModelCache
             _log($"model {url} not loadable: {e.Message}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// client3d/src/scene/glbMaterials.ts <c>neutralizeGltfMaterials</c>, run once per imported GLB (propAssets.ts runs
+    /// it on load, before any placement): generated GLBs often leave <c>metallicFactor</c> unset, glTF's default is 1.0,
+    /// and an untextured metal without an environment map renders almost black — it is meant as no metal at all.
+    /// <see cref="MaterialLooks.NeutralizeLook"/> decides (vector-checked): untextured metalness above 0.5 → 0, a real
+    /// metal-roughness texture keeps it. The browser then also hangs a neutral environment map at intensity 0.7 on the
+    /// textured ones; Godot has no per-material environment map — those materials take the scene's reflections.
+    /// The template's materials are changed IN PLACE (they are this GLB's own, shared by every placement of it, like the
+    /// browser's lease). Returns how many materials went to 0.
+    /// </summary>
+    public static int NeutralizeMaterials(Node root)
+    {
+        int changed = 0;
+        var seen = new HashSet<ulong>();
+        foreach (var mi in Walk(root))
+        {
+            if (mi is not MeshInstance3D { Mesh: { } mesh } inst) continue;
+            for (int s = 0; s < mesh.GetSurfaceCount(); s++)
+            {
+                if ((inst.GetSurfaceOverrideMaterial(s) ?? mesh.SurfaceGetMaterial(s)) is not BaseMaterial3D m) continue;
+                if (!seen.Add(m.GetInstanceId())) continue;
+                var look = Scene.MaterialLooks.NeutralizeLook(m.Metallic, m.MetallicTexture is not null, true);
+                if (look.Metalness != m.Metallic)
+                {
+                    m.Metallic = (float)look.Metalness;
+                    changed++;
+                }
+            }
+        }
+        return changed;
+    }
+
+    private static IEnumerable<Node> Walk(Node n)
+    {
+        yield return n;
+        foreach (var c in n.GetChildren())
+        foreach (var d in Walk(c))
+            yield return d;
     }
 
     public static Node3D Instance(Template t) => (Node3D)t.Root.Duplicate();
