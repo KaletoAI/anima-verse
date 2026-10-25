@@ -608,7 +608,18 @@ export class Engine {
     this.camera.lookAt(SCRATCH.look.copy(at).add(viewDir));
   }
 
+  /** Optional bench hooks: absent during normal play. Raw wall delta is never clamped. */
+  benchFrame?: (dt: number) => void;
+  benchCamera?: () => void;
+  benchVisibility?: () => void;
+  benchRendered?: (dt: number, cpuMs: number, calls: number, tris: number) => void;
+  private benchFrameAt = 0;
+
   private frame() {
+    const frameStart = this.benchRendered ? performance.now() : 0;
+    const benchDt = this.benchFrameAt ? (frameStart - this.benchFrameAt) / 1000 : 0;
+    this.benchFrameAt = this.benchRendered ? frameStart : 0;
+    this.benchFrame?.(benchDt);
     const dt = Math.min(this.clock.getDelta(), 0.1);
     // ONE time value for everything that moves by itself: the water surfaces
     // and, since the terrain animations, the swaying scatter (shared uniform).
@@ -667,6 +678,7 @@ export class Engine {
       this.camera.lookAt(this.target);
     }
     this.applyViewShift(dt);
+    this.benchCamera?.();
 
     // The sun follows the map section so the shadow map can stay small — but it
     // follows it in WHOLE SHADOW TEXELS (`scene/shadowSnap.ts`). A frustum that
@@ -690,7 +702,11 @@ export class Engine {
       const at = this.follow?.();
       if (at) this.placeFirstPerson(at, off);
     }
+    this.benchCamera?.(); // Reassert after hooks and the first-person lens update.
+    this.benchVisibility?.();
     this.renderer.render(this.scene, this.camera);
+    this.benchRendered?.(benchDt, performance.now() - frameStart,
+      this.renderer.info.render.calls, this.renderer.info.render.triangles);
     this.labelRenderer.render(this.scene, this.camera);
   }
 }

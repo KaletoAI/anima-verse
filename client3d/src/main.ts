@@ -1,3 +1,7 @@
+import { sampleWorldHeight } from '@anima/scene-render';
+import { initBench } from './bench/bench';
+import { setTerrainLodDebug } from './scene/terrainLod';
+import { setWaterGhostOff } from './scene/submergedGhost';
 import { ambienceTarget, stepAmbience } from './scene/ambience';
 import { pushSeq, isOwnEcho, avatarDriver, NO_CANCEL, suppressedJourney, answerApplies, type DriverState, type Cancelled } from './game/posEcho';
 import { avatarWaitsForPlace, holdFor, holdSnap, clearApproach, clearSnap, trySnap, enterWhenReady, type PendingSnap, type ReadinessDeps } from './game/readiness';
@@ -6556,6 +6560,54 @@ async function startApp(username: string, role: string) {
   pendingTakeControl = false;
   setBootNote(null);
   reportBootStage('arrival');
+  // Install after boot/arrival: neither auto-follow nor the arrival fly can
+  // replace the bench camera. Manual starts resolve the current location anew.
+  initBench(engine, {
+    output: result => { void import('./hud/bench').then(m => m.showBenchResult(result)); },
+    anchor: () => {
+      const query = new URLSearchParams(location.search).get('goto')?.toLowerCase();
+      const rows = [...detailById.values()];
+      const currentId = (lastMap ?? firstMap).characters.find(c => c.name === avatarName)?.location_id;
+      const loc = query
+        ? rows.find(l => l.id.toLowerCase() === query || l.name.toLowerCase().includes(query))
+        : rows.find(l => l.id === currentId);
+      if (query && (!loc || loc.pos_x === null || loc.pos_z === null)) {
+        throw new Error(`Bench goto location is unknown or unplaced: ${query}`);
+      }
+      if (!loc || loc.pos_x === null || loc.pos_z === null) {
+        return {pos: [0, 0, 0], locationId: null, heightSource: 'world origin'};
+      }
+      return {pos: [loc.pos_x, sampleWorldHeight(terrainGround.heightField(), loc.pos_x, loc.pos_z), loc.pos_z],
+        locationId: loc.id, heightSource: '/play/heightfield overview: sampleWorldHeight (bilinear, border-clamped), frozen at run start'};
+    },
+    switches: (scatter, water) => {
+      // Reuse the existing local LOD preferences; disabling scatter must also
+      // remove the near objects, which a cull-distance preference cannot do.
+      gameActions.applyScatterPrefs?.(loadScatterPrefs(localStorage.getItem(SCATTER_PREFS_KEY)));
+      const hidden = new Map<THREE.Object3D, boolean>();
+      const release = () => {
+        for (const [obj, visible] of hidden) obj.visible = visible;
+        hidden.clear();
+      };
+      engine.benchVisibility = () => {
+        release();
+        setTerrainLodDebug({noWater: !water});
+        setWaterGhostOff(!water);
+        if (scatter && water) return;
+        const parts = terrainGround.debugParts();
+        const hide = (obj: THREE.Object3D) => {
+          if (!hidden.has(obj)) hidden.set(obj, obj.visible);
+          obj.visible = false;
+        };
+        if (!scatter) [...parts.scatter, ...parts.undergrowth].forEach(hide);
+        if (!water) parts.water.forEach(hide);
+      };
+      return () => {
+        release(); engine.benchVisibility = undefined;
+        setTerrainLodDebug({noWater: false}); setWaterGhostOff(false);
+      };
+    },
+  });
 }
 
 boot();
