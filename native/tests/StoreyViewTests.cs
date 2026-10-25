@@ -30,10 +30,10 @@ public class StoreyViewTests
     [Fact]
     public void SwitchButtonsAreSortedAscendingWithTheBrowsersLabels()
     {
-        // [...levels].sort((a, b) => a - b); 0 → 'EG', else `${lv}.` (a basement keeps its minus sign).
+        // [...levels].sort((a, b) => a - b); 0 → 'G', else `${lv}.` (a basement keeps its minus sign).
         var b = StoreyView.SwitchButtons(new[] { L(1, 3), L(-1, -3), L(0, 0), L(2, 6) });
         Assert.Equal(new[] { -1, 0, 1, 2 }, b.Select(x => x.Level));
-        Assert.Equal(new[] { "-1.", "EG", "1.", "2." }, b.Select(x => x.Label));
+        Assert.Equal(new[] { "-1.", "G", "1.", "2." }, b.Select(x => x.Label));
     }
 
     [Fact]

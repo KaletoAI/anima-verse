@@ -65,9 +65,9 @@ public static class StoreysCheck
                    == "r-cellar:-1:in,r-hall:0:in,r-study:1:in,r-terrace:1:out", string.Join(",", st.Rooms.Keys));
             Expect("S1 terrace off the tile", tower.Group.GetNodeOrNull("Room_r-terrace") is not null
                    && tower.Group.GetNodeOrNull("Interior/Room_r-study") is not null, "");
-            Expect("S1 switch buttons", string.Join(" ", st.Buttons.Select(b => b.Label)) == "-1. EG 1.", string.Join(" ", st.Buttons.Select(b => b.Label)));
+            Expect("S1 switch buttons", string.Join(" ", st.Buttons.Select(b => b.Label)) == "-1. G 1.", string.Join(" ", st.Buttons.Select(b => b.Label)));
             Expect("S1 lift anchors the switch", st.Elevator == new Scatter.P2(4, -1.5), $"{st.Elevator}");
-            Expect("S1 pit switch (storeys -1, 0)", string.Join(" ", pit.Storeys.Buttons.Select(b => b.Label)) == "-1. EG", "");
+            Expect("S1 pit switch (storeys -1, 0)", string.Join(" ", pit.Storeys.Buttons.Select(b => b.Label)) == "-1. G", "");
             var doors = st.DoorMeshes().ToList();
             Expect("S1 door marks", doors.Count == 3 && string.Join(",", doors.Select(d => d.Level)) == "-1,0,1", string.Join(",", doors.Select(d => d.Level)));
             CheckDoorMark(doors.Single(d => d.Level == 0).Mesh, 1.2f, 0.36f, -3, 0.02f, 4);
@@ -91,7 +91,7 @@ public static class StoreysCheck
             builder.TickView(0, cam);
             var mats = new Mats(tower);
             View(builder, tower, mats, 0, rooms: "r-hall,r-terrace", slabs: "", walls: "0,0", solid: "", doorLevel: 0,
-                 labels: "Hall@(64,5.375,123),Terrace@(64,8.375,117)", switchY: Datum + 2, active: "EG");
+                 labels: "Hall@(64,5.375,123),Terrace@(64,8.375,117)", switchY: Datum + 2, active: "G");
             Expect("S2 desk hidden at 0", !group.GetNode<Node3D>("Interior/Room_r-study/Placeholder").IsVisibleInTree(), "");
             Expect("S2 SetLevel", builder.SetLevel("loc-tower", 1) && !builder.SetLevel("loc-tower", 5) && !builder.SetLevel("nowhere", 0), "");
             builder.TickView(0, cam);
@@ -270,7 +270,7 @@ public static class StoreysCheck
         Expect("S5 click on '1.' sets storey 1", tower.LevelFilter == 1, $"{tower.LevelFilter}");
         Expect("S5 the camera saw no click", clicks == 0, $"{clicks}");
         double yaw = cam.Control.TargetYaw;
-        var eg = shown[0].Buttons.Single(b => b.Label == "EG").Rect.GetCenter();
+        var eg = shown[0].Buttons.Single(b => b.Label == "G").Rect.GetCenter();
         Push(Button(MouseButton.Right, true, eg));
         Push(new InputEventMouseMotion { Position = eg + new Vector2(120, 0), GlobalPosition = eg + new Vector2(120, 0), Relative = new Vector2(120, 0), ButtonMask = MouseButtonMask.Right });
         Push(Button(MouseButton.Right, false, eg + new Vector2(120, 0)));

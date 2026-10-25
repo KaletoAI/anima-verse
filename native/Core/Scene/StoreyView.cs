@@ -34,12 +34,12 @@ public static class StoreyView
     /// <summary>A switch is built only when the payload declares more than one storey (<c>levels.length &gt; 1</c>).</summary>
     public static bool HasLevelSwitch(IReadOnlyCollection<SceneLevel> levels) => levels.Count > 1;
 
-    /// <summary>One button per declared storey, sorted ascending; <c>'EG'</c> for 0, else <c>`${lv}.`</c>.</summary>
+    /// <summary>One button per declared storey, sorted ascending; <c>'G'</c> for 0, else <c>`${lv}.`</c>.</summary>
     public static List<LevelButton> SwitchButtons(IEnumerable<SceneLevel> levels)
         => levels.Select(l => l.Level).OrderBy(l => l).Select(l => new LevelButton(l, SwitchLabel(l))).ToList();
 
     public static string SwitchLabel(int level)
-        => level == 0 ? "EG" : level.ToString(CultureInfo.InvariantCulture) + ".";
+        => level == 0 ? "G" : level.ToString(CultureInfo.InvariantCulture) + ".";
 
     /// <summary>
     /// <c>elevatorXZ</c>: the centre (x, z) of the FIRST extra whose kind starts with <c>elevator_</c> — a stair box

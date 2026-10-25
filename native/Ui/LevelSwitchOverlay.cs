@@ -17,7 +17,7 @@ namespace AnimaNative.Ui;
 ///   • WHERE: centred (CSS2D) on the tile-local point <see cref="StoreyView.SwitchPosition"/> — the first lift box's
 ///     (x, z), else (2.2, 0), ⅔ of a storey above the SHOWN storey's floor — turned into the world by the location
 ///     group, projected through the camera's own projection (<see cref="LabelOverlay.Project"/>);
-///   • LOOK: a row of buttons sorted ascending (<c>EG</c> / <c>n.</c>), 4 px gap, padding 4 × 6 px, radius 8,
+///   • LOOK: a row of buttons sorted ascending (<c>G</c> / <c>n.</c>), 4 px gap, padding 4 × 6 px, radius 8,
 ///     <c>rgba(20, 24, 32, .82)</c>; a button 12 px system-ui, padding 2 × 8, radius 5, <c>#2c3442</c> /
 ///     <c>#dde3ea</c>, the shown storey <c>#e0b64a</c> / <c>#22201a</c>;
 ///   • INPUT: the browser's widget has <c>pointer-events: auto</c> over a pointer-transparent label layer, so a press
