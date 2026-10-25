@@ -1167,11 +1167,11 @@ immer sichtbar, nur Locations verstecken sich.
   (`terrain_query.default_kind()`): fehlender ODER leerer Schlüssel
   ergibt `"grass"`. Der Endpoint darf nie eine andere Vorgabe melden, als
   die Laufregeln anwenden.
-- **`passable`, `speed_factor`, `meta.move_anim` und `meta.idle_anim` kommen
+- **`passable`, `speed_factor` und `meta.movement` kommen
   AUSSCHLIESSLICH aus dem Typen-Katalog** — nie aus der Fläche, nie aus einer
   Client-Tabelle, nie aus dem Namen. Eine Art ohne Katalogeintrag (Typ
-  nachträglich gelöscht) gilt als begehbar mit Faktor 1,0 und ohne
-  Boden-Clips: ein Loch im Katalog darf niemanden stranden lassen.
+  nachträglich gelöscht) gilt als begehbar mit Faktor 1,0 und `walk_run`:
+  ein Loch im Katalog darf niemanden stranden lassen.
 - **`passable` beurteilt die WILDNIS, nicht das Innere einer platzierten
   Location** (Entscheidung 2026-08-13, „Footprint gewinnt", Gate-Kette in
   § A15). Innerhalb eines Fußabdrucks entfällt das Gelände-Verbot ganz —
@@ -1179,7 +1179,7 @@ immer sichtbar, nur Locations verstecken sich.
   Öffnungen und Regeln. Ein Renderer, der die Figur selbst hält, MUSS es
   genauso machen — sonst weigert sich das Bild zu laufen, wo der Server
   jede Meldung annimmt.
-- **`speed_factor`, `meta.move_anim` und `meta.idle_anim` gelten SO WEIT, WIE
+- **`speed_factor` und `meta.movement` gelten SO WEIT, WIE
   DER HIMMEL REICHT** (Befund 3 der E8-Sichtabnahme, 2026-08-13; Reichweite in Runde 2
   entschieden). Drei Orte, von innen nach außen gefragt:
 
@@ -1225,8 +1225,8 @@ immer sichtbar, nur Locations verstecken sich.
   aus. Bestandswelten füllt eine einmalige Boot-Migration
   (`app/core/terrain_surface_migration.py`) mit genau der Zuordnung, die die
   alte Regel ableitete.
-- `types[].meta` ist **frei-form mit GENAU ZWEI vertraglichen Schlüsseln**:
-  `move_anim` und `idle_anim` (§ A9). Was auf einem Boden WÄCHST, hängt seit
+- `types[].meta` ist **frei-form mit EINEM vertraglichen Schlüssel für die
+  Fortbewegung**: `movement` (§ A9). Was auf einem Boden WÄCHST, hängt seit
   Befund B17 an der Fläche, nicht an der Art; eine alte `meta.scatter` an einem Typ liegt
   tot in der DB.
 
@@ -2367,9 +2367,31 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   `<set>/<kind>` → … → `<kind>` über `animation_sets` des Charakters.
   Dateiregeln und Bibliotheks-Layout: `shared/models/clips/README.md`.
 - **Server-authoritativ:** `activity_animation` (per Worldmap) bestimmt
-  den Clip; nennt der Server keinen, steht die Figur (`idle`). Die
+  den Clip; nennt der Server keinen, steht die Figur (Pose `standing`). Die
   Keyword-Heuristik `activityToClipKind` im Client ist gelöscht (2026-08-28,
   Task 13 plan-posen-plaetze.md).
+- **Feste Fortbewegungs-Posen** (2026-10-25, `app/core/movement.py`):
+  `standing`, `walking`, `running`, `swimming`, `treading_water`, `crawling`,
+  `crawling_rest`. Welcher Clip eine Situation spielt, wird NUR über diese
+  Posen eingestellt — der mitgelieferte Katalog nennt die freien
+  Werkstatt-/CMU-Clips (öffentlich), die Welt-Schicht darf sie überschreiben
+  (lokal z. B. lizenzierte). Nicht umbenennbar, der mitgelieferte Eintrag ist
+  nicht löschbar (eine Welt-Kopie schon). Die vier Nur-Fortbewegungs-Posen
+  (`swimming` … `crawling_rest`) sind keine Tätigkeit
+  (`pose_catalog.activity_catalog()`). `GET /assets/animation-clips` liefert
+  `movement_poses: {pose: {kind, public_kind}}` — `kind` aus dem effektiven
+  Katalog, `public_kind` aus dem mitgelieferten; der Client spielt `kind`
+  und fällt ohne Datei zuerst auf `public_kind` zurück
+  (`clipCoverage.clipKindChain`). Welche Pose eine Bodenart verlangt, steht
+  bei `movement` in § A9. Pro Figur zeigt
+  `GET /characters/{name}/animations` die Zuordnung samt gefundener Datei
+  entlang der Set-Kette (Game-Admin → Character → 3D).
+- **Übergänge hängen an Posen** (2026-10-25): `shared/config/clip_transitions.json`
+  nennt in `from`/`to` Pose-Schlüssel (oder `*`), in `kind` den Brücken-Clip.
+  Der Server übersetzt sie für den Client in Clip-Regeln
+  (`transition_clips`: gespielte und mitgelieferte Clip-Art beider Posen;
+  `animation_clips.client_transition_rules`); `transitions` trägt die
+  Pose-Regeln für den Editor. Fehlt der Brücken-Clip, gibt es keinen Übergang.
 - **Loop oder letztes Bild** (2026-09-13, E5): Jeder Clip der Auflistung trägt
   `loop` — `true` = wiederholen, `false` = letztes Bild halten (Three.js
   `LoopOnce` + `clampWhenFinished`). Das Kennzeichen setzt der Admin NACH dem
@@ -2754,43 +2776,29 @@ Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
   `toward`-Art keine Klasse, entsteht keine Maske und nichts ändert sich.
 - Das Blend-BAKING (Canvas-Komposition, Noise) bleibt bewusst
   Client-Sache — rein visuell, kein Geometrie-Vertrag.
-- **`move_anim` — der Clip, mit dem man über einen Boden kommt** (Befund 3
-  der E8-Sichtabnahme, 2026-08-13). Ein Gelände-TYP (§ A1.5, nicht die
-  Oberflächen-Bibliothek) darf in `meta.move_anim` eine Animations-Art
-  nennen; der Server whitelistet diesen `meta`-Schlüssel
-  (getrimmter String, höchstens 40 Zeichen wie eine `kind`, leer = Schlüssel
-  weg — „keine Animation" ist nie ein leerer String).
+- **`movement` — WIE man sich über einen Boden bewegt** (2026-10-25, ersetzt
+  die früheren Clip-Schlüssel). Ein Gelände-TYP (§ A1.5) nennt nur noch die ART
+  der Fortbewegung, nie einen Clip: `walk_run` (Gehen + Laufen, auch wenn der
+  Schlüssel fehlt oder ungültig ist), `walk` (nur Gehen, z. B. Sumpf),
+  `swim`, `crawl`. Der Server whitelistet den Wert (alles andere fällt weg).
 
   ```
   types: [ …, {kind: "water", …, "speed_factor": 0.4,
-               "meta": {"move_anim": "swim"}} ]
+               "meta": {"water": true, "movement": "swim"}} ]
   ```
 
-  Vertrag für die Renderer: **bewegt sich eine Figur** — Avatar, NPC oder
-  Reisender — **auf einem obersten Gelände mit `move_anim`, spielt sie
-  diesen Clip statt `walk`/`run`**, so weit wie die Gelände-Regel dort reicht
-  (§ A1.5: Wildnis und offene Orte ja, Gebäude und Innenräume nein); es gibt
-  kein Rennen darüber, ein See wird nicht gesprintet. Die
-  Art gehört ins OFFENE Clip-Vokabular (§ A8) und wird nirgends gegen eine
-  Liste geprüft; fehlt der Clip am Modell, greift die normale
-  Ersatzkette (`swim` → `walk` → `idle`). Der Client bezieht die Antwort aus
-  EINER Stelle für alle Figuren — sonst tanzen Avatar und NPC im selben
-  Wasser verschieden.
-- **`idle_anim` — der Clip, mit dem man auf einem Boden WARTET** (Wasser-Runde
-  der Abnahme, 2026-08-13). Derselbe Vertrag für den Stand: ein zweiter
-  whitelisteter `meta`-Schlüssel mit derselben Formregel, und **steht eine
-  Figur auf einem obersten Gelände mit `idle_anim`, spielt sie diesen Clip
-  statt ihres eigenen Steh-Clips** — so weit wie dieselbe Gelände-Regel reicht
-  (in einer gefliesten Halle im See wird kein Wasser getreten). Nur wo der Boden
-  nichts sagt, gilt die alte Ordnung: `activity_animation` vor der
-  Aktivitäts-Heuristik (§ A8). Die Boden-Absenkung des Clips (die Figur steht
-  auf dem Boden, nicht auf ihrer autorierten Wasserlinie) gilt für BEIDE
-  Boden-Clips; `treading-water` fällt am Modell ohne ihn über `idle` zurück.
-
-  ```
-  types: [ …, {kind: "water", …, "meta": {"move_anim": "swim",
-                                          "idle_anim": "treading-water"}} ]
-  ```
+  WELCHER Clip läuft, sagen die festen Fortbewegungs-Posen (§ A8): bewegen /
+  stehen bleiben = `walking`·`running` / Tätigkeit oder `standing` bei
+  `walk_run`, `walking` / dito bei `walk`, `swimming` / `treading_water` bei
+  `swim`, `crawling` / `crawling_rest` bei `crawl`. Laufen (und der 1,8-fache
+  Schritt über `RUN_DISTANCE`) gibt es nur bei `walk_run`; bei `swim` und
+  `crawl` verdrängt die Ruhe-Pose auch eine Tätigkeit. Reichweite wie bisher
+  (§ A1.5: Wildnis und offene Orte ja, Gebäude und Innenräume nein — dort gilt
+  `walk_run`). Der Client bezieht die Antwort aus EINER Stelle für alle
+  Figuren (`client3d/src/game/walk.ts` `moveClip`/`idleClip`). Bestandswelten
+  stellt eine einmalige Boot-Migration um
+  (`app/core/terrain_movement_migration.py`): Wasser mit Clip → `swim`, ein
+  abweichender Clip wird Welt-Override der Pose `swimming`/`treading_water`.
 - **`move_sink_m` / `idle_sink_m` — wie tief man IN einem Boden steht**
   (2026-08-13, Befund 13). ZWEI whitelistete `meta`-Schlüssel, je eine Zahl in
   Metern (geklemmt 0…1,5, zwei Dezimalen, 0/leer/auf 0 gerundet = Schlüssel
@@ -2809,13 +2817,13 @@ Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
 
   Vertrag für die Renderer, in dieser Reihenfolge:
   1. **Wahl nach Zustand:** bewegt sich die Figur → `move_sink_m`; wartet sie →
-     `idle_sink_m`, **aber nur, wenn der Boden auch `idle_anim` nennt**. Ohne
-     ihn behält die Figur ihren EIGENEN Steh-Clip, und der bringt seine eigene
-     Bezugshöhe mit (`sleep` ist auf einem Bett animiert) — den zu versenken
-     hieße, den Schläfer durch die Matratze zu schieben. Die Bewegung braucht
-     dieses Gate nicht: `walk`/`run` stehen auf dem Boden, auf dem sie laufen,
-     ein Moor darf also auch ohne eigenen Clip die Knöchel schlucken.
-  2. **Reichweite:** dieselbe wie bei den beiden Clips (§ A1.5 — Wildnis und
+     `idle_sink_m`, **aber nur, wenn der Boden eine Ruhe-Pose vorgibt**
+     (`swim`/`crawl`). Sonst behält die Figur ihren EIGENEN Steh-Clip, und der
+     bringt seine eigene Bezugshöhe mit (`sleep` ist auf einem Bett animiert) —
+     den zu versenken hieße, den Schläfer durch die Matratze zu schieben. Beide
+     Tiefen wirken nur bei `movement: swim`; der Client liest sie bei jeder
+     anderen Art als 0.
+  2. **Reichweite:** dieselbe wie bei `movement` (§ A1.5 — Wildnis und
      offene Orte ja, Gebäude und Innenräume nein). In einer gefliesten Halle
      im See sinkt niemand ein.
   3. **Verrechnung:** `Absenkung = Clip-Offset × Figurenskalierung + Tiefe`,
@@ -2826,27 +2834,26 @@ Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
   Saat: `water` trägt `move_sink_m` 0,35 und `idle_sink_m` 1,3.
 
   ```
-  types: [ …, {kind: "water", …, "meta": {"move_anim": "swim",
-                                          "idle_anim": "treading-water",
+  types: [ …, {kind: "water", …, "meta": {"movement": "swim",
                                           "move_sink_m": 0.35,
                                           "idle_sink_m": 1.3}} ]
   ```
-- **`swim_from_m` — AB WELCHER WASSERTIEFE die vier Schlüssel oben überhaupt
+- **`swim_from_m` — AB WELCHER WASSERTIEFE die Schlüssel oben überhaupt
   gelten** (W4c, 2026-08-23). Ein whitelisteter `meta`-Schlüssel, eine Zahl in
   Metern (geklemmt 0…10, zwei Dezimalen; **0 IST EIN WERT** — „ab der Kante
   schwimmen", das Verhalten jeder Wasser-Art vor dieser Runde — nur Junk lässt
   den Schlüssel weg, fehlender Schlüssel = 1,0 m). Schwimmen war bis dahin eine
-  Eigenschaft der ART: `move_anim: swim` lief auf JEDEM Pixel einer
+  Eigenschaft der ART: ein Schwimm-Boden wurde auf JEDEM Pixel einer
   Wasserfläche, knöcheltief auf der Uferrampe eingeschlossen.
 
   Vertrag für die Renderer, eine Zeile: `Tiefe = Wasserspiegel − Boden` an der
   Figur (beides liegt vor — lokales Niveau aus `meta.water_profile`, Höhe aus
   der Höhen-Pyramide).
-  - `Tiefe ≥ swim_from_m` → SCHWIMMEN: `move_anim`/`idle_anim` und die beiden
+  - `Tiefe ≥ swim_from_m` → SCHWIMMEN: `movement` und die beiden
     Absenkungen wie oben, der Körper hängt unter dem SPIEGEL.
-  - `Tiefe < swim_from_m` → WATEN: der Boden sagt **nichts** — eigener
+  - `Tiefe < swim_from_m` → WATEN: `walk_run` — eigener
     Geh-/Lauf- bzw. Steh-Clip, Absenkung 0, und der SPIEGEL gilt für die
-    Figur nicht (sie steht auf dem Bett). Die vier Felder werden GEMEINSAM
+    Figur nicht (sie steht auf dem Bett). Die Felder werden GEMEINSAM
     abgeschaltet: bliebe das Niveau stehen, hübe `max(Boden, Spiegel)` den
     Watenden auf die Wasseroberfläche.
 
@@ -2861,8 +2868,7 @@ Figur, nicht den Abstand. Beides wäre IK, nicht Teil des Piloten.
   types: [ …, {kind: "river", …, "meta": {"water": true,
                                           "water_depth_m": 1.2,
                                           "shore_ramp_m": 1.0,
-                                          "move_anim": "swim",
-                                          "idle_anim": "treading-water",
+                                          "movement": "swim",
                                           "move_sink_m": 0.35,
                                           "idle_sink_m": 1.3,
                                           "swim_from_m": 1.0}} ]
@@ -4184,10 +4190,10 @@ zweite fragt `draws_built_floor`.
 HIMMEL REICHT** (Befund 3 der E8-Sichtabnahme, 2026-08-13; Reichweite in
 Runde 2 entschieden). Der Fußabdruck nimmt dem Boden das VERBOT, nicht seine
 Beschaffenheit — aber nur dort, wo der Ort selbst offener Grund ist: ein Dorf
-auf einem See wird durchwatet und mit `move_anim` „swim" auch so animiert,
+auf einem See wird durchwatet und mit `movement: swim` auch so animiert,
 eine Halle auf demselben See nicht. Die volle Reichweiten-Tabelle (Raum →
 Fußabdruck → Wildnis) steht in § A1.5; neutral heißt dort immer Tempo 1,0 UND
-keiner der beiden Boden-Clips (`move_anim` im Gehen, `idle_anim` im Stehen).
+`walk_run`.
 Server und Client tragen beide Regeln je einmal
 (`terrain_query.ground_scope`/`effective_speed_factor` bzw.
 `game/walk.groundScope`/`terrainPace`/`moveClip`/`idleClip`); die Reisezeit

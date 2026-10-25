@@ -543,8 +543,8 @@ export interface TerrainType {
   speed_factor: number;
   /** Open bag of extras — a type says how ground LOOKS and how it is walked,
    *  nothing about what grows on it (the scatter moved to the AREA with
-   *  finding B17). FIVE keys in it are a contract: `move_anim`, `idle_anim`,
-   *  the two depths `move_sink_m` / `idle_sink_m` and the depth they start at,
+   *  finding B17). FOUR keys in it are a contract: `movement`, the two
+   *  depths `move_sink_m` / `idle_sink_m` and the depth they start at,
    *  `swim_from_m`. */
   meta?: TerrainTypeMeta;
 }
@@ -552,15 +552,10 @@ export interface TerrainType {
 /** A type's `meta`. Free-form by contract — the two keys with a meaning are
  *  named, the rest stays open. */
 export interface TerrainTypeMeta {
-  /** The clip a MOVING figure plays on this ground instead of walk/run
-   *  (§ A9, finding 3) — a kind out of the open clip vocabulary, e.g.
-   *  `swim` on water. Absent = walk/run as always; the server never stores
-   *  an empty one. */
-  move_anim?: string;
-  /** The clip a STANDING figure plays on this ground instead of its own
-   *  standing one (§ A9, the water round of 2026-08-13) — e.g.
-   *  `treading-water` on water. Absent = the standing clip as always. */
-  idle_anim?: string;
+  /** HOW one moves over this ground (§ A9): `walk_run` (also when absent),
+   *  `walk`, `swim` or `crawl`. The clips come from the fixed movement poses,
+   *  never from the ground. */
+  movement?: 'walk_run' | 'walk' | 'swim' | 'crawl';
   /** How deep a figure stands IN this ground while it MOVES over it, in metres
    *  (§ A9, 0…1.5). The clip is normalised onto the surface, which puts a
    *  swimmer on top of the lake; this is the extra drop. Absent = nothing
@@ -569,9 +564,10 @@ export interface TerrainTypeMeta {
   /** The same for a figure WAITING on it — a second number, because the pose
    *  is a different one (finding 13): a swimmer lies flat and its knee is a
    *  hand's width down, a treader hangs upright and its foot is a body length
-   *  down. Only in force where the ground also names an `idle_anim`. */
+   *  down. Only in force where the ground's movement has a resting pose
+   *  (`swim`, `crawl`). */
   idle_sink_m?: number;
-  /** FROM WHICH WATER DEPTH under the figure the two clips and the two depths
+  /** FROM WHICH WATER DEPTH under the figure the movement type and the two depths
    *  above count at all, in metres (W4c, 0…10) — shallower water is WADED: the
    *  figure keeps its own walk/run and standing clips and stands on the bed.
    *  Absent = `walk.SWIM_FROM_DEFAULT_M` (1 m); an authored 0 means "swim from

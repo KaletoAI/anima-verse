@@ -1352,7 +1352,7 @@ def _terrain_sig(*, areas=None) -> str:
     The effective catalog, not the world rows alone (round 2 of the E8
     acceptance): the shared seed ``shared/terrain/types.json`` is half the
     answer every consumer gets, so a seed edit that changes a passability, a
-    speed factor or a ``move_anim`` has to reach a running client and a
+    speed factor or a movement type has to reach a running client and a
     running router the same way a world row does. It used to sit outside the
     signature, which meant a seed change was invisible until a restart while
     ``GET /play/terrain`` already served the new numbers under the old

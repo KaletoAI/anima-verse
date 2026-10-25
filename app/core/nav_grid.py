@@ -329,7 +329,7 @@ def build_nav_context() -> NavContext:
 
     "World terrain types" is the whole EDITABLE catalog: ``terrain_sig`` hashes
     the ``terrain_types`` rows, and every catalog edit (a speed factor, a
-    ``move_anim``) writes such a row — so a re-typed ground hands out a new
+    movement type) writes such a row — so a re-typed ground hands out a new
     context, which matters now that the pace of a type reaches inside the
     places too. Since round 2 of the acceptance ``terrain_sig`` hashes the
     EFFECTIVE catalog (shared seed overlaid by the world rows), so a changed

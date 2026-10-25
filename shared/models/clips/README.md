@@ -76,8 +76,10 @@ shared `<kind>.json` of its kind.
 trailing `_<number>`, the numbering of several clips of one kind. So
 `swim-idle.fbx` is the kind `swim-idle`, not a second `swim`. It is what the
 character is *doing*: the pose presets carry an `animation` field (Game-Admin →
-Poses), and a terrain type names one in `move_anim`/`idle_anim` — both must
-spell the kind exactly as the file does.
+Poses), which must spell the kind exactly as the file does. Walking, running,
+standing, swimming, treading water and crawling are poses too — the fixed
+movement poses (`app/core/movement.py`); a terrain type only names its
+movement type (`meta.movement`), never a clip.
 
 **`set`** is the figure the clip was authored for and comes from the
 DIRECTORY — one subdirectory per set, exactly one level deep. Clips in this

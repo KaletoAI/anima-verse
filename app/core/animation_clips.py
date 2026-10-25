@@ -110,7 +110,7 @@ def parse_clip_name(filename: str) -> str:
     belong to the kind. Splitting at them was the bug of 2026-08-13: it filed
     ``swim-idle.fbx`` under "swim" (two clips of one kind, the wrong one played
     while moving) and ``treading-water.fbx`` under "treading", so the kind an
-    author writes into ``idle_anim`` existed nowhere. The set is NOT read from
+    author wrote for treading water existed nowhere. The set is NOT read from
     the name (it is the directory).
 
         walk.fbx             -> "walk"
