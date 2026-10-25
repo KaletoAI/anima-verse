@@ -9,23 +9,30 @@ live positions; Task S2 adds the bench drive (see "Bench" below); Task S3 adds
 the scatter and the undergrowth behind `--scatter` (see "Scatter" below);
 Task S4 lays the React HUD over the world through gdCEF (see "HUD" below);
 Task S3b dresses the terrain in the browser's ground surfaces (see "Ground
-surfaces" below).
+surfaces" below); Task S3c brings the scene content to parity with the
+browser — recipe primitives, props, world props, water — and an offline mode
+on a payload dump of a real world (see "Scene content" and "Offline").
 
 What it draws after login:
 
 - **terrain** — the `/play/heightfield` overview as one mesh, plus the 2 m tiles
-  (`/play/heightfield/tiles`) within 384 m of the anchor as separate meshes,
-  no water/LOD; dressed in the browser's ground material — the painted layers
-  cut per texel from the server's masks, the surface textures, colour patches,
-  height AO and the per-fragment shading normal (see "Ground surfaces"); the
-  plain one-colour material when that fails or with `--plain-ground`;
-- **buildings** — per placed location of `/play/worldmap`, the `role: building`
-  model of its scene recipe (`/play/locations/{id}/scene`), loaded from
-  `/play/locations/{id}/model` and placed by the contract's `place()` (§ B2);
-  the server's Meshopt-compressed GLBs are decoded client-side
-  (`Gltf/GlbMeshoptDecoder.cs` + vendored meshoptimizer);
-- **recipe shells** — locations without a building model get their recipe
-  plates/walls/extras as untextured meshes;
+  (`/play/heightfield/tiles`) within 560 m of the anchor (`HEIGHT_TILE_RADIUS_M` =
+  `FOG_FAR_M` 520 + 40, the browser's rule) as separate meshes, no LOD; dressed in
+  the browser's ground material — the painted layers cut per texel from the
+  server's masks, the surface textures, colour patches, height AO and the
+  per-fragment shading normal (see "Ground surfaces"); the plain one-colour
+  material when that fails or with `--plain-ground`;
+- **water** — the browser's Wasser v2 terrain water: a wet tile's vertices lifted
+  onto the mirror, shaded by the water variant of the ground shader (see "Scene
+  content"); off with `--no-water`;
+- **locations** — per placed location in reach, what the browser's overview shows
+  of its scene recipe (`/play/locations/{id}/scene`): the `role: building` model
+  (loaded from its variant URL, Meshopt-decoded client-side —
+  `Gltf/GlbMeshoptDecoder.cs` + vendored meshoptimizer — and placed by the
+  contract's `place()`, § B2), the outdoor model specs (props, door/window models,
+  dioramas), the outdoor rooms' primitives, the far-view shell of a place without
+  a model, and the avatar's OPEN location with its interior (see "Scene content");
+- **world props** — the single props of `/play/worldmap` `world_props` (§ A9a);
 - **figures** — the characters of `/play/worldmap`, polled every 5 s, where the
   browser's far view draws them (journey point along the route, the huddle in
   front of / around their location, or their free point in the wilderness), on
@@ -107,6 +114,8 @@ Arguments after `--` (no .env, no config file):
 | `--no-scatter` | hide the scatter AND the undergrowth (default on, like the browser; = `&scatter=0`); the bench flags say `scatter: false` |
 | `--plain-ground` | keep the S1a one-colour terrain (no `/play/terrain-layers`, no surface textures); the bench result's `ground` key says `ground[plain: --plain-ground]` |
 | `--no-hud` | no HUD even when gdCEF is linked (the S2/S3 bench numbers were taken without it) |
+| `--no-water` | no water lift / water variant (= the browser's `&water=0`); the bench flags say `water: false` |
+| `--offline=DIR` | build from a payload dump (`tools/dump_payloads.py`) instead of a server: no login, no HUD; prints the world/scatter/figure/shader summary lines and quits (with `--bench`: runs the drive, then quits) |
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
@@ -137,9 +146,12 @@ terrain, tiles, buildings and the first poll's figures have loaded):
 ./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=<loc> --bench --quit-after-bench --size=1920x1080
 ```
 
-Compare with the browser at the same window size:
-`http://192.168.8.244:8000/play?bench=auto&goto=<loc>&scatter=0&water=0` (the
-native client draws no water; without `--scatter` its flags say `scatter: false, water: false`).
+Compare with the browser at the same window size and the same switches: the
+native client draws water and scatter by default like the browser
+(`flags.water` / `flags.scatter` say what was drawn); `--no-water` ↔ `&water=0`,
+`--no-scatter` ↔ `&scatter=0`, e.g.
+`http://192.168.8.244:8000/play?bench=auto&goto=<loc>&scatter=0&water=0` against
+`… --bench --no-scatter --no-water`.
 
 With scatter on (both layers, see "Scatter"):
 
@@ -169,9 +181,11 @@ CPU/GPU time, draws/triangles = `RenderTotalDrawCallsInFrame` /
 previous rendered frame). V-sync is off during the run unless `--vsync=on`.
 The free camera is switched off for the run and handed back afterwards.
 
-Every result ends with the extra key `ground` (Task S3b): `ground[layers=…]`
+Every result ends with the extra keys `ground` (Task S3b): `ground[layers=…]`
 when the browser's ground material was drawn, `ground[plain…]` (with the
-reason) when the plain one was — compare only runs where it says `layers`.
+reason) when the plain one was — compare only runs where it says `layers` —
+and `water` (Task S3c): `water[areas=… tiles=… kinds=… wet_texels=…]` when the
+water variant was drawn, `water[off: --no-water]` / `water[none…]` otherwise.
 
 ## Ground surfaces (Task S3b)
 
@@ -206,11 +220,105 @@ lit as three's `MeshStandardMaterial` (roughness 0.85, metalness 0.02, Lambert).
 compares with the TS functions (`fixtures/ground_reference.mjs`).
 
 Not ported (favours Godot, a little fragment work): the fog-of-war veil
-(`applyFogVeil`) and the basement hole discard (`patchHole`); water is out
-(`&water=0`). The masks are loaded ONCE around the anchor (the browser re-fetches
+(`applyFogVeil`) and the basement hole discard (`patchHole`). The water branch
+is the separate water variant (Task S3c, "Scene content"). The masks are loaded ONCE around the anchor (the browser re-fetches
 as its anchor moves). If anything of the index/masks/texture array fails, the
 plain material stays and the log says why (`ground surfaces failed, …`); a single
 image that fails only turns its slice into the colour slice, like the browser.
+
+## Scene content (Task S3c)
+
+What the browser's overview shows of every location, decided like client3d
+(`World/LocationView.cs`, `World/RecipeMeshes.cs`, `World/SceneModels.cs`) —
+nothing here is a native choice:
+
+- **Reach** (`streamRings.ringFor` over `placeDistance` to the stream points: the
+  avatar's position and the camera focus = the bench anchor): `near` ≤ 150 m or
+  pinned (the avatar's location), `far` ≤ 560 m, beyond that the browser does not
+  mount the location at all (`gone`, counted, not built).
+- **The open location**: the avatar's location is open from the first mount on
+  (`arrivalLocId`, fade 1). Its interior group shows: storey plates only on the
+  avatar's storey, room groups only on it (outdoor/always-visible rooms always),
+  outline walls only on it and only where the camera is not on their outer side
+  (`applyWallCulling`, per frame in the recipe shader), door leaves / window panes
+  that a model fills stay hidden, extras (stairs, lift) always; its indoor model
+  specs on that storey are placed. A shell building model fades out (not drawn);
+  a plan-hull or ground model stays and loses what lies inside its `cutouts` (the
+  browser discards those fragments; here the triangles whose centroid lies
+  inside are dropped from a per-placement copy — same pixels, no per-fragment
+  polygon loop, which favours Godot).
+- **Closed locations**: the building model(s), the outdoor model specs (no room
+  or an outdoor / always-visible room) and the outdoor rooms' primitives; a place
+  without a building model shows its far-view shell (`shellPlan`: copies of the
+  level plates at or above ground and of every non-glass wall, leaves included).
+  The interior group stays invisible — its primitives and indoor specs are
+  counted as `interior`, not built.
+- **Tiers** (static, from the anchor and the bench path's start camera
+  anchor + (0, 24, 40)): building — far → `low`, near → `full` under 45 m camera
+  distance minus the footprint's half diagonal; outdoor/indoor specs — far → `low`,
+  near → `full` (`low` for a closed area-detail scene); world props —
+  `instanceTier` at 3 × the scatter distances (105 / 135 / 360 m) from the camera,
+  hidden beyond 360 m. The variant is `pickModelVariant` (model variant first,
+  then the tier, a missing tier → the best existing one).
+- **Placement**: every spec through `place()` (§ B2, `World/ModelPlacement.cs`,
+  incl. `measure: "fit"` door/window models), one import per GLB URL
+  (`World/ModelCache.cs`, placements are `Duplicate()`s sharing meshes and
+  materials), the § A16.9 terrain lift for level-0 specs, a grey placeholder box
+  for a spec without a loadable mesh but with `placeholder_dims`.
+- **Primitive materials** (`World/RecipeMaterials.cs`): the kind's surface texture
+  tiled in world metres (plates: outline metres / `size_m`, walls and extras: each
+  face's own metres) or the payload style colour; glass / door-leaf / stair / lift
+  colours and opacities from `style`; matte 0.85 / 0.02 unless the kind's
+  `material` says otherwise. One mesh per material per location (the browser draws
+  one per primitive — fewer draw calls, favours Godot).
+- **Water** (`Ground/Water.cs`, the water branch of `Ground/GroundShader.cs`):
+  Wasser v2 K-A has no water mesh. A wet height tile (`water` block of
+  `/play/heightfield/tiles`) is lifted onto `liftedHeight(h, level, sd)` (the
+  vertex stage's `tlodLift`, done once on the CPU) with the lift in `UV2.x`; the
+  water variant samples the signed distance, the kind row and the flow per pixel
+  (one window over the loaded wet tiles) and runs `tlodWaterSurface` /
+  `tlodWaterNormal` / `tlodWaterOut` (absorption, surface share, foam, the
+  three-sheet ripple of the procedural wave map, the fresnel sky share). The look
+  table is `refreshWaterLook`'s (one row per water layer kind, the kind surface's
+  `material`, the last painted area's bed depth). The final sky/foam mixes go in
+  as ALBEDO scale + EMISSION (Godot has no post-light hook; the specular share is
+  not scaled — a hair brighter highlight on deep water).
+- **Shader safety** (`World/ShaderSafety.cs`): every spatial shader (ground, the
+  water variant, the recipe variants, every scatter/undergrowth variant) goes
+  through Godot's shader-language front end once and logs
+  `shader <name>: compiled (N uniforms)`; a failure logs `FAILED … plain material
+  fallback` and that material falls back (ground → the plain vertex colour, water
+  → the dry tile, recipe → a StandardMaterial3D, scatter → the same shader
+  without the wind).
+
+Not ported (all view-only, counted nowhere): picture/glass slot materials, the
+room clip and the depth cut of props (`clip_outline`, `cut_plane`), door
+swinging, prop lights, the underwater ghosts, waterfalls, LOD re-evaluation while
+the camera moves (the bench drive keeps its focus on the anchor).
+
+Summary line of a build (online log, `--offline`, `--check`): `primitives=N
+skipped=M (degenerate=… interior=… storey=… panes=…) shell_copies=…
+culled_walls=… models[building=… room=… prop=… door=… window=… world=…
+placeholders=… missing=… interior=… storey=… faded=… culled=… full=… low=…]
+… water[…]`.
+
+## Offline: the real world without the server (Task S3c)
+
+`tools/dump_payloads.py` opens a COPY of a world directory through the FastAPI
+app itself (`TestClient`, no lifespan — no agent loop, no LLM), logs in as a
+temporary player that mirrors a user of that copy, and writes exactly the
+answers the client reads, laid out like `fixtures/` (binaries as hard links into
+the copy where possible). It refuses a world inside the repository's `worlds/`
+and an output inside the repository — the user's content stays out of git.
+
+```bash
+./.venv/bin/python native/tools/dump_payloads.py --world /path/to/COPY --out /path/to/dump --as-user NAME
+$GODOT --headless --path native -- --offline=/path/to/dump --goto=LOCATION
+```
+
+The offline run builds the same world as online (`Check/FixtureSource.cs` serves
+the dump) and prints `offline world …`, `offline scatter …`, `offline figures …`
+and the shader lines, then quits.
 
 ## Scatter (Task S3)
 
@@ -334,15 +442,16 @@ works the same way.
 | `Main.cs`, `Main.tscn` | entry scene: login → world build → camera → (`--bench`) the drive; `--check`/`--check-bench` dispatch |
 | `Cli.cs` | command-line parameters |
 | `Api/AnimaApi.cs` | HttpClient + cookie session, the server getters, `IWorldSource` |
-| `World/` | payload parsing, height sampling + anchor, terrain, `place()`, recipe meshes, the builder |
+| `World/` | payload parsing, height sampling + anchor, terrain, `place()`, the view rules (`LocationView.cs`), recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
+| `tools/dump_payloads.py` | Task S3c: dumps the client's HTTP answers from a COPY of a world for `--offline` |
 | `Gltf/` | Meshopt decode (P/Invoke) and runtime GLB import |
 | `Figures/` | world-map characters: placement rule, figures + poll loop, clip library (import, pick, retarget), rest-pose correction |
 | `Ui/` | login screen, fly camera (W/A/S/D gated while the HUD types) |
 | `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |
-| `Ground/` | Task S3b: the layer-cut port + payload (`LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`TerrainNormal.cs`), the ground shader (`GroundShader.cs`), the loader that builds slices/masks/material (`GroundSurfaces.cs`) |
+| `Ground/` | Task S3b: the layer-cut port + payload (`LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); Task S3c: the water field, numbers and window (`Water.cs`) |
 | `Scatter/` | `/play/terrain` payload, the exact sampler port, the LOD/undergrowth maths, prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
 | `Bench/` | camera path (`loadPath`/`samplePath`), statistics (`summarize`/`percentile`), the bench driver and its output |
-| `Check/` | `--check`: fixture source and expectations, bench maths, scatter (`ScatterCheck.cs`), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
+| `Check/` | `--check`: fixture source and expectations, the S3c world (`S3cCheck.cs`: view rules, models, world props, water, shaders), bench maths, scatter (`ScatterCheck.cs`), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
 | `fixtures/` | offline payloads (incl. `terrain.json`, the scatter reference vectors, the cut-down layer bake + surface library + the ground reference values) + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
 | `third_party/meshoptimizer/` | meshoptimizer v1.3 sources (MIT, `src/*.cpp`, `meshoptimizer.h`, LICENSE) |

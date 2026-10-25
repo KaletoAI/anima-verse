@@ -1,0 +1,39 @@
+{
+  "avatar": "Pia Lund",
+  "current_location_id": "loc-open",
+  "locations": [
+    { "id": "loc-open", "name": "Glass Villa", "pos_x": 64.0, "pos_z": 120.0, "yaw_deg": 0.0,
+      "plan_width_m": 10.0, "boundary": [[-5, -5], [5, -5], [5, 5], [-5, 5]], "openings": [] },
+    { "id": "loc-closed", "name": "Mill", "pos_x": -40.0, "pos_z": 100.0, "yaw_deg": 0.0,
+      "plan_width_m": 8.0, "boundary": [[-4, -4], [4, -4], [4, 4], [-4, 4]], "openings": [] },
+    { "id": "loc-far", "name": "Watch Post", "pos_x": 600.0, "pos_z": 128.0, "yaw_deg": 0.0,
+      "plan_width_m": 8.0, "boundary": [[-4, -4], [4, -4], [4, 4], [-4, 4]], "openings": [] },
+    { "id": "loc-gone", "name": "Far Shrine", "pos_x": 2000.0, "pos_z": 2000.0, "yaw_deg": 0.0,
+      "plan_width_m": 8.0, "boundary": [[-4, -4], [4, -4], [4, 4], [-4, 4]], "openings": [] }
+  ],
+  "characters": [
+    { "name": "Pia Lund", "location_id": "loc-open", "pos": { "x": 64.0, "z": 120.0 }, "pos_origin": null,
+      "height_cm": 170, "room_id": "r-ground", "activity_animation": "", "travel": null, "model_sig": "pia-1" }
+  ],
+  "world_props": [
+    { "id": "wp1", "prop_id": "stone", "name": "Stone", "x": 80.0, "z": 150.0, "yaw_deg": 30.0, "offset_y": 0.5,
+      "max_m": 1.2, "measure": "xyz", "fix_euler": { "x": 0, "y": 0, "z": 0 },
+      "variants": { "full": "/assets/props/stone/model?tier=full", "low": "/assets/props/stone/model?tier=low" },
+      "model_variants": [
+        { "full": "/assets/props/stone/model?tier=full", "low": "/assets/props/stone/model?tier=low" },
+        { "full": "/assets/props/stone/model?variant=1&tier=full", "low": "/assets/props/stone/model?variant=1&tier=low" }
+      ],
+      "variant": 1, "ground_offset_m": -0.25 },
+    { "id": "wp2", "prop_id": "stone", "name": "Stone", "x": 64.0, "z": 600.0, "yaw_deg": 0.0, "offset_y": 0.0,
+      "max_m": 1.2, "measure": "xyz", "fix_euler": { "x": 0, "y": 0, "z": 0 },
+      "variants": { "full": "/assets/props/stone/model?tier=full", "low": "/assets/props/stone/model?tier=low" } },
+    { "id": "wp3", "prop_id": "sign", "name": "Sign", "x": 200.0, "z": 160.0, "yaw_deg": 0.0, "offset_y": 0.0,
+      "max_m": 2.0, "measure": "xyz", "fix_euler": { "x": 0, "y": 0, "z": 0 },
+      "variants": { "full": "/assets/props/sign/model?tier=full", "low": "/assets/props/sign/model?tier=low" } }
+  ],
+  "world_props_sig": "s3c",
+  "events_by_location": {},
+  "world_bounds": { "min_x": -44.0, "min_z": 96.0, "max_x": 2004.0, "max_z": 2004.0 },
+  "height_sig": "fixture-s1a",
+  "fogged": false
+}

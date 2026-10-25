@@ -41,6 +41,10 @@ public static class ScatterShaders
         string key = $"{amp:0.00}|{textured}|{instanceColor}|{alphaCut}|{cullDisabled}";
         if (Cache.TryGetValue(key, out var s)) return s;
         s = new Shader { Code = Code(amp, textured, instanceColor, alphaCut, cullDisabled) };
+        // Shader safety (Task S3c): a sway shader that does not compile falls back to the same material without
+        // the wind (same uniform names, so every SetShaderParameter still lands) instead of the error colour.
+        if (!World.ShaderSafety.Ok(s, $"scatter[sway={amp:0.00}{(textured ? ",tex" : "")}{(instanceColor ? ",inst" : "")}{(alphaCut ? ",cut" : "")}{(cullDisabled ? ",both" : "")}]"))
+            s = new Shader { Code = Code(0, textured, instanceColor, alphaCut, cullDisabled) };
         Cache[key] = s;
         return s;
     }

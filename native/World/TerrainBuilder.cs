@@ -38,11 +38,23 @@ public static class TerrainBuilder
         return Build(grid, OverviewColor, Skip, "TerrainOverview");
     }
 
-    public static (MeshInstance3D Node, GridMeshStats Stats) BuildTile(HeightTile tile)
-        => Build(tile.Grid, TileColor, (_, _) => false, $"TerrainTile_{tile.Key.Tx}_{tile.Key.Tz}");
+    /// <summary>
+    /// One fine tile. With <paramref name="water"/> and a wet tile (Wasser v2 K-A) every vertex stands on
+    /// <c>liftedHeight(h, level, sd)</c> — the water variant's vertex lift, done once here instead of per frame —
+    /// and carries the lift (metres of water over the bed, the browser's <c>vTlodWet</c>) in <c>UV2.x</c>; the
+    /// node is tagged <c>wet</c> so the ground step dresses it in the water variant.
+    /// </summary>
+    public static (MeshInstance3D Node, GridMeshStats Stats) BuildTile(HeightTile tile, bool water = false)
+    {
+        var field = water && tile.Water is { } w && w.Wet > 0 ? w : null;
+        var r = Build(tile.Grid, TileColor, (_, _) => false, $"TerrainTile_{tile.Key.Tx}_{tile.Key.Tz}", field);
+        if (field is not null) r.Item1.SetMeta("wet", true);
+        return r;
+    }
 
     private static (MeshInstance3D, GridMeshStats) Build(HeightGrid g, Color color,
-                                                         Func<int, int, bool> skipCell, string name)
+                                                         Func<int, int, bool> skipCell, string name,
+                                                         Ground.WaterTileField? water = null)
     {
         int rows = g.Rows, cols = g.Cols;
         var node = new MeshInstance3D { Name = name };
@@ -51,11 +63,19 @@ public static class TerrainBuilder
         var verts = new Vector3[rows * cols];
         var normals = new Vector3[rows * cols];
         var colors = new Color[rows * cols];
+        var wet = water is not null ? new Vector2[rows * cols] : null;
         for (int j = 0; j < rows; j++)
         for (int i = 0; i < cols; i++)
         {
             int k = j * cols + i;
-            verts[k] = new Vector3((float)(g.OriginX + i * g.Step), g.At(i, j), (float)(g.OriginZ + j * g.Step));
+            float y = g.At(i, j);
+            if (water is not null && wet is not null && water.Rows == rows && water.Cols == cols)
+            {
+                float lifted = (float)Ground.Water.Lifted(y, water.Level[k], water.Sd[k]);
+                wet[k] = new Vector2(lifted - y, 0);
+                y = lifted;
+            }
+            verts[k] = new Vector3((float)(g.OriginX + i * g.Step), y, (float)(g.OriginZ + j * g.Step));
             // Central differences (one-sided at the border): n = (-dh/dx, 1, -dh/dz).
             int i0 = Math.Max(i - 1, 0), i1 = Math.Min(i + 1, cols - 1);
             int j0 = Math.Max(j - 1, 0), j1 = Math.Min(j + 1, rows - 1);
@@ -83,6 +103,7 @@ public static class TerrainBuilder
         arrays[(int)Mesh.ArrayType.Vertex] = verts;
         arrays[(int)Mesh.ArrayType.Normal] = normals;
         arrays[(int)Mesh.ArrayType.Color] = colors;
+        if (wet is not null) arrays[(int)Mesh.ArrayType.TexUV2] = wet;
         arrays[(int)Mesh.ArrayType.Index] = indices.ToArray();
         var mesh = new ArrayMesh();
         mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);

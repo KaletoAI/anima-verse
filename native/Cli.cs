@@ -22,6 +22,10 @@ namespace AnimaNative;
 ///   --no-scatter                hide the scatter AND the undergrowth (default on, like the browser; = &amp;scatter=0)
 ///   --plain-ground              the S1a one-colour terrain instead of the browser's ground surfaces (Task S3b)
 ///   --no-hud                    no React HUD over the world (default: the HUD via gdCEF when native/cef_artifacts is linked)
+///   --no-water                  no water (the terrain's water variant off; = &amp;water=0)
+///   --offline=DIR               build the world from a payload dump (native/tools/dump_payloads.py) instead of a
+///                               server: no login, no HUD; prints the world/scatter/figure summary lines, then quits
+///                               (with --bench: runs the drive, then quits)
 ///   --check                     offline self-test from native/fixtures, then quit
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
@@ -39,6 +43,10 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
     public bool PlainGround { get; init; }
     /// <summary><c>--no-hud</c>: skip the gdCEF HUD overlay (Task S4) even when the extension is linked.</summary>
     public bool NoHud { get; init; }
+    /// <summary><c>--no-water</c>: no water lift / water variant — the browser bench's <c>&amp;water=0</c> (Task S3c).</summary>
+    public bool NoWater { get; init; }
+    /// <summary><c>--offline=DIR</c>: the payload dump to build from (Task S3c), null = online.</summary>
+    public string? Offline { get; init; }
     /// <summary>true = keep V-sync during the bench run (<c>--vsync=on</c>).</summary>
     public bool Vsync { get; init; }
     /// <summary>Explicit <c>--size</c>; null = the project default (the bench uses <see cref="DefaultBenchSize"/>).</summary>
@@ -51,6 +59,8 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
         string server = DefaultServer;
         string? user = null, gotoQuery = null;
         bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = true, noHud = false, plainGround = false;
+        bool noWater = false;
+        string? offline = null;
         Vector2I? size = null;
         foreach (var raw in args)
         {
@@ -63,6 +73,8 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
             else if (arg == "--scatter") scatter = true;
             else if (arg == "--no-hud") noHud = true;
             else if (arg == "--plain-ground") plainGround = true;
+            else if (arg == "--no-water") noWater = true;
+            else if (TryValue(arg, "--offline", out var off)) offline = off;
             else if (TryValue(arg, "--server", out var v)) server = v.TrimEnd('/');
             else if (TryValue(arg, "--user", out v)) user = v;
             else if (TryValue(arg, "--goto", out v)) gotoQuery = v;
@@ -90,6 +102,8 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
             Scatter = scatter,
             NoHud = noHud,
             PlainGround = plainGround,
+            NoWater = noWater,
+            Offline = string.IsNullOrWhiteSpace(offline) ? null : offline,
             Vsync = vsync,
             Size = size,
         };

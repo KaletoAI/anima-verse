@@ -17,7 +17,13 @@ public sealed record TerrainTypeInfo(string Kind, string Color, double Undergrow
 
 /// <summary>A painted area: id, kind, the RAW polygon (junk corners as NaN — <c>cleanRing</c> drops them),
 /// its scatter rows, and how many rows of the kinds the spike does not port (along/edge/center).</summary>
-public sealed record TerrainAreaInfo(string Id, string Kind, List<P2> Polygon, List<ScatterEntry> Scatter, int OtherRows);
+public sealed record TerrainAreaInfo(string Id, string Kind, List<P2> Polygon, List<ScatterEntry> Scatter, int OtherRows)
+{
+    /// <summary><c>meta.water_profile</c> is there — the bake carved a bed (<c>waterProfileOf</c>, W1).</summary>
+    public bool WaterProfile { get; init; }
+    /// <summary><c>meta.water_depth_effective</c> (null = the bake default).</summary>
+    public double? WaterDepthEffective { get; init; }
+}
 
 public sealed record PropBox(double X, double Z, double YawDeg, double HalfW, double HalfD);
 
@@ -111,8 +117,13 @@ public sealed class TerrainPayload
                     other += al.EnumerateArray().Count(e => e.ValueKind == JsonValueKind.Object);
             }
             other += rows.Count(r => r.Place is "edge" or "center");
+            bool hasMeta = a.TryGetProperty("meta", out var am) && am.ValueKind == JsonValueKind.Object;
             t.Areas.Add(new TerrainAreaInfo(Json.Str(a, "id"), Json.Str(a, "kind"),
-                a.TryGetProperty("polygon", out var poly) ? Points(poly) : new List<P2>(), rows, other));
+                a.TryGetProperty("polygon", out var poly) ? Points(poly) : new List<P2>(), rows, other)
+            {
+                WaterProfile = hasMeta && am.TryGetProperty("water_profile", out var wp) && wp.ValueKind == JsonValueKind.Object,
+                WaterDepthEffective = hasMeta ? NumOrNull(am, "water_depth_effective") : null,
+            });
         }
         foreach (var b in Json.Arr(root, "prop_boxes"))
             t.PropBoxes.Add(new PropBox(NumOrNull(b, "x") ?? double.NaN, NumOrNull(b, "z") ?? double.NaN,

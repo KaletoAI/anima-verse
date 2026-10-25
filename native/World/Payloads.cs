@@ -149,35 +149,84 @@ public sealed class HeightfieldOverview
 
 /// <summary>
 /// A location row. From <c>GET /play/worldmap</c> it carries the placement
-/// (<c>pos_x/pos_z</c> nullable, <c>yaw_deg</c>); from
-/// <c>GET /world/locations?view=3d</c> only id and name (that view has no
-/// position — § A1.3: "position and derived geometry come from the world map").
+/// (<c>pos_x/pos_z</c> nullable, <c>yaw_deg</c>), the footprint (<c>boundary</c>, location-local
+/// metres, <c>plan_width_m</c>) and <c>map3d</c>; from <c>GET /world/locations?view=3d</c> only id and
+/// name (that view has no position — § A1.3: "position and derived geometry come from the world map").
 /// </summary>
 public sealed record LocationInfo(string Id, string Name, double? PosX, double? PosZ, double YawDeg)
 {
     public bool IsPlaced => PosX is double x && double.IsFinite(x) && PosZ is double z && double.IsFinite(z);
+    /// <summary><c>boundary</c> (location-local, before the yaw); null when the row has none.</summary>
+    public (double X, double Z)[]? Boundary { get; init; }
+    /// <summary><c>plan_width_m</c>, else 0.</summary>
+    public double PlanWidthM { get; init; }
+    /// <summary><c>map3d.style</c> (AV3D-1), "" when absent.</summary>
+    public string Map3dStyle { get; init; } = "";
+    /// <summary><c>map3d.area_model</c> truthy — <c>isAreaLocation</c> (tiles.ts).</summary>
+    public bool AreaModel { get; init; }
+    /// <summary>The row's <c>terrain</c> string (AV3D-7), "" when absent.</summary>
+    public string Terrain { get; init; } = "";
 
     public static List<LocationInfo> ParseList(JsonElement root)
         => Json.Arr(root, "locations")
                .Where(l => l.ValueKind == JsonValueKind.Object)
-               .Select(l => new LocationInfo(Json.Str(l, "id"), Json.Str(l, "name"),
-                                             Json.NumOrNull(l, "pos_x"), Json.NumOrNull(l, "pos_z"),
-                                             Json.Num(l, "yaw_deg")))
+               .Select(Parse)
                .Where(l => l.Id.Length > 0)
                .ToList();
+
+    public static LocationInfo Parse(JsonElement l)
+    {
+        l.TryGetProperty("map3d", out var m3);
+        var ring = l.TryGetProperty("boundary", out var b) ? Json.Ring(b) : Array.Empty<(double, double)>();
+        bool area = m3.ValueKind == JsonValueKind.Object && m3.TryGetProperty("area_model", out var am)
+                    && am.ValueKind is not (JsonValueKind.Null or JsonValueKind.False or JsonValueKind.Undefined)
+                    && !(am.ValueKind == JsonValueKind.String && am.GetString() == "")
+                    && !(am.ValueKind == JsonValueKind.Number && am.GetDouble() == 0);
+        return new LocationInfo(Json.Str(l, "id"), Json.Str(l, "name"),
+                                Json.NumOrNull(l, "pos_x"), Json.NumOrNull(l, "pos_z"), Json.Num(l, "yaw_deg"))
+        {
+            Boundary = ring.Length >= 3 ? ring : null,
+            PlanWidthM = Json.Num(l, "plan_width_m"),
+            Map3dStyle = Json.Str(m3, "style"),
+            AreaModel = area,
+            Terrain = Json.Str(l, "terrain"),
+        };
+    }
 }
 
 /// <summary>§ B1 <c>plates[]</c>.</summary>
 public sealed record ScenePlate(int Level, (double X, double Z)[] Outline, (double X, double Z)[][] Holes,
-                                double TopY, double Thickness);
+                                double TopY, double Thickness)
+{
+    public string RoomId { get; init; } = "";
+    public string TextureKind { get; init; } = "";
+    /// <summary><c>opacity_role</c>: "upper" = the payload ghosts it (<c>style.upper_floor_opacity</c>).</summary>
+    public string OpacityRole { get; init; } = "";
+}
 
 /// <summary>§ B1 <c>walls[]</c>.</summary>
 public sealed record SceneWall(int Level, (double X, double Z) From, (double X, double Z) To,
                                double BaseY, double Height, double Thickness,
-                               bool Glass, bool Leaf, bool DoorProp);
+                               bool Glass, bool Leaf, bool DoorProp)
+{
+    public string RoomId { get; init; } = "";
+    public string TextureKind { get; init; } = "";
+    public string OpacityRole { get; init; } = "";
+    /// <summary>The pane is filled by a window MODEL in <c>models[]</c> (Blender windows v16) — hidden inside like a door-prop leaf.</summary>
+    public bool WindowModel { get; init; }
+    /// <summary><c>outward_normal</c> (tile frame), (0, 0) when absent.</summary>
+    public (double X, double Z) OutwardNormal { get; init; }
+}
 
 /// <summary>§ B1 <c>extras[]</c> — a box, centre + own size, optional XYZ Euler in degrees.</summary>
-public sealed record SceneExtra(string Kind, double[] Center, double[] Size, double[]? Rotation);
+public sealed record SceneExtra(string Kind, double[] Center, double[] Size, double[]? Rotation)
+{
+    public int? Level { get; init; }
+    public string TextureKind { get; init; } = "";
+}
+
+/// <summary>§ B1 <c>rooms[]</c>: the fields the visibility rules read.</summary>
+public sealed record SceneRoom(string RoomId, int Level, bool AlwaysVisible);
 
 /// <summary>§ B1 <c>models[]</c> — the one placement spec of § B2.</summary>
 public sealed record SceneModelSpec(
@@ -187,6 +236,14 @@ public sealed record SceneModelSpec(
     double[]? SizeM, double AnchorX, double AnchorZ, double BottomY)
 {
     private static readonly string[] Tiers = { "full", "low" };
+
+    public string RoomId { get; init; } = "";
+    public int Level { get; init; }
+    public bool PlanHull { get; init; }
+    /// <summary><c>placeholder_dims</c> {w, d, h} — the box a spec without a loadable mesh keeps (§ A2).</summary>
+    public (double W, double D, double H)? PlaceholderDims { get; init; }
+    /// <summary><c>cutouts</c>: tile-frame polygons the open interior view cuts out of an area/plan-hull model.</summary>
+    public (double X, double Z)[][] Cutouts { get; init; } = Array.Empty<(double, double)[]>();
 
     /// <summary>
     /// <c>pickModelVariant</c> + <c>pickVariant</c> (types.ts): the model
@@ -208,46 +265,89 @@ public sealed record SceneModelSpec(
     }
 }
 
-/// <summary>The scene recipe of one location, reduced to what S1a draws.</summary>
+/// <summary>The scene recipe of one location, reduced to what the native client draws.</summary>
 public sealed class ScenePayload
 {
     public List<ScenePlate> Plates { get; } = new();
     public List<SceneWall> Walls { get; } = new();
     public List<SceneExtra> Extras { get; } = new();
     public List<SceneModelSpec> Models { get; } = new();
+    public List<SceneRoom> Rooms { get; } = new();
+    public HashSet<string> OutdoorRooms { get; } = new();
     public Dictionary<string, string> Style { get; } = new();
+    public Dictionary<string, double> StyleNumbers { get; } = new();
     public double K { get; private set; } = 1;
+    public bool AreaDetail { get; private set; }
+    /// <summary><c>floor_plan</c> or <c>markers</c> non-empty — part of <c>hasInterior</c> (mountShell).</summary>
+    public bool HasFloorPlanOrMarkers { get; private set; }
 
     public static ScenePayload Parse(JsonElement root)
     {
-        var s = new ScenePayload { K = Json.Num(root, "k", 1) };
+        var s = new ScenePayload
+        {
+            K = Json.Num(root, "k", 1), AreaDetail = Truthy(root, "area_detail"),
+            HasFloorPlanOrMarkers = Json.Arr(root, "floor_plan").Any() || Json.Arr(root, "markers").Any(),
+        };
         if (root.TryGetProperty("style", out var style) && style.ValueKind == JsonValueKind.Object)
             foreach (var p in style.EnumerateObject())
+            {
                 if (p.Value.ValueKind == JsonValueKind.String) s.Style[p.Name] = p.Value.GetString()!;
+                else if (p.Value.ValueKind == JsonValueKind.Number) s.StyleNumbers[p.Name] = p.Value.GetDouble();
+            }
         foreach (var p in Json.Arr(root, "plates"))
             s.Plates.Add(new ScenePlate((int)Json.Num(p, "level"),
                                         p.TryGetProperty("outline", out var o) ? Json.Ring(o) : Array.Empty<(double, double)>(),
                                         Json.Arr(p, "holes").Select(Json.Ring).ToArray(),
-                                        Json.Num(p, "top_y"), Json.Num(p, "thickness")));
+                                        Json.Num(p, "top_y"), Json.Num(p, "thickness"))
+            {
+                RoomId = Json.Str(p, "room_id"), TextureKind = Json.Str(p, "texture_kind"),
+                OpacityRole = Json.Str(p, "opacity_role"),
+            });
         foreach (var w in Json.Arr(root, "walls"))
         {
             var from = Json.Vec(w, "from");
             var to = Json.Vec(w, "to");
             if (from.Length < 2 || to.Length < 2) { s.Walls.Add(Degenerate); continue; }
+            var n = Json.Vec(w, "outward_normal");
             s.Walls.Add(new SceneWall((int)Json.Num(w, "level"), (from[0], from[1]), (to[0], to[1]),
                                       Json.Num(w, "base_y"), Json.Num(w, "height"), Json.Num(w, "thickness"),
-                                      Json.Bool(w, "glass"), Json.Bool(w, "leaf"), Json.Bool(w, "door_prop")));
+                                      Json.Bool(w, "glass"), Json.Bool(w, "leaf"), Json.Bool(w, "door_prop"))
+            {
+                RoomId = Json.Str(w, "room_id"), TextureKind = Json.Str(w, "texture_kind"),
+                OpacityRole = Json.Str(w, "opacity_role"), WindowModel = Json.Bool(w, "window_model"),
+                OutwardNormal = n.Length >= 2 ? (n[0], n[1]) : (0, 0),
+            });
         }
         foreach (var e in Json.Arr(root, "extras"))
         {
             double[]? rot = e.TryGetProperty("rotation", out var r) && r.ValueKind == JsonValueKind.Array
                 ? r.EnumerateArray().Select(x => Json.Num(x)).ToArray() : null;
-            s.Extras.Add(new SceneExtra(Json.Str(e, "kind"), Json.Vec(e, "center"), Json.Vec(e, "size"), rot));
+            s.Extras.Add(new SceneExtra(Json.Str(e, "kind"), Json.Vec(e, "center"), Json.Vec(e, "size"), rot)
+            {
+                Level = Json.NumOrNull(e, "level") is double lv ? (int)lv : null,
+                TextureKind = Json.Str(e, "texture_kind"),
+            });
         }
+        foreach (var r in Json.Arr(root, "rooms"))
+            if (Json.Str(r, "room_id") is { Length: > 0 } id)
+                s.Rooms.Add(new SceneRoom(id, (int)Json.Num(r, "level"), Json.Bool(r, "always_visible")));
+        foreach (var o in Json.Arr(root, "outdoor_rooms"))
+            if (o.ValueKind == JsonValueKind.String && o.GetString() is { Length: > 0 } id) s.OutdoorRooms.Add(id);
         foreach (var m in Json.Arr(root, "models"))
             s.Models.Add(ParseModel(m));
         return s;
     }
+
+    /// <summary>JS truthiness of one field (<c>!!scene.area_detail</c>).</summary>
+    private static bool Truthy(JsonElement e, string name)
+        => e.TryGetProperty(name, out var v) && v.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.Number => v.GetDouble() != 0,
+            JsonValueKind.String => v.GetString()!.Length > 0,
+            JsonValueKind.Object or JsonValueKind.Array => true,
+            _ => false,
+        };
 
     private static readonly SceneWall Degenerate = new(0, (0, 0), (0, 0), 0, 0, 0, false, false, false);
 
@@ -260,7 +360,8 @@ public sealed class ScenePayload
         return d;
     }
 
-    private static SceneModelSpec ParseModel(JsonElement m)
+    /// <summary>One placement spec; shared by the recipe's <c>models[]</c> and the world props (§ A9a).</summary>
+    public static SceneModelSpec ParseModel(JsonElement m)
     {
         m.TryGetProperty("fix_euler", out var fix);
         var anchor = Json.Vec(m, "anchor");
@@ -268,6 +369,9 @@ public sealed class ScenePayload
         List<Dictionary<string, string>>? mv = null;
         if (m.TryGetProperty("model_variants", out var mvEl) && mvEl.ValueKind == JsonValueKind.Array)
             mv = mvEl.EnumerateArray().Select(UrlMap).ToList();
+        (double, double, double)? ph = null;
+        if (m.TryGetProperty("placeholder_dims", out var pd) && pd.ValueKind == JsonValueKind.Object)
+            ph = (Json.Num(pd, "w"), Json.Num(pd, "d"), Json.Num(pd, "h"));
         return new SceneModelSpec(
             Json.Str(m, "role"), Json.Str(m, "id"), Json.Str(m, "display", "shell"), Json.Bool(m, "roof_only"),
             m.TryGetProperty("variants", out var v) ? UrlMap(v) : new Dictionary<string, string>(),
@@ -276,13 +380,23 @@ public sealed class ScenePayload
             Json.Num(m, "yaw_deg"), Json.Num(m, "max_m", 1), Json.Str(m, "measure", "xyz"),
             size.Length >= 2 ? size : null,
             anchor.Length >= 1 ? anchor[0] : 0, anchor.Length >= 2 ? anchor[1] : 0,
-            Json.Num(m, "bottom_y"));
+            Json.Num(m, "bottom_y"))
+        {
+            RoomId = Json.Str(m, "room_id"),
+            Level = (int)Json.Num(m, "level"),
+            PlanHull = Json.Bool(m, "plan_hull"),
+            PlaceholderDims = ph,
+            Cutouts = Json.Arr(m, "cutouts").Select(Json.Ring).Where(r => r.Length >= 3).ToArray(),
+        };
     }
 }
 
 /// <summary>One fine tile of <c>/play/heightfield/tiles</c> (256 m at 2 m step, edges shared).</summary>
 public sealed record HeightTile((int Tx, int Tz) Key, HeightGrid Grid)
 {
+    /// <summary>The tile's water field (Wasser v2 K-A, § A16.5 point 3), null on a dry tile.</summary>
+    public Ground.WaterTileField? Water { get; init; }
+
     public static List<HeightTile> ParseBatch(JsonElement root)
     {
         double step = Json.Num(root, "step_m", 2.0);
@@ -290,7 +404,10 @@ public sealed record HeightTile((int Tx, int Tz) Key, HeightGrid Grid)
         if (!root.TryGetProperty("tiles", out var tiles) || tiles.ValueKind != JsonValueKind.Object) return list;
         foreach (var p in tiles.EnumerateObject())
             if (HeightfieldOverview.TryTileKey(p.Name, out var key))
-                list.Add(new HeightTile(key, HeightGrid.Parse(p.Value, step)));
+            {
+                var grid = HeightGrid.Parse(p.Value, step);
+                list.Add(new HeightTile(key, grid) { Water = Ground.WaterTileField.Parse(p.Value, grid) });
+            }
         return list;
     }
 }

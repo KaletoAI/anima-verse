@@ -32,22 +32,38 @@ namespace AnimaNative.Check;
 public sealed class FixtureSource : IWorldSource
 {
     private readonly string _dir;
+    /// <summary>Where a file this directory does not hold is read from (the S3c world borrows the ground files).</summary>
+    private readonly string? _fallback;
     private readonly Dictionary<string, string> _urls;
+    /// <summary>The two large merged files, parsed once (a real dump holds ~30 / ~200 MB of them).</summary>
+    private readonly Dictionary<string, JsonDocument> _big = new();
+
+    public string Dir => _dir;
 
     public List<string> TileRequests { get; } = new();
+    /// <summary>Every <c>/play/locations/{id}/scene</c> asked for.</summary>
+    public List<string> SceneRequests { get; } = new();
     public List<string> ByteRequests { get; } = new();
     public List<string> ModelRequests { get; } = new();
     /// <summary>Every <c>/play/terrain-layers</c> call: "" for the index, else the keys joined by ';'.</summary>
     public List<string> LayerRequests { get; } = new();
 
-    public FixtureSource(string dir)
+    public FixtureSource(string dir, string? fallback = null)
     {
         _dir = dir;
+        _fallback = fallback;
         _urls = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(Path.Combine(dir, "urls.json")))
                 ?? new Dictionary<string, string>();
     }
 
-    private Task<JsonDocument> Doc(string file) => Task.FromResult(JsonDocument.Parse(File.ReadAllBytes(Path.Combine(_dir, file))));
+    private Task<JsonDocument> Doc(string file) => Task.FromResult(JsonDocument.Parse(File.ReadAllBytes(PathOf(file))));
+
+    /// <summary>The file in this directory, else in the fallback directory.</summary>
+    private string PathOf(string file)
+    {
+        var own = Path.Combine(_dir, file);
+        return File.Exists(own) || _fallback is null ? own : Path.Combine(_fallback, file);
+    }
 
     public Task<JsonDocument> GetWorldMapAsync() => Doc("worldmap.json");
     public Task<JsonDocument> GetHeightfieldAsync() => Doc("heightfield.json");
@@ -59,8 +75,7 @@ public sealed class FixtureSource : IWorldSource
             throw new ArgumentOutOfRangeException(nameof(keys));
         var wanted = keys.Select(k => $"{k.Tx},{k.Tz}").ToHashSet();
         TileRequests.AddRange(wanted);
-        using var all = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(_dir, "tiles.json")));
-        var root = all.RootElement;
+        var root = Big("tiles.json").RootElement;
         var tiles = new Dictionary<string, JsonElement>();
         foreach (var p in root.GetProperty("tiles").EnumerateObject())
             if (wanted.Contains(p.Name)) tiles[p.Name] = p.Value;
@@ -76,6 +91,7 @@ public sealed class FixtureSource : IWorldSource
 
     public Task<JsonDocument?> GetLocationSceneAsync(string locationId)
     {
+        SceneRequests.Add(locationId);
         var path = Path.Combine(_dir, $"scene_{locationId}.json");
         return Task.FromResult(File.Exists(path) ? JsonDocument.Parse(File.ReadAllBytes(path)) : null);
     }
@@ -106,10 +122,9 @@ public sealed class FixtureSource : IWorldSource
         LayerRequests.Add(string.Join(";", keys));
         if (keys.Count == 0) return Doc("terrain_layers.json");
         if (keys.Count > Ground.LayerCut.BatchMax) throw new ArgumentOutOfRangeException(nameof(keys));
-        using var index = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(_dir, "terrain_layers.json")));
+        using var index = JsonDocument.Parse(File.ReadAllBytes(PathOf("terrain_layers.json")));
         var indexed = index.RootElement.GetProperty("tile_keys").EnumerateArray().Select(k => k.GetString()).ToHashSet();
-        using var all = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(_dir, "terrain_layers_tiles.json")));
-        var root = all.RootElement;
+        var root = Big("terrain_layers_tiles.json").RootElement;
         var answer = new Dictionary<string, object>();
         foreach (var p in root.EnumerateObject())
             if (p.Name != "tiles") answer[p.Name] = p.Value;
@@ -121,6 +136,17 @@ public sealed class FixtureSource : IWorldSource
     }
 
     public Task<JsonDocument> GetSurfaceTexturesAsync() => Doc("surface_textures.json");
+
+    private JsonDocument Big(string file)
+    {
+        lock (_big)
+        {
+            if (!_big.TryGetValue(file, out var doc))
+                _big[file] = doc = JsonDocument.Parse(File.ReadAllBytes(PathOf(file)),
+                                                      new JsonDocumentOptions { MaxDepth = 256 });
+            return doc;
+        }
+    }
 
     /// <summary>
     /// A fixture file, or with <c>repo:</c> a repository file: the repository

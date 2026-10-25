@@ -1,0 +1,8 @@
+{
+  "locations": [
+    {"id": "loc-open", "name": "Glass Villa", "rooms": [], "terrain": null, "map3d": null},
+    {"id": "loc-closed", "name": "Mill", "rooms": [], "terrain": null, "map3d": null},
+    {"id": "loc-far", "name": "Watch Post", "rooms": [], "terrain": null, "map3d": null},
+    {"id": "loc-gone", "name": "Far Shrine", "rooms": [], "terrain": null, "map3d": null}
+  ]
+}

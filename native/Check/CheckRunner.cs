@@ -28,7 +28,10 @@ public static class CheckRunner
     private const int ExpLocations = 3, ExpScenes = 2;
     private const int ExpBuildings = 1, ExpBuildingsMeshopt = 1;
     private const int ExpBuildingVertices = 2220, ExpBuildingIndices = 3330;
-    private const int ExpPrimitives = 9, ExpSkipped = 4, ExpDoorPropLeaves = 1;
+    // S3c: the yard (no model, closed) shows its FAR SHELL — 1 level plate + 6 non-glass walls (leaves included);
+    // skipped: 3 degenerate (2-point plate, zero-length wall, empty shaft) + 5 interior (house plate + wall, yard
+    // glass + 2 stair boxes) — README "Recipe primitives".
+    private const int ExpPrimitives = 7, ExpSkipped = 8, ExpShellCopies = 7, ExpDegenerate = 3, ExpInterior = 5;
     private const float ExpHouseDatum = 4f, ExpYardDatum = 2.91357421875f;
     private const float ExpPlateArea = 46f;                        // 8 × 6 minus the 2 × 1 hole
     private const float ExpBuildingMaxM = 12f, ExpBuildingBottom = -0.25f;
@@ -81,7 +84,11 @@ public static class CheckRunner
             Eq("building_indices", stats.BuildingIndices, ExpBuildingIndices);
             Eq("primitives", stats.Primitives, ExpPrimitives);
             Eq("skipped", stats.Skipped, ExpSkipped);
-            Eq("door_prop_leaves", stats.DoorPropLeaves, ExpDoorPropLeaves);
+            Eq("shell_copies", stats.Recipe.ShellCopies, ExpShellCopies);
+            Eq("degenerate", stats.Recipe.Degenerate, ExpDegenerate);
+            Eq("interior", stats.Recipe.Interior, ExpInterior);
+            Eq("panes", stats.Recipe.Panes, 0);
+            Eq("missing models", stats.Models.Missing, 1);   // the house's crate: no fixture for its URL
             Eq("failures", stats.Failures, 0);
 
             // Location frames: datum from the fine tile where loaded, else the overview.
@@ -102,8 +109,10 @@ public static class CheckRunner
             // The plate with a hole: area of the hole-free pieces.
             float area = PlateArea(dir);
             Near("plate area", area, ExpPlateArea);
-            Expect("recipe mesh", yard.GetNodeOrNull<MeshInstance3D>("Recipe") is not null, "yard has no Recipe mesh");
-            Expect("no recipe under house", house.GetNodeOrNull("Recipe") is null, "house drew its recipe despite the model");
+            Expect("recipe mesh", yard.GetChildren().OfType<MeshInstance3D>().Any(n => n.Name.ToString().StartsWith("Recipe")),
+                   "yard has no Recipe mesh");
+            Expect("no recipe under house", !house.GetChildren().OfType<MeshInstance3D>().Any(n => n.Name.ToString().StartsWith("Recipe")),
+                   "house drew its recipe despite the model");
 
             CheckPlacementRule();
             var figures = await CheckFigures(world, source, builder.Height!);
@@ -111,10 +120,12 @@ public static class CheckRunner
             var scatter = await ScatterCheck.RunAsync(world, source, builder.Height!, dir);
             var hud = HudCheck.Run(source);
             var ground = await GroundCheck.RunAsync(world, source, builder, stats, dir);
+            var s3c = await S3cCheck.RunAsync(host, dir);
 
             GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c}");
+            builder.Models?.FreeAll();
             world.QueueFree();
             return 0;
         }

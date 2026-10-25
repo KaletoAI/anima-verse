@@ -1,0 +1,26 @@
+{
+  "signature": "s3c-far", "k": 1, "extent_m": 8, "storey_m": 3,
+  "levels": [{ "level": 0, "floor_y": 0 }],
+  "style": { "wall_color": "#c9bfae", "floor_color": "#a89f90", "glass_color": "#9cc3e0", "stair_color": "#8f8577" },
+  "rooms": [
+    { "room_id": "f1", "level": 0, "always_visible": false, "outline": [[-4, -4], [4, -4], [4, 4], [-4, 4]], "openings": [] }
+  ],
+  "outdoor_rooms": [],
+  "plates": [],
+  "walls": [
+    { "level": 0, "room_id": "f1", "from": [-4, -4], "to": [4, -4], "base_y": 0, "height": 3, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [0, -1] },
+    { "level": 0, "room_id": "f1", "from": [4, -4], "to": [4, 4], "base_y": 0, "height": 3, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [1, 0] },
+    { "level": 0, "room_id": "f1", "from": [-4, 0], "to": [-4, -1], "base_y": 0.9, "height": 1.2, "thickness": 0.05, "glass": true, "opacity_role": "ground", "outward_normal": [-1, 0] }
+  ],
+  "extras": [
+    { "kind": "stair_riser", "center": [0, 0.1, 0], "size": [1, 0.2, 0.05], "level": 0, "stair": 0 }
+  ],
+  "floor_plan": [], "stairs": [], "markers": [], "doorways": [], "problems": [], "corridors": [],
+  "models": [
+    { "role": "prop", "id": "post",
+      "variants": { "full": "/assets/props/post/model.glb?tier=full", "low": "/assets/props/post/model.glb?tier=low" },
+      "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 2, "measure": "xyz",
+      "anchor": [0, 5], "bottom_y": 0 }
+  ],
+  "figures": { "base_height_m_world": 1.7, "stand_clearance": 0.12 }
+}

@@ -30,11 +30,16 @@ public partial class Main : Node3D
 {
     private CliOptions? _options;
     private AnimaApi? _api;
+    /// <summary>What the world is built from: the logged-in API, or the payload dump of <c>--offline</c>.</summary>
+    private IWorldSource? _source;
+    private WorldBuilder? _builder;
     private Label? _status;
     private FlyCamera? _camera;
     private FigureManager? _figures;
     private ScatterLayer? _scatter;
     private string _groundSummary = "ground[plain]";
+    private string _waterSummary = "water[none]";
+    private bool _waterDrawn;
     private readonly CancellationTokenSource _stop = new();
     private int _focus = -1;
     private HudOverlay? _hud;
@@ -71,6 +76,14 @@ public partial class Main : Node3D
         {
             int code = await BenchCheck.RunAsync(this, _camera!, _options);
             GetTree().Quit(code);
+            return;
+        }
+        if (_options.Offline is { } dump)
+        {
+            // --offline: the REAL world from a payload dump, headless-capable, no login, no HUD (Task S3c).
+            _source = new FixtureSource(System.IO.Path.GetFullPath(dump));
+            Log($"offline source: {((FixtureSource)_source).Dir}");
+            await LoadWorldAsync();
             return;
         }
         if (!_options.NoHud) AttachHud();
@@ -141,6 +154,7 @@ public partial class Main : Node3D
             _api?.Dispose();
             _api = new AnimaApi(_options.Server);
             using (await _api.LoginAsync(user, password)) { }
+            _source = _api;
             // ONE login: the HUD's browser gets this very session (HudOverlay.Start).
             _hud?.Start(_api.BaseUri, _api.SessionToken());
             layer.QueueFree();
@@ -156,7 +170,11 @@ public partial class Main : Node3D
             MeshoptNative.EnsureLoaded();
             var world = new Node3D { Name = "World" };
             AddChild(world);
-            var builder = new WorldBuilder(_api!, Log, strict: false) { PlainGround = _options!.PlainGround };
+            var builder = _builder = new WorldBuilder(_source!, Log, strict: false)
+            {
+                PlainGround = _options!.PlainGround,
+                NoWater = _options.NoWater,
+            };
             var stats = await builder.BuildAsync(world, _options!.Goto);
             Anchor = stats.Anchor;
             _camera!.LookAtAnchor(stats.Anchor.Position + new Vector3(0, 1.5f, 0));
@@ -166,6 +184,8 @@ public partial class Main : Node3D
                               + (stats.Ground.Mode == "layers" ? $", ground {stats.Ground.Layers} layers / {stats.Ground.TexturesLoaded} textures"
                                                                 : ", plain ground");
             _groundSummary = stats.Ground.Summary();
+            _waterSummary = stats.WaterSummary();
+            _waterDrawn = stats.WaterMode == "drawn";
             SetStatus(worldStatus + "   —   loading figures…");
 
             if (_options.Scatter)
@@ -173,12 +193,12 @@ public partial class Main : Node3D
                 // --scatter: the authored scatter AND the undergrowth (Task S3), anchored on the camera target.
                 SetStatus(worldStatus + "   —   loading scatter…");
                 var cam = _camera!;
-                _scatter = await ScatterLayer.CreateAsync(_api!, builder.Height!, builder.FirstMap!.Value,
+                _scatter = await ScatterLayer.CreateAsync(_source!, builder.Height!, builder.FirstMap!.Value,
                                                           () => cam.Target, Log);
                 world.AddChild(_scatter);
             }
 
-            _figures = new FigureManager(_api!, builder.Height!, Log, strict: false);
+            _figures = new FigureManager(_source!, builder.Height!, Log, strict: false);
             world.AddChild(_figures);
             await _figures.InitAsync();
             _ = _figures.PollLoopAsync(_stop.Token);
@@ -194,6 +214,25 @@ public partial class Main : Node3D
                               ? "   —   drag: orbit, wheel: zoom, WASD: move, click a figure: plaque, F/Enter: chat, M: menu"
                               : "   —   drag: orbit, wheel: zoom, WASD: move, F: next figure"));
             };
+            if (_options.Offline is not null && !_options.Bench)
+            {
+                await _figures.FirstPollDone;
+                if (_scatter is not null)
+                {
+                    await ScatterSettled(_scatter);
+                    // One more LOD pass after the meshes landed (the browser's 1 Hz tick), so the line counts what is drawn.
+                    int passes = _scatter.LodPasses;
+                    ulong t0 = Time.GetTicksMsec();
+                    while (_scatter.LodPasses <= passes && Time.GetTicksMsec() - t0 < 3000)
+                        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+                }
+                Log("offline world " + stats.Summary());
+                if (_scatter is not null) Log("offline scatter " + _scatter.Summary());
+                Log("offline figures " + FigureLine());
+                foreach (var line in ShaderSafety.Lines) Log("offline " + line);
+                GetTree().Quit(0);
+                return;
+            }
             if (_options.Bench)
             {
                 await _figures.FirstPollDone;
@@ -205,7 +244,7 @@ public partial class Main : Node3D
         {
             GD.PrintErr($"[native] world load failed: {e}");
             SetStatus("World load failed: " + e.Message);
-            if (_options!.Bench && _options.QuitAfterBench) GetTree().Quit(1);
+            if ((_options!.Bench && _options.QuitAfterBench) || _options.Offline is not null) GetTree().Quit(1);
         }
     }
 
@@ -217,7 +256,8 @@ public partial class Main : Node3D
     private void StartBench(WorldBuilder builder)
     {
         var settings = BenchRunner.SettingsFor(_figures!.LatestMap ?? builder.FirstMap!.Value, builder,
-                                               _options!.Goto, _options.Vsync, scatter: _scatter is not null);
+                                               _options!.Goto, _options.Vsync, scatter: _scatter is not null,
+                                               water: _waterDrawn);
         Log($"bench starts ({settings.Path.Keyframes.Length} keyframes)");
         AddChild(new BenchRunner(_camera!, settings, result =>
         {
@@ -229,6 +269,8 @@ public partial class Main : Node3D
             }
             // Extra key (Task S3b): which ground material the run drew — "layers" (the browser's) or "plain".
             result["ground"] = _groundSummary;
+            // Extra key (Task S3c): what the world showed — water, recipe primitives, models.
+            result["water"] = _waterSummary;
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(this, result, file);
             _ = ReportBench(BenchOutput.Line(result));
@@ -238,6 +280,11 @@ public partial class Main : Node3D
     /// <summary>Sends the result to the server's bench log, then honours <c>--quit-after-bench</c>.</summary>
     private async Task ReportBench(string line)
     {
+        if (_api is null)
+        {
+            if (_options!.QuitAfterBench || _options.Offline is not null) GetTree().Quit(0);
+            return;
+        }
         try
         {
             await _api!.PostBenchResultAsync(line);
@@ -299,6 +346,7 @@ public partial class Main : Node3D
     public override void _ExitTree()
     {
         _stop.Cancel();
+        _builder?.Models?.FreeAll();
         if (_hud is not null && IsInstanceValid(_hud)) _hud.Handlers.Clear();   // the overlay outlives this scene
         _api?.Dispose();
     }

@@ -1,0 +1,66 @@
+{
+  "signature": "s3c-open", "k": 1, "extent_m": 10, "storey_m": 3,
+  "levels": [{ "level": 0, "floor_y": 0 }, { "level": 1, "floor_y": 3 }],
+  "style": { "wall_color": "#d0c8b8", "floor_color": "#b8b0a0", "glass_color": "#9cc3e0", "glass_opacity": 0.3,
+             "door_color": "#4a3a2e", "upper_wall_opacity": 0.45, "upper_floor_opacity": 0.4,
+             "elevator_glass_opacity": 0.22, "stair_color": "#8a7a66" },
+  "rooms": [
+    { "room_id": "r-ground", "level": 0, "always_visible": false, "outline": [[-5, -5], [5, -5], [5, 0], [-5, 0]], "openings": [] },
+    { "room_id": "r-up", "level": 1, "always_visible": false, "outline": [[-5, -5], [5, -5], [5, 0], [-5, 0]], "openings": [] },
+    { "room_id": "r-garden", "level": 0, "always_visible": true, "outline": [[-5, 1], [5, 1], [5, 5], [-5, 5]], "openings": [] }
+  ],
+  "outdoor_rooms": [],
+  "plates": [
+    { "level": 1, "outline": [[-5, -5], [5, -5], [5, 0], [-5, 0]], "holes": [], "top_y": 3.0, "thickness": 0.2, "opacity_role": "upper" },
+    { "level": 1, "room_id": "r-up", "outline": [[-5, -5], [5, -5], [5, 0], [-5, 0]], "holes": [], "top_y": 3.02, "thickness": 0.02, "opacity_role": "upper" },
+    { "level": 0, "room_id": "r-garden", "outline": [[-5, 1], [5, 1], [5, 5], [-5, 5]], "holes": [], "top_y": 0.02, "thickness": 0, "texture_kind": "grass", "opacity_role": "ground" }
+  ],
+  "walls": [
+    { "level": 0, "from": [-5, -5], "to": [5, -5], "base_y": 0, "height": 3, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [0, -1], "texture_kind": "forest" },
+    { "level": 0, "room_id": "r-ground", "from": [5, -5], "to": [5, 0], "base_y": 0, "height": 3, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [1, 0] },
+    { "level": 1, "room_id": "r-up", "from": [-5, -5], "to": [5, -5], "base_y": 3.2, "height": 2.8, "thickness": 0.2, "opacity_role": "upper", "outward_normal": [0, -1] },
+    { "level": 0, "room_id": "r-ground", "from": [-5, -1], "to": [-5, -2], "base_y": 0, "height": 2.1, "thickness": 0.05, "leaf": true, "door_prop": true, "opacity_role": "ground", "outward_normal": [-1, 0] },
+    { "level": 0, "room_id": "r-ground", "from": [-5, -3], "to": [-5, -4], "base_y": 0.9, "height": 1.2, "thickness": 0.05, "glass": true, "window_model": true, "opacity_role": "ground", "outward_normal": [-1, 0] },
+    { "level": 0, "room_id": "r-ground", "from": [1, 0], "to": [3, 0], "base_y": 0.9, "height": 1.2, "thickness": 0.05, "glass": true, "opacity_role": "ground", "outward_normal": [0, 1] },
+    { "level": 0, "room_id": "r-ground", "from": [0, 0], "to": [0, 0], "base_y": 0, "height": 3, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [0, 1] }
+  ],
+  "extras": [
+    { "kind": "stair_tread", "center": [2, 0.1, -2], "size": [1, 0.2, 0.3], "level": 0, "stair": 0, "texture_kind": "forest" },
+    { "kind": "elevator_glass", "center": [-3, 1.5, -3], "size": [1, 3, 0.02], "level": 0 }
+  ],
+  "floor_plan": [
+    { "room_id": "r-ground", "polygon_world": [[-5, -5], [5, -5], [5, 0], [-5, 0]], "floor_kind": "", "closed": true }
+  ],
+  "stairs": [], "markers": [], "doorways": [], "problems": [], "corridors": [],
+  "models": [
+    { "role": "building", "display": "shell", "id": "loc-open",
+      "variants": { "full": "/play/locations/loc-open/model?tier=full" }, "level": 0,
+      "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 10, "measure": "yawed_xz",
+      "anchor": [0, 0], "bottom_y": 0, "walk_y_world": 0, "plan_hull": true,
+      "cutouts": [[[-3, -3], [3, -3], [3, 3], [-3, 3]]] },
+    { "role": "prop", "id": "chair", "room_id": "r-ground",
+      "variants": { "full": "/assets/props/broadleaf/model.glb?tier=full", "low": "/assets/props/broadleaf/model.glb?tier=low" },
+      "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 90, "max_m": 1, "measure": "xyz",
+      "anchor": [2, -1], "bottom_y": 0 },
+    { "role": "prop", "id": "lamp", "room_id": "r-up",
+      "variants": { "full": "/assets/props/lamp/model?tier=full" },
+      "level": 1, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 1, "measure": "xyz",
+      "anchor": [0, -2], "bottom_y": 3.02 },
+    { "role": "prop", "id": "door:s3c0001", "room_id": "r-ground",
+      "variants": { "full": "/assets/doors/s3c0001/model?tier=full" },
+      "level": 0, "fix_euler": null, "yaw_deg": 90, "measure": "fit", "size_m": [1.0, 2.1],
+      "anchor": [-5, -1.5], "bottom_y": 0 },
+    { "role": "prop", "id": "window:s3c0002", "room_id": "r-ground", "variants": {},
+      "placeholder_dims": { "w": 1.0, "d": 0.1, "h": 1.2 },
+      "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 90, "max_m": 1.2, "measure": "xyz",
+      "anchor": [-5, -3.5], "bottom_y": 0.9 },
+    { "role": "room", "id": "r-ground", "room_id": "r-ground", "variants": {},
+      "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 10, "measure": "xz",
+      "anchor": [0, -2.5], "bottom_y": 0 },
+    { "role": "prop", "id": "bench", "room_id": "r-garden",
+      "variants": { "full": "/assets/props/broadleaf/model.glb?tier=full", "low": "/assets/props/broadleaf/model.glb?tier=low" },
+      "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 1.5, "measure": "xyz",
+      "anchor": [0, 3], "bottom_y": 0 }
+  ],
+  "figures": { "base_height_m_world": 1.7, "stand_clearance": 0.12 }
+}

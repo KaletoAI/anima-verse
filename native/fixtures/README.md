@@ -30,6 +30,7 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `ground_fixture.mjs` | plain node script that bakes the cut-down masks in the server's encoding (see "Ground surfaces") |
 | `ground_reference.json` | the browser's layer-cut / want-set / natural-ground / colour-slice values on these fixtures — WRITTEN by `ground_reference.mjs` |
 | `ground_reference.mjs` | node script that runs `layerCut.ts`, `heightTiles.ts` `wantedTiles`, `naturalGroundMath.ts` and three's `Color` themselves |
+| `s3c/` | Task S3c: a second, hand-written world (avatar, open/closed/far/gone locations, world props, a wet tile) — files missing there (`heightfield.json`, the ground files) are read from this directory; see "S3c world" |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
 for the repository root above this directory, then above the working directory):
@@ -152,21 +153,26 @@ measured in the location frame: **max(size.x, size.z) = 12, min.y = −0.25,
 centre xz = (1.5, −2)**. The variant URL maps to `building_meshopt.glb` →
 **buildings = 1, buildings_meshopt = 1, 2220 / 3330**.
 
-`models[1]` is a prop → not drawn in S1a, **skipped +1**. The house has a
-(non-roof) building model, so its recipe plate/wall are NOT drawn (the browser's
-far view: the model replaces the shell).
+`models[1]` (the crate) is an OUTDOOR spec (no room) → placed like the browser's `mountShell` does; its URL
+has no fixture → not loadable, no `placeholder_dims` → **models missing = 1**. The house has a (non-roof)
+building model, so its recipe plate/wall stay in the (closed, invisible) interior group → **interior +2**.
 
-### Yard scene (no model → primitives)
+### Yard scene (no model → its far-view shell, Task S3c)
 
-- plates: the 8 × 6 plate with a 2 × 1 hole → drawn (**1**); the 2-point plate →
-  **skipped +1**. Top area = 48 − 2 = **46 m²** (check sums the triangles).
-- walls: 4 plain + 1 glass + 1 leaf drawn (**6**); the `door_prop` leaf is not
-  drawn and counted as **door_prop_leaves = 1** (not skipped — the contract hands
-  that opening to a door prop); the zero-length wall → **skipped +1**.
-- extras: tread + rotated stringer drawn (**2**); the box with size x = 0 →
-  **skipped +1**.
+No avatar in this world → nothing is open. The yard has no building model, its name carries no nature word
+(`detectStyle` → generic, not an area location) → `farShellSource` = **recipe**: the browser stands copies of
+the LEVEL plates (no room, level ≥ 0) and of every non-GLASS wall (level ≥ 0, door leaves included, even the
+one a door prop fills) outside; everything else stays in the invisible interior group.
 
-primitives = 1 + 6 + 2 = **9**; skipped = 1 (prop) + 1 + 1 + 1 = **4**.
+- plates: the 8 × 6 plate with a 2 × 1 hole → shell copy (**1**); the 2-point plate → **degenerate +1**.
+  Top area = 48 − 2 = **46 m²** (check sums the triangles).
+- walls: 4 plain + 1 leaf + the `door_prop` leaf → shell copies (**6**); the glass pane is not part of a shell
+  → **interior +1**; the zero-length wall → **degenerate +1**.
+- extras: tread + rotated stringer hang in the interior group → **interior +2**; the box with size x = 0 →
+  **degenerate +1**.
+
+primitives = 1 + 6 = **7** (all **7 shell copies**); skipped = degenerate 3 + interior (2 house + 1 + 2) 5 = **8**;
+panes 0.
 
 ## Figures (Task S1b)
 
@@ -447,3 +453,88 @@ path `"Path_Blend "` (trimmed + lower-cased → `path_blend`), meadow `meadow_te
   `ground surfaces failed, keeping the plain material: HTTP 503 …`; the library answering 503 → still the layer
   material, every slice its catalog colour (grass `#6f9a4a`, forest `#3f6e3a`, path `#a08a60`, lake → bed grass
   `#6f9a4a`, meadow `#7a9a50`), every tile 3 m; `--plain-ground` → no request at all.
+
+## S3c world (`s3c/`, Task S3c)
+
+A second small world, hand-written (no byte of a real world), for the scene shapes the real payloads have and
+the S1a fixtures did not: an avatar whose location is OPEN, rooms on two storeys, outdoor rooms, door/window
+models, world props, a wet height tile. `heightfield.json`, `terrain*.json` and `surface_textures.json` come
+from the main fixtures (fallback directory). Built with `--goto=Glass` → anchor **loc-open (64, 7.34375, 120)**
+(overview: fx = 320/256 = 1.25, fz = 376/256 = 1.46875 → north 4·0.75 + 8·0.25 = 5, south 10 →
+5·0.53125 + 10·0.46875 = 7.34375).
+
+### View: rings, open location, tiers
+
+Stream points = the avatar Pia Lund's `pos` (64, 120) and the anchor (64, 120); footprint distances (yaw 0):
+
+- loc-open: inside → 0, and pinned (the avatar's) → **near**, OPEN, storey of room `r-ground` = **0**;
+- loc-closed (−40, 100), square ±4: local (104, 20) → nearest corner (4, 4) → √(100² + 16²) = 101.27 ≤ 150 → **near**;
+- loc-far (600, 128): local (−536, −8) → corner (−4, −4) → √(532² + 4²) = 532.02 ≤ 520 + 40 → **far**;
+- loc-gone (2000, 2000) → **gone**: no scene request at all → **4 locations, 1 gone, 3 scenes**.
+
+Static tiers from the start camera = anchor + (0, 24, 40) = (64, 31.34375, 160):
+- loc-open building: datum = tile ground (64, 120) = 2·1 + 1.875 = **3.875**; distance √(40² + 27.46875²) =
+  48.52 − 10·√½ = 41.45 < 45 → **full**. loc-closed building: datum = overview (−40, 100): fx = 0.84375,
+  fz = 1.390625 → north 3.375, south 6.75 → 4.69336; distance √(104² + 60² + 26.65²) = 122.99 − 8·√½ = 117.3
+  → **low** (only `full` exists → that URL). Interior/outdoor specs: near → **full** (no area detail), far → **low**.
+
+### Primitives
+
+loc-open (open, storey 0): storey plate L1 → **storey**; room plate of `r-up` (L1) → **storey**; plate of the
+always-visible `r-garden` (thickness 0, both sides, texture `grass`) → **drawn**. Walls: contour w1 + room wall w2
+on L0 → **drawn, camera-culled**; w3 of `r-up` → **storey**; the `door_prop` leaf + the `window_model` pane →
+**panes 2**; the plain glass pane → **drawn** (translucent, opacity 0.3, not culled); the zero-length wall →
+**degenerate**. Extras: textured tread + lift glass → **drawn 2**.
+loc-closed (closed): plate of outdoor room `o1` → **drawn**; wall of `r-in` + the lift pad → **interior 2**.
+loc-far (closed, no model → far shell): 2 opaque walls → **shell copies 2**; the glass wall + the riser →
+**interior 2**.
+
+drawn = 6 + 1 + 2 = **9** (plates 2, walls 5, extras 2; shell 2; culled 2); skipped = degenerate 1 + interior 4 +
+storey 3 + panes 2 = **10**.
+
+### Models
+
+loc-open: the plan-hull building is KEPT when open (cutouts instead of a fade) → placed, its triangles inside
+the 6 × 6 cutout removed (**> 0 and < 1110**, and no remaining centroid inside); chair (`r-ground`) → prop;
+lamp (`r-up`) → **storey**; the `door:` model (`measure: "fit"`) → door; the `window:` spec has no URL but
+`placeholder_dims` → **placeholder**; the `room` diorama has neither → **missing**; bench (`r-garden`) → prop.
+loc-closed: building; well (no room) → prop; shelf (`r-in`) → **interior**. loc-far: post → prop at **low**.
+World props (camera (64, 160), landmark LOD = scatter × 3 = 105 / 135 / 360 m, cold start `low`):
+wp1 (80, 150) d = 18.87 → **full**, variant 1 → `…?variant=1&tier=full`; wp2 (64, 600) d = 440 → **culled**;
+wp3 (200, 160) d = 136 > 135 → **low**.
+→ placed building 2, prop 4, door 1, world 2; placeholders 1, missing 1, interior 1, storey 1, culled 1;
+tiers asked: full 6 (open building, chair, door, bench, well, wp1), low 3 (closed building, post, wp3);
+building GLBs 2 × (2220 / 3330). The hidden lamp/shelf URLs are never requested.
+
+Heights (§ A16.9 lift = ground(anchor) − datum, level 0, non-building):
+- chair anchor (2, −1) → world (66, 119): tile h = 2x/64 + z/64 → 2.0625 + 1.859375 = 3.921875 → lift
+  **0.046875** = its bottom in the location frame (bottom_y 0);
+- door anchor (−5, −1.5) → (59, 118.5): 1.84375 + 1.8515625 = 3.6953125 → bottom **−0.1796875**, height
+  **2.1** (`fit` scales y to `size_m[1]`);
+- placeholder anchor (−5, −3.5) → (59, 116.5): 3.6640625 → y = 0.9 − 0.2109375 = **0.6890625**, yaw 90°;
+- wp1 bottom = tile ground (80, 150) = 2.5 + 2.34375 = 4.84375 + 0.5 − 0.25 = **5.09375**.
+
+### Water (tile 0, 0)
+
+`h(i, j) = 2i + j` on the 5 × 5 lattice (step 64). Five lattice points carry a level of 6 m;
+`liftedHeight = h + (w − h)·smoothstep(0, 0.5, sd)` where w > h:
+
+| (i, j) | h | sd | gate | lifted | lift (UV2.x) |
+|---|---|---|---|---|---|
+| (0, 0) | 0 | 1.0 | 1 | **6** | **6** |
+| (1, 0) | 2 | 0.25 | 0.5 | **4** | **2** |
+| (0, 1) | 1 | 1.0 | 1 | **6** | **5** |
+| (1, 1) | 3 | −0.5 | 0 | **3** | **0** |
+| (0, 2) | 2 | 0.125 | 0.15625 | **2.625** | **0.625** |
+| (2, 0) | 4 | dry | 0 | **4** | **0** |
+
+→ **1 wet tile, 5 wet texels**, window 5 × 5 at (0, 0) step 64 (sd at (1, 0) = 0.25, a dry texel −10 000);
+the layer table's only water layer `lake` → **1 look row**, its surface `water` has no library entry and no
+painted area carries a profile → the default look, opaque depth ¾ · 2 = **1.5 m**, water areas **0**. With
+`--no-water`: no lift (vertex (0, 0) stays at **0**), no tag, no variant, `water[off: --no-water]`.
+
+### Shaders
+
+Every spatial shader goes through the headless front end once and logs one line; the check requires
+`ground`, `ground-water`, `recipe[opaque]`, `recipe[translucent]` and `recipe[opaque,both-sides]` to be
+`compiled (N uniforms)` with N = the shader's own uniform count.

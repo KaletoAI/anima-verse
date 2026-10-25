@@ -68,12 +68,14 @@ public partial class BenchRunner : Node
     /// path unless overridden (offline smoke only).
     /// </summary>
     public static BenchSettings SettingsFor(JsonElement worldmap, WorldBuilder builder, string? gotoQuery, bool vsync,
-                                            double? warmup = null, double? duration = null, bool scatter = false)
+                                            double? warmup = null, double? duration = null, bool scatter = false,
+                                            bool water = false)
     {
         var anchor = World.Anchor.FromWorld(worldmap, builder.Details, builder.Height!.Overview.Grid, gotoQuery,
                                             World.Anchor.BenchSource);
         var path = CameraPath.LoadEmbedded();
-        return new BenchSettings(path, warmup ?? path.Warmup, duration ?? path.Duration, anchor, gotoQuery, vsync, scatter);
+        return new BenchSettings(path, warmup ?? path.Warmup, duration ?? path.Duration, anchor, gotoQuery, vsync, scatter,
+                                 water);
     }
 
     public BenchRunner(FlyCamera camera, BenchSettings settings, Action<JsonObject> finished)

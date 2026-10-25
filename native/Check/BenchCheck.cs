@@ -59,7 +59,7 @@ public static class BenchCheck
             host.AddChild(world);
             void Log(string line) => GD.Print("[check-bench] " + line);
             var gotoQuery = options.Goto ?? "harbour";
-            var builder = new WorldBuilder(source, Log, strict: true);
+            var builder = new WorldBuilder(source, Log, strict: true) { NoWater = options.NoWater };
             var stats = await builder.BuildAsync(world, gotoQuery);
             var figures = new FigureManager(source, builder.Height!, Log, strict: true);
             world.AddChild(figures);
@@ -80,7 +80,8 @@ public static class BenchCheck
                 Log("scatter settled: " + scatter.Summary());
             }
             var settings = BenchRunner.SettingsFor(builder.FirstMap!.Value, builder, gotoQuery, options.Vsync,
-                                                   Warmup, Duration, scatter: scatter is not null);
+                                                   Warmup, Duration, scatter: scatter is not null,
+                                                   water: stats.WaterMode == "drawn");
             var anchor = settings.Anchor;
             if (options.Goto is null)
                 Expect("anchor", anchor.Position.DistanceTo(new Vector3(64f, 7.5f, 128f)) < 1e-4f
@@ -98,13 +99,14 @@ public static class BenchCheck
             int passesAtEnd = scatter?.LodPasses ?? 0;
             if (scatter is not null) result["scatterLayers"] = scatter.Summary();
             result["ground"] = stats.Ground.Summary();
+            result["water"] = stats.WaterSummary();
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(host, result, file);
             Expect("panel", host.GetNodeOrNull("BenchResult") is not null, "no result panel");
             Expect("printed line unescaped", BenchOutput.Line(result).Contains("\"backend\":\"godot-forward+\""),
                    BenchOutput.Line(result));
 
-            Expect("keys", result.Select(kv => kv.Key).SequenceEqual((scatter is null ? Keys : Keys.Append("scatterLayers")).Append("ground")),
+            Expect("keys", result.Select(kv => kv.Key).SequenceEqual((scatter is null ? Keys : Keys.Append("scatterLayers")).Append("ground").Append("water")),
                    string.Join(",", result.Select(kv => kv.Key)));
             Expect("backend", (string?)result["backend"] == "godot-forward+", $"{result["backend"]}");
             Expect("path", (string?)result["path"] == "shared/bench/camera_path_v1.json", $"{result["path"]}");
@@ -150,6 +152,9 @@ public static class BenchCheck
                 Expect("scatterLayers key", ((string?)result["scatterLayers"])?.StartsWith("scatter[") == true, $"{result["scatterLayers"]}");
             }
 
+            // Task S3c: the fixture world has a water LAYER but no wet height tile → no water drawn, flag false.
+            Expect("water key", (string?)result["water"] == (options.NoWater ? "water[off: --no-water]" : "water[none]"),
+                   $"{result["water"]}");
             Expect("ground key: the fixture world draws the layer material",
                    ((string?)result["ground"])?.StartsWith("ground[layers=") == true, $"{result["ground"]}");
             var written = JsonNode.Parse(File.ReadAllText(file))!;
@@ -159,7 +164,8 @@ public static class BenchCheck
                      + $"frameMsMedian={(double)result["frameMsMedian"]!:0.###} cpuMsMedian={(double)result["cpuMsMedian"]!:0.###} "
                      + $"draws={result["draws"]} triangles={result["triangles"]} size={result["size"]} "
                      + $"gpu=null (headless dummy renderer) file={file}"
-                     + (scatter is not null ? $" | {scatter.Summary()}" : "") + $" | {stats.Ground.Summary()}");
+                     + (scatter is not null ? $" | {scatter.Summary()}" : "") + $" | {stats.Ground.Summary()} | {stats.WaterSummary()}");
+            builder.Models?.FreeAll();   // the GLB templates never enter the tree (World/ModelCache.cs)
             return 0;
         }
         catch (Exception e)

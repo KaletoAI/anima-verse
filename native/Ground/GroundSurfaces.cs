@@ -21,6 +21,7 @@ public sealed class GroundStats
     public string? Reason;
     public int Layers, Slices, TexturesLoaded, TextureFailures, ColourSlices;
     public int WantedTiles, MaskTiles, WindowIdSize, WindowSdSize, FarCols, FarRows;
+    public int WaterTiles, WaterKinds, WaterTexels, WaterAreas;
     public float AoStrength;
     public int NearHeightCols, NearHeightRows;
     public double NormalSpan;
@@ -85,14 +86,21 @@ public sealed class GroundSurfaces
     public GroundStats Stats { get; } = new() { Mode = "layers" };
 
     private readonly Dictionary<string, (string? Url, double SizeM)> _library = new();
+    private readonly Dictionary<string, JsonElement> _materials = new();
+    /// <summary>The water variant every wet tile wears (null = no water drawn: none loaded, <c>--no-water</c>, or its shader failed).</summary>
+    public ShaderMaterial? WaterMaterial { get; private set; }
+    public WaterWindow? WaterWindow { get; private set; }
+    public List<WaterLook> WaterLooks { get; } = new();
+    public Dictionary<string, int> WaterRowOfKind { get; } = new();
     private readonly Dictionary<string, Image> _loaded = new();
     private TerrainPayload _catalog = null!;
 
     public static async Task<GroundSurfaces> LoadAsync(IWorldSource source, WorldHeight height, double anchorX,
-                                                       double anchorZ, Action<string> log)
+                                                       double anchorZ, Action<string> log, bool water = true)
     {
         var g = new GroundSurfaces();
         await g.Run(source, height, anchorX, anchorZ, log);
+        if (water) g.BuildWater(height, log);
         return g;
     }
 
@@ -167,6 +175,8 @@ public sealed class GroundSurfaces
                 if (kind.Length == 0 || (url.Length == 0 && !blend)) continue;
                 double size = Json.Num(t, "size_m");
                 _library[kind.ToLowerInvariant()] = (url.Length > 0 ? url : null, size != 0 ? size : 3);
+                if (t.TryGetProperty("material", out var mat) && mat.ValueKind == JsonValueKind.Object)
+                    _materials[kind.ToLowerInvariant()] = mat.Clone();
             }
         }
         catch (Exception e)
@@ -347,6 +357,8 @@ public sealed class GroundSurfaces
 
     private void BuildMaterial()
     {
+        if (!ShaderSafety.Ok(GroundShader.Get(), "ground"))
+            throw new InvalidOperationException("the ground shader did not compile");
         var mat = new ShaderMaterial { Shader = GroundShader.Get() };
         var arr = new Texture2DArray();
         var err = arr.CreateFromImages(new Godot.Collections.Array<Image>(Slices));
@@ -403,9 +415,79 @@ public sealed class GroundSurfaces
         Material = mat;
     }
 
-    /// <summary>Put the ground material on every terrain mesh (overview + tiles), over the S1a vertex colour.</summary>
+    /// <summary>
+    /// Put the ground material on every terrain mesh (overview + tiles), over the S1a vertex colour; a tile built
+    /// with the water lift (meta <c>wet</c>) wears the water variant (the browser's second CDLOD program).
+    /// </summary>
     public void ApplyTo(IEnumerable<GeometryInstance3D> nodes)
     {
-        foreach (var n in nodes) n.MaterialOverride = Material;
+        foreach (var n in nodes)
+            n.MaterialOverride = WaterMaterial is not null && n.HasMeta("wet") ? WaterMaterial : Material;
+    }
+
+    // ── Water (Wasser v2 K-A: ground.ts refreshWaterLook + terrainLod's water pyramid) ─────────────────────
+
+    /// <summary>
+    /// The look table (<c>refreshWaterLook</c>: one row per WATER layer kind, in layer-table order; the look from the
+    /// kind's surface material and the bed depth of the LAST painted area of that kind), the water window over the
+    /// loaded wet tiles, and the water variant of the ground material. A failure leaves the water off (logged).
+    /// </summary>
+    private void BuildWater(WorldHeight height, Action<string> log)
+    {
+        var wet = height.Tiles.Where(t => t.Water is { } w && w.Wet > 0).ToList();
+        if (wet.Count == 0) return;
+        try
+        {
+            var depthOf = new Dictionary<string, double?>();
+            foreach (var a in _catalog.Areas)
+                if (a.WaterProfile) depthOf[(a.Kind ?? "").ToLowerInvariant()] = a.WaterDepthEffective;
+            foreach (var layer in Layers)
+            {
+                if (!layer.Water) continue;
+                var kind = (layer.Kind ?? "").ToLowerInvariant();
+                if (WaterRowOfKind.ContainsKey(kind)) continue;
+                WaterRowOfKind[kind] = WaterLooks.Count;
+                var surface = SurfaceOf(layer.Kind ?? "");
+                JsonElement? spec = _materials.TryGetValue(surface, out var m) ? m : null;
+                WaterLooks.Add(Water.LookFrom(spec, depthOf.TryGetValue(kind, out var d) ? d : null));
+            }
+            if (WaterLooks.Count == 0) WaterLooks.Add(Water.LookFrom(null, null));
+            WaterWindow = WaterWindow.Build(wet.Select(t => (t.Key.Tx, t.Key.Tz, t.Water!)), height.Overview.TileM, WaterRowOfKind);
+            var shader = GroundShader.Get(water: true);
+            if (!ShaderSafety.Ok(shader, "ground-water")) { WaterWindow = null; return; }
+            var mat = new ShaderMaterial { Shader = shader };
+            foreach (var u in GroundShader.Get().GetShaderUniformList())
+            {
+                var name = (string)u.AsGodotDictionary()["name"];
+                mat.SetShaderParameter(name, Material.GetShaderParameter(name));
+            }
+            var w = WaterWindow!;
+            byte[] Bytes(float[] f)
+            {
+                var b = new byte[f.Length * 4];
+                Buffer.BlockCopy(f, 0, b, 0, b.Length);
+                return b;
+            }
+            mat.SetShaderParameter("tw_sd", Tex(w.Cols, w.Rows, Image.Format.Rf, Bytes(w.Sd)));
+            mat.SetShaderParameter("tw_kind", Tex(w.Cols, w.Rows, Image.Format.Rf, Bytes(w.KindRow)));
+            mat.SetShaderParameter("tw_flow", Tex(w.Cols, w.Rows, Image.Format.Rgf, Bytes(w.Flow)));
+            var look = Water.Pack(WaterLooks);
+            mat.SetShaderParameter("tw_look", Tex(3, Math.Max(1, WaterLooks.Count), Image.Format.Rgbaf, Bytes(look)));
+            mat.SetShaderParameter("tw_geom", new Vector4((float)w.OriginX, (float)w.OriginZ, (float)w.Step, 1));
+            mat.SetShaderParameter("tw_sky", Water.Sky);
+            mat.SetShaderParameter("tw_wave", ImageTexture.CreateFromImage(Water.WaveNormal()));
+            WaterMaterial = mat;
+            Stats.WaterTiles = w.Tiles;
+            Stats.WaterKinds = WaterLooks.Count;
+            Stats.WaterTexels = w.WetTexels;
+            Stats.WaterAreas = _catalog.Areas.Count(a => a.WaterProfile);
+            log($"water: {w.Tiles} wet tiles, window {w.Cols}x{w.Rows} @ ({w.OriginX:0.#}, {w.OriginZ:0.#}), "
+                + $"{w.WetTexels} wet texels, kinds [{string.Join(", ", WaterRowOfKind.OrderBy(k => k.Value).Select(k => k.Key))}]");
+        }
+        catch (Exception e)
+        {
+            WaterMaterial = null;
+            log($"water: failed, drawing no water ({e.Message})");
+        }
     }
 }

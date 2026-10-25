@@ -1,0 +1,13 @@
+{
+  "/play/locations/loc-open/model?tier=full": "../building_meshopt.glb",
+  "/play/locations/loc-closed/model?tier=full": "../building_meshopt.glb",
+  "/assets/doors/s3c0001/model?tier=full": "../building_original.glb",
+  "/assets/props/broadleaf/model.glb?tier=full": "repo:worlds/demo/props/broadleaf-df5830/model_1792265756.glb",
+  "/assets/props/broadleaf/model.glb?tier=low": "repo:worlds/demo/props/broadleaf-df5830/model_1792265757.glb",
+  "/assets/props/post/model.glb?tier=full": "repo:worlds/demo/props/broadleaf-df5830/model_1792265756.glb",
+  "/assets/props/post/model.glb?tier=low": "repo:worlds/demo/props/broadleaf-df5830/model_1792265757.glb",
+  "/assets/props/stone/model?variant=1&tier=full": "repo:worlds/demo/props/broadleaf-df5830/model_1792265756.glb",
+  "/assets/props/sign/model?tier=low": "repo:worlds/demo/props/broadleaf-df5830/model_1792265757.glb",
+  "/assets/surface-textures/ground_grass.png": "../ground_grass.png",
+  "/assets/surface-textures/dark_stone_2.jpg": "repo:shared/surface_textures/dark_stone_2_1785267141.jpg"
+}
