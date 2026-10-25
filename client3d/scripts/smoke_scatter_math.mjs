@@ -1668,11 +1668,83 @@
  *        301 m           -> 2 (hidden)   share(160) = 1 - (120/260)*0.75
  *                                                   = 0.653846153...
  *
+ * ============================================================================
+ * SHARED VECTORS — `shared/test-vectors/scatter.json`
+ * ============================================================================
+ * Every case above whose function has a C# port in `native/Core/Scatter/`
+ * runs from `shared/test-vectors/scatter.json` (format in its README), which
+ * the native client's C# tests read too. The derivations stay HERE; the JSON
+ * carries inputs + expectations only, each label starting with the tag of its
+ * derivation. A compound check (`[a, b]` against `[x, y]`) became one case
+ * per value. The `fn` names are the TypeScript ones; the C# side maps them:
+ *
+ *   TS (`fn`)              C#
+ *   propGroundFit          ScatterMath.GroundFit
+ *   pointInRing            ScatterMath.PointInRing
+ *   pointInFootprint       ScatterMath.PointInFootprint
+ *   footprintDistance      ScatterMath.FootprintDistance
+ *   footprintBlocks        ScatterMath.FootprintBlocks
+ *   scatterClearM          ScatterMath.ClearM
+ *   propBoxFootprint       ScatterMath.PropBoxFootprint
+ *   scatterWantedCount     ScatterMath.WantedCount
+ *   scatterInstances       ScatterMath.Instances
+ *   scatterCellInstances   ScatterMath.CellInstances
+ *   scatterSeed            ScatterMath.Seed
+ *   scatterCellSeed        ScatterMath.CellSeed
+ *   reshuffleEpoch         ScatterMath.ReshuffleEpoch
+ *   scatterSeedHash        ScatterMath.SeedHash
+ *   scatterVariantIndex    ScatterMath.VariantIndex
+ *   scatterYaw             ScatterMath.Yaw
+ *   scatterCellAt          ScatterMath.CellAt
+ *   scatterCellRing        ScatterMath.CellRing
+ *   scatterCellSpan        ScatterMath.CellSpan
+ *   scatterTargetH         ScatterLod.TargetH
+ *   scatterSway            ScatterLod.Sway
+ *   scatterGroundOffset    ScatterLod.GroundOffset
+ *   instanceTier           ScatterLod.InstanceTier
+ *   instanceShare          ScatterLod.InstanceShare
+ *   instanceVisible        ScatterLod.InstanceVisible
+ *   horizontalFovRad       ScatterLod.HorizontalFovRad
+ *   viewCone               ScatterLod.ViewCone
+ *   inViewCone             ScatterLod.InViewCone
+ *
+ * Ported but without a case of their own here: `scatterPinnedVariant`
+ * (PinnedVariant, reached through the `variant` option), `seedEpochSuffix`,
+ * `scatterOccupyR`, `instanceHash`, `seededRandom` (returns a stream, never a
+ * value), `wantedScatterCells` (WantedCells: the checks below compare only a
+ * length or the first cell) and the `undergrowth*` / `Ug*` functions (their
+ * cases live in `smoke_undergrowth.mjs`). `OccupancyGrid` is a class, not one
+ * of the ported static functions, so section (V, occupancy) stays inline.
+ *
+ * The JSON speaks the TypeScript shapes: a point is `[x, z]`, a footprint
+ * `{points}`, a LOD cfg `{nearM, farM, cullM}`, a prop box `{x, z, yaw_deg,
+ * half_w, half_d}`, a sampler call ONE options object with the TS keys; the
+ * results compared are `{x, z, yaw, variant}`, `{scale, offsetY}`,
+ * `{fwdX, fwdZ, cosHalf}` and `{points}`. Two conventions on top:
+ *   - `rng` in a sampler's options is a LIST of numbers. The runner feeds it
+ *     in order and THROWS when the sampler draws past its end — `stream()`
+ *     below, the hand-fed stream of section (C).
+ *   - An omitted trailing argument / option key is JS `undefined`; `null` is
+ *     JS `null`. In every case here both read as "not given" (C# `null`).
+ *     The one null in a middle position — the angle of (Q2) "aligned without
+ *     an angle" — gives the answer `undefined` gives there.
+ *
+ * WHAT STAYS INLINE BELOW, and why: inputs or expectations JSON cannot carry
+ * (NaN, Infinity, `undefined` as a RESULT, a non-number where the C# side has
+ * a typed number, functions such as `axisAt` or an `OccupancyGrid`); the red
+ * counter-checks against mutated sources; constants and source-text pins;
+ * properties instead of values (determinism of the seeded path, prefixes,
+ * lengths of seeded runs, sweeps over 1000 instances, "the key is ABSENT",
+ * relations between two calls); inputs built by a smoke helper
+ * (`localToWorld`, `at100`, `coneCos`); and every function without a C#
+ * port (`propBoxFootprints`, `scatterCellsInBox`, impostors, `scatterAxis.ts`,
+ * the edge / centre samplers, prefs).
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC = join(ROOT, 'packages/scene-render/src/scatter.ts');
@@ -1979,12 +2051,9 @@ async function main() {
 
   const TAU = Math.PI * 2;
   const SQUARE = [[0, 0], [20, 0], [20, 20], [0, 20]];
-  const TRIANGLE = [[0, 0], [20, 0], [0, 20]];
-  // The occluder rings of (C8..C11) — see the header for what each covers.
+  // The occluder ring OCC_LEFT of (C8) — the rest of (C8..C11) runs from the
+  // JSON, which spells its rings out the same way.
   const OCC_LEFT = [[0, 0], [10, 0], [10, 10], [0, 10]];
-  const OCC_RIGHT = [[12, 0], [20, 0], [20, 10], [12, 10]];
-  const OCC_FAR = [[30, 30], [40, 30], [40, 40], [30, 40]];
-  const BOWTIE = [[0, 0], [10, 10], [10, 0], [0, 10]];
   /** The server's concave L-shape in LOCAL metres — the fixture of
    *  `scripts/smoke_world_polygon.py` and `smoke_polygon_containment.mjs`. */
   const L_LOCAL = [[0, 0], [4, 0], [4, 2], [2, 2], [2, 4], [0, 4]];
@@ -2005,55 +2074,41 @@ async function main() {
   /** (C2)/(D): the outline that covers the first candidate of the (C1) stream
    *  — 1..3 by 3..5 in world metres, and (2, 4) is its centre. */
   const FP_OVER_FIRST = { points: [[1, 3], [3, 3], [3, 5], [1, 5]] };
-  /**
-   * (C12): a meadow painted AROUND the L-shaped place of section (B) — the
-   * 8 × 8 m square 100..108 by 44..52, which holds the whole outline.
-   *
-   *   wanted = round(64 / 100 * 3.125) = round(2) = 2, and `triesPerPoint` 1
-   *   bounds the run at exactly those two candidates.
-   *   x = 100 + r*8, z = 44 + r*8:
-   *     0.375, 0.375, 0.50 -> (103, 47), yaw pi   — the NOTCH  (B1)
-   *     0.125, 0.625, 0.00 -> (101, 49), yaw 0    — the wide ARM (B2)
-   */
-  const L_MEADOW = {
-    ring: [[100, 44], [108, 44], [108, 52], [100, 52]],
-    areaM2: 64, densityPer100m2: 3.125, seed: 's', triesPerPoint: 1,
-  };
-  const L_STREAM = [0.375, 0.375, 0.50, 0.125, 0.625, 0.00];
-  const L_BOTH = [{ x: 103, z: 47, yaw: Math.PI }, { x: 101, z: 49, yaw: 0 }];
-  // The (C1) stream and the two points it makes — reused by every existence
-  // check below, so "nothing moved" is one literal and not four.
+  // The (C1) stream — the (D) mutant below reads it; the (C12) meadow around
+  // the L-shaped place is the JSON fixture L_MEADOW (derivation in the header).
   const C1_STREAM = [0.10, 0.20, 0.50, 0.75, 0.25, 0.00];
-  const C1_POINTS = [{ x: 2, z: 4, yaw: Math.PI }, { x: 15, z: 5, yaw: 0 }];
   /** The client's `SCATTER_MODEL_HEIGHT_M` (metres), written out by hand and
    *  pinned against the client source in section (E). */
   const DEFAULT_TARGET_H = 2.0;
 
-  console.log('\n(A) propGroundFit — the prop stands on the ground (B16)');
-  check('A1 a 2 m tree around its centre rises by exactly 1 m',
-    propGroundFit(-1, 1, null), { scale: 1, offsetY: 1 });
-  check('A2 …and with height_m 4 it doubles and lifts by 2',
-    propGroundFit(-1, 1, 4), { scale: 2, offsetY: 2 });
-  check('A3 a prop already based at 0 is not "corrected"',
-    propGroundFit(0, 3, null), { scale: 1, offsetY: 0 });
-  check('A4 a prop hanging above its origin comes DOWN',
-    propGroundFit(0.5, 2.5, null), { scale: 1, offsetY: -0.5 });
-  check('A4 …and scales to a 1 m target from there',
-    propGroundFit(0.5, 2.5, 1), { scale: 0.5, offsetY: -0.25 });
-  check('A5 a flat prop lies on the ground instead of scaling to infinity',
-    propGroundFit(0.7, 0.7, null), { scale: 1, offsetY: -0.7 });
-  check('A5 …even when a target height is asked for',
-    propGroundFit(0.7, 0.7, 3), { scale: 1, offsetY: -0.7 });
+  // ---- the shared vectors: every hand-derived case of a C#-ported function
+  // (see "SHARED VECTORS" in the header). A sampler's `rng` list becomes the
+  // throwing `stream()`; everything else is called as the JSON spells it.
+  const lod = await loadTs(LOD_SRC);
+  const fed = (fn) => (opts) => fn(Array.isArray(opts?.rng)
+    ? { ...opts, rng: stream(opts.rng) } : opts);
+  console.log('\n(vectors) shared/test-vectors/scatter.json');
+  const vectors = runVectors(loadVectors('scatter'), {
+    propGroundFit, pointInRing, pointInFootprint, footprintDistance, footprintBlocks,
+    scatterClearM, propBoxFootprint, scatterWantedCount,
+    scatterInstances: fed(scatterInstances), scatterCellInstances: fed(scatterCellInstances),
+    scatterSeed, scatterCellSeed, reshuffleEpoch, scatterSeedHash, scatterVariantIndex,
+    scatterYaw, scatterCellAt, scatterCellRing, scatterCellSpan,
+    scatterTargetH: lod.scatterTargetH, scatterSway: lod.scatterSway,
+    scatterGroundOffset: lod.scatterGroundOffset, instanceTier: lod.instanceTier,
+    instanceShare: lod.instanceShare, instanceVisible: lod.instanceVisible,
+    horizontalFovRad: lod.horizontalFovRad, viewCone: lod.viewCone, inViewCone: lod.inViewCone,
+  });
+  passed += vectors.passed;
+  failed += vectors.failed;
+
+  console.log('\n(A) propGroundFit — the inline rest (non-finite / non-number input)');
   check('A6 a NaN box leaves the prop where the file put it',
     propGroundFit(NaN, NaN, 2), { scale: 1, offsetY: 0 });
-  for (const bad of [0, -2, NaN, null, undefined, 'tall']) {
+  for (const bad of [NaN, 'tall']) {
     check(`A7 target height ${JSON.stringify(bad)} is no request — lift only`,
       propGroundFit(-1, 1, bad), { scale: 1, offsetY: 1 });
   }
-  check('A8 the 2 m default blows a centimetre-sized tree up to 2 m',
-    propGroundFit(0, 0.02, DEFAULT_TARGET_H), { scale: 100, offsetY: 0 });
-  check('A8 …and SHRINKS an oversized one to the same 2 m',
-    propGroundFit(-2, 2, DEFAULT_TARGET_H), { scale: 0.5, offsetY: 1 });
 
   console.log('\n(B) pointInFootprint — the DRAWN outline stays clear (B18, v6)');
   // The caller's job, done here by hand so the expectations below are literals
@@ -2063,40 +2118,17 @@ async function main() {
   check('B …and the whole outline is the hand-derived one', L_WORLD, [
     [100, 50], [100, 46], [102, 46], [102, 48], [104, 48], [104, 50],
   ]);
+  // B1..B5 run from the JSON (HUT there is this hand-derived L_WORLD); inline
+  // stay the two non-finite inputs.
   const HUT = { points: L_WORLD };
-  check('B1 the NOTCH — local (3,3) = world (103,47) — is NOT excluded',
-    pointInFootprint(HUT, 103, 47), false);
-  check('B2 the wide arm — local (1,1) = world (101,49) — IS excluded',
-    pointInFootprint(HUT, 101, 49), true);
-  check('B2 …and the right arm — local (3,1) = world (101,47) — too',
-    pointInFootprint(HUT, 101, 47), true);
-  check('B3 local (5,5) = world (105,45) is past the outline entirely',
-    pointInFootprint(HUT, 105, 45), false);
-  check('B4 a two-point outline blocks nothing',
-    pointInFootprint({ points: [[100, 50], [100, 46]] }, 100, 48), false);
-  check('B4 an empty outline blocks nothing',
-    pointInFootprint({ points: [] }, 101, 49), false);
-  check('B4 a missing outline blocks nothing',
-    pointInFootprint({}, 101, 49), false);
   check('B4 a junk coordinate poisons the whole outline',
     pointInFootprint({ points: [[100, 50], [100, NaN], [102, 46], [102, 48]] },
       101, 47), false);
   check('B4 a NaN query point is refused', pointInFootprint(HUT, NaN, 49), false);
-  check('B5 a closed ring answers exactly as the open one does (inside)',
-    pointInFootprint({ points: [...L_WORLD, [100, 50]] }, 101, 49), true);
-  check('B5 …and in the notch (outside)',
-    pointInFootprint({ points: [...L_WORLD, [100, 50]] }, 103, 47), false);
 
   console.log('\n(M) the CLEARANCE — a prop stops OVERHANGING a location');
   const SQ_FP = { points: [[0, 0], [10, 0], [10, 10], [0, 10]] };
-  check('M1 (10.4, 5) is 0.4 m east of the x = 10 edge',
-    footprintDistance(SQ_FP, 10.4, 5), 0.4);
-  check('M1 (11.4, 5) is 1.4 m out', footprintDistance(SQ_FP, 11.4, 5), 1.4);
-  check('M1 the centre is INSIDE and reads 0',
-    footprintDistance(SQ_FP, 5, 5), 0);
-  check('M1 past the corner it is hypot(3, 4) = 5',
-    footprintDistance(SQ_FP, 13, 14), 5);
-  // Infinity survives no JSON round trip, so the four are asserted as the
+  // M1..M5 run from the JSON, except what JSON cannot carry. Infinity survives no JSON round trip, so the four are asserted as the
   // predicate they stand for: nothing can ever be that close.
   check('M1 a degenerate outline is unreachable',
     [footprintDistance({ points: [[0, 0], [10, 0]] }, 5, 5),
@@ -2107,51 +2139,18 @@ async function main() {
   check('M1 …and therefore blocks nothing, at any clearance',
     footprintBlocks({ points: [[0, 0], [10, NaN], [10, 10]] }, 5, 5, 1e6),
     false);
-  check('M1 …and with clearM 1.0 the 0.4 m prop goes, the 1.4 m one stays',
-    [footprintBlocks(SQ_FP, 10.4, 5, 1), footprintBlocks(SQ_FP, 11.4, 5, 1)],
-    [true, false]);
-  check('M1 the prop INSIDE is excluded whatever the clearance',
-    [footprintBlocks(SQ_FP, 5, 5, 1), footprintBlocks(SQ_FP, 5, 5, 0)],
-    [true, true]);
-  check('M2 without a clearance it is the plain containment test again',
-    [footprintBlocks(SQ_FP, 10.4, 5, 0), footprintBlocks(SQ_FP, 10.4, 5),
-      footprintBlocks(SQ_FP, 10.4, 5, NaN)],
-    [false, false, false]);
-  check('M3 the concave NOTCH is exactly 1 m from both its edges',
-    footprintDistance(HUT, 103, 47), 1);
-  check('M3 …so clearM 1.0 keeps the prop there and 1.2 takes it away',
-    [footprintBlocks(HUT, 103, 47, 1), footprintBlocks(HUT, 103, 47, 1.2)],
-    [false, true]);
+  check('M2 without a clearance it is the plain containment test again — clearM NaN',
+    footprintBlocks(SQ_FP, 10.4, 5, NaN), false);
   const CLEAR_SAMPLE = {
     ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
     footprints: [{ points: [[10, 0], [20, 0], [20, 10], [10, 10]] }],
     triesPerPoint: 1,
   };
   const CLEAR_STREAM = [0.48, 0.25, 0.00, 0.43, 0.25, 0.50];
-  check('M4 without a clearance both candidates stand — 0.4 m and 1.4 m out',
-    scatterInstances({ ...CLEAR_SAMPLE, rng: stream(CLEAR_STREAM) }),
-    [{ x: 9.6, z: 5, yaw: 0 }, { x: 8.6, z: 5, yaw: Math.PI }]);
-  check('M4 clearM 1.0 SUBTRACTS the 0.4 m one and leaves the other untouched',
-    scatterInstances({ ...CLEAR_SAMPLE, clearM: 1, rng: stream(CLEAR_STREAM) }),
-    [{ x: 8.6, z: 5, yaw: Math.PI }]);
-  check('M4 …the same holds through the cell sampler',
-    scatterCellInstances({
-      ring: [[0, 0], [64, 0], [64, 64], [0, 64]], cx: 0, cz: 0,
-      densityPer100m2: 0.05,
-      seed: 'm4',
-      footprints: [{ points: [[10, 0], [20, 0], [20, 10], [10, 10]] }],
-      clearM: 1,
-      rng: stream([0.15, 0.078125, 0.00, 0.134375, 0.078125, 0.50]),
-    }),
-    [{ x: 8.6, z: 5, yaw: Math.PI }]);
-  check('M5 an 8 m prop nobody measured keeps 4 m — as wide as it is tall',
-    scatterClearM(8), 4);
-  check('M5 …measured 3 m across it keeps 1.5', scatterClearM(8, 3), 1.5);
-  check('M5 a junk extent falls back to the estimate',
-    [scatterClearM(8, 0), scatterClearM(8, NaN), scatterClearM(8, null)],
-    [4, 4, 4]);
-  check('M5 …and a junk height is no clearance at all',
-    [scatterClearM(0), scatterClearM(NaN), scatterClearM(-3)], [0, 0, 0]);
+  check('M5 a junk extent falls back to the estimate — extent NaN',
+    scatterClearM(8, NaN), 4);
+  check('M5 …and a junk height is no clearance at all — height NaN',
+    scatterClearM(NaN), 0);
   check('M5 the estimate ratio is a half', SCATTER_CLEAR_HEIGHT_RATIO, 0.5);
   const centreMutant = await loadTs(SRC, centreInsteadOfClearance);
   checkNot('M6 the "centre inside" mutant does NOT reproduce the M4 answer',
@@ -2165,106 +2164,8 @@ async function main() {
     }),
     [{ x: 9.6, z: 5, yaw: 0 }, { x: 8.6, z: 5, yaw: Math.PI }]);
 
-  console.log('\n  pointInRing — the even-odd rule both sides share');
-  check('the centre of the square is inside', pointInRing(10, 10, SQUARE), true);
-  check('a point outside it is not', pointInRing(25, 10, SQUARE), false);
-  check('(18, 18) is outside the lower-left triangle',
-    pointInRing(18, 18, TRIANGLE), false);
-  check('…and (2, 2) is inside it', pointInRing(2, 2, TRIANGLE), true);
-
+  // pointInRing and C1..C6, C8..C12 run from the JSON.
   console.log('\n(C) scatterInstances — the sampler');
-  check('C1 two points out of six hand-fed numbers',
-    scatterInstances({
-      ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
-      triesPerPoint: 1,
-      rng: stream(C1_STREAM),
-    }),
-    C1_POINTS);
-  check('C2 a footprint SUBTRACTS the covered point — the rest is (C1) verbatim',
-    scatterInstances({
-      ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
-      footprints: [FP_OVER_FIRST],
-      triesPerPoint: 1,
-      rng: stream(C1_STREAM),
-    }),
-    [{ x: 15, z: 5, yaw: 0 }]);
-  check('C3 a candidate outside the ring costs its three numbers all the same',
-    scatterInstances({
-      ring: TRIANGLE, areaM2: 200, densityPer100m2: 1, seed: 's',
-      rng: stream([0.90, 0.90, 0.00, 0.10, 0.10, 0.00, 0.25, 0.25, 0.50]),
-    }),
-    [{ x: 2, z: 2, yaw: 0 }, { x: 5, z: 5, yaw: Math.PI }]);
-  check('C4 the try budget ends the loop instead of hanging',
-    scatterInstances({
-      ring: TRIANGLE, areaM2: 200, densityPer100m2: 1, seed: 's',
-      triesPerPoint: 1,
-      rng: stream([0.90, 0.90, 0.00, 0.95, 0.95, 0.00]),
-    }), []);
-  check('C5 density 0 scatters nothing',
-    scatterInstances({ ring: SQUARE, areaM2: 400, densityPer100m2: 0, seed: 's' }), []);
-  check('C5 a negative density scatters nothing',
-    scatterInstances({ ring: SQUARE, areaM2: 400, densityPer100m2: -3, seed: 's' }), []);
-  check('C5 an area of 0 scatters nothing',
-    scatterInstances({ ring: SQUARE, areaM2: 0, densityPer100m2: 5, seed: 's' }), []);
-  check('C5 a two-point ring scatters nothing',
-    scatterInstances({ ring: [[0, 0], [1, 1]], areaM2: 400, densityPer100m2: 5, seed: 's' }), []);
-  check('C5 a density that rounds to zero scatters nothing',
-    scatterInstances({ ring: SQUARE, areaM2: 400, densityPer100m2: 0.1, seed: 's' }), []);
-  check('C6 maxPoints caps the count at 3',
-    scatterInstances({
-      ring: SQUARE, areaM2: 400, densityPer100m2: 25, seed: 's', maxPoints: 3,
-      rng: stream([0.1, 0.1, 0, 0.2, 0.2, 0.25, 0.3, 0.3, 0.5]),
-    }),
-    [{ x: 2, z: 2, yaw: 0 }, { x: 4, z: 4, yaw: TAU * 0.25 },
-     { x: 6, z: 6, yaw: Math.PI }]);
-
-  console.log('\n  C8..C11 occluders — only the topmost area of a spot scatters');
-  check('C8 an area painted OVER this one subtracts the covered point',
-    scatterInstances({
-      ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
-      occluders: [OCC_LEFT], triesPerPoint: 1, rng: stream(C1_STREAM),
-    }),
-    [{ x: 15, z: 5, yaw: 0 }]);
-  for (const [what, occluders] of [
-    ['no occluders at all', undefined],
-    ['an empty occluder list', []],
-    ['an empty ring', [[]]],
-    ['a ring that covers nothing here', [OCC_FAR]],
-  ]) {
-    check(`C9 ${what} moves not one prop — (C1) verbatim`,
-      scatterInstances({
-        ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
-        occluders, triesPerPoint: 1, rng: stream(C1_STREAM),
-      }),
-      C1_POINTS);
-  }
-  check('C10 the occluder is tested EVEN-ODD: the bow-tie notch is not covered',
-    scatterInstances({
-      ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
-      occluders: [BOWTIE], triesPerPoint: 1,
-      rng: stream([0.10, 0.25, 0.00, 0.25, 0.10, 0.50]),
-    }),
-    [{ x: 5, z: 2, yaw: Math.PI }]);
-  check('C11 lying in ANY occluder is enough — here it is the second',
-    scatterInstances({
-      ring: SQUARE, areaM2: 400, densityPer100m2: 0.5, seed: 's',
-      occluders: [OCC_FAR, OCC_RIGHT], triesPerPoint: 1, rng: stream(C1_STREAM),
-    }),
-    [{ x: 2, z: 4, yaw: Math.PI }]);
-
-  console.log('\n  C12 the CONCAVE footprint, end to end (the lake with a bay)');
-  check('C12 without the hut both candidates stand',
-    scatterInstances({ ...L_MEADOW, rng: stream(L_STREAM) }), L_BOTH);
-  check('C12 the hut subtracts the ARM and leaves the NOTCH growing',
-    scatterInstances({ ...L_MEADOW, footprints: [HUT], rng: stream(L_STREAM) }),
-    [L_BOTH[0]]);
-  // The RED counter-probe of the bug this replaces: the old exclusion was the
-  // bounding SQUARE of the outline, and it swallows the notch as well.
-  const L_SQUARE_FP = { points: [[100, 46], [104, 46], [104, 50], [100, 50]] };
-  check('C12 the bounding SQUARE would have cleared the notch too — the bug',
-    scatterInstances({ ...L_MEADOW, footprints: [L_SQUARE_FP],
-      rng: stream(L_STREAM) }), []);
-
   console.log('\n  C7 determinism of the seeded path (a property, not a record)');
   const opts = { ring: SQUARE, areaM2: 400, densityPer100m2: 2 };
   const a1 = scatterInstances({ ...opts, seed: scatterSeed('ta_1', 0) });
@@ -2274,15 +2175,9 @@ async function main() {
   check('…and it is not empty', a1.length, 8);
   check('a second entry of the same area stands elsewhere',
     JSON.stringify(a1) !== JSON.stringify(b1), true);
-  check('the seed is area- and index-stable',
-    scatterSeed('ta_1', 2), 'terrain:scatter:ta_1:2');
 
   console.log('\n  C13 TWO AREAS OF ONE KIND — the count is the AREA\'s, '
     + 'never the kind\'s');
-  check('C13 a 10 000 m2 wood at 3 per 100 m2 wants 300',
-    scatterWantedCount(10000, 3), 300);
-  check('C13 …and a 900 m2 one of the same kind and density wants 27',
-    scatterWantedCount(900, 3), 27);
   const BIG = [[0, 0], [100, 0], [100, 100], [0, 100]];      // 10 000 m2
   const SMALL = [[200, 0], [230, 0], [230, 30], [200, 30]];  //    900 m2
   const big = scatterInstances({
@@ -2295,9 +2190,6 @@ async function main() {
     [big.length, small.length], [300, 27]);
   check('C13 …at the SAME density per 100 m2 — 3 and 3',
     [big.length / (10000 / 100), small.length / (900 / 100)], [3, 3]);
-  check('C13 the seeds are per AREA INSTANCE, not per kind',
-    [scatterSeed('ta_big', 0), scatterSeed('ta_small', 0)],
-    ['terrain:scatter:ta_big:0', 'terrain:scatter:ta_small:0']);
   check('C13 …so the second area is not a copy of the first',
     JSON.stringify(scatterInstances({
       ring: BIG, areaM2: 10000, densityPer100m2: 3,
@@ -2316,14 +2208,10 @@ async function main() {
   // (K1) the per-cell counts, straight off 4096/100 = 40.96
   const CELL_M2 = SCATTER_CELL_M * SCATTER_CELL_M;
   check('K0 a cell is 64 m, i.e. 4 096 m2', [SCATTER_CELL_M, CELL_M2], [64, 4096]);
-  check('K1 d = 3 / 20 / 10 / 1 / 0.1 per cell -> 123 / 819 / 410 / 41 / 4',
-    [3, 20, 10, 1, 0.1].map((d) =>
-      scatterWantedCount(CELL_M2, d, SCATTER_MAX_PER_CELL)),
-    [123, 819, 410, 41, 4]);
+  // K1's per-cell counts and the d = 200 cap run from the JSON; the 97.66 is
+  // arithmetic on the constants.
   check('K1 the guard is 4 000 per cell, i.e. 97.66 props per 100 m2',
-    [scatterWantedCount(CELL_M2, 200, SCATTER_MAX_PER_CELL),
-      Math.round((SCATTER_MAX_PER_CELL / (CELL_M2 / 100)) * 100) / 100],
-    [4000, 97.66]);
+    Math.round((SCATTER_MAX_PER_CELL / (CELL_M2 / 100)) * 100) / 100, 97.66);
   // (K2) the two forests — cell-aligned squares, 100 times apart in size
   const F_BIG = [[0, 0], [1280, 0], [1280, 1280], [0, 1280]];
   const F_SMALL = [[2048, 0], [2176, 0], [2176, 128], [2048, 128]];
@@ -2369,9 +2257,7 @@ async function main() {
     [density(oldBig, 1638400), density(oldSmall, 16384)]);
   check('K3 …because the cell rule puts the two woods at ONE density, ratio 1',
     density(bigN, 1638400) / density(smallN, 16384), 1);
-  // (K4) the seed
-  check('K4 the seed carries area, row AND cell',
-    scatterCellSeed('ta_1', 0, -2, 3), 'terrain:scatter:ta_1:0:-2,3');
+  // (K4) the seed string runs from the JSON
   const cellA = scatterCellInstances({
     ring: F_BIG, cx: 3, cz: 4, densityPer100m2: 3,
     seed: scatterCellSeed('ta_big', 0, 3, 4),
@@ -2389,18 +2275,8 @@ async function main() {
     cellA.map((p) => [p.x + SCATTER_CELL_M, p.z, p.yaw]).slice(0, 3)
       .some((p, i) => Math.abs(p[0] - cellB[i].x) < 1e-9
         && Math.abs(p[1] - cellB[i].z) < 1e-9), false);
-  // (K5) the ring filters, it does not shrink the box
-  check('K5 a cell half covered by the area keeps exactly its two inside props',
-    scatterCellInstances({
-      ring: [[0, 0], [32, 0], [32, 64], [0, 64]], cx: 0, cz: 0,
-      densityPer100m2: 0.1, seed: 'k5',
-      rng: stream([0.10, 0.50, 0.00, 0.90, 0.50, 0.25,
-        0.25, 0.25, 0.50, 0.75, 0.75, 0.75]),
-    }),
-    [{ x: 6.4, z: 32, yaw: 0 }, { x: 16, z: 16, yaw: Math.PI }]);
-  // (K6) the window
-  check('K6 cull 120 / 60 / 300 -> a span of 2 / 1 / 5 cells',
-    [scatterCellSpan(120), scatterCellSpan(60), scatterCellSpan(300)], [2, 1, 5]);
+  // (K5) runs from the JSON. (K6) the window — the spans, cell indices and
+  // the cell ring run from the JSON too.
   check('K6 …i.e. 25 / 9 / 121 cells in the window',
     [wantedScatterCells(0, 0, 120).length, wantedScatterCells(0, 0, 60).length,
       wantedScatterCells(0, 0, 300).length], [25, 9, 121]);
@@ -2410,17 +2286,11 @@ async function main() {
   check('K6 at the origin the window runs from (-2,-2)',
     wantedScatterCells(0, 0, 120)[0], [-2, -2]);
   check('K6 at (100, 30) the anchor cell is (1, 0), so it runs from (-1,-2)',
-    [scatterCellAt(100), scatterCellAt(30), wantedScatterCells(100, 30, 120)[0]],
-    [1, 0, [-1, -2]]);
+    wantedScatterCells(100, 30, 120)[0], [-1, -2]);
   check('K6 a step inside the same cell does not move the window',
     wantedScatterCells(100, 30, 120), wantedScatterCells(120, 60, 120));
   check('K6 …crossing the border does', wantedScatterCells(130, 30, 120)[0],
     [0, -2]);
-  check('K6 a cell owns its lower edge',
-    [scatterCellAt(0), scatterCellAt(63.99), scatterCellAt(64),
-      scatterCellAt(-1)], [0, 0, 1, -1]);
-  check('K6 the cell ring is its own box',
-    scatterCellRing(0, 0), [[0, 0], [64, 0], [64, 64], [0, 64]]);
   check('K6 a world box asks for every cell it meets, row-major',
     scatterCellsInBox(0, 0, 70, 10), [[0, 0], [1, 0]]);
   check('K6 …and a box bigger than the guard asks for none',
@@ -2455,14 +2325,9 @@ async function main() {
     }
     return h >>> 0;
   };
-  check('N1 the empty seed is the offset basis itself',
-    scatterSeedHash(''), 2166136261);
-  check('N1 hash(\'A\') is the hand-derived 3 289 118 412',
-    scatterSeedHash('A'), 3289118412);
+  // N1's three hashes and N2's index walks run from the JSON.
   check('N1 …and 3 289 118 412 mod 3 = 0 — the offset of the (N3) fixture',
     scatterSeedHash('A') % 3, 0);
-  check('N1 the real cell seed of (K4) hashes to 3 875 892 755',
-    scatterSeedHash(scatterCellSeed('ta_1', 0, -2, 3)), 3875892755);
   check('N1 …the module agrees with an independently written FNV-1a',
     ['', 'A', 'terrain:scatter:ta_1:0:-2,3', 'terrain:scatter:ta_big:7:31,-4']
       .map(scatterSeedHash),
@@ -2471,23 +2336,9 @@ async function main() {
   check('N1 the hash is UNSIGNED — a negative one would be a negative variant',
     ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(scatterSeedHash)
       .every((h) => h >= 0 && h < 2 ** 32 && Number.isInteger(h)), true);
-  // (N2) the formula
-  check('N2 seed \'A\', 3 variants, candidates 0..5 walk the ring from 0',
-    [0, 1, 2, 3, 4, 5].map((i) => scatterVariantIndex('A', i, 3)),
-    [0, 1, 2, 0, 1, 2]);
-  check('N2 the (K4) cell starts at 2 — every cell enters the ring on its own',
-    [0, 1, 2, 3, 4, 5].map((i) =>
-      scatterVariantIndex('terrain:scatter:ta_1:0:-2,3', i, 3)),
-    [2, 0, 1, 2, 0, 1]);
-  check('N2 n = 1 has nothing to choose from',
-    [0, 1, 2, 7].map((i) => scatterVariantIndex('A', i, 1)), [0, 0, 0, 0]);
-  check('N2 …and neither has n = 0, a negative n or junk',
-    [scatterVariantIndex('A', 3, 0), scatterVariantIndex('A', 3, -2),
-      scatterVariantIndex('A', 3, NaN), scatterVariantIndex('A', 3, null),
-      scatterVariantIndex('A', NaN, 3)], [0, 0, 0, 0, 0]);
-  check('N2 a big instance number wraps rather than running off the list',
-    [scatterVariantIndex('A', 3000, 4), scatterVariantIndex('A', 3001, 4)],
-    [(3289118412 + 3000) % 4, (3289118412 + 3001) % 4]);
+  // (N2) the formula — the junk the JSON cannot carry
+  check('N2 …and neither has n = 0, a negative n or junk — NaN n, NaN candidate',
+    [scatterVariantIndex('A', 3, NaN), scatterVariantIndex('A', NaN, 3)], [0, 0]);
   check('N2 …and the answer is always a usable index',
     [1, 2, 3, 4].every((n) => [0, 1, 2, 3, 4, 5, 6, 7].every((i) => {
       const v = scatterVariantIndex(`terrain:scatter:ta_${i}:0:${i},${n}`, i, n);
@@ -2502,21 +2353,12 @@ async function main() {
     0.75, 0.30, 0.00, 0.40, 0.80, 0.00];
   /** The ring painted OVER the middle of (N3) — it covers c2 and nothing else. */
   const OCC_MIDDLE = [[8, 8], [12, 8], [12, 12], [8, 12]];
+  // N3's three value checks run from the JSON; the runs are kept here for the
+  // mutant, bucket and pinned-variant checks below.
   const mixed = scatterInstances({ ...MIX, rng: stream(MIX_STREAM) });
-  check('N3 five candidates, five props, each with the variant of its ordinal',
-    mixed,
-    [{ x: 2, z: 4, yaw: 0, variant: 0 },
-      { x: 5, z: 5, yaw: TAU * 0.25, variant: 1 },
-      { x: 10, z: 10, yaw: Math.PI, variant: 2 },
-      { x: 15, z: 6, yaw: 0, variant: 0 },
-      { x: 8, z: 16, yaw: 0, variant: 1 }]);
   const subtracted = scatterInstances({
     ...MIX, occluders: [OCC_MIDDLE], rng: stream(MIX_STREAM),
   });
-  check('N3 a shape painted over the middle takes c2 and nothing else away',
-    subtracted.map((p) => [p.x, p.z]), [[2, 4], [5, 5], [15, 6], [8, 16]]);
-  check('N3 …and the survivors keep the variants they had: 0, 1, 0, 1',
-    subtracted.map((p) => p.variant), [0, 1, 0, 1]);
   const survivorMutant = await loadTs(SRC, variantFromSurvivorIndex);
   checkNot('N3 the mutant "count the survivors" does NOT reproduce that',
     survivorMutant.scatterInstances({
@@ -2610,34 +2452,14 @@ async function main() {
   check('N5 the payload list it reads is `model_variants` (§ A9)',
     mixSrc.includes('const list = entry.model_variants;'), true);
 
-  // (N6) the pinned variant — the formula's answer replaced, nothing else
+  // (N6) the pinned variant — the formula's answer replaced, nothing else.
+  // Pinned 1 / 9 / -1 and the cell-sampler pair run from the JSON.
   const pinnedRun = (variant) => scatterInstances({ ...MIX, variant, rng: stream(MIX_STREAM) });
-  const pinned1 = pinnedRun(1);
-  check('N6 a pinned variant leaves x, z and yaw of the (N3) run untouched',
-    pinned1.map((p) => [p.x, p.z, p.yaw]), mixed.map((p) => [p.x, p.z, p.yaw]), 1e-12);
-  check('N6 …and every instance shows variant 1',
-    pinned1.map((p) => p.variant), [1, 1, 1, 1, 1]);
-  check('N6 variant 9 at n = 3 clamps to the last, 2',
-    pinnedRun(9).map((p) => p.variant), [2, 2, 2, 2, 2]);
-  check('N6 variant -1 clamps to the first, 0',
-    pinnedRun(-1).map((p) => p.variant), [0, 0, 0, 0, 0]);
   check('N6 NaN is no pin: the formula of (N3), 0 1 2 0 1',
     pinnedRun(NaN).map((p) => p.variant), [0, 1, 2, 0, 1]);
   check('N6 one variant carries no variant key even when pinned',
     scatterInstances({ ...MIX, variantCount: 1, variant: 1, rng: stream(MIX_STREAM) })
       .map((p) => Object.keys(p)), Array(5).fill(['x', 'z', 'yaw']));
-  const cellPinned = (variant) => scatterCellInstances({
-    ring: SQUARE, cx: 0, cz: 0, densityPer100m2: 0.125, seed: 'A', variantCount: 3,
-    variant, rng: stream(MIX_STREAM),
-  });
-  check('N6 through the cell sampler: the square keeps c0 and c1, variants 0 1 free',
-    cellPinned(undefined),
-    [{ x: 6.4, z: 12.8, yaw: 0, variant: 0 }, { x: 16, z: 16, yaw: TAU * 0.25, variant: 1 }],
-    1e-9);
-  check('N6 …and 1 1 pinned, at the same two points',
-    cellPinned(1),
-    [{ x: 6.4, z: 12.8, yaw: 0, variant: 1 }, { x: 16, z: 16, yaw: TAU * 0.25, variant: 1 }],
-    1e-9);
 
   console.log('\n(S) the MINIMUM SPACING — a row\'s own props keep their distance');
   // The 10 x 10 fixture of the header: 5 wanted, one try each, 15 numbers.
@@ -2653,13 +2475,9 @@ async function main() {
     { x: 5, z: 1, yaw: Math.PI }, { x: 8, z: 4, yaw: TAU * 0.25 },
     { x: 1, z: 5, yaw: 0 },
   ];
-  // (S2) the four survivors: (3,3) is 2.8284 m from (1,1); the two at exactly
-  // 4.0 m stand, because the test is strictly less.
-  const SPACE_KEPT = [SPACE_ALL[0], SPACE_ALL[2], SPACE_ALL[3], SPACE_ALL[4]];
-  check('S1 without a spacing all five candidates stand',
-    scatterInstances({ ...SPACE_SAMPLE, rng: stream(SPACE_STREAM) }),
-    SPACE_ALL);
-  for (const none of [undefined, 0, -1, NaN, null, 'far']) {
+  // S1 (spacing absent / 0 / -1 / null), S2, S4, S5, S7 and S8's true answer
+  // run from the JSON; inline stay NaN and the non-number 'far'.
+  for (const none of [NaN, 'far']) {
     check(`S1 minSpacingM ${String(none)} is no constraint — the same five`,
       scatterInstances({
         ...SPACE_SAMPLE, minSpacingM: none, rng: stream(SPACE_STREAM),
@@ -2677,11 +2495,6 @@ async function main() {
     [scatterInstances({ ...SEEDED, minSpacingM: 0 }),
       scatterInstances({ ...SEEDED, minSpacingM: undefined })],
     [seededPlain, seededPlain]);
-  check('S2 spacing 4 SUBTRACTS the crowded candidate — the rest is (S1) verbatim',
-    scatterInstances({
-      ...SPACE_SAMPLE, minSpacingM: 4, rng: stream(SPACE_STREAM),
-    }),
-    SPACE_KEPT);
   // (S3) the entry ends thinner than the density asked for, and the run is
   // still the five candidates the budget allows — `stream` throws on a sixth.
   check('S3 four of the five wanted, and no extra try to fill the count',
@@ -2689,22 +2502,6 @@ async function main() {
       ...SPACE_SAMPLE, minSpacingM: 4, rng: stream(SPACE_STREAM),
     }).length,
     4);
-  check('S4 spacing 4.01 takes BOTH exact-4 m props away',
-    scatterInstances({
-      ...SPACE_SAMPLE, minSpacingM: 4.01, rng: stream(SPACE_STREAM),
-    }),
-    [SPACE_ALL[0], SPACE_ALL[3]]);
-  check('S4 …and a spacing every pair already keeps changes nothing',
-    scatterInstances({
-      ...SPACE_SAMPLE, minSpacingM: 2.5, rng: stream(SPACE_STREAM),
-    }),
-    SPACE_ALL);
-  check('S5 the survivors keep the variants of their CANDIDATE ordinals',
-    scatterInstances({
-      ...SPACE_SAMPLE, minSpacingM: 4, variantCount: 3,
-      rng: stream(SPACE_STREAM),
-    }).map((p) => p.variant),
-    [0, 2, 0, 1]);
   // (S6) the prefix property, with the spacing switched on
   const spacedFull = scatterInstances({ ...SEEDED, minSpacingM: 4 });
   const spacedHead = scatterInstances({ ...SEEDED, minSpacingM: 4, maxPoints: 10 });
@@ -2712,25 +2509,12 @@ async function main() {
     [spacedFull.length > 10, spacedHead.length], [true, 10]);
   check('S6 …and maxPoints 10 is the first 10 of the very same list',
     spacedHead, spacedFull.slice(0, 10));
-  // (S7) through the cell sampler — the path the authored scatter really takes
-  check('S7 the cell sampler passes the spacing through to the same rule',
-    scatterCellInstances({
-      ring: scatterCellRing(0, 0), cx: 0, cz: 0,
-      densityPer100m2: 0.09765625, seed: 's7', minSpacingM: 4,
-      rng: stream([0.015625, 0.015625, 0.00, 0.046875, 0.046875, 0.00,
-        0.078125, 0.015625, 0.50, 0.125, 0.0625, 0.25]),
-    }),
-    [{ x: 1, z: 1, yaw: 0 }, { x: 5, z: 1, yaw: Math.PI },
-      { x: 8, z: 4, yaw: TAU * 0.25 }]);
   // (S8) the red counter-check: two props 0.2 m apart across a bucket border
   const BUCKET_SAMPLE = {
     ring: SPACE_RING, areaM2: 100, densityPer100m2: 2, seed: 'A',
     triesPerPoint: 1, minSpacingM: 4,
   };
   const BUCKET_STREAM = [0.39, 0.10, 0.00, 0.41, 0.10, 0.00];
-  check('S8 two candidates 0.2 m apart across a bucket border: one survives',
-    scatterInstances({ ...BUCKET_SAMPLE, rng: stream(BUCKET_STREAM) }),
-    [{ x: 3.9, z: 1, yaw: 0 }]);
   const bucketMutant = await loadTs(SRC, ownBucketOnly);
   const bucketMutantOut = bucketMutant.scatterInstances({
     ...BUCKET_SAMPLE, rng: stream(BUCKET_STREAM),
@@ -2752,24 +2536,15 @@ async function main() {
     [7.232050807568877, 4.866025403784439],
     [3.7679491924311228, 6.866025403784439],
   ];
-  // (P1) the corners
-  check('P1 the box is the ROTATED rectangle, four corners in local order',
-    propBoxFootprint(PROP_BOX).points, PROP_BOX_CORNERS);
+  // (P1) the corners run from the JSON; the block helper has no C# port
   check('P1 …and a whole block comes back as footprints',
     propBoxFootprints([PROP_BOX]), [{ points: PROP_BOX_CORNERS }]);
   // (P2) a box that encloses nothing is no box
-  check('P2 a half-extent of 0 encloses nothing',
-    propBoxFootprint({ ...PROP_BOX, half_d: 0 }), null);
-  check('P2 a negative half-extent likewise',
-    propBoxFootprint({ ...PROP_BOX, half_w: -2 }), null);
   check('P2 a non-finite centre likewise',
     propBoxFootprint({ ...PROP_BOX, x: NaN }), null);
   check('P2 …and the block drops them instead of passing empty outlines',
     propBoxFootprints([{ ...PROP_BOX, half_w: 0 }, PROP_BOX, null]),
     [{ points: PROP_BOX_CORNERS }]);
-  check('P2 no yaw is no turn: the plain box 3..7 x 4..6',
-    propBoxFootprint({ x: 5, z: 5, half_w: 2, half_d: 1 }).points,
-    [[3, 4], [7, 4], [7, 6], [3, 6]]);
   check('P2 nothing at all is an empty list', propBoxFootprints(undefined), []);
   // (P3) which of the seven candidates die — see the header for each one
   const BOX_RING = [[0, 0], [10, 0], [10, 10], [0, 10]];
@@ -2783,12 +2558,7 @@ async function main() {
   ];
   const BOX_TRUE = [{ x: 3.2, z: 4.2, yaw: 0 }, { x: 1, z: 1, yaw: 0 },
     { x: 9, z: 9, yaw: 0 }];
-  check('P3 the four candidates inside the turned box die, three stand',
-    scatterInstances({
-      ...BOX_SAMPLE, footprints: propBoxFootprints([PROP_BOX]),
-      rng: stream(BOX_STREAM),
-    }),
-    BOX_TRUE);
+  // P3's value runs from the JSON (the footprint there is P1's corner list).
   check('P3 …and with no box at all every one of the seven stands',
     scatterInstances({ ...BOX_SAMPLE, rng: stream(BOX_STREAM) }).length, 7);
   // (P4) the red counter-check: the axis-aligned box swaps two of them
@@ -2803,27 +2573,9 @@ async function main() {
     boxMutantOut,
     [{ x: 5, z: 6, yaw: 0 }, { x: 7.1, z: 4.8, yaw: 0 },
       { x: 1, z: 1, yaw: 0 }, { x: 9, z: 9, yaw: 0 }]);
-  // (P5) a box inside a location footprint is redundant, never harmful
-  const LOC_OVER_BOX = { points: [[2, 2], [8, 2], [8, 8], [2, 8]] };
-  const locAlone = scatterInstances({
-    ...BOX_SAMPLE, footprints: [LOC_OVER_BOX], rng: stream(BOX_STREAM),
-  });
-  check('P5 the location alone leaves the two candidates outside it',
-    locAlone, [{ x: 1, z: 1, yaw: 0 }, { x: 9, z: 9, yaw: 0 }]);
-  check('P5 …and adding the enclosed box changes nothing',
-    scatterInstances({
-      ...BOX_SAMPLE,
-      footprints: [LOC_OVER_BOX, ...propBoxFootprints([PROP_BOX])],
-      rng: stream(BOX_STREAM),
-    }),
-    locAlone);
-  // (P6) same area or another — a box is nobody's scatter
-  const boxFps = propBoxFootprints([PROP_BOX]);
-  check('P6 the same box excludes the same candidate under any area seed',
-    ['ta_own:0', 'ta_other:3'].map((seed) => scatterInstances({
-      ...BOX_SAMPLE, seed, footprints: boxFps, rng: stream(BOX_STREAM),
-    })),
-    [BOX_TRUE, BOX_TRUE]);
+  // (P5) and (P6) run from the JSON: the location alone, the location plus the
+  // enclosed box (both against the hand-derived [(1,1), (9,9)]), and the box
+  // under the seeds 'ta_own:0' and 'ta_other:3' (against BOX_TRUE).
 
   console.log('\n(D) the RED counter-check — a mutant that fails these cases');
   const RED = {
@@ -2832,8 +2584,7 @@ async function main() {
   };
   const RED_STREAM = [0.10, 0.20, 0.50, 0.75, 0.25, 0.00, 0.60, 0.80, 0.25];
   const RED_TRUE = [{ x: 15, z: 5, yaw: 0 }, { x: 12, z: 16, yaw: TAU * 0.25 }];
-  check('D the true sampler drops the covered candidate, the rest keeps its numbers',
-    scatterInstances({ ...RED, rng: stream(RED_STREAM) }), RED_TRUE);
+  // The true sampler's answer runs from the JSON; the mutant is compared here.
   const mutant = await loadTs(SRC, yawOnAcceptance);
   const redMutant = mutant.scatterInstances({ ...RED, rng: stream(RED_STREAM) });
   checkNot('D the mutant "yaw only on acceptance" does NOT reproduce that list',
@@ -2895,17 +2646,8 @@ async function main() {
   console.log('\n(G) how tall a scattered prop is — the prop\'s own height (finding 12, Task 9)');
   // The fallback of (A8) and step 2 of the rule are the same number.
   check('G the flat fallback is 2 m', SCATTER_MODEL_HEIGHT_M, DEFAULT_TARGET_H);
-  // (G1) the prop's height
-  check('G1 the library\'s 8.5 m, not 2 m', scatterTargetH(8.5), 8.5);
-  // (G2) no prop
-  check('G2 no prop at all -> the flat 2 m', scatterTargetH(undefined), 2);
-  // (G3) "not given"
-  // `JSON.stringify(NaN)` is "null", so the labels are written out — two
-  // cases that read the same in the log are one case as far as a reader is
-  // concerned.
-  for (const [bad, name] of [[0, '0'], [-1, '-1'], [NaN, 'NaN'], [null, 'null']]) {
-    check(`G3 a prop height of ${name} is no answer`, scatterTargetH(bad), 2);
-  }
+  // (G1), (G2) and (G3) for 0 / -1 / null run from the JSON; NaN stays here.
+  check('G3 a prop height of NaN is no answer', scatterTargetH(NaN), 2);
   // (G4) one argument — the row has no height of its own any more
   check('G4 scatterTargetH takes ONE argument', scatterTargetH.length, 1);
   check('G4 a stale row height in the old first slot is read AS the prop height',
@@ -2918,31 +2660,11 @@ async function main() {
 
   console.log('\n(H) the wind factor — kind × prop, the one effective amplitude');
   check('H an absent factor means the FULL amount', SCATTER_SWAY_FACTOR_DEFAULT, 1);
-  // (H1) the plain products
-  check('H1 a 0.06 m meadow at factor 1 bends 0.06 m', scatterSway(0.06, 1), 0.06);
-  check('H1 …at 0.5 half as far', scatterSway(0.06, 0.5), 0.03);
-  check('H1 …at 0.25 -> 0.015, rounded to 0.02', scatterSway(0.06, 0.25), 0.02);
-  check('H1 a 0.04 m forest at 0.5 -> 0.02', scatterSway(0.04, 0.5), 0.02);
-  // (H2) the boulder — the reason the field exists
-  check('H2 factor 0 is EXACTLY 0, so no material is ever cloned',
-    scatterSway(0.06, 0), 0);
-  // (H3) no factor is not "no wind"
-  for (const [bad, name] of [[undefined, 'undefined'], [null, 'null'],
-    [NaN, 'NaN'], ['x', 'a string']]) {
+  // (H1)..(H5) run from the JSON; (H3) for NaN and a string stays here.
+  for (const [bad, name] of [[NaN, 'NaN'], ['x', 'a string']]) {
     check(`H3 ${name} reads as the full amount, not as nothing`,
       scatterSway(0.06, bad), 0.06);
   }
-  // (H4) the clamp, both ends, and a ground with no wind at all
-  check('H4 a hand-edited 5 cannot amplify the wind', scatterSway(0.06, 5), 0.06);
-  check('H4 a hand-edited -2 cannot invert it', scatterSway(0.06, -2), 0);
-  check('H4 no wind stays no wind however willing the prop',
-    scatterSway(0, 0.5), 0);
-  check('H4 …and a negative amplitude is no wind either', scatterSway(-1, 1), 0);
-  // (H5) the rounding is the shader's own threshold
-  check('H5 0.04 * 0.1 = 0.004 -> 0, below what applySway would accept',
-    scatterSway(0.04, 0.1), 0);
-  check('H5 0.06 * 0.1 = 0.006 -> 0.01, the smallest amplitude there is',
-    scatterSway(0.06, 0.1), 0.01);
   // (H6) THE one place — asserted on ground.ts, like (E)
   const swayCalls = groundSrc.match(/scatterSway\(sway, entry\.sway_factor\)/g);
   check('H6 ground.ts multiplies in exactly ONE place',
@@ -2968,16 +2690,12 @@ async function main() {
   const { SCATTER_GROUND_OFFSET_LIMIT_M, scatterGroundOffset }
     = await loadTs(LOD_SRC);
   check('H8 the limit is the server\'s own ±5 m', SCATTER_GROUND_OFFSET_LIMIT_M, 5);
-  check('H8 a stated sink is passed through', scatterGroundOffset(-0.2), -0.2);
-  check('H8 …and a stated lift as well', scatterGroundOffset(0.35), 0.35);
-  // An absent key is the NORMAL case here (the server ships it only when it
-  // differs), so it has to read as "on the ground" and not as anything else.
-  for (const [bad, name] of [[undefined, 'undefined'], [null, 'null'],
-    [NaN, 'NaN'], ['x', 'a string']]) {
+  // The stated sink / lift, undefined, null and the ±99 clamp run from the
+  // JSON. An absent key is the NORMAL case here (the server ships it only when
+  // it differs), so it has to read as "on the ground" and not as anything else.
+  for (const [bad, name] of [[NaN, 'NaN'], ['x', 'a string']]) {
     check(`H8 ${name} means "on the ground"`, scatterGroundOffset(bad), 0);
   }
-  check('H8 a hand-edited -99 cannot bury a wood', scatterGroundOffset(-99), -5);
-  check('H8 …and a 99 cannot launch it', scatterGroundOffset(99), 5);
   // The seat itself, hand-derived: ground 12.5 m under the instance, entry at
   // −0.2 → 12.3; the same instance on an entry without the key stays at 12.5.
   check('H8 an instance at ground 12.5 with −0.2 is seated at 12.3',
@@ -3033,55 +2751,15 @@ async function main() {
   check('I an instance re-appears at 0.92 of the cull distance',
     SCATTER_UNHIDE_FACTOR, 0.92);
 
-  // (I1) the mesh band, per instance
-  check('I1 a low instance at 0 m -> full', instanceTier(0, 1, DEF), 0);
-  check('I1 a low instance at 34.9 m -> full', instanceTier(34.9, 1, DEF), 0);
-  check('I1 …but at exactly 35 m it stays low', instanceTier(35, 1, DEF), 1);
-  check('I1 a full instance at exactly 45 m stays full',
-    instanceTier(45, 0, DEF), 0);
-  check('I1 …at 45.001 m it drops to low', instanceTier(45.001, 0, DEF), 1);
-  check('I1 …and at 100 m it is low', instanceTier(100, 0, DEF), 1);
-  check('I1 40 m answers differently for the two tiers',
-    [instanceTier(40, 0, DEF), instanceTier(40, 1, DEF)], [0, 1]);
-  check('I1 CFG2 promotes at its own 10 m, not at 35',
-    [instanceTier(9.9, 1, CFG2), instanceTier(10, 1, CFG2)], [0, 1]);
-  check('I1 …demotes at its own 20 m, not at 45',
-    [instanceTier(20, 0, CFG2), instanceTier(20.1, 0, CFG2)], [0, 1]);
-  check('I1 …and holds its own band at 15 m',
-    [instanceTier(15, 0, CFG2), instanceTier(15, 1, CFG2)], [0, 1]);
-
-  // (I2) the cull edge and the way back
-  check('I2 120 m is still drawn', instanceTier(120, 1, DEF), 1);
-  check('I2 120.001 m is hidden', instanceTier(120.001, 1, DEF), 2);
-  check('I2 1000 m is hidden', instanceTier(1000, 0, DEF), 2);
+  // (I1) and (I2) run from the JSON, except the NaN distance and the walk.
   check('I2 a NaN distance hides, whatever stood there',
     [instanceTier(NaN, 0, DEF), instanceTier(NaN, 1, DEF), instanceTier(NaN, 2, DEF)],
     [2, 2, 2]);
-  check('I2 a hidden instance at 119 m stays hidden', instanceTier(119, 2, DEF), 2);
-  check('I2 …at exactly 110.4 m too (the line is exclusive)',
-    instanceTier(110.4, 2, DEF), 2);
-  check('I2 …and comes back as LOW just under it',
-    instanceTier(110.399, 2, DEF), 1);
-  check('I2 …or as full if it re-appears inside the near distance',
-    instanceTier(30, 2, DEF), 0);
-  check('I2 CFG2 re-appears under its own 55.2 m',
-    [instanceTier(55.2, 2, CFG2), instanceTier(55, 2, CFG2),
-      instanceTier(60.1, 2, CFG2)],
-    [2, 1, 2]);
   check('I2 drifting across the cull edge costs ONE change, not six',
     swaps(instanceTier, 1, [119.9, 120.1, 119.9, 120.1, 119.9, 120.1], DEF), 1);
 
-  // (I3) the share at the instance's own distance
-  check('I3 share at 0 m is 1', instanceShare(0, DEF), 1);
-  check('I3 share at 45 m is still 1', instanceShare(45, DEF), 1);
-  check('I3 share at 60 m is 0.85', instanceShare(60, DEF), 0.85);
-  check('I3 share at 82.5 m is 0.625', instanceShare(82.5, DEF), 0.625);
-  check('I3 share at 105 m is 0.4', instanceShare(105, DEF), 0.4);
-  check('I3 share at 120 m is the quarter', instanceShare(120, DEF), 0.25);
-  check('I3 share past the cull is 0', instanceShare(120.001, DEF), 0);
+  // (I3) the share at the instance's own distance runs from the JSON, but NaN
   check('I3 share of a NaN distance is 0', instanceShare(NaN, DEF), 0);
-  check('I3 CFG2 is at its midpoint 0.625 where DEF still draws everything',
-    [instanceShare(40, CFG2), instanceShare(40, DEF)], [0.625, 1]);
 
   // (I4) which instances survive — properties, never a table of hashes
   check('I4 inside the far distance every instance is drawn',
@@ -3108,9 +2786,7 @@ async function main() {
     check(`I4 ${label} draws ${1000 * share} of 1000, within 5 % (got ${n})`,
       Math.abs(n - 1000 * share) <= 0.05 * 1000 * share, true);
   }
-  check('I4 instance 0 survives as long as anything of the entry does',
-    [instanceVisible(0, 119.9, DEF), instanceVisible(0, 120.001, DEF)],
-    [true, false]);
+  // 'I4 instance 0 survives as long as anything of the entry does' runs from the JSON.
 
   // (I5) the red counter-checks
   const noInstanceBand = await loadTs(LOD_SRC, dropInstanceBand);
@@ -3161,13 +2837,9 @@ async function main() {
   check('V the margin is 30 degrees', SCATTER_CONE_MARGIN_RAD, Math.PI / 6);
   check('V the near keep is 40 m', SCATTER_CONE_NEAR_M, 40);
 
-  // (V1) the horizontal fov, and the aspect is really read
-  check('V1 45 deg half-fov on a square window -> 90 deg',
-    horizontalFovRad(90, 1), Math.PI / 2);
-  check('V1 …and the same 90 deg from a narrow fov on a 2:1 window',
-    horizontalFovRad(2 * Math.atan(0.5) / DEG, 2), Math.PI / 2);
-  check('V1 90 deg on a 2:1 window is 2*atan(2), not 90',
-    horizontalFovRad(90, 2), 2 * Math.atan(2));
+  // (V1) the horizontal fov — the three values run from the JSON (the narrow
+  // fov there is the header's 53.13010235415598 deg, 2*atan 2 its
+  // 2.214297435588181 rad); the degree reading and the junk stay here.
   check('V1 …which is 126.86989764584402 deg',
     horizontalFovRad(90, 2) / DEG, 126.86989764584402, 1e-9);
   for (const [fov, aspect, label] of [
@@ -3180,16 +2852,11 @@ async function main() {
       Number.isNaN(horizontalFovRad(fov, aspect)), true);
   }
 
-  // (V2) the cone of one pass
-  check('V2 a forward of length 2 is normalised',
-    viewCone(0, -2, Math.PI / 2), { fwdX: 0, fwdZ: -1, cosHalf: COS75 });
-  check('V2 …and the 3-4-5 triangle too',
-    [viewCone(3, 4, Math.PI / 2).fwdX, viewCone(3, 4, Math.PI / 2).fwdZ],
-    [0.6, 0.8]);
+  // (V2) the cone of one pass — the normalised forwards, cos 75 deg
+  // (0.25881904510252074 in the JSON), the degenerate and the 320 deg cones run
+  // from the JSON; what needs the smoke's own closed form stays here.
   check('V2 the closed form IS cos 75 deg',
     COS75, (Math.sqrt(6) - Math.sqrt(2)) / 4);
-  check('V2 …i.e. 45 deg of half-fov plus the 30 deg margin',
-    viewCone(0, 1, Math.PI / 2).cosHalf, Math.cos(75 * DEG));
   // the client's own camera: fov 45 on 16:9, tan 22.5 deg = sqrt(2) - 1
   const U_CLIENT = (16 * (Math.SQRT2 - 1)) / 9;
   const clientCone = viewCone(0, 1, horizontalFovRad(45, 16 / 9));
@@ -3199,35 +2866,25 @@ async function main() {
     [Math.cos(66 * DEG) >= clientCone.cosHalf,
       Math.cos(67 * DEG) >= clientCone.cosHalf],
     [true, false]);
-  check('V2 a camera looking straight down accepts everything',
-    viewCone(0, 0, Math.PI / 2), { fwdX: 0, fwdZ: 1, cosHalf: -1 });
-  for (const hfov of [NaN, Infinity, 0, -1]) {
+  for (const hfov of [NaN, Infinity]) {
     check(`V2 an hfov of ${hfov} accepts everything`,
       viewCone(0, 1, hfov).cosHalf, -1);
   }
-  check('V2 a 320 deg fov opens the cone fully instead of closing it again',
-    viewCone(1, 0, 320 * DEG), { fwdX: 1, fwdZ: 0, cosHalf: -1 });
   check('V2 …where cos(190 deg) would have rejected a direction 175 deg off',
     Math.cos(175 * DEG) >= Math.cos(190 * DEG), false);
 
-  // (V3) the 40 m near keep
-  check('V3 39 m dead behind is kept', seen(0, -39), true);
-  check('V3 …40 m too, the line is inclusive', seen(0, -40), true);
-  check('V3 …40.001 m is not', seen(0, -40.001), false);
-  check('V3 40 m dead sideways is kept', seen(40, 0), true);
-  check('V3 …41 m is not', seen(41, 0), false);
+  // (V3) the 40 m near keep runs from the JSON, but the NaN offsets
   check('V3 a NaN offset is kept, not silently dropped',
     [seen(NaN, 0), seen(0, NaN)], [true, true]);
 
-  // (V4) the angle, both sides of the line and both sides of the axis
-  check('V4 dead ahead at 100 m is in', seen(...at100(0)), true);
+  // (V4) the angle, both sides of the line and both sides of the axis. Dead
+  // ahead (0, 100) and the exact >= pair run from the JSON; the points the
+  // `at100` helper computes stay here.
   check('V4 74.9 deg off is in, either way',
     [seen(...at100(74.9)), seen(...at100(-74.9))], [true, true]);
   check('V4 75.1 deg off is out, either way',
     [seen(...at100(75.1)), seen(...at100(-75.1))], [false, false]);
   check('V4 dead behind at 100 m is out', seen(...at100(180)), false);
-  check('V4 the >= is inclusive, pinned where floats are exact',
-    [seen(100, 0, 0), seen(100, -0.001, 0)], [true, false]);
 
   // (V5) the margin, against a mutant that cuts at the frustum edge
   const tightCone = await loadTs(LOD_SRC, noConeMargin);
@@ -3270,13 +2927,12 @@ async function main() {
 
   // (W1) continuity — the two lines meet at the cull distance
   const JUST_PAST = 120.000001;
-  check('W1 the mesh line ends at a quarter', instanceShare(120, DEF), 0.25);
+  // 'W1 the mesh line ends at a quarter' runs from the JSON.
   check('W1 …which is SCATTER_MIN_SHARE itself', MIN_SHARE, 0.25);
   check('W1 …and the billboard line starts there', impostorShare(JUST_PAST, DEF),
     0.25, 1e-6);
-  check('W1 the same continuity on a cfg of its own (cull 60)',
-    [instanceShare(60, CFG2), impostorShare(60.000001, CFG2)], [0.25, 0.25],
-    1e-6);
+  check('W1 the same continuity on a cfg of its own (cull 60) — the billboard side',
+    impostorShare(60.000001, CFG2), 0.25, 1e-6);
 
   // (W2) the real reach of the cell window
   check('W2 cull 120 -> k = 2, so the corner is sqrt(2)*3*64',
@@ -3422,43 +3078,22 @@ async function main() {
   });
   check('J4 the stored fields become a cfg', setCfg,
     { nearM: 20, farM: 40, cullM: 300 });
-  check('J4 …and 20 / 40 / 300 behaves that way end to end',
-    [instanceTier(19, 1, setCfg), instanceTier(41, 0, setCfg),
-      instanceTier(301, 1, setCfg)],
-    [0, 1, 2]);
-  check('J4 …including the thinning line of the set cull distance',
-    instanceShare(160, setCfg), 1 - (120 / 260) * 0.75);
+  // …and the cfg above, as the literal it was just pinned to, drives the
+  // tier and share cases of (J4) in the JSON.
 
   // (Q) THE TURN
   console.log('\n(Q) the turn — scatterYaw, aligned to an axis');
-  check('Q1 no mode: r = 0.25 is a quarter turn', scatterYaw(0.25), Math.PI / 2);
-  check('Q1 an unknown mode reads as random', scatterYaw(0.25, 'spin', 90), Math.PI / 2);
-  check('Q1 …and so does the retired "fixed" — no reader for it',
-    scatterYaw(0.25, 'fixed', 90), Math.PI / 2);
-  check('Q2 aligned, axis π/2, deg 0 is π/2 for r = 0',
-    scatterYaw(0, 'aligned', 0, Math.PI / 2), Math.PI / 2);
-  check('Q2 …and for r = 0.99', scatterYaw(0.99, 'aligned', 0, Math.PI / 2), Math.PI / 2);
-  check('Q2 aligned, axis π/2, deg 90 is π',
-    scatterYaw(0.5, 'aligned', 90, Math.PI / 2), Math.PI);
-  check('Q2 aligned without an angle is the axis alone',
-    [scatterYaw(0.7, 'aligned', undefined, Math.PI / 2),
-      scatterYaw(0.7, 'aligned', NaN, Math.PI / 2)], [Math.PI / 2, Math.PI / 2]);
-  check('Q2 aligned without an axis is the angle alone',
-    scatterYaw(0.7, 'aligned', 90), Math.PI / 2);
-  check('Q3 3π/2 + 90° normalises to 0',
-    scatterYaw(0, 'aligned', 90, 3 * Math.PI / 2), 0);
-  check('Q3 3π/2 + 270° = 3π normalises to π',
-    scatterYaw(0, 'aligned', 270, 3 * Math.PI / 2), Math.PI, 1e-9);
+  // Q1..Q3 run from the JSON (an absent angle there is null, which reads as
+  // undefined does); the NaN angle stays here.
+  check('Q2 aligned without an angle is the axis alone — NaN',
+    scatterYaw(0.7, 'aligned', NaN, Math.PI / 2), Math.PI / 2);
   const turnCase = (mode, deg, axisAt) => scatterInstances({
     ring: SQUARE, areaM2: 400, densityPer100m2: 0.25, seed: 'q',
     rng: stream([0.5, 0.5, 0.25]), yawMode: mode, yawDeg: deg, axisAt,
   });
-  check('Q4 no mode: (10, 10) with yaw π/2', turnCase(undefined, undefined),
-    [{ x: 10, z: 10, yaw: Math.PI / 2 }]);
+  // Q4 without a mode and without axisAt run from the JSON; axisAt is a function.
   check('Q4 aligned 90 on an axis of π/2: the same point, yaw π',
     turnCase('aligned', 90, () => Math.PI / 2), [{ x: 10, z: 10, yaw: Math.PI }]);
-  check('Q4 aligned 90 without axisAt: the same point, axis 0 -> π/2',
-    turnCase('aligned', 90), [{ x: 10, z: 10, yaw: Math.PI / 2 }]);
   const cellYaws = scatterCellInstances({
     ring: SQUARE, cx: 0, cz: 0, densityPer100m2: 1,
     seed: scatterCellSeed('area', 0, 0, 0), yawMode: 'aligned', yawDeg: 45,
@@ -3804,22 +3439,14 @@ async function main() {
 
   // (W) THE EPOCH
   console.log('\n(W) the epoch — reshuffleEpoch and the seed suffix');
-  check('W1 3599 s at 60 min is epoch 0', reshuffleEpoch(3599, 60), 0);
-  check('W1 3600 s is epoch 1', reshuffleEpoch(3600, 60), 1);
-  check('W1 7199 s is still epoch 1', reshuffleEpoch(7199, 60), 1);
+  // W1's three epochs and W2's seeds run from the JSON; `undefined` as a
+  // RESULT and a NaN epoch cannot be written there.
   check('W1 no interval, 0, negative or a junk clock is undefined',
     [reshuffleEpoch(3600), reshuffleEpoch(3600, 0), reshuffleEpoch(3600, -5),
       reshuffleEpoch(NaN, 60)], [undefined, undefined, undefined, undefined]);
-  check('W2 the cell seed without an epoch is what it was',
-    scatterCellSeed('a', 1, 2, 3), 'terrain:scatter:a:1:2,3');
-  check('W2 …and with epoch 7 carries :e7',
-    scatterCellSeed('a', 1, 2, 3, 7), 'terrain:scatter:a:1:2,3:e7');
-  check('W2 the entry seed likewise',
-    [scatterSeed('a', 1), scatterSeed('a', 1, 7)], ['terrain:scatter:a:1', 'terrain:scatter:a:1:e7']);
-  check('W2 an undefined or NaN epoch adds nothing',
-    [scatterCellSeed('a', 1, 2, 3, undefined), scatterCellSeed('a', 1, 2, 3, NaN),
-      scatterSeed('a', 1, NaN)],
-    ['terrain:scatter:a:1:2,3', 'terrain:scatter:a:1:2,3', 'terrain:scatter:a:1']);
+  check('W2 an undefined or NaN epoch adds nothing — NaN',
+    [scatterCellSeed('a', 1, 2, 3, NaN), scatterSeed('a', 1, NaN)],
+    ['terrain:scatter:a:1:2,3', 'terrain:scatter:a:1']);
 
   // (X) THE EDGE AND CENTRE SAMPLERS
   console.log('\n(X) the edge and centre samplers');
