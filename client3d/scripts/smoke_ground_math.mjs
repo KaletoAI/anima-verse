@@ -115,11 +115,21 @@
  * A ring that encloses nothing (|A| below 1e-9: collinear points, a hairline)
  * yields an EMPTY list — there is no face to build, and `buildAreaGeometry`
  * answers `null` for it instead of putting a zero-area mesh into the scene.
+ *
+ * --- Shared vectors ---------------------------------------------------------
+ * The `signedArea`, `polygonArea` and `cleanRing` cases (inputs + expectations)
+ * live in `shared/test-vectors/ground_polygons.json`, shared with the native
+ * client's C# tests (`ScatterMath.SignedArea/PolygonArea/CleanRing`); each case
+ * label starts with the tag of its derivation above. Inline below stay what the
+ * JSON format cannot carry: the two `cleanRing` cases with a NaN / Infinity
+ * point (non-finite numbers are forbidden in a vector file), and everything of
+ * `shapePoints` / `buildAreaGeometry`, which have no C# port.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC = join(ROOT, 'packages/scene-render/src/groundAreas.ts');
@@ -188,43 +198,16 @@ async function main() {
   const { signedArea, polygonArea, cleanRing, shapePoints, buildAreaGeometry }
     = await loadGroundAreas();
 
-  console.log('signedArea — the shoelace, sign carries the winding');
-  check('(T) triangle, counter-clockwise in world XZ', signedArea(TRIANGLE), 30);
-  check('(T\') the same triangle the other way round', signedArea(TRIANGLE_CW), -30);
-  check('(S) unit square', signedArea(SQUARE), -1);
-  check('(C) concave L', signedArea(L_SHAPE), 18);
-  check('(C\') the L reversed', signedArea(L_SHAPE_REV), -18);
-  check('(D) three collinear points enclose nothing', signedArea(COLLINEAR), 0);
-  check('(P) bevelled pond', signedArea(POND), 94);
-  check('fewer than three points is no ring', signedArea([[0, 0], [1, 1]]), 0);
+  console.log('signedArea / polygonArea / cleanRing — shared/test-vectors/ground_polygons.json');
+  const vectors = runVectors(loadVectors('ground_polygons'), { signedArea, polygonArea, cleanRing });
+  passed += vectors.passed;
+  failed += vectors.failed;
 
-  console.log('\npolygonArea — |shoelace|, so both windings give the same m2');
-  check('(T) triangle', polygonArea(TRIANGLE), 30);
-  check('(T\') reversed triangle, SAME area', polygonArea(TRIANGLE_CW), 30);
-  check('(S) unit square', polygonArea(SQUARE), 1);
-  check('(C) concave L', polygonArea(L_SHAPE), 18);
-  check('(C\') reversed L, SAME area', polygonArea(L_SHAPE_REV), 18);
-  check('(D) degenerate strip', polygonArea(COLLINEAR), 0);
-  check('(P) bevelled pond', polygonArea(POND), 94);
-  // A closed ring must not count its repeated corner twice — the extra edge
-  // is zero-length and contributes nothing, which this pins.
-  check('a repeated first corner changes nothing',
-    polygonArea([...TRIANGLE, [0, 0]]), 30);
-
-  console.log('\ncleanRing — junk out, order kept, winding untouched');
-  check('the closing duplicate goes',
-    cleanRing([[0, 0], [10, 0], [0, 6], [0, 0]]), TRIANGLE);
-  check('consecutive duplicates collapse',
-    cleanRing([[0, 0], [0, 0], [10, 0], [0, 6]]), TRIANGLE);
+  console.log('\ncleanRing — the non-finite cases JSON cannot carry');
   check('non-finite points are dropped',
     cleanRing([[0, 0], [10, 0], [NaN, 1], [0, 6]]), TRIANGLE);
   check('and so is an infinite one',
     cleanRing([[0, 0], [10, 0], [0, 6], [Infinity, Infinity]]), TRIANGLE);
-  check('a two-point ring is no ring at all',
-    cleanRing([[0, 0], [10, 0]]), []);
-  check('the concave L survives unchanged', cleanRing(L_SHAPE), L_SHAPE);
-  check('a ring that collapses to two distinct points is dropped',
-    cleanRing([[0, 0], [0, 0], [1, 1], [1, 1]]), []);
 
   console.log('\nshapePoints — into THREE.Shape space (x, -z), winding normalised');
   check('(T) the CCW-in-world triangle gets reversed',

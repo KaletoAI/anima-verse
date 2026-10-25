@@ -108,3 +108,4 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 | File | Source smoke | Functions |
 |---|---|---|
 | `bench_math.json` | `client3d/scripts/smoke_bench_math.mjs` | `percentile`, `summarize` (`client3d/src/bench/benchStats.ts`) |
+| `ground_polygons.json` | `client3d/scripts/smoke_ground_math.mjs` | `signedArea`, `polygonArea`, `cleanRing` (`packages/scene-render/src/groundAreas.ts`) |
