@@ -1566,7 +1566,7 @@ export async function mountShell(tile: Tile, scene: ScenePayload,
     };
     for (const lv of [...levels].sort((a, b) => a - b)) {
       const btn = document.createElement('button');
-      btn.textContent = lv === 0 ? 'EG' : `${lv}.`;
+      btn.textContent = lv === 0 ? 'G' : `${lv}.`;
       btn.dataset.level = String(lv);
       btn.addEventListener('click', (ev) => {
         ev.stopPropagation();
