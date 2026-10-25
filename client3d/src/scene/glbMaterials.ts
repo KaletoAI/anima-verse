@@ -1,3 +1,4 @@
+import { neutralizeLook } from './materialLooks';
 import * as THREE from 'three';
 
 // Material-Behandlung für alle Server-GLBs (Gebäude, Raum-Dioramen, Props).
@@ -26,13 +27,11 @@ export function neutralizeGltfMaterials(root: THREE.Object3D) {
     for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
       const std = m as THREE.MeshStandardMaterial;
       if (!std.isMeshStandardMaterial) continue;
-      if (std.metalnessMap) {
-        if (modelEnv) {
-          std.envMap = modelEnv;
-          std.envMapIntensity = 0.7;
-        }
-      } else if (std.metalness > 0.5) {
-        std.metalness = 0;
+      const look = neutralizeLook(std.metalness, !!std.metalnessMap, !!modelEnv);
+      std.metalness = look.metalness;
+      if ('envMapIntensity' in look) {
+        std.envMap = modelEnv;
+        std.envMapIntensity = look.envMapIntensity!;
       }
     }
   });

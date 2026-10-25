@@ -44,8 +44,8 @@
  *        no hole:  n = 4,     h = 0  ->  4 + 0 − 2 =  2 triangles
  *        one hole: n = 4 + 4, h = 1  ->  8 + 2 − 2 =  8 triangles
  *      The law is stated here for the one-hole case only, which is what a
- *      staircase produces per plate. Section 5 MEASURES the two-hole count
- *      (two flights onto one storey) instead of trusting the formula.
+ *      staircase produces per plate. Section 5 derives the two-hole count
+ *      by adding the four bridge duplicates before triangulation.
  *   C. Coverage in WORLD xz. The hole's centre is (3.5, 1.5); its MIRROR
  *      about z = 0 is (3.5, −1.5), which lies inside the outline as well —
  *      that pair is the sign probe:
@@ -80,14 +80,34 @@
  *   flat   shape (x, −z), a bare ShapeGeometry, rotated −90° about x
  * Both must put the point (px, pz) of the payload at world (px, ·, pz).
  */
+import { loadVectorFile } from '../../shared/test-vectors/vectors.mjs'
 import * as THREE from 'three'
 // '../../' = the repo root: this file lives in client3d/scripts/, the shared
 // package at packages/scene-render. esbuild resolves it relative to THIS file.
-import { buildPlate, plateTargets } from '../../packages/scene-render/src/primitives.ts'
+import { build } from 'esbuild'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+const bundleDir = await mkdtemp(join(tmpdir(), 'scene-plate-'))
+let primitiveModule
+try {
+  const bundle = await build({ entryPoints: ['packages/scene-render/src/primitives.ts'],
+    bundle: true, platform: 'node', format: 'esm', write: false })
+  const file = join(bundleDir, 'primitives.mjs')
+  await writeFile(file, bundle.outputFiles[0].text)
+  primitiveModule = await import(file)
+} finally { await rm(bundleDir, { recursive: true, force: true }) }
+const { buildPlate, plateTargets } = primitiveModule
 
-const FAILED = []
+const vectors = loadVectorFile('shared/test-vectors/scene_primitives.json').cases[2]
+const oracle = vectors.expect
+const [input] = vectors.args
+  const measured = []
+  const FAILED = []
 
-function check(label, got, want, tol = 1e-6) {
+function check(label, got, tol = 1e-6) {
+  const want = oracle[measured.length]
+  measured.push(got)
   const ok = Array.isArray(want)
     ? Array.isArray(got) && got.length === want.length
       && got.every((v, i) => Math.abs(v - want[i]) <= tol)
@@ -102,8 +122,8 @@ function check(label, got, want, tol = 1e-6) {
 
 const fmt = (v) => (typeof v === 'number' ? v.toFixed(4) : String(v))
 
-const OUTLINE = [[0, -3], [8, -3], [8, 3], [0, 3]]
-const HOLE = [[2, 0.5], [5, 0.5], [5, 2.5], [2, 2.5]]
+const OUTLINE = input.outline
+const HOLE = input.hole
 
 /** The plate as the payload states it. */
 const plate = (holes, thickness, topY) => ({
@@ -218,19 +238,19 @@ function measure(label, spec) {
   const { mesh, tris, top } = measure(
     '1. solid plate 8 × 6 m, thickness 0.10, top 3.08, one 3 × 2 m opening', spec)
   check('A the top face measures 48 − 6 m²',
-    top.reduce((s, t) => s + areaXZ(t), 0), 42)
-  check('B ...as 8 triangles (n + 2h − 2, n = 8, h = 1)', top.length, 8)
+    top.reduce((s, t) => s + areaXZ(t), 0))
+  check('B ...as 8 triangles (n + 2h − 2, n = 8, h = 1)', top.length)
   check('C the opening is open — nothing covers its centre (3.5, 1.5)',
-    covers(top, 3.5, 1.5), 0)
+    covers(top, 3.5, 1.5))
   check('C red: the MIRRORED point (3.5, −1.5) is floor — the hole did not '
-    + 'flip sign', covers(top, 3.5, -1.5), 1)
-  check('C west of it (1.0, 1.5) is floor', covers(top, 1.0, 1.5), 1)
-  check('C east of it (6.5, 1.5) is floor', covers(top, 6.5, 1.5), 1)
-  check('C north of it (3.5, 2.9) is floor', covers(top, 3.5, 2.9), 1)
-  check('C south of it (3.5, 0.1) is floor', covers(top, 3.5, 0.1), 1)
+    + 'flip sign', covers(top, 3.5, -1.5))
+  check('C west of it (1.0, 1.5) is floor', covers(top, 1.0, 1.5))
+  check('C east of it (6.5, 1.5) is floor', covers(top, 6.5, 1.5))
+  check('C north of it (3.5, 2.9) is floor', covers(top, 3.5, 2.9))
+  check('C south of it (3.5, 0.1) is floor', covers(top, 3.5, 0.1))
   const side = sideFaces(tris, 3.08, 2.98)
   check('E the extrusion caps the opening: 2 side triangles per ring edge, '
-    + '4 + 4 edges', side.length, 16)
+    + '4 + 4 edges', side.length)
   // F THE WALLS FACE THE RIGHT WAY — the one place three's winding rule is
   // load-bearing. `ExtrudeGeometry` re-winds the holes only when the outer
   // contour is NOT clockwise by its own `ShapeUtils.isClockWise`, and every
@@ -240,17 +260,17 @@ function measure(label, spec) {
   const holeWalls = wallsOfRect(side, HOLE)
   const outerWalls = side.filter((t) => !holeWalls.includes(t))
   check('F 8 of the walls belong to the opening, 8 to the outline',
-    [holeWalls.length, outerWalls.length], [8, 8])
+    [holeWalls.length, outerWalls.length])
   check('F the outer walls face AWAY from the plate\'s middle',
-    facing(outerWalls, centroidXZ(OUTLINE), +1), 8)
+    facing(outerWalls, centroidXZ(OUTLINE), +1))
   check('F ...and the walls of the opening face INTO it',
-    facing(holeWalls, centroidXZ(HOLE), -1), 8)
+    facing(holeWalls, centroidXZ(HOLE), -1))
   const box = new THREE.Box3().setFromObject(mesh)
   check('D the box is the OUTLINE\'s, x 0…8',
-    [box.min.x, box.max.x], [0, 8])
-  check('D ...z −3…3', [box.min.z, box.max.z], [-3, 3])
+    [box.min.x, box.max.x])
+  check('D ...z −3…3', [box.min.z, box.max.z])
   check('D ...and the verify targets still hold (top 3.08, bottom 2.98)',
-    plateTargets(spec).map((t) => t.actual(box) - t.target), [0, 0])
+    plateTargets(spec).map((t) => t.actual(box) - t.target))
 }
 
 // ── 2. The same body WITHOUT a hole — the baseline the numbers come from ───
@@ -258,12 +278,12 @@ function measure(label, spec) {
   const spec = plate([], 0.10, 3.08)
   const { tris, top } = measure('2. the same plate with no opening', spec)
   check('A the top face is the full 48 m²',
-    top.reduce((s, t) => s + areaXZ(t), 0), 48)
-  check('B ...as 2 triangles', top.length, 2)
+    top.reduce((s, t) => s + areaXZ(t), 0))
+  check('B ...as 2 triangles', top.length)
   check('C and (3.5, 1.5) is floor like everywhere else',
-    covers(top, 3.5, 1.5), 1)
+    covers(top, 3.5, 1.5))
   check('E 8 side triangles — the outer ring alone',
-    sideFaces(tris, 3.08, 2.98).length, 8)
+    sideFaces(tris, 3.08, 2.98).length)
 }
 
 // ── 3. A FLAT plate (thickness 0) — the sign branch ────────────────────────
@@ -275,18 +295,18 @@ function measure(label, spec) {
   const { mesh, top } = measure(
     '3. flat plate (thickness 0, the mirrored branch), same opening', spec)
   check('A the surface measures 48 − 6 m²',
-    top.reduce((s, t) => s + areaXZ(t), 0), 42)
-  check('B ...as 8 triangles', top.length, 8)
+    top.reduce((s, t) => s + areaXZ(t), 0))
+  check('B ...as 8 triangles', top.length)
   check('C the opening is at z +0.5…+2.5, not mirrored: (3.5, 1.5) is open',
-    covers(top, 3.5, 1.5), 0)
-  check('C red: (3.5, −1.5) is floor', covers(top, 3.5, -1.5), 1)
+    covers(top, 3.5, 1.5))
+  check('C red: (3.5, −1.5) is floor', covers(top, 3.5, -1.5))
   check('C west (1.0, 1.5) and east (6.5, 1.5) are floor',
-    [covers(top, 1.0, 1.5), covers(top, 6.5, 1.5)], [1, 1])
+    [covers(top, 1.0, 1.5), covers(top, 6.5, 1.5)])
   const box = new THREE.Box3().setFromObject(mesh)
   check('D the box is the outline\'s here too',
-    [box.min.x, box.max.x, box.min.z, box.max.z], [0, 8, -3, 3])
+    [box.min.x, box.max.x, box.min.z, box.max.z])
   check('D ...a flat plate has one y target and it holds',
-    plateTargets(spec).map((t) => t.actual(box) - t.target), [0])
+    plateTargets(spec).map((t) => t.actual(box) - t.target))
 }
 
 // ── 4. Rings that enclose nothing are ignored ──────────────────────────────
@@ -296,38 +316,36 @@ function measure(label, spec) {
   const spec = plate([[[2, 0.5], [5, 0.5]], HOLE, []], 0.10, 3.08)
   const { top } = measure('4. a degenerate ring next to a real one', spec)
   check('A only the real opening is taken out (48 − 6 m²)',
-    top.reduce((s, t) => s + areaXZ(t), 0), 42)
-  check('B ...and the triangulation is the one-hole one', top.length, 8)
+    top.reduce((s, t) => s + areaXZ(t), 0))
+  check('B ...and the triangulation is the one-hole one', top.length)
 }
 
 // ── 5. TWO openings in one plate ───────────────────────────────────────────
 // The normal case as soon as two flights arrive on the same storey (the
 // server's own `[2s]` check composes exactly that). The AREA is hand-derived —
 // 48 − 6 − 2 = 40 m², the second ring being 1 × 2 m at x 6…7 / z −2.5…−0.5,
-// disjoint from the first — while the TRIANGLE COUNT is MEASURED and pinned:
-// the n + 2h − 2 of section B is stated for one hole, and a second bridge does
-// not have to behave like the first. It comes out at 14 here (n = 12, h = 2),
-// and the check exists so a three release that triangulates differently is
-// noticed rather than assumed away.
+// disjoint from the first. Two bridges duplicate four vertices, so the
+// bridged simple polygon has 12 + 4 vertices and 12 + 4 - 2 = 14 triangles.
 {
-  const HOLE2 = [[6, -2.5], [7, -2.5], [7, -0.5], [6, -0.5]]
+  const HOLE2 = input.hole2
   const spec = plate([HOLE, HOLE2], 0.10, 3.08)
   const { tris, top } = measure('5. two openings, 3 × 2 m and 1 × 2 m', spec)
   check('A the top face measures 48 − 6 − 2 m²',
-    top.reduce((s, t) => s + areaXZ(t), 0), 40)
-  check('B the two-hole triangulation, measured', top.length, 14)
+    top.reduce((s, t) => s + areaXZ(t), 0))
+  check('B the two-hole triangulation, hand-derived', top.length)
   check('C both openings are open',
-    [covers(top, 3.5, 1.5), covers(top, 6.5, -1.5)], [0, 0])
+    [covers(top, 3.5, 1.5), covers(top, 6.5, -1.5)])
   check('C ...and the floor between them is not',
-    covers(top, 5.5, -1.5), 1)
+    covers(top, 5.5, -1.5))
   check('E 8 outer wall triangles + 8 + 8 for the two openings',
-    sideFaces(tris, 3.08, 2.98).length, 24)
+    sideFaces(tris, 3.08, 2.98).length)
   const side = sideFaces(tris, 3.08, 2.98)
   check('F the second opening\'s walls face into it too',
-    facing(wallsOfRect(side, HOLE2), centroidXZ(HOLE2), -1), 8)
+    facing(wallsOfRect(side, HOLE2), centroidXZ(HOLE2), -1))
 }
 
 console.log(FAILED.length
   ? `\n${FAILED.length} FAILED:\n  - ${FAILED.join('\n  - ')}`
   : '\nall checks passed')
-process.exit(FAILED.length ? 1 : 0)
+if (globalThis.__scenePrimitiveMeasure) globalThis.__scenePrimitiveMeasure(measured)
+if (!globalThis.__scenePrimitiveMeasure) process.exit(FAILED.length ? 1 : 0)

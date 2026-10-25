@@ -82,6 +82,7 @@
  *  (B5) …and the composed value itself is still the style's ghost, i.e. this
  *       check is measuring the same ladder the finding is about.
  */
+import { loadVectors } from '../../shared/test-vectors/vectors.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -126,29 +127,31 @@ function check(label, actual, expected) {
  *  (`app/core/scene_recipe.STYLE.upper_floor_opacity`). Written here by hand,
  *  not read from anywhere — if the server changes it, this check has to be
  *  looked at rather than silently follow. */
-const GHOST_FLOOR = 0.4;
+const vectors = loadVectors('scene_view');
+const expectCase = (label) => vectors.cases.find(c => c.label.startsWith(label + ' ')).expect;
+const GHOST_FLOOR = expectCase('[R6]');
 
 async function main() {
   const { storeyPieceOpacity, STOREY_SHOWN_OPACITY } = await loadTs(RULE_SRC);
 
   console.log('(A) the rule');
   check('A1 the storey the view shows is solid',
-    storeyPieceOpacity(3, 3, GHOST_FLOOR), 1);
+    storeyPieceOpacity(3, 3, GHOST_FLOOR), expectCase('[R5]'));
   check('A2 another storey keeps the composed ghost',
     storeyPieceOpacity(3, 0, GHOST_FLOOR), GHOST_FLOOR);
   check('A3 switching there, away and back does not drift',
     [storeyPieceOpacity(3, 3, GHOST_FLOOR), storeyPieceOpacity(3, 0, GHOST_FLOOR),
       storeyPieceOpacity(3, 3, GHOST_FLOOR)],
-    [1, GHOST_FLOOR, 1]);
+    [expectCase('[R5]'), expectCase('[R6]'), expectCase('[R5]')]);
   check('A4 a ground-role piece has no ghost and is solid everywhere',
-    [storeyPieceOpacity(0, 0, 1), storeyPieceOpacity(0, 3, 1)], [1, 1]);
+    [storeyPieceOpacity(0, 0, 1), storeyPieceOpacity(0, 3, 1)], [expectCase('[R9]'), expectCase('[R10]')]);
   check('A5 room plate and storey slab of one storey get the same number',
     storeyPieceOpacity(3, 3, GHOST_FLOOR) === storeyPieceOpacity(3, 3, GHOST_FLOOR)
-      && storeyPieceOpacity(3, 3, GHOST_FLOOR) === 1,
+      && storeyPieceOpacity(3, 3, GHOST_FLOOR) === expectCase('[R5]'),
     true);
   check('A6 a basement is a declared storey like any other',
     [storeyPieceOpacity(-1, -1, GHOST_FLOOR), storeyPieceOpacity(-1, 0, GHOST_FLOOR)],
-    [1, GHOST_FLOOR]);
+    [expectCase('[R7]'), expectCase('[R8]')]);
   check('A7 "solid" is 1', STOREY_SHOWN_OPACITY, 1);
 
   const tiles = await readFile(TILES_SRC, 'utf8');
@@ -170,8 +173,9 @@ async function main() {
   check('B4 the unmount clears the map like the other level maps',
     recipe.includes('tile.levelRoomPlateMats.clear();'), true);
   check('B5 the composed value is still the payload style\'s ghost',
-    [recipe.includes('const upper = plate.opacity_role === \'upper\';'),
-      recipe.includes('const opacity = upper ? (style.upper_floor_opacity ?? 1) : 1;')],
+    [recipe.includes('const look = plateLook(plate, style);'),
+      (await readFile(join(ROOT, 'client3d/src/scene/materialLooks.ts'), 'utf8'))
+        .includes('opacity: upper ? (style.upper_floor_opacity ?? 1) : 1,')],
     [true, true]);
 
   console.log(`\n${passed} ok, ${failed} failed`);

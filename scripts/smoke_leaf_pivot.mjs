@@ -100,21 +100,17 @@ async function main() {
   const vnear = (a, b) => a.length === 3 && b.length === 3 && a.every((v, i) => near(v, b[i]))
   const fmt = (v) => `(${v.map((x) => +x.toFixed(6)).join(', ')})`
 
-  const bbox = { min: [0.1, 0.1, -0.02], max: [0.9, 2.1, 0] }
-  const cases = [
-    ['fix 0 (R12 exactly)', {}, [0.1, 0.1, -0.01], [0, 1, 0]],
-    ['fix y = 180°: the fixed min.x is the raw max.x', { y: 180 }, [0.9, 0.1, -0.01], [0, 1, 0]],
-    ['fix y = 90°: the raw min.z edge, mid-width', { y: 90 }, [0.5, 0.1, -0.02], [0, 1, 0]],
-    ['fix x = 90°: min.x at mid-height on the front, axis −z', { x: 90 }, [0.1, 1.1, 0], [0, 0, -1]],
-    ['fix z = 90°: the top-left corner, axis +x', { z: 90 }, [0.1, 2.1, -0.01], [1, 0, 0]],
-  ]
+  const vectors = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'shared/test-vectors/scene_models.json'), 'utf8'))
+  const bbox = vectors.fixtures.LEAF
+  const cases = vectors.cases.filter(c => c.fn === 'leafPivot' && c.args.length === 2)
+    .map(c => [c.label, c.args[1], c.expect.point, c.expect.axis])
   console.log('--- leafPivot(bbox, fix): hand-derived point + axis ---')
   for (const [label, fix, point, axis] of cases) {
     const got = leafPivot(bbox, fix)
     check(`${label}: point ${fmt(point)}`, vnear(got.point, point), fmt(got.point))
     check(`${label}: axis ${fmt(axis)}`, vnear(got.axis, axis), fmt(got.axis))
   }
-  check('undefined fix is fix 0', vnear(leafPivot(bbox, undefined).point, [0.1, 0.1, -0.01]))
+  check('undefined fix is fix 0', vnear(leafPivot(bbox, undefined).point, cases[0][2]))
   check('the axis is unit length for a tilted fix',
     near(Math.hypot(...leafPivot(bbox, { x: 30, y: 45, z: 60 }).axis), 1))
 

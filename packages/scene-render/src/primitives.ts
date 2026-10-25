@@ -25,6 +25,8 @@
 import type { BufferGeometry, Material, Mesh } from 'three'
 import type { ScenePlate, SceneWall, SceneExtra } from './types'
 import type { PrimitiveTarget } from './verify'
+import { wallTransform, boxFaceUVs, extraRotation, plateShape, placeholderBox } from './primitiveMath'
+export { wallTransform, boxFaceExtents, boxFaceUVs, extraRotation, extraCorners, plateShape, placeholderBox } from './primitiveMath'
 
 /** Length of a wall segment in world metres — the box's width, and with it
  *  the world scale of the uvs on its broad faces. */
@@ -74,27 +76,28 @@ export function wallLength(wall: SceneWall): number {
  */
 export function buildPlate(THREE: typeof import('three'),
                            plate: ScenePlate, material: Material): Mesh {
-  const solid = plate.thickness > 0
+  const plane = plateShape(plate)
+  const solid = plane.solid
   /** One closed ring into a shape or a hole path, in the plate's own plane. */
   const ring = (into: { moveTo(x: number, y: number): unknown
                         lineTo(x: number, y: number): unknown
                         closePath(): unknown },
-                points: readonly [number, number][]) => {
+                points: readonly (readonly number[])[]) => {
     points.forEach(([px, pz], i) => {
-      const sy = solid ? pz : -pz
+      const sy = pz
       if (i === 0) into.moveTo(px, sy)
       else into.lineTo(px, sy)
     })
     into.closePath()
   }
   const shape = new THREE.Shape()
-  ring(shape, plate.outline)
+  ring(shape, plane.outline)
   // `?? []` is a GUARD, not a compat reader: the field is required by the
   // contract, but this routine is handed raw payload JSON in the admin
   // (`useScenePreview`), and an older server's plate would otherwise throw
   // inside the render pass and take the whole floor-plan preview with it. The
   // same defensiveness the outline gets from its `length < 3` filters.
-  for (const hole of plate.holes ?? []) {
+  for (const hole of plane.holes) {
     // Fewer than three points enclose nothing — the same rule the outline
     // itself is filtered by, and an empty `Path` would break the triangulation
     // of the ring around it.
@@ -108,7 +111,7 @@ export function buildPlate(THREE: typeof import('three'),
       ? new THREE.ExtrudeGeometry(shape, { depth: plate.thickness, bevelEnabled: false })
       : new THREE.ShapeGeometry(shape),
     material)
-  mesh.rotation.x = solid ? Math.PI / 2 : -Math.PI / 2
+  mesh.rotation.x = plane.rotationX
   mesh.position.y = plate.top_y
   return mesh
 }
@@ -129,15 +132,6 @@ export function buildPlate(THREE: typeof import('three'),
  * regardless of how many metres the face actually measures. That
  * normalisation is the whole problem this table exists to undo.
  */
-function boxFaceExtents(width: number, height: number, depth: number):
-    Array<[number, number]> {
-  return [
-    [depth, height], [depth, height],   // px, nx
-    [width, depth], [width, depth],     // py, ny
-    [width, height], [width, height],   // pz, nz
-  ]
-}
-
 /**
  * Rewrite a wall box's UVs to WORLD SCALE — the tiling belongs here, not on
  * `material.map.repeat`.
@@ -165,11 +159,11 @@ export function applyWorldScaleWallUVs(geometry: BufferGeometry, len: number,
   // 6 faces x 4 vertices. Anything else is not the box `buildWall` builds, and
   // guessing at a segmented layout would be worse than leaving it untouched.
   if (!uv || uv.count !== 24) return
-  const faces = boxFaceExtents(len, height, thickness)
+  const faces = boxFaceUVs(len, height, thickness, tileM)
   for (let f = 0; f < 6; f++) {
     const [su, sv] = faces[f]
     for (let i = f * 4; i < f * 4 + 4; i++) {
-      uv.setXY(i, uv.getX(i) * (su / tileM), uv.getY(i) * (sv / tileM))
+      uv.setXY(i, uv.getX(i) * su, uv.getY(i) * sv)
     }
   }
   uv.needsUpdate = true
@@ -193,13 +187,12 @@ export function applyWorldScaleWallUVs(geometry: BufferGeometry, len: number,
 export function buildWall(THREE: typeof import('three'),
                           wall: SceneWall, material: Material,
                           tileM = 0): Mesh {
-  const len = wallLength(wall)
+  const transform = wallTransform(wall)
+  const len = transform.size[0]
   const geometry = new THREE.BoxGeometry(len, wall.height, wall.thickness)
   applyWorldScaleWallUVs(geometry, len, wall.height, wall.thickness, tileM)
   const mesh = new THREE.Mesh(geometry, material)
-  mesh.position.set((wall.from[0] + wall.to[0]) / 2,
-                    wall.base_y + wall.height / 2,
-                    (wall.from[1] + wall.to[1]) / 2)
+  mesh.position.set(...transform.position)
   // THIS MINUS STAYS, and it is NOT the yaw sign of § A1.1.
   //
   // It is the inverse of the very rotation the yaw flip settled on. Under
@@ -212,7 +205,7 @@ export function buildWall(THREE: typeof import('three'),
   // axis-parallel about the segment's midpoint (an axis-parallel one would look
   // unchanged — a box is symmetric under 180° — which is exactly why this had to
   // be derived and not eyeballed).
-  mesh.rotation.y = -Math.atan2(wall.to[1] - wall.from[1], wall.to[0] - wall.from[0])
+  mesh.rotation.y = transform.yaw
   return mesh
 }
 
@@ -237,11 +230,7 @@ export function buildExtra(THREE: typeof import('three'),
   applyWorldScaleWallUVs(geometry, extra.size[0], extra.size[1], extra.size[2], tileM)
   const mesh = new THREE.Mesh(geometry, material)
   mesh.position.set(extra.center[0], extra.center[1], extra.center[2])
-  if (extra.rotation) {
-    const d = Math.PI / 180
-    mesh.rotation.set(extra.rotation[0] * d, extra.rotation[1] * d,
-                      extra.rotation[2] * d)
-  }
+  mesh.rotation.set(...extraRotation(extra))
   return mesh
 }
 
@@ -255,11 +244,9 @@ export function buildExtra(THREE: typeof import('three'),
 export function buildPlaceholder(THREE: typeof import('three'),
                                  dims: { w: number; d: number; h: number },
                                  material: Material): Mesh {
-  const w = Math.max(dims.w, 0.01)
-  const h = Math.max(dims.h, 0.01)
-  const d = Math.max(dims.d, 0.01)
-  const geo = new THREE.BoxGeometry(w, h, d)
-  geo.translate(0, h / 2, 0)
+  const box = placeholderBox(dims)
+  const geo = new THREE.BoxGeometry(...box.size)
+  geo.translate(...box.offset)
   return new THREE.Mesh(geo, material)
 }
 

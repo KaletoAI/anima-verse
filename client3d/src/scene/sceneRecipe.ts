@@ -1,3 +1,5 @@
+import { hasInterior as sceneHasInterior, isOutdoorSpec as outdoorSpec } from './sceneView';
+import { plateLook, wallLook, extraLook, placeholderLook } from './materialLooks';
 import { propLightPool, placementLightPosition, type LightHandle } from './lightPool';
 import { createFocusQueue } from '../game/focusQueue';
 import * as THREE from 'three';
@@ -388,13 +390,6 @@ function std(opts: THREE.MeshStandardMaterialParameters): THREE.MeshStandardMate
   return new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0.02, ...opts });
 }
 
-/** '#rrggbb' → THREE.Color; unbrauchbar/fehlend → weiß (das Payload IST die
- *  Quelle, es gibt hier bewusst keine zweite Farbtabelle). */
-function hex(c: string | undefined): THREE.Color {
-  const v = parseInt((c || '').replace('#', ''), 16);
-  return new THREE.Color(Number.isFinite(v) ? v : 0xffffff);
-}
-
 // ── Scene library: signature polling, as for the room recipe ──────────────
 
 /** One scene per location, polled by signature: request() fetches once (404 =
@@ -612,10 +607,7 @@ function tiledTexture(kind: string | undefined, use: 'floor' | 'wall'):
  *  outward only, a bare surface both ways. */
 function plateMaterial(plate: ScenePlate,
                        style: ScenePayload['style']): THREE.MeshStandardMaterial {
-  const solid = plate.thickness > 0;
-  const upper = plate.opacity_role === 'upper';
-  const opacity = upper ? (style.upper_floor_opacity ?? 1) : 1;
-  const side = solid ? THREE.FrontSide : THREE.DoubleSide;
+  const look = plateLook(plate, style);
   // A plate's uvs ARE its outline in metres (Shape/Extrude geometry), so its
   // world scale is a plain repeat of one tile per tileM — unlike a wall box,
   // whose faces are each normalised to 0..1 and therefore carry the scale in
@@ -627,22 +619,9 @@ function plateMaterial(plate: ScenePlate,
   // exakt das bisherige Material.
   return surfaceMaterial(THREE, {
     material: surfaceMaterialSpec(plate.texture_kind),
-    map: tex, color: hex(style.floor_color),
-    transparent: upper, opacity, side,
+    map: tex, ...look, color: new THREE.Color(look.color),
   }) as THREE.MeshStandardMaterial;
 }
-
-/** Colour of a door leaf when the payload carries no `style.door_color` —
- *  the server's own constant (`scene_recipe.STYLE`), repeated here ONLY as the
- *  fallback for a payload composed before the field existed. */
-const DOOR_COLOR_FALLBACK = '#4a3a2e';
-
-/** Colour of a staircase (`stair_*`) when the payload carries
- *  no `style.stair_color` — the server's own constant (`scene_recipe.STYLE`),
- *  repeated here ONLY as the fallback for a payload composed before the field
- *  existed. Without it a staircase would wear the elevator's grey and the two
- *  vertical connections would look like the same thing. */
-const STAIR_COLOR_FALLBACK = '#8a7a66';
 
 /** Material of a wall segment: a PANE from its own vocabulary — a window's
  *  translucent glass or a door's opaque dark leaf — else the tiled wall
@@ -654,25 +633,14 @@ const STAIR_COLOR_FALLBACK = '#8a7a66';
  *  crushed the texture on every jamb and reveal. `tileM` 0 = nothing to tile. */
 function wallMaterial(wall: SceneWall, style: ScenePayload['style']):
     { mat: THREE.MeshStandardMaterial; tileM: number } {
-  if (wall.glass) {
-    return { mat: std({ color: hex(style.glass_color), transparent: true,
-                        opacity: style.glass_opacity ?? 0.25, roughness: 0.3 }),
-             tileM: 0 };
-  }
-  // The DOOR LEAF: opaque, dark, matte — the one thing that makes an exterior
-  // door read as a door rather than as a hole into the dark.
-  if (wall.leaf) {
-    return { mat: std({ color: hex(style.door_color ?? DOOR_COLOR_FALLBACK),
-                        roughness: 0.75 }),
-             tileM: 0 };
-  }
-  const upper = wall.opacity_role === 'upper';
-  const opacity = upper ? (style.upper_wall_opacity ?? 1) : 1;
+  const look = wallLook(wall, style);
+  if (wall.glass || wall.leaf) return {
+    mat: std({ ...look, color: new THREE.Color(look.color) }), tileM: 0,
+  };
   const surf = tiledTexture(wall.texture_kind, 'wall');
   const mat = surfaceMaterial(THREE, {
     material: surfaceMaterialSpec(wall.texture_kind),
-    map: surf?.tex ?? null, color: hex(style.wall_color),
-    transparent: upper, opacity,
+    map: surf?.tex ?? null, ...look, color: new THREE.Color(look.color),
   }) as THREE.MeshStandardMaterial;
   return { mat, tileM: surf?.tileM ?? 0 };
 }
@@ -686,32 +654,24 @@ function wallMaterial(wall: SceneWall, style: ScenePayload['style']):
 function extraMaterial(extra: SceneExtra, style: ScenePayload['style']):
     { mat: THREE.MeshStandardMaterial; tileM: number } {
   const glass = extra.kind.endsWith('_glass');
-  const cabin = extra.kind === 'elevator_cabin';
-  const stair = extra.kind.startsWith('stair_');
-  const color = glass ? style.glass_color
-    : stair ? (style.stair_color ?? STAIR_COLOR_FALLBACK)
-      : extra.kind === 'elevator_pad' ? style.elevator_pad_color
-        : cabin ? style.elevator_cabin_color : style.elevator_frame_color;
-  const opacity = glass ? (style.elevator_glass_opacity ?? style.glass_opacity ?? 0.22)
-    : cabin ? (style.elevator_cabin_opacity ?? 1) : 1;
+  const look = extraLook(extra, style);
   const surf = glass ? null : tiledTexture(extra.texture_kind, 'wall');
   if (surf) {
     const mat = surfaceMaterial(THREE, {
       material: surfaceMaterialSpec(extra.texture_kind),
-      map: surf.tex, color: hex(color),
-      transparent: opacity < 1, opacity,
+      map: surf.tex, color: new THREE.Color(look.color),
+      transparent: look.transparent, opacity: look.opacity,
     }) as THREE.MeshStandardMaterial;
     return { mat, tileM: surf.tileM };
   }
-  return { mat: std({ color: hex(color), transparent: opacity < 1, opacity,
-                      roughness: glass ? 0.3 : 0.85 }),
+  return { mat: std({ ...look, color: new THREE.Color(look.color) }),
            tileM: 0 };
 }
 
 /** Material of the placeholder for a prop without a mesh: matte, half
  *  translucent grey — readable as a gap without dominating the scene. */
 function placeholderMaterial(): THREE.MeshStandardMaterial {
-  return std({ color: 0x9a9a9a, roughness: 0.9, transparent: true, opacity: 0.5 });
+  return std(placeholderLook());
 }
 
 // ── Mount ────────────────────────────────────────────────────────────────
@@ -1024,7 +984,7 @@ function roomProps(placements: readonly PlacedSceneModel[], roomId: string
 
 /** A model with no room, or in a room visible outdoors, belongs to the shell. */
 export function isOutdoorSpec(tile: Tile, spec: SceneModelSpec): boolean {
-  return !spec.room_id || tile.alwaysVisibleRooms.has(spec.room_id) || tile.roomOutdoor.has(spec.room_id);
+  return outdoorSpec(spec.room_id, [...tile.alwaysVisibleRooms], [...tile.roomOutdoor]);
 }
 
 export async function mountShell(tile: Tile, scene: ScenePayload,
@@ -1069,10 +1029,7 @@ export async function mountShell(tile: Tile, scene: ScenePayload,
   // …and since E5a a storey-0 room is DATA rather than a plate, so the floor
   // plan counts here exactly as its plates used to: a location made of nothing
   // but open zones still has an inside to uncover.
-  const hasInterior = scene.plates.length > 0 || scene.floor_plan.length > 0
-    || scene.walls.length > 0
-    || scene.extras.length > 0 || scene.markers.length > 0
-    || scene.models.some((m) => m.role !== 'building');
+  const hasInterior = sceneHasInterior(scene);
   tile.interior = hasInterior ? g : null;
   tile.group.add(g);
 

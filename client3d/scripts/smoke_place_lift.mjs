@@ -109,6 +109,7 @@
  * (shown on the two-place bench fixture above); and WITHOUT the argument the
  * pick is exactly as before (prop targets pass none).
  */
+import { runModelVectors } from './smoke_scene_models.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -173,14 +174,9 @@ async function main() {
   const AT = { x: 1.4, z: 2.0 };          // the marker's own point (at_world)
   const ANCHOR = { x: 1.0, z: 2.0 };      // its placement's anchor
   const SLOT0 = { x: 1.1, z: 2.0 };       // slot 0 of the capacity-2 bench
-  check('a prop marker is sampled at its placement anchor',
-        markerLiftPoint(AT, ANCHOR), { x: 1.0, z: 2.0 });
-  check('a room marker (no anchor) keeps its own point',
-        markerLiftPoint(AT, null), { x: 1.4, z: 2.0 });
-  check('...an absent anchor is the same case',
-        markerLiftPoint(AT, undefined), { x: 1.4, z: 2.0 });
-  check('a non-finite anchor is no anchor',
-        markerLiftPoint(AT, { x: Number.NaN, z: 2.0 }), { x: 1.4, z: 2.0 });
+  const vectors = await runModelVectors(c => c.label.startsWith('[K]'));
+  passed += vectors.passed;
+  failed += vectors.failed;
   check('the answer is a COPY — a caller may not edit the payload',
         markerLiftPoint(AT, ANCHOR) !== ANCHOR, true);
 

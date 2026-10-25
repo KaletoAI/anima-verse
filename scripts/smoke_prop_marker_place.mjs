@@ -135,6 +135,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadVectors } from '../shared/test-vectors/vectors.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SRC = join(ROOT, 'packages/scene-render/src/place.ts');
@@ -242,10 +243,7 @@ console.log('\n0. the fixture is the box the server is told about');
 const ANCHOR = [2, 3];
 const BOTTOM = 0.5;
 
-const CASES = [
-  ['A  fix 0,    yaw 30 ', { x: 0, y: 0, z: 0 }, 30, [0.217, -0.125], 0.225],
-  ['B  fix y90,  yaw 217', { x: 0, y: 90, z: 0 }, 217, [0.150, 0.200], 0.225],
-];
+const CASES = loadVectors('scene_place').fixtures.MARKERS;
 
 for (const [label, fix, yaw, [dx, dz], height] of CASES) {
   console.log(`\n${label} — the composed marker IS the mesh point`);

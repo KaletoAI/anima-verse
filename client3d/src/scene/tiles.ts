@@ -1,3 +1,7 @@
+import { tileToWorld as viewTileToWorld, tileDirToWorld as viewTileDirToWorld,
+  tileWorldBounds as viewTileWorldBounds, wallVisible, roomVisible,
+  fadeStep, fadeOpacities } from './sceneView';
+export { detectStyle } from './sceneView';
 import type { PlaceRecord } from './places';
 import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
@@ -245,12 +249,8 @@ export function footprintYaw(loc: WorldLocation): number {
  */
 export function tileToWorld(tile: Tile, lx: number, lz: number,
                             ly = 0): THREE.Vector3 {
-  const c = Math.cos(tile.yaw);
-  const s = Math.sin(tile.yaw);
-  return new THREE.Vector3(
-    tile.center.x + lx * c + lz * s,
-    tile.center.y + ly,
-    tile.center.z - lx * s + lz * c);
+  const p = viewTileToWorld(tile, lx, lz, ly);
+  return new THREE.Vector3(p.x, p.y, p.z);
 }
 
 /** World (x, z) → tile-local — the inverse of `tileToWorld` (a turn by −yaw).
@@ -288,49 +288,13 @@ export function tileContains(tile: Pick<Tile, 'boundary' | 'center' | 'yaw'>, x:
  */
 export function tileWorldBounds(tile: Tile
 ): { minX: number; minZ: number; maxX: number; maxZ: number } | null {
-  if (!tile.boundary) return null;
-  let minX = Infinity; let minZ = Infinity;
-  let maxX = -Infinity; let maxZ = -Infinity;
-  for (const [lx, lz] of tile.boundary) {
-    const p = tileToWorld(tile, lx, lz);
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.z < minZ) minZ = p.z;
-    if (p.z > maxZ) maxZ = p.z;
-  }
-  return { minX, minZ, maxX, maxZ };
+  return viewTileWorldBounds(tile);
 }
 
 /** Turn a tile-local DIRECTION into a world direction (no translation). */
 export function tileDirToWorld(tile: Tile, lx: number, lz: number
 ): { x: number; z: number } {
-  const c = Math.cos(tile.yaw);
-  const s = Math.sin(tile.yaw);
-  return { x: lx * c + lz * s, z: -lx * s + lz * c };
-}
-
-type TileStyle = 'forest' | 'road' | 'grass' | 'water' | 'cafe' | 'house' | 'highrise' | 'generic';
-
-/** AV3D-7: tolerantes Terrain-Vokabular (de/en). Leer -> null. */
-function terrainKind(raw: string | undefined): TileStyle | null {
-  const t = (raw || '').toLowerCase().trim();
-  if (!t) return null;
-  if (/water|see|lake|meer|ocean|fluss|river|teich|pond/.test(t)) return 'water';
-  if (/forest|wald|wood|park/.test(t)) return 'forest';
-  if (/road|street|stra|weg|path|asphalt/.test(t)) return 'road';
-  if (/grass|wiese|meadow|feld|field|gras/.test(t)) return 'grass';
-  return null;
-}
-
-/** AV3D-1: map3d.style -> building style. Empty/unknown -> null. */
-function styleKind(raw: string | undefined): TileStyle | null {
-  const s = (raw || '').toLowerCase().trim();
-  if (!s) return null;
-  if (/tower|highrise|high-rise|hochhaus|skyscraper/.test(s)) return 'highrise';
-  if (/shop|cafe|caf|store|laden|bar|restaurant/.test(s)) return 'cafe';
-  if (/house|haus|home|residence|cottage|villa/.test(s)) return 'house';
-  if (/generic|hall|block|building/.test(s)) return 'generic';
-  return terrainKind(s); // erlaubt auch style: "lake"/"forest"
+  return viewTileDirToWorld(tile, lx, lz);
 }
 
 /** One placed model of the mounted scene, kept for tier swapping (Stage 3,
@@ -758,26 +722,6 @@ export interface Tile {
 // them (`roomFigureScale`, `storeyHeight`, `locationAnchor`) had no readers
 // left once the double scale went. The payload's `storey_m` is read where it
 // is needed, in `sceneRecipe.ts`, out of the payload itself.
-
-export function detectStyle(loc: WorldLocation): TileStyle {
-  // Priority: map3d.style (AV3D-1) > terrain (AV3D-7) > name heuristic. The
-  // area vocabulary (forest/road/grass) is only ever guessed for an AREA
-  // location — a built place never wears a ground look because its name says
-  // "park".
-  const explicit = styleKind(loc.map3d?.style) ?? terrainKind(loc.terrain);
-  if (explicit) return explicit;
-
-  const n = (loc.name || '').toLowerCase();
-  if (isAreaLocation(loc)) {
-    if (/forest|wald|park|wood/.test(n)) return 'forest';
-    if (/street|stra|road|weg|alley/.test(n)) return 'road';
-    return 'grass';
-  }
-  if (/high-rise|highrise|tower|hochhaus|skyscraper|building/.test(n)) return 'highrise';
-  if (/caf|bar|restaurant|shop|laden|store|diner/.test(n)) return 'cafe';
-  if (/residence|house|haus|home|cottage|villa/.test(n)) return 'house';
-  return 'generic';
-}
 
 /** Keep the hull corridor and cutouts mutually exclusive without recompiling. */
 export function setTileCutoutsEnabled(tile: Tile, on: boolean): void {
@@ -1294,12 +1238,12 @@ export function applyTileOcclusion(tile: Tile, hide: boolean, dt: number) {
  *  Walls above the selected storey remain hidden. */
 export function applyWallCulling(tile: Tile, camX: number, camZ: number) {
   for (const w of tile.outlineWalls) {
-    const cullOk = (camX - w.mid.x) * w.normal.x + (camZ - w.mid.y) * w.normal.y <= 0;
+    const cullOk = wallVisible(camX, camZ, w.mid.x, w.mid.y, w.normal.x, w.normal.y, w.level, tile.levelFilter);
     // Exactly the chosen storey — see applyLevelDisplay. A room of an
     // always-visible (outdoor) zone cannot lose walls to this: the payload
     // emits none for it at all (app/core/scene_recipe.py, `always_visible`
     // or `no_walls` -> no segments).
-    w.mesh.visible = cullOk && w.level === tile.levelFilter;
+    w.mesh.visible = cullOk;
   }
 }
 
@@ -1352,8 +1296,7 @@ export function applyLevelDisplay(tile: Tile) {
  *  hiding is unnecessary — nothing except walls is hidden on a storey. */
 export function applyRoomVisibility(tile: Tile) {
   for (const [id, rg] of tile.roomGroups) {
-    rg.visible = tile.alwaysVisibleRooms.has(id)
-      || (tile.roomLevels.get(id) ?? 0) === tile.levelFilter;
+    rg.visible = roomVisible(tile.alwaysVisibleRooms.has(id), tile.roomLevels.get(id) ?? null, tile.levelFilter);
   }
 }
 
@@ -1369,12 +1312,12 @@ export function applyNightGlow(tile: Tile, night: number) {
  *  side effect: τ = 1/4 s reaches 95 % in ~0.75 s — the "~0.8 s feel" of the
  *  plan. The old 6 (≈0.5 s) read as a snap once the camera no longer moved
  *  with it. */
-const FADE_RATE = 4;
 
 /** Crossfade exterior view <-> room view (fade 0..1). */
 export function applyTileFade(tile: Tile, dt: number) {
-  tile.fade = THREE.MathUtils.lerp(tile.fade, tile.fadeTarget, 1 - Math.exp(-FADE_RATE * dt));
+  tile.fade = fadeStep(tile.fade, tile.fadeTarget, dt);
   const f = tile.fade;
+  const opacity = fadeOpacities(f);
   // No more Y morphing: the spec supplies ONE scale, valid at every zoom.
   // Scaling anything here would recreate the divergence from the admin
   // preview measured on 2026-07-28.
@@ -1404,17 +1347,17 @@ export function applyTileFade(tile: Tile, dt: number) {
     sm.visible = !(f > 0.03 && tile.levelFilter < 0);
   }
 
-  for (const m of tile.roofMats) m.opacity = Math.max(0, 1 - f * 1.4);
-  for (const o of tile.roofParts) o.visible = f < 0.95;
+  for (const m of tile.roofMats) m.opacity = opacity.roof;
+  for (const o of tile.roofParts) o.visible = opacity.roofVisible;
   // Revealed interior: the shell stops casting shadows so figures do not
   // stand in the dark.
-  const shellShadow = f < 0.4;
+  const shellShadow = opacity.shellShadow;
   tile.group.traverse((o) => {
     if ((o as THREE.Mesh).isMesh && o.castShadow !== shellShadow && tile.interior && !tile.interior.getObjectById(o.id)) {
       o.castShadow = shellShadow;
     }
   });
-  for (const m of tile.shellMats) m.opacity = 1 - f * 0.88;
-  tile.interior.visible = f > 0.03;
-  for (const l of tile.interiorLabels) l.visible = f > 0.5;
+  for (const m of tile.shellMats) m.opacity = opacity.shell;
+  tile.interior.visible = opacity.interiorVisible;
+  for (const l of tile.interiorLabels) l.visible = opacity.labelsVisible;
 }

@@ -62,6 +62,14 @@ function glyphColour(group: string): number {
   return GLYPH_COLOURS[group] ?? GLYPH_COLOUR_UNKNOWN;
 }
 
+/** Renderer-independent ring dimensions and material settings. */
+export function glyphParameters(group: string) {
+  return { colour: glyphColour(group), innerRadius: RING_INNER_M, outerRadius: RING_OUTER_M,
+    segments: 32, lift: RING_LIFT_M, renderOrder: RING_RENDER_ORDER,
+    rotationX: -Math.PI / 2, opacity: 0.85, transparent: true,
+    depthTest: false, depthWrite: false, side: 2 as const };
+}
+
 /** One ring per FREE slot of every offered place in `entries` (the room's
  *  markers) that has NO PROP under it, skipping the place `skipPlaceId` — the
  *  one the avatar itself holds; its rings would sit under the avatar's own
@@ -85,39 +93,50 @@ function glyphColour(group: string): number {
  *  Every mesh carries `userData.placeId` for `hitPlace`. ONE geometry and one
  *  material per colour for the whole group — `disposeGlyphs` frees them
  *  once. */
+/** Pure ring inventory; the renderer only allocates geometry and materials. */
+export function glyphRows(entries: ReadonlyMap<string, Pick<PlaceEntry,
+    'slots' | 'fixed' | 'anchor' | 'diorama' | 'roomId'>> | undefined,
+    offers: PlaceOffer[], skipPlaceId = '', dioramaRooms: ReadonlySet<string> = new Set()) {
+  const rows: { placeId: string; colour: number; position: { x: number; y: number; z: number } }[] = [];
+  if (!entries) return rows;
+  for (const offer of offers) {
+    if (offer.id === skipPlaceId || offer.free <= 0) continue;
+    const entry = entries.get(offer.id);
+    if (!entry || (entry.fixed && entry.anchor) ||
+        (entry.diorama && dioramaRooms.has(entry.roomId))) continue;
+    for (const i of offer.free_slots) {
+      const p = entry.slots[i];
+      if (p) rows.push({ placeId: offer.id, colour: glyphColour(offer.group),
+        position: { x: p.x, y: p.y + RING_LIFT_M, z: p.z } });
+    }
+  }
+  return rows;
+}
+
 export function buildGlyphs(entries: Map<string, PlaceEntry> | undefined, offers: PlaceOffer[],
                             skipPlaceId = '',
                             dioramaRooms: ReadonlySet<string> = new Set()): THREE.Group {
   const group = new THREE.Group();
   group.name = 'placeGlyphs';
   if (!entries) return group;
-  const geometry = new THREE.RingGeometry(RING_INNER_M, RING_OUTER_M, 32);
+  const parameters = glyphParameters('');
+  const geometry = new THREE.RingGeometry(parameters.innerRadius, parameters.outerRadius, parameters.segments);
   const materials = new Map<number, THREE.MeshBasicMaterial>();
-  for (const offer of offers) {
-    if (offer.id === skipPlaceId || offer.free <= 0) continue;
-    const entry = entries.get(offer.id);
-    if (!entry) continue;
-    if (entry.fixed && entry.anchor) continue;               // its prop is the target
-    if (entry.diorama && dioramaRooms.has(entry.roomId)) continue;   // its room is
-    const colour = glyphColour(offer.group);
-    let material = materials.get(colour);
+  for (const row of glyphRows(entries, offers, skipPlaceId, dioramaRooms)) {
+    let material = materials.get(row.colour);
     if (!material) {
       material = new THREE.MeshBasicMaterial({
-        color: colour, transparent: true, opacity: 0.85,
-        depthTest: false, depthWrite: false, side: THREE.DoubleSide,
+        color: row.colour, transparent: parameters.transparent, opacity: parameters.opacity,
+        depthTest: parameters.depthTest, depthWrite: parameters.depthWrite, side: parameters.side,
       });
-      materials.set(colour, material);
+      materials.set(row.colour, material);
     }
-    for (const i of offer.free_slots) {
-      const p = entry.slots[i];
-      if (!p) continue;    // the payload's capacity and the server's disagree: no ring
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.rotation.x = -Math.PI / 2;    // RingGeometry lies in XY — lay it flat
-      mesh.position.set(p.x, p.y + RING_LIFT_M, p.z);
-      mesh.renderOrder = RING_RENDER_ORDER;
-      mesh.userData.placeId = offer.id;
-      group.add(mesh);
-    }
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.rotation.x = parameters.rotationX;
+    mesh.position.set(row.position.x, row.position.y, row.position.z);
+    mesh.renderOrder = parameters.renderOrder;
+    mesh.userData.placeId = row.placeId;
+    group.add(mesh);
   }
   // NOTHING TO DRAW is now the normal case in a furnished room — every place
   // of it sits on a prop. `disposeGlyphs` frees what it finds under the

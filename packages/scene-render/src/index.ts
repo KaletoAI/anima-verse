@@ -115,7 +115,7 @@ export type {
   StrokeStationOptions,
 } from './stroke'
 
-export { SpecVerifier, VERIFY_EPS } from './verify'
+export { SpecVerifier, VERIFY_EPS, inFrame, primitiveRows, placementRows } from './verify'
 export type { PrimitiveTarget, VerifyRow } from './verify'
 
 export {
@@ -152,3 +152,14 @@ export { createSecondaryMotion, stepSecondaryParticle, softMotionAngle, blendMot
 export type { MotionGroup, MotionAttributeProfiles, ExtensionRigDeclaration, SecondaryMotionPayload, SecondaryMotion } from './secondaryMotion'
 
 export { installSkinnedNormalCorrection } from './skinnedNormals'
+
+export { placeTransform } from './placeTransform'
+export type { MeshBox, PlaceTransform } from './placeTransform'
+
+export { wallTransform, boxFaceExtents, boxFaceUVs, extraRotation,
+  extraCorners, plateShape, placeholderBox } from './primitiveMath'
+export { clipOutlinePoints, cutoutPolygons, clipPointInside, clipKeepsPoint,
+  cutoutPadding, cutoutDiscardsPoint } from './clipMath'
+export { cutPlaneData } from './depthCutMath'
+export { surfaceFinish } from './materials'
+export type { VerifyPoint, VerifyBox, VerifyMeasurement, VerifyResult } from './verify'

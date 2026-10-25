@@ -1,0 +1,35 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_place_rotation.mjs",
+  "fixtures": {
+    "UNIT": [{"min":[-0.5,-0.5,-0.5],"max":[0.5,0.5,0.5]}],
+    "BASE": {"role":"building","id":"x","url":"","level":0,"measure":"xyz","max_m":4,"anchor":[0,0],"bottom_y":0},
+    "LEAF": [{"min":[-0.25,-1,-0.05],"max":[0.25,1,0.05]}],
+    "DOOR": {"role":"prop","id":"door","url":"","level":0,"measure":"fit","size_m":[1,2.1],"anchor":[3,7],"bottom_y":0.5},
+    "L": [{"min":[0,0,0],"max":[1,1,1]},{"min":[0,0,1],"max":[0.2,1,2]}],
+    "ORACLES": {"unitScale":4,"yaw45Scale":2.8284271247461903,"yaw45Hull":4,"yawScales":[4,2.928203230275509,4,2.85622369742826],"markerScale":1,"markerX":14.5,"markerZ":15.5,"cornerX":15,"cornerZ":15,"doorWidth":1,"doorHeight":2.1,"doorDepth":0.2,"doorMinX":3,"doorMaxX":4,"doorBottom":0.5,"doorZ":7,"door270MinZ":7,"door270MaxZ":8,"door270Depth":0.2,"door270Height":2.1},
+    "MARKERS": [
+      ["A  fix 0,    yaw 30",{"x":0,"y":0,"z":0},30,[0.217,-0.125],0.225],
+      ["B  fix y90,  yaw 217",{"x":0,"y":90,"z":0},217,[0.150,0.200],0.225]
+    ]
+  },
+  "cases": [
+    {"label":"[1] xyz unit","fn":"placeTransform","args":[{"$fixture":"BASE"},{"$fixture":"UNIT"}],"expect":{"fixPos":[0,0,0],"fitScale":[1,1,1],"outerScale":4,"outerPos":[0,2,0]}},
+    {"label":"[1] xyz quarter fix","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"fix_euler":{"y":90}}},{"$fixture":"UNIT"}],"expect":{"outerScale":4}},
+    {"label":"[1] xyz fine fix","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"fix_euler":{"y":110,"z":357}}},{"$fixture":"UNIT"}],"expect":{"outerScale":4}},
+    {"label":"[1] xyz all-axis fine fix","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"fix_euler":{"x":5,"y":110,"z":355}}},{"$fixture":"UNIT"}],"expect":{"outerScale":4}},
+    {"label":"[2] xz unit","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"measure":"xz"}},{"$fixture":"UNIT"}],"expect":{"outerScale":4}},
+    {"label":"[2] xz fine fix","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"measure":"xz","fix_euler":{"x":5,"y":110,"z":355}}},{"$fixture":"UNIT"}],"expect":{"outerScale":4}},
+    {"label":"[3] yawed unit","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"measure":"yawed_xz"}},{"$fixture":"UNIT"}],"expect":{"outerScale":4}},
+    {"label":"[3] yawed fine fix","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"measure":"yawed_xz","fix_euler":{"x":5,"y":110,"z":355}}},{"$fixture":"UNIT"}],"expect":{"outerScale":4}},
+    {"label":"[4] yaw45 hull ruler","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"measure":"yawed_xz","yaw_deg":45}},{"$fixture":"UNIT"}],"expect":{"outerScale":2.8284271247461903}},
+    {"label":"[5] yaw30 fine fix","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"measure":"yawed_xz","yaw_deg":30,"fix_euler":{"x":5,"y":110,"z":355}}},{"$fixture":"UNIT"}],"expect":{"outerScale":2.928203230275509}},
+    {"label":"[5] yaw90 fine fix","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"measure":"yawed_xz","yaw_deg":90,"fix_euler":{"x":5,"y":110,"z":355}}},{"$fixture":"UNIT"}],"expect":{"outerScale":4}},
+    {"label":"[5] yaw217 fine fix","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"measure":"yawed_xz","yaw_deg":217,"fix_euler":{"x":5,"y":110,"z":355}}},{"$fixture":"UNIT"}],"expect":{"outerScale":2.85622369742826}},
+    {"label":"[6] slab marker scale and seat","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"measure":"xz","max_m":10,"yaw_deg":90,"anchor":[10,20]}},[{"min":[-5,-0.5,-5],"max":[5,0.5,5]},{"min":[4,-0.5,4],"max":[5,0.5,5]}]],"expect":{"fixPos":[0,0,0],"outerScale":1,"outerPos":[10,0.5,20]}},
+    {"label":"[7] fitted door yaw0","fn":"placeTransform","args":[{"$fixture":"DOOR"},{"$fixture":"LEAF"}],"expect":{"fixPos":[0.25,1,0],"fitScale":[2,1.05,2],"outerScale":1,"outerPos":[3,0.5,7]}},
+    {"label":"[7] fitted door yaw270","fn":"placeTransform","args":[{"$fixture":"DOOR","$with":{"yaw_deg":270}},{"$fixture":"LEAF"}],"expect":{"fixPos":[0.25,1,0],"fitScale":[2,1.05,2],"outerScale":1,"outerPos":[3,0.5,7]}},
+    {"label":"[8] L marker A seating","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"max_m":1,"yaw_deg":30,"anchor":[2,3],"bottom_y":0.5}},{"$fixture":"L"}],"expect":{"fixPos":[-0.5,-0.5,-1],"fitScale":[1,1,1],"outerScale":0.5,"outerPos":[2,0.75,3]}},
+    {"label":"[8] L marker B seating","fn":"placeTransform","args":[{"$fixture":"BASE","$with":{"max_m":1,"yaw_deg":217,"fix_euler":{"y":90},"anchor":[2,3],"bottom_y":0.5}},{"$fixture":"L"}],"expect":{"fixPos":[-1,-0.5,0.5],"fitScale":[1,1,1],"outerScale":0.5,"outerPos":[2,0.75,3]}}
+  ]
+}

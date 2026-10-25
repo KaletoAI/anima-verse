@@ -1,3 +1,4 @@
+import { cutPlaneData } from './depthCutMath'
 /**
  * The DEPTH CUT of a placed prop (§ B2 addendum 2026-08-23) — half a table
  * against a wall, out of the one table in the library.
@@ -33,15 +34,11 @@ import type { SceneCutPlane } from './types'
  *  hanging where it belongs. Returns null when the placement is uncut. */
 export function cutPlaneFor(THREE: typeof import('three'), obj: Object3D,
                             cut: SceneCutPlane | undefined) {
-  if (!cut || !cut.normal) return null
-  const n = new THREE.Vector3(cut.normal[0], cut.normal[1], cut.normal[2])
-  if (n.lengthSq() < 1e-9) return null
-  const plane = new THREE.Plane(n.normalize(), cut.constant)
   const parent = obj.parent
-  if (parent) {
-    parent.updateMatrixWorld(true)
-    plane.applyMatrix4(parent.matrixWorld)
-  }
+  if (parent) parent.updateMatrixWorld(true)
+  const data = cutPlaneData(cut, parent?.matrixWorld.elements)
+  if (!data) return null
+  const plane = new THREE.Plane(new THREE.Vector3(...data.normal), data.constant)
   return plane
 }
 

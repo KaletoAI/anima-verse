@@ -1,0 +1,2404 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_scene_models.mjs",
+  "fixtures": {
+    "MODEL": {
+      "variants": {
+        "full": "/assets/props/pine-abc123/model?tier=full",
+        "low": "/assets/props/pine-abc123/model?tier=low"
+      },
+      "model_variants": [
+        {
+          "full": "/assets/props/pine-abc123/model?tier=full",
+          "low": "/assets/props/pine-abc123/model?tier=low"
+        },
+        {
+          "full": "/assets/props/pine-abc123/model?variant=2&tier=full",
+          "low": "/assets/props/pine-abc123/model?variant=2&tier=low"
+        },
+        {
+          "full": "/assets/props/pine-abc123/model?variant=3&tier=full"
+        }
+      ]
+    },
+    "LEAF": {
+      "min": [
+        0.1,
+        0.1,
+        -0.02
+      ],
+      "max": [
+        0.9,
+        2.1,
+        0
+      ]
+    },
+    "SLOTS": [
+      [
+        -2,
+        0,
+        -3.6
+      ],
+      [
+        -2,
+        0,
+        -3
+      ],
+      [
+        -2,
+        0,
+        -2.4
+      ]
+    ],
+    "ENTRIES": {
+      "floor": {
+        "roomId": "a",
+        "slots": [
+          [
+            1,
+            2,
+            3
+          ]
+        ],
+        "diorama": false
+      },
+      "prop": {
+        "roomId": "a",
+        "slots": [
+          [
+            4,
+            5,
+            6
+          ]
+        ],
+        "fixed": true,
+        "anchor": [
+          4,
+          6
+        ],
+        "diorama": false
+      },
+      "old": {
+        "roomId": "a",
+        "slots": [
+          [
+            7,
+            8,
+            9
+          ]
+        ],
+        "fixed": true,
+        "diorama": false
+      },
+      "dio": {
+        "roomId": "a",
+        "slots": [
+          [
+            10,
+            11,
+            12
+          ]
+        ],
+        "diorama": true
+      }
+    },
+    "OFFERS": [
+      {
+        "id": "floor",
+        "group": "seat",
+        "free": 1,
+        "free_slots": [
+          0
+        ]
+      },
+      {
+        "id": "prop",
+        "group": "seat",
+        "free": 1,
+        "free_slots": [
+          0
+        ]
+      },
+      {
+        "id": "old",
+        "group": "seat",
+        "free": 1,
+        "free_slots": [
+          0
+        ]
+      },
+      {
+        "id": "dio",
+        "group": "seat",
+        "free": 1,
+        "free_slots": [
+          0
+        ]
+      }
+    ],
+    "SURFACE": {
+      "step": 1,
+      "origin": [
+        -1,
+        -1
+      ],
+      "cols": 3,
+      "rows": 3,
+      "box_min": [
+        -1,
+        0,
+        -1
+      ],
+      "box_max": [
+        1,
+        1,
+        1
+      ],
+      "extent_snapped": [
+        2,
+        1,
+        2
+      ],
+      "values": [
+        0,
+        100,
+        200,
+        0,
+        100,
+        200,
+        null,
+        100,
+        200
+      ]
+    },
+    "PLACEMENT": {
+      "anchor": [
+        4,
+        -3
+      ],
+      "yaw_deg": 90,
+      "bottom_y": 0.5,
+      "max_m": 4,
+      "measure": "xz"
+    },
+    "SQUARE": [
+      [
+        0,
+        0
+      ],
+      [
+        2,
+        0
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        0,
+        2
+      ]
+    ]
+  },
+  "cases": [
+    {
+      "label": "[M] single full",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "variants": {
+            "full": "/assets/props/pine-abc123/model?tier=full",
+            "low": "/assets/props/pine-abc123/model?tier=low"
+          }
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?tier=full"
+    },
+    {
+      "label": "[M] single low",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "variants": {
+            "full": "/assets/props/pine-abc123/model?tier=full",
+            "low": "/assets/props/pine-abc123/model?tier=low"
+          }
+        },
+        "low"
+      ],
+      "expect": "/assets/props/pine-abc123/model?tier=low"
+    },
+    {
+      "label": "[M] single same as plain",
+      "fn": "variantMatchesPlain",
+      "args": [
+        {
+          "variants": {
+            "full": "/assets/props/pine-abc123/model?tier=full",
+            "low": "/assets/props/pine-abc123/model?tier=low"
+          }
+        },
+        "low"
+      ],
+      "expect": true
+    },
+    {
+      "label": "[M] empty list",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "variants": {
+            "full": "/assets/props/pine-abc123/model?tier=full",
+            "low": "/assets/props/pine-abc123/model?tier=low"
+          },
+          "model_variants": []
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?tier=full"
+    },
+    {
+      "label": "[M] 0 full",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 0
+          }
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?tier=full"
+    },
+    {
+      "label": "[M] 0 low",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 0
+          }
+        },
+        "low"
+      ],
+      "expect": "/assets/props/pine-abc123/model?tier=low"
+    },
+    {
+      "label": "[M] 1 full",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 1
+          }
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?variant=2&tier=full"
+    },
+    {
+      "label": "[M] 1 low",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 1
+          }
+        },
+        "low"
+      ],
+      "expect": "/assets/props/pine-abc123/model?variant=2&tier=low"
+    },
+    {
+      "label": "[M] 2 full",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 2
+          }
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?variant=3&tier=full"
+    },
+    {
+      "label": "[M] missing",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL"
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?tier=full"
+    },
+    {
+      "label": "[M] missing primary contract",
+      "fn": "variantMatchesPlain",
+      "args": [
+        {
+          "$fixture": "MODEL"
+        },
+        "full"
+      ],
+      "expect": true
+    },
+    {
+      "label": "[M] invalid",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": "x"
+          }
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?tier=full"
+    },
+    {
+      "label": "[M] 3 wraps",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 3
+          }
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?tier=full"
+    },
+    {
+      "label": "[M] 4 wraps",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 4
+          }
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?variant=2&tier=full"
+    },
+    {
+      "label": "[M] 7 wraps",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 7
+          }
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?variant=2&tier=full"
+    },
+    {
+      "label": "[M] -1 wraps",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": -1
+          }
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?variant=3&tier=full"
+    },
+    {
+      "label": "[M] -4 wraps",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": -4
+          }
+        },
+        "full"
+      ],
+      "expect": "/assets/props/pine-abc123/model?variant=3&tier=full"
+    },
+    {
+      "label": "[M] fallback full",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 2
+          }
+        },
+        "low"
+      ],
+      "expect": "/assets/props/pine-abc123/model?variant=3&tier=full"
+    },
+    {
+      "label": "[M] contained fallback",
+      "fn": "variantContained",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 2
+          }
+        },
+        "low"
+      ],
+      "expect": true
+    },
+    {
+      "label": "[M] unknown tier",
+      "fn": "pickModelVariant",
+      "args": [
+        {
+          "$fixture": "MODEL",
+          "$with": {
+            "variant": 1
+          }
+        },
+        "ultra"
+      ],
+      "expect": "/assets/props/pine-abc123/model?variant=2&tier=full"
+    },
+    {
+      "label": "[M] scatter order",
+      "fn": "variantScatter",
+      "args": [
+        {
+          "$fixture": "MODEL"
+        },
+        [
+          1,
+          2,
+          0,
+          1,
+          2,
+          0
+        ]
+      ],
+      "expect": [
+        "/assets/props/pine-abc123/model?variant=2&tier=full",
+        "/assets/props/pine-abc123/model?variant=3&tier=full",
+        "/assets/props/pine-abc123/model?tier=full",
+        "/assets/props/pine-abc123/model?variant=2&tier=full",
+        "/assets/props/pine-abc123/model?variant=3&tier=full",
+        "/assets/props/pine-abc123/model?tier=full"
+      ]
+    },
+    {
+      "label": "[M] scatter counts",
+      "fn": "variantCounts",
+      "args": [
+        {
+          "$fixture": "MODEL"
+        },
+        [
+          1,
+          2,
+          0,
+          1,
+          2,
+          0
+        ]
+      ],
+      "expect": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "label": "[L] zero",
+      "fn": "leafPivot",
+      "args": [
+        {
+          "$fixture": "LEAF"
+        },
+        {}
+      ],
+      "expect": {
+        "point": [
+          0.1,
+          0.1,
+          -0.01
+        ],
+        "axis": [
+          0,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "label": "[L] yaw180",
+      "fn": "leafPivot",
+      "args": [
+        {
+          "$fixture": "LEAF"
+        },
+        {
+          "y": 180
+        }
+      ],
+      "expect": {
+        "point": [
+          0.9,
+          0.1,
+          -0.01
+        ],
+        "axis": [
+          0,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "label": "[L] yaw90",
+      "fn": "leafPivot",
+      "args": [
+        {
+          "$fixture": "LEAF"
+        },
+        {
+          "y": 90
+        }
+      ],
+      "expect": {
+        "point": [
+          0.5,
+          0.1,
+          -0.02
+        ],
+        "axis": [
+          0,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "label": "[L] pitch90",
+      "fn": "leafPivot",
+      "args": [
+        {
+          "$fixture": "LEAF"
+        },
+        {
+          "x": 90
+        }
+      ],
+      "expect": {
+        "point": [
+          0.1,
+          1.1,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          -1
+        ]
+      }
+    },
+    {
+      "label": "[L] roll90",
+      "fn": "leafPivot",
+      "args": [
+        {
+          "$fixture": "LEAF"
+        },
+        {
+          "z": 90
+        }
+      ],
+      "expect": {
+        "point": [
+          0.1,
+          2.1,
+          -0.01
+        ],
+        "axis": [
+          1,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "label": "[L] missing fix",
+      "fn": "leafPivot",
+      "args": [
+        {
+          "$fixture": "LEAF"
+        }
+      ],
+      "expect": {
+        "point": [
+          0.1,
+          0.1,
+          -0.01
+        ],
+        "axis": [
+          0,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "label": "[G] ground rise",
+      "fn": "storeyGroundLift",
+      "args": [
+        0,
+        2,
+        3,
+        0.25,
+        1
+      ],
+      "expect": 0.75
+    },
+    {
+      "label": "[G] upper plate",
+      "fn": "storeyGroundLift",
+      "args": [
+        1,
+        2,
+        3,
+        0.25,
+        1
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[G] basement plate",
+      "fn": "storeyGroundLift",
+      "args": [
+        -1,
+        2,
+        3,
+        0.25,
+        1
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[G] missing sampler",
+      "fn": "storeyGroundLift",
+      "args": [
+        0,
+        2,
+        3,
+        0.25,
+        null
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[G] default ground",
+      "fn": "storeyGroundLift",
+      "args": [
+        null,
+        2,
+        3,
+        0.25,
+        1
+      ],
+      "expect": 0.75
+    },
+    {
+      "label": "[G] rise",
+      "fn": "storeyGroundRelift",
+      "args": [
+        0.4,
+        0,
+        2,
+        3,
+        0.25,
+        1
+      ],
+      "expect": {
+        "lift": 0.75,
+        "delta": 0.35
+      }
+    },
+    {
+      "label": "[G] same",
+      "fn": "storeyGroundRelift",
+      "args": [
+        0.75,
+        0,
+        2,
+        3,
+        0.25,
+        1
+      ],
+      "expect": {
+        "lift": 0.75,
+        "delta": 0
+      }
+    },
+    {
+      "label": "[G] no sample",
+      "fn": "storeyGroundRelift",
+      "args": [
+        0.75,
+        0,
+        2,
+        3,
+        0.25,
+        null
+      ],
+      "expect": {
+        "lift": 0.75,
+        "delta": 0
+      }
+    },
+    {
+      "label": "[G] plate clears",
+      "fn": "storeyGroundRelift",
+      "args": [
+        0.75,
+        1,
+        2,
+        3,
+        0.25,
+        1
+      ],
+      "expect": {
+        "lift": 0,
+        "delta": -0.75
+      }
+    },
+    {
+      "label": "[G] tile moves",
+      "fn": "tileDatumStep",
+      "args": [
+        0.25,
+        2,
+        3,
+        1
+      ],
+      "expect": {
+        "datum": 1,
+        "delta": 0.75
+      }
+    },
+    {
+      "label": "[G] tile holds",
+      "fn": "tileDatumStep",
+      "args": [
+        0.25,
+        2,
+        3,
+        null
+      ],
+      "expect": {
+        "datum": 0.25,
+        "delta": 0
+      }
+    },
+    {
+      "label": "[K] prop anchor",
+      "fn": "markerLiftPoint",
+      "args": [
+        {
+          "x": 1.4,
+          "z": 2
+        },
+        {
+          "x": 1,
+          "z": 2
+        }
+      ],
+      "expect": {
+        "x": 1,
+        "z": 2
+      }
+    },
+    {
+      "label": "[K] room point",
+      "fn": "markerLiftPoint",
+      "args": [
+        {
+          "x": 1.4,
+          "z": 2
+        },
+        null
+      ],
+      "expect": {
+        "x": 1.4,
+        "z": 2
+      }
+    },
+    {
+      "label": "[K] absent anchor",
+      "fn": "markerLiftPoint",
+      "args": [
+        {
+          "x": 1.4,
+          "z": 2
+        }
+      ],
+      "expect": {
+        "x": 1.4,
+        "z": 2
+      }
+    },
+    {
+      "label": "[K] invalid anchor",
+      "fn": "markerLiftPointInvalidAnchor",
+      "args": [
+        {
+          "x": 1.4,
+          "z": 2
+        }
+      ],
+      "expect": {
+        "x": 1.4,
+        "z": 2
+      }
+    },
+    {
+      "label": "[S] slot 1",
+      "fn": "slotFor",
+      "args": [
+        {
+          "$fixture": "SLOTS"
+        },
+        1
+      ],
+      "expect": [
+        -2,
+        0,
+        -3
+      ]
+    },
+    {
+      "label": "[S] slot pair",
+      "fn": "slotFor",
+      "args": [
+        {
+          "$fixture": "SLOTS"
+        },
+        "pair"
+      ],
+      "expect": [
+        -2,
+        0,
+        -3
+      ]
+    },
+    {
+      "label": "[S] slot 7",
+      "fn": "slotFor",
+      "args": [
+        {
+          "$fixture": "SLOTS"
+        },
+        7
+      ],
+      "expect": [
+        -2,
+        0,
+        -3.6
+      ]
+    },
+    {
+      "label": "[S] slot -1",
+      "fn": "slotFor",
+      "args": [
+        {
+          "$fixture": "SLOTS"
+        },
+        -1
+      ],
+      "expect": [
+        -2,
+        0,
+        -3.6
+      ]
+    },
+    {
+      "label": "[S] slot 2",
+      "fn": "slotFor",
+      "args": [
+        {
+          "$fixture": "SLOTS"
+        },
+        2
+      ],
+      "expect": [
+        -2,
+        0,
+        -2.4
+      ]
+    },
+    {
+      "label": "[S] empty numbered",
+      "fn": "slotFor",
+      "args": [
+        [],
+        0
+      ],
+      "expect": null
+    },
+    {
+      "label": "[S] empty pair",
+      "fn": "slotFor",
+      "args": [
+        [],
+        "pair"
+      ],
+      "expect": null
+    },
+    {
+      "label": "[Y] mounted diorama",
+      "fn": "buildGlyphs",
+      "args": [
+        {
+          "$fixture": "ENTRIES"
+        },
+        {
+          "$fixture": "OFFERS"
+        },
+        "",
+        [
+          "a"
+        ]
+      ],
+      "expect": [
+        {
+          "placeId": "floor",
+          "colour": 15912302,
+          "position": {
+            "x": 1,
+            "y": 2.03,
+            "z": 3
+          }
+        },
+        {
+          "placeId": "old",
+          "colour": 15912302,
+          "position": {
+            "x": 7,
+            "y": 8.03,
+            "z": 9
+          }
+        }
+      ]
+    },
+    {
+      "label": "[Y] skip avatar",
+      "fn": "buildGlyphs",
+      "args": [
+        {
+          "$fixture": "ENTRIES"
+        },
+        {
+          "$fixture": "OFFERS"
+        },
+        "floor",
+        [
+          "a"
+        ]
+      ],
+      "expect": [
+        {
+          "placeId": "old",
+          "colour": 15912302,
+          "position": {
+            "x": 7,
+            "y": 8.03,
+            "z": 9
+          }
+        }
+      ]
+    },
+    {
+      "label": "[Y] not mounted",
+      "fn": "buildGlyphs",
+      "args": [
+        {
+          "$fixture": "ENTRIES"
+        },
+        {
+          "$fixture": "OFFERS"
+        },
+        "",
+        []
+      ],
+      "expect": [
+        {
+          "placeId": "floor",
+          "colour": 15912302,
+          "position": {
+            "x": 1,
+            "y": 2.03,
+            "z": 3
+          }
+        },
+        {
+          "placeId": "old",
+          "colour": 15912302,
+          "position": {
+            "x": 7,
+            "y": 8.03,
+            "z": 9
+          }
+        },
+        {
+          "placeId": "dio",
+          "colour": 15912302,
+          "position": {
+            "x": 10,
+            "y": 11.03,
+            "z": 12
+          }
+        }
+      ]
+    },
+    {
+      "label": "[Y] other room mounted",
+      "fn": "buildGlyphs",
+      "args": [
+        {
+          "$fixture": "ENTRIES"
+        },
+        {
+          "$fixture": "OFFERS"
+        },
+        "",
+        [
+          "b"
+        ]
+      ],
+      "expect": [
+        {
+          "placeId": "floor",
+          "colour": 15912302,
+          "position": {
+            "x": 1,
+            "y": 2.03,
+            "z": 3
+          }
+        },
+        {
+          "placeId": "old",
+          "colour": 15912302,
+          "position": {
+            "x": 7,
+            "y": 8.03,
+            "z": 9
+          }
+        },
+        {
+          "placeId": "dio",
+          "colour": 15912302,
+          "position": {
+            "x": 10,
+            "y": 11.03,
+            "z": 12
+          }
+        }
+      ]
+    },
+    {
+      "label": "[Y] no entries",
+      "fn": "buildGlyphs",
+      "args": [
+        null,
+        [
+          {
+            "id": "floor",
+            "group": "seat",
+            "free": 1,
+            "free_slots": [
+              0
+            ]
+          },
+          {
+            "id": "prop",
+            "group": "seat",
+            "free": 1,
+            "free_slots": [
+              0
+            ]
+          },
+          {
+            "id": "old",
+            "group": "seat",
+            "free": 1,
+            "free_slots": [
+              0
+            ]
+          },
+          {
+            "id": "dio",
+            "group": "seat",
+            "free": 1,
+            "free_slots": [
+              0
+            ]
+          }
+        ]
+      ],
+      "expect": []
+    },
+    {
+      "label": "[Y] ring seat",
+      "fn": "glyphParameters",
+      "args": [
+        "seat"
+      ],
+      "expect": {
+        "colour": 15912302,
+        "innerRadius": 0.25,
+        "outerRadius": 0.32,
+        "segments": 32,
+        "lift": 0.03,
+        "renderOrder": 20,
+        "rotationX": -1.5707963267948966,
+        "opacity": 0.85,
+        "transparent": true,
+        "depthTest": false,
+        "depthWrite": false,
+        "side": 2
+      }
+    },
+    {
+      "label": "[Y] ring lie",
+      "fn": "glyphParameters",
+      "args": [
+        "lie"
+      ],
+      "expect": {
+        "colour": 9417727,
+        "innerRadius": 0.25,
+        "outerRadius": 0.32,
+        "segments": 32,
+        "lift": 0.03,
+        "renderOrder": 20,
+        "rotationX": -1.5707963267948966,
+        "opacity": 0.85,
+        "transparent": true,
+        "depthTest": false,
+        "depthWrite": false,
+        "side": 2
+      }
+    },
+    {
+      "label": "[Y] ring ground",
+      "fn": "glyphParameters",
+      "args": [
+        "ground"
+      ],
+      "expect": {
+        "colour": 10474634,
+        "innerRadius": 0.25,
+        "outerRadius": 0.32,
+        "segments": 32,
+        "lift": 0.03,
+        "renderOrder": 20,
+        "rotationX": -1.5707963267948966,
+        "opacity": 0.85,
+        "transparent": true,
+        "depthTest": false,
+        "depthWrite": false,
+        "side": 2
+      }
+    },
+    {
+      "label": "[Y] ring stand",
+      "fn": "glyphParameters",
+      "args": [
+        "stand"
+      ],
+      "expect": {
+        "colour": 14274749,
+        "innerRadius": 0.25,
+        "outerRadius": 0.32,
+        "segments": 32,
+        "lift": 0.03,
+        "renderOrder": 20,
+        "rotationX": -1.5707963267948966,
+        "opacity": 0.85,
+        "transparent": true,
+        "depthTest": false,
+        "depthWrite": false,
+        "side": 2
+      }
+    },
+    {
+      "label": "[Y] ring unknown",
+      "fn": "glyphParameters",
+      "args": [
+        "unknown"
+      ],
+      "expect": {
+        "colour": 10132122,
+        "innerRadius": 0.25,
+        "outerRadius": 0.32,
+        "segments": 32,
+        "lift": 0.03,
+        "renderOrder": 20,
+        "rotationX": -1.5707963267948966,
+        "opacity": 0.85,
+        "transparent": true,
+        "depthTest": false,
+        "depthWrite": false,
+        "side": 2
+      }
+    },
+    {
+      "label": "[H] A anchor",
+      "fn": "surfaceHeightAt",
+      "args": [
+        {
+          "$fixture": "SURFACE"
+        },
+        {
+          "$fixture": "PLACEMENT"
+        },
+        4,
+        -3
+      ],
+      "expect": 2.5
+    },
+    {
+      "label": "[H] B edge",
+      "fn": "surfaceHeightAt",
+      "args": [
+        {
+          "$fixture": "SURFACE"
+        },
+        {
+          "$fixture": "PLACEMENT"
+        },
+        4,
+        -5
+      ],
+      "expect": 4.5
+    },
+    {
+      "label": "[H] C bilinear",
+      "fn": "surfaceHeightAt",
+      "args": [
+        {
+          "$fixture": "SURFACE"
+        },
+        {
+          "$fixture": "PLACEMENT"
+        },
+        2,
+        -2.5
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[H] D hole",
+      "fn": "surfaceHeightAt",
+      "args": [
+        {
+          "$fixture": "SURFACE"
+        },
+        {
+          "$fixture": "PLACEMENT"
+        },
+        5,
+        -2
+      ],
+      "expect": null
+    },
+    {
+      "label": "[H] E outside",
+      "fn": "surfaceHeightAt",
+      "args": [
+        {
+          "$fixture": "SURFACE"
+        },
+        {
+          "$fixture": "PLACEMENT"
+        },
+        4,
+        -6
+      ],
+      "expect": null
+    },
+    {
+      "label": "[H] F xyz",
+      "fn": "surfaceHeightAt",
+      "args": [
+        {
+          "$fixture": "SURFACE",
+          "$with": {
+            "extent_snapped": [
+              2,
+              3,
+              2
+            ]
+          }
+        },
+        {
+          "$fixture": "PLACEMENT",
+          "$with": {
+            "measure": "xyz"
+          }
+        },
+        4,
+        -3
+      ],
+      "expect": 1.8333333333333333
+    },
+    {
+      "label": "[H] G yaw0",
+      "fn": "surfaceHeightAt",
+      "args": [
+        {
+          "$fixture": "SURFACE"
+        },
+        {
+          "$fixture": "PLACEMENT",
+          "$with": {
+            "yaw_deg": 0
+          }
+        },
+        3.5,
+        -5
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[H] H corrupt",
+      "fn": "surfaceHeightAt",
+      "args": [
+        {
+          "$fixture": "SURFACE",
+          "$with": {
+            "values": [
+              0,
+              100,
+              200,
+              0
+            ]
+          }
+        },
+        {
+          "$fixture": "PLACEMENT"
+        },
+        4,
+        -3
+      ],
+      "expect": null
+    },
+    {
+      "label": "[H] I lifted",
+      "fn": "surfaceHeightAt",
+      "args": [
+        {
+          "$fixture": "SURFACE"
+        },
+        {
+          "$fixture": "PLACEMENT"
+        },
+        4,
+        -3,
+        0.75
+      ],
+      "expect": 3.25
+    },
+    {
+      "label": "[H] I zero lift",
+      "fn": "surfaceHeightAt",
+      "args": [
+        {
+          "$fixture": "SURFACE"
+        },
+        {
+          "$fixture": "PLACEMENT"
+        },
+        4,
+        -3,
+        0
+      ],
+      "expect": 2.5
+    },
+    {
+      "label": "[H] highest at A",
+      "fn": "highestSurfaceAt",
+      "args": [
+        [
+          {
+            "surface": {
+              "$fixture": "SURFACE"
+            },
+            "spec": {
+              "$fixture": "PLACEMENT"
+            },
+            "lift": 0,
+            "id": "surface",
+            "level": 0,
+            "roomId": ""
+          },
+          {
+            "surface": {
+              "$fixture": "SURFACE"
+            },
+            "spec": {
+              "$fixture": "PLACEMENT",
+              "$with": {
+                "bottom_y": 1
+              }
+            },
+            "lift": 0,
+            "id": "surface",
+            "level": 0,
+            "roomId": ""
+          }
+        ],
+        4,
+        -3
+      ],
+      "expect": 3
+    },
+    {
+      "label": "[H] highest at D",
+      "fn": "highestSurfaceAt",
+      "args": [
+        [
+          {
+            "surface": {
+              "$fixture": "SURFACE"
+            },
+            "spec": {
+              "$fixture": "PLACEMENT"
+            },
+            "lift": 0,
+            "id": "surface",
+            "level": 0,
+            "roomId": ""
+          },
+          {
+            "surface": {
+              "$fixture": "SURFACE"
+            },
+            "spec": {
+              "$fixture": "PLACEMENT",
+              "$with": {
+                "bottom_y": 1
+              }
+            },
+            "lift": 0,
+            "id": "surface",
+            "level": 0,
+            "roomId": ""
+          }
+        ],
+        5,
+        -2
+      ],
+      "expect": null
+    },
+    {
+      "label": "[H] highest skips blank",
+      "fn": "highestSurfaceAt",
+      "args": [
+        [
+          {
+            "surface": {
+              "$fixture": "SURFACE"
+            },
+            "spec": {
+              "$fixture": "PLACEMENT"
+            },
+            "lift": 0,
+            "id": "surface",
+            "level": 0,
+            "roomId": ""
+          },
+          {
+            "surface": {
+              "$fixture": "SURFACE",
+              "$with": {
+                "values": [
+                  null,
+                  null,
+                  null,
+                  null,
+                  null,
+                  null,
+                  null,
+                  null,
+                  null
+                ]
+              }
+            },
+            "spec": {
+              "$fixture": "PLACEMENT"
+            },
+            "lift": 0,
+            "id": "surface",
+            "level": 0,
+            "roomId": ""
+          }
+        ],
+        4,
+        -3
+      ],
+      "expect": 2.5
+    },
+    {
+      "label": "[H] highest own lift",
+      "fn": "highestSurfaceAt",
+      "args": [
+        [
+          {
+            "surface": {
+              "$fixture": "SURFACE"
+            },
+            "spec": {
+              "$fixture": "PLACEMENT"
+            },
+            "lift": 0.75,
+            "id": "surface",
+            "level": 0,
+            "roomId": ""
+          },
+          {
+            "surface": {
+              "$fixture": "SURFACE"
+            },
+            "spec": {
+              "$fixture": "PLACEMENT"
+            },
+            "lift": 0,
+            "id": "surface",
+            "level": 0,
+            "roomId": ""
+          }
+        ],
+        4,
+        -3
+      ],
+      "expect": 3.25
+    },
+    {
+      "label": "[H] highest unlifted alone",
+      "fn": "highestSurfaceAt",
+      "args": [
+        [
+          {
+            "surface": {
+              "$fixture": "SURFACE"
+            },
+            "spec": {
+              "$fixture": "PLACEMENT"
+            },
+            "lift": 0,
+            "id": "surface",
+            "level": 0,
+            "roomId": ""
+          }
+        ],
+        4,
+        -3
+      ],
+      "expect": 2.5
+    },
+    {
+      "label": "[P] bare upper",
+      "fn": "plateLook",
+      "args": [
+        {
+          "thickness": 0,
+          "opacity_role": "upper"
+        },
+        {
+          "floor_color": "#123456",
+          "upper_floor_opacity": 0.4
+        }
+      ],
+      "expect": {
+        "color": 1193046,
+        "transparent": true,
+        "opacity": 0.4,
+        "side": 2
+      }
+    },
+    {
+      "label": "[P] solid lower",
+      "fn": "plateLook",
+      "args": [
+        {
+          "thickness": 0.2
+        },
+        {
+          "floor_color": "#123456"
+        }
+      ],
+      "expect": {
+        "color": 1193046,
+        "transparent": false,
+        "opacity": 1,
+        "side": 0
+      }
+    },
+    {
+      "label": "[W] glass",
+      "fn": "wallLook",
+      "args": [
+        {
+          "glass": true
+        },
+        {}
+      ],
+      "expect": {
+        "color": 16777215,
+        "transparent": true,
+        "opacity": 0.25,
+        "roughness": 0.3,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[W] leaf",
+      "fn": "wallLook",
+      "args": [
+        {
+          "leaf": true
+        },
+        {}
+      ],
+      "expect": {
+        "color": 4864558,
+        "roughness": 0.75,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[W] upper",
+      "fn": "wallLook",
+      "args": [
+        {
+          "opacity_role": "upper"
+        },
+        {
+          "wall_color": "#010203",
+          "upper_wall_opacity": 0.6
+        }
+      ],
+      "expect": {
+        "color": 66051,
+        "transparent": true,
+        "opacity": 0.6
+      }
+    },
+    {
+      "label": "[W] lower",
+      "fn": "wallLook",
+      "args": [
+        {},
+        {}
+      ],
+      "expect": {
+        "color": 16777215,
+        "transparent": false,
+        "opacity": 1
+      }
+    },
+    {
+      "label": "[E] glass",
+      "fn": "extraLook",
+      "args": [
+        {
+          "kind": "elevator_glass"
+        },
+        {}
+      ],
+      "expect": {
+        "color": 16777215,
+        "opacity": 0.22,
+        "transparent": true,
+        "roughness": 0.3,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[E] glass fallback",
+      "fn": "extraLook",
+      "args": [
+        {
+          "kind": "elevator_glass"
+        },
+        {
+          "glass_opacity": 0.4
+        }
+      ],
+      "expect": {
+        "color": 16777215,
+        "opacity": 0.4,
+        "transparent": true,
+        "roughness": 0.3,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[E] glass override",
+      "fn": "extraLook",
+      "args": [
+        {
+          "kind": "elevator_glass"
+        },
+        {
+          "glass_opacity": 0.4,
+          "elevator_glass_opacity": 0.1
+        }
+      ],
+      "expect": {
+        "color": 16777215,
+        "opacity": 0.1,
+        "transparent": true,
+        "roughness": 0.3,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[E] cabin",
+      "fn": "extraLook",
+      "args": [
+        {
+          "kind": "elevator_cabin"
+        },
+        {
+          "elevator_cabin_color": "#112233",
+          "elevator_cabin_opacity": 0.8
+        }
+      ],
+      "expect": {
+        "color": 1122867,
+        "opacity": 0.8,
+        "transparent": true,
+        "roughness": 0.85,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[E] stair",
+      "fn": "extraLook",
+      "args": [
+        {
+          "kind": "stair_step"
+        },
+        {}
+      ],
+      "expect": {
+        "color": 9075302,
+        "opacity": 1,
+        "transparent": false,
+        "roughness": 0.85,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[E] pad",
+      "fn": "extraLook",
+      "args": [
+        {
+          "kind": "elevator_pad"
+        },
+        {
+          "elevator_pad_color": "#000001"
+        }
+      ],
+      "expect": {
+        "color": 1,
+        "opacity": 1,
+        "transparent": false,
+        "roughness": 0.85,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[E] frame",
+      "fn": "extraLook",
+      "args": [
+        {
+          "kind": "elevator_shaft"
+        },
+        {
+          "elevator_frame_color": "#000002"
+        }
+      ],
+      "expect": {
+        "color": 2,
+        "opacity": 1,
+        "transparent": false,
+        "roughness": 0.85,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[P] placeholder",
+      "fn": "placeholderLook",
+      "args": [],
+      "expect": {
+        "color": 10132122,
+        "roughness": 0.9,
+        "metalness": 0.02,
+        "transparent": true,
+        "opacity": 0.5
+      }
+    },
+    {
+      "label": "[X] missing",
+      "fn": "recipeHex",
+      "args": [
+        null
+      ],
+      "expect": 16777215
+    },
+    {
+      "label": "[X] partial",
+      "fn": "recipeHex",
+      "args": [
+        "12zz"
+      ],
+      "expect": 18
+    },
+    {
+      "label": "[X] black",
+      "fn": "recipeHex",
+      "args": [
+        "#000000"
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[X] invalid",
+      "fn": "recipeHex",
+      "args": [
+        "oops"
+      ],
+      "expect": 16777215
+    },
+    {
+      "label": "[F] matte",
+      "fn": "surfaceFinish",
+      "args": [
+        {
+          "class": "matte"
+        }
+      ],
+      "expect": {
+        "roughness": 0.85,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[F] gloss",
+      "fn": "surfaceFinish",
+      "args": [
+        {
+          "class": "gloss"
+        }
+      ],
+      "expect": {
+        "roughness": 0.25,
+        "metalness": 0.02
+      }
+    },
+    {
+      "label": "[F] water",
+      "fn": "surfaceFinish",
+      "args": [
+        {
+          "class": "water"
+        }
+      ],
+      "expect": {
+        "roughness": 0.08,
+        "metalness": 0.15
+      }
+    },
+    {
+      "label": "[F] ice",
+      "fn": "surfaceFinish",
+      "args": [
+        {
+          "class": "ice"
+        }
+      ],
+      "expect": {
+        "roughness": 0.08,
+        "metalness": 0.15
+      }
+    },
+    {
+      "label": "[F] glow",
+      "fn": "surfaceFinish",
+      "args": [
+        {
+          "class": "glow"
+        }
+      ],
+      "expect": {
+        "roughness": 0.85,
+        "metalness": 0.02,
+        "emissiveIntensity": 1
+      }
+    },
+    {
+      "label": "[F] overrides",
+      "fn": "surfaceFinish",
+      "args": [
+        {
+          "class": "glow",
+          "roughness": 0.1,
+          "metalness": 0.2,
+          "glow": 0
+        }
+      ],
+      "expect": {
+        "roughness": 0.1,
+        "metalness": 0.2,
+        "emissiveIntensity": 0
+      }
+    },
+    {
+      "label": "[N] untextured high",
+      "fn": "neutralizeLook",
+      "args": [
+        1,
+        false,
+        true
+      ],
+      "expect": {
+        "metalness": 0
+      }
+    },
+    {
+      "label": "[N] threshold",
+      "fn": "neutralizeLook",
+      "args": [
+        0.5,
+        false,
+        false
+      ],
+      "expect": {
+        "metalness": 0.5
+      }
+    },
+    {
+      "label": "[N] textured env",
+      "fn": "neutralizeLook",
+      "args": [
+        1,
+        true,
+        true
+      ],
+      "expect": {
+        "metalness": 1,
+        "envMapIntensity": 0.7
+      }
+    },
+    {
+      "label": "[N] textured no env",
+      "fn": "neutralizeLook",
+      "args": [
+        1,
+        true,
+        false
+      ],
+      "expect": {
+        "metalness": 1
+      }
+    },
+    {
+      "label": "[D] absent",
+      "fn": "cutPlaneFor",
+      "args": [
+        null
+      ],
+      "expect": null
+    },
+    {
+      "label": "[D] zero",
+      "fn": "cutPlaneFor",
+      "args": [
+        {
+          "normal": [
+            0,
+            0,
+            0
+          ],
+          "constant": 2
+        }
+      ],
+      "expect": null
+    },
+    {
+      "label": "[D] normalize constant unchanged",
+      "fn": "cutPlaneFor",
+      "args": [
+        {
+          "normal": [
+            2,
+            0,
+            0
+          ],
+          "constant": -3
+        }
+      ],
+      "expect": {
+        "normal": [
+          1,
+          0,
+          0
+        ],
+        "constant": -3
+      }
+    },
+    {
+      "label": "[D] translated yaw90",
+      "fn": "cutPlaneFor",
+      "args": [
+        {
+          "normal": [
+            1,
+            0,
+            0
+          ],
+          "constant": -2
+        },
+        [
+          0,
+          0,
+          -1,
+          0,
+          0,
+          1,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          10,
+          3,
+          20,
+          1
+        ]
+      ],
+      "expect": {
+        "normal": [
+          0,
+          0,
+          -1
+        ],
+        "constant": 18
+      }
+    },
+    {
+      "label": "[D] nonuniform scale",
+      "fn": "cutPlaneFor",
+      "args": [
+        {
+          "normal": [
+            1,
+            0,
+            0
+          ],
+          "constant": -2
+        },
+        [
+          3,
+          0,
+          0,
+          0,
+          0,
+          2,
+          0,
+          0,
+          0,
+          0,
+          4,
+          0,
+          10,
+          3,
+          20,
+          1
+        ]
+      ],
+      "expect": {
+        "normal": [
+          1,
+          0,
+          0
+        ],
+        "constant": -16
+      }
+    },
+    {
+      "label": "[C] inside",
+      "fn": "clipKeepsPoint",
+      "args": [
+        [
+          1,
+          1
+        ],
+        {
+          "$fixture": "SQUARE"
+        }
+      ],
+      "expect": true
+    },
+    {
+      "label": "[C] outside",
+      "fn": "clipKeepsPoint",
+      "args": [
+        [
+          3,
+          1
+        ],
+        {
+          "$fixture": "SQUARE"
+        }
+      ],
+      "expect": false
+    },
+    {
+      "label": "[C] left boundary",
+      "fn": "clipKeepsPoint",
+      "args": [
+        [
+          0,
+          1
+        ],
+        {
+          "$fixture": "SQUARE"
+        }
+      ],
+      "expect": true
+    },
+    {
+      "label": "[C] right boundary",
+      "fn": "clipKeepsPoint",
+      "args": [
+        [
+          2,
+          1
+        ],
+        {
+          "$fixture": "SQUARE"
+        }
+      ],
+      "expect": false
+    },
+    {
+      "label": "[C] no clipping",
+      "fn": "clipKeepsPoint",
+      "args": [
+        [
+          3,
+          1
+        ],
+        [
+          [
+            0,
+            0
+          ],
+          [
+            2,
+            0
+          ]
+        ]
+      ],
+      "expect": true
+    },
+    {
+      "label": "[C] cut inside",
+      "fn": "cutoutDiscardsPoint",
+      "args": [
+        [
+          1,
+          1
+        ],
+        [
+          {
+            "$fixture": "SQUARE"
+          }
+        ],
+        0,
+        true
+      ],
+      "expect": true
+    },
+    {
+      "label": "[C] cut outside",
+      "fn": "cutoutDiscardsPoint",
+      "args": [
+        [
+          2.1,
+          1
+        ],
+        [
+          {
+            "$fixture": "SQUARE"
+          }
+        ],
+        0,
+        true
+      ],
+      "expect": false
+    },
+    {
+      "label": "[C] cut padding edge",
+      "fn": "cutoutDiscardsPoint",
+      "args": [
+        [
+          2.25,
+          1
+        ],
+        [
+          {
+            "$fixture": "SQUARE"
+          }
+        ],
+        0.25,
+        true
+      ],
+      "expect": true
+    },
+    {
+      "label": "[C] cut beyond padding",
+      "fn": "cutoutDiscardsPoint",
+      "args": [
+        [
+          2.26,
+          1
+        ],
+        [
+          {
+            "$fixture": "SQUARE"
+          }
+        ],
+        0.25,
+        true
+      ],
+      "expect": false
+    },
+    {
+      "label": "[C] cut padding corner",
+      "fn": "cutoutDiscardsPoint",
+      "args": [
+        [
+          2.375,
+          2.5
+        ],
+        [
+          {
+            "$fixture": "SQUARE"
+          }
+        ],
+        0.625,
+        true
+      ],
+      "expect": true
+    },
+    {
+      "label": "[C] cut off",
+      "fn": "cutoutDiscardsPoint",
+      "args": [
+        [
+          1,
+          1
+        ],
+        [
+          {
+            "$fixture": "SQUARE"
+          }
+        ],
+        0.25,
+        false
+      ],
+      "expect": false
+    },
+    {
+      "label": "[C] union second",
+      "fn": "cutoutDiscardsPoint",
+      "args": [
+        [
+          11,
+          11
+        ],
+        [
+          {
+            "$fixture": "SQUARE"
+          },
+          [
+            [
+              10,
+              10
+            ],
+            [
+              12,
+              10
+            ],
+            [
+              12,
+              12
+            ],
+            [
+              10,
+              12
+            ]
+          ]
+        ]
+      ],
+      "expect": true
+    },
+    {
+      "label": "[C] scale padding",
+      "fn": "cutoutPadding",
+      "args": [
+        0.2,
+        3
+      ],
+      "expect": 0.6
+    },
+    {
+      "label": "[C] negative padding",
+      "fn": "cutoutPadding",
+      "args": [
+        -0.2,
+        3
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[C] string padding",
+      "fn": "cutoutPadding",
+      "args": [
+        "0.2",
+        3
+      ],
+      "expect": 0
+    }
+  ]
+}

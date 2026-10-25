@@ -1,0 +1,30 @@
+{
+  "format":"anima-test-vectors/1",
+  "source":"client3d/scripts/smoke_scene_verify.mjs",
+  "fixtures": {
+    "ZERO":{"x":0,"y":0,"z":0},
+    "BOX":{"min":{"x":1,"y":2,"z":3},"max":{"x":5,"y":8,"z":7}},
+    "SPEC":{"role":"prop","id":"p","measure":"xyz","max_m":6,"anchor":[3,5],"bottom_y":2},
+    "DOOR":{"role":"prop","id":"d","measure":"fit","size_m":[4,6],"anchor":[1,3],"bottom_y":2}
+  },
+  "cases":[
+    {"label":"[1] shifted frame","fn":"inFrame","args":[{"$fixture":"BOX"},{"x":1,"y":2,"z":3}],"expect":{"min":{"x":0,"y":0,"z":0},"max":{"x":4,"y":6,"z":4}}},
+    {"label":"[1] quarter-turned frame","fn":"inFrame","args":[{"$fixture":"BOX"},{"$fixture":"ZERO"},1.5707963267948966],"expect":{"min":{"x":-7,"y":2,"z":1},"max":{"x":-3,"y":8,"z":5}}},
+    {"label":"[1] diagonal frame keeps world extents","fn":"inFrame","args":[{"min":{"x":1,"y":2,"z":1},"max":{"x":3,"y":4,"z":3}},{"$fixture":"ZERO"},0.7853981633974483],"expect":{"min":{"x":-1,"y":2,"z":1.8284271247461903},"max":{"x":1,"y":4,"z":3.8284271247461903}}},
+    {"label":"[2] tolerance and rounded deviation rows","fn":"primitiveRows","args":["wall:w",[{"field":"exact","actual":2,"target":2},{"field":"edge","actual":0.01,"target":0},{"field":"near","actual":0.009,"target":0},{"field":"high","actual":2.01234,"target":2},{"field":"low","actual":-0.01234,"target":0}]],"expect":{"checked":5,"rows":[{"object":"wall:w","field":"high","actual":2.012,"target":2,"delta":0.012},{"object":"wall:w","field":"low","actual":-0.012,"target":0,"delta":-0.012}]}},
+    {"label":"[3] axis-parallel geometry anchor and xyz max","fn":"placementRows","args":[{"$fixture":"BOX"},{"x":99,"y":0,"z":99},{"$fixture":"SPEC"},{"$fixture":"ZERO"}],"expect":{"checked":4,"rows":[]}},
+    {"label":"[3] xz extent reads horizontal maximum","fn":"placementRows","args":[{"$fixture":"BOX"},{"$fixture":"ZERO"},{"$fixture":"SPEC","$with":{"measure":"xz","max_m":4}},{"$fixture":"ZERO"}],"expect":{"checked":4,"rows":[]}},
+    {"label":"[3] yawed xz same axis-parallel ruler","fn":"placementRows","args":[{"$fixture":"BOX"},{"$fixture":"ZERO"},{"$fixture":"SPEC","$with":{"measure":"yawed_xz","max_m":4,"yaw_deg":90}},{"$fixture":"ZERO"}],"expect":{"checked":4,"rows":[]}},
+    {"label":"[3] geometry errors become four rows","fn":"placementRows","args":[{"$fixture":"BOX"},{"$fixture":"ZERO"},{"$fixture":"SPEC","$with":{"bottom_y":1,"anchor":[2,4],"max_m":5}},{"$fixture":"ZERO"}],"expect":{"checked":4,"rows":[{"object":"prop:p","field":"bottom_y","actual":2,"target":1,"delta":1},{"object":"prop:p","field":"anchor.x","actual":3,"target":2,"delta":1},{"object":"prop:p","field":"anchor.z","actual":5,"target":4,"delta":1},{"object":"prop:p","field":"max_m","actual":6,"target":5,"delta":1}]}},
+    {"label":"[4] diagonal yaw reads hanging point skips extent","fn":"placementRows","args":[{"$fixture":"BOX"},{"x":3,"y":999,"z":5},{"$fixture":"SPEC","$with":{"yaw_deg":45,"max_m":100}},{"$fixture":"ZERO"}],"expect":{"checked":3,"rows":[]}},
+    {"label":"[4] fine fix skips extent only","fn":"placementRows","args":[{"$fixture":"BOX"},{"$fixture":"ZERO"},{"$fixture":"SPEC","$with":{"fix_euler":{"x":5,"y":110,"z":355},"max_m":100}},{"$fixture":"ZERO"}],"expect":{"checked":3,"rows":[]}},
+    {"label":"[4] diagonal frame inverse rotates hanging point","fn":"placementRows","args":[{"$fixture":"BOX"},{"x":1.4142135623730951,"y":0,"z":0},{"$fixture":"SPEC","$with":{"anchor":[1,1],"max_m":100}},{"$fixture":"ZERO"},0.7853981633974483],"expect":{"checked":3,"rows":[]}},
+    {"label":"[5] fitted hinge and opening ruler","fn":"placementRows","args":[{"$fixture":"BOX"},{"x":1,"y":0,"z":3},{"$fixture":"DOOR"},{"$fixture":"ZERO"}],"expect":{"checked":5,"rows":[]}},
+    {"label":"[5] fitted diagonal skips opening extent","fn":"placementRows","args":[{"$fixture":"BOX"},{"x":1,"y":0,"z":3},{"$fixture":"DOOR","$with":{"yaw_deg":45,"size_m":[99,99]}},{"$fixture":"ZERO"}],"expect":{"checked":3,"rows":[]}},
+    {"label":"[5] fitted wrong sizes report opening errors","fn":"placementRows","args":[{"$fixture":"BOX"},{"x":1,"y":0,"z":3},{"$fixture":"DOOR","$with":{"size_m":[3,5]}},{"$fixture":"ZERO"}],"expect":{"checked":5,"rows":[{"object":"prop:d","field":"size_m.w","actual":4,"target":3,"delta":1},{"object":"prop:d","field":"size_m.h","actual":6,"target":5,"delta":1}]}},
+    {"label":"[6] terrain lift changes bottom target","fn":"placementRows","args":[{"$fixture":"BOX"},{"$fixture":"ZERO"},{"$fixture":"SPEC","$with":{"bottom_y":1.5}},{"$fixture":"ZERO"},0,0.5],"expect":{"checked":4,"rows":[]}},
+    {"label":"[6] absent max skips extent","fn":"placementRows","args":[{"$fixture":"BOX"},{"$fixture":"ZERO"},{"$fixture":"SPEC","$with":{"max_m":0}},{"$fixture":"ZERO"}],"expect":{"checked":3,"rows":[]}},
+    {"label":"[7] axis wall targets","fn":"wallTargets","args":[{"from":[0,2],"to":[4,2],"base_y":1,"height":3}],"expect":[{"field":"base_y","target":1},{"field":"top_y","target":4},{"field":"centre.x","target":2},{"field":"centre.z","target":2}]},
+    {"label":"[7] diagonal wall targets","fn":"wallTargets","args":[{"from":[1,2],"to":[5,8],"base_y":-1,"height":2.5}],"expect":[{"field":"base_y","target":-1},{"field":"top_y","target":1.5},{"field":"centre.x","target":3},{"field":"centre.z","target":5}]}
+  ]
+}

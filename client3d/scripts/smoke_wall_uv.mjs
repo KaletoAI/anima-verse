@@ -47,14 +47,20 @@
  * implies. A three release that reorders `buildPlane` would therefore be
  * caught by this check instead of silently passing it.
  */
+import { loadVectorFile } from '../../shared/test-vectors/vectors.mjs'
 import * as THREE from 'three'
 // '../../' = the repo root: this file lives in client3d/scripts/, the shared
 // package at packages/scene-render. esbuild resolves it relative to THIS file.
 import { buildWall } from '../../packages/scene-render/src/primitives.ts'
 
-const FAILED = []
+const vectors = loadVectorFile('shared/test-vectors/scene_primitives.json').cases[0]
+const oracle = vectors.expect
+  const measured = []
+  const FAILED = []
 
-function check(label, got, want, tol = 1e-4) {
+function check(label, got, tol = 1e-4) {
+  const want = oracle[measured.length]
+  measured.push(got)
   const ok = Math.abs(got - want) <= tol
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}: ${got.toFixed(4)}`
     + (ok ? '' : `  (expected ${want})`))
@@ -104,22 +110,22 @@ function built(len, height, thickness, tileM) {
 }
 
 // ── 1. The reported case: a long textured wall with openings ─────────────
-const LEN = 10.2624, HIGH = 2.65, THICK = 0.07, TILE = 2
+const [LEN, HIGH, THICK, TILE] = vectors.args
 
 console.log('1. wall 10.2624 x 2.65 x 0.07 m, tile 2 m — every face in world scale')
 {
   const s = built(LEN, HIGH, THICK, TILE)
   for (const face of ['+z', '-z']) {
-    check(`wall face ${face} u`, s.get(face).u, 5.1312)
-    check(`wall face ${face} v`, s.get(face).v, 1.325)
+    check(`wall face ${face} u`, s.get(face).u)
+    check(`wall face ${face} v`, s.get(face).v)
   }
   for (const face of ['+x', '-x']) {
-    check(`reveal ${face} u (jamb, 7 cm)`, s.get(face).u, 0.035)
-    check(`reveal ${face} v`, s.get(face).v, 1.325)
+    check(`reveal ${face} u (jamb, 7 cm)`, s.get(face).u)
+    check(`reveal ${face} v`, s.get(face).v)
   }
   for (const face of ['+y', '-y']) {
-    check(`lintel/soffit ${face} u`, s.get(face).u, 5.1312)
-    check(`lintel/soffit ${face} v (7 cm)`, s.get(face).v, 0.035)
+    check(`lintel/soffit ${face} u`, s.get(face).u)
+    check(`lintel/soffit ${face} v (7 cm)`, s.get(face).v)
   }
 }
 
@@ -127,10 +133,10 @@ console.log('1. wall 10.2624 x 2.65 x 0.07 m, tile 2 m — every face in world s
 console.log('\n2. sill 1.2 x 0.9 x 0.07 m, tile 2 m — the face you look down on')
 {
   const s = built(1.2, 0.9, THICK, TILE)
-  check('sill top +y u', s.get('+y').u, 0.6)
-  check('sill top +y v (7 cm)', s.get('+y').v, 0.035)
-  check('sill face +z u', s.get('+z').u, 0.6)
-  check('sill face +z v', s.get('+z').v, 0.45)
+  check('sill top +y u', s.get('+y').u)
+  check('sill top +y v (7 cm)', s.get('+y').v)
+  check('sill face +z u', s.get('+z').u)
+  check('sill face +z v', s.get('+z').v)
 }
 
 // ── 3. Red counter-check: the OLD material repeat, recomputed ────────────
@@ -140,10 +146,10 @@ console.log('\n3. red counter-check — what the old material repeat did')
 {
   const oldU = LEN / TILE, oldV = HIGH / TILE
   const s = built(LEN, HIGH, THICK, TILE)
-  check('old repeat u (from the wall face)', oldU, 5.1312)
-  check('reveal squeeze factor u', oldU / s.get('+x').u, 146.6057, 1e-3)
+  check('old repeat u (from the wall face)', oldU)
+  check('reveal squeeze factor u', oldU / s.get('+x').u, 1e-3)
   const sill = built(1.2, 0.9, THICK, TILE)
-  check('sill-top squeeze factor v', (0.9 / TILE) / sill.get('+y').v, 12.8571, 1e-3)
+  check('sill-top squeeze factor v', (0.9 / TILE) / sill.get('+y').v, 1e-3)
 }
 
 // ── 4. tileM 0 leaves the box alone (glass bands, untextured walls) ──────
@@ -151,8 +157,8 @@ console.log('\n4. tileM 0 — no texture, so the default 0..1 uvs stay')
 {
   const s = built(LEN, HIGH, THICK, 0)
   for (const face of ['+x', '+y', '+z']) {
-    check(`face ${face} u`, s.get(face).u, 1)
-    check(`face ${face} v`, s.get(face).v, 1)
+    check(`face ${face} u`, s.get(face).u)
+    check(`face ${face} v`, s.get(face).v)
   }
 }
 
@@ -165,12 +171,12 @@ console.log('\n5. the box still measures what the payload says')
                          new THREE.MeshBasicMaterial(), TILE)
   mesh.updateMatrixWorld(true)
   const box = new THREE.Box3().setFromObject(mesh)
-  check('base_y', box.min.y, 0)
-  check('top_y', box.max.y, HIGH)
-  check('centre.x', (box.min.x + box.max.x) / 2, LEN / 2)
-  check('centre.z', (box.min.z + box.max.z) / 2, 0)
-  check('length x', box.max.x - box.min.x, LEN)
-  check('thickness z', box.max.z - box.min.z, THICK)
+  check('base_y', box.min.y)
+  check('top_y', box.max.y)
+  check('centre.x', (box.min.x + box.max.x) / 2)
+  check('centre.z', (box.min.z + box.max.z) / 2)
+  check('length x', box.max.x - box.min.x)
+  check('thickness z', box.max.z - box.min.z)
 }
 
 console.log()
@@ -178,4 +184,5 @@ if (FAILED.length) {
   console.log(`FAILED (${FAILED.length}): ${FAILED.join(', ')}`)
   process.exit(1)
 }
-console.log('all checks passed')
+if (globalThis.__scenePrimitiveMeasure) globalThis.__scenePrimitiveMeasure(measured)
+  console.log('all checks passed')

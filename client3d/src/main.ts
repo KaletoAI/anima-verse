@@ -1,3 +1,5 @@
+import { openable as sceneOpenable, buildingTier, interiorTier, doorMarkTransform,
+  boundaryMarkTransform, basementHole, neighbourOccludes } from './scene/sceneView';
 import { sampleWorldHeight } from '@anima/scene-render';
 import { initBench } from './bench/bench';
 import { pickBenchAnchor } from './bench/benchAnchor';
@@ -134,26 +136,10 @@ const SOUNDTRACK_TICK_MS = 1000;
 // panned beyond max(12, 3 × footprint width) off the open location) is
 // `openViewShouldClose` in game/openView.ts, shared with the native client.
 
-/** Radius around the NEIGHBOUR's centre inside which it counts as standing
- *  between the camera and the open location, as a factor on its own
- *  `plan_width_m`: 1.05 × the FULL edge, not the half — deliberately generous,
- *  and exactly what `CELL * 1.05` was (a radius of one whole cell and a bit
- *  around a cell centre). It is written against the neighbour's own size now,
- *  so a 40 m hall is no longer judged by a 10 m yardstick.
- *  OBSERVATION for task 7: on a very large footprint (a 200 m forest) this
- *  radius is 210 m, so such a location fades away as an "occluder" from far
- *  off. Sizing an area location by its half-width — or by the distance to its
- *  EDGE rather than its centre — is the fix; it needs its own look at the
- *  shell/ground display rules and does not belong in this task. */
-const OCCLUDER_RADIUS_FACTOR = 1.05;
+
 /** "Hineinsehen" flies in to this distance — the old panel fly-to, kept. */
 const OPEN_FLY_DIST = 15;
-/** Far-view building models: hysteresis of the camera-distance tier choice
- *  (No. 5). Nearer than NEAR → `full`, farther than FAR → `low`; the 15 m
- *  band between them keeps a camera hovering at the line from thrashing
- *  swaps. Boot overview distance is 70 (> FAR), so the map starts light. */
-const BUILDING_TIER_NEAR = 45;
-const BUILDING_TIER_FAR = 60;
+
 /** Character figures: same hysteresis idea, tighter band — a 1.70 m figure
  *  carries its detail only up close, and the swap re-downloads a mesh, so the
  *  10 m band keeps a strolling camera from flapping at the line. */
@@ -247,14 +233,8 @@ const DOOR_MARK_LOCKED_MAT = new THREE.MeshBasicMaterial({
  *  map. The pair rides on the marker group; the lock look swaps between the two
  *  by identity, so it has to be the tile's own pair. */
 type DoorMarkMats = { open: THREE.Material; locked: THREE.Material };
-/** Depth of the threshold ACROSS the wall, as a share of the doorway's width —
- *  never thinner than the wall it fills, or it would vanish inside it. */
-const DOOR_MARK_DEPTH = 0.3;
-/** How far the threshold quad lies ABOVE the floor the payload names
- *  (`doorways[].base_y`), so it cannot sink into it. Centimetres, not a share
- *  of anything: a storey is three real metres since E4 (k = 1), so two
- *  centimetres are two centimetres. */
-const DOOR_MARK_LIFT = 0.02;
+
+
 
 /**
  * "Zoom to" a figure. With the camera's 45° vertical FOV the visible height is
@@ -940,8 +920,7 @@ async function startApp(username: string, role: string) {
   // fade TARGET now comes from here instead of from camera geometry.
   /** A mounted detail scene: shells fade away, persistent area models open
    *  their authored cutouts without hiding the rest of the site. */
-  const openable = (tile: Tile) =>
-    !!tile.interior && (tile.isBuilding || !!tile.modelIsShellArea || !!tile.modelIsGround);
+  const openable = (tile: Tile) => sceneOpenable(tile);
 
   /** The floating close control shows exactly while a view is open in the
    *  OVERVIEW. Embodied it stays hidden: there the avatar's location owns the
@@ -991,12 +970,10 @@ async function startApp(username: string, role: string) {
     const d = engine.camera.position.distanceTo(tile.center)
       - tile.width * Math.SQRT1_2;
     const cur = buildingTierByLoc.get(tile.loc.id) ?? 'low';
-    if (cur === 'low' && d < BUILDING_TIER_NEAR) return 'full';
-    if (cur === 'full' && d > BUILDING_TIER_FAR) return 'low';
-    return cur;
+    return buildingTier(d, cur);
   }
   function nearInteriorTier(locId: string, scene = scenes.get(locId)): ModelTier {
-    return scene?.area_detail && openLocationId !== locId ? 'low' : 'full';
+    return interiorTier(!!scene?.area_detail, openLocationId === locId);
   }
   function wantedBuildingTier(tile: Tile): ModelTier {
     return residency.get(tile.loc.id)?.ring === 'far' ? 'low' : nearBuildingTier(tile);
@@ -1341,13 +1318,14 @@ async function startApp(username: string, role: string) {
         // geometry comes from the shared, signature-cached recipe. Nothing
         // about a lock is stored in the payload (§ 3 decision 2).
         mesh.userData.rooms = m.roomIds;
-        mesh.scale.set(m.width, 1, Math.max(m.width * DOOR_MARK_DEPTH, thickness));
+        const transform = doorMarkTransform(m.width, thickness, m.along, m.mid, m.baseY);
+        mesh.scale.fromArray(transform.scale);
         // Local +x turned onto the wall direction: a rotation by φ about Y maps
         // (1,0,0) to (cos φ, 0, -sin φ), so φ = atan2(-along.z, along.x). Both
         // the direction and the point stay TILE-LOCAL — the tile's own turn is
         // applied to the whole group, once.
-        mesh.rotation.y = Math.atan2(-m.along.z, m.along.x);
-        mesh.position.set(m.mid.x, m.baseY + DOOR_MARK_LIFT, m.mid.z);
+        mesh.rotation.y = transform.yaw;
+        mesh.position.fromArray(transform.position);
         // Late, so the quad is not swallowed by the fading walls it lies
         // between, and unpickable — the selection-ring lesson: an overlay that
         // catches the ray steals the click that was meant for the tile.
@@ -1510,12 +1488,13 @@ async function startApp(username: string, role: string) {
       const z = at.z;
       const inward = tileDirToWorld(tile, o.inward[0], o.inward[1]);
       const mesh = new THREE.Mesh(DOOR_MARK_GEO, DOOR_MARK_LOCKED_MAT);
-      mesh.scale.set(width, 1, Math.max(width * DOOR_MARK_DEPTH, 0.3));
+      const transform = boundaryMarkTransform(width, inward, x, z, groundY(x, z));
+      mesh.scale.fromArray(transform.scale);
       // The threshold runs ALONG the edge, i.e. across the inward normal:
       // rotating (1,0,0) by φ about Y gives (cos φ, 0, -sin φ), and the
       // direction perpendicular to `inward` is (inward.z, -inward.x).
-      mesh.rotation.y = Math.atan2(inward.x, inward.z);
-      mesh.position.set(x, groundY(x, z) + 0.05, z);
+      mesh.rotation.y = transform.yaw;
+      mesh.position.fromArray(transform.position);
       mesh.renderOrder = 3;
       mesh.raycast = () => {};
       root.add(mesh);
@@ -6257,45 +6236,16 @@ async function startApp(username: string, role: string) {
       // rectangle: every point of the drawn outline turned into world axes and
       // stretched over (`tileWorldBounds`). The ground is cut, not the tile, so
       // the rectangle has to be stated in world axes.
-      let { minX, minZ, maxX, maxZ } = basementBox;
-      // A tile-sized hole is enough to look straight down, but not to look
-      // INTO the pit: from an angle its near rim stands between camera and
-      // basement. So the hole grows towards the viewer — up to double the
-      // extent, smoothly with the camera angle, recomputed per frame (that is
-      // what the uniforms are for). The hole exists only while a storey
-      // BELOW ground is displayed (the gate above), so there is no level-0
-      // case here any more in which the enlarged hole would tear open the map
-      // around the tile for nothing.
-      const dx = engine.camera.position.x - basementOpen.center.x;
-      const dz = engine.camera.position.z - basementOpen.center.z;
-      const len = Math.hypot(dx, dz) || 1;
-      const ux = dx / len;
-      const uz = dz / len;
-      // Only the edge FACING the camera moves — the far one stays put, so
-      // the pit does not grow away from the viewer. It grows by one whole
-      // footprint at most, the same "up to double the extent" as before.
-      const grow = basementOpen.width;
-      if (ux > 0) maxX += grow * ux; else minX += grow * ux;
-      if (uz > 0) maxZ += grow * uz; else minZ += grow * uz;
-      terrainGround.setHole([minX, minZ, maxX, maxZ]);
+      terrainGround.setHole(basementHole(basementBox, basementOpen.center,
+        engine.camera.position, basementOpen.width));
     }
 
     // In an open interior view, hide neighbouring tiles between the camera
     // and the revealed tile (XZ corridor).
     const cam = engine.camera.position;
     for (const { tile } of residency.values()) {
-      let hide = false;
-      if (open && tile !== open && tile.height > 1.5) {
-        const tx = open.center.x - cam.x, tz = open.center.z - cam.z;
-        const nx = tile.center.x - cam.x, nz = tile.center.z - cam.z;
-        const len2 = tx * tx + tz * tz;
-        const t = len2 > 1e-6 ? (nx * tx + nz * tz) / len2 : 0;
-        if (t > 0.05 && t < 0.92) {
-          const px = cam.x + tx * t, pz = cam.z + tz * t;
-          hide = Math.hypot(tile.center.x - px, tile.center.z - pz)
-            < tile.width * OCCLUDER_RADIUS_FACTOR;
-        }
-      }
+      const hide = !!open && neighbourOccludes(cam, open.center,
+        { x: tile.center.x, z: tile.center.z, width: tile.width, height: tile.height }, tile === open);
       applyTileOcclusion(tile, hide, dt);
     }
 

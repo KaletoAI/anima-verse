@@ -1,3 +1,4 @@
+import { cutoutPolygons, cutoutPadding, CLIP_POINT_LIMIT, CUTOUT_POLYGON_LIMIT } from './clipMath'
 /**
  * Cutouts for AREA locations (plan-area-locations.md) — the inverted twin of
  * the room clip in `clip.ts`.
@@ -35,11 +36,11 @@ import type { Material, Mesh, Object3D,
 
 /** Same ceiling as ``CUTOUT_MAX_POLYS`` in the composer — the test runs per
  *  fragment, so the server never sends more and we never compile more. */
-export const CUTOUT_MAX_POLYS = 16
+export const CUTOUT_MAX_POLYS = CUTOUT_POLYGON_LIMIT
 /** Per-polygon ceiling, shared with the room clip. 32 → 64 with contract
  *  v5.2 item 11 (tessellated curved hulls) — must follow the composer cap,
  *  or the client truncates silently. */
-export const CUTOUT_MAX_POINTS = 64
+export const CUTOUT_MAX_POINTS = CLIP_POINT_LIMIT
 
 export interface CutoutHandle {
   /** Holes on (interior view) or off (far view: the model is intact). */
@@ -101,10 +102,7 @@ export function applyCutouts(THREE: typeof import('three'),
                              obj: Object3D,
                              outlines: Array<Array<[number, number]>>,
                              ): CutoutHandle {
-  const polys = (outlines || [])
-    .map((o) => (o || []).slice(0, CUTOUT_MAX_POINTS))
-    .filter((o) => o.length >= 3)
-    .slice(0, CUTOUT_MAX_POLYS)
+  const polys = cutoutPolygons(outlines)
   const noop: CutoutHandle = { setEnabled: () => {}, dispose: () => {} }
   if (!polys.length) return noop
 
@@ -158,7 +156,7 @@ export function applyCutouts(THREE: typeof import('three'),
     let padding = 0
     if (typeof declaredPadding === 'number' && Number.isFinite(declaredPadding) && declaredPadding > 0) {
       mesh.updateWorldMatrix(true, false)
-      padding = declaredPadding * mesh.matrixWorld.getMaxScaleOnAxis()
+      padding = cutoutPadding(declaredPadding, mesh.matrixWorld.getMaxScaleOnAxis())
     }
     const cutOne = (src: Material): Material => {
       const mat = src.clone()

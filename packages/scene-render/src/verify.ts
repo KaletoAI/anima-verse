@@ -85,20 +85,10 @@ export class SpecVerifier {
    * frame yaw included.
    */
   private inFrame(box: Box3, origin: Vector3, frameYaw: number): Box3 {
-    const b = box.clone()
-    b.min.sub(origin)
-    b.max.sub(origin)
-    if (!frameYaw) return b
-    const c = b.getCenter(new this.THREE.Vector3())
-    const h = b.getSize(new this.THREE.Vector3()).multiplyScalar(0.5)
-    // Inverse of § A1.1 (x = lx·cos + lz·sin, z = −lx·sin + lz·cos).
-    const cos = Math.cos(frameYaw)
-    const sin = Math.sin(frameYaw)
-    const lx = c.x * cos - c.z * sin
-    const lz = c.x * sin + c.z * cos
-    b.min.set(lx - h.x, c.y - h.y, lz - h.z)
-    b.max.set(lx + h.x, c.y + h.y, lz + h.z)
-    return b
+    const b = inFrame(box, origin, frameYaw)
+    return new this.THREE.Box3(
+      new this.THREE.Vector3(b.min.x, b.min.y, b.min.z),
+      new this.THREE.Vector3(b.max.x, b.max.y, b.max.z))
   }
 
   /** Check a primitive against its spec: measure the world bbox and diff the
@@ -112,7 +102,11 @@ export class SpecVerifier {
     mesh.updateWorldMatrix(true, true)
     const box = this.inFrame(
       new this.THREE.Box3().setFromObject(mesh), origin, frameYaw)
-    for (const t of targets) this.check(name, t.field, t.actual(box), t.target)
+    const result = primitiveRows(name, targets.map(t => ({
+      field: t.field, actual: t.actual(box), target: t.target,
+    })))
+    this.checked += result.checked
+    this.rows.push(...result.rows)
   }
 
   /** Check a placed model against its spec.
@@ -129,74 +123,57 @@ export class SpecVerifier {
     if (!this.active) return
     obj.updateWorldMatrix(true, true)
     const world = new this.THREE.Box3().setFromObject(obj)
-    const size = world.getSize(new this.THREE.Vector3())
-    const box = this.inFrame(world, origin, frameYaw)
-    const centre = box.getCenter(new this.THREE.Vector3())
-    const name = `${spec.role}:${spec.id}`
-    // `groundLift` is the storey-0 terrain lift of § A16.9
-    // (`storeyGroundLift`) — the ONLY sanctioned difference between the
-    // composed `bottom_y` and the drawn one. It is added to the TARGET rather
-    // than subtracted from the measurement on purpose: the row a verify report
-    // prints then names the height the object is meant to have at ITS point,
-    // which is the number a reader can check against the height field.
-    this.check(name, 'bottom_y', box.min.y, spec.bottom_y + groundLift)
-    const axisParallel = (v?: number) =>
-      Math.abs((((v || 0) % 90) + 90) % 90) <= 0.01
-    // A FITTED model (v5, door props) hangs on its HINGE EDGE, so its bbox
-    // centre is half an opening away from the anchor by design. What is
-    // checked is the hanging point itself — the same measurement the diagonal
-    // case below uses, and for the same reason.
-    if (spec.measure === 'fit') {
-      const p = obj.getWorldPosition(new this.THREE.Vector3()).sub(origin)
-      const cos = Math.cos(frameYaw)
-      const sin = Math.sin(frameYaw)
-      this.check(name, 'anchor.x', p.x * cos - p.z * sin, spec.anchor[0])
-      this.check(name, 'anchor.z', p.x * sin + p.z * cos, spec.anchor[1])
-      // …and the opening is the ruler: the width lies on whichever horizontal
-      // axis the yaw put it on, the height is the height.
-      if (spec.size_m && axisParallel(spec.yaw_deg)
-          && axisParallel((frameYaw * 180) / Math.PI)) {
-        this.check(name, 'size_m.w', Math.max(size.x, size.z), spec.size_m[0])
-        this.check(name, 'size_m.h', size.y, spec.size_m[1])
-      }
-      return
-    }
-    if (axisParallel(spec.yaw_deg) && axisParallel((frameYaw * 180) / Math.PI)) {
-      // Axis-parallel, the world bbox centre IS the seating point — the
-      // sharper measurement, because it checks the GEOMETRY, not the
-      // transform.
-      this.check(name, 'anchor.x', centre.x, spec.anchor[0])
-      this.check(name, 'anchor.z', centre.z, spec.anchor[1])
-    } else {
-      // Diagonally no longer: since the § B2 revision (2026-08-20) the object
-      // sits on its box BEFORE the yaw, and the hull of the diagonally turned
-      // mesh has a different centre (sectional sofa at 45°: 0.50 m off —
-      // exactly the difference that used to separate a prop marker from its
-      // prop). What is checked here is therefore the hanging point itself,
-      // which `place()` sets on the anchor: the world position of the placed
-      // group, turned back into the frame the spec numbers live in.
-      const p = obj.getWorldPosition(new this.THREE.Vector3()).sub(origin)
-      const cos = Math.cos(frameYaw)
-      const sin = Math.sin(frameYaw)
-      this.check(name, 'anchor.x', p.x * cos - p.z * sin, spec.anchor[0])
-      this.check(name, 'anchor.z', p.x * sin + p.z * cos, spec.anchor[1])
-    }
-    // Extent checks only apply when NOTHING stands diagonally — the world
-    // bbox of a diagonally turned mesh is legitimately larger than the target
-    // box. That holds for the map yaw as for the orientation fix: since the
-    // object size is measured at the 90°-rounded fix (§ B2), a fix of e.g.
-    // 110° is exactly such a case. Since E4 the tile's frame yaw counts the
-    // same way: a location set at an angle inflates the axis-aligned hull of
-    // its models just as much.
-    if (!axisParallel(spec.yaw_deg) || !axisParallel(spec.fix_euler?.x)
-        || !axisParallel(spec.fix_euler?.y) || !axisParallel(spec.fix_euler?.z)
-        || !axisParallel((frameYaw * 180) / Math.PI)) return
-    if (spec.max_m) {
-      // With an axis-parallel yaw the turned box is the fixed one with
-      // swapped axes — `yawed_xz` and `xz` measure the same thing here.
-      this.check(name, 'max_m', spec.measure === 'xyz'
-        ? Math.max(size.x, size.y, size.z) : Math.max(size.x, size.z),
-      spec.max_m)
-    }
+    const result = placementRows(world, obj.getWorldPosition(new this.THREE.Vector3()),
+      spec, origin, frameYaw, groundLift)
+    this.checked += result.checked
+    this.rows.push(...result.rows)
   }
+}
+
+/** Structural numbers only: these functions can run without Three. */
+export interface VerifyPoint { x: number; y: number; z: number }
+export interface VerifyBox { min: VerifyPoint; max: VerifyPoint }
+export interface VerifyMeasurement { field: string; actual: number; target: number }
+export interface VerifyResult { checked: number; rows: VerifyRow[] }
+export function inFrame(box: VerifyBox, origin: VerifyPoint, frameYaw = 0): VerifyBox {
+  const min = { x: box.min.x-origin.x, y: box.min.y-origin.y, z: box.min.z-origin.z }
+  const max = { x: box.max.x-origin.x, y: box.max.y-origin.y, z: box.max.z-origin.z }
+  if (!frameYaw) return { min, max }
+  const empty=max.x<min.x||max.y<min.y||max.z<min.z
+  const x=empty?0:(min.x+max.x)/2, y=empty?0:(min.y+max.y)/2, z=empty?0:(min.z+max.z)/2
+  const hx=empty?0:(max.x-min.x)/2, hy=empty?0:(max.y-min.y)/2, hz=empty?0:(max.z-min.z)/2
+  const lx=x*Math.cos(frameYaw)-z*Math.sin(frameYaw)
+  const lz=x*Math.sin(frameYaw)+z*Math.cos(frameYaw)
+  return { min: { x: lx-hx,y:y-hy,z:lz-hz }, max: { x:lx+hx,y:y+hy,z:lz+hz } }
+}
+export function primitiveRows(object: string, measurements: VerifyMeasurement[]): VerifyResult {
+  const r3=(v:number)=>Math.round(v*1000)/1000
+  return { checked: measurements.length, rows: measurements.filter(t=>Math.abs(t.actual-t.target)>VERIFY_EPS)
+    .map(t=>({object,field:t.field,actual:r3(t.actual),target:r3(t.target),delta:r3(t.actual-t.target)})) }
+}
+export function placementRows(world: VerifyBox, position: VerifyPoint, spec: SceneModelSpec,
+  origin: VerifyPoint, frameYaw = 0, groundLift = 0): VerifyResult {
+  const empty=world.max.x<world.min.x||world.max.y<world.min.y||world.max.z<world.min.z
+  const size=empty?{x:0,y:0,z:0}:{x:world.max.x-world.min.x,y:world.max.y-world.min.y,z:world.max.z-world.min.z}
+  const box=inFrame(world,origin,frameYaw)
+  const ms: VerifyMeasurement[]=[]
+  const add=(field:string,actual:number,target:number)=>ms.push({field,actual,target})
+  const axis=(v=0)=>Math.abs(((v%90)+90)%90)<=0.01
+  const parallel=axis(spec.yaw_deg)&&axis(frameYaw*180/Math.PI)
+  add('bottom_y',box.min.y,spec.bottom_y+groundLift)
+  if(spec.measure==='fit'||!parallel) {
+    const x=position.x-origin.x,z=position.z-origin.z
+    add('anchor.x',x*Math.cos(frameYaw)-z*Math.sin(frameYaw),spec.anchor[0])
+    add('anchor.z',x*Math.sin(frameYaw)+z*Math.cos(frameYaw),spec.anchor[1])
+  } else {
+    const boxEmpty=box.max.x<box.min.x||box.max.y<box.min.y||box.max.z<box.min.z
+    add('anchor.x',boxEmpty?0:(box.min.x+box.max.x)/2,spec.anchor[0])
+    add('anchor.z',boxEmpty?0:(box.min.z+box.max.z)/2,spec.anchor[1])
+  }
+  if(spec.measure==='fit') {
+    if(spec.size_m&&parallel) {add('size_m.w',Math.max(size.x,size.z),spec.size_m[0]);add('size_m.h',size.y,spec.size_m[1])}
+  } else if(parallel&&axis(spec.fix_euler?.x)&&axis(spec.fix_euler?.y)&&axis(spec.fix_euler?.z)&&spec.max_m) {
+    add('max_m',spec.measure==='xyz'?Math.max(size.x,size.y,size.z):Math.max(size.x,size.z),spec.max_m)
+  }
+  return primitiveRows(`${spec.role}:${spec.id}`,ms)
 }

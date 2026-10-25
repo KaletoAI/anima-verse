@@ -567,6 +567,17 @@ function applyWaterShader(mat: MeshStandardMaterial, spec: SurfaceMaterialSpec,
  * material as before — the function is then only the ONE place the defaults
  * live instead of three places in two apps.
  */
+/** Pure class finish defaults, shared with non-WebGL clients. */
+export function surfaceFinish(spec?: SurfaceMaterialSpec | null) {
+  const cls = spec?.class || 'matte'
+  const rippled = cls === 'water' || cls === 'ice'
+  return {
+    roughness: spec?.roughness ?? (rippled ? 0.08 : cls === 'gloss' ? 0.25 : 0.85),
+    metalness: spec?.metalness ?? (rippled ? 0.15 : 0.02),
+    ...(cls === 'glow' ? { emissiveIntensity: spec?.glow ?? 1 } : {}),
+  }
+}
+
 export function surfaceMaterial(T: THREE, opts: SurfaceMaterialOptions): Material {
   const spec = opts.material || null
   const cls = spec?.class || 'matte'
@@ -575,8 +586,7 @@ export function surfaceMaterial(T: THREE, opts: SurfaceMaterialOptions): Materia
   // structure, it just does not flow.
   const rippled = cls === 'water' || cls === 'ice'
   const params: Record<string, unknown> = {
-    roughness: spec?.roughness ?? (rippled ? 0.08 : cls === 'gloss' ? 0.25 : 0.85),
-    metalness: spec?.metalness ?? (rippled ? 0.15 : 0.02),
+    ...surfaceFinish(spec),
   }
   if (opts.map) params.map = opts.map
   else params.color = toColor(T, opts.color ?? (rippled ? spec?.tint : 0xffffff))
@@ -593,7 +603,7 @@ export function surfaceMaterial(T: THREE, opts: SurfaceMaterialOptions): Materia
     // night scene as the ground next to it.
     const c = toColor(T, spec?.tint ?? 0xffffff)
     mat.emissive = c
-    mat.emissiveIntensity = spec?.glow ?? 1
+    mat.emissiveIntensity = surfaceFinish(spec).emissiveIntensity!
     if (opts.map) mat.emissiveMap = opts.map
   }
 

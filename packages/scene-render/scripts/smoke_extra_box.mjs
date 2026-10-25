@@ -32,6 +32,7 @@
  *       (0.52, 0.08). tileM 0 leaves every face at 0..1.
  *   [3] no rotation → the mesh is axis aligned (rotation 0, 0, 0).
  */
+import { loadVectorFile } from '../../../shared/test-vectors/vectors.mjs'
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -41,7 +42,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 async function main() {
-  if (!process.env.SMOKE_BUNDLED) {
+  if (!process.env.SMOKE_BUNDLED && !globalThis.__scenePrimitiveMeasure) {
     const bundlePath = '/tmp/smoke_extra_box_bundled.mjs'
     const root = path.join(__dirname, '../../../')
     const bin = ['client3d/node_modules/.bin/esbuild',
@@ -67,11 +68,17 @@ async function main() {
   const THREE = await import('three')
   const { buildExtra } = await import('../src/primitives.ts')
 
+  const vectors = loadVectorFile('shared/test-vectors/scene_primitives.json').cases[1]
+  const oracle = vectors.expect
+  const [input] = vectors.args
+  const measured = []
   const FAILED = []
   const near = (got, want, eps = 1e-4) => Array.isArray(want)
     ? got.length === want.length && want.every((w, i) => near(got[i], w, eps))
     : Math.abs(got - want) <= eps
-  function check(label, got, want, eps = 1e-4) {
+  function check(label, got, eps = 1e-4) {
+    const want = oracle[measured.length]
+    measured.push(got)
     const ok = near(got, want, eps)
     console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}: ${JSON.stringify(got)}`
       + (ok ? '' : `  (expected ${JSON.stringify(want)})`))
@@ -86,25 +93,19 @@ async function main() {
   const mat = new THREE.MeshStandardMaterial()
 
   console.log('\n[1] rotation — the stringer of smoke_scene_recipe [5s]')
-  const L = 4.969547, d = 0.16
-  const east = buildExtra(THREE, {
-    kind: 'stair_stringer', center: [3.999582, 1.437218, -2.575],
-    size: [L, d, 0.05], rotation: [0, 0, 38.2997], stair: 0, level: 0,
-  }, mat)
-  check('Euler z in radians', east.rotation.z, 38.2997 * Math.PI / 180, 1e-9)
-  check('Euler x, y stay 0', [east.rotation.x, east.rotation.y], [0, 0], 1e-12)
+  const L = input.east.size[0], d = input.east.size[1]
+  const east = buildExtra(THREE, input.east, mat)
+  check('Euler z in radians', east.rotation.z, 1e-9)
+  check('Euler x, y stay 0', [east.rotation.x, east.rotation.y], 1e-12)
   check('top-foot corner (−L/2, +d/2) lands on (2.00, −0.04, −2.575)',
-    corner(east, [-L / 2, d / 2, 0]), [2.0, -0.04, -2.575])
+    corner(east, [-L / 2, d / 2, 0]))
   check('top-head corner (+L/2, +d/2) lands on (5.90, 3.04, −2.575)',
-    corner(east, [L / 2, d / 2, 0]), [5.9, 3.04, -2.575])
-  const south = buildExtra(THREE, {
-    kind: 'stair_stringer', center: [1.425, 1.437218, -2 + 1.999582],
-    size: [0.05, d, L], rotation: [-38.2997, 0, 0], stair: 0, level: 0,
-  }, mat)
+    corner(east, [L / 2, d / 2, 0]))
+  const south = buildExtra(THREE, input.south, mat)
   check('dir 0: top-foot corner (0, +d/2, −L/2) lands on (1.425, −0.04, −2)',
-    corner(south, [0, d / 2, -L / 2]), [1.425, -0.04, -2.0])
+    corner(south, [0, d / 2, -L / 2]))
   check('dir 0: top-head corner lands on (1.425, 3.04, 1.90)',
-    corner(south, [0, d / 2, L / 2]), [1.425, 3.04, 1.9])
+    corner(south, [0, d / 2, L / 2]))
 
   console.log('\n[2] uvs — a tread [0.26, 0.04, 1.10] tiled at 0.5 m')
   const faceMax = (mesh, f) => {
@@ -115,24 +116,17 @@ async function main() {
     }
     return [mu, mv]
   }
-  const tread = buildExtra(THREE, {
-    kind: 'stair_tread', center: [0, 0, 0], size: [0.26, 0.04, 1.10],
-  }, mat, 0.5)
-  check('+x face (depth × height) → (2.2, 0.08)', faceMax(tread, 0), [2.2, 0.08])
-  check('+y face (width × depth) → (0.52, 2.2)', faceMax(tread, 2), [0.52, 2.2])
-  check('+z face (width × height) → (0.52, 0.08)', faceMax(tread, 4), [0.52, 0.08])
-  const plain = buildExtra(THREE, {
-    kind: 'stair_tread', center: [0, 0, 0], size: [0.26, 0.04, 1.10],
-  }, mat)
+  const tread = buildExtra(THREE, input.tread, mat, input.tileM)
+  check('+x face (depth × height) → (2.2, 0.08)', faceMax(tread, 0))
+  check('+y face (width × depth) → (0.52, 2.2)', faceMax(tread, 2))
+  check('+z face (width × height) → (0.52, 0.08)', faceMax(tread, 4))
+  const plain = buildExtra(THREE, input.tread, mat)
   check('tileM 0: every face stays 0..1',
-    [faceMax(plain, 0), faceMax(plain, 2), faceMax(plain, 4)],
-    [[1, 1], [1, 1], [1, 1]])
+    [faceMax(plain, 0), faceMax(plain, 2), faceMax(plain, 4)])
 
   console.log('\n[3] no rotation → axis aligned')
-  check('rotation (0, 0, 0)', [plain.rotation.x, plain.rotation.y, plain.rotation.z],
-    [0, 0, 0], 1e-12)
-  check('centre kept', [plain.position.x, plain.position.y, plain.position.z],
-    [0, 0, 0], 1e-12)
+  check('rotation (0, 0, 0)', [plain.rotation.x, plain.rotation.y, plain.rotation.z], 1e-12)
+  check('centre kept', [plain.position.x, plain.position.y, plain.position.z], 1e-12)
 
   console.log()
   if (FAILED.length) {
@@ -140,7 +134,8 @@ async function main() {
     for (const f of FAILED) console.log(`  - ${f}`)
     process.exit(1)
   }
+  if (globalThis.__scenePrimitiveMeasure) globalThis.__scenePrimitiveMeasure(measured)
   console.log('all checks passed')
 }
 
-main()
+await main()

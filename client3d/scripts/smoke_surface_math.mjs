@@ -39,75 +39,7 @@
  * j=1..2, which touches the null node (0,2) and is therefore null by design (D). The
  * bilinear reading is tested one row of nodes away from that hole, at the same u = 0.75.
  */
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-// '../..' = the REPO root (this file lives in client3d/scripts/).
-const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
-let passed = 0, failed = 0;
-
-function check(label, actual, expected, eps = 1e-6) {
-  const ok = (actual === null && expected === null)
-    || (typeof actual === 'number' && typeof expected === 'number' && Math.abs(actual - expected) <= eps);
-  if (ok) { passed += 1; console.log(`  ok   ${label}`); }
-  else {
-    failed += 1;
-    console.log(`  FAIL ${label}\n       expected ${JSON.stringify(expected)}\n       actual   ${JSON.stringify(actual)}`);
-  }
-}
-
-/**
- * `surface.ts` is TypeScript and deliberately free of any runtime import (only
- * a type import, which vanishes on transpile), so a plain esbuild transform is
- * enough — no bundler. esbuild ships as a Vite dependency.
- */
-async function load() {
-  let esbuild;
-  try { esbuild = await import('esbuild'); }
-  catch { console.error('esbuild missing — run npm install (loud failure on purpose)'); process.exit(2); }
-  const dir = await mkdtemp(join(tmpdir(), 'surface-'));
-  const src = await readFile(join(ROOT, 'packages/scene-render/src/surface.ts'), 'utf8');
-  const out = esbuild.transformSync(src, { loader: 'ts', format: 'esm' });
-  const file = join(dir, 'surface.mjs');
-  await writeFile(file, out.code, 'utf8');
-  return import(`file://${file}`);
-}
-
-const { surfaceHeightAt: h, highestSurfaceAt } = await load();
-
-const S1 = {
-  step: 1, origin: [-1, -1], cols: 3, rows: 3, box_min: [-1, 0, -1], box_max: [1, 1, 1],
-  extent_snapped: [2, 1, 2], values: [0, 100, 200, 0, 100, 200, null, 100, 200],
-};
-const P1 = { anchor: [4, -3], yaw_deg: 90, bottom_y: 0.5, max_m: 4, measure: 'xz' };
-
-check('A anchor node', h(S1, P1, 4, -3), 2.5);
-check('B node (2,1)', h(S1, P1, 4, -5), 4.5);
-check('C bilinear 0.75', h(S1, P1, 2, -2.5), 2.0);
-check('D null neighbour', h(S1, P1, 5, -2), null);
-check('E outside', h(S1, P1, 4, -6), null);
-check('F measure xyz', h({ ...S1, extent_snapped: [2, 3, 2] }, { ...P1, measure: 'xyz' }, 4, -3), 0.5 + 4 / 3);
-check('G yaw 0', h(S1, { ...P1, yaw_deg: 0 }, 3.5, -5), 2.0);
-check('H truncated values', h({ ...S1, values: [0, 100, 200, 0] }, P1, 4, -3), null);
-check('I lift 0.75', h(S1, P1, 4, -3, 0.75), 3.25);
-check('I lift 0 = A', h(S1, P1, 4, -3, 0), 2.5);
-
-/** An entry of `tile.surfaces`; `level`/`roomId` scope the lookup, not the maths. */
-const placed = (id, spec, surface, lift = 0) =>
-  ({ id, spec, surface, lift, level: 0, roomId: '' });
-
-const both = [placed('a', P1, S1), placed('b', { ...P1, bottom_y: 1.0 }, S1)];
-check('highest at A', highestSurfaceAt(both, 4, -3), 3.0);
-check('highest at D', highestSurfaceAt(both, 5, -2), null);
-const blank = { ...S1, values: Array(9).fill(null) };
-check('highest skips all-null',
-  highestSurfaceAt([placed('a', P1, S1), placed('c', P1, blank)], 4, -3), 2.5);
-const lifted = [placed('a', P1, S1, 0.75), placed('b', P1, S1, 0)];
-check('highest reads each entry\'s own lift', highestSurfaceAt(lifted, 4, -3), 3.25);
-check('...and the unlifted entry alone stays 2.5',
-  highestSurfaceAt([placed('b', P1, S1, 0)], 4, -3), 2.5);
-
+import { runModelVectors } from './smoke_scene_models.mjs';
+const { passed, failed } = await runModelVectors(c => c.label.startsWith('[H]'));
 console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;
