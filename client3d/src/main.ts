@@ -1693,7 +1693,7 @@ async function startApp(username: string, role: string) {
         height = value;
         if (residency.get(id)?.tile !== tile) return;
         place.height = value;
-        eventPins.get(id)?.position.setY(value + 3.5);
+        eventPins.get(id)?.position.setY(pinY(tile.center.y, value));
       },
     });
   }
