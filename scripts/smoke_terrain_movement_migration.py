@@ -3,7 +3,8 @@
 swim, preserving 0.6 m sink; dry bog becomes walk_run with one warning.
 Grass is unchanged. Only swimming differs from shipped clips. A 2:1 vote
 wins by count, 1:1 alphabetically; conflicts warn. Temporary DB checks
-full world pose copies, cache invalidation and no-op reruns.
+full world pose copies, cache invalidation and no-op reruns. The world copy
+is the STORED entry (shipped file or world layer) with only the clip changed.
 """
 import copy
 import json
@@ -25,6 +26,12 @@ with tempfile.TemporaryDirectory(prefix="terrain-movement-") as tmp:
     for axis in ("pose", "expression"):
         source = pose_catalog.catalog_path(axis)
         (catalog_dir / source.name).write_bytes(source.read_bytes())
+    # The expectations assume the SHIPPED clips (swim / treading-water); the
+    # working-tree file may carry a local edit of them.
+    pose_doc = json.loads((catalog_dir / "pose_catalog.json").read_text(encoding="utf-8"))
+    pose_doc["entries"]["swimming"]["animation"] = "swim"
+    pose_doc["entries"]["treading_water"]["animation"] = "treading-water"
+    (catalog_dir / "pose_catalog.json").write_text(json.dumps(pose_doc), encoding="utf-8")
     original_path = pose_catalog.catalog_path
     pose_catalog.catalog_path = lambda axis: catalog_dir / original_path(axis).name
     from app.core import db, terrain_types
@@ -56,11 +63,12 @@ with tempfile.TemporaryDirectory(prefix="terrain-movement-") as tmp:
     print("[W7] majority, alphabetical tie, tread, idle-only: OK")
     with catalog_txn("pose"):
         data = read_store("pose", "world")
-        entry = copy.deepcopy(pose_catalog.get_catalog("pose")["swimming"])
-        entry["prompt"] = "World-specific swimming prompt"
-        data["entries"]["swimming"] = entry
+        stored = copy.deepcopy(read_store("pose", "shared")["entries"]["swimming"])
+        stored["prompt"] = "World-specific swimming prompt"
+        data["entries"]["swimming"] = stored
         write_store("pose", data, "world")
     entry = copy.deepcopy(pose_catalog.get_catalog("pose")["swimming"])
+    raw_shared = copy.deepcopy(read_store("pose", "shared")["entries"]["swimming"])
     with db.transaction() as conn:
         for row in rows:
             conn.execute("INSERT INTO terrain_types (kind, name, color, passable, speed_factor, meta, updated_at) VALUES (?, ?, '#123456', 1, 0.7, ?, '2026-10-25T00:00:00Z')", (row["kind"], row["kind"], json.dumps(row["meta"])))
@@ -91,5 +99,23 @@ with tempfile.TemporaryDirectory(prefix="terrain-movement-") as tmp:
     with db.transaction() as conn:
         assert json.loads(conn.execute("SELECT meta FROM terrain_types WHERE kind='water'").fetchone()[0]) == out[0]["meta"]
     assert terrain_types.get_type("water")["speed_factor"] == 0.7
+    # The world copy is the STORED entry with the clip changed — never the
+    # normalised catalog view (places/yaw_offset on a solo pose made
+    # validate_catalog report "places/yaw_offset only make sense on a pair pose").
+    assert read_store("pose", "world")["entries"]["swimming"] == {**stored, "animation": "breast-stroke"}
+    assert not [p for p in pose_catalog.validate_catalog("pose") if "swimming" in p]
     print("[W5-W6] temporary DB, idempotency, full world override, cache: OK")
+    # Without a world entry the copy comes from the shipped file, same rule.
+    with catalog_txn("pose"):
+        data = read_store("pose", "world")
+        del data["entries"]["swimming"]
+        write_store("pose", data, "world")
+    with db.transaction() as conn:
+        conn.execute("UPDATE terrain_types SET meta=? WHERE kind='water'", (json.dumps(rows[0]["meta"]),))
+        conn.execute("DELETE FROM world_kv WHERE key='migrated_terrain_movement_v1'")
+    terrain_types._bump_types_generation()
+    assert migrate_terrain_movement_once()["overrides"] == 1
+    assert read_store("pose", "world")["entries"]["swimming"] == {**raw_shared, "animation": "breast-stroke"}
+    assert not [p for p in pose_catalog.validate_catalog("pose") if "swimming" in p]
+    print("[W9] world copy = stored entry, no stray pair fields: OK")
 print("terrain movement migration: PASS")

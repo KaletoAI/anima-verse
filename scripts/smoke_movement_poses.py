@@ -192,6 +192,16 @@ def fixed_checks(pc, ac):
             check("[F5] rename refused " + key, exc.status_code == 400)
         else:
             check("[F5] rename refused " + key, False)
+    # Moving a shipped movement pose into the world makes a world COPY: the
+    # shipped entry (the public clip) stays, like the DELETE guard demands.
+    from app.core.pose_catalog_edit import read_store
+    shipped = read_store("pose", "shared")["entries"]["treading_water"]
+    poses._update_entry_sync("treading_water", "pose", {}, {"store": "world", "animation": "idle"})
+    check("[F6] move to world keeps shipped",
+          read_store("pose", "shared")["entries"].get("treading_water") == shipped
+          and pc.world_entries("pose")["treading_water"]["animation"] == "idle")
+    poses.delete_entry("treading_water", "pose", {})
+    check("[F6] world copy deletable", pc.get_catalog("pose")["treading_water"]["animation"] == shipped["animation"])
     ac.save_transitions([{"from": "sitting at table", "to": "walking", "kind": "walk"}])
     response = poses._rename_entry_sync("sitting at table", "pose", {"new_key": "seated"})
     check("rename transitions", response.get("transitions_rewritten") == 1 and ac.load_transitions()[0]["from"] == "seated")

@@ -15,13 +15,8 @@
  * it answers, so a cell tagged "free" and "licensed" holds files of DIFFERENT
  * names, never two versions of one.
  *
- * On top of the matrix sits the LOCOMOTION block: which kind every figure —
- * NPC and avatar alike — plays for `walk` / `run` / `idle` when neither the
- * ground nor the server names a clip. World-independent like the clips
- * (`shared/config/locomotion_clips.json`); a ground's own move/idle clip
- * (water → swim) keeps its precedence in the client. The mapping rides on the
- * listing (`locomotion`) and is fetched here — the listing prop's type does
- * not carry it.
+ * "Used by" counts the poses that play a kind AND the transition rules that
+ * play it as their bridge (`from → to`) — a bridge-only clip is not unused.
  *
  * Per file the detail column carries the LOOP switch: whether a clip repeats
  * or holds its last frame is the admin's decision AFTER the import
@@ -192,8 +187,13 @@ export function ClipLibrary({
       if (!k) continue
       ;(out[k] = out[k] || []).push(p.key)
     }
+    for (const r of listing.transitions || []) {
+      const k = (r.kind || '').trim()
+      if (!k) continue
+      ;(out[k] = out[k] || []).push(`${r.from} → ${r.to}`)
+    }
     return out
-  }, [poses])
+  }, [poses, listing.transitions])
 
   const rows = useMemo<Row[]>(() => {
     const kinds = new Set<string>(listing.kinds || [])

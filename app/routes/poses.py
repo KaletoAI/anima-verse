@@ -469,6 +469,7 @@ async def update_entry(key: str, request: Request, axis: str = Query("pose"),
 def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
                        body: Any) -> Dict[str, Any]:
     """The blocking body of ``update_entry`` — runs in the threadpool."""
+    from app.core.movement import MOVEMENT_POSES
     try:
         axis = _axis(axis)
         key = key.strip().lower()
@@ -524,8 +525,11 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
                 target = read_store(axis, store)
                 target["entries"][key] = entry
                 write_store(axis, target, store)
-                data["entries"].pop(key, None)
-                write_store(axis, data, was)
+                # A movement pose keeps its shipped entry (the public clip, see
+                # the DELETE guard): moving it into the world makes a world COPY.
+                if not (axis == "pose" and was == "shared" and key in MOVEMENT_POSES):
+                    data["entries"].pop(key, None)
+                    write_store(axis, data, was)
         return {"status": "success", "key": key, "axis": axis, "store": store}
     except CatalogEditError as e:
         raise HTTPException(status_code=e.status, detail=e.detail) from e

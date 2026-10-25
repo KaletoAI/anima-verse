@@ -54,7 +54,6 @@ def migrate_terrain_movement_once() -> Dict[str, int]:
     discards the legacy clips needed for retry. The guard is set last.
     """
     from app.core.db import transaction
-    from app.core.pose_catalog import get_catalog
     from app.core.pose_catalog_edit import catalog_txn, read_store, write_store
     from app.core.terrain_types import _bump_types_generation
     from app.models.world import get_world_setting, set_world_setting
@@ -71,10 +70,11 @@ def migrate_terrain_movement_once() -> Dict[str, int]:
     if overrides:
         with catalog_txn("pose"):
             data = read_store("pose", "world")
-            effective = get_catalog("pose")
+            shared = read_store("pose", "shared")["entries"]
             for key, clip in overrides.items():
-                entry = deepcopy(effective[key])
-                entry.pop("_store", None)
+                # The STORED entry, never get_catalog's normalised one: that adds
+                # places/yaw_offset/_default/label, which a solo pose must not carry.
+                entry = deepcopy(data["entries"].get(key) or shared[key])
                 entry["animation"] = clip
                 data["entries"][key] = entry
             write_store("pose", data, "world")
