@@ -11,7 +11,17 @@
     { "id": "loc-meadow", "name": "Meadow", "pos_x": 300.0, "pos_z": -200.0, "yaw_deg": 0.0,
       "plan_width_m": null, "boundary": null, "openings": [] }
   ],
-  "characters": [],
+  "characters": [
+    { "name": "Ada Wren", "location_id": "", "pos": { "x": -50.0, "z": 30.0 }, "pos_origin": null,
+      "height_cm": 160, "room_id": "", "activity_animation": "", "travel": null, "model_sig": "ada-1" },
+    { "name": "Bram Holt", "location_id": "loc-house", "pos": { "x": 63.0, "z": 127.0 }, "pos_origin": null,
+      "height_cm": 180, "room_id": "room-hall", "activity_animation": "", "travel": null, "model_sig": "bram-1" },
+    { "name": "Cleo Marsh", "location_id": "", "pos": { "x": 260.0, "z": -100.0 }, "pos_origin": null,
+      "room_id": "", "activity_animation": "",
+      "travel": { "target_id": "loc-yard", "waypoints": [[300.0, -200.0], [300.0, -100.0], [200.0, -100.0]],
+                  "progress_m": 137.0, "total_m": 200.0, "starts_in_s": null,
+                  "speed_m_s_real": 1.4, "pace_m_s_real": 1.4, "paces_m_s_real": [1.4, 1.4], "journey_id": null } }
+  ],
   "events_by_location": {},
   "world_bounds": { "min_x": -104.0, "min_z": -203.0, "max_x": 300.0, "max_z": 134.0 },
   "height_sig": "fixture-s1a",

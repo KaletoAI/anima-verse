@@ -1,0 +1,16 @@
+{
+  "Ada Wren": {
+    "signature": "ada-1", "has_input": true, "pending": false,
+    "model": { "filename": "aa1f6d51558d.glb", "signature": "ada-1", "format": "glb", "rig": "mixamo",
+               "url": "/characters/Ada%20Wren/model3d/file?v=fixtureada000001", "model_rev": "r1" },
+    "animation_set": "", "animation_sets": []
+  },
+  "Bram Holt": {
+    "signature": "bram-1", "has_input": true, "pending": false,
+    "model": { "filename": "bram.fbx", "signature": "bram-1", "format": "fbx", "rig": "generic",
+               "url": "/characters/Bram%20Holt/model3d/file?v=fixturebram00001",
+               "texture_url": "/characters/Bram%20Holt/model3d/texture?v=fixturebramtex01", "model_rev": "r1" },
+    "animation_set": "animal", "animation_sets": ["animal"]
+  },
+  "Cleo Marsh": null
+}

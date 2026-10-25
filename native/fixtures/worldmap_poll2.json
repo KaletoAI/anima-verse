@@ -1,0 +1,18 @@
+{
+  "avatar": null,
+  "current_location_id": null,
+  "locations": [],
+  "characters": [
+    { "name": "Ada Wren", "location_id": "", "pos": { "x": -40.0, "z": 30.0 }, "pos_origin": null,
+      "height_cm": 160, "room_id": "", "activity_animation": "", "travel": null, "model_sig": "ada-2" },
+    { "name": "Cleo Marsh", "location_id": "", "pos": { "x": 250.0, "z": -100.0 }, "pos_origin": null,
+      "room_id": "", "activity_animation": "",
+      "travel": { "target_id": "loc-yard", "waypoints": [[300.0, -200.0], [300.0, -100.0], [200.0, -100.0]],
+                  "progress_m": 144.0, "total_m": 200.0, "starts_in_s": null,
+                  "speed_m_s_real": 1.4, "pace_m_s_real": 1.4, "paces_m_s_real": [1.4, 1.4], "journey_id": null } }
+  ],
+  "events_by_location": {},
+  "world_bounds": null,
+  "height_sig": "fixture-s1a",
+  "fogged": false
+}

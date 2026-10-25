@@ -1,7 +1,9 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Check;
+using AnimaNative.Figures;
 using AnimaNative.Gltf;
 using AnimaNative.Ui;
 using AnimaNative.World;
@@ -19,6 +21,9 @@ public partial class Main : Node3D
     private AnimaApi? _api;
     private Label? _status;
     private FlyCamera? _camera;
+    private FigureManager? _figures;
+    private readonly CancellationTokenSource _stop = new();
+    private int _focus = -1;
 
     /// <summary>The bench anchor of the current world (S2 drives its path relative to it).</summary>
     public AnchorInfo? Anchor { get; private set; }
@@ -117,9 +122,18 @@ public partial class Main : Node3D
             Anchor = stats.Anchor;
             _camera!.LookAtAnchor(stats.Anchor.Position + new Vector3(0, 1.5f, 0));
             Log("world " + stats.Summary());
-            SetStatus($"{stats.Buildings} buildings, {stats.Tiles} tiles, {stats.Primitives} primitives"
-                      + (stats.Failures > 0 ? $", {stats.Failures} locations failed (see log)" : "")
-                      + "   —   drag: orbit, wheel: zoom, WASD: move");
+            var worldStatus = $"{stats.Buildings} buildings, {stats.Tiles} tiles, {stats.Primitives} primitives"
+                              + (stats.Failures > 0 ? $", {stats.Failures} locations failed (see log)" : "");
+            SetStatus(worldStatus + "   —   loading figures…");
+
+            _figures = new FigureManager(_api!, builder.Height!, Log, strict: false);
+            world.AddChild(_figures);
+            await _figures.InitAsync();
+            _ = _figures.PollLoopAsync(_stop.Token);
+            var timer = new Godot.Timer { WaitTime = 1.0, Autostart = true };
+            AddChild(timer);
+            timer.Timeout += () => SetStatus($"{worldStatus}, {FigureLine()}"
+                                             + "   —   drag: orbit, wheel: zoom, WASD: move, F: next figure");
         }
         catch (Exception e)
         {
@@ -127,6 +141,28 @@ public partial class Main : Node3D
             SetStatus("World load failed: " + e.Message);
         }
     }
+
+    private string FigureLine()
+    {
+        var s = _figures!.Stats;
+        return $"{s.Figures} figures ({s.GlbFigures} models, {s.Placeholders} placeholders), "
+               + $"{s.ClipsLoaded} clips" + (s.UnboundClips > 0 ? $", {s.UnboundClips} unbound" : "");
+    }
+
+    /// <summary>F: the camera follows the next figure (name order); WASD lets go.</summary>
+    public override void _UnhandledInput(InputEvent e)
+    {
+        if (e is not InputEventKey { Pressed: true, Echo: false, Keycode: Key.F } || _figures is null || _camera is null)
+            return;
+        var list = _figures.Ordered();
+        if (list.Count == 0) return;
+        _focus = (_focus + 1) % list.Count;
+        _camera.Follow = list[_focus];
+        _camera.Distance = 8f;
+        Log($"camera → {list[_focus].CharacterName} ({list[_focus].Rule})");
+    }
+
+    public override void _ExitTree() => _stop.Cancel();
 
     private void SetStatus(string text)
     {

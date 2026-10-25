@@ -40,8 +40,12 @@ public interface IWorldSource
     Task<JsonDocument> GetLocations3dAsync();
     /// <summary>The scene recipe (§ B1); null on 404 (nothing to compose).</summary>
     Task<JsonDocument?> GetLocationSceneAsync(string locationId);
-    /// <summary>Raw bytes of a server-relative URL as it appears in a payload (GLB variants).</summary>
+    /// <summary>Raw bytes of a server-relative URL as it appears in a payload (GLB variants, clips, character models).</summary>
     Task<byte[]> GetBytesAsync(string url);
+    /// <summary><c>GET /characters/{name}/model3d</c> (§ A7); null on 404 (no model — the normal state).</summary>
+    Task<JsonDocument?> GetCharacterModelAsync(string name);
+    /// <summary><c>GET /assets/animation-clips</c> (§ A7/§ A8): <c>{clips: [{kind, role, set, url, loop, …}], locomotion, …}</c>.</summary>
+    Task<JsonDocument> GetAnimationClipsAsync();
 }
 
 /// <summary>
@@ -112,6 +116,11 @@ public sealed class AnimaApi : IWorldSource, IDisposable
 
     public Task<JsonDocument?> GetLocationSceneAsync(string locationId)
         => GetJsonOrNull($"/play/locations/{Uri.EscapeDataString(locationId)}/scene");
+
+    public Task<JsonDocument?> GetCharacterModelAsync(string name)
+        => GetJsonOrNull($"/characters/{Uri.EscapeDataString(name)}/model3d");
+
+    public Task<JsonDocument> GetAnimationClipsAsync() => GetJson("/assets/animation-clips");
 
     /// <summary>§ A7: <c>{format, rotation, offset_*, floors, height_m, signature}</c>, null on 404.</summary>
     public Task<JsonDocument?> GetLocationModelMetaAsync(string locationId)

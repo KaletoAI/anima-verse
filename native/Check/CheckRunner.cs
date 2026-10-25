@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using AnimaNative.Figures;
 using AnimaNative.Gltf;
 using AnimaNative.World;
 using Godot;
@@ -32,6 +34,22 @@ public static class CheckRunner
     private const float ExpBuildingMaxM = 12f, ExpBuildingBottom = -0.25f;
     private static readonly Vector2 ExpBuildingAnchor = new(1.5f, -2f);
 
+    // ---- S1b figures (worldmap.json / worldmap_poll2.json, README "Figures") ----
+    private const int ExpFigures = 3, ExpGlbFigures = 1, ExpPlaceholders = 2, ExpClipsLoaded = 2;
+    private const int ExpTracksPerClip = 53;                       // 52 rotations + the hips position
+    private const int ExpBoundTracks = 2 * ExpTracksPerClip;        // idle + walk on the one GLB figure
+    private const string Ada = "Ada Wren", Bram = "Bram Holt", Cleo = "Cleo Marsh";
+    private static readonly Vector3 ExpAda = new(-50f, 3.595947265625f, 30f);     // free, overview
+    private static readonly Vector3 ExpBram = new(64f, 4.0675f, 132.32f);         // house huddle, fine tile
+    private static readonly Vector3 ExpCleo = new(263f, 4.875f, -100f);           // journey, overview
+    private const float ExpAdaHeight = 1.60f, ExpBramHeight = 1.80f, ExpCleoHeight = 1.70f;
+    private static readonly Vector3 ExpAdaHalfway = new(-45f, 3.68316650390625f, 30f);
+    private static readonly Vector3 ExpCleoHalfway = new(259.5f, 4.875f, -100f);
+    private static readonly Vector3 ExpAdaEnd = new(-40f, 3.7705078125f, 30f);
+    private const string IdleUrl = "/assets/animation-clips/stand-relaxed.fbx?v=fixturestand0001";
+    private const string WalkUrl = "/assets/animation-clips/walk.fbx?v=fixturewalk00001";
+    private const string AdaUrl = "/characters/Ada%20Wren/model3d/file?v=fixtureada000001";
+
     public static async Task<int> RunAsync(Node3D host)
     {
         try
@@ -43,8 +61,8 @@ public static class CheckRunner
             var source = new FixtureSource(dir);
             var world = new Node3D { Name = "CheckWorld" };
             host.AddChild(world);
-            var stats = await new WorldBuilder(source, line => GD.Print("[check] " + line), strict: true)
-                .BuildAsync(world, Goto);
+            var builder = new WorldBuilder(source, line => GD.Print("[check] " + line), strict: true);
+            var stats = await builder.BuildAsync(world, Goto);
 
             Expect("anchor", stats.Anchor.Position.DistanceTo(ExpectedAnchor) < 1e-4f, $"{stats.Anchor.Position}");
             Expect("anchor location", stats.Anchor.LocationId == "loc-house", stats.Anchor.LocationId ?? "null");
@@ -86,9 +104,12 @@ public static class CheckRunner
             Expect("recipe mesh", yard.GetNodeOrNull<MeshInstance3D>("Recipe") is not null, "yard has no Recipe mesh");
             Expect("no recipe under house", house.GetNodeOrNull("Recipe") is null, "house drew its recipe despite the model");
 
+            CheckPlacementRule();
+            var figures = await CheckFigures(world, source, builder.Height!);
+
             GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt}");
+                     + $"| meshopt {meshopt} | {figures}");
             world.QueueFree();
             return 0;
         }
@@ -195,6 +216,188 @@ public static class CheckRunner
             Expect($"goto '{bad}' rejected", threw, "resolved instead of failing");
         }
     }
+
+    /// <summary>
+    /// Figures (Task S1b), two polls. Poll 1: three characters (free GLB,
+    /// FBX in a location huddle, model-less traveller); poll 2: one moved and
+    /// re-signed, one vanished, one further along its route.
+    /// </summary>
+    private static async Task<string> CheckFigures(Node3D world, FixtureSource source, WorldHeight height)
+    {
+        var mgr = new FigureManager(source, height, line => GD.Print("[check] " + line), strict: true) { AutoTick = false };
+        world.AddChild(mgr);
+        await mgr.InitAsync();
+        Expect("idle role → mapped kind", mgr.Clips.KindOf("idle") == "stand-relaxed", mgr.Clips.KindOf("idle"));
+        Expect("run role keeps its name", mgr.Clips.KindOf("run") == "run", mgr.Clips.KindOf("run"));
+        using (var map = Load("worldmap.json")) await mgr.Apply(map.RootElement);
+        var st = mgr.Stats;
+        Eq("figures", st.Figures, ExpFigures);
+        Eq("glb_figures", st.GlbFigures, ExpGlbFigures);
+        Eq("placeholders", st.Placeholders, ExpPlaceholders);
+        Eq("clips_loaded", st.ClipsLoaded, ExpClipsLoaded);
+        Eq("bound_tracks", st.BoundTracks, ExpBoundTracks);
+        Eq("unbound_clips", st.UnboundClips, 0);
+        Eq("offmap", st.Offmap, 0);
+        Eq("model_failures", st.ModelFailures, 0);
+        var poll1 = st.Summary();
+
+        var ada = mgr.Figures[Ada];
+        var bram = mgr.Figures[Bram];
+        var cleo = mgr.Figures[Cleo];
+        Expect("rules", ada.Rule == "free" && bram.Rule == "tile" && cleo.Rule == "journey",
+               $"{ada.Rule}/{bram.Rule}/{cleo.Rule}");
+        NearV("Ada position", ada.Position, ExpAda);
+        NearV("Bram position", bram.Position, ExpBram);
+        NearV("Cleo position", cleo.Position, ExpCleo);
+        Near("Ada y = ground", ada.Position.Y, (float)height.GroundAt(-50, 30));
+        Expect("Ada is GLB", ada.IsGlb && !bram.IsGlb && !cleo.IsGlb, "body kinds");
+        Near("Ada height", ModelPlacement.Measure(ada.Body!, Transform3D.Identity).Size.Y, ExpAdaHeight);
+        Near("Bram height", ModelPlacement.Measure(bram.Body!, Transform3D.Identity).Size.Y, ExpBramHeight);
+        Near("Cleo height", ModelPlacement.Measure(cleo.Body!, Transform3D.Identity).Size.Y, ExpCleoHeight);
+
+        // Clip cache: one download per clip URL, the FBX model is never fetched.
+        Eq("idle downloads", source.ByteRequests.Count(u => u == IdleUrl), 1);
+        Eq("walk downloads", source.ByteRequests.Count(u => u == WalkUrl), 1);
+        Expect("FBX model not fetched", !source.ByteRequests.Any(u => u.Contains("Bram", StringComparison.Ordinal)),
+               string.Join(";", source.ByteRequests));
+
+        // The binding itself: after one evaluation the skeleton holds the clip's values.
+        CheckBinding(mgr, ada, "idle");
+
+        // ---- poll 2 ----
+        using (var map = Load("worldmap_poll2.json")) await mgr.Apply(map.RootElement);
+        st = mgr.Stats;
+        Eq("poll2 figures", st.Figures, 2);
+        Expect("Bram removed", !mgr.Figures.ContainsKey(Bram), "still there");
+        Eq("Ada model3d requests (model_sig changed)", source.ModelRequests.Count(n => n == Ada), 2);
+        Eq("Ada GLB downloads (same URL, cached)", source.ByteRequests.Count(u => u == AdaUrl), 1);
+        Eq("Cleo model3d requests (sig absent, unchanged)", source.ModelRequests.Count(n => n == Cleo), 1);
+        Eq("clips still loaded once", source.ByteRequests.Count(u => u == IdleUrl || u == WalkUrl), 2);
+        Eq("poll2 bound_tracks", st.BoundTracks, ExpBoundTracks);
+        Expect("Ada reloaded", ada.LoadedSig == "ada-2" && ada.IsGlb, ada.LoadedSig ?? "null");
+        Expect("Ada walks (2 m/s)", ada.Moving && ada.Player?.CurrentAnimation == "walk",
+               $"{ada.PlannedSpeed} {ada.Player?.CurrentAnimation}");
+        Near("Ada faces +x", ada.Rotation.Y, Mathf.Pi / 2f);
+        NearV("Ada still at the old point", ada.Position, ExpAda);
+        mgr.Tick(2.5);
+        NearV("Ada halfway", ada.Position, ExpAdaHalfway);
+        NearV("Cleo halfway", cleo.Position, ExpCleoHalfway);
+        mgr.Tick(2.5);
+        NearV("Ada arrived", ada.Position, ExpAdaEnd);
+        Expect("Ada idles after arriving", !ada.Moving && ada.Player?.CurrentAnimation == "idle",
+               ada.Player?.CurrentAnimation ?? "no player");
+
+        var info = RestMismatch(source, ada);
+        mgr.QueueFree();
+        return $"figures {poll1} | poll2 figures={st.Figures} glb_figures={st.GlbFigures} placeholders={st.Placeholders} "
+               + $"model_loads={st.ModelLoads} | {info}";
+    }
+
+    /// <summary>
+    /// Evaluate the clip once and read the skeleton back: a moving bone holds
+    /// the clip's key 0 verbatim, a bone Godot left without a track holds the
+    /// clip's node default (the restored constant), the hips are in place at
+    /// the scaled height.
+    /// </summary>
+    private static void CheckBinding(FigureManager mgr, Figure fig, string role)
+    {
+        var player = fig.Player ?? throw new InvalidOperationException("no AnimationPlayer");
+        var skel = fig.Skeleton ?? throw new InvalidOperationException("no skeleton");
+        var clip = mgr.Clips.ByRole[role]!;
+        Expect($"{role} playing", player.CurrentAnimation == role, player.CurrentAnimation);
+        player.Seek(0, true);
+
+        void SameRot(string bone, Quaternion want)
+        {
+            int i = skel.FindBone(bone);
+            Expect($"{bone} on skeleton", i >= 0, "missing");
+            var got = skel.GetBonePoseRotation(i);
+            Expect($"{role} {bone} rotation", got.IsEqualApprox(want) || got.IsEqualApprox(-want), $"{got} vs {want}");
+        }
+        string moving = "mixamorig_LeftUpLeg", constant = "mixamorig_LeftForeArm";
+        Expect("LeftUpLeg has a track", clip.RotationTracks.ContainsKey(moving), "no track");
+        Expect("LeftForeArm has none (constant in the file)", !clip.RotationTracks.ContainsKey(constant), "has a track");
+        SameRot(moving, clip.Anim.TrackGetKeyValue(clip.RotationTracks[moving], 0).AsQuaternion());
+        SameRot(constant, clip.RestRotations[Array.IndexOf(clip.Bones, constant)]);
+
+        int h = skel.FindBone("mixamorig_Hips");
+        var rest = skel.GetBoneRest(h).Origin;
+        var pose = skel.GetBonePosePosition(h);
+        double refY = mgr.Clips.StandingHipsY(clip);
+        double y0 = Math.Abs(clip.Anim.TrackGetKeyValue(clip.PositionTracks["mixamorig_Hips"], 0).AsVector3().Y);
+        Near("hips x in place", pose.X, rest.X, 1e-5f);
+        Near("hips z in place", pose.Z, rest.Z, 1e-5f);
+        Near("hips y = y0 · rest/ref", pose.Y, (float)(y0 * rest.Y / refY), 1e-5f);
+    }
+
+    /// <summary>
+    /// Information only (no expectation): how far the character's bind pose sits
+    /// from the reference rig the clips were authored on, bone by bone (local
+    /// rest rotations) — the error the spike's verbatim copy carries and the
+    /// browser's rest correction removes.
+    /// </summary>
+    private static string RestMismatch(FixtureSource source, Figure fig)
+    {
+        var refRoot = new FbxDocument();
+        var state = new FbxState();
+        if (refRoot.AppendFromFile(source.Resolve("repo:shared/models/rig/reference.fbx"), state) != Error.Ok)
+            return "rest_mismatch=n/a";
+        var scene = refRoot.GenerateScene(state);
+        try
+        {
+            var rs = ClipLibrary.Find<Skeleton3D>(scene)!;
+            var ts = fig.Skeleton!;
+            double sum = 0, max = 0; int n = 0; string worst = "";
+            for (int i = 0; i < ts.GetBoneCount(); i++)
+            {
+                int r = rs.FindBone(ts.GetBoneName(i));
+                if (r < 0) continue;
+                var a = ts.GetBoneRest(i).Basis.GetRotationQuaternion();
+                var b = rs.GetBoneRest(r).Basis.GetRotationQuaternion();
+                double deg = Mathf.RadToDeg(a.AngleTo(b));
+                sum += deg; n++;
+                if (deg > max) { max = deg; worst = ts.GetBoneName(i); }
+            }
+            return $"rest_mismatch_deg mean={sum / Math.Max(n, 1):0.0} max={max:0.0} ({worst}) over {n} bones";
+        }
+        finally { scene.Free(); }
+    }
+
+    /// <summary>The far-view placement rule on its own: offmap, fogged route, huddle rows, ring, yaw.</summary>
+    private static void CheckPlacementRule()
+    {
+        var house = new MapPlace("h", 10, 20, 90, 10, IsBuilding: true);
+        var meadow = new MapPlace("m", -5, 5, 0, 30, IsBuilding: false);
+        var placed = new Dictionary<string, MapPlace> { ["h"] = house, ["m"] = meadow };
+        var rows = new List<CharacterRow>
+        {
+            new("Zed", "h", null, null, null, null, null),
+            new("Amy", "h", null, null, null, null, null),
+            new("Mo", "m", 1, 1, null, null, null),
+            new("Nob", "", null, null, null, null, null),                                  // offmap
+            new("Fog", "", 7, 8, null, null, new TravelInfo(null, null)),                // withheld route → pos
+            new("Dot", "", null, null, null, null, new TravelInfo(new() { (1, 1) }, 0)),  // degenerate, no pos → offmap
+            new("Run", "", 0, 0, null, null, new TravelInfo(new() { (0, 0), (3, 4) }, 99)), // clamped to the end
+        };
+        var spots = FigurePlacement.Resolve(rows, placed);
+        Expect("offmap", !spots.ContainsKey("Nob") && !spots.ContainsKey("Dot"), string.Join(",", spots.Keys));
+        Expect("fog → pos", spots["Fog"] is { X: 7, Z: 8, Rule: "journey-pos" }, $"{spots["Fog"]}");
+        Expect("route end", spots["Run"] is { X: 3, Z: 4, Rule: "journey" }, $"{spots["Run"]}");
+        // House, yaw 90°: Amy (i=0 of 2) local (−1.15, 3.6) → world (10 + 3.6, 20 + 1.15); Zed (1.15, 3.6) → (13.6, 18.85).
+        NearXZ("Amy huddle", spots["Amy"], 13.6, 21.15);
+        NearXZ("Zed huddle", spots["Zed"], 13.6, 18.85);
+        // Meadow ring, one character, angle 0 → (−5 + 2.6, 5); its own pos is ignored (tile wins).
+        NearXZ("Mo ring", spots["Mo"], -2.4, 5);
+    }
+
+    private static JsonDocument Load(string file)
+        => JsonDocument.Parse(File.ReadAllBytes(Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures", file)));
+
+    private static void NearV(string what, Vector3 got, Vector3 want, float eps = 1e-3f)
+        => Expect(what, got.DistanceTo(want) <= eps, $"got {got}, expected {want}");
+
+    private static void NearXZ(string what, FigureSpot got, double x, double z)
+        => Expect(what, Math.Abs(got.X - x) < 1e-6 && Math.Abs(got.Z - z) < 1e-6, $"got ({got.X}, {got.Z}), expected ({x}, {z})");
 
     private static float PlateArea(string dir)
     {

@@ -12,9 +12,18 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `worldmap.json` | `GET /play/worldmap` (§ A1.3) — location rows with `pos_x/pos_z/yaw_deg` |
 | `locations.json` | `GET /world/locations?view=3d` — ids/names, **no position** (like the server) |
 | `scene_<id>.json` | `GET /play/locations/<id>/scene` (§ B1); no file = 404 |
-| `urls.json` | payload URL → GLB file |
+| `urls.json` | payload URL → file in this directory, or `repo:<path>` = a tracked repository file read in place |
 | `building_original.glb` | a real stored location model (demo world, see provenance) |
 | `building_meshopt.glb` | the server's Meshopt delivery copy of exactly that file |
+| `model3d.json` | `GET /characters/<name>/model3d` (§ A7) per character name; `null` = 404 |
+| `animation_clips.json` | `GET /assets/animation-clips` (§ A7/§ A8) |
+| `worldmap_poll2.json` | the second world-map poll of the figure check (characters only) |
+
+Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
+for the repository root above this directory, then above the working directory):
+`shared/models/clips/idle.fbx`, `shared/models/clips/walk.fbx` (tracked clip library),
+`worlds/demo/characters/Minerva McGonagall/model3d/aa1f6d51558d.glb` (tracked demo-world
+character model) and, for an information line only, `shared/models/rig/reference.fbx`.
 
 The directory carries a `.gdignore`, so the Godot editor never imports the GLBs
 (the compressed one would fail: `EXT_meshopt_compression` is required).
@@ -128,3 +137,98 @@ far view: the model replaces the shell).
   **skipped +1**.
 
 primitives = 1 + 6 + 2 = **9**; skipped = 1 (prop) + 1 + 1 + 1 = **4**.
+
+## Figures (Task S1b)
+
+### The three characters of `worldmap.json`
+
+| name | row | model3d answer | rule |
+|---|---|---|---|
+| Ada Wren | `location_id ""`, `pos` (−50, 30), `height_cm` 160, `model_sig` `ada-1` | GLB, rig `mixamo`, not `normalized` | **free** (wilderness) |
+| Bram Holt | `location_id` `loc-house`, `room_id` set, `pos` (63, 127), `height_cm` 180 | `format` `fbx`, rig `generic`, `texture_url` | **tile** (far-view huddle) |
+| Cleo Marsh | `location_id ""`, `travel` with waypoints, no `height_cm`, no `model_sig` | `null` = 404 | **journey** |
+
+→ **figures = 3, glb_figures = 1, placeholders = 2** (FBX → capsule, 404 → capsule).
+The FBX file is never downloaded (the check asserts no byte request for Bram).
+
+**Ada** stands on her own point (no placed location): (−50, 30). Tile (−1, 0) is not
+loaded → overview: fx = (−50+256)/256 = 0.8046875 (i = 0, tx = 0.8046875),
+fz = (30+256)/256 = 1.1171875 (j = 1, tz = 0.1171875);
+north = 0·(1−tx) + 4·tx = 3.21875, south = 0 + 8·tx = 6.4375,
+y = 3.21875·0.8828125 + 6.4375·0.1171875 = **3.595947265625** → (−50, 3.595947265625, 30).
+
+**Bram** is in `loc-house` (placed, no `map3d.area_model` → building), so the browser's
+far view puts him in the row in front of the building, whatever `pos`/`room_id` say:
+one character of one → x = (0 − 0)·2.3 = 0, z = width·0.36 with width = bounding box of
+the boundary ±6 = 12 → z = 4.32; yaw 0 → world (64 + 0, 128 + 4.32) = (64, 132.32).
+That lies in the loaded tile (0, 0): h = 2·(64/64) + 132.32/64 = 2 + 2.0675 = **4.0675**
+(the tile is linear in i and j, so bilinear = linear) → (64, 4.0675, 132.32).
+
+**Cleo** walks the polyline (300, −200) → (300, −100) → (200, −100) (100 m + 100 m);
+`progress_m` 137 = 100 + 37 → 37 m along the second leg: (300 − 37, −100) = (263, −100).
+Overview: fx = (263+256)/256 > 2 → clamped to 2 (i = 1, tx = 1); fz = 156/256 = 0.609375
+(j = 0, tz = 0.609375); north = heights[0][2] = 0, south = heights[1][2] = 8;
+y = 8·0.609375 = **4.875** → (263, 4.875, −100).
+
+**Heights.** Ada's GLB is 1.74 m tall in the file (glTF POSITION max y 1.7400002,
+min y −1.8e−7; Blender's `measured.dims_m` z = 1.74), not normalised in the fixture
+answer → scale = 1.60 / 1.74 → measured body height **1.60**. (The real server marks this
+file `normalized` — its sidecar lists the `normalize` step — and would draw it at 1.74;
+the fixture says `false` to exercise the scale rule.) Bram's capsule = 180 cm → **1.80**,
+Cleo has no `height_cm` → the browser default **1.70**.
+
+### Clips
+
+`locomotion` maps `idle → "Stand-Relaxed"` (lower-cased: `stand-relaxed`), `walk → walk`,
+`run → ""` (keeps `run`). The list carries decoys that a wrong pick would hit (their URLs
+are not in `urls.json`, so a wrong pick fails the check with a 404): a pair half
+(`role: a`) and a `female`-set entry of `stand-relaxed`, a plain `idle` (the unmapped
+role name), a `female` walk. The neutral solo `stand-relaxed` maps to
+`shared/models/clips/idle.fbx`, the neutral `walk` to `shared/models/clips/walk.fbx`
+→ **clips_loaded = 2**, each URL downloaded exactly once over both polls.
+
+**Track list of the clip files** (from the FBX connection table, read with a 60-line
+binary-FBX reader outside the repo — not from Godot): both files hold 70 Model nodes
+(Armature + 69 LimbNodes of the reference rig) and 53 AnimationCurveNodes with curves:
+`Lcl Rotation` on 52 bones — Hips, Spine, Spine1, Spine2, Neck, Head, and per side
+Shoulder, Arm, ForeArm, Hand, UpLeg, Leg, Foot, ToeBase (16) and Thumb/Index/Middle/Ring/
+Pinky 1–3 (30) — and `Lcl Translation` on Hips only. Not keyed: HeadTop_End, LeftEye, RightEye,
+LeftRibbon1, LeftRibbon2, both Toe_End and the ten `…4` finger/thumb tips (17 bones).
+
+**Ada's skeleton** (glTF `skins[0].joints`): 52 joints — exactly those 52 keyed bones
+(`mixamorig:` names; the 17 unkeyed reference bones are absent).
+
+Bound per clip = 52 rotation tracks + 1 hips position = **53**; idle + walk on the one
+GLB figure → **bound_tracks = 106**, unbound_clips = 0.
+
+Godot's FBX importer emits only the curves that move (idle 40 rotation tracks, walk 20 —
+the check log shows them) and keeps the constant ones as the node default; the retarget
+writes those back as one-key tracks, which is why the count is the file's 53 and not
+41/21. The check proves both kinds bind: after one evaluation Ada's `LeftUpLeg` (a moving
+track) holds the idle clip's key 0 and her `LeftForeArm` (no Godot track — constant in
+the file) the clip's node default; both differ from her own rest, so an unbound track
+would fail.
+
+### Second poll (`worldmap_poll2.json`)
+
+Bram is gone → **figures = 2**. Ada moves to (−40, 30) and her `model_sig` becomes
+`ada-2` → `model3d` is asked again (2 requests), the GLB URL is unchanged → no second
+download (template cache), clips not downloaded again. Cleo has no `model_sig` (absent
+both times) → not asked again. Cleo's `progress_m` 144 → (300 − 44, −100) = (256, −100).
+
+Lerp over the poll interval (5 s): Ada plans 10 m / 5 s = 2 m/s > 0.2 → **walk**, facing +x
+(rotation.y = atan2(10, 0) = π/2). After 2.5 s: Ada (−45, 30), y: fx = 211/256 =
+0.82421875, north = 3.296875, south = 6.59375, y = 3.296875·0.8828125 + 6.59375·0.1171875
+= **3.68316650390625**; Cleo (259.5, −100), y = 4.875 (same clamped cell). After 5 s: Ada
+at (−40, 30), fx = 216/256 = 0.84375, north = 3.375, south = 6.75, y = 2.9794921875 +
+0.791015625 = **3.7705078125**, arrived → **idle**.
+
+### Placement rule on its own (`CheckPlacementRule`)
+
+A building `h` at (10, 20), yaw 90°, width 10 with Amy and Zed (sorted: Amy i = 0,
+Zed i = 1 of 2): local x = ∓1.15, z = 3.6; world = (10 + lz·sin 90°, 20 − lx·sin 90°)
+→ Amy (13.6, 21.15), Zed (13.6, 18.85). An area place `m` at (−5, 5) with one character:
+ring angle 0 → (−2.4, 5) (its own `pos` is ignored — the tile wins). A traveller with a
+withheld route (`waypoints` null) but a `pos` → its pos; a one-point route without `pos`
+and a row with neither location nor `pos` → off the map; `progress_m` 99 on a 5 m line →
+the end point (3, 4).

@@ -1,0 +1,19 @@
+{
+  "clips": [
+    { "kind": "stand-relaxed", "role": "a", "set": "", "name": "stand-relaxed__a", "filename": "stand-relaxed__a.fbx",
+      "url": "/assets/animation-clips/stand-relaxed__a.fbx?v=fixturepair00001", "loop": true },
+    { "kind": "idle", "role": "", "set": "", "name": "idle", "filename": "idle.fbx",
+      "url": "/assets/animation-clips/idle.fbx?v=fixtureidle00001", "loop": true },
+    { "kind": "stand-relaxed", "role": "", "set": "female", "name": "stand-relaxed", "filename": "stand-relaxed.fbx",
+      "url": "/assets/animation-clips/female/stand-relaxed.fbx?v=fixturefemale001", "loop": true },
+    { "kind": "Stand-Relaxed", "role": "", "set": "", "name": "stand-relaxed", "filename": "stand-relaxed.fbx",
+      "url": "/assets/animation-clips/stand-relaxed.fbx?v=fixturestand0001", "loop": true },
+    { "kind": "walk", "role": "", "set": "female", "name": "walk", "filename": "walk.fbx",
+      "url": "/assets/animation-clips/female/walk.fbx?v=fixturefemale002" },
+    { "kind": "walk", "role": "", "set": "", "name": "walk", "filename": "walk.fbx",
+      "url": "/assets/animation-clips/walk.fbx?v=fixturewalk00001" }
+  ],
+  "kinds": ["idle", "stand-relaxed", "walk"],
+  "locomotion": { "walk": "walk", "run": "", "idle": "Stand-Relaxed" },
+  "transitions": []
+}

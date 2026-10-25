@@ -8,6 +8,8 @@ namespace AnimaNative.Ui;
 ///   mouse drag (left or right button)  orbit around the target
 ///   wheel                              distance to the target
 ///   W/A/S/D                            move the target over the ground plane
+///                                      (and stop following a figure)
+/// <see cref="Follow"/> keeps the target on a node (the F key's figure).
 /// Lens like the browser engine (client3d/src/scene/engine.ts): vertical FOV
 /// 45°, near 0.2 m, far 800 m.
 /// </summary>
@@ -21,6 +23,10 @@ public partial class FlyCamera : Camera3D
     public float Pitch { get; set; } = 0.55f;
 
     private bool _dragging;
+
+    /// <summary>When set, the target rides on this node (+<see cref="FollowHeight"/>) until W/A/S/D is used.</summary>
+    public Node3D? Follow { get; set; }
+    public float FollowHeight { get; set; } = 1.2f;
 
     public FlyCamera()
     {
@@ -66,6 +72,12 @@ public partial class FlyCamera : Camera3D
         if (Input.IsKeyPressed(Key.S)) move.Y += 1;
         if (Input.IsKeyPressed(Key.A)) move.X -= 1;
         if (Input.IsKeyPressed(Key.D)) move.X += 1;
+        if (move != Vector2.Zero) Follow = null;
+        if (Follow is not null)
+        {
+            if (IsInstanceValid(Follow) && Follow.IsInsideTree()) Target = Follow.GlobalPosition + new Vector3(0, FollowHeight, 0);
+            else Follow = null;
+        }
         if (move != Vector2.Zero)
         {
             // Ground-plane movement relative to the view; faster when far out.

@@ -1,3 +1,6 @@
 {
-  "/play/locations/loc-house/model?tier=full": "building_meshopt.glb"
+  "/play/locations/loc-house/model?tier=full": "building_meshopt.glb",
+  "/characters/Ada%20Wren/model3d/file?v=fixtureada000001": "repo:worlds/demo/characters/Minerva McGonagall/model3d/aa1f6d51558d.glb",
+  "/assets/animation-clips/stand-relaxed.fbx?v=fixturestand0001": "repo:shared/models/clips/idle.fbx",
+  "/assets/animation-clips/walk.fbx?v=fixturewalk00001": "repo:shared/models/clips/walk.fbx"
 }
