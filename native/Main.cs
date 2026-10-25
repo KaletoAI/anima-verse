@@ -13,6 +13,7 @@ using AnimaNative.Gltf;
 using AnimaNative.Hud;
 using AnimaNative.Overview;
 using AnimaNative.Scatter;
+using AnimaNative.Sync;
 using AnimaNative.Ui;
 using AnimaNative.World;
 using Godot;
@@ -45,7 +46,33 @@ public partial class Main : Node3D
     private readonly CancellationTokenSource _stop = new();
     private HudOverlay? _hud;
     private string? _selected;
-    private int _selectedPoll = -1;
+    // ---- sync (Task 10): the browser's polling cadence, the push stream, the boot stages ----
+    private const string WorldmapKey = "c3d-worldmap";
+    /// <summary>The clock and timers of the sync layer, pumped every frame (<see cref="_Process"/>).</summary>
+    private readonly TimerQueue _timers = new(() => Time.GetTicksMsec());
+    private double _nextTickMs = double.PositiveInfinity;
+    private SyncStream? _hub;
+    private PollScheduler? _poll;
+    private IDisposable? _pollSub;
+    private BootTracker? _boot;
+    private readonly ConnectionState _conn = new();
+    private LocationsCache? _locCache;
+    private LocationsSync? _locSync;
+    private object? _locTimer;
+    /// <summary>The role of the logged-in user (<c>POST /auth/login</c> → <c>user.role</c>); "" offline.</summary>
+    private string _role = "";
+    private bool IsAdmin => _role == "admin";
+    /// <summary>The admin's "show all locations" view (<c>/play/worldmap?all=1</c>), live like main.ts <c>applyShowAll</c>.</summary>
+    private bool _showAll;
+    /// <summary>main.ts <c>viewRev</c>: a poll fetched under an older view is dropped.</summary>
+    private int _viewRev;
+    private bool _viewSwitchBusy, _revealBusy;
+    private ScatterPrefs _scatterPrefs = ScatterPrefs.Defaults;
+    /// <summary>The login screen while it is the loading screen (null once it faded, and offline).</summary>
+    private LoginScreen? _loading;
+    private CanvasLayer? _loadingLayer;
+    /// <summary>A line for the NEXT login screen (survives the scene reload): why the session ended.</summary>
+    private static string? _loginNotice;
     // ---- overview picking (Task 9) ----
     private LocationPicking? _picking;
     private EventPins? _pins;
@@ -224,25 +251,52 @@ public partial class Main : Node3D
         AddChild(layer);
         var login = new LoginScreen().Setup(launch.Server, launch.User);
         layer.AddChild(login);
+        if (_loginNotice is { } notice)
+        {
+            login.ShowStatus(notice, true);
+            _loginNotice = null;
+        }
+        login.Back = () => _ = BackToTitleAsync();
         login.Submit = async (server, user, password) =>
         {
             _api?.Dispose();
             _api = new AnimaApi(server);
-            using (await _api.LoginAsync(user, password)) { }
+            using (var answer = await _api.LoginAsync(user, password)) _role = RoleOf(answer.RootElement);
             // Remembered only after the server accepted them; the password is not part of the file.
             LauncherStore.Update(s => s with { Server = server, User = user });
-            Log($"logged in as '{user}' on {server} (server and user remembered)");
+            Log($"logged in as '{user}' (role '{_role}') on {server} (server and user remembered)");
             _source = _api;
+            // api.ts `auth:required`: any later 401 ends this session on the client too.
+            _api.Unauthorized += () => Callable.From(OnUnauthorized).CallDeferred();
             // ONE login: the HUD's browser gets this very session (HudOverlay.Start).
             _hud?.Start(_api.BaseUri, _api.SessionToken());
-            layer.QueueFree();
+            // The login screen stays as the loading screen until the world is visible (TitleScreen).
+            _loading = login;
+            _loadingLayer = layer;
             await LoadWorldAsync();
         };
     }
 
+    /// <summary><c>user.role</c> of the login answer (app/routes/auth.py), "" when absent.</summary>
+    private static string RoleOf(JsonElement answer)
+        => answer.ValueKind == JsonValueKind.Object && answer.TryGetProperty("user", out var u)
+           && u.ValueKind == JsonValueKind.Object ? Str(u, "role") ?? "" : "";
+
+    /// <summary>
+    /// The start, reported in the browser's six boot stages (game/boot.ts) — native points:
+    ///   world   — heightfield + worldmap + <c>/world/locations?view=3d</c> are in (retried with the title's note);
+    ///   scenes  — every scene recipe of the start ring is fetched;
+    ///   tiles   — the start ring's locations and the world props stand;
+    ///   visible — the first frame after the world is in the tree and the camera framed it (note "characters");
+    ///   figures — the first map's figures and the model loads they started are through;
+    ///   arrival — the boot is done (no embodied take-over in this client yet, so nothing more to wait for).
+    /// </summary>
     private async Task LoadWorldAsync()
     {
         SetStatus("Loading world…");
+        var boot = _boot = new BootTracker(() => Time.GetTicksMsec());
+        boot.Changed += PublishBoot;
+        PublishBoot();
         try
         {
             MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
@@ -253,7 +307,27 @@ public partial class Main : Node3D
                 PlainGround = _options!.PlainGround,
                 NoWater = _options.NoWater,
             };
-            var stats = await builder.BuildAsync(world, _options!.Goto);
+            // The details go through the conditional cache from the start, so the first re-sync is a 304.
+            var source = _source!;
+            var api = _api;
+            _locCache = new LocationsCache(api is not null
+                ? api.GetLocations3dConditionalAsync
+                : async _ =>
+                {
+                    using var doc = await source.GetLocations3dAsync();
+                    return new ConditionalAnswer(200, "", doc.RootElement.Clone());
+                });
+            var cache = _locCache;
+            var hooks = new WorldBuilder.BuildHooks
+            {
+                Stage = boot.Report,
+                Bootstrap = fetch => BootRetry.RunAsync(fetch, AnimaApi.IsAuthError,
+                    seconds => boot.SetNote(BootNote.Retry(seconds)), () => boot.SetNote(null),
+                    ms => Task.Delay(TimeSpan.FromMilliseconds(ms), _stop.Token),
+                    (line, e) => Log($"boot: world data {line}: {e.Message}")),
+                Locations3d = async () => (await cache.GetAsync()).Root,
+            };
+            var stats = await builder.BuildAsync(world, _options!.Goto, hooks);
             Anchor = stats.Anchor;
             _interactive = !_options.Bench && _options.Offline is null;
             _picking = new LocationPicking(builder);
@@ -291,8 +365,14 @@ public partial class Main : Node3D
                 var cam = _camera!;
                 _scatter = await ScatterLayer.CreateAsync(_source!, builder.Height!, builder.FirstMap!.Value,
                                                           () => cam.Target, Log);
+                if (_scatterPrefs != ScatterPrefs.Defaults) _scatter.Field.SetLod(ScatterPrefs.LodCfgOf(_scatterPrefs));
                 world.AddChild(_scatter);
             }
+
+            // visible: the world stands and the camera looks at it — the next drawn frame shows it.
+            boot.SetNote(BootNote.Characters);
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+            boot.Report("visible");
 
             _figures = new FigureManager(_source!, builder.Height!, Log, strict: false);
             world.AddChild(_figures);
@@ -302,22 +382,28 @@ public partial class Main : Node3D
                 if (_pins is not null && IsInstanceValid(_pins) && _figures.LatestMap is { } polled) _pins.Update(polled, PlaceOf);
             };
             await _figures.InitAsync();
-            _ = _figures.PollLoopAsync(_stop.Token);
-            _hud?.SetBoot(HudProtocol.BootReady());
+            // The boot's own map places the first figures (main.ts npcs.update(firstMap)); the poll takes over.
+            _figures.ApplyPolled(builder.FirstMap!.Value);
+            StartSync();
             var timer = new Godot.Timer { WaitTime = 1.0, Autostart = true };
             AddChild(timer);
             timer.Timeout += () =>
             {
-                PublishHudState();
                 SetStatus($"{worldStatus}, {FigureLine()}"
                           + (_scatter is not null ? $"\n{_scatter.Summary()}" : "")
+                          + $"\n{SyncLine()}"
                           + (_hud?.Active == true
                               ? "   —   " + CameraHint + ", click a figure: plaque, F/Enter: chat, M: menu"
                               : "   —   " + CameraHint));
             };
+            await _figures.FirstPollDone;
+            boot.Report("figures");
+            boot.SetNote(null);
+            boot.Report("arrival");
+            Log("boot stages: " + boot.Describe());
+
             if (_options.Offline is not null && !_options.Bench)
             {
-                await _figures.FirstPollDone;
                 if (_scatter is not null)
                 {
                     await ScatterSettled(_scatter);
@@ -336,18 +422,295 @@ public partial class Main : Node3D
             }
             if (_options.Bench)
             {
-                await _figures.FirstPollDone;
                 if (_scatter is not null) await ScatterSettled(_scatter);
                 StartBench(builder);
             }
         }
         catch (Exception e)
         {
-            if (_stop.IsCancellationRequested) return;   // back to the title during the load: the scene is gone
+            if (_stop.IsCancellationRequested || _leaving) return;   // back to the title / a lost session: the scene is gone
+            if (AnimaApi.IsAuthError(e)) return;   // the session died: OnUnauthorized brings the login back
             GD.PrintErr($"[native] world load failed: {e}");
             SetStatus("World load failed: " + e.Message);
+            boot.SetNote(BootNote.Failed);
             if ((_options!.Bench && _options.QuitAfterBench) || _options.Offline is not null) GetTree().Quit(1);
         }
+    }
+
+    // ---- sync: the browser's polling cadence and push stream (Task 10) ------------------------------------
+
+    /// <summary>
+    /// The world map poll of main.ts: ONE subscription <c>c3d-worldmap</c> with the browser's budget
+    /// (<see cref="PollSpec.Worldmap3d"/>: 3 s, 6 s while the push stream is connected, at least 3 s apart, backoff on
+    /// failures) on <see cref="PollScheduler"/>; online the push stream <c>/events/sync</c> (<see cref="SyncStream"/>)
+    /// wakes it early on <c>presence</c>/<c>world</c> and makes a resync drop what was in flight. The location details
+    /// re-sync every 120 s and whenever a poll names another revision.
+    /// </summary>
+    private void StartSync()
+    {
+        if (_api is { } api)
+        {
+            _hub = new SyncStream(url => new HttpEventSource(api.OpenEventStreamAsync, url, Log), _timers);
+            var hub = _hub;
+            bool wasConnected = false;
+            int seenGen = 0;
+            hub.OnState(() =>
+            {
+                if (hub.Connected == wasConnected && hub.Generation == seenGen) return;
+                wasConnected = hub.Connected;
+                seenGen = hub.Generation;
+                Log(hub.Describe());
+            });
+        }
+        _poll = new PollScheduler(_timers, _hub);
+        _nextTickMs = Time.GetTicksMsec() + PollSchedule.TickMs;
+        _pollSub = _poll.Subscribe<PolledMap>(WorldmapKey, FetchWorldMapAsync, PollSpec.Worldmap3d, OnWorldMap);
+        if (_locCache?.Cached is { } first)
+        {
+            _locSync = new LocationsSync(_locCache, l =>
+            {
+                _builder?.TakeDetails(l.Root);
+                Log($"locations re-synced (ETag {l.Etag})");
+            });
+            _locSync.Seed(first);
+            _ = _locSync.SyncAsync();
+            ArmLocationsResync();
+        }
+    }
+
+    private void ArmLocationsResync()
+    {
+        _locTimer = _timers.SetTimeout(() =>
+        {
+            if (_stop.IsCancellationRequested || _locSync is null) return;
+            _ = _locSync.SyncAsync();
+            ArmLocationsResync();
+        }, LocationsSync.ResyncMs);
+    }
+
+    /// <summary>Back to the title, a lost session, the scene going: no poll, no stream, no timer survives.</summary>
+    private void StopSync()
+    {
+        _pollSub?.Dispose();
+        _pollSub = null;
+        _poll = null;
+        _hub?.Stop();
+        _hub = null;
+        _timers.ClearTimeout(_locTimer);
+        _locTimer = null;
+        _locSync = null;
+        _nextTickMs = double.PositiveInfinity;
+    }
+
+    /// <summary>A polled map with the view revision it was asked under (main.ts <c>PolledMap</c>).</summary>
+    private sealed record PolledMap(JsonElement Map, int ViewRev);
+
+    private async Task<PolledMap> FetchWorldMapAsync()
+    {
+        int rev = _viewRev;
+        using var doc = _api is { } api ? await api.GetWorldMapAsync(_showAll) : await _source!.GetWorldMapAsync();
+        return new PolledMap(doc.RootElement.Clone(), rev);
+    }
+
+    /// <summary>The poll's callback: an error that is not a lost session marks the connection lost.</summary>
+    private void OnWorldMap(PolledMap? polled, Exception? error)
+    {
+        if (_stop.IsCancellationRequested || _leaving) return;
+        if (error is not null)
+        {
+            if (AnimaApi.IsAuthError(error)) return;   // the login comes back (OnUnauthorized)
+            Log($"worldmap poll failed: {error.Message} — next in {(_poll?.IntervalMs(WorldmapKey) ?? 0) / 1000:0} s");
+            _figures?.MarkPollFailed();
+            if (_conn.Lost()) _hud?.SetState("connection", ConnectionState.LostValue);
+            return;
+        }
+        if (polled is not null) ApplyWorldMap(polled);
+    }
+
+    /// <summary>
+    /// main.ts <c>applyWorldMap</c>, the parts this client has: drop a map of an older view; re-sync the details
+    /// when the map names another revision; the figures, the pins and the selection follow the map; connection and
+    /// clock only on change; a placed location the world has not taken in forces a details re-sync and is revealed.
+    /// </summary>
+    private void ApplyWorldMap(PolledMap p)
+    {
+        if (p.ViewRev != _viewRev || _viewSwitchBusy || _figures is null) return;
+        var map = p.Map;
+        try
+        {
+            if (_locSync is not null && _locSync.Differs(LocationsSync.MapRev(map))) _ = _locSync.SyncAsync();
+            _figures.PollSeconds = (_poll?.IntervalMs(WorldmapKey) ?? PollSpec.Worldmap3d.IntervalMs) / 1000.0;
+            _figures.ApplyPolled(map);
+            var clock = ConnectionState.ClockOf(map);
+            if (_conn.Ok(clock))
+            {
+                _hud?.SetState("connection", ConnectionState.OkValue);
+                _hud?.SetState("clock", clock);
+            }
+            if (_selected is not null) Select(_selected);   // refreshSelection(map)
+            if (_interactive && _builder is not null && _builder.FreshOf(map).Count > 0)
+            {
+                // Discovery needs details even when the endpoint revision has not changed.
+                _ = _locSync?.SyncAsync(force: true);
+                _ = RevealAsync(map);
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"worldmap apply failed: {e.Message}");
+            if (!AnimaApi.IsAuthError(e) && _conn.Lost()) _hud?.SetState("connection", ConnectionState.LostValue);
+        }
+    }
+
+    /// <summary><c>revealLocations(map)</c>: one at a time; a run of an older view mounts nothing.</summary>
+    private async Task<int> RevealAsync(JsonElement map)
+    {
+        if (_revealBusy || _builder is null) return 0;
+        _revealBusy = true;
+        int rev = _viewRev;
+        try
+        {
+            int added = await _builder.RevealAsync(map, () => rev == _viewRev && !_stop.IsCancellationRequested);
+            if (added > 0) _placeRows = null;
+            return added;
+        }
+        catch (Exception e)
+        {
+            Log($"reveal failed: {e.Message}");
+            return 0;
+        }
+        finally
+        {
+            _revealBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// main.ts <c>applyShowAll(on)</c> — the admin's "show all locations", applied live: the flag and the view
+    /// revision move BEFORE the request (a poll in flight of the old view is dropped), the other view's map is
+    /// fetched and the world is reconciled against it: what it no longer carries goes (the avatar's own place
+    /// stays), what it adds is revealed. A failed request rolls the flag back and says so in a toast.
+    /// </summary>
+    private async Task ApplyShowAllAsync(bool on)
+    {
+        if (!IsAdmin || on == _showAll || _viewSwitchBusy || _api is null || _builder is null || _figures is null) return;
+        _viewSwitchBusy = true;
+        try
+        {
+            _showAll = on;
+            _viewRev++;
+            JsonElement map;
+            try
+            {
+                using var doc = await _api.GetWorldMapAsync(on);
+                map = doc.RootElement.Clone();
+            }
+            catch (Exception e)
+            {
+                _showAll = !on;
+                _viewRev++;
+                Log($"show all: switch failed: {e.Message}");
+                _hud?.SendUi("toast", JsonValue.Create("The view could not be switched."), JsonValue.Create(true));
+                return;
+            }
+            if (_stop.IsCancellationRequested) return;
+            _figures.ApplyPolled(map);
+            var dropped = _builder.DropVanished(map);
+            if (dropped.Count > 0)
+            {
+                if (_openView.OpenId is { } open && dropped.Contains(open)) CloseOpenLocation();
+                // A view switch closes information that may describe a removed place.
+                SetInfo(null);
+            }
+            _placeRows = null;
+            if (_selected is not null) Select(_selected);
+            int rev = _viewRev;
+            int added = await _builder.RevealAsync(map, () => rev == _viewRev && !_stop.IsCancellationRequested);
+            Log($"show all locations {(on ? "ON" : "off")}: {dropped.Count} dropped, {added} revealed");
+        }
+        catch (Exception e)
+        {
+            Log($"show all: switch failed: {e.Message}");
+            _hud?.SendUi("toast", JsonValue.Create("The view could not be switched."), JsonValue.Create(true));
+        }
+        finally
+        {
+            _viewSwitchBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// <c>applyScatterPrefs(prefs)</c> from the HUD's menu: checked again here (<see cref="ScatterPrefs.Check"/> — a
+    /// malformed message must not invert the band), then the scatter LOD of the standing scatter layer. The
+    /// undergrowth keeps its own fixed distances (ground.ts leaves it alone too); the world props' tiers are set
+    /// once at build in this client (no live prop LOD yet), so they are not touched.
+    /// </summary>
+    private void ApplyScatterPrefs(JsonArray args)
+    {
+        if (args.Count == 0 || args[0] is not JsonObject p)
+        {
+            Log("applyScatterPrefs: no prefs object — ignored");
+            return;
+        }
+        var check = ScatterPrefs.Check(HudUi.Num(p, "scatterNearM"), HudUi.Num(p, "scatterFarM"), HudUi.Num(p, "scatterCullM"));
+        if (check.Prefs is not { } prefs)
+        {
+            Log($"applyScatterPrefs refused ({check.Error}): {p.ToJsonString()}");
+            return;
+        }
+        _scatterPrefs = prefs;
+        _scatter?.Field.SetLod(ScatterPrefs.LodCfgOf(prefs));
+        Log($"scatter detail distances {prefs.ScatterNearM}/{prefs.ScatterFarM}/{prefs.ScatterCullM} m"
+            + (_scatter is null ? " (kept for a scatter layer; none is drawn without --scatter)" : " applied"));
+    }
+
+    /// <summary>The boot state → the HUD (<c>boot</c> message) and the loading screen; the screen fades at <c>visible</c>.</summary>
+    private void PublishBoot()
+    {
+        if (_boot is null) return;
+        _hud?.SetBoot(_boot.ToHud());
+        if (_loading is not { } screen || !IsInstanceValid(screen)) return;
+        var progress = _boot.Progress;
+        var note = _boot.Note;
+        bool failed = note?.Kind == "failed";
+        screen.ShowBoot(progress.Percent, BootTracker.StageText(progress.Label),
+                        note is null ? null : BootTracker.NoteText(note), failed);
+        if (!failed && _boot.Done.Contains("visible"))
+        {
+            var layer = _loadingLayer;
+            screen.FadeOut(0.9, () =>
+            {
+                if (layer is not null && IsInstanceValid(layer)) layer.QueueFree();
+                _loading = null;
+                _loadingLayer = null;
+            });
+        }
+    }
+
+    private string SyncLine()
+        => $"poll every {(_poll?.IntervalMs(WorldmapKey) ?? 0) / 1000:0} s ({_conn.Connection})"
+           + (_hub is not null ? $", {_hub.Describe()}" : ", no push stream")
+           + (_locSync is not null ? $", locations rev {_locSync.Rev}" : "")
+           + (_showAll ? ", SHOW ALL" : "");
+
+    /// <summary>
+    /// A request answered 401 (api.ts <c>auth:required</c>): back to the login screen like <see cref="BackToTitleAsync"/>,
+    /// but WITHOUT a logout call — the session is gone already; server and user stay prefilled (the launcher file).
+    /// </summary>
+    private void OnUnauthorized()
+    {
+        if (_leaving) return;
+        _leaving = true;
+        Log("session ended (HTTP 401) — back to the login screen, no logout call");
+        StopSync();
+        _stop.Cancel();
+        _hud?.Suspend();
+        _loginNotice = "Your session has ended — please log in again.";
+        _api?.ForgetCookies();
+        _api?.Dispose();
+        _api = null;
+        _source = null;
+        GetTree().ReloadCurrentScene();
     }
 
     /// <summary>
@@ -426,6 +789,7 @@ public partial class Main : Node3D
 
     public override void _ExitTree()
     {
+        StopSync();
         _stop.Cancel();
         _builder?.Models?.FreeAll();
         if (_hud is not null && IsInstanceValid(_hud)) _hud.Handlers.Clear();   // the overlay outlives this scene
@@ -451,6 +815,14 @@ public partial class Main : Node3D
         hud.Handlers["infoAction"] = args => InfoAction(Arg(args, 0), Arg(args, 1));
         hud.Handlers["setVolumes"] = _ => { };                                  // no audio in the spike
         hud.Handlers["backToTitle"] = args => { _ = BackToTitleAsync(); };
+        hud.Handlers["setShowAll"] = args =>
+        {
+            if (args.Count > 0 && args[0] is JsonValue v && v.TryGetValue<bool>(out var on)) _ = ApplyShowAllAsync(on);
+        };
+        hud.Handlers["applyScatterPrefs"] = ApplyScatterPrefs;
+        // The browser sets a marker that survives ONE page reload, so the next boot skips the title gate (a
+        // character take-over reloads the page). This client never reloads a page: there is nothing to mark.
+        hud.Handlers["markResume"] = _ => Log("markResume: acknowledged — the native client has no page reload to resume after");
         // Scene-owned fields the chat, plaque and menu read (minimum viable set).
         hud.SetState("mode", "overview");
         hud.SetState("connection", "ok");
@@ -458,19 +830,6 @@ public partial class Main : Node3D
         hud.SetState("selected", null);
         hud.SetState("openView", null);
         hud.SetState("info", null);
-    }
-
-    /// <summary>1 Hz: connection, game clock and the selected figure's fresh row (main.ts does this per poll).</summary>
-    private void PublishHudState()
-    {
-        if (_hud is null || _figures is null) return;
-        _hud.SetState("connection", _figures.LastPollFailed ? "lost" : "ok");
-        if (_figures.LatestMap is not { } map) return;
-        var clock = "";
-        if (map.TryGetProperty("game_time", out var gt) && gt.ValueKind == JsonValueKind.Object)
-            clock = Str(gt, "label_display") is { Length: > 0 } display ? display : Str(gt, "label") ?? "";
-        _hud.SetState("clock", clock);
-        if (_selected is not null && _figures.PollSerial != _selectedPoll) Select(_selected);
     }
 
     /// <summary>
@@ -495,7 +854,6 @@ public partial class Main : Node3D
                     ["isAvatar"] = Str(map, "avatar") == name,
                 };
                 _selected = name;
-                _selectedPoll = _figures.PollSerial;
                 break;
             }
         }
@@ -597,6 +955,15 @@ public partial class Main : Node3D
 
     public override void _Process(double delta)
     {
+        // The sync layer's clock: due timers (trailing polls, stream deadlines and retries, the 120-s location
+        // re-sync), then the poll core's 1-s tick.
+        _timers.Pump();
+        if (_poll is not null && Time.GetTicksMsec() >= _nextTickMs)
+        {
+            _nextTickMs += PollSchedule.TickMs;
+            if (_nextTickMs < Time.GetTicksMsec()) _nextTickMs = Time.GetTicksMsec() + PollSchedule.TickMs;
+            _poll.Tick();
+        }
         if (_hoverPending)
         {
             _hoverPending = false;
@@ -699,6 +1066,7 @@ public partial class Main : Node3D
         if (_leaving) return;
         _leaving = true;
         Log("back to title");
+        StopSync();
         _stop.Cancel();
         try
         {

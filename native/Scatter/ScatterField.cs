@@ -50,7 +50,10 @@ public partial class ScatterField : Node3D
     private readonly Action<string> _log;
     private TerrainPayload? _payload;
     private List<IReadOnlyList<P2>> _footprints = new();
-    private readonly ScatterLodCfg _cfg = ScatterLod.Defaults;
+    private ScatterLodCfg _cfg = ScatterLod.Defaults;
+
+    /// <summary>The detail distances in force (the player's, once the HUD sent them).</summary>
+    public ScatterLodCfg Lod => _cfg;
     private List<(int Cx, int Cz)> _cells = new();
     private string _cellSig = "";
     private double _anchorX, _anchorZ;
@@ -399,6 +402,20 @@ public partial class ScatterField : Node3D
         p.LowNode.Visible = p.BaseCount > 0;
         Upload(p.Low, p.LowBuf);
         MountUrl(p, p.LoUrl, false);
+    }
+
+    /// <summary>
+    /// <c>setScatterLod(cfg)</c> of client3d/src/scene/ground.ts: the player's detail distances. A new cull
+    /// distance is a new cell window (re-sampled when it changed); every placed instance is re-binned against the
+    /// camera of the last LOD pass at once, not on the next beat.
+    /// </summary>
+    public void SetLod(ScatterLodCfg cfg)
+    {
+        _cfg = cfg;
+        if (MoveWindow(_anchorX, _anchorZ) && _areas.Count > 0) RebuildScatter();
+        if (_lodCam is not { } cam) return;
+        foreach (var a in _areas)
+            foreach (var p in a.Props) BinProp(p, cam);
     }
 
     /// <summary>One LOD pass (<c>tickScatterLod</c>): the camera, its forward direction and lens.</summary>

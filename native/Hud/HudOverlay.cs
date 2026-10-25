@@ -42,7 +42,7 @@ public partial class HudOverlay : CanvasLayer
 
     /// <summary>Declared game actions that are background chatter of the HUD (logged once, no toast).</summary>
     private static readonly HashSet<string> QuietActions = new()
-        { "closeInfo", "speak", "stopSpeech", "markResume", "sayBubble", "applyAudioPrefs", "applyScatterPrefs", "setChatBox" };
+        { "closeInfo", "speak", "stopSpeech", "sayBubble", "applyAudioPrefs", "setChatBox" };
 
     public static HudOverlay? Instance { get; private set; }
 
@@ -297,6 +297,22 @@ public partial class HudOverlay : CanvasLayer
         if (await Task.WhenAny(_left.Task, Task.Delay(3000)) != _left.Task)
             Log("hud: leaving timed out after 3 s (the next login ends a session the browser still holds)");
         _phase = Phase.Idle;
+    }
+
+    /// <summary>
+    /// The session died (a 401): hide the HUD and stop its page — a blank page, NO script, so nothing asks the
+    /// server for a logout (the session is gone already) and the page's own polls stop answering with its own
+    /// login gate. The next <see cref="Start"/> hands a fresh session over as usual.
+    /// </summary>
+    public void Suspend()
+    {
+        _loaded = false;
+        _hello = false;
+        Ui.Reset();
+        _router.Reset();
+        if (_rect is not null) _rect.Visible = false;
+        _phase = Phase.Idle;
+        if (_cef is not null && _cef.HasBrowser) _cef.LoadUrl("about:blank");
     }
 
     // ---- scene → HUD ------------------------------------------------------------

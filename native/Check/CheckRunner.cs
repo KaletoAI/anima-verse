@@ -65,7 +65,8 @@ public static class CheckRunner
             var world = new Node3D { Name = "CheckWorld" };
             host.AddChild(world);
             var builder = new WorldBuilder(source, line => GD.Print("[check] " + line), strict: true);
-            var stats = await builder.BuildAsync(world, Goto);
+            var probe = new SyncCheck.BuildProbe();
+            var stats = await builder.BuildAsync(world, Goto, probe.Hooks(source));
 
             Expect("anchor", stats.Anchor.Position().DistanceTo(ExpectedAnchor) < 1e-4f, $"{stats.Anchor.Position()}");
             Expect("anchor location", stats.Anchor.LocationId == "loc-house", stats.Anchor.LocationId ?? "null");
@@ -124,10 +125,11 @@ public static class CheckRunner
             var launcher = LauncherCheck.Run();
             var overview = OverviewCheck.Run(host, builder.FirstMap!.Value, builder.Height!);
             var pick = await PickCheck.RunAsync(host, world, builder, dir);
+            var sync = await SyncCheck.RunAsync(source, probe, dir);
 
             GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {sync}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;
@@ -242,7 +244,7 @@ public static class CheckRunner
     /// </summary>
     private static async Task<string> CheckFigures(Node3D world, FixtureSource source, WorldHeight height)
     {
-        var mgr = new FigureManager(source, height, line => GD.Print("[check] " + line), strict: true) { AutoTick = false };
+        var mgr = new FigureManager(source, height, line => GD.Print("[check] " + line), strict: true) { AutoTick = false, PollSeconds = 5.0 };   // the README derivation lerps over 5 s
         world.AddChild(mgr);
         await mgr.InitAsync();
         Expect("idle role → mapped kind", mgr.Clips.KindOf("idle") == "stand-relaxed", mgr.Clips.KindOf("idle"));

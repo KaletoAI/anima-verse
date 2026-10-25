@@ -33,7 +33,8 @@ What it draws after login:
   dioramas), the outdoor rooms' primitives, the far-view shell of a place without
   a model, and the avatar's OPEN location with its interior (see "Scene content");
 - **world props** — the single props of `/play/worldmap` `world_props` (§ A9a);
-- **figures** — the characters of `/play/worldmap`, polled every 5 s, where the
+- **figures** — the characters of `/play/worldmap`, polled at the browser's cadence
+  (see "Polling, push stream, boot stages" below), where the
   browser's far view draws them (journey point along the route, the huddle in
   front of / around their location, or their free point in the wilderness), on
   the world ground; a moved figure lerps to its new point over the poll
@@ -138,10 +139,32 @@ only for a live session — only the server can drop CEF's HttpOnly cookie, and 
 anonymous logout is not a no-op on the server), CEF goes to `about:blank`, Godot
 logs out its own copy if it is still alive and empties its cookie container,
 and the scene is reloaded — like the browser's `location.reload()`, that frees
-the world, figures, scatter and timers; the worldmap poll ends with the
-cancelled token. Logging in again builds the world anew. A leave that cannot
+the world, figures, scatter and timers; the worldmap poll, the push stream and
+every sync timer stop first (`StopSync`). Logging in again builds the world anew. A leave that cannot
 reach the server still returns to the title; the next login's handoff ends a
 session CEF may still hold before it writes the new cookie.
+
+Polling, push stream, boot stages (Task 10) — the browser's, ported to `Core/Sync/`:
+
+- **World-map poll** (`c3d-worldmap`, `PollSpec.Worldmap3d`): a 1-s tick; every 3 s, every 6 s while the
+  push stream is connected, at least 3 s apart; a failure doubles the interval up to the 60-s cap (3, 6, 12,
+  24, 48, 60, 60 s), a success resets it; one request at a time. `GET /play/worldmap?all=1` while an admin
+  has "show all locations" on (applied live: dropped places go, added ones are built, a failure rolls back with
+  the toast "The view could not be switched.").
+- **Push stream** `GET /events/sync` (online): `presence`/`world` frames poll at once (respecting the 3 s); a
+  resync after the first drops what was in flight; 35 s deadline (+10 s sleep tolerance), retries 5 s doubling
+  to 60 s, `bye` stops it. One line `sync stream connected|connecting|waiting …` per change in the log.
+- **Locations** `GET /world/locations?view=3d` with `If-None-Match` (304 keeps the cache): re-synced every 120 s,
+  when a poll's `locations_rev` differs, and forced when a poll brings a place the world does not have yet
+  (which is then built).
+- **Connection**: a failed poll (not a 401) → HUD `connection: lost`, the next good one → `ok`; the clock is
+  sent only when it changes. **Any 401** → back to the login screen like "Back to title" but without a logout
+  call; server and user stay filled in, the screen says the session ended.
+- **Boot stages**: the login screen stays up as the loading screen (bar, stage in words, the retry/failed
+  line) and fades at `visible`; the HUD gets the same `boot` messages. Native points: world (boot data in,
+  retried 1, 2, 4, 8, 15 s), scenes (start-ring recipes fetched), tiles (start ring + world props built),
+  visible (next frame), figures (first map's figures + their models), arrival (immediately after; no
+  embodied take-over yet). `boot stages: world … ms, …` in the log.
 
 Arguments after `--` (no .env; all optional):
 
@@ -427,7 +450,8 @@ The browser HUD itself — `client3d/hud.html`, served by the Anima server at
   `openView`), and `ui` actions; it receives the HUD's ui state
   (`hitRects`, `typing`, `overlayOpen`, `menuOpen`) and game actions
   (`zoomTo`, `clearSelection`, `closeOpenView`, `setVolumes` (no-op),
-  `backToTitle`; the others are logged once, and a player-triggered one
+  `backToTitle`, `setShowAll` (admin only), `applyScatterPrefs`, `markResume`
+  (acknowledged: no page reload exists natively); the others are logged once, and a player-triggered one
   answers with a toast "Not available in the native client yet").
 - **Input**: a mouse event goes to CEF over a HUD surface (`hitRects`) or
   anywhere while an overlay is open, otherwise to the camera; the side that
@@ -487,13 +511,13 @@ works the same way.
 |---|---|
 | `Main.cs`, `Main.tscn` | entry scene: login → world build → camera → (`--bench`) the drive; `--check`/`--check-bench` dispatch |
 | `Cli.cs` | command-line parameters |
-| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke) |
+| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke), `Sync/` (Task 10: `PollScheduler` = pollCore.ts, `SyncStream` = syncHub.ts + `HttpEventSource`/`SseParser` for `/events/sync`, `BootTracker` + `BootRetry` = game/boot.ts + `retryBoot`, `LocationsCache`/`LocationsSync` = the ETag'd `/world/locations?view=3d`, `ConnectionState`, the frame-pumped `TimerQueue`) |
 | `tests/` | xUnit project on Core (`dotnet test tests`) |
 | `test.sh` | `dotnet test` + build + headless `--check` |
 | `World/` | the Godot side of the world (payloads, height + anchor and the view rules are in `Core/World/`): terrain, `place()`, recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
 | `tools/dump_payloads.py` | Task S3c: dumps the client's HTTP answers from a COPY of a world for `--offline` |
 | `Gltf/` | runtime GLB import (the Meshopt decode is in `Core/Gltf/`) |
-| `Figures/` | world-map characters: placement rule, figures + poll loop, clip library (import, pick, retarget), rest-pose correction |
+| `Figures/` | world-map characters: placement rule, figures (fed by Main's poll), clip library (import, pick, retarget), rest-pose correction |
 | `Ui/` | login screen (server, user, password), `LauncherStore` (`user://launcher.json`), fly camera (W/A/S/D gated while the HUD types) |
 | `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |

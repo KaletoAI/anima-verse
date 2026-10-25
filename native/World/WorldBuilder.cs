@@ -135,6 +135,10 @@ public sealed class WorldBuilder
     public bool NoWater { get; init; }
 
     private readonly Dictionary<string, LocationSlot> _slots = new();
+    /// <summary>Every placed location id the world has taken in (built or out of reach) — main.ts <c>places</c>.</summary>
+    private readonly HashSet<string> _known = new();
+    /// <summary>The stream points of the build (avatar, anchor): the rings of revealed locations are measured from them.</summary>
+    private List<(double X, double Z)> _points = new();
     private Node3D? _places;
     private Vector3 _tierCamera;
     private (string? LocationId, string? RoomId) _avatarAt;
@@ -153,22 +157,60 @@ public sealed class WorldBuilder
         _strict = strict;
     }
 
-    public async Task<WorldStats> BuildAsync(Node3D root, string? gotoQuery)
+    /// <summary>
+    /// The world data the start fetches before anything is built (main.ts: <c>Promise.all(getLocations3d,
+    /// getWorldMap, getSurfaceTextures)</c> — here the heightfield, the worldmap and the location details; the
+    /// surface library follows with the ground). One unit, so a retry repeats all three.
+    /// </summary>
+    public sealed record BootData(HeightfieldOverview Overview, JsonElement Map, JsonElement Locations);
+
+    /// <summary>
+    /// The boot's view of the build: <see cref="Stage"/> hears <c>world</c> (the boot data is in), <c>scenes</c>
+    /// (every scene recipe of the start ring is fetched) and <c>tiles</c> (the start ring and the world props
+    /// stand); <see cref="Bootstrap"/> wraps the boot data fetch (the client's retry with its title notes);
+    /// <see cref="Locations3d"/> replaces the plain details request (the client's conditional cache).
+    /// </summary>
+    public sealed class BuildHooks
+    {
+        public Action<string>? Stage { get; init; }
+        public Func<Func<Task<BootData>>, Task<BootData>>? Bootstrap { get; init; }
+        public Func<Task<JsonElement>>? Locations3d { get; init; }
+    }
+
+    /// <summary>The boot data, the three requests at once (one failure fails the unit).</summary>
+    public async Task<BootData> FetchBootDataAsync(Func<Task<JsonElement>>? locations3d = null)
+    {
+        var hf = Fetch(_source.GetHeightfieldAsync(), root => HeightfieldOverview.Parse(root));
+        var map = Fetch(_source.GetWorldMapAsync(), root => root.Clone());
+        var loc = locations3d is not null ? locations3d() : Fetch(_source.GetLocations3dAsync(), root => root.Clone());
+        await Task.WhenAll(hf, map, loc);
+        return new BootData(hf.Result, map.Result, loc.Result);
+
+        static async Task<T> Fetch<T>(Task<JsonDocument> request, Func<JsonElement, T> take)
+        {
+            using var doc = await request;
+            return take(doc.RootElement);
+        }
+    }
+
+    public async Task<WorldStats> BuildAsync(Node3D root, string? gotoQuery, BuildHooks? hooks = null)
     {
         var stats = new WorldStats();
-        using var hfDoc = await _source.GetHeightfieldAsync();
-        var overview = HeightfieldOverview.Parse(hfDoc.RootElement);
-        using var mapDoc = await _source.GetWorldMapAsync();
-        var locations = LocationInfo.ParseList(mapDoc.RootElement);
-        using var locDoc = await _source.GetLocations3dAsync();
-        var details = LocationInfo.ParseList(locDoc.RootElement);
+        var boot = hooks?.Bootstrap is { } wrap
+            ? await wrap(() => FetchBootDataAsync(hooks.Locations3d))
+            : await FetchBootDataAsync(hooks?.Locations3d);
+        var overview = boot.Overview;
+        var mapRoot = boot.Map;
+        var locations = LocationInfo.ParseList(mapRoot);
+        var details = LocationInfo.ParseList(boot.Locations);
         Details = details;
-        FirstMap = mapDoc.RootElement.Clone();
+        FirstMap = mapRoot;
+        hooks?.Stage?.Invoke("world");
         _log($"heightfield {overview.Grid.Cols}x{overview.Grid.Rows} step {overview.Grid.Step} m, "
              + $"{overview.TileIndex.Count} indexed tiles; worldmap {locations.Count} locations, "
              + $"view=3d {details.Count}");
 
-        stats.Anchor = Anchor.FromWorld(mapDoc.RootElement, details, overview.Grid, gotoQuery);
+        stats.Anchor = Anchor.FromWorld(mapRoot, details, overview.Grid, gotoQuery);
         _log($"anchor {stats.Anchor.Position()} ({stats.Anchor.Source}{(stats.Anchor.LocationId is { } id ? ", " + id : "")})");
 
         var height = Height = new WorldHeight(overview);
@@ -207,11 +249,12 @@ public sealed class WorldBuilder
         _materials = new RecipeMaterials(_library);
 
         // The view: the avatar opens its location, the stream points are its position and the camera focus.
-        var avatar = AvatarOf(mapDoc.RootElement, locations);
+        var avatar = AvatarOf(mapRoot, locations);
         var anchorXZ = (X: (double)stats.Anchor.X, Z: (double)stats.Anchor.Z);
         var points = new List<(double X, double Z)>();
         if (avatar.Pos is { } ap) points.Add(ap);
         points.Add(anchorXZ);
+        _points = points;
         var camera = _tierCamera = stats.Anchor.Position() + StartCameraOffset;
         _avatarAt = (avatar.LocationId, avatar.RoomId);
 
@@ -219,18 +262,31 @@ public sealed class WorldBuilder
         root.AddChild(places);
         var placed = locations.Where(l => l.IsPlaced).ToList();
         stats.Locations = placed.Count;
-        using var gate = new SemaphoreSlim(SceneConcurrency);
-        var tasks = placed.Select(async loc =>
+        var jobs = new List<(LocationInfo Loc, Ring Ring, bool Pinned)>();
+        foreach (var loc in placed)
         {
+            _known.Add(loc.Id);
+            bool pinned = loc.Id == avatar.LocationId;
+            var ring = LocationView.RingFor(LocationView.PlaceDistance(loc, points), pinned);
+            if (ring == Ring.Gone) { stats.LocationsGone++; continue; }
+            jobs.Add((loc, ring, pinned));
+        }
+        // main.ts: `scenes.prime(residentIds)` → 'scenes', then the tiles → 'tiles'. The recipes of the start ring
+        // first, all of them; then each location is built from its recipe.
+        var scenes = await PrimeScenes(jobs.Select(j => j.Loc), stats);
+        hooks?.Stage?.Invoke("scenes");
+        using var gate = new SemaphoreSlim(SceneConcurrency);
+        var tasks = jobs.Select(async job =>
+        {
+            var (loc, ring, pinned) = job;
+            if (!scenes.TryGetValue(loc.Id, out var doc)) return;   // its fetch failed (counted there)
             await gate.WaitAsync();
             try
             {
-                bool pinned = loc.Id == avatar.LocationId;
-                var ring = LocationView.RingFor(LocationView.PlaceDistance(loc, points), pinned);
-                if (ring == Ring.Gone) { stats.LocationsGone++; return; }
+                if (doc is null) return;   // 404: nothing to compose
                 // The avatar's location starts open (main.ts arrivalLocId / bootPin); every other one closed.
-                var built = await BuildLocation(loc, height, stats, ring, pinned, pinned ? avatar.RoomId : null, camera);
-                if (built is null) return;
+                var built = await BuildFromScene(loc, doc.RootElement, height, stats, ring, pinned,
+                                                 pinned ? avatar.RoomId : null, camera);
                 places.AddChild(built.Group);
                 lock (_slots) _slots[loc.Id] = built;
             }
@@ -240,11 +296,16 @@ public sealed class WorldBuilder
                 stats.Problems.Add($"{loc.Id}: {e.Message}");
                 _log($"location {loc.Id} ({loc.Name}) failed: {e.Message}");
             }
-            finally { gate.Release(); }
+            finally
+            {
+                doc?.Dispose();
+                gate.Release();
+            }
         }).ToList();
         await Task.WhenAll(tasks);
 
-        await BuildWorldProps(root, mapDoc.RootElement, height, stats, camera);
+        await BuildWorldProps(root, mapRoot, height, stats, camera);
+        hooks?.Stage?.Invoke("tiles");
         _log($"recipe: {stats.Recipe.Primitives} primitives drawn ({stats.Recipe.Plates} plates, {stats.Recipe.Walls} walls, "
              + $"{stats.Recipe.Extras} extras; {stats.Recipe.ShellCopies} far-shell copies), {stats.Recipe.Skipped} skipped "
              + $"({stats.Recipe.SkipSummary()}); surfaces {_library.Loaded} loaded / {_library.Failed} failed; "
@@ -345,7 +406,41 @@ public sealed class WorldBuilder
     {
         using var doc = await _source.GetLocationSceneAsync(loc.Id);
         if (doc is null) return null;  // 404: nothing to compose (no plan, no rooms, no model)
-        var scene = ScenePayload.Parse(doc.RootElement);
+        return await BuildFromScene(loc, doc.RootElement, height, stats, ring, wantOpen, room, camera);
+    }
+
+    /// <summary>
+    /// The scene recipes of these locations, at most <see cref="SceneConcurrency"/> requests at a time: id → the
+    /// payload (null for a 404). A failed request is counted and logged here (online) and has no entry.
+    /// </summary>
+    private async Task<Dictionary<string, JsonDocument?>> PrimeScenes(IEnumerable<LocationInfo> locs, WorldStats stats)
+    {
+        var scenes = new Dictionary<string, JsonDocument?>();
+        using var gate = new SemaphoreSlim(SceneConcurrency);
+        await Task.WhenAll(locs.Select(async loc =>
+        {
+            await gate.WaitAsync();
+            try
+            {
+                var doc = await _source.GetLocationSceneAsync(loc.Id);
+                lock (scenes) scenes[loc.Id] = doc;
+            }
+            catch (Exception e) when (!_strict)
+            {
+                stats.Failures++;
+                stats.Problems.Add($"{loc.Id}: {e.Message}");
+                _log($"location {loc.Id} ({loc.Name}) failed: {e.Message}");
+            }
+            finally { gate.Release(); }
+        }));
+        return scenes;
+    }
+
+    /// <summary>One location from its scene recipe (see <see cref="BuildLocation"/>).</summary>
+    private async Task<LocationSlot> BuildFromScene(LocationInfo loc, JsonElement sceneRoot, WorldHeight height,
+                                                    WorldStats stats, Ring ring, bool wantOpen, string? room, Vector3 camera)
+    {
+        var scene = ScenePayload.Parse(sceneRoot);
         stats.Scenes++;
         if (Math.Abs(scene.K - 1) > 1e-9)
             _log($"location {loc.Id}: scene k={scene.K} (contract says 1) — drawn unscaled");
@@ -501,6 +596,103 @@ public sealed class WorldBuilder
         Rebuilt?.Invoke(slot);
         return true;
     }
+
+    // ---- locations that come and go while one plays (main.ts revealLocations / dropVanished) ----------
+
+    /// <summary>
+    /// The placed locations of a worldmap snapshot the world has not taken in yet (main.ts: <c>placeableOf(map)</c>
+    /// minus <c>places</c>) — a place the avatar has just discovered, or what the admin's unfiltered view adds.
+    /// </summary>
+    public List<LocationInfo> FreshOf(JsonElement map)
+        => LocationInfo.ParseList(map).Where(l => l.IsPlaced && !_known.Contains(l.Id)).ToList();
+
+    /// <summary>
+    /// <c>revealLocations(map)</c>: build the fresh locations of this snapshot the same way the boot built its own —
+    /// ring from the build's stream points (a place out of reach is only taken in), recipes first, then the
+    /// groups; <paramref name="stillValid"/> is asked before anything goes into the world (the client's view
+    /// revision: a reveal of the view one has just left must not mount). Returns how many groups went in.
+    /// </summary>
+    public async Task<int> RevealAsync(JsonElement map, Func<bool> stillValid)
+    {
+        if (_places is null || Height is null || _library is null) return 0;
+        var fresh = FreshOf(map);
+        if (fresh.Count == 0) return 0;
+        var avatar = AvatarOf(map, LocationInfo.ParseList(map));
+        var stats = new WorldStats();
+        var jobs = new List<(LocationInfo Loc, Ring Ring, bool Pinned)>();
+        foreach (var loc in fresh)
+        {
+            bool pinned = loc.Id == avatar.LocationId;
+            var ring = LocationView.RingFor(LocationView.PlaceDistance(loc, _points), pinned);
+            if (ring != Ring.Gone) jobs.Add((loc, ring, pinned));
+        }
+        var scenes = await PrimeScenes(jobs.Select(j => j.Loc), stats);
+        if (!stillValid())
+        {
+            foreach (var d in scenes.Values) d?.Dispose();
+            return 0;
+        }
+        int added = 0;
+        foreach (var (loc, ring, pinned) in jobs)
+        {
+            if (!scenes.TryGetValue(loc.Id, out var doc)) continue;
+            using (doc)
+            {
+                if (doc is null) { _known.Add(loc.Id); continue; }
+                LocationSlot built;
+                try
+                {
+                    built = await BuildFromScene(loc, doc.RootElement, Height, stats, ring, false, null, _tierCamera);
+                }
+                catch (Exception e) when (!_strict)
+                {
+                    _log($"location {loc.Id} ({loc.Name}) failed: {e.Message}");
+                    continue;
+                }
+                if (!stillValid() || !GodotObject.IsInstanceValid(_places))
+                {
+                    built.Group.Free();
+                    return added;
+                }
+                _places.AddChild(built.Group);
+                _slots[loc.Id] = built;
+                _known.Add(loc.Id);
+                added++;
+            }
+        }
+        // Out of reach: taken in without a group, like the boot's 'gone' ring.
+        foreach (var loc in fresh)
+            if (!jobs.Any(j => j.Loc.Id == loc.Id)) _known.Add(loc.Id);
+        if (added > 0) _log($"revealed {added} location(s): {string.Join(", ", fresh.Where(l => _slots.ContainsKey(l.Id)).Select(l => l.Id))}");
+        return added;
+    }
+
+    /// <summary>
+    /// <c>dropVanished(map)</c>: give back every location this snapshot no longer carries — except the avatar's own
+    /// (the ground it stands on). Returns the ids that went.
+    /// </summary>
+    public List<string> DropVanished(JsonElement map)
+    {
+        var keep = LocationInfo.ParseList(map).Where(l => l.IsPlaced).Select(l => l.Id).ToHashSet();
+        if (AvatarOf(map, new List<LocationInfo>()).LocationId is { } here) keep.Add(here);
+        var gone = _known.Concat(_slots.Keys).Where(id => !keep.Contains(id)).Distinct().ToList();
+        foreach (var id in gone)
+        {
+            _known.Remove(id);
+            if (!_slots.Remove(id, out var slot)) continue;
+            slot.Generation++;   // a rebuild in flight must not put it back
+            if (GodotObject.IsInstanceValid(slot.Group)) slot.Group.QueueFree();
+            Rebuilt?.Invoke(slot);
+        }
+        if (gone.Count > 0) _log($"dropped {gone.Count} location(s) the view no longer carries: {string.Join(", ", gone)}");
+        return gone;
+    }
+
+    /// <summary>
+    /// A re-synced <c>/world/locations?view=3d</c> (main.ts <c>applyLocations</c>): the detail rows (names, rooms)
+    /// are replaced. Rebuilding a built location whose details changed is not ported (no live tile rebuild yet).
+    /// </summary>
+    public void TakeDetails(JsonElement locations) => Details = LocationInfo.ParseList(locations);
 
     /// <summary>§ A16.9 <c>storeyGroundLift</c>: a level-0 spec moves onto the ground under its own anchor.</summary>
     private static double GroundLift(Node3D group, SceneModelSpec spec, WorldHeight height, double datum)

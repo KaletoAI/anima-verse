@@ -6,7 +6,9 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
+using AnimaNative.Sync;
 
 namespace AnimaNative.Api;
 
@@ -78,8 +80,24 @@ public sealed class AnimaApi : IWorldSource, IDisposable
     public const string SessionCookieName = "av_session";
 
     private readonly HttpClient _http;
+    /// <summary>
+    /// The same handler (and cookie container) without a timeout, for the event stream: <c>Timeout</c> is the
+    /// whole request's budget, and <c>/events/sync</c> is one request that lasts the session.
+    /// </summary>
+    private readonly HttpClient _streams;
     private readonly CookieContainer _cookies = new();
     public Uri BaseUri { get; }
+
+    /// <summary>
+    /// A request answered 401 — the session is gone (api.ts <c>json()</c> dispatches <c>auth:required</c> once
+    /// per failing call; the same here). Not raised by <c>POST /auth/login</c> (a wrong password is not a lost
+    /// session) nor by the event stream (the browser's EventSource does not announce one either).
+    /// </summary>
+    public event Action? Unauthorized;
+
+    /// <summary>The one failure that needs a login rather than a retry (api.ts <c>isAuthError</c>).</summary>
+    public static bool IsAuthError(Exception? e) => e is ApiException { Status: 401 }
+                                                     || (e is AggregateException a && IsAuthError(a.InnerException));
 
     public AnimaApi(string server)
     {
@@ -92,6 +110,7 @@ public sealed class AnimaApi : IWorldSource, IDisposable
         };
         _http = new HttpClient(handler) { BaseAddress = BaseUri, Timeout = TimeSpan.FromSeconds(180) };
         _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        _streams = new HttpClient(handler, disposeHandler: false) { BaseAddress = BaseUri, Timeout = Timeout.InfiniteTimeSpan };
     }
 
     /// <summary>
@@ -171,8 +190,45 @@ public sealed class AnimaApi : IWorldSource, IDisposable
     }
 
     public Task<JsonDocument> GetWorldMapAsync() => GetJson("/play/worldmap");
+
+    /// <summary>
+    /// <c>getWorldMap(all)</c>: <c>all</c> asks for the UNFILTERED view (contract § A12) — the admin's switch; the
+    /// server answers 403 for anybody else, so callers pass it only for role <c>admin</c>.
+    /// </summary>
+    public Task<JsonDocument> GetWorldMapAsync(bool all) => GetJson(all ? "/play/worldmap?all=1" : "/play/worldmap");
     public Task<JsonDocument> GetHeightfieldAsync() => GetJson("/play/heightfield");
     public Task<JsonDocument> GetLocations3dAsync() => GetJson("/world/locations?view=3d");
+
+    /// <summary>
+    /// <c>GET /world/locations?view=3d</c> with <c>If-None-Match</c> (api.ts <c>getLocations3d</c>; the cache and
+    /// the single flight are <see cref="LocationsCache"/>'s): 304 comes back as a status without a body, 200 with
+    /// the body and its <c>ETag</c>; anything else throws like every other call (401 included).
+    /// </summary>
+    public async Task<ConditionalAnswer> GetLocations3dConditionalAsync(string? etag)
+    {
+        const string path = "/world/locations?view=3d";
+        using var req = new HttpRequestMessage(HttpMethod.Get, Relative(path));
+        if (etag is not null) req.Headers.TryAddWithoutValidation("If-None-Match", etag);
+        using var res = await _http.SendAsync(req);
+        if (res.StatusCode == HttpStatusCode.NotModified) return new ConditionalAnswer(304, res.Headers.ETag?.ToString() ?? "", null);
+        await EnsureOk(res, path);
+        var bytes = await res.Content.ReadAsByteArrayAsync();
+        using var doc = JsonDocument.Parse(bytes);
+        return new ConditionalAnswer((int)res.StatusCode, res.Headers.ETag?.ToString() ?? "", doc.RootElement.Clone());
+    }
+
+    /// <summary>
+    /// An event stream (<c>/events/sync</c>) for <see cref="HttpEventSource"/>: GET with this session, headers
+    /// only, NO status check — the transport tells a refusal from a stream itself.
+    /// </summary>
+    public async Task<HttpResponseMessage> OpenEventStreamAsync(string path, CancellationToken ct)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, Relative(path));
+        req.Headers.Accept.Clear();
+        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        req.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
+        return await _streams.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
 
     /// <summary>
     /// <c>GET /play/heightfield/tiles?keys=tx:tz,tx:tz</c> — the colon joins a
@@ -250,16 +306,17 @@ public sealed class AnimaApi : IWorldSource, IDisposable
         return await ReadJson(res, path);
     }
 
-    private static async Task<JsonDocument> ReadJson(HttpResponseMessage res, string path)
+    private async Task<JsonDocument> ReadJson(HttpResponseMessage res, string path)
     {
         await EnsureOk(res, path);
         var bytes = await res.Content.ReadAsByteArrayAsync();
         return JsonDocument.Parse(bytes);
     }
 
-    private static async Task EnsureOk(HttpResponseMessage res, string path)
+    private async Task EnsureOk(HttpResponseMessage res, string path)
     {
         if (res.IsSuccessStatusCode) return;
+        if (res.StatusCode == HttpStatusCode.Unauthorized && path != "/auth/login") Unauthorized?.Invoke();
         string? detail = null;
         try
         {
@@ -279,5 +336,9 @@ public sealed class AnimaApi : IWorldSource, IDisposable
     /// <summary>Payload URLs are server-absolute ("/play/…"); resolve them against the base.</summary>
     private Uri Relative(string path) => new(BaseUri, path.TrimStart('/'));
 
-    public void Dispose() => _http.Dispose();
+    public void Dispose()
+    {
+        _streams.Dispose();
+        _http.Dispose();
+    }
 }

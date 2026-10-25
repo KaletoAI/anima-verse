@@ -30,8 +30,9 @@ public sealed class FigureStats
 ///
 ///   • which and where: <see cref="FigurePlacement.Resolve"/> (the browser's far view);
 ///     y = <see cref="WorldHeight.GroundAt"/> at the shown point, every frame;
-///   • polled every <see cref="PollSeconds"/> s (online); new/vanished
-///     characters are added/removed; a moved target lerps in over the interval;
+///   • fed by the client's world-map poll (<see cref="ApplyPolled"/>; the cadence is the browser's,
+///     Main's <see cref="Sync.PollScheduler"/>); new/vanished characters are added/removed; a moved
+///     target lerps in over the current poll interval (<see cref="PollSeconds"/>);
 ///   • model: <c>GET /characters/{name}/model3d</c> → <c>model.url</c> used
 ///     unchanged (§ A7); a GLB is Meshopt-decoded and imported once per URL and
 ///     duplicated per figure; FBX (generic rig) and "no model" (404, or
@@ -48,7 +49,8 @@ public sealed class FigureStats
 public partial class FigureManager : Node3D
 {
     public const double DefaultHeightM = 1.70;
-    public double PollSeconds { get; set; } = 5.0;
+    /// <summary>The current poll interval (s): a moved figure lerps to its new spot over it.</summary>
+    public double PollSeconds { get; set; } = 3.0;
     /// <summary>false in <c>--check</c>: time only moves through <see cref="Tick"/>.</summary>
     public bool AutoTick { get; set; } = true;
 
@@ -118,36 +120,28 @@ public partial class FigureManager : Node3D
     /// <summary>A poll landed: <see cref="LatestMap"/> is the new payload (the event pins rebuild on it, like <c>applyWorldMap</c>).</summary>
     public event Action? Polled;
 
-    /// <summary>Online: poll the world map forever (until <paramref name="ct"/>).</summary>
-    public async Task PollLoopAsync(CancellationToken ct)
+    /// <summary>
+    /// A world-map poll landed (the client's <see cref="Sync.PollScheduler"/> fetched it): it becomes
+    /// <see cref="LatestMap"/>, the figures follow it, <see cref="Polled"/> fires. The first one completes
+    /// <see cref="FirstPollDone"/> once the model loads it started are through.
+    /// </summary>
+    public void ApplyPolled(JsonElement map)
     {
-        while (!ct.IsCancellationRequested)
-        {
-            try
-            {
-                using var doc = await _source.GetWorldMapAsync();
-                // Back to the title while the request ran: this node may be freed already.
-                if (ct.IsCancellationRequested) break;
-                bool first = LatestMap is null;
-                LatestMap = doc.RootElement.Clone();
-                LastPollFailed = false;
-                PollSerial++;
-                var loads = Apply(doc.RootElement);
-                Polled?.Invoke();
-                if (first)
-                    _ = loads.ContinueWith(_ => _firstPoll.TrySetResult(), TaskScheduler.Default);
-            }
-            catch (Exception e)
-            {
-                if (ct.IsCancellationRequested) break;   // the session ended on purpose (back to the title)
-                _log($"worldmap poll failed: {e.Message}");
-                LastPollFailed = true;
-                PollSerial++;
-                _firstPoll.TrySetResult();  // nothing to wait for; the bench runs on what is there
-            }
-            try { await Task.Delay(TimeSpan.FromSeconds(PollSeconds), ct); }
-            catch (TaskCanceledException) { break; }
-        }
+        bool first = LatestMap is null;
+        LatestMap = map;
+        LastPollFailed = false;
+        PollSerial++;
+        var loads = Apply(map);
+        Polled?.Invoke();
+        if (first) _ = loads.ContinueWith(_ => _firstPoll.TrySetResult(), TaskScheduler.Default);
+    }
+
+    /// <summary>A world-map poll failed: the figures keep the last good map; nothing to wait for any more.</summary>
+    public void MarkPollFailed()
+    {
+        LastPollFailed = true;
+        PollSerial++;
+        _firstPoll.TrySetResult();   // the bench runs on what is there
     }
 
     /// <summary>
