@@ -1211,8 +1211,8 @@
 
 /* These surfaces used the scene page's reset before the migration. Keep
    their geometry identical in the standalone HUD without styling the world. */
-:where(#hud) :where(.hud-top, .hud-hints, .info-panel, .open-view-badge, .place-menu),
-:where(#hud) :where(.hud-top, .hud-hints, .info-panel, .open-view-badge, .place-menu) * {
+:where(#hud) :where(.hud-top, .info-panel, .open-view-badge, .place-menu),
+:where(#hud) :where(.hud-top, .info-panel, .open-view-badge, .place-menu) * {
   box-sizing: border-box; margin: 0; padding: 0;
 }
 
@@ -1257,20 +1257,6 @@
 }
 .hud-logout:hover { background: rgba(242, 205, 110, 0.15); }
 
-.hud-hints {
-  position: fixed;
-  bottom: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 12px;
-  color: #cfc8b8;
-  background: rgba(16, 19, 24, 0.8);
-  border: 1px solid rgba(242, 205, 110, 0.25);
-  border-radius: 16px;
-  padding: 5px 16px;
-  z-index: 10;
-  white-space: nowrap;
-}
 
 /* ---------- Info-Panel ---------- */
 .info-panel {
@@ -1394,7 +1380,7 @@
 .place-menu-pose:hover { background: rgba(242, 205, 110, 0.15); }
 
 /* Migrated surfaces are interactive within the pointer-transparent HUD. */
-#hud .hud-top, #hud .hud-hints, #hud .info-panel, #hud .open-view-badge,
+#hud .hud-top, #hud .info-panel, #hud .open-view-badge,
 #hud .place-menu-backdrop { pointer-events: auto; }
 #hud .place-menu-backdrop {
   position: fixed;

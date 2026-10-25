@@ -266,7 +266,7 @@ export function Hud({ avatar, username, role }: {
   useEffect(() => {
     const selector = '.hud-scene-tile, .hud-scene-icon, .hud-rail, .hud-dock, .hud-panel, .hud-mode, .hud-party, '
       + '.hud-travel, .hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
-      + '.hud-top, .hud-hints, .info-panel, .open-view-badge, .hud-notices';
+      + '.hud-top, .info-panel, .open-view-badge, .hud-notices';
     let frame = 0;
     const observed = new Set<Element>();
     const measure = () => {
@@ -1047,8 +1047,6 @@ export function Hud({ avatar, username, role }: {
         </div>
       </div>
       <div className="hud-notices"><NoticeBanner /></div>
-      {game.mode === 'embodied' && <div className="hud-hints">
-        {t('🖱 Drag: turn/tilt the view · Click on the ground: walk there · Wheel: zoom · WASD: move · Q/E: 45° turn · Esc: hand back control')}</div>}
       {game.info && <InfoPanel info={game.info} onPick={setTravelPick} />}
       {game.openView?.trim() && game.mode !== 'embodied' && <div className="open-view-badge">
         <span className="ovb-name">{game.openView}</span>
