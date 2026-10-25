@@ -225,8 +225,23 @@ public partial class Main : Node3D
             }
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(this, result, file);
-            if (_options.QuitAfterBench) GetTree().Quit(0);
+            _ = ReportBench(BenchOutput.Line(result));
         }));
+    }
+
+    /// <summary>Sends the result to the server's bench log, then honours <c>--quit-after-bench</c>.</summary>
+    private async Task ReportBench(string line)
+    {
+        try
+        {
+            await _api!.PostBenchResultAsync(line);
+            Log("bench result sent to the server (logs/bench.jsonl)");
+        }
+        catch (Exception e)
+        {
+            Log("bench result NOT sent to the server: " + e.Message);
+        }
+        if (_options!.QuitAfterBench) GetTree().Quit(0);
     }
 
     /// <summary>

@@ -1507,6 +1507,40 @@ async def play_scene_render(request: Request, user=Depends(get_current_user)):
     return result
 
 
+_BENCH_LOG = Path("./logs/bench.jsonl")
+_BENCH_MAX_BYTES = 64 * 1024
+_bench_lock = threading.Lock()
+
+
+@router.post("/play/bench-result")
+async def play_bench_result(request: Request, user=Depends(get_current_user)):
+    """Stores one render-bench summary (browser ``?bench=auto`` or the native
+    client's ``--bench``) as a JSON line in ``logs/bench.jsonl``, so runs on
+    any player machine can be compared on the server. Diagnostics only: the
+    body is one small JSON object, capped at 64 KB, never read back by the
+    game."""
+    from app.core.timeutils import utc_now_iso
+    from app.core.upload_limits import guard_content_length
+    guard_content_length(request, max_bytes=_BENCH_MAX_BYTES, what="bench result")
+    raw = await request.body()
+    if len(raw) > _BENCH_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="bench result is too large")
+    try:
+        result = json.loads(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bench result is not JSON")
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=400, detail="bench result must be an object")
+    line = json.dumps({"received": utc_now_iso(),
+                       "user": (user or {}).get("username", ""),
+                       "result": result}, ensure_ascii=False)
+    with _bench_lock:
+        _BENCH_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with _BENCH_LOG.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    return {"ok": True}
+
+
 @router.get("/play/scene-render/image")
 def play_scene_render_image(sig: str, user=Depends(get_current_user)):
     """Serves a rendered scene image by its cache signature."""

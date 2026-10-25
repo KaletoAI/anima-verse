@@ -58,6 +58,10 @@ export function initBench(engine: Engine, env: BenchEnvironment): void {
         fps:summary.fpsMean,gpuMs:null,draws:summary.callsMedian,triangles:summary.trisMedian};
       console.info('[bench] result ' + JSON.stringify(api.last));
       env.output(api.last);
+      // The server keeps every run in logs/bench.jsonl, beside the native client's.
+      void fetch('/play/bench-result', {method: 'POST', credentials: 'include',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify(api.last)})
+        .catch(err => console.warn('[bench] result not sent to the server', err));
       engine.benchFrame=undefined; engine.benchCamera=undefined; engine.benchRendered=undefined;
       engine.target.copy(oldTarget); engine.dist=oldDist; engine.targetDist=oldTargetDist;
       engine.yaw=oldYaw; engine.targetYaw=oldTargetYaw;

@@ -123,6 +123,17 @@ public sealed class AnimaApi : IWorldSource, IDisposable
         await EnsureOk(res, "/auth/logout");
     }
 
+    /// <summary>
+    /// <c>POST /play/bench-result</c>: hands one bench summary to the server,
+    /// which appends it to <c>logs/bench.jsonl</c> next to the browser's runs.
+    /// </summary>
+    public async Task PostBenchResultAsync(string json)
+    {
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
+        using var res = await _http.PostAsync("play/bench-result", content);
+        await EnsureOk(res, "/play/bench-result");
+    }
+
     public Task<JsonDocument> GetWorldMapAsync() => GetJson("/play/worldmap");
     public Task<JsonDocument> GetHeightfieldAsync() => GetJson("/play/heightfield");
     public Task<JsonDocument> GetLocations3dAsync() => GetJson("/world/locations?view=3d");

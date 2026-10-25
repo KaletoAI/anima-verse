@@ -5,10 +5,13 @@
  * CPU samples all 7 ms, calls all 11, triangles all 13. Anchor [100,5,200]
  * plus keyframe zero [0,24,40] puts the camera at [100,29,240], target
  * [100,6.5,200]. A stalled one-second frame must retain its full duration.
+ * The finished run is POSTed once to /play/bench-result (fetch stubbed here).
  */
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { Vector3, PerspectiveCamera } from 'three';
+const posted=[];
+globalThis.fetch=async(url,init)=>{posted.push({url,body:JSON.parse(init.body)});return {ok:true};};
 const built=await build({entryPoints:['client3d/src/bench/bench.ts'],bundle:true,write:false,format:'esm',platform:'node'});
 const {initBench}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 globalThis.window={}; globalThis.location={search:'?scatter=0&water=0&goto=demo'};
@@ -37,4 +40,5 @@ assert.deepEqual(JSON.parse(elements.get('bench').textContent),s);
 assert.equal(restores,1);assert.equal(window.__bench.running,false);
 assert.equal(engine.benchFrame,undefined);assert.equal(engine.benchCamera,undefined);assert.equal(engine.benchRendered,undefined);
 assert.deepEqual(engine.target.toArray(),[9,8,7]);assert.equal(engine.dist,80);
+assert.equal(posted.length,1);assert.equal(posted[0].url,'/play/bench-result');assert.deepEqual(posted[0].body,s);
 console.log('PASS smoke_bench_driver');
