@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
+using AnimaNative.Ui;
 using Godot;
 
 namespace AnimaNative.Hud;
@@ -30,6 +31,11 @@ namespace AnimaNative.Hud;
 ///   • LOGIN — ONE login: Godot logs in, then hands its session to CEF (see
 ///     <see cref="Start"/>): gdCEF exposes no cookie manager, so the cookie is
 ///     written by a script on a page of the server's origin.
+///   • SETTINGS — the browser profile is in memory, so the page's localStorage
+///     would be gone at every start: the page mirrors each localStorage write to
+///     <see cref="hud_storage"/> (a second JS binding method, not the bridge
+///     protocol), Godot keeps it in <c>user://hud_storage.json</c> per server
+///     (<see cref="HudStorage"/>) and the handoff seeds it back before the HUD loads.
 ///
 /// The node lives under the scene-tree ROOT, not under Main, and survives a scene
 /// reload (back to the title): CEF can be initialised once per process only.
@@ -37,6 +43,10 @@ namespace AnimaNative.Hud;
 public partial class HudOverlay : CanvasLayer
 {
     public const string Channel = "hud_bridge";
+    /// <summary>The JS binding method the page mirrors its localStorage writes to (<c>window.godotMethods.hud_storage</c>).</summary>
+    public const string StorageMethod = "hud_storage";
+    /// <summary>A burst of writes (a dragged slider) reaches the file once, this long after the last one.</summary>
+    private const ulong StorageWriteDelayMs = 300;
     public const string HudPath = "static/client3d/hud.html?bridge=gdcef";
     private const int Fps = 60;
 
@@ -60,6 +70,9 @@ public partial class HudOverlay : CanvasLayer
     private bool _failed, _loaded, _hello;
     private TaskCompletionSource? _left;
     private Input.CursorShape _cursor = Input.CursorShape.Arrow;
+    private HudStorage _storage = new();
+    private bool _storageDirty;
+    private ulong _storageDueMs;
 
     /// <summary>The HUD's ui state (hit rectangles, typing, overlay, menu) as last reported.</summary>
     public HudUi Ui { get; } = new();
@@ -78,6 +91,9 @@ public partial class HudOverlay : CanvasLayer
 
     /// <summary>Scene handlers for game actions by name (Main fills them, and clears them when it leaves).</summary>
     public Dictionary<string, Action<JsonArray>> Handlers { get; } = new();
+
+    /// <summary>The HUD page (<c>hud.html</c>) finished loading — the handoff's load or a reload (Main sets and clears it).</summary>
+    public Action? PageLoaded { get; set; }
 
     /// <summary>
     /// The overlay, created once per process; null when gdCEF is not linked
@@ -106,6 +122,7 @@ public partial class HudOverlay : CanvasLayer
 
     public override void _Ready()
     {
+        _storage = HudStorageStore.Load();
         _rect = new TextureRect
         {
             Name = "HudView",
@@ -126,8 +143,9 @@ public partial class HudOverlay : CanvasLayer
         var config = new Godot.Collections.Dictionary
         {
             // In-memory profile: the session cookie never reaches a disk cache (the
-            // HUD's localStorage prefs do not persist either). root_cache_path still
-            // takes CEF's lock files — under user://, not next to the binary.
+            // HUD's localStorage prefs live in user://hud_storage.json instead, see
+            // hud_storage). root_cache_path still takes CEF's lock files — under
+            // user://, not next to the binary.
             ["incognito"] = true,
             ["root_cache_path"] = dir,
             // Console messages of the page (the bridge's own warnings) land here at "info";
@@ -150,7 +168,13 @@ public partial class HudOverlay : CanvasLayer
 
     public override void _ExitTree()
     {
+        FlushStorage();
         if (Instance == this) Instance = null;
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_storageDirty && Time.GetTicksMsec() >= _storageDueMs) FlushStorage();
     }
 
     private string HudUrl => new Uri(_server!, HudPath).ToString();
@@ -194,6 +218,7 @@ public partial class HudOverlay : CanvasLayer
         }
         // Before the first page runs a script: messages to an unregistered method are dropped.
         if (!_cef.RegisterMethod(this, Channel)) Log("hud: register_method failed — the HUD cannot reach the scene");
+        if (!_cef.RegisterMethod(this, StorageMethod)) Log("hud: register_method hud_storage failed — HUD settings are not kept across starts");
         // gdCEF emits on_page_loaded(http_status, browser) — gdbrowser.cpp, emit_signal("on_page_loaded", httpStatusCode, this).
         _cef.ConnectBrowser(GdCef.SignalPageLoaded, Callable.From<int, GodotObject>((_, browser) => OnPageLoaded(browser)));
         _cef.ConnectBrowser(GdCef.SignalPageFailed, Callable.From<int, string, GodotObject>(OnPageFailed));
@@ -223,11 +248,14 @@ public partial class HudOverlay : CanvasLayer
     /// <summary>
     /// The handoff script on <c>/health</c>: end a session the browser may still hold
     /// (a back-to-title whose logout did not reach the server — that cookie would block
-    /// the new one), then <see cref="CookieScript"/>. A failure of the first part never
-    /// stops the handoff.
+    /// the new one), then write the stored HUD settings into this origin's localStorage
+    /// (<see cref="HudStorage.SeedScript"/>; nothing for none), then <see cref="CookieScript"/>,
+    /// which navigates to the HUD — so its first read finds them. A failure of the first
+    /// two parts never stops the handoff.
     /// </summary>
-    public static string HandoffScript(string token, bool secure, string hudUrl)
-        => EndSessionScript + ".catch(() => 'unreachable').then(() => { " + CookieScript(token, secure, hudUrl) + " });";
+    public static string HandoffScript(string token, bool secure, string hudUrl, IReadOnlyDictionary<string, string>? stored = null)
+        => EndSessionScript + ".catch(() => 'unreachable').then(() => { "
+           + HudStorage.SeedScript(stored ?? new Dictionary<string, string>()) + CookieScript(token, secure, hudUrl) + " });";
 
     /// <summary>Back to the title: end the browser's session, then a blank page whose fragment names the outcome.</summary>
     public const string LeaveScript =
@@ -252,8 +280,9 @@ public partial class HudOverlay : CanvasLayer
         if (_phase == Phase.Cookie && url.StartsWith(CookiePageUrl, StringComparison.Ordinal))
         {
             _phase = Phase.Hud;
-            _cef.ExecuteJavaScript(HandoffScript(_token!, _server!.Scheme == Uri.UriSchemeHttps, HudUrl));
-            Log("hud: session handed to CEF, opening the HUD");
+            var stored = StoredEntries(_server);
+            _cef.ExecuteJavaScript(HandoffScript(_token!, _server!.Scheme == Uri.UriSchemeHttps, HudUrl, stored));
+            Log($"hud: session handed to CEF ({stored.Count} stored HUD settings), opening the HUD");
             return;
         }
         if (_phase == Phase.Hud && url.Contains("/static/client3d/hud.html", StringComparison.Ordinal))
@@ -264,6 +293,7 @@ public partial class HudOverlay : CanvasLayer
             Log($"hud: page loaded ({url.Split('?')[0]}, view {_rect.Size.X}x{_rect.Size.Y})");
             PublishAll();
             _ = ProbeTransparencyLater();
+            PageLoaded?.Invoke();
             return;
         }
         if (_phase == Phase.Leaving && url.StartsWith("about:blank", StringComparison.Ordinal))
@@ -397,6 +427,52 @@ public partial class HudOverlay : CanvasLayer
         Log($"hud: action '{name}' is not implemented in the native spike");
         if (!QuietActions.Contains(name))
             SendUi("toast", JsonValue.Create($"Not available in the native client yet: {name}"), JsonValue.Create(false));
+    }
+
+    // ---- HUD settings kept across starts --------------------------------------------
+
+    /// <summary>The HUD settings stored for <paramref name="server"/> (empty without one).</summary>
+    public IReadOnlyDictionary<string, string> StoredEntries(Uri? server) => _storage.EntriesFor(server?.ToString());
+
+    /// <summary>
+    /// gdCEF calls this for <c>window.godotMethods.hud_storage(data)</c>: one mirrored localStorage call of the HUD
+    /// page as a JSON string (<see cref="HudStorage.ParseOp"/>), applied to the current server's entries. The file
+    /// follows <see cref="StorageWriteDelayMs"/> after the last change. A write past the 256 KB cap and one carrying
+    /// the session token are dropped and logged.
+    /// </summary>
+    public void hud_storage(Variant data)
+    {
+        var raw = data.VariantType == Variant.Type.String ? data.AsString() : Json.Stringify(data);
+        if (_server is null)
+        {
+            Log("hud storage: a write before any server — dropped");
+            return;
+        }
+        if (HudStorage.ParseOp(raw, out var reason) is not { } op)
+        {
+            Log($"hud storage: dropped invalid message ({reason}): {(raw.Length > 200 ? raw[..200] + "…" : raw)}");
+            return;
+        }
+        switch (_storage.Apply(_server.ToString(), op, _token))
+        {
+            case HudStorageResult.Changed:
+                _storageDirty = true;
+                _storageDueMs = Time.GetTicksMsec() + StorageWriteDelayMs;
+                break;
+            case HudStorageResult.TooLarge:
+                Log($"hud storage: write of '{op.Key}' dropped — the stored HUD settings would exceed {HudStorage.MaxBytes / 1024} KB");
+                break;
+            case HudStorageResult.Secret:
+                Log($"hud storage: write of '{op.Key}' refused — it carries the session token");
+                break;
+        }
+    }
+
+    private void FlushStorage()
+    {
+        if (!_storageDirty) return;
+        _storageDirty = false;
+        HudStorageStore.Save(_storage);
     }
 
     // ---- input --------------------------------------------------------------------

@@ -1,16 +1,130 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AnimaNative.Api;
+using AnimaNative.Overview;
 using AnimaNative.Sync;
 using AnimaNative.Ui;
 using Godot;
 
 namespace AnimaNative;
 
-/// <summary>Main, login and session: the launcher values, the login screen, a lost session, back to the title.</summary>
+/// <summary>
+/// Main, login and session: the launcher values, the login screen, the session flow (<see cref="SessionFlow"/>: a
+/// character switch rebuilds with the live session, a lost session and back to the title end on the login screen).
+/// </summary>
 public partial class Main : Node3D
 {
+    /// <summary>The session a rebuild hands to the next scene (survives the scene reload, taken once).</summary>
+    private sealed record CarriedSession(string Server, string Token, string Role);
+    private static CarriedSession? _carried;
+
+    /// <summary>
+    /// The start of an online scene (<see cref="SessionFlow.Start"/>): the login screen, or — after a character
+    /// switch — the world at once with the session the old scene carried over.
+    /// </summary>
+    private void StartSession(LauncherSettings launch)
+    {
+        var carried = _carried;
+        _carried = null;
+        var (state, step) = SessionFlow.Start(carried is not null);
+        _session = state;
+        if (step == SessionStep.ResumeWorld) _ = ResumeAsync(carried!, launch);
+        else ShowLogin(launch);
+    }
+
+    /// <summary>One session event through <see cref="SessionFlow.Next"/>, then what it says to do.</summary>
+    private void OnSession(SessionEvent e)
+    {
+        var (next, step) = SessionFlow.Next(_session, e);
+        _session = next;
+        switch (step)
+        {
+            case SessionStep.Acknowledge:
+                Log("markResume: acknowledged — the avatar changed; the world is rebuilt once the HUD page has reloaded");
+                break;
+            case SessionStep.Rebuild:
+                RebuildWithSession();
+                break;
+            case SessionStep.LogoutToTitle:
+                _ = BackToTitleAsync();
+                break;
+            case SessionStep.ExpiredToTitle:
+                ExpireSession();
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The character switch (GameMenu: <c>switchCharacter</c> → <c>markResume</c> → <c>location.reload()</c>), native
+    /// side: the world that stands belongs to the character just left, so it is rebuilt from scratch — the same scene
+    /// reload as back to the title, but WITHOUT a logout and without the login screen. The live session goes to the
+    /// next scene (<see cref="ResumeAsync"/>); the HUD page has already reloaded on that very cookie, so there is no
+    /// handoff either (it would end the session the browser holds).
+    /// </summary>
+    private void RebuildWithSession()
+    {
+        var token = _api?.SessionToken();
+        if (_api is null || token is null)
+        {
+            Log("character switch: no live session to carry over — back to the title");
+            _ = BackToTitleAsync();
+            return;
+        }
+        Log("character switch: the HUD page reloaded after markResume — rebuilding the world with the live session (no login)");
+        _carried = new CarriedSession(_api.BaseUri.ToString(), token, _role);
+        StopSync();
+        _stop.Cancel();
+        _api.Dispose();
+        _api = null;
+        _source = null;
+        GetTree().ReloadCurrentScene();
+    }
+
+    /// <summary>
+    /// The scene after a character switch: the carried session in a fresh API (no login request), the role it had,
+    /// the loading screen at once, then the normal world load. The HUD page is already up on the same session.
+    /// </summary>
+    private async Task ResumeAsync(CarriedSession carried, LauncherSettings launch)
+    {
+        _api = new AnimaApi(carried.Server);
+        _api.AdoptSession(carried.Token);
+        _role = carried.Role;
+        _source = _api;
+        _api.Unauthorized += () => Callable.From(OnUnauthorized).CallDeferred();
+        Log($"session carried over (role '{_role}') on {_api.BaseUri} — rebuilding the world without a login");
+        _loading = AddLoginScreen(launch, out _loadingLayer);
+        ReadStoredStart();
+        await LoadWorldAsync();
+    }
+
+    /// <summary>
+    /// main.ts at boot, from the HUD settings kept across starts (<see cref="HudStorage"/>): the admin's "show all
+    /// locations" picks the view the boot fetches (an admin only), the scatter detail distances the scatter LOD. The
+    /// HUD page reads the same entries from its seeded localStorage, so both sides start alike.
+    /// </summary>
+    private void ReadStoredStart()
+    {
+        if (_api is null) return;
+        var stored = _hud?.StoredEntries(_api.BaseUri) ?? HudStorageStore.Load().EntriesFor(_api.BaseUri.ToString());
+        _showAll = HudStorage.StartShowAll(stored, IsAdmin);
+        _scatterPrefs = ScatterPrefs.Load(stored.GetValueOrDefault(HudStorage.ScatterPrefsKey));
+        Log($"stored HUD settings: {stored.Count} entries; start view {(_showAll ? "show all locations" : "known locations")}, "
+            + $"scatter {_scatterPrefs.ScatterNearM}/{_scatterPrefs.ScatterFarM}/{_scatterPrefs.ScatterCullM} m");
+    }
+
+    /// <summary>The login screen on its own layer above everything (it doubles as the loading screen).</summary>
+    private LoginScreen AddLoginScreen(LauncherSettings launch, out CanvasLayer layer)
+    {
+        layer = new CanvasLayer { Name = "LoginLayer", Layer = 10 };
+        AddChild(layer);
+        var login = new LoginScreen().Setup(launch.Server, launch.User);
+        layer.AddChild(login);
+        login.Back = () => OnSession(SessionEvent.BackToTitle);
+        return login;
+    }
+
     /// <summary>
     /// Start values of the login screen: <c>--server</c>/<c>--user</c> win over
     /// <c>user://launcher.json</c>, which wins over empty fields (<see cref="LauncherSettings.Merge"/>).
@@ -29,16 +143,12 @@ public partial class Main : Node3D
 
     private void ShowLogin(LauncherSettings launch)
     {
-        var layer = new CanvasLayer { Name = "LoginLayer", Layer = 10 };
-        AddChild(layer);
-        var login = new LoginScreen().Setup(launch.Server, launch.User);
-        layer.AddChild(login);
+        var login = AddLoginScreen(launch, out var layer);
         if (_loginNotice is { } notice)
         {
             login.ShowStatus(notice, true);
             _loginNotice = null;
         }
-        login.Back = () => _ = BackToTitleAsync();
         login.Submit = async (server, user, password) =>
         {
             _api?.Dispose();
@@ -47,6 +157,7 @@ public partial class Main : Node3D
             // Remembered only after the server accepted them; the password is not part of the file.
             LauncherStore.Update(s => s with { Server = server, User = user });
             Log($"logged in as '{user}' (role '{_role}') on {server} (server and user remembered)");
+            OnSession(SessionEvent.LoggedIn);
             _source = _api;
             // api.ts `auth:required`: any later 401 ends this session on the client too.
             _api.Unauthorized += () => Callable.From(OnUnauthorized).CallDeferred();
@@ -55,6 +166,7 @@ public partial class Main : Node3D
             // The login screen stays as the loading screen until the world is visible (TitleScreen).
             _loading = login;
             _loadingLayer = layer;
+            ReadStoredStart();
             await LoadWorldAsync();
         };
     }
@@ -64,14 +176,15 @@ public partial class Main : Node3D
         => answer.ValueKind == JsonValueKind.Object && answer.TryGetProperty("user", out var u)
            && u.ValueKind == JsonValueKind.Object ? Str(u, "role") ?? "" : "";
 
+    /// <summary>A request answered 401 (api.ts <c>auth:required</c>), deferred to the main loop.</summary>
+    private void OnUnauthorized() => OnSession(SessionEvent.Unauthorized);
+
     /// <summary>
-    /// A request answered 401 (api.ts <c>auth:required</c>): back to the login screen like <see cref="BackToTitleAsync"/>,
-    /// but WITHOUT a logout call — the session is gone already; server and user stay prefilled (the launcher file).
+    /// The session died: back to the login screen like <see cref="BackToTitleAsync"/>, but WITHOUT a logout call —
+    /// the session is gone already; server and user stay prefilled (the launcher file).
     /// </summary>
-    private void OnUnauthorized()
+    private void ExpireSession()
     {
-        if (_leaving) return;
-        _leaving = true;
         Log("session ended (HTTP 401) — back to the login screen, no logout call");
         StopSync();
         _stop.Cancel();
@@ -99,8 +212,6 @@ public partial class Main : Node3D
     /// </summary>
     private async Task BackToTitleAsync()
     {
-        if (_leaving) return;
-        _leaving = true;
         Log("back to title");
         StopSync();
         _stop.Cancel();

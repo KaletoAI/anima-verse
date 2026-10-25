@@ -124,4 +124,55 @@ host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 1, kind: 'state', patch:
 assert.equal(hud.getGameState().clock, before);
 assert.equal(hud.gameActions.zoomTo, undefined);
 stopScene();
-console.log('hud gdcef: PASS (string wire both ways, state/boot/ui/hud/action round trips, rejection, missing binding, late binding, cleanup)');
+
+// --- HUD settings across starts: the localStorage mirror (hud/storageMirror.ts) ----------------
+// The native browser keeps no storage; every localStorage write goes to Godot as ONE JSON string
+// on its own binding method `hud_storage` (not the bridge channel). A fake Storage class stands in:
+// methods on the PROTOTYPE like the real one, two instances (localStorage, sessionStorage), and a
+// quota of 8 characters per value so a refused write can be shown.
+const mirrorBuild = await build({ entryPoints: ['client3d/src/hud/storageMirror.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
+const mirror = await import('data:text/javascript;base64,' + Buffer.from(mirrorBuild.outputFiles[0].text).toString('base64'));
+class FakeStorage {
+  constructor() { this.items = new Map(); }
+  setItem(key, value) {
+    if (String(value).length > 8) throw new Error('QuotaExceededError');
+    this.items.set(String(key), String(value));
+  }
+  removeItem(key) { this.items.delete(String(key)); }
+  clear() { this.items.clear(); }
+}
+const local = new FakeStorage();
+const session = new FakeStorage();
+const toStorage = [];
+const storageHost = { godotMethods: { hud_storage: data => { toStorage.push(data); return true; } } };
+const undo = mirror.mirrorStorage(local, mirror.gdcefStorageSender(storageHost));
+local.setItem('av3d.showAllLocations', '1');
+local.setItem('n', 5);                       // Storage stringifies: the op carries "5"
+session.setItem('s', 'x');                   // another storage on the same prototype: not mirrored
+assert.throws(() => local.setItem('big', '123456789'), /Quota/);   // refused by the browser: nothing sent
+local.removeItem('n');
+local.clear();
+assert.deepEqual(toStorage, [
+  '{"op":"set","key":"av3d.showAllLocations","value":"1"}',
+  '{"op":"set","key":"n","value":"5"}',
+  '{"op":"remove","key":"n"}',
+  '{"op":"clear"}',
+], 'one JSON string per accepted localStorage call, in order');
+assert.equal(local.items.size, 0);
+assert.equal(session.items.get('s'), 'x', 'the wrapped methods still store');
+assert.equal(storageHost.godotMethods.hud_bridge, undefined, 'nothing on the bridge channel');
+undo();
+local.setItem('after', 'undo');
+assert.equal(toStorage.length, 4, 'undo restores the original methods');
+// Without the binding: one warning, never a throw from inside a localStorage call.
+const storageWarnings = [];
+console.warn = (...args) => storageWarnings.push(args);
+try {
+  const undoBare = mirror.mirrorStorage(local, mirror.gdcefStorageSender({}));
+  local.setItem('a', '1');
+  local.setItem('b', '2');
+  undoBare();
+} finally { console.warn = warn; }
+assert.equal(storageWarnings.length, 1, 'one warning for a missing hud_storage binding');
+assert.equal(local.items.get('b'), '2');
+console.log('hud gdcef: PASS (string wire both ways, state/boot/ui/hud/action round trips, rejection, missing binding, late binding, cleanup, localStorage mirror)');

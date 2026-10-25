@@ -144,6 +144,32 @@ every sync timer stop first (`StopSync`). Logging in again builds the world anew
 reach the server still returns to the title; the next login's handoff ends a
 session CEF may still hold before it writes the new cookie.
 
+**Taking over another character** (game menu, Task 12). The HUD switches the
+avatar on the server, sends `markResume` and reloads its page (the browser
+reloads everything). Natively `markResume` is acknowledged, and the reloaded
+`hud.html` that follows makes the scene rebuild the world for the new avatar
+with the SAME session: the scene reloads like back to the title, but without a
+logout and without the login screen — the loading screen comes up at once.
+Both signals are needed (`Core/Ui/SessionFlow.cs`): a page load without the
+marker (the handoff's own) changes nothing. Log: `markResume: acknowledged …`,
+`character switch: the HUD page reloaded after markResume …`, `session carried
+over (role '…') …`, then the usual boot stages.
+
+**HUD settings across starts** (Task 12). CEF's profile lives in memory, so the
+HUD's `localStorage` (show all, scatter distances, volumes, dock and chat sizes,
+…) would be gone at every start. In gdCEF mode the page mirrors every
+`localStorage` write to Godot (`window.godotMethods.hud_storage`, a binding
+method of its own, not the bridge protocol); Godot keeps the entries per server
+origin in `user://hud_storage.json` (Linux:
+`~/.local/share/godot/app_userdata/Anima Native/hud_storage.json`, written
+0.3 s after the last change, at most 256 KB — a larger write is dropped and
+logged) and writes them back into `localStorage` in the login handoff on
+`/health`, before `hud.html` loads. The scene reads the same entries at the
+start like main.ts does: an admin's "show all locations" picks the first view,
+the scatter distances the scatter LOD (`stored HUD settings: …` in the log).
+No cookie and no session token is ever stored there. Delete the file to reset
+the HUD settings.
+
 Polling, push stream, boot stages (Task 10) — the browser's, ported to `Core/Sync/`:
 
 - **World-map poll** (`c3d-worldmap`, `PollSpec.Worldmap3d`): a 1-s tick; every 3 s, every 6 s while the
@@ -466,8 +492,10 @@ The browser HUD itself — `client3d/hud.html`, served by the Anima server at
   (`hitRects`, `typing`, `overlayOpen`, `menuOpen`) and game actions
   (`zoomTo`, `clearSelection`, `closeOpenView`, `setVolumes` (no-op),
   `backToTitle`, `setShowAll` (admin only), `applyScatterPrefs`, `markResume`
-  (acknowledged: no page reload exists natively); the others are logged once, and a player-triggered one
-  answers with a toast "Not available in the native client yet").
+  (acknowledged; the page reload after it rebuilds the world, see "Taking over another character"); the others
+  are logged once, and a player-triggered one answers with a toast "Not available in the native client yet").
+  The page's `localStorage` writes go over a second binding method, `hud_storage` (see "HUD settings across
+  starts").
 - **Input**: a mouse event goes to CEF over a HUD surface (`hitRects`) or
   anywhere while an overlay is open, otherwise to the camera; the side that
   got the press keeps the pointer until release; CEF always sees the pointer
@@ -478,7 +506,7 @@ The browser HUD itself — `client3d/hud.html`, served by the Anima server at
   (`av_session`) is then written into CEF by a script on `/health` (the
   server's smallest anonymous page, same origin) — gdCEF exposes no cookie
   manager — and the HUD opens already signed in. CEF runs incognito (no
-  cookie on disk), without a DevTools port; its log (incl. the page's console
+  cookie on disk; the HUD settings are kept by Godot instead), without a DevTools port; its log (incl. the page's console
   at "info") is `user://cef/debug.log` (Linux:
   `~/.local/share/godot/app_userdata/Anima Native/cef/debug.log`). "Back to
   title" in the menu logs out through the HUD page (CEF drops its cookie),
@@ -527,14 +555,14 @@ works the same way.
 | `Main.cs`, `Main.tscn` | entry scene: login → world build → camera → (`--bench`) the drive; `--check`/`--check-bench` dispatch |
 | `App/Main*.cs` | the rest of the entry scene's class, by concern: `MainSession` (login, session, back to the title), `MainWorld` (world build, boot stages, bench/offline), `MainSync` (poll, push stream, show all), `MainHud` (HUD game actions, picking, info panel) |
 | `Cli.cs` | command-line parameters |
-| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke), `Sync/` (Task 10: `PollScheduler` = pollCore.ts, `SyncStream` = syncHub.ts + `HttpEventSource`/`SseParser` for `/events/sync`, `BootTracker` + `BootRetry` = game/boot.ts + `retryBoot`, `LocationsCache`/`LocationsSync` = the ETag'd `/world/locations?view=3d`, `ConnectionState`, the frame-pumped `TimerQueue`) |
+| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Ui/SessionFlow.cs` (login / character switch / back to title / lost session as one decision), `Ui/HudStorage.cs` (the kept HUD settings: file model, 256 KB cap, the handoff's seed script), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke), `Sync/` (Task 10: `PollScheduler` = pollCore.ts, `SyncStream` = syncHub.ts + `HttpEventSource`/`SseParser` for `/events/sync`, `BootTracker` + `BootRetry` = game/boot.ts + `retryBoot`, `LocationsCache`/`LocationsSync` = the ETag'd `/world/locations?view=3d`, `ConnectionState`, the frame-pumped `TimerQueue`) |
 | `tests/` | xUnit project on Core (`dotnet test tests`) |
 | `test.sh` | `dotnet test` + build + headless `--check` |
 | `World/` | the Godot side of the world (payloads, height + anchor and the view rules are in `Core/World/`): terrain, `place()`, recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
 | `tools/dump_payloads.py` | Task S3c: dumps the client's HTTP answers from a COPY of a world for `--offline` |
 | `Gltf/` | runtime GLB import (the Meshopt decode is in `Core/Gltf/`) |
 | `Figures/` | world-map characters: placement rule, figures (fed by Main's poll), clip library (import, pick, retarget), rest-pose correction |
-| `Ui/` | login screen (server, user, password), `LauncherStore` (`user://launcher.json`), the overview camera, the label overlay (`LabelOverlay.cs`: projection, order, the label CSS in `LabelStyle`), the performance probe (`PerfProbe.cs`) |
+| `Ui/` | login screen (server, user, password), `LauncherStore` (`user://launcher.json`), `HudStorageStore` (`user://hud_storage.json`), the overview camera, the label overlay (`LabelOverlay.cs`: projection, order, the label CSS in `LabelStyle`), the performance probe (`PerfProbe.cs`) |
 | `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |
 | `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); Task S3c: the water numbers and window (`Water.cs`; the tile field is `Core/Ground/WaterTileField.cs`) |

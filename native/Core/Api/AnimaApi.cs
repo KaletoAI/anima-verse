@@ -143,6 +143,18 @@ public sealed class AnimaApi : IWorldSource, IDisposable
     }
 
     /// <summary>
+    /// Takes over a session this process already holds (its <see cref="SessionToken"/> from an API that is being
+    /// replaced): the cookie goes into this container as the server set it — name <c>av_session</c>, path <c>/</c> —
+    /// without a login request. Used by the rebuild after a character switch, which keeps the one live session the
+    /// HUD's browser shares. The server's next sliding refresh renews it as usual.
+    /// </summary>
+    public void AdoptSession(string token)
+    {
+        if (string.IsNullOrEmpty(token)) throw new ArgumentException("an empty session token cannot be adopted", nameof(token));
+        _cookies.Add(BaseUri, new Cookie(SessionCookieName, token, "/") { HttpOnly = true });
+    }
+
+    /// <summary>
     /// <c>POST /auth/logout</c>: ends the session server-side (both channels share it), the
     /// answer's Set-Cookie drops it from this container, and the container is emptied of
     /// this server's cookies afterwards in any case. Call it only with a LIVE session

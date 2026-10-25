@@ -13,7 +13,7 @@ namespace AnimaNative.Check;
 /// <c>--check</c>, HUD part (Task S4): the pure parts of the native HUD with
 /// hand-derived cases — <c>pointInRects</c> incl. the CSS/window scale, the
 /// routing decision table, message validation, the outgoing message strings,
-/// the cookie handoff script (the figure pick is 3D since Task 9: PickCheck) — plus two drift guards: the name
+/// the cookie handoff script and its localStorage seed (the figure pick is 3D since Task 9: PickCheck) — plus two drift guards: the name
 /// lists against the TypeScript sources, and (when gdCEF is linked) every
 /// method this client calls against the loaded library.
 /// </summary>
@@ -26,10 +26,11 @@ public static class HudCheck
         int keys = CheckKeys();
         int messages = CheckMessages();
         CheckCookieScript();
+        int seeds = CheckStorageSeed();
         CheckNameLists(source);
         var gdcef = CheckBinding();
         return $"rect_cases={rects} route_cases={routes} key_cases={keys} message_cases={messages} "
-               + $"name_lists=4 gdcef={gdcef}";
+               + $"storage_seed_cases={seeds} name_lists=4 gdcef={gdcef}";
     }
 
     // Two surfaces: A = chat panel x∈[10,310) y∈[20,220); B = rail x∈[1500,1600) y∈[0,900).
@@ -237,6 +238,49 @@ public static class HudCheck
                HudOverlay.LeaveScript);
     }
 
+    /// <summary>
+    /// The handoff with stored HUD settings (Task 12): end the session, seed localStorage, THEN the cookie and the
+    /// navigation to the HUD — and the seed cannot be broken out of. Each hostile value below would end a naive
+    /// literal or script: a quote (<c>"</c> and <c>'</c>), a newline, <c>&lt;/script&gt;</c>, non-ASCII including
+    /// U+2028 (a line terminator in pre-2019 JS strings) and an emoji (a surrogate pair). Expected: the script is
+    /// printable ASCII without a line break or <c>&lt;</c>, and the object literal reads back as exactly the entries.
+    /// </summary>
+    private static int CheckStorageSeed()
+    {
+        var hud = "http://h:8000/static/client3d/hud.html?bridge=gdcef";
+        var plain = HudOverlay.HandoffScript("tok-EN_1", false, hud);
+        var none = HudOverlay.HandoffScript("tok-EN_1", false, hud, new Dictionary<string, string>());
+        Expect("handoff without stored settings is unchanged", none == plain, none);
+
+        var entries = new Dictionary<string, string>
+        {
+            ["av3d.showAllLocations"] = "1",
+            ["quote\"key"] = "say \"hi\" and 'bye'",
+            ["newline"] = "a\nb\r\nc",
+            ["tag"] = "</script><script>alert(1)</script>",
+            ["unicode"] = "\u00dcnal \u2028\u2029 \U0001F6B6 \\",
+        };
+        var script = HudOverlay.HandoffScript("tok-EN_1", false, hud, entries);
+        var cookieName = Api.AnimaApi.SessionCookieName;   // the cookie part names it; the seed part must not
+        int seedAt = script.IndexOf("localStorage.setItem", StringComparison.Ordinal);
+        int cookieAt = script.IndexOf("document.cookie", StringComparison.Ordinal);
+        int navAt = script.IndexOf("location.replace", StringComparison.Ordinal);
+        Expect("handoff order: end session, seed, cookie, navigate",
+               script.StartsWith(HudOverlay.EndSessionScript, StringComparison.Ordinal) && seedAt > 0 && cookieAt > seedAt && navAt > cookieAt,
+               $"{seedAt}/{cookieAt}/{navAt}");
+        Expect("seed script is printable ASCII", script.All(c => c >= 0x20 && c < 0x7f),
+               string.Concat(script.Where(c => c < 0x20 || c >= 0x7f).Select(c => $"U+{(int)c:X4} ")));
+        Expect("no '<' anywhere (no </script>)", !script.Contains('<'), script);
+        int from = script.IndexOf("const e = ", StringComparison.Ordinal) + "const e = ".Length;
+        int to = script.IndexOf("; for (", StringComparison.Ordinal);
+        var back = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(script[from..to]) ?? new();
+        Expect("seed literal reads back as exactly the entries",
+               back.Count == entries.Count && entries.All(e => back.TryGetValue(e.Key, out var v) && v == e.Value),
+               script[from..to]);
+        Expect("the seed carries no session cookie", !script[from..to].Contains(cookieName, StringComparison.Ordinal), script[from..to]);
+        return 5;
+    }
+
     /// <summary>The C# lists equal the TypeScript ones (bridge.ts gameNames/uiNames, bus.ts HUD_OWNED_FIELDS + the state fields).</summary>
     private static void CheckNameLists(FixtureSource source)
     {
@@ -258,8 +302,10 @@ public static class HudCheck
         // C# method is exposed to the engine under exactly that name.
         var overlay = new HudOverlay();
         bool exposed = overlay.HasMethod(HudOverlay.Channel);
+        bool storage = overlay.HasMethod(HudOverlay.StorageMethod);
         overlay.Free();
         Expect("HudOverlay exposes hud_bridge to the engine", exposed, "no method 'hud_bridge' — gdCEF could not call it");
+        Expect("HudOverlay exposes hud_storage to the engine", storage, "no method 'hud_storage' — gdCEF could not call it");
         if (!GdCef.Available) return "not-linked";
         var missing = GdCef.MissingMethods();
         Expect("gdCEF binds every method and signal this client uses", missing.Count == 0, string.Join(", ", missing));

@@ -21,7 +21,8 @@ public static class LauncherCheck
     {
         int files = CheckStore();
         int flags = CheckFlags();
-        return $"launcher file_cases={files} flag_cases={flags}";
+        int hud = CheckHudStore();
+        return $"launcher file_cases={files} flag_cases={flags} hud_store_cases={hud}";
     }
 
     private static int CheckStore()
@@ -55,6 +56,44 @@ public static class LauncherCheck
             Expect("broken file → defaults", broken == new LauncherSettings(), broken.ToString());
             Expect("save over a broken file", LauncherStore.Save(s, path) && LauncherStore.Load(path) == s, File.ReadAllText(path));
             return 5;
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch (Exception) { /* temp dir: best effort */ }
+        }
+    }
+
+    /// <summary>
+    /// <c>user://hud_storage.json</c> through <see cref="HudStorageStore"/> (Task 12), in a temporary directory: a
+    /// missing file is empty; a save/load round trip keeps the entries per server (the stored server key is the
+    /// origin, so <c>192.168.8.244:8000/</c> finds them) and leaves no <c>.tmp</c>; a broken file reads as empty
+    /// and is written over.
+    /// </summary>
+    private static int CheckHudStore()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "anima-native-check-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "hud_storage.json");
+        try
+        {
+            Expect("hud storage: missing file → empty", HudStorageStore.Load(path).Serialize() == "{\"version\":1,\"servers\":{}}",
+                   HudStorageStore.Load(path).Serialize());
+            var s = new HudStorage();
+            s.Apply("http://192.168.8.244:8000", new HudStorageOp(HudStorageOp.Set, HudStorage.ShowAllKey, "1"));
+            s.Apply("http://192.168.8.244:8000", new HudStorageOp(HudStorageOp.Set, "av3d.chat.size", "{\"w\":420}"));
+            s.Apply("http://other:9", new HudStorageOp(HudStorageOp.Set, "k", "v"));
+            Expect("hud storage: save", HudStorageStore.Save(s, path), "Save returned false");
+            Expect("hud storage: no temp file left", !File.Exists(path + ".tmp"), "hud_storage.json.tmp still there");
+            var back = HudStorageStore.Load(path);
+            var lan = back.EntriesFor("192.168.8.244:8000/");
+            Expect("hud storage: round trip per server", back.Serialize() == s.Serialize() && lan.Count == 2
+                                                          && lan[HudStorage.ShowAllKey] == "1" && lan["av3d.chat.size"] == "{\"w\":420}",
+                   back.Serialize());
+            File.WriteAllText(path, "{ not json");
+            Expect("hud storage: broken file → empty, then saved over",
+                   HudStorageStore.Load(path).Serialize() == "{\"version\":1,\"servers\":{}}"
+                   && HudStorageStore.Save(s, path) && HudStorageStore.Load(path).Serialize() == s.Serialize(), File.ReadAllText(path));
+            return 4;
         }
         finally
         {

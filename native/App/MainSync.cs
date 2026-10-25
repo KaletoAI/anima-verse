@@ -90,7 +90,7 @@ public partial class Main : Node3D
     /// <summary>The poll's callback: an error that is not a lost session marks the connection lost.</summary>
     private void OnWorldMap(PolledMap? polled, Exception? error)
     {
-        if (_stop.IsCancellationRequested || _leaving) return;
+        if (_stop.IsCancellationRequested || Leaving) return;
         if (error is not null)
         {
             if (AnimaApi.IsAuthError(error)) return;   // the login comes back (OnUnauthorized)

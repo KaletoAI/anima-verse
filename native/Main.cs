@@ -93,7 +93,9 @@ public partial class Main : Node3D
     private Vector2? _hoverAt;
     private bool _hoverPending;
     private (int Serial, Dictionary<string, LocationInfo> Rows)? _placeRows;
-    private bool _leaving;
+    /// <summary>Where this scene stands with its session (<see cref="SessionFlow"/>); Leaving = it is going away.</summary>
+    private SessionState _session;
+    private bool Leaving => _session.Phase == SessionPhase.Leaving;
     /// <summary>The window is set up once per PROCESS: back to the title reloads this scene and must not undo F11.</summary>
     private static bool _windowApplied;
 
@@ -140,7 +142,7 @@ public partial class Main : Node3D
         var launch = Launcher();
         ApplyStoredFullscreen(launch.Fullscreen);
         _windowApplied = true;
-        ShowLogin(launch);
+        StartSession(launch);
     }
 
     /// <summary>
@@ -243,7 +245,12 @@ public partial class Main : Node3D
         StopSync();
         _stop.Cancel();
         _builder?.Models?.FreeAll();
-        if (_hud is not null && IsInstanceValid(_hud)) _hud.Handlers.Clear();   // the overlay outlives this scene
+        if (_hud is not null && IsInstanceValid(_hud))
+        {
+            // The overlay outlives this scene.
+            _hud.Handlers.Clear();
+            _hud.PageLoaded = null;
+        }
         _api?.Dispose();
     }
 

@@ -175,13 +175,16 @@ public sealed class WorldBuilder
         public Action<string>? Stage { get; init; }
         public Func<Func<Task<BootData>>, Task<BootData>>? Bootstrap { get; init; }
         public Func<Task<JsonElement>>? Locations3d { get; init; }
+        /// <summary>The boot's world map (main.ts <c>api.getWorldMap(showAll)</c>: the stored start view); default the source's.</summary>
+        public Func<Task<JsonDocument>>? WorldMap { get; init; }
     }
 
     /// <summary>The boot data, the three requests at once (one failure fails the unit).</summary>
-    public async Task<BootData> FetchBootDataAsync(Func<Task<JsonElement>>? locations3d = null)
+    public async Task<BootData> FetchBootDataAsync(Func<Task<JsonElement>>? locations3d = null,
+                                                   Func<Task<JsonDocument>>? worldMap = null)
     {
         var hf = Fetch(_source.GetHeightfieldAsync(), root => HeightfieldOverview.Parse(root));
-        var map = Fetch(_source.GetWorldMapAsync(), root => root.Clone());
+        var map = Fetch(worldMap is not null ? worldMap() : _source.GetWorldMapAsync(), root => root.Clone());
         var loc = locations3d is not null ? locations3d() : Fetch(_source.GetLocations3dAsync(), root => root.Clone());
         await Task.WhenAll(hf, map, loc);
         return new BootData(hf.Result, map.Result, loc.Result);
@@ -197,8 +200,8 @@ public sealed class WorldBuilder
     {
         var stats = new WorldStats();
         var boot = hooks?.Bootstrap is { } wrap
-            ? await wrap(() => FetchBootDataAsync(hooks.Locations3d))
-            : await FetchBootDataAsync(hooks?.Locations3d);
+            ? await wrap(() => FetchBootDataAsync(hooks.Locations3d, hooks.WorldMap))
+            : await FetchBootDataAsync(hooks?.Locations3d, hooks?.WorldMap);
         var overview = boot.Overview;
         var mapRoot = boot.Map;
         var locations = LocationInfo.ParseList(mapRoot);

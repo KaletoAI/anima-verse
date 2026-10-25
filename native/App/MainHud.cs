@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using AnimaNative.Hud;
 using AnimaNative.Overview;
+using AnimaNative.Ui;
 using AnimaNative.World;
 using Godot;
 
@@ -29,7 +30,7 @@ public partial class Main : Node3D
         hud.Handlers["closeInfo"] = _ => SetInfo(null);
         hud.Handlers["infoAction"] = args => InfoAction(Arg(args, 0), Arg(args, 1));
         hud.Handlers["setVolumes"] = _ => { };                                  // no audio in the spike
-        hud.Handlers["backToTitle"] = args => { _ = BackToTitleAsync(); };
+        hud.Handlers["backToTitle"] = _ => OnSession(SessionEvent.BackToTitle);
         hud.Handlers["setShowAll"] = args =>
         {
             if (args.Count > 0 && args[0] is JsonValue v && v.TryGetValue<bool>(out var on)) _ = ApplyShowAllAsync(on);
@@ -41,8 +42,10 @@ public partial class Main : Node3D
             if (Arg(args, 0) is { } who && Arg(args, 1) is { } text) _tags?.Say(who, text);
         };
         // The browser sets a marker that survives ONE page reload, so the next boot skips the title gate (a
-        // character take-over reloads the page). This client never reloads a page: there is nothing to mark.
-        hud.Handlers["markResume"] = _ => Log("markResume: acknowledged — the native client has no page reload to resume after");
+        // character take-over reloads the page). Natively the marker is acknowledged, and the HUD page's reload
+        // that follows rebuilds the world with the live session (SessionFlow).
+        hud.Handlers["markResume"] = _ => OnSession(SessionEvent.ResumeMarked);
+        hud.PageLoaded = () => OnSession(SessionEvent.HudPageLoaded);
         // Scene-owned fields the chat, plaque and menu read (minimum viable set).
         hud.SetState("mode", "overview");
         hud.SetState("connection", "ok");

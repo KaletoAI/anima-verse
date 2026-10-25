@@ -106,6 +106,30 @@ public class AnimaApiSessionTests
         Assert.Equal("GET /auth/status cookie=-", server.Requests[^1]);
     }
 
+    /// <summary>
+    /// The rebuild after a character switch: a NEW api takes over the live session of the old one without a login
+    /// request — the server sees the same cookie, and the session is still the one alive.
+    /// </summary>
+    [Fact]
+    public async Task AdoptedSessionIsTheLiveOneWithoutALogin()
+    {
+        using var server = new FakeAuthServer();
+        string token;
+        using (var first = new AnimaApi(server.Url))
+        {
+            using (await first.LoginAsync("demo", "pw")) { }
+            token = first.SessionToken()!;
+        }
+        using var api = new AnimaApi(server.Url);
+        Assert.Null(api.SessionToken());
+        api.AdoptSession(token);
+        Assert.Equal("tok", api.SessionToken());
+        Assert.True(await api.IsAuthenticatedAsync());
+        Assert.Equal("GET /auth/status cookie=tok", server.Requests[^1]);
+        Assert.Single(server.Requests, r => r.StartsWith("POST /auth/login", StringComparison.Ordinal));
+        Assert.Throws<ArgumentException>(() => api.AdoptSession(""));
+    }
+
     [Fact]
     public async Task AFailedLogoutStillForgetsTheCookie()
     {

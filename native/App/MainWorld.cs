@@ -61,6 +61,8 @@ public partial class Main : Node3D
                     ms => Task.Delay(TimeSpan.FromMilliseconds(ms), _stop.Token),
                     (line, e) => Log($"boot: world data {line}: {e.Message}")),
                 Locations3d = async () => (await cache.GetAsync()).Root,
+                // main.ts `api.getWorldMap(showAll)`: the stored start view (ReadStoredStart), online only.
+                WorldMap = api is not null ? () => api.GetWorldMapAsync(_showAll) : null,
             };
             var stats = await builder.BuildAsync(world, _options!.Goto, hooks);
             Anchor = stats.Anchor;
@@ -180,7 +182,7 @@ public partial class Main : Node3D
         }
         catch (Exception e)
         {
-            if (_stop.IsCancellationRequested || _leaving) return;   // back to the title / a lost session: the scene is gone
+            if (_stop.IsCancellationRequested || Leaving) return;   // back to the title / a lost session: the scene is gone
             if (AnimaApi.IsAuthError(e)) return;   // the session died: OnUnauthorized brings the login back
             GD.PrintErr($"[native] world load failed: {e}");
             SetStatus("World load failed: " + e.Message);

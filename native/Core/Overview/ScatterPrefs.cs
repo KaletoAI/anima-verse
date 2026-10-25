@@ -1,4 +1,6 @@
 using System;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using AnimaNative.Scatter;
 
 namespace AnimaNative.Overview;
@@ -52,6 +54,34 @@ public readonly record struct ScatterPrefs(double ScatterNearM, double ScatterFa
         }
         var prefs = new ScatterPrefs(metres[0], metres[1], metres[2]);
         return prefs.Ordered ? new ScatterPrefsCheck(prefs, null) : new ScatterPrefsCheck(null, "order");
+    }
+
+    /// <summary>
+    /// <c>loadScatterPrefs(raw)</c>: the stored string (<c>av3d.view.scatter.v1</c>) → three usable distances; never
+    /// throws, never half a setting. Field by field first (a finite NUMBER, clamped; anything else is that field's
+    /// default), then the triple as a whole: one that does not climb falls back to <see cref="Defaults"/> completely.
+    /// Not JSON, not an object, an array, null: the defaults.
+    /// </summary>
+    public static ScatterPrefs Load(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return Defaults;
+        JsonNode? parsed;
+        try
+        {
+            parsed = JsonNode.Parse(raw);
+        }
+        catch (JsonException)
+        {
+            return Defaults;
+        }
+        if (parsed is not JsonObject p) return Defaults;
+        static double Distance(JsonNode? node, double fallback)
+            => node is JsonValue v && v.GetValueKind() == JsonValueKind.Number
+               && v.TryGetValue<double>(out var d) && double.IsFinite(d) ? ClampM(d) : fallback;
+        var prefs = new ScatterPrefs(Distance(p["scatterNearM"], Defaults.ScatterNearM),
+                                     Distance(p["scatterFarM"], Defaults.ScatterFarM),
+                                     Distance(p["scatterCullM"], Defaults.ScatterCullM));
+        return prefs.Ordered ? prefs : Defaults;
     }
 
     /// <summary><c>scatterLodCfgOf</c>: the stored fields → the cfg the LOD maths takes.</summary>
