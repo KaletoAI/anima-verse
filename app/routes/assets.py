@@ -53,7 +53,7 @@ from app.core.animation_clips import (CLIP_EXTS, ClipExists,
                                       ClipLibraryError, ClipNotFound,
                                       clip_entries, clip_meta,
                                       clip_role_gender, clip_view, delete_clip,
-                                      load_transitions,
+                                      annotated_transitions, client_transition_rules,
                                       orient_clip, pair_kinds, rename_clip,
                                       save_transitions,
                                       set_clip_loop, set_clip_role_gender)
@@ -120,7 +120,8 @@ def list_animation_clips() -> Dict[str, Any]:
             "movement_poses": movement_pose_kinds(),
             # The clip that has to play BETWEEN two clips — an exit ("stand up
             # before walking"), an enter, or the pair of exactly two states.
-            "transitions": load_transitions()}
+            "transitions": annotated_transitions(),
+            "transition_clips": client_transition_rules()}
 
 
 # ── Editing the libraries (the Poses tab's "Library" view) ───────────────
@@ -265,7 +266,7 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
 async def put_clip_transitions(request: Request,
                                _: Dict[str, Any] = Depends(require_admin)
                                ) -> Dict[str, Any]:
-    """Sets the transition rules — which clip has to play BETWEEN two clips.
+    """Sets pose transition rules — which bridge clip plays between two poses.
 
     Body ``{transitions: [{from, to, kind}]}`` (a bare list is accepted too),
     and it replaces the WHOLE list: the rules are few and the editor shows all
@@ -280,7 +281,8 @@ async def put_clip_transitions(request: Request,
         raise HTTPException(status_code=400, detail="invalid JSON body")
     rules = body.get("transitions") if isinstance(body, dict) else body
     try:
-        return {"transitions": save_transitions(rules)}
+        save_transitions(rules)
+        return {"transitions": annotated_transitions()}
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
 

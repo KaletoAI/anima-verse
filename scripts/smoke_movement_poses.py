@@ -7,6 +7,8 @@ Hand-derived Task 2 expectations: seven poses map to idle/walk/run/swim/
 treading-water/crawl/crawl-rest. Two world overrides affect played kinds
 only. Female walk wins over neutral; licensed walk shadows free walk only
 when licensed clips are allowed. Missing and pair-only kinds resolve to None.
+Task 3: sleeping→walking expands to two pairs, the seat wildcard to one;
+unknown poses contribute none. Exact beats exit beats enter; accel caps at 8.
 """
 import json
 import os
@@ -23,6 +25,41 @@ def check(label, ok):
     print(f"{'OK' if ok else 'FAIL'} {label}")
     if not ok:
         FAILURES.append(label)
+
+
+def transition_checks(ac, path, fixture):
+    # By hand: exact beats exit beats enter, regardless of file order.
+    rules = [{"from": "*", "to": "walking", "kind": "run"}, {"from": "sitting at table", "to": "*", "kind": "idle"}, {"from": "sitting at table", "to": "walking", "kind": "walk"}]
+    ac.save_transitions(rules)
+    check("specificity", [ac.resolve_transition(a,b)["kind"] for a,b in [("sitting at table", "walking"), ("sitting at table", "running"), ("standing", "walking")]] == ["walk", "idle", "run"])
+    check("empty/same/unruled", all(ac.resolve_transition(a,b) is None for a,b in [("", "walking"), ("walking", ""), ("walking", "walking"), ("standing", "running")]))
+    bad_lists = [[dict(fixture[0], kind=k)] for k in ("missing", "pair")]
+    bad_lists += [[dict(fixture[0], **changes)] for changes in ({"from": "*", "to": "*"}, {"from": ""}, {"from": "bad/key"}, {"to": "bad*key"})]
+    bad_lists += [rules + [rules[0]], {}, [{"from": "sleeping", "kind": "idle"}]]
+    for bad in bad_lists:
+        try:
+            ac.save_transitions(bad)
+        except ac.ClipLibraryError:
+            check("invalid rule rejected", True)
+        else:
+            check("invalid rule rejected", False)
+    check("refused calls preserve list", len(ac.load_transitions()) == 3)
+    check("accel defaults/cap", [ac.save_transitions([dict(fixture[0], accel=v)])[0]["accel"] for v in (None, 1.5, "junk", -2, 0, 99)] == [0, 1.5, 0, 0, 0, 8])
+    check("replacement/reload", len(ac.load_transitions()) == 1 and ac.load_transitions()[0]["accel"] == 8)
+    path.write_text("junk")
+    check("junk file", ac.load_transitions() == [])
+    path.write_text(json.dumps({"transitions": [fixture[0], {"from": "sleeping"}, "junk", fixture[0]]}))
+    check("junk entries", len(ac.load_transitions()) == 1)
+    ac.save_transitions(fixture)
+    missing_bridge = [dict(fixture[0], kind="absent-bridge"), fixture[1]]
+    path.write_text(json.dumps({"transitions": missing_bridge}))
+    check("rename preserves unavailable bridges", ac.rename_transition_pose("sleeping", "asleep") == 1)
+    check("drop preserves unavailable bridges", ac.drop_transition_pose("sitting at table") == 1 and ac.load_transitions()[0]["kind"] == "absent-bridge")
+    ac.save_transitions(fixture)
+    collision = fixture + [dict(fixture[0], kind="get-up-chair")]
+    check("annotations/conflict", ac.annotated_transitions(collision)[-1]["conflict"] and ac.annotated_transitions()[0]["bridge_public"])
+    check("first wins", ac.client_transition_rules(collision)[0]["kind"] == "get-up-bed")
+    check("same clip skipped", ac.client_transition_rules([dict(fixture[0], to="sleeping")]) == [])
 
 
 def main():
@@ -44,9 +81,10 @@ def main():
                  "swimming": "swim", "treading_water": "treading-water",
                  "crawling": "crawl", "crawling_rest": "crawl-rest"}
         entries = {key: {"animation": kind, "prompt": key} for key, kind in kinds.items()}
+        entries.update({"sleeping": {"animation": "sleeping-side"}, "sitting at table": {"animation": "sitting-at-the-table"}})
         catalog = root / "pose_catalog.json"
         catalog.write_text(json.dumps({"entries": entries}), encoding="utf-8")
-        for name in (*kinds.values(), "breast-stroke", "pair__a", "pair__b"):
+        for name in (*kinds.values(), "breast-stroke", "get-up-bed", "get-up-chair", "sleeping-side", "sitting-at-the-table", "pair__a", "pair__b"):
             (free / f"{name}.fbx").write_bytes(b"clip")
         (free / "female").mkdir()
         (free / "female" / "walk.fbx").write_bytes(b"clip")
@@ -61,11 +99,32 @@ def main():
             k = movement_pose_kinds()
             check("[M2] played/public", len(k) == 7 and k["walking"] == {"kind": "mob1-walk", "public_kind": "walk"} and k["swimming"] == {"kind": "breast-stroke", "public_kind": "swim"} and k["crawling_rest"] == {"kind": "crawl-rest", "public_kind": "crawl-rest"})
             check("unknown poses", played_pose_kind("missing") == shared_pose_kind("missing") == "")
+            from app.core import animation_clips as ac
+            rules_path = root / "transitions.json"
+            fixture = [{"from": "sleeping", "to": "walking", "kind": "get-up-bed"}, {"from": "sitting at table", "to": "*", "kind": "get-up-chair"}, {"from": "ghost pose", "to": "*", "kind": "get-up-chair"}]
+            with patch.object(ac, "clip_transitions_path", return_value=rules_path):
+                ac.save_transitions(fixture)
+                check("[T1] pose precedence", ac.resolve_transition("sleeping", "walking")["kind"] == "get-up-bed" and ac.resolve_transition("sitting at table", "running")["kind"] == "get-up-chair" and ac.resolve_transition("walking", "walking") is None)
+                annotated = ac.annotated_transitions()[0]
+                check("annotation kinds", {k: annotated[k] for k in ("from_kind", "to_kind", "from_public_kind", "to_public_kind")} == {"from_kind": "sleeping-side", "to_kind": "mob1-walk", "from_public_kind": "sleeping-side", "to_public_kind": "walk"})
+                check("missing public bridge", not ac.annotated_transitions([dict(fixture[0], kind="mob1-walk")])[0]["bridge_public"])
+                (free / "female" / "set-bridge.fbx").write_bytes(b"clip")
+                check("public bridge in a set", ac.annotated_transitions([dict(fixture[0], kind="set-bridge")])[0]["bridge_public"])
+                c = ac.client_transition_rules()
+                pairs = {(r["from"], r["to"]) for r in c}
+                check("[T2] expanded played+public", {("sleeping-side", "mob1-walk"), ("sleeping-side", "walk")} <= pairs)
+                check("[T3] wildcard kept", ("sitting-at-the-table", "*") in pairs)
+                check("[T4] unknown pose skipped", len(c) == 3)
+                check("[T5] unknown survives save", any(r["from"] == "ghost pose" for r in ac.save_transitions(ac.load_transitions())))
+                check("[T7] rename/drop", ac.rename_transition_pose("sleeping", "asleep") == 1 and ac.drop_transition_pose("asleep") == 1)
+                transition_checks(ac, rules_path, fixture)
             pc.replace_world_entries("pose", {})
             pc.reload_catalogs()
             for file in licensed.iterdir():
                 file.unlink()
             check("[M3] public", movement_pose_kinds() == {key: {"kind": kind, "public_kind": kind} for key, kind in kinds.items()} and all(clip_file_for(kind, [], free_only=False)["library"] == "free" for kind in kinds.values()))
+            with patch.object(ac, "clip_transitions_path", return_value=rules_path):
+                check("[T6] public rules", all("mob1" not in r["from"] + r["to"] for r in ac.client_transition_rules()))
             (licensed / "walk.fbx").write_bytes(b"clip")
             check("[M4] set chain", clip_file_for("walk", ["missing", "female"], free_only=False)["set"] == "female")
             played = clip_file_for("walk", [], free_only=False)
@@ -75,6 +134,9 @@ def main():
             check("[M6] missing", clip_file_for("fly", ["female"], free_only=False) is None and clip_file_for("mob1-walk", [], free_only=True) is None and clip_file_for("pair", [], free_only=False) is None)
             payload = list_animation_clips()
             check("[M7] payload", payload.get("movement_poses") == movement_pose_kinds() and "locomotion" not in payload)
+            with patch.object(ac, "clip_transitions_path", return_value=rules_path):
+                payload = list_animation_clips()
+                check("transition payload", payload["transitions"] == ac.annotated_transitions() and payload["transition_clips"] == ac.client_transition_rules())
         pc.reload_catalogs()
     print(f"{len(FAILURES)} failures")
     return bool(FAILURES)

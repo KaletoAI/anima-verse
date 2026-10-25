@@ -190,7 +190,7 @@ def test_listing() -> None:
           "/assets/animation-clips/lady/dance_02.fbx" in urls)
     check("the payload shape",
           set(data) == {"clips", "kinds", "pair_kinds", "pairs", "clip_sets",
-                        "sets", "movement_poses", "transitions"},
+                        "sets", "movement_poses", "transitions", "transition_clips"},
           str(sorted(data)))
     check("per-clip fields",
           set(data["clips"][0]) == {"kind", "role", "set", "source", "library",

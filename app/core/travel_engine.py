@@ -571,11 +571,7 @@ def exit_bridge_for_pose(pose_key: str) -> Tuple[str, float]:
     """
     try:
         from app.core.animation_clips import clip_meta, resolve_transition
-        from app.core.expression_pose_maps import resolve_pose_animation
-        from app.core.movement import played_pose_kind
-        from_kind = resolve_pose_animation(pose_key)
-        to_kind = played_pose_kind("walking") or "walk"
-        rule = resolve_transition(from_kind, to_kind)
+        rule = resolve_transition(pose_key, "walking")
         if not rule or float(rule.get("accel") or 0) > 0:
             return "", 0.0
         via = str(rule.get("kind") or "")

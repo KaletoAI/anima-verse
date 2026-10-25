@@ -315,25 +315,18 @@ for _kind, _mode in (("smoke-rise", "foot_lock"), ("smoke-rise-strip", "strip"))
                                      "ref_height_m": 1.75}}}), encoding="utf-8")
 
 
-#: pose key -> the animation it plays, and animation -> its exit clip.
-_ANIM = {"sitting": "sit", "lying": "lie", "sleeping": "sleep"}
-
-
 @contextlib.contextmanager
 def _bridge_fixture(accel: float, kind: str = "smoke-rise"):
     import app.core.animation_clips as ac
-    import app.core.expression_pose_maps as epm
-    keep = (epm.resolve_pose_animation, ac.load_locomotion_clips, ac.resolve_transition)
-    exits = {"sit": kind, "lie": "smoke-rise-strip", "sleep": "smoke-rise"}
+    keep = ac.resolve_transition
+    exits = {"sitting": kind, "lying": "smoke-rise-strip", "sleeping": "smoke-rise"}
     try:
-        epm.resolve_pose_animation = lambda k: _ANIM.get(k, "idle")
-        ac.load_locomotion_clips = lambda *a, **k: {"walk": "walk"}
         ac.resolve_transition = lambda a, b, rules=None: (
             {"from": a, "to": b, "kind": exits[a], "accel": accel}
-            if a in exits and b == "walk" else None)
+            if a in exits and b == "walking" else None)
         yield
     finally:
-        epm.resolve_pose_animation, ac.load_locomotion_clips, ac.resolve_transition = keep
+        ac.resolve_transition = keep
 
 
 def near_xz(point, x: float, z: float, eps: float = 1e-6) -> bool:

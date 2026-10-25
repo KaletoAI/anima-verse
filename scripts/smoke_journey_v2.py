@@ -477,25 +477,19 @@ check("… and stores no journey", travel_engine.get_journey("wild_npc"), None)
 
 # ── Standing up before walking (T2) ─────────────────────────────────────
 #
-# `travel_engine.departure_bridge` combines three answers into one: what the
-# character's POSE plays now, what WALKING plays, and whether the transition
-# table rules a clip between them. The rule under test is that combination, so
-# the three collaborators are stood in for.
+# `travel_engine.departure_bridge` asks for the effective pose's transition
+# into walking and uses the bridge clip's own duration.
 print("\n[departure bridge]")
 import app.core.animation_clips as _ac                        # noqa: E402
-import app.core.expression_pose_maps as _epm                  # noqa: E402
 import app.models.character as _ch                            # noqa: E402
 
-_keep = (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
-         _ac.load_locomotion_clips, _ac.resolve_transition, _ac.clip_meta)
+_keep = (_ch.get_effective_pose_key,
+         _ac.resolve_transition, _ac.clip_meta)
 try:
     _ch.get_effective_pose_key = lambda n: "sitting"
-    _epm.resolve_pose_animation = lambda k: "sit"
-    _ac.load_locomotion_clips = lambda *a, **k: {"walk": "walk", "run": "run",
-                                                 "idle": "idle"}
     def _rule(a, b, rules=None, accel=0.0):
         return ({"from": a, "to": b, "kind": "standup", "accel": accel}
-                if (a, b) == ("sit", "walk") else None)
+                if (a, b) == ("sitting", "walking") else None)
 
     _ac.resolve_transition = _rule
     _ac.clip_meta = lambda kind, *a, **k: ({"duration_s": 2.23}
@@ -547,8 +541,8 @@ try:
     check("… a frozen clock keeps the clip's own seconds",
           travel_engine._exit_delay(2.23, 0.0), 3)
 finally:
-    (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
-     _ac.load_locomotion_clips, _ac.resolve_transition, _ac.clip_meta) = _keep
+    (_ch.get_effective_pose_key,
+     _ac.resolve_transition, _ac.clip_meta) = _keep
 
 # ── A journey from a SEAT starts where the exit clip set the figure down ──
 #
@@ -601,8 +595,8 @@ set_known_locations("seat_npc", [HOME, PARK])
 _SEAT = {"id": "s1", "slot": 0, "x": 2.0, "z": 3.0, "facing": 90.0,
          "room_id": "r1"}
 
-_keep_seat = (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
-              _ac.load_locomotion_clips, _ac.resolve_transition, _places.place_of)
+_keep_seat = (_ch.get_effective_pose_key,
+              _ac.resolve_transition, _places.place_of)
 
 
 def _seat_journey(kind):
@@ -610,14 +604,12 @@ def _seat_journey(kind):
     set_character_pos("seat_npc", 2.0, 3.0)
     _ac.resolve_transition = lambda a, b, rules=None: (
         {"from": a, "to": b, "kind": kind, "accel": 0.0}
-        if (a, b) == ("sit", "walk") else None)
+        if (a, b) == ("sitting", "walking") else None)
     return travel_engine.start_journey("seat_npc", PARK)
 
 
 try:
     _ch.get_effective_pose_key = lambda n, *a, **k: "sitting"
-    _epm.resolve_pose_animation = lambda k: "sit"
-    _ac.load_locomotion_clips = lambda *a, **k: {"walk": "walk"}
     _places.place_of = lambda n, *a, **k: dict(_SEAT) if n == "seat_npc" else None
 
     _j, _why = _seat_journey("smoke-rise")
@@ -655,8 +647,8 @@ try:
     approx("[J3] … timed from the seat: 2.8284 m / 1.4",
            _w[1][2], math.sqrt(8.0) / 1.4, tol=0.01)
 finally:
-    (_epm.resolve_pose_animation, _ch.get_effective_pose_key,
-     _ac.load_locomotion_clips, _ac.resolve_transition, _places.place_of) = _keep_seat
+    (_ch.get_effective_pose_key,
+     _ac.resolve_transition, _places.place_of) = _keep_seat
     travel_engine.cancel_journey("seat_npc")
 
 # ── The world WAITS: a journey that starts later ────────────────────────

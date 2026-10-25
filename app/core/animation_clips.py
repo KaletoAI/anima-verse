@@ -408,11 +408,11 @@ def _accel(raw: Any) -> float:
     return round(min(value, 8.0), 3)
 
 
-def resolve_transition(from_kind: Any, to_kind: Any,
+def resolve_transition(from_pose: Any, to_pose: Any,
                        rules: Optional[List[Dict[str, Any]]] = None
                        ) -> Optional[Dict[str, Any]]:
-    """The RULE that applies when a figure goes from ``from_kind`` to
-    ``to_kind`` — ``None`` when nothing is configured.
+    """The RULE that applies when a figure goes from ``from_pose`` to
+    ``to_pose`` — ``None`` when nothing is configured.
 
     The whole rule, not just its clip: what happens during the bridge depends
     on ``accel`` as much as on ``kind``, and two lookups for one answer is how
@@ -425,11 +425,11 @@ def resolve_transition(from_kind: Any, to_kind: Any,
        ("standing up after sitting, whatever comes next"),
     3. ``to`` named, ``from`` the wildcard — the ENTER clip of a state.
 
-    A switch onto the SAME clip is never a transition: a figure that keeps
+    A switch onto the SAME pose is never a transition: a figure that keeps
     walking must not stand up first.
     """
-    src = str(from_kind or "").strip().lower()
-    dst = str(to_kind or "").strip().lower()
+    src = str(from_pose or "").strip().lower()
+    dst = str(to_pose or "").strip().lower()
     if not src or not dst or src == dst:
         return None
     table = load_transitions() if rules is None else rules
@@ -456,8 +456,7 @@ def save_transitions(entries: Any,
 
     ``kind`` must exist as a SOLO clip — a rule pointing at a file nobody has
     would stall a figure between two states. ``from``/``to`` are NOT checked
-    against the library: they are the kinds a pose or a ground happens to
-    name, and a world may carry clips this installation does not. Both sides
+    against the catalog: they are pose keys from any world or pack. Both sides
     wildcard is refused — that rule would fire on every single clip change.
     """
     if not isinstance(entries, list):
@@ -478,7 +477,8 @@ def save_transitions(entries: Any,
                 "every clip change — name at least one side")
         for side, value in (("from", src), ("to", dst)):
             if value != TRANSITION_ANY:
-                validate_kind(value)
+                if "/" in value or "*" in value:
+                    raise ClipLibraryError(f"rule {i + 1}: invalid pose key on {side}")
         kind = validate_kind(raw.get("kind"))
         if solo is None:
             solo = _solo_kinds()
@@ -492,12 +492,111 @@ def save_transitions(entries: Any,
         out.append({"from": src, "to": dst, "kind": kind,
                     "accel": _accel(raw.get("accel"))})
 
+    _write_transitions(out, path)
+    return out
+
+
+def _write_transitions(entries: List[Dict[str, Any]], path: Optional[Path] = None) -> None:
+    """Persist rules; reference maintenance must preserve unavailable bridges."""
     target = path or clip_transitions_path()
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps({"transitions": out}, indent=2,
+    target.write_text(json.dumps({"transitions": entries}, indent=2,
                                  ensure_ascii=False) + "\n", encoding="utf-8")
-    logger.info("clip transitions saved: %d rule(s)", len(out))
+    logger.info("clip transitions saved: %d rule(s)", len(entries))
+
+
+def _pose_kind_maps() -> Tuple[Dict[str, str], Dict[str, str]]:
+    """``(played, shipped)`` pose key → clip kind, each catalog read ONCE per
+    listing (the shipped one is a file read, and every rule names two poses)."""
+    from app.core.pose_catalog import get_catalog
+    from app.core.pose_catalog_edit import read_store
+    played = {k: str(v.get("animation") or "") for k, v in get_catalog("pose").items()}
+    shipped = {k: str((v or {}).get("animation") or "")
+               for k, v in read_store("pose", "shared")["entries"].items()}
+    return played, shipped
+
+
+def _transition_pairs(rule: Dict[str, Any], maps: Tuple[Dict[str, str], Dict[str, str]]):
+    """The clip pairs a pose rule stands for: played kinds before shipped
+    ones, a pose this world does not know gives none, ``*`` stays ``*``."""
+    played, shipped = maps
+
+    def kinds(key):
+        if key == TRANSITION_ANY:
+            return [TRANSITION_ANY]
+        return list(dict.fromkeys(k for k in (played.get(key, ""), shipped.get(key, "")) if k))
+
+    return [(src, dst) for src in kinds(rule["from"])
+            for dst in kinds(rule["to"]) if src != dst]
+
+
+def client_transition_rules(rules=None) -> List[Dict[str, Any]]:
+    """The pose rules translated into the CLIP rules the 3D client switches
+    by (it knows clip kinds, not poses); the first rule to occupy a clip
+    pair keeps it."""
+    maps = _pose_kind_maps()
+    out = []
+    seen = set()
+    for rule in load_transitions() if rules is None else rules:
+        for src, dst in _transition_pairs(rule, maps):
+            if (src, dst) in seen:
+                continue
+            seen.add((src, dst))
+            out.append({"from": src, "to": dst, "kind": rule["kind"],
+                        "accel": _accel(rule.get("accel"))})
     return out
+
+
+def annotated_transitions(rules=None) -> List[Dict[str, Any]]:
+    """The pose rules as the editor shows them: each side's played and
+    shipped clip kind, whether the bridge clip exists in the FREE library
+    (``bridge_public``) and whether an earlier rule already occupies one of
+    its clip pairs (``conflict``)."""
+    maps = _pose_kind_maps()
+    played, shipped = maps
+    free = {e["kind"] for root, source in get_animation_clips_dirs()
+            if source == "free" and root.exists()
+            for e in _scan_library(root, source) if not e["role"]}
+    out = []
+    seen = set()
+    for rule in load_transitions() if rules is None else rules:
+        pairs = _transition_pairs(rule, maps)
+        row = dict(rule)
+        for side in ("from", "to"):
+            key = rule[side]
+            row[side + "_kind"] = TRANSITION_ANY if key == TRANSITION_ANY else played.get(key, "")
+            row[side + "_public_kind"] = (TRANSITION_ANY if key == TRANSITION_ANY
+                                          else shipped.get(key, ""))
+        row["bridge_public"] = rule["kind"] in free
+        row["conflict"] = any(pair in seen for pair in pairs)
+        seen.update(pairs)
+        out.append(row)
+    return out
+
+
+def rename_transition_pose(old: str, new: str) -> int:
+    """Rename both references to a pose and return the number of changed rules."""
+    rules = load_transitions()
+    count = 0
+    for rule in rules:
+        if old in (rule["from"], rule["to"]):
+            count += 1
+            for side in ("from", "to"):
+                if rule[side] == old:
+                    rule[side] = new
+    if count:
+        _write_transitions(rules)
+    return count
+
+
+def drop_transition_pose(key: str) -> int:
+    """Remove rules referencing a deleted pose."""
+    rules = load_transitions()
+    kept = [r for r in rules if key not in (r["from"], r["to"])]
+    count = len(rules) - len(kept)
+    if count:
+        _write_transitions(kept)
+    return count
 
 
 # ── The library view: one clip as the listing (and the editor) sees it ────

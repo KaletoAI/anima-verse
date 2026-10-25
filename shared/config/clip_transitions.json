@@ -1,20 +1,20 @@
 {
   "transitions": [
     {
-      "from": "mob1-stand-relaxed-idle-v2",
-      "to": "mob1-walk",
+      "from": "standing",
+      "to": "walking",
       "kind": "mob1-stand-relaxed-to-walk",
       "accel": 1.0
     },
     {
-      "from": "sleeping-side",
-      "to": "mob1-stand-relaxed-idle-v2",
+      "from": "sleeping",
+      "to": "standing",
       "kind": "get-up-bed",
       "accel": 0.0
     },
     {
-      "from": "sleeping-side",
-      "to": "mob1-walk",
+      "from": "sleeping",
+      "to": "walking",
       "kind": "get-up-bed",
       "accel": 0.0
     },
@@ -25,7 +25,7 @@
       "accel": 0.0
     },
     {
-      "from": "sitting-at-the-table",
+      "from": "sitting at table",
       "to": "*",
       "kind": "get-up-chair",
       "accel": 0.0
@@ -43,8 +43,8 @@
       "accel": 0.0
     },
     {
-      "from": "laying",
-      "to": "mob1-stand-relaxed-idle-v2",
+      "from": "lying",
+      "to": "standing",
       "kind": "get-up-bed",
       "accel": 0.0
     }
