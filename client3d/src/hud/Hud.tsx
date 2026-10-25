@@ -1047,9 +1047,8 @@ export function Hud({ avatar, username, role }: {
         </div>
       </div>
       <div className="hud-notices"><NoticeBanner /></div>
-      <div className="hud-hints">{game.mode === 'embodied'
-        ? t('🖱 Drag: turn/tilt the view · Click on the ground: walk there · Wheel: zoom · WASD: move · Q/E: 45° turn · Esc: hand back control')
-        : t('🖱 Drag: pan · Middle or Shift+drag: turn/tilt · Wheel: zoom (closest = figures) · Q/E: 45° turn · Click: open place')}</div>
+      {game.mode === 'embodied' && <div className="hud-hints">
+        {t('🖱 Drag: turn/tilt the view · Click on the ground: walk there · Wheel: zoom · WASD: move · Q/E: 45° turn · Esc: hand back control')}</div>}
       {game.info && <InfoPanel info={game.info} onPick={setTravelPick} />}
       {game.openView?.trim() && game.mode !== 'embodied' && <div className="open-view-badge">
         <span className="ovb-name">{game.openView}</span>
