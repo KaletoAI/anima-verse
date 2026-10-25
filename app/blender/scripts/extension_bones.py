@@ -32,6 +32,19 @@ COINCIDENT_EPSILON_M = 1e-5
 # hair or fabric blobs 48 mm and more; accepted primary tips reach 34 mm,
 # which is why this is only the fallback and not a filter on the primary pair.
 MARKER_APEX_REACH_M = .02
+# Metres: a tip the mesher already modelled is kept as it is from this height
+# on (no fill, no stub; the bone spans it base to apex). Measured 2026-10-25 on
+# the outer skin: UniForge bodies 1.5-7 mm (Ylva 4.9/6.7), Trellis bodies
+# without a modelled tip 0-1.3 mm. Below, the tip is filled and a stub built.
+EXISTING_TIP_MIN_M = .0025
+# Metres: the fallback fill when the wide ring does not fit levels only the tip,
+# out to the inner edge of the ring its own surface is fitted on (8 mm).
+LOCAL_FILL_RADIUS_M = .008
+# A body counts as double-walled from this many enclosed vertices around the
+# tips (measured: UniForge 474-5563; creases and seams of single-walled bodies
+# a handful).
+DOUBLE_WALL_MIN_VERTICES = 100
+LOCAL_FILL_BLEND_M = .003
 
 PARAMETERS = {'pair_protrusion': {'band_lower_bone': 'bone',
                      'band_upper_bone': 'bone',
@@ -654,11 +667,27 @@ def tip_mesh(meshes, p, placement):
         mesh.data.update()
     for mesh in meshes:
         subdivide(mesh,tips,[level*radius for level in p['subdivide_radii']])
-    rows = []
+    tree = world_tree(meshes)
+    # Inner walls of a double-walled body neither define the surface nor move:
+    # their points sit a few mm below the skin and used to spoil the ring fit
+    # (UniForge: RMS 2-4 mm, fill skipped) and follow the fill and the stub.
+    region = max(p['normal_radius'],p['fill_radius']+p['fill_ring'])*radius
+    inner = set()
+    for index,mesh in enumerate(meshes):
+        normal_matrix = mesh.matrix_world.to_3x3().inverted().transposed()
+        for vertex in mesh.data.vertices:
+            point = mesh.matrix_world@vertex.co
+            if any((point-t).length <= region for t in tips) and _common.enclosed(tree,point,normal_matrix@vertex.normal):
+                inner.add((index,vertex.index))
+    if len(inner) < DOUBLE_WALL_MIN_VERTICES:
+        inner = set()   # a crease or seam, not a wall: single-walled body, unchanged
+    frames = []
     for tip in tips:
         normal = Vector()
-        for mesh in meshes:
+        for index,mesh in enumerate(meshes):
             for face in mesh.data.polygons:
+                if any((index,i) in inner for i in face.vertices):
+                    continue
                 points = [mesh.matrix_world@mesh.data.vertices[i].co for i in face.vertices]
                 centre = sum(points,Vector())/len(points)
                 if (centre-tip).length <= p['normal_radius']*radius:
@@ -671,20 +700,42 @@ def tip_mesh(meshes, p, placement):
             normal.negate()
         a = normal.orthogonal().normalized()
         b = normal.cross(a)
+        frames.append((tip,normal,a,b,existing_tip(tree,tip,normal,a,b)))
+    # One decision for the pair: a tip just above the threshold on one side and
+    # just below on the other must not end up as one kept tip and one stub.
+    keep = statistics.mean(f[4]['protrusion'] for f in frames) >= EXISTING_TIP_MIN_M
+    rows = []
+    for tip,normal,a,b,existing in frames:
         def coords(point):
             d = point-tip
             u,w,h = d.dot(a),d.dot(b),d.dot(normal)
             return u,w,h,math.hypot(u,w)
+        if keep:
+            # The mesher modelled the tip: keep it, the bone spans it base to apex
+            # (floors keep a flatter partner side from a degenerate bone).
+            apex = Vector(existing['apex'])
+            length = max(existing['protrusion'],EXISTING_TIP_MIN_M/2)
+            rows.append({'tip':list(apex-normal*length),'axis':list(normal),'radius':radius,
+                         'fill':'skipped: existing tip','fill_rms':None,'fill_moved':0,'fill_kept_by_tolerance':0,
+                         'tip_source':'mesh','tip_length_m':length,'tip_radius_m':max(existing['radius'],p['tip_diameter']/4),
+                         'existing_tip_m':existing['protrusion'],'inner_wall_vertices':len(inner)})
+            continue
         unique = {}
-        for mesh in meshes:
+        for index,mesh in enumerate(meshes):
             for vertex in mesh.data.vertices:
+                if (index,vertex.index) in inner:
+                    continue
                 point = mesh.matrix_world@vertex.co
                 unique.setdefault(tuple(round(v,8) for v in point),point)
         ring = [coords(point) for point in unique.values()]
         ring = [(u,w,h) for u,w,h,r in ring if p['fill_radius']*radius <= r <= (p['fill_radius']+p['fill_ring'])*radius and h >= -p['fill_depth']]
         coef,rms = None,None
         reason = 'fewer than 12 ring points'
-        if len(ring) >= 12:
+        if inner:
+            # Double-walled: the wide fill may move the skin by up to
+            # fill_tolerance, through the inner wall a few mm below it.
+            reason = 'double-walled body'
+        elif len(ring) >= 12:
             design = np.array([[1,u,w,u*u,u*w,w*w] for u,w,_ in ring])
             heights = np.array([h for _,_,h in ring])
             candidate,_,rank,_ = np.linalg.lstsq(design,heights,rcond=None)
@@ -692,30 +743,86 @@ def tip_mesh(meshes, p, placement):
             reason = 'rank deficient fit' if rank < 6 else 'RMS exceeds fill_rms_max'
             if rank == 6 and rms <= p['fill_rms_max']:
                 coef = candidate
+        fill_outer,fill_blend,fill = p['fill_radius']*radius,p['fill_blend']*radius,'applied'
+        if coef is None and existing['coef'] is not None and existing['rms'] <= p['fill_rms_max']:
+            # The wide ring over a coarse or strongly curved breast does not fit,
+            # the tip's own 8-15 mm ring does: level just the tip, so a modelled
+            # tip below the keep threshold is not stacked under the stub.
+            coef,fill_outer,fill_blend,fill = existing['coef'],LOCAL_FILL_RADIUS_M,LOCAL_FILL_BLEND_M,'applied locally ('+reason+')'
         moved,kept = 0,0
         if coef is not None:
-            for mesh in meshes:
+            for index,mesh in enumerate(meshes):
                 inverse = mesh.matrix_world.inverted()
                 for vertex in mesh.data.vertices:
+                    if (index,vertex.index) in inner:
+                        continue
                     u,w,h,r = coords(mesh.matrix_world@vertex.co)
-                    if r >= p['fill_radius']*radius or h < -p['fill_depth']:
+                    if r >= fill_outer or h < -p['fill_depth']:
                         continue
                     fitted = float(np.dot(coef,[1,u,w,u*u,u*w,w*w]))
                     if abs(h-fitted) > p['fill_tolerance']:
                         kept += 1
                         continue
-                    factor = smooth((p['fill_radius']*radius-r)/(p['fill_blend']*radius))
+                    factor = smooth((fill_outer-r)/fill_blend)
                     vertex.co = inverse@(tip+a*u+b*w+normal*(h*(1-factor)+fitted*factor))
                     moved += 1
                 mesh.data.update()
         filled = tip+normal*float(coef[0]) if coef is not None else tip.copy()
         axis = (normal-a*float(coef[1])-b*float(coef[2])).normalized() if coef is not None else normal
-        rows.append({'tip':list(filled),'axis':list(axis),'radius':radius,'fill':'applied' if coef is not None else 'skipped: '+reason,
-                     'fill_rms':rms,'fill_moved':moved,'fill_kept_by_tolerance':kept})
-    if p['tip_subdivide'] > 0:
+        rows.append({'tip':list(filled),'axis':list(axis),'radius':radius,'fill':fill if coef is not None else 'skipped: '+reason,
+                     'fill_rms':rms,'fill_moved':moved,'fill_kept_by_tolerance':kept,
+                     'tip_source':'stub','tip_length_m':p['tip_length'],'tip_radius_m':p['tip_diameter']/2,
+                     'existing_tip_m':existing['protrusion'],'inner_wall_vertices':len(inner)})
+    stubs = [Vector(row['tip']) for row in rows if row['tip_source']=='stub']
+    if p['tip_subdivide'] > 0 and stubs:
         for mesh in meshes:
-            subdivide(mesh,[Vector(row['tip']) for row in rows],[p['tip_subdivide']])
+            subdivide(mesh,stubs,[p['tip_subdivide']])
     return rows, before
+
+
+def world_tree(meshes):
+    """One BVH over all meshes in world space."""
+    verts,polys = [],[]
+    for mesh in meshes:
+        offset = len(verts)
+        verts.extend(mesh.matrix_world@v.co for v in mesh.data.vertices)
+        polys.extend([offset+i for i in face.vertices] for face in mesh.data.polygons)
+    return BVHTree.FromPolygons(verts,polys)
+
+
+def existing_tip(tree, tip, normal, a, b):
+    """Height of a tip the mesh already carries, from the OUTER skin.
+
+    A depth map by rays from in front (the first hit is the outer skin, never an
+    inner wall) on a 0.5 mm grid; the surrounding surface is a quadratic fit to
+    the ring 8-15 mm out, the tip is the highest residual within 7 mm.
+    Returns protrusion (m), apex (world) and the equal-area radius of the part
+    above half the protrusion."""
+    grid = np.arange(-.015,.0151,.0005)
+    samples = []
+    for u in grid:
+        for w in grid:
+            hit = tree.ray_cast(tip+a*float(u)+b*float(w)+normal*.08,-normal,.2)
+            if hit[0] is not None:
+                samples.append((float(u),float(w),(hit[0]-tip).dot(normal)))
+    if len(samples) < 50:
+        return {'protrusion':0.,'apex':list(tip),'radius':0.,'coef':None,'rms':None}
+    S = np.array(samples)
+    r = np.hypot(S[:,0],S[:,1])
+    design = lambda rows:np.stack([np.ones(len(rows)),rows[:,0],rows[:,1],rows[:,0]**2,rows[:,0]*rows[:,1],rows[:,1]**2],1)
+    ring = (r > .008)&(r < .015)
+    inner = r < .007
+    if ring.sum() < 12 or not inner.any():
+        return {'protrusion':0.,'apex':list(tip),'radius':0.,'coef':None,'rms':None}
+    coef = np.linalg.lstsq(design(S[ring]),S[ring,2],rcond=None)[0]
+    residual = S[:,2]-design(S)@coef
+    k = int(np.argmax(np.where(inner,residual,-np.inf)))
+    protrusion = float(residual[k])
+    raised = (r < .009)&(residual > protrusion/2)
+    u,w,h = S[k]
+    return {'protrusion':max(protrusion,0.),'apex':list(tip+a*u+b*w+normal*h),
+            'radius':math.sqrt(raised.sum()*.0005**2/math.pi),
+            'coef':coef,'rms':float(np.sqrt(np.mean(residual[ring]**2)))}
 
 
 def tip_height(r, p):
@@ -726,10 +833,23 @@ def tip_height(r, p):
 
 
 def tip_plan(group, p, co, source, rows, before, meshes):
-    rc,wall,band = p['tip_diameter']/2,p['tip_wall'],p['tip_band']
-    minimum = min(1-3*x*x+2*x*x*x-6*((rc+wall)/band+x)*x*(1-x) for x in np.linspace(0.,1.,10001))
+    wall,band = p['tip_wall'],p['tip_band']
+    # The inner-wall test needs the meshes behind ``co``; without them there is
+    # no wall to tell apart.
+    tree = world_tree(meshes) if meshes else None
+    normals = mesh_arrays(meshes)[3] if meshes else []
     for row in rows:
+        row.setdefault('tip_source','stub')
+        row.setdefault('tip_length_m',p['tip_length'])
+        row.setdefault('tip_radius_m',p['tip_diameter']/2)
+        rc = row['tip_radius_m']
+        minimum = min(1-3*x*x+2*x*x*x-6*((rc+wall)/band+x)*x*(1-x) for x in np.linspace(0.,1.,10001))
+        row['girth_fold_free_max'] = float(1+1/-minimum) if minimum < 0 else None
+        if row['tip_source'] == 'mesh':
+            row['stub_height'] = row['tip_length_m']
+            continue
         tip,axis = Vector(row['tip']),Vector(row['axis'])
+        walled = tree is not None and row.get('inner_wall_vertices',0) > 0
         heights = []
         for i,point in enumerate(co):
             delta = point-tip
@@ -738,10 +858,11 @@ def tip_plan(group, p, co, source, rows, before, meshes):
                 continue
             r = (delta-axis*axial).length
             height = tip_height(r,p)
-            if height > 0:
+            # An inner wall under the tip stays where it is (double-walled body).
+            if height > 0 and not (walled and _common.enclosed(tree,point,normals[i])):
                 co[i] = point+axis*height
                 heights.append(axial+height)
-        row.update(stub_height=max(heights,default=0.),girth_fold_free_max=float(1+1/-minimum) if minimum < 0 else None)
+        row['stub_height'] = max(heights,default=0.)
     offset = 0
     for mesh in meshes:
         inverse = mesh.matrix_world.inverted()
@@ -753,7 +874,8 @@ def tip_plan(group, p, co, source, rows, before, meshes):
     for chain,source_chain,row in zip(group['chains'],source[0]['chains'],rows):
         link = chain[0]
         tip,axis = Vector(row['tip']),Vector(row['axis'])
-        head,tail = tip,tip+axis*p['tip_length']
+        rc = row['tip_radius_m']
+        head,tail = tip,tip+axis*row['tip_length_m']
         source_weights = source[2][1][source_chain[0]['bone']]
         values,factors = {},{}
         for i,value in source_weights.items():
@@ -1996,15 +2118,18 @@ def measure(arm, meshes, edges, plans):
             lift = []
             for row in plan[2]['placement']:
                 tip,axis = Vector(row['tip']),Vector(row['axis'])
-                nearest = min(range(len(rest)),key=lambda i:(rest[i]-(tip+axis*p['tip_length'])).length_squared)
-                rc = p['tip_diameter']/2
+                length = row.get('tip_length_m',p['tip_length'])
+                nearest = min(range(len(rest)),key=lambda i:(rest[i]-(tip+axis*length)).length_squared)
+                rc = row.get('tip_radius_m',p['tip_diameter']/2)
                 lw = p['tip_length']-min(p['tip_round']*rc,p['tip_length'])
                 ring = []
                 for i,point in enumerate(rest):
                     delta = point-tip
                     axial = delta.dot(axis)
                     r = (delta-axis*axial).length
-                    if axial >= -p['weight_depth'] and abs(r-rc) < p['tip_wall']/2 and tip_height(r,p) > lw/2:
+                    side = (0 <= axial <= length/2 if row.get('tip_source') == 'mesh'
+                            else axial >= -p['weight_depth'] and tip_height(r,p) > lw/2)
+                    if abs(r-rc) < p['tip_wall']/2 and side:
                         moved = posed[i]-tip
                         ring.append((moved-axis*moved.dot(axis)).length)
                 row['diameter'] = 2*statistics.mean(ring) if ring else None

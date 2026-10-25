@@ -21,6 +21,12 @@ Float32 positions at z~1.4 have <.12 micrometre error. Band weight error
 is <1.5*.12e-6/.009=2e-5 (use 1e-4); at the cap edge the square
 root amplifies this to <.0027*sqrt(2*.12e-6/.0045)=.020 mm
 (use .025 mm for exact synthetic height probes).
+Modelled tip: a cosine bump of 4 mm height and 6 mm radius, pushed along -Y
+and centred on the marker vertex (x and z are multiples of the 2.5 mm spacing),
+is kept: no fill, no stub, no vertex within 20 mm moves. Its length along the
+cap normal, tilted asin(.01/.106)=5.42 deg from -Y, is .004*cos(5.42 deg)=
+3.982 mm; the ring quadric misses the cap by <.0054 mm and a 2.5 mm chord by
+.0025**2/(8*.106)=.007 mm, so .05 mm covers it. Bone head-to-tail = that length.
 No expected value is recorded from a run.
 """
 import sys
@@ -66,7 +72,10 @@ if kind!='C':
  for vertex in obj.data.vertices:
   for t in tips:
    r=math.hypot(vertex.co.x-t.x,vertex.co.z-t.z)
-   if r<.010:
+   if job['params'].get('modelled',False):
+    if r<.006:
+     vertex.co.y-=.004*(1+math.cos(math.pi*r/.006))/2
+   elif r<.010:
     vertex.co.y+=.004*(1+.25*math.sin(r*math.pi/.002))
  if seam:
   import bmesh
@@ -123,6 +132,18 @@ elif kind=='C':
  import struct
  raw=Path(outputs['model']).read_bytes(); size=struct.unpack_from('<I',raw,12)[0]; doc=json.loads(raw[20:20+size])
  assert not any(n.get('name') in ('TipLeft','TipRight') for n in doc['nodes'])
+elif job['params'].get('modelled',False):
+ rows=result['metrics']['Tip']['placement']
+ for name,row in zip(('TipLeft','TipRight'),rows):
+  t,axis=Vector(row['tip']),Vector(row['axis'])
+  assert row['tip_source']=='mesh' and row['fill']=='skipped: existing tip',row
+  assert abs(row['tip_length_m']-.004*math.cos(math.asin(.01/.106)))<.00005,row
+  assert abs(row['stub_height']-row['tip_length_m'])<1e-9,row
+  assert (arm.data.bones[name].head_local-t).length<1e-4
+  assert (arm.data.bones[name].tail_local-(t+axis*row['tip_length_m'])).length<1e-4
+  for v in obj.data.vertices:
+   if (captured['co'][v.index]-t).length<.02:
+    assert (v.co-captured['co'][v.index]).length<1e-6,(v.index,list(v.co))
 else:
  metrics=result['metrics']['Tip']; rows=metrics['placement']
  assert metrics['vertices_after']>metrics['vertices_before']
@@ -231,7 +252,7 @@ Path(job['result']).write_text(json.dumps({'ok':True,'data':{},'outputs':{}}))
 def main():
     import argparse
     parser=argparse.ArgumentParser()
-    parser.add_argument('--case',choices=['crater','seam','geometry','refusal','descendant'])
+    parser.add_argument('--case',choices=['crater','seam','geometry','refusal','descendant','modelled'])
     selected=parser.parse_args().case
     from app.blender import runner
     if not runner.status()['executable']:
@@ -244,7 +265,7 @@ def main():
         (root/'probe.py').write_text(prefix+TIP_PROBE)
         source=runner.SCRIPTS_DIR/'extension_bones.py'
         with patch.object(runner,'SCRIPTS_DIR',root):
-            for label,options in [('crater',{}),('seam',{'seam':True}),('geometry',{'kind':'C'}),('refusal',{'noise':True}),('descendant',{'descendant':True})]:
+            for label,options in [('crater',{}),('seam',{'seam':True}),('geometry',{'kind':'C'}),('refusal',{'noise':True}),('descendant',{'descendant':True}),('modelled',{'modelled':True})]:
                 if selected and selected!=label: continue
                 result=runner.run('probe',params={'source':str(source),**options},out_dir=root/label,timeout_s=120)
                 assert result['ok'],(label,result)

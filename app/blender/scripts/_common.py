@@ -135,6 +135,31 @@ def reset_scene():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
 
+def enclosed(tree, point, normal):
+    """Whether a surface point is an INNER wall: every ray of a fan around its
+    normal hits the mesh again (``tree`` a mathutils BVHTree in the point's space).
+
+    Some meshers (UniForge) deliver double-walled bodies: the outer skin plus a
+    wall a few mm below it whose normals face the hollow interior. Measured on
+    such a body: inner wall 9 of 9 rays hit, outer skin at the groin 0-4 of 9.
+    A deep crease of outer skin can pass as enclosed too."""
+    import math
+    from mathutils import Vector
+    n = normal.normalized()
+    a = Vector((1, 0, 0)) if abs(n.x) < .9 else Vector((0, 1, 0))
+    u = n.cross(a).normalized()
+    w = n.cross(u)
+    origin = point + n * 1e-5
+    if tree.ray_cast(origin, n)[0] is None:
+        return False
+    for angle in (45, 70):
+        c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+        for t in (u, -u, w, -w):
+            if tree.ray_cast(origin, (n * c + t * s).normalized())[0] is None:
+                return False
+    return True
+
+
 def body_meshes_first(path):
     """Keep the body mesh first without changing accessors or binary buffers."""
     import json

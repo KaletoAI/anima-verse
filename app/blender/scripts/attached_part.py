@@ -133,11 +133,10 @@ class OuterSkin:
     inner wall a few mm below it whose normals face the hollow interior. The
     skin field takes its sign from the nearest face's normal, so the inner wall
     turned the body's inside into "outside" and the surface net sprouted
-    fragments inside the body. An inner-wall face is enclosed: every ray of a
-    fan around its normal hits the body again (measured on such a body: inner
-    wall 9 of 9, outer skin at the root 0-4 of 9). A deep crease of outer skin
-    can pass as enclosed too; losing it from the field only coarsens the
-    distance there, while a missed inner-wall face breaks the field's sign.
+    fragments inside the body. An inner-wall face is ``_common.enclosed``. A
+    deep crease of outer skin can pass as enclosed too; losing it from the field
+    only coarsens the distance there, while a missed inner-wall face breaks the
+    field's sign.
     """
 
     def __init__(self, body, centre, radius):
@@ -157,19 +156,7 @@ class OuterSkin:
 
     @staticmethod
     def _enclosed(tree, poly):
-        n = poly.normal
-        a = Vector((1, 0, 0)) if abs(n.x) < .9 else Vector((0, 1, 0))
-        u = n.cross(a).normalized()
-        w = n.cross(u)
-        origin = poly.center + n * 1e-5
-        if tree.ray_cast(origin, n)[0] is None:
-            return False
-        for angle in (45, 70):
-            c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
-            for t in (u, -u, w, -w):
-                if tree.ray_cast(origin, (n * c + t * s).normalized())[0] is None:
-                    return False
-        return True
+        return _common.enclosed(tree, poly.center, poly.normal)
 
     def _mapped(self, hit):
         location, normal, index, distance = hit

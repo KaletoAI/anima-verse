@@ -522,6 +522,14 @@ clean prerig.
 `pair_protrusion` group on the same slot. Geometry detection soft-skips the tip
 group; colour placement supplies `marker_area` in square metres and one shared
 radius R = sqrt((left_area + right_area)/(2*pi)). A rounded stub is baked after source re-planning.
+A tip the mesher already modelled is measured on the outer skin (depth map by rays
+from in front, surface fitted on the 8–15 mm ring): when the pair's mean height is
+at least 2.5 mm it is kept — no fill, no stub, the bone spans it base to apex and
+its weight radius follows the measured width (`tip_source: mesh`, `tip_length_m`,
+`tip_radius_m`). On a double-walled body (UniForge: an inner wall a few mm below
+the skin) the inner wall neither defines the surface nor moves, and the fill levels
+only the tip (8 mm, `applied locally`) — the wide fill could push the skin through
+the inner wall. Single-walled bodies keep the wide fill unchanged.
 
 | Required parameter | Example | Constraint / meaning |
 |---|---|---|
