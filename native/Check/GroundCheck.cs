@@ -174,9 +174,11 @@ public static class GroundCheck
         var mat = g.Material;
         Expect("material shader", mat.Shader == GroundShader.Get(), "");
         // Godot's dummy renderer runs the shader-language front end too (material_storage.cpp shader_set_code):
-        // a shader that does not parse reports NO uniforms. 25 = the hand count of the declarations.
+        // a shader that does not parse reports NO uniforms. 27 = the hand count of the declarations (25 + the basement
+        // hole's hole_rect / hole_on, Task 16).
         int uniforms = mat.Shader.GetShaderUniformList().Count;
-        Expect("ground shader compiles (front end) with its 25 uniforms", uniforms == 25, $"{uniforms}");
+        Expect("ground shader compiles (front end) with its 27 uniforms", uniforms == 27, $"{uniforms}");
+        Expect("ground hole off at the build", (float)mat.GetShaderParameter("hole_on") == 0f, "");
         Param(mat, "lc_near", new Vector4(64, 96, 1, 128));
         Param(mat, "lc_near_sd_geom", new Vector4(64, 96, 0.5f, 256));
         Param(mat, "lc_sd_code", new Vector2(128, 15.875f));

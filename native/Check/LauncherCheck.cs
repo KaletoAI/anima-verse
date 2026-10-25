@@ -121,11 +121,14 @@ public static class LauncherCheck
         Expect("verify flags", sections[0] is { Check: true, CheckOnly: "verify" } && sections[1] is { Check: true, CheckOnly: "verify" }
                                && sections[2] is { Check: true, CheckOnly: null, Verify: false } && sections[3] is { Check: false, Verify: true },
                string.Join(" | ", sections.Select(o => o.ToString())));
+        // Task 16: the storey section, both spellings.
+        var storeys = new[] { CliOptions.Parse(new[] { "--check", "storeys" }), CliOptions.Parse(new[] { "--check=storeys" }) };
+        Expect("storeys flags", storeys.All(o => o is { Check: true, CheckOnly: "storeys" }), string.Join(" | ", storeys.Select(o => o.ToString())));
         threw = false;
         try { CliOptions.Parse(new[] { "--check=everything" }); }
         catch (ArgumentException) { threw = true; }
         Expect("--check=everything is refused", threw, "no exception");
-        return 7;
+        return 8;
     }
 
     private static void Expect(string what, bool ok, string detail)

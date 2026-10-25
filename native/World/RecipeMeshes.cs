@@ -18,7 +18,10 @@ public sealed class RecipeStats
     public int Degenerate;
     /// <summary>Not shown: inside the interior group of a CLOSED location (mounted, the crossfade keeps it invisible) and not part of a far shell.</summary>
     public int Interior;
-    /// <summary>Not drawn: in the OPEN location, but on another storey (<c>applyLevelDisplay</c>/<c>applyRoomVisibility</c>/the wall filter).</summary>
+    /// <summary>
+    /// Not shown at the build: in the OPEN location, but on another storey than the build's (<c>applyLevelDisplay</c> /
+    /// <c>applyRoomVisibility</c> / the wall filter) — mounted all the same since Task 16, the switch shows it.
+    /// </summary>
     public int Storey;
     /// <summary>Not drawn: a door leaf / window pane whose opening a model in <c>models[]</c> fills (<c>door_prop</c>, <c>window_model</c>).</summary>
     public int Panes;
@@ -42,8 +45,8 @@ public sealed class RecipeStats
 
 /// <summary>
 /// The view state the stats describe: <see cref="Open"/> = the location's fade TARGET at the build (open or
-/// closed), <see cref="LevelFilter"/> = the storey the interior is mounted for, <see cref="FarShell"/> = it shows a
-/// far-view shell (<c>shellPlan</c> 'recipe').
+/// closed), <see cref="LevelFilter"/> = the storey shown at the build (the stats count what the browser SHOWS then;
+/// every storey is mounted either way), <see cref="FarShell"/> = it shows a far-view shell (<c>shellPlan</c> 'recipe').
 /// </summary>
 public sealed record RecipeView(bool Open, int LevelFilter, bool FarShell)
 {
@@ -54,31 +57,61 @@ public sealed record RecipeView(bool Open, int LevelFilter, bool FarShell)
 public sealed record MeasuredPrimitive(string Name, List<PrimitiveTarget> Targets, VBox Local);
 
 /// <summary>
-/// The recipe meshes of one location, by the layer they hang in (sceneRecipe.ts <c>mountShell</c>):
-///   <see cref="Outdoor"/>      — pieces of outdoor / always-visible rooms, off the tile group, always shown;
-///   <see cref="OutdoorClosed"/> — outdoor OUTLINE walls of another storey than the mounted one: shown while the
-///                                location is closed, hidden by the storey filter once its interior is up;
-///   <see cref="Interior"/>     — everything else on the mounted storey (the browser's interior group <c>g</c>);
-///   <see cref="Shell"/>        — the far-view shell copies (<c>buildFarShell</c>), which fade like a roof.
+/// The storey rule a recipe mesh follows at runtime (tiles.ts <c>applyLevelDisplay</c> / <c>applyWallCulling</c>):
+///   <see cref="Slab"/>        — a storey's contour plate (<c>levelSlabs</c>): shown on its own storey only;
+///   <see cref="RoomPlate"/>   — a room's floor plate (<c>levelRoomPlateMats</c>): drawn at <c>storeyPieceOpacity</c>;
+///   <see cref="OutlineWall"/> — a facade piece (<c>outlineWalls</c>): its own storey only, camera-culled in the shader;
+///   <see cref="Other"/>       — panes, leaves and extras: no storey rule of their own (their parent decides).
+/// </summary>
+public enum StoreyRole { Slab, RoomPlate, OutlineWall, Other }
+
+/// <summary>
+/// Where a recipe mesh hangs and which storey rule drives it: <see cref="Room"/> = the declared room whose group it
+/// joins ("" = the interior group <c>g</c> itself — a room-less piece, or one whose room the payload does not
+/// declare: <c>parentFor</c>), <see cref="Outdoor"/> = that room hangs straight off the tile (<c>outdoor_rooms</c> ∪
+/// <c>always_visible</c>), <see cref="Level"/> = the storey the rule reads (0 for <see cref="StoreyRole.Other"/>).
+/// </summary>
+public readonly record struct PieceUnit(string Room, bool Outdoor, StoreyRole Role, int Level)
+{
+    public string Tag => Role switch
+    {
+        StoreyRole.Slab => $"slab{Level}",
+        StoreyRole.RoomPlate => $"plate{Level}",
+        StoreyRole.OutlineWall => $"wall{Level}",
+        _ => "other",
+    };
+}
+
+/// <summary>
+/// One mounted recipe mesh: its unit, and for a ghosted piece whose storey rule can make it solid (a room plate, an
+/// outdoor outline wall) the solid twin of its material (<see cref="Solid"/>, worn as <c>MaterialOverride</c> — the
+/// browser writes <c>material.opacity</c> instead); null when the piece is solid anyway.
+/// </summary>
+public sealed record RecipePiece(MeshInstance3D Mesh, PieceUnit Unit, Material? Solid);
+
+/// <summary>
+/// The recipe meshes of one location (sceneRecipe.ts <c>mountShell</c>):
+///   <see cref="Pieces"/> — every plate, wall and extra of EVERY storey, by unit (outdoor rooms off the tile, the
+///                          rest in the interior group or its room groups); the storey switch only flips what
+///                          shows (<see cref="LocationStoreys"/>), nothing is rebuilt;
+///   <see cref="Shell"/>  — the far-view shell copies (<c>buildFarShell</c>), which fade like a roof.
 /// </summary>
 public sealed class RecipeLayers
 {
-    public List<MeshInstance3D> Outdoor { get; init; } = new();
-    public List<MeshInstance3D> OutdoorClosed { get; init; } = new();
-    public List<MeshInstance3D> Interior { get; init; } = new();
+    public List<RecipePiece> Pieces { get; init; } = new();
     public List<MeshInstance3D> Shell { get; init; } = new();
-    /// <summary>Every plate and wall the browser's verify measures that is mounted here (see <see cref="RecipeMeshes"/>).</summary>
+    /// <summary>Every plate and wall the browser's verify measures (see <see cref="RecipeMeshes"/>).</summary>
     public List<MeasuredPrimitive> Measured { get; init; } = new();
 }
 
 /// <summary>
 /// The § B primitives of a scene recipe, mounted ONCE per location the way the browser mounts them
-/// (client3d/src/scene/sceneRecipe.ts <c>mountShell</c>): outdoor pieces off the tile, the interior in its own
-/// group that the crossfade shows (<see cref="LocationFade"/>), the far-view shell as copies that fade like a
-/// roof. Geometry is the Core's <see cref="RecipeGeometry"/> — the ports of the shared builders
-/// (packages/scene-render/src/primitives.ts) and of the three geometry they make, checked against
-/// shared/test-vectors/scene_primitives.json; the visibility decisions are <see cref="SceneView"/>'s
-/// (RoomVisible, StoreyPieceOpacity, FarShellPiece, scene_view.json):
+/// (client3d/src/scene/sceneRecipe.ts <c>mountShell</c>): every storey, outdoor pieces off the tile, the interior in
+/// its own group that the crossfade shows (<see cref="LocationFade"/>) with one sub-group per declared room, the
+/// far-view shell as copies that fade like a roof. Geometry is the Core's <see cref="RecipeGeometry"/> — the ports of
+/// the shared builders (packages/scene-render/src/primitives.ts) and of the three geometry they make, checked against
+/// shared/test-vectors/scene_primitives.json; the visibility decisions are <see cref="SceneView"/>'s and
+/// <see cref="StoreyView"/>'s, applied per frame by <see cref="LocationStoreys"/>:
 ///
 ///   plates — polygon top face at <c>top_y</c>, holes cut out, plus underside and rims when <c>thickness</c>
 ///            &gt; 0 (ExtrudeGeometry down by the thickness; 0 = a bare face seen from both sides);
@@ -86,22 +119,24 @@ public sealed class RecipeLayers
 ///   extras — one box per entry, centre + own size, optional XYZ Euler in degrees.
 ///
 /// WHERE each piece goes (the browser's, nothing is a native choice):
-///   • a primitive of an OUTDOOR room (<c>outdoor_rooms</c> ∪ <c>always_visible</c>) hangs off the tile;
-///   • everything else is the interior, mounted for ONE storey (<see cref="RecipeView.LevelFilter"/> — the runtime
-///     storey switch is Task 16): storey plates of that storey, room groups on it, outline walls on it, which the
-///     shader drops where the camera is on their outer side (the GPU twin of <see cref="SceneView.WallVisible"/>);
-///     a door leaf / window pane that a model fills is not drawn;
+///   • a primitive of a declared OUTDOOR room (<c>outdoor_rooms</c> ∪ <c>always_visible</c>) hangs off the tile in
+///     its room group; a primitive of another declared room in that room's group inside the interior; anything
+///     else (no room, an undeclared room, every extra) in the interior group itself;
+///   • a storey contour plate shows on its storey only and is drawn solid (<c>applyLevelDisplay</c> sets its opacity
+///     to 1 whenever it shows); an interior outline wall likewise (only its storey's walls show with the interior up,
+///     and those wear opacity 1); a room plate wears its composed ghost or, on the displayed storey, its solid twin;
+///   • a door leaf / window pane that a model fills is not drawn;
 ///   • a location without a building model also gets its far-view shell (<c>shellPlan</c> 'recipe'): copies of
 ///     the level plates at or above ground and of every non-glass wall at or above ground, leaves included.
-/// Stats count what the browser SHOWS at the fade target (<see cref="RecipeView.Open"/>), unchanged from the
-/// static spike; <see cref="RecipeStats.InteriorMounted"/> counts what stands in the interior group.
-/// Materials: <see cref="RecipeMaterials"/>; one mesh per material per layer (the browser draws one mesh per
+/// Stats count what the browser SHOWS at the fade target and the build's storey (<see cref="RecipeView"/>);
+/// <see cref="RecipeStats.InteriorMounted"/> counts what stands in the interior group (every storey).
+/// Materials: <see cref="RecipeMaterials"/>; one mesh per material per unit (the browser draws one mesh per
 /// primitive — merging them is the one native liberty here, it saves draw calls and favours Godot).
 ///
 /// VERIFY (§ B5a): <see cref="RecipeLayers.Measured"/> carries every plate and wall the browser's
-/// <c>builtPlates</c>/<c>builtWalls</c> holds AND this client mounts — its box from the very vertices emitted (as
+/// <c>builtPlates</c>/<c>builtWalls</c> holds and this client mounts — its box from the very vertices emitted (as
 /// floats), or for a pane a model fills (the browser builds it invisible) from the geometry it would emit. Not
-/// measured: degenerate pieces (not built here) and pieces of other storeys (not mounted until Task 16).
+/// measured: degenerate pieces (not built here).
 /// </summary>
 public static class RecipeMeshes
 {
@@ -109,44 +144,38 @@ public static class RecipeMeshes
         ScenePayload scene, RecipeView view, RecipeMaterials materials, string name)
     {
         var stats = new RecipeStats();
-        var outdoorB = new Builder(materials);
-        var closedB = new Builder(materials);
-        var interiorB = new Builder(materials);
+        var pieces = new Builder(materials);
         var shellB = new Builder(materials);
         var measured = new List<MeasuredPrimitive>();
         var outdoor = LocationView.OutdoorRoomIds(scene);
         var roomLevel = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Level);
         int filter = view.LevelFilter;
-        bool IsOutdoor(string roomId) => roomId.Length > 0 && outdoor.Contains(roomId);
-        // parentFor(room) with the interior up: an outdoor room is always there; a declared room shows when
-        // SceneView.RoomVisible puts it on the mounted storey; anything else hangs in the interior group itself.
-        bool ParentShownOpen(string roomId) => IsOutdoor(roomId)
-            || !roomLevel.TryGetValue(roomId, out var lv) || SceneView.RoomVisible(false, lv, filter);
+        // parentFor(room): the room's group when the payload declares the room, else the interior group itself.
+        string RoomOf(string roomId) => roomId.Length > 0 && roomLevel.ContainsKey(roomId) ? roomId : "";
+        bool IsOutdoor(string room) => room.Length > 0 && outdoor.Contains(room);
+        // With the interior up at the build's storey: an outdoor room is always there; a declared room shows when
+        // SceneView.RoomVisible puts it on that storey; anything else hangs in the interior group itself.
+        bool ParentShownOpen(string room) => room.Length == 0 || IsOutdoor(room) || SceneView.RoomVisible(false, roomLevel[room], filter);
 
         foreach (var p in scene.Plates)
         {
             if (p.Outline.Length < 3 || RecipeGeometry.TopTriangles(p) == 0) { stats.Degenerate++; continue; }
-            var ghost = MaterialLooks.PlateLook(p, scene).Opacity;
-            bool outdoorPiece = IsOutdoor(p.RoomId);
-            // Room plates follow their room group, a storey plate (levelSlabs) only its own storey.
-            bool shownOpen = p.RoomId.Length > 0 ? ParentShownOpen(p.RoomId) : p.Level == filter;
+            string room = RoomOf(p.RoomId);
+            bool outdoorPiece = IsOutdoor(room);
+            // A storey's contour plate (no room_id) is a level slab; any plate WITH a room_id joins the room plates.
+            bool slab = p.RoomId.Length == 0;
+            var unit = new PieceUnit(room, outdoorPiece, slab ? StoreyRole.Slab : StoreyRole.RoomPlate, p.Level);
+            var ghost = materials.Plate(p, scene);
+            // A slab only ever shows on its own storey, at opacity 1 (applyLevelDisplay); a room plate keeps its ghost
+            // and gets the solid twin storeyPieceOpacity hands the displayed storey.
+            MeshData emitted = slab
+                ? pieces.Plate(unit, p, ghost with { Opacity = 1 }, null)
+                : pieces.Plate(unit, p, ghost, ghost.Opacity < 1 ? ghost with { Opacity = 1 } : null);
+            if (!outdoorPiece) stats.InteriorMounted++;
+            bool shownOpen = slab ? StoreyView.SlabVisible(p.Level, filter) : ParentShownOpen(room);
             bool shellCopy = view.FarShell && !outdoorPiece && SceneView.FarShellPiece("plate", p.Level, p.RoomId, false);
-            MeshData? emitted = null;
-            if (shownOpen && outdoorPiece)
-                emitted = outdoorB.Plate(p, materials.Plate(p, scene));
-            else if (shownOpen)
-            {
-                // storeyPieceOpacity: the shown storey is solid, the others keep the composed ghost.
-                emitted = interiorB.Plate(p, materials.Plate(p, scene, SceneView.StoreyPieceOpacity(p.Level, filter, ghost)));
-                stats.InteriorMounted++;
-            }
-            if (shellCopy)
-            {
-                var copy = shellB.Plate(p, materials.Plate(p, scene, 1));
-                emitted ??= copy;
-            }
-            if (emitted is not null)
-                measured.Add(new MeasuredPrimitive(SceneVerifier.PlateName(p), SceneVerify.PlateTargets(p), Builder.FloatBounds(emitted)));
+            if (shellCopy) shellB.Plate(default, p, materials.Plate(p, scene, 1), null);
+            measured.Add(new MeasuredPrimitive(SceneVerifier.PlateName(p), SceneVerify.PlateTargets(p), Builder.FloatBounds(emitted)));
 
             if (view.Open) { if (shownOpen) stats.Plates++; else stats.Storey++; }
             else if (outdoorPiece) stats.Plates++;
@@ -160,36 +189,35 @@ public static class RecipeMeshes
             if (len < 1e-4 || !(w.Height > 0) || !(w.Thickness > 0)) { stats.Degenerate++; continue; }
             bool outline = !w.Glass && !w.Leaf;
             bool hiddenPane = w.DoorProp || w.WindowModel;
-            bool outdoorPiece = IsOutdoor(w.RoomId);
-            bool parentOpen = ParentShownOpen(w.RoomId);
+            string room = RoomOf(w.RoomId);
+            bool outdoorPiece = IsOutdoor(room);
+            bool parentOpen = ParentShownOpen(room);
             bool shownOpen = parentOpen && !hiddenPane && (!outline || w.Level == filter);
             bool shellCopy = view.FarShell && !outdoorPiece && SceneView.FarShellPiece("wall", w.Level, w.RoomId, w.Glass);
+            var unit = new PieceUnit(room, outdoorPiece, outline ? StoreyRole.OutlineWall : StoreyRole.Other, outline ? w.Level : 0);
             MeshData? emitted = null;
-            if (outdoorPiece && !hiddenPane)
+            if (!hiddenPane)
             {
-                // Off the tile: culled per frame only while the interior is up (applyWallCulling runs at fade > 0.03,
-                // LocationFade switches the instance's cull_active), and an outline wall of another storey is only
-                // there while the location is closed.
-                var look = materials.Wall(w, scene, outline);
-                emitted = shownOpen ? outdoorB.Wall(w, look, outline) : closedB.Wall(w, look, outline);
+                if (outdoorPiece)
+                {
+                    // Off the tile, at the composed look; an outline wall of a ghosted storey turns solid once its
+                    // storey has been displayed (levelWallMats[filter].opacity = 1 sticks).
+                    var look = materials.Wall(w, scene, outline);
+                    emitted = pieces.Wall(unit, w, look, outline, outline && look.Opacity < 1 ? look with { Opacity = 1 } : null);
+                }
+                else
+                {
+                    // An interior outline wall only ever shows on the displayed storey, where it is solid; a pane or a
+                    // leaf keeps its own look (it is not in levelWallMats).
+                    emitted = pieces.Wall(unit, w, materials.Wall(w, scene, outline, outline ? 1 : null), outline, null);
+                    stats.InteriorMounted++;
+                }
             }
-            else if (shownOpen)
-            {
-                double opacity = SceneView.StoreyPieceOpacity(w.Level, filter, MaterialLooks.WallLook(w, scene).Opacity);
-                emitted = interiorB.Wall(w, materials.Wall(w, scene, outline, opacity), outline);
-                stats.InteriorMounted++;
-            }
-            if (shellCopy)
-            {
-                var copy = shellB.Wall(w, materials.Wall(w, scene, false, 1), false);
-                emitted ??= copy;
-            }
+            if (shellCopy) shellB.Wall(default, w, materials.Wall(w, scene, false, 1), false, null);
             // A pane a model fills: the browser builds it invisible and measures it; here it is measured from the
             // geometry it would be (its box, through the same location frame) without drawing it.
-            if (emitted is null && hiddenPane && parentOpen)
-                emitted = RecipeGeometry.Wall(w, 0);
-            if (emitted is not null)
-                measured.Add(new MeasuredPrimitive(SceneVerifier.WallName(w), SceneVerify.WallTargets(w), Builder.FloatBounds(emitted)));
+            emitted ??= RecipeGeometry.Wall(w, 0);
+            measured.Add(new MeasuredPrimitive(SceneVerifier.WallName(w), SceneVerify.WallTargets(w), Builder.FloatBounds(emitted)));
 
             if (view.Open)
             {
@@ -211,7 +239,7 @@ public static class RecipeMeshes
                 continue;
             }
             // Extras hang in the interior group (lift and flights alike) and are not storey-filtered.
-            interiorB.Extra(e, materials.Extra(e, scene));
+            pieces.Extra(new PieceUnit("", false, StoreyRole.Other, 0), e, materials.Extra(e, scene));
             stats.InteriorMounted++;
             if (view.Open) stats.Extras++;
             else stats.Interior++;
@@ -219,42 +247,41 @@ public static class RecipeMeshes
 
         var layers = new RecipeLayers
         {
-            Outdoor = outdoorB.Commit(materials, name),
-            OutdoorClosed = closedB.Commit(materials, name + "Closed"),
-            Interior = interiorB.Commit(materials, name),
-            Shell = shellB.Commit(materials, name + "Shell"),
+            Pieces = pieces.Commit(materials, name),
+            Shell = shellB.Commit(materials, name + "Shell").Select(x => x.Mesh).ToList(),
             Measured = measured,
         };
         return (layers, stats);
     }
 
-    /// <summary>Triangles per material, written into one mesh each.</summary>
+    /// <summary>Triangles per unit and material, written into one mesh each.</summary>
     private sealed class Builder
     {
-        private readonly Dictionary<string, (RecipeLook Look, SurfaceTool St)> _surfaces = new();
+        private readonly Dictionary<(PieceUnit Unit, string Look), (RecipeLook Look, RecipeLook? Solid, SurfaceTool St)> _surfaces = new();
         private readonly RecipeMaterials _materials;
         public int Triangles { get; private set; }
 
         public Builder(RecipeMaterials materials) => _materials = materials;
 
-        private SurfaceTool For(RecipeLook look)
+        private SurfaceTool For(PieceUnit unit, RecipeLook look, RecipeLook? solid)
         {
-            if (_surfaces.TryGetValue(look.Key, out var s)) return s.St;
+            if (_surfaces.TryGetValue((unit, look.Key), out var s)) return s.St;
             var st = new SurfaceTool();
             st.Begin(Mesh.PrimitiveType.Triangles);
             st.SetCustomFormat(0, SurfaceTool.CustomFormat.RgbaFloat);
-            _surfaces[look.Key] = (look, st);
+            _surfaces[(unit, look.Key)] = (look, solid, st);
             return st;
         }
 
-        public List<MeshInstance3D> Commit(RecipeMaterials materials, string name)
+        public List<RecipePiece> Commit(RecipeMaterials materials, string name)
         {
-            var list = new List<MeshInstance3D>();
+            var list = new List<RecipePiece>();
             int i = 0;
-            foreach (var (look, st) in _surfaces.Values)
+            foreach (var ((unit, _), (look, solid, st)) in _surfaces)
             {
                 st.SetMaterial(materials.Get(look));
-                list.Add(new MeshInstance3D { Name = $"{name}_{i++}", Mesh = st.Commit() });
+                var mesh = new MeshInstance3D { Name = $"{name}_{unit.Tag}_{i++}", Mesh = st.Commit() };
+                list.Add(new RecipePiece(mesh, unit, solid is { } sl ? materials.Get(sl) : null));
             }
             return list;
         }
@@ -288,13 +315,13 @@ public static class RecipeMeshes
         }
 
         /// <summary><c>buildWall</c> (<see cref="RecipeGeometry.Wall"/>); an outline wall carries its midpoint and outward normal in CUSTOM0.</summary>
-        public MeshData Wall(SceneWall w, RecipeLook look, bool cull)
+        public MeshData Wall(PieceUnit unit, SceneWall w, RecipeLook look, bool cull, RecipeLook? solid)
         {
             var t = PrimitiveMath.WallTransform(w);
             var custom = cull ? new Color((float)t.Position.X, (float)t.Position.Z, (float)w.OutwardNormal.X, (float)w.OutwardNormal.Z)
                               : new Color(0, 0, 0, 0);
             var m = RecipeGeometry.Wall(w, look.TextureKind.Length > 0 ? TileOf(look) : 0);
-            Emit(For(look), m, 1, custom);
+            Emit(For(unit, look, solid), m, 1, custom);
             return m;
         }
 
@@ -307,15 +334,15 @@ public static class RecipeMeshes
         }
 
         /// <summary><c>buildExtra</c> (<see cref="RecipeGeometry.Extra"/>): its own size, XYZ Euler, world-scale uvs.</summary>
-        public void Extra(SceneExtra e, RecipeLook look)
-            => Emit(For(look), RecipeGeometry.Extra(e, look.TextureKind.Length > 0 ? TileOf(look) : 0), 1, new Color(0, 0, 0, 0));
+        public void Extra(PieceUnit unit, SceneExtra e, RecipeLook look)
+            => Emit(For(unit, look, null), RecipeGeometry.Extra(e, look.TextureKind.Length > 0 ? TileOf(look) : 0), 1, new Color(0, 0, 0, 0));
 
         /// <summary><c>buildPlate</c> (<see cref="RecipeGeometry.Plate"/>); its uvs are shape metres, tiled by 1 / tile size.</summary>
-        public MeshData Plate(ScenePlate p, RecipeLook look)
+        public MeshData Plate(PieceUnit unit, ScenePlate p, RecipeLook look, RecipeLook? solid)
         {
             double tileM = look.TextureKind.Length > 0 ? TileOf(look) : 0;
             var m = RecipeGeometry.Plate(p);
-            Emit(For(look), m, tileM > 0 ? 1 / tileM : 1, new Color(0, 0, 0, 0));
+            Emit(For(unit, look, solid), m, tileM > 0 ? 1 / tileM : 1, new Color(0, 0, 0, 0));
             return m;
         }
 

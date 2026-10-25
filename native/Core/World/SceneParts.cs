@@ -49,6 +49,11 @@ public sealed record SceneDoorway(
 {
     public bool Hull { get; init; }
     public P2? OutwardNormal { get; init; }
+    /// <summary>
+    /// doors.ts <c>marker()</c> would draw it: <c>at_world</c> and <c>along</c> hold two finite numbers each and
+    /// <c>width_m</c> is a finite number above 0 (the parse reads a missing field as 0, this keeps the difference).
+    /// </summary>
+    public bool Usable { get; init; }
 }
 
 /// <summary>§ B1 <c>corridors[]</c>: the per-storey corridor room (§ A13b/c).</summary>
@@ -171,7 +176,13 @@ public static class SceneJson
         Json.Num(d, "width_m"), Json.Num(d, "height_m"), Json.Num(d, "base_y"), Strings(d, "rooms"), Json.Bool(d, "outside"))
     {
         Hull = Json.Bool(d, "hull"), OutwardNormal = PtOrNull(d, "outward_normal"),
+        Usable = FinitePair(d, "at_world") && FinitePair(d, "along") && Json.NumOrNull(d, "width_m") is > 0,
     };
+
+    /// <summary>An array whose first two entries are finite numbers (doors.ts <c>finite(at[0]) &amp;&amp; finite(at[1])</c>).</summary>
+    private static bool FinitePair(JsonElement e, string name)
+        => e.TryGetProperty(name, out var a) && a.ValueKind == JsonValueKind.Array && a.GetArrayLength() >= 2
+           && Json.NumOrNull(a[0]) is not null && Json.NumOrNull(a[1]) is not null;
 
     public static SceneCorridor Corridor(JsonElement c)
         => new(Json.Str(c, "room_id"), (int)Json.Num(c, "level"), Pt(c, "anchor"), Ring(c, "outline"));

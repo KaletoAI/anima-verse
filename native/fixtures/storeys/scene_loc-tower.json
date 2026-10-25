@@ -1,0 +1,60 @@
+{
+  "signature": "storeys-tower", "k": 1, "extent_m": 12, "storey_m": 3,
+  "boundary": [[-6, -4], [6, -4], [6, 4], [-6, 4]],
+  "levels": [{ "level": -1, "floor_y": -3 }, { "level": 0, "floor_y": 0 }, { "level": 1, "floor_y": 3 }],
+  "style": { "wall_color": "#d0c8b8", "floor_color": "#b8b0a0", "glass_color": "#9cc3e0", "glass_opacity": 0.3,
+             "upper_wall_opacity": 0.45, "upper_floor_opacity": 0.4, "stair_color": "#8a7a66" },
+  "rooms": [
+    { "room_id": "r-cellar", "level": -1, "always_visible": false, "outline": [[-6, -4], [6, -4], [6, 4], [-6, 4]], "openings": [] },
+    { "room_id": "r-hall", "level": 0, "always_visible": false, "outline": [[-6, -4], [0, -4], [0, 4], [-6, 4]], "openings": [] },
+    { "room_id": "r-study", "level": 1, "always_visible": false, "outline": [[-6, -4], [0, -4], [0, 4], [-6, 4]], "openings": [] },
+    { "room_id": "r-terrace", "level": 1, "always_visible": true, "outline": [[0, -4], [6, -4], [6, 4], [0, 4]], "openings": [] }
+  ],
+  "outdoor_rooms": [],
+  "floor_plan": [
+    { "room_id": "r-hall", "polygon_world": [[-6, -4], [0, -4], [0, 4], [-6, 4]], "floor_kind": "planks", "closed": true }
+  ],
+  "plates": [
+    { "level": -1, "outline": [[-6, -4], [6, -4], [6, 4], [-6, 4]], "holes": [], "top_y": -3.0, "thickness": 0.2, "opacity_role": "ground" },
+    { "level": -1, "room_id": "r-cellar", "outline": [[-6, -4], [6, -4], [6, 4], [-6, 4]], "holes": [], "top_y": -2.98, "thickness": 0.02, "opacity_role": "ground" },
+    { "level": 1, "outline": [[-6, -4], [6, -4], [6, 4], [-6, 4]], "holes": [], "top_y": 3.0, "thickness": 0.2, "opacity_role": "upper" },
+    { "level": 1, "room_id": "r-study", "outline": [[-6, -4], [0, -4], [0, 4], [-6, 4]], "holes": [], "top_y": 3.02, "thickness": 0.02, "opacity_role": "upper" },
+    { "level": 1, "room_id": "r-terrace", "outline": [[0, -4], [6, -4], [6, 4], [0, 4]], "holes": [], "top_y": 3.02, "thickness": 0, "opacity_role": "upper" }
+  ],
+  "walls": [
+    { "level": -1, "room_id": "r-cellar", "from": [-6, -4], "to": [6, -4], "base_y": -3, "height": 3, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [0, -1] },
+    { "level": 0, "room_id": "r-hall", "from": [-6, 4], "to": [0, 4], "base_y": 0, "height": 3, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [0, 1] },
+    { "level": 0, "from": [-6, -4], "to": [0, -4], "base_y": 0, "height": 3, "thickness": 0.25, "opacity_role": "ground", "outward_normal": [0, -1] },
+    { "level": 1, "room_id": "r-study", "from": [-6, -4], "to": [0, -4], "base_y": 3.2, "height": 2.8, "thickness": 0.2, "opacity_role": "upper", "outward_normal": [0, -1] },
+    { "level": 0, "from": [0, 1], "to": [0, 2], "base_y": 0.9, "height": 1.2, "thickness": 0.05, "glass": true, "opacity_role": "ground", "outward_normal": [1, 0] }
+  ],
+  "extras": [
+    { "kind": "stair_tread", "center": [-2, -2.9, 2], "size": [1, 0.2, 0.3], "level": -1, "stair": 0 },
+    { "kind": "elevator_shaft", "center": [4, 0, -1.5], "size": [1, 9, 1], "level": 0 }
+  ],
+  "stairs": [],
+  "markers": [],
+  "doorways": [
+    { "level": -1, "at_world": [0, -4], "along": [1, 0], "type": "door", "width_m": 1, "height_m": 2.1, "base_y": -3, "rooms": ["r-cellar"], "outside": false },
+    { "level": 0, "at_world": [-3, 4], "along": [1, 0], "type": "door", "width_m": 1.2, "height_m": 2.1, "base_y": 0, "rooms": ["r-hall"], "outside": true },
+    { "level": 0, "at_world": [-3, -4], "along": [1, 0], "type": "door", "width_m": 0, "height_m": 2.1, "base_y": 0, "rooms": ["r-hall"], "outside": false },
+    { "level": 1, "at_world": [-3, -4], "along": [1, 0], "type": "door", "width_m": 0.9, "height_m": 2.1, "base_y": 3.2, "rooms": ["r-study", "r-terrace"], "outside": false },
+    { "level": 2, "at_world": [0, 0], "along": [1, 0], "type": "door", "width_m": 1, "height_m": 2.1, "base_y": 6, "rooms": [], "outside": false }
+  ],
+  "problems": [],
+  "corridors": [],
+  "boundary_openings": [
+    { "edge": 1, "at_world": [6, 0], "width_m": 2, "type": "gate", "inward": [-1, 0] }
+  ],
+  "models": [
+    { "role": "prop", "id": "desk", "room_id": "r-study", "variants": {},
+      "placeholder_dims": { "w": 1.2, "d": 0.6, "h": 0.75 },
+      "level": 1, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 1.2, "measure": "xyz",
+      "anchor": [-3, 0], "bottom_y": 3.02 },
+    { "role": "prop", "id": "barrel", "room_id": "r-cellar", "variants": {},
+      "placeholder_dims": { "w": 0.6, "d": 0.6, "h": 0.9 },
+      "level": -1, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 0.9, "measure": "xyz",
+      "anchor": [2, 2], "bottom_y": -2.98 }
+  ],
+  "figures": { "base_height_m_world": 1.7, "stand_clearance": 0.12 }
+}

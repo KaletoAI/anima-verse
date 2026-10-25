@@ -85,7 +85,11 @@ public partial class Main : Node3D
             var placeLabels = _placeLabels;
             // `tile.labelObj.visible = tile.group.visible`: a neighbour the occlusion has hidden takes its name along.
             _labelOverlay.Sources.Add(() => placeLabels.Visible(id => OccludedPlace(id) ? null : PlaceOf(id)));
+            // The room names of an open interior (mountShell step 16), and the in-world storey switch over them.
+            _labelOverlay.Sources.Add(builder.VisibleRoomLabels);
             labelsLayer.AddChild(_labelOverlay);
+            labelsLayer.AddChild(new LevelSwitchOverlay { Camera = _camera, Builder = builder });
+            _avatarRoom = AvatarRoomOf(builder.FirstMap!.Value);
             if (_options.Bench || _options.Offline is not null)
             {
                 // The measuring runs keep the spike's start: the target on the anchor, where the scatter window
@@ -132,6 +136,7 @@ public partial class Main : Node3D
                 if (_figures.LatestMap is not { } polled) return;
                 // applyWorldMap → updatePins(map), every poll; npcs.update → the tags' texts; the place labels follow.
                 if (_pins is not null && IsInstanceValid(_pins)) _pins.Update(polled, PlaceOf);
+                _avatarRoom = AvatarRoomOf(polled);
                 tags.Apply(polled);
                 SyncPlaceLabels();
             };

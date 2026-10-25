@@ -19,9 +19,11 @@ namespace AnimaNative.Ground;
 ///   4. three's <c>MeshStandardMaterial</c> lighting with <c>surfaceMaterial</c>'s matte defaults:
 ///      roughness 0.85, metalness 0.02, Lambert diffuse + GGX specular (Godot <c>diffuse_lambert</c>).
 ///
-/// Not ported (both are per-fragment work the browser does and Godot does not — favours Godot): the fog
-/// veil (<c>applyFogVeil</c>, the fog-of-war haze) and the basement hole discard (<c>patchHole</c>); the
-/// water branch of the terrain (bench runs use <c>&amp;water=0</c>).
+/// 5. the basement hole (<c>patchHole</c>, Task 16): while <c>hole_on</c>, a fragment whose world xz lies strictly
+///    inside <c>hole_rect</c> (minX, minZ, maxX, maxZ) is discarded — the open view looks down into a cellar.
+///
+/// Not ported (per-fragment work the browser does and Godot does not — favours Godot): the fog veil
+/// (<c>applyFogVeil</c>, the fog-of-war haze).
 ///
 /// Differences that are cost-neutral: the id masks are RG8 UNORM textures read with <c>texelFetch</c> and
 /// decoded <c>round(v·255)</c> (Godot's <see cref="Image"/> has no RG8UI format; the browser reads RG8UI
@@ -86,6 +88,10 @@ uniform float tl_normal_span = 2.0;
 
 uniform float ground_roughness = 0.85;
 uniform float ground_metallic = 0.02;
+
+// ---- basement hole (ground.ts patchHole) ----
+uniform vec4 hole_rect = vec4(0.0);   // minX, minZ, maxX, maxZ (world)
+uniform float hole_on = 0.0;
 {(water ? WaterUniforms : "")}
 varying vec2 v_world;
 
@@ -218,6 +224,8 @@ void fragment() {{
 	// The two derivatives, ONCE and at uniform control flow (layerCut.ts lcCompose).
 	vec2 dpdx = dFdx(p);
 	vec2 dpdy = dFdy(p);
+	// patchHole: the strict test of the browser, after the derivatives so they stay in uniform control flow.
+	if (hole_on > 0.5 && p.x > hole_rect.x && p.x < hole_rect.z && p.y > hole_rect.y && p.y < hole_rect.w) discard;
 	vec3 alb = lc_compose(p, dpdx, dpdy) * vec3(1.0);
 	// (2) colour patches — brightness, then saturation through the own luminance; hue untouched.
 	float ng_tint = lc_noise(p / {L(NaturalGround.TintM)}) * 2.0 - 1.0;

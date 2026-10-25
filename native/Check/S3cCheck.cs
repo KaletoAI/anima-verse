@@ -30,9 +30,10 @@ public static class S3cCheck
     private const int ExpDegenerate = 1, ExpInterior = 4, ExpStorey = 3, ExpPanes = 2;
     private const int ExpBuildings = 2, ExpProps = 4, ExpDoors = 1, ExpWorld = 2;
     // Task 15 mounts the near ring's indoor specs once (hidden at fade 0): loc-closed's shelf is asked for and, having
-    // no fixture, is MISSING (+1) instead of "interior" (README "Models").
-    private const int ExpPlaceholders = 1, ExpMissing = 2, ExpModelInterior = 0, ExpModelStorey = 1, ExpCulled = 1;
-    private const int ExpInteriorMounted = 11;               // loc-open 5 + loc-closed 2 + loc-far 4 (README "Primitives")
+    // no fixture, is MISSING (+1) instead of "interior"; Task 16 mounts every storey, so loc-open's level-1 lamp is
+    // asked for too and is MISSING (+1) — still counted "storey" (hidden by its room group at the build's storey 0).
+    private const int ExpPlaceholders = 1, ExpMissing = 3, ExpModelInterior = 0, ExpModelStorey = 1, ExpCulled = 1;
+    private const int ExpInteriorMounted = 14;               // loc-open 8 + loc-closed 2 + loc-far 4 (README "Primitives")
     private const int ExpFull = 6, ExpLow = 3;
     private const int ExpBuildingVertices = 2 * 2220, ExpBuildingIndices = 2 * 3330;
     private const float ExpChairBottom = 0.046875f;          // bottom_y 0 + ground(66, 119) 3.921875 − datum 3.875
@@ -99,20 +100,21 @@ public static class S3cCheck
                    && !asked.Contains("/assets/props/post/model.glb?tier=full"), string.Join(";", asked));
             Expect("s3c world prop variant 1 full", asked.Contains("/assets/props/stone/model?variant=1&tier=full"), "");
             Expect("s3c world prop low", asked.Contains("/assets/props/sign/model?tier=low"), "");
-            Expect("s3c storey-hidden lamp not loaded", !asked.Any(u => u.Contains("/lamp/")), "");
+            Expect("s3c level-1 lamp asked at the mount (every storey)", asked.Contains("/assets/props/lamp/model?tier=full"), "");
             Expect("s3c near-ring shelf asked at the mount", asked.Contains("/assets/props/shelf/model?tier=full"), "");
 
             // Placements, measured in the location frame (§ B2 + the § A16.9 lift).
             var open = world.GetNode<Node3D>("Locations/Loc_loc-open");
             // Indoor specs hang in the interior group (mounted once, shown by the crossfade).
             var openInterior = open.GetNode<Node3D>("Interior");
-            var chair = openInterior.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString() == "Placed_prop_chair");
+            var chair = Descendants(openInterior).OfType<Node3D>().Single(n => n.Name.ToString() == "Placed_prop_chair");
+            Expect("s3c chair in its room group", chair.GetParent().Name.ToString() == "Room_r-ground", chair.GetParent().Name);
             Near("s3c chair bottom (lift)", ModelPlacement.Measure(chair, Transform3D.Identity).Position.Y, ExpChairBottom);
-            var door = openInterior.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString() == "Placed_prop_door_s3c0001");
+            var door = Descendants(openInterior).OfType<Node3D>().Single(n => n.Name.ToString() == "Placed_prop_door_s3c0001");
             var doorBox = ModelPlacement.Measure(door, Transform3D.Identity);
             Near("s3c door bottom", doorBox.Position.Y, ExpDoorBottom);
             Near("s3c door height (fit)", doorBox.Size.Y, ExpDoorHeight);
-            var ph = openInterior.GetChildren().OfType<Node3D>().Single(n => n.Name.ToString().StartsWith("Placeholder"));
+            var ph = Descendants(openInterior).OfType<Node3D>().Single(n => n.Name.ToString().StartsWith("Placeholder"));
             Near("s3c placeholder y", ph.Position.Y, ExpPlaceholderY);
             Near("s3c placeholder yaw", ph.Rotation.Y, Mathf.DegToRad(90f));
 
@@ -125,7 +127,7 @@ public static class S3cCheck
             CheckCutoutClean(hull);
 
             // The outline walls of the open location wear the culling material, the glass the translucent one.
-            var recipeMats = open.GetChildren().Concat(openInterior.GetChildren()).OfType<MeshInstance3D>()
+            var recipeMats = Descendants(open).OfType<MeshInstance3D>()
                 .Select(mi => mi.Mesh.SurfaceGetMaterial(0)).OfType<ShaderMaterial>().ToList();
             Expect("s3c wall-cull material", recipeMats.Any(x => (float)x.GetShaderParameter("wall_cull") > 0.5f), "");
             Expect("s3c translucent glass", recipeMats.Any(x => Math.Abs((float)x.GetShaderParameter("opacity") - 0.3f) < 1e-6), "");
@@ -313,4 +315,14 @@ public static class S3cCheck
 
     private static void Near(string what, float got, float want, float eps = 1e-3f)
         => Expect(what, Math.Abs(got - want) <= eps, $"got {got}, expected {want}");
+
+    /// <summary>Every node below <paramref name="n"/> (room groups nest the interior's pieces since Task 16).</summary>
+    private static IEnumerable<Node> Descendants(Node n)
+    {
+        foreach (var c in n.GetChildren())
+        {
+            yield return c;
+            foreach (var d in Descendants(c)) yield return d;
+        }
+    }
 }

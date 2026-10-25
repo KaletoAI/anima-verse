@@ -86,6 +86,10 @@ public partial class Main : Node3D
     private readonly PerfProbe _perf = new();
     private Node3D? _world;
     private readonly OpenView _openView = new();
+    /// <summary>The avatar's room (its worldmap row), for the door marks' lock look; and what the locks were last synced at.</summary>
+    private string _avatarRoom = "";
+    private string _lockRoom = "";
+    private int _lockVersion = -1;
     /// <summary>The info panel as last published (main.ts keeps the click's snapshot; only view.open is patched).</summary>
     private JsonObject? _info;
     /// <summary>Normal play: not a bench drive, not an offline dump (those keep the built world static).</summary>
@@ -276,7 +280,11 @@ public partial class Main : Node3D
         if (_hud is { } hudNow && _perf.Frame(hudNow.Active && hudNow.Ui.PerfOn, delta, _world) is { } perf) hudNow.SendPerf(perf);
         // main.ts' frame hook: the crossfade of every openable location and the neighbour occlusion — in every run
         // with a world (the measuring runs too: the avatar's location fades in at their start, as in the browser).
-        if (_builder is not null && _camera is not null && _world is not null) _builder.TickView(delta, _camera.GlobalPosition);
+        if (_builder is not null && _camera is not null && _world is not null)
+        {
+            SyncLocks();
+            _builder.TickView(delta, _camera.GlobalPosition);
+        }
         // The overview auto-close of main.ts' frame hook (no auto-reopen). The measuring runs keep their world.
         if (_interactive && _openView.OpenId is { } open && _camera is not null)
         {

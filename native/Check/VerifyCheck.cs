@@ -26,13 +26,13 @@ public static class VerifyCheck
     /// <summary>(location, checked, rows, placed, total) — README "Verify (§ B5a)".</summary>
     private static readonly (string Loc, int Checked, int Rows, int Placed, int Total)[] ExpMain =
     {
-        ("loc-house", 9, 1, 1, 2),
+        ("loc-house", 11, 1, 1, 2),
         ("loc-yard", 30, 0, 0, 0),
     };
 
     private static readonly (string Loc, int Checked, int Rows, int Placed, int Total)[] ExpS3c =
     {
-        ("loc-open", 43, 1, 5, 6),
+        ("loc-open", 52, 2, 5, 7),
         ("loc-closed", 15, 1, 2, 3),
         ("loc-far", 16, 0, 1, 1),
     };
@@ -44,7 +44,7 @@ public static class VerifyCheck
         {
             var house = builder.Slots["loc-house"];
             var interior = house.Group.GetNode<Node3D>("Interior");
-            var wallMesh = interior.GetChildren().OfType<MeshInstance3D>().Single();
+            var wallMesh = interior.GetChildren().OfType<MeshInstance3D>().Single(m => m.Name.ToString().Contains("_wall0_"));
             var box = WorldBuilder.WorldBox(ToV(wallMesh.Transform * wallMesh.Mesh.GetAabb()), house.Group.Transform);
             var origin = new Overview.Vec3(house.Group.Position.X, house.Group.Position.Y, house.Group.Position.Z);
             var wall = new SceneWall(0, (-4, -3), (4, -3), 0, 3, 0.2, false, false, false);
@@ -63,7 +63,7 @@ public static class VerifyCheck
         var s3c = await Run(host, new FixtureSource(Path.Combine(fixtures, "s3c"), fixtures), "Glass", ExpS3c, "verify-s3c", async (world, builder) =>
         {
             var open = builder.Slots["loc-open"];
-            var chair = open.Group.GetNode<Node3D>("Interior/Placed_prop_chair");
+            var chair = open.Group.GetNode<Node3D>("Interior/Room_r-ground/Placed_prop_chair");
             using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixtures, "s3c", "scene_loc-open.json")));
             var spec = ScenePayload.Parse(doc.RootElement).Models.Single(m => m.Id == "chair");
             var origin = new Overview.Vec3(open.Group.Position.X, open.Group.Position.Y, open.Group.Position.Z);

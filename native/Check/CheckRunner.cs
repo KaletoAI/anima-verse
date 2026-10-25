@@ -33,9 +33,9 @@ public static class CheckRunner
     // skipped: 3 degenerate (2-point plate, zero-length wall, empty shaft) + 5 interior (house plate + wall, yard
     // glass + 2 stair boxes) — README "Recipe primitives".
     private const int ExpPrimitives = 7, ExpSkipped = 8, ExpShellCopies = 7, ExpDegenerate = 3, ExpInterior = 5;
-    // Task 15: every location mounts its interior once (hidden at fade 0) — house wall 1 + yard 6 walls + 2 stair
-    // boxes (README "Yard scene"); the house's level-1 plate and the yard's are not on storey 0.
-    private const int ExpInteriorMounted = 9;
+    // Task 15/16: every location mounts its interior once (hidden at fade 0), EVERY storey — house wall + its level-1
+    // slab = 2, yard 6 walls + 2 stair boxes + its level-1 slab = 9 (README "Yard scene").
+    private const int ExpInteriorMounted = 11;
     private const float ExpHouseDatum = 4f, ExpYardDatum = 2.91357421875f;
     private const float ExpPlateArea = 46f;                        // 8 × 6 minus the 2 × 1 hole
     private const float ExpBuildingMaxM = 12f, ExpBuildingBottom = -0.25f;
@@ -66,6 +66,12 @@ public static class CheckRunner
             if (only == "verify")
             {
                 var alone = await VerifyCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
+            if (only == "storeys")
+            {
+                var alone = await StoreysCheck.RunAsync(host, dir);
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
@@ -139,10 +145,11 @@ public static class CheckRunner
             var labels = await LabelCheck.RunAsync(host, world, builder, dir);
             var sync = await SyncCheck.RunAsync(source, probe, dir);
             var verify = await VerifyCheck.RunAsync(host, dir);
+            var storeys = await StoreysCheck.RunAsync(host, dir);
 
             GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

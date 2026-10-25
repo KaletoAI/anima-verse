@@ -1,0 +1,20 @@
+{
+  "avatar": "Tess Vale",
+  "current_location_id": "loc-tower",
+  "locations": [
+    { "id": "loc-tower", "name": "Tower", "pos_x": 64.0, "pos_z": 120.0, "yaw_deg": 90.0,
+      "plan_width_m": 12.0, "boundary": [[-6, -4], [6, -4], [6, 4], [-6, 4]], "openings": [] },
+    { "id": "loc-pit", "name": "Pit", "pos_x": -40.0, "pos_z": 100.0, "yaw_deg": 0.0,
+      "plan_width_m": 8.0, "boundary": [[-4, -4], [4, -4], [4, 4], [-4, 4]], "openings": [] }
+  ],
+  "characters": [
+    { "name": "Tess Vale", "location_id": "loc-tower", "pos": { "x": 64.0, "z": 120.0 }, "pos_origin": null,
+      "height_cm": 170, "room_id": "r-hall", "activity_animation": "", "travel": null, "model_sig": "tess-1" }
+  ],
+  "world_props": [],
+  "world_props_sig": "storeys",
+  "events_by_location": {},
+  "world_bounds": { "min_x": -44.0, "min_z": 96.0, "max_x": 70.0, "max_z": 126.0 },
+  "height_sig": "fixture-s1a",
+  "fogged": false
+}

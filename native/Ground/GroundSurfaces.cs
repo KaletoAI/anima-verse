@@ -419,6 +419,26 @@ public sealed class GroundSurfaces
     /// Put the ground material on every terrain mesh (overview + tiles), over the S1a vertex colour; a tile built
     /// with the water lift (meta <c>wet</c>) wears the water variant (the browser's second CDLOD program).
     /// </summary>
+    /// <summary>The basement hole the materials cut right now (null = none).</summary>
+    public double[]? Hole { get; private set; }
+
+    /// <summary>
+    /// <c>terrainGround.setHole(rect | null)</c>: the world rectangle [minX, minZ, maxX, maxZ] the ground discards, on
+    /// the dry material and its water variant (one uniform pair each; nothing is written when it did not change).
+    /// </summary>
+    public void SetHole(double[]? rect)
+    {
+        if (rect is null ? Hole is null : Hole is not null && rect.SequenceEqual(Hole)) return;
+        Hole = rect is null ? null : (double[])rect.Clone();
+        foreach (var mat in new[] { Material, WaterMaterial })
+        {
+            if (mat is null) continue;
+            mat.SetShaderParameter("hole_on", rect is null ? 0f : 1f);
+            if (rect is not null)
+                mat.SetShaderParameter("hole_rect", new Vector4((float)rect[0], (float)rect[1], (float)rect[2], (float)rect[3]));
+        }
+    }
+
     public void ApplyTo(IEnumerable<GeometryInstance3D> nodes)
     {
         foreach (var n in nodes)

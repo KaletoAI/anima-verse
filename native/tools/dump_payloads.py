@@ -172,7 +172,7 @@ def dump(world: Path, out: Path, instance: Path, as_user: str) -> int:
     import starlette.responses as sr
 
     # Background builders off (see the docstring).
-    glb_delivery.delivery_path = lambda p: p
+    glb_delivery.delivery_path = lambda p, **_: p   # keyword arguments (source=) ride along unused
     refine.auto_lod_enabled = lambda: False
 
     def _no_blender(*_a, **_k):

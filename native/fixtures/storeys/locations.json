@@ -1,0 +1,8 @@
+{
+  "locations": [
+    {"id": "loc-tower", "name": "Tower", "terrain": null, "map3d": null,
+     "rooms": [{"id": "r-cellar", "name": "Cellar"}, {"id": "r-hall", "name": "Hall"}, {"id": "r-study", "name": "Study"},
+               {"id": "r-terrace", "name": "Terrace"}, {"id": "__floor__1", "name": ""}]},
+    {"id": "loc-pit", "name": "Pit", "terrain": null, "map3d": null, "rooms": [{"id": "p-vault", "name": "Vault"}]}
+  ]
+}

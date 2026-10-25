@@ -24,6 +24,10 @@ public static class Json
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
            && v.TryGetDouble(out var d) && double.IsFinite(d) ? d : null;
 
+    /// <summary>A finite number element, else null.</summary>
+    public static double? NumOrNull(JsonElement v)
+        => v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var d) && double.IsFinite(d) ? d : null;
+
     public static string Str(JsonElement e, string name, string fallback = "")
         => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v)
            && v.ValueKind == JsonValueKind.String ? v.GetString() ?? fallback : fallback;
@@ -166,6 +170,11 @@ public sealed record LocationInfo(string Id, string Name, double? PosX, double? 
     public bool AreaModel { get; init; }
     /// <summary>The row's <c>terrain</c> string (AV3D-7), "" when absent.</summary>
     public string Terrain { get; init; } = "";
+    /// <summary>
+    /// <c>rooms</c> of the <c>/world/locations?view=3d</c> row: room id → name (<c>tile.loc.rooms</c>, the room labels'
+    /// text; <c>placeableOf</c> takes them from the detail record). Empty on a world-map row.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> Rooms { get; init; } = new Dictionary<string, string>();
 
     public static List<LocationInfo> ParseList(JsonElement root)
         => Json.Arr(root, "locations")
@@ -173,6 +182,19 @@ public sealed record LocationInfo(string Id, string Name, double? PosX, double? 
                .Select(Parse)
                .Where(l => l.Id.Length > 0)
                .ToList();
+
+    /// <summary><c>rooms[]</c> → id → name; the first entry of an id wins (<c>rooms.find(r =&gt; r.id === id)</c>).</summary>
+    private static Dictionary<string, string> RoomNames(JsonElement l)
+    {
+        var names = new Dictionary<string, string>();
+        foreach (var r in Json.Arr(l, "rooms"))
+        {
+            if (r.ValueKind != JsonValueKind.Object) continue;
+            var id = Json.Str(r, "id");
+            if (id.Length > 0 && !names.ContainsKey(id)) names[id] = Json.Str(r, "name");
+        }
+        return names;
+    }
 
     public static LocationInfo Parse(JsonElement l)
     {
@@ -190,6 +212,7 @@ public sealed record LocationInfo(string Id, string Name, double? PosX, double? 
             Map3dStyle = Json.Str(m3, "style"),
             AreaModel = area,
             Terrain = Json.Str(l, "terrain"),
+            Rooms = RoomNames(l),
         };
     }
 }
@@ -310,6 +333,9 @@ public sealed class ScenePayload
 
     /// <summary><c>floorYof(level)</c>: the declared floor height of a storey, 0 when it is not declared.</summary>
     public double FloorY(int level) => Levels.FirstOrDefault(l => l.Level == level)?.FloorY ?? 0;
+
+    /// <summary><c>floorYof.get(level)</c>: the declared floor height, null when the storey is not declared.</summary>
+    public double? FloorYOrNull(int level) => Levels.FirstOrDefault(l => l.Level == level)?.FloorY;
 
     public static ScenePayload Parse(JsonElement root)
     {

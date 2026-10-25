@@ -337,7 +337,9 @@ public static class PickCheck
             Near("G pad distance", after!.Value.Distance, 50 - (ClosedDatum + 0.1), 2e-3);
             Expect("G loc-open stays closed", openSlot.Fade.Fade == 0 && openSlot.Group.GetNode<Node3D>("Placed_building_loc-open").Visible
                    && !openSlot.Group.GetNode<Node3D>("Cutout_building_loc-open").Visible
-                   && !openSlot.Group.GetNode<Node3D>("Interior").Visible && HasChild(openSlot.Group, "Placed_prop_bench"), "");
+                   && !openSlot.Group.GetNode<Node3D>("Interior").Visible
+                   // the always-visible garden's group hangs off the tile, its bench in it (Task 16 room groups)
+                   && openSlot.Group.GetNodeOrNull<Node3D>("Room_r-garden/Placed_prop_bench") is { } bench && bench.IsVisibleInTree(), "");
 
             // Neighbour occlusion: camera C (168, ·, 140), target the open centre (−40, 100) → d = (−208, −40);
             // loc-open's centre (64, 120) − C = (−104, −20) = d/2 → t = 0.5 ∈ (0.05, 0.92), off the line by 0 <

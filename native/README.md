@@ -228,6 +228,7 @@ Arguments after `--` (no .env; all optional):
 | `--verify` | § B5a: log the full verify table of every mounted location (default: only a location with a deviation is logged, like the browser without `?verify=1`) |
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
 | `--check verify` | only the § B5a section of the self-test (both fixture worlds, `Check/VerifyCheck.cs`), then exit 0/1 |
+| `--check storeys` | only the storey section (`fixtures/storeys/`, `Check/StoreysCheck.cs`: the switch at runtime, hole, marks, labels, pointer), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
 Camera (the browser's overview camera, `Ui/OverviewCamera.cs` + `Core/Overview/OverviewControl.cs`):
@@ -351,12 +352,13 @@ nothing here is a native choice:
   pinned (the avatar's location), `far` ≤ 560 m, beyond that the browser does not
   mount the location at all (`gone`, counted, not built).
 - **The open location**: the avatar's location is open from the first mount on
-  (`arrivalLocId`, fade 1). Its interior group shows: storey plates only on the
-  avatar's storey, room groups only on it (outdoor/always-visible rooms always),
-  outline walls only on it and only where the camera is not on their outer side
-  (`applyWallCulling`, per frame in the recipe shader), door leaves / window panes
-  that a model fills stay hidden, extras (stairs, lift) always; its indoor model
-  specs on that storey are placed. A shell building model fades out (not drawn);
+  (`arrivalLocId`, fade 1), at storey 0 (buildTile). Its interior group shows:
+  storey plates only on the shown storey, room groups only on it
+  (outdoor/always-visible rooms always), outline walls only on it and only where
+  the camera is not on their outer side (`applyWallCulling`, per frame in the
+  recipe shader), door leaves / window panes that a model fills stay hidden,
+  extras (stairs, lift) always; its indoor model specs of every storey are placed
+  in their room groups. A shell building model fades out (not drawn);
   a plan-hull or ground model stays and loses what lies inside its `cutouts` (the
   browser discards those fragments; here the triangles whose centroid lies
   inside are dropped from a per-placement copy — same pixels, no per-fragment
@@ -365,8 +367,9 @@ nothing here is a native choice:
   or an outdoor / always-visible room) and the outdoor rooms' primitives; a place
   without a building model shows its far-view shell (`shellPlan`: copies of the
   level plates at or above ground and of every non-glass wall, leaves included).
-  The interior group stays invisible — its primitives and indoor specs are
-  counted as `interior`, not built.
+  The interior group stays invisible until the location opens (its primitives are
+  mounted and counted `interior`; its indoor specs are mounted in the near ring and
+  counted `interior` in the far ring, where they are not).
 - **Tiers** (static, from the anchor and the bench path's start camera
   anchor + (0, 24, 40)): building — far → `low`, near → `full` under 45 m camera
   distance minus the footprint's half diagonal; outdoor/indoor specs — far → `low`,
@@ -429,8 +432,22 @@ neighbour occlusion `NeighbourOccludes` + `OcclusionStep` 8/s). Opacities go int
 `GeometryInstance3D.Transparency` (one per mesh instance, multiplied by Godot into the material's own alpha; the
 recipe shader writes `ALPHA *= opacity`), set to 0 wherever Godot would draw opaque anyway (fade alpha ≥ 0.999), so a
 mesh is in the transparent pass only while a fade runs. Kept plan-hull / ground models with cutouts carry a cut copy
-the fade swaps in at 0.03. Only shown meshes are pickable. The storey is fixed at the mount (the avatar's room in
-its own location, else 0) until Task 16.
+the fade swaps in at 0.03. Only shown meshes are pickable.
+
+### Storeys at runtime (Task 16)
+
+Every storey is mounted (one room group per declared room — outdoor ones off the location group, the rest in
+`Interior`; recipe meshes per unit: slab / room plate / outline wall per storey). `LocationSlot.LevelFilter` is
+view state (0 at the mount); `World/LocationStoreys.cs` applies it per frame from `TickView` with the Core's rules
+(`SceneView.RoomVisible` / `StoreyPieceOpacity`, `StoreyView`): room groups by storey, slabs and outline walls of the
+shown storey only (fade > 0.03), room plates on their solid twin (`MaterialOverride`) on the displayed storey,
+a ground model hidden and the basement hole (`GroundShader` `hole_rect`/`hole_on`, the rectangle grown towards the
+camera) while a storey below ground is shown. Overlays: door marks per declared storey (near-ring buildings, gold /
+locked red from the HUD's lock fields), boundary marks (world frame, shown while the avatar is refused the place),
+room labels (label overlay, fade > 0.5, not on area locations) and the in-world level switch
+(`Ui/LevelSwitchOverlay.cs`, scene-owned like the browser's — no bridge message): a button row on the first lift
+box (else (2.2, 0)) ⅔ of a storey above the shown floor; a press on it is taken by Godot's GUI pass before the
+camera's `_UnhandledInput`, so it never picks, orbits or drags.
 
 ### § B5a verify (Task 15)
 
@@ -440,8 +457,8 @@ outer position, with its storey-0 lift; `surface_scale`/`surface_box` where a sp
 payload through the vector-checked cores of `SceneVerify`; a spec that placed nothing is a `geladen` row (the
 browser's field name). The log line is the browser's, in English: `[verify] <loc>: N numbers checked, no deviation
 > 0.01 m (models P/T)`, or the deviation count plus a table. Differences to `window.__sceneVerify`: one report per
-location (the browser's detail report overwrites its shell report), degenerate pieces and pieces of other storeys
-are not built here and therefore not measured.
+location (the browser's detail report overwrites its shell report), degenerate pieces are not built here and
+therefore not measured; every storey is (Task 16).
 
 ## Offline: the real world without the server (Task S3c)
 

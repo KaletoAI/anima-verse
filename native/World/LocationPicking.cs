@@ -124,7 +124,8 @@ public sealed class LocationPicking
         double maxX = double.NegativeInfinity, maxY = maxX, maxZ = maxX;
         foreach (var mi in Walk(slot.Group).OfType<MeshInstance3D>())
         {
-            if (mi.Mesh is not { } mesh) continue;
+            // The flat overlays (door marks) never catch the ray (main.ts: mesh.raycast = () => {}).
+            if (mi.Mesh is not { } mesh || mi.HasMeta(LocationFade.OverlayMeta)) continue;
             var xf = mi.GlobalTransform;
             var box = xf * mesh.GetAabb();
             var lo = box.Position;

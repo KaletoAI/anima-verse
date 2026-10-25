@@ -31,6 +31,7 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `ground_reference.json` | the browser's layer-cut / want-set / natural-ground / colour-slice values on these fixtures — WRITTEN by `ground_reference.mjs` |
 | `ground_reference.mjs` | node script that runs `layerCut.ts`, `heightTiles.ts` `wantedTiles`, `naturalGroundMath.ts` and three's `Color` themselves |
 | `s3c/` | Task S3c: a second, hand-written world (avatar, open/closed/far/gone locations, world props, a wet tile) — files missing there (`heightfield.json`, the ground files) are read from this directory; see "S3c world" |
+| `storeys/` | Task 16: a third, hand-written world (a tower with a cellar, two storeys above and an always-visible terrace; a pit with a ground model over a basement) for the storey switch at runtime — the ground files come from this directory; see "Storeys world" |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
 for the repository root above this directory, then above the working directory):
@@ -156,8 +157,8 @@ centre xz = (1.5, −2)**. The variant URL maps to `building_meshopt.glb` →
 `models[1]` (the crate) is an OUTDOOR spec (no room) → placed like the browser's `mountShell` does; its URL
 has no fixture → not loadable, no `placeholder_dims` → **models missing = 1**. The house has a (non-roof)
 building model, so its recipe plate/wall stay in the (closed, invisible) interior group → **interior +2**.
-Mounted there since Task 15 (storey 0): the level-0 wall (**interior mounted 1**); the level-1 plate is on
-another storey and is not mounted.
+Mounted there since Task 15, every storey since Task 16: the level-0 wall and the level-1 storey plate (a slab,
+shown only on storey 1) → **interior mounted 2**.
 
 ### Yard scene (no model → its far-view shell, Task S3c)
 
@@ -176,9 +177,9 @@ one a door prop fills) outside; everything else stays in the invisible interior 
 primitives = 1 + 6 = **7** (all **7 shell copies**); skipped = degenerate 3 + interior (2 house + 1 + 2) 5 = **8**;
 panes 0.
 
-Interior mounted (Task 15, storey 0, hidden at fade 0): the 4 contour walls + the glass pane + the plain leaf
-(the `door_prop` leaf is a pane a model would fill — not drawn inside, only in the shell) + the tread and the
-stringer = 8; the level-1 plate is not on storey 0. With the house: **interior mounted = 1 + 8 = 9**.
+Interior mounted (Task 15, hidden at fade 0; every storey since Task 16): the 4 contour walls + the glass pane +
+the plain leaf (the `door_prop` leaf is a pane a model would fill — not drawn inside, only in the shell) + the
+tread and the stringer + the level-1 plate (its storey's slab) = 9. With the house: **interior mounted = 2 + 9 = 11**.
 
 ## Figures (Task S1b)
 
@@ -442,8 +443,8 @@ path `"Path_Blend "` (trimmed + lower-cased → `path_blend`), meadow `meadow_te
   `ng_field_size` (3, 3), `ng_strength` 1 (the field is not flat: 0…16), `tl_normal_span` = `tile_step_m` 2,
   `tl_far_geom` (−256, −256, 256, 1), `tl_far_level` (3, 3, 256, 0); the near height window = the loaded tile
   (0, 0) = 0…256 grown by max(16, 2 · 256) = 512 → **−512…768 at 2 m = 641 × 641**, rect (−512, −512, 768, 768).
-  25 uniform declarations; Godot's dummy renderer runs the shader-language front end, so a shader that does
-  not parse reports none.
+  27 uniform declarations (25 + the basement hole's `hole_rect` / `hole_on`, Task 16, off at the build); Godot's
+  dummy renderer runs the shader-language front end, so a shader that does not parse reports none.
 - **AO** on the overview h = 4·i·j (bilinear, exact everywhere inside): at the anchor (64, 128) the four taps of a
   bilinear field average to the centre → **0**. At (−255, 128): u = (−255 + 256)/256 = 0.00390625, v = 1.5 → own
   4uv = 0.0234375; tap x + 3 → u 0.015625 → 0.09375; tap x − 3 → u < 0 → CLAMPED to the border texel → 0; the two
@@ -498,25 +499,27 @@ loc-far (closed, no model → far shell): 2 opaque walls → **shell copies 2**;
 drawn = 6 + 1 + 2 = **9** (plates 2, walls 5, extras 2; shell 2; culled 2); skipped = degenerate 1 + interior 4 +
 storey 3 + panes 2 = **10**.
 
-Interior mounted (Task 15 — every location mounts its interior once, for its storey): loc-open (storey 0) w1, w2,
-the plain glass pane + 2 extras = 5 (the garden plate hangs outside; the panes a model fills are not drawn; L1 is
-another storey); loc-closed the `r-in` wall + the pad = 2; loc-far (far ring: primitives are part of the shell
-mount there too) 3 walls + the riser = 4 → **11**.
+Interior mounted (Task 15 — every location mounts its interior once; Task 16 — every storey of it): loc-open w1,
+w2, the plain glass pane + 2 extras + the level-1 storey plate + the `r-up` plate + w3 = 8 (the garden plate hangs
+outside; the panes a model fills are not drawn); loc-closed the `r-in` wall + the pad = 2; loc-far (far ring:
+primitives are part of the shell mount there too) 3 walls + the riser = 4 → **14**. The counts above (drawn,
+storey …) still describe the view at the build's storey 0.
 
 ### Models
 
 loc-open: the plan-hull building is KEPT when open (cutouts instead of a fade) → placed, its triangles inside
 the 6 × 6 cutout removed (**> 0 and < 1110**, and no remaining centroid inside); chair (`r-ground`) → prop;
-lamp (`r-up`) → **storey**; the `door:` model (`measure: "fit"`) → door; the `window:` spec has no URL but
+lamp (`r-up`, level 1) → mounted in its room group since Task 16 (hidden at storey 0), its URL has no fixture
+→ **missing**, still counted **storey**; the `door:` model (`measure: "fit"`) → door; the `window:` spec has no URL but
 `placeholder_dims` → **placeholder**; the `room` diorama has neither → **missing**; bench (`r-garden`) → prop.
 loc-closed: building; well (no room) → prop; shelf (`r-in`) → mounted in the hidden interior since Task 15 (near
 ring, `mountDetail`), its URL has no fixture → **missing**. loc-far: post → prop at **low**.
 World props (camera (64, 160), landmark LOD = scatter × 3 = 105 / 135 / 360 m, cold start `low`):
 wp1 (80, 150) d = 18.87 → **full**, variant 1 → `…?variant=1&tier=full`; wp2 (64, 600) d = 440 → **culled**;
 wp3 (200, 160) d = 136 > 135 → **low**.
-→ placed building 2, prop 4, door 1, world 2; placeholders 1, missing 2 (diorama, shelf), interior 0, storey 1,
+→ placed building 2, prop 4, door 1, world 2; placeholders 1, missing 3 (diorama, shelf, lamp), interior 0, storey 1,
 culled 1; tiers placed: full 6 (open building, chair, door, bench, well, wp1), low 3 (closed building, post, wp3);
-building GLBs 2 × (2220 / 3330). The storey-hidden lamp's URL is never requested; the shelf's is (at the mount).
+building GLBs 2 × (2220 / 3330). The lamp's and the shelf's URLs are requested at the mount.
 
 Heights (§ A16.9 lift = ground(anchor) − datum, level 0, non-building):
 - chair anchor (2, −1) → world (66, 119): tile h = 2x/64 + z/64 → 2.0625 + 1.859375 = 3.921875 → lift
@@ -537,25 +540,26 @@ prop marker (m-chair), one doorway, two problems (one `scope: "editor"`), one co
 models: the door's `door` block (opening 0, left, swing −1, leaf box), the diorama's `clip_outline` and
 `walk_y_world` 0.05, and on the storey-hidden lamp `walkable`, `width_estimated`, `cut_plane`, `slots`, `light`,
 a 3 × 2 `surface`, a `water` region and a top-level `leaf_bbox`. None of them changes a count above: the markers
-and floor plan only feed `hasInterior` of a location that has an interior anyway, the lamp is never placed
-(storey 1), the diorama has no mesh, the door block and the rest are read by no native code yet.
+and floor plan only feed `hasInterior` of a location that has an interior anyway, the lamp has no mesh fixture
+(missing since Task 16 mounts storey 1), the diorama has no mesh, the door block and the rest are read by no native code yet.
 
 ### Verify (§ B5a, Task 15)
 
 `Check/VerifyCheck.cs` builds both worlds and reads each location's report. A plate checks `top_y` (+ `bottom_y`
 for a body), a wall `base_y`, `top_y`, `centre.x`, `centre.z`; a placement `bottom_y` (+ its storey-0 lift),
 `anchor.x/z` and — where every angle keeps the box axis-parallel — `max_m` (or `size_m.w/h` for `fit`); a spec
-that placed nothing one `geladen` row. Measured: every MOUNTED plate/wall (a pane a model fills from its geometry),
-not degenerate pieces nor other storeys. The GLB boxes come from the glTF accessors: `building_*.glb`
+that placed nothing one `geladen` row. Measured: every MOUNTED plate/wall of every storey (Task 16; a pane a model
+fills from its geometry), not degenerate pieces. The GLB boxes come from the glTF accessors: `building_*.glb`
 18.845 × 9.14 × 14.4 (x, y, z); every model's scale is chosen so its own measure equals its `max_m` / `size_m`.
 
-- **loc-house**: wall 4 + building 4 (fix 90 and yaw 0 are axis-parallel: bottom, anchor, `max_m` 12) + the crate
-  `geladen` 1 → **9 checked, 1 row**, models 1/2.
+- **loc-house**: wall 4 + the level-1 plate 2 (Task 16) + building 4 (fix 90 and yaw 0 are axis-parallel: bottom,
+  anchor, `max_m` 12) + the crate `geladen` 1 → **11 checked, 1 row**, models 1/2.
 - **loc-yard** (yaw 30°: the box centres turn back exactly, no extent is read): the level-1 plate via its shell
   copy 2 + 7 walls × 4 = **30, 0 rows**, models 0/0.
-- **loc-open**: garden plate (bare) 1 + walls w1, w2, the glass pane and the two panes a model fills 5 × 4 = 20;
-  building 4, chair 4, door 5 (fit at yaw 90: size 1 × 2.1 × 14.4/18.845 turned → max(x, z) = 1, y = 2.1),
-  window placeholder 4 (max of 1 × 1.2 × 0.1 = 1.2), bench 4, diorama `geladen` 1 → **43, 1 row**, models 5/6.
+- **loc-open**: garden plate (bare) 1 + the level-1 storey plate 2 + the `r-up` plate 2 + walls w1, w2, w3, the
+  glass pane and the two panes a model fills 6 × 4 = 24; building 4, chair 4, door 5 (fit at yaw 90: size 1 × 2.1 ×
+  14.4/18.845 turned → max(x, z) = 1, y = 2.1), window placeholder 4 (max of 1 × 1.2 × 0.1 = 1.2), bench 4, the
+  diorama and the level-1 lamp `geladen` 1 each → **52, 2 rows**, models 5/7.
 - **loc-closed**: plate 2 + wall 4 + building 4 + well 4 + shelf `geladen` 1 → **15, 1 row**, models 2/3.
 - **loc-far**: 3 walls 12 + post 4 → **16, 0 rows**, models 1/1.
 
@@ -586,3 +590,71 @@ painted area carries a profile → the default look, opaque depth ¾ · 2 = **1.
 Every spatial shader goes through the headless front end once and logs one line; the check requires
 `ground`, `ground-water`, `recipe[opaque]`, `recipe[translucent]` and `recipe[opaque,both-sides]` to be
 `compiled (N uniforms)` with N = the shader's own uniform count.
+
+## Storeys world (`storeys/`, Task 16)
+
+A third small world, hand-written, for the storey switch at runtime (`Check/StoreysCheck.cs`, `--check storeys`):
+a tower with a cellar, a ground floor, an upper floor and an always-visible terrace on it, and a pit whose ground
+model covers a basement. Heightfield, tiles, terrain layers and surface textures come from `fixtures/` (fallback).
+Built with `--goto=Tower`; the avatar Tess Vale stands in `r-hall` of loc-tower → **loc-tower near, OPEN, storey 0**
+(the browser's buildTile starts every tile at 0; the avatar's storey is followed only when embodied); loc-pit at
+(−40, 100), the s3c loc-closed position → **near** (101.27 m), closed. Datums: tower = tile ground (64, 120) =
+2·1 + 1.875 = **3.875**; pit = overview (−40, 100) = **4.693359375** (see "S3c world").
+
+**Tower** (`scene_loc-tower.json`, yaw 90°, boundary ±6 × ±4, storey_m 3, levels −1 / 0 / 1 at floor_y −3 / 0 / 3).
+Rooms: `r-cellar` (−1), `r-hall` (0), `r-study` (1) inside; `r-terrace` (1, always visible) off the tile.
+
+| piece | unit | storey −1 | storey 0 | storey 1 |
+|---|---|---|---|---|
+| P1 slab −1 (ground) | interior, slab −1 | shown | – | – |
+| P2 `r-cellar` plate (ground, ghost 1 → no twin) | room `r-cellar` | shown | – | – |
+| P3 slab 1 (upper) | interior, slab 1 | – | – | shown |
+| P4 `r-study` plate (upper, ghost 0.4) | room `r-study` | – | – | shown, **solid** |
+| P5 `r-terrace` plate (upper, ghost 0.4, bare) | room `r-terrace` (outdoor) | shown, ghost | shown, **ghost** | shown, **solid** |
+| W1 cellar wall | room `r-cellar`, wall −1 | shown | – | – |
+| W2 hall wall | room `r-hall`, wall 0 | – | shown | – |
+| W3 contour wall (no room, t 0.25) | interior, wall 0 | – | shown | – |
+| W4 study wall (upper) | room `r-study`, wall 1 | – | – | shown |
+| W5 glass pane (no room) | interior, other | shown | shown | shown |
+| E1 stair tread, E2 lift shaft | interior, other | shown | shown | shown |
+
+Rule per row: a room group shows when outdoor or on the storey (`roomVisible`); a slab on its storey; an outline
+wall on its storey (fade > 0.03); a room plate solid on the displayed storey, its composed ghost elsewhere
+(`storeyPieceOpacity` — so the terrace floor is 40 % at storeys 0 and −1 and solid at 1, both directions). The desk
+(`r-study`, level 1) and the barrel (`r-cellar`, −1) are placeholders in their room groups → shown only at 1 / −1.
+
+- **Interior mounted**: P1–P4 + W1–W5 + E1, E2 = **11** (P5 hangs off the tile); pit P1 + W1 = 2 → **13**.
+- **Stats at the build (open, storey 0)**: drawn = P5 (outdoor) + W2, W3, W5 + E1, E2 = **6** (plates 1, walls 3,
+  extras 2, culled walls 2 = W2, W3); storey = P1–P4 + W1, W4 = **6**; the pit (closed, its ground model stands)
+  → interior **2**; models storey = desk + barrel = **2**; placeholders desk, barrel, the pit's model = **3**.
+- **Verify (every storey)**: tower plates P1–P4 2 each + P5 1 = 9, walls 5 × 4 = 20, desk and barrel 4 each (yaw 0:
+  bottom, anchor x/z, `max_m` = the largest placeholder side, 1.2 / 0.9) → **37, 0 rows, models 2/2**; pit slab 2 +
+  wall 4 + its building placeholder 4 (8 × 0.5 × 8, `xz` 8) → **10, 0 rows, 1/1**.
+- **Level switch**: 3 declared storeys → buttons **−1. EG 1.** (ascending; `EG` for 0); the first lift box E2 (the
+  tread E1 comes first but never anchors) → (4, −1.5). Tile-local (4, floor_y(lv) + 2, −1.5), turned by 90°
+  (x = 64 + lz, z = 120 − lx) → world **(62.5, 3.875 + 2 + floor_y, 116)**: y 5.875 / 8.875 / 2.875 at 0 / 1 / −1.
+  The active button follows the filter. The pit (levels −1, 0) has buttons **−1. EG**.
+- **Room labels** (names from `locations.json`; `__floor__1` has an empty name → none): hulls = `floor_plan` for
+  `r-hall` (x −6…0 → centre (−3, 0)), the room outline for the other storeys (`r-cellar` (0, 0), `r-study` (−3, 0),
+  `r-terrace` (3, 0)); y = floor_y + min(1.5, 0.8·3) = floor_y + 1.5; turned → Hall **(64, 5.375, 123)**, Study
+  **(64, 8.375, 123)**, Cellar **(64, 2.375, 120)**, Terrace **(64, 8.375, 117)**. Drawn at fade > 0.5 where the room
+  group shows: storey 0 → Hall, Terrace; 1 → Study, Terrace; −1 → Cellar, Terrace. The pit has a display-ground
+  model → an area location → no labels.
+- **Door marks** (a building in the near ring; one group per DECLARED storey): D1 (−1, width 1, depth max(0.3,
+  W1 0.2) = 0.3, at (0, −3 + 0.02, −4)), D2 (0, width 1.2, depth max(0.36, W2 0.2 — the first non-pane wall of
+  storey 0) = 0.36, at (−3, 0.02, 4)), D3 width 0 → none, D4 (1, width 0.9, depth max(0.27, W4 0.2) = 0.27, at
+  (−3, 3.22, −4)), D5 storey 2 is not declared → none → **3 marks on 3 storeys**, yaw atan2(−0, 1) = 0 (tile frame).
+  Shown at fade > 0.5, only the filter's storey.
+- **Locks**: `lockedRooms {r-terrace}` answered for loc-tower, avatar in `r-hall` → D4 (`r-study`, `r-terrace`)
+  red, D1/D2 gold; avatar on the terrace → its own room is left out → all gold; the same map answered for loc-pit →
+  nothing painted in the tower. `lockedLocations {loc-tower}` → its boundary mark shows.
+- **Boundary mark**: opening at (6, 0), width 2, inward (−1, 0) → world (64, 114), inward (0, 1) → yaw 0, scale
+  (2, 1, max(0.6, 0.3) = 0.6), y = ground(64, 114) + 0.05 = 2 + 1.78125 + 0.05 = **3.83125**.
+- **Basement hole**: storey −1 of the tower, camera (100, 30, 147): bounds of the turned boundary x 60…68,
+  z 114…126; camera − centre = (36, 27), length 45 → u = (0.8, 0.6) → maxX + 12·0.8, maxZ + 12·0.6 →
+  **[60, 114, 77.6, 133.2]**; off at storeys 0 and 1 and once the tower closes. The pit at −1 (camera (−10, 30, 140):
+  u = (0.6, 0.8), width 8) → **[−44, 96, −31.2, 110.4]**, its ground model hidden; back at storey 0, or at fade
+  exactly 0.03 (the gate is > 0.03).
+- **Switch input** (1600 × 900, camera on the anchor at 20 m → the box centred at (800, 450) ± 1 px): a left click
+  on `1.` → storey 1, the camera's click counter stays 0; a right-drag starting on `EG` turns nothing; a click at
+  (200, 800) → the camera's click (1).

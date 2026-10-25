@@ -55,6 +55,32 @@ public partial class Main : Node3D
         hud.SetState("info", null);
     }
 
+    /// <summary>main.ts <c>roomOf.get(avatarName)</c>: the room the avatar's row names ("" without one).</summary>
+    private static string AvatarRoomOf(JsonElement map)
+    {
+        var name = Str(map, "avatar");
+        if (string.IsNullOrEmpty(name) || !map.TryGetProperty("characters", out var chars) || chars.ValueKind != JsonValueKind.Array)
+            return "";
+        foreach (var c in chars.EnumerateArray())
+            if (Str(c, "name") == name) return Str(c, "room_id") ?? "";
+        return "";
+    }
+
+    /// <summary>
+    /// The lock look of the marks follows the HUD's verdicts and the avatar's room (main.ts frame hook: repainted only
+    /// when the lock map, the location it was answered for or the room changed — here the HUD-owned version and the
+    /// room are the comparison).
+    /// </summary>
+    private void SyncLocks()
+    {
+        if (_builder is null || _hud is not { } hud || !IsInstanceValid(hud)) return;
+        if (hud.HudOwnedVersion == _lockVersion && _avatarRoom == _lockRoom) return;
+        _lockVersion = hud.HudOwnedVersion;
+        _lockRoom = _avatarRoom;
+        _builder.SetLocks(Scene.LockState.FromHud(hud.HudOwned("lockedRooms"), hud.HudOwned("lockedLoc"),
+                                                  hud.HudOwned("lockedLocations"), _avatarRoom));
+    }
+
     /// <summary>
     /// <c>applyScatterPrefs(prefs)</c> from the HUD's menu: checked again here (<see cref="ScatterPrefs.Check"/> — a
     /// malformed message must not invert the band), then the scatter LOD of the standing scatter layer. The

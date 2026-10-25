@@ -32,6 +32,7 @@ namespace AnimaNative;
 ///                               locations with a deviation, like the browser without ?verify=1)
 ///   --check                     offline self-test from native/fixtures, then quit
 ///   --check verify | --check=verify   only the § B5a section of the self-test (fixture world + S3c world)
+///   --check storeys | --check=storeys only the storey section (fixtures/storeys: the switch at runtime, Task 16)
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
 public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
@@ -75,7 +76,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             var arg = raw.Trim();
             if (arg == "--check") check = true;
             else if (TryValue(arg, "--check", out var only)) { check = true; checkOnly = CheckSection(only); }
-            else if (check && checkOnly is null && arg == "verify") checkOnly = "verify";
+            else if (check && checkOnly is null && arg is "verify" or "storeys") checkOnly = arg;
             else if (arg == "--verify") verify = true;
             else if (arg == "--bench") bench = true;
             else if (arg == "--check-bench") checkBench = true;
@@ -121,8 +122,8 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         };
     }
 
-    private static string CheckSection(string v) => v == "verify"
-        ? v : throw new ArgumentException($"--check= knows only 'verify', got '{v}'");
+    private static string CheckSection(string v) => v is "verify" or "storeys"
+        ? v : throw new ArgumentException($"--check= knows only 'verify' and 'storeys', got '{v}'");
 
     private static Vector2I ParseSize(string v)
     {

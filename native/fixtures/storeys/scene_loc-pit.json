@@ -1,0 +1,24 @@
+{
+  "signature": "storeys-pit", "k": 1, "extent_m": 8, "storey_m": 3,
+  "boundary": [[-4, -4], [4, -4], [4, 4], [-4, 4]],
+  "levels": [{ "level": -1, "floor_y": -3 }, { "level": 0, "floor_y": 0 }],
+  "style": { "wall_color": "#d0c8b8", "floor_color": "#b8b0a0", "upper_wall_opacity": 0.45, "upper_floor_opacity": 0.4 },
+  "rooms": [
+    { "room_id": "p-vault", "level": -1, "always_visible": false, "outline": [[-4, -4], [4, -4], [4, 4], [-4, 4]], "openings": [] }
+  ],
+  "outdoor_rooms": [],
+  "floor_plan": [],
+  "plates": [
+    { "level": -1, "outline": [[-4, -4], [4, -4], [4, 4], [-4, 4]], "holes": [], "top_y": -3.0, "thickness": 0.2, "opacity_role": "ground" }
+  ],
+  "walls": [
+    { "level": -1, "room_id": "p-vault", "from": [-4, -4], "to": [4, -4], "base_y": -3, "height": 3, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [0, -1] }
+  ],
+  "extras": [], "stairs": [], "markers": [], "doorways": [], "problems": [], "corridors": [], "boundary_openings": [],
+  "models": [
+    { "role": "building", "display": "ground", "id": "loc-pit", "variants": {},
+      "placeholder_dims": { "w": 8, "d": 8, "h": 0.5 },
+      "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 8, "measure": "xz",
+      "anchor": [0, 0], "bottom_y": 0 }
+  ]
+}

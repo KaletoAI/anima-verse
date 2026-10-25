@@ -92,8 +92,15 @@ public sealed class LocationSlot
     public bool Open { get; set; }
     /// <summary>The crossfade and occlusion state of the mounted group.</summary>
     public LocationFade Fade { get; init; } = new();
-    /// <summary>The storey the interior is mounted for (the avatar room's level in the avatar's location, else 0).</summary>
-    public int LevelFilter { get; init; }
+    /// <summary>
+    /// <c>tile.levelFilter</c>: the storey the open view shows — view state, 0 at the mount (buildTile), moved by the
+    /// level switch (<see cref="WorldBuilder.SetLevel"/>); every storey is mounted, so a switch rebuilds nothing. The
+    /// slot lives as long as the world knows the place, so it is also the per-session memory (main.ts
+    /// <c>storeyByPlace</c> only bridges a streamed-out tile, which this client does not have yet).
+    /// </summary>
+    public int LevelFilter { get; set; }
+    /// <summary>The storey passes of the mounted location (room groups, slabs, walls, marks, labels, the switch data).</summary>
+    public LocationStoreys Storeys { get; init; } = new();
     /// <summary>The § B5a report of the mount (<c>window.__sceneVerify[loc]</c>).</summary>
     public VerifyReport? Verify { get; set; }
     /// <summary>Bumped when the location is dropped; work for it that finishes later is thrown away.</summary>
@@ -112,8 +119,9 @@ public sealed class LocationSlot
 ///   5. per placed location in reach (<see cref="LocationView"/>): a group at (pos_x, ground, pos_z) turned by
 ///      +yaw_deg (§ A1.1); its scene recipe mounted ONCE as the browser mounts it — building model(s), outdoor
 ///      model specs, the outdoor rooms' primitives, the far-view shell of a place without a model, and its
-///      interior (primitives on the mounted storey, in the near ring the indoor model specs) held at fade 0 until
-///      it is opened (<see cref="SetOpen"/>, crossfaded by <see cref="TickView"/>); then its § B5a verify
+///      interior (primitives of every storey, in the near ring the indoor model specs, in room groups) held at
+///      fade 0 until it is opened (<see cref="SetOpen"/>, crossfaded by <see cref="TickView"/>, which also applies
+///      the shown storey, <see cref="SetLevel"/>); then its § B5a verify
 ///   6. the world props of <c>/play/worldmap</c> (§ A9a)
 /// </summary>
 public sealed class WorldBuilder
@@ -159,6 +167,8 @@ public sealed class WorldBuilder
     private List<(double X, double Z)> _points = new();
     private Node3D? _places;
     private Vector3 _tierCamera;
+    /// <summary>The avatar's lock verdicts the marks wear (<see cref="SetLocks"/>).</summary>
+    private LockState _locks = LockState.None;
 
     /// <summary>The built locations by id (the browser's resident tiles). Filled by <see cref="BuildAsync"/>.</summary>
     public IReadOnlyDictionary<string, LocationSlot> Slots => _slots;
@@ -305,9 +315,9 @@ public sealed class WorldBuilder
             {
                 if (doc is null) return;   // 404: nothing to compose
                 // The avatar's location starts open (main.ts arrivalLocId / bootPin); every other one closed.
-                var built = await BuildFromScene(loc, doc.RootElement, height, stats, ring, pinned,
-                                                 pinned ? avatar.RoomId : null, camera);
+                var built = await BuildFromScene(loc, doc.RootElement, height, stats, ring, pinned, camera);
                 places.AddChild(built.Group);
+                if (built.Storeys.BoundaryMarks is { } bm) places.AddChild(bm);
                 lock (_slots) _slots[loc.Id] = built;
             }
             catch (Exception e) when (!_strict)
@@ -450,14 +460,16 @@ public sealed class WorldBuilder
     ///   • the shell layer: every building model (a fading one — display shell / shell_area / roof_only — is a roof
     ///     part of the crossfade; a kept plan hull / ground model gets a cut copy for its cutouts), the outdoor
     ///     specs, the outdoor rooms' primitives and, for a place without a building model, the far-view shell;
-    ///   • the interior group <c>g</c> (hidden at fade 0): the interior primitives of the mounted storey and — in the
-    ///     near ring only, like <c>mountDetail</c> — the indoor specs on that storey.
+    ///   • the interior group <c>g</c> (hidden at fade 0): the interior primitives of every storey and — in the near
+    ///     ring only, like <c>mountDetail</c> — the indoor specs, each in its room's group.
     /// <paramref name="wantOpen"/> sets the fade TARGET (the avatar's location at the boot) if it can be opened
-    /// (<c>openable(tile)</c>); <paramref name="room"/> picks the storey (the room's level, else 0). Every mount ends
-    /// with its § B5a verify (<see cref="SceneVerifier"/>).
+    /// (<c>openable(tile)</c>). EVERY storey is mounted (Task 16): room groups per declared room, the storey rules filed
+    /// in <see cref="LocationStoreys"/>, the door marks (near ring, buildings), the boundary marks (world frame) and the
+    /// room labels; the storey shown starts at 0 (buildTile). Every mount ends with its § B5a verify
+    /// (<see cref="SceneVerifier"/>) over all of it.
     /// </summary>
     private async Task<LocationSlot> BuildFromScene(LocationInfo loc, JsonElement sceneRoot, WorldHeight height,
-                                                    WorldStats stats, Ring ring, bool wantOpen, string? room, Vector3 camera)
+                                                    WorldStats stats, Ring ring, bool wantOpen, Vector3 camera)
     {
         var scene = ScenePayload.Parse(sceneRoot);
         stats.Scenes++;
@@ -485,7 +497,9 @@ public sealed class WorldBuilder
         bool open = wantOpen && openable;
         if (open) stats.OpenLocation = loc.Id;
         var roomLevel = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Level);
-        int levelFilter = room is { Length: > 0 } ar && roomLevel.TryGetValue(ar, out var lvl) ? lvl : 0;
+        // buildTile: levelFilter 0 — the overview opens every location on the ground floor (the avatar's storey is
+        // followed only in the embodied mode, followAvatarStorey).
+        const int levelFilter = 0;
         var outdoor = LocationView.OutdoorRoomIds(scene);
         bool RoomShown(string roomId) => outdoor.Contains(roomId)
             || !roomLevel.TryGetValue(roomId, out var lv) || SceneView.RoomVisible(false, lv, levelFilter);
@@ -498,6 +512,29 @@ public sealed class WorldBuilder
         var interior = hasInterior ? new Node3D { Name = "Interior" } : null;
         if (interior is not null) group.AddChild(interior);
         fade.Interior = interior;
+        // The room groups (mountShell step 5): an outdoor / always-visible room off the tile, every other one in the
+        // interior group; the first entry of an id wins (as roomLevel does).
+        var storeys = new LocationStoreys
+        {
+            Buttons = StoreyView.HasLevelSwitch(scene.Levels) ? StoreyView.SwitchButtons(scene.Levels) : new List<LevelButton>(),
+            Elevator = StoreyView.ElevatorAnchor(scene.Extras),
+            StoreyM = scene.StoreyM,
+            FloorY = scene.FloorYOrNull,
+            HasBasement = StoreyView.HasBasement(scene.Levels),
+        };
+        foreach (var r in scene.Rooms)
+        {
+            if (storeys.Rooms.ContainsKey(r.RoomId)) continue;
+            bool od = outdoor.Contains(r.RoomId);
+            var parentNode = od ? group : interior;
+            if (parentNode is null) continue;   // no interior: nothing would ever hang in it
+            var node = new Node3D { Name = "Room_" + NodeName(r.RoomId) };
+            parentNode.AddChild(node);
+            storeys.Rooms[r.RoomId] = new LocationStoreys.RoomGroup(r.RoomId, node, r.Level, od);
+        }
+        // parentFor(room) of mountModels: the room's group, else the tile for an outdoor spec, else the interior.
+        Node3D? ParentFor(string roomId, bool isOut)
+            => roomId.Length > 0 && storeys.Rooms.TryGetValue(roomId, out var rg) ? rg.Node : isOut ? group : interior;
         var verify = new SceneVerifier();
         var placedSpecs = new List<(SceneModelSpec Spec, Node3D? Node, double Lift)>();
 
@@ -513,6 +550,7 @@ public sealed class WorldBuilder
             if (!spec.RoofOnly) solidBuildingPlaced = true;
             var nb = ModelPlacement.Measure(node, Transform3D.Identity);
             buildingBox = buildingBox is { } bb ? bb.Merge(nb) : nb;
+            bool isGround = spec.Display == "ground";
             if (!keep)
             {
                 fade.RoofParts.Add(node);
@@ -525,9 +563,11 @@ public sealed class WorldBuilder
                 int removed = SceneModels.ApplyCutouts(cut, spec.Cutouts);
                 stats.CutoutTriangles += removed;
                 group.AddChild(cut);
-                fade.Cutouts.Add((node, cut));
+                fade.Cutouts.Add((node, cut, isGround));
             }
-            if ((await _models.GetAsync(ModelVariants.PickModelVariant(spec, buildingTier))) is { } t)
+            else if (isGround) fade.GroundModels.Add(node);
+            var buildingUrl = ModelVariants.PickModelVariant(spec, buildingTier);
+            if (buildingUrl.Length > 0 && (await _models.GetAsync(buildingUrl)) is { } t)
             {
                 stats.Buildings++;
                 if (t.Compressed) stats.BuildingsCompressed++;
@@ -536,19 +576,19 @@ public sealed class WorldBuilder
             }
         }
 
-        // ── The other specs: outdoor ones off the tile; indoor ones into the interior (near ring, mounted storey). ──
+        // ── The other specs: outdoor ones off the tile; indoor ones into their room groups (near ring, every storey). ──
         var placements = new List<Task>();
         foreach (var spec in scene.Models.Where(m => m.Role != "building"))
         {
             bool isOut = LocationView.IsOutdoor(scene, spec.RoomId);
-            Node3D parent = group;
             if (!isOut)
             {
-                // mountDetail runs for the near ring only; its parentFor(room) is the interior group.
+                // mountDetail runs for the near ring only; its parentFor(room) is the room group or the interior.
                 if (ring != Ring.Near || interior is null) { models.Interior++; continue; }
-                if (!RoomShown(spec.RoomId)) { models.Storey++; continue; }
-                parent = interior;
+                // Mounted all the same: its room group hides it until the switch shows its storey.
+                if (!RoomShown(spec.RoomId)) models.Storey++;
             }
+            var parent = ParentFor(spec.RoomId, isOut)!;
             double lift = GroundLift(group, spec, height, datum);
             placements.Add(PlaceAndRecord(spec, interiorTier, parent, lift));
         }
@@ -568,24 +608,26 @@ public sealed class WorldBuilder
                          .Concat(scene.Extras.Select(e => e.TextureKind)).Where(k => k.Length > 0).Append("floor");
         await _library!.PreloadAsync(kinds);
         var (layers, rs) = RecipeMeshes.Build(scene, new RecipeView(open, levelFilter, farShell), _materials, "Recipe");
-        foreach (var m in layers.Outdoor)
+        foreach (var piece in layers.Pieces)
         {
-            group.AddChild(m);
-            fade.OutdoorCull.Add(m);
-        }
-        foreach (var m in layers.OutdoorClosed)
-        {
-            group.AddChild(m);
-            fade.OutdoorCull.Add(m);
-            fade.ClosedOnly.Add(m);
+            // Every non-outdoor piece implies an interior (hasInterior counts plates, walls and extras).
+            var parent = ParentFor(piece.Unit.Room, piece.Unit.Outdoor) ?? group;
+            parent.AddChild(piece.Mesh);
+            if (piece.Unit.Outdoor) fade.OutdoorCull.Add(piece.Mesh);
+            storeys.Add(piece);
         }
         foreach (var m in layers.Shell)
         {
             group.AddChild(m);
             fade.RoofParts.Add(m);
         }
-        if (interior is not null)
-            foreach (var m in layers.Interior) interior.AddChild(m);
+        // The overlays: door marks (a building's thresholds, near ring — buildDoorMarks), boundary marks (every
+        // resident, world frame — buildBoundaryMarks), the room names (not on an area location).
+        var frame0 = new TileFrame(new Overview.Vec3(x, datum, z), group.Rotation.Y);
+        if (isBuilding && ring == Ring.Near) storeys.BuildDoorMarks(group, scene);
+        storeys.BuildBoundaryMarks(loc.Id, frame0, scene, height.GroundAt);
+        if (!StoreyView.AreaLocation(natureSite, isBuilding, scene.AreaDetail, scene.Models))
+            AddRoomLabels(storeys, scene, DetailRooms(loc.Id));
         // tile.height: the building model(s) measured (a roof-only part together with the rest, as
         // `box.expandByObject(tile.shell)` reads it), else the far shell, else buildPlace's reading height.
         double? measured = buildingBox is { } box && box.Size.Y > 0 ? box.Size.Y : null;
@@ -613,6 +655,8 @@ public sealed class WorldBuilder
         LogVerify(report);
 
         fade.Collect(group);
+        storeys.Apply(levelFilter, 0, openable, fade);
+        storeys.ApplyLocks(_locks, loc.Id);
         lock (stats)
         {
             stats.Recipe.Add(rs);
@@ -630,8 +674,41 @@ public sealed class WorldBuilder
             Loc = loc, Ring = ring, Group = group, Width = width, Openable = openable, Open = open,
             Height = measured ?? Overview.EventPinRule.DefaultPlaceHeight(isBuilding, natureSite, LocationView.DetectStyle(loc)),
             HeightMeasured = measured is not null,
-            Fade = fade, LevelFilter = levelFilter, Verify = report,
+            Fade = fade, LevelFilter = levelFilter, Verify = report, Storeys = storeys,
         };
+    }
+
+    /// <summary>The room names of a location: its <c>/world/locations?view=3d</c> row's <c>rooms</c> (empty when unknown).</summary>
+    private IReadOnlyDictionary<string, string> DetailRooms(string id)
+    {
+        foreach (var d in Details) if (d.Id == id) return d.Rooms;
+        return new Dictionary<string, string>();
+    }
+
+    /// <summary>
+    /// mountShell step 16: one label per room group whose room has a non-empty name, at the room rectangle's centre
+    /// (<see cref="StoreyView.RoomHulls"/> / <see cref="StoreyView.RectCentre"/>, else the tile origin), its storey's
+    /// floor + min(1.5, 0.8·storey_m) up, in the room's group.
+    /// </summary>
+    private static void AddRoomLabels(LocationStoreys storeys, ScenePayload scene, IReadOnlyDictionary<string, string> names)
+    {
+        var hulls = StoreyView.RoomHulls(scene);
+        foreach (var rg in storeys.Rooms.Values)
+        {
+            if (!names.TryGetValue(rg.Id, out var name) || name.Length == 0) continue;
+            var centre = hulls.TryGetValue(rg.Id, out var hull) ? StoreyView.RectCentre(hull) : null;
+            var p = StoreyView.RoomLabelPosition(centre, scene.FloorYOrNull(rg.Level), scene.StoreyM);
+            storeys.Labels.Add(new RoomLabel(rg.Id, name, rg.Node, new Vector3((float)p.X, (float)p.Y, (float)p.Z)));
+        }
+    }
+
+    /// <summary>A room id as a node name (Godot refuses <c>. : @ / " %</c> in names).</summary>
+    private static string NodeName(string id)
+    {
+        var chars = id.ToCharArray();
+        for (int i = 0; i < chars.Length; i++)
+            if (chars[i] is '.' or ':' or '@' or '/' or '"' or '%') chars[i] = '_';
+        return new string(chars);
     }
 
     /// <summary>A box of the location frame in the world (three's <c>Box3.applyMatrix4</c>: the AABB of the 8 corners).</summary>
@@ -720,18 +797,30 @@ public sealed class WorldBuilder
 
     /// <summary>
     /// The per-frame view pass of main.ts' frame hook: every openable location steps its crossfade towards its
-    /// target (<c>applyTileFade</c>); the open one, once past fade 0.4, makes every taller neighbour between the
-    /// camera and its centre fade out (<see cref="SceneView.NeighbourOccludes"/>, <c>applyTileOcclusion</c>).
+    /// target (<c>applyTileFade</c>); every location applies its shown storey (<see cref="LocationStoreys.Apply"/>:
+    /// <c>applyLevelDisplay</c>, the storey half of <c>applyWallCulling</c>, <c>applyRoomVisibility</c>, the door
+    /// marks); the ground opens over a basement while one is shown (<see cref="BasementHoleOf"/>); the open location,
+    /// once past fade 0.4, makes every taller neighbour between the camera and its centre fade out
+    /// (<see cref="SceneView.NeighbourOccludes"/>, <c>applyTileOcclusion</c>).
     /// </summary>
     public void TickView(double dt, Vector3 camera)
     {
         LocationSlot? open = null;
+        LocationSlot? basement = null;
         foreach (var slot in _slots.Values)
         {
-            if (!slot.Openable || !GodotObject.IsInstanceValid(slot.Group)) continue;
-            slot.Fade.Step(dt, slot.Open);
-            if (slot.Open && slot.Fade.Fade > 0.4) open = slot;
+            if (!GodotObject.IsInstanceValid(slot.Group)) continue;
+            if (slot.Openable)
+            {
+                slot.Fade.Step(dt, slot.Open);
+                if (slot.Open && slot.Fade.Fade > 0.4) open = slot;
+                // The ground opens over a basement only while a storey below ground is the displayed one.
+                if (StoreyView.BasementOpen(slot.Storeys.HasBasement, slot.Fade.Fade, slot.LevelFilter)) basement = slot;
+            }
+            // applyLevelDisplay / applyWallCulling (openable, fade > 0.03), applyRoomVisibility and the door marks (all).
+            slot.Storeys.Apply(slot.LevelFilter, slot.Openable ? slot.Fade.Fade : 0, slot.Openable, slot.Fade);
         }
+        Ground?.SetHole(basement is null ? null : BasementHoleOf(basement, camera));
         var cam = new Scatter.P2(camera.X, camera.Z);
         foreach (var slot in _slots.Values)
         {
@@ -740,6 +829,61 @@ public sealed class WorldBuilder
                 new Scatter.P2(open.Group.Position.X, open.Group.Position.Z),
                 new Neighbour(slot.Group.Position.X, slot.Group.Position.Z, slot.Width, slot.Height), slot == open);
             slot.Fade.StepOcclusion(slot.Group, hide, dt);
+        }
+    }
+
+    /// <summary>
+    /// <c>terrainGround.setHole(basementHole(tileWorldBounds(tile), tile.center, camera, tile.width))</c>: the open
+    /// location's footprint as a world rectangle, grown towards the camera by up to one width; null without a boundary.
+    /// </summary>
+    public static double[]? BasementHoleOf(LocationSlot slot, Vector3 camera)
+    {
+        var g = slot.Group.Position;
+        var frame = new TileFrame(new Overview.Vec3(g.X, g.Y, g.Z), slot.Group.Rotation.Y);
+        var boundary = slot.Loc.Boundary?.Select(p => new Scatter.P2(p.X, p.Z)).ToArray();
+        if (SceneView.TileWorldBounds(frame, boundary) is not { } bounds) return null;
+        return SceneView.BasementHole(bounds, new Scatter.P2(g.X, g.Z), new Scatter.P2(camera.X, camera.Z), slot.Width);
+    }
+
+    /// <summary>
+    /// The level switch's click (<c>tile.levelFilter = lv</c>): the storey the location shows from the next frame on —
+    /// nothing is rebuilt or fetched. Returns false for an unknown location or a storey its payload does not declare.
+    /// </summary>
+    public bool SetLevel(string id, int level)
+    {
+        if (!_slots.TryGetValue(id, out var slot)) return false;
+        if (slot.Storeys.Buttons.Count > 0 && slot.Storeys.Buttons.All(b => b.Level != level)) return false;
+        if (slot.LevelFilter == level) return true;
+        slot.LevelFilter = level;
+        _log($"location {id} ({slot.Loc.Name}) shows storey {level}");
+        return true;
+    }
+
+    /// <summary>
+    /// The avatar's lock verdicts changed (the HUD's <c>lockedRooms</c> / <c>lockedLoc</c> / <c>lockedLocations</c>, or
+    /// the room it stands in): every location repaints its door marks and shows or hides its boundary marks
+    /// (main.ts: repainted only on a real change; the caller compares).
+    /// </summary>
+    public void SetLocks(LockState locks)
+    {
+        _locks = locks;
+        foreach (var slot in _slots.Values)
+            if (GodotObject.IsInstanceValid(slot.Group)) slot.Storeys.ApplyLocks(locks, slot.Loc.Id);
+    }
+
+    /// <summary>
+    /// The room labels to draw this frame (a source of the label overlay): every label of a location whose labels are
+    /// on (<see cref="StoreyView.LabelsOn"/>) and whose room group is shown in the tree (interior up, the storey
+    /// filter, the neighbour occlusion all take it along).
+    /// </summary>
+    public IEnumerable<Ui.IOverlayLabel> VisibleRoomLabels()
+    {
+        foreach (var slot in _slots.Values)
+        {
+            if (slot.Storeys.Labels.Count == 0 || !GodotObject.IsInstanceValid(slot.Group)) continue;
+            if (!StoreyView.LabelsOn(slot.Openable, slot.Fade.Fade)) continue;
+            foreach (var label in slot.Storeys.Labels)
+                if (label.Parent.IsVisibleInTree()) yield return label;
         }
     }
 
@@ -791,7 +935,7 @@ public sealed class WorldBuilder
                 LocationSlot built;
                 try
                 {
-                    built = await BuildFromScene(loc, doc.RootElement, Height, stats, ring, false, null, _tierCamera);
+                    built = await BuildFromScene(loc, doc.RootElement, Height, stats, ring, false, _tierCamera);
                 }
                 catch (Exception e) when (!_strict)
                 {
@@ -801,9 +945,11 @@ public sealed class WorldBuilder
                 if (!stillValid() || !GodotObject.IsInstanceValid(_places))
                 {
                     built.Group.Free();
+                    built.Storeys.BoundaryMarks?.Free();
                     return added;
                 }
                 _places.AddChild(built.Group);
+                if (built.Storeys.BoundaryMarks is { } bm) _places.AddChild(bm);
                 _slots[loc.Id] = built;
                 _known.Add(loc.Id);
                 added++;
@@ -831,6 +977,7 @@ public sealed class WorldBuilder
             if (!_slots.Remove(id, out var slot)) continue;
             slot.Generation++;   // a rebuild in flight must not put it back
             if (GodotObject.IsInstanceValid(slot.Group)) slot.Group.QueueFree();
+            if (slot.Storeys.BoundaryMarks is { } bm && GodotObject.IsInstanceValid(bm)) bm.QueueFree();
             Dropped?.Invoke(slot);
         }
         if (gone.Count > 0) _log($"dropped {gone.Count} location(s) the view no longer carries: {string.Join(", ", gone)}");

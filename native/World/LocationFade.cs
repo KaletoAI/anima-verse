@@ -17,9 +17,10 @@ namespace AnimaNative.World;
 ///     at opacity max(0, 1 − 1.4·f), hidden from f ≥ 0.95;
 ///   • everything outside the interior casts shadows while f &lt; 0.4;
 ///   • the cutouts of a kept plan-hull / ground model open at f &gt; 0.03 (not on a shell area), by swapping the
-///     whole model for its cut copy;
-///   • an outdoor outline wall is camera-culled only while the interior is up (its instance's <c>cull_active</c>),
-///     and an outdoor outline wall of another storey is only there while the interior is not;
+///     whole model for its cut copy; a ground model hides altogether while a storey below ground is shown
+///     (<see cref="SetGroundHidden"/>, driven by <see cref="LocationStoreys"/>);
+///   • an outdoor outline wall is camera-culled only while the interior is up (its instance's <c>cull_active</c>);
+///     which storey's walls stand is <see cref="LocationStoreys"/>' business;
 ///   • a neighbour between the camera and the open location fades by the occlusion, hidden from 0.95.
 ///
 /// TRANSPARENCY (Step 0 of Task 15): the opacities go into <see cref="GeometryInstance3D.Transparency"/> — one
@@ -35,14 +36,19 @@ public sealed class LocationFade
     public Node3D? Interior { get; set; }
     /// <summary>Roof parts: fading building models and far-shell copies (<c>tile.roofParts</c>/<c>roofMats</c>).</summary>
     public List<Node3D> RoofParts { get; } = new();
-    /// <summary>Kept models with cutouts: the whole model and its cut copy (one of the two is shown).</summary>
-    public List<(Node3D Whole, Node3D Cut)> Cutouts { get; } = new();
-    /// <summary>Outdoor outline walls of another storey: shown only while the interior is not.</summary>
-    public List<Node3D> ClosedOnly { get; } = new();
+    /// <summary>Kept models with cutouts: the whole model and its cut copy (one of the two is shown); Ground = display ground.</summary>
+    public List<(Node3D Whole, Node3D Cut, bool Ground)> Cutouts { get; } = new();
+    /// <summary>Kept display-ground models without cutouts (they only hide in a basement view).</summary>
+    public List<Node3D> GroundModels { get; } = new();
+    /// <summary><c>sm.visible = !(f &gt; 0.03 &amp;&amp; levelFilter &lt; 0)</c> for the ground model(s).</summary>
+    public bool GroundHidden { get; private set; }
     /// <summary>Outdoor recipe meshes whose outline walls cull only while the interior is up.</summary>
     public List<GeometryInstance3D> OutdoorCull { get; } = new();
     /// <summary><c>tile.modelIsShellArea</c>: its cutouts stay shut (the model itself fades).</summary>
     public bool ShellArea { get; set; }
+
+    /// <summary>Meta on an overlay mesh (door marks): never a shadow caster, never a pick target.</summary>
+    public const string OverlayMeta = "overlay";
 
     public double Fade { get; private set; }
     public double Occl { get; private set; }
@@ -70,7 +76,8 @@ public sealed class LocationFade
         foreach (var g in Walk(group).OfType<GeometryInstance3D>())
         {
             _allMeshes.Add(g);
-            if (Interior is null || !Interior.IsAncestorOf(g)) _shellMeshes.Add(g);
+            // The flat overlays (door marks) never cast: the browser's would only at f < 0.4, where they are hidden.
+            if ((Interior is null || !Interior.IsAncestorOf(g)) && !g.HasMeta(OverlayMeta)) _shellMeshes.Add(g);
         }
         _look = null;
         _cutOn = null;
@@ -101,11 +108,7 @@ public sealed class LocationFade
         if (!ShellArea && _cutOn != f > 0.03)
         {
             _cutOn = f > 0.03;
-            foreach (var (whole, cut) in Cutouts)
-            {
-                whole.Visible = !_cutOn.Value;
-                cut.Visible = _cutOn.Value;
-            }
+            ApplyModels();
         }
         if (_look is not { } old || old.RoofVisible != look.RoofVisible)
             foreach (var p in RoofParts) p.Visible = look.RoofVisible;
@@ -118,12 +121,32 @@ public sealed class LocationFade
         if (_look is not { } prev || prev.InteriorVisible != look.InteriorVisible)
         {
             if (Interior is not null) Interior.Visible = look.InteriorVisible;
-            foreach (var n in ClosedOnly) n.Visible = !look.InteriorVisible;
             foreach (var g in OutdoorCull) g.SetInstanceShaderParameter("cull_active", look.InteriorVisible ? 1f : 0f);
         }
         _look = look;
         _roof = look.Roof;
         WriteTransparency();
+    }
+
+    /// <summary>A storey below ground is shown (or no longer is): the ground model(s) hide or come back.</summary>
+    public void SetGroundHidden(bool hidden)
+    {
+        if (GroundHidden == hidden) return;
+        GroundHidden = hidden;
+        ApplyModels();
+    }
+
+    /// <summary>The kept models: whole or cut copy by the cutout state, a ground model hidden in a basement view.</summary>
+    private void ApplyModels()
+    {
+        bool cut = _cutOn == true;
+        foreach (var (whole, cutCopy, ground) in Cutouts)
+        {
+            bool hide = ground && GroundHidden;
+            whole.Visible = !hide && !cut;
+            cutCopy.Visible = !hide && cut;
+        }
+        foreach (var g in GroundModels) g.Visible = !GroundHidden;
     }
 
     /// <summary>

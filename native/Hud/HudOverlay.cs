@@ -61,6 +61,12 @@ public partial class HudOverlay : CanvasLayer
     private readonly MouseRouter _router = new();
     private readonly ScenePublisher _state = new();
     private readonly JsonObject _hudOwned = new();
+
+    /// <summary>Bumped by every state patch that wrote a HUD-owned field (the scene re-reads what it depends on).</summary>
+    public int HudOwnedVersion { get; private set; }
+
+    /// <summary>The last value the HUD wrote for one of its own fields (bus.ts <c>HUD_OWNED_FIELDS</c>), null when none yet.</summary>
+    public JsonNode? HudOwned(string key) => _hudOwned[key];
     private readonly HashSet<string> _unimplemented = new();
     private JsonObject? _boot;
     private Uri? _server;
@@ -408,6 +414,7 @@ public partial class HudOverlay : CanvasLayer
                 var (accepted, dropped) = HudProtocol.SplitOwned(msg.Patch!);
                 if (dropped.Count > 0) Log("hud bridge: dropped state fields not owned by the HUD: " + string.Join(", ", dropped));
                 foreach (var (key, value) in accepted) _hudOwned[key] = value?.DeepClone();
+                if (accepted.Count > 0) HudOwnedVersion++;
                 break;
             case "action":
                 Dispatch(msg.Name!, msg.Args!);

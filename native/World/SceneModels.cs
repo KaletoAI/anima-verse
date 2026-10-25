@@ -20,7 +20,11 @@ public sealed class ModelStats
     public int Missing;
     /// <summary>Not mounted: indoor specs of a far-ring location (<c>mountDetail</c> runs for the near ring only).</summary>
     public int Interior;
-    /// <summary>Indoor specs of the open location in a room of another storey.</summary>
+    /// <summary>
+    /// Indoor specs in a room of another storey than the one shown at the build (mounted all the same since Task 16 —
+    /// counted in <see cref="Placed"/> / <see cref="Placeholders"/> / <see cref="Missing"/> too; their room group
+    /// hides them until the switch shows their storey).
+    /// </summary>
     public int Storey;
     /// <summary>A shell building of the OPEN location (mounted; the crossfade takes it to opacity 0, roofParts hidden).</summary>
     public int Faded;
