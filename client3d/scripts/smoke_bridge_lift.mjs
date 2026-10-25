@@ -333,7 +333,7 @@ async function main() {
   console.log('[M] terrain movement controls clips and pace');
   for (const [movement, clip, step] of [
     ['walk_run', 'run', .612], ['walk', 'walk', .34],
-    ['swim', 'swim', .34], ['crawl', 'crawl', .34],
+    ['swim', 'breast-stroke', .34], ['crawl', 'crawl', .34],
   ]) {
     const mgr = new C.NpcManager({}, {});
     const root = new THREE.Group();

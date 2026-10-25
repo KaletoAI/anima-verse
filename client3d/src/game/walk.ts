@@ -200,7 +200,7 @@ export const MOVEMENT_POSES = ['standing', 'walking', 'running', 'swimming',
   'treading_water', 'crawling', 'crawling_rest'] as const;
 export type MovementPose = typeof MOVEMENT_POSES[number];
 const MOVEMENT_DEFAULTS: Record<MovementPose, string> = {
-  standing: 'idle', walking: 'walk', running: 'run', swimming: 'swim',
+  standing: 'idle', walking: 'walk', running: 'run', swimming: 'breast-stroke',
   treading_water: 'treading-water', crawling: 'crawl', crawling_rest: 'crawl-rest',
 };
 type PoseClips = Record<MovementPose, {kind: string; publicKind: string}>;

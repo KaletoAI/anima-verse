@@ -1247,7 +1247,7 @@ async function main() {
   console.log('movement types and fixed poses');
   for (const [movement, slow, fast, idle] of [
     ['walk_run', 'walk', 'run', ''], ['walk', 'walk', 'walk', ''],
-    ['swim', 'swim', 'swim', 'treading-water'], ['crawl', 'crawl', 'crawl', 'crawl-rest'],
+    ['swim', 'breast-stroke', 'breast-stroke', 'treading-water'], ['crawl', 'crawl', 'crawl', 'crawl-rest'],
   ]) {
     check(`${movement} walking`, moveClip(movement, false), slow);
     check(`${movement} running`, moveClip(movement, true), fast);
@@ -1268,7 +1268,7 @@ async function main() {
   // Junk fields independently reset to catalog defaults, never to an empty kind.
   setMovementPoses({walking: {kind: ' ', public_kind: 42}, standing: null});
   for (const [pose, kind] of [['standing', 'idle'], ['walking', 'walk'],
-    ['running', 'run'], ['swimming', 'swim'], ['treading_water', 'treading-water'],
+    ['running', 'run'], ['swimming', 'breast-stroke'], ['treading_water', 'treading-water'],
     ['crawling', 'crawl'], ['crawling_rest', 'crawl-rest']]) {
     check(`${pose} default played`, poseClip(pose), kind);
     check(`${pose} default public`, publicClip(pose), kind);
@@ -1420,12 +1420,12 @@ async function main() {
       wadeGate({ movement: 'walk_run', sink: { move: 0, idle: 0 }, water: L },
         L - 0.4, 1.0), WADED);
     check('...moving: the swim clip, 0.35 under the mirror',
-      at(1.0, 1.0, true), { clip: 'swim', sink: 0.35, root: 5.0 });
+      at(1.0, 1.0, true), { clip: 'breast-stroke', sink: 0.35, root: 5.0 });
     check('...waiting: treading water, and a 1.3 m foot still finds the '
       + '1.0 m bed', at(1.0, 1.0, false),
     { clip: 'treading-water', sink: 1.3, root: 5.3 });
     check('depth 1.6 m: swimming, moving',
-      at(1.6, 1.0, true), { clip: 'swim', sink: 0.35, root: 5.0 });
+      at(1.6, 1.0, true), { clip: 'breast-stroke', sink: 0.35, root: 5.0 });
     check('...and treading water, feet off the bed at last',
       at(1.6, 1.0, false),
       { clip: 'treading-water', sink: 1.3, root: 5.0 });
@@ -1456,7 +1456,7 @@ async function main() {
     // RED COUNTER-PROBE, EXECUTED: the pre-W4c rule is no gate at all.
     const ungated = (word) => word;
     check('RED: ungated, the 0.4 m ford is swum',
-      moveClip(ungated({ ...RIVER }).movement, false), 'swim');
+      moveClip(ungated({ ...RIVER }).movement, false), 'breast-stroke');
     check('...where the rule in force walks it', at(0.4, 1.0, true).clip,
       'walk');
     check('...and in real water the two agree', at(1.6, 1.0, true).clip,
