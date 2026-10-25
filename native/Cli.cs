@@ -7,13 +7,15 @@ namespace AnimaNative;
 
 /// <summary>
 /// Start parameters. They come from the command line only — after Godot's own
-/// arguments and a literal <c>--</c> (<c>OS.GetCmdlineUserArgs()</c>). There is
-/// no .env and no config file: the server URL is the one thing the client has to
-/// know, and the password is never accepted here (it is typed into the login
-/// screen and kept in memory only for the one login request).
+/// arguments and a literal <c>--</c> (<c>OS.GetCmdlineUserArgs()</c>). None is
+/// required: the launcher remembers server and user name in
+/// <c>user://launcher.json</c> (<see cref="Ui.LauncherStore"/>), and a flag given
+/// here wins over the remembered value for this start. There is no .env; the
+/// password is never accepted here (it is typed into the login screen and kept
+/// in memory only for the one login request).
 ///
-///   --server=http://host:8000   base URL of the Anima server (default localhost)
-///   --user=NAME                 pre-fills the login field
+///   --server=URL                pre-fills the server field (http(s); "host:port" gets http://)
+///   --user=NAME                 pre-fills the user field
 ///   --goto=ID|NAME              bench anchor: location id or name substring
 ///   --bench                     run the camera drive once the world has loaded
 ///   --size=WxH                  window size (bench default 1920x1080)
@@ -29,9 +31,8 @@ namespace AnimaNative;
 ///   --check                     offline self-test from native/fixtures, then quit
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
-public sealed record CliOptions(string Server, string? User, string? Goto, bool Check)
+public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
 {
-    public const string DefaultServer = "http://localhost:8000";
     public static readonly Vector2I DefaultBenchSize = new(1920, 1080);
 
     public bool Bench { get; init; }
@@ -56,7 +57,7 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
 
     public static CliOptions Parse(IEnumerable<string> args)
     {
-        string server = DefaultServer;
+        string? server = null;
         string? user = null, gotoQuery = null;
         bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = true, noHud = false, plainGround = false;
         bool noWater = false;
@@ -75,7 +76,9 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
             else if (arg == "--plain-ground") plainGround = true;
             else if (arg == "--no-water") noWater = true;
             else if (TryValue(arg, "--offline", out var off)) offline = off;
-            else if (TryValue(arg, "--server", out var v)) server = v.TrimEnd('/');
+            else if (TryValue(arg, "--server", out var v))
+                server = Ui.LauncherSettings.NormalizeServer(v)
+                         ?? throw new ArgumentException($"--server must be an http(s) URL, got '{v}'");
             else if (TryValue(arg, "--user", out v)) user = v;
             else if (TryValue(arg, "--goto", out v)) gotoQuery = v;
             else if (TryValue(arg, "--size", out v)) size = ParseSize(v);
@@ -90,9 +93,6 @@ public sealed record CliOptions(string Server, string? User, string? Goto, bool 
                 throw new ArgumentException("--password is not accepted; type it into the login screen");
             else GD.PushWarning($"[cli] ignoring unknown argument '{arg}'");
         }
-        if (!Uri.TryCreate(server, UriKind.Absolute, out var uri)
-            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-            throw new ArgumentException($"--server must be an http(s) URL, got '{server}'");
         return new CliOptions(server, string.IsNullOrWhiteSpace(user) ? null : user,
                               string.IsNullOrWhiteSpace(gotoQuery) ? null : gotoQuery, check)
         {

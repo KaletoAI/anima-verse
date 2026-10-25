@@ -198,6 +198,36 @@ public partial class HudOverlay : CanvasLayer
     }
 
     /// <summary>
+    /// Page script (a promise chain, no trailing semicolon) that ends the session THIS
+    /// browser holds, if it holds one: <c>GET /auth/status</c> first, and
+    /// <c>POST /auth/logout</c> only when it answers <c>authenticated: true</c>. Only the
+    /// server can drop the cookie once its sliding refresh re-issued it HttpOnly (a page
+    /// script can neither delete nor overwrite an HttpOnly cookie), hence the logout runs
+    /// IN the browser. The status guard matters: an anonymous <c>/auth/logout</c> is not a
+    /// no-op on the server (<c>release_active_character</c> falls back to the legacy
+    /// account row without a request user). Resolves to <c>logged-out</c>,
+    /// <c>no-session</c>, <c>logout-&lt;status&gt;</c> or <c>status-&lt;status&gt;</c>.
+    /// </summary>
+    public const string EndSessionScript =
+        "fetch('/auth/status', {credentials: 'include'})"
+        + ".then(r => r.ok ? r.json().then(s => s && s.authenticated === true"
+        + " ? fetch('/auth/logout', {method: 'POST', credentials: 'include'}).then(o => o.ok ? 'logged-out' : 'logout-' + o.status)"
+        + " : 'no-session') : 'status-' + r.status)";
+
+    /// <summary>
+    /// The handoff script on <c>/health</c>: end a session the browser may still hold
+    /// (a back-to-title whose logout did not reach the server — that cookie would block
+    /// the new one), then <see cref="CookieScript"/>. A failure of the first part never
+    /// stops the handoff.
+    /// </summary>
+    public static string HandoffScript(string token, bool secure, string hudUrl)
+        => EndSessionScript + ".catch(() => 'unreachable').then(() => { " + CookieScript(token, secure, hudUrl) + " });";
+
+    /// <summary>Back to the title: end the browser's session, then a blank page whose fragment names the outcome.</summary>
+    public const string LeaveScript =
+        EndSessionScript + ".catch(() => 'unreachable').then(o => location.replace('about:blank#' + o));";
+
+    /// <summary>
     /// The cookie handoff: a NON-HttpOnly copy of the session cookie (page scripts
     /// cannot set HttpOnly), same name/path/SameSite as the server's, Secure on
     /// https, without an expiry (the browser is incognito anyway). The server's
@@ -216,7 +246,7 @@ public partial class HudOverlay : CanvasLayer
         if (_phase == Phase.Cookie && url.StartsWith(CookiePageUrl, StringComparison.Ordinal))
         {
             _phase = Phase.Hud;
-            _cef.ExecuteJavaScript(CookieScript(_token!, _server!.Scheme == Uri.UriSchemeHttps, HudUrl));
+            _cef.ExecuteJavaScript(HandoffScript(_token!, _server!.Scheme == Uri.UriSchemeHttps, HudUrl));
             Log("hud: session handed to CEF, opening the HUD");
             return;
         }
@@ -231,16 +261,21 @@ public partial class HudOverlay : CanvasLayer
             return;
         }
         if (_phase == Phase.Leaving && url.StartsWith("about:blank", StringComparison.Ordinal))
+        {
+            int hash = url.IndexOf('#');
+            Log("hud: left the HUD, browser session: " + (hash >= 0 ? url[(hash + 1)..] : "?"));
             _left?.TrySetResult();
+        }
     }
 
     private void OnPageFailed(int code, string message, GodotObject browser)
         => Log($"hud: page failed to load ({code} {message}) in phase {_phase}");
 
     /// <summary>
-    /// Back to the title: the HUD page logs out through ITS cookie jar (so CEF drops
-    /// the session cookie even after the server re-issued it HttpOnly — a later
-    /// script could not overwrite that), then the view goes blank. At most 3 s.
+    /// Back to the title: the HUD page ends its session through ITS cookie jar
+    /// (<see cref="LeaveScript"/>), so CEF drops the cookie even after the server
+    /// re-issued it HttpOnly; then the view goes blank. At most 3 s — a leave that
+    /// does not finish is caught up by the next handoff (<see cref="HandoffScript"/>).
     /// </summary>
     public async Task LeaveAsync()
     {
@@ -252,9 +287,9 @@ public partial class HudOverlay : CanvasLayer
         if (_cef is null || !_cef.HasBrowser) return;
         _phase = Phase.Leaving;
         _left = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _cef.ExecuteJavaScript("fetch('/auth/logout', {method: 'POST', credentials: 'include'})"
-                               + ".catch(() => {}).finally(() => location.replace('about:blank'));");
-        await Task.WhenAny(_left.Task, Task.Delay(3000));
+        _cef.ExecuteJavaScript(LeaveScript);
+        if (await Task.WhenAny(_left.Task, Task.Delay(3000)) != _left.Task)
+            Log("hud: leaving timed out after 3 s (the next login ends a session the browser still holds)");
         _phase = Phase.Idle;
     }
 
@@ -400,6 +435,8 @@ public partial class HudOverlay : CanvasLayer
             }
             case InputEventKey k:
             {
+                // F11 is the window's (Main toggles full screen), never the page's — not even while it types.
+                if (k.Keycode == Key.F11) break;
                 if (HudRouting.KeysToHud(Ui))
                 {
                     int code = k.Unicode != 0 ? (int)k.Unicode : (int)k.Keycode;

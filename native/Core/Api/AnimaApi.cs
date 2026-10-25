@@ -123,12 +123,40 @@ public sealed class AnimaApi : IWorldSource, IDisposable
         return cookie is null || cookie.Expired || cookie.Value.Length == 0 ? null : cookie.Value;
     }
 
-    /// <summary><c>POST /auth/logout</c>: ends the session server-side (both channels share it) and drops the cookie.</summary>
+    /// <summary>
+    /// <c>POST /auth/logout</c>: ends the session server-side (both channels share it), the
+    /// answer's Set-Cookie drops it from this container, and the container is emptied of
+    /// this server's cookies afterwards in any case. Call it only with a LIVE session
+    /// (<see cref="IsAuthenticatedAsync"/>): an anonymous logout is not a no-op on the
+    /// server (<c>release_active_character</c> falls back to the legacy account row).
+    /// </summary>
     public async Task LogoutAsync()
     {
-        using var content = new StringContent("{}", Encoding.UTF8, "application/json");
-        using var res = await _http.PostAsync("auth/logout", content);
-        await EnsureOk(res, "/auth/logout");
+        try
+        {
+            using var content = new StringContent("{}", Encoding.UTF8, "application/json");
+            using var res = await _http.PostAsync("auth/logout", content);
+            await EnsureOk(res, "/auth/logout");
+        }
+        finally
+        {
+            ForgetCookies();
+        }
+    }
+
+    /// <summary><c>GET /auth/status</c> → <c>authenticated</c>: whether this container's session is alive.</summary>
+    public async Task<bool> IsAuthenticatedAsync()
+    {
+        using var doc = await GetJson("/auth/status");
+        return doc.RootElement.ValueKind == JsonValueKind.Object
+               && doc.RootElement.TryGetProperty("authenticated", out var a)
+               && a.ValueKind == JsonValueKind.True;
+    }
+
+    /// <summary>Expires every cookie this container holds for the server (the session copy of this process).</summary>
+    public void ForgetCookies()
+    {
+        foreach (Cookie c in _cookies.GetCookies(BaseUri)) c.Expired = true;
     }
 
     /// <summary>

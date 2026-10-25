@@ -122,6 +122,8 @@ public partial class FigureManager : Node3D
             try
             {
                 using var doc = await _source.GetWorldMapAsync();
+                // Back to the title while the request ran: this node may be freed already.
+                if (ct.IsCancellationRequested) break;
                 bool first = LatestMap is null;
                 LatestMap = doc.RootElement.Clone();
                 LastPollFailed = false;
@@ -132,6 +134,7 @@ public partial class FigureManager : Node3D
             }
             catch (Exception e)
             {
+                if (ct.IsCancellationRequested) break;   // the session ended on purpose (back to the title)
                 _log($"worldmap poll failed: {e.Message}");
                 LastPollFailed = true;
                 PollSerial++;

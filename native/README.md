@@ -108,15 +108,47 @@ affected (`--check` exits 0 with the extension loaded).
 ## Start
 
 ```bash
+./anima-native.x86_64                 # or: sh run.sh — no flag is required
 ./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --user=demo --goto=LOCATION
 ```
 
-Arguments after `--` (no .env, no config file):
+**The launcher.** The client starts on its login screen: server address, user,
+password. The server field takes the address the way one types it —
+`192.168.8.244:8000` becomes `http://192.168.8.244:8000` (scheme added when
+missing, blanks and trailing `/` removed; anything but http(s) is refused with a
+message). After a successful login the server and the user name are remembered
+and pre-filled at the next start; the **password is never stored** (nor
+accepted as a flag). F11 toggles full screen (`Fullscreen`, not exclusive) at
+any time — on the login screen, in the world, while the HUD types — and the
+mode is remembered too (a `--bench` run and an explicit `--size` ignore the
+remembered mode). Pre-fill order per field: the flag (`--server`, `--user`) >
+the remembered value > empty. One log line says what was used:
+`[native] launcher: server '…' (cli|file|none) user '…' (cli|file|none) fullscreen on|off — settings <path>`.
+
+The settings file is `user://launcher.json` — Linux:
+`~/.local/share/godot/app_userdata/Anima Native/launcher.json` — with exactly
+the keys `server`, `user`, `fullscreen` (pure rules: `Core/Ui/LauncherSettings.cs`,
+file side: `Ui/LauncherStore.cs`). A missing, empty or broken file only costs
+the pre-fill; delete it to forget server and user.
+
+**Back to the title.** The HUD's "Back to title" (game menu) and "Log out" (top
+bar) end the session and return to the login screen, server and user filled in:
+the HUD page ends ITS session first (`GET /auth/status`, then `POST /auth/logout`
+only for a live session — only the server can drop CEF's HttpOnly cookie, and an
+anonymous logout is not a no-op on the server), CEF goes to `about:blank`, Godot
+logs out its own copy if it is still alive and empties its cookie container,
+and the scene is reloaded — like the browser's `location.reload()`, that frees
+the world, figures, scatter and timers; the worldmap poll ends with the
+cancelled token. Logging in again builds the world anew. A leave that cannot
+reach the server still returns to the title; the next login's handoff ends a
+session CEF may still hold before it writes the new cookie.
+
+Arguments after `--` (no .env; all optional):
 
 | Argument | Meaning |
 |---|---|
-| `--server=URL` | Anima server base URL (default `http://localhost:8000`) |
-| `--user=NAME` | pre-fills the login field (the password is typed in, never passed or stored) |
+| `--server=URL` | pre-fills the server field for this start, over the remembered one (http(s); `host:port` gets `http://`) |
+| `--user=NAME` | pre-fills the user field, over the remembered one (the password is typed in, never passed or stored) |
 | `--goto=ID\|NAME` | anchor: location id, or a case-insensitive name substring (the browser bench's `&goto=`) — the start camera looks at it, the 2 m tiles load around it; without it the avatar's location, else the world origin |
 | `--bench` | run the camera drive once the world has loaded (see "Bench") |
 | `--size=WxH` | window size; a bench run defaults to `1920x1080` (the result reports the size actually rendered) |
@@ -408,7 +440,7 @@ The browser HUD itself — `client3d/hud.html`, served by the Anima server at
   at "info") is `user://cef/debug.log` (Linux:
   `~/.local/share/godot/app_userdata/Anima Native/cef/debug.log`). "Back to
   title" in the menu logs out through the HUD page (CEF drops its cookie),
-  then Godot returns to its login screen.
+  then Godot returns to its login screen (see "Start" → "Back to the title").
 
 Start (the HUD is on whenever the gdCEF artifacts are next to the binary):
 
@@ -452,14 +484,14 @@ works the same way.
 |---|---|
 | `Main.cs`, `Main.tscn` | entry scene: login → world build → camera → (`--bench`) the drive; `--check`/`--check-bench` dispatch |
 | `Cli.cs` | command-line parameters |
-| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke) |
+| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke) |
 | `tests/` | xUnit project on Core (`dotnet test tests`) |
 | `test.sh` | `dotnet test` + build + headless `--check` |
 | `World/` | the Godot side of the world (payloads, height + anchor and the view rules are in `Core/World/`): terrain, `place()`, recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
 | `tools/dump_payloads.py` | Task S3c: dumps the client's HTTP answers from a COPY of a world for `--offline` |
 | `Gltf/` | runtime GLB import (the Meshopt decode is in `Core/Gltf/`) |
 | `Figures/` | world-map characters: placement rule, figures + poll loop, clip library (import, pick, retarget), rest-pose correction |
-| `Ui/` | login screen, fly camera (W/A/S/D gated while the HUD types) |
+| `Ui/` | login screen (server, user, password), `LauncherStore` (`user://launcher.json`), fly camera (W/A/S/D gated while the HUD types) |
 | `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |
 | `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); Task S3c: the water numbers and window (`Water.cs`; the tile field is `Core/Ground/WaterTileField.cs`) |

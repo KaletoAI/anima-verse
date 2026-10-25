@@ -46,6 +46,9 @@ public partial class Main : Node3D
     private string? _selected;
     private int _selectedPoll = -1;
     private Vector2? _pressAt;
+    private bool _leaving;
+    /// <summary>The window is set up once per PROCESS: back to the title reloads this scene and must not undo F11.</summary>
+    private static bool _windowApplied;
 
     /// <summary>The bench anchor of the current world (S2 drives its path relative to it).</summary>
     public AnchorInfo? Anchor { get; private set; }
@@ -87,12 +90,62 @@ public partial class Main : Node3D
             return;
         }
         if (!_options.NoHud) AttachHud();
-        ShowLogin();
+        var launch = Launcher();
+        ApplyStoredFullscreen(launch.Fullscreen);
+        _windowApplied = true;
+        ShowLogin(launch);
+    }
+
+    /// <summary>
+    /// Start values of the login screen: <c>--server</c>/<c>--user</c> win over
+    /// <c>user://launcher.json</c>, which wins over empty fields (<see cref="LauncherSettings.Merge"/>).
+    /// </summary>
+    private LauncherSettings Launcher()
+    {
+        var stored = LauncherStore.Load();
+        var launch = LauncherSettings.Merge(stored, _options!.Server, _options.User);
+        string From(string value, string? cli)
+            => value.Length == 0 ? "none" : !string.IsNullOrWhiteSpace(cli) ? "cli" : "file";
+        Log($"launcher: server '{launch.Server}' ({From(launch.Server, _options.Server)}) "
+            + $"user '{launch.User}' ({From(launch.User, _options.User)}) "
+            + $"fullscreen {(launch.Fullscreen ? "on" : "off")} — settings {ProjectSettings.GlobalizePath(LauncherStore.DefaultPath)}");
+        return launch;
+    }
+
+    /// <summary>
+    /// The remembered window mode, at the first start of the process only — not for a
+    /// bench (it measures in its fixed window) nor next to an explicit <c>--size</c>.
+    /// </summary>
+    private void ApplyStoredFullscreen(bool fullscreen)
+    {
+        if (_windowApplied || !fullscreen || _options!.Bench || _options.Size is not null) return;
+        if (DisplayServer.GetName() == "headless") return;
+        DisplayServer.WindowSetMode(DisplayServer.WindowMode.Fullscreen);
+        Log("window: full screen (remembered; F11 toggles)");
+    }
+
+    /// <summary>
+    /// F11: full screen ⇄ window, remembered in the launcher file. <c>Fullscreen</c>, not
+    /// <c>ExclusiveFullscreen</c>: the same on Wayland, keeps the compositor on X11 (screen
+    /// recorders keep working) and takes the window to the monitor size like the other.
+    /// Handled in <c>_Input</c>, before the login fields and the HUD (which lets F11 through).
+    /// </summary>
+    public override void _Input(InputEvent e)
+    {
+        if (e is not InputEventKey { Pressed: true, Echo: false, Keycode: Key.F11 }) return;
+        GetViewport().SetInputAsHandled();
+        if (DisplayServer.GetName() == "headless") return;
+        var mode = DisplayServer.WindowGetMode();
+        bool full = mode is not (DisplayServer.WindowMode.Fullscreen or DisplayServer.WindowMode.ExclusiveFullscreen);
+        DisplayServer.WindowSetMode(full ? DisplayServer.WindowMode.Fullscreen : DisplayServer.WindowMode.Windowed);
+        LauncherStore.Update(s => s with { Fullscreen = full });
+        Log($"window: {(full ? "full screen" : "windowed")} (F11, remembered)");
     }
 
     /// <summary><c>--size=WxH</c> (a bench run defaults to 1920x1080), centred on the current screen.</summary>
     private void ApplyWindowSize()
     {
+        if (_windowApplied) return;
         var size = _options!.Size ?? (_options.Bench ? CliOptions.DefaultBenchSize : (Vector2I?)null);
         if (size is not { } s || DisplayServer.GetName() == "headless") return;
         DisplayServer.WindowSetMode(DisplayServer.WindowMode.Windowed);
@@ -143,17 +196,20 @@ public partial class Main : Node3D
         hud.AddChild(_status);
     }
 
-    private void ShowLogin()
+    private void ShowLogin(LauncherSettings launch)
     {
         var layer = new CanvasLayer { Name = "LoginLayer", Layer = 10 };
         AddChild(layer);
-        var login = new LoginScreen().Setup(_options!.Server, _options.User);
+        var login = new LoginScreen().Setup(launch.Server, launch.User);
         layer.AddChild(login);
-        login.Submit = async (user, password) =>
+        login.Submit = async (server, user, password) =>
         {
             _api?.Dispose();
-            _api = new AnimaApi(_options.Server);
+            _api = new AnimaApi(server);
             using (await _api.LoginAsync(user, password)) { }
+            // Remembered only after the server accepted them; the password is not part of the file.
+            LauncherStore.Update(s => s with { Server = server, User = user });
+            Log($"logged in as '{user}' on {server} (server and user remembered)");
             _source = _api;
             // ONE login: the HUD's browser gets this very session (HudOverlay.Start).
             _hud?.Start(_api.BaseUri, _api.SessionToken());
@@ -242,6 +298,7 @@ public partial class Main : Node3D
         }
         catch (Exception e)
         {
+            if (_stop.IsCancellationRequested) return;   // back to the title during the load: the scene is gone
             GD.PrintErr($"[native] world load failed: {e}");
             SetStatus("World load failed: " + e.Message);
             if ((_options!.Bench && _options.QuitAfterBench) || _options.Offline is not null) GetTree().Quit(1);
@@ -440,15 +497,50 @@ public partial class Main : Node3D
         Log($"camera → {name} (HUD zoomTo)");
     }
 
-    /// <summary>The menu's "Back to title": end the shared session, back to the login screen.</summary>
+    /// <summary>
+    /// The menu's "Back to title" (and the top bar's "Log out"): end the shared session,
+    /// back to the login screen. Like the browser (client3d main.ts <c>backToTitle</c>:
+    /// logout, then <c>location.reload()</c>) the world is not taken apart by hand: the
+    /// scene reload frees everything Main built (world, figures, scatter, the 1 Hz timer)
+    /// and the cancelled token ends the worldmap poll; the HUD overlay, under the root,
+    /// survives. Order: the HUD page ends the session first through its own cookie jar
+    /// (HudOverlay.LeaveAsync — only a server answer can drop CEF's HttpOnly copy), then
+    /// Godot asks <c>/auth/status</c> and logs out only a session that is still alive
+    /// (an anonymous logout is not a no-op on the server), and empties its container.
+    /// The reload runs whatever failed before it — a dead server must not keep the
+    /// player out of the title screen.
+    /// </summary>
     private async Task BackToTitleAsync()
     {
+        if (_leaving) return;
+        _leaving = true;
         Log("back to title");
         _stop.Cancel();
-        if (_hud is not null) await _hud.LeaveAsync();
-        try { if (_api is not null) await _api.LogoutAsync(); }
-        catch (Exception e) { Log($"logout: {e.Message}"); }
-        GetTree().ReloadCurrentScene();
+        try
+        {
+            if (_hud is not null) await _hud.LeaveAsync();
+            if (_api is not null)
+            {
+                if (await _api.IsAuthenticatedAsync())
+                {
+                    await _api.LogoutAsync();
+                    Log("logout: the client's session ended");
+                }
+                else Log("logout: no live session left on the client side");
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"logout: {e.Message}");
+        }
+        finally
+        {
+            _api?.ForgetCookies();
+            _api?.Dispose();
+            _api = null;
+            _source = null;
+            GetTree().ReloadCurrentScene();
+        }
     }
 
     private static string? Str(JsonElement o, string key)

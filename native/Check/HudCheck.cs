@@ -243,6 +243,20 @@ public static class HudCheck
         // A hostile value cannot leave the string literal (JSON escaping).
         var hostile = HudOverlay.CookieScript("a\";alert(1);//", false, "http://h/");
         Expect("token is escaped", hostile.Contains("av_session=a\\u0022;alert(1);//"), hostile);
+
+        // Back to the title / the next handoff: the browser logs out only a session it really holds.
+        var end = HudOverlay.EndSessionScript;
+        int status = end.IndexOf("fetch('/auth/status'", StringComparison.Ordinal);
+        int guard = end.IndexOf("s.authenticated === true", StringComparison.Ordinal);
+        int logout = end.IndexOf("fetch('/auth/logout', {method: 'POST'", StringComparison.Ordinal);
+        Expect("end-session order: status, authenticated guard, logout", status == 0 && guard > status && logout > guard,
+               $"{status}/{guard}/{logout}: {end}");
+        var handoff = HudOverlay.HandoffScript("tok-EN_1", false, "http://h:8000/static/client3d/hud.html?bridge=gdcef");
+        Expect("handoff = end session, then the cookie script",
+               handoff == end + ".catch(() => 'unreachable').then(() => { " + got + " });", handoff);
+        Expect("leave = end session, then a blank page naming the outcome",
+               HudOverlay.LeaveScript == end + ".catch(() => 'unreachable').then(o => location.replace('about:blank#' + o));",
+               HudOverlay.LeaveScript);
     }
 
     /// <summary>The C# lists equal the TypeScript ones (bridge.ts gameNames/uiNames, bus.ts HUD_OWNED_FIELDS + the state fields).</summary>

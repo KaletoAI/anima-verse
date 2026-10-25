@@ -86,11 +86,13 @@ fi
 # engine log should land next to the build where the build host can read it.
 cat > "$out/run.sh" <<'RUN'
 #!/bin/sh
-# Usage: sh run.sh --server=http://HOST:8000 [--goto=LOCATION] [--bench [--scatter] [--quit-after-bench]] ...
+# Usage: sh run.sh [--server=http://HOST:8000] [--user=NAME] [--goto=LOCATION] [--bench [--quit-after-bench]] ...
+# Every flag is optional: without --server/--user the login screen offers the
+# server and user name of the last successful login (user://launcher.json).
 here="$(cd "$(dirname "$0")" && pwd)"
 chmod +x "$here/anima-native.x86_64" "$here/gdCefRenderProcess" 2>/dev/null
 mkdir -p "$here/logs"
 exec "$here/anima-native.x86_64" --log-file "$here/logs/native-$(date +%Y%m%d-%H%M%S).log" -- "$@"
 RUN
 chmod +x "$out/run.sh"
-echo "== done: $out/anima-native.x86_64 -- --server=http://HOST:8000 [--user=NAME] [--goto=LOCATION] [--no-hud] [--bench [--scatter] [--quit-after-bench] [--size=WxH]]"
+echo "== done: $out/anima-native.x86_64 -- [--server=http://HOST:8000] [--user=NAME] [--goto=LOCATION] [--no-hud] [--bench [--scatter] [--quit-after-bench] [--size=WxH]]"

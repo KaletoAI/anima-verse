@@ -121,10 +121,11 @@ public static class CheckRunner
             var hud = HudCheck.Run(source);
             var ground = await GroundCheck.RunAsync(world, source, builder, stats, dir);
             var s3c = await S3cCheck.RunAsync(host, dir);
+            var launcher = LauncherCheck.Run();
 
             GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

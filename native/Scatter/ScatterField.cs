@@ -579,6 +579,8 @@ public partial class ScatterField : Node3D
         _spreadArmed = true;
         GetTree().CreateTimer(SpreadResampleS).Timeout += () =>
         {
+            // The tree's timer outlives this node (back to the title reloads the scene).
+            if (!IsInstanceValid(this) || !IsInsideTree()) return;
             _spreadArmed = false;
             if (_areas.Count > 0) RebuildScatter();
         };
