@@ -178,3 +178,43 @@ def bob(g: GaitFrames, *, low_phase: float, base_cm: float, amp_cm: float = 0.0,
                                  f"{g.hips_min_drop[i] + margin_cm:.1f}) where the bob is ~0")
             amp = need / shape[i]
     return [base_cm + amp * s for s in shape]
+
+
+@dataclass
+class PadFrames:
+    """One contact point that is not a foot (a hand, a knee), sampled once
+    per frame: ``z`` (cm, + = front) along the belt, ``lift`` (cm over its
+    contact height) and whether it is in contact."""
+    t: List[float]
+    z: List[float] = field(default_factory=list)
+    lift: List[float] = field(default_factory=list)
+    contact: List[bool] = field(default_factory=list)
+
+
+def pad(*, duration_s: float, speed_mps: float, stance: float, phase: float,
+        centre_cm: float, lift_cm: float) -> PadFrames:
+    """A hand or knee that walks on the belt like ``gait``'s feet, without a
+    roll: in contact, φ in [0, stance), it rides back with the belt at
+    ``speed_mps``, centred on ``centre_cm`` at mid-contact; in the swing it
+    comes forward on a cubic Hermite with the belt's velocity at both ends
+    (no kink) and rises ``lift_cm`` · sin²(π u). ``phase`` is the pad's phase
+    at t = 0 (0 = touchdown)."""
+    belt = speed_mps * 100.0 * duration_s           # cm per cycle
+    z_down = centre_cm + belt * stance / 2.0        # touchdown
+    z_up = centre_cm - belt * stance / 2.0          # lift-off
+    span = 1.0 - stance
+    v = -belt                                       # cm per unit phase
+    n = int(round(duration_s * FPS))
+    out = PadFrames(t=[i / FPS for i in range(n)])
+    for t in out.t:
+        phi = (t / duration_s + phase) % 1.0
+        if phi < stance:
+            out.z.append(z_down - belt * phi)
+            out.lift.append(0.0)
+            out.contact.append(True)
+        else:
+            u = (phi - stance) / span
+            out.z.append(_hermite(z_up, z_down, v * span, v * span, u))
+            out.lift.append(lift_cm * math.sin(math.pi * u) ** 2)
+            out.contact.append(False)
+    return out
