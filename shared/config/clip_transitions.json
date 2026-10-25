@@ -31,18 +31,6 @@
       "accel": 0.0
     },
     {
-      "from": "crouching-mission",
-      "to": "*",
-      "kind": "crouching-mission-climax",
-      "accel": 0.0
-    },
-    {
-      "from": "crouching-mast",
-      "to": "*",
-      "kind": "crouching-mission-climax",
-      "accel": 0.0
-    },
-    {
       "from": "lying",
       "to": "standing",
       "kind": "get-up-bed",
