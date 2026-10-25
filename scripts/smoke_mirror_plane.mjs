@@ -104,6 +104,24 @@
  *     (2.5, 0.5, 0) — that is what makes the case discriminating.
  * [12] The clamp of [7] on the NON-indexed path as well: the six vertices of
  *     [5] with ranges [[0, 9999]] → the answer of [1].
+ * [D] mirrorRefreshes(rendered, distanceM, maxDistanceM) — the distance cap
+ *     of `MirrorOptions.maxDistanceM`: a pane refreshes unless it HAS rendered
+ *     once and stands farther than the cap. D1 never rendered, 50 m, cap 12 →
+ *     true (its target would stay black). D2 12 m at cap 12 → true (the cap is
+ *     "farther than"). D3 12.5 m → false. D4 no cap (Infinity) → true.
+ * [M] MIRROR_PRESET = {tint 0x777777 = 7829367, textureSize 512, clipBias 0.003}.
+ *
+ * VECTORS: [1]–[12], [D] and [M] are in shared/test-vectors/mirror_plane.json
+ * (shared with the native client's C# tests). JSON wrappers:
+ *   planeOfSquareMix(n, m) — [9]'s unit square with n copies of the ccw index
+ *     list [0,1,2, 0,2,3] followed by m copies of the cw list [0,2,1, 0,3,2],
+ *     one range over all of it;
+ *   mirrorBudgetRun(max, start, steps) — a MirrorBudget(max; null = Infinity),
+ *     each step either a list of pane names asking in that order in ONE
+ *     top-level frame (the counter starts at `start`, rises by one per grant,
+ *     and the next frame starts one past where it ended — askFrame below) or
+ *     {forget: name}; returns the grant list of every frame;
+ *   mirrorRefreshes(rendered, d, max) — max null = Infinity.
  * [13] OPTIONAL local cross-check (skipped, not failed, when the file is
  *     absent): MIRROR_FIXTURE_GLB=<path to a prop's model_<ts>.glb> and
  *     MIRROR_FIXTURE_JSON=<its .json sidecar> — for every area whose id
@@ -242,12 +260,13 @@ async function main() {
     ], { cwd: root, stdio: 'inherit' })
     if (built.status !== 0) process.exit(built.status ?? 1)
     const run = spawnSync('node', [bundlePath], {
-      stdio: 'inherit', env: { ...process.env, SMOKE_BUNDLED: '1' },
+      stdio: 'inherit', env: { ...process.env, SMOKE_BUNDLED: '1', SMOKE_ROOT: root },
     })
     process.exit(run.status ?? 1)
   }
 
-  const { planeOfFaces, MirrorBudget, sharedMirrorBudget } =
+  const { planeOfFaces, MirrorBudget, sharedMirrorBudget, mirrorRefreshes,
+          MIRROR_PRESET } =
     await import('../packages/scene-render/src/mirrorSurface.ts')
 
   const failures = []
@@ -260,45 +279,12 @@ async function main() {
   const vecNear = (v, w, tol = 1e-9) => v.length === 3
     && near(v[0], w[0], tol) && near(v[1], w[1], tol) && near(v[2], w[2], tol)
 
-  console.log('\n[1] rectangle in z = 0.2, ccw from +z')
-  const rect = [-0.15, -0.2, 0.2,  0.35, -0.2, 0.2,  0.35, 0.8, 0.2,  -0.15, 0.8, 0.2]
-  const p1 = planeOfFaces(rect, [0, 1, 2, 0, 2, 3], [[0, 6]])
-  check('centroid (0.1, 0.3, 0.2)', p1 && vecNear(p1.point, [0.1, 0.3, 0.2]), JSON.stringify(p1))
-  check('normal (0, 0, 1)', p1 && vecNear(p1.normal, [0, 0, 1]), JSON.stringify(p1))
-
-  console.log('\n[2] reversed winding flips the normal only')
-  const p2 = planeOfFaces(rect, [0, 2, 1, 0, 3, 2], [[0, 6]])
-  check('normal (0, 0, -1)', p2 && vecNear(p2.normal, [0, 0, -1]), JSON.stringify(p2))
-  check('centroid unchanged', p2 && vecNear(p2.point, [0.1, 0.3, 0.2]))
-
-  console.log('\n[3] tilted rectangle in y = 0.7')
-  const tilt = [0, 0.7, 0,  1, 0.7, 0,  1, 0.7, 2,  0, 0.7, 2]
-  const p3 = planeOfFaces(tilt, [0, 1, 2, 0, 2, 3], [[0, 6]])
-  check('normal (0, -1, 0)', p3 && vecNear(p3.normal, [0, -1, 0]), JSON.stringify(p3))
-  check('centroid (0.5, 0.7, 1.0)', p3 && vecNear(p3.point, [0.5, 0.7, 1.0]), JSON.stringify(p3))
-
-  console.log('\n[4] only the range counts')
-  const mixed = [0, 0, 5,  1, 0, 5,  0, 1, 5, ...rect]
-  const idx4 = [0, 1, 2,  3, 4, 5,  3, 5, 6]
-  const p4 = planeOfFaces(mixed, idx4, [[3, 6]])
-  check('range [3,6] → the rectangle of [1]',
-        p4 && vecNear(p4.point, [0.1, 0.3, 0.2]) && vecNear(p4.normal, [0, 0, 1]), JSON.stringify(p4))
-
-  console.log('\n[5] non-indexed geometry, vertex units')
-  const flat = [-0.15, -0.2, 0.2,  0.35, -0.2, 0.2,  0.35, 0.8, 0.2,
-                -0.15, -0.2, 0.2,  0.35, 0.8, 0.2,  -0.15, 0.8, 0.2]
-  const p5 = planeOfFaces(flat, null, [[0, 6]])
-  check('answer of [1]', p5 && vecNear(p5.point, [0.1, 0.3, 0.2]) && vecNear(p5.normal, [0, 0, 1]), JSON.stringify(p5))
-
-  console.log('\n[6] degenerate faces → null')
-  check('three identical points', planeOfFaces([1, 1, 1, 1, 1, 1, 1, 1, 1], [0, 1, 2], [[0, 3]]) === null)
-
-  console.log('\n[7] a count past the end is clamped')
-  const p7 = planeOfFaces(mixed, idx4, [[3, 9999]])
-  check('range [3,9999] → the rectangle of [1]',
-        p7 && vecNear(p7.point, [0.1, 0.3, 0.2]) && vecNear(p7.normal, [0, 0, 1]), JSON.stringify(p7))
-
-  console.log('\n[8] the per-frame budget and its rotation')
+  console.log('\n[vectors] shared/test-vectors/mirror_plane.json')
+  // The bundle runs from /tmp, so the vector file is found from the repo root
+  // the unbundled half handed down (SMOKE_ROOT), not from the bundle's place.
+  const { loadVectorFile, runVectors } = await import('../shared/test-vectors/vectors.mjs')
+  const loadVectors = (name) => loadVectorFile(
+    path.join(process.env.SMOKE_ROOT || path.join(__dirname, '..'), 'shared/test-vectors', `${name}.json`))
   /** ONE top-level frame: the panes ask in a fixed order (three sorts the
    *  opaque render list by material.id, so the hooks really do fire in the
    *  same order every frame), and each GRANT is a nested render that bumps the
@@ -314,87 +300,49 @@ async function main() {
     })
     return { got, next: frame + 1 }
   }
-  const b = new MirrorBudget(2)
-  const paneA = { id: 'A' }, paneB = { id: 'B' }, paneC = { id: 'C' }
-  const abc = [paneA, paneB, paneC]
-  const f1 = askFrame(b, abc, 10)
-  const f2 = askFrame(b, abc, f1.next)
-  const f3 = askFrame(b, abc, f2.next)
-  check('frame 1: nobody is in the rotation yet → A, B served, C waits',
-        JSON.stringify(f1.got) === '[true,true,false]', JSON.stringify(f1.got))
-  check('frame 2: the window moved to {C, A} → A and C served, B waits',
-        JSON.stringify(f2.got) === '[true,false,true]', JSON.stringify(f2.got))
-  check('frame 3: the window moved to {B, C} → B and C served, A waits',
-        JSON.stringify(f3.got) === '[false,true,true]', JSON.stringify(f3.got))
-  check('...so every pane was served in any two consecutive frames',
-        f1.got.map((v, i) => v || f2.got[i]).every(Boolean)
-        && f2.got.map((v, i) => v || f3.got[i]).every(Boolean))
-  check('budget 0 grants nothing', new MirrorBudget(0).allow(1, paneA) === false)
-  const inf = new MirrorBudget(Infinity)
-  check('unlimited budget always grants',
-        inf.allow(1, paneA) && inf.allow(2, paneB) && inf.allow(3, paneA))
+  const sq = [0, 0, 0,  1, 0, 0,  1, 1, 0,  0, 1, 0]
+  const ccw = [0, 1, 2,  0, 2, 3]
+  const cw = [0, 2, 1,  0, 3, 2]
+  const vectors = runVectors(loadVectors('mirror_plane'), {
+    planeOfFaces,
+    planeOfSquareMix: (n, m) => {
+      const idx = []
+      for (let i = 0; i < n; i += 1) idx.push(...ccw)
+      for (let i = 0; i < m; i += 1) idx.push(...cw)
+      return planeOfFaces(sq, idx, [[0, idx.length]])
+    },
+    mirrorBudgetRun: (max, start, steps) => {
+      const budget = new MirrorBudget(max === null ? Infinity : max)
+      const panes = new Map()
+      const pane = (name) => {
+        if (!panes.has(name)) panes.set(name, { id: name })
+        return panes.get(name)
+      }
+      const out = []
+      let at = start
+      for (const step of steps) {
+        if (Array.isArray(step)) {
+          const f = askFrame(budget, step.map(pane), at)
+          out.push(f.got)
+          at = f.next
+        } else {
+          budget.forget(pane(step.forget))
+        }
+      }
+      return out
+    },
+    mirrorRefreshes: (rendered, d, max) => mirrorRefreshes(rendered, d, max === null ? Infinity : max),
+    mirrorPreset: () => ({ ...MIRROR_PRESET }),
+  })
+  for (let i = 0; i < vectors.failed; i += 1) failures.push('vector')
+  check(`${vectors.passed} vector case(s) passed`, vectors.failed === 0)
+
+  console.log('\n[8] the budget is ONE instance per limit')
   // One instance per limit for the whole page is what puts every pane of an
   // app into ONE rotation.
   const shared = sharedMirrorBudget(2)
   check('the same limit IS the same counter, a different limit is not',
         sharedMirrorBudget(2) === shared && sharedMirrorBudget(3) !== shared)
-  // A disposed pane leaves the rotation, or the shared budget (a module-level
-  // singleton) would keep spending slots on panes that are gone.
-  const leaving = new MirrorBudget(1)
-  const kept = { id: 'kept' }, dropped = { id: 'dropped' }
-  askFrame(leaving, [kept, dropped], 100)
-  leaving.forget(dropped)
-  const after = askFrame(leaving, [kept], 200)
-  check('a forgotten pane frees its slot in the rotation',
-        JSON.stringify(after.got) === '[true]', JSON.stringify(after.got))
-
-  console.log('\n[9] the faces of a group must agree on a side')
-  // The unit square in z = 0, counter-clockwise seen from +z. Both its faces
-  // have the face vector (0,0,1), so ONE copy is weight 2 and sum (0,0,2).
-  const sq = [0, 0, 0,  1, 0, 0,  1, 1, 0,  0, 1, 0]
-  const ccw = [0, 1, 2,  0, 2, 3]
-  const cw = [0, 2, 1,  0, 3, 2]
-  check('one skin plus its mirror image → ratio 0 → null',
-        planeOfFaces(sq, [...ccw, ...cw], [[0, 12]]) === null,
-        JSON.stringify(planeOfFaces(sq, [...ccw, ...cw], [[0, 12]])))
-  /** n copies of the square wound ccw and m wound cw, in one index range. */
-  const mix = (n, m) => {
-    const idx = []
-    for (let i = 0; i < n; i += 1) idx.push(...ccw)
-    for (let i = 0; i < m; i += 1) idx.push(...cw)
-    return planeOfFaces(sq, idx, [[0, idx.length]])
-  }
-  check('2 ccw + 1 cw → ratio 2/6 = 1/3 → null', mix(2, 1) === null,
-        JSON.stringify(mix(2, 1)))
-  check('3 ccw + 1 cw → ratio 4/8 = 0.5 → null', mix(3, 1) === null,
-        JSON.stringify(mix(3, 1)))
-  check('18 ccw + 2 cw → ratio 32/40 = 0.8 → still null', mix(18, 2) === null,
-        JSON.stringify(mix(18, 2)))
-  const p9 = mix(19, 1)
-  check('19 ccw + 1 cw → ratio 36/40 = 0.9 → a plane, (0.5,0.5,0)/(0,0,1)',
-        p9 && vecNear(p9.point, [0.5, 0.5, 0]) && vecNear(p9.normal, [0, 0, 1]),
-        JSON.stringify(p9))
-  check('the square on its own is ratio 1',
-        planeOfFaces(sq, ccw, [[0, 6]]) !== null)
-
-  console.log('\n[10] an index past the buffer is not a plane')
-  const p10 = planeOfFaces([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 1, 99], [[0, 3]])
-  check('a vertex read out of bounds → null, never a NaN plane', p10 === null,
-        JSON.stringify(p10))
-
-  console.log('\n[11] the centroid is AREA-weighted, not a plain mean')
-  const tris = [0, 0, 0,  2, 0, 0,  0, 2, 0,   4, 0, 0,  5, 0, 0,  4, 1, 0]
-  const p11 = planeOfFaces(tris, null, [[0, 6]])
-  check('centroid (1.4, 0.6, 0) — the plain mean would be (2.5, 0.5, 0)',
-        p11 && vecNear(p11.point, [1.4, 0.6, 0]), JSON.stringify(p11))
-  check('normal (0, 0, 1)', p11 && vecNear(p11.normal, [0, 0, 1]),
-        JSON.stringify(p11))
-
-  console.log('\n[12] the clamp holds on the non-indexed path too')
-  const p12 = planeOfFaces(flat, null, [[0, 9999]])
-  check('range [0,9999] over 6 vertices → the rectangle of [1]',
-        p12 && vecNear(p12.point, [0.1, 0.3, 0.2])
-        && vecNear(p12.normal, [0, 0, 1]), JSON.stringify(p12))
 
   console.log('\n[13] optional local fixture')
   const glbPath = process.env.MIRROR_FIXTURE_GLB

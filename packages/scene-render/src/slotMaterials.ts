@@ -88,9 +88,43 @@ type SlotMaterial = Material & {
  *  the server does it: `slot_ picture_1` is a modeller's typo, not a slot whose
  *  name starts with a space. A bare `picture` is its own slot name and passes
  *  through untouched. */
-const slotNameOf = (raw: string | undefined): string => {
+export const slotNameOf = (raw: string | undefined): string => {
   const key = (raw || '').trim().toLowerCase()
   return key.startsWith('slot_') ? key.slice(5).trim() : key
+}
+
+/** What a slot does to one material — the decision half of
+ *  `applySlotMaterials`, without three: `image` hangs a picture, `glass` /
+ *  `mirror` apply that preset, `null` leaves the material as modelled. */
+export interface SlotFill {
+  /** The slot name the material answers to (its name without `slot_`). */
+  slot: string
+  kind: 'image' | 'glass' | 'mirror'
+  /** The trimmed picture URL; '' for a preset. */
+  image: string
+}
+
+/**
+ * Which fill (if any) the payload's `slots` give the material named
+ * `materialName`. Slot keys match case-insensitively and trimmed; the material
+ * answers by `slotNameOf`. A value with an image is a picture (the image wins
+ * over a preset); without one it must name a known preset (case-insensitive,
+ * trimmed), anything else touches nothing.
+ */
+export function slotFill(materialName: string | undefined,
+                         slots: SceneSlotValues | undefined): SlotFill | null {
+  const slot = slotNameOf(materialName)
+  let value: { image?: string; preset?: string } | undefined
+  for (const [name, v] of Object.entries(slots || {})) {
+    const key = (name || '').trim().toLowerCase()
+    if (key && v && key === slot) value = v
+  }
+  if (!value) return null
+  const image = (value.image || '').trim()
+  if (image) return { slot, kind: 'image', image }
+  const preset = (value.preset || '').trim().toLowerCase()
+  if (!(MATERIAL_PRESETS as readonly string[]).includes(preset)) return null
+  return { slot, kind: preset as 'glass' | 'mirror', image: '' }
 }
 
 /**
@@ -121,24 +155,15 @@ export function applySlotMaterials(
   loadTexture: SlotTextureLoader,
   mirror?: MirrorOptions,
 ): Material[] {
-  const wanted = new Map<string, { image?: string; preset?: string }>()
-  for (const [name, value] of Object.entries(slots || {})) {
-    const key = (name || '').trim().toLowerCase()
-    if (key && value) wanted.set(key, value)
-  }
-  if (!wanted.size) return []
+  if (!Object.entries(slots || {}).some(([name, value]) => (name || '').trim() && value)) return []
 
   const clones: Material[] = []
   const fill = (src: Material, mesh: Mesh, materialIndex: number | null): Material => {
     const cur = src as SlotMaterial
-    const slot = slotNameOf(cur.name)
-    const value = wanted.get(slot)
-    if (!value) return src
-    const image = (value.image || '').trim()
-    const preset = (value.preset || '').trim().toLowerCase()
-    const isPreset = (MATERIAL_PRESETS as readonly string[]).includes(preset)
-    if (!image && !isPreset) return src
-    if (!image && preset === 'mirror') {
+    const decided = slotFill(cur.name, slots)
+    if (!decided) return src
+    const { slot, image } = decided
+    if (decided.kind === 'mirror') {
       // A reflector on the pane's OWN faces: the module measures the plane
       // from this material's face group and hooks the mesh's render callback.
       // Nothing measurable = the mesh stays exactly as it was modelled.

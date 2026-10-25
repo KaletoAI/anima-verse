@@ -77,6 +77,21 @@
  *   (0.3,   1.4835298641951802, 0,    3.0) -> 0.3        a frame of no time
  *                                                        moves nothing
  *
+ *   (0,    1, 1/60) -> 0.05     the rate defaults to DOOR_SWING_RATE 3.0
+ *
+ * --- the whole swing, frame by frame (60 fps) -----------------------------
+ *   1.4835298641951802 / 0.05 = 29.67 → 30 frames from shut to fully open
+ *   (standing 1.0 m away), and 30 frames back to shut from fully open when
+ *   the avatar stands 3.0 m away.
+ *
+ * VECTORS: the cases above are in shared/test-vectors/door_swing.json (shared
+ * with the native client's C# tests). JSON wrappers: a `null` distance
+ * argument is Infinity and a returned Infinity is `null`;
+ * `doorConstants()` = {range, openDeg, rate}; `doorSwingFrames(from, distM)`
+ * counts 60-fps frames of easeAngle towards doorTargetAngle(distM, true, +1)
+ * until the angle stands exactly on it (at most 100). NaN has no JSON
+ * spelling, so that case stays inline below, as does the stacked-door chain.
+ *
  * The LEAF PIVOT (where the leaf node turns, ruling R13) is NOT here: it is
  * `leafPivot` of @anima/scene-render, checked by scripts/smoke_leaf_pivot.mjs.
  */
@@ -143,77 +158,36 @@ async function main() {
   const OPEN = (85 * Math.PI) / 180;
   check('85° is 1.4835298641951802 rad', OPEN, 1.4835298641951802);
 
-  console.log('\n--- doorTargetAngle ---');
-  check('1.9 m, enterable, left hinge (+1) -> +85°',
-    doorTargetAngle(1.9, true, 1), OPEN);
-  check('2.1 m -> shut, the range ends at 2.0',
-    doorTargetAngle(2.1, true, 1), 0);
-  check('exactly 2.0 m still counts as standing in front of it',
-    doorTargetAngle(2.0, true, 1), OPEN);
-  check('1.9 m but LOCKED -> shut',
-    doorTargetAngle(1.9, false, 1), 0);
-  check('1.9 m, enterable, right hinge (-1) -> -85°',
-    doorTargetAngle(1.9, true, -1), -OPEN);
-  check('2.1 m AND locked -> shut',
-    doorTargetAngle(2.1, false, -1), 0);
-  check('0 m (standing in the doorway) -> open',
-    doorTargetAngle(0, true, 1), OPEN);
-  check('no avatar in the scene (Infinity) -> shut',
-    doorTargetAngle(Infinity, true, 1), 0);
+  console.log('\n--- the shared vectors (shared/test-vectors/door_swing.json) ---');
+  const { loadVectors, runVectors } = await import('../../shared/test-vectors/vectors.mjs');
+  const inf = (d) => (d === null ? Infinity : d);
+  const fin = (v) => (v === Infinity ? null : v);
+  const vectors = runVectors(loadVectors('door_swing'), {
+    doorConstants: () => ({ range: DOOR_OPEN_RANGE, openDeg: DOOR_OPEN_DEG, rate: DOOR_SWING_RATE }),
+    doorTargetAngle: (d, enterable, swing) => doorTargetAngle(inf(d), enterable, swing),
+    doorDistance: (dl, al, d) => fin(doorDistance(dl, al, inf(d))),
+    easeAngle,
+    doorSwingFrames: (from, distM) => {
+      const target = doorTargetAngle(distM, true, 1);
+      let a = from;
+      let frames = 0;
+      while (a !== target && frames < 100) {
+        a = easeAngle(a, target, 1 / 60, DOOR_SWING_RATE);
+        frames += 1;
+      }
+      return frames;
+    },
+  });
+  passed += vectors.passed;
+  failed += vectors.failed;
+
+  console.log('\n--- inline: NaN and the stacked-door chain ---');
   check('NaN is not "near" either -> shut',
     doorTargetAngle(NaN, true, 1), 0);
-
-  console.log('\n--- doorDistance: stacked doors are not the same door ---');
-  check('same storey -> the distance stands',
-    doorDistance(0, 0, 1.9), 1.9);
-  check('the door one storey UP is out of reach, however close in plan',
-    doorDistance(1, 0, 0.1), Infinity);
-  check('...and so is the one under one\'s feet',
-    doorDistance(0, 1, 0.1), Infinity);
-  check('a basement door, seen from the basement',
-    doorDistance(-1, -1, 0.4), 0.4);
   check('RED: a stacked door 0.1 m away in plan stays SHUT',
     doorTargetAngle(doorDistance(1, 0, 0.1), true, 1), 0);
   check('...while the very same door on the avatar\'s own storey stands open',
     doorTargetAngle(doorDistance(1, 1, 0.1), true, 1), OPEN);
-
-  console.log('\n--- easeAngle: one frame at 60 fps, 3.0 rad/s = 0.05 rad ---');
-  check('shut -> opening: 0 + 0.05',
-    easeAngle(0, OPEN, 1 / 60, DOOR_SWING_RATE), 0.05);
-  check('1.4 -> 1.45 (difference 0.0835 > one step)',
-    easeAngle(1.4, OPEN, 1 / 60, DOOR_SWING_RATE), 1.45);
-  check('1.45 -> the target itself (difference 0.0335 <= one step, no overshoot)',
-    easeAngle(1.45, OPEN, 1 / 60, DOOR_SWING_RATE), OPEN);
-  check('negative direction, first step: -0.05',
-    easeAngle(0, -OPEN, 1 / 60, DOOR_SWING_RATE), -0.05);
-  check('negative direction clamps at the target too',
-    easeAngle(-1.45, -OPEN, 1 / 60, DOOR_SWING_RATE), -OPEN);
-  check('shutting again: 1.2 -> 1.15',
-    easeAngle(1.2, 0, 1 / 60, DOOR_SWING_RATE), 1.15);
-  check('already there: nothing moves',
-    easeAngle(OPEN, OPEN, 1 / 60, DOOR_SWING_RATE), OPEN);
-  check('a frame of no time moves nothing',
-    easeAngle(0.3, OPEN, 0, DOOR_SWING_RATE), 0.3);
-
-  console.log('\n--- the whole swing, frame by frame (60 fps) ---');
-  // 1.4835298641951802 / 0.05 = 29.67 → 30 frames to stand fully open, and
-  // then it stays there: half a second, hand-counted.
-  let a = 0;
-  let frames = 0;
-  while (a !== OPEN && frames < 100) {
-    a = easeAngle(a, doorTargetAngle(1.0, true, 1), 1 / 60, DOOR_SWING_RATE);
-    frames += 1;
-  }
-  check('30 frames from shut to fully open', frames, 30);
-  check('...and it stops there', easeAngle(a, OPEN, 1 / 60, DOOR_SWING_RATE), OPEN);
-  // Walking away shuts it in the same 30 frames.
-  let b = OPEN;
-  let shutFrames = 0;
-  while (b !== 0 && shutFrames < 100) {
-    b = easeAngle(b, doorTargetAngle(3.0, true, 1), 1 / 60, DOOR_SWING_RATE);
-    shutFrames += 1;
-  }
-  check('and 30 frames back to shut when the avatar walks away', shutFrames, 30);
 
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed ? 1 : 0);

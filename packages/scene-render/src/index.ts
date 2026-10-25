@@ -41,11 +41,11 @@ export type { RestPose, RestCorrection } from './clipRetarget'
 export { applyDepthCut, disposeCutMaterials } from './depthCut'
 
 export { applySlotMaterials, disposeSlotMaterials, GLASS_PRESET,
-  MATERIAL_PRESETS } from './slotMaterials'
-export type { SlotTextureLoader } from './slotMaterials'
+  MATERIAL_PRESETS, slotFill, slotNameOf } from './slotMaterials'
+export type { SlotTextureLoader, SlotFill } from './slotMaterials'
 
 export { planeOfFaces, MirrorBudget, sharedMirrorBudget, attachMirror,
-  disposeMirror, mirrorPlaneOf } from './mirrorSurface'
+  disposeMirror, mirrorPlaneOf, mirrorRefreshes, MIRROR_PRESET } from './mirrorSurface'
 export type { MirrorPlane, MirrorOptions, MirrorInfo } from './mirrorSurface'
 
 export { applyCutouts } from './cutouts'

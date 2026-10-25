@@ -13,6 +13,7 @@ import { declaredFloorAt, furnitureUse, plateCeiling, polygonCentroid,
   recipeFloorAt, roomSpotGrid, standY, WALK_CLEARANCE_M,
   type DeclaredFloor, type GroundModelInfo, type WalkPlate } from '../game/ground';
 import { pointInPolygon, polygonBounds, sanitizePolygon } from '../game/polygon';
+import { roomRectOf } from '../game/roomAt';
 import type { SubmergedGhost } from './submergedGhost';
 import type { PlaceEntry } from './placeSlot';
 import { storeyPieceOpacity } from './storeyDisplay';
@@ -953,20 +954,11 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
   tile.group.updateMatrixWorld(true);
   const { hull } = floor;
   // The room's OWN frame: the bounding box of its hull carries the raster and
-  // the label rectangle, the area centroid carries the centre.
-  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-  for (const [px, pz] of hull) {
-    if (px < minX) minX = px;
-    if (px > maxX) maxX = px;
-    if (pz < minZ) minZ = pz;
-    if (pz > maxZ) maxZ = pz;
-  }
-  if (!Number.isFinite(minX)) return;
-  const bx = (minX + maxX) / 2;
-  const bz = (minZ + maxZ) / 2;
-  const w = Math.max(maxX - minX, 0.5);
-  const d = Math.max(maxZ - minZ, 0.5);
-  tile.roomRects.set(roomId, { x: bx, z: bz, w, d });
+  // the label rectangle, the area centroid carries the centre (`roomRectOf`).
+  const rect = roomRectOf(hull);
+  if (!rect) return;
+  const { x: bx, z: bz, w, d } = rect;
+  tile.roomRects.set(roomId, rect);
 
   // THE RASTER, only as the centre's fallback: since the SERVER picks the
   // point a figure stands on (§ A1.4, T4) nothing hands out stands here any

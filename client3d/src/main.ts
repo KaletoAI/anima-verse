@@ -51,6 +51,7 @@ import { nearestRoomAt, stairChain, stairLegTo, stairLegs, stairsAt,
   type StairLink, type StairPrompt } from './game/stairs';
 import { bodyRadius, clampAgainstWalls, wallSegments, type Segment } from './game/collide';
 import { polygonArea, pointInPolygon } from './game/polygon';
+import { corridorAtOutline, roomAtRects } from './game/roomAt';
 import { doorMarkers, doorwayBetween, roomDoor, type DoorMarker } from './game/doors';
 import { doorwayLock, isLocked, lockReason, unlockedRooms, NO_LOCKS } from './game/locks';
 import { doorDistance, doorTargetAngle, easeAngle, DOOR_SWING_RATE } from './game/doorSwing';
@@ -74,7 +75,7 @@ import {
   ambientTerrainFor, emptyManifest, newTerrainSwitch, nightForMusic, pickAmbient,
   pickMusic, terrainSwitch, type AudioManifest,
 } from './game/soundtrack';
-import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintBoundary, footprintYaw, footprintCentre, redatumTile, roomStandY, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type TileCorridor, type VerticalTarget } from './scene/tiles';
+import { applyLevelDisplay, applyNightGlow, applyRoomVisibility, applyTileFade, applyTileOcclusion, applyWallCulling, bakedFloorAt, buildTile, footprintBoundary, footprintYaw, footprintCentre, redatumTile, roomStandY, setSurfaceTextures, tileContains, tileDirToWorld, tileGroundY, tileToWorld, tileWorldBounds, worldToTile, type Tile, type VerticalTarget } from './scene/tiles';
 import { setFogVeilCameraHeight, setFogVeilCells, setFogVeilFogged,
   tickFogVeil } from './scene/fogVeil';
 import { setModelEnvironment } from './scene/glbMaterials';
@@ -3041,14 +3042,7 @@ async function startApp(username: string, role: string) {
    */
   function roomAt(tile: Tile, x: number, z: number): string | null {
     const p = worldToTile(tile, x, z);
-    let best: string | null = null;
-    let bestArea = Infinity;
-    for (const [id, r] of tile.roomRects) {
-      if (Math.abs(p.x - r.x) > r.w / 2 || Math.abs(p.z - r.z) > r.d / 2) continue;
-      const area = r.w * r.d;
-      if (area < bestArea) { best = id; bestArea = area; }
-    }
-    return best;
+    return roomAtRects(tile.roomRects, p.x, p.z);
   }
 
   /**
@@ -3061,13 +3055,8 @@ async function startApp(username: string, role: string) {
    * line between hallway and yard; every upper storey sits inside it.
    */
   function corridorAt(tile: Tile, x: number, z: number): string | null {
-    let lowest: TileCorridor | null = null;
-    for (const c of tile.corridors) {
-      if (c.level >= 0 && (!lowest || c.level < lowest.level)) lowest = c;
-    }
-    if (!lowest || lowest.outline.length < 3) return null;
     const p = worldToTile(tile, x, z);
-    return pointInPolygon(p.x, p.z, lowest.outline) ? lowest.roomId : null;
+    return corridorAtOutline(tile.corridors, p.x, p.z);
   }
 
   /**

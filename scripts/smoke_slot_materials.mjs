@@ -18,6 +18,27 @@
  * what makes the "same object / different object" question answerable at all:
  * the stub's `clone()` is the only cloner in the picture.
  *
+ * THE DECISION, SHARED. Which fill a material gets is `slotFill(materialName,
+ * slots)` — the three-free half of the routine — and its cases are in
+ * shared/test-vectors/slot_materials.json (shared with the native client's C#
+ * tests; the labels name the sections below):
+ *   [1] 'picture' + {picture: {image}} → {slot picture, kind image, image}.
+ *   [3] 'glass' + {glass: {preset: glass}} → kind glass, image ''.
+ *   [4] no match: another name, a value with neither image nor preset, an
+ *       unknown preset ('chrome'), no slots at all → null; the match is
+ *       case-insensitive on the material AND on the slot key.
+ *   [8] one leading `slot_` is the marker, not the name: slot_picture_1 →
+ *       picture_1, slot_slot_sign → slot_sign, 'slot_ picture_1' → picture_1
+ *       (trimmed behind the prefix); the raw name as a key and 'slotpicture_1'
+ *       match nothing.
+ *   [9] 'slot_glass_1' + {glass_1: {preset: mirror}} → kind mirror.
+ *   [14] an image beats a preset, and is trimmed: ' /…/a.png ' → '/…/a.png'.
+ *   [15] a preset is trimmed and case-insensitive: ' Glass ' → glass.
+ *   [16] a blank image ('  ') is no image: the preset decides (mirror).
+ *   [3c] glassPreset() = GLASS_PRESET {opacity .3, roughness .06, metalness 0,
+ *       transmission .85}; [11] materialPresets() = MATERIAL_PRESETS [glass, mirror].
+ * Everything else here is the THREE side (clones, textures, mirrors), inline.
+ *
  * The package is TypeScript, so the script bundles itself into /tmp on EVERY
  * run and executes that (same harness as
  * `client3d/scripts/smoke_place_rotation.mjs`, including the esbuild lookup
@@ -49,13 +70,13 @@ async function main() {
     ], { cwd: root, stdio: 'inherit' })
     if (built.status !== 0) process.exit(built.status ?? 1)
     const run = spawnSync('node', [bundlePath], {
-      stdio: 'inherit', env: { ...process.env, SMOKE_BUNDLED: '1' },
+      stdio: 'inherit', env: { ...process.env, SMOKE_BUNDLED: '1', SMOKE_ROOT: root },
     })
     process.exit(run.status ?? 1)
   }
 
   const { applySlotMaterials, disposeSlotMaterials, GLASS_PRESET,
-          MATERIAL_PRESETS } =
+          MATERIAL_PRESETS, slotFill } =
     await import('../packages/scene-render/src/slotMaterials.ts')
   // The mirror's own module, for the two questions `applySlotMaterials` alone
   // cannot answer: WHICH faces were measured, and does a second attach on the
@@ -126,6 +147,17 @@ async function main() {
     const meshes = mats.map(mesh)
     return { meshes, traverse(cb) { for (const m of meshes) cb(m) } }
   }
+
+  console.log('\n[vectors] shared/test-vectors/slot_materials.json')
+  // The bundle runs from /tmp: the vector file is found from SMOKE_ROOT.
+  const { loadVectorFile, runVectors } = await import('../shared/test-vectors/vectors.mjs')
+  const vectors = runVectors(loadVectorFile(path.join(process.env.SMOKE_ROOT || path.join(__dirname, '..'),
+                                                      'shared/test-vectors/slot_materials.json')), {
+    slotFill,
+    glassPreset: () => ({ ...GLASS_PRESET }),
+    materialPresets: () => [...MATERIAL_PRESETS],
+  })
+  check(`${vectors.passed} vector case(s) passed`, vectors.failed === 0, `${vectors.failed} failed`)
 
   console.log('\n[1] the picture lands, the rest of the mesh is untouched')
   const wood = new FakeMaterial('wood')

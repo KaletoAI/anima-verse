@@ -307,6 +307,16 @@ export class MirrorBudget {
   }
 }
 
+/** May a pane refresh its reflection at this camera distance? Beyond
+ *  `maxDistanceM` a pane keeps the reflection it has — but only once it HAS
+ *  one: a pane that never completed a pass shows a black render target, so
+ *  its first pass ignores the distance (see `MirrorOptions.maxDistanceM`).
+ *  `Infinity` is "no limit". */
+export function mirrorRefreshes(rendered: boolean, distanceM: number,
+                                maxDistanceM: number): boolean {
+  return !(rendered && distanceM > maxDistanceM)
+}
+
 /** One budget per DISTINCT limit, for the whole page.
  *
  *  A `MirrorBudget` per pane is inert: each nested reflection bumps
@@ -640,7 +650,7 @@ function renderMirror(THREE: typeof import('three'), mesh: Mesh, renderer: WebGL
   // The FIRST pass ignores the distance: a pane that has never rendered has a
   // black render target, and a mirror that starts out of range would stay
   // black until the camera happened to come close.
-  if (state.rendered && view.length() > state.maxDistanceM) return
+  if (!mirrorRefreshes(state.rendered, view.length(), state.maxDistanceM)) return
   if (!state.budget.allow(renderer.info.render.frame, state)) return
 
   let reflectionCamera = state.cameras.get(camera)

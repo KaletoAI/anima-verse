@@ -1,0 +1,44 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_door_swing.mjs",
+  "cases": [
+    { "label": "[K] range 2.0 m, 85°, 3.0 rad/s", "fn": "doorConstants", "args": [],
+      "expect": { "range": 2, "openDeg": 85, "rate": 3 } },
+
+    { "label": "[T1] 1.9 m, enterable, left hinge (+1) -> +85° = 1.4835298641951802", "fn": "doorTargetAngle", "args": [1.9, true, 1],
+      "expect": 1.4835298641951802, "eps": 1e-12 },
+    { "label": "[T2] 2.1 m -> shut", "fn": "doorTargetAngle", "args": [2.1, true, 1], "expect": 0 },
+    { "label": "[T3] exactly 2.0 m still opens", "fn": "doorTargetAngle", "args": [2.0, true, 1], "expect": 1.4835298641951802, "eps": 1e-12 },
+    { "label": "[T4] 1.9 m but LOCKED -> shut", "fn": "doorTargetAngle", "args": [1.9, false, 1], "expect": 0 },
+    { "label": "[T5] right hinge (−1) -> −85°", "fn": "doorTargetAngle", "args": [1.9, true, -1], "expect": -1.4835298641951802, "eps": 1e-12 },
+    { "label": "[T6] 2.1 m AND locked -> shut", "fn": "doorTargetAngle", "args": [2.1, false, -1], "expect": 0 },
+    { "label": "[T7] 0 m (in the doorway) -> open", "fn": "doorTargetAngle", "args": [0, true, 1], "expect": 1.4835298641951802, "eps": 1e-12 },
+    { "label": "[T8] no avatar (null = Infinity) -> shut", "fn": "doorTargetAngle", "args": [null, true, 1], "expect": 0 },
+
+    { "label": "[D1] same storey -> the distance stands", "fn": "doorDistance", "args": [0, 0, 1.9], "expect": 1.9 },
+    { "label": "[D2] the door one storey UP -> Infinity (null)", "fn": "doorDistance", "args": [1, 0, 0.1], "expect": null },
+    { "label": "[D3] ...and the one under one's feet", "fn": "doorDistance", "args": [0, 1, 0.1], "expect": null },
+    { "label": "[D4] a basement door seen from the basement", "fn": "doorDistance", "args": [-1, -1, 0.4], "expect": 0.4 },
+
+    { "label": "[E1] shut -> opening: 0 + 3.0/60 = 0.05", "fn": "easeAngle", "args": [0, 1.4835298641951802, 0.016666666666666666, 3],
+      "expect": 0.05, "eps": 1e-12 },
+    { "label": "[E2] 1.4 -> 1.45 (difference 0.0835 > one step)", "fn": "easeAngle", "args": [1.4, 1.4835298641951802, 0.016666666666666666, 3],
+      "expect": 1.45, "eps": 1e-12 },
+    { "label": "[E3] 1.45 -> the target (difference 0.0335 ≤ one step, no overshoot)", "fn": "easeAngle",
+      "args": [1.45, 1.4835298641951802, 0.016666666666666666, 3], "expect": 1.4835298641951802 },
+    { "label": "[E4] negative direction, first step: −0.05", "fn": "easeAngle", "args": [0, -1.4835298641951802, 0.016666666666666666, 3],
+      "expect": -0.05, "eps": 1e-12 },
+    { "label": "[E5] negative direction clamps at the target", "fn": "easeAngle", "args": [-1.45, -1.4835298641951802, 0.016666666666666666, 3],
+      "expect": -1.4835298641951802 },
+    { "label": "[E6] shutting again: 1.2 -> 1.15", "fn": "easeAngle", "args": [1.2, 0, 0.016666666666666666, 3], "expect": 1.15, "eps": 1e-12 },
+    { "label": "[E7] already there: nothing moves", "fn": "easeAngle", "args": [1.4835298641951802, 1.4835298641951802, 0.016666666666666666, 3],
+      "expect": 1.4835298641951802 },
+    { "label": "[E8] a frame of no time moves nothing", "fn": "easeAngle", "args": [0.3, 1.4835298641951802, 0, 3], "expect": 0.3 },
+    { "label": "[E9] the rate defaults to 3.0 rad/s", "fn": "easeAngle", "args": [0, 1, 0.016666666666666666], "expect": 0.05, "eps": 1e-12 },
+
+    { "label": "[S1] 30 frames at 60 fps from shut to fully open (1.4835 / 0.05 = 29.67)", "fn": "doorSwingFrames",
+      "args": [0, 1.0], "expect": 30 },
+    { "label": "[S2] and 30 frames back to shut when the avatar walks away", "fn": "doorSwingFrames",
+      "args": [1.4835298641951802, 3.0], "expect": 30 }
+  ]
+}

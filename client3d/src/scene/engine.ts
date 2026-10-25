@@ -1,5 +1,6 @@
 import { isTypingTarget } from '../hud/dom';
 import { createPropLightPool } from './lightPool';
+import { nightFactorAt } from './ambience';
 import { FOG_NEAR_M, FOG_FAR_M } from './fogConstants';
 import * as THREE from 'three';
 import { CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
@@ -321,7 +322,7 @@ export class Engine {
     // own that would be wrong twice a day (`scene/fogVeil.ts`).
     setFogVeilSky(sky.getHex());
 
-    this.nightFactor = THREE.MathUtils.clamp(1 - day * 3, 0, 1);
+    this.nightFactor = nightFactorAt(hour);
     this.onDayNight?.(this.nightFactor);
     this.applyAmbience(this.ambienceDaylight, this.ambienceTint);
   }

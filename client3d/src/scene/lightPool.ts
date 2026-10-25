@@ -52,8 +52,64 @@ export function flickerFactor(kind: Light['flicker'], t: number, phase: number):
  */
 export function placementLightPosition(parent: THREE.Object3D, anchor: number[], bottom: number, light: Light): THREE.Vector3 {
   parent.updateWorldMatrix(true, false);
-  return parent.localToWorld(new THREE.Vector3(anchor[0], bottom, anchor[1]))
-    .add(new THREE.Vector3(light.offset_m[0], light.height_m, light.offset_m[1]));
+  const [x, y, z] = lightPositionInFrame(parent.matrixWorld.elements, anchor, bottom, light);
+  return new THREE.Vector3(x, y, z);
+}
+
+/**
+ * `placementLightPosition` as plain arithmetic: `frame` is the parent's world
+ * matrix, column-major (three's `elements`). The base anchor (anchor x,
+ * bottom, anchor z) goes through the frame, then the world offset is added.
+ */
+export function lightPositionInFrame(frame: ArrayLike<number>, anchor: readonly number[], bottom: number,
+                                     light: Pick<Light, 'offset_m' | 'height_m'>): [number, number, number] {
+  const ax = anchor[0], ay = bottom, az = anchor[1];
+  const w = frame[3] * ax + frame[7] * ay + frame[11] * az + frame[15];
+  return [
+    (frame[0] * ax + frame[4] * ay + frame[8] * az + frame[12]) / w + light.offset_m[0],
+    (frame[1] * ax + frame[5] * ay + frame[9] * az + frame[13]) / w + light.height_m,
+    (frame[2] * ax + frame[6] * ay + frame[10] * az + frame[14]) / w + light.offset_m[1],
+  ];
+}
+
+/** three's `MathUtils.smoothstep`: 0 at or below `lo`, 1 at or above `hi`, the cubic in between. */
+function smoothstep(x: number, lo: number, hi: number): number {
+  if (x <= lo) return 0;
+  if (x >= hi) return 1;
+  const t = (x - lo) / (hi - lo);
+  return t * t * (3 - 2 * t);
+}
+
+/** A night lamp fades in between night .3 and .6; every other lamp is at full gain. */
+export function nightLightGain(when: Light['when'], night: number): number {
+  return when === 'night' ? smoothstep(night, .3, .6) : 1;
+}
+
+/** A halo shows while its room is shown and, for a night lamp, once the night passes .3. */
+export function haloVisible(roomShown: boolean, when: Light['when'], night: number): boolean {
+  return roomShown && (when !== 'night' || night > .3);
+}
+
+/** How far a fire's colour leans towards the dip colour #ff6a20: 0.1 at the deepest dip, 0 on the upswing. */
+export function fireColourMix(t: number, phase: number): number {
+  return Math.max(0, (1 - flickerFactor('fire', t, phase)) / .25) * .1;
+}
+
+/** One pool slot as the fade sees it: which source it shows and at what gain. */
+export interface LightSlotState { id: string; gain: number }
+
+/**
+ * One frame of a slot's fade (0.4 s each way): a slot whose source is not the
+ * wanted one fades OUT first and takes the wanted source only at gain 0, so a
+ * lamp never jumps to another position while lit; a slot showing the wanted
+ * source fades in to 1.
+ */
+export function stepLightSlot(slot: LightSlotState, wanted: string, dt: number): LightSlotState {
+  if (slot.id !== wanted) {
+    const gain = Math.max(0, slot.gain - dt / .4);
+    return { id: gain === 0 ? wanted : slot.id, gain };
+  }
+  return { id: slot.id, gain: Math.min(1, slot.gain + dt / .4) };
 }
 
 let haloTexture: THREE.CanvasTexture | undefined;
@@ -155,22 +211,19 @@ export class LightPool {
     }
     const active = (s: Source) => !s.room_id || visibleRooms.has(s.room_id);
     const factor = (s: Source) => flickerFactor(s.light.flicker, this.time, s.phase)
-      * (s.when === 'night' ? THREE.MathUtils.smoothstep(night, .3, .6) : 1);
+      * nightLightGain(s.when, night);
     for (const s of this.sources.values()) {
       if (s.halo) {
-        s.halo.visible = active(s) && (s.when !== 'night' || night > .3);
+        s.halo.visible = haloVisible(active(s), s.when, night);
         s.halo.material.opacity = factor(s);
       }
     }
     this.slots.forEach((slot, i) => {
       const wanted = this.selected[i] || '';
       // Fade the old source to zero before assigning the new source's position.
-      if (slot.id !== wanted) {
-        slot.gain = Math.max(0, slot.gain - dt / .4);
-        if (slot.gain === 0) slot.id = wanted;
-      } else {
-        slot.gain = Math.min(1, slot.gain + dt / .4);
-      }
+      const next = stepLightSlot(slot, wanted, dt);
+      slot.id = next.id;
+      slot.gain = next.gain;
       const s = this.sources.get(slot.id);
       if (!s) {
         slot.lamp.intensity = 0;
@@ -181,8 +234,7 @@ export class LightPool {
       slot.lamp.color.set(s.light.color);
       const f = factor(s);
       if (s.light.flicker === 'fire') {
-        slot.lamp.color.lerp(FIRE_COLOR,
-          Math.max(0, (1 - flickerFactor('fire', this.time, s.phase)) / .25) * .1);
+        slot.lamp.color.lerp(FIRE_COLOR, fireColourMix(this.time, s.phase));
       }
       slot.lamp.intensity = active(s) ? s.light.intensity * slot.gain * f : 0;
     });
