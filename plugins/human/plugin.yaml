@@ -64,7 +64,8 @@ body_slots:
       always: "{length} {color} hair"
     # T-pose renders for image-to-3D: hair over the chest bakes into the torso
     # mesh. Only hair long enough to fall there gets the line, so short hair
-    # is never pushed anywhere (or grown to make the line satisfiable). The
+    # is never pushed anywhere (or grown to make the line satisfiable). An
+    # unset length counts as short (user decision 2026-10-25): no line. The
     # back view leaves it out (slot without back: true).
     mesh_input_prompt:
       attribute: length
