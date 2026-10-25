@@ -67,9 +67,9 @@ export function SceneTile({ scene, collapsed, railEl }: { scene: SceneData | nul
     {activeSig ? <img className="hud-scene-background" src={'/play/scene-render/image?sig=' + encodeURIComponent(activeSig)} alt="" draggable={false} />
       : <div className="hud-scene-figures">{tileFigures(scene).map(f => <div className="hud-scene-figure" key={f.name}
         title={f.isAvatar ? `${f.name} (${t('you')})` : f.name}>
+        <span className={f.isAvatar ? 'hud-scene-avatar' : ''}>{f.name}</span>
         <img key={exprUrl(f.name, f.version)} src={exprUrl(f.name, f.version)} alt="" draggable={false}
           onError={e => { e.currentTarget.style.visibility = 'hidden'; }} />
-        <span className={f.isAvatar ? 'hud-scene-avatar' : ''}>{f.name}</span>
       </div>)}</div>}
     <div className="hud-scene-strip">{scene.room_name || scene.location_name}
       {scene.room_name && scene.location_name !== scene.room_name ? ` · ${scene.location_name}` : ''}</div>
