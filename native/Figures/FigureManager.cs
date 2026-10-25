@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Gltf;
+using AnimaNative.Overview;
 using AnimaNative.World;
 using Godot;
 using Json = AnimaNative.World.Json;
@@ -114,6 +115,9 @@ public partial class FigureManager : Node3D
     /// <summary>Counts finished polls (good or failed) — lets a reader see that <see cref="LatestMap"/> was renewed.</summary>
     public int PollSerial { get; private set; }
 
+    /// <summary>A poll landed: <see cref="LatestMap"/> is the new payload (the event pins rebuild on it, like <c>applyWorldMap</c>).</summary>
+    public event Action? Polled;
+
     /// <summary>Online: poll the world map forever (until <paramref name="ct"/>).</summary>
     public async Task PollLoopAsync(CancellationToken ct)
     {
@@ -129,6 +133,7 @@ public partial class FigureManager : Node3D
                 LastPollFailed = false;
                 PollSerial++;
                 var loads = Apply(doc.RootElement);
+                Polled?.Invoke();
                 if (first)
                     _ = loads.ContinueWith(_ => _firstPoll.TrySetResult(), TaskScheduler.Default);
             }
@@ -360,6 +365,154 @@ public partial class FigureManager : Node3D
         fig.BoundTracks = t.BoundTracks;
         fig.UnboundClips = t.Library is null && info.Rig == "mixamo" ? ClipLibrary.Roles.Length : t.Unbound;
         fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player);
+    }
+
+    // ---- the figure pick (Task 9) ----------------------------------------------------------------
+
+    /// <summary>
+    /// The prefilter sphere around a figure: centred half-way up its height, radius 1.5 × height (at least
+    /// 1.5 m). A body of height h, however posed — standing, arms raised, sitting with the legs forward, lying
+    /// with the feet at the root — stays within 1.12 h of that centre (lying: √(h² + (h/2)²)); a model that
+    /// came normalised (scale 1) is drawn at its own height, which the floor of 1 m covers up to 1.5 m.
+    /// </summary>
+    public const double PickSphereFactor = 1.5;
+
+    /// <summary>Counters of the last figure pick (for the check and the report).</summary>
+    public int LastPickCandidates { get; private set; }
+    public int LastPickSkinnedVertices { get; private set; }
+    public double LastPickMs { get; private set; }
+
+    private sealed class SkinSurface
+    {
+        public required float[] Rest;
+        public required int[] Bones;
+        public required float[] Weights;
+        public required int[] Indices;
+        public required int Slots;
+        public float[]? Posed;
+    }
+
+    /// <summary>The bind-pose arrays of a skinned mesh resource, read once (the figures of one GLB share the mesh).</summary>
+    private readonly Dictionary<ulong, SkinSurface[]> _skinData = new();
+
+    /// <summary>
+    /// npcs.ts <c>characterAt(ray)</c>: the character whose figure the ray hits first, among the VISIBLE
+    /// figures, and the distance (m). Every mesh of the figure counts (the whole hierarchy, as three's
+    /// recursive intersect does): a skinned GLB part in its CURRENT pose — the vertices skinned on the CPU
+    /// exactly as the shader skins them (<see cref="Skinning"/>), like three.js <c>SkinnedMesh.raycast</c> —
+    /// and an unskinned part or the capsule placeholder as stored. A sphere around each figure
+    /// (<see cref="PickSphereFactor"/>) keeps the skinning to the figures the ray can reach at all.
+    /// </summary>
+    public (string Name, double Distance)? CharacterAt(Vec3 origin, Vec3 dir)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        LastPickCandidates = 0;
+        LastPickSkinnedVertices = 0;
+        double len = Math.Sqrt(dir.X * dir.X + dir.Y * dir.Y + dir.Z * dir.Z);
+        if (len == 0) return null;
+        var o = new Vector3((float)origin.X, (float)origin.Y, (float)origin.Z);
+        var d = new Vector3((float)(dir.X / len), (float)(dir.Y / len), (float)(dir.Z / len));
+        string? bestName = null;
+        double best = double.PositiveInfinity;
+        foreach (var fig in _figures.Values)
+        {
+            if (!IsInstanceValid(fig) || !fig.IsVisibleInTree() || fig.Body is not { } body) continue;
+            double h = Math.Max(fig.HeightM, 1.0);
+            var c = fig.GlobalPosition + new Vector3(0, (float)(fig.HeightM / 2), 0);
+            if (!RayMath.RaySphere(origin, new Vec3(d.X, d.Y, d.Z), new Vec3(c.X, c.Y, c.Z), PickSphereFactor * h)) continue;
+            LastPickCandidates++;
+            foreach (var mi in Walk(body).OfType<MeshInstance3D>())
+            {
+                if (!mi.IsVisibleInTree()) continue;
+                double? t = mi.Skin is not null && mi.GetNodeOrNull<Skeleton3D>(mi.Skeleton) is { } skel
+                    ? SkinnedHit(mi, skel, o, d) : MeshRay.Static(mi, o, d);
+                if (t is double tt && tt < best)
+                {
+                    best = tt;
+                    bestName = fig.CharacterName;
+                }
+            }
+        }
+        LastPickMs = sw.Elapsed.TotalMilliseconds;
+        return bestName is null ? null : (bestName, best);
+    }
+
+    /// <summary>The ray against a skinned mesh in its current pose: world distance of the nearest hit, or null.</summary>
+    private double? SkinnedHit(MeshInstance3D mi, Skeleton3D skel, Vector3 o, Vector3 d)
+    {
+        if (mi.Mesh is not { } mesh || mi.Skin is not { } skin) return null;
+        var surfaces = SkinData(mesh);
+        if (surfaces.Length == 0) return MeshRay.Static(mi, o, d);
+        // Skeleton3D's own upload (skeleton_3d.cpp): bind i → bone by its NAME when the bind has one, else by
+        // its index; transform = bone global pose · bind pose.
+        int binds = skin.GetBindCount();
+        var mats = new Affine[binds];
+        for (int i = 0; i < binds; i++)
+        {
+            string name = skin.GetBindName(i);
+            int bone = name.Length > 0 ? skel.FindBone(name) : skin.GetBindBone(i);
+            if (bone < 0 || bone >= skel.GetBoneCount()) bone = 0;
+            mats[i] = ToAffine(skel.GetBoneGlobalPose(bone) * skin.GetBindPose(i));
+        }
+        var world = mi.GlobalTransform;
+        var inv = world.AffineInverse();
+        var lo = inv * o;
+        var ld = inv.Basis * d;
+        var lov = new Vec3(lo.X, lo.Y, lo.Z);
+        var ldv = new Vec3(ld.X, ld.Y, ld.Z);
+        double? best = null;
+        foreach (var s in surfaces)
+        {
+            s.Posed ??= new float[s.Rest.Length];
+            Skinning.Apply(s.Rest, s.Bones, s.Weights, s.Slots, mats, s.Posed);
+            LastPickSkinnedVertices += s.Rest.Length / 3;
+            if (RayMath.NearestTriangle(lov, ldv, s.Posed, s.Indices) is not double t) continue;
+            var hit = world * (lo + ld * (float)t);
+            double dist = (hit - o).Length();
+            if (best is null || dist < best) best = dist;
+        }
+        return best;
+    }
+
+    private SkinSurface[] SkinData(Mesh mesh)
+    {
+        ulong key = mesh.GetInstanceId();
+        if (_skinData.TryGetValue(key, out var cached)) return cached;
+        var list = new List<SkinSurface>();
+        for (int s = 0; s < mesh.GetSurfaceCount(); s++)
+        {
+            var arrays = mesh.SurfaceGetArrays(s);
+            var verts = arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+            var bones = arrays[(int)Mesh.ArrayType.Bones].AsInt32Array();
+            var weights = arrays[(int)Mesh.ArrayType.Weights].AsFloat32Array();
+            var idx = arrays[(int)Mesh.ArrayType.Index].AsInt32Array();
+            if (verts.Length == 0 || bones.Length == 0 || bones.Length != weights.Length || bones.Length % verts.Length != 0)
+                continue;
+            if (idx.Length == 0) idx = Enumerable.Range(0, verts.Length).ToArray();
+            var rest = new float[verts.Length * 3];
+            for (int v = 0; v < verts.Length; v++)
+            {
+                rest[v * 3] = verts[v].X;
+                rest[v * 3 + 1] = verts[v].Y;
+                rest[v * 3 + 2] = verts[v].Z;
+            }
+            list.Add(new SkinSurface { Rest = rest, Bones = bones, Weights = weights, Indices = idx, Slots = bones.Length / verts.Length });
+        }
+        return _skinData[key] = list.ToArray();
+    }
+
+    private static Affine ToAffine(Transform3D t)
+        => new(t.Basis.Column0.X, t.Basis.Column0.Y, t.Basis.Column0.Z,
+               t.Basis.Column1.X, t.Basis.Column1.Y, t.Basis.Column1.Z,
+               t.Basis.Column2.X, t.Basis.Column2.Y, t.Basis.Column2.Z,
+               t.Origin.X, t.Origin.Y, t.Origin.Z);
+
+    private static IEnumerable<Node> Walk(Node n)
+    {
+        yield return n;
+        foreach (var c in n.GetChildren())
+        foreach (var d in Walk(c))
+            yield return d;
     }
 
     private void UpdateStats()

@@ -13,7 +13,7 @@ namespace AnimaNative.Check;
 /// <c>--check</c>, HUD part (Task S4): the pure parts of the native HUD with
 /// hand-derived cases — <c>pointInRects</c> incl. the CSS/window scale, the
 /// routing decision table, message validation, the outgoing message strings,
-/// figure picking, the cookie handoff script — plus two drift guards: the name
+/// the cookie handoff script (the figure pick is 3D since Task 9: PickCheck) — plus two drift guards: the name
 /// lists against the TypeScript sources, and (when gdCEF is linked) every
 /// method this client calls against the loaded library.
 /// </summary>
@@ -25,11 +25,10 @@ public static class HudCheck
         int routes = CheckRouting();
         int keys = CheckKeys();
         int messages = CheckMessages();
-        int picks = CheckPick();
         CheckCookieScript();
         CheckNameLists(source);
         var gdcef = CheckBinding();
-        return $"rect_cases={rects} route_cases={routes} key_cases={keys} message_cases={messages} pick_cases={picks} "
+        return $"rect_cases={rects} route_cases={routes} key_cases={keys} message_cases={messages} "
                + $"name_lists=4 gdcef={gdcef}";
     }
 
@@ -207,27 +206,6 @@ public static class HudCheck
         Expect("boot ready: 100 %, 6 stages incl. visible",
                boot["state"]!["percent"]!.GetValue<int>() == 100 && boot["state"]!["stages"]!.AsArray().Count == 6
                && boot["state"]!["stages"]!.AsArray().Any(s => s!.GetValue<string>() == "visible"), boot.ToJsonString());
-        return n;
-    }
-
-    private static int CheckPick()
-    {
-        // Figure P: feet (100,400) → head (100,300), 100 px tall → tolerance max(10, 30) = 30 px.
-        // Figure Q: feet (130,400) → head (130,380), 20 px tall (far) → tolerance 10 px.
-        var p = new FigurePick.Candidate("P", new Vector2(100, 400), new Vector2(100, 300), 10);
-        var q = new FigurePick.Candidate("Q", new Vector2(130, 400), new Vector2(130, 380), 50);
-        var both = new[] { p, q };
-        int n = 0;
-        void Is(string what, string? got, string? want) { n++; Expect(what, got == want, $"got {got ?? "null"}"); }
-        Is("on P's body", FigurePick.Pick(both, new Vector2(100, 350)), "P");
-        Is("29 px beside P, 1 px beside Q → Q (nearer)", FigurePick.Pick(both, new Vector2(129, 390)), "Q");
-        Is("25 px left of P → P", FigurePick.Pick(both, new Vector2(75, 350)), "P");
-        Is("31 px left of P → nothing", FigurePick.Pick(both, new Vector2(69, 350)), null);
-        Is("above P's head by 20 px → P (distance to the end point 20 ≤ 30)", FigurePick.Pick(both, new Vector2(100, 280)), "P");
-        // Equal distance 5 px to both: the nearer figure (depth 10) wins.
-        var r = new FigurePick.Candidate("R", new Vector2(110, 400), new Vector2(110, 300), 40);
-        Is("tie → nearer to the camera", FigurePick.Pick(new[] { r, p }, new Vector2(105, 350)), "P");
-        Is("nothing to pick", FigurePick.Pick(Array.Empty<FigurePick.Candidate>(), new Vector2(0, 0)), null);
         return n;
     }
 

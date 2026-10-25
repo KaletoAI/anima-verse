@@ -67,6 +67,12 @@ public partial class HudOverlay : CanvasLayer
     /// <summary>The HUD page is up and routes input.</summary>
     public bool Active => _loaded;
 
+    /// <summary>The cursor the SCENE wants outside the HUD surfaces (the hover pick sets it: a hand over a location).</summary>
+    public Input.CursorShape SceneCursor { get; set; } = Input.CursorShape.Arrow;
+
+    /// <summary>The last pointer motion was over a HUD surface (the page's cursor applies there).</summary>
+    public bool PointerOverHud { get; private set; }
+
     /// <summary>The HUD owns the keyboard right now (the camera must ignore W/A/S/D).</summary>
     public bool KeysToHud => _loaded && HudRouting.KeysToHud(Ui);
 
@@ -421,8 +427,8 @@ public partial class HudOverlay : CanvasLayer
             case InputEventMouseMotion mm:
             {
                 MoveTo(mm.Position);   // CEF always sees the pointer (hover)
-                bool over = Over(mm.Position);
-                Input.SetDefaultCursorShape(over ? _cursor : Input.CursorShape.Arrow);
+                bool over = PointerOverHud = Over(mm.Position);
+                Input.SetDefaultCursorShape(over ? _cursor : SceneCursor);
                 if (!_router.Motion(over).Scene) Handled();
                 break;
             }

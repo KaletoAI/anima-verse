@@ -60,6 +60,35 @@ public sealed class WorldStats
 }
 
 /// <summary>
+/// One built location (the browser's resident TILE): its group in the world (the pick target — every mesh
+/// under it answers <see cref="Loc"/>'s id, as <c>tile.group.userData.locationId</c> does), the facts the
+/// overview needs about it (centre, footprint width, reading height, whether it can be opened) and whether
+/// it is shown open right now. <see cref="Group"/> is replaced when the location is rebuilt open or closed.
+/// </summary>
+public sealed class LocationSlot
+{
+    public required LocationInfo Loc { get; init; }
+    public required Ring Ring { get; init; }
+    /// <summary>The location group, (pos_x, ground datum, pos_z), turned by yaw (<c>tile.group</c>, <c>tile.center</c>).</summary>
+    public required Node3D Group { get; set; }
+    /// <summary><c>footprintWidth</c> (<c>tile.width</c>).</summary>
+    public double Width { get; init; }
+    /// <summary>
+    /// <c>tile.height</c>: the vertical extent of the building model(s) or of the far-view shell, else the reading
+    /// height of <c>buildPlace</c>. A rebuild that places nothing measurable keeps the last measured value.
+    /// </summary>
+    public double Height { get; set; }
+    /// <summary><see cref="Height"/> came from a model or shell, not from the default.</summary>
+    public bool HeightMeasured { get; set; }
+    /// <summary><c>openable(tile)</c>: an interior exists and the place is a building, a shell area or a ground model.</summary>
+    public bool Openable { get; set; }
+    /// <summary>Shown open (its interior up, a fading shell left out).</summary>
+    public bool Open { get; set; }
+    /// <summary>Bumped by every rebuild; a rebuild that finishes after a newer one started is thrown away.</summary>
+    internal int Generation;
+}
+
+/// <summary>
 /// Builds the world from an <see cref="IWorldSource"/> — the server online, the fixtures in <c>--check</c>, a
 /// payload dump in <c>--offline</c>; all paths run THIS code.
 ///
@@ -104,6 +133,17 @@ public sealed class WorldBuilder
     public bool PlainGround { get; init; }
     /// <summary><c>--no-water</c>: no lift, no water variant (the browser bench's <c>&amp;water=0</c>).</summary>
     public bool NoWater { get; init; }
+
+    private readonly Dictionary<string, LocationSlot> _slots = new();
+    private Node3D? _places;
+    private Vector3 _tierCamera;
+    private (string? LocationId, string? RoomId) _avatarAt;
+
+    /// <summary>The built locations by id (the browser's resident tiles). Filled by <see cref="BuildAsync"/>.</summary>
+    public IReadOnlyDictionary<string, LocationSlot> Slots => _slots;
+
+    /// <summary>A location group was replaced by <see cref="SetOpenAsync"/> (the pick cache drops its entry).</summary>
+    public event Action<LocationSlot>? Rebuilt;
 
     /// <param name="strict">true in <c>--check</c>: any failure aborts; online a broken location is logged and skipped.</param>
     public WorldBuilder(IWorldSource source, Action<string> log, bool strict)
@@ -172,9 +212,10 @@ public sealed class WorldBuilder
         var points = new List<(double X, double Z)>();
         if (avatar.Pos is { } ap) points.Add(ap);
         points.Add(anchorXZ);
-        var camera = stats.Anchor.Position() + StartCameraOffset;
+        var camera = _tierCamera = stats.Anchor.Position() + StartCameraOffset;
+        _avatarAt = (avatar.LocationId, avatar.RoomId);
 
-        var places = new Node3D { Name = "Locations" };
+        var places = _places = new Node3D { Name = "Locations" };
         root.AddChild(places);
         var placed = locations.Where(l => l.IsPlaced).ToList();
         stats.Locations = placed.Count;
@@ -187,8 +228,11 @@ public sealed class WorldBuilder
                 bool pinned = loc.Id == avatar.LocationId;
                 var ring = LocationView.RingFor(LocationView.PlaceDistance(loc, points), pinned);
                 if (ring == Ring.Gone) { stats.LocationsGone++; return; }
-                await BuildLocation(loc, places, height, stats, ring, loc.Id == avatar.LocationId ? avatar.RoomId : null,
-                                    camera);
+                // The avatar's location starts open (main.ts arrivalLocId / bootPin); every other one closed.
+                var built = await BuildLocation(loc, height, stats, ring, pinned, pinned ? avatar.RoomId : null, camera);
+                if (built is null) return;
+                places.AddChild(built.Group);
+                lock (_slots) _slots[loc.Id] = built;
             }
             catch (Exception e) when (!_strict)
             {
@@ -291,11 +335,16 @@ public sealed class WorldBuilder
         stats.WaterAreas = Ground.Stats.WaterAreas;
     }
 
-    private async Task BuildLocation(LocationInfo loc, Node3D parent, WorldHeight height, WorldStats stats,
-                                     Ring ring, string? avatarRoom, Vector3 camera)
+    /// <summary>
+    /// One location as the browser shows it, built DETACHED (the caller hangs <see cref="LocationSlot.Group"/>
+    /// into the world). <paramref name="wantOpen"/>: show it open if it can be opened (<c>openable(tile)</c>);
+    /// <paramref name="room"/> picks the storey shown (the room's level, else 0). null for a 404 scene.
+    /// </summary>
+    private async Task<LocationSlot?> BuildLocation(LocationInfo loc, WorldHeight height, WorldStats stats,
+                                                    Ring ring, bool wantOpen, string? room, Vector3 camera)
     {
         using var doc = await _source.GetLocationSceneAsync(loc.Id);
-        if (doc is null) return;  // 404: nothing to compose (no plan, no rooms, no model)
+        if (doc is null) return null;  // 404: nothing to compose (no plan, no rooms, no model)
         var scene = ScenePayload.Parse(doc.RootElement);
         stats.Scenes++;
         if (Math.Abs(scene.K - 1) > 1e-9)
@@ -310,7 +359,6 @@ public sealed class WorldBuilder
             Rotation = new Vector3(0, (float)(loc.YawDeg * Math.PI / 180.0), 0),
         };
         group.SetMeta("location_id", loc.Id);
-        parent.AddChild(group);
 
         var (isBuilding, natureSite) = LocationView.Kind(loc);
         var buildings = scene.Models.Where(m => m.Role == "building").ToList();
@@ -318,11 +366,12 @@ public sealed class WorldBuilder
         bool groundModel = buildings.Any(m => m.Display == "ground");
         bool hasInterior = scene.Plates.Count > 0 || scene.Walls.Count > 0 || scene.Extras.Count > 0
                            || scene.HasFloorPlanOrMarkers || scene.Models.Any(m => m.Role != "building");
-        // openable(tile) + the singleton: only the avatar's location is open (fade 1).
-        bool open = avatarRoom is not null && hasInterior && (isBuilding || shellArea || groundModel);
+        // openable(tile) + the singleton: only the location the caller opens is open (fade 1).
+        bool openable = hasInterior && (isBuilding || shellArea || groundModel);
+        bool open = wantOpen && openable;
         if (open) stats.OpenLocation = loc.Id;
         var roomLevel = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Level);
-        int levelFilter = avatarRoom is { Length: > 0 } ar && roomLevel.TryGetValue(ar, out var lvl) ? lvl : 0;
+        int levelFilter = room is { Length: > 0 } ar && roomLevel.TryGetValue(ar, out var lvl) ? lvl : 0;
         var outdoor = LocationView.OutdoorRoomIds(scene);
         bool RoomShown(string roomId) => outdoor.Contains(roomId)
             || (!roomLevel.TryGetValue(roomId, out var lv) || lv == levelFilter);
@@ -334,6 +383,7 @@ public sealed class WorldBuilder
 
         // ── Building model(s): the far view, or — open — a kept plan hull / ground model with its cutouts. ──
         bool solidBuildingPlaced = false;
+        Aabb? buildingBox = null;
         foreach (var spec in buildings)
         {
             bool keep = spec.Display == "ground" || spec.PlanHull;
@@ -342,6 +392,8 @@ public sealed class WorldBuilder
             var node = await SceneModels.PlaceAsync(_models, spec, buildingTier, "building", group, 0, models, _materials);
             if (node is null) continue;
             if (!spec.RoofOnly) solidBuildingPlaced = true;
+            var nb = ModelPlacement.Measure(node, Transform3D.Identity);
+            buildingBox = buildingBox is { } bb ? bb.Merge(nb) : nb;
             if (open && keep && spec.Cutouts.Length > 0) stats.CutoutTriangles += SceneModels.ApplyCutouts(node, spec.Cutouts);
             if ((await _models.GetAsync(spec.PickUrl(buildingTier))) is { } t)
             {
@@ -377,6 +429,20 @@ public sealed class WorldBuilder
         await _library!.PreloadAsync(kinds);
         var (meshes, rs) = RecipeMeshes.Build(scene, new RecipeView(open, levelFilter, farShell), _materials, "Recipe");
         foreach (var m in meshes) group.AddChild(m);
+        // tile.height: the building model(s) measured (a roof-only part together with the rest, as
+        // `box.expandByObject(tile.shell)` reads it), else the far shell, else buildPlace's reading height.
+        double? measured = buildingBox is { } box && box.Size.Y > 0 ? box.Size.Y : null;
+        if (measured is null && farShell)
+        {
+            Aabb? shellBox = null;
+            foreach (var m in meshes)
+                if (m.Mesh is { } mesh)
+                {
+                    var b = m.Transform * mesh.GetAabb();
+                    shellBox = shellBox is { } sb ? sb.Merge(b) : b;
+                }
+            if (shellBox is { } sh && sh.Size.Y > 0) measured = sh.Size.Y;
+        }
         lock (stats)
         {
             stats.Recipe.Add(rs);
@@ -385,6 +451,55 @@ public sealed class WorldBuilder
         if (rs.Primitives > 0 || open)
             _log($"location {loc.Id} ({loc.Name}): ring={ring.ToString().ToLowerInvariant()}{(open ? $" OPEN storey {levelFilter}" : "")}"
                  + $"{(farShell ? " far-shell" : "")} — {rs.Primitives} primitives, skipped {rs.SkipSummary()}; {models.Summary()}");
+        return new LocationSlot
+        {
+            Loc = loc, Ring = ring, Group = group, Width = width, Openable = openable, Open = open,
+            Height = measured ?? Overview.EventPinRule.DefaultPlaceHeight(isBuilding, natureSite, LocationView.DetectStyle(loc)),
+            HeightMeasured = measured is not null,
+        };
+    }
+
+    /// <summary>
+    /// Show one built location open or closed: rebuild it with the same ring and tiers, hidden until it is
+    /// complete, then swap it in for the old group (the browser crossfades the two; this client cuts).
+    /// Opening shows storey 0, or the avatar's storey in the avatar's own location. A newer call for the same
+    /// location wins; a failure keeps the old group. Returns whether the new group went in.
+    /// </summary>
+    public async Task<bool> SetOpenAsync(string id, bool open)
+    {
+        if (!_slots.TryGetValue(id, out var slot) || _places is null || Height is null) return false;
+        int gen = ++slot.Generation;
+        LocationSlot? built;
+        try
+        {
+            string? room = open && id == _avatarAt.LocationId ? _avatarAt.RoomId : null;
+            built = await BuildLocation(slot.Loc, Height, new WorldStats(), slot.Ring, open, room, _tierCamera);
+        }
+        catch (Exception e)
+        {
+            _log($"location {id}: rebuild {(open ? "open" : "closed")} failed: {e.Message}");
+            return false;
+        }
+        if (built is null || gen != slot.Generation || !GodotObject.IsInstanceValid(_places))
+        {
+            if (built is not null) built.Group.Free();
+            return false;
+        }
+        var old = slot.Group;
+        old.Name = old.Name + "_old";
+        old.QueueFree();
+        _places.AddChild(built.Group);
+        slot.Group = built.Group;
+        slot.Open = built.Open;
+        slot.Openable = built.Openable;
+        if (built.HeightMeasured || !slot.HeightMeasured)
+        {
+            slot.Height = built.Height;
+            slot.HeightMeasured = built.HeightMeasured;
+        }
+        _log($"location {id} ({slot.Loc.Name}) shown {(built.Open ? "OPEN" : "closed")}");
+        Rebuilt?.Invoke(slot);
+        return true;
     }
 
     /// <summary>§ A16.9 <c>storeyGroundLift</c>: a level-0 spec moves onto the ground under its own anchor.</summary>

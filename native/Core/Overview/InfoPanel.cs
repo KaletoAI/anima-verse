@@ -146,4 +146,41 @@ public static class InfoPanel
         data["view"] = view is InfoView v ? new JsonObject { ["openable"] = v.Openable, ["open"] = v.Open } : null;
         return data;
     }
+
+    /// <summary>
+    /// main.ts <c>engine.onPick(id)</c>, the inputs gathered from one <c>GET /play/worldmap</c> payload: the
+    /// location row of <paramref name="id"/> (null when the map has none — the panel then stays as it is),
+    /// the characters whose <c>location_id</c> is it, its <c>events_by_location</c> entry, every character's
+    /// room (<c>takeRoomsFrom</c>: <c>room_id ?? ''</c>) and the avatar (<c>map.avatar</c>'s row: its
+    /// <c>location_id</c> and <c>pos ?? null</c>; no row → no avatar). <paramref name="view"/> is the scene's.
+    /// </summary>
+    public static JsonObject? FromWorldMap(JsonElement map, string id, InfoView view)
+    {
+        if (map.ValueKind != JsonValueKind.Object) return null;
+        JsonElement? row = null;
+        foreach (var l in Json.Arr(map, "locations"))
+            if (InfoLocation.StrOrNull(l, "id") == id) { row = l; break; }
+        if (row is not { } r) return null;
+        var all = Json.Arr(map, "characters").Where(c => c.ValueKind == JsonValueKind.Object).ToList();
+        var chars = all.Where(c => InfoLocation.StrOrNull(c, "location_id") == id).Select(InfoCharacter.FromJson).ToList();
+        var events = new List<InfoEvent>();
+        if (map.TryGetProperty("events_by_location", out var ebl) && ebl.ValueKind == JsonValueKind.Object
+            && ebl.TryGetProperty(id, out var evs) && evs.ValueKind == JsonValueKind.Array)
+            events.AddRange(evs.EnumerateArray().Select(InfoEvent.FromJson));
+        var roomOf = new Dictionary<string, string>();
+        foreach (var c in all)
+            if (InfoLocation.StrOrNull(c, "name") is { } n) roomOf[n] = InfoLocation.StrOrNull(c, "room_id") ?? "";
+        InfoAvatar? avatar = null;
+        if (InfoLocation.StrOrNull(map, "avatar") is { } me)
+            foreach (var c in all)
+            {
+                if (InfoLocation.StrOrNull(c, "name") != me) continue;
+                (double, double)? pos = c.TryGetProperty("pos", out var p) && p.ValueKind == JsonValueKind.Object
+                                        && Json.NumOrNull(p, "x") is double px && Json.NumOrNull(p, "z") is double pz
+                    ? (px, pz) : null;
+                avatar = new InfoAvatar(InfoLocation.StrOrNull(c, "location_id") ?? "", pos);
+                break;
+            }
+        return Build(InfoLocation.FromJson(r), chars, events, roomOf, view, avatar);
+    }
 }

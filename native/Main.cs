@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -45,6 +46,17 @@ public partial class Main : Node3D
     private HudOverlay? _hud;
     private string? _selected;
     private int _selectedPoll = -1;
+    // ---- overview picking (Task 9) ----
+    private LocationPicking? _picking;
+    private EventPins? _pins;
+    private readonly OpenView _openView = new();
+    /// <summary>The info panel as last published (main.ts keeps the click's snapshot; only view.open is patched).</summary>
+    private JsonObject? _info;
+    /// <summary>Normal play: not a bench drive, not an offline dump (those keep the built world static).</summary>
+    private bool _interactive;
+    private Vector2? _hoverAt;
+    private bool _hoverPending;
+    private (int Serial, Dictionary<string, LocationInfo> Rows)? _placeRows;
     private bool _leaving;
     /// <summary>The window is set up once per PROCESS: back to the title reloads this scene and must not undo F11.</summary>
     private static bool _windowApplied;
@@ -188,10 +200,16 @@ public partial class Main : Node3D
         AddChild(_camera);
         _camera.Current = true;
         _camera.JumpTo(Vector3.Zero, OverviewControl.InitialDist);
-        // The pick chain of a click (Task 9 extends it): for now the figure plaque, as before.
+        // The click chain (engine.ts pointerup): figure → [seat/glyph/stair: E2/E7] → location → nothing.
         _camera.Clicked += at =>
         {
             if (_hud?.Active == true) PickAt(at);
+        };
+        // engine.ts pointermove without a gesture → onHover(pickLocation): the cursor, once per frame.
+        _camera.Hovered += at =>
+        {
+            _hoverAt = at;
+            _hoverPending = true;
         };
 
         var hud = new CanvasLayer { Name = "Hud" };
@@ -237,6 +255,14 @@ public partial class Main : Node3D
             };
             var stats = await builder.BuildAsync(world, _options!.Goto);
             Anchor = stats.Anchor;
+            _interactive = !_options.Bench && _options.Offline is null;
+            _picking = new LocationPicking(builder);
+            // main.ts: the avatar's location is the open one from the first mount on.
+            if (stats.OpenLocation.Length > 0) _openView.TryOpen(stats.OpenLocation, true, out _);
+            RefreshOpenBadge();
+            _pins = new EventPins();
+            world.AddChild(_pins);
+            _pins.Update(builder.FirstMap!.Value, PlaceOf);
             if (_options.Bench || _options.Offline is not null)
             {
                 // The measuring runs keep the spike's start: the target on the anchor, where the scatter window
@@ -270,6 +296,11 @@ public partial class Main : Node3D
 
             _figures = new FigureManager(_source!, builder.Height!, Log, strict: false);
             world.AddChild(_figures);
+            _figures.Polled += () =>
+            {
+                // applyWorldMap → updatePins(map), every poll.
+                if (_pins is not null && IsInstanceValid(_pins) && _figures.LatestMap is { } polled) _pins.Update(polled, PlaceOf);
+            };
             await _figures.InitAsync();
             _ = _figures.PollLoopAsync(_stop.Token);
             _hud?.SetBoot(HudProtocol.BootReady());
@@ -415,7 +446,9 @@ public partial class Main : Node3D
         // The chat panel's box (HUD CSS px) → the camera's view shift (viewport px).
         hud.Handlers["setChatBox"] = args => _camera?.SetChatBox(hud.ChatBoxInWindow(args));
         hud.Handlers["clearSelection"] = _ => Select(null);
-        hud.Handlers["closeOpenView"] = _ => hud.SetState("openView", null);   // no open location views in the spike
+        hud.Handlers["closeOpenView"] = _ => CloseOpenLocation();
+        hud.Handlers["closeInfo"] = _ => SetInfo(null);
+        hud.Handlers["infoAction"] = args => InfoAction(Arg(args, 0), Arg(args, 1));
         hud.Handlers["setVolumes"] = _ => { };                                  // no audio in the spike
         hud.Handlers["backToTitle"] = args => { _ = BackToTitleAsync(); };
         // Scene-owned fields the chat, plaque and menu read (minimum viable set).
@@ -424,6 +457,7 @@ public partial class Main : Node3D
         hud.SetState("clock", "");
         hud.SetState("selected", null);
         hud.SetState("openView", null);
+        hud.SetState("info", null);
     }
 
     /// <summary>1 Hz: connection, game clock and the selected figure's fresh row (main.ts does this per poll).</summary>
@@ -468,19 +502,175 @@ public partial class Main : Node3D
         _hud.SetState("selected", value);
     }
 
-    /// <summary>A click the HUD did not take: the figure under it gets the plaque, a miss clears it.</summary>
+    /// <summary>
+    /// A click the HUD did not take (engine.ts <c>pointerup</c>, a left release without a drag): the ray through
+    /// the pointer — the camera's own, which honours the view shift — asks the figures first, then the
+    /// locations (<see cref="PickChain"/>): a figure gets the plaque and keeps the panel, a location opens its
+    /// info panel and clears the selection, empty ground clears both.
+    /// </summary>
     private void PickAt(Vector2 click)
     {
         if (_figures is null || _camera is null) return;
-        var candidates = _figures.Figures.Values
-            .Where(f => IsInstanceValid(f) && !_camera.IsPositionBehind(f.GlobalPosition))
-            .Select(f => new FigurePick.Candidate(
-                f.CharacterName,
-                _camera.UnprojectPosition(f.GlobalPosition),
-                _camera.UnprojectPosition(f.GlobalPosition + new Vector3(0, (float)f.HeightM, 0)),
-                _camera.GlobalPosition.DistanceTo(f.GlobalPosition)));
-        Select(FigurePick.Pick(candidates, click));
+        var (o, d) = _camera.RayAt(click);
+        var figure = _figures.CharacterAt(o, d);
+        // Asked only when no figure took the click, as engine.ts does.
+        var location = figure is null ? _picking?.Pick(o, d) : null;
+        var outcome = PickChain.Resolve(figure?.Name, location?.Id);
+        Log($"pick at ({click.X:0},{click.Y:0}): "
+            + (figure is { } f ? $"figure {f.Name} at {f.Distance:0.##} m ({_figures.LastPickCandidates} near the ray, "
+                                 + $"{_figures.LastPickSkinnedVertices} vertices skinned, {_figures.LastPickMs:0.##} ms)"
+               : location is { } l ? $"location {l.Id} at {l.Distance:0.##} m ({_picking!.LastBoxTests} boxes, "
+                                     + $"{_picking.LastTriangleQueries} meshes, {_picking.LastMs:0.##} ms)"
+               : "nothing"));
+        Select(outcome.Selected);
+        if (outcome.Info == InfoChange.Clear) SetInfo(null);
+        else if (outcome.Info == InfoChange.Show) ShowInfo(outcome.InfoLocationId!);
     }
+
+    // ---- info panel, open view, hover, auto-close (Task 9) -----------------------------------------
+
+    private void SetInfo(JsonObject? info)
+    {
+        _info = info;
+        _hud?.SetState("info", info?.DeepClone());
+    }
+
+    /// <summary>
+    /// main.ts <c>engine.onPick(id)</c>: the panel of a known place (its world-map row), with the characters in
+    /// it, its events, who is in which room, the view state and the avatar's whereabouts. An id without a row
+    /// leaves the panel as it is.
+    /// </summary>
+    private void ShowInfo(string id)
+    {
+        var map = _figures?.LatestMap ?? _builder?.FirstMap;
+        if (map is not { } m) return;
+        var slot = _builder?.Slots.GetValueOrDefault(id);
+        // `openable: !!residency.get(id) && openable(tile)` — a place that is not built cannot be opened.
+        if (InfoPanel.FromWorldMap(m, id, new InfoView(slot?.Openable == true, _openView.OpenId == id)) is { } info)
+            SetInfo(info);
+    }
+
+    /// <summary>
+    /// main.ts <c>infoAction(id, kind)</c>: "Close view" closes the open location; "Zoom in" and "Look inside"
+    /// fly to the place's centre at <c>min(targetDist, 15)</c>, "Look inside" also opens it. Then only the
+    /// panel's <c>view.open</c> is brought up to date.
+    /// </summary>
+    private void InfoAction(string? id, string? kind)
+    {
+        if (id is null || _camera is null) return;
+        if (kind == "closeView") CloseOpenLocation();
+        else if (PlaceCentre(id) is { } centre)
+        {
+            _camera.FlyTo(centre, OpenView.FlyInDist(_camera.Control.TargetDist));
+            if (kind == "lookInside") OpenLocation(id);
+        }
+        if (_info is { } info && Str(info, "id") == id && info["view"] is JsonObject v)
+        {
+            v["open"] = _openView.OpenId == id;
+            SetInfo(info);
+        }
+    }
+
+    /// <summary><c>openLocation(id)</c>: only a built, openable place; the previously open one closes.</summary>
+    private void OpenLocation(string id)
+    {
+        var slot = _builder?.Slots.GetValueOrDefault(id);
+        if (!_openView.TryOpen(id, slot?.Openable == true, out var closed)) return;
+        if (closed is not null) _ = _builder!.SetOpenAsync(closed, false);
+        _ = _builder!.SetOpenAsync(id, true);
+        RefreshOpenBadge();
+    }
+
+    /// <summary><c>closeOpenLocation()</c>.</summary>
+    private void CloseOpenLocation()
+    {
+        if (_openView.Close() is { } closed) _ = _builder?.SetOpenAsync(closed, false);
+        RefreshOpenBadge();
+    }
+
+    /// <summary><c>refreshOpenBadge</c>: the open place's name, when it has one.</summary>
+    private void RefreshOpenBadge()
+    {
+        var name = _openView.OpenId is { } id ? RowsOfPlaces().GetValueOrDefault(id)?.Name : null;
+        _hud?.SetState("openView", OpenView.BadgeName(name));
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_hoverPending)
+        {
+            _hoverPending = false;
+            Hover(_hoverAt);
+        }
+        // The overview auto-close of main.ts' frame hook (no auto-reopen). The measuring runs keep their world.
+        if (_interactive && _openView.OpenId is { } open && _camera is not null)
+        {
+            var slot = _builder?.Slots.GetValueOrDefault(open);
+            var target = _camera.Target;
+            if (slot is null || !IsInstanceValid(slot.Group)
+                || OpenView.ShouldClose(_camera.Distance, target.X, target.Z, slot.Group.Position.X, slot.Group.Position.Z, slot.Width))
+            {
+                Log($"open view {open} closes (camera {_camera.Distance:0.#} m)");
+                CloseOpenLocation();
+            }
+        }
+    }
+
+    /// <summary>
+    /// <c>applyHoverCursor</c>: the pointing hand over a pickable location, the arrow elsewhere — only for a
+    /// pointer over the SCENE (the camera reports moves the HUD did not take), and only while clicks pick.
+    /// </summary>
+    private void Hover(Vector2? at)
+    {
+        var shape = Input.CursorShape.Arrow;
+        if (at is { } p && _hud?.Active == true && _picking is not null && _camera is not null)
+        {
+            var (o, d) = _camera.RayAt(p);
+            if (_picking.Pick(o, d) is not null) shape = Input.CursorShape.PointingHand;
+        }
+        if (_hud is not null) _hud.SceneCursor = shape;
+        if (_hud?.PointerOverHud == true) return;   // the page owns the cursor there
+        Input.SetDefaultCursorShape(shape);
+    }
+
+    /// <summary>The world-map location rows by id (latest poll, else the build's), parsed once per poll.</summary>
+    private Dictionary<string, LocationInfo> RowsOfPlaces()
+    {
+        int serial = _figures?.PollSerial ?? -1;
+        if (_placeRows is { } cached && cached.Serial == serial) return cached.Rows;
+        var map = _figures?.LatestMap ?? _builder?.FirstMap;
+        var rows = new Dictionary<string, LocationInfo>();
+        if (map is { } m)
+            foreach (var l in LocationInfo.ParseList(m))
+                rows[l.Id] = l;
+        _placeRows = (serial, rows);
+        return rows;
+    }
+
+    /// <summary><c>tile.center</c>: the built group's position, else the row's position on the ground.</summary>
+    private Vector3? PlaceCentre(string id)
+    {
+        if (_builder?.Slots.GetValueOrDefault(id) is { } slot && IsInstanceValid(slot.Group)) return slot.Group.Position;
+        if (RowsOfPlaces().GetValueOrDefault(id) is { IsPlaced: true } row && _builder?.Height is { } h)
+            return new Vector3((float)row.PosX!.Value, (float)h.GroundAt(row.PosX.Value, row.PosZ!.Value), (float)row.PosZ.Value);
+        return null;
+    }
+
+    /// <summary>A place for the event pins: centre x/z and <c>tile.height</c> (measured, else the reading height).</summary>
+    private (double X, double Z, double Height)? PlaceOf(string id)
+    {
+        if (_builder?.Slots.GetValueOrDefault(id) is { } slot && IsInstanceValid(slot.Group))
+            return (slot.Group.Position.X, slot.Group.Position.Z, slot.Height);
+        if (RowsOfPlaces().GetValueOrDefault(id) is not { IsPlaced: true } row) return null;
+        var (isBuilding, nature) = LocationView.Kind(row);
+        return (row.PosX!.Value, row.PosZ!.Value, EventPinRule.DefaultPlaceHeight(isBuilding, nature, LocationView.DetectStyle(row)));
+    }
+
+    private static string? Arg(JsonArray args, int i)
+        => args.Count > i && args[i] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
+
+    private static string? Str(JsonObject o, string key)
+        => o[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : null;
 
     /// <summary>The plaque's "Zoom to" (main.ts <c>zoomTo</c>): fly to the figure's root + 0.85 m at 4.5 m; no follow.</summary>
     private void ZoomTo(string? name)
