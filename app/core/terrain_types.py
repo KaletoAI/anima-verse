@@ -3,9 +3,8 @@
 Data-driven ground vocabulary for the painted terrain areas: what a kind
 looks like on the schematic 2D map (color), whether it can be walked on,
 how fast, and — since finding 3 of the E8 acceptance — HOW one moves over
-it (``meta.move_anim``, the clip that replaces walk/run), how one WAITS
-on it (``meta.idle_anim``, the clip that replaces the standing one) and how
-DEEP one stands in it while doing either (``meta.move_sink_m`` /
+it (``meta.movement``, one of the fixed movement types) and how
+DEEP one stands in it while moving or waiting (``meta.move_sink_m`` /
 ``meta.idle_sink_m`` — two depths, because a swimmer lies flat and a treader
 hangs upright, and the same drop cannot serve both). Since 2026-08-14 also how
 far what grows on it WAVES in the wind (``meta.sway_m``, § A9) and, since
@@ -88,12 +87,12 @@ SINK_MIN, SINK_MAX = 0.0, 1.5
 SINK_KEYS = ("move_sink_m", "idle_sink_m")
 
 #: FROM WHICH WATER DEPTH ONE SWIMS, in metres (W4c, 2026-08-23). Swimming
-#: used to be a property of the KIND alone — a ground with ``move_anim: swim``
+#: used to be a property of the KIND alone — a ground with ``movement: swim``
 #: was swum on every one of its pixels, ankle-deep on the shore ramp included,
 #: which is what made a figure crawl through a puddle. It is a DEPTH: shallower
 #: water is WADED (the figure keeps its own walk/run clip and stands on the
 #: bed, no sink at all), from here on it swims with ``move_sink_m`` under the
-#: mirror, and the standing case is the same line — ``idle_anim`` /
+#: mirror, and the standing case is the same line — the resting pose /
 #: ``idle_sink_m`` only apply from this depth, below it the figure keeps its
 #: own standing clip on the bed.
 #:
@@ -248,7 +247,7 @@ def _clamped_meta_number(meta: Dict[str, Any], key: str,
                          low: float, high: float) -> None:
     """One optional numeric ``meta`` key, IN PLACE — clamped or gone.
 
-    The ``move_anim`` shape rule for numbers: a value that says nothing
+    The shape rule for optional numbers: a value that says nothing
     (absent, junk, zero, negative) leaves NO key behind, so no reader ever has
     to tell "authored as 0" from "not authored". Everything else is CLAMPED
     rather than refused — an authoring slip should move the ground to the
@@ -321,15 +320,12 @@ def sanitize_type(raw: Any) -> Dict[str, Any]:
     # to be whitelisted here and moved to the AREA with finding B17 — see
     # `app/models/terrain._sanitize_scatter_list`.
     meta = dict(raw.get("meta")) if isinstance(raw.get("meta"), dict) else {}
-    # TWO keys inside it are whitelisted as CLIPS (§ A9): `move_anim`, what a
-    # figure MOVING over this ground plays instead of walk/run (finding 3 of
-    # the E8 acceptance — water is swum through), and since the water round of
-    # 2026-08-13 `idle_anim`, what it plays STANDING there instead of its idle
-    # (treading water instead of standing in the lake). Same shape rule for
-    # both, `_trimmed_meta_string` — the kinds come out of an open vocabulary
-    # and are never checked against a list.
-    _trimmed_meta_string(meta, "move_anim")
-    _trimmed_meta_string(meta, "idle_anim")
+    # Terrain names a movement type; poses own the animation clips.
+    from app.core.movement import MOVEMENT_TYPES
+    meta.pop("move_anim", None)
+    meta.pop("idle_anim", None)
+    if meta.get("movement") not in MOVEMENT_TYPES:
+        meta.pop("movement", None)
     # TWO MORE belong to the same picture (2026-08-13): `move_sink_m` and
     # `idle_sink_m`, how deep a figure stands in this ground while it MOVES
     # over it and while it WAITS on it. The clips are normalised onto the

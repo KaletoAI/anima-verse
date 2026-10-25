@@ -288,6 +288,15 @@ async def lifespan(app: FastAPI):
     except Exception as _tse:
         logger.warning("terrain surface migration failed: %s", _tse)
 
+    # Terrain declares movement; preserve historical water clips in world poses.
+    try:
+        from app.core.terrain_movement_migration import migrate_terrain_movement_once
+        _tm = migrate_terrain_movement_once()
+        if _tm:
+            logger.info("Terrain movement migrated: %s", _tm)
+    except Exception as _tme:
+        logger.warning("terrain movement migration failed: %s", _tme)
+
     # The micro-relief belongs to the painted AREA now, not to the terrain KIND
     # (2026-08-23): a kind-level amplitude made every meadow in a world equally
     # bumpy. The kind lost the two keys without a fallback reader, so the value

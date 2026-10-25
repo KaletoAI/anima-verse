@@ -5,9 +5,9 @@ Throwaway storage. Hand-derived expectations:
 
   [1] Fresh world: effective_catalog() contains at least the seven shared
       kinds; grass is passable with speed_factor 1.0; `water` is SWIMMABLE
-      (round 2 of the E8 acceptance — swimming is what move_anim is for)
+      (round 2 of the E8 acceptance — swimming is movement: swim)
       while the barrier kind `deep_water` carries the same 0.4 and the same
-      swim clip at `passable: false`. sources say "shared" for grass.
+      swim movement at `passable: false`. sources say "shared" for grass.
   [2] save_world_type({kind: "grass", name: "Dry Grass", color: "#aaaa00",
       passable: True, speed_factor: 0.9}) -> effective grass has name
       "Dry Grass" AND speed_factor 0.9. Override REPLACES the shared entry
@@ -30,22 +30,8 @@ Throwaway storage. Hand-derived expectations:
       scripts/smoke_terrain_areas.py [11]) — the type-level field was
       removed without a shim, so a `meta` handed to sanitize_type now
       survives verbatim, scatter-shaped keys included.
-  [8] TWO keys inside `meta` are whitelisted as CLIPS: `move_anim` (finding
-      3 of the E8 acceptance), what a MOVING figure plays on this ground
-      instead of walk/run, and `idle_anim` (the water round of 2026-08-13),
-      what it plays STANDING there instead of its idle. Both are clip kinds
-      out of an OPEN vocabulary, so nothing is checked against a list — only
-      the shape, and it is the SAME shape rule for both:
-        "  swim  "        -> "swim"          (trimmed)
-        "s" * 45          -> "s" * 40        (a kind is 40 chars, no more)
-        ""  /  "   "      -> the KEY IS GONE, never an empty string
-        41 chars of blanks around a 3-letter word -> the word
-        no `move_anim` at all -> untouched, and the other keys with it
-      Water carries both in the shared seed:
-      `{"move_anim": "swim", "idle_anim": "treading-water"}` with
-      `speed_factor 0.4` — the ground one wades through and treads water in.
-      `deep_water` is the barrier kind: same swim clip, no idle one, because
-      nobody stands in it (`passable: false`).
+  [8] Only walk_run/walk/swim/crawl survive as meta.movement; invalid
+      values and old clip keys disappear. Seed water kinds carry swim.
   [8b] TWO MORE clip-side meta keys since the same evening, and they are two
       on purpose (finding 13): `move_sink_m` and `idle_sink_m`, how deep a
       figure stands IN this ground while it MOVES over it and while it WAITS
@@ -73,13 +59,13 @@ Throwaway storage. Hand-derived expectations:
       The relief keys cannot reach it: their lower clamps (0.05 / 4) are
       themselves positive, so no clamped value can round down to 0.
       Water carries `move_sink_m: 0.35` and `idle_sink_m: 1.3` in the shared
-      seed, next to its two clips; `deep_water` carries neither — nobody
+      seed, next to its movement type; `deep_water` carries neither — nobody
       stands in a barrier, and nobody waits in one.
       `sink_m` is GONE, without an alias: the key was one day old, and a
       stored one is a dead free-form key nothing reads (checked below).
   [8c] ONE MORE, and it is what turns SWIMMING from a property of the KIND
       into one of the water DEPTH under the figure (W4c, 2026-08-23):
-      `swim_from_m`. Until it existed, `move_anim: swim` played on every
+      `swim_from_m`. Until it existed, `movement: swim` applied on every
       pixel of a water area, ankle-deep on the shore ramp included. From
       this depth on the two clips and the two depths of [8]/[8b] apply;
       shallower water is WADED — the figure keeps its own walk/run and
@@ -238,6 +224,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="terrain-smoke-"))
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="terrain-clips-")
+os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = tempfile.mkdtemp(prefix="terrain-licensed-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
@@ -372,40 +359,22 @@ check("meta survives the save/read round trip",
       {"note": "free form", "n": 3})
 terrain_types.delete_world_type("meadow")
 
-print("[8] move_anim is the one whitelisted meta key")
-check("a move_anim is trimmed", meta_of({"move_anim": "  swim  "}),
-      {"move_anim": "swim"})
-check("...and capped at 40 characters",
-      meta_of({"move_anim": "s" * 45}), {"move_anim": "s" * 40})
-check("an empty one leaves no key behind", meta_of({"move_anim": ""}), {})
-check("...and neither does a blank one", meta_of({"move_anim": "   "}), {})
-check("blanks around a real value keep the value",
-      meta_of({"move_anim": " " * 20 + "fly" + " " * 21}), {"move_anim": "fly"})
-check("a meta without it is untouched", meta_of({"note": "free form"}),
-      {"note": "free form"})
-check("...and the neighbours of a move_anim survive",
-      meta_of({"move_anim": " crawl ", "note": "x"}),
-      {"move_anim": "crawl", "note": "x"})
-check("an idle_anim follows the same shape rule",
-      meta_of({"idle_anim": "  treading-water  "}),
-      {"idle_anim": "treading-water"})
-check("...capped at 40 characters too",
-      meta_of({"idle_anim": "t" * 45}), {"idle_anim": "t" * 40})
-check("...and an empty one leaves no key behind either",
-      meta_of({"idle_anim": "   "}), {})
-check("the two are independent, and neighbours survive both",
-      meta_of({"move_anim": " swim ", "idle_anim": " treading-water ",
-               "note": "x"}),
-      {"move_anim": "swim", "idle_anim": "treading-water", "note": "x"})
+print("[8] movement is a finite type; legacy clip keys are removed")
+for movement in ("walk_run", "walk", "swim", "crawl"):
+    check(f"valid movement {movement}", meta_of({"movement": movement}), {"movement": movement})
+for junk in ("fly", " swim ", "", None, 7, [], {}):
+    check(f"invalid movement {junk!r}", meta_of({"movement": junk}), {})
+check("old clips are removed; neighbours survive",
+      meta_of({"move_anim": "swim", "idle_anim": "treading-water", "note": "x"}), {"note": "x"})
 # Since "Ein Boden" E1 (§ G4) both water kinds also carry the WATER FLAG —
 # ``meta.water``, the one thing that makes the bake carve a bed under an area
 # painted with them. It is a flag on the TYPE and never a match on the NAME:
 # kinds are an open vocabulary, so a world whose lakes are called "lagoon"
 # carves exactly like this one.
-check("water carries both clips in the shared seed — plus its two sink depths"
+check("water carries swim movement in the shared seed — plus its two sink depths"
       " and the water flag",
       (terrain_types.get_type("water") or {}).get("meta"),
-      {"water": True, "move_anim": "swim", "idle_anim": "treading-water",
+      {"water": True, "movement": "swim",
        "move_sink_m": 0.35, "idle_sink_m": 1.3})
 check("...so is_water_kind says yes for it",
       terrain_types.is_water_kind("water"), True)
@@ -421,11 +390,11 @@ check("...at the pace of a ground one wades through",
       (terrain_types.get_type("water") or {}).get("speed_factor"), 0.4)
 check("...and it is walked into, not refused",
       (terrain_types.get_type("water") or {}).get("passable"), True)
-check("the barrier kind carries the same MOVE clip and pace — and no idle "
-      "one, nobody stands in it",
+check("the barrier kind carries the same movement and pace — no sink "
+      "depths, nobody stands in it",
       ((terrain_types.get_type("deep_water") or {}).get("meta"),
        (terrain_types.get_type("deep_water") or {}).get("speed_factor")),
-      ({"water": True, "move_anim": "swim"}, 0.4))
+      ({"water": True, "movement": "swim"}, 0.4))
 
 print("[8b] the two sink depths — how deep one stands IN the ground")
 check("the moving depth of water survives", meta_of({"move_sink_m": 0.35}),
@@ -453,10 +422,10 @@ for _key in ("move_sink_m", "idle_sink_m"):
           meta_of({_key: 0.0049}), {})
     check(f"[{_key}] ...while the first one that rounds to something stays",
           meta_of({_key: 0.005}), {_key: 0.01})
-check("the two are independent, and travel with the clips and a neighbour",
-      meta_of({"move_anim": " swim ", "idle_anim": " treading-water ",
+check("the two are independent, and travel with movement and a neighbour",
+      meta_of({"movement": "swim",
                "move_sink_m": 0.35, "idle_sink_m": 1.3, "note": "x"}),
-      {"move_anim": "swim", "idle_anim": "treading-water",
+      {"movement": "swim",
        "move_sink_m": 0.35, "idle_sink_m": 1.3, "note": "x"})
 check("a ground may sink a walker without naming a clip",
       meta_of({"move_sink_m": 0.2}), {"move_sink_m": 0.2})
@@ -495,10 +464,10 @@ check("deeper than any authored water is clamped to ten metres",
 for _junk in ("deep", float("nan"), "", None):
     check(f"junk ({_junk!r}) leaves no key — the client reads its default",
           meta_of({"swim_from_m": _junk}), {})
-check("it travels with the clips and the two sinks",
-      meta_of({"move_anim": "swim", "idle_anim": "treading-water",
+check("it travels with movement and the two sinks",
+      meta_of({"movement": "swim",
                "move_sink_m": 0.35, "idle_sink_m": 1.3, "swim_from_m": 1.0}),
-      {"move_anim": "swim", "idle_anim": "treading-water",
+      {"movement": "swim",
        "move_sink_m": 0.35, "idle_sink_m": 1.3, "swim_from_m": 1.0})
 # THE SEED KIND OF W4b: a river is narrow, so it is shaped by its own two
 # numbers (1.2 m deep over a 1 m ramp) rather than by the module defaults a
@@ -506,7 +475,7 @@ check("it travels with the clips and the two sinks",
 check("the seed ships a river with its own depth, ramp and threshold",
       (terrain_types.get_type("river") or {}).get("meta"),
       {"water": True, "water_depth_m": 1.2, "shore_ramp_m": 1.0,
-       "move_anim": "swim", "idle_anim": "treading-water",
+       "movement": "swim",
        "move_sink_m": 0.35, "idle_sink_m": 1.3, "swim_from_m": 1.0})
 check("...it is water by the one predicate",
       terrain_types.is_water_kind("river"), True)
@@ -539,9 +508,9 @@ check("...and a wave under the old Nyquist floor stays where it was typed",
       meta_of({"relief_wave_m": 2}), {"relief_wave_m": 2})
 check("a whole relief pair rides along verbatim, next to a real key",
       meta_of({"relief_amplitude_m": 0.4449, "relief_wave_m": 999,
-               "move_anim": " swim ", "note": "x"}),
+               "movement": "swim", "note": "x"}),
       {"relief_amplitude_m": 0.4449, "relief_wave_m": 999,
-       "move_anim": "swim", "note": "x"})
+       "movement": "swim", "note": "x"})
 # …AND BY NAME: the clamps left with the fields, they did not go quiet.
 check("the module holds no relief clamp any more",
       [n for n in ("RELIEF_AMPLITUDE_MIN", "RELIEF_AMPLITUDE_MAX",
@@ -594,11 +563,11 @@ check("...and neither does a negative one", meta_of({"sway_m": -1}), {})
 check("...nor junk", meta_of({"sway_m": "windy"}), {})
 check("...nor NaN", meta_of({"sway_m": float("nan")}), {})
 check("...nor an empty string", meta_of({"sway_m": ""}), {})
-check("it travels with the relief, a clip and a free-form neighbour",
+check("it travels with the relief, movement and a free-form neighbour",
       meta_of({"sway_m": 0.06, "relief_amplitude_m": 0.4,
-               "move_anim": " swim ", "note": "x"}),
+               "movement": "swim", "note": "x"}),
       {"sway_m": 0.06, "relief_amplitude_m": 0.4,
-       "move_anim": "swim", "note": "x"})
+       "movement": "swim", "note": "x"})
 _seeded = {k: (e.get("meta") or {}).get("sway_m")
            for k, e in terrain_types.effective_catalog().items()
            if (e.get("meta") or {}).get("sway_m")}

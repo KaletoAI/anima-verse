@@ -15,14 +15,14 @@ Hand-derived expectations:
   [2] kind_at(2, 2)    -> "water"  (only water contains it)
   [3] kind_at(10, 10)  -> "path"   (both contain it, path has higher z)
   [4] passability_at(2, 2)  -> (True, 0.4) — the seed's `water` is SWUM
-      (round 2 of the E8 acceptance: swimming is what `move_anim` is for,
+      (round 2 of the E8 acceptance: swimming is what `movement` is for,
       a barrier of water is its own kind, `deep_water` -> (False, 0.4));
       passability_at(30, 30) -> (True, 1.0); passability_at(10, 10)
       -> (True, 1.2). Plus the catalog hole: an area whose kind was deleted
       from the catalog afterwards degrades to (True, 1.0) — a missing type
       must never strand a character behind an impassable ghost.
       entry_at is the ONE reading behind both: it hands back the kind AND
-      its effective entry, so (2, 2) reads "water" with meta.move_anim
+      its effective entry, so (2, 2) reads "water" with meta.movement
       "swim" and the hole reads its kind with the fallback entry.
 
       speed_at applies the pace rule of finding 3 on top, and `ground_scope`
@@ -82,6 +82,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="terrain-query-smoke-"))
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="terrain-query-clips-")
+os.environ["ANIMATION_CLIPS_LICENSED_DIR"] = tempfile.mkdtemp(prefix="terrain-query-licensed-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
@@ -178,10 +179,10 @@ check("passability_at(2, 2) — water is SWUM since round 2",
       terrain_query.passability_at(2, 2), (True, 0.4))
 check("...a barrier of water is its own seed kind",
       (terrain_types.get_type("deep_water") or {}).get("passable"), False)
-check("...at the same 0.4 and the same swim clip",
+check("...at the same 0.4 and the same swim movement",
       ((terrain_types.get_type("deep_water") or {}).get("speed_factor"),
        ((terrain_types.get_type("deep_water") or {}).get("meta")
-        or {}).get("move_anim")), (0.4, "swim"))
+        or {}).get("movement")), (0.4, "swim"))
 check("passability_at(30, 30)", terrain_query.passability_at(30, 30), (True, 1.0))
 check("passability_at(10, 10)", terrain_query.passability_at(10, 10), (True, 1.2))
 # The ONE reading behind both answers, and the pace rule on top of it.
@@ -189,7 +190,7 @@ _kind, _entry = terrain_query.entry_at(2, 2)
 check("entry_at(2, 2) names the kind", _kind, "water")
 check("...and hands out its catalog entry",
       (_entry.get("passable"), _entry.get("speed_factor")), (True, 0.4))
-check("...move_anim included", (_entry.get("meta") or {}).get("move_anim"),
+check("...movement included", (_entry.get("meta") or {}).get("movement"),
       "swim")
 # How far the rule reaches — the hand table of the docstring, then the pace.
 _scope = terrain_query.ground_scope
