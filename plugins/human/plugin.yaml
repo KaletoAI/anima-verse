@@ -62,6 +62,16 @@ body_slots:
           very short: ["kurze haare", "short hair"]
     prompt:
       always: "{length} {color} hair"
+    # T-pose renders for image-to-3D: hair over the chest bakes into the torso
+    # mesh. Only hair long enough to fall there gets the line, so short hair
+    # is never pushed anywhere (or grown to make the line satisfiable). The
+    # back view leaves it out (slot without back: true).
+    mesh_input_prompt:
+      attribute: length
+      values:
+        medium: "hair tucked back behind the shoulders, the chest and collarbones free of hair"
+        long: "hair tucked back behind the shoulders and falling down the back, the chest and collarbones free of hair"
+        very long: "hair tucked back behind the shoulders and falling down the back, the chest and collarbones free of hair"
   - id: eyes
     face: true   # belongs into portrait/expression prompts
     attributes:

@@ -332,6 +332,8 @@ def prompt_fragments(character_name: str,
     ``back_view`` keeps only EXPOSED fragments of slots declared
     ``back: true`` (a render seen from behind); the general fragments are
     unaffected — they describe the whole person, not one side of it.
+    ``mesh_input`` (T-pose renders for image-to-3D) swaps an active
+    ``mesh_part`` text in and adds a slot's ``mesh_input_prompt`` line.
     """
     specs = slots_for_character(character_name, profile=profile)
     if face_only:
@@ -416,6 +418,13 @@ def prompt_fragments(character_name: str,
                            optional=frozenset(defaulted))
             if frag:
                 exposed.append(frag)
+            # Mesh inputs only: a line picked by one attribute's value (the
+            # hair length decides whether there is hair to keep off the chest).
+            if mesh_input and spec.mesh_input_prompt:
+                value = exposed_vals.get(spec.mesh_input_prompt["attribute"], "").strip().lower()
+                frag = _render(spec.mesh_input_prompt["values"].get(value, ""), exposed_vals)
+                if frag:
+                    exposed.append(frag)
         else:
             frag = _render(spec.prompt.get("covered", ""), vals)
             if frag:

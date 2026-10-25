@@ -316,6 +316,9 @@ class BodySlotSpec:
     back: bool = False  # Include fragments in rear-view renders.
     rigs: List[RigSpec] = field(default_factory=list)
     mesh_part: Optional[MeshPartSpec] = None
+    # Mesh-input (T-pose) text chosen by one attribute's value:
+    # {"attribute": <name>, "values": {<option>: <fragment>}}; empty = none.
+    mesh_input_prompt: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

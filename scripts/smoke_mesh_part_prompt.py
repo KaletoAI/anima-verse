@@ -62,4 +62,28 @@ with tempfile.TemporaryDirectory() as tmp:
         assert len(bs.exposed_slot_loras('', profile=profile, mesh_input=True)) == 1
         profile['equipped_pieces'] = {'cover': 'item'}
         assert bs.prompt_fragments('', profile=profile, mesh_input=True)['exposed'] == []
-print('PASS mesh_part prompt: mesh input, ordinary, off, covered; rig size 1.5')
+    # mesh_input_prompt (hand-derived): the line follows the stored value of
+    # its attribute, case-insensitively; an unmapped value, an ordinary render
+    # and a back view (slot without back: true) add nothing.
+    hattrs = {'length': {'type': 'select', 'options': ['short', 'long']}}
+    hair = BodySlotSpec('hair', 'fixture', attributes=hattrs, prompt={'always': '{length} hair'},
+                        mesh_input_prompt={'attribute': 'length', 'values': {'long': 'hair behind the shoulders'}})
+    hpkg = Package('fixture', Path(tmp), {}, body_slots=[hair])
+    with patch.object(bs, '_species_packages_for', return_value=[hpkg]), patch('app.core.outfit_renderer.is_free_text_wardrobe', return_value=False):
+        hp = lambda length: {'body_slots': {'hair': {'length': length}}, 'equipped_pieces': {}}
+        assert bs.prompt_fragments('', profile=hp('long'), mesh_input=True) == {
+            'general': ['long hair'], 'exposed': ['hair behind the shoulders']}
+        assert bs.prompt_fragments('', profile=hp('Long'), mesh_input=True)['exposed'] == ['hair behind the shoulders']
+        assert bs.prompt_fragments('', profile=hp('short'), mesh_input=True)['exposed'] == []
+        assert bs.prompt_fragments('', profile=hp('long'))['exposed'] == []
+        assert bs.prompt_fragments('', profile=hp('long'), mesh_input=True, back_view=True)['exposed'] == []
+    from app.plugins.loader import _parse_package
+    good = {'attribute': 'length', 'values': {'Long': ' behind '}}
+    meta = dict(name='fixture', body_slots=[dict(id='hair', attributes=hattrs, mesh_input_prompt=good)])
+    parsed = _parse_package(Path(tmp)/'fixture', meta, register_tasks=False)
+    assert parsed.body_slots[0].mesh_input_prompt == {'attribute': 'length', 'values': {'long': 'behind'}}
+    for bad in ({'attribute': 'missing', 'values': {'long': 'x'}}, {'attribute': 'length', 'values': {}},
+                {'attribute': 'length', 'values': {'long': ''}}, {'attribute': 'length'}, 'text'):
+        meta['body_slots'][0]['mesh_input_prompt'] = bad
+        assert _parse_package(Path(tmp)/'fixture', meta, register_tasks=False) is None
+print('PASS mesh_part prompt: mesh input, ordinary, off, covered; rig size 1.5; mesh_input_prompt')

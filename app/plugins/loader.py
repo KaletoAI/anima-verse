@@ -255,6 +255,18 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
             except (ValueError, TypeError, OverflowError) as exc:
                 logger.error("Package %s slot %s: invalid mesh_part: %s", pkg.id, bdef["id"], exc)
                 return None
+        mesh_input_prompt = {}
+        if "mesh_input_prompt" in bdef:
+            raw = bdef["mesh_input_prompt"]
+            values = raw.get("values") if isinstance(raw, dict) else None
+            if (not isinstance(raw, dict) or set(raw) != {"attribute", "values"}
+                    or raw["attribute"] not in (bdef.get("attributes") or {})
+                    or not isinstance(values, dict) or not values
+                    or any(not isinstance(text, str) or not text.strip() for text in values.values())):
+                logger.error("Package %s slot %s: invalid mesh_input_prompt", pkg.id, bdef["id"])
+                return None
+            mesh_input_prompt = {"attribute": str(raw["attribute"]),
+                                 "values": {str(k).strip().lower(): v.strip() for k, v in values.items()}}
         pkg.body_slots.append(BodySlotSpec(
             id=str(bdef["id"]).strip(),
             package_id=pkg.id,
@@ -269,6 +281,7 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
             back=bool(bdef.get("back", False)),
             rigs=rigs,
             mesh_part=mesh_part,
+            mesh_input_prompt=mesh_input_prompt,
         ))
     # piece_slots entries: plain string OR {id, label}
     for pdef in meta.get("piece_slots") or []:
