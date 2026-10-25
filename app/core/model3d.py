@@ -1770,11 +1770,12 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
                     "error": "reduced mesh rewrote the rig frames: "
                              + "; ".join(frames.get("errors") or [])}
         low_metrics = {}
-        # Built parts are not extension_bones groups; only captured groups are re-measured.
+        # Built parts are not extension_bones groups; only captured groups are re-measured,
+        # and only the enabled ones — a group switched off for this model was never built.
         from app.core.extension_rig import resolved_extension_groups
         measured_groups = [g for g in resolved_extension_groups(character_name, signature=path.stem,
                                                                 mesh_variant=meta.get("mesh_variant") or "")
-                           if g["op"] not in ("attached_part", "attached_part_bone", "inset_part")]
+                           if g["enabled"] and g["op"] not in ("attached_part", "attached_part_bone", "inset_part")]
         if (meta.get("extension_rig") or {}).get("status") == "applied" and measured_groups:
             measured = runner.run("extension_bones", inputs={"model": next(iter(res["outputs"].values()))},
                                   params={"groups": measured_groups, "metrics_only": True})
