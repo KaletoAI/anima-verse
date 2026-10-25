@@ -16,9 +16,12 @@ public enum SessionEvent
 {
     /// <summary>The login screen's login was accepted by the server.</summary>
     LoggedIn,
-    /// <summary>The HUD's <c>markResume</c> action: GameMenu has switched the avatar and is about to reload its page.</summary>
+    /// <summary>The HUD's <c>markResume</c> action: the page is about to reload into the current session.</summary>
     ResumeMarked,
-    /// <summary>The HUD page (<c>hud.html</c>) finished loading — the handoff's first load or a reload.</summary>
+    /// <summary>
+    /// The HUD page (<c>hud.html</c>) finished loading in the main frame (gdCEF emits <c>on_page_loaded</c> for the main
+    /// frame only, gdbrowser.cpp <c>onLoadEnd</c>) — the handoff's first load, or a reload.
+    /// </summary>
     HudPageLoaded,
     /// <summary>"Back to title" / "Log out" (menu, top bar, the failed start's button).</summary>
     BackToTitle,
@@ -34,7 +37,7 @@ public enum SessionStep
     ShowLogin,
     /// <summary>A start that carries the live session of a rebuild: straight to the world, no login screen, no handoff.</summary>
     ResumeWorld,
-    /// <summary><c>markResume</c> is acknowledged; the page reload that follows decides.</summary>
+    /// <summary><c>markResume</c> is acknowledged (logged); the reload decides, in whichever order the two arrive.</summary>
     Acknowledge,
     /// <summary>The avatar changed: tear this scene down and build the world anew with the SAME session (no logout, no login).</summary>
     Rebuild,
@@ -44,8 +47,11 @@ public enum SessionStep
     ExpiredToTitle,
 }
 
-/// <summary>The session state of one scene: its phase and whether a <c>markResume</c> is pending.</summary>
-public readonly record struct SessionState(SessionPhase Phase, bool ResumeMarked);
+/// <summary>
+/// The session state of one scene: its phase, and whether the HUD page of this session has had its first load
+/// (every later load is a reload).
+/// </summary>
+public readonly record struct SessionState(SessionPhase Phase, bool HudLoaded);
 
 /// <summary>
 /// The native client's session flow as ONE pure decision (no Godot, no I/O), so the rules are testable:
@@ -53,12 +59,14 @@ public readonly record struct SessionState(SessionPhase Phase, bool ResumeMarked
 ///
 /// The character switch. The browser's GameMenu calls <c>markResume()</c> and then <c>location.reload()</c>; the
 /// marker makes the reloaded page's boot skip the title gate, and the reload rebuilds the world for the new avatar
-/// (client3d main.ts <c>RESUME_KEY</c>). In the native client the reload only reaches the HUD page, so the scene
-/// rebuilds itself when — and only when — BOTH signals arrived: the marker first, then the reloaded <c>hud.html</c>.
-/// <c>markResume</c> alone stays an acknowledgement (the page is about to go; rebuilding under it would race its
-/// unload), and a page load without a pending marker is the handoff's first load or a reload with nothing behind it,
-/// after which the world is still the player's. The rebuild keeps the session: the HUD page has already reloaded on
-/// that very cookie, and a handoff would end it (<c>HudOverlay.HandoffScript</c> logs out what the browser holds).
+/// (client3d main.ts <c>RESUME_KEY</c>). Every reload of the HUD page after its first load means exactly that —
+/// "resume with the current session" (a take-over, or a re-login that reloads with the marker); inside CEF there is
+/// no other reload path. So the RELOAD is the trigger: the first <c>hud.html</c> load of a session (the handoff's
+/// navigation) only sets <see cref="SessionState.HudLoaded"/>, every later one rebuilds. <c>markResume</c> is only
+/// acknowledged, and it may arrive before or after the reload (two IPC paths, no order to rely on). A scene started
+/// by a rebuild has its page loaded already — that reload was the trigger — so its next reload rebuilds again. The
+/// rebuild keeps the session: the HUD page has already reloaded on that very cookie, and a handoff would end it
+/// (<c>HudOverlay.HandoffScript</c> logs out what the browser holds).
 ///
 /// Leaving is final for a scene: a back-to-title or a 401 that comes while a rebuild is under way changes nothing
 /// more, and the next scene starts from <see cref="Start"/>.
@@ -67,11 +75,11 @@ public static class SessionFlow
 {
     /// <summary>
     /// A new scene: with the session a rebuild carried over it plays at once (<see cref="SessionStep.ResumeWorld"/>),
-    /// otherwise it shows the login screen.
+    /// its HUD page already loaded (the reload that triggered the rebuild); otherwise it shows the login screen.
     /// </summary>
     public static (SessionState State, SessionStep Step) Start(bool carriesSession)
         => carriesSession
-            ? (new SessionState(SessionPhase.Playing, false), SessionStep.ResumeWorld)
+            ? (new SessionState(SessionPhase.Playing, true), SessionStep.ResumeWorld)
             : (new SessionState(SessionPhase.Title, false), SessionStep.ShowLogin);
 
     /// <summary>The next state and the step for <paramref name="e"/> in <paramref name="s"/>.</summary>
@@ -91,8 +99,10 @@ public static class SessionFlow
             case SessionPhase.Playing:
                 return e switch
                 {
-                    SessionEvent.ResumeMarked => (s with { ResumeMarked = true }, SessionStep.Acknowledge),
-                    SessionEvent.HudPageLoaded when s.ResumeMarked => (leaving, SessionStep.Rebuild),
+                    SessionEvent.ResumeMarked => (s, SessionStep.Acknowledge),
+                    // The handoff's own navigation: the first load of this session's page, not a reload.
+                    SessionEvent.HudPageLoaded when !s.HudLoaded => (s with { HudLoaded = true }, SessionStep.None),
+                    SessionEvent.HudPageLoaded => (leaving, SessionStep.Rebuild),
                     SessionEvent.BackToTitle => (leaving, SessionStep.LogoutToTitle),
                     SessionEvent.Unauthorized => (leaving, SessionStep.ExpiredToTitle),
                     _ => (s, SessionStep.None),

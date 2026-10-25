@@ -150,10 +150,12 @@ reloads everything). Natively `markResume` is acknowledged, and the reloaded
 `hud.html` that follows makes the scene rebuild the world for the new avatar
 with the SAME session: the scene reloads like back to the title, but without a
 logout and without the login screen — the loading screen comes up at once.
-Both signals are needed (`Core/Ui/SessionFlow.cs`): a page load without the
-marker (the handoff's own) changes nothing. Log: `markResume: acknowledged …`,
-`character switch: the HUD page reloaded after markResume …`, `session carried
-over (role '…') …`, then the usual boot stages.
+The trigger is the reload (`Core/Ui/SessionFlow.cs`): every `hud.html` load
+after the session's first one (the handoff's own navigation) rebuilds, whether
+`markResume` arrived before or after it — inside CEF a reload only ever means
+"resume with the current session". Log: `markResume: acknowledged …`,
+`character switch: the HUD page reloaded …`, `session carried over (role '…')
+…`, then the usual boot stages.
 
 **HUD settings across starts** (Task 12). CEF's profile lives in memory, so the
 HUD's `localStorage` (show all, scatter distances, volumes, dock and chat sizes,

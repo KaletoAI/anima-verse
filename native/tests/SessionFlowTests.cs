@@ -5,17 +5,19 @@ namespace AnimaNative.Tests;
 
 /// <summary>
 /// The session flow (<see cref="SessionFlow"/>), derived from the browser by hand:
-///   • GameMenu's take-over = <c>markResume()</c> then <c>location.reload()</c>; the browser's reloaded boot skips the
-///     title gate because of the marker → natively: marker THEN reloaded <c>hud.html</c> = rebuild with the session;
-///   • the handoff's first <c>hud.html</c> load (no marker) changes nothing;
+///   • GameMenu's take-over = <c>markResume()</c> then <c>location.reload()</c>, a re-login reloads with the marker —
+///     inside CEF every reload of the HUD page after its first load means "resume with the current session";
+///   • so natively the RELOAD rebuilds (with the session), in either order with <c>markResume</c>, which is only
+///     acknowledged; the handoff's own navigation to <c>hud.html</c> is the first load, not a reload;
+///   • a scene started by a rebuild has its page loaded already (that reload was the trigger);
 ///   • back to title = logout + reload (main.ts <c>backToTitle</c>), a 401 = the login without a logout;
-///   • a scene that is leaving answers nothing more (one teardown per scene).
+///   • a scene that is leaving answers nothing more (one teardown per scene), the login screen ignores the HUD.
 /// </summary>
 public class SessionFlowTests
 {
     private static readonly SessionState Title = new(SessionPhase.Title, false);
-    private static readonly SessionState Playing = new(SessionPhase.Playing, false);
-    private static readonly SessionState Marked = new(SessionPhase.Playing, true);
+    private static readonly SessionState Fresh = new(SessionPhase.Playing, false);   // logged in, HUD page not loaded yet
+    private static readonly SessionState Up = new(SessionPhase.Playing, true);       // the HUD page has had its first load
     private static readonly SessionState Leaving = new(SessionPhase.Leaving, false);
 
     [Fact]
@@ -23,42 +25,62 @@ public class SessionFlowTests
         => Assert.Equal((Title, SessionStep.ShowLogin), SessionFlow.Start(carriesSession: false));
 
     [Fact]
-    public void ARebuiltSceneResumesWithoutLogin()
-        => Assert.Equal((Playing, SessionStep.ResumeWorld), SessionFlow.Start(carriesSession: true));
+    public void ARebuiltSceneResumesWithItsPageAlreadyLoaded()
+        => Assert.Equal((Up, SessionStep.ResumeWorld), SessionFlow.Start(carriesSession: true));
 
     [Fact]
-    public void CharacterSwitchRebuildsWithoutLogin()
+    public void TheHandoffsFirstLoadIsNoReload()
     {
-        // login → the handoff's first hud.html → markResume → the reloaded hud.html
+        // login → the handoff navigates /health → hud.html: one main-frame load of hud.html.
         var (s, step) = SessionFlow.Next(Title, SessionEvent.LoggedIn);
-        Assert.Equal((Playing, SessionStep.None), (s, step));
+        Assert.Equal((Fresh, SessionStep.None), (s, step));
         (s, step) = SessionFlow.Next(s, SessionEvent.HudPageLoaded);
-        Assert.Equal((Playing, SessionStep.None), (s, step));
-        (s, step) = SessionFlow.Next(s, SessionEvent.ResumeMarked);
-        Assert.Equal((Marked, SessionStep.Acknowledge), (s, step));
-        (s, step) = SessionFlow.Next(s, SessionEvent.HudPageLoaded);
-        Assert.Equal((Leaving, SessionStep.Rebuild), (s, step));
-        // The next scene carries the session: straight to the world.
-        Assert.Equal((Playing, SessionStep.ResumeWorld), SessionFlow.Start(carriesSession: true));
+        Assert.Equal((Up, SessionStep.None), (s, step));
     }
 
     [Fact]
-    public void APageReloadWithoutTheMarkerKeepsTheWorld()
-        => Assert.Equal((Playing, SessionStep.None), SessionFlow.Next(Playing, SessionEvent.HudPageLoaded));
+    public void MarkerThenReloadRebuilds()
+    {
+        var (s, step) = SessionFlow.Next(Up, SessionEvent.ResumeMarked);
+        Assert.Equal((Up, SessionStep.Acknowledge), (s, step));
+        (s, step) = SessionFlow.Next(s, SessionEvent.HudPageLoaded);
+        Assert.Equal((Leaving, SessionStep.Rebuild), (s, step));
+    }
+
+    [Fact]
+    public void ReloadThenMarkerRebuildsOnce()
+    {
+        // The reload's load event wins the race: it rebuilds alone; the late marker reaches the leaving scene …
+        var (s, step) = SessionFlow.Next(Up, SessionEvent.HudPageLoaded);
+        Assert.Equal((Leaving, SessionStep.Rebuild), (s, step));
+        Assert.Equal((Leaving, SessionStep.None), SessionFlow.Next(s, SessionEvent.ResumeMarked));
+        // … or the rebuilt scene, where it is only acknowledged — no second rebuild.
+        var (rebuilt, _) = SessionFlow.Start(carriesSession: true);
+        Assert.Equal((Up, SessionStep.Acknowledge), SessionFlow.Next(rebuilt, SessionEvent.ResumeMarked));
+    }
 
     [Fact]
     public void TheMarkerAloneIsOnlyAcknowledged()
     {
-        Assert.Equal((Marked, SessionStep.Acknowledge), SessionFlow.Next(Playing, SessionEvent.ResumeMarked));
-        // A second markResume before the reload is the same acknowledgement, not a second rebuild.
-        Assert.Equal((Marked, SessionStep.Acknowledge), SessionFlow.Next(Marked, SessionEvent.ResumeMarked));
+        Assert.Equal((Up, SessionStep.Acknowledge), SessionFlow.Next(Up, SessionEvent.ResumeMarked));
+        // Before the page's first load as well (nothing to rebuild yet, and the first load stays the first load).
+        var (s, step) = SessionFlow.Next(Fresh, SessionEvent.ResumeMarked);
+        Assert.Equal((Fresh, SessionStep.Acknowledge), (s, step));
+        Assert.Equal((Up, SessionStep.None), SessionFlow.Next(s, SessionEvent.HudPageLoaded));
+    }
+
+    [Fact]
+    public void ASecondSwitchAfterARebuildRebuildsAgain()
+    {
+        var (s, _) = SessionFlow.Start(carriesSession: true);
+        Assert.Equal((Leaving, SessionStep.Rebuild), SessionFlow.Next(s, SessionEvent.HudPageLoaded));
     }
 
     [Fact]
     public void BackToTitleLogsOut()
     {
-        Assert.Equal((Leaving, SessionStep.LogoutToTitle), SessionFlow.Next(Playing, SessionEvent.BackToTitle));
-        Assert.Equal((Leaving, SessionStep.LogoutToTitle), SessionFlow.Next(Marked, SessionEvent.BackToTitle));
+        Assert.Equal((Leaving, SessionStep.LogoutToTitle), SessionFlow.Next(Up, SessionEvent.BackToTitle));
+        Assert.Equal((Leaving, SessionStep.LogoutToTitle), SessionFlow.Next(Fresh, SessionEvent.BackToTitle));
         // The login screen's own "back" (no session yet): the status check skips the logout.
         Assert.Equal((Leaving, SessionStep.LogoutToTitle), SessionFlow.Next(Title, SessionEvent.BackToTitle));
     }
@@ -66,9 +88,8 @@ public class SessionFlowTests
     [Fact]
     public void ALostSessionGoesToTheLoginWithoutLogout()
     {
-        Assert.Equal((Leaving, SessionStep.ExpiredToTitle), SessionFlow.Next(Playing, SessionEvent.Unauthorized));
-        // A 401 between the marker and the reload: the session is dead, a rebuild could not resume it.
-        Assert.Equal((Leaving, SessionStep.ExpiredToTitle), SessionFlow.Next(Marked, SessionEvent.Unauthorized));
+        Assert.Equal((Leaving, SessionStep.ExpiredToTitle), SessionFlow.Next(Up, SessionEvent.Unauthorized));
+        Assert.Equal((Leaving, SessionStep.ExpiredToTitle), SessionFlow.Next(Fresh, SessionEvent.Unauthorized));
     }
 
     [Theory]
@@ -89,5 +110,5 @@ public class SessionFlowTests
 
     [Fact]
     public void ALoginWhilePlayingChangesNothing()
-        => Assert.Equal((Marked, SessionStep.None), SessionFlow.Next(Marked, SessionEvent.LoggedIn));
+        => Assert.Equal((Up, SessionStep.None), SessionFlow.Next(Up, SessionEvent.LoggedIn));
 }

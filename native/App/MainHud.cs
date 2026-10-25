@@ -42,8 +42,8 @@ public partial class Main : Node3D
             if (Arg(args, 0) is { } who && Arg(args, 1) is { } text) _tags?.Say(who, text);
         };
         // The browser sets a marker that survives ONE page reload, so the next boot skips the title gate (a
-        // character take-over reloads the page). Natively the marker is acknowledged, and the HUD page's reload
-        // that follows rebuilds the world with the live session (SessionFlow).
+        // character take-over reloads the page). Natively the marker is only acknowledged: any reload of the HUD
+        // page after its first load rebuilds the world with the live session, whichever arrives first (SessionFlow).
         hud.Handlers["markResume"] = _ => OnSession(SessionEvent.ResumeMarked);
         hud.PageLoaded = () => OnSession(SessionEvent.HudPageLoaded);
         // Scene-owned fields the chat, plaque and menu read (minimum viable set).

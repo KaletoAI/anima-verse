@@ -42,7 +42,7 @@ public partial class Main : Node3D
         switch (step)
         {
             case SessionStep.Acknowledge:
-                Log("markResume: acknowledged — the avatar changed; the world is rebuilt once the HUD page has reloaded");
+                Log("markResume: acknowledged — the HUD page's reload rebuilds the world (in either order)");
                 break;
             case SessionStep.Rebuild:
                 RebuildWithSession();
@@ -72,7 +72,7 @@ public partial class Main : Node3D
             _ = BackToTitleAsync();
             return;
         }
-        Log("character switch: the HUD page reloaded after markResume — rebuilding the world with the live session (no login)");
+        Log("character switch: the HUD page reloaded — rebuilding the world with the live session (no login)");
         _carried = new CarriedSession(_api.BaseUri.ToString(), token, _role);
         StopSync();
         _stop.Cancel();
