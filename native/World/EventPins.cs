@@ -10,7 +10,8 @@ namespace AnimaNative.World;
 /// <summary>
 /// The event pins of the overview (client3d/src/main.ts <c>updatePins</c> / <c>makePinTexture</c>, the bob in
 /// the frame hook; the rule in <see cref="EventPinRule"/>): one billboard per location with events, 🔥 when
-/// one of them is <c>danger</c>, else ❗, 3 m tall, never hidden by geometry, bobbing.
+/// one of them is <c>danger</c>, else ❗, 3 m tall, never hidden by geometry, bobbing; 3.5 m above the top of its
+/// place, measured from the place's ground datum (client3d/src/game/eventPins.ts, vector-checked).
 ///
 /// THE GLYPH. The browser draws the emoji with the canvas font <c>72px serif</c>, i.e. the system's colour
 /// emoji font (Noto Color Emoji on a Linux desktop). Godot renders colour glyphs (CBDT/COLR via FreeType) when
@@ -49,11 +50,12 @@ public partial class EventPins : Node3D
     public EventPins() => Name = "EventPins";
 
     /// <summary>
-    /// One poll (<c>updatePins(map)</c>): pins for <c>events_by_location</c>, placed at the place's centre and
-    /// <c>height + 3.5</c>. <paramref name="placeOf"/> answers a known place's centre (x, z) and reading height,
-    /// null for an unknown id (<c>places.has</c>).
+    /// One poll (<c>updatePins(map)</c>): pins for <c>events_by_location</c>. A pin whose glyph changed is rebuilt,
+    /// and every wanted pin is placed again at the place's centre and <see cref="EventPinRule.PinY"/> — the ground
+    /// datum can settle after the pin was made. <paramref name="placeOf"/> answers a known place's centre (x, ground
+    /// datum, z) and height, null for an unknown id (<c>places.has</c>).
     /// </summary>
-    public void Update(JsonElement map, Func<string, (double X, double Z, double Height)?> placeOf)
+    public void Update(JsonElement map, Func<string, (double X, double GroundY, double Z, double Height)?> placeOf)
     {
         var events = new List<KeyValuePair<string, IReadOnlyCollection<string?>>>();
         if (map.ValueKind == JsonValueKind.Object && map.TryGetProperty("events_by_location", out var byLoc)
@@ -70,21 +72,27 @@ public partial class EventPins : Node3D
             }
         }
         var wanted = EventPinRule.Wanted(events, id => placeOf(id) is not null);
-        var (remove, add) = EventPinRule.Diff(_pins.Keys, wanted);
+        var existing = _pins.ToDictionary(kv => kv.Key, kv => kv.Value.GetMeta("glyph").AsString());
+        var (remove, add) = EventPinRule.Diff(existing, wanted);
         foreach (var id in remove)
         {
+            // Out of the tree at once, so a rebuilt pin can take the same node name this frame.
+            RemoveChild(_pins[id]);
             _pins[id].QueueFree();
             _pins.Remove(id);
         }
         foreach (var (id, glyph) in add)
         {
-            var place = placeOf(id)!.Value;
             var pin = MakePin(glyph);
             pin.Name = ("Pin_" + id).ValidateNodeName();
-            pin.Position = new Vector3((float)place.X, (float)EventPinRule.PinY(place.Height), (float)place.Z);
             pin.SetMeta("glyph", glyph);
             AddChild(pin);
             _pins[id] = pin;
+        }
+        foreach (var id in wanted.Keys)
+        {
+            var place = placeOf(id)!.Value;
+            _pins[id].Position = new Vector3((float)place.X, (float)EventPinRule.PinY(place.GroundY, place.Height), (float)place.Z);
         }
     }
 
@@ -130,6 +138,9 @@ public partial class EventPins : Node3D
             TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmaps,
         };
     }
+
+    /// <summary>The system's colour emoji font (probed once), for other text that shows emoji (name tags); null without one.</summary>
+    public static FontFile? SharedEmojiFont => EmojiFont();
 
     /// <summary>The system's colour emoji font when it has both glyphs, else null (probed once).</summary>
     private static FontFile? EmojiFont()

@@ -48,36 +48,8 @@ public class OpenViewTests
         Assert.Equal(15, OpenView.OpenFlyDist);
     }
 
-    [Theory]
-    // max(12, 3·w): w 2 → 6 < 12 → 12; w 4 → 12 = 12; w 10 → 30; w 0 (no footprint) → 12.
-    [InlineData(2, 12)]
-    [InlineData(4, 12)]
-    [InlineData(10, 30)]
-    [InlineData(0, 12)]
-    public void CloseTargetDistance(double width, double want) => Assert.Equal(want, OpenView.CloseTargetDist(width));
-
-    [Theory]
-    // Centre (10, −5), width 10 → limit 30 m.
-    // Camera exactly at 60 → not "> 60" → stays; 60.0001 → closes.
-    [InlineData(60, 10, -5, false)]
-    [InlineData(60.0001, 10, -5, true)]
-    // Target (28, 19): offset (18, 24) → hypot 30 exactly (3-4-5 × 6) → not "> 30" → stays.
-    [InlineData(20, 28, 19, false)]
-    // Target (28, 19.5): offset (18, 24.5) → √(324 + 600.25) = √924.25 = 30.4015… > 30 → closes.
-    [InlineData(20, 28, 19.5, true)]
-    // Height is ignored: the rule measures on the ground plane only (y is not an argument at all).
-    // Target (−15, −5): offset 25 ≤ 30, camera 59 ≤ 60 → stays.
-    [InlineData(59, -15, -5, false)]
-    public void AutoCloseRule(double camDist, double tx, double tz, bool close)
-        => Assert.Equal(close, OpenView.ShouldClose(camDist, tx, tz, 10, -5, 10));
-
-    [Fact]
-    public void AutoCloseOnASmallFootprintUsesTheFloor()
-    {
-        // Width 1 (a shrine): 3 · 1 = 3 < 12 → the limit is 12. Offset (12, 0) → stays; (12.01, 0) → closes.
-        Assert.False(OpenView.ShouldClose(30, 12, 0, 0, 0, 1));
-        Assert.True(OpenView.ShouldClose(30, 12.01, 0, 0, 0, 1));
-    }
+    // closeTargetDist and the auto-close rule (openViewShouldClose) are vector cases now:
+    // shared/test-vectors/overview_labels.json [D1..D4, C1..C9] (OverviewLabelsVectorTests).
 
     [Theory]
     // min(targetDist, 15): a camera already at 8 m stays at 8 (no zooming OUT), from 40 m → 15.
@@ -127,11 +99,12 @@ public class EventPinRuleTests
     [Fact]
     public void GlyphPerLocation()
     {
-        // `evs.some(e => e.category === 'danger') ? '🔥' : '❗'`, an empty list gets no pin.
-        Assert.Equal("🔥", EventPinRule.GlyphFor(new string?[] { "social", "danger" }));
-        Assert.Equal("❗", EventPinRule.GlyphFor(new string?[] { "social", null }));
-        Assert.Equal("❗", EventPinRule.GlyphFor(new string?[] { "Danger" }));   // case matters (=== 'danger')
-        Assert.Null(EventPinRule.GlyphFor(Array.Empty<string?>()));
+        // `evs.some(e => e.category === 'danger') ? '🔥' : '❗'`, an empty list gets no pin (more in event_pins.json).
+        Assert.Equal("🔥", EventPinRule.PinGlyph(new string?[] { "social", "danger" }));
+        Assert.Equal("❗", EventPinRule.PinGlyph(new string?[] { "social", null }));
+        Assert.Equal("❗", EventPinRule.PinGlyph(new string?[] { "Danger" }));   // case matters (=== 'danger')
+        Assert.Null(EventPinRule.PinGlyph(Array.Empty<string?>()));
+        Assert.Null(EventPinRule.PinGlyph(null));
     }
 
     [Fact]
@@ -141,7 +114,7 @@ public class EventPinRuleTests
         {
             ["a"] = new string?[] { "danger" },
             ["b"] = new string?[] { "news" },
-            ["c"] = Array.Empty<string?>(),          // `!evs.length` → skipped
+            ["c"] = Array.Empty<string?>(),          // pinGlyph null → skipped
             ["ghost"] = new string?[] { "danger" },  // `!places.has(id)` → skipped
         };
         var wanted = EventPinRule.Wanted(events, id => id != "ghost");
@@ -149,21 +122,23 @@ public class EventPinRuleTests
     }
 
     [Fact]
-    public void ExistingPinsAreKeptAsTheyAre()
+    public void AChangedGlyphIsRebuilt()
     {
-        // Pins a (❗) and b exist. Now: a has a danger event (🔥), b has none, c is new.
-        // main.ts: b goes (not wanted), c comes, a is skipped (`if (eventPins.has(locId)) continue`) — it keeps ❗.
-        var (remove, add) = EventPinRule.Diff(new[] { "a", "b" },
-                                              new Dictionary<string, string> { ["a"] = "🔥", ["c"] = "❗" });
-        Assert.Equal(new[] { "b" }, remove);
-        Assert.Equal(new[] { new KeyValuePair<string, string>("c", "❗") }, add);
+        // Pins a (❗), b (❗) and d (🔥) exist. Now: a has a danger event (🔥), b has none, d is unchanged, c is new.
+        // main.ts since 99c16a69: `wanted.get(id) !== pin.userData.glyph` removes a (glyph changed) and b (not
+        // wanted; undefined !== '❗'); d stays; the add loop creates a (again, as 🔥) and c.
+        var existing = new Dictionary<string, string> { ["a"] = "❗", ["b"] = "❗", ["d"] = "🔥" };
+        var (remove, add) = EventPinRule.Diff(existing,
+                                              new Dictionary<string, string> { ["a"] = "🔥", ["c"] = "❗", ["d"] = "🔥" });
+        Assert.Equal(new[] { "a", "b" }, remove);
+        Assert.Equal(new[] { new KeyValuePair<string, string>("a", "🔥"), new KeyValuePair<string, string>("c", "❗") }, add);
     }
 
     [Fact]
     public void PlacementAndBob()
     {
-        // setY(tile.height + 3.5): a 4 m building → 7.5, absolute.
-        Assert.Equal(7.5, EventPinRule.PinY(4));
+        // pinY(groundY, height) = groundY + height + 3.5: a 4 m building on a 42.25 m hill → 49.75 (event_pins [Y2]).
+        Assert.Equal(49.75, EventPinRule.PinY(42.25, 4));
         // bob 0, dt 0.5 → 1.1; dy = sin(1.1) · 0.008 = 0.891207360061435 · 0.008 = 0.00712965888049148.
         var (bob, dy) = EventPinRule.BobStep(0, 0.5);
         Assert.Equal(1.1, bob, 12);

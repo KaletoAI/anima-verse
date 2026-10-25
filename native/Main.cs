@@ -76,6 +76,12 @@ public partial class Main : Node3D
     // ---- overview picking (Task 9) ----
     private LocationPicking? _picking;
     private EventPins? _pins;
+    // ---- labels and the performance readout (Task 11) ----
+    private NameTags? _tags;
+    private LocationLabels? _placeLabels;
+    private LabelOverlay? _labelOverlay;
+    private readonly PerfProbe _perf = new();
+    private Node3D? _world;
     private readonly OpenView _openView = new();
     /// <summary>The info panel as last published (main.ts keeps the click's snapshot; only view.open is patched).</summary>
     private JsonObject? _info;
@@ -337,6 +343,16 @@ public partial class Main : Node3D
             _pins = new EventPins();
             world.AddChild(_pins);
             _pins.Update(builder.FirstMap!.Value, PlaceOf);
+            _world = world;
+            // The CSS2D label layer: location names now, name tags once the figures are there. Under the HUD (layer 5).
+            _placeLabels = new LocationLabels();
+            SyncPlaceLabels();
+            var labelsLayer = new CanvasLayer { Name = "Labels", Layer = 1 };
+            AddChild(labelsLayer);
+            _labelOverlay = new LabelOverlay { Camera = _camera };
+            var placeLabels = _placeLabels;
+            _labelOverlay.Sources.Add(() => placeLabels.Visible(PlaceOf));
+            labelsLayer.AddChild(_labelOverlay);
             if (_options.Bench || _options.Offline is not null)
             {
                 // The measuring runs keep the spike's start: the target on the anchor, where the scatter window
@@ -376,10 +392,15 @@ public partial class Main : Node3D
 
             _figures = new FigureManager(_source!, builder.Height!, Log, strict: false);
             world.AddChild(_figures);
+            var tags = _tags = new NameTags(_figures, () => Time.GetTicksMsec()) { CamDist = () => _camera?.Distance ?? 0 };
+            _labelOverlay.Sources.Add(tags.Visible);
             _figures.Polled += () =>
             {
-                // applyWorldMap → updatePins(map), every poll.
-                if (_pins is not null && IsInstanceValid(_pins) && _figures.LatestMap is { } polled) _pins.Update(polled, PlaceOf);
+                if (_figures.LatestMap is not { } polled) return;
+                // applyWorldMap → updatePins(map), every poll; npcs.update → the tags' texts; the place labels follow.
+                if (_pins is not null && IsInstanceValid(_pins)) _pins.Update(polled, PlaceOf);
+                tags.Apply(polled);
+                SyncPlaceLabels();
             };
             await _figures.InitAsync();
             // The boot's own map places the first figures (main.ts npcs.update(firstMap)); the poll takes over.
@@ -390,6 +411,8 @@ public partial class Main : Node3D
             timer.Timeout += () =>
             {
                 SetStatus($"{worldStatus}, {FigureLine()}"
+                          + (_labelOverlay is { } lo && IsInstanceValid(lo)
+                              ? $", {lo.LastShown} labels ({lo.LastCollectMs + lo.LastDrawMs:0.00} ms)" : "")
                           + (_scatter is not null ? $"\n{_scatter.Summary()}" : "")
                           + $"\n{SyncLine()}"
                           + (_hud?.Active == true
@@ -572,6 +595,7 @@ public partial class Main : Node3D
         {
             int added = await _builder.RevealAsync(map, () => rev == _viewRev && !_stop.IsCancellationRequested);
             if (added > 0) _placeRows = null;
+            SyncPlaceLabels();
             return added;
         }
         catch (Exception e)
@@ -626,6 +650,8 @@ public partial class Main : Node3D
             if (_selected is not null) Select(_selected);
             int rev = _viewRev;
             int added = await _builder.RevealAsync(map, () => rev == _viewRev && !_stop.IsCancellationRequested);
+            _placeRows = null;
+            SyncPlaceLabels();
             Log($"show all locations {(on ? "ON" : "off")}: {dropped.Count} dropped, {added} revealed");
         }
         catch (Exception e)
@@ -820,6 +846,11 @@ public partial class Main : Node3D
             if (args.Count > 0 && args[0] is JsonValue v && v.TryGetValue<bool>(out var on)) _ = ApplyShowAllAsync(on);
         };
         hud.Handlers["applyScatterPrefs"] = ApplyScatterPrefs;
+        // Hud.tsx: a new speakable line of this room → npcs.say(speaker, text); unknown names are ignored.
+        hud.Handlers["sayBubble"] = args =>
+        {
+            if (Arg(args, 0) is { } who && Arg(args, 1) is { } text) _tags?.Say(who, text);
+        };
         // The browser sets a marker that survives ONE page reload, so the next boot skips the title gate (a
         // character take-over reloads the page). This client never reloads a page: there is nothing to mark.
         hud.Handlers["markResume"] = _ => Log("markResume: acknowledged — the native client has no page reload to resume after");
@@ -969,6 +1000,10 @@ public partial class Main : Node3D
             _hoverPending = false;
             Hover(_hoverAt);
         }
+        // npcs.tick: a bubble whose reading time is up goes.
+        _tags?.Expire();
+        // The performance readout: measured and sent only while the HUD shows it (HudUiState.perfOn).
+        if (_hud is { } hudNow && _perf.Frame(hudNow.Active && hudNow.Ui.PerfOn, delta, _world) is { } perf) hudNow.SendPerf(perf);
         // The overview auto-close of main.ts' frame hook (no auto-reopen). The measuring runs keep their world.
         if (_interactive && _openView.OpenId is { } open && _camera is not null)
         {
@@ -1023,14 +1058,26 @@ public partial class Main : Node3D
         return null;
     }
 
-    /// <summary>A place for the event pins: centre x/z and <c>tile.height</c> (measured, else the reading height).</summary>
-    private (double X, double Z, double Height)? PlaceOf(string id)
+    /// <summary>
+    /// A place for the event pins and the location labels (main.ts <c>places.get(id)</c>): centre x/z, the ground
+    /// datum (<c>tile.center.y</c>) and <c>tile.height</c> — the built group's, else the ground under the row's pin
+    /// (<c>footprintCentre</c>) and <c>buildPlace</c>'s reading height.
+    /// </summary>
+    private (double X, double GroundY, double Z, double Height)? PlaceOf(string id)
     {
         if (_builder?.Slots.GetValueOrDefault(id) is { } slot && IsInstanceValid(slot.Group))
-            return (slot.Group.Position.X, slot.Group.Position.Z, slot.Height);
-        if (RowsOfPlaces().GetValueOrDefault(id) is not { IsPlaced: true } row) return null;
+            return (slot.Group.Position.X, slot.Group.Position.Y, slot.Group.Position.Z, slot.Height);
+        if (RowsOfPlaces().GetValueOrDefault(id) is not { IsPlaced: true } row || _builder?.Height is not { } h) return null;
         var (isBuilding, nature) = LocationView.Kind(row);
-        return (row.PosX!.Value, row.PosZ!.Value, EventPinRule.DefaultPlaceHeight(isBuilding, nature, LocationView.DetectStyle(row)));
+        return (row.PosX!.Value, h.GroundAt(row.PosX.Value, row.PosZ!.Value), row.PosZ.Value,
+                EventPinRule.DefaultPlaceHeight(isBuilding, nature, LocationView.DetectStyle(row)));
+    }
+
+    /// <summary>The location labels follow the world's places and their latest rows.</summary>
+    private void SyncPlaceLabels()
+    {
+        if (_placeLabels is null || _builder is null) return;
+        _placeLabels.Sync(_builder.Known, RowsOfPlaces());
     }
 
     private static string? Arg(JsonArray args, int i)

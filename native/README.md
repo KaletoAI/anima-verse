@@ -166,6 +166,21 @@ Polling, push stream, boot stages (Task 10) — the browser's, ported to `Core/S
   visible (next frame), figures (first map's figures + their models), arrival (immediately after; no
   embodied take-over yet). `boot stages: world … ms, …` in the log.
 
+Labels and the performance readout (Task 11) — the browser's CSS2D layer as a screen-space overlay
+(`Ui/LabelOverlay.cs`, canvas layer 1, under the HUD; never takes the mouse):
+
+- **Name tags** (`Figures/NameTags.cs`): a column [speech bubble, name, activity] centred over each figure's head
+  (height + 0.45 m), shown while the camera is closer than 55 m; the name of a traveller reads `🚶 HH:MM Name`,
+  the avatar's in gold. The HUD's `sayBubble` puts a bubble over the speaker (at most 140 characters, 22ch wide,
+  3.5–12 s). Rules: `Core/Overview/OverviewLabels.cs`, vector-checked (`shared/test-vectors/overview_labels.json`).
+- **Location names** (`World/LocationLabels.cs`): every non-area place, serif small capitals in gold, 2.2 m above
+  the place's height on its ground; no distance limit.
+- **Event pins** float 3.5 m above the top of their place measured from its ground (`pinY`, vectors in
+  `event_pins.json`); a pin whose event turns into a danger is rebuilt; every poll places them again.
+- **Performance readout**: while the HUD's overlay is on (game menu), the `perf` message every 300 ms — fps over
+  1 s, worst frame, triangles and draw calls (Godot's frame monitors), visible vertices (1 s walk); the other
+  fields are 0 (no native source). The status line shows `N labels (x ms)`.
+
 Arguments after `--` (no .env; all optional):
 
 | Argument | Meaning |
@@ -518,7 +533,7 @@ works the same way.
 | `tools/dump_payloads.py` | Task S3c: dumps the client's HTTP answers from a COPY of a world for `--offline` |
 | `Gltf/` | runtime GLB import (the Meshopt decode is in `Core/Gltf/`) |
 | `Figures/` | world-map characters: placement rule, figures (fed by Main's poll), clip library (import, pick, retarget), rest-pose correction |
-| `Ui/` | login screen (server, user, password), `LauncherStore` (`user://launcher.json`), fly camera (W/A/S/D gated while the HUD types) |
+| `Ui/` | login screen (server, user, password), `LauncherStore` (`user://launcher.json`), the overview camera, the label overlay (`LabelOverlay.cs`: projection, order, the label CSS in `LabelStyle`), the performance probe (`PerfProbe.cs`) |
 | `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |
 | `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); Task S3c: the water numbers and window (`Water.cs`; the tile field is `Core/Ground/WaterTileField.cs`) |

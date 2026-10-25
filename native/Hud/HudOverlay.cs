@@ -332,6 +332,9 @@ public partial class HudOverlay : CanvasLayer
 
     public void SendUi(string name, params JsonNode?[] args) => Send(HudProtocol.Ui(name, args));
 
+    /// <summary>The performance readout (<c>perf</c> message); only while the HUD's <c>perfOn</c> is set (the caller's rule).</summary>
+    public void SendPerf(JsonObject? value) => Send(HudProtocol.Perf(value));
+
     /// <summary>Everything the scene owns, unconditionally — for a HUD that has just (re)connected.</summary>
     private void PublishAll()
     {

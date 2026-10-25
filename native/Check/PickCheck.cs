@@ -42,10 +42,13 @@ namespace AnimaNative.Check;
 ///      the right is 300 · 6 · 2·tan(22.5°)/900 = 1.657 m off the axis → nothing.
 ///   E  the info panel of loc-house: Bram is there (room room-hall), no rooms in the row, no events, no avatar
 ///      (no travel), openable (building with an interior: its plate and wall), not open.
-///   F  event pins: house 🔥 at y = its building height + 3.5, yard ❗ at its shell height 3 (walls 0…3, plate top
-///      3) + 3.5 = 6.5, meadow ❗ unbuilt → the reading height 4 + 3.5 = 7.5, an unknown id none. Second poll:
-///      house only "news" → kept as 🔥 (main.ts keeps existing pins), yard gone, meadow kept. Bob 0.5 s:
-///      sin(1.1) · 0.008 = 0.00712965888.
+///   F  event pins (eventPins.ts <c>pinY</c> = ground datum + place height + 3.5, since 99c16a69): house 🔥 at
+///      4 + its building height + 3.5, yard ❗ at 2.91357421875 + its shell height 3 (walls 0…3, plate top 3) + 3.5
+///      = 9.41357421875, meadow ❗ unbuilt → the ground under its pin (300, −200): overview, x clamped to the last
+///      cell (i 1, tx 1), fz = 56/256 = 0.21875 → 0·(1 − 0.21875) + 8·0.21875 = 1.75, plus the reading height 4 +
+///      3.5 = 9.25; an unknown id none. Bob 0.5 s: sin(1.1) · 0.008 = 0.00712965888. Second poll: house only
+///      "news" → its glyph changed → REBUILT as ❗ (a new node); yard gone; meadow unchanged → the SAME node, placed
+///      again at 9.25 (the bob's offset is gone).
 ///
 /// S3c world (README "S3c world"):
 ///   G  loc-closed (−40, 100), datum 4.693359375 (overview, README), yaw 0, square ±4: openable, built closed with
@@ -186,6 +189,17 @@ public static class PickCheck
         }
     }
 
+    /// <summary>The place answer of Main.PlaceOf for the check's builder: the built group, else the row on the ground.</summary>
+    internal static (double X, double GroundY, double Z, double Height)? PlaceOfFor(WorldBuilder builder,
+                                                                                 IReadOnlyDictionary<string, LocationInfo> rows, string id)
+    {
+        if (builder.Slots.TryGetValue(id, out var s)) return (s.Group.Position.X, s.Group.Position.Y, s.Group.Position.Z, s.Height);
+        if (!rows.TryGetValue(id, out var row) || !row.IsPlaced) return null;
+        var (b, n) = LocationView.Kind(row);
+        return (row.PosX!.Value, builder.Height!.GroundAt(row.PosX.Value, row.PosZ!.Value), row.PosZ.Value,
+                EventPinRule.DefaultPlaceHeight(b, n, LocationView.DetectStyle(row)));
+    }
+
     private static string CheckPins(Node3D world, WorldBuilder builder, LocationSlot house, float houseHeight)
     {
         Near("F house height = its building", house.Height, houseHeight, 1e-4);
@@ -193,13 +207,7 @@ public static class PickCheck
         var yard = builder.Slots["loc-yard"];
         Near("F yard height = its shell", yard.Height, 3.0, 1e-4);
         var rows = LocationInfo.ParseList(builder.FirstMap!.Value).ToDictionary(l => l.Id);
-        (double X, double Z, double Height)? PlaceOf(string id)
-        {
-            if (builder.Slots.TryGetValue(id, out var s)) return (s.Group.Position.X, s.Group.Position.Z, s.Height);
-            if (!rows.TryGetValue(id, out var row) || !row.IsPlaced) return null;
-            var (b, n) = LocationView.Kind(row);
-            return (row.PosX!.Value, row.PosZ!.Value, EventPinRule.DefaultPlaceHeight(b, n, LocationView.DetectStyle(row)));
-        }
+        (double X, double GroundY, double Z, double Height)? PlaceOf(string id) => PlaceOfFor(builder, rows, id);
         var pins = new EventPins();
         world.AddChild(pins);
         try
@@ -219,9 +227,9 @@ public static class PickCheck
             string Glyph(string id) => pins.Pins[id].GetMeta("glyph").AsString();
             Expect("F glyphs", Glyph("loc-house") == "🔥" && Glyph("loc-yard") == "❗" && Glyph("loc-meadow") == "❗",
                    $"{Glyph("loc-house")}{Glyph("loc-yard")}{Glyph("loc-meadow")}");
-            NearV("F house pin", pins.Pins["loc-house"].Position, new Vector3(64, houseHeight + 3.5f, 128));
-            NearV("F yard pin", pins.Pins["loc-yard"].Position, new Vector3(-100, 6.5f, 50));
-            NearV("F meadow pin", pins.Pins["loc-meadow"].Position, new Vector3(300, 7.5f, -200));
+            NearV("F house pin", pins.Pins["loc-house"].Position, new Vector3(64, 4 + houseHeight + 3.5f, 128));
+            NearV("F yard pin", pins.Pins["loc-yard"].Position, new Vector3(-100, (float)(YardDatum + 3 + 3.5), 50));
+            NearV("F meadow pin", pins.Pins["loc-meadow"].Position, new Vector3(300, 9.25f, -200));
             var pin = pins.Pins["loc-house"];
             if (pin is Label3D label)
                 Expect("F glyph label", label.NoDepthTest && label.Billboard == BaseMaterial3D.BillboardModeEnum.Enabled
@@ -232,6 +240,8 @@ public static class PickCheck
             float y0 = pins.Pins["loc-yard"].Position.Y;
             pins.Bob(0.5);
             Near("F bob", pins.Pins["loc-yard"].Position.Y - y0, 0.00712965888049148, 1e-6);
+            var house1 = pins.Pins["loc-house"];
+            var meadow1 = pins.Pins["loc-meadow"];
 
             using (var poll2 = JsonDocument.Parse("""
                 { "events_by_location": { "loc-house": [ { "category": "news" } ], "loc-meadow": [ { "category": "news" } ] } }
@@ -239,7 +249,11 @@ public static class PickCheck
                 pins.Update(poll2.RootElement, PlaceOf);
             Expect("F poll 2 pins", pins.Pins.Keys.OrderBy(k => k).SequenceEqual(new[] { "loc-house", "loc-meadow" }),
                    string.Join(",", pins.Pins.Keys));
-            Expect("F poll 2 house keeps its pin", Glyph("loc-house") == "🔥", Glyph("loc-house"));
+            Expect("F poll 2 house rebuilt as ❗", Glyph("loc-house") == "❗" && !ReferenceEquals(pins.Pins["loc-house"], house1),
+                   Glyph("loc-house"));
+            Expect("F poll 2 meadow kept", ReferenceEquals(pins.Pins["loc-meadow"], meadow1), "a new node");
+            NearV("F poll 2 meadow placed again", pins.Pins["loc-meadow"].Position, new Vector3(300, 9.25f, -200), 1e-5f);
+            Expect("F old house pin out of the tree", house1.GetParent() is null, "still a child");
 
             // The drawn look-alike (used when the system has no colour emoji font): hand-placed sample pixels.
             var fire = EventPins.FallbackImage("🔥");

@@ -125,11 +125,12 @@ public static class CheckRunner
             var launcher = LauncherCheck.Run();
             var overview = OverviewCheck.Run(host, builder.FirstMap!.Value, builder.Height!);
             var pick = await PickCheck.RunAsync(host, world, builder, dir);
+            var labels = await LabelCheck.RunAsync(host, world, builder, dir);
             var sync = await SyncCheck.RunAsync(source, probe, dir);
 
             GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {sync}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

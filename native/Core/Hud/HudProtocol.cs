@@ -155,6 +155,10 @@ public static class HudProtocol
     public static string Boot(JsonObject value)
         => new JsonObject { ["v"] = Version, ["kind"] = "boot", ["value"] = value.DeepClone() }.ToJsonString();
 
+    /// <summary><c>{v:1, kind:'perf', value}</c> — the performance readout (<c>PerfStats</c> of bus.ts) or null.</summary>
+    public static string Perf(JsonObject? value)
+        => new JsonObject { ["v"] = Version, ["kind"] = "perf", ["value"] = value?.DeepClone() }.ToJsonString();
+
     /// <summary><c>{v:1, kind:'ui', name, args}</c>; only the declared ui actions.</summary>
     public static string Ui(string name, params JsonNode?[] args)
     {

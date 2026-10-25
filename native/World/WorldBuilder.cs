@@ -603,6 +603,9 @@ public sealed class WorldBuilder
     /// The placed locations of a worldmap snapshot the world has not taken in yet (main.ts: <c>placeableOf(map)</c>
     /// minus <c>places</c>) — a place the avatar has just discovered, or what the admin's unfiltered view adds.
     /// </summary>
+    /// <summary>Every place the world has taken in, built or not (main.ts <c>places</c>): the location labels' set.</summary>
+    public IReadOnlyCollection<string> Known => _known;
+
     public List<LocationInfo> FreshOf(JsonElement map)
         => LocationInfo.ParseList(map).Where(l => l.IsPlaced && !_known.Contains(l.Id)).ToList();
 

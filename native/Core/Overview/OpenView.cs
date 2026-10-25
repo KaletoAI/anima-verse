@@ -5,10 +5,11 @@ namespace AnimaNative.Overview;
 /// <summary>
 /// The ONE open detail view of the overview (client3d/src/main.ts, "The open detail view: ONE explicit
 /// singleton"): exactly one location shows its interior; opening another closes the current one; there
-/// is no auto-reopen. The numbers and the overview auto-close rule are main.ts constants:
-/// <c>CLOSE_CAM_DIST</c>, <c>CLOSE_TARGET_FOOTPRINTS</c>, <c>CLOSE_TARGET_MIN_M</c>, <c>OPEN_FLY_DIST</c>.
-/// No shared vector: main.ts carries these inline (not in a module a smoke could import) — the cases
-/// in native/tests/OpenViewTests.cs are derived by hand.
+/// is no auto-reopen. The overview auto-close rule and its numbers are client3d/src/game/openView.ts
+/// (<c>CLOSE_CAM_DIST</c>, <c>CLOSE_TARGET_FOOTPRINTS</c>, <c>CLOSE_TARGET_MIN_M</c>, <c>closeTargetDist</c>,
+/// <c>openViewShouldClose</c>), vector-checked against shared/test-vectors/overview_labels.json [D, C]
+/// (derivations in client3d/scripts/smoke_overview_labels.mjs). The singleton, <c>OPEN_FLY_DIST</c> and the badge
+/// are inline in main.ts; native/tests/PickingTests.cs derives those cases by hand.
 /// </summary>
 public sealed class OpenView
 {
@@ -47,15 +48,14 @@ public sealed class OpenView
     public static double CloseTargetDist(double width) => Math.Max(CloseTargetMinM, width * CloseTargetFootprints);
 
     /// <summary>
-    /// The overview auto-close of the frame hook: the camera is farther out than 60 m, or the target
-    /// stands farther than <see cref="CloseTargetDist"/> from the open location's centre, measured on the
-    /// ground plane (<c>Math.hypot(target.x − center.x, target.z − center.z)</c>). Strictly greater, as
-    /// main.ts compares.
+    /// <c>openViewShouldClose</c>: the camera is farther out than 60 m, or the target stands farther than
+    /// <see cref="CloseTargetDist"/> from the open location's centre, measured on the ground plane
+    /// (<c>Math.hypot(target.x − center.x, target.z − center.z)</c>). Both strictly greater.
     /// </summary>
     public static bool ShouldClose(double camDist, double targetX, double targetZ, double centreX, double centreZ,
                                    double width)
     {
-        double off = Math.Sqrt((targetX - centreX) * (targetX - centreX) + (targetZ - centreZ) * (targetZ - centreZ));
+        double off = double.Hypot(targetX - centreX, targetZ - centreZ);   // JS Math.hypot
         return camDist > CloseCamDist || off > CloseTargetDist(width);
     }
 
