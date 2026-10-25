@@ -66,13 +66,18 @@ body_slots:
     # mesh. Only hair long enough to fall there gets the line, so short hair
     # is never pushed anywhere (or grown to make the line satisfiable). An
     # unset length counts as short (user decision 2026-10-25): no line. The
-    # back view leaves it out (slot without back: true).
+    # back view describes the SAME hair from behind (back_values), otherwise
+    # the model brings the hair forward over the shoulders there.
     mesh_input_prompt:
       attribute: length
       values:
         medium: "hair tucked back behind the shoulders, the chest and collarbones free of hair"
         long: "hair tucked back behind the shoulders and falling down the back, the chest and collarbones free of hair"
         very long: "hair tucked back behind the shoulders and falling down the back, the chest and collarbones free of hair"
+      back_values:
+        medium: "hair lying behind the shoulders, its ends on the upper back"
+        long: "hair lying behind the shoulders and falling down the back"
+        very long: "hair lying behind the shoulders and falling down the back"
   - id: eyes
     face: true   # belongs into portrait/expression prompts
     attributes:

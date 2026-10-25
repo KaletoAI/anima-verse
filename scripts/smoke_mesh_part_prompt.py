@@ -77,12 +77,20 @@ with tempfile.TemporaryDirectory() as tmp:
         assert bs.prompt_fragments('', profile=hp('short'), mesh_input=True)['exposed'] == []
         assert bs.prompt_fragments('', profile=hp('long'))['exposed'] == []
         assert bs.prompt_fragments('', profile=hp('long'), mesh_input=True, back_view=True)['exposed'] == []
+        hair.mesh_input_prompt['back_values'] = {'long': 'hair down the back'}
+        assert bs.prompt_fragments('', profile=hp('long'), mesh_input=True, back_view=True)['exposed'] == ['hair down the back']
+        assert bs.prompt_fragments('', profile=hp('long'), mesh_input=True)['exposed'] == ['hair behind the shoulders']
+        assert bs.prompt_fragments('', profile=hp('short'), mesh_input=True, back_view=True)['exposed'] == []
     from app.plugins.loader import _parse_package
     good = {'attribute': 'length', 'values': {'Long': ' behind '}}
     meta = dict(name='fixture', body_slots=[dict(id='hair', attributes=hattrs, mesh_input_prompt=good)])
     parsed = _parse_package(Path(tmp)/'fixture', meta, register_tasks=False)
     assert parsed.body_slots[0].mesh_input_prompt == {'attribute': 'length', 'values': {'long': 'behind'}}
+    meta['body_slots'][0]['mesh_input_prompt'] = {**good, 'back_values': {'LONG': 'down'}}
+    parsed = _parse_package(Path(tmp)/'fixture', meta, register_tasks=False)
+    assert parsed.body_slots[0].mesh_input_prompt['back_values'] == {'long': 'down'}
     for bad in ({'attribute': 'missing', 'values': {'long': 'x'}}, {'attribute': 'length', 'values': {}},
+                {**good, 'back_values': {}}, {**good, 'back_values': {'long': ' '}}, {**good, 'other': {}},
                 {'attribute': 'length', 'values': {'long': ''}}, {'attribute': 'length'}, 'text'):
         meta['body_slots'][0]['mesh_input_prompt'] = bad
         assert _parse_package(Path(tmp)/'fixture', meta, register_tasks=False) is None

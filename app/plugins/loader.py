@@ -258,15 +258,19 @@ def _parse_package(entry_dir: Path, meta: Dict[str, Any], *,
         mesh_input_prompt = {}
         if "mesh_input_prompt" in bdef:
             raw = bdef["mesh_input_prompt"]
-            values = raw.get("values") if isinstance(raw, dict) else None
-            if (not isinstance(raw, dict) or set(raw) != {"attribute", "values"}
+            tables = {key: raw.get(key) for key in ("values", "back_values")} if isinstance(raw, dict) else {}
+            if (not isinstance(raw, dict) or not {"attribute", "values"} <= set(raw)
+                    or set(raw) - {"attribute", "values", "back_values"}
                     or raw["attribute"] not in (bdef.get("attributes") or {})
-                    or not isinstance(values, dict) or not values
-                    or any(not isinstance(text, str) or not text.strip() for text in values.values())):
+                    or any(table is not None and (not isinstance(table, dict) or not table or any(
+                        not isinstance(text, str) or not text.strip() for text in table.values()))
+                        for table in tables.values())):
                 logger.error("Package %s slot %s: invalid mesh_input_prompt", pkg.id, bdef["id"])
                 return None
-            mesh_input_prompt = {"attribute": str(raw["attribute"]),
-                                 "values": {str(k).strip().lower(): v.strip() for k, v in values.items()}}
+            mesh_input_prompt = {"attribute": str(raw["attribute"])}
+            for key, table in tables.items():
+                if table is not None:
+                    mesh_input_prompt[key] = {str(k).strip().lower(): v.strip() for k, v in table.items()}
         pkg.body_slots.append(BodySlotSpec(
             id=str(bdef["id"]).strip(),
             package_id=pkg.id,

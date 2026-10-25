@@ -317,7 +317,8 @@ class BodySlotSpec:
     rigs: List[RigSpec] = field(default_factory=list)
     mesh_part: Optional[MeshPartSpec] = None
     # Mesh-input (T-pose) text chosen by one attribute's value:
-    # {"attribute": <name>, "values": {<option>: <fragment>}}; empty = none.
+    # {"attribute": <name>, "values": {<option>: <fragment>},
+    #  "back_values": {...} (optional, back views)}; empty = none.
     mesh_input_prompt: Dict[str, Any] = field(default_factory=dict)
 
 

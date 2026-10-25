@@ -19,6 +19,8 @@ right now" and "is merely scheduled" apart — a scheduled debounce timer is
 NOT a render in progress, and the UI must not claim one.
 """
 
+import contextlib
+import tempfile
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -130,10 +132,13 @@ ANIMAL_VIEW_PROMPT_DEFAULTS = {
 # points, instead of the old "face not visible", which named the face itself.
 # "the same figure turned around" speaks to the reference: every extra view
 # slots the main T-pose render (not the frontal profile portrait), so an
-# edit-capable backend turns THAT figure around. Hair CLEAR of the back here
-# for the same reason the front view wants it clear of the chest (2026-09-27
-# reword, see there) — the surface the mesher is supposed to read from this
-# angle is the back, not the chest.
+# edit-capable backend turns THAT figure around. The hair follows the
+# reference (2026-10-25, user report): the old "hair clear of the back" made
+# the model bring long hair forward over the shoulders, contradicting a front
+# view where it lies behind them, and a back view showed less hair than the
+# front (no strands at the sides). Long hair has to be somewhere; the mesher
+# needs it in the same place in every view. The hair slot's back_values say
+# where (body slot mesh_input_prompt).
 TPOSE_BACK_PROMPT_DEFAULT = (
     "the same figure turned around, back view, seen directly from behind, "
     "the back of the head, the upper back and the shoulder blades facing the "
@@ -142,7 +147,7 @@ TPOSE_BACK_PROMPT_DEFAULT = (
     "the sides at shoulder height, palms facing down toward the floor, hands "
     "in natural proportion to the body, fingers straight, slender and slightly "
     "spread apart, legs clearly apart with open space visible between them, "
-    "hair clear of the back"
+    "the same hairstyle, hair length and hair volume as the reference"
 )
 
 # Both profiles share one text — the side is the only difference, so they
@@ -161,7 +166,9 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
     "to the sides at shoulder height so the near arm points at the camera and "
     "hides the far arm, strongly foreshortened, palms facing down toward the "
     "floor, hands in natural proportion to the body, fingers straight, slender "
-    "and slightly spread apart, legs clearly apart, no hair on the chest or in front of the shoulders, chest, collarbones and front of the shoulders fully uncovered"
+    "and slightly spread apart, legs clearly apart, the same hairstyle, hair "
+    "length and hair volume as the reference, no hair on the chest or in front "
+    "of the shoulders"
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
@@ -903,6 +910,7 @@ def generate_model_ref_images(character_name: str,
             # same signature, only the pose/use-case layer differs. Missing
             # views are never fatal: the mesh runs off the main render.
             if _tpose and path is not None:
+                view_reference = modifier_scope.enter_context(neutral_view_reference(path, refs_dir))
                 for view in views:
                     view_kind = f"tpose_{view}"
                     if not force and find_ref_image(character_name, view_kind,
@@ -938,8 +946,9 @@ def generate_model_ref_images(character_name: str,
                             # in the reference drags the figure toward the
                             # camera, and the main render carries exactly the
                             # figure, outfit and proportions the views must
-                            # match for multi-view img2mesh.
-                            reference_image=path)
+                            # match for multi-view img2mesh. It is sent on
+                            # neutral grey (see neutral_view_reference).
+                            reference_image=view_reference)
                     except Exception as e:
                         view_path = None
                         logger.warning(
@@ -955,6 +964,39 @@ def generate_model_ref_images(character_name: str,
         logger.info("Model refs for %s (%s): %s", character_name, signature,
                     {k: bool(v) for k, v in results.items()})
     return results
+
+
+# Grey the views' reference stands on. The cut-out main render is RGBA; the
+# image backends drop the alpha and the transparent area turns BLACK, so every
+# view came back on black with a dark rim (measured 2026-10-25). The style asks
+# for a "plain neutral background" — this is that background.
+VIEW_REFERENCE_BACKGROUND = (128, 128, 128)
+
+
+@contextlib.contextmanager
+def neutral_view_reference(path: Path, refs_dir: Path):
+    """The main render on neutral grey, for slotting into its extra views.
+
+    The copy keeps the file name (the view's sidecar records the reference by
+    name) and lives in a private temp dir inside ``refs_dir``, where the
+    reference containment gate accepts it. An opaque or unreadable image is
+    used as is — the backend gets what it got before."""
+    from PIL import Image, UnidentifiedImageError
+    try:
+        with Image.open(path) as im:
+            rgba = (im.convert("RGBA") if im.mode in ("RGBA", "LA", "PA") or "transparency" in im.info
+                    else None)
+    except (OSError, UnidentifiedImageError):
+        rgba = None
+    if rgba is None:
+        yield path
+        return
+    with tempfile.TemporaryDirectory(prefix=".viewref_", dir=refs_dir) as tmp:
+        flat = Image.new("RGBA", rgba.size, VIEW_REFERENCE_BACKGROUND + (255,))
+        flat.alpha_composite(rgba)
+        out = Path(tmp) / path.name
+        flat.convert("RGB").save(out)
+        yield out
 
 
 def _kind_lock(key: tuple) -> threading.Lock:
