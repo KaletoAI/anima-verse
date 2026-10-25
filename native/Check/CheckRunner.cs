@@ -263,6 +263,9 @@ public static class CheckRunner
 
         // The binding itself: after one evaluation the skeleton holds the clip's values.
         CheckBinding(mgr, ada, "idle");
+        // The rest correction against the browser's own numbers (rest_reference.json).
+        var restInfo = CheckRestReference(mgr, ada, source);
+        ada.UpdateClip();
 
         // ---- poll 2 ----
         using (var map = Load("worldmap_poll2.json")) await mgr.Apply(map.RootElement);
@@ -290,7 +293,7 @@ public static class CheckRunner
         var info = RestMismatch(source, ada);
         mgr.QueueFree();
         return $"figures {poll1} | poll2 figures={st.Figures} glb_figures={st.GlbFigures} placeholders={st.Placeholders} "
-               + $"model_loads={st.ModelLoads} | {info}";
+               + $"model_loads={st.ModelLoads} | {restInfo} | {info}";
     }
 
     /// <summary>
@@ -317,8 +320,12 @@ public static class CheckRunner
         string moving = "mixamorig_LeftUpLeg", constant = "mixamorig_LeftForeArm";
         Expect("LeftUpLeg has a track", clip.RotationTracks.ContainsKey(moving), "no track");
         Expect("LeftForeArm has none (constant in the file)", !clip.RotationTracks.ContainsKey(constant), "has a track");
-        SameRot(moving, clip.Anim.TrackGetKeyValue(clip.RotationTracks[moving], 0).AsQuaternion());
-        SameRot(constant, clip.RestRotations[Array.IndexOf(clip.Bones, constant)]);
+        // Both are rest-corrected (q = K_p⁻¹·c·K_b) with this skeleton's factors.
+        var fixes = RestCorrections.Build(mgr.Clips.DonorRest!, (Node3D)skel.GetParent().GetParent(), skel);
+        Quaternion Fixed(string bone, Quaternion c)
+            => fixes.TryGetValue(ClipLibrary.NormBone(bone), out var f) ? RestCorrections.Apply(f, c).Normalized() : c;
+        SameRot(moving, Fixed(moving, clip.Anim.TrackGetKeyValue(clip.RotationTracks[moving], 0).AsQuaternion()));
+        SameRot(constant, Fixed(constant, clip.RestRotations[Array.IndexOf(clip.Bones, constant)]));
 
         int h = skel.FindBone("mixamorig_Hips");
         var rest = skel.GetBoneRest(h).Origin;
@@ -328,6 +335,99 @@ public static class CheckRunner
         Near("hips x in place", pose.X, rest.X, 1e-5f);
         Near("hips z in place", pose.Z, rest.Z, 1e-5f);
         Near("hips y = y0 · rest/ref", pose.Y, (float)(y0 * rest.Y / refY), 1e-5f);
+    }
+
+    /// <summary>
+    /// The rest-pose correction against the BROWSER'S OWN function:
+    /// <c>native/fixtures/rest_reference.json</c> is written by
+    /// <c>native/fixtures/rest_reference.mjs</c>, which runs
+    /// <c>restCorrections</c>/<c>bindRelativeValues</c> of
+    /// packages/scene-render/src/clipRetarget.ts on three's loaders with the same
+    /// files. Three tracked demo rigs: Minerva (= Ada; no stance rule), Johanna
+    /// (leg stance), Hagrid (torso + foot stance). Per model: the corrected-bone
+    /// count and the stance bones must match; per clip/time/bone the clip value
+    /// (importer agreement) and the corrected rotation must lie within 0.5°.
+    /// For Ada the corrected rotations are also read back off her skeleton after
+    /// the AnimationPlayer evaluated the bound clip (end to end).
+    /// </summary>
+    private static string CheckRestReference(FigureManager mgr, Figure ada, FixtureSource source)
+    {
+        const double TolDeg = 0.5;
+        var donor = mgr.Clips.DonorRest ?? throw new InvalidOperationException("reference rig not loaded");
+        Expect("rig hips height", mgr.Clips.DonorHipsY is > 1.13 and < 1.131, $"{mgr.Clips.DonorHipsY}");
+        using var refDoc = Load("rest_reference.json");
+        double maxClip = 0, maxFixed = 0, maxPose = 0;
+        int compared = 0, models = 0;
+        string worst = "";
+        Quaternion Q(JsonElement a) => new((float)a[0].GetDouble(), (float)a[1].GetDouble(),
+                                           (float)a[2].GetDouble(), (float)a[3].GetDouble());
+        double Deg(Quaternion a, Quaternion b) => Mathf.RadToDeg(a.Normalized().AngleTo(b.Normalized()));
+        Quaternion Sample(ClipSource clip, string bone, double t)
+        {
+            int b = Array.FindIndex(clip.Bones, n => ClipLibrary.NormBone(n) == ClipLibrary.NormBone(bone));
+            if (b < 0) throw new InvalidOperationException($"clip {clip.Kind} has no bone {bone}");
+            return clip.RotationTracks.TryGetValue(clip.Bones[b], out var tr)
+                ? clip.Anim.RotationTrackInterpolate(tr, t) : clip.RestRotations[b];
+        }
+        foreach (var model in refDoc.RootElement.GetProperty("models").EnumerateArray())
+        {
+            var name = model.GetProperty("name").GetString()!;
+            var file = model.GetProperty("file").GetString()!;
+            var (root, _) = GlbLoader.Import(File.ReadAllBytes(source.Resolve("repo:" + file)), file);
+            try
+            {
+                var skel = ClipLibrary.Find<Skeleton3D>(root)!;
+                var stance = new HashSet<string>();
+                var fixes = RestCorrections.Build(donor, root, skel, stanceBones: stance);
+                Eq($"{name} corrected bones", fixes.Count, model.GetProperty("corrected_bones").GetInt32());
+                var wantStance = model.GetProperty("stance_bones").EnumerateArray().Select(e => e.GetString()!).ToHashSet();
+                Expect($"{name} stance bones", stance.SetEquals(wantStance),
+                       $"got [{string.Join(",", stance.OrderBy(x => x))}], browser [{string.Join(",", wantStance.OrderBy(x => x))}]");
+                foreach (var sample in model.GetProperty("samples").EnumerateArray())
+                {
+                    var role = sample.GetProperty("clip").GetString() == "idle" ? "idle" : "walk";
+                    var clip = mgr.Clips.ByRole[role]!;
+                    double t = sample.GetProperty("time").GetDouble();
+                    foreach (var bone in sample.GetProperty("bones").EnumerateObject())
+                    {
+                        var c = Sample(clip, bone.Name, t);
+                        double dc = Deg(c, Q(bone.Value.GetProperty("clip")));
+                        var key = ClipLibrary.NormBone(bone.Name);
+                        var q = fixes.TryGetValue(key, out var f) ? RestCorrections.Apply(f, c) : c;
+                        double dq = Deg(q, Q(bone.Value.GetProperty("corrected")));
+                        maxClip = Math.Max(maxClip, dc);
+                        if (dq > maxFixed) { maxFixed = dq; worst = $"{name}/{role}@{t}/{bone.Name}"; }
+                        Expect($"{name} {role}@{t} {bone.Name} clip value (importers)", dc <= TolDeg, $"{dc:0.###}°");
+                        Expect($"{name} {role}@{t} {bone.Name} corrected vs browser", dq <= TolDeg, $"{dq:0.###}°");
+                        compared++;
+                    }
+                }
+                models++;
+            }
+            finally { root.Free(); }
+        }
+
+        // End to end on Ada (Minerva): evaluate the bound clip, read the skeleton.
+        var minerva = refDoc.RootElement.GetProperty("models").EnumerateArray().First(m => m.GetProperty("name").GetString() == "Minerva McGonagall");
+        var player = ada.Player!;
+        var skelA = ada.Skeleton!;
+        foreach (var sample in minerva.GetProperty("samples").EnumerateArray())
+        {
+            var role = sample.GetProperty("clip").GetString() == "idle" ? "idle" : "walk";
+            double t = sample.GetProperty("time").GetDouble();
+            player.Play(role, 0);
+            player.Seek(t, true);
+            foreach (var bone in sample.GetProperty("bones").EnumerateObject())
+            {
+                int i = skelA.FindBone("mixamorig_" + bone.Name);
+                Expect($"Ada bone {bone.Name}", i >= 0, "missing");
+                double d = Deg(skelA.GetBonePoseRotation(i), Q(bone.Value.GetProperty("corrected")));
+                maxPose = Math.Max(maxPose, d);
+                Expect($"Ada pose {role}@{t} {bone.Name} vs browser", d <= TolDeg, $"{d:0.###}°");
+            }
+        }
+        return $"rest_reference models={models} compared={compared} max_clip_dev={maxClip:0.####}° "
+               + $"max_corrected_dev={maxFixed:0.####}° ({worst}) max_pose_dev={maxPose:0.####}°";
     }
 
     /// <summary>

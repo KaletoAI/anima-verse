@@ -18,12 +18,15 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `model3d.json` | `GET /characters/<name>/model3d` (§ A7) per character name; `null` = 404 |
 | `animation_clips.json` | `GET /assets/animation-clips` (§ A7/§ A8) |
 | `worldmap_poll2.json` | the second world-map poll of the figure check (characters only) |
+| `rest_reference.json` | the browser's rest-corrected rotations for three rigs — WRITTEN by `rest_reference.mjs` |
+| `rest_reference.mjs` | node script that runs the browser's own `restCorrections` on three's loaders (see below) |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
 for the repository root above this directory, then above the working directory):
 `shared/models/clips/idle.fbx`, `shared/models/clips/walk.fbx` (tracked clip library),
 `worlds/demo/characters/Minerva McGonagall/model3d/aa1f6d51558d.glb` (tracked demo-world
-character model) and, for an information line only, `shared/models/rig/reference.fbx`.
+character model), `shared/models/rig/reference.fbx` (served as `/assets/animation-rig`) and,
+for the rest-correction comparison only, the demo bakes of Johanna Falk and Rubeus Hagrid.
 
 The directory carries a `.gdignore`, so the Godot editor never imports the GLBs
 (the compressed one would fail: `EXT_meshopt_compression` is required).
@@ -232,3 +235,37 @@ ring angle 0 → (−2.4, 5) (its own `pos` is ignored — the tile wins). A tra
 withheld route (`waypoints` null) but a `pos` → its pos; a one-point route without `pos`
 and a row with neither location nor `pos` → off the map; `progress_m` 99 on a 5 m line →
 the end point (3, 4).
+
+### Rest-pose correction against the browser (`rest_reference.json`)
+
+The figure clips are rest-corrected like client3d does it (`q = K_p⁻¹·c·K_b`,
+`restCorrections` in `packages/scene-render/src/clipRetarget.ts`). The expected values are
+not hand-derived — they are the BROWSER'S OWN FUNCTION's output:
+
+    node native/fixtures/rest_reference.mjs      # from the repo root; needs npm install
+
+The script bundles itself with esbuild (like `scripts/smoke_clip_retarget.mjs`), loads the
+reference rig and the clips with three's `FBXLoader` and three demo bakes with
+`GLTFLoader` (images stripped — node cannot decode them; geometry/skin/skeleton intact),
+runs `restPoseOf` → `restCorrections` → `bindRelativeValues` and writes per model the
+corrected-bone count, the bones a stance rule turned, and for idle @ 0 s / 5 s and walk
+@ 0 s / 0.4 s the raw clip quaternion and the corrected one for 16 bones. Re-run it when
+the browser function, a clip or one of the rigs changes, and commit the JSON.
+
+| model | corrected bones | stance rule | why it is in |
+|---|---|---|---|
+| Minerva McGonagall | 51 (all but the hips) | none | the `--check` figure (Ada) |
+| Johanna Falk | 51 | **leg** (both legs, upleg → toebase) | exercises `legStance` |
+| Rubeus Hagrid | 51 | **foot** (both feet + toebase) | exercises `footStance` (sole read off the skinned mesh) |
+
+No demo rig trips `torsoStance` (Hagrid's trunk mean is 1.05°, the gate 6°), so that
+branch is ported but not compared.
+
+`CheckRestReference` demands, per model, the same corrected-bone count and stance set,
+and per sample and bone: Godot's clip value within 0.5° of three's (the two FBX importers
+agree — measured 0°) and the corrected rotation within **0.5°** of the browser's (measured
+max 0.056°, 192 comparisons). End to end on Ada: after `Seek` of the bound clip her
+skeleton's pose rotations are within 0.5° of the browser's corrected values (measured
+max 0.04°). Example, Minerva idle @ 5 s, RightArm: clip
+(0.5371679, -0.0387975, -0.114042, 0.8348292) → browser-corrected (0.316868, -0.5165012, -0.4071294, 0.6834235) — 72.3° apart, which
+is what the old verbatim copy put on her arm; the check allows 0.5°.

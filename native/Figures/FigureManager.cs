@@ -71,6 +71,8 @@ public partial class FigureManager : Node3D
         public AnimationLibrary? Library { get; init; }
         public int BoundTracks { get; init; }
         public int Unbound { get; init; }
+        /// <summary>Bones with a rest correction; −1 = no rig (verbatim copy).</summary>
+        public int Corrected { get; init; }
     }
 
     private sealed record ModelInfo(string Url, string Format, string Rig, bool Normalized);
@@ -283,15 +285,19 @@ public partial class FigureManager : Node3D
         double raw = Math.Max(size.Y, 0.01);
         var skel = ClipLibrary.Find<Skeleton3D>(root);
         AnimationLibrary? lib = null;
-        int bound = 0, unbound = 0;
+        int bound = 0, unbound = 0, corrected = -1;
         if (info.Rig == "mixamo" && skel is not null && skel.GetBoneCount() > 0)
         {
             await Clips.WaitRolesAsync();
+            // The browser's rest-pose correction against the reference rig
+            // (restCorrections, built once per model like fitLibraryAsync does).
+            var fixes = Clips.DonorRest is { } donor ? RestCorrections.Build(donor, root, skel) : null;
+            corrected = fixes?.Count ?? -1;
             lib = new AnimationLibrary();
             foreach (var role in ClipLibrary.Roles)
             {
                 var clip = Clips.ByRole.GetValueOrDefault(role);
-                var b = clip is null ? new BoundClip(role, null, 0) : Clips.Retarget(clip, root, skel);
+                var b = clip is null ? new BoundClip(role, null, 0) : Clips.Retarget(clip, root, skel, fixes);
                 if (b.Anim is null)
                 {
                     unbound++;
@@ -301,9 +307,11 @@ public partial class FigureManager : Node3D
                 lib.AddAnimation(role, b.Anim);
                 bound += b.Tracks;
             }
-            _log($"model {info.Url}: {skel.GetBoneCount()} bones, raw height {raw:0.###} m, {bound} clip tracks bound");
+            _log($"model {info.Url}: {skel.GetBoneCount()} bones, raw height {raw:0.###} m, {bound} clip tracks bound, "
+                 + (corrected >= 0 ? $"{corrected} bones rest-corrected" : "no rig: verbatim copy"));
         }
-        return new ModelTemplate { Root = root, RawHeight = raw, Library = lib, BoundTracks = bound, Unbound = unbound };
+        return new ModelTemplate { Root = root, RawHeight = raw, Library = lib, BoundTracks = bound, Unbound = unbound,
+                                   Corrected = corrected };
     }
 
     private void Instantiate(Figure fig, ModelTemplate t, ModelInfo info)

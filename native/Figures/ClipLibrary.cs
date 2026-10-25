@@ -61,28 +61,30 @@ public readonly record struct BoundClip(string Kind, Animation? Anim, int Tracks
 /// constant track from the clip bone's default for every clip bone the target
 /// has — which restores the file's track list.
 ///
-/// <b>Retarget (the spike's simplest one).</b> Bones are matched by name after
-/// stripping a namespace (<c>…:</c>) and the <c>mixamorig</c> prefix (Godot
-/// sanitises <c>mixamorig:Hips</c> to <c>mixamorig_Hips</c>), case-insensitive —
-/// the browser's <c>normBoneName</c>. ROTATION tracks are copied verbatim (local
-/// quaternions of the reference rig, written onto the character's bone).
-/// The HIPS position keeps the target's rest x/z (the clip plays in place) and
-/// scales the clip's hips height by the height ratio
-/// <c>k = target hips rest height / source standing hips height</c>, i.e. the
-/// browser's <c>rest + (y − ref)·k</c> = <c>y·k</c>; the source standing height
-/// is the median of the IDLE clip's hips track (the browser's no-rig fallback).
+/// <b>Retarget.</b> Bones are matched by name after stripping a namespace
+/// (<c>…:</c>) and the <c>mixamorig</c> prefix (Godot sanitises
+/// <c>mixamorig:Hips</c> to <c>mixamorig_Hips</c>), case-insensitive — the
+/// browser's <c>normBoneName</c>. ROTATIONS get the browser's rest-pose
+/// correction against the reference rig <c>/assets/animation-rig</c>:
+/// <c>q = K_p⁻¹·c·K_b</c> per bone (<see cref="RestCorrections"/>, a port of
+/// <c>restCorrections</c>/<c>bindRelativeValues</c> in
+/// packages/scene-render/src/clipRetarget.ts, incl. the leg/torso/foot stance
+/// rules), so a rig whose bone rolls differ from the reference plays the same
+/// motion; without the rig they are copied verbatim and the hips get the
+/// browser's <c>hipsRotFix</c>. The HIPS position keeps the target's rest x/z
+/// (the clip plays in place) and scales the clip's hips height by
+/// <c>k = target hips rest height / standing reference</c>, i.e. the browser's
+/// <c>rest + (y − ref)·k</c> = <c>y·k</c>; the reference is the rig's rest hips
+/// height (<c>standingHipsRef</c>), without the rig the idle clip's hips median.
 /// Other position and all scale tracks are dropped. A clip that binds fewer than
 /// <see cref="MinTracks"/> tracks is not played (browser <c>MIN_CLIP_TRACKS</c>).
 ///
 /// What the browser does beyond this (<c>adaptExternalClips</c>,
-/// <c>figures.ts</c>): rest-pose correction against the reference rig
-/// <c>/assets/animation-rig</c> (q = K_p⁻¹·c·K_b per bone, so rigs whose bone
-/// rolls differ from the reference get the same motion), the reference rig's
-/// rest hips (113.032 units) as the standing height, hips scale-outlier
-/// healing, root-motion paths for <c>keep</c>/<c>foot_lock</c> clips, per-rig
-/// root-path relock and foot pinning (<c>legPin</c>), bridge lift/heading,
-/// embedded clips winning per kind, clip transitions, set chains and
-/// <c>activity_animation</c> clips, pace-matched walk playback.
+/// <c>figures.ts</c>): hips scale-outlier healing, root-motion paths for
+/// <c>keep</c>/<c>foot_lock</c> clips, per-rig root-path relock and foot pinning
+/// (<c>legPin</c>), bridge lift/heading, embedded clips winning per kind, clip
+/// transitions, set chains and <c>activity_animation</c> clips, pace-matched
+/// walk playback.
 /// </summary>
 public sealed class ClipLibrary
 {
@@ -149,9 +151,18 @@ public sealed class ClipLibrary
         catch (Exception) { /* reported by the caller of LoadRolesAsync */ }
     }
 
+    /// <summary>The reference rig the clips are authored on (<c>/assets/animation-rig</c>).</summary>
+    public const string RigUrl = "/assets/animation-rig";
+
+    /// <summary>Rest pose of the reference rig; null when it could not be loaded (then: verbatim copy + hips fix).</summary>
+    public RestPose? DonorRest { get; private set; }
+    /// <summary>The rig's rest hips height (<c>rigHipsHeight</c>) — the standing reference when the rig is there.</summary>
+    public double? DonorHipsY { get; private set; }
+
     private async Task LoadRolesCore()
     {
         using (var doc = await _source.GetAnimationClipsAsync()) Parse(doc.RootElement);
+        await LoadRigAsync();
         foreach (var role in Roles)
         {
             var entry = Pick(role);
@@ -162,6 +173,41 @@ public sealed class ClipLibrary
                 continue;
             }
             ByRole[role] = await LoadAsync(entry);
+        }
+    }
+
+    /// <summary>
+    /// <c>/assets/animation-rig</c> → <see cref="DonorRest"/> (<c>restPoseOf(rig.scene)</c>)
+    /// and <see cref="DonorHipsY"/> (<c>rigHipsHeight</c>), like client3d's figure library.
+    /// A failure is logged; the clips then play as a verbatim copy (the browser's fallback).
+    /// </summary>
+    private async Task LoadRigAsync()
+    {
+        try
+        {
+            var bytes = await _source.GetBytesAsync(RigUrl);
+            var root = ImportFbxScene(bytes);
+            try
+            {
+                var skel = Find<Skeleton3D>(root) ?? throw new InvalidOperationException("rig has no skeleton");
+                var root3 = root as Node3D ?? throw new InvalidOperationException("rig root is not a Node3D");
+                DonorRest = RestPose.Of(root3, skel);
+                if (DonorRest.RootBone is { } hips && hips.EndsWith("hips", StringComparison.Ordinal))
+                    DonorHipsY = DonorRest.Position[hips].Y;
+                else
+                {
+                    var key = DonorRest.Order.FirstOrDefault(k => k.EndsWith("hips", StringComparison.Ordinal));
+                    if (key is not null) DonorHipsY = DonorRest.Position[key].Y;
+                }
+                _log($"rig: {DonorRest.World.Count} bones, rest hips height {DonorHipsY:0.####}");
+            }
+            finally { root.Free(); }
+        }
+        catch (Exception e)
+        {
+            DonorRest = null;
+            DonorHipsY = null;
+            _log($"rig {RigUrl} failed: {e.Message} — clips are copied 1:1 (no rest correction)");
         }
     }
 
@@ -192,15 +238,15 @@ public sealed class ClipLibrary
         }
     }
 
-    /// <summary>Runtime FBX import (main thread: it builds nodes), then keep only the data.</summary>
-    public static ClipSource Import(byte[] fbx, ClipEntry entry)
+    /// <summary>
+    /// Runtime FBX import to a scene (main thread: it builds nodes). Through a temp
+    /// file, not AppendFromBuffer: from a buffer the FBX reader asks Godot's memory
+    /// file for more bytes than remain and every import prints two "Reading less
+    /// data than requested" warnings (harmless, but they drown the log).
+    /// </summary>
+    public static Node ImportFbxScene(byte[] fbx)
     {
-        // Through a temp file, not AppendFromBuffer: from a buffer the FBX
-        // reader asks Godot's memory file for more bytes than remain and every
-        // import prints two "Reading less data than requested" warnings
-        // (harmless, but they drown the log). From a file it reads cleanly.
-        var tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"anima-clip-{Guid.NewGuid():N}.fbx");
-        Node root;
+        var tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"anima-fbx-{Guid.NewGuid():N}.fbx");
         try
         {
             System.IO.File.WriteAllBytes(tmp, fbx);
@@ -208,12 +254,18 @@ public sealed class ClipLibrary
             var state = new FbxState();
             var err = doc.AppendFromFile(tmp, state);
             if (err != Error.Ok) throw new InvalidOperationException($"FBX import failed: {err}");
-            root = doc.GenerateScene(state) as Node ?? throw new InvalidOperationException("FBX scene is empty");
+            return doc.GenerateScene(state) as Node ?? throw new InvalidOperationException("FBX scene is empty");
         }
         finally
         {
             try { System.IO.File.Delete(tmp); } catch (System.IO.IOException) { }
         }
+    }
+
+    /// <summary>Runtime FBX import (main thread: it builds nodes), then keep only the data.</summary>
+    public static ClipSource Import(byte[] fbx, ClipEntry entry)
+    {
+        var root = ImportFbxScene(fbx);
         try
         {
             var skel = Find<Skeleton3D>(root) ?? throw new InvalidOperationException("clip has no skeleton");
@@ -258,12 +310,14 @@ public sealed class ClipLibrary
     }
 
     /// <summary>
-    /// The source's standing hips height: median of the idle clip's hips
-    /// position track (browser fallback without a served rig), else the clip's
-    /// own hips default.
+    /// The source's standing hips height (<c>standingHipsRef</c>): the reference
+    /// rig's rest hips height when the rig is loaded, else the median of the idle
+    /// clip's hips position track (the browser's no-rig fallback), else the
+    /// clip's own hips default.
     /// </summary>
     public double StandingHipsY(ClipSource fallback)
     {
+        if (DonorHipsY is > 0) return DonorHipsY.Value;
         var src = ByRole.GetValueOrDefault("idle") ?? fallback;
         int hb = Array.FindIndex(src.Bones, b => NormBone(b) == "hips");
         if (hb < 0) return 0;
@@ -283,9 +337,23 @@ public sealed class ClipLibrary
     /// <summary>
     /// Build <paramref name="clip"/> for the skeleton under <paramref name="modelRoot"/>
     /// (track paths are relative to it — the AnimationPlayer's root node).
+    /// <paramref name="corrections"/> = <see cref="RestCorrections.Build"/> for this
+    /// skeleton (null without a rig): every rotation value becomes
+    /// <c>K_p⁻¹·c·K_b</c> (<c>bindRelativeValues</c>, client3d
+    /// <c>adaptExternalClips</c>); a bone without an entry keeps its values. Without
+    /// a rig the hips rotation gets the browser's fallback <c>hipsRotFix</c>
+    /// (the inverse world rotation of the hips' parent, premultiplied).
     /// </summary>
-    public BoundClip Retarget(ClipSource clip, Node3D modelRoot, Skeleton3D skel)
+    public BoundClip Retarget(ClipSource clip, Node3D modelRoot, Skeleton3D skel,
+                              IReadOnlyDictionary<string, RestFix>? corrections = null)
     {
+        Quaternion? hipsRotFix = null;
+        if (corrections is null)
+        {
+            var selfRest = RestPose.Of(modelRoot, skel);
+            var hk = selfRest.Order.FirstOrDefault(k => k.EndsWith("hips", StringComparison.Ordinal));
+            if (hk is not null) hipsRotFix = selfRest.Parent[hk].Inverse();
+        }
         var target = new Dictionary<string, int>();
         for (int i = 0; i < skel.GetBoneCount(); i++) target.TryAdd(NormBone(skel.GetBoneName(i)), i);
         var skelPath = modelRoot.GetPathTo(skel).ToString();
@@ -304,6 +372,11 @@ public sealed class ClipLibrary
             if (!target.TryGetValue(key, out int ti)) continue;
             var path = new NodePath($"{skelPath}:{skel.GetBoneName(ti)}");
 
+            Func<Quaternion, Quaternion> fix = q => q;
+            if (corrections is not null && corrections.TryGetValue(key, out var rf))
+                fix = q => RestCorrections.Apply(rf, q);
+            else if (key == "hips" && hipsRotFix is { } hf)
+                fix = q => hf * q;
             int rt = anim.AddTrack(Animation.TrackType.Rotation3D);
             anim.TrackSetPath(rt, path);
             if (clip.RotationTracks.TryGetValue(name, out int st))
@@ -311,11 +384,11 @@ public sealed class ClipLibrary
                 anim.TrackSetInterpolationType(rt, clip.Anim.TrackGetInterpolationType(st));
                 for (int k = 0; k < clip.Anim.TrackGetKeyCount(st); k++)
                     anim.RotationTrackInsertKey(rt, clip.Anim.TrackGetKeyTime(st, k),
-                                                clip.Anim.TrackGetKeyValue(st, k).AsQuaternion());
+                                                fix(clip.Anim.TrackGetKeyValue(st, k).AsQuaternion()).Normalized());
             }
             else
             {
-                anim.RotationTrackInsertKey(rt, 0, clip.RestRotations[b]);
+                anim.RotationTrackInsertKey(rt, 0, fix(clip.RestRotations[b]).Normalized());
             }
             tracks++;
 

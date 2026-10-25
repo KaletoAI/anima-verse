@@ -29,8 +29,10 @@ What it draws after login:
   changed `model_sig` reloads it. Clips: the neutral-set `idle`/`walk` of
   `/assets/animation-clips` (through its `locomotion` mapping), each FBX
   downloaded and imported once at runtime (`FBXDocument`), retargeted by bone
-  name — rotations verbatim, hips height scaled (see `Figures/ClipLibrary.cs`
-  for what the browser does on top);
+  name with the browser's rest-pose correction against `/assets/animation-rig`
+  (`Figures/RestCorrection.cs`, port of `restCorrections` in
+  `packages/scene-render/src/clipRetarget.ts`), hips height scaled (see
+  `Figures/ClipLibrary.cs` for what the browser does on top);
 - a sun + fill light and ambient comparable to the browser, sky colour, no fog.
 
 ## Requirements (build machine)
@@ -92,7 +94,7 @@ above the working directory).
 | `Api/AnimaApi.cs` | HttpClient + cookie session, the server getters, `IWorldSource` |
 | `World/` | payload parsing, height sampling + anchor, terrain, `place()`, recipe meshes, the builder |
 | `Gltf/` | Meshopt decode (P/Invoke) and runtime GLB import |
-| `Figures/` | world-map characters: placement rule, figures + poll loop, clip library (import, pick, retarget) |
+| `Figures/` | world-map characters: placement rule, figures + poll loop, clip library (import, pick, retarget), rest-pose correction |
 | `Ui/` | login screen, fly camera |
 | `Check/` | `--check`: fixture source and expectations |
 | `fixtures/` | offline payloads + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
