@@ -790,6 +790,7 @@
     "LLM-composed (cached)": "LLM-komponiert (aus dem Cache)",
     "Loading the world": "Die Welt wird geladen",
     "Loading this place…": "Dieser Ort lädt noch …",
+    "No extension bones on this model.": "Dieses Modell hat keine Zusatz-Bones.",
     "Loading…": "Lade…",
     "Location": "Ort",
     "Location copied": "Ort kopiert",

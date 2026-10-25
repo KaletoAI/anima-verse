@@ -22,6 +22,7 @@ import { BodyEditor } from '@anima/player-ui'
 import { DefaultExpressionField } from './DefaultExpressionField'
 import { StatsPanel } from './StatsPanel'
 import { FieldModel3D } from './FieldModel3D'
+import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model3DSidePanels'
 import { FieldModelRefs } from './FieldModelRefs'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from '@anima/player-ui'
@@ -127,7 +128,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
   'placement', 'body_editor', 'default_expression', 'model_refs', 'model3d_gen',
-  'stats',
+  'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
 ])
 
 function sectionIsRenderable(s: TmplSectionRaw): boolean {
@@ -946,7 +947,10 @@ export function CharactersTab() {
                         />
                       ),
                       model_refs: <FieldModelRefs character={selected} kinds={['tpose']} />,
-                      model3d_gen: <FieldModel3D character={selected} />,
+                      model3d_gen: <FieldModel3D key={selected} character={selected} />,
+                      model3d_animations: <Model3DAnimations character={selected} />,
+                      model3d_extensions: <Model3DExtensions character={selected} />,
+                      model3d_generation: <Model3DGeneration character={selected} />,
                     }}
                   />
                 ) : null

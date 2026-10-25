@@ -1,8 +1,7 @@
-import { AnimationSituations } from './AnimationSituations'
+import { clearModel3DPanel, publishModel3DPanel, useModel3DPanel } from './model3dPanel'
 import { previewMotionSliders } from './motionFieldPreview'
-import { ExtensionMotionDraft, ExtensionMotionSliders } from './ExtensionMotionDraft'
+import { ExtensionMotionSliders } from './ExtensionMotionDraft'
 import type { Physics } from '../../lib/motionDraft'
-import { MotionPreviewHint } from './MotionPreviewHint'
 import type { SecondaryMotionPayload, ExtensionRigDeclaration } from '@anima/scene-render'
 /**
  * FieldModel3D — the character's 3D model for the current outfit. ONE model,
@@ -68,7 +67,7 @@ interface Model3DDiagnosis {
   at?: string
 }
 
-interface ExtensionRigResult {
+export interface ExtensionRigResult {
   status?: 'none_applicable' | 'not_found' | 'failed' | 'applied'
   reason?: string
   metrics?: Record<string, unknown>
@@ -158,7 +157,7 @@ interface MeshBackend {
   lod_stages?: boolean
 }
 
-interface Model3DStatus {
+export interface Model3DStatus {
   motion?: SecondaryMotionPayload
   motion_defaults?: SecondaryMotionPayload['groups']
   signature?: string
@@ -196,6 +195,8 @@ export function FieldModel3D({ character }: { character: string }) {
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [analysisResults, setAnalysisResults] = useState<Array<{ message: string; error: boolean }>>([])
+  const panel = useModel3DPanel(character)
+  useEffect(() => () => clearModel3DPanel(character), [character])
   const [clip, setClip] = useState({ character: '', url: '' })
   const playSituation = useCallback((url: string) => setClip({ character, url }), [character])
   const [sliderPreview, setSliderPreview] = useState<{ context: string; groups: Record<string, Physics> }>({ context: '', groups: {} })
@@ -288,6 +289,7 @@ export function FieldModel3D({ character }: { character: string }) {
   }, [load, t, toast])
 
   useEffect(() => {
+    let cancelled = false
     setConfirmDelete(false)
     setRerigOpen(false)
     rerigTaskRef.current = ''
@@ -307,9 +309,10 @@ export function FieldModel3D({ character }: { character: string }) {
     load().then((d) => {
       // Backend still meshing (switched in / reloaded mid-run)? Track it to
       // completion so the display clears on its own.
-      if (d?.pending) startPoll()
+      if (!cancelled && d?.pending) startPoll()
     })
     return () => {
+      cancelled = true
       if (pollRef.current) clearInterval(pollRef.current)
     }
   }, [load, startPoll])
@@ -827,6 +830,14 @@ export function FieldModel3D({ character }: { character: string }) {
     </fieldset>
   ) : null)
   const extensionResult = model?.extension_rig?.per_tier?.[viewTier] || model?.extension_rig
+  const panelSnapshot = useMemo(() => ({
+    st, pending, busy, rigless, mixamo, viewTier, extensionResult, canMeasure, model,
+    setModelOption, setExtensionOption, setExtensionMotion, rebuildExtensions,
+    playUrl: clip.character === character ? clip.url : '', setPlayUrl: playSituation,
+  }), [st, pending, busy, rigless, mixamo, viewTier, extensionResult, canMeasure, model,
+    setModelOption, setExtensionOption, setExtensionMotion, rebuildExtensions, clip, character, playSituation])
+  useEffect(() => { publishModel3DPanel(character, panelSnapshot) }, [character, panelSnapshot])
+
   const statusRow = (label: string, value: string, color: string, explanation: string) => (
     <div className="ga-model3d-status-row" title={explanation}>
       <span className={`ga-model3d-status-dot ga-model3d-status-${color}`} />
@@ -886,7 +897,7 @@ export function FieldModel3D({ character }: { character: string }) {
             motionToolbar={rigless ? undefined : motionToolbar}
             url={viewerUrl}
             format={model.format || 'fbx'}
-            clipUrl={mixamo && clip.character === character ? clip.url : ''}
+            clipUrl={mixamo ? panel?.playUrl || '' : ''}
             embeddedTakes={model.rig === 'generic'}
             clipLoops={model.clips}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
@@ -939,9 +950,6 @@ export function FieldModel3D({ character }: { character: string }) {
               ) : null}
             </div>
           ) : null}
-          {mixamo ? <AnimationSituations
-            key={`${character}:${(st.animation_sets || [st.animation_set || '']).join(':')}`}
-            character={character} onPlay={playSituation} /> : null}
           <div className="ga-model3d-controls">
           <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span className="ga-hint">{t('Preview state')}</span>
             <select className="ga-input" value={previewState} disabled={rigless} onChange={event => setPreviewState(event.target.value)}>
@@ -1055,76 +1063,6 @@ export function FieldModel3D({ character }: { character: string }) {
             : t('No 3D model for this outfit yet — upload one or generate it from the T-pose render.')}
         </div>
       )}
-      <label className="ga-check-row"
-        title={t('Once the T-pose render of a NEW outfit combination has succeeded, the mesh is generated automatically on the cheapest matching backend — the T-pose is always awaited first.')}>
-        <input
-          type="checkbox"
-          checked={!!st.options?.auto_generate}
-          onChange={(e) => setModelOption('auto_generate', e.target.checked)}
-        />
-        <span>{t('Auto-generate 3D model (cheapest backend)')}</span>
-      </label>
-      <label className="ga-check-row"
-        title={st.rig && st.rig !== 'mixamo' ? t('Humanoid models only.') : t('New meshes get the face correction (upscaler + face retexture) before the first rig, so the rigger runs once. Independent of auto-generate. Humanoid models only.')}>
-        <input type="checkbox" checked={!!st.options?.face_before_rig}
-          disabled={!!st.rig && st.rig !== 'mixamo'}
-          onChange={e => setModelOption('face_before_rig', e.target.checked)} />
-        <span>{t('Improve face before rigging')}</span>
-      </label>
-      {st.extension_groups?.length ? (
-        <fieldset className="ga-form">
-          <legend>{t('Extension bones')}</legend>
-          <div className="ga-hint" aria-live="polite">
-            <strong>{t('Extension bones')} · {viewTier}: </strong>
-            {t(extensionResult?.status === 'applied' ? 'Applied'
-              : extensionResult?.status === 'failed' ? 'Failed'
-              : extensionResult?.status === 'not_found' ? 'Geometry not found'
-              : extensionResult?.status === 'none_applicable' ? 'No applicable groups'
-              : 'Not processed')}
-            {extensionResult?.reason ? ` · ${extensionResult.reason}` : ''}
-            {extensionResult?.metrics ? (
-              <details>
-                <summary>{t('Metrics')}</summary>
-                <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                  {JSON.stringify(extensionResult.metrics, null, 2)}
-                </pre>
-              </details>
-            ) : null}
-          </div>
-
-          {st.extension_groups.map((group) => (
-            <div key={group.id} style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-              <span>{group.id}</span>
-              <label>
-                <input type="checkbox" disabled={pending || busy || !st.model?.signature}
-                  checked={st.options?.extension_rig_models?.[st.model?.signature || '']?.[group.id]?.enabled !== false}
-                  onChange={(event) => setExtensionOption(group.id, 'enabled', event.target.checked)} />
-                {' '}{t('Enabled')} <MotionPreviewHint field="enabled" />
-              </label>
-              {group.op === 'appendage_chain' ? (
-                <label>
-                  <input type="checkbox" disabled={pending || busy || !st.model?.signature}
-                    checked={st.options?.extension_rig_models?.[st.model?.signature || '']?.[group.id]?.flip === true}
-                    onChange={(event) => setExtensionOption(group.id, 'flip', event.target.checked)} />
-                  {' '}{t('Flip direction')} <MotionPreviewHint field="flip" />
-                </label>
-              ) : null}
-              {st.motion_defaults?.[group.id] ? <ExtensionMotionDraft
-                key={`${character}:${st.model?.signature || st.signature || ''}:${group.id}`}
-                controls={group.controls}
-                defaults={st.motion_defaults[group.id] as unknown as Physics}
-                overrides={st.options?.extension_motion?.[group.id] ?? {}}
-                disabled={pending || busy || rigless}
-                onSave={values => setExtensionMotion(group.id, values)} /> : null}
-            </div>
-          ))}
-        {model?.format === 'glb' && mixamo ? (
-          <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
-            onClick={rebuildExtensions}>{t('Rebuild extension bones')}</button>
-        ) : null}
-          <span className="ga-hint">{t('Enabled and flip are saved for this model; they take effect after rebuilding its extension bones.')}</span>
-        </fieldset>
-      ) : null}
       {!st.pending && st.rerig_result ? <div className="ga-hint" role="status">
         {st.rerig_result.ok ? t('Re-rig completed') : `${t('Re-rig failed')}: ${st.rerig_result.error || t('Error')}`}
       </div> : null}
