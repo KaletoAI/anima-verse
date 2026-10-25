@@ -82,6 +82,11 @@ logger = get_logger(__name__)
 #   it satisfiable. Naming the OUTCOME instead (clear of the chest) states
 #   what actually matters for the mesh and is true of short hair for free —
 #   the identity layer still says how long the hair actually is.
+#   Strengthened 2026-10-25 (user: the clause was too weak, long hair and
+#   braids still fell onto the chest): the outcome is now spelled out as the
+#   uncovered surfaces (chest, collarbones, front of the shoulders), and the
+#   failure images (hair/braid/ponytail over the shoulder or chest) sit in
+#   the T-pose negative — still no direction, so short hair stays satisfied.
 # The admin override image_generation.tpose_prompt stays untouched — whoever
 # replaces this text takes the responsibility with it.
 TPOSE_PROMPT_DEFAULT = (
@@ -89,7 +94,7 @@ TPOSE_PROMPT_DEFAULT = (
     "sides at shoulder height, forming the letter T, palms facing down "
     "toward the floor, hands in natural proportion to the body, fingers "
     "straight, slender and slightly spread apart, legs clearly apart with "
-    "open space visible between them, hair clear of the chest"
+    "open space visible between them, no hair on the chest or in front of the shoulders, chest, collarbones and front of the shoulders fully uncovered"
 )
 
 # Animals use a strict profile, not a three-quarter view, to keep the mesh
@@ -156,7 +161,7 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
     "to the sides at shoulder height so the near arm points at the camera and "
     "hides the far arm, strongly foreshortened, palms facing down toward the "
     "floor, hands in natural proportion to the body, fingers straight, slender "
-    "and slightly spread apart, legs clearly apart, hair clear of the chest"
+    "and slightly spread apart, legs clearly apart, no hair on the chest or in front of the shoulders, chest, collarbones and front of the shoulders fully uncovered"
 )
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
