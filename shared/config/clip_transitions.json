@@ -1,12 +1,6 @@
 {
   "transitions": [
     {
-      "from": "standing",
-      "to": "walking",
-      "kind": "mob1-stand-relaxed-to-walk",
-      "accel": 1.0
-    },
-    {
       "from": "sleeping",
       "to": "standing",
       "kind": "get-up-bed",

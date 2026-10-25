@@ -7,10 +7,10 @@
  * TO side it makes an exit clip ("stand up, whatever comes next"), on the FROM
  * side an enter clip; the more precise rule wins.
  *
- * The rules are world-independent like the clips themselves
- * (`shared/config/clip_transitions.json`) and the whole list travels on every
- * save: they are few, the table shows all of them, and a partial write would
- * only invite two editors to disagree about what the list is.
+ * Free bridges can live in the shared seed; licensed bridges stay in the
+ * world layer. The whole effective list travels on every save: they are few,
+ * the table shows all of them, and a partial write would only invite two
+ * editors to disagree about what the list is.
  *
  *   GET  /assets/animation-clips               … {kinds, pair_kinds, transitions}
  *   PUT  /assets/animation-clips/transitions   {transitions:[…]}
@@ -20,7 +20,7 @@ import { ClipPreview } from './ClipPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 
-import type { PoseTransition as Transition } from './clipSets'
+import type { ClipListing, PoseTransition as Transition } from './clipSets'
 
 export interface PoseRef { key: string }
 
@@ -37,6 +37,7 @@ export function ClipTransitions({ poses, onSaved }: {
   // Which row the preview on the right follows (index into `draft`)
   const [selected, setSelected] = useState<number | null>(null)
   const [kinds, setKinds] = useState<string[]>([])
+  const [freeKinds, setFreeKinds] = useState<Set<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -44,7 +45,7 @@ export function ClipTransitions({ poses, onSaved }: {
   // they may name.
   useEffect(() => {
     let alive = true
-    apiGet<{ kinds?: string[]; pair_kinds?: string[]; transitions?: Transition[] }>(
+    apiGet<ClipListing>(
       '/assets/animation-clips')
       .then((data) => {
         if (!alive) return
@@ -52,7 +53,11 @@ export function ClipTransitions({ poses, onSaved }: {
         // the server refuses a pair kind here anyway.
         const pair = new Set(data.pair_kinds || [])
         setKinds((data.kinds || []).filter((k) => !pair.has(k)))
-        const rules = data.transitions || []
+        const free = new Set(data.clips.filter((c) => c.library === 'free' && !c.role).map((c) => c.kind))
+        setFreeKinds(free)
+        const rules = (data.transitions || []).map((r) => ({
+          ...r, store: free.has(r.kind) ? r.store : 'world' as const,
+        }))
         setTransitions(rules)
         setDraft(rules)
         setError('')
@@ -73,8 +78,13 @@ export function ClipTransitions({ poses, onSaved }: {
   )
 
   const patch = useCallback((i: number, part: Partial<Transition>) => {
-    setDraft((d) => d.map((r, j) => (j === i ? { ...r, ...part } : r)))
-  }, [])
+    setDraft((d) => d.map((r, j) => {
+      if (j !== i) return r
+      const next = { ...r, ...part }
+      if (!freeKinds.has(next.kind)) next.store = 'world'
+      return next
+    }))
+  }, [freeKinds])
 
   const removeRule = useCallback((i: number) => {
     setDraft((d) => d.filter((_, j) => j !== i))
@@ -85,8 +95,8 @@ export function ClipTransitions({ poses, onSaved }: {
   const addRule = useCallback(() => {
     // The new row is the last one, and the preview follows it right away.
     setSelected(draft.length)
-    setDraft((d) => [...d, { from: TRANSITION_ANY, to: TRANSITION_ANY, kind: kinds[0] || '', accel: 0 }])
-  }, [draft.length, kinds])
+    setDraft((d) => [...d, { from: TRANSITION_ANY, to: TRANSITION_ANY, kind: kinds[0] || '', accel: 0, store: freeKinds.has(kinds[0]) ? 'shared' : 'world' }])
+  }, [draft.length, kinds, freeKinds])
 
   const save = useCallback(async () => {
     if (busy || !transitions) return
@@ -97,7 +107,7 @@ export function ClipTransitions({ poses, onSaved }: {
       // write would only invite two editors to disagree about what it is.
       const res = await apiPut<{ transitions: Transition[] }>(
         '/assets/animation-clips/transitions',
-        { transitions: draft.filter((r) => r.from && r.to && r.kind).map(({ from, to, kind, accel }) => ({ from, to, kind, accel })) },
+        { transitions: draft.filter((r) => r.from && r.to && r.kind).map(({ from, to, kind, accel, store }) => ({ from, to, kind, accel, store })) },
       )
       setTransitions(res.transitions)
       setDraft(res.transitions)
@@ -139,6 +149,7 @@ export function ClipTransitions({ poses, onSaved }: {
                 <th>{t('From')}</th>
                 <th>{t('To')}</th>
                 <th>{t('Bridge clip')}</th>
+                <th>{t('Store')}</th>
                 <th
                   title={t('Fraction of normal speed the figure gains per second while the'
                            + ' clip plays: 0 holds it on the spot for the whole clip'
@@ -154,7 +165,7 @@ export function ClipTransitions({ poses, onSaved }: {
             <tbody>
               {!draft.length ? (
                 <tr>
-                  <td colSpan={5}>{t('No rules — every pose change is instant.')}</td>
+                  <td colSpan={6}>{t('No rules — every pose change is instant.')}</td>
                 </tr>
               ) : null}
               {draft.map((rule, i) => (
@@ -208,6 +219,18 @@ export function ClipTransitions({ poses, onSaved }: {
                     </div>
                     {rule.bridge_public === false ? <div className="ga-field-warn">{t('Bridge clip missing publicly')}</div> : null}
                     {rule.conflict ? <div className="ga-field-warn">{t('Overlaps an earlier rule')}</div> : null}
+                  </td>
+                  <td>
+                    {rule.store === 'world' ? <span className="ga-source">{t('world')}</span> : null}
+                    <select className="ga-input" value={rule.store} disabled={busy}
+                      aria-label={t('Store')}
+                      onChange={(e) => patch(i, { store: e.target.value as Transition['store'] })}>
+                      <option value="shared" disabled={!freeKinds.has(rule.kind)}>{t('shared')}</option>
+                      <option value="world">{t('world')}</option>
+                    </select>
+                    {!freeKinds.has(rule.kind) ? (
+                      <div className="ga-form-hint">{t('Licensed bridge clips stay in this world.')}</div>
+                    ) : null}
                   </td>
                   <td>
                     <input

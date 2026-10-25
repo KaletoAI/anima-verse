@@ -346,7 +346,7 @@ TRANSITION_ANY = "*"
 
 
 def clip_transitions_path() -> Path:
-    """Shared, world-independent clip transition rules."""
+    """Shared seed for clip transition rules."""
     return get_config_dir() / "clip_transitions.json"
 
 
@@ -365,14 +365,14 @@ def _read_transitions_file(path: Path) -> List[Dict[str, Any]]:
     return rules if isinstance(rules, list) else []
 
 
-def load_transitions(path: Optional[Path] = None) -> List[Dict[str, str]]:
+def load_shared_transitions(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """The transition rules as ``[{from, to, kind}]``, junk entries dropped.
 
     Order is the file's own — :func:`resolve_transition` decides by
     specificity, not by position, so a hand-edited file cannot become
     order-dependent behind the editor's back.
     """
-    out: List[Dict[str, str]] = []
+    out: List[Dict[str, Any]] = []
     seen = set()
     for raw in _read_transitions_file(path or clip_transitions_path()):
         if not isinstance(raw, dict):
@@ -387,6 +387,54 @@ def load_transitions(path: Optional[Path] = None) -> List[Dict[str, str]]:
         seen.add((src, dst))
         out.append({"from": src, "to": dst, "kind": kind,
                     "accel": _accel(raw.get("accel"))})
+    return out
+
+
+def world_transitions() -> List[Dict[str, Any]]:
+    """Read world rules in insertion order; a not-yet-created table is empty."""
+    import sqlite3
+    from app.core.db import get_connection
+    try:
+        rows = get_connection().execute(
+            "SELECT from_pose, to_pose, kind, accel FROM clip_transitions_world ORDER BY rowid"
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise
+        return []
+    return [{"from": src, "to": dst, "kind": kind, "accel": _accel(accel)}
+            for src, dst, kind, accel in rows]
+
+
+def _write_world_transitions(rules: List[Dict[str, Any]]) -> None:
+    """Replace the whole layer atomically, preserving unavailable bridges."""
+    from app.core.db import transaction
+    from app.core.timeutils import utc_now_iso
+    now = utc_now_iso()
+    with transaction() as conn:
+        conn.execute("DELETE FROM clip_transitions_world")
+        conn.executemany(
+            "INSERT INTO clip_transitions_world (from_pose, to_pose, kind, accel, updated_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            [(r["from"], r["to"], r["kind"], r["accel"], now) for r in rules])
+
+
+def replace_world_transitions(rules: Any) -> List[Dict[str, Any]]:
+    """Validate and replace the entire world layer."""
+    out = _validate_transitions(rules)
+    _write_world_transitions(out)
+    return out
+
+
+def load_transitions(path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Shared file order, world replacements in place, world-only rows last."""
+    world = {(r["from"], r["to"]): r for r in world_transitions()}
+    out = []
+    for rule in load_shared_transitions(path):
+        replacement = world.pop((rule["from"], rule["to"]), None)
+        out.append(dict(replacement if replacement is not None else rule,
+                        store="world" if replacement is not None else "shared"))
+    out.extend(dict(rule, store="world") for rule in world.values())
     return out
 
 
@@ -447,24 +495,55 @@ def resolve_transition(from_pose: Any, to_pose: Any,
 
 
 def save_transitions(entries: Any,
-                     path: Optional[Path] = None) -> List[Dict[str, str]]:
-    """Replaces the whole rule list and returns what is now stored.
-
-    The whole list, not a merge: the rules are few and the editor shows all of
-    them, so a partial write would only invite two editors to disagree about
-    what "the list" is.
-
-    ``kind`` must exist as a SOLO clip — a rule pointing at a file nobody has
-    would stall a figure between two states. ``from``/``to`` are NOT checked
-    against the catalog: they are pose keys from any world or pack. Both sides
-    wildcard is refused — that rule would fire on every single clip change.
-    """
+                     path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Validate both stores before writing the shared seed and whole world layer."""
     if not isinstance(entries, list):
         raise ClipLibraryError("a list of {from, to, kind} is expected")
-    out: List[Dict[str, str]] = []
-    seen = set()
-    solo = None
+    shared, world = [], []
+    seen = {"shared": set(), "world": set()}
+    solo = _solo_kinds()
+    free = {e["kind"] for root, source in get_animation_clips_dirs()
+            if source == "free" and root.exists()
+            for e in _scan_library(root, source) if not e["role"]}
+    # Validate each row with its original position for useful editor errors.
     for i, raw in enumerate(entries):
+        rule = _validate_transitions([raw], offset=i, solo=solo)[0]
+        store = raw.get("store", "shared")
+        if store not in ("shared", "world"):
+            raise ClipLibraryError(f"rule {i + 1}: store must be shared or world")
+        if store == "shared" and rule["kind"] not in free:
+            raise ClipLibraryError(
+                f"rule {i + 1}: bridge clip {rule['kind']} is licensed — it belongs to the world layer")
+        layer = shared if store == "shared" else world
+        pair = (rule["from"], rule["to"])
+        if pair in seen[store]:
+            raise ClipLibraryError(
+                f"rule {i + 1}: '{rule['from']}' to '{rule['to']}' is already ruled")
+        seen[store].add(pair)
+        layer.append(rule)
+    # The editor sends the EFFECTIVE list, where a world rule hides the shared
+    # rule of its pair. That hidden shared rule is not being deleted — keep it
+    # in the seed (in its place), or every save would strip it from the repo.
+    for rule in load_shared_transitions(path):
+        pair = (rule["from"], rule["to"])
+        if pair in seen["world"] and pair not in seen["shared"]:
+            seen["shared"].add(pair)
+            shared.append(rule)
+    order = {(r["from"], r["to"]): n for n, r in enumerate(load_shared_transitions(path))}
+    shared.sort(key=lambda r: order.get((r["from"], r["to"]), len(order)))
+    _write_world_transitions(world)
+    _write_transitions(shared, path)
+    return load_transitions(path)
+
+
+def _validate_transitions(entries: Any, offset: int = 0,
+                          solo: Optional[set] = None) -> List[Dict[str, Any]]:
+    """Validate one layer; bridges must be solo clips in either library."""
+    if not isinstance(entries, list):
+        raise ClipLibraryError("a list of {from, to, kind} is expected")
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for i, raw in enumerate(entries, start=offset):
         if not isinstance(raw, dict):
             raise ClipLibraryError(f"rule {i + 1}: an object is expected")
         src = str(raw.get("from") or "").strip().lower()
@@ -492,7 +571,6 @@ def save_transitions(entries: Any,
         out.append({"from": src, "to": dst, "kind": kind,
                     "accel": _accel(raw.get("accel"))})
 
-    _write_transitions(out, path)
     return out
 
 
@@ -561,7 +639,7 @@ def annotated_transitions(rules=None) -> List[Dict[str, Any]]:
     seen = set()
     for rule in load_transitions() if rules is None else rules:
         pairs = _transition_pairs(rule, maps)
-        row = dict(rule)
+        row = dict(rule, store=rule.get("store", "shared"))
         for side in ("from", "to"):
             key = rule[side]
             row[side + "_kind"] = TRANSITION_ANY if key == TRANSITION_ANY else played.get(key, "")
@@ -575,27 +653,33 @@ def annotated_transitions(rules=None) -> List[Dict[str, Any]]:
 
 
 def rename_transition_pose(old: str, new: str) -> int:
-    """Rename both references to a pose and return the number of changed rules."""
-    rules = load_transitions()
+    """Rename references in both layers, counting even hidden shared rules."""
     count = 0
-    for rule in rules:
-        if old in (rule["from"], rule["to"]):
-            count += 1
-            for side in ("from", "to"):
-                if rule[side] == old:
-                    rule[side] = new
-    if count:
-        _write_transitions(rules)
+    for rules, write in ((load_shared_transitions(), _write_transitions),
+                         (world_transitions(), _write_world_transitions)):
+        changed = 0
+        for rule in rules:
+            if old in (rule["from"], rule["to"]):
+                changed += 1
+                for side in ("from", "to"):
+                    if rule[side] == old:
+                        rule[side] = new
+        if changed:
+            write(rules)
+        count += changed
     return count
 
 
 def drop_transition_pose(key: str) -> int:
-    """Remove rules referencing a deleted pose."""
-    rules = load_transitions()
-    kept = [r for r in rules if key not in (r["from"], r["to"])]
-    count = len(rules) - len(kept)
-    if count:
-        _write_transitions(kept)
+    """Remove references from both layers, including hidden shared rules."""
+    count = 0
+    for rules, write in ((load_shared_transitions(), _write_transitions),
+                         (world_transitions(), _write_world_transitions)):
+        kept = [r for r in rules if key not in (r["from"], r["to"])]
+        removed = len(rules) - len(kept)
+        if removed:
+            write(kept)
+        count += removed
     return count
 
 

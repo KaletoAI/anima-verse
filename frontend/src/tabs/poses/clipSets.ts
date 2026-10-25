@@ -54,6 +54,7 @@ export interface ApiClipRow {
 }
 
 export interface PoseTransition {
+  store: 'shared' | 'world'
   from: string
   to: string
   kind: string

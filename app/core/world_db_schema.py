@@ -708,6 +708,16 @@ SCHEMA_STATEMENTS = [
         PRIMARY KEY (axis, kind, key)
     )""",
 
+    # Clip transitions: world rows replace shared rules by pose pair.
+    """CREATE TABLE IF NOT EXISTS clip_transitions_world (
+        from_pose  TEXT NOT NULL,
+        to_pose    TEXT NOT NULL,
+        kind       TEXT NOT NULL,
+        accel      REAL NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (from_pose, to_pose)
+    )""",
+
     # Building styles, WORLD layer: shared/building_styles/*.json is the seed.
     # A row REPLACES the whole shared entry or adds a world-only style.
     # Deleting the row restores the shared seed. See hull_styles.py STORES.

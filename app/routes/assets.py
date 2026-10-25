@@ -268,7 +268,7 @@ async def put_clip_transitions(request: Request,
                                ) -> Dict[str, Any]:
     """Sets pose transition rules — which bridge clip plays between two poses.
 
-    Body ``{transitions: [{from, to, kind}]}`` (a bare list is accepted too),
+    Body ``{transitions: [{from, to, kind, accel, store}]}`` (a bare list is accepted too),
     and it replaces the WHOLE list: the rules are few and the editor shows all
     of them. ``"*"`` on the ``to`` side is an exit clip ("stand up, whatever
     comes next"), on the ``from`` side an enter clip; both sides at once is

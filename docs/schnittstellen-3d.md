@@ -2388,6 +2388,8 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   entlang der Set-Kette (Game-Admin → Character → 3D).
 - **Übergänge hängen an Posen** (2026-10-25): `shared/config/clip_transitions.json`
   nennt in `from`/`to` Pose-Schlüssel (oder `*`), in `kind` den Brücken-Clip.
+  Die Shared-Datei enthält nur Regeln mit freien Brücken; Regeln mit lizenzierten
+  Brücken liegen im World-Layer (`clip_transitions_world`), der Shared je `(from,to)` ersetzt.
   Der Server übersetzt sie für den Client in Clip-Regeln
   (`transition_clips`: gespielte und mitgelieferte Clip-Art beider Posen;
   `animation_clips.client_transition_rules`); `transitions` trägt die
