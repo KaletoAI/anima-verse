@@ -19,6 +19,7 @@
  * editing an entry's prompt does NOT invalidate the images already rendered
  * under it — that is what the clear button next to the editor is for.
  */
+import { ConfirmDialog } from '@anima/player-ui'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PoseAnimationDialog } from './PoseAnimationDialog'
 import type { PoseAnimationRequest } from './PoseAnimationDialog'
@@ -134,6 +135,8 @@ interface Entry {
    *  world's own layer in its world.db for entries that must never be
    *  committed */
   store?: Store
+  movement?: boolean
+  deletable?: boolean
   /** false for the keys the server code names literally (pose axis) */
   renamable?: boolean
 }
@@ -213,6 +216,7 @@ export function PosesTab() {
   const [confirmDismissAll, setConfirmDismissAll] = useState(false)
   const [confirmClear, setConfirmClear] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [animationDialog, setAnimationDialog] = useState<PoseAnimationRequest | null>(null)
   const [animationJobs, setAnimationJobs] = useState<AnimationJob[]>([])
@@ -564,17 +568,19 @@ export function PosesTab() {
   }, [approveOf, axis, draft, isNew, isPose, load, t, toast])
 
   const remove = useCallback(async () => {
-    if (!draft || isNew) return
+    if (!draft || isNew || draft.deletable === false) return
     try {
       await apiDelete(`/poses/${encodeURIComponent(draft.key)}?axis=${axis}`)
       toast(t('Deleted'))
+      setDeleteOpen(false)
+      await loadClips()
       setDraft(null)
       setSelected('')
       await load()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [axis, draft, isNew, load, t, toast])
+  }, [axis, draft, isNew, load, loadClips, t, toast])
 
   /** Renames the selected pose's KEY. The server rewrites every stored
    *  reference of this world (character poses, pair interactions, invites,
@@ -598,12 +604,13 @@ export function PosesTab() {
         setDraft((d) => (d ? { ...d, key: r.key,
           synonyms: d.synonyms.filter((s) => s !== r.key) } : d))
         setSelected(r.key)
+        await loadClips()
         await load()
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [axis, draft, isNew, load, t, toast],
+    [axis, draft, isNew, load, loadClips, t, toast],
   )
 
   const asSynonym = useCallback(
@@ -742,6 +749,10 @@ export function PosesTab() {
     [data.groups],
   )
 
+  const transitionCount = isPose && draft
+    ? (clipList.transitions || []).filter((rule) => rule.from === draft.key || rule.to === draft.key).length
+    : 0
+
   const viewSwitch = (
     <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
       {(['entries', 'library', 'catalog', 'inbox', 'transitions'] as View[]).map((v) => (
@@ -778,7 +789,7 @@ export function PosesTab() {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {viewSwitch}
-        <ClipTransitions />
+        <ClipTransitions poses={data.entries} onSaved={() => { void loadClips() }} />
       </div>
     )
   }
@@ -1102,6 +1113,7 @@ export function PosesTab() {
                   {isPose && p.label_de_missing ? (
                     <span className="ga-source">{t('No German label')}</span>
                   ) : null}
+                  {p.movement ? <span className="ga-source">{t('movement')}</span> : null}
                   {p.is_default ? <span className="ga-source">{t('default')}</span> : null}
                   {p.store === 'world'
                     ? <span className="ga-source">{t('world')}</span> : null}
@@ -1268,7 +1280,7 @@ export function PosesTab() {
                       : draft.key
                 }
                 onSave={save}
-                onDelete={isNew ? undefined : remove}
+                onDelete={isNew || draft.deletable === false ? undefined : () => setDeleteOpen(true)}
               />
               {/* Two columns: the catalog text on the left, the 3D animation
                   with its preview on the right — the preview needs the room. */}
@@ -1541,6 +1553,9 @@ export function PosesTab() {
                     ) : null}
                   </div>
                 ) : null}
+                {draft.movement && draft.deletable === false ? <div className="ga-form-hint">
+                  {t('Movement poses are fixed: change their clip, but they cannot be deleted or renamed.')}
+                </div> : null}
                 {draft.is_default ? (
                   <div className="ga-form-hint">
                     {t('Default entry: every free text the catalog cannot absorb falls back to this key. It cannot be deleted.')}
@@ -1551,6 +1566,11 @@ export function PosesTab() {
           )}
         </section>
       </div>
+      <ConfirmDialog open={deleteOpen} title={t('Delete')} confirmLabel={t('Delete')} danger
+        message={[draft?.key || '', transitionCount
+          ? t('Also removes {n} transition rule(s).').replace('{n}', String(transitionCount)) : '']
+          .filter(Boolean).join(' · ')}
+        onConfirm={() => { void remove() }} onClose={() => setDeleteOpen(false)} />
       <PromptDialog
         open={renameOpen}
         title={t('Rename pose key')}

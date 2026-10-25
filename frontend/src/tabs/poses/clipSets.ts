@@ -53,7 +53,21 @@ export interface ApiClipRow {
   root_motion?: ClipRootMotion | null
 }
 
+export interface PoseTransition {
+  from: string
+  to: string
+  kind: string
+  accel: number
+  from_kind?: string | null
+  to_kind?: string | null
+  from_public_kind?: string | null
+  to_public_kind?: string | null
+  bridge_public?: boolean
+  conflict?: boolean
+}
+
 export interface ClipListing {
+  transitions?: PoseTransition[]
   clips: ApiClipRow[]
   kinds: string[]
   pair_kinds?: string[]

@@ -41,17 +41,15 @@
  * The import's own dial is gone by then and most mocap sources with it, so
  * this is the only way a clip that lies across the bed gets straightened.
  *
- *   GET    /assets/animation-clips                     … + {locomotion}
- *   PUT    /assets/animation-clips/locomotion          {walk?, run?, idle?}
  *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, overwrite?}
  *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, height_cm?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { ClipPreview } from './ClipPreview'
 import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
-import { ApiError, apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../lib/api'
+import { ApiError, apiDelete, apiPatch, apiPost } from '../../lib/api'
 import { orderSets } from './clipSets'
 import type { ApiClipRow as BaseApiClipRow, ClipListing } from './clipSets'
 import { rootMotionSummary } from './rootMotion'
@@ -111,14 +109,6 @@ interface Row {
 
 type ActionKind = 'kind' | 'set' | 'library' | 'delete'
 
-/** The three roles, in the order the block shows them; the label is the
- *  disambiguated source string ("Run" alone already means "execute"). */
-const LOCOMOTION_ROLES: Array<{ role: 'walk' | 'run' | 'idle'; label: string }> = [
-  { role: 'walk', label: 'Walk clip' },
-  { role: 'run', label: 'Run clip' },
-  { role: 'idle', label: 'Idle clip' },
-]
-
 interface PoseRef {
   key: string
   animation: string
@@ -163,11 +153,6 @@ export function ClipLibrary({
   const [busy, setBusy] = useState(false)
   // Bumped after every write so the preview reloads the (possibly renamed) clip
   const [seq, setSeq] = useState(0)
-  // The locomotion mapping as the server resolves it, and the edited copy
-  const [locomotion, setLocomotion] = useState<Record<string, string> | null>(null)
-  const [locoDraft, setLocoDraft] = useState<Record<string, string>>({})
-  const [locoBusy, setLocoBusy] = useState(false)
-  const [locoError, setLocoError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   // The orientation dials of the selected clip: degrees, degrees, degrees and
   // centimetres. They are a DRAFT — the preview turns live, nothing is written
@@ -182,26 +167,6 @@ export function ClipLibrary({
   const [orientBusy, setOrientBusy] = useState(false)
   const [orientError, setOrientError] = useState('')
   const [orientSeconds, setOrientSeconds] = useState<number | null>(null)
-
-  // Fetched with every new listing: a rename or delete may have taken a
-  // configured kind away, and the block must show what is in force now.
-  useEffect(() => {
-    let alive = true
-    apiGet<{ locomotion?: Record<string, string> }>('/assets/animation-clips')
-      .then((data) => {
-        if (!alive) return
-        const map = data.locomotion || {}
-        setLocomotion(map)
-        setLocoDraft(map)
-        setLocoError('')
-      })
-      .catch((e) => {
-        if (alive) setLocoError((e as Error).message)
-      })
-    return () => {
-      alive = false
-    }
-  }, [listing])
 
   const clips = useMemo(() => listing.clips || [], [listing.clips])
   const pairKinds = useMemo(
@@ -274,39 +239,6 @@ export function ClipLibrary({
   }, [libFilter, onlyUnused, onlyUsed, rows, search, setFilter])
 
   const row = useMemo(() => rows.find((r) => r.kind === selected) || null, [rows, selected])
-
-  /** What a locomotion role may point at: every kind a SOLO file backs — a
-   *  pair needs a partner, a missing kind has nothing to play. */
-  const locoKinds = useMemo(
-    () => rows.filter((r) => !r.pair && !r.missing).map((r) => r.kind),
-    [rows],
-  )
-  const locoDirty = useMemo(
-    () => !!locomotion && LOCOMOTION_ROLES.some(({ role }) => (locoDraft[role] || '') !== (locomotion[role] || '')),
-    [locoDraft, locomotion],
-  )
-
-  const saveLocomotion = useCallback(async () => {
-    if (locoBusy || !locomotion) return
-    setLocoBusy(true)
-    setLocoError('')
-    try {
-      const body: Record<string, string> = {}
-      for (const { role } of LOCOMOTION_ROLES) {
-        if ((locoDraft[role] || '') !== (locomotion[role] || '')) body[role] = locoDraft[role] || ''
-      }
-      const res = await apiPut<{ locomotion: Record<string, string> }>(
-        '/assets/animation-clips/locomotion',
-        body,
-      )
-      setLocomotion(res.locomotion)
-      setLocoDraft(res.locomotion)
-    } catch (e) {
-      setLocoError((e as Error).message)
-    } finally {
-      setLocoBusy(false)
-    }
-  }, [locoBusy, locoDraft, locomotion])
 
   const refresh = useCallback(async () => {
     if (refreshing) return
@@ -730,74 +662,6 @@ export function ClipLibrary({
         <p className="ga-sched-muted" style={{ margin: 0 }}>
           {t('Every installed clip by kind, set and library. A licensed file hides a free one of the same name: only the licensed one is listed and only it is played. A row without any clip is named by a pose but backed by no file — figures fall back to idle there.')}
         </p>
-
-        {/* ── the locomotion roles ── */}
-        <div
-          style={{
-            border: '1px solid var(--border, #30363d)',
-            borderRadius: 6,
-            padding: '8px 10px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
-          }}
-        >
-          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-            <strong>{t('Locomotion clips')}</strong>
-            <span className="ga-hint">
-              {t('What every figure — NPC and avatar alike — plays while walking, running and standing, in every world. A ground with its own clip (water: swim) still wins.')}
-            </span>
-          </div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            {LOCOMOTION_ROLES.map(({ role, label }) => {
-              const current = locoDraft[role] || role
-              const known = locoKinds.includes(current)
-              return (
-                <label key={role} style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.85em' }}>
-                  <span>{t(label)}</span>
-                  <select
-                    className="ga-input"
-                    style={{ maxWidth: 170 }}
-                    value={current}
-                    disabled={!locomotion || locoBusy}
-                    onChange={(e) => setLocoDraft((d) => ({ ...d, [role]: e.target.value }))}
-                  >
-                    {known ? null : (
-                      <option value={current}>{`${current} (${t('missing')})`}</option>
-                    )}
-                    {locoKinds.map((k) => (
-                      <option key={k} value={k}>
-                        {k}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )
-            })}
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm ga-btn-primary"
-              disabled={!locoDirty || locoBusy}
-              onClick={() => void saveLocomotion()}
-            >
-              {locoBusy ? t('Saving…') : t('Save')}
-            </button>
-            {locoDirty && !locoBusy ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                onClick={() => setLocoDraft(locomotion || {})}
-              >
-                {t('Cancel')}
-              </button>
-            ) : null}
-          </div>
-          {locoError ? (
-            <div className="ga-form-hint" style={{ color: 'var(--danger, #f85149)' }}>
-              {locoError}
-            </div>
-          ) : null}
-        </div>
 
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           <button

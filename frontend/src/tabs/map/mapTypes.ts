@@ -336,14 +336,12 @@ export interface TerrainType {
    *  validated against the library on save — the Terrain tab MARKS a value the
    *  library does not hold instead (§ A1.5). */
   surface?: string
-  /** Free-form, with four contracted keys: `meta.move_anim`, the animation
-   *  clip a MOVING figure plays on this ground instead of walk/run (§ A9 —
-   *  "swim" on water), `meta.idle_anim`, the one a STANDING figure plays
-   *  instead of its own ("treading-water"), and the two depths
-   *  `meta.move_sink_m` / `meta.idle_sink_m`, how deep the figure stands IN
-   *  the ground while it moves and while it waits (two numbers, because the
-   *  two poses hang differently in the water). Absent = walk, run and idle as
-   *  usual, on top of the ground; the server never stores an empty one. */
+  /** Free-form, with three contracted keys: `meta.movement`, HOW one moves
+   *  over this ground (§ A9 — `walk_run`, also when absent, `walk`, `swim`,
+   *  `crawl`; the clips come from the fixed movement poses), and the two
+   *  depths `meta.move_sink_m` / `meta.idle_sink_m`, how deep a swimming
+   *  figure stands IN the ground while it moves and while it waits (two
+   *  numbers, because the two poses hang differently in the water). */
   meta?: Record<string, unknown>
 }
 

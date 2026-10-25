@@ -1,3 +1,4 @@
+import { AnimationSituations } from './AnimationSituations'
 import { previewMotionSliders } from './motionFieldPreview'
 import { ExtensionMotionDraft, ExtensionMotionSliders } from './ExtensionMotionDraft'
 import type { Physics } from '../../lib/motionDraft'
@@ -184,23 +185,6 @@ interface Model3DStatus {
   blender?: { enabled?: boolean; executable?: string; version?: string; usable?: boolean }
 }
 
-interface AnimationClip {
-  kind: string
-  set: string
-  name: string
-  filename: string
-  url: string
-}
-
-// The chosen clip is a VIEW preference, not character data: it survives the
-// character switch (and a reload) instead of snapping back on every change.
-const CLIP_PREF_KEY = 'model3d.clip'
-const DEFAULT_CLIP_KIND = 'idle'
-// Sentinel for an explicit "static / no animation" choice — told apart from
-// "unset" (which auto-picks the default) so it survives a status reload instead
-// of snapping back to idle.
-const CLIP_NONE = 'none'
-
 export function FieldModel3D({ character }: { character: string }) {
   // Subscribe to the shared clock settings so the stamps above re-render
   // once the server-configured format and timezone arrive.
@@ -212,8 +196,8 @@ export function FieldModel3D({ character }: { character: string }) {
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [analysisResults, setAnalysisResults] = useState<Array<{ message: string; error: boolean }>>([])
-  const [clips, setClips] = useState<AnimationClip[]>([])
-  const [clipUrl, setClipUrl] = useState('')
+  const [clip, setClip] = useState({ character: '', url: '' })
+  const playSituation = useCallback((url: string) => setClip({ character, url }), [character])
   const [sliderPreview, setSliderPreview] = useState<{ context: string; groups: Record<string, Physics> }>({ context: '', groups: {} })
   const [previewState, setPreviewState] = useState('')
   const [previewFilters, setPreviewFilters] = useState<Array<{ id: string; label?: string; bone_pose?: Record<string, unknown> }>>([])
@@ -359,23 +343,6 @@ export function FieldModel3D({ character }: { character: string }) {
       document.removeEventListener('visibilitychange', refresh)
     }
   }, [enc, previewState, st.model?.url])
-
-  // Shared animation clips (world-independent, same rig as the models).
-  useEffect(() => {
-    apiGet<{ clips?: AnimationClip[] }>('/assets/animation-clips')
-      .then((d) => setClips(d.clips || []))
-      .catch(() => setClips([]))
-  }, [])
-
-  const pickClip = useCallback((url: string) => {
-    setClipUrl(url)
-    // Remember the KIND, not the URL, so the same choice follows across
-    // characters even on a different set (idle -> idle_female). An empty select
-    // is an explicit "static" choice (sentinel CLIP_NONE), NOT "unset" — it must
-    // survive a status reload instead of snapping back to the default.
-    const kind = url ? (clips.find((c) => c.url === url)?.kind || '') : CLIP_NONE
-    localStorage.setItem(CLIP_PREF_KEY, kind)
-  }, [clips])
 
   // Open the picker (the dialog preselects the admin default / only backend).
   const openDialog = useCallback(() => setDialogOpen(true), [])
@@ -830,47 +797,6 @@ export function FieldModel3D({ character }: { character: string }) {
   const rigless = model?.rig === 'none'
   const bust = model?.model_rev || model?.created_at || st.signature || ''
 
-  // The character's set CHAIN, most specific first: explicit set, then the
-  // derived one (animal / female / male). An explicit set may be incomplete —
-  // a "lady" character without sit_lady sits like a female, and only if that
-  // is missing too does the plain sit.fbx apply.
-  const chain = useMemo(
-    () => st.animation_sets || (st.animation_set ? [st.animation_set] : []),
-    [st.animation_sets, st.animation_set],
-  )
-  const myClips = useMemo(
-    () => clips.filter((c) => !c.set || chain.includes(c.set)),
-    [clips, chain],
-  )
-
-  // Pick the best clip of a kind along the chain: explicit set -> derived set
-  // -> setless.
-  const bestOfKind = useCallback(
-    (kind: string): AnimationClip | undefined => {
-      const ofKind = clips.filter((c) => c.kind === kind)
-      for (const s of chain) {
-        const hit = ofKind.find((c) => c.set === s)
-        if (hit) return hit
-      }
-      return ofKind.find((c) => !c.set)
-    },
-    [clips, chain],
-  )
-
-  // Keep the KIND across characters and resolve it per character: the same
-  // "idle" pick lands on idle_female for her and idle_animal for the dog.
-  useEffect(() => {
-    if (!clips.length) return
-    setClipUrl((cur) => {
-      if (cur && myClips.some((c) => c.url === cur)) return cur
-      const pref = localStorage.getItem(CLIP_PREF_KEY)
-      // An explicit "static" choice is honoured — do NOT auto-pick a default
-      // on top of it (this reruns on every 5 s generation poll).
-      if (pref === CLIP_NONE) return ''
-      const wanted = pref || DEFAULT_CLIP_KIND
-      return (bestOfKind(wanted) || bestOfKind(DEFAULT_CLIP_KIND))?.url || ''
-    })
-  }, [clips, myClips, bestOfKind])
   // Cache-bust per combination so a re-generated mesh is re-fetched. The tier
   // is part of the URL, so switching it reloads the viewer with the other
   // resolution — same camera, same clip, only the mesh changes.
@@ -960,7 +886,7 @@ export function FieldModel3D({ character }: { character: string }) {
             motionToolbar={rigless ? undefined : motionToolbar}
             url={viewerUrl}
             format={model.format || 'fbx'}
-            clipUrl={mixamo ? clipUrl : ''}
+            clipUrl={mixamo && clip.character === character ? clip.url : ''}
             embeddedTakes={model.rig === 'generic'}
             clipLoops={model.clips}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
@@ -1013,37 +939,10 @@ export function FieldModel3D({ character }: { character: string }) {
               ) : null}
             </div>
           ) : null}
-          {/* The clips of THIS character's set (+ the setless fallbacks). */}
+          {mixamo ? <AnimationSituations
+            key={`${character}:${(st.animation_sets || [st.animation_set || '']).join(':')}`}
+            character={character} onPlay={playSituation} /> : null}
           <div className="ga-model3d-controls">
-          {mixamo ? (myClips.length ? (
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>
-                {t('Animation')}
-                {chain.length ? ` (${chain.join(' → ')})` : ''}
-              </span>
-              <select
-                className="ga-input"
-                value={clipUrl}
-                onChange={(e) => pickClip(e.target.value)}
-              >
-                <option value="">{t('— none (static) —')}</option>
-                {/* Keyed on the URL: since sets became directories the bare
-                    file name repeats (idle.fbx exists per set). */}
-                {myClips.map((c) => (
-                  <option key={c.url} value={c.url}>
-                    {c.kind}
-                    {c.set ? ` · ${c.set}` : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <div className="ga-hint">
-              {clips.length
-                ? t('No clips for this animation set — add <kind>_<set>.fbx files or plain <kind>.fbx fallbacks.')
-                : t('No animation clips — drop Mixamo FBX files ("Without Skin") into shared/models/clips/.')}
-            </div>
-          )) : null}
           <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span className="ga-hint">{t('Preview state')}</span>
             <select className="ga-input" value={previewState} disabled={rigless} onChange={event => setPreviewState(event.target.value)}>
               <option value="">{t('Current (live)')}</option>

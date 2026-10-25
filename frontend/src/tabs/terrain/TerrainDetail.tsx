@@ -35,11 +35,9 @@
  * area chip of the map itself — said out loud in the Vegetation section,
  * because that is where it used to be typed.
  */
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { DetailToolbar } from '../../components/DetailToolbar'
 import { Field } from '@anima/player-ui'
-import { ModelPicker } from '../../components/ModelPicker'
-import type { PickerOption } from '../../components/ModelPicker'
 import { useI18n } from '../../i18n/I18nProvider'
 import {
   SHORE_RAMP_DEFAULT_M, SHORE_RAMP_MAX_M, SHORE_RAMP_MIN_M,
@@ -52,20 +50,19 @@ import type { SurfaceKind } from '../world/worldTypes'
 // second literal here would be a second opinion about the same server value.
 import { UNKNOWN_COLOR as DEFAULT_COLOR } from '../map/TerrainLayer'
 
-/** Server mirrors — `_KIND_RE`, `SPEED_MIN/MAX`, the cap of the two animation
- *  keys and the two relief clamps of `terrain_types.py`. */
+/** Server mirrors — `_KIND_RE`, `SPEED_MIN/MAX` and the water/vegetation
+ *  clamps of `terrain_types.py`. */
 const KIND_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/
 const KIND_MAX = 40
 const SPEED_MIN = 0
 const SPEED_MAX = 2
 const SPEED_STEP = 0.05
 const NAME_MAX = 60
-const ANIM_MAX = 40
 const SINK_MIN = 0
 const SINK_MAX = 1.5
 const SINK_STEP = 0.05
 // `terrain_types.SWIM_FROM_*`. THE THIRD FIELD OF THE MOVEMENT SENTENCE (W4c):
-// from which WATER DEPTH the two clips and the two sinks above count at all.
+// from which WATER DEPTH the movement mode and the two sinks count at all.
 // 0 IS A VALUE here — "swim from the very rim", what every water kind did
 // before this round — so an empty field is the server's metre, not a zero.
 const SWIM_FROM_MIN = 0
@@ -121,16 +118,6 @@ function metaNumOf(type: TerrainType | null, key: string): string {
   return typeof raw === 'number' && Number.isFinite(raw) ? String(raw) : ''
 }
 
-/** One optional string key, IN PLACE — trimmed or GONE. The server's
- *  `_trimmed_meta_string`: "no animation" is a missing key, never an empty
- *  string a reader has to test for. */
-function setMetaStr(meta: Record<string, unknown>, key: string,
-                    raw: string): void {
-  const clean = raw.trim()
-  if (clean) meta[key] = clean
-  else delete meta[key]
-}
-
 /** One optional numeric key, IN PLACE — written or GONE. Mirrors the server's
  *  `_clamped_meta_number`: nothing, junk or a non-positive number leaves NO
  *  key behind, so no reader has to tell "authored as 0" from "not authored". */
@@ -181,8 +168,7 @@ function setMetaBool(meta: Record<string, unknown>, key: string,
 
 /** The `meta` keys this form owns, as their fields hold them. */
 interface OwnedMeta {
-  moveAnim: string
-  idleAnim: string
+  movement: string
   moveSink: string
   idleSink: string
   swimFrom: string
@@ -195,14 +181,13 @@ interface OwnedMeta {
 }
 
 /** `meta` with the owned keys written — or with the KEY REMOVED where the
- *  field is empty, which is what the server stores too ("no animation" is
- *  never an empty string a reader has to test for). The rest of `meta` is
+ *  field is empty. Movement is always explicit, including walk_run.
+ *  The rest of `meta` is
  *  copied through untouched: the route is a full replace. */
 function withOwnedMeta(meta: Record<string, unknown> | undefined,
                        own: OwnedMeta): Record<string, unknown> {
   const next = { ...(meta || {}) }
-  setMetaStr(next, 'move_anim', own.moveAnim)
-  setMetaStr(next, 'idle_anim', own.idleAnim)
+  next.movement = own.movement
   setMetaNum(next, 'move_sink_m', own.moveSink)
   setMetaNum(next, 'idle_sink_m', own.idleSink)
   // The swim threshold shares the "0 is a value" rule of the transition width:
@@ -306,37 +291,6 @@ function shoreRampHint(t: (s: string) => string): string {
     .replace('{def}', String(SHORE_RAMP_DEFAULT_M))
 }
 
-/** The options of one animation picker: every kind the clip library holds,
- *  plus the CURRENT value whenever the library does not hold it.
- *
- *  Same rule as the surface texture above, and for the same reason (finding
- *  2026-08-24): a list can only ever offer what exists TODAY, so a clip kind
- *  imported tomorrow must stay nameable today. The unknown value therefore
- *  stays selected and selectable instead of being refused — it is only MARKED
- *  "(missing)", and only when the library actually answered: with an empty
- *  list "not in the list" is no evidence at all.
- */
-function clipOptions(kinds: string[], value: string,
-                     t: (s: string) => string): PickerOption[] {
-  const opts: PickerOption[] = kinds.map((k) => ({ value: k, label: k }))
-  const clean = value.trim()
-  if (clean && !kinds.includes(clean)) {
-    opts.unshift({
-      value: clean,
-      label: clean,
-      sublabel: kinds.length > 0 ? t('(missing)') : undefined,
-    })
-  }
-  return opts
-}
-
-/** Whether a stored clip kind is one the ANSWERED library does not know — the
- *  condition for both the "(missing)" mark and the warning line under it. */
-function clipMissing(kinds: string[], value: string): boolean {
-  const clean = value.trim()
-  return !!clean && kinds.length > 0 && !kinds.includes(clean)
-}
-
 export interface TerrainDetailProps {
   /** The entry being edited, or `null` for the create form. */
   type: TerrainType | null
@@ -351,11 +305,6 @@ export interface TerrainDetailProps {
    *  "no list" are not the same statement. A stored id is still offered and
    *  still selected in that case, just without a verdict on it. */
   surfaces: SurfaceKind[]
-  /** The clip kinds the shared animation library holds (`kinds` of `GET
-   *  /assets/animation-clips`), for the two animation pickers. Empty while it
-   *  loads or after a failed fetch — and then nothing is marked missing, the
-   *  same reading as `surfaces`. */
-  clipKinds: string[]
   busy: boolean
   /** Write the entry; answers the SANITIZED row the server stored, or `null`
    *  when the write failed (the caller has already said so). */
@@ -369,7 +318,7 @@ export interface TerrainDetailProps {
 }
 
 export function TerrainDetail({
-  type, source, existingKinds, surfaces, clipKinds, busy,
+  type, source, existingKinds, surfaces, busy,
   onSave, onReset, onCancel,
 }: TerrainDetailProps) {
   const { t } = useI18n()
@@ -381,8 +330,7 @@ export function TerrainDetail({
   const [passable, setPassable] = useState(type ? !!type.passable : true)
   const [speed, setSpeed] = useState(type ? String(type.speed_factor) : '1')
   const [surface, setSurface] = useState((type?.surface || '').trim())
-  const [moveAnim, setMoveAnim] = useState(metaStrOf(type, 'move_anim'))
-  const [idleAnim, setIdleAnim] = useState(metaStrOf(type, 'idle_anim'))
+  const [movement, setMovement] = useState(metaStrOf(type, 'movement') || 'walk_run')
   const [moveSink, setMoveSink] = useState(metaNumOf(type, 'move_sink_m'))
   const [idleSink, setIdleSink] = useState(metaNumOf(type, 'idle_sink_m'))
   const [swimFrom, setSwimFrom] = useState(metaNumOf(type, 'swim_from_m'))
@@ -414,16 +362,6 @@ export function TerrainDetail({
   // is no evidence at all, so nothing gets marked.
   const surfaceMissing = surfaceUnlisted && surfaces.length > 0
 
-  // The two clip pickers. Their vocabulary is OPEN (`animation_clips`: a kind
-  // is just a file name), so both are free-typing pickers over the library
-  // rather than a closed list.
-  const moveAnimOptions = useMemo(
-    () => clipOptions(clipKinds, moveAnim, t), [clipKinds, moveAnim, t])
-  const idleAnimOptions = useMemo(
-    () => clipOptions(clipKinds, idleAnim, t), [clipKinds, idleAnim, t])
-  const moveAnimMissing = clipMissing(clipKinds, moveAnim)
-  const idleAnimMissing = clipMissing(clipKinds, idleAnim)
-
   // A field the user cannot fix by typing further is not "dirty", it is
   // wrong — but it still has to enable `Save` so the marking is reachable.
   // The guard matters most on a SEED row: every save there creates a world
@@ -433,8 +371,7 @@ export function TerrainDetail({
     || color !== (type?.color || DEFAULT_COLOR)
     || passable !== !!type?.passable
     || surface.trim() !== (type?.surface || '').trim()
-    || moveAnim.trim() !== metaStrOf(type, 'move_anim')
-    || idleAnim.trim() !== metaStrOf(type, 'idle_anim')
+    || movement !== (metaStrOf(type, 'movement') || 'walk_run')
     || numChanged(moveSink, metaNumOf(type, 'move_sink_m'))
     || numChanged(idleSink, metaNumOf(type, 'idle_sink_m'))
     || blendChanged(swimFrom, metaNumOf(type, 'swim_from_m'))
@@ -466,7 +403,7 @@ export function TerrainDetail({
       speed_factor: speedNum,
       surface: surface.trim(),
       meta: withOwnedMeta(type?.meta,
-        { moveAnim, idleAnim, moveSink, idleSink, swimFrom, sway,
+        { movement, moveSink, idleSink, swimFrom, sway,
           undergrowth, edgeBlend, water, waterDepth, shoreRamp }),
     })
     if (!saved) return
@@ -475,8 +412,7 @@ export function TerrainDetail({
     setPassable(!!saved.passable)
     setSpeed(String(saved.speed_factor))
     setSurface((saved.surface || '').trim())
-    setMoveAnim(metaStrOf(saved, 'move_anim'))
-    setIdleAnim(metaStrOf(saved, 'idle_anim'))
+    setMovement(metaStrOf(saved, 'movement') || 'walk_run')
     setMoveSink(metaNumOf(saved, 'move_sink_m'))
     setIdleSink(metaNumOf(saved, 'idle_sink_m'))
     setSwimFrom(metaNumOf(saved, 'swim_from_m'))
@@ -486,8 +422,8 @@ export function TerrainDetail({
     setWater(metaBoolOf(saved, 'water'))
     setWaterDepth(metaNumOf(saved, 'water_depth_m'))
     setShoreRamp(metaNumOf(saved, 'shore_ramp_m'))
-  }, [color, edgeBlend, idleAnim, idleSink, kindBad, kindClean, kindTaken,
-      moveAnim, moveSink, name, onSave, passable,
+  }, [color, edgeBlend, idleSink, kindBad, kindClean, kindTaken,
+      movement, moveSink, name, onSave, passable,
       shoreRamp, speedBad, speedNum, surface, sway, swimFrom, type,
       undergrowth, water, waterDepth])
 
@@ -687,53 +623,14 @@ export function TerrainDetail({
 
         <div className="ga-section">
           <div className="ga-form-section-label">{t('Movement & water')}</div>
-          <div className="ga-form-row">
-            <Field
-              label={t('Move animation')}
-              hint={t('Animation clip a moving figure plays on this ground instead of walking — e.g. “swim” on water. Empty = walk and run as usual.')}
-            >
-              {/* The clip LIBRARY as the list, typing still allowed: the clip
-                  vocabulary is open (a kind is a file name), so a ground may
-                  name a clip that is imported next week. */}
-              <ModelPicker
-                options={moveAnimOptions}
-                value={moveAnim}
-                onChange={setMoveAnim}
-                allowFree
-                maxLength={ANIM_MAX}
-                emptyLabel={t('none (walk / run)')}
-                placeholder={t('walk / run')}
-                title={t('A clip kind of the shared animation library — or any name typed here.')}
-              />
-            </Field>
-            <Field
-              label={t('Idle animation')}
-              hint={t('Animation clip a figure STANDING on this ground plays instead of its own — e.g. “treading-water” on water. Empty = the activity or idle clip as usual.')}
-            >
-              <ModelPicker
-                options={idleAnimOptions}
-                value={idleAnim}
-                onChange={setIdleAnim}
-                allowFree
-                maxLength={ANIM_MAX}
-                emptyLabel={t('none (idle / activity)')}
-                placeholder={t('idle / activity')}
-                title={t('A clip kind of the shared animation library — or any name typed here.')}
-              />
-            </Field>
-          </div>
-          {/* Marked, never refused — the surface texture's rule one section
-              up. A kind the library does not hold is still stored and still
-              shown; only an ANSWERED library gets to call it missing. */}
-          {[moveAnimMissing ? moveAnim.trim() : '',
-            idleAnimMissing ? idleAnim.trim() : '']
-            .filter((k, i, all) => k && all.indexOf(k) === i)
-            .map((k) => (
-              <div className="ga-field-hint ga-field-warn" key={k}>
-                {t('“{kind}” is not in the clip library — figures here play their usual clips until a clip of that kind is imported.')
-                  .replace('{kind}', k)}
-              </div>
-            ))}
+          <Field label={t('Movement')} hint={t('The animations are set in Poses.')}>
+            <select className="ga-input" value={movement} onChange={(e) => setMovement(e.target.value)}>
+              <option value="walk_run">{t('Walk & run')}</option>
+              <option value="walk">{t('Walk only')}</option>
+              <option value="swim">{t('Swim')}</option>
+              <option value="crawl">{t('Crawl')}</option>
+            </select>
+          </Field>
           <div className="ga-form-row">
             <Field label={t('Sink move (m)')} compact hint={moveSinkHint(t)}>
               <input

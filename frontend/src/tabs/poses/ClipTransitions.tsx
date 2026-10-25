@@ -2,7 +2,7 @@
  * ClipTransitions — the bridge clips, read as one table: from × to × clip.
  *
  * A figure must not jump from one state into the next: a rule names the clip
- * that has to play BETWEEN two clips (stand up before walking away), and how
+ * that has to play BETWEEN two poses (stand up before walking away), and how
  * much speed the body picks up while it plays. `"*"` is the wildcard — on the
  * TO side it makes an exit clip ("stand up, whatever comes next"), on the FROM
  * side an enter clip; the more precise rule wins.
@@ -20,25 +20,16 @@ import { ClipPreview } from './ClipPreview'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 
-/** One rule of the transition table: the clip that has to play when a figure
- *  goes from one clip to another. `"*"` is the wildcard — on `to` it makes an
- *  EXIT clip ("stand up, whatever comes next"), on `from` an ENTER clip. */
-interface Transition {
-  from: string
-  to: string
-  kind: string
-  /** Fraction of normal speed the figure gains per second WHILE the clip
-   *  plays. 0 holds it on the spot for the whole clip (standing up out of a
-   *  seat); above 0 it gets going during the clip (starting to walk). */
-  accel: number
-}
+import type { PoseTransition as Transition } from './clipSets'
+
+export interface PoseRef { key: string }
 
 const TRANSITION_ANY = '*'
 
-/** The datalist both text cells read — one id for the whole table. */
-const KIND_LIST_ID = 'clip-transition-kinds'
-
-export function ClipTransitions() {
+export function ClipTransitions({ poses, onSaved }: {
+  poses: PoseRef[]
+  onSaved: () => void
+}) {
   const { t } = useI18n()
   // The rules as the server stores them, and the edited copy
   const [transitions, setTransitions] = useState<Transition[] | null>(null)
@@ -74,6 +65,8 @@ export function ClipTransitions() {
     }
   }, [])
 
+  const poseKeys = useMemo(() => poses.map((p) => p.key).sort(), [poses])
+
   const dirty = useMemo(
     () => !!transitions && JSON.stringify(draft) !== JSON.stringify(transitions),
     [draft, transitions],
@@ -92,7 +85,7 @@ export function ClipTransitions() {
   const addRule = useCallback(() => {
     // The new row is the last one, and the preview follows it right away.
     setSelected(draft.length)
-    setDraft((d) => [...d, { from: '', to: TRANSITION_ANY, kind: kinds[0] || '', accel: 0 }])
+    setDraft((d) => [...d, { from: TRANSITION_ANY, to: TRANSITION_ANY, kind: kinds[0] || '', accel: 0 }])
   }, [draft.length, kinds])
 
   const save = useCallback(async () => {
@@ -104,17 +97,18 @@ export function ClipTransitions() {
       // write would only invite two editors to disagree about what it is.
       const res = await apiPut<{ transitions: Transition[] }>(
         '/assets/animation-clips/transitions',
-        { transitions: draft.filter((r) => r.from && r.to && r.kind) },
+        { transitions: draft.filter((r) => r.from && r.to && r.kind).map(({ from, to, kind, accel }) => ({ from, to, kind, accel })) },
       )
       setTransitions(res.transitions)
       setDraft(res.transitions)
       setSelected(null)
+      onSaved()
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setBusy(false)
     }
-  }, [busy, draft, transitions])
+  }, [busy, draft, transitions, onSaved])
 
   const row = selected !== null ? draft[selected] : undefined
 
@@ -132,16 +126,11 @@ export function ClipTransitions() {
       {/* ── the rules ── */}
       <section style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, minHeight: 0 }}>
         <p className="ga-form-hint" style={{ margin: 0 }}>
-          {t('The clip that has to play BETWEEN two clips, so a figure does not jump'
+          {t('The clip that has to play BETWEEN two poses, so a figure does not jump'
              + ' from one state into the next. Write "*" for "anything" — on the To'
              + ' side that makes an exit clip, on the From side an enter clip, and the'
              + ' more precise rule wins.')}
         </p>
-
-        <datalist id={KIND_LIST_ID}>
-          <option value={TRANSITION_ANY} />
-          {kinds.map((k) => <option key={k} value={k} />)}
-        </datalist>
 
         <div style={{ overflow: 'auto', minHeight: 0, flex: 1 }}>
           <table className="ga-sched-table">
@@ -165,7 +154,7 @@ export function ClipTransitions() {
             <tbody>
               {!draft.length ? (
                 <tr>
-                  <td colSpan={5}>{t('No rules — every clip change is instant.')}</td>
+                  <td colSpan={5}>{t('No rules — every pose change is instant.')}</td>
                 </tr>
               ) : null}
               {draft.map((rule, i) => (
@@ -178,20 +167,26 @@ export function ClipTransitions() {
                   }}
                 >
                   <td>
-                    <input
-                      className="ga-input" list={KIND_LIST_ID} style={{ maxWidth: 190 }}
-                      value={rule.from} placeholder={TRANSITION_ANY}
-                      disabled={busy}
-                      onChange={(e) => patch(i, { from: e.target.value })}
-                    />
+                    <select className="ga-input" style={{ maxWidth: 190 }}
+                      value={rule.from} disabled={busy}
+                      onChange={(e) => patch(i, { from: e.target.value })}>
+                      <option value={TRANSITION_ANY}>{TRANSITION_ANY}</option>
+                      {rule.from !== TRANSITION_ANY && !poseKeys.includes(rule.from) ? (
+                        <option value={rule.from}>{rule.from} ({t('unknown pose')})</option>
+                      ) : null}
+                      {poseKeys.map((key) => <option key={key} value={key}>{key}</option>)}
+                    </select>
                   </td>
                   <td>
-                    <input
-                      className="ga-input" list={KIND_LIST_ID} style={{ maxWidth: 190 }}
-                      value={rule.to} placeholder={TRANSITION_ANY}
-                      disabled={busy}
-                      onChange={(e) => patch(i, { to: e.target.value })}
-                    />
+                    <select className="ga-input" style={{ maxWidth: 190 }}
+                      value={rule.to} disabled={busy}
+                      onChange={(e) => patch(i, { to: e.target.value })}>
+                      <option value={TRANSITION_ANY}>{TRANSITION_ANY}</option>
+                      {rule.to !== TRANSITION_ANY && !poseKeys.includes(rule.to) ? (
+                        <option value={rule.to}>{rule.to} ({t('unknown pose')})</option>
+                      ) : null}
+                      {poseKeys.map((key) => <option key={key} value={key}>{key}</option>)}
+                    </select>
                   </td>
                   <td>
                     <select
@@ -204,6 +199,15 @@ export function ClipTransitions() {
                       )}
                       {kinds.map((k) => <option key={k} value={k}>{k}</option>)}
                     </select>
+                    <div className="ga-form-hint">
+                      {t('local: {from_kind} → {to_kind} · public: {from_public_kind} → {to_public_kind}')
+                        .replace('{from_kind}', rule.from_kind || '—')
+                        .replace('{to_kind}', rule.to_kind || '—')
+                        .replace('{from_public_kind}', rule.from_public_kind || '—')
+                        .replace('{to_public_kind}', rule.to_public_kind || '—')}
+                    </div>
+                    {rule.bridge_public === false ? <div className="ga-field-warn">{t('Bridge clip missing publicly')}</div> : null}
+                    {rule.conflict ? <div className="ga-field-warn">{t('Overlaps an earlier rule')}</div> : null}
                   </td>
                   <td>
                     <input
