@@ -201,12 +201,15 @@ public static class S3cCheck
                 Expect($"s3c shader {name}", ShaderSafety.Lines.Contains($"shader {name}: compiled ({UniformCount(name)} uniforms)"),
                        string.Join(" | ", ShaderSafety.Lines));
 
+            // Task 19: the places data on the native tile and the problems toast; LAST, because its re-datum replaces tile (0, 0).
+            var places = CheckPlaces(builder);
+
             // --no-water: no lift, no variant, the flag in the stats.
             var dry = await NoWaterRun(host, dir, fixtures);
 
             return $"s3c drawn={r.Primitives} skipped={r.Skipped} ({r.SkipSummary()}) shell={r.ShellCopies} "
                    + $"culled_walls={r.CulledWalls} {m.Summary()} {stats.CutSummary()} "
-                   + $"{stats.WaterSummary()} no_water={dry}";
+                   + $"{stats.WaterSummary()} no_water={dry} {places}";
         }
         finally
         {
@@ -214,6 +217,73 @@ public static class S3cCheck
             world.QueueFree();
         }
     }
+
+    /// <summary>
+    /// Task 19 (README "S3c world", "Places"): loc-open (pin (64, 120), yaw 0, datum 3.875) carries the prop marker m-chair,
+    /// one flight, the lift glass (a target, no stop), the storey-1 corridor and two problems; loc-closed (datum
+    /// 4.693359375) one lift pad. Then the problems toast of the avatar's location, and a height revision that re-datums
+    /// loc-open onto a flat 10 m tile: every world point rides the step and the chair seat is re-lifted onto the ground.
+    /// </summary>
+    private static string CheckPlaces(WorldBuilder builder)
+    {
+        var open = builder.Slots["loc-open"];
+        var p = open.Places;
+        // m-chair: anchor (2, −1) → (66, 119), lift 3.921875 − 3.875 = 0.046875; slot y = 3.875 + 0.45 − 0.42 + 0.046875.
+        Expect("places marker keys (no room names in view=3d)", p.Markers.Keys.SequenceEqual(new[] { "r-ground" }), string.Join(",", p.Markers.Keys));
+        var chair = p.Markers["r-ground"]["m-chair"];
+        Expect("places chair is a fixed prop place on storey 0", chair.Fixed && chair.Level == 0 && chair.Group == "seat" && chair.Slots.Length == 1, "");
+        NearD("places chair lift", chair.Lift, 0.046875);
+        NearD("places chair drop", chair.Drop, 0.42);
+        NearV("places chair slot", chair.Slots[0], 66, 3.951875, 119);
+        // Flight 0: foot (2, 0.01, −0.9) → (66, 3.885, 119.1), head (2, 3.03, −3.1) → (66, 6.905, 116.9), at (2, −1.5) →
+        // (66, 118.5), dir (0, −1); the lift glass is a target but no stop; the stair_tread names flight 0.
+        Eq("places flights", p.Stairs.Count, 1);
+        var s = p.Stairs[0];
+        NearV("places foot", s.Foot.Pos, 66, 3.885, 119.1);
+        NearV("places head", s.Head.Pos, 66, 6.905, 116.9);
+        Expect("places at/dir", Math.Abs(s.At.X - 66) < 1e-9 && Math.Abs(s.At.Z - 118.5) < 1e-9 && s.Dir == new Scatter.P2(0, -1),
+               $"{s.At} {s.Dir}");
+        Expect("places targets", p.VerticalTargets.SequenceEqual(new[] { new Scene.VerticalTarget("elevator", -1), new Scene.VerticalTarget("stairs", 0) }),
+               string.Join(",", p.VerticalTargets));
+        Eq("places loc-open stops", p.ElevatorStops.Count, 0);
+        // __floor__1 on the storey-1 plate (top 3.0): (0, −2.5) → (64, 3.875 + 3.01, 117.5).
+        Eq("places corridors", p.Corridors.Count, 1);
+        NearV("places corridor stand", p.Corridors[0].Stand!.Value, 64, 6.885, 117.5);
+        // loc-closed's pad (0, 0.05, −2) size y 0.1 → (−40, 4.693359375 + 0.1, 98).
+        var closed = builder.Slots["loc-closed"].Places;
+        Expect("places loc-closed stop on storey 0", closed.ElevatorStops.Keys.SequenceEqual(new[] { 0 }), "");
+        NearV("places loc-closed stop", closed.ElevatorStops[0], -40, 4.793359375, 98);
+        Expect("places loc-closed lift target",
+               closed.VerticalTargets.SequenceEqual(new[] { new Scene.VerticalTarget("elevator", -1) }), string.Join(",", closed.VerticalTargets));
+
+        // The problems toast (announceSceneProblems): the avatar Pia Lund stands in loc-open; of its two problems the
+        // editor one is skipped → one toast; the same poll again → none.
+        var spent = new HashSet<string>();
+        var toasts = Scene.SceneProblems.Announce("loc-open", open.Problems, spent);
+        Expect("places one toast", toasts.Count == 1 && toasts[0].Message == "2 rooms cannot be reached"
+               && toasts[0].Key == "loc-open|unreachable_rooms|", string.Join(";", toasts));
+        Expect("places toast once", Scene.SceneProblems.Announce("loc-open", open.Problems, spent).Count == 0, "");
+
+        // A flat tile (0, 0) at 10 m: loc-open 3.875 → 10 (+6.125). Foot/head/stand ride the step (10.01, 13.03, 13.01);
+        // the chair seat rides it to 10.076875, then its lift 0.046875 → 0 takes 0.046875 off: 10.03 = 10 + 0.45 − 0.42.
+        builder.Height!.AddTiles(new[] { new HeightTile((0, 0), new HeightGrid(0, 0, 64, 5, 5, Enumerable.Repeat(10f, 25).ToArray())) });
+        var tick = builder.TickModels(open.Group.Position + new Vector3(0, 24, 40));
+        Expect("places re-datum", tick.Redatumed >= 1 && tick.SeatsMoved == 1, $"redatumed {tick.Redatumed}, seats {tick.SeatsMoved}");
+        NearD("places chair lift after", chair.Lift, 0);
+        NearV("places chair slot after", chair.Slots[0], 66, 10.03, 119);
+        NearV("places foot after", s.Foot.Pos, 66, 10.01, 119.1);
+        NearV("places head after", s.Head.Pos, 66, 13.03, 116.9);
+        NearV("places corridor stand after", p.Corridors[0].Stand!.Value, 64, 13.01, 117.5);
+        NearV("places loc-closed stop unchanged", closed.ElevatorStops[0], -40, 4.793359375, 98);
+        return $"places[chair {chair.Slots[0].Y:0.###}, flights 1, targets 2, stand {p.Corridors[0].Stand!.Value.Y:0.###}, toasts 1]";
+    }
+
+    private static void NearD(string what, double got, double want, double eps = 1e-6)
+        => Expect(what, Math.Abs(got - want) <= eps, $"got {got}, expected {want}");
+
+    private static void NearV(string what, Overview.Vec3 got, double x, double y, double z, double eps = 1e-5)
+        => Expect(what, Math.Abs(got.X - x) <= eps && Math.Abs(got.Y - y) <= eps && Math.Abs(got.Z - z) <= eps,
+                  $"got ({got.X}, {got.Y}, {got.Z}), expected ({x}, {y}, {z})");
 
     /// <summary>
     /// The rotations reach Godot as the Core's matrices (<see cref="ModelPlacement.ToBasis"/>), never as a Godot

@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Overview;
+using AnimaNative.Scene;
 using AnimaNative.Sync;
 using Godot;
 
@@ -123,6 +125,7 @@ public partial class Main : Node3D
                 _hud?.SetState("clock", clock);
             }
             if (_selected is not null) Select(_selected);   // refreshSelection(map)
+            AnnounceSceneProblems(map);                      // what the composer found wrong (§ 4.3)
             if (_interactive && _builder is not null && _builder.FreshOf(map).Count > 0)
             {
                 // Discovery needs details even when the endpoint revision has not changed.
@@ -134,6 +137,26 @@ public partial class Main : Node3D
         {
             Log($"worldmap apply failed: {e.Message}");
             if (!AnimaApi.IsAuthError(e) && _conn.Lost()) _hud?.SetState("connection", ConnectionState.LostValue);
+        }
+    }
+
+    /// <summary>The (location, kind, room) keys already toasted this session (main.ts <c>announcedProblems</c>).</summary>
+    private readonly HashSet<string> _announcedProblems = new();
+
+    /// <summary>
+    /// main.ts <c>announceSceneProblems(map)</c>: the scene problems of the avatar's location (its mounted scene) are
+    /// toasted once per (location, kind, room) through the HUD's toast action (translated, error look), never one with
+    /// <c>scope: "editor"</c>; each is also logged as a warning line.
+    /// </summary>
+    private void AnnounceSceneProblems(JsonElement map)
+    {
+        if (_builder is null) return;
+        var here = AnimaNative.World.Anchor.AvatarLocation(map);
+        var problems = here is not null && _builder.Slots.TryGetValue(here, out var slot) ? slot.Problems : null;
+        foreach (var toast in SceneProblems.Announce(here, problems, _announcedProblems))
+        {
+            Log(toast.Log);
+            _hud?.SendUi("toast", JsonValue.Create(toast.Message), JsonValue.Create(true));
         }
     }
 

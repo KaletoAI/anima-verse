@@ -14,8 +14,8 @@ public sealed class ModelTickResult
 {
     /// <summary>The tier swaps started this tick (await them to see their outcome).</summary>
     public List<Task<int>> Swaps { get; } = new();
-    /// <summary>Locations whose datum moved, placements whose lift moved (a height revision).</summary>
-    public int Redatumed, Relifted;
+    /// <summary>Locations whose datum moved, placements whose lift moved, places whose seats moved (a height revision).</summary>
+    public int Redatumed, Relifted, SeatsMoved;
 }
 
 /// <summary>
@@ -65,9 +65,10 @@ public sealed partial class WorldBuilder
             if (!GodotObject.IsInstanceValid(slot.Group)) continue;
             if (heightMoved)
             {
-                var (datumMoved, relifted) = Redatum(slot);
+                var (datumMoved, relifted, seats) = Redatum(slot);
                 if (datumMoved) result.Redatumed++;
                 result.Relifted += relifted;
+                if (seats) result.SeatsMoved++;
             }
             var b = LocationView.BuildingTier(slot.Ring, camera.DistanceTo(slot.Group.Position), slot.Width, slot.BuildingTier);
             if (b != slot.BuildingTier)
@@ -83,7 +84,8 @@ public sealed partial class WorldBuilder
             }
         }
         if (result.Redatumed > 0 || result.Relifted > 0)
-            _log($"height revision {_heightRevision}: {result.Redatumed} location datum(s) moved, {result.Relifted} placement(s) re-lifted");
+            _log($"height revision {_heightRevision}: {result.Redatumed} location datum(s) moved, {result.Relifted} placement(s) re-lifted, "
+                 + $"seats moved in {result.SeatsMoved} location(s)");
         return result;
     }
 
@@ -270,11 +272,13 @@ public sealed partial class WorldBuilder
     /// <c>redatumTile</c> + <c>reliftScene</c>: the location's datum is read again under its pin (<c>tileDatumStep</c>) and
     /// the frame moves by the step; every non-building placement then takes the lift the field says now
     /// (<c>storeyGroundRelift</c>), so it ends at <c>ground(anchor) + bottom_y</c> again; a depth-cut plane follows its
-    /// frame. Returns whether the datum moved and how many lifts changed.
+    /// frame; the places data rides along (<see cref="PlaceInventory.Relift"/>: world-composed points carried by the datum
+    /// step, prop-marker seats re-lifted at their lift point, corridor stands derived again). Returns whether the datum
+    /// moved, how many lifts changed and whether a seat moved.
     /// </summary>
-    public (bool DatumMoved, int Relifted) Redatum(LocationSlot slot)
+    public (bool DatumMoved, int Relifted, bool SeatsMoved) Redatum(LocationSlot slot)
     {
-        if (Height is null) return (false, 0);
+        if (Height is null) return (false, 0, false);
         var g = slot.Group.Position;
         var step = StoreyGround.TileDatumStep(g.Y, g.X, g.Z, Height.GroundAt);
         bool moved = step.Delta != 0;
@@ -297,7 +301,8 @@ public sealed partial class WorldBuilder
             if ((moved || r.Delta != 0) && rec.LightId is { } lid) PropLights?.Move(lid, LightPosition(slot.Group, rec));
         }
         if (moved || relifted > 0) slot.MeshVersion++;
-        return (moved, relifted);
+        bool seats = slot.Places.Relift(frame, moved ? step.Delta : 0, Height.GroundAt);
+        return (moved, relifted, seats);
     }
 
     /// <summary>

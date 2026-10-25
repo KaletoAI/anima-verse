@@ -129,6 +129,13 @@ public sealed class LocationSlot
     public List<SceneCorridor> Corridors { get; init; } = new();
     /// <summary><c>rooms[].ambience</c> by room id (the first block of an id, <c>rooms.find</c>); null = neutral.</summary>
     public Dictionary<string, SceneAmbience?> RoomAmbience { get; init; } = new();
+    /// <summary>
+    /// The places data of the mount for the figures (E5) and the embodied mode (E7): markers with their lift, lift stops,
+    /// stair flights, vertical targets, corridor stands (<see cref="PlaceInventory"/>); re-lifted with the placements.
+    /// </summary>
+    public PlaceInventory Places { get; init; } = new();
+    /// <summary>The payload's <c>problems[]</c> (<c>scenes.get(loc).problems</c>, toasted for the avatar's location).</summary>
+    public IReadOnlyList<SceneProblem> Problems { get; init; } = Array.Empty<SceneProblem>();
 }
 
 /// <summary>
@@ -740,6 +747,8 @@ public sealed partial class WorldBuilder
             stats.VerifyChecked += report.Checked;
             stats.VerifyRows += report.Rows.Count;
         }
+        var places = PlaceInventory.Compose(scene, frame0, DetailRooms(loc.Id), height.GroundAt);
+        if (VerifyFull) _log($"location {loc.Id} ({loc.Name}) {PlacesSummary(places, scene.Problems)}");
         if (rs.Primitives > 0 || open)
             _log($"location {loc.Id} ({loc.Name}): ring={ring.ToString().ToLowerInvariant()}{(open ? $" OPEN storey {levelFilter}" : "")}"
                  + $"{(farShell ? " far-shell" : "")} — {rs.Primitives} primitives, skipped {rs.SkipSummary()}, "
@@ -756,7 +765,21 @@ public sealed partial class WorldBuilder
                                   .Where(r => r.Rect is not null).Select(r => new KeyValuePair<string, RoomRect>(r.Key, r.Rect!.Value)).ToList(),
             Corridors = scene.Corridors.ToList(),
             RoomAmbience = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Ambience),
+            // mountShell's places part (markers, lift stops, flights, vertical targets, corridor stands) in the frame
+            // the group stands in now; the re-datum carries it (Redatum → PlaceInventory.Relift).
+            Places = places,
+            Problems = scene.Problems.ToList(),
         };
+    }
+
+    /// <summary>The places data of a mount in one line (the <c>--verify</c> / <c>--check</c> log).</summary>
+    public static string PlacesSummary(PlaceInventory p, IReadOnlyList<SceneProblem> problems)
+    {
+        var entries = p.Entries().ToList();
+        return $"places[markers={entries.Count} prop={entries.Count(e => e.Fixed)} slots={entries.Sum(e => e.Slots.Length)} "
+               + $"stops={p.ElevatorStops.Count} flights={p.Stairs.Count} targets={p.VerticalTargets.Count} "
+               + $"corridors={p.Corridors.Count} stands={p.Corridors.Count(c => c.Stand is not null)} "
+               + $"problems={problems.Count} toastable={problems.Count(q => q.Scope != "editor")}]";
     }
 
     /// <summary>The room names of a location: its <c>/world/locations?view=3d</c> row's <c>rooms</c> (empty when unknown).</summary>

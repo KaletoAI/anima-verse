@@ -543,9 +543,29 @@ tint; the floor-plan entry `floor_kind` "planks" and a `map_water` (area-pond, l
 prop marker (m-chair), one doorway, two problems (one `scope: "editor"`), one corridor, one boundary opening; on
 models: the door's `door` block (opening 0, left, swing −1, leaf box), the diorama's `clip_outline` and
 `walk_y_world` 0.05, and on the storey-hidden lamp `walkable`, `width_estimated`, `cut_plane`, `slots`, `light`,
-a 3 × 2 `surface`, a `water` region and a top-level `leaf_bbox`. None of them changes a count above: the markers
-and floor plan only feed `hasInterior` of a location that has an interior anyway, the lamp has no mesh fixture
+a 3 × 2 `surface`, a `water` region and a top-level `leaf_bbox`. None of them changes a count above: the floor plan only feeds `hasInterior` of a location that has an
+interior anyway (the marker, the flight, the corridor and the problems feed the places data since Task 19, see
+"Places"), the lamp has no mesh fixture
 (missing since Task 16 mounts storey 1), the diorama has no mesh, the door block and the rest are read by no native code yet.
+
+### Places (Task 19)
+
+`PlaceInventory.Compose` on loc-open (pin (64, 120), yaw 0 → tileToWorld(lx, lz, ly) = (64 + lx, 3.875 + ly, 120 + lz)):
+- **m-chair** (prop marker, `r-ground`, storey 0): lift point = its anchor (2, −1) → (66, 119), lift = 3.921875 − 3.875 =
+  **0.046875**; slot (2, −1) at y_world 0.45 − root_offset 0.42 + lift → **(66, 3.951875, 119)**. view=3d has no room names,
+  so the only key is `r-ground`.
+- **flight 0**: foot (2, 0.01, −0.9) → **(66, 3.885, 119.1)**, head (2, 3.03, −3.1) → **(66, 6.905, 116.9)**, at (2, −1.5) →
+  (66, 118.5), dir = normalize(head − at) = **(0, −1)**.
+- **vertical targets**: the lift glass is an `elevator_*` box → (elevator, −1); the tread names stair 0 = flight 0 →
+  (stairs, 0). No `elevator_pad` → **no stop**.
+- **corridor** `__floor__1`: the storey-1 plate without a room id has top 3.0 → stand (0, −2.5) at 3.0 + 0.01 →
+  **(64, 6.885, 117.5)**.
+- loc-closed's pad (0, 0.05, −2), size y 0.1 → stop on storey 0 at **(−40, 4.693359375 + 0.1, 98)**; target (elevator, −1).
+- **problems**: of the two, the `scope: "editor"` one is skipped → **one toast** "2 rooms cannot be reached", key
+  `loc-open|unreachable_rooms|`; asked again → none.
+- **re-datum**: a flat tile (0, 0) at 10 m moves loc-open's datum 3.875 → 10 (+6.125). Foot/head/stand ride the step →
+  10.01 / 13.03 / 13.01; the chair seat rides to 10.076875, then its lift 0.046875 → 0 takes 0.046875 off → **10.03**
+  (= 10 + 0.45 − 0.42), one location with moved seats; loc-closed (overview) keeps its stop.
 
 ### Verify (§ B5a, Task 15)
 

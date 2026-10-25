@@ -52,6 +52,28 @@ What it draws after login:
 - with `--scatter`: the authored scatter of the painted areas and the automatic
   undergrowth (see "Scatter").
 
+### What stage E2 shows (Phase 3, Tasks 13–19)
+
+The scene recipe and the interiors with storeys, as the browser's overview shows them, every number on the shared
+vectors of `shared/test-vectors/scene_*.json` (and `light_pool`, `ambience`, `mirror_plane`, `slot_materials`,
+`door_swing`):
+
+- **Look inside** crossfades in ~0.75 s (`Hineinsehen` / "Close view"), taller neighbours in front fade out
+  (see "Mounted once, opened by a crossfade");
+- **storeys**: the in-world switch `-1. G 1. …`, slabs/walls/rooms/props of the shown storey only, the cellar through
+  a hole in the ground, door marks in the thresholds, room names, boundary marks of refused places
+  (see "Storeys at runtime");
+- **model fidelity**: room dioramas clipped to their hull, half furniture cut at the wall, area/plan-hull cutouts
+  opening with the fade, metalness neutralised, the building tier swapping at 45/60 m, re-datum on height revisions,
+  a remount when a scene's signature moves (see "Model fidelity");
+- **props**: pictures in frames, glass, mirrors, prop lights (night, flicker, halos), room ambience, door leaves
+  (see "Slots, mirrors, lights, ambience and doors");
+- **places data and problems**: the place markers with their lift, lift stops, stair flights, vertical targets and
+  corridor stands on every mounted location (for E5/E7, nothing drawn — the browser draws place rings only
+  embodied), and the composer's problems of the avatar's location as a HUD toast (see "Places data and problems");
+- **§ B5a verify** after every mount: `-- --verify` prints `[verify] <loc>: N numbers checked, no deviation > 0.01 m`
+  per location (otherwise only a location with a deviation is logged).
+
 ## Requirements (build machine)
 
 - Godot **4.7.2 stable .NET** editor binary (`Godot_v4.7.2-stable_mono_linux.x86_64`)
@@ -225,10 +247,11 @@ Arguments after `--` (no .env; all optional):
 | `--no-hud` | no HUD even when gdCEF is linked (the S2/S3 bench numbers were taken without it) |
 | `--no-water` | no water lift / water variant (= the browser's `&water=0`); the bench flags say `water: false` |
 | `--offline=DIR` | build from a payload dump (`tools/dump_payloads.py`) instead of a server: no login, no HUD; prints the world/scatter/figure/shader summary lines and quits (with `--bench`: runs the drive, then quits) |
-| `--verify` | § B5a: log the full verify table of every mounted location (default: only a location with a deviation is logged, like the browser without `?verify=1`) |
+| `--verify` | § B5a: log the full verify table of every mounted location (default: only a location with a deviation is logged, like the browser without `?verify=1`), plus each mount's `places[…]` line (Task 19) |
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
 | `--check verify` | only the § B5a section of the self-test (both fixture worlds, `Check/VerifyCheck.cs`), then exit 0/1 |
 | `--check storeys` | only the storey section (`fixtures/storeys/`, `Check/StoreysCheck.cs`: the switch at runtime, hole, marks, labels, pointer), then exit 0/1 |
+| `--check fidelity` | only the model-fidelity section (`fixtures/fidelity/`, `Check/FidelityCheck.cs`: neutralisation, clip, cutouts, depth cut, tier swap, re-datum, sweep), then exit 0/1 |
 | `--check props` | only the props section (`fixtures/props/`, `Check/PropsCheck.cs`: slots, mirrors, prop lights, doors, ambience), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
@@ -407,10 +430,9 @@ nothing here is a native choice:
   → the dry tile, recipe → a StandardMaterial3D, scatter → the same shader
   without the wind).
 
-Not ported (all view-only, counted nowhere): picture/glass slot materials, the
-room clip and the depth cut of props (`clip_outline`, `cut_plane` — parsed since Task 15), door
-swinging, prop lights, the underwater ghosts, waterfalls, LOD re-evaluation while
-the camera moves (the bench drive keeps its focus on the anchor).
+Not ported yet (view-only, counted nowhere): door swinging (needs an avatar, E7), the underwater ghosts and
+waterfalls (E3), streaming in/out of rings while the camera moves (E3/E6; the tier swap does run, see "Model
+fidelity"). Slots, clip, depth cut and prop lights landed in Tasks 17/18 (sections below).
 
 Summary line of a build (online log, `--offline`, `--check`): `primitives=N
 skipped=M (degenerate=… interior=… storey=… panes=…) shell_copies=…
@@ -496,6 +518,33 @@ room labels (label overlay, fade > 0.5, not on area locations) and the in-world 
 (`Ui/LevelSwitchOverlay.cs`, scene-owned like the browser's — no bridge message): a button row on the first lift
 box (else (2.2, 0)) ⅔ of a storey above the shown floor; a press on it is taken by Godot's GUI pass before the
 camera's `_UnhandledInput`, so it never picks, orbits or drags.
+
+### Places data and problems (Task 19)
+
+`Core/Scene/ScenePlaces.cs` composes what the browser's `mountShell` files on the tile for the figures and the embodied
+mode — `LocationSlot.Places` (`PlaceInventory`), every point through the vector-checked `tileToWorld` /
+`storeyGround*` / `markerLiftPoint`:
+
+| Field | Shape | Browser twin |
+|---|---|---|
+| `Markers[room id or name][marker id]` | `PlaceEntry`: `Slots` (world `Vec3[]`, figure-root height = surface − `Drop` + `Lift`, re-lifted IN PLACE), `RoomId`, `Group`, `Rotation`/`Tilt`/`Roll` (deg, tile frame), `Drop`, `OffsetY`, `Fixed` (prop marker), `Diorama`, `Level`, `Lift`, `LiftAt` (world xz), `Anchor` (tile xz, prop markers) | `tile.roomMarkers` (`PlaceEntry`, placeSlot.ts) |
+| `ElevatorStops[level]` | world `Vec3`: the pad's top face | `tile.elevatorStops` |
+| `Stairs[]` | `StairLink`: `Id`, `Foot`/`Head` (`Level`, world `Pos`), `At` (run foot, world xz), `Dir` (unit, world xz), `RunM`, `WidthM`, `Steps`, `Footprint` (world xz) | `tile.stairs` (`StairWorldLink`) |
+| `VerticalTargets[]` | `(Kind "elevator"/"stairs", Flight)` — flight −1 = the lift | `tile.verticalTargets` (without the mesh groups: native draws extras merged) |
+| `Corridors[]` | `CorridorStand`: `RoomId`, `Level`, `Anchor`/`Outline` (tile frame), `PlateTop`, `Stand` (world; null on storey 0) | `tile.corridors` + `roomCenters` |
+
+`PlaceInventory.SlotFor` (`slotFor`) and `GlyphRows` (`buildGlyphs` over `/play/places` offers) read it; the rings
+are not drawn (the browser draws them only embodied — E7). The re-datum (`WorldBuilder.Redatum`) carries it like
+`reliftScene`. Two browser rungs are NOT ported because they have no shared vector yet and their first consumer is
+E5/E7: a room marker's height re-derivation from the room floor (`deriveRoomSpots` → `roomBaseFloorY`; here a room
+marker keeps its composed height, equal on a flat built plot) and a storey-0 corridor stand (`tileGroundY`'s ground
+ladder; `Stand` is null there).
+
+The scene's `problems[]` (`LocationSlot.Problems`) of the AVATAR's location are toasted through the HUD's `toast` action
+on every world-map poll, once per (location, kind, room), never one with `scope: "editor"` (`SceneProblems.Announce`,
+main.ts `announceSceneProblems`), and logged as `[scene] <loc>: <kind> — <message>`. With `--verify` / `--check` every
+mount logs a `places[markers=… prop=… slots=… stops=… flights=… targets=… corridors=… stands=… problems=… toastable=…]`
+line. Checked by `tests/ScenePlacesTests.cs` and the S3c section of `--check` (fixtures/README "Places").
 
 ### § B5a verify (Task 15)
 

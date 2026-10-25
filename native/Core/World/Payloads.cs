@@ -246,6 +246,8 @@ public sealed record SceneExtra(string Kind, double[] Center, double[] Size, dou
 {
     public int? Level { get; init; }
     public string TextureKind { get; init; } = "";
+    /// <summary><c>stair</c>: the index into <c>stairs[]</c> (by its <c>id</c>) a <c>stair_*</c> box belongs to; null when absent.</summary>
+    public int? Stair { get; init; }
 }
 
 /// <summary>§ B1 <c>rooms[]</c>: the visibility fields, plus outline, openings, overlay and ambience.</summary>
@@ -398,6 +400,7 @@ public sealed class ScenePayload
             {
                 Level = Json.NumOrNull(e, "level") is double lv ? (int)lv : null,
                 TextureKind = Json.Str(e, "texture_kind"),
+                Stair = Json.NumOrNull(e, "stair") is double st ? (int)st : null,
             });
         }
         foreach (var r in Json.Arr(root, "rooms"))
