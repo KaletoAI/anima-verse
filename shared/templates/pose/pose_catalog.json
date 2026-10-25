@@ -1261,6 +1261,18 @@
       "animation": "swim",
       "group": "stand",
       "solo": true
+    },
+    "treading_water": {
+      "prompt": "treading water in deep water, head and shoulders above the surface, arms sculling slowly",
+      "synonyms": [
+        "wassertreten",
+        "im wasser treiben",
+        "treading water",
+        "staying afloat"
+      ],
+      "animation": "treading-water",
+      "group": "stand",
+      "solo": true
     }
   }
 }
