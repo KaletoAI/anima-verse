@@ -1235,6 +1235,19 @@
       "animation": "crawl-rest",
       "group": "ground",
       "solo": true
+    },
+    "crawling": {
+      "prompt": "crawling on hands and knees across the ground, back level, head raised, looking ahead",
+      "synonyms": [
+        "kriechen",
+        "krabbeln",
+        "auf allen vieren kriechen",
+        "crawling",
+        "crawling on hands and knees"
+      ],
+      "animation": "crawl",
+      "group": "ground",
+      "solo": true
     }
   }
 }
