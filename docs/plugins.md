@@ -474,6 +474,13 @@ values; fingerprint version 14 identified the pair tip contract, version 16
 the geometry-mode crest search and midline cap of `pair_protrusion`.
 
 `pair_protrusion` requires two one-link chains: first `+X`, second `-X`.
+Each built bone carries the glTF node extras `anchor_blend` — the bones its tissue
+followed before, by share of the weight it took over (e.g. `{Spine1: .53, Spine2: .45,
+LeftShoulder: .02}`; shares under 2 % dropped). The shared solver in `@anima/scene-render`
+anchors the bone's rest frame at that blend instead of its one parent (head moved as
+linear skinning moved it, rotation the normalised share-weighted sum), so clips that
+bend the upper chest against the lower one do not drag the tissue along with Spine2
+alone; at bind the blend is the parent's frame. No extras = the parent alone.
 Sides are measured from the body midline, the mean x of `lateral_positive_bone`
 and `lateral_negative_bone`; `lateral_min`/`lateral_max` bound the candidate
 cells and `side_margin` keeps every sample and weight on its own side.

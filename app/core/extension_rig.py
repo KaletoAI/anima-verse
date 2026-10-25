@@ -94,7 +94,7 @@ def extension_rig_fingerprint(groups, overrides=None):
     geometry = [{**{key: group[key] for key in ("id", "op", "chains", "params", "enabled", "flip") if key in group},
                  **({"build": PART_BUILDS[group["op"]]} if group.get("op") in PART_BUILDS else {})}
                 for group in groups]
-    return _revision({"version": 18, "groups": sorted(geometry, key=lambda g: g["id"]),
+    return _revision({"version": 19, "groups": sorted(geometry, key=lambda g: g["id"]),
                       "overrides": overrides or {}})
 
 

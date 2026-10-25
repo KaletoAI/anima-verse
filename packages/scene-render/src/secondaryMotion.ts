@@ -131,6 +131,12 @@ interface Bind {
   rotation: Quaternion
   straightenRotation: Quaternion
   localRotation: Quaternion
+  /** Inverse bind world matrix, for the anchor blend of other bones. */
+  bindWorldInverse: Matrix4
+  /** Bones the bone's tissue followed before it was built, with their shares
+   *  (glTF extras `anchor_blend`); the rest frame follows their blend instead of
+   *  the one parent. Undefined = the parent alone. */
+  anchorBlend?: { bind: Bind; share: number }[]
 }
 interface Particle {
   bind: Bind
@@ -245,7 +251,8 @@ export function createSecondaryMotion(
         binds.set(bone, { bone, local: bone.matrix.clone(), centroid: new three.Vector3(), mass: 0, scaleAxis: new three.Vector3(), centroidWorld: new three.Vector3(),
           gravityRest: gravity.clone().applyQuaternion(q), gravityProjection: 0, bodyFront: new three.Vector3(),
           head: bone.getWorldPosition(new three.Vector3()), parentHead: bone.parent!.getWorldPosition(new three.Vector3()), worldRotation: q.clone().invert(), pureWorld: new three.Matrix4(),
-          singleLateral: new three.Vector3(), centeringRotation: new three.Quaternion(), lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), straightenRotation: new three.Quaternion(), localRotation: bone.quaternion.clone() })
+          singleLateral: new three.Vector3(), centeringRotation: new three.Quaternion(), lateral: new three.Vector3(), pairedLateral: new three.Vector3(), auto: bone.matrixAutoUpdate, depth, rotation: new three.Quaternion(), straightenRotation: new three.Quaternion(), localRotation: bone.quaternion.clone(),
+          bindWorldInverse: bone.matrixWorld.clone().invert() })
       }
     })
     // One pass over four influences per vertex, not one pass per skeleton bone.
@@ -283,6 +290,19 @@ export function createSecondaryMotion(
   const bindHeads = new Map<Bone, Vector3>()
   root.traverse(o => { if ((o as Bone).isBone) bindHeads.set(o as Bone, o.getWorldPosition(new three.Vector3())) })
   const byName = new Map([...binds.values()].map(b => [normBoneName(b.bone.name), b]))
+  // The rigger spread the tissue a built bone takes over across several bones
+  // (breast tissue: 22-63 % Spine1, the rest Spine2). Following the one parent
+  // alone made it sag with the upper chest in clips that bend it against the
+  // lower one; the build measures the shares and stores them on the joint.
+  for (const b of binds.values()) {
+    const raw = (b.bone.userData as { anchor_blend?: Record<string, number> } | undefined)?.anchor_blend
+    if (!raw || typeof raw !== 'object') continue
+    const entries = Object.entries(raw)
+      .map(([name, share]) => ({ bind: byName.get(normBoneName(name)), share: Number(share) }))
+      .filter((e): e is { bind: Bind; share: number } => !!e.bind && e.bind !== b && Number.isFinite(e.share) && e.share > 0)
+    const total = entries.reduce((sum, e) => sum + e.share, 0)
+    if (total > 0) b.anchorBlend = entries.map(e => ({ bind: e.bind, share: e.share / total }))
+  }
   let particles: Particle[] = []
   /** rigid_tail links, parent first: carried by their parent, never driven. */
   let rigids: Bind[] = []
@@ -515,6 +535,29 @@ export function createSecondaryMotion(
   const centeringQ = new three.Quaternion()
   const chainCentre = new three.Vector3(), chainForce = new three.Vector3()
   const driven = new Map<Bone, Particle>()
+  const delta = new three.Matrix4(), localBase = new three.Matrix4()
+  const blendQ = new three.Quaternion(), deltaQ = new three.Quaternion(), firstQ = new three.Quaternion()
+  const blendHead = new three.Vector3(), blendPos = new three.Vector3(), blendScale = new three.Vector3()
+  /** Rest frame at the blend of the anchor bones' motions since bind: the bind
+   *  head moved as linear skinning moved the tissue (sum of share x delta x head),
+   *  the rotation is the normalised share-weighted sum of their delta rotations.
+   *  At bind every delta is identity, so bind values are unchanged. */
+  const blendAnchor = (b: Bind) => {
+    blendQ.set(0, 0, 0, 0); blendHead.set(0, 0, 0)
+    b.anchorBlend!.forEach(({ bind: x, share }, i) => {
+      delta.copy(x.bone.matrixWorld).multiply(x.bindWorldInverse)
+      blendHead.addScaledVector(temp.copy(b.head).applyMatrix4(delta), share)
+      delta.decompose(blendPos, deltaQ, blendScale)
+      if (i === 0) firstQ.copy(deltaQ)
+      else if (firstQ.dot(deltaQ) < 0) deltaQ.set(-deltaQ.x, -deltaQ.y, -deltaQ.z, -deltaQ.w)
+      blendQ.set(blendQ.x + share * deltaQ.x, blendQ.y + share * deltaQ.y, blendQ.z + share * deltaQ.z, blendQ.w + share * deltaQ.w)
+    })
+    blendQ.normalize()
+    anchorQ.copy(blendQ).multiply(b.worldRotation)
+    anchor.decompose(blendPos, deltaQ, blendScale)
+    anchor.compose(blendHead, anchorQ, blendScale)
+    anchorFull.copy(anchor)
+  }
   const pureParent = (node: Object3D | null): Quaternion => {
     anchorQ.identity()
     // Multiply local rotations from leaf toward root, replacing driven transforms.
@@ -571,6 +614,8 @@ export function createSecondaryMotion(
         }
         if (drivenAncestor) anchor.setPosition(temp.setFromMatrixPosition(anchorFull))
         pureParent(b.bone.parent).multiply(b.localRotation)
+        const blended = !drivenAncestor && !!b.anchorBlend
+        if (blended) blendAnchor(b)
         if (st.roots.length === 1 && st.roots[0] === b && b.singleLateral.lengthSq() > 1e-12) {
           centeringQ.identity().slerp(b.centeringRotation, st.straighten)
           restQ.setFromAxisAngle(b.singleLateral, st.rest).multiply(centeringQ)
@@ -808,7 +853,7 @@ export function createSecondaryMotion(
         }
         shiftPart.copy(head).add(headShift).applyMatrix4(inverseAnchor)
         translationMatrix.makeTranslation(shiftPart.x, shiftPart.y, shiftPart.z)
-        b.bone.matrix.copy(b.local)
+        b.bone.matrix.copy(blended ? localBase.copy(b.bone.parent!.matrixWorld).invert().multiply(anchor) : b.local)
           .multiply(translationMatrix)
           .multiply(rotationMatrix.makeRotationFromQuaternion(dynamicQ.multiply(restQ)))
           .multiply(scale)

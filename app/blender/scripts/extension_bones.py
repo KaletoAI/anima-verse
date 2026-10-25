@@ -625,8 +625,36 @@ def pair_plan(group, p, co, bones, front, owners, pinned=None):
             raise ValueError('empty pair weight region')
         weights[link['bone']] = w
         placements.append({'head':list(head),'tip':list(apex),'apex_source':'colour' if colour else 'geometry',
-                           'marker_area':marker_areas[len(placements)] if colour else None,'marker_note':note,'reach':reach.copy(),'wall_centre':list(c),'wall_normal':list(n),'depth':depth})
+                           'marker_area':marker_areas[len(placements)] if colour else None,'marker_note':note,'reach':reach.copy(),'wall_centre':list(c),'wall_normal':list(n),'depth':depth,
+                           'anchor_blend':anchor_blend(w,owners,bones)})
     return links,weights,{'placement':placements,'leak':False},set(),[]
+
+
+# Bones below this share of the tissue a new bone takes over leave its anchor.
+ANCHOR_BLEND_MIN_SHARE = .02
+
+
+def anchor_blend(weights, owners, bones):
+    """Which bones the tissue a new bone takes over followed BEFORE, by share.
+
+    Each vertex's original deform weights, normalised, count with the weight the
+    new bone takes from it. The renderers anchor the bone at this blend instead
+    of its one parent: the rigger spread the tissue over several bones (breast
+    tissue 22-63 % Spine1, the rest Spine2), and a bone that followed Spine2
+    alone sagged with the upper chest in clips that bend it against Spine1."""
+    names = {bone.name for bone in bones.values() if not isinstance(bone, SimpleNamespace)}
+    share = {}
+    for i,value in weights.items():
+        mesh,vi = owners[i]
+        groups = [(mesh.vertex_groups[g.group].name,g.weight) for g in mesh.data.vertices[vi].groups
+                  if g.weight > 0 and mesh.vertex_groups[g.group].name in names]
+        total = sum(weight for _,weight in groups)
+        for name,weight in groups:
+            share[name] = share.get(name,0.)+value*weight/total
+    total = sum(share.values())
+    kept = {name:x/total for name,x in share.items() if total and x/total >= ANCHOR_BLEND_MIN_SHARE}
+    rest = sum(kept.values())
+    return {name:round(x/rest,4) for name,x in sorted(kept.items())} if rest else {}
 
 
 def mesh_arrays(meshes):
@@ -2359,6 +2387,13 @@ def extension_bones(args):
             b.use_connect=False
             b.roll=0
     bpy.ops.object.mode_set(mode='OBJECT')
+    # The anchor blend travels as glTF node extras of the joint (Bone data
+    # custom properties survive import/export round trips; pose bones do not).
+    for g,p,plan in plans:
+        if g['op'] == 'pair_protrusion':
+            for (name,_,_,_),row in zip(plan[0],plan[2]['placement']):
+                if row.get('anchor_blend'):
+                    arm.data.bones[name]['anchor_blend'] = row['anchor_blend']
     # Edit mode rebuilds the bone data; references cached before it are stale.
     bones = {bone_key(b.name):b for b in arm.data.bones}
     totals,allweights={},{}
