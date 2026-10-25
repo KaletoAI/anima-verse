@@ -2920,6 +2920,13 @@
     "Suggestion failed.": "Vorschlag fehlgeschlagen.",
     "Re-animate": "Erneut animieren",
     "Animate": "Animieren",
-    "Suggest": "Vorschlagen"
+    "Suggest": "Vorschlagen",
+    "Scene": "Szene",
+    "you": "du",
+    "Show rendered scene": "Gerenderte Szene anzeigen",
+    "Render a fresh scene image": "Ein neues Szenenbild rendern",
+    "Rendering scene…": "Szene wird gerendert…",
+    "Cooldown — ⟳ renders a fresh image": "Wartezeit — ⟳ rendert ein neues Bild",
+    "A scene render is already running": "Ein Szenenbild wird bereits gerendert"
   }
 }

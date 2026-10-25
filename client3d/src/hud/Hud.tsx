@@ -38,6 +38,8 @@ import { CharacterPlaque } from './CharacterPlaque';
 import { ChatPortraits } from './ChatPortraits';
 import { GameMenu } from './GameMenu';
 import { InfoPanel } from './InfoPanel';
+import { SceneTile } from './SceneTile';
+import { TILE_COLLAPSE_BELOW_PX } from './sceneTile';
 import { PlaceMenu } from './PlaceMenu';
 import { TravelBar } from './TravelBar';
 import type { TravelPick } from '../game/travelPick';
@@ -181,6 +183,14 @@ export function Hud({ avatar, username, role }: {
     belongings: false, mind: false, phone: false, news: false, tasks: false,
     quests: false, gallery: false, instagram: false, avatar: false,
   });
+  const [railEl, setRailEl] = useState<HTMLElement | null>(null);
+  const dockOpen = Object.entries(open).some(([id, value]) => id !== 'chat' && value);
+  const [narrow, setNarrow] = useState(() => window.innerWidth < TILE_COLLAPSE_BELOW_PX);
+  useEffect(() => {
+    const resize = () => setNarrow(window.innerWidth < TILE_COLLAPSE_BELOW_PX);
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
   const unread = useOpenTopics(open.instagram);
   /** `open.chat` for callbacks that must not re-subscribe on every toggle. */
   const chatOpen = useRef(open.chat);
@@ -254,7 +264,7 @@ export function Hud({ avatar, username, role }: {
   /** Measure only non-modal surfaces. Portalled overlays own the full window
    *  through overlayOpen, never through a full-screen hit rectangle. */
   useEffect(() => {
-    const selector = '.hud-rail, .hud-dock, .hud-panel, .hud-mode, .hud-party, '
+    const selector = '.hud-scene-tile, .hud-scene-icon, .hud-rail, .hud-dock, .hud-panel, .hud-mode, .hud-party, '
       + '.hud-travel, .hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
       + '.hud-top, .hud-hints, .info-panel, .open-view-badge, .hud-notices';
     let frame = 0;
@@ -1079,7 +1089,9 @@ export function Hud({ avatar, username, role }: {
         </div>
       )}
 
-      <nav className="hud-rail">
+      <SceneTile scene={data ?? null} collapsed={dockOpen || !!game.info || narrow} railEl={railEl} />
+
+      <nav ref={setRailEl} className="hud-rail">
         {PANELS.filter((p) => !p.requires || hasCapability(p.requires)).map((p) => (
           <button key={p.id} className={open[p.id] ? 'on' : ''}
             onClick={() => toggle(p.id)} aria-pressed={open[p.id]}
@@ -1170,9 +1182,7 @@ export function Hud({ avatar, username, role }: {
         </section>
       )}
 
-      {(open.self || open.others || open.menu || open.belongings || open.mind
-        || open.phone || open.news || open.tasks || open.quests || open.gallery
-        || open.instagram || open.avatar) && (
+      {dockOpen && (
         <div ref={dockRef}
           className={'hud-dock'
             + ([...WIDE_PANELS].some((id) => open[id]) ? ' hud-dock-wide' : '')}

@@ -1462,3 +1462,70 @@
   box-shadow: 0 0 0 1.5px var(--bg, #0d1117);
   pointer-events: none;
 }
+
+/* Scene tile: goal 1 keeps the permanent image beside the right rail, clear
+   of the centre. Dock/info panels or widths below 1200px collapse it to the
+   last button inside the rail via a portal. The icon inherits rail layout and
+   button styling, keeping it clear of the dock and other rail buttons. */
+#hud .hud-scene-tile {
+  position: absolute;
+  right: var(--dock-right, 62px);
+  bottom: 12px;
+  pointer-events: auto;
+  border: 1px solid var(--border, #30363d);
+  background: var(--bg-container, #161b22);
+  color: inherit;
+  box-shadow: 0 4px 18px rgba(0,0,0,.4);
+}
+#hud .hud-scene-tile { width: 256px; aspect-ratio: 16/9; border-radius: 10px; overflow: hidden; }
+.hud-scene-image-area {
+  position: absolute; inset: 0; width: 100%; height: 100%; padding: 0;
+  border: 0; background: transparent; color: inherit; cursor: zoom-in;
+  font: inherit;
+}
+.hud-scene-background { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.hud-scene-figures {
+  position: absolute; inset: 14% 4% 17%; display: flex;
+  align-items: flex-end; justify-content: space-evenly; pointer-events: none;
+}
+.hud-scene-figure {
+  flex: 1 1 0; min-width: 0; height: 100%; display: flex;
+  flex-direction: column; align-items: center; justify-content: flex-end;
+}
+.hud-scene-figure img {
+  max-height: calc(100% - 16px); max-width: 100%; min-height: 0; object-fit: contain;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,.55));
+}
+.hud-scene-figure span {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10px; line-height: 16px; padding: 0 3px; border-radius: 3px;
+  background: rgba(0,0,0,.6); color: #fff;
+}
+.hud-scene-figure .hud-scene-avatar { color: var(--accent, #6aa9ff); }
+.hud-scene-strip {
+  position: absolute; bottom: 0; left: 0; right: 0; padding: 8px 8px 4px;
+  background: linear-gradient(transparent, rgba(0,0,0,.8)); color: #fff;
+  font-size: 12px; text-align: left; pointer-events: none;
+}
+.hud-scene-controls { position: absolute; top: 5px; right: 5px; display: flex; gap: 4px; }
+.hud-scene-controls button, .hud-scene-close {
+  border: 1px solid rgba(255,255,255,.35); border-radius: 5px;
+  background: rgba(0,0,0,.65); color: #fff; cursor: pointer; padding: 2px 6px;
+}
+.hud-scene-controls button:disabled { opacity: .5; cursor: wait; }
+.hud-scene-status {
+  position: absolute; left: 5px; right: 5px; top: 36px; padding: 3px 5px;
+  background: rgba(0,0,0,.8); color: #fff; font-size: 11px;
+  overflow-wrap: anywhere; max-height: 50%; overflow: auto;
+}
+.hud-scene-big {
+  position: fixed; inset: 0; z-index: 10000; background: rgba(0,0,0,.8);
+  display: flex; align-items: center; justify-content: center; pointer-events: auto;
+}
+.hud-scene-large {
+  position: relative; width: min(90vw, 151.11vh); aspect-ratio: 16/9;
+  max-height: 85vh; overflow: hidden; border-radius: 10px; background: #161b22;
+}
+.hud-scene-large .hud-scene-controls { right: 44px; }
+.hud-scene-large .hud-scene-figure span { font-size: clamp(10px, 1.4vw, 18px); line-height: 1.4; }
+.hud-scene-close { position: absolute; right: 5px; top: 5px; font-size: 18px; }
