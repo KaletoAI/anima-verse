@@ -30,6 +30,7 @@ import {
   type Tile, type VerticalTarget,
 } from './tiles';
 import { SubmergedGhost } from './submergedGhost';
+import { locationLabelLift } from './nameTags';
 import { ghostCutY, ghostWaterLevel } from '../game/walk';
 import { waterInside } from './waterShade';
 
@@ -2016,7 +2017,7 @@ function buildFarShell(tile: Tile,
   const box = new THREE.Box3().setFromObject(shell);
   if (box.max.y > box.min.y) {
     tile.height = box.max.y - box.min.y;
-    tile.labelObj?.position.set(0, tile.height + 2.2, 0);
+    tile.labelObj?.position.set(0, locationLabelLift(tile.height), 0);
   }
 }
 
@@ -2179,7 +2180,7 @@ export async function setSceneModelTier(tile: Tile, group: 'building' | 'interio
             'roofMats', 'roofParts', 'facadeMats', 'height', 'modelWalkY', 'cutouts', 'cutoutOccGate'] as const) {
             Object.assign(tile, { [key]: staged[key] });
           }
-          tile.labelObj?.position.set(0, tile.height + 2.2, 0);
+          tile.labelObj?.position.set(0, locationLabelLift(tile.height), 0);
           for (const m of oldMats) if (!tile.roofMats.includes(m)) m.dispose();
           old?.parent?.remove(old);
         } else {
@@ -2363,7 +2364,7 @@ function applySceneBuilding(tile: Tile, model: THREE.Group,
   // walls it sits on — the readable height of the place is shell plus roof.
   if (roofOnly && tile.shell) box.expandByObject(tile.shell);
   tile.height = box.max.y - box.min.y;
-  tile.labelObj?.position.set(0, tile.height + 2.2, 0);
+  tile.labelObj?.position.set(0, locationLabelLift(tile.height), 0);
 }
 
 /** Remove the scene, preserving tile-owned procedural objects and labels. */

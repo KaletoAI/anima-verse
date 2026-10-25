@@ -1,0 +1,62 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_overview_labels.mjs",
+  "cases": [
+    { "label": "[V1] 40 m, shown, not first person -> visible", "fn": "tagVisible", "args": [40, false, false], "expect": true },
+    { "label": "[V2] 54.999 m -> still visible", "fn": "tagVisible", "args": [54.999, false, false], "expect": true },
+    { "label": "[V3] exactly 55 m -> gone (strict <)", "fn": "tagVisible", "args": [55, false, false], "expect": false },
+    { "label": "[V4] 60 m -> gone", "fn": "tagVisible", "args": [60, false, false], "expect": false },
+    { "label": "[V5] hidden figure at 10 m -> gone", "fn": "tagVisible", "args": [10, true, false], "expect": false },
+    { "label": "[V6] own first-person body at 1 m -> gone", "fn": "tagVisible", "args": [1, false, true], "expect": false },
+
+    { "label": "[T1] no travel block -> not under way", "fn": "tagTravelling", "args": [null], "expect": false },
+    { "label": "[T2] starts_in_s 0 -> under way", "fn": "tagTravelling", "args": [{ "starts_in_s": 0 }], "expect": true },
+    { "label": "[T3] starts_in_s null -> under way", "fn": "tagTravelling", "args": [{ "starts_in_s": null }], "expect": true },
+    { "label": "[T4] starts_in_s 12 -> start ahead, not under way", "fn": "tagTravelling", "args": [{ "starts_in_s": 12 }], "expect": false },
+    { "label": "[T5] an empty travel block -> under way", "fn": "tagTravelling", "args": [{}], "expect": true },
+
+    { "label": "[N1] no travel -> the bare name", "fn": "tagName", "args": ["Ada", null], "expect": "Ada" },
+    { "label": "[N2] under way with an ETA -> walker, clock, name", "fn": "tagName",
+      "args": ["Ada", { "starts_in_s": 0, "eta_hhmm": "14:30" }], "expect": "🚶 14:30 Ada" },
+    { "label": "[N3] under way, no starts_in_s key -> walker, clock, name", "fn": "tagName",
+      "args": ["Ada", { "eta_hhmm": "07:05" }], "expect": "🚶 07:05 Ada" },
+    { "label": "[N4] start ahead -> the bare name", "fn": "tagName",
+      "args": ["Ada", { "starts_in_s": 12, "eta_hhmm": "14:30" }], "expect": "Ada" },
+    { "label": "[N5] under way, eta null -> walker and name only", "fn": "tagName",
+      "args": ["Cleo Marsh", { "starts_in_s": null, "eta_hhmm": null }], "expect": "🚶 Cleo Marsh" },
+    { "label": "[N6] under way, eta empty -> walker and name only", "fn": "tagName",
+      "args": ["Cleo Marsh", { "eta_hhmm": "" }], "expect": "🚶 Cleo Marsh" },
+
+    { "label": "[A1] a 1.60 m model -> 2.05", "fn": "tagAnchorY", "args": [1.6], "expect": 2.05 },
+    { "label": "[A2] a 1.80 m model -> 2.25", "fn": "tagAnchorY", "args": [1.8], "expect": 2.25 },
+    { "label": "[A3] a portrait sprite -> -0.15", "fn": "tagAnchorY", "args": [null], "expect": -0.15 },
+
+    { "label": "[L1] a 4 m building -> 6.2", "fn": "locationLabelLift", "args": [4], "expect": 6.2 },
+    { "label": "[L2] a 0.6 m nature site -> 2.8", "fn": "locationLabelLift", "args": [0.6], "expect": 2.8 },
+    { "label": "[L3] a 3 m shell -> 5.2", "fn": "locationLabelLift", "args": [3], "expect": 5.2 },
+
+    { "label": "[D1] width 2 -> the 12 m floor", "fn": "closeTargetDist", "args": [2], "expect": 12 },
+    { "label": "[D2] width 4 -> 12 (3 x 4 = the floor)", "fn": "closeTargetDist", "args": [4], "expect": 12 },
+    { "label": "[D3] width 10 -> 30", "fn": "closeTargetDist", "args": [10], "expect": 30 },
+    { "label": "[D4] no footprint -> 12", "fn": "closeTargetDist", "args": [0], "expect": 12 },
+
+    { "label": "[C1] camera exactly 60 m, target on the centre -> stays", "fn": "openViewShouldClose",
+      "args": [60, 10, -5, 10, -5, 10], "expect": false },
+    { "label": "[C2] camera 60.0001 m -> closes", "fn": "openViewShouldClose",
+      "args": [60.0001, 10, -5, 10, -5, 10], "expect": true },
+    { "label": "[C3] target (18, 24) off, width 10 -> exactly 30 -> stays", "fn": "openViewShouldClose",
+      "args": [20, 28, 19, 10, -5, 10], "expect": false },
+    { "label": "[C4] target (18, 24.5) off, width 10 -> 30.40 -> closes", "fn": "openViewShouldClose",
+      "args": [20, 28, 19.5, 10, -5, 10], "expect": true },
+    { "label": "[C5] target 25 m off, camera 59 m -> stays", "fn": "openViewShouldClose",
+      "args": [59, -15, -5, 10, -5, 10], "expect": false },
+    { "label": "[C6] a 1 m shrine, target 12 m off -> the floor holds", "fn": "openViewShouldClose",
+      "args": [30, 12, 0, 0, 0, 1], "expect": false },
+    { "label": "[C7] a 1 m shrine, target 12.01 m off -> closes", "fn": "openViewShouldClose",
+      "args": [30, 12.01, 0, 0, 0, 1], "expect": true },
+    { "label": "[C8] width 8, target 24 m off -> stays", "fn": "openViewShouldClose",
+      "args": [40, -40, 76, -40, 100, 8], "expect": false },
+    { "label": "[C9] width 8, target 24.5 m off -> closes", "fn": "openViewShouldClose",
+      "args": [40, -40, 75.5, -40, 100, 8], "expect": true }
+  ]
+}

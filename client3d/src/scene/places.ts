@@ -3,6 +3,7 @@ import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { tileDatumStep } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
 import { polygonArea } from '../game/polygon';
+import { locationLabelLift } from './nameTags';
 import { detectStyle, footprintBoundary, footprintCentre, footprintWidth,
   footprintYaw, isAreaLocation, worldGroundSampler, type Tile } from './tiles';
 
@@ -55,7 +56,7 @@ export function buildPlace(loc: WorldLocation): PlaceRecord {
     el.className = 'loc-label';
     el.textContent = loc.name;
     labelObj = new CSS2DObject(el);
-    labelObj.position.set(0, height + 2.2, 0);
+    labelObj.position.set(0, locationLabelLift(height), 0);
     anchor.add(labelObj);
   }
   return { loc, center, boundary, area: polygonArea(boundary), width, yaw,

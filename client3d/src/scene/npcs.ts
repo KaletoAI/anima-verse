@@ -13,6 +13,7 @@ import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
 import { GROUND_Y } from './ground';
+import { tagAnchorY, tagName, tagTravelling, tagVisible } from './nameTags';
 import type { PlaceEntry } from './placeSlot';
 import { settleOffset, type StandSettle } from './standSettle';
 import { seededRandom } from './textures';
@@ -968,9 +969,8 @@ export class NpcManager {
       // A journey whose start still lies ahead is NOT under way: the figure
       // is getting out of its pose and stays where it is. Reading `travel`
       // alone walked it while the standing-up clip was still running.
-      const travelling = !!st.char.travel && !st.char.travel.starts_in_s;
-      const eta = st.char.travel?.eta_hhmm ? ` ${st.char.travel.eta_hhmm}` : '';
-      npc.labelName.textContent = (travelling ? `🚶${eta} ` : '') + st.char.name;
+      const travelling = tagTravelling(st.char.travel);
+      npc.labelName.textContent = tagName(st.char.name, st.char.travel);
       npc.travelling = travelling;
       // DEAD RECKONING for a traveller the fog left without a route (§ A12,
       // decision `77dbdb61`): the payload thins a foreign traveller's row down
@@ -1032,7 +1032,7 @@ export class NpcManager {
 
     if (figure) {
       root.add(figure.root);
-      labelY = figure.height + 0.45;
+      labelY = tagAnchorY(figure.height);
     } else {
       const tex = makePortraitTexture(st.char.name, st.char.avatar_url, isAvatar);
       sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: true }));
@@ -1047,7 +1047,7 @@ export class NpcManager {
       blob.rotation.x = -Math.PI / 2;
       blob.position.y = 0.08;
       root.add(blob);
-      labelY = -0.15;
+      labelY = tagAnchorY(null);
     }
 
     const el = document.createElement('div');
@@ -1304,7 +1304,9 @@ export class NpcManager {
       const visible = !own || ownBody;
       for (const child of npc.root.children) child.visible = visible;
       npc.figure?.setFirstPerson(ownBody);
-      const labelVisible = !own && camDist < 55;
+      // A hidden root takes its label with it (CSS2DRenderer hides the
+      // subtree); the rule states it all the same, for the native client.
+      const labelVisible = tagVisible(camDist, !npc.root.visible, own);
       if (npc.interaction && this.tickInteraction(npc, dt, labelVisible, frozen)) continue;
       // Server journey (§ A11): walk along the route instead of npc.target.
       // Metres along the polyline carry the whole journey: the server target

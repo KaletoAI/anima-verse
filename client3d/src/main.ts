@@ -29,6 +29,7 @@ import { buildGlyphs, clearPropHighlight, disposeGlyphs, highlightProp, hitPlace
   type PropHighlight } from './scene/placeGlyphs';
 import { installSpotHighlight, setSpot } from './scene/spotHighlight';
 import { pinGlyph, pinY } from './game/eventPins';
+import { openViewShouldClose } from './game/openView';
 import { infoPanelData } from './game/infoPanel';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
@@ -129,25 +130,9 @@ const SOUNDTRACK_TICK_MS = 1000;
 // is the TRANSITION, driven by open/close events — never by camera distance.
 // The former INTERIOR_CAM_DIST 26 + "target within 0.75 cells" auto-open is
 // gone; opening is explicit ("Look inside"/"Enter") or avatar-driven.
-/** Camera farther out than this closes the open view (overview only). Must
- *  stay ABOVE the embodied EMBODY_MAX_DIST 34 with headroom, so the open view
- *  can never close under an embodied avatar — 60 leaves 26 m of it, and since
- *  finding B12 the wheel cannot even reach the 34. */
-const CLOSE_CAM_DIST = 60;
-/** Camera target panned this far off the open tile closes it too — the tile
- *  has left the view.
- *
- *  ABSOLUTE METRES since E4, and measured against the OPEN LOCATION'S OWN
- *  footprint: `3 × plan_width_m`, which on the grid world's 10 m cell is
- *  exactly the 30 m this used to be. It has to follow the footprint, not a
- *  fixed number — panning three metres off a 1 m shrine is leaving it, panning
- *  thirty metres off a 200 m forest is still standing in the middle of it.
- *  Floored, so a location with a tiny anchor cannot close itself on the first
- *  nudge of the mouse. */
-const CLOSE_TARGET_FOOTPRINTS = 3;
-const CLOSE_TARGET_MIN_M = 12;
-const closeTargetDist = (tile: Pick<PlaceRecord, 'width'>) =>
-  Math.max(CLOSE_TARGET_MIN_M, tile.width * CLOSE_TARGET_FOOTPRINTS);
+// The overview auto-close (camera beyond CLOSE_CAM_DIST 60, or the target
+// panned beyond max(12, 3 × footprint width) off the open location) is
+// `openViewShouldClose` in game/openView.ts, shared with the native client.
 
 /** Radius around the NEIGHBOUR's centre inside which it counts as standing
  *  between the camera and the open location, as a factor on its own
@@ -6227,10 +6212,8 @@ async function startApp(username: string, role: string) {
       }
     } else if (openLocationId) {
       const t = places.get(openLocationId);
-      const off = t
-        ? Math.hypot(engine.target.x - t.center.x, engine.target.z - t.center.z)
-        : Infinity;
-      if (!t || engine.dist > CLOSE_CAM_DIST || off > closeTargetDist(t)) {
+      if (!t || openViewShouldClose(engine.dist, engine.target.x, engine.target.z,
+                                    t.center.x, t.center.z, t.width)) {
         closeOpenLocation();
       }
     }

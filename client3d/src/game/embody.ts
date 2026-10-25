@@ -22,7 +22,7 @@
  * (`engine.zoomCap`) and the cap reports itself, so the hint can point at the
  * chip that leaves. The distance is the same 34 m the exit used to trip at:
  * far enough to see the surroundings of the figure, and still inside the 60 m
- * at which an open detail view closes (`CLOSE_CAM_DIST` in main.ts), so an
+ * at which an open detail view closes (`CLOSE_CAM_DIST` in game/openView.ts), so an
  * open interior can never close under an embodied avatar.
  *
  * ZOOMING IN aims at the EYES, not at the figure's root. The eye point is
