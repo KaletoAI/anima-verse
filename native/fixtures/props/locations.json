@@ -1,0 +1,24 @@
+{
+ "locations": [
+  {
+   "id": "loc-room",
+   "name": "Lamp House",
+   "terrain": null,
+   "map3d": null,
+   "rooms": [
+    {
+     "id": "r-parlour",
+     "name": "Parlour"
+    },
+    {
+     "id": "r-closet",
+     "name": "Closet"
+    },
+    {
+     "id": "r-cellar",
+     "name": "Cellar"
+    }
+   ]
+  }
+ ]
+}

@@ -164,6 +164,17 @@ public static class SceneView
         return new Vec3(tile.Center.X + lx * c + lz * s, tile.Center.Y + ly, tile.Center.Z - lx * s + lz * c);
     }
 
+    /// <summary>
+    /// <c>worldToTile</c> (tiles.ts → scene-render <c>worldToLocalXZ</c>): a world (x, z) into the tile frame, the inverse
+    /// of <see cref="TileToWorld"/> (a turn by −yaw); checked against shared/test-vectors/ambience.json [T].
+    /// </summary>
+    public static P2 WorldToTile(TileFrame tile, double x, double z)
+    {
+        double c = Math.Cos(tile.Yaw), s = Math.Sin(tile.Yaw);
+        double dx = x - tile.Center.X, dz = z - tile.Center.Z;
+        return new P2(dx * c - dz * s, dx * s + dz * c);
+    }
+
     public static P2 TileDirToWorld(double yaw, double lx, double lz)
     {
         double c = Math.Cos(yaw), s = Math.Sin(yaw);

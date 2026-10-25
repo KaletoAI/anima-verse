@@ -1,0 +1,8 @@
+{
+ "/p/frame.glb": "frame.glb",
+ "/p/mirror.glb": "mirror.glb",
+ "/p/door.glb": "door.glb",
+ "/p/poster.png": "poster.png",
+ "/assets/surface-textures/ground_grass.png": "../ground_grass.png",
+ "/assets/surface-textures/dark_stone_2.jpg": "repo:shared/surface_textures/dark_stone_2_1785267141.jpg"
+}

@@ -127,11 +127,14 @@ public static class LauncherCheck
         // Task 17: the model-fidelity section, both spellings.
         var fidelity = new[] { CliOptions.Parse(new[] { "--check", "fidelity" }), CliOptions.Parse(new[] { "--check=fidelity" }) };
         Expect("fidelity flags", fidelity.All(o => o is { Check: true, CheckOnly: "fidelity" }), string.Join(" | ", fidelity.Select(o => o.ToString())));
+        // Task 18: the props section, both spellings.
+        var props = new[] { CliOptions.Parse(new[] { "--check", "props" }), CliOptions.Parse(new[] { "--check=props" }) };
+        Expect("props flags", props.All(o => o is { Check: true, CheckOnly: "props" }), string.Join(" | ", props.Select(o => o.ToString())));
         threw = false;
         try { CliOptions.Parse(new[] { "--check=everything" }); }
         catch (ArgumentException) { threw = true; }
         Expect("--check=everything is refused", threw, "no exception");
-        return 9;
+        return 10;
     }
 
     private static void Expect(string what, bool ok, string detail)

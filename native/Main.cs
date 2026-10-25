@@ -215,13 +215,16 @@ public partial class Main : Node3D
             RotationDegrees = new Vector3(-50f, -35f, 0f),
         };
         AddChild(sun);
-        AddChild(new DirectionalLight3D
+        var fill = new DirectionalLight3D
         {
             Name = "Fill",
             LightColor = new Color("dde8ff"),
             LightEnergy = 0.25f,
             RotationDegrees = new Vector3(-35f, 130f, 0f),
-        });
+        };
+        AddChild(fill);
+        // The room ambience scales and tints this stage (StageAmbience; neutral base until E3).
+        _stage = new StageAmbience { Sun = sun, Fill = fill, Env = env, Water = () => _builder?.Ground?.WaterMaterial };
         _camera = new OverviewCamera { Name = "Camera" };
         AddChild(_camera);
         _camera.Current = true;
@@ -284,6 +287,7 @@ public partial class Main : Node3D
         {
             SyncLocks();
             _builder.TickView(delta, _camera.GlobalPosition);
+            TickLights(delta);
         }
         // The overview auto-close of main.ts' frame hook (no auto-reopen). The measuring runs keep their world.
         if (_interactive && _openView.OpenId is { } open && _camera is not null)

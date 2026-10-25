@@ -52,8 +52,8 @@ public sealed class ModelStats
 ///   • the storey-0 terrain lift (§ A16.9 <c>reliftPlacement</c> / <c>storeyGroundLift</c>): a non-building
 ///     spec on level 0 moves by <c>ground(anchor) − datum</c>, the datum being the ground under the pin.
 /// The room clip, the area cutouts and the depth cut ride on the placement afterwards (<see cref="CutMaterials"/>,
-/// <see cref="WorldBuilder.CutPlacement"/>). Not ported (view-only): picture/glass slot materials (<c>fillSlots</c>),
-/// door swinging, prop lights.
+/// <see cref="WorldBuilder.CutPlacement"/>); the texture slots, door props and prop lights before and after them
+/// (<see cref="SlotMaterials"/>, <see cref="DoorProps"/>, <see cref="PropLightPool"/>, WorldBuilder.Props.cs).
 /// </summary>
 public static class SceneModels
 {

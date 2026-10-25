@@ -1,0 +1,684 @@
+{
+ "signature": "props-1",
+ "k": 1,
+ "extent_m": 12,
+ "storey_m": 3,
+ "boundary": [],
+ "levels": [
+  {
+   "level": -1,
+   "floor_y": -3
+  },
+  {
+   "level": 0,
+   "floor_y": 0
+  }
+ ],
+ "style": {},
+ "rooms": [
+  {
+   "room_id": "r-parlour",
+   "level": 0,
+   "always_visible": false,
+   "outline": [
+    [
+     -5,
+     -5
+    ],
+    [
+     5,
+     -5
+    ],
+    [
+     5,
+     5
+    ],
+    [
+     -5,
+     5
+    ]
+   ],
+   "openings": [],
+   "ambience": {
+    "daylight": 0.4,
+    "tint": "#ffcf9a"
+   }
+  },
+  {
+   "room_id": "r-closet",
+   "level": 0,
+   "always_visible": false,
+   "outline": [
+    [
+     2,
+     2
+    ],
+    [
+     4,
+     2
+    ],
+    [
+     4,
+     4
+    ],
+    [
+     2,
+     4
+    ]
+   ],
+   "openings": []
+  },
+  {
+   "room_id": "r-cellar",
+   "level": -1,
+   "always_visible": false,
+   "outline": [
+    [
+     -5,
+     -5
+    ],
+    [
+     -3,
+     -5
+    ],
+    [
+     -3,
+     -3
+    ],
+    [
+     -5,
+     -3
+    ]
+   ],
+   "openings": [],
+   "ambience": {
+    "daylight": 0.2,
+    "tint": "#8899ff"
+   }
+  },
+  {
+   "room_id": "r-hall",
+   "level": 0,
+   "always_visible": false,
+   "outline": [
+    [
+     -6,
+     -6
+    ],
+    [
+     6,
+     -6
+    ],
+    [
+     6,
+     6
+    ],
+    [
+     -6,
+     6
+    ]
+   ],
+   "openings": [],
+   "ambience": {
+    "daylight": 0.8,
+    "tint": null
+   }
+  }
+ ],
+ "outdoor_rooms": [],
+ "plates": [],
+ "walls": [],
+ "extras": [],
+ "floor_plan": [
+  {
+   "room_id": "r-parlour",
+   "polygon_world": [
+    [
+     -5,
+     -5
+    ],
+    [
+     5,
+     -5
+    ],
+    [
+     5,
+     5
+    ],
+    [
+     -5,
+     5
+    ]
+   ],
+   "floor_kind": "",
+   "closed": true
+  },
+  {
+   "room_id": "r-closet",
+   "polygon_world": [
+    [
+     2,
+     2
+    ],
+    [
+     4,
+     2
+    ],
+    [
+     4,
+     4
+    ],
+    [
+     2,
+     4
+    ]
+   ],
+   "floor_kind": "",
+   "closed": true
+  }
+ ],
+ "stairs": [],
+ "markers": [],
+ "doorways": [
+  {
+   "level": 0,
+   "at_world": [
+    0,
+    -5
+   ],
+   "along": [
+    1,
+    0
+   ],
+   "type": "door",
+   "width_m": 0.9,
+   "height_m": 2.1,
+   "base_y": 0,
+   "rooms": [
+    "r-parlour"
+   ],
+   "outside": true
+  }
+ ],
+ "problems": [],
+ "corridors": [
+  {
+   "room_id": "r-hall",
+   "level": 0,
+   "anchor": [
+    5.5,
+    5.5
+   ],
+   "outline": [
+    [
+     -6,
+     -6
+    ],
+    [
+     6,
+     -6
+    ],
+    [
+     6,
+     6
+    ],
+    [
+     -6,
+     6
+    ]
+   ]
+  }
+ ],
+ "boundary_openings": [],
+ "models": [
+  {
+   "role": "prop",
+   "id": "lamp-1",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 0.3,
+   "measure": "xyz",
+   "anchor": [
+    1,
+    0
+   ],
+   "bottom_y": 0,
+   "variants": {},
+   "light": {
+    "color": "#ffb35c",
+    "intensity": 2,
+    "range_m": 4,
+    "flicker": "none",
+    "when": "always",
+    "glow_m": 0,
+    "offset_m": [
+     0,
+     0
+    ],
+    "height_m": 2
+   }
+  },
+  {
+   "role": "prop",
+   "id": "lamp-2",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 0.3,
+   "measure": "xyz",
+   "anchor": [
+    -2,
+    0
+   ],
+   "bottom_y": 0,
+   "variants": {},
+   "light": {
+    "color": "#ffb35c",
+    "intensity": 2,
+    "range_m": 4,
+    "flicker": "none",
+    "when": "night",
+    "glow_m": 0.1,
+    "offset_m": [
+     0,
+     0
+    ],
+    "height_m": 2
+   }
+  },
+  {
+   "role": "prop",
+   "id": "lamp-3",
+   "room_id": "r-cellar",
+   "level": -1,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 0.3,
+   "measure": "xyz",
+   "anchor": [
+    3,
+    0
+   ],
+   "bottom_y": -3,
+   "variants": {},
+   "light": {
+    "color": "#ffb35c",
+    "intensity": 2,
+    "range_m": 4,
+    "flicker": "none",
+    "when": "always",
+    "glow_m": 0,
+    "offset_m": [
+     0,
+     0
+    ],
+    "height_m": 2
+   }
+  },
+  {
+   "role": "prop",
+   "id": "lamp-4",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 0.3,
+   "measure": "xyz",
+   "anchor": [
+    -4,
+    0
+   ],
+   "bottom_y": 0,
+   "variants": {},
+   "light": {
+    "color": "#ffb35c",
+    "intensity": 2,
+    "range_m": 4,
+    "flicker": "candle",
+    "when": "always",
+    "glow_m": 0.12,
+    "offset_m": [
+     0,
+     0
+    ],
+    "height_m": 2
+   }
+  },
+  {
+   "role": "prop",
+   "id": "lamp-5",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 0.3,
+   "measure": "xyz",
+   "anchor": [
+    5,
+    0
+   ],
+   "bottom_y": 0,
+   "variants": {},
+   "light": {
+    "color": "#ffb35c",
+    "intensity": 2,
+    "range_m": 4,
+    "flicker": "fire",
+    "when": "always",
+    "glow_m": 0,
+    "offset_m": [
+     0,
+     0
+    ],
+    "height_m": 2
+   }
+  },
+  {
+   "role": "prop",
+   "id": "lamp-6",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 0.3,
+   "measure": "xyz",
+   "anchor": [
+    -6,
+    0
+   ],
+   "bottom_y": 0,
+   "variants": {},
+   "light": {
+    "color": "#ffb35c",
+    "intensity": 2,
+    "range_m": 4,
+    "flicker": "none",
+    "when": "always",
+    "glow_m": 0,
+    "offset_m": [
+     0,
+     0
+    ],
+    "height_m": 2
+   }
+  },
+  {
+   "role": "prop",
+   "id": "lamp-7",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 0.3,
+   "measure": "xyz",
+   "anchor": [
+    7,
+    0
+   ],
+   "bottom_y": 0,
+   "variants": {},
+   "light": {
+    "color": "#ffb35c",
+    "intensity": 2,
+    "range_m": 4,
+    "flicker": "none",
+    "when": "always",
+    "glow_m": 0,
+    "offset_m": [
+     0,
+     0
+    ],
+    "height_m": 2
+   }
+  },
+  {
+   "role": "prop",
+   "id": "lamp-8",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 0.3,
+   "measure": "xyz",
+   "anchor": [
+    -8,
+    0
+   ],
+   "bottom_y": 0,
+   "variants": {},
+   "light": {
+    "color": "#ffb35c",
+    "intensity": 2,
+    "range_m": 4,
+    "flicker": "none",
+    "when": "always",
+    "glow_m": 0,
+    "offset_m": [
+     0,
+     0
+    ],
+    "height_m": 2
+   }
+  },
+  {
+   "role": "prop",
+   "id": "frame",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 1,
+   "measure": "xyz",
+   "anchor": [
+    -3,
+    -4
+   ],
+   "bottom_y": 1,
+   "variants": {
+    "full": "/p/frame.glb"
+   },
+   "slots": {
+    "picture_1": {
+     "image": "/p/poster.png"
+    },
+    "glass_1": {
+     "preset": "glass"
+    }
+   },
+   "cut_plane": {
+    "normal": [
+     0,
+     1,
+     0
+    ],
+    "constant": 10
+   }
+  },
+  {
+   "role": "prop",
+   "id": "frame-2",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 1,
+   "measure": "xyz",
+   "anchor": [
+    3,
+    -4
+   ],
+   "bottom_y": 1,
+   "variants": {
+    "full": "/p/frame.glb"
+   }
+  },
+  {
+   "role": "prop",
+   "id": "mirror-a",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 1.2,
+   "measure": "xyz",
+   "anchor": [
+    0,
+    4
+   ],
+   "bottom_y": 0,
+   "variants": {
+    "full": "/p/mirror.glb"
+   },
+   "slots": {
+    "glass_1": {
+     "preset": "mirror"
+    }
+   }
+  },
+  {
+   "role": "prop",
+   "id": "mirror-b",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 1.2,
+   "measure": "xyz",
+   "anchor": [
+    -2,
+    4
+   ],
+   "bottom_y": 0,
+   "variants": {
+    "full": "/p/mirror.glb"
+   },
+   "slots": {
+    "glass_1": {
+     "preset": "mirror"
+    }
+   }
+  },
+  {
+   "role": "prop",
+   "id": "mirror-c",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 1.2,
+   "measure": "xyz",
+   "anchor": [
+    2,
+    4
+   ],
+   "bottom_y": 0,
+   "variants": {
+    "full": "/p/mirror.glb"
+   },
+   "slots": {
+    "glass_1": {
+     "preset": "mirror"
+    }
+   }
+  },
+  {
+   "role": "prop",
+   "id": "door:0",
+   "room_id": "r-parlour",
+   "level": 0,
+   "fix_euler": {
+    "x": 0,
+    "y": 0,
+    "z": 0
+   },
+   "yaw_deg": 0,
+   "max_m": 2.1,
+   "measure": "fit",
+   "size_m": [
+    0.9,
+    2.1
+   ],
+   "anchor": [
+    0,
+    -5
+   ],
+   "bottom_y": 0,
+   "variants": {
+    "full": "/p/door.glb"
+   },
+   "door": {
+    "opening": 0,
+    "hinge": "left",
+    "swing": 1,
+    "leaf_bbox": {
+     "min": [
+      0.05,
+      0,
+      0
+     ],
+     "max": [
+      0.85,
+      2,
+      0
+     ]
+    }
+   }
+  }
+ ],
+ "figures": {}
+}

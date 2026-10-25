@@ -33,6 +33,7 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `s3c/` | Task S3c: a second, hand-written world (avatar, open/closed/far/gone locations, world props, a wet tile) — files missing there (`heightfield.json`, the ground files) are read from this directory; see "S3c world" |
 | `storeys/` | Task 16: a third, hand-written world (a tower with a cellar, two storeys above and an always-visible terrace; a pit with a ground model over a basement) for the storey switch at runtime — the ground files come from this directory; see "Storeys world" |
 | `fidelity/` | Task 17: a fourth, hand-written world (a plan hull with cutouts and padding, a room clip, two depth cuts on a turned location, a shell area, a changed scene for the sweep) — the ground files come from this directory; see "Fidelity world" |
+| `props/` | Task 18: a fifth, hand-written world (8 lamps + a world-prop lantern, a picture frame with a picture and a glass slot, three mirror panes, a door prop with a leaf, rooms with ambience, a corridor, a cellar storey) — the ground files come from this directory; see "Props world" |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
 for the repository root above this directory, then above the working directory):
@@ -704,3 +705,55 @@ files come from this directory (heightfield, tile (0,0) with h[j][i] = 2i + j at
 - **F7** a sweep with unchanged signatures remounts nothing (3 scene requests); with `scene_loc-hull.v2.json` only
   loc-hull is remounted: new slot, signature `hull-2`, still open, its group at today's datum 10, the diorama
   centred at z −1, the old group freed.
+
+## Props world (`props/`, Task 18)
+
+A fifth small world, hand-written, for texture slots, mirrors, prop lights, doors and ambience (`Check/PropsCheck.cs`,
+`--check props`). Ground files from this directory (ground(x, z) = 2x/64 + z/64 on tile (0,0)). GLBs and the picture are
+written by `props/make_glbs.py` (stdlib, see its docstring): `frame.glb` (wood / slot_picture_1 / slot_glass_1 quads,
+extent 1), `mirror.glb` (wood quad + the pane of smoke_mirror_plane [1], extent 1.2), `door.glb` (nodes `frame` and
+`leaf`, the leaf box (0.05, 0, 0)…(0.85, 2, 0)), `poster.png` (2 × 2). The world map carries `game_time.hour_fraction` 22.
+
+**loc-room "Lamp House"**, pin (64, 120), yaw 0, datum tile 2 + 1.875 = **3.875**; levels −1 (floor −3) and 0. Rooms:
+`r-parlour` (±5, ambience daylight 0.4, tint #ffcf9a; floor_plan ±5), `r-closet` (2…4, no ambience; floor_plan),
+`r-cellar` level −1 (outline (−5…−3)², ambience 0.2 / #8899ff), `r-hall` (the corridor block, ambience 0.8, no tint;
+`corridors[]` outline ±6). A storey-0 non-building placement at local (x, z) is lifted by ground − datum =
+(2x + z)/64.
+
+- **P1** `frame` (anchor (−3, −4), bottom 1, a keep-all cut_plane n (0,1,0) c 10 so every surface is cut): the picture
+  surface's cut clone takes `texture_albedo` = the 2 × 2 poster, `albedo_texture_size` (2, 2), albedo white; the glass
+  surface's cut clone comes from the glass preset (albedo alpha **0.3**, roughness **0.06**, metallic **0**, blend_mix,
+  cull_disabled); the wood's clone has no texture and alpha 1; the template keeps no texture and an opaque glass
+  material; `frame-2` (same GLB, no slots, no cut) has no override at all.
+- **P2** mirrors `mirror-a/b/c` at anchors (0, 4), (−2, 4), (2, 4), max_m 1.2 = extent → scale 1; fix −centre
+  (0.1, 0.3, 0.15) and outer y = 0.6 + lift seat the pane centre (0.1, 0.3, 0.2) at tile (x, 0.6 + lift, 4.05): A lift
+  4/64 → world (64, **4.5375**, 124.05), B lift 0 → (62, 4.475, 124.05). The measured plane is the pane's own surface:
+  (0.1, 0.3, 0.2), |n_z| = 1. Closed: the interior is hidden → **0** passes; opened and faded in, a camera at
+  (64, 4.5375, 128.05) looking −z sees all three: budget 2 over the panes in list order P0, P1, P2 → frames
+  **{P0,P1} {P0,P2} {P1,P2}**. Reflection of A: d = 4, eye′ (64, 4.5375, **120.05**), back (0,0,−1), right (−1,0,0),
+  window x_c ∈ [−.25, .25], y_c ∈ [−.5, .5] → size **1**, offset (0, 0), near **4**. B: x_c = −(x − 64) ∈ [1.75, 2.25],
+  y_c = y − 4.5375 ∈ [−0.5625, 0.4375] → offset (**2**, **−0.0625**), size 1, near 4. Godot's own
+  `UnprojectPosition` of B's camera (512 px): the pane centre → (256, 256), the corner (61.75, 4.975, 124.05) → u =
+  (2.25 − 1.5)/1 = 0.75, v = (0.4375 − 0.4375)/1 = 0 → **(384, 0)**, and the lookup rows give the same (0.5, 0.5) /
+  (0.75, 0). A camera at z 160 (36 m) refreshes nothing (all panes have rendered).
+- **P3** lamps 1…8 at local (x, 0), x = 1, −2, 3, −4, 5, −6, 7, −8 (range 4 → cutoff 34; lamp 2 `night` with glow 0.1,
+  lamp 3 in the cellar at level −1 / bottom −3, lamp 4 candle with glow 0.12, lamp 5 fire), height 2: world
+  (64 + x, 3.875 + x/32 + 2, 120) — lamp 1 (65, **5.90625**, 120); lamp 3 has no lift (level −1): (67, **2.875**, 120).
+  The lantern row at (−40, 100) is 107 m from the focus (64, 5.875, 120). Night 1, storey 0 (cellar hidden): by
+  distance **1, 2, 4, 5, 6, 7**. Second tick: gain 0.5 → lamp 1's energy 2 · 0.5 · StageScale = **0.4921228**;
+  candle within ±8 %; fire colour between #ffb35c and #ff6a20. Day (night 0): lamp 2 drops, survivors keep their
+  slots, lamp 8 fills slot 1 → **1, 8, 4, 5, 6, 7**; lamp 2's halo hides. Cellar storey (night 1): only the cellar room
+  is shown → **3**; the parlour's halos hide.
+- **P4** `door:0` (fit, opening 0 → doorway at (0, −5), level 0, rooms [r-parlour], swing +1): pivot at
+  LeafPivot((0.05,0,0)…(0.85,2,0), fix 0) = (min x, min y, centre z) = **(0.05, 0, 0)**, axis +y; the leaf's own position
+  (−0.05, 0, 0) so leaf + pivot = its original (0, 0, 0). Overview: angle **0**. An avatar 1 m away for one 60-fps
+  frame → **0.05** rad; the next overview frame eases it back to 0 (|0.05| ≤ one step).
+- **P5** the open location, focus at local (0, 0) → parlour (area 100; the cellar rect (−4, −4) is elsewhere);
+  (3, 3) → the closet (area 4) → no ambience; (5.5, 5.5) → no rect → the corridor r-hall → 0.8; (−4, −4) → the cellar
+  rect (area 4 < 100, any storey) → 0.2; a closed / unknown location → none. Stage from neutral towards the parlour
+  for dt 0.5: k = 1 − 1/e, daylight 1 − 0.6k = **0.6207276647** → sun 0.62073, fill 0.15518, ambient 0.43451;
+  tint g = 1 − (48/255)k = 0.8810126, b = 1 − (101/255)k = 0.7496307 (the sun's red stays 1); then 4 × 0.125 s back to
+  neutral = one τ: 1 − (1 − 0.62073)/e = **0.8604735**.
+- **P6** a flat tile (0,0) at 10 m: datum 10, lamp 1's lift 0 → (65, **12**, 120).
+- **P7** `game_time.hour_fraction` 22 → sin((16/12)π) < 0 → night **1**.
+

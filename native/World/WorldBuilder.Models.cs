@@ -145,9 +145,15 @@ public sealed partial class WorldBuilder
         double lift = Height is null ? rec.Lift : GroundLift(slot.Group, rec.Spec, Height, slot.Group.Position.Y);
         if (lift != 0) placed.Position += new Vector3(0, (float)lift, 0);
         rec.Parent.AddChild(placed);
+        var old = rec.Node;
         rec.Node = placed;
         rec.Lift = lift;
+        // The slots and the door follow the fresh mesh (fillSlots / retargetDoorProp), before its cuts; the light its lift.
+        if (old is not null) Mirrors?.DetachUnder(old);
+        rec.Slots = rec.Placeholder ? null : FillSlots(placed, rec.Spec);
+        if (rec.Door is { } door) DoorProps.Retarget(door, placed);
         rec.Cut = CutPlacement(slot.Group, rec);
+        if (rec.LightId is { } id) PropLights?.Move(id, LightPosition(slot.Group, rec));
     }
 
     /// <summary>
@@ -288,6 +294,7 @@ public sealed partial class WorldBuilder
             }
             rec.Lift = r.Lift;
             if (moved && rec.Cut is { HasPlane: true } h && PlaneOf(slot.Group, rec) is { } plane) h.SetPlane(plane);
+            if ((moved || r.Delta != 0) && rec.LightId is { } lid) PropLights?.Move(lid, LightPosition(slot.Group, rec));
         }
         if (moved || relifted > 0) slot.MeshVersion++;
         return (moved, relifted);
@@ -354,6 +361,7 @@ public sealed partial class WorldBuilder
     private void Replace(LocationSlot old, LocationSlot built)
     {
         old.Generation++;
+        ReleaseProps(old);
         _places!.AddChild(built.Group);
         if (built.Storeys.BoundaryMarks is { } bm) _places.AddChild(bm);
         built.Storeys.ApplyLocks(_locks, built.Loc.Id);

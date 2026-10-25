@@ -123,6 +123,12 @@ public sealed class LocationSlot
     public List<MeshInstance3D> FarShell { get; init; } = new();
     /// <summary>Counts every change of the meshes under <see cref="Group"/> (tier swap, re-datum): the pick cache follows it.</summary>
     public int MeshVersion { get; set; }
+    /// <summary>The room rectangles (<c>tile.roomRects</c>, tile frame, in <c>roomFloors</c> order) the ambience picks from.</summary>
+    public List<KeyValuePair<string, RoomRect>> RoomRects { get; init; } = new();
+    /// <summary>The payload's <c>corridors[]</c> (the ambience's corridor fallback, <c>corridorAt</c>).</summary>
+    public List<SceneCorridor> Corridors { get; init; } = new();
+    /// <summary><c>rooms[].ambience</c> by room id (the first block of an id, <c>rooms.find</c>); null = neutral.</summary>
+    public Dictionary<string, SceneAmbience?> RoomAmbience { get; init; } = new();
 }
 
 /// <summary>
@@ -142,6 +148,12 @@ public sealed class PlacedModel
     public double Lift { get; set; }
     public bool Placeholder { get; set; }
     public CutHandle? Cut { get; set; }
+    /// <summary>The texture slots this placement filled (pictures, glass, mirror panes) — <c>rec.slotMats</c>.</summary>
+    public SlotHandle? Slots { get; set; }
+    /// <summary>The door-prop record when the spec carries <c>door</c> (<c>tile.doorProps</c>).</summary>
+    public DoorProp? Door { get; set; }
+    /// <summary>The prop light's source in the pool (<c>rec.lightHandle</c>), registered whether or not a mesh stands.</summary>
+    public string? LightId { get; set; }
     public bool IsBuilding => Spec.Role == "building";
 }
 
@@ -329,6 +341,12 @@ public sealed partial class WorldBuilder
 
         var places = _places = new Node3D { Name = "Locations" };
         root.AddChild(places);
+        // The engine's one light pool and the mirror passes, shared by every mount (createPropLightPool, MIRROR_OPTS).
+        PropLights = new PropLightPool();
+        if (LightSeed is { } seed) PropLights.Seed(seed);
+        root.AddChild(PropLights);
+        Mirrors = new MirrorPanes();
+        root.AddChild(Mirrors);
         var placed = locations.Where(l => l.IsPlaced).ToList();
         stats.Locations = placed.Count;
         var jobs = new List<(LocationInfo Loc, Ring Ring, bool Pinned)>();
@@ -631,9 +649,24 @@ public sealed partial class WorldBuilder
                                                     rec.Lift, models, _materials);
             rec.Node = node;
             rec.Placeholder = node is not null && SceneModels.IsPlaceholder(node);
+            if (node is not null && !rec.Placeholder)
+            {
+                // The texture slots FIRST (fillSlots): the cuts below clone what they find, slot materials included.
+                rec.Slots = FillSlots(node, rec.Spec);
+                // A door prop joins the swing list (registerDoorProp) — its leaf hangs in its pivot, shut.
+                rec.Door = DoorProps.Register(scene, rec.Spec, node);
+            }
             // The depth cut (also on a stand-in box) and the room clip (meshes only), after the node hangs in place.
             if (node is not null) rec.Cut = CutPlacement(group, rec);
         }
+        // The prop lights (reliftPlacement): every non-building record with a light, whether a mesh stands or not, at its
+        // base anchor through its parent's frame plus the light's own offset; keyed to its room unless outdoors.
+        foreach (var rec in placements)
+            if (!rec.IsBuilding && rec.Spec.Light is { } light && PropLights is { } pool)
+            {
+                var roomKey = rec.Spec.RoomId.Length > 0 && !LocationView.IsOutdoor(scene, rec.Spec.RoomId) ? $"{loc.Id}:{rec.Spec.RoomId}" : "";
+                rec.LightId = pool.Register(light, LightPosition(group, rec), roomKey);
+            }
         foreach (var rec in placements)
             if (rec.Cut is { } h)
             {
@@ -719,6 +752,10 @@ public sealed partial class WorldBuilder
             Fade = fade, LevelFilter = levelFilter, Verify = report, Storeys = storeys,
             Signature = scene.Signature, AreaDetail = scene.AreaDetail, Placements = placements,
             BuildingTier = buildingTier, InteriorTier = interiorTier, FarShell = layers.Shell.ToList(),
+            RoomRects = StoreyView.RoomHulls(scene).Select(h => (h.Key, Rect: Ambience.RoomRectOf(h.Value)))
+                                  .Where(r => r.Rect is not null).Select(r => new KeyValuePair<string, RoomRect>(r.Key, r.Rect!.Value)).ToList(),
+            Corridors = scene.Corridors.ToList(),
+            RoomAmbience = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Ambience),
         };
     }
 
@@ -1021,6 +1058,7 @@ public sealed partial class WorldBuilder
             _known.Remove(id);
             if (!_slots.Remove(id, out var slot)) continue;
             slot.Generation++;   // a rebuild in flight must not put it back
+            ReleaseProps(slot);
             if (GodotObject.IsInstanceValid(slot.Group)) slot.Group.QueueFree();
             if (slot.Storeys.BoundaryMarks is { } bm && GodotObject.IsInstanceValid(bm)) bm.QueueFree();
             Dropped?.Invoke(slot);
@@ -1077,6 +1115,10 @@ public sealed partial class WorldBuilder
             stats.WorldPropRows++;
             double bottom = height.GroundAt(x, z) + Json.Num(wp, "offset_y") + Json.Num(wp, "ground_offset_m");
             var spec = WorldPropSpec(wp, x, z, bottom);
+            // worldProps.ts redrapeOne: a row's light is registered whatever its tier (a culled landmark still lights),
+            // at (x + offset x, bottom + height, z + offset z) in world metres.
+            if (spec.Light is { } light && PropLights is { } pool)
+                pool.Register(light, new Vector3((float)(x + light.Offset.X), (float)(bottom + light.HeightM), (float)(z + light.Offset.Z)), "");
             double d = Math.Sqrt((x - camera.X) * (x - camera.X) + (z - camera.Z) * (z - camera.Z));
             byte tier = Scatter.ScatterLod.InstanceTier(d, 1, cfg);
             if (tier == 2) { models.Culled++; continue; }

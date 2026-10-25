@@ -67,6 +67,8 @@ public partial class Main : Node3D
             };
             var stats = await builder.BuildAsync(world, _options!.Goto, hooks);
             Anchor = stats.Anchor;
+            // main.ts takeGameHour(): the world clock of the freshest map drives the night gate (every 60 s, below).
+            TakeGameHour(builder.FirstMap!.Value);
             _interactive = !_options.Bench && _options.Offline is null;
             _picking = new LocationPicking(builder);
             // main.ts: the avatar's location is the open one from the first mount on.
@@ -144,6 +146,10 @@ public partial class Main : Node3D
             // The boot's own map places the first figures (main.ts npcs.update(firstMap)); the poll takes over.
             _figures.ApplyPolled(builder.FirstMap!.Value);
             StartSync();
+            // main.ts `setInterval(takeGameHour, 60_000)`: the clock is re-read from the latest polled map.
+            var clock = new Godot.Timer { Name = "GameHour", WaitTime = GameHourIntervalS, Autostart = true };
+            clock.Timeout += () => TakeGameHour(_figures?.LatestMap ?? builder.FirstMap!.Value);
+            AddChild(clock);
             if (_interactive)
             {
                 // main.ts `setInterval(requestServerModels, 60_000)`: the scene sweep remounts a location whose signature moved.

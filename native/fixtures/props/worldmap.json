@@ -1,0 +1,73 @@
+{
+ "avatar": "",
+ "current_location_id": null,
+ "locations": [
+  {
+   "id": "loc-room",
+   "name": "Lamp House",
+   "pos_x": 64.0,
+   "pos_z": 120.0,
+   "yaw_deg": 0.0,
+   "plan_width_m": 12.0,
+   "boundary": [
+    [
+     -6,
+     -6
+    ],
+    [
+     6,
+     -6
+    ],
+    [
+     6,
+     6
+    ],
+    [
+     -6,
+     6
+    ]
+   ],
+   "openings": []
+  }
+ ],
+ "characters": [],
+ "world_props": [
+  {
+   "id": "wp-lantern",
+   "prop_id": "lantern",
+   "x": -40.0,
+   "z": 100.0,
+   "offset_y": 0,
+   "ground_offset_m": 0,
+   "max_m": 1,
+   "variants": {},
+   "light": {
+    "color": "#ffd080",
+    "intensity": 3,
+    "range_m": 4,
+    "flicker": "none",
+    "when": "always",
+    "glow_m": 0,
+    "offset_m": [
+     0,
+     0
+    ],
+    "height_m": 2
+   }
+  }
+ ],
+ "world_props_sig": "props",
+ "events_by_location": {},
+ "world_bounds": {
+  "min_x": -46.0,
+  "min_z": 94.0,
+  "max_x": 70.0,
+  "max_z": 146.0
+ },
+ "height_sig": "fixture-s1a",
+ "fogged": false,
+ "game_time": {
+  "hour_fraction": 22.0,
+  "label": "Spring 1, 22:00"
+ }
+}

@@ -229,6 +229,7 @@ Arguments after `--` (no .env; all optional):
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
 | `--check verify` | only the § B5a section of the self-test (both fixture worlds, `Check/VerifyCheck.cs`), then exit 0/1 |
 | `--check storeys` | only the storey section (`fixtures/storeys/`, `Check/StoreysCheck.cs`: the switch at runtime, hole, marks, labels, pointer), then exit 0/1 |
+| `--check props` | only the props section (`fixtures/props/`, `Check/PropsCheck.cs`: slots, mirrors, prop lights, doors, ambience), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
 Camera (the browser's overview camera, `Ui/OverviewCamera.cs` + `Core/Overview/OverviewControl.cs`):
@@ -455,6 +456,31 @@ mesh is in the transparent pass only while a fade runs. The cutouts of a buildin
 - **Scene sweep** (`WorldBuilder.SweepAsync`, every 60 s online): a location whose scene `signature` moved is
   mounted again (open target and storey carried over).
 - Checked by `--check fidelity` (fixtures/fidelity, README there) and `tests/CutShaderTests.cs`.
+
+### Slots, mirrors, lights, ambience and doors (Task 18)
+
+- **Texture slots** (`World/SlotMaterials.cs`, decision `Core/Scene/SlotFill.cs`): a material whose name (without one
+  `slot_` prefix) matches a key of `models[].slots` takes a picture (loaded per placement, white tint, sRGB) or the
+  glass preset (alpha 0.3, roughness 0.06, metallic 0, two-sided) — as a per-placement surface override, BEFORE the
+  cuts, so the cut clones carry it; a picture that arrives after the cut is written into the cut clone's parameters.
+- **Mirror panes** (`World/MirrorPanes.cs`, `Core/Scene/MirrorMath.cs`): the plane is measured from the pane surface's
+  faces (`planeOfFaces`, coherence ≥ 0.9). Godot 4.7's Camera3D has no custom/oblique projection, so each pane has a
+  512 px SubViewport whose camera stands at the viewer's mirror image and looks straight through the pane with an
+  off-axis frustum whose near plane IS the pane (everything behind the mirror is clipped, as Reflector.js' oblique
+  plane does); the pane samples it projectively and overlays the 0x777777 tint. At most 2 passes per frame across all
+  panes in turns (`MirrorBudget`), no refresh beyond 12 m once a pane has a reflection, nothing for a hidden pane.
+- **Prop lights** (`World/PropLightPool.cs`, `Core/Scene/PropLights.cs`): six OmniLight3D slots (no shadows,
+  attenuation 2 = three's decay 2 with the range window), re-picked at 5 Hz from every source (`pickLights`: night
+  gate, shown room, range + 30 m, nearest, sticky slots), 0.4 s fades, candle/fire flicker, additive billboard halos
+  of 2·glow_m; energy = intensity × `Ambience.StageScale` (the factor the native stage was derived with). The night
+  factor comes from the world map's `game_time.hour_fraction` (every 60 s), like the browser's.
+- **Room ambience** (`World/StageAmbience.cs`, `Core/Scene/Ambience.cs`): the room under the camera target in the open
+  location (smallest room rectangle, else the storey corridor) eases daylight/tint with τ 0.5 onto sun, fill, ambient
+  and the water's sky — on the fixed stage as a NEUTRAL BASE until E3 brings the game-hour light model.
+- **Door props** (`World/DoorProps.cs`): the `leaf` node hangs in a pivot from `leafPivot`; shut in the overview, the
+  swing (`Core/Scene/DoorSwing.cs`) waits for an avatar (E7).
+- Checked by `--check props` (fixtures/props, README there), the vector tests (light_pool, ambience, mirror_plane,
+  slot_materials, door_swing) and `tests/PropsCoreTests.cs`.
 
 ### Storeys at runtime (Task 16)
 
