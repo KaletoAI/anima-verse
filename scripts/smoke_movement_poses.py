@@ -12,6 +12,8 @@ Task 4: seven fixed keys; four movement-only keys excluded from activities;
 world overrides deletable, shipped movement entries protected; one rename/drop rule.
 Task 3: sleeping→walking expands to two pairs, the seat wildcard to one;
 unknown poses contribute none. Exact beats exit beats enter; accel caps at 8.
+Task 6: seven ordered rows; female walk beats neutral licensed walk; missing
+swim stays null. Reading resolves played/public separately; unknown is null.
 """
 import json
 import os
@@ -132,6 +134,60 @@ def fixed_checks(pc, ac):
     check("delete transitions", response.get("transitions_removed") == 1 and ac.load_transitions() == [])
 
 
+def character_checks(pc, free):
+    from app.core.db import transaction
+    from app.core.movement import MOVEMENT_POSES
+    from app.routes import characters
+
+    now = "2026-10-25T00:00:00Z"
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO characters (name, template, profile_json, config_json,"
+            " created_at, updated_at) VALUES (?, '', ?, '{}', ?, ?)",
+            ("movement-demo", json.dumps({"animation_set": "female", "gender": "female"}), now, now))
+    pc.replace_world_entries("pose", {"reading": {"animation": "mob1-walk"}})
+    pc.reload_catalogs()
+    (free / "swim.fbx").unlink()
+    payload = characters.get_character_animations("movement-demo")
+    rows = {row["pose"]: row for row in payload["situations"]}
+    check("[C1] set/order", payload["sets"] == ["female"] and
+          [row["pose"] for row in payload["situations"]] == list(MOVEMENT_POSES))
+    check("[C1] female walk", rows["walking"]["file"]["set"] == "female" and
+          rows["walking"]["public_file"]["set"] == "female")
+    check("[C1] missing swim", rows["swimming"]["file"] is None and
+          rows["swimming"]["public_file"] is None)
+    check("[C1] neutral file", rows["standing"]["file"]["set"] == "" and
+          rows["standing"]["file"]["library"] == "free")
+    check("[C2] no activity", payload["activity"] is None)
+    row = characters.get_character_animations("movement-demo", "reading")["activity"]
+    check("[C2] reading played/public", row is not None and row["pose"] == "reading" and
+          row["kind"] == "mob1-walk" and row["public_kind"] == "walk" and
+          row["file"]["library"] == "licensed" and row["file"]["set"] == "" and
+          row["public_file"]["library"] == "free" and row["public_file"]["set"] == "female")
+    check("[C2] unknown activity", characters.get_character_animations(
+        "movement-demo", "missing")["activity"] is None)
+    if "--http" in sys.argv:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        app = FastAPI()
+        app.include_router(characters.router)
+        with TestClient(app) as client:
+            response = client.get("/characters/movement-demo/animations?pose=reading")
+            check("[C2] HTTP reading", response.status_code == 200 and
+                  response.json()["activity"]["pose"] == "reading")
+    from app.models.character import get_character_profile, save_character_profile
+    profile = get_character_profile("movement-demo")
+    profile["animation_set"] = "special"
+    assert save_character_profile("movement-demo", profile)
+    payload = characters.get_character_animations("movement-demo")
+    check("[C1] explicit then derived", payload["sets"] == ["special", "female"] and
+          payload["situations"][1]["file"]["set"] == "female" and
+          payload["situations"][1]["public_file"]["set"] == "female")
+    (free / "swim.fbx").write_bytes(b"clip")
+    pc.replace_world_entries("pose", {})
+    pc.reload_catalogs()
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="movement-poses-") as tmp:
         root = Path(tmp)
@@ -151,7 +207,7 @@ def main():
                  "swimming": "swim", "treading_water": "treading-water",
                  "crawling": "crawl", "crawling_rest": "crawl-rest"}
         entries = {key: {"animation": kind, "prompt": key, "group": "ground" if key.startswith("crawling") else "stand", "synonyms": ["schwimmen"] if key == "swimming" else []} for key, kind in kinds.items()}
-        entries.update({"sleeping": {"animation": "sleeping-side"}, "sitting at table": {"animation": "sitting-at-the-table"}})
+        entries.update({"reading": {"animation": "walk"}, "sleeping": {"animation": "sleeping-side"}, "sitting at table": {"animation": "sitting-at-the-table"}})
         catalog = root / "pose_catalog.json"
         catalog.write_text(json.dumps({"entries": entries, "groups": {"stand": {"default": "standing", "needs_place": False}, "ground": {"default": "crawling_rest", "needs_place": False}}}), encoding="utf-8")
         for name in (*kinds.values(), "breast-stroke", "get-up-bed", "get-up-chair", "sleeping-side", "sitting-at-the-table", "pair__a", "pair__b"):
@@ -202,6 +258,7 @@ def main():
             check("[M5] licensed shadow", played["library"] == "licensed" and public["library"] == "free" and played["url"].startswith("/assets/animation-clips/licensed/walk.fbx?v=") and public["url"].startswith("/assets/animation-clips/walk.fbx?v="))
             (licensed / "mob1-walk.fbx").write_bytes(b"clip")
             check("[M6] missing", clip_file_for("fly", ["female"], free_only=False) is None and clip_file_for("mob1-walk", [], free_only=True) is None and clip_file_for("pair", [], free_only=False) is None)
+            character_checks(pc, free)
             payload = list_animation_clips()
             check("[M7] payload", payload.get("movement_poses") == movement_pose_kinds() and "locomotion" not in payload)
             with patch.object(ac, "clip_transitions_path", return_value=rules_path):

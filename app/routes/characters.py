@@ -1529,6 +1529,13 @@ def get_character_model_ref_image(character_name: str, kind: str, request: Reque
 
 # --- Generated 3D model (img2mesh from the T-pose render, per outfit) ---
 
+@router.get("/{character_name}/animations")
+def get_character_animations(character_name: str, pose: str = "") -> Dict[str, Any]:
+    """Return played and public clips for this character's movement and activity."""
+    from app.core.movement import character_animations
+    return character_animations(character_name, pose)
+
+
 @router.get("/{character_name}/model3d")
 def get_character_model3d(character_name: str, request: Request, preview_states: Optional[str] = None) -> Dict[str, Any]:
     """Status of the generated mesh for the CURRENT outfit combination

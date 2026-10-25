@@ -66,3 +66,28 @@ def clip_file_for(kind: str, chain: List[str], *,
                 view = clip_view(entry)
                 return {field: view[field] for field in ("set", "library", "url")}
     return None
+
+
+def character_animations(name: str, pose: str = "") -> Dict[str, Any]:
+    """Resolve played and public situation clips along a character's set chain."""
+    from app.core.animation_sets import resolve_sets
+    from app.core.pose_catalog import get_catalog
+
+    chain = resolve_sets(name)
+
+    def row(key: str, kind: str, public_kind: str) -> Dict[str, Any]:
+        return {
+            "pose": key, "kind": kind, "public_kind": public_kind,
+            "file": clip_file_for(kind, chain, free_only=False),
+            "public_file": clip_file_for(public_kind, chain, free_only=True),
+        }
+
+    kinds = movement_pose_kinds()
+    activity = None
+    if pose and pose in get_catalog("pose"):
+        activity = row(pose, played_pose_kind(pose), shared_pose_kind(pose))
+    return {
+        "sets": chain,
+        "situations": [row(key, **kinds[key]) for key in MOVEMENT_POSES],
+        "activity": activity,
+    }
