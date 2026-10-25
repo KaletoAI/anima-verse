@@ -1649,21 +1649,16 @@
  *        {"scatterNearM":100}   -> 100 < 45 is false -> all three defaults
  *      Round trip: `loadScatterPrefs(saveScatterPrefs(p))` returns `p`.
  *
- * (J3) TYPING. `checkScatterPrefs(near, far, cull)` is what the menu asks
- *      before it stores anything:
- *        (20, 40, 300)      -> ok, taken as typed
- *        (3, 10, 50)        -> ok, the 3 clamped up to 5
- *        (40, 20, 300)      -> refused, 'order' — near is not under far
- *        (20, 40, 40)       -> refused, 'order' — equal is not ordered either
- *        (NaN, 45, 120)     -> refused, 'number' (an empty number field)
- *        ('30', 45, 120)    -> refused, 'number' (a string is not a number)
- *        (2500, 3000, 4000) -> refused, 'order': all three clamp to 2000 and
- *                              collide there, which is better told to the
- *                              player than silently drawn.
+ * (J3) TYPING. `checkScatterPrefs(near, far, cull)`, what the menu asks
+ *      before it stores anything, is derived and checked in
+ *      `smoke_walk_math.mjs` (header "Scatter detail distances: typing"),
+ *      whose cases run from `shared/test-vectors/overview_hud.json` with the
+ *      other HUD-side cases the native client reads.
  *
  * (J4) THE TWO SIDES MEET. `scatterLodCfgOf` renames the stored fields into
- *      the cfg the maths takes, so a setting of 20/40/300 must produce exactly
- *      that behaviour end to end:
+ *      the cfg the maths takes (that rename is the [J4] case of
+ *      `overview_hud.json`, see `smoke_walk_math.mjs`), so a setting of
+ *      20/40/300 must produce exactly that behaviour end to end:
  *        19 m, prev low  -> 0 (full)      41 m, prev full -> 1 (low)
  *        301 m           -> 2 (hidden)   share(160) = 1 - (120/260)*0.75
  *                                                   = 0.653846153...
@@ -1738,7 +1733,8 @@
  * relations between two calls); inputs built by a smoke helper
  * (`localToWorld`, `at100`, `coneCos`); and every function without a C#
  * port (`propBoxFootprints`, `scatterCellsInBox`, impostors, `scatterAxis.ts`,
- * the edge / centre samplers, prefs).
+ * the edge / centre samplers, the stored prefs of J1/J2 — the typing of J3
+ * runs from `overview_hud.json` via `smoke_walk_math.mjs`).
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -3011,8 +3007,7 @@ async function main() {
   console.log('\n(J) the detail distances as a local setting — prefs.ts');
   const {
     SCATTER_PREFS_KEY, SCATTER_PREF_MIN_M, SCATTER_PREF_MAX_M,
-    DEFAULT_SCATTER_PREFS, checkScatterPrefs, loadScatterPrefs,
-    saveScatterPrefs, scatterLodCfgOf,
+    DEFAULT_SCATTER_PREFS, loadScatterPrefs, saveScatterPrefs, scatterLodCfgOf,
   } = await loadTs(PREFS_SRC);
   const PREF_DEFAULTS = {
     scatterNearM: 35, scatterFarM: 45, scatterCullM: 120,
@@ -3054,32 +3049,9 @@ async function main() {
   check('J2 the round trip returns what was stored',
     loadScatterPrefs(saveScatterPrefs(typed)), typed);
 
-  // (J3) what the menu asks before it stores anything
-  check('J3 20 / 40 / 300 is taken as typed',
-    checkScatterPrefs(20, 40, 300),
-    { ok: true, prefs: { scatterNearM: 20, scatterFarM: 40, scatterCullM: 300 } });
-  check('J3 a 3 is taken, clamped up to 5',
-    checkScatterPrefs(3, 10, 50),
-    { ok: true, prefs: { scatterNearM: 5, scatterFarM: 10, scatterCullM: 50 } });
-  check('J3 near above far is refused as unordered',
-    checkScatterPrefs(40, 20, 300), { ok: false, error: 'order' });
-  check('J3 equal is not ordered either',
-    checkScatterPrefs(20, 40, 40), { ok: false, error: 'order' });
-  check('J3 an empty number field is refused as no number',
-    checkScatterPrefs(NaN, 45, 120), { ok: false, error: 'number' });
-  check('J3 a string is refused as no number',
-    checkScatterPrefs('30', 45, 120), { ok: false, error: 'number' });
-  check('J3 three values colliding at the ceiling are refused, not drawn',
-    checkScatterPrefs(2500, 3000, 4000), { ok: false, error: 'order' });
-
-  // (J4) the setting reaches the maths
-  const setCfg = scatterLodCfgOf({
-    scatterNearM: 20, scatterFarM: 40, scatterCullM: 300,
-  });
-  check('J4 the stored fields become a cfg', setCfg,
-    { nearM: 20, farM: 40, cullM: 300 });
-  // …and the cfg above, as the literal it was just pinned to, drives the
-  // tier and share cases of (J4) in the JSON.
+  // (J3) and the rename of (J4) run from shared/test-vectors/overview_hud.json
+  // in smoke_walk_math.mjs; the cfg {nearM 20, farM 40, cullM 300} that
+  // rename yields drives the tier and share cases of (J4) in scatter.json.
 
   // (Q) THE TURN
   console.log('\n(Q) the turn — scatterYaw, aligned to an axis');

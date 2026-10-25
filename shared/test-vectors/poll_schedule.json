@@ -1,0 +1,37 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "scripts/smoke_sync_client.mjs",
+  "cases": [
+    { "label": "[P1a] worldmap3d without push: every 3000 ms", "fn": "pollIntervalMs",
+      "args": [3000, 3000, 1], "expect": 3000 },
+    { "label": "[P1b] worldmap3d with push: the pushed 6000 ms", "fn": "pollIntervalMs",
+      "args": [6000, 3000, 1], "expect": 6000 },
+    { "label": "[P1c] one failure doubles 3000 to 6000", "fn": "pollIntervalMs",
+      "args": [3000, 3000, 2], "expect": 6000 },
+    { "label": "[P1d] factor 64 would be 192000 -> the 60000 ceiling", "fn": "pollIntervalMs",
+      "args": [3000, 3000, 64], "expect": 60000 },
+    { "label": "[P1e] factor 8 on 5000 is 40000, under the ceiling", "fn": "pollIntervalMs",
+      "args": [5000, 0, 8], "expect": 40000 },
+    { "label": "[P1f] factor 16 on 5000 would be 80000 -> 60000", "fn": "pollIntervalMs",
+      "args": [5000, 0, 16], "expect": 60000 },
+    { "label": "[P1g] a slow endpoint stays slow: 120000 backs off to itself", "fn": "pollIntervalMs",
+      "args": [120000, 0, 4], "expect": 120000 },
+    { "label": "[P1h] the minimum spacing wins over a shorter base", "fn": "pollIntervalMs",
+      "args": [1000, 5000, 1], "expect": 5000 },
+    { "label": "[P1i] badges: 20000 with a 20000 spacing", "fn": "pollIntervalMs",
+      "args": [20000, 20000, 1], "expect": 20000 },
+
+    { "label": "[P2] a failure doubles 1 to 2", "fn": "nextErrorFactor",
+      "args": [1, false], "expect": 2 },
+    { "label": "[P2] a failure doubles 32 to 64", "fn": "nextErrorFactor",
+      "args": [32, false], "expect": 64 },
+    { "label": "[P2] 64 is the ceiling", "fn": "nextErrorFactor",
+      "args": [64, false], "expect": 64 },
+    { "label": "[P2] a success resets 8 to 1", "fn": "nextErrorFactor",
+      "args": [8, true], "expect": 1 },
+    { "label": "[P2] a success at 1 stays 1", "fn": "nextErrorFactor",
+      "args": [1, true], "expect": 1 },
+    { "label": "[P2] a success resets the ceiling 64 to 1", "fn": "nextErrorFactor",
+      "args": [64, true], "expect": 1 }
+  ]
+}

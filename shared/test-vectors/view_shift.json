@@ -1,0 +1,48 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_view_shift.mjs",
+  "cases": [
+    { "label": "[1] the default chat window: dx (right)", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 12, "y": 388, "w": 840, "h": 680 }], "expect": { "dx": 247.6228 }, "eps": 1e-3 },
+    { "label": "[1] the default chat window: dy (up = negative)", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 12, "y": 388, "w": 840, "h": 680 }], "expect": { "dy": -126.8883 }, "eps": 1e-3 },
+
+    { "label": "[2a] full height, half width: dx capped", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 0, "y": 0, "w": 960, "h": 1080 }], "expect": { "dx": 336 } },
+    { "label": "[2a] full height, half width: no vertical shift", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 0, "y": 0, "w": 960, "h": 1080 }], "expect": { "dy": 0 } },
+    { "label": "[2b] full width, half height: no horizontal shift", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 0, "y": 540, "w": 1920, "h": 540 }], "expect": { "dx": 0 } },
+    { "label": "[2b] full width, half height: dy capped", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 0, "y": 540, "w": 1920, "h": 540 }], "expect": { "dy": -189 } },
+
+    { "label": "[3] 1600 x 900: dx capped at 0.35 * W/2", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 12, "y": 168, "w": 1600, "h": 900 }], "expect": { "dx": 336 } },
+    { "label": "[3] 1600 x 900: dy capped at 0.35 * H/2", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 12, "y": 168, "w": 1600, "h": 900 }], "expect": { "dy": -189 } },
+    { "label": "[3] no panel: dx", "fn": "viewShiftFor",
+      "args": [1920, 1080, null], "expect": { "dx": 0 } },
+    { "label": "[3] no panel: dy", "fn": "viewShiftFor",
+      "args": [1920, 1080, null], "expect": { "dy": 0 } },
+    { "label": "[3] panel covers everything: dx", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 0, "y": 0, "w": 1920, "h": 1080 }], "expect": { "dx": 0 } },
+    { "label": "[3] panel covers everything: dy", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 0, "y": 0, "w": 1920, "h": 1080 }], "expect": { "dy": 0 } },
+    { "label": "[3] zero-width panel: dx", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 10, "y": 10, "w": 0, "h": 400 }], "expect": { "dx": 0 } },
+    { "label": "[3] zero-width panel: dy", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 10, "y": 10, "w": 0, "h": 400 }], "expect": { "dy": 0 } },
+    { "label": "[3] no canvas yet: no shift", "fn": "viewShiftFor",
+      "args": [0, 0, { "x": 0, "y": 0, "w": 10, "h": 10 }], "expect": { "dx": 0, "dy": 0 } },
+
+    { "label": "[4] an over-tall panel is the full-height one: dx", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 0, "y": 0, "w": 960, "h": 4000 }], "expect": { "dx": 336 } },
+    { "label": "[4] an over-tall panel is the full-height one: dy", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 0, "y": 0, "w": 960, "h": 4000 }], "expect": { "dy": 0 } },
+
+    { "label": "[5] small window: dx", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 12, "y": 808, "w": 520, "h": 260 }], "expect": { "dx": 125.1882 }, "eps": 1e-3 },
+    { "label": "[5] small window: dy", "fn": "viewShiftFor",
+      "args": [1920, 1080, { "x": 12, "y": 808, "w": 520, "h": 260 }], "expect": { "dy": -64.3733 }, "eps": 1e-3 }
+  ]
+}

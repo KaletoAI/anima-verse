@@ -25,8 +25,22 @@
  * runHidden, restart with a pending retry, malformed frames and listener cleanup.
  * listener_cleanup: a two-topic listener fires once per matching frame, zero
  * after unsubscribe. bye_restart: an explicit restart opens exactly one source.
+ *
+ * POLL SCHEDULE (shared/test-vectors/poll_schedule.json, also read by the native
+ * client's C# tests; labels start with the tag below):
+ * [P1] pollIntervalMs(base, spacing, f) = max(spacing, min(base*f, max(base, 60000))).
+ *   a) worldmap3d without push (3000, 3000, 1): min(3000, 60000) = 3000, max(3000, 3000) = 3000
+ *   b) with push the base is pushedIntervalMs (6000, 3000, 1) -> 6000
+ *   c) one failure (3000, 3000, 2): 6000      d) (3000, 3000, 64): 192000 -> 60000
+ *   e) (5000, 0, 8): 40000                    f) (5000, 0, 16): 80000 -> 60000
+ *   g) (120000, 0, 4): min(480000, max(120000, 60000) = 120000) = 120000 — slow stays slow
+ *   h) (1000, 5000, 1): max(5000, 1000) = 5000 — the spacing wins
+ *   i) badges (20000, 20000, 1): 20000
+ * [P2] nextErrorFactor(f, ok) = ok ? 1 : min(2f, 64):
+ *   (1, fail) 2; (32, fail) 64; (64, fail) min(128, 64) = 64; (8, ok) 1; (1, ok) 1; (64, ok) 1.
  */
 import { readFileSync } from "node:fs";
+import { loadVectors, runVectors } from "../shared/test-vectors/vectors.mjs";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 const unhandled = [];
@@ -40,6 +54,12 @@ async function load(n) {
 const { createPollCore } = await load("pollCore");
 const { createSyncHub } = await load("syncHub");
 const { SYNC_ENDPOINTS: S } = await load("syncEndpoints");
+{
+  const { pollIntervalMs, nextErrorFactor } = await load("pollCore");
+  const { passed, failed } = runVectors(loadVectors("poll_schedule"), { pollIntervalMs, nextErrorFactor });
+  assert.equal(failed, 0, `${failed} poll schedule vector(s) failed`);
+  console.log(`PASS poll_schedule_vectors (${passed} cases)`);
+}
 function fixture() {
   let t = 0, hidden = false, id = 0;
   const timers = new Map(), sources = [], starts = [], data = [];

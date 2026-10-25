@@ -30,6 +30,25 @@ export interface PollCore {
 }
 export const TICK_MS = 1000;
 export const MAX_BACKOFF_MS = 60_000; // Bound retries while keeping slow endpoints slow.
+/** Highest error multiplier: 1, 2, 4 … 64, doubled per failed request. */
+export const MAX_ERROR_FACTOR = 64;
+
+/**
+ * The time between two polls of one entry, in ms: the base interval stretched
+ * by the error factor, but never past `max(base, MAX_BACKOFF_MS)` (a slow
+ * endpoint stays slow, a fast one backs off to a minute at most), and never
+ * below the entry's minimum spacing. Pure, so the native client checks the
+ * same schedule against `shared/test-vectors/poll_schedule.json`.
+ */
+export function pollIntervalMs(baseMs: number, minSpacingMs: number, errorFactor: number): number {
+  return Math.max(minSpacingMs, Math.min(baseMs * errorFactor, Math.max(baseMs, MAX_BACKOFF_MS)));
+}
+
+/** The error factor after a request: back to 1 on success, doubled on a
+ *  failure up to `MAX_ERROR_FACTOR`. */
+export function nextErrorFactor(factor: number, ok: boolean): number {
+  return ok ? 1 : Math.min(factor * 2, MAX_ERROR_FACTOR);
+}
 interface Sub {
   fetcher: () => Promise<unknown>;
   spec: EndpointSpec;
@@ -59,7 +78,7 @@ export function createPollCore(env: PollEnv, hub: HubLike | null): PollCore {
   const interval = (e: Entry) => {
     const base = Math.min(...[...e.subs].map(s => hub?.connected()
       ? (s.spec.pushedIntervalMs ?? s.spec.intervalMs) : s.spec.intervalMs));
-    return Math.max(spacing(e), Math.min(base * e.errorFactor, Math.max(base, MAX_BACKOFF_MS)));
+    return pollIntervalMs(base, spacing(e), e.errorFactor);
   };
   const hidden = (e: Entry) => env.hidden() && ![...e.subs].some(s => s.spec.runHidden);
   function cancelTrailing(e: Entry) {
@@ -101,10 +120,10 @@ export function createPollCore(env: PollEnv, hub: HubLike | null): PollCore {
     e.inFlight = fetched.then(data => {
       if (generation() !== startedGen) return;
       e.lastData = data; e.lastError = null; e.hasData = true;
-      e.dataGen = startedGen; e.errorFactor = 1;
+      e.dataGen = startedGen; e.errorFactor = nextErrorFactor(e.errorFactor, true);
     }, error => {
       if (generation() !== startedGen) return;
-      e.lastError = error; e.dataGen = startedGen; e.errorFactor = Math.min(e.errorFactor * 2, 64);
+      e.lastError = error; e.dataGen = startedGen; e.errorFactor = nextErrorFactor(e.errorFactor, false);
     }).then(() => {
       e.inFlight = null;
       e.runningWaiters = [];

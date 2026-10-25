@@ -2,7 +2,7 @@
  * Smoke run for `client3d/src/scene/viewShift.ts` — where the 3D client's
  * camera aims when the HUD's chat window covers part of the picture.
  *
- * Usage:  node scripts/smoke_view_shift.mjs
+ * Usage:  node client3d/scripts/smoke_view_shift.mjs
  *         (transforms the module with esbuild — a Vite dependency, already
  *          installed; no bundler, no GL context, no server)
  *
@@ -40,12 +40,12 @@
  *
  *     cx = (12960·6 + 1153440·1386 + 744960·960 + 23040·960) / 1934400
  *        = (77 760 + 1 598 667 840 + 715 161 600 + 22 118 400) / 1934400
- *        = 2 336 025 600 / 1 934 400 = 1207.6229...
+ *        = 2 336 025 600 / 1 934 400 = 1207.6228...
  *     cy = (12960·540 + 1153440·540 + 744960·194 + 23040·1074) / 1934400
  *        = (6 998 400 + 622 857 600 + 144 522 240 + 24 744 960) / 1934400
  *        = 799 123 200 / 1 934 400 = 413.11...
  *
- *     dx = 1207.6229 − 960 = 247.6229      dy = 413.1117 − 540 = −126.8883
+ *     dx = 1207.6228 − 960 = 247.6228      dy = 413.1117 − 540 = −126.8883
  *
  * The caps are 0.35·960 = 336 and 0.35·540 = 189; neither binds. So the
  * default window moves the avatar a quarter of a half-width to the right and
@@ -83,33 +83,50 @@
  *
  * A panel that covers the whole canvas leaves Σ = 0: there is nothing to aim
  * beside, and the honest answer is the middle rather than an arbitrary corner.
+ * The same answer, NO_SHIFT = {0, 0}, for no panel at all, for a panel of zero
+ * width (it covers nothing: pr = px) and for a canvas that has no size yet
+ * (w = h = 0, before the first layout).
+ *
+ * ---------------------------------------------------------------------------
+ * [4] A PANEL HANGING OVER THE EDGE IS CLIPPED, NOT TRUSTED
+ * ---------------------------------------------------------------------------
+ * Mid-animation the panel may report a box that reaches past the bottom edge:
+ * 960 x 4000 at (0, 0). Clipped to the canvas it is pb = min(4000, 1080) =
+ * 1080 — exactly the full-height panel of [2a] -> dx 336 (capped), dy 0.
+ *
+ * ---------------------------------------------------------------------------
+ * [5] A SMALLER WINDOW SHIFTS LESS
+ * ---------------------------------------------------------------------------
+ * 520 x 260 (the clamp's floor) at (12, 1080 − 12 − 260 = 808), pr = 532, pb = 1068:
+ *
+ *     L = 12·1080 = 12 960 (6, 540)     R = 1388·1080 = 1 499 040 (1226, 540)
+ *     T = 1920·808 = 1 551 360 (960, 404)   B = 23 040 (960, 1074)
+ *     Σ = 3 086 400
+ *     cx = (77 760 + 1 837 823 040 + 1 489 305 600 + 22 118 400) / 3 086 400
+ *        = 3 349 324 800 / 3 086 400 = 1085.1882...
+ *     cy = (6 998 400 + 809 481 600 + 626 749 440 + 24 744 960) / 3 086 400
+ *        = 1 467 974 400 / 3 086 400 = 475.6267...
+ *     dx = 125.1882      dy = −64.3733
+ *
+ * The cases (inputs + expectations) live in shared/test-vectors/view_shift.json,
+ * shared with the native client's C# tests; each case label starts with the [n]
+ * of its derivation above. What stays inline below: the relations ("the cap
+ * does not bind", "a smaller window shifts less than the default").
  */
 import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRequire } from 'node:module';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 
-const ROOT = new URL('..', import.meta.url);
-const SRC = join(fileURLToPath(ROOT), 'client3d/src/scene/viewShift.ts');
-
-/** esbuild comes with Vite and npm does NOT hoist it to the root of the
- *  workspace, so a bare `import('esbuild')` from `scripts/` finds nothing.
- *  Ask the workspaces that own it, the client — whose file this checks —
- *  first. */
-function esbuildEntry() {
-  for (const ws of ['client3d', 'frontend']) {
-    try {
-      return createRequire(new URL(`${ws}/package.json`, ROOT)).resolve('esbuild');
-    } catch { /* that workspace has no node_modules yet */ }
-  }
-  throw new Error('esbuild not found — run `npm install` in the repo root');
-}
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const SRC = join(ROOT, 'client3d/src/scene/viewShift.ts');
 
 /** The module, transformed and imported — it has no imports of its own, so a
- *  single-file transform is enough (the `smoke_embodied_camera.mjs` recipe). */
+ *  single-file transform is enough. esbuild resolves from client3d/, whose
+ *  Vite dependency it is. */
 async function loadShift() {
-  const esbuild = await import(pathToFileURL(esbuildEntry()).href);
+  const esbuild = await import('esbuild');
   const dir = await mkdtemp(join(tmpdir(), 'viewshift-smoke-'));
   try {
     const source = await readFile(SRC, 'utf8');
@@ -123,70 +140,22 @@ async function loadShift() {
 }
 
 const V = await loadShift();
-
-let passed = 0;
-let failed = 0;
-function check(what, got, want, tol = 0) {
-  const ok = typeof want === 'number' && typeof got === 'number'
-    ? Math.abs(got - want) <= tol
-    : got === want;
-  if (ok) { passed += 1; console.log(`  ok   ${what} = ${got}`); }
-  else { failed += 1; console.log(`  FAIL ${what}: got ${got}, want ${want}`); }
+const vectors = runVectors(loadVectors('view_shift'), { viewShiftFor: V.viewShiftFor });
+let passed = vectors.passed;
+let failed = vectors.failed;
+function check(what, ok) {
+  if (ok) { passed += 1; console.log(`  ok   ${what}`); }
+  else { failed += 1; console.log(`  FAIL ${what}`); }
 }
 
 const W = 1920;
 const H = 1080;
-
-console.log('[1] the default chat window, 840 x 680 on 1920 x 1080');
+console.log('\n(inline) relations');
 const def = V.viewShiftFor(W, H, { x: 12, y: 388, w: 840, h: 680 });
-check('dx (right)', def.dx, 247.6229, 1e-3);
-check('dy (up = negative)', def.dy, -126.8883, 1e-3);
-check('the cap does not bind horizontally', Math.abs(def.dx) < 0.35 * W / 2, true);
-check('the cap does not bind vertically', Math.abs(def.dy) < 0.35 * H / 2, true);
-
-console.log('[2] the shape decides the direction');
-const tall = V.viewShiftFor(W, H, { x: 0, y: 0, w: 960, h: 1080 });
-check('full height, half width: dx capped', tall.dx, 336, 1e-9);
-check('full height, half width: no vertical shift', tall.dy, 0, 1e-9);
-const wide = V.viewShiftFor(W, H, { x: 0, y: 540, w: 1920, h: 540 });
-check('full width, half height: no horizontal shift', wide.dx, 0, 1e-9);
-check('full width, half height: dy capped', wide.dy, -189, 1e-9);
-
-console.log('[3] the cap, and the degenerate cases');
-const big = V.viewShiftFor(W, H, { x: 12, y: 168, w: 1600, h: 900 });
-check('1600 x 900: dx capped at 0.35·W/2', big.dx, 336, 1e-9);
-check('1600 x 900: dy capped at 0.35·H/2', big.dy, -189, 1e-9);
-const none = V.viewShiftFor(W, H, null);
-check('no panel: dx', none.dx, 0);
-check('no panel: dy', none.dy, 0);
-const all = V.viewShiftFor(W, H, { x: 0, y: 0, w: W, h: H });
-check('panel covers everything: dx', all.dx, 0);
-check('panel covers everything: dy', all.dy, 0);
-const empty = V.viewShiftFor(W, H, { x: 10, y: 10, w: 0, h: 400 });
-check('zero-width panel: dx', empty.dx, 0);
-check('zero-width panel: dy', empty.dy, 0);
-check('no canvas yet: dx', V.viewShiftFor(0, 0, { x: 0, y: 0, w: 10, h: 10 }).dx, 0);
-
-console.log('[4] a panel hanging over the edge is clipped, not trusted');
-// Mid-animation the panel may report a box that reaches past the bottom edge.
-// Clipped it becomes exactly case [2a] plus a 12 px left strip.
-const over = V.viewShiftFor(W, H, { x: 0, y: 0, w: 960, h: 4000 });
-check('over-tall panel equals the full-height one: dx', over.dx, tall.dx, 1e-9);
-check('over-tall panel equals the full-height one: dy', over.dy, tall.dy, 1e-9);
-
-console.log('[5] a smaller window shifts less');
-// 520 x 260 (the clamp's floor) at (12, 1080−12−260 = 808), pr = 532, pb = 1068:
-//   L = 12·1080 = 12 960 (6, 540)     R = 1388·1080 = 1 499 040 (1226, 540)
-//   T = 1920·808 = 1 551 360 (960, 404)   B = 23 040 (960, 1074)
-//   Σ = 3 086 400
-//   cx = (77 760 + 1 837 823 040 + 1 489 305 600 + 22 118 400) / 3 086 400
-//      = 3 349 324 800 / 3 086 400 = 1085.1882...
-//   cy = (6 998 400 + 809 481 600 + 626 749 440 + 24 744 960) / 3 086 400
-//      = 1 467 974 400 / 3 086 400 = 475.6268...
+check('[1] the cap does not bind horizontally', Math.abs(def.dx) < 0.35 * W / 2);
+check('[1] the cap does not bind vertically', Math.abs(def.dy) < 0.35 * H / 2);
 const small = V.viewShiftFor(W, H, { x: 12, y: 808, w: 520, h: 260 });
-check('small window: dx', small.dx, 125.1882, 1e-3);
-check('small window: dy', small.dy, -64.3733, 1e-3);
-check('smaller window shifts less than the default', small.dx < def.dx, true);
+check('[5] a smaller window shifts less than the default', small.dx < def.dx);
 
 console.log(`\n${passed} ok, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

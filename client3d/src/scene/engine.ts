@@ -7,16 +7,21 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { setSurfaceSky, updateSurfaceMaterials } from '@anima/scene-render';
 import { setFogVeilSky } from './fogVeil';
 import {
-  basePitchDeg, FirstPersonZoom, MAX_DIST, MIN_DIST, OVERVIEW_NEAR_PITCH_DEG,
-  THIRD_PERSON_MIN_DIST,
+  basePitchDeg, FirstPersonZoom, OVERVIEW_NEAR_PITCH_DEG, THIRD_PERSON_MIN_DIST,
 } from './cameraFraming';
+import {
+  clampPitchDeg, clampZoom, damp, flyAdvance, flyEase, MAX_FRAME_DT, orbitOffset,
+  orbitStep, type Vec3, wheelFactor, zoomCeiling, zoomFloorOf, zoomTowardCursor,
+} from './cameraMath';
 import { SHADOW_HALF_M, SHADOW_MAP_PX, snapShadowCentre } from './shadowSnap';
 import { type ScreenBox, viewShiftFor } from './viewShift';
 
-/** The framing arithmetic lives in `scene/cameraFraming.ts` — pure numbers, so
- *  the distances and the pitch curve can be checked without a GL context
- *  (`scripts/smoke_first_person.mjs`). Re-exported here because `MIN_DIST`
- *  is a fact about this camera and `main.ts` frames the world with it. */
+/** The framing arithmetic lives in `scene/cameraFraming.ts` and the overview
+ *  camera's own arithmetic (wheel, easing, fly-to, orbit, pose) in
+ *  `scene/cameraMath.ts` — pure numbers, so they can be checked without a GL
+ *  context (`scripts/smoke_embodied_camera.mjs`,
+ *  `client3d/scripts/smoke_camera_math.mjs`). Re-exported here because
+ *  `MIN_DIST` is a fact about this camera and `main.ts` frames with it. */
 export { MIN_DIST } from './cameraFraming';
 
 /**
@@ -47,6 +52,8 @@ const SCRATCH = {
   look: new THREE.Vector3(),
   sunOff: new THREE.Vector3(),
   surfaceSky: new THREE.Color(),
+  /** `orbitOffset` writes its tuple here before it is copied into `off`. */
+  offTuple: [0, 0, 0] as Vec3,
 };
 
 /**
@@ -339,15 +346,15 @@ export class Engine {
    *  engine's own `MIN_DIST`/`MAX_DIST` are silent: they are the lens, not a
    *  rule of the game. */
   private clampZoom(dist: number): number {
-    const floor = this.zoomFloor === null ? MIN_DIST : Math.max(this.zoomFloor, MIN_DIST);
-    const ceiling = Math.max(floor,
-      this.zoomCap === null ? MAX_DIST : Math.min(this.zoomCap, MAX_DIST));
     // Every notch beyond the ceiling reports — how OFTEN the player is told is
     // the listener's business (main.ts shows it once per embodied session),
     // and a "first time only" rule down here could not tell one session from
     // the next.
-    if (this.zoomCap !== null && dist > ceiling + 1e-6) this.onZoomCapped?.();
-    return THREE.MathUtils.clamp(dist, floor, ceiling);
+    if (this.zoomCap !== null
+        && dist > zoomCeiling(zoomFloorOf(this.zoomFloor), this.zoomCap) + 1e-6) {
+      this.onZoomCapped?.();
+    }
+    return clampZoom(dist, this.zoomFloor, this.zoomCap);
   }
 
   /** Ease the camera onto a point + distance. */
@@ -355,8 +362,8 @@ export class Engine {
     this.flyFrom = this.target.clone();
     this.flyToPoint = point.clone();
     this.flyT = 0;
-    this.targetDist = THREE.MathUtils.clamp(
-      dist, this.zoomFloor === null ? MIN_DIST : Math.max(this.zoomFloor, MIN_DIST), MAX_DIST);
+    // The cap binds the user's zoom, not this deliberate move (`zoomCap`).
+    this.targetDist = clampZoom(dist, this.zoomFloor, null);
   }
   private flyFrom: THREE.Vector3 | null = null;
   private flyToPoint: THREE.Vector3 | null = null;
@@ -433,16 +440,18 @@ export class Engine {
 
     el.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const factor = Math.exp(e.deltaY * 0.0012);
+      // `cameraMath.wheelZoom`, taken apart only so the cap can report.
       const before = this.targetDist;
-      this.targetDist = this.clampZoom(before * factor);
+      this.targetDist = this.clampZoom(before * wheelFactor(e.deltaY));
       if (this.targetDist < before && !this.follow) {
         // Pull the target towards the cursor by exactly the fraction of the
-        // distance that was just given up. `before` is a clamped distance and
-        // therefore ≥ MIN_DIST > 0, so the ratio can never divide by zero; at
-        // the MIN_DIST floor it becomes 0 and the target simply stays put.
+        // distance that was just given up (`cameraMath.zoomTowardCursor`).
         const p = this.groundPoint(e.clientX, e.clientY);
-        if (p) this.target.lerp(p, 1 - this.targetDist / before);
+        if (p) {
+          const t = zoomTowardCursor([this.target.x, this.target.y, this.target.z],
+            [p.x, p.z], before, this.targetDist);
+          this.target.set(t[0], t[1], t[2]);
+        }
       }
       this.flyT = 1; // abort a running camera fly
     }, { passive: false });
@@ -487,10 +496,9 @@ export class Engine {
         if (Math.hypot(e.clientX - this.orbitStart.x, e.clientY - this.orbitStart.y)
             > ORBIT_DRAG_PX) this.moved = true;
         this.orbitLast = { x: e.clientX, y: e.clientY };
-        this.targetYaw -= dx * 0.005;
-        const pitchLimit = this.firstPerson ? 85 : 35;
-        this.pitchOffset = THREE.MathUtils.clamp(
-          this.pitchOffset + dy * 0.25, -pitchLimit, pitchLimit);
+        const step = orbitStep(this.targetYaw, this.pitchOffset, dx, dy, this.firstPerson);
+        this.targetYaw = step.targetYaw;
+        this.pitchOffset = step.pitchOffset;
         this.flyT = 1;
         return;
       }
@@ -574,7 +582,7 @@ export class Engine {
       };
     }
     const want = viewShiftFor(w, h, box);
-    const k = 1 - Math.exp(-8 * dt);
+    const k = damp(dt);
     this.viewDx += (want.dx - this.viewDx) * k;
     this.viewDy += (want.dy - this.viewDy) * k;
     // An exponential chase never arrives. Closing the last twentieth of a
@@ -620,7 +628,7 @@ export class Engine {
     const benchDt = this.benchFrameAt ? (frameStart - this.benchFrameAt) / 1000 : 0;
     this.benchFrameAt = this.benchRendered ? frameStart : 0;
     this.benchFrame?.(benchDt);
-    const dt = Math.min(this.clock.getDelta(), 0.1);
+    const dt = Math.min(this.clock.getDelta(), MAX_FRAME_DT);
     // ONE time value for everything that moves by itself: the water surfaces
     // and, since the terrain animations, the swaying scatter (shared uniform).
     updateSurfaceMaterials(dt);
@@ -640,9 +648,8 @@ export class Engine {
 
     // Camera fly
     if (this.flyT < 1 && this.flyFrom && this.flyToPoint) {
-      this.flyT = Math.min(1, this.flyT + dt * 1.6);
-      const k = this.flyT * this.flyT * (3 - 2 * this.flyT);
-      this.target.lerpVectors(this.flyFrom, this.flyToPoint, k);
+      this.flyT = flyAdvance(this.flyT, dt);
+      this.target.lerpVectors(this.flyFrom, this.flyToPoint, flyEase(this.flyT));
     }
 
     // Follow target — the ONE evaluation per frame, deliberately AFTER the fly:
@@ -651,8 +658,9 @@ export class Engine {
     const followAt = this.follow?.();
     if (followAt) this.target.lerp(followAt, 1 - Math.exp(-6 * dt));
 
-    this.dist = THREE.MathUtils.lerp(this.dist, this.targetDist, 1 - Math.exp(-8 * dt));
-    this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, 1 - Math.exp(-8 * dt));
+    const ease = damp(dt);
+    this.dist = THREE.MathUtils.lerp(this.dist, this.targetDist, ease);
+    this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, ease);
 
     // Require the eased zoom to reach the entry threshold too: one large
     // inward scroll must not teleport a distant camera straight to the eyes.
@@ -661,13 +669,9 @@ export class Engine {
     const firstPerson = this.firstPersonZoom.update(zoomDistance, !!followAt, dt);
     const orbitDist = followAt ? Math.max(this.dist, THIRD_PERSON_MIN_DIST) : this.dist;
     const basePitch = firstPerson ? 0 : basePitchDeg(orbitDist, this.nearPitchDeg);
-    const pitch = THREE.MathUtils.degToRad(
-      THREE.MathUtils.clamp(basePitch + this.pitchOffset, firstPerson ? -85 : 8, 85));
-    const off = SCRATCH.off.set(
-      Math.sin(this.yaw) * Math.cos(pitch),
-      Math.sin(pitch),
-      Math.cos(this.yaw) * Math.cos(pitch)
-    );
+    const pitchDeg = clampPitchDeg(basePitch + this.pitchOffset, firstPerson);
+    // `cameraMath.cameraPose`, written into the frame's scratch vector.
+    const off = SCRATCH.off.fromArray(orbitOffset(this.yaw, pitchDeg, SCRATCH.offTuple));
     if (firstPerson && followAt) {
       // Place the lens at the actual eyes, without the chase lag behind a
       // walking avatar. Keep the orbit's view direction, now looking ahead.

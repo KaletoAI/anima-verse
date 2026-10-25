@@ -626,10 +626,12 @@
  *
  * --- Boot progress (stage 4, task 3; `client3d/src/game/boot.ts`) ----------
  * Six stages: world, scenes, tiles, visible, figures, arrival. Step = 100/6.
- * Hand derivation: 0 -> 0/world, 1 -> 17/scenes, 2 -> 33/tiles,
+ * [P1] In order: 0 -> 0/world, 1 -> 17/scenes (16.67 rounds up), 2 -> 33/tiles,
  * 3 -> 50/visible, 4 -> 67/figures, 5 -> 83/arrival, 6 -> 100/ready.
- * Out of order: figures alone -> 17/world; world+figures+tiles ->
- * 50/scenes; world+figures+scenes+arrival -> 67/tiles. Unknowns count zero.
+ * [P2] Out of order: figures alone -> 17/world; world+figures+tiles ->
+ * 50/scenes; world+figures+scenes+arrival -> 67/tiles; all six reversed ->
+ * 100/ready. [P3] Unknowns count zero: world+bogus -> 17/scenes,
+ * bogus+other -> 0/world.
  * Attribution: A=[0,100], B=[50,300]; [60,160] -> B (40 vs 100);
  * [0,40] -> A (40 vs 0); [400,450] -> null. Tie [50,100] -> A:
  * both overlap by 50, but A started earlier.
@@ -641,6 +643,80 @@
  * re-renders the screen once per attempt for nothing. The note is a value
  * (`{kind:'retry',seconds}` / `{kind:'failed'}`) for the same reason as the
  * label: the vanilla side has no t().
+ *
+ * --- Speech bubbles (stage 6; `client3d/src/game/bubble.ts`) ---------------
+ * From the module's constants: BUBBLE_MAX_CHARS = 140, BUBBLE_BASE_MS = 3500,
+ * BUBBLE_MS_PER_CHAR = 55, BUBBLE_MAX_MS = 12000, so
+ *     bubbleMs(n chars) = clamp(3500 + 55n, 3500, 12000),
+ * which reaches the ceiling at 55n = 8500 -> n = 154.5454..., i.e. the FIRST
+ * length that clamps is 155 characters. What is shown:
+ * [B1] 'Yes.' passes through unchanged.  [B2] surrounding whitespace goes.
+ * [B3] inner whitespace collapses to single spaces: 'one\n\ntwo   three\tfour'
+ *      -> 'one two three four' (a pasted line break must not make the bubble
+ *      three lines tall).  [B4] whitespace only -> '' (the caller shows nothing).
+ * [B5] exactly at the cap: 140 'a' -> untouched, no ellipsis.
+ * [B6] one over: 141 'a' -> 139 'a' + '…' = 140 rendered characters.
+ * [B7] the cut must not leave a dangling space in front of the ellipsis:
+ *      138 'b' + ' ' + 20 'c' -> the first 139 characters end in the space ->
+ *      trimEnd -> 138 'b' + '…'.
+ * How long it hangs:
+ * [B8] 'Yes.': 3500 + 55·4 = 3720.  [B9] '' -> the base 3500.
+ * [B10] 100 chars: 3500 + 5500 = 9000.  [B11] 154: 3500 + 8470 = 11970, the
+ *       last value BELOW the ceiling.  [B12] 155: 3500 + 8525 = 12025 -> 12000.
+ * [B13] 4000 chars -> 12000.  [B14] the duration is measured on the UNCUT
+ *       line: 200 chars are shown as 140 but took 200 characters to say -> 12000.
+ * [B15] it measures the COLLAPSED length, like bubbleText: ' a \n b ' -> 'a b'
+ *       = 3 characters -> 3500 + 165 = 3665.
+ *
+ * --- Location info panel (`client3d/src/game/infoPanel.ts`) ----------------
+ * `infoPanelData(loc, chars, events, roomOf, view?, avatar?)` is a plain copy
+ * of what the HUD shows; the fixture is the location Home with the rooms
+ * r1 'Kitchen' and r2 'Hall', the characters A (travelling to Harbor, eta
+ * 14:30), B and C, and roomOf A -> 'Kitchen' (a room NAME), B -> 'r2' (a room ID).
+ * [I1] terrain 'forest' is an area: its rooms are generic zones -> rooms [].
+ * [I2] map3d.area_model set -> rooms [] as well.
+ * [I3] otherwise every room in the location's order with who matches its name
+ *      OR its id: Kitchen [A] (by name), Hall [B] (by id); C is in no room.
+ * [I4] present: every character in the given order, absent fields as '':
+ *      A {travelTo 'Harbor', eta '14:30'}, B and C all ''.
+ * [I5] events: danger iff category === 'danger' -> Fire true, News false.
+ * [I6] no view given -> null.  [I7] no description -> ''.
+ * [I8] a view is copied: {openable true, open false}.
+ * [I9] the avatar elsewhere: L1 at (0, 0), avatar in L2 at (3, 4) -> distance
+ *      hypot(3, 4) = 5.  [I10] the avatar IN this location -> travel null.
+ *      [I11] no avatar -> travel null.  [I12] a location without pos_x/pos_z
+ *      -> travel {distanceM: null} (the button stays, the number goes).
+ *
+ * --- Scatter detail distances: typing (`client3d/src/game/prefs.ts`) -------
+ * The stored side of these prefs (defaults, reading) is pinned in
+ * `smoke_scatter_math.mjs` section (J); what the menu asks before it stores
+ * anything is here, beside the other prefs:
+ * [J3] `checkScatterPrefs(near, far, cull)` — a value must be a finite NUMBER,
+ *      it is clamped to 5..2000 m, and the triple must climb strictly:
+ *        (20, 40, 300)      -> ok, taken as typed
+ *        (3, 10, 50)        -> ok, the 3 clamped up to 5
+ *        (40, 20, 300)      -> refused, 'order' — near is not under far
+ *        (20, 40, 40)       -> refused, 'order' — equal is not ordered either
+ *        (NaN, 45, 120)     -> refused, 'number' (an empty number field)
+ *        ('30', 45, 120)    -> refused, 'number' (a string is not a number)
+ *        (2500, 3000, 4000) -> refused, 'order': all three clamp to 2000 and
+ *                              collide there, which is better told to the
+ *                              player than silently drawn.
+ * [J4] `scatterLodCfgOf` renames the stored fields into the cfg the LOD maths
+ *      takes: {scatterNearM 20, scatterFarM 40, scatterCullM 300} ->
+ *      {nearM 20, farM 40, cullM 300} (what that cfg then does is (J4) of
+ *      `smoke_scatter_math.mjs`).
+ *
+ * --- SHARED VECTORS — `shared/test-vectors/overview_hud.json` --------------
+ * The input -> value cases of the four sections above run from that file,
+ * which the native client's C# tests read too; each label starts with the
+ * tag of its derivation. The `fn` names are the TypeScript ones. Two
+ * conventions: `bootProgress` takes the finished stages as a LIST (the TS
+ * function takes a Set), and `infoPanelData` takes `roomOf` as an OBJECT
+ * name -> room (a Map in TS) and `null` for an absent view / avatar.
+ * WHAT STAYS INLINE: the constants and BOOT_STAGES pins, string lengths,
+ * the JSON round trip of the panel data, the NaN input of (J3), the boot
+ * STORE (state across calls) and `attributeLongTask` (no C# consumer yet).
  *
  * --- Soundtrack (stage 4, task 5; `client3d/src/game/soundtrack.ts`) -------
  * WHICH music and WHICH ambience play. All four rules are pure lookups or a
@@ -850,6 +926,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 
 // '../..' = the REPO root (this file lives in client3d/scripts/) — the same
 // anchor smoke_enter_math.mjs and smoke_ground_math.mjs use.
@@ -860,7 +937,7 @@ const SRC_DIR = join(ROOT, 'client3d/src/game');
  *  DOM. */
 const MODULES = ['walk', 'clickmove', 'proximity', 'roomwalk', 'elevator', 'collide',
   'doors', 'prefs', 'boot', 'soundtrack', 'voiceover', 'polygon', 'enterLocation',
-  'perfstats', 'bubble', 'minimap', 'locks', 'placement', 'ground', 'stairs'];
+  'perfstats', 'bubble', 'minimap', 'locks', 'placement', 'ground', 'stairs', 'infoPanel'];
 
 /**
  * Both files are TypeScript and deliberately free of any runtime dependency
@@ -961,7 +1038,7 @@ const SQRT_HALF = Math.SQRT1_2;   // 0.7071067811865476
 async function main() {
   const { walk, clickmove, proximity, roomwalk, elevator, collide, doors,
     prefs, boot, soundtrack, voiceover, enterLocation, perfstats,
-    bubble, minimap, locks, placement, ground, stairs } = await loadGameModules();
+    bubble, minimap, locks, placement, ground, stairs, infoPanel } = await loadGameModules();
   const { walkDir, slideBlocked, slopeBlocks, gateStandY, groundStoreyFloors,
     terrainBlocks, terrainPace,
     moveClip, idleClip, groundSink, sinkForState, floatRootY, groundWaterLevel,
@@ -997,6 +1074,22 @@ async function main() {
     master: 0.8, music: 0.5, ambient: 0.6, tts: 1,
     musicOn: true, ambientOn: true, ttsOn: 'auto',
   };
+
+  // ---- the shared vectors (see "SHARED VECTORS" in the header): bubbles,
+  // boot progress, the info panel and the scatter-pref typing. A stage list
+  // becomes the Set the TS function takes, a roomOf object the Map.
+  console.log('\n(vectors) shared/test-vectors/overview_hud.json');
+  const hudVectors = runVectors(loadVectors('overview_hud'), {
+    bubbleText: bubble.bubbleText,
+    bubbleMs: bubble.bubbleMs,
+    bootProgress: (stages) => bootProgress(new Set(stages)),
+    infoPanelData: (loc, chars, events, roomOf, view, avatar) => infoPanel.infoPanelData(
+      loc, chars, events, new Map(Object.entries(roomOf)), view ?? undefined, avatar ?? undefined),
+    checkScatterPrefs: prefs.checkScatterPrefs,
+    scatterLodCfgOf: prefs.scatterLodCfgOf,
+  });
+  passed += hudVectors.passed;
+  failed += hudVectors.failed;
 
   // --- the CELL maths: GONE (E4 task 5) ------------------------------------
   // `cellOf`, `stepDirection`, `clampToCell`, `keepAhead`, `splitDiagonal` and
@@ -3576,22 +3669,10 @@ async function main() {
     loadPrefs(savePrefs(loadPrefs('{"master":2,"music":-1}'))),
     { ...DEFAULTS, master: 1, music: 0 });
 
-  // Expected values are derived by hand in the docstring.
+  // Expected values are derived by hand in the docstring; the bootProgress
+  // cases [P1..P3] run from overview_hud.json (see the top of main).
   const STAGES = ['world', 'scenes', 'tiles', 'visible', 'figures', 'arrival'];
   check('BOOT_STAGES order', [...BOOT_STAGES], STAGES);
-  const cases = [
-    [[], 0, 'world'], [['world'], 17, 'scenes'],
-    [['world', 'scenes'], 33, 'tiles'],
-    [['world', 'scenes', 'tiles'], 50, 'visible'],
-    [['world', 'scenes', 'tiles', 'visible'], 67, 'figures'],
-    [STAGES.slice(0, 5), 83, 'arrival'], [STAGES, 100, 'ready'],
-    [['figures'], 17, 'world'], [['world', 'figures', 'tiles'], 50, 'scenes'],
-    [['world', 'figures', 'scenes', 'arrival'], 67, 'tiles'],
-    [['world', 'bogus'], 17, 'scenes'], [['bogus', 'other'], 0, 'world'],
-    [[...STAGES].reverse(), 100, 'ready'],
-  ];
-  for (const [stages, percent, label] of cases)
-    check(`boot ${stages}`, bootProgress(new Set(stages)), { percent, label });
   const intervals = [
     { phase: 'scene:fetch', start: 0, end: 100 },
     { phase: 'ground:fetch', start: 50, end: 300 },
@@ -4489,61 +4570,17 @@ async function main() {
     scatterCosts([inst(10, 6, { indexed: false })], IMP).impostor.calls, 0);
 
   // --- Speech bubbles (stage 6; client3d/src/game/bubble.ts) ---------------
-  //
-  // Every number here is derived BY HAND from the constants in that module:
-  //   BUBBLE_MAX_CHARS = 140, BUBBLE_BASE_MS = 3500,
-  //   BUBBLE_MS_PER_CHAR = 55, BUBBLE_MAX_MS = 12000
-  // so   bubbleMs(n chars) = clamp(3500 + 55n, 3500, 12000),
-  // which reaches the ceiling at  55n = 8500  ->  n = 154.5454...,
-  // i.e. the FIRST length that clamps is 155 characters.
-  console.log('\nbubble — what is shown');
-  const { bubbleText, bubbleMs, BUBBLE_MAX_CHARS, BUBBLE_BASE_MS,
+  // Derived in the header ([B1..B15]); the cases run from overview_hud.json.
+  // What stays here: the constants the derivation computes with, and the
+  // rendered LENGTHS (a property of the result, not a second value).
+  console.log('\nbubble — constants and lengths');
+  const { bubbleText, BUBBLE_MAX_CHARS, BUBBLE_BASE_MS,
     BUBBLE_MS_PER_CHAR, BUBBLE_MAX_MS } = bubble;
   check('the constants are the ones this block computes with',
     [BUBBLE_MAX_CHARS, BUBBLE_BASE_MS, BUBBLE_MS_PER_CHAR, BUBBLE_MAX_MS],
     [140, 3500, 55, 12000]);
-  check('a short line passes through unchanged', bubbleText('Yes.'), 'Yes.');
-  check('surrounding whitespace goes', bubbleText('  Yes.  '), 'Yes.');
-  //   a pasted line break must not make the bubble three lines tall
-  check('inner whitespace collapses to single spaces',
-    bubbleText('one\n\ntwo   three\tfour'), 'one two three four');
-  check('whitespace only yields the empty string (caller shows nothing)',
-    bubbleText('   \n  '), '');
-  //   exactly at the cap: 140 'a' -> untouched, no ellipsis
-  const a140 = 'a'.repeat(140);
-  check('140 characters are still shown in full', bubbleText(a140), a140);
-  check('...and that really is 140 characters', bubbleText(a140).length, 140);
-  //   one over the cap: cut to 139 + the ellipsis = 140 rendered characters
-  const a141 = 'a'.repeat(141);
-  check('141 characters are cut', bubbleText(a141), `${'a'.repeat(139)}…`);
-  check('the ellipsis counts towards the cap', bubbleText(a141).length, 140);
-  //   the cut must not leave a dangling space in front of the ellipsis:
-  //   139 chars of "b"*138 + " " -> trimEnd -> 138 + ellipsis = 139 long
-  const spaceAt139 = `${'b'.repeat(138)} ${'c'.repeat(20)}`;
-  check('a cut on a space does not leave one hanging',
-    bubbleText(spaceAt139), `${'b'.repeat(138)}…`);
-
-  console.log('\nbubble — how long it hangs');
-  //   3500 + 55*4 = 3720
-  check('short line: 3500 + 55*4', bubbleMs('Yes.'), 3720);
-  //   the empty line never reaches the scene, but the floor must still hold
-  check('nothing to say is still the base', bubbleMs(''), 3500);
-  //   100 chars: 3500 + 5500 = 9000
-  check('100 characters: 3500 + 5500', bubbleMs('x'.repeat(100)), 9000);
-  //   154 chars: 3500 + 8470 = 11970 — the last value BELOW the ceiling
-  check('154 characters stay just under the ceiling',
-    bubbleMs('x'.repeat(154)), 11970);
-  //   155 chars: 3500 + 8525 = 12025 -> clamped to 12000
-  check('155 characters are the first to clamp',
-    bubbleMs('x'.repeat(155)), 12000);
-  check('a very long line clamps too', bubbleMs('x'.repeat(4000)), 12000);
-  //   the duration is measured on the UNCUT line: 200 chars are shown as 140,
-  //   but they took 200 characters' worth of time to say -> ceiling
-  check('the duration counts what was SAID, not what is shown',
-    bubbleMs('x'.repeat(200)), 12000);
-  //   and it measures the COLLAPSED length, like bubbleText does:
-  //   'a b' is 3 characters -> 3500 + 165 = 3665
-  check('duration uses the collapsed length', bubbleMs(' a \n b '), 3665);
+  check('[B5] ...and 140 characters really are 140', bubbleText('a'.repeat(140)).length, 140);
+  check('[B6] the ellipsis counts towards the cap', bubbleText('a'.repeat(141)).length, 140);
 
   // The admin's "show all locations" switch lives beside the audio prefs since
   // the veil was struck (contract v6 Nr. 8) — it was never about the veil, only
@@ -4553,6 +4590,22 @@ async function main() {
   console.log('prefs — the show-all switch key');
   check('the show-all pref key is the documented one',
     SHOW_ALL_KEY, 'av3d.showAllLocations');
+
+  // Info panel [I1..I12] and scatter-pref typing [J3]/[J4] run from
+  // overview_hud.json; what JSON cannot carry stays here.
+  console.log('info panel — the inline rest');
+  check('infoPanelData is a function', typeof infoPanel.infoPanelData, 'function');
+  const panel = infoPanel.infoPanelData(
+    { id: 'loc1', name: 'Home', rooms: [{ id: 'r1', name: 'Kitchen' }, { id: 'r2', name: 'Hall' }] },
+    [{ name: 'A', movement_target_name: 'Harbor', travel: { eta_hhmm: '14:30' } }, { name: 'B' }, { name: 'C' }],
+    [{ category: 'danger', text: 'Fire' }, { category: 'other', text: 'News' }],
+    new Map([['A', 'Kitchen'], ['B', 'r2']]));
+  // `compare` counts keys, so a field that JSON would drop (undefined) fails.
+  check('the panel data survives a JSON round trip unchanged',
+    JSON.parse(JSON.stringify(panel)), panel);
+  console.log('prefs — scatter typing, the inline rest');
+  check('[J3] an empty number field (NaN) is refused as no number',
+    prefs.checkScatterPrefs(NaN, 45, 120), { ok: false, error: 'number' });
 
   /**
    * --- Minimap (stage 5 task 3; on the METRE world since E4 task 2) ---------

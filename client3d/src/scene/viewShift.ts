@@ -1,6 +1,7 @@
 /**
  * WHERE in the window the camera's aim point lands — pure numbers, no `three`,
- * no DOM, so `scripts/smoke_view_shift.mjs` can check it without a GL context.
+ * no DOM, so `client3d/scripts/smoke_view_shift.mjs` can check it without a GL context
+ * (cases in `shared/test-vectors/view_shift.json`, shared with the native client).
  *
  * The camera aims at a point and `lookAt` puts that point in the exact middle
  * of the picture. The HUD's chat window sits ON that picture, bottom left, and

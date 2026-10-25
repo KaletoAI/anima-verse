@@ -18,6 +18,7 @@ import * as api from './api';
 import { pollCore, syncHub, SYNC_ENDPOINTS } from '@anima/player-ui';
 import { initDebug3d, initIsolation } from './debug3d';
 import { Engine, MIN_DIST } from './scene/engine';
+import { fitDistance, worldCentreXZ } from './scene/cameraMath';
 import { viewHeading } from './scene/cameraFraming';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { FigureLibrary } from './scene/figures';
@@ -286,29 +287,9 @@ const ZOOM_TO_BASE_DIST = 4.5;
 const ZOOM_TO_MAX_DIST = 12;
 
 // --- Framing the world (§ A12, E4 task 3) -----------------------------------
-//
-// The map camera is an orbit camera with a 45° VERTICAL field of view
-// (`engine.ts`), so a sphere of radius R fits the picture at
-//
-//     d = R / sin(22.5°) = 2.6131 · R
-//
-// and the fit below is exactly that, over the bounding sphere of
-// `world_bounds` — the simplest framing that can be checked by hand, and the
-// one the plan asks for. It is deliberately GENEROUS: the camera looks down at
-// an angle, so the ground it actually covers is wider than the sphere test
-// assumes, and the horizontal field is wider still on a landscape window.
-/** Half the vertical field of view of the map camera, in radians. */
-const CAMERA_HALF_FOV = (22.5 * Math.PI) / 180;
-/** Air around the bounds, as a factor on the fitted radius. 15 % keeps the
- *  outermost footprint off the edge of the picture. */
-const CAMERA_FIT_MARGIN = 1.15;
-/** The engine's own MAX_DIST (not exported) — a world larger than this simply
- *  starts as far out as the camera can go. The lower end is `MIN_DIST`, which
- *  the engine DOES export. */
-const CAMERA_FIT_MAX = 150;
-/** Fit distance for a world with nothing placed: the old boot default, so an
- *  empty world looks exactly as it always did. */
-const CAMERA_FIT_EMPTY = 70;
+// The fit itself (`fitDistance`, `worldCentreXZ`) is pure lens arithmetic and
+// lives in `scene/cameraMath.ts`, checked against shared vectors. Only the
+// HEIGHT of the aim point is decided here, because it needs the terrain.
 
 /** Centre of `world_bounds`, or the world origin when nothing is placed — on
  *  the GROUND there (§ A16). The camera looks at a point of the world, and in
@@ -317,23 +298,8 @@ const CAMERA_FIT_EMPTY = 70;
  *  is the sampler; a world without a relief answers 0 as it always did. */
 function worldCentre(b: WorldBounds | null | undefined,
                      groundY: (x: number, z: number) => number): THREE.Vector3 {
-  const x = b ? (b.min_x + b.max_x) / 2 : 0;
-  const z = b ? (b.min_z + b.max_z) / 2 : 0;
+  const [x, z] = worldCentreXZ(b);
   return new THREE.Vector3(x, groundY(x, z), z);
-}
-
-/** Camera distance at which `world_bounds` fits the picture, clamped to what
- *  the camera can actually be set to: the engine snaps anything below
- *  `MIN_DIST` on its first update anyway, and handing it a smaller number
- *  would mean the boot distance and the camera's distance disagree from frame
- *  one — a tiny world (a single 4 m location) is exactly that case. */
-function fitDistance(b: WorldBounds | null | undefined): number {
-  if (!b) return CAMERA_FIT_EMPTY;
-  const r = Math.hypot(b.max_x - b.min_x, b.max_z - b.min_z) / 2;
-  if (!Number.isFinite(r) || r <= 0) return CAMERA_FIT_EMPTY;
-  return THREE.MathUtils.clamp(
-    (r * CAMERA_FIT_MARGIN) / Math.sin(CAMERA_HALF_FOV),
-    MIN_DIST, CAMERA_FIT_MAX);
 }
 
 const app = document.getElementById('app')!;
