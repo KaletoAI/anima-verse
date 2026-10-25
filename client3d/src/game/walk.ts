@@ -193,62 +193,48 @@ export function terrainPace(speedFactor: number, scope: GroundScope): number {
   return Math.max(speedFactor, MIN_PACE);
 }
 
-/**
- * WHICH CLIP a moving figure plays — the animation half of the same rule,
- * with the same reach.
- *
- * A ground may name the clip one moves over it with (`meta.move_anim`, § A9 —
- * `swim` on water). It replaces walk AND run: a figure crossing a lake does
- * not sprint through it, and there is no second speed of swimming to choose
- * from. Without one the old pair stands, the `run` role past `RUN_DISTANCE`
- * and the `walk` role below it (`locomotionClip` — the admin's kinds, `run` /
- * `walk` themselves by default). INSIDE A BUILT PLACE the ground names
- * nothing at all: one does not swim across a tiled hall standing in a lake.
- *
- * The clip kind goes into the open vocabulary of `Figure.play` unchecked —
- * a kind no model carries falls back through `clipCoverage.resolveClipKind` —
- * same FAMILY first (`walk` ↔ `walk-cmu`), then `CLIP_FALLBACK` (swim → walk),
- * finally idle, which is the same road every other kind takes.
- * STANDING is `idleClip`'s business, not this one's.
- */
-export function moveClip(moveAnim: string, running: boolean,
-                         scope: GroundScope): string {
-  const kind = groundClip(moveAnim, scope);
-  if (kind) return kind;
-  return locomotionClip(running ? 'run' : 'walk');
+/** Terrain selects a movement type; the server selects each fixed pose's clips.
+ * This module stays import-free so standalone smokes share the same rules. */
+export type MovementType = 'walk_run' | 'walk' | 'swim' | 'crawl';
+export const MOVEMENT_POSES = ['standing', 'walking', 'running', 'swimming',
+  'treading_water', 'crawling', 'crawling_rest'] as const;
+export type MovementPose = typeof MOVEMENT_POSES[number];
+const MOVEMENT_DEFAULTS: Record<MovementPose, string> = {
+  standing: 'idle', walking: 'walk', running: 'run', swimming: 'swim',
+  treading_water: 'treading-water', crawling: 'crawl', crawling_rest: 'crawl-rest',
+};
+type PoseClips = Record<MovementPose, {kind: string; publicKind: string}>;
+let movementPoses: PoseClips;
+
+export function setMovementPoses(raw: unknown): Readonly<PoseClips> {
+  const src = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const clean = (value: unknown, fallback: string) =>
+    typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : fallback;
+  movementPoses = Object.fromEntries(MOVEMENT_POSES.map((pose) => {
+    const value = src[pose];
+    const entry = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+    return [pose, {kind: clean(entry.kind, MOVEMENT_DEFAULTS[pose]),
+      publicKind: clean(entry.public_kind, MOVEMENT_DEFAULTS[pose])}];
+  })) as PoseClips;
+  return Object.fromEntries(MOVEMENT_POSES.map((pose) => [pose, {...movementPoses[pose]}])) as PoseClips;
 }
+setMovementPoses(null);
 
-/**
- * THE LOCOMOTION ROLES — what a figure plays when neither the ground nor the
- * server names a clip: `walk` and `run` while it moves, `idle` while it
- * stands. WHICH clip kind each role means is the admin's choice (Poses →
- * Library, `shared/config/locomotion_clips.json`), delivered as `locomotion`
- * of `GET /assets/animation-clips` and set here once by the clip loader
- * (`figures.FigureFactory.init`). Until then — and for a listing without the
- * field — each role plays the kind of its own name, which is what every
- * figure played before the mapping existed.
- *
- * The order of the three words stays: a GROUND clip (`move_anim` /
- * `idle_anim`) beats the role, the role beats the fallback chain of
- * `clipCoverage.clipKindChain`, which is the last resort when the chosen kind
- * is bound on no rig. This module is import-free on purpose (the smoke
- * scripts transpile it alone), so the state lives here and not in a store.
- *
- * THE MAPPING IS ALSO READ BACKWARDS. `clipCoverage.locomotionRole` asks this
- * module which role a KIND is, because a role kind out of a licensed pack
- * (`mob1-walk`) has no family in common with the free clips — the role name is
- * what carries it back to them, wherever the kind comes from: this module,
- * the server's `animation` or the pose catalog. Hence the one-way import
- * there: `clipCoverage` may read this file, this file imports nothing.
- */
-export type LocomotionRole = 'walk' | 'run' | 'idle';
-export const LOCOMOTION_ROLES: readonly LocomotionRole[] = ['walk', 'run', 'idle'];
-
-const locomotionKinds: Record<LocomotionRole, string> = { walk: 'walk', run: 'run', idle: 'idle' };
-
-/** The clip kind a locomotion role plays — never empty. */
-export function locomotionClip(role: LocomotionRole): string {
-  return locomotionKinds[role] || role;
+export function poseClip(pose: MovementPose): string { return movementPoses[pose].kind; }
+export function publicClip(pose: MovementPose): string { return movementPoses[pose].publicKind; }
+export function movementPoseOf(kind: string | null | undefined): MovementPose | '' {
+  const want = (kind ?? '').trim().toLowerCase();
+  return MOVEMENT_POSES.find((pose) => poseClip(pose) === want)
+    || MOVEMENT_POSES.find((pose) => publicClip(pose) === want) || '';
+}
+export function movementOf(raw: unknown, scope: GroundScope): MovementType {
+  return scope !== 'built' && (raw === 'walk_run' || raw === 'walk' || raw === 'swim' || raw === 'crawl')
+    ? raw : 'walk_run';
+}
+export function canRun(movement: MovementType): boolean { return movement === 'walk_run'; }
+export function moveClip(movement: MovementType, running: boolean): string {
+  return poseClip(movement === 'swim' ? 'swimming' : movement === 'crawl' ? 'crawling'
+    : canRun(movement) && running ? 'running' : 'walking');
 }
 
 /**
@@ -344,35 +330,10 @@ export function bridgePace(accel: number, elapsedS: number): number {
   return Math.min(1, Math.max(BRIDGE_MIN_PACE, accel * e));
 }
 
-/**
- * Takes the server's mapping over. A role that is missing, empty or not a
- * string keeps its own name — junk in the payload must not leave a figure
- * without a walk. Returns the mapping now in force (for the smoke checks).
- */
-export function setLocomotionClips(config: unknown): Readonly<Record<LocomotionRole, string>> {
-  const src = (config && typeof config === 'object' ? config : {}) as Record<string, unknown>;
-  for (const role of LOCOMOTION_ROLES) {
-    const raw = src[role];
-    const kind = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
-    locomotionKinds[role] = kind || role;
-  }
-  return { ...locomotionKinds };
-}
-
-/**
- * WHICH CLIP a STANDING figure plays because of the ground — the second half
- * of the same contract (`meta.idle_anim`, § A9; the water round of
- * 2026-08-13: standing still in a lake played the standing clip, and the
- * figure stood on the water like a floor).
- *
- * `''` means "the ground says nothing", and then the caller's own standing
- * clip stands — the server's `animation` or the activity heuristic (§ A8),
- * unchanged. THE REACH IS THE ONE OF `moveClip`, literally the same helper:
- * inside a built place the ground names nothing, one does not tread water in
- * a tiled hall standing in a lake.
- */
-export function idleClip(idleAnim: string, scope: GroundScope): string {
-  return groundClip(idleAnim, scope);
+/** Only swimming and crawling override a standing activity pose. */
+export function idleClip(movement: MovementType): string {
+  return movement === 'swim' ? poseClip('treading_water')
+    : movement === 'crawl' ? poseClip('crawling_rest') : '';
 }
 
 /**
@@ -382,8 +343,7 @@ export function idleClip(idleAnim: string, scope: GroundScope): string {
  * Three words in one order: the GROUND first (`idleClip` above, `''` where it
  * says nothing), then the server's activity clip (§ A8/AV3D-6, the worldmap's
  * `activity_animation`), and where neither names one the figure simply
- * stands — with the `idle` ROLE's clip (`locomotionClip`, the admin's
- * choice; `idle` itself until a mapping arrives). There is no keyword
+ * stands with the server-resolved `standing` pose. There is no keyword
  * guessing over the activity text any more — a pose comes from the catalog
  * or not at all (plan-posen-plaetze.md, Task 13).
  *
@@ -398,7 +358,7 @@ export function idleClip(idleAnim: string, scope: GroundScope): string {
  */
 export function standingClipFor(animation: string | undefined,
                                 groundIdle: string | undefined): string {
-  return groundIdle || animation || locomotionClip('idle');
+  return groundIdle || animation || poseClip('standing');
 }
 
 /**
@@ -435,7 +395,7 @@ export interface GroundSink { move: number; idle: number }
  * So the state picks: moving → the move depth, waiting → the idle one. AND
  * WAITING HAS A GATE the moving case does not have: the idle depth only counts
  * where the ground also NAMES a standing clip (`groundIdle`, i.e.
- * `idleClip(meta.idle_anim, scope)` — already reach-filtered by the caller).
+ * `idleClip(movement)` — already scope-filtered by the caller).
  * Without one the figure keeps its OWN standing clip, and that clip brings its
  * own reference height with it (`sleep` is animated on a bed) — sinking it
  * would push a sleeper through the mattress. Moving needs no such gate: walk
@@ -472,16 +432,9 @@ export function groundWaterLevel(level: number | null,
  *  carrying it. */
 export const SWIM_FROM_DEFAULT_M = 1.0;
 
-/** What the GROUND imposes on a figure at one point, as `wadeGate` reads and
- *  returns it: the two clips it names, its two depths and the mirror over the
- *  point (already cut to its scope by `groundWaterLevel`). It is the water
- *  half of `npcs.GroundMove`, which is why the scope itself is not in it —
- *  that reach was applied before this one. */
+/** The scope-filtered movement type, sink depths and water mirror at a point. */
 export interface GroundWater {
-  /** `meta.move_anim`, or `''` — what a MOVING figure plays here */
-  anim: string;
-  /** `meta.idle_anim`, or `''` — what a WAITING figure plays here */
-  idle: string;
+  movement: MovementType;
   /** `meta.move_sink_m` / `meta.idle_sink_m` */
   sink: GroundSink;
   /** the mirror over the point in world metres, or `null` where none applies */
@@ -492,48 +445,37 @@ export interface GroundWater {
  * SWIMMING IS A DEPTH, NOT A KIND (W4c, 2026-08-23) — the SECOND reach rule of
  * the ground contract, next to the scope one above.
  *
- * THE BUG IT ENDS. Until now `meta.move_anim: swim` played on every pixel of a
- * water area, ankle-deep on the shore ramp included: a figure crossing a ford,
- * or standing on the rim of a river whose ramp is a metre wide, crawled through
- * water that reached its shins. The client has both numbers it needs to know
- * better — the mirror over the point (`groundWaterLevel`) and the bed under the
- * figure — so the ground's water word is gated by what they say:
+ * A `movement: swim` ground used to be swum on every pixel, ankle-deep on the
+ * shore ramp included. The client has both numbers it needs to know better —
+ * the mirror over the point (`groundWaterLevel`) and the bed under the figure —
+ * so the ground's water word is gated by what they say:
  *
  *     depth = waterLevel − groundY
- *     depth ≥ swimFromM  ->  SWIM: the ground's clips and sinks as before, the
- *                            body hangs `move_sink_m` under the mirror
- *     depth <  swimFromM  ->  WADE: the ground says NOTHING — the figure keeps
- *                            its own walk/run and standing clips, sinks by
- *                            nothing and stands on the BED (`water: null`, so
- *                            `floatRootY` leaves the terrain height alone)
+ *     depth ≥ swimFromM  ->  SWIM: the ground's movement and sinks as they are,
+ *                            the body hangs `move_sink_m` under the mirror
+ *     depth <  swimFromM  ->  WADE: `walk_run`, no sink, and the figure stands
+ *                            on the BED (`water: null`, so `floatRootY` leaves
+ *                            the terrain height alone)
  *
- * The mirror has to go with the clips: leaving it in while zeroing the sink
- * would put the wader ON the water surface (`floatRootY` = max(groundY, level)),
- * which is the opposite of standing in the water. All four fields answer one
- * question, so they are gated in one place and not four.
+ * The mirror has to go with the movement: leaving it in while zeroing the sink
+ * would put the wader ON the water surface (`floatRootY` = max(groundY, level)).
+ * The sink goes to zero, not to something small: a wader plays a walk clip,
+ * authored standing on the ground it is played on; the water reaching the hips
+ * is drawn by the surface passing through the figure.
  *
- * WHY THE SINK GOES TO ZERO AND NOT TO SOMETHING SMALL: a wader plays a walk
- * clip, and a walk clip is authored standing on the ground it is played on.
- * The water reaching the hips is drawn by the water surface passing through the
- * figure, not by dropping the figure into the bed.
- *
- * NO WATER, NO GATE. Where the point carries no mirror (`water === null` — the
- * whole dry world, and every built place, which `groundWaterLevel` already cut)
- * the word passes through untouched: a bog with a `move_sink_m` still swallows
- * ankles, and a kind with a `move_anim` of its own still names it. This is what
- * keeps the rule to WATER and out of every other ground.
+ * NO WATER, NO GATE: where the point carries no mirror (`water === null` — the
+ * dry world and every built place) the word passes through untouched.
  *
  * Worked through with the river seed (`swim_from_m` 1.0, mirror at L = 5.0):
  *
- *     depth 0.4 -> groundY 4.6, wades: walk/idle clip, sink 0, root 4.6
- *     depth 1.0 -> groundY 4.0, THE THRESHOLD, swims: swim/treading-water,
+ *     depth 0.4 -> groundY 4.6, wades: walking/standing, sink 0, root 4.6
+ *     depth 1.0 -> groundY 4.0, THE THRESHOLD, swims: swimming/treading water,
  *                  root = max(4.0 + 0.35, 5.0) = 5.0
  *     depth 1.6 -> groundY 3.4, swims: root = max(3.75, 5.0) = 5.0
  *
  * `swimFromM` is the kind's number as `ground.typeAt` read it; junk and a
- * negative one fall back to `SWIM_FROM_DEFAULT_M`, and a 0 is kept — it means
- * "swim from the very rim", which is exactly what every water kind did before
- * this round.
+ * negative one fall back to `SWIM_FROM_DEFAULT_M`, and a 0 is kept — "swim
+ * from the very rim".
  */
 export function wadeGate(word: GroundWater, groundY: number,
                          swimFromM: number): GroundWater {
@@ -545,7 +487,7 @@ export function wadeGate(word: GroundWater, groundY: number,
     return word;
   }
   if (level - groundY >= swimFrom(swimFromM)) return word;
-  return { anim: '', idle: '', sink: { move: 0, idle: 0 }, water: null };
+  return { movement: 'walk_run', sink: { move: 0, idle: 0 }, water: null };
 }
 
 /** The kind's swim threshold, made a number — junk and a negative one are the
@@ -736,14 +678,6 @@ export function ghostCutY(baseY: number,
 export function ghostWaterLevel(waterLevel: number,
                                 insideness: number): number {
   return insideness > 0 ? waterLevel : NaN;
-}
-
-/** The reach rule BOTH ground clips share, in one place: outside a built
- *  place the ground may name a clip, inside it never does, and a blank name
- *  is no name. Two copies of this is how one of them starts reaching further
- *  than the other. */
-function groundClip(anim: string, scope: GroundScope): string {
-  return scope === 'built' ? '' : (anim || '').trim();
 }
 
 /** Below this horizontal distance a height change counts as a STEP, above it

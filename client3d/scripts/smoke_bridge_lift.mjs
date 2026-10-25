@@ -298,7 +298,8 @@ async function loadClient() {
       `export { measureGroundOffsets } from '${src}/scene/clipGround';`,
       `export { NpcManager } from '${src}/scene/npcs';`,
       `export { STAND_ADOPT_M } from '${src}/scene/standSettle';`,
-      `export { setClipTransitions } from '${src}/game/walk';`,
+      `export { moveClip, setClipTransitions } from '${src}/game/walk';`,
+      `export { getAnimationClips } from '${src}/api';`,
       `export { restCorrections, restPoseOf, rigHipsHeight } from '@anima/scene-render';`,
     ].join('\n');
     const built = await esbuild.build({
@@ -324,6 +325,42 @@ async function main() {
   const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
   const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
   const C = await loadClient();
+
+  // Task 7, spec §7: dt=.1, walk=3.4 m/s => .34 m (an NPC's step does not
+  // read the terrain's speed_factor; `npc.pace` is 1 for everybody but the
+  // avatar); only walk_run boosts by 1.8 => .612 m. A waypoint adds 10 m to
+  // dist, so it must never enable running for walk/swim/crawl. No rig needed.
+  console.log('[M] terrain movement controls clips and pace');
+  for (const [movement, clip, step] of [
+    ['walk_run', 'run', .612], ['walk', 'walk', .34],
+    ['swim', 'swim', .34], ['crawl', 'crawl', .34],
+  ]) {
+    const mgr = new C.NpcManager({}, {});
+    const root = new THREE.Group();
+    const npc = {name: 'movement-test', root, figure: null, sprite: null,
+      label: {visible: false}, bubbleUntil: 0, target: new THREE.Vector3(20, 0, 0),
+      waypoints: [new THREE.Vector3(20, 0, 0)], pace: 1, face: null,
+      ride: null, route: null, travelling: false, interaction: null, settle: null};
+    mgr.npcs.set(npc.name, npc);
+    mgr.setTerrainMove(() => ({movement, scope: 'wilderness', speed: .5,
+      sink: {move: 0, idle: 0}, water: null, swimFrom: 1}));
+    check(`[M] ${movement} distant clip`, C.moveClip(movement, true) === clip);
+    mgr.tick(.1, 10);
+    near(`[M] ${movement} waypoint step`, root.position.x, step, 1e-9);
+  }
+  // Deliberately contradictory pose-keyed admin rules: the player must read
+  // transition_clips, preserving its accel, and never use transitions.
+  const originalFetch = globalThis.fetch;
+  const payload = {clips: [], movement_poses: {walking: {kind: 'local-walk', public_kind: 'walk'}},
+    transitions: [{from: 'lying', to: 'walking', kind: 'wrong-admin-rule'}],
+    transition_clips: [{from: 'laying', to: 'local-walk', kind: 'get-up-bed', accel: .5}]};
+  try {
+    globalThis.fetch = async () => ({ok: true, json: async () => payload});
+    const library = await C.getAnimationClips();
+    check('[M] API movement poses', library.movement_poses.walking.kind === 'local-walk');
+    check('[M] API uses clip transitions including accel',
+      JSON.stringify(library.transition_clips) === JSON.stringify(payload.transition_clips));
+  } finally { globalThis.fetch = originalFetch; }
 
   // ------------------------------------------------------------------ [L]
   console.log('[L] liftAt — hand cases');

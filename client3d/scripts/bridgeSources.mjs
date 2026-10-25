@@ -5,8 +5,10 @@
  * A smoke must not depend on a file only one working tree has: the lying and
  * sitting clips the live transition table names may be imports another
  * session has not committed yet. So the source is read at RUN TIME from
- * `shared/config/clip_transitions.json` (every `from` of a rule whose `kind`
- * is the bridge, in table order), and the first of them whose `.fbx` exists
+ * `shared/config/clip_transitions.json` (every `from` pose of a rule whose
+ * `kind` is the bridge, in table order). Resolve via entries[from].animation
+ * in the COMMITTED pose catalog (`git show HEAD:`), ignoring local-only poses.
+ * The first resulting clip whose `.fbx` exists
  * AND is tracked by git (`git ls-files --error-unmatch`) is taken. Otherwise
  * the given tracked fallback, under the same test; otherwise `null` — the
  * caller skips what needs it, with a message.
@@ -17,7 +19,7 @@ import { join } from 'node:path';
 
 function tracked(root, rel) {
   try {
-    execFileSync('git', ['ls-files', '--error-unmatch', rel], { cwd: root, stdio: 'ignore' });
+    execFileSync('timeout', ['60', 'git', 'ls-files', '--error-unmatch', rel], { cwd: root, stdio: 'ignore' });
     return true;
   } catch {
     return false;
@@ -36,9 +38,12 @@ export function bridgeSourceClip(root, bridgeKind, fallback) {
   let named = [];
   try {
     const table = JSON.parse(readFileSync(join(root, 'shared/config/clip_transitions.json'), 'utf8'));
+    const catalog = JSON.parse(execFileSync('timeout', ['60', 'git', 'show',
+      'HEAD:shared/templates/pose/pose_catalog.json'], {cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}));
     named = [...new Set((table.transitions ?? [])
       .filter((r) => r && r.kind === bridgeKind && typeof r.from === 'string' && r.from !== '*')
-      .map((r) => r.from))];
+      .map((r) => catalog.entries?.[r.from]?.animation)
+      .filter((kind) => typeof kind === 'string' && kind.trim()))];
   } catch {
     skipped.push('transition table unreadable');
   }

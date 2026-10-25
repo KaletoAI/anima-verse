@@ -6,9 +6,9 @@ import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
 import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
-  ghostCutY, groundWaterLevel, idleClip, locomotionClip, moveClip, sinkForState, standingClipFor,
+  canRun, movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, sinkForState, standingClipFor,
   terrainPace, wadeGate,
-  type GroundScope, type GroundSink, type GroundWater } from '../game/walk';
+  type MovementType, type GroundScope, type GroundSink, type GroundWater } from '../game/walk';
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
@@ -37,8 +37,7 @@ const WAYPOINT_ARRIVE_M = 1.5;
  *  hands in: `main.ts` owns the terrain payload and the footprints, this file
  *  owns neither. */
 export interface GroundMove {
-  anim: string;
-  idle: string;
+  movement: MovementType;
   scope: GroundScope;
   /** The terrain type's raw `speed_factor` at the point (1 = plain ground).
    *  RAW: what it means for a walking figure is `walk.terrainPace`, which
@@ -301,8 +300,8 @@ export class NpcManager {
    *  bucket. */
   private groundRev: () => number = () => 0;
   /**
-   * What the GROUND says about a figure at a point: the clips its type asks
-   * for (`meta.move_anim` and `meta.idle_anim`, § A9) and HOW FAR that rule
+   * What the GROUND says about a figure at a point: its movement type
+   * (`meta.movement`, § A9) and HOW FAR that rule
    * reaches there (`walk.GroundScope`) — handed in like the height, never
    * derived here.
    *
@@ -313,7 +312,7 @@ export class NpcManager {
    * is the world without painted ground: walk, run and idle as always.
    */
   private groundMoveAt: (x: number, z: number) => GroundMove =
-    () => ({ anim: '', idle: '', scope: 'wilderness', speed: 1,
+    () => ({ movement: 'walk_run', scope: 'wilderness', speed: 1,
       sink: { move: 0, idle: 0 }, water: null,
       swimFrom: SWIM_FROM_DEFAULT_M });
 
@@ -365,7 +364,7 @@ export class NpcManager {
   }
 
   /** Install the ground-clip lookup (`main.ts` `groundMoveAt`: the terrain
-   *  type's `move_anim` and `idle_anim` plus the scope at that point). Called
+   *  type's movement and the scope at that point). Called
    *  once at boot; the payload updates itself. */
   setTerrainMove(fn: (x: number, z: number) => GroundMove) {
     this.groundMoveAt = fn;
@@ -1262,23 +1261,15 @@ export class NpcManager {
   /** What the ground at (x, z) says, through the depth gate: the raw word,
    *  the bed height under the point and the gated word. The ONE chain behind
    *  the clip decision of a figure without a route in `tick` (after the step)
-   *  and `moveKindAt` (before it) — two copies of it would be two answers. */
+   *  and the step's own read BEFORE it (`stepGround`, which also decides
+   *  whether the ground allows running) — two copies would be two answers. */
   private groundWordAt(x: number, z: number): { raw: GroundMove; bedY: number; gm: GroundWater } {
     const raw = this.groundMoveAt(x, z);
     const bedY = this.groundY(x, z);
-    const gm = wadeGate({ anim: raw.anim, idle: raw.idle, sink: raw.sink,
+    const gm = wadeGate({ movement: movementOf(raw.movement, raw.scope),
+      sink: movementOf(raw.movement, raw.scope) === 'swim' ? raw.sink : {move: 0, idle: 0},
       water: groundWaterLevel(raw.water, raw.scope) }, bedY, raw.swimFrom);
     return { raw, bedY, gm };
-  }
-
-  /** The move clip a figure stepping from (x, z) asks for — the same words
-   *  the clip decision in `tick` reads after the step (the ground's
-   *  `move_anim` through the depth gate, else walk/run; `groundWordAt`).
-   *  Asked BEFORE the step, so the step can hear whether that clip opens a
-   *  bridge. */
-  private moveKindAt(x: number, z: number, running: boolean): string {
-    const { raw, gm } = this.groundWordAt(x, z);
-    return moveClip(gm.anim, running, raw.scope);
   }
 
   /** `firstPerson` names the camera's own figure while the view is first
@@ -1383,7 +1374,8 @@ export class NpcManager {
         // feet on the bed. `goalPos.y` is still the raw terrain height of the
         // point the walk has reached, which is exactly the bed to measure
         // against; it becomes the float height two lines further down.
-        const gm = wadeGate({ anim: raw.anim, idle: raw.idle, sink: raw.sink,
+        const gm = wadeGate({ movement: movementOf(raw.movement, raw.scope),
+          sink: movementOf(raw.movement, raw.scope) === 'swim' ? raw.sink : {move: 0, idle: 0},
           water: groundWaterLevel(raw.water, raw.scope) },
         goalPos.y, raw.swimFrom);
         // THE UNDERWATER GHOST, for a traveller as for anybody else (finding
@@ -1392,7 +1384,7 @@ export class NpcManager {
         // BED here, three lines before it becomes the float height.
         npc.figure?.setSubmerged(
           ghostCutY(goalPos.y, groundWaterLevel(raw.water, raw.scope)));
-        const groundIdle = idleClip(gm.idle, raw.scope);
+        const groundIdle = idleClip(gm.movement);
         const sinkM = groundSink(sinkForState(travelling, groundIdle, gm.sink),
                                  raw.scope);
         goalPos.y = floatRootY(goalPos.y, gm.water, sinkM);
@@ -1403,8 +1395,8 @@ export class NpcManager {
         // root out from under the body (Task C4). 0 holds it, the ramp of a
         // bridge that walks off scales the catch-up; the route runs on and
         // the catch-up takes the distance up once the bridge lets go.
-        const clip = travelling ? moveClip(gm.anim, false, raw.scope)
-          : (groundIdle || locomotionClip('idle'));
+        const clip = travelling ? moveClip(gm.movement, false)
+          : (groundIdle || poseClip('standing'));
         const paceLimit = !npc.figure ? 1
           : npc.figure.bridging ? npc.figure.paceLimit : npc.figure.paceLimitFor(clip);
         if (d > 0.05 && paceLimit > 0) {
@@ -1502,6 +1494,8 @@ export class NpcManager {
       // server vouched for. Without a measurement yet (the first sighting) the
       // old walk stands, minus the boost.
       const reckoning = npc.travelling && npc.name !== this.playerDriven;
+      const stepGround = this.groundWordAt(npc.root.position.x, npc.root.position.z);
+      const running = !reckoning && dist > RUN_DISTANCE && canRun(stepGround.gm.movement);
       const reckonRate = reckoning ? npc.reckon?.rateMS ?? null : null;
       // A BRIDGE CLIP HOLDS THE FIGURE, and it holds it HERE — at the step,
       // the one place every figure's movement goes through. The gate used to
@@ -1520,8 +1514,7 @@ export class NpcManager {
       // about — read at the point it steps from.
       const paceLimit = !npc.figure ? 1
         : moving && !npc.figure.bridging
-          ? npc.figure.paceLimitFor(this.moveKindAt(npc.root.position.x,
-            npc.root.position.z, !reckoning && dist > RUN_DISTANCE))
+          ? npc.figure.paceLimitFor(moveClip(stepGround.gm.movement, running))
           : npc.figure.paceLimit;
       if (moving && paceLimit > 0) {
         // ONE pace for every figure, the player's included: `WALK_SPEED` is
@@ -1529,6 +1522,7 @@ export class NpcManager {
         // GROUND allows on top of that (1 for everybody but the avatar) —
         // the step is where the terrain pace belongs, because the goal is a
         // fixed lead ahead and a paced lead would fall under `MOVE_EPS_M`.
+        // The run boost needs a ground that allows running (`canRun`).
         let step: number;
         if (reckonRate !== null) {
           // The reckoned figure reads its own ground here, BEFORE the step:
@@ -1540,7 +1534,7 @@ export class NpcManager {
                                 dt, distToGoal);
         } else {
           step = Math.min(distToGoal,
-            WALK_SPEED * dt * npc.pace * (!reckoning && dist > RUN_DISTANCE ? 1.8 : 1));
+            WALK_SPEED * dt * npc.pace * (running ? 1.8 : 1));
         }
         const dir = delta.clone().normalize();
         npc.root.position.addScaledVector(dir, step * paceLimit);
@@ -1554,7 +1548,7 @@ export class NpcManager {
       // bed is sampled UNDER THE FIGURE (never the waypoint's stored y, which
       // is a goal and may be a lake away), because "how deep does the water
       // stand around me" is a question about where the figure IS. The chain
-      // is `groundWordAt`, shared with `moveKindAt` before the step.
+      // is `groundWordAt`, shared with the step's read before it.
       const { raw: standRaw, bedY: standBedY, gm: standGm } =
         this.groundWordAt(npc.root.position.x, npc.root.position.z);
       // …and the UNDERWATER GHOST rides the same two numbers, but the UNGATED
@@ -1565,7 +1559,7 @@ export class NpcManager {
       // answers the LEVEL, because the ghost cuts itself off at the waterline.
       npc.figure?.setSubmerged(ghostCutY(standBedY,
         groundWaterLevel(standRaw.water, standRaw.scope)));
-      const standIdle = idleClip(standGm.idle, standRaw.scope);
+      const standIdle = idleClip(standGm.movement);
       const standSink = groundSink(
         sinkForState(moving, standIdle, standGm.sink), standRaw.scope);
       // THE HEIGHT. On a flight of stairs the ride answers it OUTRIGHT: the
@@ -1617,7 +1611,7 @@ export class NpcManager {
         // head looks around, past it the body turns after it. An animation —
         // dancing, a seat, a bridge — is never turned: the clip plays on and
         // only the view moves.
-        const viewDriven = ownBody && !npc.face && standingClip === locomotionClip('idle');
+        const viewDriven = ownBody && !npc.face && standingClip === poseClip('standing');
         const viewYaw = viewDriven && firstPerson
           ? bodyYawForView(npc.figure.root.rotation.y, firstPerson.viewYaw) : null;
         const target = viewDriven ? undefined : faceTo.get(npc.name);
@@ -1634,8 +1628,7 @@ export class NpcManager {
       }
 
       if (npc.figure) {
-        // Moving, the GROUND decides (`moveClip`, finding 3): its `move_anim`
-        // replaces walk and run alike, and without one the old pair stands.
+        // Moving, the terrain type selects a fixed movement pose.
         // STANDING, the ground gets the FIRST word too since the water round
         // of 2026-08-13 (`idleClip`): a figure standing in a lake treads water
         // rather than standing on it. Only where the ground names nothing does
@@ -1657,7 +1650,7 @@ export class NpcManager {
         // very number the root was raised with above, which is what makes the
         // pair meet: root − sink is the surface the body rests on.
         this.playLifting(npc,
-          moving ? moveClip(standGm.anim, !reckoning && dist > RUN_DISTANCE, standRaw.scope)
+          moving ? moveClip(standGm.movement, !reckoning && dist > RUN_DISTANCE)
             : standingClip, moving || !!standIdle, standSink, rootYBefore, goalY);
         npc.figure.update(dt, { frozen });
       } else if (npc.sprite) {

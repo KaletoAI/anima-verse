@@ -64,6 +64,7 @@
  * Nothing waits for a tile: the ground is simply draped again when one lands,
  * exactly as it is when the overview does.
  */
+import { movementOf, type MovementType } from '../game/walk';
 import * as THREE from 'three';
 import { markPhase } from '../game/boot';
 import { buildAreaGeometry,
@@ -678,11 +679,8 @@ export interface TerrainPoint {
   passable: boolean;
   /** catalog `speed_factor`; a kind without an entry walks at 1 */
   speed_factor: number;
-  /** catalog `meta.move_anim`, or `''` — the clip a moving figure plays here */
-  move_anim: string;
-  /** catalog `meta.idle_anim`, or `''` — the clip a STANDING figure plays
-   *  here instead of its own standing one (`treading-water` on water) */
-  idle_anim: string;
+  /** Terrain movement type, independent of clip names. */
+  movement: MovementType;
   /** catalog `meta.move_sink_m`, or 0 — how deep the figure stands IN this
    *  ground while it MOVES over it, in metres */
   move_sink_m: number;
@@ -3403,8 +3401,7 @@ export function createGround(): Ground {
     const kind = hit || payload?.default_kind || '';
     const entry = catalog.get(kind.toLowerCase());
     if (!entry) {
-      return { kind, passable: true, speed_factor: 1, move_anim: '',
-        idle_anim: '', move_sink_m: 0, idle_sink_m: 0,
+      return { kind, passable: true, speed_factor: 1, movement: 'walk_run', move_sink_m: 0, idle_sink_m: 0,
         swim_from_m: SWIM_FROM_DEFAULT_M, water_level: level };
     }
     // A ground that says nothing sinks nobody — and junk is nothing, never
@@ -3417,10 +3414,9 @@ export function createGround(): Ground {
       kind,
       passable: entry.passable !== false,
       speed_factor: Number.isFinite(entry.speed_factor) ? entry.speed_factor : 1,
-      move_anim: String(entry.meta?.move_anim ?? '').trim(),
-      idle_anim: String(entry.meta?.idle_anim ?? '').trim(),
-      move_sink_m: depth(entry.meta?.move_sink_m),
-      idle_sink_m: depth(entry.meta?.idle_sink_m),
+      movement: movementOf(entry.meta?.movement, 'wilderness'),
+      move_sink_m: entry.meta?.movement === 'swim' ? depth(entry.meta?.move_sink_m) : 0,
+      idle_sink_m: entry.meta?.movement === 'swim' ? depth(entry.meta?.idle_sink_m) : 0,
       // …and FROM WHICH DEPTH those two count at all (W4c). Not `depth()`: a
       // threshold of 0 is a value here ("swim from the very rim") while a
       // MISSING one is a metre, so the two cannot share one reader.

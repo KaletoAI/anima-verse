@@ -278,7 +278,7 @@ async function main() {
   const { pollIsStale } = await import('../src/game/placement.ts')
   checkTrue('poll before correction', pollIsStale(100, 150) === true)
   checkTrue('poll after correction', pollIsStale(200, 150) === false)
-  const { standingClipFor } = await import('../src/game/walk.ts')
+  const { standingClipFor, poseClip, setMovementPoses } = await import('../src/game/walk.ts')
 
   console.log('[9] a poll asked before our own seat change was answered is stale')
   checkTrue('pollIsStale(1000, Infinity) — release in flight',
@@ -292,6 +292,9 @@ async function main() {
   checkTrue('pollIsStale(0, 0) — no seat change of our own, ever',
     pollIsStale(0, 0) === false)
 
+  setMovementPoses({standing: {kind: 'local-standing', public_kind: 'idle'}})
+  checkTrue('default standing comes from the fixed pose', standingClipFor(undefined, '') === poseClip('standing'))
+  setMovementPoses(null)
   console.log('[10] the standing clip: ground first, then the server, then idle')
   checkList("standingClipFor('sit', '') / (undefined, '') / ('sit', 'tread')",
     [standingClipFor('sit', ''), standingClipFor(undefined, ''),

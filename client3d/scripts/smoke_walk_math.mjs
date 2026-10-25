@@ -128,51 +128,12 @@
  * walks the lake dry — 0.4 in a footprint becomes 1 — which is exactly
  * finding 3.
  *
- * --- moveClip: the ground names the clip ----------------------------------
- * A type may carry `meta.move_anim` (§ A9, `swim` on water). It replaces walk
- * AND run — there is no sprinting through a lake — and an absent one leaves
- * the old pair alone. It has the SAME reach as the pace: inside a BUILT place
- * the ground names nothing, one does not swim through a tiled hall. Standing
- * is not this function's business at all.
- *   moveClip('swim', running false, 'wilderness')  -> 'swim'
- *   moveClip('swim', running true,  'wilderness')  -> 'swim'   (no run over it)
- *   moveClip(' swim ', false, 'open')              -> 'swim'   (trimmed)
- *   moveClip('swim', false, 'built')               -> 'walk'   <- round 2
- *   moveClip('swim', true,  'built')               -> 'run'
- *   moveClip('', false, 'wilderness')              -> 'walk'
- *   moveClip('', true,  'wilderness')              -> 'run'
- *   moveClip('   ', true, 'open')                  -> 'run'
- * A kind no model carries is not this file's problem:
- * `clipCoverage.resolveClipKind` takes a same-family take first (walk-cmu for
- * walk), then `CLIP_FALLBACK` (swim -> walk), and everything unknown ends at
- * idle.
- *
- * --- idleClip: the ground names the STANDING clip too (water round) --------
- * The acceptance finding of 2026-08-13: a figure standing still in a lake
- * played its standing clip and stood ON the water. A type may therefore carry
- * a second clip, `meta.idle_anim` (§ A9, `treading-water` on water), and it is
- * the same contract as `move_anim` with the same reach — literally the same
- * helper inside `walk.ts`, so the two can never start reaching differently.
- * `''` is the answer "the ground says nothing", and only then does the
- * caller's own standing clip stand (`npc.animation` or the activity heuristic,
- * § A8) — this function never invents `idle` itself, which is what keeps
- * "no terrain idle" distinguishable from "the terrain wants idle".
- *   idleClip('treading-water', 'wilderness')  -> 'treading-water'
- *   idleClip('treading-water', 'open')        -> 'treading-water'
- *   idleClip('  treading-water  ', 'open')    -> 'treading-water'  (trimmed)
- *   idleClip('treading-water', 'built')       -> ''   <- the reach, see below
- *   idleClip('', 'wilderness')                -> ''
- *   idleClip('   ', 'wilderness')             -> ''
- * RED COUNTER-PROBE, the one that matters: a rule WITHOUT the built-scope
- * gate (`(a || '').trim()` alone) answers 'treading-water' inside a tiled hall
- * standing in that lake — a figure treading water on a floor. The reach is
- * not decoration, it is the difference between the two answers.
- * The npcs.ts side of it, derived by hand and checked below as a table: the
- * standing branch plays `idleClip(...) || standingClip`, so the ground wins
- * where it speaks and nothing changes where it does not, and the SECOND
- * argument of `Figure.play` (the clip-ground drop gate) is
- * `moving || !!groundIdle` — `treading-water` is authored on the water line
- * exactly like `swim` and has to be dropped onto the ground the same way.
+ * --- fixed movement poses (design §5.1–5.3) -------------------------------
+ * walk_run chooses walking/running by distance; walk always walks; swim uses
+ * swimming/treading_water; crawl uses crawling/crawling_rest. Terrain values
+ * are types, never clip names. Built scopes and invalid types become walk_run.
+ * Only walk_run permits running. Missing pose fields use the seven public
+ * defaults. Played kinds are matched before public kinds in reverse lookup.
  *
  * --- groundSink: how far the ground's DEPTH reaches ------------------------
  * The third field of the same contract (§ A9, world metres): the clip
@@ -1041,7 +1002,7 @@ async function main() {
     bubble, minimap, locks, placement, ground, stairs, infoPanel } = await loadGameModules();
   const { walkDir, slideBlocked, slopeBlocks, gateStandY, groundStoreyFloors,
     terrainBlocks, terrainPace,
-    moveClip, idleClip, groundSink, sinkForState, floatRootY, groundWaterLevel,
+    moveClip, idleClip, movementOf, canRun, setMovementPoses, poseClip, publicClip, movementPoseOf, groundSink, sinkForState, floatRootY, groundWaterLevel,
     groundScope, wadeGate, swimFrom, SWIM_FROM_DEFAULT_M, MIN_PACE,
     submergedInWater, ghostCutY, ghostWaterLevel, WATER_GHOST_FROM_M,
     MOVE_EPS_M } = walk;
@@ -1282,63 +1243,43 @@ async function main() {
       oldRule(0.4, 'wilderness'), terrainPace(0.4, 'wilderness'));
   }
 
-  console.log('moveClip — a ground may name the clip one moves over it with');
-  {
-    check('water swims', moveClip('swim', false, 'wilderness'), 'swim');
-    check('...and there is no sprinting through it',
-      moveClip('swim', true, 'wilderness'), 'swim');
-    check('...an open place swims too', moveClip('swim', false, 'open'), 'swim');
-    check('ROUND 2: a built place names no clip at all',
-      moveClip('swim', false, 'built'), 'walk');
-    check('...and runs when it is far enough', moveClip('swim', true, 'built'), 'run');
-    check('the kind is trimmed', moveClip('  swim  ', false, 'open'), 'swim');
-    check('without one, walking is walking', moveClip('', false, 'wilderness'), 'walk');
-    check('...and running is running', moveClip('', true, 'wilderness'), 'run');
-    check('a blank one is no one', moveClip('   ', true, 'open'), 'run');
+  // Spec §5.2: only walk_run selects running; swim/crawl override standing.
+  console.log('movement types and fixed poses');
+  for (const [movement, slow, fast, idle] of [
+    ['walk_run', 'walk', 'run', ''], ['walk', 'walk', 'walk', ''],
+    ['swim', 'swim', 'swim', 'treading-water'], ['crawl', 'crawl', 'crawl', 'crawl-rest'],
+  ]) {
+    check(`${movement} walking`, moveClip(movement, false), slow);
+    check(`${movement} running`, moveClip(movement, true), fast);
+    check(`${movement} idle`, idleClip(movement), idle);
+    check(`${movement} can run`, canRun(movement), movement === 'walk_run');
+    check(`${movement} built`, movementOf(movement, 'built'), 'walk_run');
   }
-
-  console.log('idleClip — and it may name the standing one as well');
-  {
-    check('water is trodden, not stood on',
-      idleClip('treading-water', 'wilderness'), 'treading-water');
-    check('...in an open place too', idleClip('treading-water', 'open'),
-      'treading-water');
-    check('the kind is trimmed', idleClip('  treading-water  ', 'open'),
-      'treading-water');
-    check('THE REACH: a built place names no clip at all',
-      idleClip('treading-water', 'built'), '');
-    check('without one the ground says NOTHING — never an idle of its own',
-      idleClip('', 'wilderness'), '');
-    check('...and a blank one is no one either',
-      idleClip('   ', 'open'), '');
-    // RED COUNTER-PROBE: the same rule without the scope gate. It treads
-    // water on the tiled floor of a hall standing in the lake.
-    const ungated = (a) => (a || '').trim();
-    check('RED: without the built gate the hall is trodden too',
-      ungated('treading-water'), 'treading-water');
-    check('...while the rule in force leaves it alone',
-      idleClip('treading-water', 'built'), '');
-    check('...and both agree out in the wilderness',
-      ungated('treading-water'), idleClip('treading-water', 'wilderness'));
-
-    // The npcs.ts standing branch as a TABLE — the ground wins where it
-    // speaks, the standing clip stands where it does not, and the drop gate
-    // follows the ground and nothing else.
-    const standing = (idleAnim, scope, standingClip) => {
-      const groundIdle = idleClip(idleAnim, scope);
-      return { kind: groundIdle || standingClip, drop: !!groundIdle };
-    };
-    check('standing in the lake: the ground wins, and the drop is gated on',
-      standing('treading-water', 'wilderness', 'sit'),
-      { kind: 'treading-water', drop: true });
-    check('...the same lake under a roof: the activity clip stands, no drop',
-      standing('treading-water', 'built', 'sit'),
-      { kind: 'sit', drop: false });
-    check('a ground that names nothing changes nothing',
-      standing('', 'wilderness', 'sit'), { kind: 'sit', drop: false });
-    check('...not even the plain idle of a figure without an activity',
-      standing('', 'open', 'idle'), { kind: 'idle', drop: false });
+  check('invalid movement', movementOf('fly', 'open'), 'walk_run');
+  check('object movement', movementOf({}, 'built'), 'walk_run');
+  check('missing movement', movementOf(undefined, 'open'), 'walk_run');
+  setMovementPoses({walking: {kind: 'mob1-walk', public_kind: 'walk'}});
+  check('played pose', poseClip('walking'), 'mob1-walk');
+  check('public pose', publicClip('walking'), 'walk');
+  check('reverse played pose', movementPoseOf('mob1-walk'), 'walking');
+  check('reverse public pose', movementPoseOf('walk'), 'walking');
+  setMovementPoses(null);
+  check('reset pose', poseClip('walking'), 'walk');
+  // Junk fields independently reset to catalog defaults, never to an empty kind.
+  setMovementPoses({walking: {kind: ' ', public_kind: 42}, standing: null});
+  for (const [pose, kind] of [['standing', 'idle'], ['walking', 'walk'],
+    ['running', 'run'], ['swimming', 'swim'], ['treading_water', 'treading-water'],
+    ['crawling', 'crawl'], ['crawling_rest', 'crawl-rest']]) {
+    check(`${pose} default played`, poseClip(pose), kind);
+    check(`${pose} default public`, publicClip(pose), kind);
   }
+  setMovementPoses({walking: {kind: ' LOCAL-WALK ', public_kind: 'shared'},
+    running: {kind: 'shared', public_kind: 'run'}});
+  check('pose kind normalized', poseClip('walking'), 'local-walk');
+  check('played kind takes precedence over public collisions', movementPoseOf('shared'), 'running');
+  check('unknown reverse kind', movementPoseOf('not-a-pose'), '');
+  setMovementPoses(null);
+
 
   console.log('groundSink — how far the ground’s depth reaches');
   {
@@ -1445,20 +1386,20 @@ async function main() {
   {
     // The river seed of `shared/terrain/types.json`, and a mirror at L = 5.
     const L = 5.0;
-    const RIVER = { anim: 'swim', idle: 'treading-water',
+    const RIVER = { movement: 'swim',
       sink: { move: 0.35, idle: 1.3 }, water: L };
-    const WADED = { anim: '', idle: '', sink: { move: 0, idle: 0 },
+    const WADED = { movement: 'walk_run', sink: { move: 0, idle: 0 },
       water: null };
     // The whole chain at one depth, exactly as npcs.ts runs it: gate the word,
     // then ask the unchanged rules what clip, what sink and what root come out.
     const at = (depth, swim, moving) => {
       const groundY = L - depth;
       const g = wadeGate({ ...RIVER }, groundY, swim);
-      const groundIdle = idleClip(g.idle, 'wilderness');
+      const groundIdle = idleClip(g.movement);
       const sink = groundSink(sinkForState(moving, groundIdle, g.sink),
         'wilderness');
       return {
-        clip: moving ? moveClip(g.anim, false, 'wilderness')
+        clip: moving ? moveClip(g.movement, false)
           : (groundIdle || 'idle'),
         sink,
         root: floatRootY(groundY, g.water, sink),
@@ -1472,6 +1413,12 @@ async function main() {
       at(0.4, 1.0, false), { clip: 'idle', sink: 0, root: 4.6 });
     check('depth 1.0 m IS the threshold — the word passes through',
       wadeGate({ ...RIVER }, L - 1.0, 1.0), RIVER);
+    // A water ground that does not swim (no `movement`, i.e. walk_run) is
+    // gated the same way: shallow, its mirror goes, so the figure stands on
+    // the bed instead of on the surface (floatRootY = max(bed, mirror)).
+    check('a walk_run water ground wades in the shallows too',
+      wadeGate({ movement: 'walk_run', sink: { move: 0, idle: 0 }, water: L },
+        L - 0.4, 1.0), WADED);
     check('...moving: the swim clip, 0.35 under the mirror',
       at(1.0, 1.0, true), { clip: 'swim', sink: 0.35, root: 5.0 });
     check('...waiting: treading water, and a 1.3 m foot still finds the '
@@ -1498,7 +1445,7 @@ async function main() {
       wadeGate({ ...RIVER }, L - 0.05, 0), RIVER);
     // NOT WATER, NOT GATED — the case that keeps the rule out of every other
     // ground: with no mirror there is no depth to measure.
-    const BOG = { anim: '', idle: '', sink: { move: 0.2, idle: 0.2 },
+    const BOG = { movement: 'walk_run', sink: { move: 0.2, idle: 0.2 },
       water: null };
     check('a bog carries no mirror, so nothing is taken from it',
       wadeGate({ ...BOG }, 4.6, 1.0), BOG);
@@ -1509,11 +1456,11 @@ async function main() {
     // RED COUNTER-PROBE, EXECUTED: the pre-W4c rule is no gate at all.
     const ungated = (word) => word;
     check('RED: ungated, the 0.4 m ford is swum',
-      moveClip(ungated({ ...RIVER }).anim, false, 'wilderness'), 'swim');
+      moveClip(ungated({ ...RIVER }).movement, false), 'swim');
     check('...where the rule in force walks it', at(0.4, 1.0, true).clip,
       'walk');
     check('...and in real water the two agree', at(1.6, 1.0, true).clip,
-      moveClip(ungated({ ...RIVER }).anim, false, 'wilderness'));
+      moveClip(ungated({ ...RIVER }).movement, false));
   }
 
   // --- submergedInWater: the underwater ghost's gate (finding H3) -----------
@@ -1571,7 +1518,7 @@ async function main() {
     // very ford this ghost exists for, so a figure gated that way would be cut
     // in half exactly where the finding was reported.
     const L = 12.6;
-    const FORD = { anim: 'swim', idle: 'treading-water',
+    const FORD = { movement: 'swim',
       sink: { move: 0.35, idle: 1.3 }, water: L };
     check('RED: the wade gate calls a 0.6 m ford no water at all',
       wadeGate({ ...FORD }, BED, 1.0).water, null);

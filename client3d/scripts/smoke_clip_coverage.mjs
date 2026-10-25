@@ -13,7 +13,7 @@
  * WHY THIS FILE EXISTS
  * ===========================================================================
  * Acceptance round 2026-08-13: a character on water walked across the lake
- * instead of swimming. The rule chain (terrain `move_anim: swim` → payload →
+ * instead of swimming. The rule chain (terrain `movement: swim` → payload →
  * gate → pace) was correct; the FIGURE was the fallback rig RobotExpressive,
  * whose skeleton is Blender-named (Hips, Abdomen, UpperArm.L, Shoulder.R, …)
  * while the shared clip library is Mixamo-named (mixamorig:Hips,
@@ -176,56 +176,14 @@
  *   ''   -> null   null -> null       walking -> null (a family of its own)
  *
  * ---------------------------------------------------------------------------
- * (1g) THE LOCOMOTION ROLES ARE READ BACKWARDS (`locomotionRole`)
- * ---------------------------------------------------------------------------
- * The admin picks which KIND each role plays (`shared/config/locomotion_clips
- * .json` → `GET /assets/animation-clips` → `game/walk.setLocomotionClips`).
- * On a machine with a licensed pack that is e.g.
- *
- *     walk -> mob1-walk    run -> mob1-jog    idle -> mob1-stand-relaxed-idle-v2
- *
- * and those kinds share NO family with the free `walk`/`run`/`idle` clips that
- * every rig gets — `animFamily('mob1-walk')` is `mob1`. Family-only, the chain
- * of `mob1-walk` is `[mob1-walk, idle]` and its gait is `null`: a rig without
- * the pack falls to idle, a CLIP-LESS rig (UniRig animals) stands stock still
- * while it slides across the map. That is the `walk-cmu` regression of (1c)
- * again, reintroduced through the role indirection.
- *
- * So a kind that IS a role's configured kind counts AS that role, and the role
- * name then reaches the free clips through `matchAnimKind` and `CLIP_FALLBACK`
- * like any other kind. Derived from the steps of (1e) with the role inserted
- * behind the kind itself — [want, ROLE, FB[want], FB[role], FB[family],
- * the idle role's kind, idle] — under the mapping above:
- *
- *   mob1-walk        -> [mob1-walk, walk, mob1-stand-relaxed-idle-v2, idle]
- *   mob1-jog         -> [mob1-jog, run, walk, mob1-stand-relaxed-idle-v2, idle]
- *                       (`run` is no take on a free rig either, but its
- *                        CLIP_FALLBACK is `walk`, which is)
- *   mob1-stand-…-v2  -> [mob1-stand-relaxed-idle-v2, idle]   (idle role: the
- *                        floor's first step IS the kind, so only idle is left)
- *   walk             -> [walk, mob1-stand-relaxed-idle-v2, idle]  (no role's
- *                        kind any more — but the floor now carries the pack's
- *                        idle in front of the literal one)
- *   run              -> [run, walk, mob1-stand-relaxed-idle-v2, idle]
- *   idle             -> [idle, mob1-stand-relaxed-idle-v2]  (exact still wins)
- *
- *   resolveClipKind(mob1-walk, [walk, idle])         -> walk      THE FINDING
- *   resolveClipKind(mob1-walk, [mob1-walk, walk])    -> mob1-walk exact wins
- *   resolveClipKind(mob1-jog,  [walk, idle])         -> walk      via run
- *   resolveClipKind(mob1-jog,  [run, walk, idle])    -> run
- *   resolveClipKind(mob1-walk, [sit])                -> ''
- *   proceduralGait(mob1-walk) -> walk    proceduralGait(mob1-jog) -> run
- *   proceduralGait(mob1-stand-relaxed-idle-v2) -> null   (the idle role)
- *   proceduralGait(mob1-sit)  -> null    (no role's kind, family `mob1`)
- *
- * The same treatment reaches a POSE CATALOG entry for free: an entry whose
- * `animation` is the configured kind (`walking` → `mob1-walk`) arrives as that
- * kind and goes through these very functions — there is no second path.
- *
- * RED COUNTER-PROBE: reset the mapping to the defaults and ask again. Without
- * a role behind it `mob1-walk` is family `mob1` and nothing else, so the chain
- * falls back to `[mob1-walk, idle]` and the gait to `null` — the bug, shown to
- * be exactly what the mapping repairs.
+ * (1g) FIXED MOVEMENT POSES (design §5.3)
+ * The server delivers played/public kinds for each fixed pose. With walking
+ * mob1-walk/walk and standing mob1-stand-relaxed-idle-v2/idle, the ordered
+ * chain is [mob1-walk, walk, mob1-stand-relaxed-idle-v2, idle]: no explicit
+ * fallback for either walk kind or the mob1 family, then the two standing
+ * kinds, with the trailing duplicate idle removed. Thus a free rig walks.
+ * For crawl-rest the explicit fallback idle is second. Procedural rigs use
+ * the walking/running pose, then family. No locomotion role mapping remains.
  *
  * ---------------------------------------------------------------------------
  * (2) animatablePool(pool) — WHICH rigs may stand in at random
@@ -250,14 +208,14 @@ const SRC = join(ROOT, 'client3d/src/scene/clipCoverage.ts');
 const WALK_SRC = join(ROOT, 'client3d/src/game/walk.ts');
 
 /** `clipCoverage.ts` imports exactly ONE module — `game/walk.ts`, for the
- *  locomotion mapping (1g) — and that one is import-free itself, so a plain
+ *  movement pose mapping (1g) — and that one is import-free itself, so a plain
  *  esbuild transpile of the pair loads them here; only the file extension has
  *  to be fixed up for Node's ESM loader, as in `smoke_walk_math.mjs`. No
  *  bundler, and above all no `three`: that the import list stays this short is
  *  checked below, and anything else makes this loader fail loudly — the module
  *  holds the bookkeeping, `figures.ts` holds the skeleton maths.
  *
- *  `setLocomotionClips` comes back alongside, from the SAME instance of
+ *  `setMovementPoses` comes back alongside, from the SAME instance of
  *  `walk.mjs` the coverage module reads (Node caches by URL), so the checks
  *  can put the admin's mapping in force. */
 async function loadClipCoverage() {
@@ -275,7 +233,7 @@ async function loadClipCoverage() {
       '$1./walk.mjs$2'), 'utf8');
     const coverage = await import(`file://${file}`);
     const walk = await import(`file://${walkFile}`);
-    return { ...coverage, setLocomotionClips: walk.setLocomotionClips };
+    return { ...coverage, setMovementPoses: walk.setMovementPoses, movementPoseOf: walk.movementPoseOf };
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -299,7 +257,7 @@ async function main() {
   const {
     missingClipKinds, animatablePool, resolveClipName,
     animFamily, matchAnimKind, clipKindChain, resolveClipKind, proceduralGait,
-    locomotionRole, setLocomotionClips, CLIP_FALLBACK,
+    movementPoseOf, setMovementPoses, CLIP_FALLBACK,
   } = await loadClipCoverage();
 
   console.log('missingClipKinds — the kinds a rig cannot play');
@@ -450,73 +408,41 @@ async function main() {
   const literalGate = (k) => (k === 'walk' || k === 'run' ? k : null);
   check('RED PROBE: the literal gate misses walk-cmu', literalGate('walk-cmu'), null);
 
-  console.log('the locomotion mapping of a licensed pack (1g)');
-  const PACK = { walk: 'mob1-walk', run: 'mob1-jog', idle: 'mob1-stand-relaxed-idle-v2' };
-  check('the mapping is taken over as given',
-    setLocomotionClips(PACK), PACK);
-  check('a role\'s kind IS that role', locomotionRole('mob1-walk'), 'walk');
-  check('...for run as well', locomotionRole('mob1-jog'), 'run');
-  check('...and for idle', locomotionRole('mob1-stand-relaxed-idle-v2'), 'idle');
-  check('a kind of the same pack is no role', locomotionRole('mob1-sit'), '');
-  check('the free walk is no role\'s kind while the pack is mapped',
-    locomotionRole('walk'), '');
-  check('no kind is no role', locomotionRole(''), '');
-  check('THE FINDING: the pack\'s walk reaches the free walk before idle',
-    clipKindChain('mob1-walk'),
+  // Spec §5.3: want, public pose, stand-ins, standing pose, idle.
+  console.log('movement pose public fallback (1g)');
+  setMovementPoses({walking: {kind: 'mob1-walk', public_kind: 'walk'},
+    running: {kind: 'mob1-jog', public_kind: 'run'},
+    standing: {kind: 'mob1-stand-relaxed-idle-v2', public_kind: 'idle'}});
+  check('local walk chain', clipKindChain('mob1-walk'),
     ['mob1-walk', 'walk', 'mob1-stand-relaxed-idle-v2', 'idle']);
-  check('...and the pack\'s run reaches walk through the role\'s stand-in',
-    clipKindChain('mob1-jog'),
-    ['mob1-jog', 'run', 'walk', 'mob1-stand-relaxed-idle-v2', 'idle']);
-  check('the pack\'s idle is the floor itself',
-    clipKindChain('mob1-stand-relaxed-idle-v2'),
-    ['mob1-stand-relaxed-idle-v2', 'idle']);
-  check('the floor of every chain carries the mapped idle in front of the literal one',
-    clipKindChain('walk'), ['walk', 'mob1-stand-relaxed-idle-v2', 'idle']);
-  check('...run keeps its stand-in in front of that floor',
-    clipKindChain('run'), ['run', 'walk', 'mob1-stand-relaxed-idle-v2', 'idle']);
-  check('...and a wanted plain idle still wins as the exact kind',
-    clipKindChain('idle'), ['idle', 'mob1-stand-relaxed-idle-v2']);
-  check('a rig without the pack walks for the pack\'s walk',
-    resolveClipKind('mob1-walk', ['walk', 'idle']), 'walk');
-  check('...and the exact kind still wins where the pack IS bound',
-    resolveClipKind('mob1-walk', ['mob1-walk', 'walk']), 'mob1-walk');
-  check('the pack\'s run walks when the rig has no run take',
-    resolveClipKind('mob1-jog', ['walk', 'idle']), 'walk');
-  check('...and runs where it has one',
-    resolveClipKind('mob1-jog', ['run', 'walk', 'idle']), 'run');
-  check('nothing of the sort is still empty',
-    resolveClipKind('mob1-walk', ['sit']), '');
-  check('the clip-less rig gets its gait for the pack\'s walk',
-    proceduralGait('mob1-walk'), 'walk');
-  check('...and for the pack\'s run', proceduralGait('mob1-jog'), 'run');
-  check('the pack\'s idle stands', proceduralGait('mob1-stand-relaxed-idle-v2'), null);
-  check('a pack kind that is no role stands', proceduralGait('mob1-sit'), null);
-  // A pose-catalog entry needs no path of its own: `walking` carries the
-  // animation `mob1-walk`, and that is the kind asked for here.
-  check('a pose-catalog animation equal to the role kind takes the same road',
-    resolveClipKind('mob1-walk', ['walk', 'sit', 'idle']), 'walk');
-  // RED COUNTER-PROBE: the same kinds with the DEFAULT mapping, i.e. the
-  // family-only rule this replaces — chain to idle, no gait, figure sliding.
-  check('the mapping resets to the defaults',
-    setLocomotionClips({}), { walk: 'walk', run: 'run', idle: 'idle' });
-  check('RED PROBE: without the mapping mob1-walk only knows idle',
-    clipKindChain('mob1-walk'), ['mob1-walk', 'idle']);
-  check('RED PROBE: ...and fakes no gait at all',
-    proceduralGait('mob1-walk'), null);
-  check('the default chains are back, unchanged',
-    clipKindChain('run'), ['run', 'walk', 'idle']);
-  check('...idle included', clipKindChain('idle'), ['idle']);
+  check('missing local walk uses public walk', resolveClipKind('mob1-walk', ['walk', 'idle']), 'walk');
+  check('missing local run can walk', resolveClipKind('mob1-jog', ['walk', 'idle']), 'walk');
+  check('procedural local walk', proceduralGait('mob1-walk'), 'walk');
+  check('procedural local run', proceduralGait('mob1-jog'), 'run');
+  check('crawl rest starts with idle', clipKindChain('crawl-rest').slice(0, 2), ['crawl-rest', 'idle']);
+  check('exact local clip wins', resolveClipKind('mob1-walk', ['mob1-walk', 'walk', 'idle']), 'mob1-walk');
+  check('public running precedes walking', resolveClipKind('mob1-jog', ['run', 'walk', 'idle']), 'run');
+  check('no usable clip stays empty', resolveClipKind('mob1-walk', ['sit']), '');
+  setMovementPoses({crawling: {kind: 'missing-crawl', public_kind: 'crawl'},
+    crawling_rest: {kind: 'missing-rest', public_kind: 'crawl-rest'}});
+  check('custom crawling falls through public crawl to walk',
+    clipKindChain('missing-crawl'), ['missing-crawl', 'crawl', 'walk', 'idle']);
+  check('custom resting falls through public rest to idle',
+    clipKindChain('missing-rest'), ['missing-rest', 'crawl-rest', 'idle']);
+  setMovementPoses({});
 
   console.log('the rules are WIRED at their consumers');
   const coverageSrc = await readFile(SRC, 'utf8');
   const imports = [...coverageSrc.matchAll(/^import[^;]*?from\s*['"]([^'"]+)['"]/gm)]
     .map((m) => m[1]);
-  check('clipCoverage.ts imports the locomotion mapping and NOTHING else',
+  check('clipCoverage.ts imports the movement pose mapping and NOTHING else',
     [...new Set(imports)], ['../game/walk']);
   const walkSrc = await readFile(WALK_SRC, 'utf8');
   check('...and walk.ts stays import-free, so there is no cycle',
     /^import\s/m.test(walkSrc), false);
   const figures = await readFile(join(ROOT, 'client3d/src/scene/figures.ts'), 'utf8');
+  check('figure loader takes server movement poses', /setMovementPoses\(library\.movement_poses\)/.test(figures), true);
+  check('figure loader takes clip-keyed transitions', /setClipTransitions\(library\.transition_clips\)/.test(figures), true);
   check('figures.play resolves through resolveClipKind',
     /resolveClipKind\(kind,/.test(figures), true);
   check('the procedural gait gate asks proceduralGait',

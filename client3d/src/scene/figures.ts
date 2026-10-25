@@ -20,8 +20,8 @@ import type { SecondaryMotion, RestCorrection, RestPose } from '@anima/scene-ren
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
-import { bridgePace, clipTransition, locomotionClip, setClipTransitions,
-  setLocomotionClips } from '../game/walk';
+import { bridgePace, clipTransition, poseClip, setClipTransitions,
+  setMovementPoses } from '../game/walk';
 import { clipRootPath, clipRootTurn, rootPathAt, setClipRootPath, setClipRootTurn, toWorld, travelAt,
   turnAt } from './bridgeTravel';
 import type { RootPath, RootTurn } from './bridgeTravel';
@@ -918,8 +918,8 @@ export class FigureLibrary {
         return { models: [] };
       })();
       const libraryP = getAnimationClips().then((library) => {
-        if (library.locomotion) setLocomotionClips(library.locomotion);
-        if (library.transitions) setClipTransitions(library.transitions);
+        setMovementPoses(library.movement_poses);
+        setClipTransitions(library.transition_clips);
         return library;
       });
       const rigP = this.loadFile('/assets/animation-rig', true).then((rig) => {
@@ -937,7 +937,7 @@ export class FigureLibrary {
           + ' library clips are copied 1:1 and overwrite each rig\'s own stance');
       }
       const library = libraryResult.status === 'fulfilled' ? libraryResult.value
-        : { ok: false, clips: [], locomotion: null, transitions: [] };
+        : { ok: false, clips: [], movement_poses: null, transition_clips: [] };
       listOk = library.ok;
       // Where the clips come from: the server's global library (AV3D-5) by
       // preference, the local manifest clips otherwise (dev/offline). What is
@@ -1344,7 +1344,7 @@ export class FigureLibrary {
    * It used to be all or nothing on both sides: a model with ANY embedded
    * clip never saw the library, so the three manifest fallback rigs and every
    * server model that ships a single clip could play walk and idle and
-   * nothing else. `move_anim: "swim"` then fell through `CLIP_FALLBACK` to
+   * nothing else. `movement: "swim"` then fell through `CLIP_FALLBACK` to
    * walk and the lake looked like a meadow. Per kind: an embedded clip WINS
    * for its own kind (it was authored for this mesh), the library fills the
    * rest.
@@ -2084,15 +2084,14 @@ export class Figure {
       this.legs = findLegChains(inst, box);
       if (this.legs.length) console.info(`[figures] procedural gait: ${this.legs.length} leg chains detected`);
     }
-    // A fresh figure stands: the `idle` ROLE's clip (the admin's choice,
-    // `game/walk.locomotionClip`), not the literal kind.
-    this.play(locomotionClip('idle'));
+    // A fresh figure plays the server-resolved standing pose.
+    this.play(poseClip('standing'));
   }
 
   /** Switches the clip with a crossfade; a missing clip plays its stand-in,
    *  then idle. `kind` is server-authoritative (`activity_animation`), hence
    *  the normalisation here — the actions are indexed by lowercase kinds. An
-   *  EMPTY kind means "stand" and plays the `idle` role's clip.
+   *  EMPTY kind means "stand" and plays the fixed standing pose.
    *
    *  `terrainClip` says the kind comes from the GROUND the figure is on
    *  (`walk.moveClip` while it moves, `walk.idleClip` while it stands) — the
@@ -2112,7 +2111,7 @@ export class Figure {
    *  caller's decision (`walk.sinkForState`); the two are different numbers
    *  because a swimmer lies flat and a treader hangs upright. */
   play(rawKind: ClipKind, terrainClip = false, sink = 0) {
-    const kind = (rawKind || locomotionClip('idle')).toLowerCase();
+    const kind = (rawKind || poseClip('standing')).toLowerCase();
     // A bridge is running: let it finish. Cutting it short is the abruptness
     // this exists to remove, and a figure that changes its mind mid-standup
     // still has to finish standing up first. What comes after is not decided

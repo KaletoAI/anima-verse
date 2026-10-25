@@ -575,33 +575,27 @@ export interface ApiClip {
   root_motion?: { mode: string; travel_m?: number[] | null } | null;
 }
 
-/** The server's global clip library plus the two mappings that say WHICH clip
- *  a figure plays: the LOCOMOTION roles (`game/walk.setLocomotionClips`) and
- *  the TRANSITIONS between two clips (`game/walk.setClipTransitions`). */
+/** Server clip library, resolved movement poses and clip-keyed transitions. */
 export interface ApiClipLibrary {
   ok: boolean;
   clips: ApiClip[];
-  /** `{walk, run, idle} → kind`, every role filled by the server; `null` when
-   *  the listing could not be read — the roles then keep their own names. */
-  locomotion: Record<string, string> | null;
-  /** `[{from, to, kind}]` — the clip that has to play BETWEEN two clips;
-   *  empty when none is configured, which is the plain hard switch. */
-  transitions: Array<{ from: string; to: string; kind: string }>;
+  /** Fixed movement poses resolved by the server, including public fallbacks. */
+  movement_poses: Record<string, {kind: string; public_kind: string}> | null;
+  /** Clip-keyed rules; the admin's pose-keyed transitions are not consumed here. */
+  transition_clips: Array<{from: string; to: string; kind: string; accel: number}>;
 }
 
-/** The server's global animation library; empty when it is not reachable. */
 export async function getAnimationClips(): Promise<ApiClipLibrary> {
+  const empty: ApiClipLibrary = {ok: false, clips: [], movement_poses: null, transition_clips: []};
   try {
     const res = await fetch('/assets/animation-clips');
-    if (!res.ok) return { ok: false, clips: [], locomotion: null, transitions: [] };
+    if (!res.ok) return empty;
     const data = await res.json();
-    const locomotion = data.locomotion && typeof data.locomotion === 'object'
-      ? (data.locomotion as Record<string, string>) : null;
-    const transitions = Array.isArray(data.transitions) ? data.transitions : [];
-    return { ok: true, clips: (data.clips ?? []) as ApiClip[], locomotion, transitions };
-  } catch {
-    return { ok: false, clips: [], locomotion: null, transitions: [] };
-  }
+    return {ok: true, clips: (data.clips ?? []) as ApiClip[],
+      movement_poses: data.movement_poses && typeof data.movement_poses === 'object'
+        ? data.movement_poses : null,
+      transition_clips: Array.isArray(data.transition_clips) ? data.transition_clips : []};
+  } catch { return empty; }
 }
 
 /** Music and ambience the server has on disk (`app/routes/game_audio.py`).

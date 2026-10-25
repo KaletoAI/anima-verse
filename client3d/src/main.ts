@@ -33,7 +33,7 @@ import { openViewShouldClose } from './game/openView';
 import { infoPanelData } from './game/infoPanel';
 import { NpcManager, WALK_SPEED, type NpcState } from './scene/npcs';
 import {
-  gateStandY, groundScope, groundStoreyFloors, locomotionClip, slideBlocked,
+  gateStandY, groundScope, groundStoreyFloors, poseClip, slideBlocked,
   slopeBlocks, terrainBlocks, terrainPace, walkDir, type GroundScope,
 } from './game/walk';
 import {
@@ -624,7 +624,7 @@ async function startApp(username: string, role: string) {
   // why the footprints and rooms are asked here and not in the manager.
   npcs.setTerrainMove((x, z) => {
     const type = terrainGround.typeAt(x, z);
-    return { anim: type.move_anim, idle: type.idle_anim,
+    return { movement: type.movement,
       sink: { move: type.move_sink_m, idle: type.idle_sink_m },
       // …and the MIRROR over the point (E4, § G4): where a lake stands here,
       // a figure hangs under its water line instead of under the carved bed
@@ -4474,7 +4474,7 @@ async function startApp(username: string, role: string) {
     // over it (`standingClipFor`), so wading is unaffected.
     const steering = !!dir;
     if (steering) {
-      npcs.setPlayerAnimation(avatarName, locomotionClip('walk'));
+      npcs.setPlayerAnimation(avatarName, poseClip('walking'));
       steerClipOverride = true;
     } else if (steerClipOverride) {
       // ONCE, on release — and never again. Writing `null` every idle frame
@@ -4513,7 +4513,7 @@ async function startApp(username: string, role: string) {
     // that one frame was a goal written, a body turned towards the key and a
     // step taken out of a pose the figure had not left yet.
     if (steering && dir) {
-      const limit = npcs.paceLimitFor(avatarName, locomotionClip('walk'));
+      const limit = npcs.paceLimitFor(avatarName, poseClip('walking'));
       if (limit <= 0) {
         bridgeHeld = true;
         dir = null;
