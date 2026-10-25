@@ -5,6 +5,7 @@
  * CPU samples all 7 ms, calls all 11, triangles all 13. Anchor [100,5,200]
  * plus keyframe zero [0,24,40] puts the camera at [100,29,240], target
  * [100,6.5,200]. A stalled one-second frame must retain its full duration.
+ * The result names the unmasked WebGL renderer ('Fixture GPU').
  * The finished run is POSTed once to /play/bench-result (fetch stubbed here).
  */
 import assert from 'node:assert/strict';
@@ -18,7 +19,7 @@ globalThis.window={}; globalThis.location={search:'?scatter=0&water=0&goto=demo'
 globalThis.innerWidth=800; globalThis.innerHeight=600;
 const elements=new Map();
 globalThis.document={getElementById:id=>elements.get(id),createElement:()=>({style:{}}),body:{appendChild:el=>elements.set(el.id,el)}};
-const engine={target:new Vector3(9,8,7),camera:new PerspectiveCamera(),dist:80,targetDist:80,yaw:1,targetYaw:1,renderer:{getPixelRatio:()=>1}};
+const engine={target:new Vector3(9,8,7),camera:new PerspectiveCamera(),dist:80,targetDist:80,yaw:1,targetYaw:1,renderer:{getPixelRatio:()=>1,getContext:()=>({RENDERER:7937,getExtension:()=>({UNMASKED_RENDERER_WEBGL:37446}),getParameter:p=>p===37446?'Fixture GPU':'masked'})}};
 let switches=0,restores=0;
 initBench(engine,{output:result=>elements.set('bench',{textContent:JSON.stringify(result)}),anchor:()=>({pos:[100,5,200],locationId:'demo',heightSource:'fixture'}),switches:(scatter,water)=>{
  assert.equal(scatter,false); assert.equal(water,false); switches++; return ()=>restores++;
@@ -35,7 +36,7 @@ const s=window.__bench.last;
 assert.equal(s.frames,20);assert.equal(s.seconds,20);assert.equal(s.fps,1);
 assert.equal(s.frameMsP95,1000);assert.equal(s.cpuMsMedian,7);
 assert.equal(s.draws,11);assert.equal(s.triangles,13);assert.equal(s.gpuMs,null);
-assert.equal(s.flags.scatter,false);assert.equal(s.flags.water,false);
+assert.equal(s.gpu,'Fixture GPU');assert.equal(s.flags.scatter,false);assert.equal(s.flags.water,false);
 assert.deepEqual(JSON.parse(elements.get('bench').textContent),s);
 assert.equal(restores,1);assert.equal(window.__bench.running,false);
 assert.equal(engine.benchFrame,undefined);assert.equal(engine.benchCamera,undefined);assert.equal(engine.benchRendered,undefined);

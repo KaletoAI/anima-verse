@@ -53,7 +53,7 @@ export function initBench(engine: Engine, env: BenchEnvironment): void {
       const summary = summarize(samples);
       api.last = {backend:'webgl', path:'shared/bench/camera_path_v1.json', pathVersion:path.version,
         duration:path.duration,warmup:path.warmup,flags,anchor,
-        ua:navigator.userAgent,dpr:engine.renderer.getPixelRatio(),
+        ua:navigator.userAgent,gpu:webglRenderer(engine),dpr:engine.renderer.getPixelRatio(),
         size:`${innerWidth}x${innerHeight}`, ...summary,
         fps:summary.fpsMean,gpuMs:null,draws:summary.callsMedian,triangles:summary.trisMedian};
       console.info('[bench] result ' + JSON.stringify(api.last));
@@ -70,4 +70,15 @@ export function initBench(engine: Engine, env: BenchEnvironment): void {
     console.info(`[bench] warm-up ${path.warmup}s; drive ${path.duration}s`);
   }
   if (params.get('bench') === 'auto') requestAnimationFrame(start);
+}
+
+/** The GPU string WebGL reports, so a software fallback (llvmpipe, SwiftShader) shows in the log. */
+function webglRenderer(engine: Engine): string | null {
+  try {
+    const gl = engine.renderer.getContext();
+    const info = gl.getExtension('WEBGL_debug_renderer_info');
+    return String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+  } catch {
+    return null;
+  }
 }
