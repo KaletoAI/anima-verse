@@ -240,7 +240,7 @@ def _area(ring):
     )
 
 
-def _outlines(cells, cols, rows, lo, step):
+def _outlines(cells, cols, rows, lo, step, scale=1.0):
     """Trace marching-squares rings and simplify at one step (spec § 4.5).
 
     Use iso 0.5 on a zero-padded mask; ambiguous diagonals stay separate
@@ -305,17 +305,27 @@ def _outlines(cells, cols, rows, lo, step):
             previous, current = (current, nxt)
             if current == start:
                 break
+        rings.append(ring)
+    rings.sort(key=lambda r: abs(_area(r)), reverse=True)
+    simplified = []
+    for index, ring in enumerate(rings):
+        # Apply the world-area floor to raw holes, before simplification.
+        if index and abs(_area(ring)) * scale * scale < 0.05:
+            continue
         # Split the closed ring at its farthest vertex for stable RDP.
         split = max(range(1, len(ring)), key=lambda i: math.dist(ring[0], ring[i]))
         simple = (
             _simplify(ring[: split + 1], step)[:-1]
             + _simplify(ring[split:] + [ring[0]], step)[:-1]
         )
-        if len(simple) >= 3:
-            rings.append(simple)
+        if len(simple) < 3:
+            if index == 0:
+                return None
+            continue
+        simplified.append(simple)
+    rings = simplified
     if not rings:
         return None
-    rings.sort(key=lambda r: abs(_area(r)), reverse=True)
     outer = rings[0]
     if _area(outer) < 0:
         outer.reverse()
@@ -334,6 +344,25 @@ def _regions(
     Shape flooding is props-only. Colour evidence also works for dioramas.
     Apply area/depth/flatness thresholds, confidence and default looks; split
     disconnected final masks before generating their outlines."""
+    def _close_colour(mask, heights, cols, rows, radius):
+        """Close narrow colour gaps with a four-neighbour diamond (spec § 4.3).
+
+        Pad beyond the raster during dilation/erosion so the raster edge cannot
+        create artificial growth. Only actual hit nodes survive the closing;
+        their own height and normal are retained by the caller.
+        """
+        closed = {(i % cols, i // cols) for i in mask}
+        for _ in range(radius):
+            closed |= {(x + dx, z + dz) for x, z in closed
+                       for dx, dz in ((-1, 0), (1, 0), (0, -1), (0, 1))}
+        for _ in range(radius):
+            closed = {(x, z) for x, z in closed
+                      if all((x + dx, z + dz) in closed
+                             for dx, dz in ((-1, 0), (1, 0), (0, -1), (0, 1)))}
+        return {z * cols + x for x, z in closed
+                if 0 <= x < cols and 0 <= z < rows
+                and heights[z * cols + x] is not None}
+
     result, used = ([], set())
     cell_area = (step * scale) ** 2
     if footprint_area is None:
@@ -348,7 +377,7 @@ def _regions(
 
     def add_part(cells, level, kind, confidence, look):
         """Emit one outlined region with confidence/defaults (spec §§ 4.4–4.5)."""
-        rings = _outlines(cells, cols, rows, lo, step)
+        rings = _outlines(cells, cols, rows, lo, step, scale)
         if not rings:
             return
         bed = min((heights[i] for i in cells))
@@ -399,7 +428,10 @@ def _regions(
                 "sure" if coloured >= 0.5 else "candidate",
                 "pool" if coloured >= 0.5 else "bath",
             )
-    mask = {i for i, b in enumerate(blue) if b and i not in used}
+    mask = _close_colour(
+        {i for i, b in enumerate(blue) if b and heights[i] is not None},
+        heights, cols, rows, max(1, round(0.04 / (step * scale))),
+    ) - used
     for comp in _components(mask, cols, rows):
         area = len(comp) * cell_area
         if area < 0.05:

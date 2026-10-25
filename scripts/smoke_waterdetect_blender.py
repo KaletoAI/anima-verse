@@ -14,6 +14,11 @@ Air over bed = 2.5 m and over rim = 1.5 m, both >= 1.2 m clearance.
 With measure=xz and target 2.2, s=1: chosen bed/rim remain .2/1.2,
 so colour basin area = 2 m² (±10%) and level = 1.12 (±.021 m).
 A topmost-hit raster sees only grey and fails this regression.
+Mottled patch: a flat 1x1 m blue square at .2 crossed by two white
+.02 m wide lines. Raw blue area = 1 - (2*.02 - .02**2) = .9604 m².
+Closing radius round(.04/.02)=2 nodes joins the four quadrants; any
+residual crack holes are below .05 m². Expect ONE painted region, NO
+holes, area 1 m² (±10% boundary sampling), film level .21.
 Usage: ./.venv/bin/python scripts/smoke_waterdetect_blender.py
 """
 import subprocess
@@ -59,6 +64,11 @@ reset()
 basin(0,2,1,1.2,blue)
 box((0,0,2.75),(2.2,1.2,.1),grey)
 bpy.ops.export_scene.gltf(filepath=str(out/'roofed-pool.glb'), export_format='GLB')
+reset()
+box((0,0,.1),(1,1,.2),blue)
+box((0,0,.2005),(1,.02,.001),white)
+box((0,0,.2005),(.02,1,.001),white)
+bpy.ops.export_scene.gltf(filepath=str(out/'mottled-patch.glb'), export_format='GLB')
 '''
 
 
@@ -98,6 +108,15 @@ def main():
         assert abs(pool['area_m2'] - 2) <= .2, pool
         assert abs(pool['level'] - 1.12) <= .021, pool
         assert (root/'roofed-preview.png').is_file()
+        mottled, reason = detect_water(root/'mottled-patch.glb', {}, target_m=1,
+                                       measure='xz', wait_s=300)
+        assert reason == 'ok', reason
+        assert len(mottled['regions']) == 1, mottled
+        patch = mottled['regions'][0]
+        assert patch['kind'] == 'painted', patch
+        assert patch['holes'] == [], patch
+        assert abs(patch['area_m2'] - 1) <= .1, patch
+        assert abs(patch['level'] - .21) <= .021, patch
     print('smoke_waterdetect_blender: PASS')
 
 
