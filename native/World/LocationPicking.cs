@@ -130,7 +130,8 @@ public sealed class LocationPicking
         foreach (var mi in Walk(slot.Group).OfType<MeshInstance3D>())
         {
             // The flat overlays (door marks) never catch the ray (main.ts: mesh.raycast = () => {}).
-            if (mi.Mesh is not { } mesh || mi.HasMeta(LocationFade.OverlayMeta)) continue;
+            // …nor does a mesh's underwater ghost (the same triangles a second time).
+            if (mi.Mesh is not { } mesh || mi.HasMeta(LocationFade.OverlayMeta) || mi.HasMeta(SubmergedGhost.Meta)) continue;
             var xf = mi.GlobalTransform;
             var box = xf * mesh.GetAabb();
             var lo = box.Position;

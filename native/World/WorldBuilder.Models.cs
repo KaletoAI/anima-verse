@@ -148,6 +148,8 @@ public sealed partial class WorldBuilder
         if (lift != 0) placed.Position += new Vector3(0, (float)lift, 0);
         rec.Parent.AddChild(placed);
         var old = rec.Node;
+        // The ghost belongs to the mesh that is going away (tier swap) — a new one is asked for below.
+        DropPlacementGhost(rec);
         rec.Node = placed;
         rec.Lift = lift;
         // The slots and the door follow the fresh mesh (fillSlots / retargetDoorProp), before its cuts; the light its lift.
@@ -156,6 +158,7 @@ public sealed partial class WorldBuilder
         if (rec.Door is { } door) DoorProps.Retarget(door, placed);
         rec.Cut = CutPlacement(slot.Group, rec);
         if (rec.LightId is { } id) PropLights?.Move(id, LightPosition(slot.Group, rec));
+        RefreshPlacementWater(slot.Group, rec, Height?.WaterRaster());
     }
 
     /// <summary>
@@ -286,6 +289,7 @@ public sealed partial class WorldBuilder
         double datum = slot.Group.Position.Y;
         var frame = new TileFrame(new Overview.Vec3(g.X, datum, g.Z), slot.Group.Rotation.Y);
         int relifted = 0;
+        var raster = Height.WaterRaster();
         foreach (var rec in slot.Placements)
         {
             if (rec.IsBuilding) continue;
@@ -299,6 +303,8 @@ public sealed partial class WorldBuilder
             rec.Lift = r.Lift;
             if (moved && rec.Cut is { HasPlane: true } h && PlaneOf(slot.Group, rec) is { } plane) h.SetPlane(plane);
             if ((moved || r.Delta != 0) && rec.LightId is { } lid) PropLights?.Move(lid, LightPosition(slot.Group, rec));
+            // reliftPlacement's water + refreshPlacementGhost: the sheets follow the lift, the ghost the new base and raster.
+            RefreshPlacementWater(slot.Group, rec, raster);
         }
         if (moved || relifted > 0) slot.MeshVersion++;
         bool seats = slot.Places.Relift(frame, moved ? step.Delta : 0, Height.GroundAt);

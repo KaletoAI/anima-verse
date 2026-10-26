@@ -12,6 +12,12 @@ namespace AnimaNative.Water;
 public readonly record struct WaterLook((double R, double G, double B) Tint, double SkyMix, double WaveM, double Speed,
                                         double FlowSpeed, double OpaqueDepthM, double Roughness, double Metalness);
 
+/// <summary>The three ripple sheets of one water pixel (<see cref="WaterShade.Ripple"/>): sample coordinates, the
+/// ribbon's weight, the branch, the detail fade, the sheets' drift directions, the downstream axis and the speed.</summary>
+public readonly record struct RippleSheets((double U, double V) A, (double U, double V) B, (double U, double V) C,
+                                           double WeightC, bool Still, double Detail, (double X, double Z) DirA,
+                                           (double X, double Z) DirB, (double X, double Z) Axis, double Speed);
+
 /// <summary>
 /// The water numbers and CPU twins of the browser's terrain water variant (client3d/src/scene/waterShade.ts,
 /// waterPlaneMath.ts, terrainLod.ts <c>liftedHeight</c>, scene-render materials.ts <c>waveNormalSample</c>). Under
@@ -185,6 +191,40 @@ public static class WaterShade
             (byte)Js.Round((nx * 0.5 + 0.5) * 255), (byte)Js.Round((ny * 0.5 + 0.5) * 255),
             (byte)Js.Round((nz / len * 0.5 + 0.5) * 255), (byte)255,
         };
+    }
+
+    /// <summary>
+    /// The three sample coordinates of <c>twRipple</c> (waterShade.ts) — the CPU twin of <c>GroundShader</c>'s
+    /// <c>tw_ripple</c>, statement for statement: the flow frame (still below |flow| 1e-4: the world's axes, speed
+    /// <paramref name="speed"/>, sign +1, cross 0.6 / 1.3; flowing: downstream, speed <paramref name="flowSpeed"/>·|flow|,
+    /// sign −1, cross 0.15 / 0.3), sheets A and B isotropic at λ and 0.63 λ, the ribbon C squeezed 8× along the flow at
+    /// 2 λ with weight 0.35 (0 on still water), and the detail fade 1 − pixel / λ. Coordinates are three's (the map's own
+    /// (u, v); Godot samples (u, −v), see <c>tw_wave_at</c>).
+    /// </summary>
+    public static RippleSheets Ripple(double px, double pz, double flowX, double flowZ, double waveM, double speed,
+                                      double flowSpeed, double t, double pixelM)
+    {
+        double detail = Math.Clamp(1 - pixelM / waveM, 0, 1);
+        double len = Math.Sqrt(flowX * flowX + flowZ * flowZ);
+        bool still = len < 1e-4;
+        double axX = still ? 1 : flowX / Math.Max(len, 1e-4), axZ = still ? 0 : flowZ / Math.Max(len, 1e-4);
+        double ayX = -axZ, ayZ = axX;
+        double sp = still ? speed : flowSpeed * len;
+        double sgn = still ? 1 : -1;
+        double crossA = still ? 0.6 : 0.15, crossB = still ? 1.3 : 0.3;
+        double dirAX = axX + ayX * crossA, dirAZ = axZ + ayZ * crossA;
+        double dirBX = still ? -(axX * 0.8 + ayX * crossB) : axX * 0.8 - ayX * crossB;
+        double dirBZ = still ? -(axZ * 0.8 + ayZ * crossB) : axZ * 0.8 - ayZ * crossB;
+        double lamA = waveM, lamB = waveM * 0.63, lamC = waveM * 2;
+        (double, double) Frame(double vx, double vz, double aniso)
+        {
+            double along = (vx * axX + vz * axZ) / aniso, across = vx * ayX + vz * ayZ;
+            return (axX * along + ayX * across, axZ * along + ayZ * across);
+        }
+        var a = Frame(px / lamA + dirAX * (t * sp * sgn / lamA), pz / lamA + dirAZ * (t * sp * sgn / lamA), 1);
+        var b = Frame(px / lamB + dirBX * (t * sp * sgn / lamB), pz / lamB + dirBZ * (t * sp * sgn / lamB), 1);
+        var c = Frame((px + axX * (t * sp * sgn)) / lamC, (pz + axZ * (t * sp * sgn)) / lamC, 8);
+        return new RippleSheets(a, b, c, still ? 0 : 0.35, still, detail, (dirAX, dirAZ), (dirBX, dirBZ), (axX, axZ), sp);
     }
 
     /// <summary><c>makeWaveNormal</c>'s pixels: the n² RGBA8 texels of <see cref="WaveNormalSample"/>, row-major.</summary>

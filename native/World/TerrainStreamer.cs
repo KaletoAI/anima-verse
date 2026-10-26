@@ -17,10 +17,10 @@ namespace AnimaNative.World;
 /// the drawn world —
 ///
 ///   • the ANCHOR: the camera target (<see cref="Ui.OverviewCamera.Target"/>; the avatar from E7) on main.ts' 1 Hz tick;
-///   • a taken height batch → ONE field rebuild (<see cref="Coalescer"/>): the near pyramid, the water fields, the wet
-///     window and their images are made on a worker thread from a <see cref="WorldHeight.Snapshot"/>; only the
-///     texture upload and the uniform binding run on the main thread (<see cref="TerrainLodNode.ApplyField"/>,
-///     <see cref="GroundSurfaces.ApplyWaterWindow"/>); then the scatter and the undergrowth sample the ground again
+///   • a taken height batch → ONE field rebuild (<see cref="Coalescer"/>): the near pyramid, the water fields (level,
+///     sd, look rows, flow — all on the near lattice) and their images are made on a worker thread from a
+///     <see cref="WorldHeight.Snapshot"/>; only the texture upload and the uniform binding run on the main thread
+///     (<see cref="TerrainLodNode.ApplyField"/>); then the scatter and the undergrowth sample the ground again
 ///     (<c>rebuildAreas</c>);
 ///   • a taken mask batch → the window repacked on a worker, uploaded on the main thread
 ///     (<see cref="GroundSurfaces.SetLayerWindow"/>);
@@ -176,8 +176,8 @@ public partial class TerrainStreamer : Node
 
     /// <summary>
     /// One field rebuild: snapshot on the main thread, build on a worker (the near pyramid through the tile-first
-    /// height, the water level/sd/cap on the near lattice, the far pyramid only when the overview changed, the wet window
-    /// of the want set, all images), then upload + bind on the main thread with the frame and statistics of NOW.
+    /// height, the water level/sd/rows/flow/cap on the near lattice, the far pyramid only when the overview changed, all
+    /// images), then upload + bind on the main thread with the frame and statistics of NOW.
     /// </summary>
     private async Task BuildFieldOnceAsync()
     {
@@ -190,7 +190,6 @@ public partial class TerrainStreamer : Node
         double ax = Stream.AnchorX, az = Stream.AnchorZ;
         var extent = (double[])term.Field.Extent.Clone();
         var far = ReferenceEquals(snap.Overview, _farOverview) ? term.Field.Far : null;
-        var want = Stream.WantedHeight().ToHashSet(StringComparer.Ordinal);
         Dictionary<string, int>? rows = null;
         if (water)
         {
@@ -201,25 +200,18 @@ public partial class TerrainStreamer : Node
         var prep = await Task.Run(() =>
         {
             var raster = water ? snap.WaterRaster() : null;
-            var field = TerrainField.Build(snap, ax, az, raster, extent, far);
+            var field = TerrainField.Build(snap, ax, az, raster, extent, far, rows);
             var images = TerrainLodNode.PrepareImages(field, skipFar: far is not null);
-            WaterWindow? window = null;
-            (Image, Image, Image)? windowImages = null;
-            if (water)
-            {
-                var wet = snap.Tiles.Where(t => t.Water is { Wet: > 0 } && want.Contains(HeightTiles.Key(t.Key.Tx, t.Key.Tz)))
-                              .Select(t => (t.Key.Tx, t.Key.Tz, t.Water!));
-                window = WaterWindow.Build(wet, snap.Overview.TileM, rows!);
-                if (window is not null) windowImages = GroundSurfaces.WaterImages(window);
-            }
-            return (field, images, window, windowImages);
+            return (field, images);
         });
         LastBuildMs = clock.Elapsed.TotalMilliseconds;
         MaxBuildMs = Math.Max(MaxBuildMs, LastBuildMs);
         if (!IsInstanceValid(term) || term != _b.Terrain || height != _b.Height) return;
         clock.Restart();
         var g = _b.Ground;
-        if (water && g == ground) g!.ApplyWaterWindow(prep.window, _ => { }, prep.windowImages);
+        // The water variant comes into being with the first field that carries water (its look, sd, rows and flow all
+        // ride on the field's near lattice — no window of its own any more).
+        if (water && g == ground && prep.field.Water is not null) g!.EnsureWaterMaterial();
         // The frame and the statistics of NOW (a poll or the fill may have moved them during the build).
         prep.field.SetExtent(term.Field.Extent);
         var ov = height.Overview;
@@ -281,7 +273,7 @@ public partial class TerrainStreamer : Node
     /// <summary>
     /// A new ground for the current anchor (a new <c>terrain_sig</c>, or the re-index with its <paramref name="index"/>):
     /// catalog, library, layer index, the wanted masks, the slices — the old ground keeps drawing until the new one
-    /// stands; then the water window is rebuilt for its look table. A failure keeps the old ground (false).
+    /// stands; then the field is rebuilt (its look rows follow the new look table). A failure keeps the old ground (false).
     /// </summary>
     private async Task<bool> ReloadGroundAsync(LayerIndex? index)
     {

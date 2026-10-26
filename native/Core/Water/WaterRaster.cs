@@ -17,6 +17,34 @@ public sealed record WaterRaster(double TileM, IReadOnlyDictionary<string, Water
         => Tiles.TryGetValue(HeightTiles.TileKeyAt(TileM, x, z), out var f) ? f : null;
 
     /// <summary>
+    /// The same tile lookup as every reader (<c>tileKeyAt</c>), remembering the last tile: a lattice walk asks the
+    /// same tile 128 times in a row, and the key is a string. Answers are identical to the uncached readers; not
+    /// thread-safe — one per walk.
+    /// </summary>
+    public sealed class Cursor
+    {
+        private readonly WaterRaster? _raster;
+        private double _tx = double.NaN, _tz = double.NaN;
+        private WaterTileField? _f;
+        public Cursor(WaterRaster? raster) { _raster = raster; }
+
+        public WaterTileField? At(double x, double z)
+        {
+            if (_raster is null || !(_raster.TileM > 0)) return null;
+            double tx = Math.Floor(x / _raster.TileM), tz = Math.Floor(z / _raster.TileM);
+            if (tx == _tx && tz == _tz) return _f;
+            _tx = tx;
+            _tz = tz;
+            return _f = _raster.Tiles.TryGetValue(HeightTiles.Key(tx, tz), out var f) ? f : null;
+        }
+
+        public double LevelAt(double x, double z) => LevelIn(At(x, z), x, z);
+        public double SdAt(double x, double z) => SdIn(At(x, z), x, z);
+        public string KindAt(double x, double z) => KindIn(At(x, z), x, z);
+        public (double X, double Z) FlowAt(double x, double z) => FlowIn(At(x, z), x, z);
+    }
+
+    /// <summary>
     /// <c>waterBilinear</c>: the MASKED bilinear mix — a corner of weight 0 is not read, so a NaN (dry) neighbour
     /// with no weight cannot drag a sample on a lattice line to NaN; NaN exactly when a contributing corner is dry.
     /// </summary>
@@ -48,9 +76,10 @@ public sealed record WaterRaster(double TileM, IReadOnlyDictionary<string, Water
     }
 
     /// <summary><c>rasterLevelAt</c>: the water level at (x, z), masked bilinear on the tile's lattice; NaN = dry.</summary>
-    public static double LevelAt(WaterRaster? raster, double x, double z)
+    public static double LevelAt(WaterRaster? raster, double x, double z) => LevelIn(raster?.Field(x, z), x, z);
+
+    private static double LevelIn(WaterTileField? f, double x, double z)
     {
-        var f = raster?.Field(x, z);
         if (f is null || f.Rows < 2 || f.Cols < 2) return double.NaN;
         var (i, tx) = CellAt((x - f.OriginX) / f.Step, f.Cols);
         var (j, tz) = CellAt((z - f.OriginZ) / f.Step, f.Rows);
@@ -59,9 +88,10 @@ public sealed record WaterRaster(double TileM, IReadOnlyDictionary<string, Water
     }
 
     /// <summary><c>rasterSdAt</c>: the signed distance to the painted outline, PLAIN bilinear (the dry sentinel is finite).</summary>
-    public static double SdAt(WaterRaster? raster, double x, double z)
+    public static double SdAt(WaterRaster? raster, double x, double z) => SdIn(raster?.Field(x, z), x, z);
+
+    private static double SdIn(WaterTileField? f, double x, double z)
     {
-        var f = raster?.Field(x, z);
         if (f is null || f.Rows < 2 || f.Cols < 2) return WaterTileField.SdDry;
         var (i, tx) = CellAt((x - f.OriginX) / f.Step, f.Cols);
         var (j, tz) = CellAt((z - f.OriginZ) / f.Step, f.Rows);
@@ -72,9 +102,10 @@ public sealed record WaterRaster(double TileM, IReadOnlyDictionary<string, Water
     }
 
     /// <summary><c>rasterKindAt</c>: the painted kind of the water at (x, z), nearest texel, never mixed; '' where unknown.</summary>
-    public static string KindAt(WaterRaster? raster, double x, double z)
+    public static string KindAt(WaterRaster? raster, double x, double z) => KindIn(raster?.Field(x, z), x, z);
+
+    private static string KindIn(WaterTileField? f, double x, double z)
     {
-        var f = raster?.Field(x, z);
         if (f is null || f.Rows < 1) return "";
         int j = NearestIndex((z - f.OriginZ) / f.Step, f.Rows);
         int i = NearestIndex((x - f.OriginX) / f.Step, f.Cols);
@@ -83,9 +114,10 @@ public sealed record WaterRaster(double TileM, IReadOnlyDictionary<string, Water
     }
 
     /// <summary><c>rasterFlowAt</c>: the flow vector, masked bilinear; (0, 0) where still, unloaded or not finite.</summary>
-    public static (double X, double Z) FlowAt(WaterRaster? raster, double x, double z)
+    public static (double X, double Z) FlowAt(WaterRaster? raster, double x, double z) => FlowIn(raster?.Field(x, z), x, z);
+
+    private static (double X, double Z) FlowIn(WaterTileField? f, double x, double z)
     {
-        var f = raster?.Field(x, z);
         if (f?.FlowX is not { } fx || f.FlowZ is not { } fz) return (0, 0);
         if (f.Rows < 2 || f.Cols < 2) return (0, 0);
         var (i, tx) = CellAt((x - f.OriginX) / f.Step, f.Cols);

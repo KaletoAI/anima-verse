@@ -446,7 +446,9 @@ path `"Path_Blend "` (trimmed + lower-cased → `path_blend`), meadow `meadow_te
   **33** uniform declarations: 11 layer cut + 4 natural ground + 14 CDLOD stage (`tl_near`, `tl_far`, both geometries,
   both level arrays, the near rect, the frame, the rings, base step, normal span, the cap texture, its geometry and
   fit) + roughness/metallic + the basement hole's `hole_rect` / `hole_on` (Task 16, off at the build); the water
-  variant adds 7 `tw_*` + 4 lift uniforms (`tl_water`, `tl_water_sd`, `tl_water_geom`, `tl_water_levels`) = **44**; the
+  variant adds 5 `tw_*` (`tw_wave`, `tw_kind`, `tw_flow`, `tw_look`, `tw_sky`) + 4 lift uniforms (`tl_water`,
+  `tl_water_sd`, `tl_water_geom`, `tl_water_levels`) = **42** — since Task 25 the fragment reads the lift's own sd
+  field and lattice (`tl_sd_at`, `tl_water_geom`), the old `tw_sd` / `tw_geom` window is gone; the
   plain terrain is the 14 + its colour = **15**. Godot's dummy renderer runs the shader-language front end, so a
   shader that does not parse reports none.
 - **AO** on the overview h = 4·i·j (bilinear, exact everywhere inside): at the anchor (64, 128) the four taps of a
@@ -606,7 +608,9 @@ Cross-checks: V1 the house's merged interior wall mesh measured on its own (4 nu
 | (0, 2) | 2 | 0.125 | 0.15625 | **2.625** | **0.625** |
 | (2, 0) | 4 | dry | 0 | **4** | **0** |
 
-→ **1 wet tile, 5 wet texels**, window 5 × 5 at (0, 0) step 64 (sd at (1, 0) = 0.25, a dry texel −10 000);
+→ **1 wet tile, 5 wet texels**; the fragment's fields ride on the NEAR lattice at 2 m with the lift's (Task 25): sd at
+world (64, 0) = the tile's (1, 0) = **0.25**, at (32, 0) the mix (1 + 0.25)/2 = **0.625**, at the dry (128, 128)
+**−10 000**; one look row and no flow → every row 0, every flow (0, 0);
 the layer table's only water layer `lake` → **1 look row**, its surface `water` has no library entry and no
 painted area carries a profile → the default look, opaque depth ¾ · 2 = **1.5 m**, water areas **0**. With
 `--no-water`: no lift, no wet program, no variant, `water[off: --no-water]`. The lift is drawn by the wet program's
@@ -883,7 +887,7 @@ Sources: terrainLod.ts (`createTerrainLod`: `setField`, `buildFar`, `buildNear`,
 `Core/Terrain/TerrainLod.cs`, vector-checked in `dotnet test` (terrain_lod.json); `nodeHasWater` has no shared vector
 yet — its hand cases (smoke_terrain_lod.mjs § (c)) run in `TerrainFieldTests`.
 
-**T0 shaders.** ground **33**, ground-water **44**, terrain-plain **15** uniforms (counts under "Ground surfaces"). The
+**T0 shaders.** ground **33**, ground-water **42** (Task 25: was 44 with the separate fragment window), terrain-plain **15** uniforms (counts under "Ground surfaces"). The
 text prints `TL_PATCH_N = 32.0`, `TL_MORPH_START = 0.5`, `TL_CAP_NONE = 6.0`, six rings, the descent j = 5 … 1, the
 outline band `sd / 0.5` and `TL_SD_DRY = -10000.0` — the twin (`Core/Terrain/TerrainShaderTwin.cs`) reads the same
 numbers from C#. Only the wet program has `tl_lift`.
@@ -1030,3 +1034,60 @@ the same poll again reloads nothing.
 Masks: missing 3, 4, 2, 1 → `masks 3,0;4,0;2,0;1,0` answers under `L2` ≠ `L1` → dropped, `mask-index` (says `L2`) →
 re-indexed: a new ground with that index (`terrain`, then the masks of the want set `3,0;4,0;2,0;5,0;1,0;6,0`), held
 masks 1 … 6, one re-index. Near window again (−26, −514) … (2022, 766).
+
+## Water (Task 25, `Check/WaterCheck.cs`, `--check water`, fixtures `water/`)
+
+Sources: waterShade.ts (`terrainWaterFragmentGlsl`, `twRipple`), waterPlaneMath.ts (shore, foam, opaque depth),
+waterfall.ts (`waterfallQuad`, `buildWaterfall`, `patchCurtain`), pkg waterfall.ts (`waterfallsFrom`), submergedGhost.ts,
+walk.ts (`ghostCutY`, `groundWaterLevel`, `groundScope`), propWater.ts + propWaterMath.ts, materials.ts
+(`applyWaterShader`, `surfaceMaterial`). The pure functions are vector-checked in `dotnet test` (water.json,
+prop_water.json); the ripple's sample coordinates have no shared vector — its identities (smoke_water_shade.mjs § [5]/[6])
+are hand tests in `WaterExtrasTests`.
+
+**W0 shaders.** `ground-water` **42** uniforms (its look reads the lift's `tl_sd_at` + `tl_inside` and `tl_water_geom`,
+no `tw_sd` / `tw_geom`), `waterfall-curtain` 4, `waterfall-foam` 1, `prop-water` 4, `water-ghost[back|disabled|front]`
+5 each; every one compiles in the headless front end (a bogus render mode does not — `depth_test_inverted` is a real
+4.7.2 mode). The wave map is three's `CanvasTexture` uploaded with flipY, so three's sample (u, v) reads canvas row
+(1 − v)·N = Godot's (u, −v) on the periodic map: the terrain ripple (`uv * f`, f = (1, −1), gradients too), the curtain
+(`vec2(s.x, -s.y)`) and the sheet (`vec2(uv.x, -uv.y)`) all read it so.
+
+**W1 shore gradient** (inside 1, opaque 1.5 m = ¾ · 2 m default, rim max(fwidth, 5 cm) = 5 cm). rim = min(d/0.05, 1),
+shore = s(d/1.5), s(x) = x²(3 − 2x); absorption twA = shore·rim; surface twS = rim·(0.35 + 0.65·shore);
+raw foam = 1 − s(d/0.6); foam = raw·min(shore + 0.15·raw, 1)·rim:
+
+| d (m) | rim | shore | twA | twS | raw | foam |
+|---|---|---|---|---|---|---|
+| 0.025 | 0.5 | 0.0008240741 | **0.000412037** | **0.1752678241** | 0.9949363426 | **0.0746523251** |
+| 0.05 | 1 | 0.0032592593 | **0.0032592593** | **0.3521185185** | 0.9803240741 | **0.1473504238** |
+| 0.1 | 1 | 0.0127407407 | **0.0127407407** | **0.3582814815** | 0.9259259259 | **0.1403978052** |
+| 0.3 | 1 | 0.2²·2.6 = 0.104 | **0.104** | 0.35 + 0.0676 = **0.4176** | 0.5 | 0.5·0.179 = **0.0895** |
+| 0.59 | 1 | 0.3424272593 | **0.3424272593** | **0.5725777185** | 0.0008240741 | **0.0002822873** |
+| 0.6 | 1 | 0.4²·2.2 = 0.352 | **0.352** | **0.5788** | 0 | **0** (the foam band's edge) |
+| 0.75 | 1 | 0.5 | **0.5** | **0.675** | 0 | **0** |
+| 1.5 | 1 | 1 | **1** (the opaque edge) | **1** | 0 | **0** |
+| 2.0 | 1 | 1 | **1** | **1** | 0 | **0** |
+
+**W2 waterfalls** (`water/terrain.json`, areas in z-order). `lake`: polygon water, profile flat at 5, no stroke → no
+fall. `bank`: sand over the lake, no profile. `river`: stroke 4 m, axis (x, z, s, level) (0, 22, 0, 10), (10, 22, 10,
+10), (12, 22, 12, 6), (20, 22, 20, 6): only segment 1 is steep (drop 4 over run 2 = 2 > 0.5), the run 1 … 2 drops 4 > 1
+→ **one fall**, two knots → midpoint (11, 22), dir (1, 0), chord 2, width 4, 10 → 6. `sliver`: a fall of its own
+(9 → 5 over 2 m) but its three collinear points enclose nothing (`buildAreaGeometry` = null) → skipped.
+- Quad: h = 4, across = (dir.z, −dir.x) = (0, −1), half width 2, half run 1, lean 0.3 · 4 = 1.2; lip (10, 22), foot
+  (11 + 1 + 1.2, 22) = (13.2, 22) → corners lip-left **(10, 10, 24)**, lip-right **(10, 10, 20)**, foot-left
+  **(13.2, 6, 24)**, foot-right **(13.2, 6, 20)**; uvs (0, 1) (1, 1) (0, 0) (1, 0).
+- Scroll √(9.81 · 4 / 2) = 4.4294469 m/s / 2.5 = **1.7717788 tiles/s**; tiles (4/2.5, 4/2.5) = **(1.6, 1.6)**.
+- Foam: r = max(4/2, 0.5 · 4) = **2**, centre **(13.2, 6.05, 22)** alpha 0.6; rim point 0 (13.2 + 2, 6.05, 22), point 6
+  (a = π/2: (r cos a, 0, −r sin a)) **(13.2, 6.05, 20)**, alpha 0; 26 vertices, 24 triangles, the first three's
+  (1, 2, 0) emitted as (1, 0, 2).
+
+**W3 the ghost.** A box (albedo texture, both sides, alpha scissor 0.5): dry → **nothing built**. A crate base at 4.6
+in the lake (mirror 5, the topmost area's flat profile): 5 − 4.6 = 0.4 ≥ 0.05 → cut **5**; one twin under the box, same
+mesh, identity transform, no shadow, the `cull_disabled` variant, the texture, alpha test 0.5, tint (63, 127, 184)/255.
+The lake rises to 5.75 → the cut follows, nothing is built again. Dry → hidden, kept. The switch hides it. A skinned
+body: the twin carries the same skin and resolves the same `Skeleton3D`. Figure gate: the river at (5, 22) = 10 over
+a bed at 9 → **10**; in a built scope → dry; on the sandbank (topmost area without a profile) → dry.
+
+**W4 prop water** (`water/prop_spec.json`, lift 0.25): region 0 (4 × 4 with a 1 × 1 hole, y 1.5) → **8** triangles at
+**1.75**; region 1 (2 × 2, y 2) → **2** at **2.25**; one material for `#3f7fb8|0.7`, albedo 0.25 · raw + 0.75 · linear =
+(**0.0990446**, **0.2836829**, **0.5398823**) (linear 0.0497066, 0.2122308, 0.4793202), opacity 0.7; re-lift 1.0 →
+**2.5**; the hour's sky reaches the cached material; at (3.5, 3.5) the higher mirror 2 + 0.25 = **2.25** (bed 1.75).

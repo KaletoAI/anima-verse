@@ -63,6 +63,12 @@ public partial class FigureManager : Node3D
     /// <summary>At most 4 model requests at a time (the browser's clip queue uses the same width).</summary>
     private readonly SemaphoreSlim _net = new(4);
 
+    /// <summary>
+    /// The mirror over a point for the underwater ghost (npcs.ts: <c>groundWaterLevel(typeAt(x, z).water_level, scope)</c>,
+    /// <see cref="World.WorldBuilder.FigureWaterLevel"/>); null = no ghosts at all.
+    /// </summary>
+    public Func<double, double, double?>? WaterLevelAt { get; set; }
+
     public ClipLibrary Clips { get; }
     public FigureStats Stats { get; } = new();
     public IReadOnlyDictionary<string, Figure> Figures => _figures;
@@ -172,6 +178,7 @@ public partial class FigureManager : Node3D
             fig!.Rule = spot.Rule;
             fig.SetTarget(at, PollSeconds, snap: fresh);
             fig.Advance(0, _height.GroundAt);
+            Gate(fig);
             if (fresh)
             {
                 fig.SetBody(Figure.Capsule(fig.HeightM), false, null, null);
@@ -195,7 +202,23 @@ public partial class FigureManager : Node3D
 
     public void Tick(double dt)
     {
-        foreach (var fig in _figures.Values) fig.Advance(dt, _height.GroundAt);
+        foreach (var fig in _figures.Values)
+        {
+            fig.Advance(dt, _height.GroundAt);
+            Gate(fig);
+        }
+    }
+
+    /// <summary>
+    /// THE UNDERWATER GHOST of a figure, every frame (npcs.ts): <c>ghostCutY(bedY, groundWaterLevel(…))</c> on the UNGATED
+    /// water level — a wader is exactly the figure the opaque water surface cuts in half. The figure stands on the bed
+    /// (<see cref="WorldHeight.GroundAt"/>) until E5 brings swimming.
+    /// </summary>
+    private void Gate(Figure fig)
+    {
+        if (WaterLevelAt is not { } at) return;
+        var p = fig.Position;
+        fig.SetSubmerged(Water.WaterGates.GhostCutY(p.Y, at(p.X, p.Z)));
     }
 
     public override void _Process(double delta)
@@ -417,7 +440,7 @@ public partial class FigureManager : Node3D
             LastPickCandidates++;
             foreach (var mi in Walk(body).OfType<MeshInstance3D>())
             {
-                if (!mi.IsVisibleInTree()) continue;
+                if (!mi.IsVisibleInTree() || mi.HasMeta(World.SubmergedGhost.Meta)) continue;
                 double? t = mi.Skin is not null && mi.GetNodeOrNull<Skeleton3D>(mi.Skeleton) is { } skel
                     ? SkinnedHit(mi, skel, o, d) : MeshRay.Static(mi, o, d);
                 if (t is double tt && tt < best)

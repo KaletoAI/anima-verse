@@ -250,66 +250,44 @@ void fragment() {{
     // ── The water variant (Wasser v2 K-A: client3d/src/scene/waterShade.ts terrainWaterFragmentGlsl) ──────────
     // The wet pieces' vertices are LIFTED onto the mirror by the vertex stage (TerrainLodGlsl tl_lift, per tap of the
     // morph pair) and hand the depth over the drawn bed out as v_wet (vTlodWet). Every water field is sampled HERE at
-    // the pixel's own xz: the signed distance (shore gate), the kind row (look table) and the flow (ripple drift).
+    // the pixel's own xz, on the water pyramid's BASE lattice (tl_water_geom, the browser's uTlodWaterGeom): the signed
+    // distance through the very function and texture the vertex stage gates its lift by (tl_sd_at + tl_inside — ONE
+    // field, so the drawn surface and the drawn look ride the same shore ramp, finding G1), the kind row (look table)
+    // and the flow (ripple drift).
 
     private const string WaterUniforms = @"
 // ---- water variant (waterShade.ts) ----
 uniform sampler2D tw_wave : filter_linear_mipmap_anisotropic, repeat_enable;
-uniform sampler2D tw_sd : filter_nearest, repeat_disable;
 uniform sampler2D tw_kind : filter_nearest, repeat_disable;
 uniform sampler2D tw_flow : filter_nearest, repeat_disable;
 uniform sampler2D tw_look : filter_nearest, repeat_disable;
-uniform vec4 tw_geom = vec4(0.0);          // originX, originZ, step, present (> 0)
 uniform vec3 tw_sky = vec3(0.62, 0.78, 0.91);
 varying float v_wet;
 ";
 
     private static string WaterFunctions() => $@"
-const float TW_SD_DRY = -1.0e4;
-float tw_sd_at(vec2 p) {{
-	if (tw_geom.w <= 0.0) return TW_SD_DRY;
-	ivec2 sz = textureSize(tw_sd, 0);
-	float cols = float(sz.x);
-	float rows = float(sz.y);
-	float stp = tw_geom.z;
-	if (cols < 2.0 || rows < 2.0 || stp <= 0.0) return TW_SD_DRY;
-	float fx = (p.x - tw_geom.x) / stp;
-	float fz = (p.y - tw_geom.y) / stp;
-	if (fx < 0.0 || fz < 0.0 || fx > cols - 1.0 || fz > rows - 1.0) return TW_SD_DRY;
-	float fi = min(floor(fx), cols - 2.0);
-	float fj = min(floor(fz), rows - 2.0);
-	float tx = fx - fi;
-	float tz = fz - fj;
-	int i = int(fi);
-	int j = int(fj);
-	float s00 = texelFetch(tw_sd, ivec2(i, j), 0).r;
-	float s10 = texelFetch(tw_sd, ivec2(i + 1, j), 0).r;
-	float s01 = texelFetch(tw_sd, ivec2(i, j + 1), 0).r;
-	float s11 = texelFetch(tw_sd, ivec2(i + 1, j + 1), 0).r;
-	return mix(mix(s00, s10, tx), mix(s01, s11, tx), tz);
-}}
 int tw_kind_row(vec2 p) {{
-	if (tw_geom.w <= 0.0) return 0;
+	if (tl_water_geom.w <= 0.0) return 0;
 	ivec2 sz = textureSize(tw_kind, 0);
 	float kcols = float(sz.x);
 	float krows = float(sz.y);
-	float stp = tw_geom.z;
+	float stp = tl_water_geom.z;
 	if (kcols < 1.0 || krows < 1.0 || stp <= 0.0) return 0;
-	float fx = (p.x - tw_geom.x) / stp;
-	float fz = (p.y - tw_geom.y) / stp;
+	float fx = (p.x - tl_water_geom.x) / stp;
+	float fz = (p.y - tl_water_geom.y) / stp;
 	int i = int(clamp(floor(fx + 0.5), 0.0, kcols - 1.0));
 	int j = int(clamp(floor(fz + 0.5), 0.0, krows - 1.0));
 	return int(texelFetch(tw_kind, ivec2(i, j), 0).r + 0.5);
 }}
 vec2 tw_flow_at(vec2 p) {{
-	if (tw_geom.w <= 0.0) return vec2(0.0);
+	if (tl_water_geom.w <= 0.0) return vec2(0.0);
 	ivec2 sz = textureSize(tw_flow, 0);
 	float cols = float(sz.x);
 	float rows = float(sz.y);
-	float stp = tw_geom.z;
+	float stp = tl_water_geom.z;
 	if (cols < 2.0 || rows < 2.0 || stp <= 0.0) return vec2(0.0);
-	float fx = (p.x - tw_geom.x) / stp;
-	float fz = (p.y - tw_geom.y) / stp;
+	float fx = (p.x - tl_water_geom.x) / stp;
+	float fz = (p.y - tl_water_geom.y) / stp;
 	if (fx < 0.0 || fz < 0.0 || fx > cols - 1.0 || fz > rows - 1.0) return vec2(0.0);
 	float fi = min(floor(fx), cols - 2.0);
 	float fj = min(floor(fz), rows - 2.0);
@@ -327,8 +305,11 @@ float tw_smooth(float t) {{
 	float c = clamp(t, 0.0, 1.0);
 	return c * c * (3.0 - 2.0 * c);
 }}
-float tw_inside(float sd) {{
-	return tw_smooth(sd / {L(WaterShade.SdBandM)});
+// THE map is three's CanvasTexture, uploaded with flipY: its sample coordinate (u, v) reads the canvas row (1 − v)·N, i.e.
+// Godot's (u, −v) on the periodic map — and the y gradients flip with it.
+vec3 tw_wave_at(vec2 uv, vec2 gx, vec2 gy) {{
+	vec2 f = vec2(1.0, -1.0);
+	return textureGrad(tw_wave, uv * f, gx * f, gy * f).xyz;
 }}
 vec2 tw_frame(vec2 v, vec2 ax, vec2 ay, float aniso) {{
 	return ax * (dot(v, ax) / aniso) + ay * dot(v, ay);
@@ -354,9 +335,9 @@ vec3 tw_ripple(vec2 p, vec2 gx, vec2 gy, float wave_m, float speed, float flow_s
 	vec2 uv_a = tw_frame(p / lam_a + dir_a * (t * sp * sgn / lam_a), ax, ay, aniso);
 	vec2 uv_b = tw_frame(p / lam_b + dir_b * (t * sp * sgn / lam_b), ax, ay, aniso);
 	vec2 uv_c = tw_frame((p + ax * (t * sp * sgn)) / lam_c, ax, ay, 8.0);
-	vec3 n_a = textureGrad(tw_wave, uv_a, tw_frame(gx, ax, ay, aniso) / lam_a, tw_frame(gy, ax, ay, aniso) / lam_a).xyz * 2.0 - 1.0;
-	vec3 n_b = textureGrad(tw_wave, uv_b, tw_frame(gx, ax, ay, aniso) / lam_b, tw_frame(gy, ax, ay, aniso) / lam_b).xyz * 2.0 - 1.0;
-	vec3 n_c = textureGrad(tw_wave, uv_c, tw_frame(gx, ax, ay, 8.0) / lam_c, tw_frame(gy, ax, ay, 8.0) / lam_c).xyz * 2.0 - 1.0;
+	vec3 n_a = tw_wave_at(uv_a, tw_frame(gx, ax, ay, aniso) / lam_a, tw_frame(gy, ax, ay, aniso) / lam_a) * 2.0 - 1.0;
+	vec3 n_b = tw_wave_at(uv_b, tw_frame(gx, ax, ay, aniso) / lam_b, tw_frame(gy, ax, ay, aniso) / lam_b) * 2.0 - 1.0;
+	vec3 n_c = tw_wave_at(uv_c, tw_frame(gx, ax, ay, 8.0) / lam_c, tw_frame(gy, ax, ay, 8.0) / lam_c) * 2.0 - 1.0;
 	vec3 n = normalize(n_a + n_b + n_c * (still ? 0.0 : 0.35));
 	n = mix(vec3(0.0, 0.0, 1.0), n, detail);
 	return normalize(vec3(n.x, n.z, n.y));
@@ -381,7 +362,7 @@ vec3 tw_ripple(vec2 p, vec2 gx, vec2 gy, float wave_m, float speed, float flow_s
 	float edge = max(fwidth(d), {L(WaterShade.EdgeFadeM)});
 	if (d > 0.0) {{
 		int rows = textureSize(tw_look, 0).y;
-		float inside = tw_inside(tw_sd_at(p));
+		float inside = tl_inside(tl_sd_at(p));
 		int layer = clamp(tw_kind_row(p), 0, rows - 1);
 		float rim = clamp(d / edge, 0.0, 1.0) * inside;
 		if (rim > 0.0) {{

@@ -257,6 +257,7 @@ Arguments after `--` (no .env; all optional):
 | `--check fidelity` | only the model-fidelity section (`fixtures/fidelity/`, `Check/FidelityCheck.cs`: neutralisation, clip, cutouts, depth cut, tier swap, re-datum, sweep), then exit 0/1 |
 | `--check props` | only the props section (`fixtures/props/`, `Check/PropsCheck.cs`: slots, mirrors, prop lights, doors, ambience), then exit 0/1 |
 | `--check terrain` | only the CDLOD terrain section (`Check/TerrainCheck.cs`), then exit 0/1 |
+| `--check water` | only the water section (`Check/WaterCheck.cs`, `fixtures/water/`: shaders, shore gradient and foam band, waterfalls, underwater ghost, prop water sheets), then exit 0/1 |
 | `--check stream` | only the terrain streaming section (`Check/StreamCheck.cs`: a fake server answering height, statistics and mask batches for a ten-tile strip — batches, LRU, windows, `height_sig`/`terrain_sig` reloads, re-datum, re-index), then exit 0/1 |
 | `--fly=M[,DEG]` | after the boot, fly the camera target M metres in a straight line (heading DEG: 0 = +x, 90 = +z) at 50 m/s, let the stream settle and log `fly done …` (tiles taken/evicted, the longest frame, the longest frame while streaming); with `--offline` it then quits |
 | `--check light` | only the light section (`Check/LightCheck.cs`: the game-hour stage at 6/7/9/12/18/22 h, hemisphere, shadow fit, material policy, MSAA option), then exit 0/1 |
@@ -370,7 +371,7 @@ Port of the loaders of `client3d/src/scene/ground.ts` (`setHeightAnchor`, `refre
   reload chains. Plus `Coalescer` (one rebuild at a time, the rest folded into one) and `StreamProbe`. Unit-tested on
   simulated camera paths in `tests/TerrainStreamTests.cs`.
 - `World/TerrainStreamer.cs` — the wiring: the anchor follows the camera target on main.ts' 1 Hz tick; a taken
-  height batch rebuilds the field ON A WORKER (near pyramid, water fields, the wet window, all images, from a
+  height batch rebuilds the field ON A WORKER (near pyramid, water fields on the near lattice, all images, from a
   `WorldHeight.Snapshot`) and only uploads on the main thread (`ImageTexture.Update` when the size held); a mask batch
   is packed on a worker and uploaded the same way; a new relief sets the AO, rebuilds the far pyramid and makes every
   location re-datum (the Task 17 hook, through the height revision); a new `terrain_sig` builds a new ground for the
@@ -383,6 +384,34 @@ The log says `stream: field rebuilt (… tiles, revision …) — … worker …
 saw streaming a `stream stream[held= stats= tiles taken= evicted= … session probe[… streaming_max= …]]` line. The
 bench result gets `streamMaxFrameMs` (the longest frame of the drive while the terrain streamed; null = nothing
 streamed), `streamFrames` and `stream`.
+
+## Water (Task 25)
+
+Wasser v2 K-A has no water mesh for terrain water: the wet program lifts the terrain onto the mirror and shades the same
+pixels as water (`GroundShader` water variant). Since Task 25 the look reads ONE field set on the near lattice with the
+lift — the outline's signed distance through the vertex stage's own `tl_sd_at` / `tl_inside`, the look row
+(`buildKindRows`) and the flow (`buildFlow`) over `tl_water_geom` (`TerrainField.KindRows` / `Flow`) — so held wet tiles
+anywhere in the near window shade as water, and the old 560 m fragment window is gone. The ripple reads the wave map as
+three's flipped canvas (`(u, −v)`, see `fixtures/README.md` "Water (Task 25)" W0); `tw_sky` and every prop water sheet
+follow the game-hour sky (`StageAmbience`).
+
+- **Waterfalls** (`World/WaterfallLayer.cs`): `waterfallsFrom` over every painted area's flow axis with a stroke width
+  (`TerrainPayload` area `Falls`), one curtain quad (`waterfallQuad`, wave map scroll at the fall's mean speed, whiter
+  downwards, edge fade, double-sided) + one foam disc per fall; rebuilt with every new ground. The log says
+  `waterfalls: N [(x, z) top → bottom m, w m wide]`.
+- **Underwater ghost** (`World/SubmergedGhost.cs`): a second draw of anything standing in water, `depth_test_inverted`
+  (Godot 4.7.2: `COMPARE_OP_LESS` on the reverse-Z buffer = three's `GreaterDepth`), unshaded, water tint × own
+  texture at 0.4, no depth write, cut at the waterline. Figures every frame (`FigureManager.WaterLevelAt` =
+  `groundWaterLevel(typeAt(x, z).water_level, groundScope)`), scene placements at mount / re-lift / tier swap and world
+  props at placement (`waterGhostAt`: level AND outline). `--no-water` turns every ghost off.
+- **Prop water** (scene v18 `water.regions[]`, `World/PropWaterSheets.cs`, `Core/Water/PropWater.cs`): one flat
+  transparent sheet per region at `y + lift` in the placement's parent (world props: world frame, the ground under the
+  anchor), the still surface water look, cached per tint|opacity, moved with every re-lift. `waterRegionAt` and the
+  walk gates (`Core/Water/WaterGates.cs`) are vector-checked against `prop_water.json` (figures swimming in them: E5).
+  The log says `location … : N prop water sheet(s) [spec storey L, …], M underwater ghost(s)` per mount.
+
+The build summary carries `water_extras[falls= prop_sheets= ghosts=]`; `--offline` adds `N in water [name bed … cut …]`
+to the figures line.
 
 ## Ground surfaces (Task S3b)
 
@@ -489,9 +518,9 @@ nothing here is a native choice:
   → the dry tile, recipe → a StandardMaterial3D, scatter → the same shader
   without the wind).
 
-Not ported yet (view-only, counted nowhere): door swinging (needs an avatar, E7), the underwater ghosts and
-waterfalls (E3), streaming in/out of rings while the camera moves (E3/E6; the tier swap does run, see "Model
-fidelity"). Slots, clip, depth cut and prop lights landed in Tasks 17/18 (sections below).
+Not ported yet (view-only, counted nowhere): door swinging (needs an avatar, E7), streaming in/out of rings while the
+camera moves (E6; the tier swap does run, see "Model fidelity"). The underwater ghosts, waterfalls and prop water
+landed in Task 25 ("Water", below). Slots, clip, depth cut and prop lights landed in Tasks 17/18 (sections below).
 
 Summary line of a build (online log, `--offline`, `--check`): `primitives=N
 skipped=M (degenerate=… interior=… storey=… panes=…) shell_copies=…
@@ -787,17 +816,17 @@ works the same way.
 | `Main.cs`, `Main.tscn` | entry scene: login → world build → camera → (`--bench`) the drive; `--check`/`--check-bench` dispatch |
 | `App/Main*.cs` | the rest of the entry scene's class, by concern: `MainSession` (login, session, back to the title), `MainWorld` (world build, boot stages, bench/offline), `MainSync` (poll, push stream, show all), `MainHud` (HUD game actions, picking, info panel) |
 | `Cli.cs` | command-line parameters |
-| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Terrain/` (`TerrainLod`, `TerrainField`, `TerrainLodGlsl`, `TerrainShaderTwin`, `HeightTiles`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Ui/SessionFlow.cs` (login / character switch / back to title / lost session as one decision), `Ui/HudStorage.cs` (the kept HUD settings: file model, 256 KB cap, the handoff's seed script), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke), `Sync/` (Task 10: `PollScheduler` = pollCore.ts, `SyncStream` = syncHub.ts + `HttpEventSource`/`SseParser` for `/events/sync`, `BootTracker` + `BootRetry` = game/boot.ts + `retryBoot`, `LocationsCache`/`LocationsSync` = the ETag'd `/world/locations?view=3d`, `ConnectionState`, the frame-pumped `TimerQueue`) |
+| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Water/` (`WaterShade` + the ripple twin, `WaterRaster`, `WaterProfile`, `Waterfalls`, `WaterGates`, `PropWater`), `Terrain/` (`TerrainLod`, `TerrainField`, `TerrainLodGlsl`, `TerrainShaderTwin`, `HeightTiles`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Ui/SessionFlow.cs` (login / character switch / back to title / lost session as one decision), `Ui/HudStorage.cs` (the kept HUD settings: file model, 256 KB cap, the handoff's seed script), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke), `Sync/` (Task 10: `PollScheduler` = pollCore.ts, `SyncStream` = syncHub.ts + `HttpEventSource`/`SseParser` for `/events/sync`, `BootTracker` + `BootRetry` = game/boot.ts + `retryBoot`, `LocationsCache`/`LocationsSync` = the ETag'd `/world/locations?view=3d`, `ConnectionState`, the frame-pumped `TimerQueue`) |
 | `tests/` | xUnit project on Core (`dotnet test tests`) |
 | `test.sh` | `dotnet test` + build + headless `--check` |
-| `World/` | the Godot side of the world (payloads, height + anchor and the view rules are in `Core/World/`): the CDLOD terrain node (`TerrainLodNode.cs`), `place()`, recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
+| `World/` | the Godot side of the world (payloads, height + anchor and the view rules are in `Core/World/`): the CDLOD terrain node (`TerrainLodNode.cs`), the waterfalls / underwater ghost / prop water sheets (`WaterfallLayer.cs`, `SubmergedGhost.cs`, `PropWaterSheets.cs`, `WorldBuilder.Water.cs`), `place()`, recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
 | `tools/dump_payloads.py` | Task S3c: dumps the client's HTTP answers from a COPY of a world for `--offline` |
 | `Gltf/` | runtime GLB import (the Meshopt decode is in `Core/Gltf/`) |
 | `Figures/` | world-map characters: placement rule, figures (fed by Main's poll), clip library (import, pick, retarget), rest-pose correction |
 | `Ui/` | login screen (server, user, password), `LauncherStore` (`user://launcher.json`), `HudStorageStore` (`user://hud_storage.json`), the overview camera, the label overlay (`LabelOverlay.cs`: projection, order, the label CSS in `LabelStyle`), the performance probe (`PerfProbe.cs`) |
 | `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |
-| `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); Task S3c: the water numbers and window (`Water.cs`; the tile field is `Core/Ground/WaterTileField.cs`) |
+| `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); the water numbers are `Core/Water/` (the tile field `Core/Ground/WaterTileField.cs`), the water's fields ride on the terrain's near lattice (`Core/Terrain/TerrainField.cs`) |
 | `Scatter/` | (payload, sampler and LOD/undergrowth maths are in `Core/Scatter/`) prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
 | `Bench/` | the bench driver and its output (camera path `loadPath`/`samplePath` and statistics `summarize`/`percentile` are in `Core/Bench/`) |
 | `Check/` | `--check`: fixture source and expectations, the S3c world (`S3cCheck.cs`: view rules, models, world props, water, shaders), § B5a (`VerifyCheck.cs`), the crossfade and occlusion (`PickCheck.cs` G), bench maths, scatter (`ScatterCheck.cs`), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |

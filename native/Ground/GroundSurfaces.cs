@@ -23,7 +23,7 @@ public sealed class GroundStats
     public string? Reason;
     public int Layers, Slices, TexturesLoaded, TextureFailures, ColourSlices;
     public int WantedTiles, MaskTiles, WindowIdSize, WindowSdSize, FarCols, FarRows;
-    public int WaterTiles, WaterKinds, WaterTexels, WaterAreas;
+    public int WaterKinds, WaterAreas;
     public float AoStrength;
 
     public string Summary() => Mode != "layers"
@@ -86,14 +86,13 @@ public sealed class GroundSurfaces
     private readonly Dictionary<string, JsonElement> _materials = new();
     /// <summary>The water variant every wet tile wears (null = no water drawn: none loaded, <c>--no-water</c>, or its shader failed).</summary>
     public ShaderMaterial? WaterMaterial { get; private set; }
-    public WaterWindow? WaterWindow { get; private set; }
     public List<WaterLook> WaterLooks { get; } = new();
     public Dictionary<string, int> WaterRowOfKind { get; } = new();
     private readonly Dictionary<string, Image> _loaded = new();
     private TerrainPayload _catalog = null!;
 
-    /// <param name="water">Build the water variant over the loaded wet tiles now (the boot); false = the caller hands a
-    /// window later (<see cref="ApplyWaterWindow"/>, the streamed reload).</param>
+    /// <param name="water">Build the water variant now when a loaded tile carries water (the boot); false = the caller
+    /// makes it when a field with water arrives (<see cref="EnsureWaterMaterial"/>, the streamed reload).</param>
     /// <param name="index">The layer index already fetched (a re-index); null = fetch it.</param>
     public static async Task<GroundSurfaces> LoadAsync(IWorldSource source, WorldHeight height, double anchorX,
                                                        double anchorZ, Action<string> log, bool water = true,
@@ -376,6 +375,14 @@ public sealed class GroundSurfaces
     private static ImageTexture Tex(int w, int h, Image.Format fmt, byte[] data)
         => ImageTexture.CreateFromImage(Image.CreateFromData(w, h, false, fmt, data));
 
+    private static ImageTexture? _wave;
+
+    /// <summary>
+    /// <c>surfaceWaveNormal</c>: THE one wave normal map of the process — the terrain's water pixels, the waterfall
+    /// curtains and the prop water sheets all scroll this texture (a second map would be a second sea).
+    /// </summary>
+    public static ImageTexture WaveTexture => _wave ??= ImageTexture.CreateFromImage(WaveNormalImage());
+
     /// <summary><c>makeWaveNormal</c>: the one 256² wave normal map (<see cref="WaterShade.WaveNormalBytes"/>), mipmapped.</summary>
     private static Image WaveNormalImage()
     {
@@ -503,18 +510,18 @@ public sealed class GroundSurfaces
     // ── Water (Wasser v2 K-A: ground.ts refreshWaterLook + terrainLod's water pyramid) ─────────────────────
 
     /// <summary>
-    /// The look table (<c>refreshWaterLook</c>: one row per WATER layer kind, in layer-table order; the look from the
-    /// kind's surface material and the bed depth of the LAST painted area of that kind), the water window over the
-    /// loaded wet tiles, and the water variant of the ground material. A failure leaves the water off (logged).
+    /// The look table (<c>refreshWaterLook</c>) and the water variant of the ground material, when a loaded tile carries
+    /// water; the fields the variant reads (sd, look rows, flow) ride on the terrain's near lattice
+    /// (<see cref="Terrain.TerrainField"/>). A failure leaves the water off (logged).
     /// </summary>
     private void BuildWater(WorldHeight height, Action<string> log)
     {
-        var wet = height.Tiles.Where(t => t.Water is { } w && w.Wet > 0).ToList();
-        if (wet.Count == 0) return;
+        if (!height.Tiles.Any(t => t.Water is { } w && w.Wet > 0)) return;
         try
         {
             BuildWaterLooks();
-            ApplyWaterWindow(WaterWindow.Build(wet.Select(t => (t.Key.Tx, t.Key.Tz, t.Water!)), height.Overview.TileM, WaterRowOfKind), log);
+            if (EnsureWaterMaterial())
+                log($"water: variant ready, kinds [{string.Join(", ", WaterRowOfKind.OrderBy(k => k.Value).Select(k => k.Key))}]");
         }
         catch (Exception e)
         {
@@ -547,7 +554,6 @@ public sealed class GroundSurfaces
     }
 
     private bool _waterFailed;
-    private ImageTexture? _twSd, _twKind, _twFlow;
 
     private static byte[] Bytes(float[] f)
     {
@@ -557,10 +563,11 @@ public sealed class GroundSurfaces
     }
 
     /// <summary>
-    /// The water variant of the ground material, made once (the first wet tile the stream brings, or the boot's): the
-    /// ground's uniforms copied, the look table, the sky and the wave map. False when it cannot exist (its shader failed).
+    /// The water variant of the ground material, made once (the first field with water the stream brings, or the boot's):
+    /// the ground's uniforms copied, the look table, the sky and the wave map. False when it cannot exist (its shader
+    /// failed). The stage hands a new variant the hour's sky at its next apply (<see cref="World.StageAmbience.Apply"/>).
     /// </summary>
-    private bool EnsureWaterMaterial()
+    public bool EnsureWaterMaterial()
     {
         if (WaterMaterial is not null) return true;
         if (_waterFailed) return false;
@@ -580,50 +587,18 @@ public sealed class GroundSurfaces
         var look = WaterShade.Pack(WaterLooks);
         mat.SetShaderParameter("tw_look", Tex(3, Math.Max(1, WaterLooks.Count), Image.Format.Rgbaf, Bytes(look)));
         mat.SetShaderParameter("tw_sky", new Vector3((float)WaterShade.Sky.R, (float)WaterShade.Sky.G, (float)WaterShade.Sky.B));
-        mat.SetShaderParameter("tw_wave", ImageTexture.CreateFromImage(WaveNormalImage()));
+        mat.SetShaderParameter("tw_wave", WaveTexture);
         if (Hole is { } rect)
         {
             mat.SetShaderParameter("hole_on", 1f);
             mat.SetShaderParameter("hole_rect", new Vector4((float)rect[0], (float)rect[1], (float)rect[2], (float)rect[3]));
         }
         WaterMaterial = mat;
+        Stats.WaterKinds = WaterLooks.Count;
+        Stats.WaterAreas = _catalog.Areas.Count(a => a.WaterProfile);
         return true;
     }
 
-    /// <summary>The window's three images (sd R32F, kind row R32F, flow RG32F) — CPU only, made on a worker for a streamed window.</summary>
-    public static (Image Sd, Image Kind, Image Flow) WaterImages(WaterWindow w)
-        => (Image.CreateFromData(w.Cols, w.Rows, false, Image.Format.Rf, Bytes(w.Sd)),
-            Image.CreateFromData(w.Cols, w.Rows, false, Image.Format.Rf, Bytes(w.KindRow)),
-            Image.CreateFromData(w.Cols, w.Rows, false, Image.Format.Rgf, Bytes(w.Flow)));
-
-    /// <summary>
-    /// The water window the fragment's look reads (the wet tiles of the want set, merged on their 2 m lattice): the
-    /// water variant is made when the first wet window arrives; a null window = no water near the anchor (the variant
-    /// stays, reading dry). Images may come prepared from a worker; null = made here.
-    /// </summary>
-    public void ApplyWaterWindow(WaterWindow? w, Action<string> log, (Image Sd, Image Kind, Image Flow)? images = null)
-    {
-        WaterWindow = w;
-        if (w is null)
-        {
-            WaterMaterial?.SetShaderParameter("tw_geom", new Vector4(0, 0, 1, 0));
-            return;
-        }
-        if (!EnsureWaterMaterial()) return;
-        var mat = WaterMaterial!;
-        var (sd, kind, flow) = images ?? WaterImages(w);
-        _twSd = SwapTex(_twSd, sd);
-        _twKind = SwapTex(_twKind, kind);
-        _twFlow = SwapTex(_twFlow, flow);
-        mat.SetShaderParameter("tw_sd", _twSd);
-        mat.SetShaderParameter("tw_kind", _twKind);
-        mat.SetShaderParameter("tw_flow", _twFlow);
-        mat.SetShaderParameter("tw_geom", new Vector4((float)w.OriginX, (float)w.OriginZ, (float)w.Step, 1));
-        Stats.WaterTiles = w.Tiles;
-        Stats.WaterKinds = WaterLooks.Count;
-        Stats.WaterTexels = w.WetTexels;
-        Stats.WaterAreas = _catalog.Areas.Count(a => a.WaterProfile);
-        log($"water: {w.Tiles} wet tiles, window {w.Cols}x{w.Rows} @ ({w.OriginX:0.#}, {w.OriginZ:0.#}), "
-            + $"{w.WetTexels} wet texels, kinds [{string.Join(", ", WaterRowOfKind.OrderBy(k => k.Value).Select(k => k.Key))}]");
-    }
+    /// <summary>The terrain payload the ground was built from (types, areas — the waterfalls and the mirror per point).</summary>
+    public TerrainPayload Catalog => _catalog;
 }

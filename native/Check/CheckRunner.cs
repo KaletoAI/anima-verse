@@ -105,6 +105,12 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "water")
+            {
+                var alone = WaterCheck.Run(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "backdrop")
             {
                 var alone = BackdropCheck.Run(host);
@@ -196,10 +202,11 @@ public static class CheckRunner
             var backdrop = BackdropCheck.Run(host);
             var terrainLine = await TerrainCheck.RunAsync(host, dir);
             var streamLine = await StreamCheck.RunAsync(host, dir);
+            var waterLine = WaterCheck.Run(host, dir);
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

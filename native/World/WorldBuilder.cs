@@ -44,6 +44,8 @@ public sealed class WorldStats
     /// </summary>
     public int WaterTiles, WaterKinds, WaterTexels, WaterAreas;
     public string WaterMode = "none";
+    /// <summary>Task 25: waterfalls drawn, prop water sheets made, placements (scene + world props) with a ghost.</summary>
+    public int Waterfalls, PropWaterSheets, WaterGhosts;
     /// <summary>The ground surfaces (Task S3b); Mode "plain" = the S1a vertex colour.</summary>
     public GroundStats Ground = new();
     public List<string> Problems { get; } = new();
@@ -57,6 +59,8 @@ public sealed class WorldStats
         ? $"water[areas={WaterAreas} tiles={WaterTiles} kinds={WaterKinds} wet_texels={WaterTexels}]"
         : $"water[{WaterMode}]";
 
+    public string WaterExtrasSummary() => $"water_extras[falls={Waterfalls} prop_sheets={PropWaterSheets} ghosts={WaterGhosts}]";
+
     public string Summary() =>
         $"{TerrainSummary()} tiles={Tiles} locations={Locations} gone={LocationsGone} scenes={Scenes} "
         + $"open={(OpenLocation.Length > 0 ? OpenLocation : "-")} buildings={Buildings} "
@@ -64,7 +68,7 @@ public sealed class WorldStats
         + $"primitives={Primitives} skipped={Skipped} ({Recipe.SkipSummary()}) shell_copies={Recipe.ShellCopies} "
         + $"culled_walls={Recipe.CulledWalls} interior_mounted={Recipe.InteriorMounted} {Models.Summary()} world_props={WorldPropRows} {CutSummary()} "
         + $"failures={Failures} anchor=({Anchor.Position().X:0.###},{Anchor.Position().Y:0.###},{Anchor.Position().Z:0.###}) "
-        + $"{WaterSummary()} {Ground.Summary()} {VerifySummary()}";
+        + $"{WaterSummary()} {WaterExtrasSummary()} {Ground.Summary()} {VerifySummary()}";
 
     public string TerrainSummary() =>
         $"terrain[pieces={TerrainPieces} wet={TerrainWet} draws={TerrainDraws} triangles={TerrainTriangles} {TerrainField}]";
@@ -169,6 +173,10 @@ public sealed class PlacedModel
     public DoorProp? Door { get; set; }
     /// <summary>The prop light's source in the pool (<c>rec.lightHandle</c>), registered whether or not a mesh stands.</summary>
     public string? LightId { get; set; }
+    /// <summary>The placement's water sheets (<c>rec.waterMeshes</c>), made once and moved with every re-lift.</summary>
+    public List<MeshInstance3D>? WaterSheets { get; set; }
+    /// <summary>The underwater ghost of the mesh standing now (<c>rec.ghost</c>); null = never in water.</summary>
+    public SubmergedGhost? Ghost { get; set; }
     public bool IsBuilding => Spec.Role == "building";
 }
 
@@ -329,7 +337,8 @@ public sealed partial class WorldBuilder
         stats.Tiles = height.Tiles.Count;
         var water = !NoWater && !PlainGround && Ground?.WaterMaterial is not null ? height.WaterRaster() : null;
         var field = TerrainField.Build(height, stats.Anchor.X, stats.Anchor.Z, water,
-                                       TerrainField.ExtentOf(Overview.OverviewControl.WorldBoundsOf(mapRoot)));
+                                       TerrainField.ExtentOf(Overview.OverviewControl.WorldBoundsOf(mapRoot)),
+                                       rowOfKind: water is not null ? Ground!.WaterRowOfKind : null);
         var terrain = Terrain = new TerrainLodNode(field, _log);
         root.AddChild(terrain);
         terrain.SetMaterials(Ground?.Material, Ground?.WaterMaterial);
@@ -342,6 +351,9 @@ public sealed partial class WorldBuilder
         stats.TerrainField = $"{field.Summary()} cover={field.Coverage(first):0.######}";
         _log($"terrain: {stats.Tiles} tiles loaded; {stats.TerrainSummary()} (start camera, {StatsViewportPx} px)");
         ApplyWaterOutcome(stats, height);
+        // The water beside the terrain's own (Task 25): the falls of the painted rivers; the ghosts follow the water switch.
+        SubmergedGhost.Off = NoWater;
+        stats.Waterfalls = RebuildWaterfalls(root);
 
         _library = await SurfaceLibrary.LoadAsync(_source, _log);
         _models = new ModelCache(_source, _log);
@@ -417,7 +429,8 @@ public sealed partial class WorldBuilder
              + $"{_materials.Count} materials");
         _log($"models: {stats.Models.Summary()}; {_models.Loaded} GLBs loaded ({_models.Bytes / 1048576.0:0.0} MiB), "
              + $"{_models.Failed} failed, {_models.Neutralized} materials' metalness neutralised; {stats.CutSummary()}");
-        _log($"water: {stats.WaterSummary()}");
+        (stats.PropWaterSheets, stats.WaterGhosts) = WaterParts;
+        _log($"water: {stats.WaterSummary()} {stats.WaterExtrasSummary()}");
         return stats;
     }
 
@@ -475,12 +488,13 @@ public sealed partial class WorldBuilder
 
     /// <summary>
     /// A ground built again during play (a new <c>terrain_sig</c>, a mask re-index): it replaces the standing one on the
-    /// terrain's programs (its water variant comes with the next field rebuild's window).
+    /// terrain's programs (its water variant comes with the next field rebuild that carries water).
     /// </summary>
     public void ReplaceGround(GroundSurfaces ground)
     {
         Ground = ground;
         Terrain?.SetMaterials(ground.Material, ground.WaterMaterial);
+        Waterfalls?.Rebuild(ground.Catalog);
     }
 
     /// <summary>What became of the water: drawn by the wet program, or why not.</summary>
@@ -494,7 +508,7 @@ public sealed partial class WorldBuilder
         stats.WaterMode = "drawn";
         stats.WaterTiles = wetTiles;
         stats.WaterKinds = Ground.Stats.WaterKinds;
-        stats.WaterTexels = Ground.Stats.WaterTexels;
+        stats.WaterTexels = height.Tiles.Sum(t => t.Water?.Wet ?? 0);
         stats.WaterAreas = Ground.Stats.WaterAreas;
     }
 
@@ -745,6 +759,15 @@ public sealed partial class WorldBuilder
         LogVerify(report);
 
         fade.Collect(group);
+        // The placements' water LAST (sceneRecipe.ts: after the clip and the cut, which clone what they traverse): the
+        // sheets in their parents, the ghosts of whatever stands under a mirror.
+        var raster = height.WaterRaster();
+        foreach (var rec in placements) RefreshPlacementWater(group, rec, raster);
+        int sheets = placements.Sum(r => r.WaterSheets?.Count ?? 0), ghosts = placements.Count(r => r.Ghost is not null);
+        if (sheets > 0 || ghosts > 0)
+            _log($"location {loc.Id} ({loc.Name}): {sheets} prop water sheet(s) "
+                 + $"[{string.Join(", ", placements.Where(r => r.WaterSheets is { Count: > 0 }).Select(r => $"{r.Spec.Id} storey {r.Spec.Level}"))}], "
+                 + $"{ghosts} underwater ghost(s)");
         storeys.Apply(levelFilter, 0, openable, fade);
         storeys.ApplyLocks(_locks, loc.Id);
         lock (stats)
@@ -1139,6 +1162,7 @@ public sealed partial class WorldBuilder
                                             Scatter.ScatterLod.CullFar * WorldPropLodScale);
         var models = new ModelStats();
         var jobs = new List<Task>();
+        var raster = height.WaterRaster();
         foreach (var wp in Json.Arr(map, "world_props"))
         {
             if (wp.ValueKind != JsonValueKind.Object || Json.Str(wp, "id").Length == 0) continue;
@@ -1153,10 +1177,17 @@ public sealed partial class WorldBuilder
             double d = Math.Sqrt((x - camera.X) * (x - camera.X) + (z - camera.Z) * (z - camera.Z));
             byte tier = Scatter.ScatterLod.InstanceTier(d, 1, cfg);
             if (tier == 2) { models.Culled++; continue; }
-            jobs.Add(SceneModels.PlaceAsync(_models, spec, tier == 0 ? "full" : "low", "world", group, 0, models, null));
+            jobs.Add(PlaceWorldProp(spec, tier == 0 ? "full" : "low", group, models, raster));
         }
         await Task.WhenAll(jobs);
         lock (stats) Merge(stats.Models, models);
+    }
+
+    /// <summary>One world prop placed, then its water (sheets, ghost) — <c>mount</c> + <c>redrapeOne</c>.</summary>
+    private async Task PlaceWorldProp(SceneModelSpec spec, string tier, Node3D group, ModelStats models, Water.WaterRaster? raster)
+    {
+        var node = await SceneModels.PlaceAsync(_models, spec, tier, "world", group, 0, models, null);
+        PlaceWorldPropWater(spec, node, group, raster);
     }
 
     /// <summary><c>worldPropSceneSpec</c>: role prop, measure fixed to xyz, max_m || 1, anchor (x, z) in world metres.</summary>

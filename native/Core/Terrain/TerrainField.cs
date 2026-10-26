@@ -30,7 +30,11 @@ public sealed record TerrainUniforms(
     HeightPyramid? Far, double[] FarGeom, double[][] FarLevels,
     double[] Extent, double BaseStep, double NormalSpan,
     LodCapGrid? Cap, double[] CapGeom,
-    HeightPyramid? Water, double[] WaterGeom, double[][] WaterLevels, SdField? WaterSd);
+    HeightPyramid? Water, double[] WaterGeom, double[][] WaterLevels, SdField? WaterSd,
+    SdField? WaterKind = null, FlowField? WaterFlow = null);
+
+/// <summary>The downstream vector per lattice point (<c>terrainLod.ts</c> <c>FlowField</c>): (x, z) pairs, row-major.</summary>
+public sealed record FlowField(double OriginX, double OriginZ, double Step, int Cols, int Rows, float[] Data);
 
 /// <summary>
 /// The CPU half of the browser's CDLOD terrain (<c>client3d/src/scene/terrainLod.ts</c> <c>createTerrainLod</c>:
@@ -68,6 +72,11 @@ public sealed class TerrainField
     public double[]? NearRect { get; private init; }
     public HeightPyramid? Water { get; private init; }
     public SdField? Sd { get; private init; }
+    /// <summary>The look row per lattice point (<c>buildKindRows</c>: the raster's own kind, nearest, through the look
+    /// table's <c>rowOfKind</c>; unknown = row 0) — on the SAME lattice as <see cref="Sd"/>; null without water.</summary>
+    public SdField? KindRows { get; private init; }
+    /// <summary>The flow per lattice point (<c>buildFlow</c>: <c>rasterFlowAt</c>, still = (0, 0)); null without water.</summary>
+    public FlowField? Flow { get; private init; }
     public LodCapGrid? CapGrid { get; private init; }
     /// <summary>The wet tile keys of the partition (null = no water program at all).</summary>
     public IReadOnlySet<string>? WaterTileKeys { get; private init; }
@@ -161,8 +170,10 @@ public sealed class TerrainField
     /// </summary>
     /// <param name="far">The far pyramid of the field this one replaces when the overview did not change (a streamed
     /// tile batch moves only the near half): reused as it is instead of decimating the overview again.</param>
+    /// <param name="rowOfKind">The look table's kind → row map (lower-case kind names, <c>refreshWaterLook</c>); null =
+    /// every water reads row 0.</param>
     public static TerrainField Build(WorldHeight height, double anchorX, double anchorZ, WaterRaster? water, double[] extent,
-                                     HeightPyramid? far = null)
+                                     HeightPyramid? far = null, IReadOnlyDictionary<string, int>? rowOfKind = null)
     {
         var ov = height.Overview;
         double baseStep = ov.TileStepM > 0 ? ov.TileStepM : FallbackBaseStepM;
@@ -194,20 +205,44 @@ public sealed class TerrainField
         }
         // buildWater / buildSd: on the near pyramid's own lattice (same origin, step and base size).
         HeightPyramid? waterPyr = null;
-        SdField? sd = null;
+        SdField? sd = null, kindRows = null;
+        FlowField? flowField = null;
         if (near is not null && near.Levels.Count > 0 && water is { Tiles.Count: > 0 })
         {
             var b = near.Levels[0];
-            waterPyr = TerrainLod.BuildPyramid((x, z) => WaterRaster.LevelAt(water, x, z), near.OriginX, near.OriginZ, near.Step,
+            var cursor = new WaterRaster.Cursor(water);
+            waterPyr = TerrainLod.BuildPyramid(cursor.LevelAt, near.OriginX, near.OriginZ, near.Step,
                                                b.Cols, b.Rows, TerrainLod.MaxLodLevels);
             var data = new float[b.Cols * b.Rows];
             for (int j = 0; j < b.Rows; j++)
             {
                 double z = waterPyr.OriginZ + j * waterPyr.Step;
                 for (int i = 0; i < b.Cols; i++)
-                    data[j * b.Cols + i] = (float)WaterRaster.SdAt(water, waterPyr.OriginX + i * waterPyr.Step, z);
+                    data[j * b.Cols + i] = (float)cursor.SdAt(waterPyr.OriginX + i * waterPyr.Step, z);
             }
             sd = new SdField(waterPyr.OriginX, waterPyr.OriginZ, waterPyr.Step, b.Cols, b.Rows, data);
+            // buildKindRows + buildFlow: the fragment's two other fields, ONE level each on the same base lattice, so the
+            // look, the drift and the shore gate of a pixel are read at one place (the browser's uTlodWaterGeom).
+            var kinds = new float[b.Cols * b.Rows];
+            var rowMemo = new Dictionary<string, int>(StringComparer.Ordinal);
+            var flow = new float[b.Cols * b.Rows * 2];
+            for (int j = 0; j < b.Rows; j++)
+            {
+                double z = waterPyr.OriginZ + j * waterPyr.Step;
+                for (int i = 0; i < b.Cols; i++)
+                {
+                    double x = waterPyr.OriginX + i * waterPyr.Step;
+                    var kind = cursor.KindAt(x, z);
+                    if (!rowMemo.TryGetValue(kind, out int row))
+                        rowMemo[kind] = row = rowOfKind is not null && rowOfKind.TryGetValue(kind.ToLowerInvariant(), out int r) ? r : 0;
+                    kinds[j * b.Cols + i] = row;
+                    var (fx, fz) = cursor.FlowAt(x, z);
+                    flow[(j * b.Cols + i) * 2] = (float)fx;
+                    flow[(j * b.Cols + i) * 2 + 1] = (float)fz;
+                }
+            }
+            kindRows = new SdField(waterPyr.OriginX, waterPyr.OriginZ, waterPyr.Step, b.Cols, b.Rows, kinds);
+            flowField = new FlowField(waterPyr.OriginX, waterPyr.OriginZ, waterPyr.Step, b.Cols, b.Rows, flow);
         }
         double waterTileM = waterPyr is not null ? water!.TileM : 0;
         IReadOnlySet<string>? wetKeys = waterPyr is not null ? water!.Tiles.Keys.ToHashSet(StringComparer.Ordinal) : null;
@@ -222,6 +257,8 @@ public sealed class TerrainField
             NearRect = nearRect,
             Water = waterPyr,
             Sd = sd,
+            KindRows = kindRows,
+            Flow = flowField,
             WaterTileM = waterTileM,
             WaterTileKeys = wetKeys,
             CapGrid = TerrainLod.BuildLodCapGrid(caps, waterTileM),
@@ -339,7 +376,7 @@ public sealed class TerrainField
             Far, Geom(Far), Levels(Far),
             (double[])Extent.Clone(), BaseStep, BaseStep,
             cap, cap is null ? new double[] { 0, 0, 1, 0 } : new[] { cap.X0, cap.Z0, cap.Step, cap.Cols },
-            Water, Geom(Water), Levels(Water), Sd);
+            Water, Geom(Water), Levels(Water), Sd, KindRows, Flow);
     }
 
     /// <summary>The fragment normal's lattices: level 0 of the near and the far pyramid (<see cref="TerrainNormal"/>).</summary>

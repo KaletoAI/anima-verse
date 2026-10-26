@@ -192,11 +192,29 @@ public static class S3cCheck
             Expect("s3c water mode", stats.WaterMode == "drawn" && stats.WaterTiles == 1 && stats.WaterKinds == 1 && stats.WaterTexels == 5
                    && stats.WaterAreas == 0,
                    stats.WaterSummary());
-            var win = builder.Ground!.WaterWindow!;
-            Expect("s3c water window", win.Cols == 5 && win.Rows == 5 && win.OriginX == 0 && win.OriginZ == 0 && win.Step == 64,
-                   $"{win.Cols}x{win.Rows} @ ({win.OriginX}, {win.OriginZ}) step {win.Step}");
-            Near("s3c window sd (1,0)", win.Sd[1], 0.25f);
-            Near("s3c window sd dry", win.Sd[2 * 5 + 2], (float)WaterShade.SdDry);
+            // The fragment's fields ride on the near lattice with the lift's (Task 25 — the old 560 m window is gone): the sd
+            // at the tile lattice point (1, 0) = world (64, 0) is 0.25, at (32, 0) the mix of 1 and 0.25 = 0.625, the dry
+            // point (128, 128) −10 000; the one look row and no flow → every row 0, every flow (0, 0); the wet material holds
+            // exactly these textures and reads them over tl_water_geom.
+            var nf = terrain.Field;
+            float SdAt(double x, double z)
+            {
+                var sdf = nf.Sd!;
+                int i = (int)Math.Round((x - sdf.OriginX) / sdf.Step), j = (int)Math.Round((z - sdf.OriginZ) / sdf.Step);
+                return sdf.Data[j * sdf.Cols + i];
+            }
+            Expect("s3c water fields on one lattice", nf.Sd is { } fsd && nf.KindRows is { } fk && nf.Flow is { } ffl
+                   && fk.Cols == fsd.Cols && fk.Rows == fsd.Rows && ffl.Cols == fsd.Cols && ffl.Rows == fsd.Rows
+                   && fk.OriginX == fsd.OriginX && ffl.OriginZ == fsd.OriginZ && fsd.Step == 2, "");
+            Near("s3c near sd (64, 0)", SdAt(64, 0), 0.25f);
+            Near("s3c near sd (32, 0)", SdAt(32, 0), 0.625f);
+            Near("s3c near sd dry (128, 128)", SdAt(128, 128), (float)WaterShade.SdDry);
+            Expect("s3c look rows 0, flow still", nf.KindRows!.Data.All(v => v == 0) && nf.Flow!.Data.All(v => v == 0), "");
+            var wetMat = builder.Ground!.WaterMaterial!;
+            Expect("s3c wet material binds sd/rows/flow", wetMat.GetShaderParameter("tl_water_sd").As<Texture2D>() == terrain.SdTex
+                   && wetMat.GetShaderParameter("tw_kind").As<Texture2D>() == terrain.KindTex
+                   && wetMat.GetShaderParameter("tw_flow").As<Texture2D>() == terrain.FlowTex
+                   && terrain.KindTex is not null && terrain.FlowTex is not null, "");
             Expect("s3c water look default", builder.Ground.WaterLooks.Count == 1
                    && Math.Abs(builder.Ground.WaterLooks[0].OpaqueDepthM - 1.5) < 1e-9, "");
 

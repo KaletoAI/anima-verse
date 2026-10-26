@@ -170,7 +170,12 @@ public sealed class StageAmbience
         // The fog colour follows the sky (engine.ts: `scene.fog.color.copy(sky)`); the ambience does not touch it.
         if (_fog is not null && GodotObject.IsInstanceValid(_fog)) _fog.SetSky(f.Background.Linear);
         _water = Water?.Invoke();
-        if (f.WaterSky is { } w && _water is not null)
-            _water.SetShaderParameter("tw_sky", new Vector3((float)w.R, (float)w.G, (float)w.B));
+        if (f.WaterSky is { } w)
+        {
+            // ONE sky for every water (surfaceSkyUniform): the terrain's water pixels and the prop water sheets.
+            var sky = new Vector3((float)w.R, (float)w.G, (float)w.B);
+            _water?.SetShaderParameter("tw_sky", sky);
+            PropWaterSheets.SetSky(sky);
+        }
     }
 }

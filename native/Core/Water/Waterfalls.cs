@@ -106,6 +106,64 @@ public static class Waterfalls
         return (a.X + (b.X - a.X) * u, a.Z + (b.Z - a.Z) * u);
     }
 
+    // ── The look of the curtain and the foam (client3d/src/scene/waterfall.ts, view constants) ──
+    /// <summary><c>WATERFALL_WAVE_M</c>: metres of curtain per tile of the wave normal map.</summary>
+    public const double WaveM = 2.5;
+    /// <summary><c>WATERFALL_G</c>: free fall, m/s².</summary>
+    public const double G = 9.81;
+    /// <summary><c>WATERFALL_WHITE_TOP</c>: how white the sheet already is at the lip.</summary>
+    public const double WhiteTop = 0.35;
+    /// <summary><c>WATERFALL_OPACITY</c>: the curtain material's own opacity.</summary>
+    public const double Opacity = 0.8;
+    /// <summary><c>WATERFALL_TINT</c> 0xc2dcea (sRGB; three decodes the hex to linear).</summary>
+    public const string Tint = "#c2dcea";
+    /// <summary><c>WATERFALL_FOAM_RADIUS_PER_M</c>, <c>WATERFALL_FOAM_LIFT_M</c>, <c>WATERFALL_FOAM_SEGMENTS</c>.</summary>
+    public const double FoamRadiusPerM = 0.5, FoamLiftM = 0.05;
+    public const int FoamSegments = 24;
+
+    /// <summary><c>fallSpeedMs(h)</c>: the mean speed of water falling h metres from rest, √(g·h/2).</summary>
+    public static double FallSpeedMs(double heightM) => Math.Sqrt(G * Math.Max(heightM, 0) * 0.5);
+
+    /// <summary><c>foamRadius(fall, h)</c>: half a metre per metre of fall, never narrower than half the stream.</summary>
+    public static double FoamRadius(Waterfall fall, double heightM) => Math.Max(fall.Width * 0.5, FoamRadiusPerM * heightM);
+
+    /// <summary>The curtain shader's numbers (<c>patchCurtain</c>): the scroll in wave-map tiles per second and the tiles
+    /// across / down the sheet.</summary>
+    public static (double SpeedTilesS, double TilesX, double TilesY) Curtain(Waterfall fall)
+    {
+        double h = fall.TopY - fall.BottomY;
+        return (FallSpeedMs(h) / WaveM, fall.Width / WaveM, h / WaveM);
+    }
+
+    /// <summary>The curtain's uv per <see cref="WaterfallQuad"/> corner: u across the stream, v 1 at the lip, 0 at the foot;
+    /// its two triangles (three's index order, counter-clockwise; drawn double-sided).</summary>
+    public static readonly double[] CurtainUv = { 0, 1, 1, 1, 0, 0, 1, 0 };
+    public static readonly int[] CurtainIndex = { 0, 2, 1, 2, 3, 1 };
+
+    /// <summary>
+    /// The foam disc at the foot (<c>CircleGeometry(r, 24)</c> turned −90° about x, translated to the foot + 5 cm): the
+    /// centre first with alpha <see cref="WaterShade.FoamStrength"/>, then the 25 rim points (the first and the last
+    /// coincide) with alpha 0, as (x, y, z, alpha); the triangles (rim i, rim i + 1, centre) counter-clockwise from above.
+    /// Null without a quad.
+    /// </summary>
+    public static (double[] Vertices, int[] Index)? FoamDisc(Waterfall fall)
+    {
+        if (Quad(fall) is not { } q) return null;
+        double h = fall.TopY - fall.BottomY;
+        double r = FoamRadius(fall, h);
+        double y = fall.BottomY + FoamLiftM;
+        var v = new List<double> { q.Bottom.X, y, q.Bottom.Z, WaterShade.FoamStrength };
+        for (int s = 0; s <= FoamSegments; s++)
+        {
+            double a = (double)s / FoamSegments * Math.PI * 2;
+            // CircleGeometry's (r cos a, r sin a, 0), turned −90° about x → (r cos a, 0, −r sin a).
+            v.AddRange(new[] { q.Bottom.X + r * Math.Cos(a), y, q.Bottom.Z - r * Math.Sin(a), 0 });
+        }
+        var idx = new List<int>();
+        for (int i = 1; i <= FoamSegments; i++) idx.AddRange(new[] { i, i + 1, 0 });
+        return (v.ToArray(), idx.ToArray());
+    }
+
     /// <summary><c>waterfallQuad(fall)</c>: the curtain from the lip to the leaning foot; no height or width = null.</summary>
     public static WaterfallQuad? Quad(Waterfall fall)
     {

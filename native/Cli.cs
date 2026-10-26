@@ -158,8 +158,8 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         return (d, heading);
     }
 
-    private static string CheckSection(string v) => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream"
-        ? v : throw new ArgumentException($"--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', 'terrain' and 'stream', got '{v}'");
+    private static string CheckSection(string v) => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
+        ? v : throw new ArgumentException($"--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', 'terrain', 'stream' and 'water', got '{v}'");
 
     public static Viewport.Msaa ParseMsaa(string v) => v switch
     {

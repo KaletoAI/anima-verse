@@ -1,0 +1,17 @@
+{"sig": "water-fixture", "default_kind": "grass",
+ "types": [{"kind": "grass", "color": "#5a8a3a"}, {"kind": "lake", "color": "#3f7fb8"}, {"kind": "river", "color": "#3f7fb8"},
+           {"kind": "sand", "color": "#d8c48a"}],
+ "areas": [
+  {"id": "lake", "kind": "lake", "polygon": [[0, -10], [40, -10], [40, 10], [0, 10]],
+   "meta": {"water_profile": {"axis": [[0, 0, 0, 5], [40, 0, 40, 5]], "level_up": 5, "level_down": 5,
+            "axis_x": 0, "axis_z": 0, "dir_x": 1, "dir_z": 0, "s_min": 0, "s_max": 40}}},
+  {"id": "bank", "kind": "sand", "polygon": [[30, -2], [34, -2], [34, 2], [30, 2]], "meta": {}},
+  {"id": "river", "kind": "river", "polygon": [[0, 20], [20, 20], [20, 24], [0, 24]],
+   "meta": {"stroke": {"width_m": 4},
+            "water_profile": {"axis": [[0, 22, 0, 10], [10, 22, 10, 10], [12, 22, 12, 6], [20, 22, 20, 6]],
+            "level_up": 10, "level_down": 6, "axis_x": 0, "axis_z": 22, "dir_x": 1, "dir_z": 0, "s_min": 0, "s_max": 20}}},
+  {"id": "sliver", "kind": "river", "polygon": [[50, 0], [60, 0], [70, 0]],
+   "meta": {"stroke": {"width_m": 2},
+            "water_profile": {"axis": [[50, 0, 0, 9], [52, 0, 2, 5], [60, 0, 10, 5]],
+            "level_up": 9, "level_down": 5, "axis_x": 50, "axis_z": 0, "dir_x": 1, "dir_z": 0, "s_min": 0, "s_max": 10}}}
+ ]}

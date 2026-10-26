@@ -27,6 +27,11 @@ public sealed record TerrainAreaInfo(string Id, string Kind, List<P2> Polygon, L
     public bool WaterProfile { get; init; }
     /// <summary><c>meta.water_depth_effective</c> (null = the bake default).</summary>
     public double? WaterDepthEffective { get; init; }
+    /// <summary><c>waterProfileOf(meta)</c>: the exact profile the gameplay reads (null = no carved bed).</summary>
+    public Water.WaterProfile? Profile { get; init; }
+    /// <summary><c>waterfallsFrom(profile, strokeWidthM(meta))</c> (W5): the falls of the area's own flow axis — empty for
+    /// a polygon water (no stroke width) and for a dry area.</summary>
+    public IReadOnlyList<Water.Waterfall> Falls { get; init; } = Array.Empty<Water.Waterfall>();
 }
 
 public sealed record PropBox(double X, double Z, double YawDeg, double HalfW, double HalfD);
@@ -90,6 +95,31 @@ public sealed class TerrainPayload
             e.TryGetProperty("variants", out var v) ? Map(v) : new Dictionary<string, string>(), mv);
     }
 
+    /// <summary>The falls of one area's meta (ground.ts <c>rebuildAreas</c>): only an area with a profile has any.</summary>
+    private static IReadOnlyList<Water.Waterfall> FallsOf(JsonElement? meta)
+    {
+        if (meta is not { } m || Water.WaterProfile.Of(m) is null) return Array.Empty<Water.Waterfall>();
+        JsonElement? profile = m.TryGetProperty("water_profile", out var wp) ? wp.Clone() : null;
+        JsonElement? width = Water.Waterfalls.StrokeWidthM(m) is { } w ? JsonSerializer.SerializeToElement(w) : null;
+        return Water.Waterfalls.From(profile, width);
+    }
+
+    /// <summary>
+    /// The water part of <c>typeAt(x, z)</c> (ground.ts): the LAST (topmost) painted area containing the point decides,
+    /// and its mirror is the profile's LOCAL level there (<c>waterLevelAt</c>); a topmost area without a profile — a
+    /// sandbank over a lake — takes the water away. Null = no mirror over the point.
+    /// </summary>
+    public double? WaterLevelAt(double x, double z)
+    {
+        double? level = null;
+        foreach (var a in Areas)
+        {
+            if (!ScatterMath.PointInRing(x, z, a.Polygon)) continue;
+            level = a.Profile?.LevelAt(x, z);
+        }
+        return level;
+    }
+
     public static TerrainPayload Parse(JsonElement root)
     {
         var t = new TerrainPayload { DefaultKind = Json.Str(root, "default_kind"), Sig = Json.Str(root, "sig") };
@@ -130,6 +160,8 @@ public sealed class TerrainPayload
                 // string is a depth, junk is NaN (→ the default); absent stays null (undefined).
                 WaterDepthEffective = hasMeta && am.TryGetProperty("water_depth_effective", out var wd)
                     ? Scene.Js.Number(wd) : null,
+                Profile = hasMeta ? Water.WaterProfile.Of(am) : null,
+                Falls = FallsOf(hasMeta ? am : null),
             });
         }
         foreach (var b in Json.Arr(root, "prop_boxes"))

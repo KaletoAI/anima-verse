@@ -33,6 +33,8 @@ public partial class Figure : Node3D
     public AnimationPlayer? Player { get; private set; }
     public Skeleton3D? Skeleton { get; private set; }
     public Node3D? Body { get; private set; }
+    /// <summary>The body's underwater ghost (<c>figure.ghost</c>), made with the body, built on the first submersion.</summary>
+    public World.SubmergedGhost? Ghost { get; private set; }
 
     // Lerp state, ground plane (x, z).
     private Vector2 _from, _to;
@@ -85,14 +87,19 @@ public partial class Figure : Node3D
     /// <summary>Swap the body. The old one is freed (it owns its duplicated meshes/skeleton).</summary>
     public void SetBody(Node3D body, bool isGlb, Skeleton3D? skeleton, AnimationPlayer? player)
     {
+        Ghost?.Dispose();
         Body?.QueueFree();
         Body = body;
+        Ghost = new World.SubmergedGhost(body);
         IsGlb = isGlb;
         Skeleton = skeleton;
         Player = player;
         AddChild(body);
         UpdateClip();
     }
+
+    /// <summary><c>setSubmerged(level)</c>: the ghost cut at the mirror over the figure's bed, or hidden (null = dry).</summary>
+    public void SetSubmerged(double? waterLevel) => Ghost?.Set(waterLevel);
 
     public string WantedClip => Moving ? "walk" : "idle";
 

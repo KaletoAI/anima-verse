@@ -51,6 +51,9 @@ public partial class TerrainLodNode : Node3D
     public ImageTexture? CapTex { get; private set; }
     public ImageTexture? WaterTex { get; private set; }
     public ImageTexture? SdTex { get; private set; }
+    /// <summary>The fragment's look rows and flow on the water base lattice (<c>uTlodWaterKind</c>, <c>uTlodFlow</c>).</summary>
+    public ImageTexture? KindTex { get; private set; }
+    public ImageTexture? FlowTex { get; private set; }
     /// <summary>How often a streamed field replaced the one standing (<see cref="ApplyField"/>), and how many textures were
     /// updated in place vs created anew.</summary>
     public int FieldSwaps { get; private set; }
@@ -97,6 +100,8 @@ public partial class TerrainLodNode : Node3D
         WaterTex = Create(images.Water);
         CapTex = Create(images.Cap);
         SdTex = Create(images.Sd);
+        KindTex = Create(images.Kind);
+        FlowTex = Create(images.Flow);
         _dry = Instance("TerrainDry");
         _wet = Instance("TerrainWet");
         _wet.SetMeta("wet", true);
@@ -108,8 +113,10 @@ public partial class TerrainLodNode : Node3D
         SetMaterials(null, null);
     }
 
-    /// <summary>The R32F images of a field's pyramids, cap grid and sd field (null = none) — made off the main thread.</summary>
-    public sealed record TerrainImages(Image? Near, Image? Far, Image? Water, Image? Cap, Image? Sd);
+    /// <summary>The R32F images of a field's pyramids, cap grid, sd and kind-row fields and the RG32F flow (null = none) —
+    /// made off the main thread.</summary>
+    public sealed record TerrainImages(Image? Near, Image? Far, Image? Water, Image? Cap, Image? Sd, Image? Kind = null,
+                                       Image? Flow = null);
 
     /// <summary>
     /// The images of <paramref name="f"/>'s textures. Pure CPU work on <see cref="Image"/>s (no server resource), so a
@@ -122,7 +129,12 @@ public partial class TerrainLodNode : Node3D
         static Image? Pyr(HeightPyramid? p) => p is null ? null : FloatImage(p.Data, p.TexW, p.TexH);
         return new TerrainImages(Pyr(u.Near), skipFar ? null : Pyr(u.Far), Pyr(u.Water),
                                  u.Cap is { } c ? FloatImage(c.Caps, c.Cols, c.Rows) : null,
-                                 u.WaterSd is { } sd ? FloatImage(sd.Data, sd.Cols, sd.Rows) : null);
+                                 u.WaterSd is { } sd ? FloatImage(sd.Data, sd.Cols, sd.Rows) : null,
+                                 u.WaterKind is { } k ? FloatImage(k.Data, k.Cols, k.Rows) : null,
+                                 u.WaterFlow is { } fl
+                                     ? Image.CreateFromData(fl.Cols, fl.Rows, false, Image.Format.Rgf,
+                                                            MemoryMarshal.AsBytes(fl.Data.AsSpan(0, fl.Cols * fl.Rows * 2)))
+                                     : null);
     }
 
     /// <summary>An R32F image of <paramref name="data"/> (row-major), straight from the float span (no byte copy).</summary>
@@ -172,6 +184,8 @@ public partial class TerrainLodNode : Node3D
         WaterTex = Swap(WaterTex, images.Water);
         CapTex = Swap(CapTex, images.Cap);
         SdTex = Swap(SdTex, images.Sd);
+        KindTex = Swap(KindTex, images.Kind);
+        FlowTex = Swap(FlowTex, images.Flow);
         FieldSwaps++;
         // Re-bind both programs (the wet one may come or go with the water) and force the next selection.
         SetMaterials(dry, wet);
@@ -293,6 +307,9 @@ public partial class TerrainLodNode : Node3D
         if (!water) return;
         if (WaterTex is not null) m.SetShaderParameter("tl_water", WaterTex);
         if (SdTex is not null) m.SetShaderParameter("tl_water_sd", SdTex);
+        // The fragment's look rows and flow — the ground's water variant only (the plain program has no water).
+        if (KindTex is not null) m.SetShaderParameter("tw_kind", KindTex);
+        if (FlowTex is not null) m.SetShaderParameter("tw_flow", FlowTex);
         m.SetShaderParameter("tl_water_geom", V4(u.WaterGeom));
         m.SetShaderParameter("tl_water_levels", Rows(u.WaterLevels));
     }

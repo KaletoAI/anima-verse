@@ -138,7 +138,7 @@ public partial class Main : Node3D
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             boot.Report("visible");
 
-            _figures = new FigureManager(_source!, builder.Height!, Log, strict: false);
+            _figures = new FigureManager(_source!, builder.Height!, Log, strict: false) { WaterLevelAt = builder.FigureWaterLevel };
             world.AddChild(_figures);
             var tags = _tags = new NameTags(_figures, () => Time.GetTicksMsec()) { CamDist = () => _camera?.Distance ?? 0 };
             _labelOverlay.Sources.Add(tags.Visible);
@@ -383,8 +383,12 @@ public partial class Main : Node3D
     private string FigureLine()
     {
         var s = _figures!.Stats;
+        // The underwater ghosts standing now (Task 25): figures whose bed is under a mirror, and their cut heights.
+        var wading = _figures.Figures.Values.Where(f => f.Ghost is { Visible: true }).ToList();
         return $"{s.Figures} figures ({s.GlbFigures} models, {s.Placeholders} placeholders), "
-               + $"{s.ClipsLoaded} clips" + (s.UnboundClips > 0 ? $", {s.UnboundClips} unbound" : "");
+               + $"{s.ClipsLoaded} clips" + (s.UnboundClips > 0 ? $", {s.UnboundClips} unbound" : "")
+               + $", {wading.Count} in water"
+               + (wading.Count > 0 ? $" [{string.Join(", ", wading.Select(f => $"{f.CharacterName} bed {f.Position.Y:0.##} cut {f.Ghost!.CutY:0.##}"))}]" : "");
     }
 
     /// <summary>The overview camera's bindings (engine.ts), for the status line.</summary>

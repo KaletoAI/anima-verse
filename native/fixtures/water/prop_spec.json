@@ -1,0 +1,6 @@
+{"role": "prop", "id": "fountain", "level": 0, "anchor": [0, 0], "bottom_y": 0,
+ "water": {"regions": [
+   {"outline": [[0, 0], [4, 0], [4, 4], [0, 4]], "holes": [[[1, 1], [1, 2], [2, 2], [2, 1]]],
+    "y": 1.5, "bed_y": 0, "tint": "#3f7fb8", "opacity": 0.7, "swim_from_m": 1},
+   {"outline": [[3, 3], [5, 3], [5, 5], [3, 5]], "holes": [],
+    "y": 2, "bed_y": 1.5, "tint": "#3f7fb8", "opacity": 0.7, "swim_from_m": 1}]}}
