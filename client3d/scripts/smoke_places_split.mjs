@@ -19,7 +19,8 @@
  * c3: occlusion still hides and restores the label after it leaves tile.group.
  * d: the building-tier callback also keeps the persistent label height current.
  * NEU: during loading, heights 8 then 12 replace the initial 4 immediately.
- * A pin created between steps has y 8+3.5 = 11.5, then 12+3.5 = 15.5.
+ * A pin stands on the place's ground datum (pinY, 63ac8572) — the ground is 3
+ * from c2 on: created between steps it has y 3+8+3.5 = 14.5, then 3+12+3.5 = 18.5.
  * A stale resident must not move a replacement place's pin.
  * d: isolation toggle 16 still hides resident labels on the separate anchor.
  * d: text guards prevent knowledge paths silently reverting to residents,
@@ -109,11 +110,18 @@ const testPlaces = new Map(), testResidency = new Map(), testPins = new Map();
 // `placeLifecycles` is the per-place lifecycle token map ensurePlace stamps
 // (A-T5 H5: an entry wait aborts when the place was removed or rediscovered).
 const testLifecycles = new Map();
+// shareTileHeight re-places a pin through the shared pinY (game/eventPins.ts,
+// 63ac8572): the real function goes in, so the pin height below is the spec's.
+const pinsSrc = await readFile(join(ROOT, 'client3d/src/game/eventPins.ts'), 'utf8');
+const pinsModule = { exports: {} };
+new Function('module', 'exports', transformSync(pinsSrc, { loader: 'ts', format: 'cjs' }).code)(
+  pinsModule, pinsModule.exports);
+const { pinY } = pinsModule.exports;
 const bindings = new Function('buildPlace', 'footprintCentre', 'places', 'residency', 'eventPins', 'engine',
-  'placeLifecycles',
+  'placeLifecycles', 'pinY',
   transformSync(source + '; return {ensurePlace, shareTileHeight};', { loader: 'ts' }).code)(
   current.buildPlace, () => true, testPlaces, testResidency, testPins,
-  { scene: new THREE.Scene() }, testLifecycles);
+  { scene: new THREE.Scene() }, testLifecycles, pinY);
 const add = loc => {
   bindings.ensurePlace(loc);
   const place = testPlaces.get(loc.id);
@@ -126,17 +134,17 @@ const loadingTile = testResidency.get('f1').tile;
 loadingTile.height = 8;
 assert.equal(testPlaces.get('f1').height, 8, 'shell height is visible before mount settles');
 const eventPin = new THREE.Sprite();
-eventPin.position.set(10, testPlaces.get('f1').height + 3.5, 20);
+eventPin.position.set(10, pinY(loadingTile.center.y, testPlaces.get('f1').height), 20);
 testPins.set('f1', eventPin);
-assert.equal(eventPin.position.y, 11.5);
+assert.equal(eventPin.position.y, 14.5);
 loadingTile.height = 12;
 assert.equal(testPlaces.get('f1').height, 12);
-assert.deepEqual(eventPin.position.toArray(), [10, 15.5, 20]);
+assert.deepEqual(eventPin.position.toArray(), [10, 18.5, 20]);
 testPlaces.delete('f1');
 add(fixtures[0]);
 loadingTile.height = 20;
 assert.equal(testPlaces.get('f1').height, 4);
-assert.equal(eventPin.position.y, 15.5, 'stale resident cannot reposition the pin');
+assert.equal(eventPin.position.y, 18.5, 'stale resident cannot reposition the pin');
 const drop = main.slice(main.indexOf('function dropPlace'), main.indexOf('function dropVanished'));
 assert.match(drop, /places\.delete\(/); assert.match(drop, /driver\.drop\(/);
 const debug = await readFile(join(ROOT, 'client3d/src/debug3d.ts'), 'utf8');
