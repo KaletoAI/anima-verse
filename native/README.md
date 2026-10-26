@@ -102,6 +102,25 @@ The browser's open world round the places, every number on the E3 vectors (`terr
 - **scatter without hitches**: the 64 m window rebuild of the scatter and the undergrowth runs on a worker (see
   "Scatter").
 
+### What stage E5 shows (Phase 3, Tasks 27–35)
+
+The figures of the browser, every number on the E5 vectors (`figure_clips`, `retarget`, `clip_commit`,
+`clip_coverage`, `hips_tracks`, `npc_placement`, `figure_ground`, `room_spots`, `npc_walk`, `npc_ground`, `stairs`,
+`foot_lock`, `foot_lock_measure`, `leg_pin`, `stand_settle`, `bridge_*`, `pair_clip_*`, `pair_height`, `place_poll`,
+`figure_normalisation`, `secondary_*`, `animal_*`):
+
+- **every character plays its activity** from the server's WHOLE clip library along its set chain (`female`/`male`/
+  `animal` + neutral), one-shots hold their last frame, distance tiers full/low at 25/35 m (Tasks 27/28);
+- **sitting, lying, standing in the right room**: seats, beds, corridor stands, hidden on another storey or in a
+  closed interior (Task 29); **walking** like the browser's NPC — through doors, up stairs and in lifts, swimming and
+  wading with the underwater ghost (Task 30);
+- **getting up** through the transition clips with planted feet, travel and turn (Task 31); **pair clips** in
+  lockstep at one anchor, the bodies' feet on the ground (bind anchoring, Task 32);
+- **hair and extension sway** (secondary motion with the exact skin normals, Task 33); **animals** with their own FBX
+  takes, else the procedural gait (Task 34);
+- **measured** (Task 35, see "Clip memory and figure cost"): clip memory per template, fit time per model, the frame
+  cost of the figures (`--bench-matrix=no-figures`) and the figure keys of every bench result.
+
 ## Requirements (build machine)
 
 - Godot **4.7.2 stable .NET** editor binary (`Godot_v4.7.2-stable_mono_linux.x86_64`)
@@ -355,7 +374,8 @@ browser's (`backend: "godot-forward+"`, `path`, `pathVersion`, `duration`,
 heightSource}, `size`, `frames`, `seconds`, `fpsMean`, `frameMsMedian`,
 `frameMsP95`, `cpuMsMedian`, `cpuMsP95`, `gpuMsMedian`, `callsMedian`,
 `trisMedian`, `fps`, `gpuMs`, `draws`, `triangles`) plus `renderCpuMsMedian`,
-`godot`, `gpu`, `cpu`, `msaa` (the 3D samples of the run, Task 26). Per frame: `dt` = wall delta (unclamped), `cpuMs` =
+`godot`, `gpu`, `cpu`, `msaa` (the 3D samples of the run, Task 26), and after the stream keys `figures`,
+`figuresAnimated` (the figures moving every frame) and `clipMemMiB` (their clip memory, Task 35). Per frame: `dt` = wall delta (unclamped), `cpuMs` =
 `Performance.TimeProcess`, `renderCpuMs`/`gpuMs` = the viewport's measured render
 CPU/GPU time, draws/triangles = `RenderTotalDrawCallsInFrame` /
 `RenderTotalPrimitivesInFrame` (read in `_Process`, so they describe the
@@ -390,6 +410,22 @@ the fly drive's `max while streaming` below 33 ms with scatter on (the bench dri
 its `streamMaxFrameMs` is normally null — the fly drive is the streaming probe). Every result also goes to the
 server's `logs/bench.jsonl`.
 
+### Figures on the gate (Task 35)
+
+Since E5 every figure animates during the drive (clips, walking, secondary motion), and figures that cross the 25/35 m
+tier band during the drive fit their other tier then (sliced at 12 ms per job and frame, like the browser). The E3 pass
+numbers are the reference — with scatter + water 60.5 fps, 15.5 / 18.3 ms; without 81.7 fps, 12.0 / 14.2 ms — the
+same two `--msaa=0` commands as above; target: median ≤ 16.0 ms with scatter + water. What the figures alone cost:
+
+```bash
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench-matrix=no-figures --quit-after-bench --size=3816x1030 --msaa=0
+```
+
+Offline on the world copy (headless, dummy renderer, so CPU only; `cpuMs` = `Performance.TimeProcess`): 14 animated
+figures cost **2.4–2.7 ms** of process time per frame in the median (baselines 4.8–5.9 / 5.0–5.4 ms, no-figures
+2.6 / 2.7 ms, with / without scatter + water). The first pass's P95 (29 / 35 ms against 6–7 ms) is the low-tier fits of
+five figures the drive passes: a single `--bench` run carries them too.
+
 ### Bench matrix (Task 26b, interleaved since Task 26c)
 
 `--bench-matrix` runs the drive of `--bench` once per variant, in ONE process, on the SAME world and anchor, with the
@@ -402,8 +438,8 @@ variants (the baseline is always added).
 its middle passes 2–3 ms slower than the baseline although each switched something off). So a **baseline pass runs
 between every two variants** (B V₁ B V₂ … Vₙ B, `BenchMatrix.Schedule`) and every variant is reported against the MEAN
 of the two baselines right around it (`BenchMatrix.NeighbourDeltas`) — a drift that is linear over those three passes
-cancels; each baseline shows its own drift against the first. The full matrix is 13 variants + 14 baselines = 27 passes
-× 23 s ≈ 10.5 min; a subset (`--bench-matrix=no-shadow,fog-pass`) is 2n + 1 passes:
+cancels; each baseline shows its own drift against the first. The full matrix is 14 variants + 15 baselines = 29 passes
+× 23 s ≈ 11 min; a subset (`--bench-matrix=no-shadow,fog-pass`) is 2n + 1 passes:
 
 ```bash
 ./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench-matrix --quit-after-bench --size=3816x1030 --msaa=0
@@ -425,6 +461,7 @@ cancels; each baseline shows its own drift against the first. The full matrix is
 | `terrain-lod-coarse` | the CDLOD selection with the pixel scale × 0.5 (`TerrainLodNode.PixelScaleFactor`) = allowed screen error 2 → 4 px |
 | `shadow-atlas-2048` | `RenderingServer.DirectionalShadowAtlasSetSize(2048)` instead of 4096 |
 | `fog-pass` | the fallback (not a feature off): the distance fog as the screen-texture pass instead of the compute pass (see `--fog`) |
+| `no-figures` | every figure hidden AND its frame tick stopped (no walk, no clip advance, no skinning, nothing drawn; Task 35) — the figures' whole frame cost |
 
 Every pass prints its `[bench] result {json}` line with the extra keys `variant`, `switch` (what it did, with counts),
 `applied` (false = there was nothing to switch, e.g. no mirror in reach, or no GPU for the compute fog so `fog-pass`
@@ -904,6 +941,38 @@ figures.ts `playPair`; core `Core/Figures/PairClip.cs`, vectors `pair_clip_phase
   the bridges' travel base and the body's `groundY` carry it. Test3_mia's mesh had its origin in the middle: it stood
   0.85 m deep in the ground before.
 - `--check pairs` (`Check/PairCheck.cs`, `fixtures/pairs/`, README there).
+
+### Clip memory and figure cost (Task 35, ruling P3-R11)
+
+Measured on the world copy (`--offline`, 14 model figures + 1 portrait, the dump's model rotation as in Task 28):
+
+- **What a template holds.** Every character model is fitted once per tier (the template key is URL + set chain +
+  height) with the whole library: ~110 clips, 5 800 tracks, 312 000–320 000 keys. Godot keeps a key as
+  `TKey<Quaternion>` (32 B); inserted one by one, a track's vector grows by 1.5× and keeps the spare slots. Measured
+  with `FigureManager.ProbeClipMemory` (one template re-fitted, the static memory its Animations give back): **41.4 B
+  per key = 12.6 MiB per template** before Task 35.
+- **One-call keys** (`KeyWriter` in `Figures/ClipLibrary.cs`): a retargeted track's keys are written with ONE
+  `tracks/N/keys` set — exact vector size — whenever that stores exactly what the inserts would (every time a float,
+  strictly ascending far above Godot's merge tolerance; else key by key). On the world copy every track qualified:
+  **35.7 B per key = 10.9 MiB per template** (−14 %), the fit's interop calls drop from one per key to one per track.
+  `--check pairs` Q9 retargets a whole template both ways and compares every key bit for bit.
+- **Identical clips shared** (`FigureManager.ShareIdentical`): a retargeted clip carries a SHA-256 of everything
+  written into it; a later template whose clip comes out bit-identical binds the earlier Animation instead of a copy.
+  That happens for the same model at another height or set chain and for the fallback pool, NOT across the two tiers
+  of one model (the server's low bake moves the rests by ~1e-6 and the fitted clips then differ by up to 2.5° on a
+  bone: a near-match would change what plays). Root-motion clips are re-locked per template and never shared.
+- **Retired models** (figures.ts `retireModels`/`freeRetired`): once a character's model changed (new URL) and no
+  figure shows the old template, both tiers of the old model are freed on the 1 Hz tier tick (`--check figures`).
+- **The loop flag is per figure** (Task 32's minor): Godot keeps `loop_mode` on the shared Animation, three on the
+  per-figure action. The shared Animation keeps the listing's flag; a figure that needs the other one (a pair stored
+  with another `loop`, a bridge — always one-shot like the browser's `bridge.setLoop(LoopOnce)`) plays its own
+  bit-identical twin `loop/<clip>` (`Figure.PlayName`, `--check pairs` Q8).
+
+The offline log's `figures memory:` line (and the bench log's `bench figures memory:`) states figures, templates, fit
+times min/median/max, keys bound vs held, the estimate at `FigureManager.KeyBytes` = 36 B/key, the probe (debug engine
+only), Godot's static memory / objects / resources and the managed heap. Every bench result carries `figures`,
+`figuresAnimated` and `clipMemMiB`; `--bench-matrix=no-figures` measures what the figures cost per frame (all hidden
+and their tick stopped against the interleaved baselines).
 
 ### § B5a verify (Task 15)
 
