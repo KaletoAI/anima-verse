@@ -173,6 +173,7 @@ public partial class Figure : Node3D
         Target = at;
         Waypoints.Clear();
         Ride = null;
+        ResetSecondaryMotion();   // npcs.ts: every placement snap / arrival / first sync resets the secondary motion
     }
 
     /// <summary>The frame's motion outcome (the manager's step): moving, running, the ground word.</summary>
@@ -207,6 +208,9 @@ public partial class Figure : Node3D
     public void SetBody(Node3D body, bool isGlb, Skeleton3D? skeleton, AnimationPlayer? player,
                         IReadOnlyList<string>? clipKinds = null, V3? bindOffset = null)
     {
+        Secondary?.Release();
+        Secondary = null;
+        _secondaryPlaced = false;
         Ghost?.Dispose();
         Body?.QueueFree();
         Body = body;
@@ -230,6 +234,56 @@ public partial class Figure : Node3D
         AddChild(body);
         ApplyBody();
         UpdateClip();
+        // figures.ts Figure constructor: createSecondaryMotion(THREE, this.root, this.motion, model.template).
+        _secondaryRev = Motion?.Rev;
+        if (isGlb && skeleton is not null) Secondary = SecondaryMotionModifier.TryCreate(body, skeleton, Motion);
+    }
+
+    // ---- secondary motion (figures.ts: secondary, secondaryRev, secondaryPlaced, resetSecondaryMotion) -------------
+
+    /// <summary>The character's motion payload (worldmap <c>motion</c>, else model3d <c>motion</c>); null = none yet.</summary>
+    public MotionPayload? Motion { get; set; }
+    /// <summary>The secondary motion of the body (null = no extension bone of the payload on this rig, or no rig).</summary>
+    public SecondaryMotionModifier? Secondary { get; private set; }
+    /// <summary>This frame's <c>frozen</c> (the world's <c>game_rate</c> 0; a pair at rate 0) for the secondary motion.</summary>
+    public bool SecondaryFrozen { get; set; }
+    /// <summary>The check steps the motion itself (<see cref="SecondaryMotionModifier.StepNow"/>).</summary>
+    public bool SecondaryManual { get; set; }
+    private string? _secondaryRev;
+    private Vector3 _secondaryPos;
+    private bool _secondaryPlaced;
+
+    /// <summary><c>resetSecondaryMotion()</c>: the particles start over at their targets; the jump watch restarts.</summary>
+    public void ResetSecondaryMotion()
+    {
+        Secondary?.RequestReset();
+        _secondaryPlaced = false;
+    }
+
+    /// <summary>
+    /// The secondary part of <c>Figure.update</c>: a new payload revision reconfigures (or builds the motion once a
+    /// payload names bones this rig has), a root that moved more than 2 m since the last frame is a jump (reset), and
+    /// the frame's frozen / far go to the modifier, which steps after the mixer with the real frame time.
+    /// </summary>
+    private void TickSecondary()
+    {
+        if (Skeleton is null || Body is null) return;
+        var rev = Motion?.Rev;
+        if (rev != _secondaryRev)
+        {
+            _secondaryRev = rev;
+            if (Secondary is { } s) s.Configure(Motion);
+            else if (IsGlb) Secondary = SecondaryMotionModifier.TryCreate(Body, Skeleton, Motion);
+        }
+        if (Secondary is not { } motion) return;
+        var position = IsInsideTree() ? GlobalPosition : Position;
+        // Safety net for owners that replace placement directly: >2 m is a jump.
+        if (_secondaryPlaced && position.DistanceTo(_secondaryPos) > 2) motion.RequestReset();
+        _secondaryPos = position;
+        _secondaryPlaced = true;
+        motion.Frozen = SecondaryFrozen;
+        motion.Far = LoadedTier == FigureTier.Low;
+        motion.Manual = SecondaryManual;
     }
 
     /// <summary><c>setSubmerged(level)</c>: the ghost cut at the mirror over the figure's bed, or hidden (null = dry).</summary>
@@ -747,6 +801,7 @@ public partial class Figure : Node3D
                              && WeightOf(r) <= 0);
         ApplyRotation();
         ApplyBody();
+        TickSecondary();
     }
 
     /// <summary>Capsule placeholder standing on the node origin.</summary>

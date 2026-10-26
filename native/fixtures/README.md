@@ -1497,3 +1497,43 @@ anchor (64, 128) yaw 0, place none, in the loft. One frame:
 
 **One-shot end**: 20 more frames → the handshake clock 2.5 + 47/30 ≈ 4.07 > 3.533: phase clamped, the player stops at
 its end (**3.5333**) and holds it, Ann and Ben alike.
+
+## Secondary motion (`secondary/chain.glb`, Task 33, `Check/SecondaryCheck.cs`, `--check secondary`)
+
+`chain.glb` is written by `python3 native/tools/chain_glb.py native/fixtures/secondary/chain.glb`: one skin over
+`Root (0,0,0)` → `anchor (0,0,0)` → `c1 (0,0,0)` → `c2 (0,−1,0)` (the chain of `shared/test-vectors/secondary_chain.json`)
+and `Root` → `mixamorig:Spine1 (0,0,0)` → `mixamorig:Spine2 (0,1,0)` → `B (0,1,1)` (the rig of
+`scripts/smoke_extension_rig_anchor_blend.mjs`), all bind rotations identity. c1 carries the ring (±0.1, −0.5, 0) /
+(0, −0.5, ±0.1), c2 the same ring at y −1.5, B one triangle at (0, 1, 1.5). B's node extras:
+`{"anchor_blend": {"mixamorig:Spine1": .5, "mixamorig:Spine2": .5, "mixamorig:Missing": .3}}`. One plain material
+(base colour, double sided). Each case imports a fresh copy as a `Figure` body at the origin, yaw 0, and steps
+`Figure.UpdateFigure(dt)` + `SecondaryMotionModifier.StepNow(dt)` by hand.
+
+- **M1** Godot 4.7 imports a joint's glTF extras as the bone meta `extras` (probed on this file: bone `B` → the
+  dictionary above; the bone NAMES are sanitised to `mixamorig_Spine1`, the extras keep `mixamorig:Spine1`, both read
+  the same through `BoneNames.Norm`).
+- **M2** vector [C3] (girth 2, length 1.5, gravity 0, gain 0) after 400 × 1/120 s: c1's scale axis is the bone axis to
+  c2 (0, −1, 0), s = 1, so the scale is girth 2 across and length 1.5 along: c1 world diag(2, 1.5, 2); c2 sits at the
+  lengthened end (0, −1.5, 0). Skinned rings: half width 0.1 · 2 = 0.2, centre distance 0.5 · 1.5 = 0.75 and
+  1.5 · 1.5 = 2.25. Exactly the binds of c1 and c2 are pushed (B's group is not in this payload). c1 has no shear here,
+  so its nearest TRS scale is the exact (2, 1.5, 2). Normal (1, 1, 0)/√2 under M = diag(2, 1.5, 2): stock ∝ (2, 1.5, 0)
+  at atan(0.75) = 36.870°, browser ∝ (0.5, 0.667, 0) at atan(4/3) = 53.130°: 16.260° apart; (M Mᵀ)⁻¹ n' reproduces the
+  browser normal exactly.
+- **M3** one-link group on c1 (freq 2 Hz, ζ 1, gravity 0, gain 1, max_deg 180, squash [0.1, 3]). Frame 1 (1/30 s) puts
+  the particle on its target. The figure then moves 0.1 m along +x in one frame of 1/30 s: target velocity 3 m/s for
+  1/30 s from rest is vector [S3] — p = 0.034222 m while the target moved 0.1, so the particle trails by
+  d = 0.065778 m behind the lever end 0.5 m below c1. axis_gain 1, translate 0, s = 1: c1 turns by
+  atan(d / 0.5) = 7.4946° (the soft limit's knee is 90°: linear).
+- **M4** the figure moves 2.9 m in one frame: more than 2 m is a jump → reset → tilt 0 (without the reset the 90 m/s
+  step trails ≈ 75.9°: the counter-probe). The next 0.1 m frame trails 7.4946° again.
+- **M5** `SecondaryFrozen` (the world's `game_rate` 0): the particle rides along with its target (p += ΔT), so a further
+  0.1 m step and a 1 s frozen gap (no dt > 0.25 reset while frozen) keep 7.4946°.
+- **M6** `LoadedTier = Low` (far): the toggle resets and the gain is 0 — tilt 0 on every further step.
+- **M7** group on B (gravity 0, gain 0): at bind B's head is (0, 1, 1). Spine2 turned 20° about +X moves B's head
+  about (0, 1, 0) to (0, 1 − sin 20°, cos 20°); the blend {Spine1 .5, Spine2 .5} (Missing ignored) puts it at
+  (0, (2 − sin 20°)/2, (1 + cos 20°)/2) = (0, 0.828990, 0.969846).
+- **M9** with `SecondaryManual` off, three engine frames step the modifier at least twice (Skeleton3D runs it after
+  the mixer in its deferred update).
+- **M8** information only: the tracked demo figure with an extension group (`worlds/demo`, 54 joints), one group over
+  its non-Mixamo joints with the shipped declaration's parameters, a 1 s walk at 1.4 m/s and a 1 s stop at 60 fps: the
+  particles built, the corrected surfaces and the largest stock-normal error its extension binds reach.

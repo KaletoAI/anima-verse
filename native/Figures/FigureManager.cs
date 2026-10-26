@@ -143,7 +143,18 @@ public partial class FigureManager : Node3D
     {
         /// <summary><c>model.clips</c>: the loop flag per EXACT embedded take name (missing = loop).</summary>
         public IReadOnlyDictionary<string, bool> ClipLoops { get; init; } = new Dictionary<string, bool>();
+        /// <summary>The answer's top-level <c>motion</c> (<c>extension_rig.motion_payload</c>); null = none.</summary>
+        public MotionPayload? Motion { get; init; }
     }
+
+    /// <summary>
+    /// figures.ts <c>motionState</c>: the motion payload per character — the worldmap row's <c>motion</c> whenever it
+    /// carries one, else the model3d answer's (only while none is known). The figure reads it every frame.
+    /// </summary>
+    private readonly Dictionary<string, MotionPayload?> _motionState = new();
+
+    /// <summary>The world map's <c>game_rate === 0</c>: the world is frozen (the secondary motion stops its dynamics).</summary>
+    public bool WorldFrozen { get; private set; }
 
     public FigureManager(IWorldSource source, WorldHeight height, Action<string> log, bool strict)
     {
@@ -230,6 +241,7 @@ public partial class FigureManager : Node3D
     {
         Stats.Polls++;
         AvatarName = Json.Str(root, "avatar");
+        WorldFrozen = root.TryGetProperty("game_rate", out var rate) && rate.ValueKind == JsonValueKind.Number && rate.GetDouble() == 0;
         _rows = CharacterRow.ParseList(root);
         _rowByName = _rows.GroupBy(r => r.Name).ToDictionary(g => g.Key, g => g.Last());
         _mapPlaces = MapPlace.ParsePlaced(root);
@@ -253,6 +265,9 @@ public partial class FigureManager : Node3D
             ApplyPlan(fig, plan, fresh);
             fig.WantedSig = row.ModelSig;
             fig.WantedRev = row.ModelRev;
+            // refreshIfChanged(name, sig, rev, motion): a row's motion replaces the known payload, an absent one keeps it.
+            if (row.HasMotion || !_motionState.ContainsKey(row.Name)) _motionState[row.Name] = row.Motion;
+            fig.Motion = _motionState[row.Name];
             if (fresh)
             {
                 ShowStandIn(fig);
@@ -516,6 +531,7 @@ public partial class FigureManager : Node3D
         fig.SetMotion(plan.Moving, plan.Moving && run && FigureClips.CanRun(stand.Word.Movement), stand.Word.Movement);
         PlayLifting(fig, plan.Moving ? FigureClips.MoveClip(stand.Word.Movement, run, fig.Poses) : standingClip,
                     plan.Moving || standIdle.Length > 0, standSink, rootYBefore, goalY);
+        fig.SecondaryFrozen = WorldFrozen;
         fig.UpdateFigure(dt);
         fig.Portrait?.Tick(dt, camDist, plan.Moving);
     }
@@ -541,6 +557,7 @@ public partial class FigureManager : Node3D
                           (x, z) => GroundYAt?.Invoke(x, z) ?? _height.GroundAt(x, z));
         fig.Position = new Vector3((float)at.X, (float)at.Y, (float)at.Z);
         fig.SetYaw(it.Anchor.Yaw);
+        fig.SecondaryFrozen = WorldFrozen || it.Rate <= 0;   // npcs.ts: figure.update(dt, {frozen: frozen || it.rate <= 0})
         fig.UpdateFigure(dt);
         return true;
     }
@@ -747,6 +764,10 @@ public partial class FigureManager : Node3D
                     var tier = fig.WantedTier;
                     var template = await GetTemplate(UrlFor(info, tier), info, fig.Sets, fig.HeightM);
                     if (!Alive(fig)) return;
+                    // fetchCharacterModel: the model3d motion stands in while the worldmap has sent none.
+                    if (!_motionState.TryGetValue(fig.CharacterName, out var known) || known is null)
+                        _motionState[fig.CharacterName] = info.Motion;
+                    fig.Motion = _motionState[fig.CharacterName];
                     _infos[fig.CharacterName] = info;
                     fig.Api = Figure.ModelAnswer.Ready;
                     fig.LoadedRev = info.ModelRev;
@@ -823,7 +844,7 @@ public partial class FigureManager : Node3D
                     && lp.ValueKind is JsonValueKind.True or JsonValueKind.False)
                     loops[c.Name] = lp.ValueKind == JsonValueKind.True;
         return new ModelInfo(url, low.Length > 0 ? low : null, Json.Str(m, "format", "glb").ToLowerInvariant(), rig,
-                             Json.Bool(m, "normalized"), rev.Length > 0 ? rev : null) { ClipLoops = loops };
+                             Json.Bool(m, "normalized"), rev.Length > 0 ? rev : null) { ClipLoops = loops, Motion = MotionPayload.Of(root) };
     }
 
     /// <summary>
