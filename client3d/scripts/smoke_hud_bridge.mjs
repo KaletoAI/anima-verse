@@ -35,7 +35,7 @@ hudMessages.length = 0;
 hud.setGameState({ groundRoomId: 'g1' });
 assert.equal(hudMessages.filter(msg => msg.kind === 'state').length, 0);
 hud.setGameState({ groundRoomId: 'g2' });
-assert.deepEqual(hudMessages.filter(msg => msg.kind === 'state'), [{ v: 1, kind: 'state', patch: { groundRoomId: 'g2' } }]);
+assert.deepEqual(hudMessages.filter(msg => msg.kind === 'state'), [{ v: 2, kind: 'state', patch: { groundRoomId: 'g2' } }]);
 const info = { id: 'loc1', name: 'Home', description: '', rooms: [], present: [], events: [], view: { openable: true, open: false } };
 scene.setGameState({ info });
 assert.deepEqual(hud.getGameState().info, info);
@@ -49,6 +49,13 @@ hud.gameActions.clearSelection();
 assert.deepEqual(cleared, [[]]);
 hud.setHudUiState({ perfOn: true });
 assert.equal(scene.getHudUiState().perfOn, true);
+// Protocol v2 (Task 26d): the Graphics tab's action crosses with its prefs object intact.
+assert.equal(scene.HUD_BRIDGE_VERSION, 2);
+const graphics = [];
+scene.gameActions.applyGraphicsPrefs = (...args) => graphics.push(args);
+hud.gameActions.applyGraphicsPrefs({ antiAliasing: '4x', shadows: false });
+assert.deepEqual(graphics, [[{ antiAliasing: '4x', shadows: false }]]);
+assert.deepEqual(hudMessages.at(-1), { v: 2, kind: 'action', name: 'applyGraphicsPrefs', args: [{ antiAliasing: '4x', shadows: false }] });
 let received = [];
 scene.gameActions.zoomTo = (...args) => received.push(args);
 hud.gameActions.zoomTo('Kira');
@@ -71,12 +78,12 @@ const warnings = [];
 const warn = console.warn;
 console.warn = (...args) => warnings.push(args);
 try {
-  b.send({ v: 2, kind: 'action', name: 'zoomTo', args: ['wrong'] });
-  b.send({ v: 1, kind: 'action', name: 'nope', args: [] });
-  b.send({ v: 1, kind: 'action', name: 'toString', args: [] });
-  a.send({ v: 1, kind: 'unknown' });
-  a.send({ v: 1, kind: 'state', patch: { groundRoomId: 'x', partyLeader: 'wrong', movementLocked: true, elevatorOpen: true } });
-  b.send({ v: 1, kind: 'state', patch: { mode: 'overview', selected: null, lockedLoc: 'valid HUD field' } });
+  b.send({ v: 1, kind: 'action', name: 'zoomTo', args: ['wrong'] });   // a v1 peer is refused
+  b.send({ v: 2, kind: 'action', name: 'nope', args: [] });
+  b.send({ v: 2, kind: 'action', name: 'toString', args: [] });
+  a.send({ v: 2, kind: 'unknown' });
+  a.send({ v: 2, kind: 'state', patch: { groundRoomId: 'x', partyLeader: 'wrong', movementLocked: true, elevatorOpen: true } });
+  b.send({ v: 2, kind: 'state', patch: { mode: 'overview', selected: null, lockedLoc: 'valid HUD field' } });
 } finally { console.warn = warn; }
 assert.equal(warnings.length, 6);
 assert.equal(hud.getGameState().groundRoomId, 'g2');
@@ -100,7 +107,7 @@ const target = { postMessage: (...args) => sent.push(args) };
 const transport = scene.postMessageTransport(target, 'https://hud.test');
 let deliveries = 0;
 const off = transport.onMessage(() => deliveries++);
-const message = { v: 1, kind: 'hud', patch: {} };
+const message = { v: 2, kind: 'hud', patch: {} };
 transport.send(message);
 assert.deepEqual(sent, [[message, 'https://hud.test']]);
 for (const fn of handlers) {
@@ -116,4 +123,4 @@ assert.equal(hud.gameActions.zoomTo, undefined);
 assert.equal(scene.uiActions.openChat, undefined);
 scene.setGameState({ mode: 'overview' });
 assert.equal(hud.getGameState().mode, 'embodied');
-console.log('hud bridge: PASS (independent realms, owned-field deltas, ownership rejection, clearSelection, perfOn, UI message counts, transport, cleanup)');
+console.log('hud bridge: PASS (independent realms, owned-field deltas, ownership rejection, clearSelection, perfOn, v2 applyGraphicsPrefs, UI message counts, transport, cleanup)');

@@ -61,7 +61,8 @@ import {
   visibleVertices,
   type ScatterCounts, type TierCounts, type TierSample, type SyncCounters,
 } from './game/perfstats';
-import { loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
+import { browserAntialias, checkGraphicsPrefs, GRAPHICS_PREFS_KEY,
+  loadGraphicsPrefs, loadPrefs, loadScatterPrefs, PREFS_KEY, scatterLodCfgOf,
   SCATTER_PREFS_KEY } from './game/prefs';
 import type { Prefs } from './game/prefs';
 import { SHOW_ALL_KEY } from './game/prefs';
@@ -536,7 +537,25 @@ async function startApp(username: string, role: string) {
   // it while the world runs (`applyShowAll`), which is why it is a `let`.
   const isAdmin = role === 'admin';
   let showAll = isAdmin && localStorage.getItem(SHOW_ALL_KEY) === '1';
-  const engine = new Engine(app);
+  // THE GRAPHICS SETTINGS (Task 26d), read here because the anti-aliasing
+  // can only be chosen when the WebGL context is created — a change in the
+  // menu is stored and waits for the next page load. The shadows are only the
+  // starting value; `applyGraphicsPrefs` switches them in the running world.
+  const graphics = loadGraphicsPrefs(localStorage.getItem(GRAPHICS_PREFS_KEY));
+  const engine = new Engine(app, {
+    antialias: browserAntialias(graphics), shadows: graphics.shadows,
+  });
+  gameActions.applyGraphicsPrefs = (p) => {
+    // The prefs may have crossed a wire (the HUD runs in its own realm behind
+    // the bridge), so they are checked like any input; a malformed message
+    // changes nothing rather than half of the picture.
+    const checked = checkGraphicsPrefs(p?.antiAliasing, p?.shadows);
+    if (!checked.ok) {
+      console.warn('[graphics] refused graphics prefs', checked.error, p);
+      return;
+    }
+    engine.setShadows(checked.prefs.shadows);
+  };
   setModelEnvironment(engine.modelEnv);
   (window as unknown as { __engine: Engine }).__engine = engine;   // debug hook: game-hour lighting
   (window as unknown as { __THREE: typeof THREE }).__THREE = THREE; // debug hook: scene measurements

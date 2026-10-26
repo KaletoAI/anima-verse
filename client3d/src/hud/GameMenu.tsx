@@ -22,6 +22,15 @@
  * triple), and the list of playable characters, which belongs to the SERVER
  * and is only read here.
  *
+ * TWO TABS (Task 26d): "General" holds everything that is not a matter of
+ * the graphics card — audio, the display switches of the HUD, administration,
+ * character, session — and "Graphics" holds what decides how much this machine
+ * draws: anti-aliasing, shadows and the scatter detail distances. "Display"
+ * stays in General as a whole: the minimap, the performance readout and the
+ * chat opacity are HUD surfaces, none of them changes what the GPU renders.
+ * The open tab is view state of this component, not a setting — the menu
+ * opens on General every time.
+ *
  * THE ONE ACTION ON THIS SCREEN is the character switch: the client is built
  * for ONE avatar per session, so taking over another one goes the path that
  * already exists — resume marker (`markResume` in `main.ts`), then
@@ -31,11 +40,16 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '@anima/player-ui';
 import { gameActions } from './bus';
+import { isNativeHud } from './bridge';
 import { listPlayableCharacters, switchCharacter } from '../api';
-import { checkScatterPrefs, DEFAULT_SCATTER_PREFS, SCATTER_PREF_MAX_M,
-  SCATTER_PREF_MIN_M } from '../game/prefs';
+import { browserAntialias, checkScatterPrefs, DEFAULT_SCATTER_PREFS,
+  pickBrowserAntiAliasing, SCATTER_PREF_MAX_M, SCATTER_PREF_MIN_M } from '../game/prefs';
 import { CHAT_ALPHA_MIN } from './chatPanel';
-import type { Prefs, ScatterPrefs, TtsMode } from '../game/prefs';
+import type { AntiAliasing, GraphicsPrefs, Prefs, ScatterPrefs,
+  TtsMode } from '../game/prefs';
+
+/** The two tabs of the menu, in order. */
+type MenuTab = 'general' | 'graphics';
 
 /** The prefs fields that are a volume — the sliders below are one per entry,
  *  in this order (master first, it multiplies onto the other three). */
@@ -67,6 +81,10 @@ export interface GameMenuProps {
    *  `checkScatterPrefs`, and a refused one stays in the field with a hint
    *  under it instead of reaching the world. */
   onScatterChange: (prefs: ScatterPrefs) => void;
+  /** anti-aliasing and shadows of this machine (Task 26d). Like the scatter
+   *  distances: `Hud.tsx` owns the store and the action into the scene. */
+  graphicsPrefs: GraphicsPrefs;
+  onGraphicsChange: (prefs: GraphicsPrefs) => void;
   /** the signed-in account may see the unfiltered map (Stage 5) — the entry
    *  below exists only for one, and the server refuses the view for anybody
    *  else anyway */
@@ -145,9 +163,15 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
                            minimapOn, onMinimapChange,
                            chatAlpha, onChatAlphaChange,
                            scatterPrefs, onScatterChange,
+                           graphicsPrefs, onGraphicsChange,
                            isAdmin, showAll, onShowAllChange,
                            onBackToTitle }: GameMenuProps) {
   const { t } = useI18n();
+  const [tab, setTab] = useState<MenuTab>('general');
+  /** The native client draws with Godot, which takes 2× and 4× MSAA at
+   *  runtime; the browser's WebGL knows only on/off, fixed at context
+   *  creation. So the same setting is offered as two different choices. */
+  const native = isNativeHud();
 
   /**
    * THE ONE PIECE OF STATE IN THIS FILE, and it is not a setting: the three
@@ -247,14 +271,103 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
     { value: true, label: t('On') },
     { value: false, label: t('Off') },
   ];
+  // Labels without t(): "2×" and "4×" read the same in every language.
+  const aaLevels: ReadonlyArray<{ value: AntiAliasing; label: string }> = [
+    { value: 'off', label: t('Off') },
+    { value: '2x', label: '2×' },
+    { value: '4x', label: '4×' },
+  ];
+  const tabs: ReadonlyArray<{ value: MenuTab; label: string }> = [
+    { value: 'general', label: t('General') },
+    { value: 'graphics', label: t('Graphics') },
+  ];
   const ttsModes: Array<{ value: TtsMode; label: string }> = [
     { value: 'auto', label: t('Auto') },
     { value: 'on', label: t('On') },
     { value: 'off', label: t('Off') },
   ];
 
+  // The scatter detail distances — Graphics tab, unchanged since they moved
+  // there. Not a switch but a budget: they say how much of the ground cover
+  // this machine draws, and they are the first thing to turn down on a weak
+  // one.
+  const detailDistances = (
+    <section className="hud-menu-section">
+      <h3 className="hud-menu-head">{t('Detail distances')}</h3>
+      <Metres label={t('Full detail up to (m)')} value={draft.near}
+        onType={(v) => typeDistance({ near: v })} />
+      <Metres label={t('Low detail up to (m)')} value={draft.far}
+        onType={(v) => typeDistance({ far: v })} />
+      <Metres label={t('Not drawn beyond (m)')} value={draft.cull}
+        onType={(v) => typeDistance({ cull: v })} />
+      {scatterError === 'number' && (
+        <p className="hud-menu-warn">
+          {t('Each of the three fields needs a number of metres.')}
+        </p>
+      )}
+      {scatterError === 'order' && (
+        <p className="hud-menu-warn">
+          {t('The three distances have to climb: full detail, then low detail, then hidden.')}
+        </p>
+      )}
+      <p className="hud-menu-hint">
+        {t('How far away trees, bushes and grass drop to the cheap model and where they stop being drawn. Lower distances buy frame rate.')}
+      </p>
+      <button type="button" className="hud-menu-btn" onClick={resetDistances}>
+        {t('Reset detail distances')}
+      </button>
+    </section>
+  );
+
+  // The tab bar is the same segmented switch as the settings below — every
+  // position visible, the active one lit — with the tab roles on top, so a
+  // screen reader announces it as what it is.
+  const tabBar = (
+    <div className="hud-menu-seg hud-menu-tabs" role="tablist" aria-label={t('Menu')}>
+      {tabs.map((o) => (
+        <button key={o.value} type="button" role="tab" aria-selected={o.value === tab}
+          className={o.value === tab ? 'on' : ''}
+          onClick={() => setTab(o.value)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (tab === 'graphics') {
+    return (
+      <>
+        {tabBar}
+        <section className="hud-menu-section">
+          <h3 className="hud-menu-head">{t('Picture quality')}</h3>
+          {native ? (
+            <Choice label={t('Anti-aliasing')} value={graphicsPrefs.antiAliasing}
+              options={aaLevels}
+              onPick={(v) => onGraphicsChange({ ...graphicsPrefs, antiAliasing: v })} />
+          ) : (
+            <Choice label={t('Anti-aliasing')} value={browserAntialias(graphicsPrefs)}
+              options={onOff}
+              onPick={(v) => onGraphicsChange({ ...graphicsPrefs,
+                antiAliasing: pickBrowserAntiAliasing(v, graphicsPrefs.antiAliasing) })} />
+          )}
+          <p className="hud-menu-hint">
+            {t('Smooths the jagged edges of buildings and figures. Higher levels cost frame rate.')}
+            {!native && <> {t('Takes effect after reloading the page.')}</>}
+          </p>
+          <Choice label={t('Shadows')} value={graphicsPrefs.shadows} options={onOff}
+            onPick={(v) => onGraphicsChange({ ...graphicsPrefs, shadows: v })} />
+          <p className="hud-menu-hint">
+            {t('The shadows the sun casts. Switching them off buys frame rate.')}
+          </p>
+        </section>
+        {detailDistances}
+      </>
+    );
+  }
+
   return (
     <>
+      {tabBar}
       <section className="hud-menu-section">
         <h3 className="hud-menu-head">{t('Audio')}</h3>
         {volumes.map((v) => (
@@ -294,36 +407,6 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
         <p className="hud-menu-hint">
           {t('How solid the chat window is drawn over the world. Lower values let the scene show through the transcript.')}
         </p>
-      </section>
-
-      {/* The scatter detail distances. Kept apart from "Display" because these
-          three are not a switch but a budget: they say how much of the ground
-          cover this machine draws, and they are the first thing to turn down
-          on a weak one. */}
-      <section className="hud-menu-section">
-        <h3 className="hud-menu-head">{t('Detail distances')}</h3>
-        <Metres label={t('Full detail up to (m)')} value={draft.near}
-          onType={(v) => typeDistance({ near: v })} />
-        <Metres label={t('Low detail up to (m)')} value={draft.far}
-          onType={(v) => typeDistance({ far: v })} />
-        <Metres label={t('Not drawn beyond (m)')} value={draft.cull}
-          onType={(v) => typeDistance({ cull: v })} />
-        {scatterError === 'number' && (
-          <p className="hud-menu-warn">
-            {t('Each of the three fields needs a number of metres.')}
-          </p>
-        )}
-        {scatterError === 'order' && (
-          <p className="hud-menu-warn">
-            {t('The three distances have to climb: full detail, then low detail, then hidden.')}
-          </p>
-        )}
-        <p className="hud-menu-hint">
-          {t('How far away trees, bushes and grass drop to the cheap model and where they stop being drawn. Lower distances buy frame rate.')}
-        </p>
-        <button type="button" className="hud-menu-btn" onClick={resetDistances}>
-          {t('Reset detail distances')}
-        </button>
       </section>
 
       {/* The one entry that is not a player setting: it lifts the knowledge filter

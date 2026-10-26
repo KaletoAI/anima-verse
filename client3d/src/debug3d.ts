@@ -271,9 +271,6 @@ export function initIsolation(deps: IsolationDeps): void {
   const forced = new Map<THREE.Object3D, boolean>();
   /** The scene fog while toggle 3 holds it out of the scene. */
   let savedFog: THREE.Scene['fog'] = null;
-  /** What `renderer.shadowMap.enabled` was last set to by this panel — so the
-   *  material sweep runs on a real change and not on every click. */
-  let shadowsOff = false;
   const fpsMeter = newFpsMeter();
   let fpsNow = 0;
 
@@ -338,12 +335,11 @@ export function initIsolation(deps: IsolationDeps): void {
 
   function apply(): void {
     // Shadows (2) and fog (3) are the two that cost a program rebuild, so both
-    // act only on a real change.
-    if (on(2) !== shadowsOff) {
-      shadowsOff = on(2);
-      engine.renderer.shadowMap.enabled = !shadowsOff;
-      bumpMaterials(engine.scene);
-    }
+    // act only on a real change. The shadows go through the engine, which
+    // combines this toggle with the player's Graphics setting and sweeps the
+    // materials itself — releasing the toggle gives the player's choice back
+    // instead of switching shadows on.
+    engine.setShadowsDebugOff(on(2));
     if (on(3) && engine.scene.fog) {
       savedFog = engine.scene.fog;
       engine.scene.fog = null;

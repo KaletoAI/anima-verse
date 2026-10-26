@@ -21,7 +21,7 @@ import type { BootState, bootReport } from '../game/boot';
 import type { ElevatorState } from '../game/elevator';
 import type { MinimapState } from '../game/minimap';
 import type { PerfStats } from '../game/perfstats';
-import type { Prefs, ScatterPrefs } from '../game/prefs';
+import type { GraphicsPrefs, Prefs, ScatterPrefs } from '../game/prefs';
 import type { StairPrompt } from '../game/stairs';
 import type { InfoPanelData } from '../game/infoPanel';
 import type { MapCharacter, PlaceOffer } from '../types';
@@ -158,6 +158,14 @@ export interface HudGameActions {
    *  arrive here; the state at startup the ground reads for itself, the same
    *  way the audio drivers read `loadPrefs`. */
   applyScatterPrefs?: (prefs: ScatterPrefs) => void;
+  /** the player changed a graphics setting in the menu's Graphics tab (Task
+   *  26d). The scene applies what it can at runtime — the shadows in both
+   *  clients, the MSAA level in the native one — and the browser's
+   *  anti-aliasing waits for the next page load, because WebGL fixes it at
+   *  context creation. Only CHANGES arrive here; the state at startup the
+   *  scene reads for itself (`loadGraphicsPrefs`), like the scatter. Added in
+   *  bridge protocol v2. */
+  applyGraphicsPrefs?: (prefs: GraphicsPrefs) => void;
   /** How much of the picture the chat window covers, as a rectangle in WINDOW
    *  coordinates, or null while it is closed. The scene answers it by aiming
    *  beside the panel instead of straight through it (`scene/viewShift.ts`):

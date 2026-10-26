@@ -1,6 +1,7 @@
 /**
  * Local preferences of this browser: the audio volumes and switches (stage 4,
- * task 2) and, at the bottom of the file, the scatter detail distances.
+ * task 2) and, further down the file, the scatter detail distances and the
+ * graphics settings (anti-aliasing, shadows).
  *
  * These are LOCAL settings, deliberately not world state: they say how loud
  * this machine is, which is nothing the server or another player has an
@@ -277,4 +278,129 @@ export function scatterLodCfgOf(p: ScatterPrefs): {
   nearM: number; farM: number; cullM: number;
 } {
   return { nearM: p.scatterNearM, farM: p.scatterFarM, cullM: p.scatterCullM };
+}
+
+/* ==========================================================================
+ * THE GRAPHICS SETTINGS (Task 26d, 2026-10-26)
+ * ========================================================================== */
+
+/**
+ * Anti-aliasing and shadows — what this MACHINE can afford to draw, so a local
+ * setting for the same reason the scatter distances are one. Its own key next
+ * to theirs (`av3d.view.*`), versioned the same way.
+ *
+ * ONE SHAPE, TWO CLIENTS. The native client (Godot behind the same HUD over
+ * gdCEF) reads this very string from its `localStorage` mirror at start and
+ * gets every change through `gameActions.applyGraphicsPrefs`; its port of the
+ * functions below is pinned by `shared/test-vectors/graphics_prefs.json`.
+ *
+ * ANTI-ALIASING has three levels because the native client has three: Godot's
+ * `Viewport.msaa_3d` takes 2× and 4× at runtime, and on a weak iGPU the step
+ * between them is worth a choice (4× cost ~6 ms per frame at 3816×1030 on the
+ * user's Intel Arc). The BROWSER has only on/off: WebGL fixes `antialias` when
+ * the context is created and leaves the sample count to the implementation, so
+ * `2x` and `4x` both mean "on" there (`browserAntialias`) and the menu offers
+ * Off / On (`pickBrowserAntiAliasing`), taking effect on the next page load.
+ *
+ * SHADOWS are a plain switch, applied at runtime in both clients.
+ */
+export type AntiAliasing = 'off' | '2x' | '4x';
+
+export interface GraphicsPrefs {
+  antiAliasing: AntiAliasing;
+  /** the sun casts shadows at all */
+  shadows: boolean;
+}
+
+/** `localStorage` key. Versioned like the other two; a shape change gets a new
+ *  key instead of a migration reader. */
+export const GRAPHICS_PREFS_KEY = 'av3d.view.graphics.v1';
+
+/** The levels in menu order. */
+export const ANTI_ALIASING_LEVELS: readonly AntiAliasing[] = ['off', '2x', '4x'];
+
+/** 2× rather than 4×: on the iGPU the native client was measured on, 4× is
+ *  the difference between a smooth and a stuttering frame, and 2× already
+ *  takes the stair steps off the building edges. In the browser 2× reads as
+ *  "on", which is what the client always did before this setting existed. */
+export const DEFAULT_GRAPHICS_PREFS: GraphicsPrefs = {
+  antiAliasing: '2x',
+  shadows: true,
+};
+
+function antiAliasingOf(raw: unknown): AntiAliasing | null {
+  return ANTI_ALIASING_LEVELS.includes(raw as AntiAliasing) ? (raw as AntiAliasing) : null;
+}
+
+/**
+ * Two values from outside (a menu, a bridge message) → the finished prefs, or
+ * WHICH field was refused. The level must be one of the three strings exactly
+ * — `'2X'`, `2` or `'on'` are not a level — and the switch a real boolean, the
+ * same strictness as `flag` above. The scene side runs every incoming
+ * `applyGraphicsPrefs` through this: the bridge is a wire, and a malformed
+ * message must leave the picture alone rather than half-apply.
+ */
+export type GraphicsPrefsCheck =
+  | { ok: true; prefs: GraphicsPrefs }
+  | { ok: false; error: 'antiAliasing' | 'shadows' };
+
+export function checkGraphicsPrefs(antiAliasing: unknown, shadows: unknown): GraphicsPrefsCheck {
+  const aa = antiAliasingOf(antiAliasing);
+  if (aa === null) return { ok: false, error: 'antiAliasing' };
+  if (typeof shadows !== 'boolean') return { ok: false, error: 'shadows' };
+  return { ok: true, prefs: { antiAliasing: aa, shadows } };
+}
+
+/**
+ * The stored string → complete prefs. Never throws, never returns half a
+ * setting — the contract of `loadPrefs`, and FIELD BY FIELD like the volumes:
+ * the two settings mean something on their own (unlike the scatter triple), so
+ * a bad level must not switch the shadows back on.
+ */
+export function loadGraphicsPrefs(raw: string | null): GraphicsPrefs {
+  let parsed: unknown = null;
+  if (raw) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { ...DEFAULT_GRAPHICS_PREFS };
+  }
+  const p = parsed as Record<string, unknown>;
+  return {
+    antiAliasing: antiAliasingOf(p.antiAliasing) ?? DEFAULT_GRAPHICS_PREFS.antiAliasing,
+    shadows: flag(p.shadows, DEFAULT_GRAPHICS_PREFS.shadows),
+  };
+}
+
+/** `GraphicsPrefs` → the string to store; `loadGraphicsPrefs` of it returns
+ *  the same prefs. Fixed key order, so both clients write the same bytes. */
+export function saveGraphicsPrefs(p: GraphicsPrefs): string {
+  return JSON.stringify({ antiAliasing: p.antiAliasing, shadows: p.shadows });
+}
+
+/** The MSAA sample count a level asks for — what the native client hands to
+ *  `Viewport.msaa_3d` (0 = disabled). */
+export function msaaSamplesOf(aa: AntiAliasing): number {
+  return aa === '4x' ? 4 : aa === '2x' ? 2 : 0;
+}
+
+/** The browser's one bit: `antialias` of the `WebGLRenderer`, read once when
+ *  the engine is created. */
+export function browserAntialias(p: GraphicsPrefs): boolean {
+  return p.antiAliasing !== 'off';
+}
+
+/**
+ * The browser menu's Off / On → the level to store. "On" KEEPS a level that is
+ * already on: the browser shows 2× and 4× both as "On", so clicking the lit
+ * pill must be a no-op and not quietly rewrite the stored level. Only
+ * "off → on" has to pick one, and it picks the default.
+ */
+export function pickBrowserAntiAliasing(on: boolean, current: AntiAliasing): AntiAliasing {
+  if (!on) return 'off';
+  return current === 'off' ? DEFAULT_GRAPHICS_PREFS.antiAliasing : current;
 }

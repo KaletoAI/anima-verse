@@ -921,6 +921,17 @@
   border-color: var(--accent, #6aa9ff);
   background: color-mix(in srgb, var(--accent, #6aa9ff) 24%, transparent);
 }
+/* The menu's tab bar (Task 26d): the segmented switch above, one row on its
+   own at the top, a little larger than a setting's pills so it reads as the
+   page's navigation and not as one more choice. */
+#hud .hud-menu-tabs {
+  margin-bottom: 16px;
+}
+#hud .hud-menu-tabs button {
+  flex: 1 1 0;
+  padding: 5px 12px;
+  font-size: 0.95em;
+}
 #hud .hud-menu-hint {
   margin: 10px 0 0;
   font-size: 0.85em;

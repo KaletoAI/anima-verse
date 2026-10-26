@@ -48,8 +48,9 @@ import { PerfOverlay } from './PerfOverlay';
 import { ttsSpeak, ttsStatus } from '../api';
 import { elevatorOptions, elevatorSoleOption } from '../game/elevator';
 import { nearestOffer } from '../game/offers';
-import { loadPrefs, loadScatterPrefs, savePrefs, saveScatterPrefs, PREFS_KEY,
-  SCATTER_PREFS_KEY, type Prefs, type ScatterPrefs } from '../game/prefs';
+import { loadGraphicsPrefs, loadPrefs, loadScatterPrefs, saveGraphicsPrefs,
+  savePrefs, saveScatterPrefs, GRAPHICS_PREFS_KEY, PREFS_KEY, SCATTER_PREFS_KEY,
+  type GraphicsPrefs, type Prefs, type ScatterPrefs } from '../game/prefs';
 import { SHOW_ALL_KEY } from '../game/prefs';
 import { MINIMAP_PREF_KEY } from '../game/minimap';
 import {
@@ -385,6 +386,21 @@ export function Hud({ avatar, username, role }: {
     localStorage.setItem(SCATTER_PREFS_KEY, saveScatterPrefs(p));
     gameActions.applyScatterPrefs?.(p);
     setScatterPrefsState(p);
+  }, []);
+
+  /**
+   * The graphics settings (Task 26d) — anti-aliasing and shadows, the
+   * Graphics tab next to the detail distances. Same contract as those: stored
+   * at once, the CHANGE goes to the scene through the action, and the scene
+   * reads the store for itself at startup (the browser's anti-aliasing can
+   * ONLY be read there — WebGL fixes it at context creation).
+   */
+  const [graphicsPrefs, setGraphicsPrefsState] = useState<GraphicsPrefs>(
+    () => loadGraphicsPrefs(localStorage.getItem(GRAPHICS_PREFS_KEY)));
+  const setGraphicsPrefs = useCallback((p: GraphicsPrefs) => {
+    localStorage.setItem(GRAPHICS_PREFS_KEY, saveGraphicsPrefs(p));
+    gameActions.applyGraphicsPrefs?.(p);
+    setGraphicsPrefsState(p);
   }, []);
 
   /**
@@ -1223,6 +1239,7 @@ export function Hud({ avatar, username, role }: {
                     minimapOn={minimapOn} onMinimapChange={setMinimapOn}
                     chatAlpha={chatAlpha} onChatAlphaChange={setChatAlpha}
                     scatterPrefs={scatterPrefs} onScatterChange={setScatterPrefs}
+                    graphicsPrefs={graphicsPrefs} onGraphicsChange={setGraphicsPrefs}
                     isAdmin={role === 'admin'} showAll={showAll} onShowAllChange={setShowAll}
                     onBackToTitle={() => gameActions.backToTitle?.()} />
                 </ErrorBoundary>

@@ -1,6 +1,6 @@
 /** Standalone HUD: API requests share the host origin and cookie session. */
 import * as api from './api';
-import { connectHudSide, gdcefTransport, postMessageTransport } from './hud/bridge';
+import { connectHudSide, gdcefTransport, isNativeHud, postMessageTransport } from './hud/bridge';
 import { getBoot, setBoot, setHudUiState } from './hud/bus';
 import { mountHud, mountTitle } from './hud/mount';
 import { gdcefStorageSender, mirrorStorage } from './hud/storageMirror';
@@ -9,7 +9,7 @@ import type { AuthUser } from './types';
 const embedded = window.parent !== window;
 // `?bridge=gdcef`: the native client's Chromium is the host (gdCEF JS binding);
 // otherwise the embedding page, over postMessage.
-const gdcef = new URLSearchParams(location.search).get('bridge') === 'gdcef';
+const gdcef = isNativeHud();
 const transport = gdcef ? gdcefTransport() : postMessageTransport(window.parent, location.origin);
 // The native browser keeps no storage between starts: Godot does, from this
 // mirror (installed before anything mounts, so no write is missed).

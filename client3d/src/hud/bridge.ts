@@ -16,17 +16,23 @@ import type { HudGameState, HudUiState, HudBoot, HudGameActions, HudUiActions, H
 import type { MinimapState } from '../game/minimap';
 import type { PerfStats } from '../game/perfstats';
 
-export const HUD_BRIDGE_VERSION = 1;
+/** Protocol history — both hosts must speak the SAME number, a message with
+ *  another `v` is dropped with a warning (no negotiation, no fallback reader):
+ *  - v1: the first wire (native spike S4).
+ *  - v2 (Task 26d): game action `applyGraphicsPrefs(prefs: GraphicsPrefs)`,
+ *    the menu's Graphics tab. No other message changed shape. */
+export const HUD_BRIDGE_VERSION = 2;
+type V = typeof HUD_BRIDGE_VERSION;
 export type ToHud =
-  | { v: 1; kind: 'state'; patch: Partial<HudGameState> }
-  | { v: 1; kind: 'minimap'; value: MinimapState | null }
-  | { v: 1; kind: 'perf'; value: PerfStats | null }
-  | { v: 1; kind: 'boot'; value: HudBoot }
-  | { v: 1; kind: 'ui'; name: keyof HudUiActions; args: unknown[] };
+  | { v: V; kind: 'state'; patch: Partial<HudGameState> }
+  | { v: V; kind: 'minimap'; value: MinimapState | null }
+  | { v: V; kind: 'perf'; value: PerfStats | null }
+  | { v: V; kind: 'boot'; value: HudBoot }
+  | { v: V; kind: 'ui'; name: keyof HudUiActions; args: unknown[] };
 export type FromHud =
-  | { v: 1; kind: 'state'; patch: Partial<HudGameState> }
-  | { v: 1; kind: 'action'; name: keyof HudGameActions; args: unknown[] }
-  | { v: 1; kind: 'hud'; patch: Partial<HudUiState> };
+  | { v: V; kind: 'state'; patch: Partial<HudGameState> }
+  | { v: V; kind: 'action'; name: keyof HudGameActions; args: unknown[] }
+  | { v: V; kind: 'hud'; patch: Partial<HudUiState> };
 export interface BridgeTransport {
   send(msg: ToHud | FromHud): void;
   onMessage(fn: (msg: unknown) => void): () => void;
@@ -34,7 +40,7 @@ export interface BridgeTransport {
 const gameNames = ['infoAction', 'closeInfo', 'closeOpenView', 'pickPlacePose', 'clearSelection', 'setVolumes', 'speak', 'stopSpeech', 'markResume', 'zoomTo', 'sayBubble',
   'enterEmbodied', 'takeControl', 'exitEmbodied', 'rideElevator', 'rideStairs',
   'enterLocation', 'backToTitle', 'setShowAll', 'applyAudioPrefs', 'applyScatterPrefs',
-  'setChatBox'] as const satisfies readonly (keyof HudGameActions)[];
+  'applyGraphicsPrefs', 'setChatBox'] as const satisfies readonly (keyof HudGameActions)[];
 const uiNames = ['openChat', 'toast', 'toggleMenu', 'closeMenu'] as const satisfies readonly (keyof HudUiActions)[];
 function reject(msg: unknown): void { console.warn('[hud bridge] Dropped invalid message', msg); }
 function valid(msg: unknown): msg is ToHud | FromHud {
@@ -75,7 +81,7 @@ function statePublisher(t: BridgeTransport, fields: readonly (keyof HudGameState
         previous.set(key, value);
       }
     }
-    if (Object.keys(patch).length) t.send({ v: 1, kind: 'state', patch });
+    if (Object.keys(patch).length) t.send({ v: HUD_BRIDGE_VERSION, kind: 'state', patch });
   };
 }
 
@@ -95,7 +101,7 @@ function receiveState(patch: Partial<HudGameState>, fields: readonly (keyof HudG
 
 /** HUD endpoint: local writers publish independently of incoming scene state. */
 export function connectHudSide(t: BridgeTransport): () => void {
-  const restore = senders(bus.gameActions, gameNames, (name, args) => t.send({ v: 1, kind: 'action', name, args }));
+  const restore = senders(bus.gameActions, gameNames, (name, args) => t.send({ v: HUD_BRIDGE_VERSION, kind: 'action', name, args }));
   const publishState = statePublisher(t, bus.HUD_OWNED_FIELDS);
   let previousUi = '';
   const publish = (force = false) => {
@@ -103,7 +109,7 @@ export function connectHudSide(t: BridgeTransport): () => void {
     const next = JSON.stringify(patch);
     if (force || next !== previousUi) {
       previousUi = next;
-      t.send({ v: 1, kind: 'hud', patch });
+      t.send({ v: HUD_BRIDGE_VERSION, kind: 'hud', patch });
     }
   };
   let firstMessage = true;
@@ -132,7 +138,7 @@ export function connectHudSide(t: BridgeTransport): () => void {
 }
 /** Scene endpoint: HUD patches update the local bus used by scene handlers. */
 export function connectSceneSide(t: BridgeTransport): () => void {
-  const restore = senders(bus.uiActions, uiNames, (name, args) => t.send({ v: 1, kind: 'ui', name, args }));
+  const restore = senders(bus.uiActions, uiNames, (name, args) => t.send({ v: HUD_BRIDGE_VERSION, kind: 'ui', name, args }));
   const off = t.onMessage(msg => {
     if (!valid(msg)) return reject(msg);
     switch (msg.kind) {
@@ -145,9 +151,9 @@ export function connectSceneSide(t: BridgeTransport): () => void {
   const publishState = statePublisher(t, sceneFields);
   const stores = [
     [bus.subscribeGameState, () => publishState()],
-    [bus.subscribeMinimap, () => t.send({ v: 1, kind: 'minimap', value: bus.getMinimap() })],
-    [bus.subscribePerfStats, () => t.send({ v: 1, kind: 'perf', value: bus.getPerfStats() })],
-    [bus.subscribeBoot, () => t.send({ v: 1, kind: 'boot', value: bus.getBoot() })],
+    [bus.subscribeMinimap, () => t.send({ v: HUD_BRIDGE_VERSION, kind: 'minimap', value: bus.getMinimap() })],
+    [bus.subscribePerfStats, () => t.send({ v: HUD_BRIDGE_VERSION, kind: 'perf', value: bus.getPerfStats() })],
+    [bus.subscribeBoot, () => t.send({ v: HUD_BRIDGE_VERSION, kind: 'boot', value: bus.getBoot() })],
   ] as const;
   const unsubscribes = stores.map(([subscribe, publish]) => { const unsubscribe = subscribe(publish); publish(); return unsubscribe; });
   return () => { off(); unsubscribes.forEach(fn => fn()); restore(); };
@@ -163,6 +169,13 @@ export function postMessageTransport(target: Window, origin: string): BridgeTran
     },
   };
 }
+/** The page runs inside the native client (gdCEF) rather than a browser — the
+ *  `?bridge=gdcef` the native host loads the HUD with. One rule for the page
+ *  bootstrap (transport, storage mirror) and for the settings that differ per
+ *  host (the Graphics tab's anti-aliasing levels). */
+export function isNativeHud(search: string = location.search): boolean {
+  return new URLSearchParams(search).get('bridge') === 'gdcef';
+}
 /** What gdCEF (the native client's Chromium) installs on `window` when the page's
  *  V8 context is created: `godotMethods.<name>(data)` calls the Godot method
  *  registered under that name, `godotEvents.on(event, fn)` receives the host's
@@ -172,7 +185,7 @@ export interface GdcefHost {
   godotEvents?: { on(event: string, fn: (data: unknown) => void): void };
 }
 /** Native host over gdCEF's JS binding: ONE JSON string per message in each
- *  direction on the channel `hud_bridge` (protocol v1 unchanged — a string
+ *  direction on the channel `hud_bridge` (same protocol as postMessage — a string
  *  survives gdCEF's Variant/V8 conversion untouched, an object would not:
  *  Godot turns integral floats into ints and drops undefined). The binding is
  *  resolved at use, not at creation, so a page script never races it. */

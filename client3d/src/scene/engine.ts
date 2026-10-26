@@ -216,7 +216,23 @@ export class Engine {
    *  A CLICK keeps its meaning in both modes — see `ORBIT_DRAG_PX`. */
   orbitOnDrag = false;
 
-  constructor(container: HTMLElement) {
+  /** The player's shadow setting (Graphics tab) and the isolation panel's
+   *  "shadows off" toggle (`debug3d.ts`). TWO owners of one renderer flag, so
+   *  neither writes it: both go through `applyShadowState`, which draws
+   *  shadows only while the player wants them AND the panel does not hold
+   *  them off — releasing the debug toggle must not switch on what the player
+   *  switched off. */
+  private shadowsWanted = true;
+  private shadowsDebugOff = false;
+
+  /**
+   * `opts.antialias` is the browser's anti-aliasing setting
+   * (`browserAntialias(loadGraphicsPrefs(...))`, read by `main.ts`): WebGL
+   * fixes it when the context is created, so it is a constructor argument and
+   * there is no setter. `opts.shadows` is only the STARTING value of the
+   * runtime switch `setShadows`.
+   */
+  constructor(container: HTMLElement, opts: { antialias?: boolean; shadows?: boolean } = {}) {
     // near 0.2 (was 0.5) so MIN_DIST = 0.8 stays clear of the near plane: at
     // the closest zoom the figure's front faces sit ~0.7 m from the lens, and
     // the free pitch (right mouse) can bring geometry closer still. Trade-off:
@@ -226,8 +242,11 @@ export class Engine {
     // the scene at 520 m anyway, so no co-planar surface loses its ordering.
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.2, 800);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.shadowMap.enabled = true;
+    this.renderer = new THREE.WebGLRenderer({ antialias: opts.antialias ?? true });
+    this.shadowsWanted = opts.shadows ?? true;
+    // Set directly, not through `applyShadowState`: nothing is compiled yet,
+    // so there is no material to mark.
+    this.renderer.shadowMap.enabled = this.shadowsWanted;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     // Per-material clipping planes (§ B2 addendum 2026-08-23, the prop depth
     // cut). Without this three ignores `Material.clippingPlanes` entirely and
@@ -307,6 +326,40 @@ export class Engine {
     this.nightFactor = nightFactorAt(hour);
     this.onDayNight?.(this.nightFactor);
     this.applyAmbience(this.ambienceDaylight, this.ambienceTint);
+  }
+
+  /** The player's shadow switch (Graphics tab), at runtime. */
+  setShadows(on: boolean) {
+    this.shadowsWanted = on;
+    this.applyShadowState();
+  }
+
+  /** The isolation panel's toggle 2 (`debug3d.ts`): hold the shadows off
+   *  while set, give the player's setting back when released. */
+  setShadowsDebugOff(off: boolean) {
+    this.shadowsDebugOff = off;
+    this.applyShadowState();
+  }
+
+  /**
+   * Write the combined shadow state into the renderer — on a real CHANGE only,
+   * because each one costs a program rebuild: three.js keys the shader program
+   * on `shadowMap.enabled` (`WebGLPrograms.getParameters → shadowMapEnabled`)
+   * but `setProgram` does not notice the flag changing, so every material
+   * already compiled has to be marked by hand or it keeps drawing (or not
+   * drawing) its shadows as before.
+   */
+  private applyShadowState() {
+    const on = this.shadowsWanted && !this.shadowsDebugOff;
+    if (this.renderer.shadowMap.enabled === on) return;
+    this.renderer.shadowMap.enabled = on;
+    this.scene.traverse((o) => {
+      const mat = (o as THREE.Mesh).material as
+        THREE.Material | THREE.Material[] | undefined;
+      if (!mat) return;
+      if (Array.isArray(mat)) for (const m of mat) m.needsUpdate = true;
+      else mat.needsUpdate = true;
+    });
   }
 
   addFrameHook(fn: (dt: number) => void) {
