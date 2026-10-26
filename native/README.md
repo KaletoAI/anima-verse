@@ -671,7 +671,11 @@ computes every value of it:
   with the exact inverse of Godot's `srgb_to_linear` (`GodotSrgb.Encode`).
 - **Hemisphere**: an ambient colour (S + G)/2 plus two shadowless, specular-free directional lights of colour (S − G)/2,
   one straight down and one straight up with `light_negative` — exactly three's `mix(G, S, ½ + ½·n.y)` on a Lambert
-  surface. No sky reflection (`ReflectedLightSource.Disabled`), sun/fill `light_specular` 1 (Godot's 0.5 halves the
+  surface. On the TERRAIN the pair is a shader term instead (Task 26b, `World/HemiUniforms.cs`): the terrain instances
+  sit on render layer 20, which the two pair lights skip (`light_cull_mask`), and every ground shader adds
+  `ALBEDO · (1 − METALLIC) · av_hemi · n.y` to its emission — the exact sum Godot forms for the pair — so the screen's
+  largest surface no longer runs two extra `light_compute` per pixel. Models, scatter, recipe pieces and figures keep
+  the lights. No sky reflection (`ReflectedLightSource.Disabled`), sun/fill `light_specular` 1 (Godot's 0.5 halves the
   directional GGX; omni lights already double theirs), linear tone map (three's NoToneMapping).
 - **Materials**: Lambert diffuse like three's MeshStandardMaterial on every imported GLB (`GlbLoader.BrowserLook`), the
   scatter, the recipe fallback and the placeholders; GLB meshes and the scatter receive no shadow (three's
@@ -680,6 +684,8 @@ computes every value of it:
   `ceil((camera distance + 70)/10)·10` m and snaps it to texels itself) on the 4096 atlas — 3.8–10.6 cm per texel over
   the zoom range, 7.2 cm at the boot zoom against the browser's 6.8 cm.
 - **MSAA** 4× by default (`--msaa=0|2|4|8`).
+- **Prop lamps** (Task 26b): a pool slot without a source or at energy 0 is hidden — Godot clusters every visible omni
+  light by its range (4096 m for a range-0 lamp) whatever its energy.
 - Checked by `--check light` and `tests/StageLightTests.cs`.
 
 ### Storeys at runtime (Task 16)

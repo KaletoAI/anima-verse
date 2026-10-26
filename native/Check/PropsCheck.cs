@@ -136,7 +136,11 @@ public static class PropsCheck
             builder.TickProps(0.2, null, focus, 1);
             Expect("P3 night, storey 0", pool.State.Selected.SequenceEqual(new[] { "1", "2", "4", "5", "6", "7" }), string.Join(",", pool.State.Selected));
             Expect("P3 fresh slots at gain 0", pool.Lamps.All(l => l.LightEnergy == 0f), "");
+            // Task 26b: a lamp at energy 0 adds nothing, so it is not even clustered (hidden until it has light).
+            Expect("P3 dark slots are hidden", pool.Lamps.All(l => !l.Visible), "");
             builder.TickProps(0.2, null, focus, 1);
+            Expect("P3 lit slots are shown, dark ones stay hidden", pool.Lamps.All(l => l.Visible == (l.LightEnergy > 0f))
+                   && pool.Lamps.Any(l => l.Visible), string.Join(",", pool.Lamps.Select(l => $"{l.LightEnergy}:{l.Visible}")));
             // Gain 0.5: lamp 1 (no flicker) 2 · 0.5 / π = 0.3183098861837907 (Task 21: Godot energy = three intensity / π).
             var l0 = pool.Lamps[0];
             Expect("P3 lamp slot 0", Math.Abs(l0.LightEnergy - 0.31830989f) < 1e-6 && l0.Position.DistanceTo(new Vector3(65, 5.90625f, 120)) < 1e-5

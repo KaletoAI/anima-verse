@@ -48,6 +48,9 @@ public sealed partial class PropLightPool : Node3D
                 OmniAttenuation = 2f,
                 OmniRange = 1f,
                 LightEnergy = 0f,
+                // An empty or dark slot is hidden (Task 26b): Godot clusters every VISIBLE omni light by its range and
+                // runs light_compute for it on every fragment inside, energy 0 or not — a range-0 source is 4096 m.
+                Visible = false,
             };
             AddChild(_lamps[i]);
         }
@@ -111,12 +114,16 @@ public sealed partial class PropLightPool : Node3D
             if (s.SourceId.Length == 0)
             {
                 lamp.LightEnergy = 0f;
+                if (lamp.Visible) lamp.Visible = false;
                 continue;
             }
             lamp.Position = new Vector3((float)s.Pos.X, (float)s.Pos.Y, (float)s.Pos.Z);
             lamp.OmniRange = s.RangeM > 0 ? (float)s.RangeM : UnboundedRangeM;
             lamp.LightColor = LampColour(s.Colour, s.FireMix);
             lamp.LightEnergy = (float)Sky.StageLight.Energy(s.Intensity);
+            // Energy 0 adds exactly nothing (diffuse and specular both scale with it): no reason to cluster the lamp.
+            bool lit = lamp.LightEnergy > 0f;
+            if (lamp.Visible != lit) lamp.Visible = lit;
         }
         foreach (var h in halos)
         {

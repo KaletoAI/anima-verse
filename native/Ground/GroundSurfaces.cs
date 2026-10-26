@@ -420,6 +420,7 @@ public sealed class GroundSurfaces
         BindAo(mat);
         // The exploration veil's shared uniforms (fogVeil.ts applyFogVeil): bound now, every change reaches it.
         World.VeilUniforms.Bind(mat);
+        World.HemiUniforms.Bind(mat);
 
         Material = mat;
     }
@@ -596,6 +597,7 @@ public sealed class GroundSurfaces
             mat.SetShaderParameter("hole_rect", new Vector4((float)rect[0], (float)rect[1], (float)rect[2], (float)rect[3]));
         }
         World.VeilUniforms.Bind(mat);
+        World.HemiUniforms.Bind(mat);
         WaterMaterial = mat;
         Stats.WaterKinds = WaterLooks.Count;
         Stats.WaterAreas = _catalog.Areas.Count(a => a.WaterProfile);

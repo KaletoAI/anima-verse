@@ -17,7 +17,8 @@ namespace AnimaNative.Check;
 /// <see cref="TerrainLod"/>, vector-checked in <c>dotnet test</c> against shared/test-vectors/terrain_lod.json; this
 /// checks what the client does with it:
 ///
-///   T0 the shaders: ground, ground-water and terrain-plain compile with 33 / 42 / 15 uniforms; the shader text prints
+///   T0 the shaders: ground, ground-water and terrain-plain compile with 41 / 50 / 23 uniforms (33 / 42 / 15 + the veil's
+///      7 + av_hemi); the shader text prints
 ///      the constants the twin reads (PATCH_N, MORPH_START, LOD_CAP_NONE, the outline band, the dry sd);
 ///   T1 the main fixture's field: near pyramid 641² at 2 m (6 levels, rows 0/641/962/1123/1204/1245, 1266 high), far
 ///      pyramid 3² at 256 m (2 levels), near rectangle, frame = world_bounds ± 60 m, range (0, 16), zero level errors;
@@ -51,8 +52,8 @@ public static class TerrainCheck
         Expect("T0 terrain-plain compiles", ShaderSafety.Ok(plain, "terrain-plain"), "");
         int nDry = GroundShader.Get().GetShaderUniformList().Count, nWet = GroundShader.Get(true).GetShaderUniformList().Count;
         int nPlain = plain.GetShaderUniformList().Count;
-        // + the exploration veil's 7 uniforms on every variant (Task 26).
-        Expect("T0 uniforms ground 40 / ground-water 49 / terrain-plain 22", nDry == 40 && nWet == 49 && nPlain == 22,
+        // + the exploration veil's 7 uniforms on every variant (Task 26), + av_hemi on every variant (Task 26b).
+        Expect("T0 uniforms ground 41 / ground-water 50 / terrain-plain 23", nDry == 41 && nWet == 50 && nPlain == 23,
                $"{nDry} / {nWet} / {nPlain}");
         foreach (var code in new[] { GroundShader.Code(), GroundShader.Code(true), GroundShader.PlainCode() })
         {
@@ -67,7 +68,7 @@ public static class TerrainCheck
         Expect("T0 outline band 0.5 m, dry sd −1e4", wet.Contains("clamp(sd / 0.5, 0.0, 1.0)") && WaterShade.SdBandM == 0.5
                                                    && wet.Contains("const float TL_SD_DRY = -10000.0;"), "");
         Expect("T0 the dry program lifts nothing", !GroundShader.Code().Contains("tl_lift") && !GroundShader.PlainCode().Contains("tl_lift"), "");
-        return $"shaders 40/49/22";
+        return $"shaders 41/50/23";
     }
 
     // ---- T1–T4 ----

@@ -88,6 +88,8 @@ public sealed class StageAmbience
             LightNegative = negative,
             ShadowEnabled = false,
             SkyMode = DirectionalLight3D.SkyModeEnum.LightOnly,
+            // The terrain carries the pair as a shader term (HemiUniforms, Task 26b): the two lights skip its layer.
+            LightCullMask = HemiUniforms.PairCullMask,
         };
         var up = Hemi("HemiSky", false);
         var down = Hemi("HemiGround", true);
@@ -149,6 +151,14 @@ public sealed class StageAmbience
 
     private static Color C(GodotSrgb c) => new((float)c.R, (float)c.G, (float)c.B);
 
+    /// <summary>The ground shaders' <c>av_hemi</c> for a frame: the pair light's colour as Godot decodes it × its energy.</summary>
+    public static Vector3 HemiTermOf(StageFrame f)
+    {
+        var lin = C(f.HemiPair.Color).SrgbToLinear();
+        float e = (float)f.HemiPair.Energy;
+        return new Vector3(lin.R * e, lin.G * e, lin.B * e);
+    }
+
     private void Flush()
     {
         if (!_dirty) return;
@@ -166,6 +176,9 @@ public sealed class StageAmbience
             hemi.LightColor = C(f.HemiPair.Color);
             hemi.LightEnergy = (float)f.HemiPair.Energy;
         }
+        // The same pair as the ground shaders' term: Godot's decode of the light colour × the energy (the π of
+        // light_storage.cpp and the 1/π of the Lambert BRDF cancel, as for the lights themselves).
+        HemiUniforms.Set(HemiTermOf(f));
         Env.BackgroundColor = C(f.Background);
         // The fog colour follows the sky (engine.ts: `scene.fog.color.copy(sky)`); the ambience does not touch it.
         if (_fog is not null && GodotObject.IsInstanceValid(_fog)) _fog.SetSky(f.Background.Linear);

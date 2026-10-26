@@ -67,7 +67,7 @@ public static class GroundShader
 render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_lambert, specular_schlick_ggx;
 
 uniform vec3 plain_albedo : source_color = vec3({PlainColor.R.ToString("0.00", CultureInfo.InvariantCulture)}, {PlainColor.G.ToString("0.00", CultureInfo.InvariantCulture)}, {PlainColor.B.ToString("0.00", CultureInfo.InvariantCulture)});
-{VeilUniformBlock}{TerrainLodGlsl.Chunk(false)}
+{VeilUniformBlock}{HemiUniformBlock}{TerrainLodGlsl.Chunk(false)}
 varying vec2 v_world;
 {VeilFunctions()}
 void vertex() {{
@@ -77,11 +77,13 @@ void vertex() {{
 
 void fragment() {{
 	float fv_a = fv_amount(v_world);
-	ALBEDO = plain_albedo * (1.0 - fv_a);
-	EMISSION = fv_color * fv_a;
+	vec3 av_alb = plain_albedo * (1.0 - fv_a);
+	vec3 av_n = tl_normal_at(v_world);
+	ALBEDO = av_alb;
+	EMISSION = fv_color * fv_a{HemiTerm("av_alb", "0.0", "av_n")};
 	ROUGHNESS = {L(PlainRoughness)};
 	METALLIC = 0.0;
-	NORMAL = normalize((VIEW_MATRIX * vec4(tl_normal_at(v_world), 0.0)).xyz);
+	NORMAL = normalize((VIEW_MATRIX * vec4(av_n, 0.0)).xyz);
 }}
 ";
 
@@ -128,7 +130,7 @@ uniform float ground_metallic = 0.02;
 // ---- basement hole (ground.ts patchHole) ----
 uniform vec4 hole_rect = vec4(0.0);   // minX, minZ, maxX, maxZ (world)
 uniform float hole_on = 0.0;
-{VeilUniformBlock}{(water ? WaterUniforms : "")}{TerrainLodGlsl.Chunk(water)}
+{VeilUniformBlock}{HemiUniformBlock}{(water ? WaterUniforms : "")}{TerrainLodGlsl.Chunk(water)}
 varying vec2 v_world;
 {VeilFunctions()}
 void vertex() {{
@@ -252,12 +254,28 @@ void fragment() {{
 ";
     }
 
-    private const string DryFragment = @"	float fv_a = fv_amount(p);
-	ALBEDO = alb * (1.0 - fv_a);
-	EMISSION = fv_color * fv_a;
+    private static readonly string DryFragment = $@"	float fv_a = fv_amount(p);
+	vec3 av_alb = alb * (1.0 - fv_a);
+	vec3 av_n = tl_normal_at(p);
+	ALBEDO = av_alb;
+	EMISSION = fv_color * fv_a{HemiTerm("av_alb", "ground_metallic", "av_n")};
 	ROUGHNESS = ground_roughness;
 	METALLIC = ground_metallic;
-	NORMAL = normalize((VIEW_MATRIX * vec4(tl_normal_at(p), 0.0)).xyz);";
+	NORMAL = normalize((VIEW_MATRIX * vec4(av_n, 0.0)).xyz);";
+
+    // ── The hemisphere term (Task 26b, World/HemiUniforms.cs) ──────────────────────────────────────────────────────────
+    // The pair of shadowless directional lights that emulates three's HemisphereLight adds pair·n.y to a Lambert surface;
+    // the terrain instances sit on a render layer those two lights skip, and the term is added here instead — the exact
+    // sum Godot forms for them: colour·energy·max(N·L, 0) per light, × albedo × (1 − metallic) (ao is 1).
+
+    public const string HemiUniformBlock = @"
+// ---- hemisphere pair as a shader term (HemiUniforms.cs) ----
+uniform vec3 av_hemi = vec3(0.0);                     // the pair's linear colour × energy, 0 = off
+";
+
+    /// <summary>The term added to EMISSION: <c>albedo · (1 − metallic) · av_hemi · n.y</c> of the world shading normal.</summary>
+    public static string HemiTerm(string albedo, string metallic, string worldNormal)
+        => $" + {albedo} * (1.0 - {metallic}) * av_hemi * normalize({worldNormal}).y";
 
     // ── The exploration veil (fogVeil.ts, Task 26) ─────────────────────────────────────────────────────────────────────
     // Seven uniforms, bound and pushed by VeilUniforms (World/VeilUniforms.cs) — the browser's shared uniform objects.
@@ -437,8 +455,9 @@ vec3 tw_ripple(vec2 p, vec2 gx, vec2 gy, float wave_m, float speed, float flow_s
 	float f = tw_foam * {L(WaterShade.FoamStrength)};
 	// The veil first, then the sky and the foam (the browser's insertion order): ((L·(1 − a) + C·a)·(1 − k) + S·k)·(1 − f) + f.
 	float fv_a = fv_amount(p);
-	ALBEDO = alb * (1.0 - k) * (1.0 - f) * (1.0 - fv_a);
-	EMISSION = (fv_color * fv_a * (1.0 - k) + tw_sky * k) * (1.0 - f) + vec3(f);
+	vec3 av_alb = alb * (1.0 - k) * (1.0 - f) * (1.0 - fv_a);
+	ALBEDO = av_alb;
+	EMISSION = (fv_color * fv_a * (1.0 - k) + tw_sky * k) * (1.0 - f) + vec3(f){HemiTerm("av_alb", "metal", "nw")};
 	ROUGHNESS = rough;
 	METALLIC = metal;";
 }

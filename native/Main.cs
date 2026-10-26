@@ -232,6 +232,7 @@ public partial class Main : Node3D
         StopSync();
         _stop.Cancel();
         World.VeilUniforms.Reset();
+        World.HemiUniforms.Reset();
         _builder?.Models?.FreeAll();
         if (_hud is not null && IsInstanceValid(_hud))
         {

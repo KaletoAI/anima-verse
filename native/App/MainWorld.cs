@@ -37,6 +37,7 @@ public partial class Main : Node3D
             MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
             // A new world: the veil starts from "nothing explored" with nothing bound (its module state).
             VeilUniforms.Reset();
+            HemiUniforms.Reset();
             var world = new Node3D { Name = "World" };
             AddChild(world);
             var builder = _builder = new WorldBuilder(_source!, Log, strict: false)

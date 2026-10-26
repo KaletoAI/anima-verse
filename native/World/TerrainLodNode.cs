@@ -110,6 +110,7 @@ public partial class TerrainLodNode : Node3D
         _plain = new ShaderMaterial { Shader = GroundShader.Plain() };
         ShaderSafety.Ok(_plain.Shader, "terrain-plain");
         VeilUniforms.Bind(_plain);
+        HemiUniforms.Bind(_plain);
         _dryMat = _wetMat = _plain;
         SetMaterials(null, null);
     }
@@ -258,6 +259,8 @@ public partial class TerrainLodNode : Node3D
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             GIMode = GeometryInstance3D.GIModeEnum.Disabled,
             CustomAabb = WorldBox,
+            // The hemisphere pair is a shader term on every ground material (HemiUniforms): its two lights skip this layer.
+            Layers = HemiUniforms.Layer,
         };
     }
 

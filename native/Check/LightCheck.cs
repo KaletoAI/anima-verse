@@ -25,7 +25,11 @@ namespace AnimaNative.Check;
 ///   L3 the room ambience on the clock base (daylight 0.5: energies halved, the water's sky bytes);
 ///   L4 the shadow fit: max distance from the camera distance, Godot's texel size against the browser's 6.84 cm;
 ///   L5 the material policy: Lambert + no received shadow on every imported GLB material, the scatter shader likewise,
-///      the terrain casts no shadow; the MSAA option.
+///      the terrain casts no shadow; the MSAA option;
+///   L6 the hemisphere pair as the terrain's shader term (Task 26b, <see cref="HemiUniforms"/>): the term is the pair
+///      light as Godot decodes it × its energy (noon = the L2 difference n.y 1 − n.y 0), ambient + term·n.y equals the
+///      lit sum of L2 for every n.y, the terrain sits on the layer both pair lights skip (sun, fill, lamps and every
+///      default-layer instance keep them), all three ground shaders add the term, and the bench switch zeroes it.
 /// </summary>
 public static class LightCheck
 {
@@ -132,9 +136,56 @@ public static class LightCheck
                    && CliOptions.Parse(new[] { "--msaa=2" }).Msaa == Viewport.Msaa.Msaa2X, "");
             Energy("L5 a lamp of intensity 2 → 2/π", (float)StageLight.Energy(2), 0.636619772);
 
-            return $"light L0..L5 ok (hours 6 7 9 12 18 22, noon sun {0.716197:0.######} hemi {0.493380:0.######} fill {0.175070:0.######}, "
+            // ---- L6 the hemisphere term on the terrain (Task 26b) ----
+            stage.SetHour(12);
+            stage.Apply(AmbienceState.Neutral);
+            // Noon, README "Light": the pair = (n.y 1) − (n.y 0) = (0.364070476 − 0.244732059, …).
+            var term = HemiUniforms.Value;
+            Expect("L6 the term = the pair as Godot decodes it × energy", term == StageAmbience.HemiTermOf(stage.Frame), $"{term}");
+            Expect("L6 noon term (0.119338417, 0.131202015, 0.200356626)", Math.Abs(term.X - 0.119338417) < 1e-5
+                   && Math.Abs(term.Y - 0.131202015) < 1e-5 && Math.Abs(term.Z - 0.200356626) < 1e-5, $"{term}");
+            var amb6 = stage.Env.AmbientLightColor.SrgbToLinear() * stage.Env.AmbientLightEnergy;
+            foreach (float ny in new[] { 1f, 0.75f, 0.5f, 0.2f, 0f, -0.5f, -1f })
+            {
+                // What the lights sum to on a Lambert surface (L2's path) against ambient + the shader term.
+                var n = new Vector3(0, ny, 0);
+                var lit = amb6 + stage.HemiUp.LightColor.SrgbToLinear() * stage.HemiUp.LightEnergy * Math.Max(0, n.Dot(Dir(stage.HemiUp)))
+                          - stage.HemiDown.LightColor.SrgbToLinear() * stage.HemiDown.LightEnergy * Math.Max(0, n.Dot(Dir(stage.HemiDown)));
+                var shaded = new Vector3(amb6.R, amb6.G, amb6.B) + term * ny;
+                Expect($"L6 ambient + term·n.y = the pair's sum at n.y {ny}", Math.Abs(shaded.X - lit.R) < 1e-6
+                       && Math.Abs(shaded.Y - lit.G) < 1e-6 && Math.Abs(shaded.Z - lit.B) < 1e-6, $"{shaded} vs {lit}");
+            }
+            uint layer = HemiUniforms.Layer;
+            Expect("L6 both pair lights skip the terrain layer", (stage.HemiUp.LightCullMask & layer) == 0
+                   && (stage.HemiDown.LightCullMask & layer) == 0, $"{stage.HemiUp.LightCullMask:x}");
+            Expect("L6 sun and fill still light it", (stage.Sun.LightCullMask & layer) != 0 && (stage.Fill.LightCullMask & layer) != 0, "");
+            var probeMesh = new MeshInstance3D();
+            bool defaultLayer = probeMesh.Layers == 1u;
+            probeMesh.Free();
+            Expect("L6 the pair keeps every default-layer instance", (stage.HemiUp.LightCullMask & 1u) != 0
+                   && (stage.HemiDown.LightCullMask & 1u) != 0 && defaultLayer, "");
+            using (var hf = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixtures, "heightfield.json"))))
+            {
+                var height = new WorldHeight(HeightfieldOverview.Parse(hf.RootElement));
+                var terrain = new TerrainLodNode(Terrain.TerrainField.Build(height, 0, 0, null, Terrain.TerrainField.ExtentOf(null)), _ => { });
+                Expect("L6 the terrain instances sit on that layer only", terrain.DryInstance.Layers == layer && terrain.WetInstance.Layers == layer, "");
+                var plainMat = terrain.Materials.Dry;
+                Expect("L6 the plain terrain material carries the term", HemiUniforms.Materials().Contains(plainMat)
+                       && plainMat.GetShaderParameter(HemiUniforms.Uniform).AsVector3() == term, "");
+                HemiUniforms.Off = true;
+                Expect("L6 the bench switch zeroes it", plainMat.GetShaderParameter(HemiUniforms.Uniform).AsVector3() == Vector3.Zero, "");
+                HemiUniforms.Off = false;
+                Expect("L6 and puts it back", plainMat.GetShaderParameter(HemiUniforms.Uniform).AsVector3() == term, "");
+                terrain.Free();
+            }
+            foreach (var (code, name) in new[] { (Ground.GroundShader.Code(), "ground"), (Ground.GroundShader.Code(true), "ground-water"),
+                                                 (Ground.GroundShader.PlainCode(), "terrain-plain") })
+                Expect($"L6 {name} adds the term", code.Contains("uniform vec3 av_hemi") && code.Contains("* av_hemi * normalize("), "");
+
+            return $"light L0..L6 ok (hours 6 7 9 12 18 22, noon sun {0.716197:0.######} hemi {0.493380:0.######} fill {0.175070:0.######}, "
                    + $"hemisphere ±pair exact at n.y 1/0/−1, shadow ortho {atlas} px max-dist 80/150/220, texel@80 m {texel80 * 100:0.##} cm, "
-                   + $"GLB {mats.Length} materials Lambert/no-receive)";
+                   + $"GLB {mats.Length} materials Lambert/no-receive; terrain hemisphere term {term.X:0.######}/{term.Y:0.######}/{term.Z:0.######} "
+                   + "on layer 20, pair lights skip it)";
         }
         finally
         {

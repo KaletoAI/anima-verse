@@ -14,7 +14,7 @@ namespace AnimaNative.Check;
 /// the REAL ground shaders and the shared uniforms (<see cref="VeilUniforms"/>), against the hand numbers of
 /// native/fixtures/README.md "Veil":
 ///
-///   V0 shaders: ground / ground-water / terrain-plain compile with 40 / 49 / 22 uniforms (+7 each); the text pins the
+///   V0 shaders: ground / ground-water / terrain-plain compile with 41 / 50 / 23 uniforms (+7 each; Task 26b +1 each); the text pins the
 ///      cell size, the zero-alpha branch, the linear + clamped + black-default samplers and the three output mixes;
 ///   V1 cells: <c>fixtures/explored.json</c> through <see cref="ExploredSync"/> and the fixture source → a 5 × 4 R8
 ///      texture on all three materials, the geometry, explored texels 6 and 13; an unchanged signature asks nothing;
@@ -47,7 +47,8 @@ public static class VeilCheck
         foreach (var (s, name) in new[] { (dry, "ground"), (wet, "ground-water"), (plain, "terrain-plain") })
             Expect($"V0 {name} compiles", ShaderSafety.Ok(s, name), string.Join(" | ", ShaderSafety.Lines));
         int nDry = dry.GetShaderUniformList().Count, nWet = wet.GetShaderUniformList().Count, nPlain = plain.GetShaderUniformList().Count;
-        Expect("V0 uniforms 40 / 49 / 22 (33 / 42 / 15 + the veil's 7)", nDry == 40 && nWet == 49 && nPlain == 22,
+        Expect("V0 uniforms 41 / 50 / 23 (33 / 42 / 15 + the veil's 7 + av_hemi — Task 26b)",
+               nDry == 41 && nWet == 50 && nPlain == 23,
                $"{nDry} / {nWet} / {nPlain}");
         foreach (var (code, name) in new[] { (GroundShader.Code(), "dry"), (GroundShader.Code(true), "wet"), (GroundShader.PlainCode(), "plain") })
         {
@@ -62,12 +63,14 @@ public static class VeilCheck
             Expect($"V0 {name}: every veil uniform declared once",
                    GroundShader.VeilUniformNames.All(u => System.Text.RegularExpressions.Regex.Matches(code, $@"\buniform \w+ {u}\b").Count == 1), "");
         }
-        Expect("V0 dry: lit · (1 − a) + colour · a", GroundShader.Code().Contains("ALBEDO = alb * (1.0 - fv_a);")
-                                                    && GroundShader.Code().Contains("EMISSION = fv_color * fv_a;"), "");
+        // Task 26b: the albedo is named (av_alb) because the hemisphere term multiplies the SAME albedo the lights see.
+        Expect("V0 dry: lit · (1 − a) + colour · a", GroundShader.Code().Contains("vec3 av_alb = alb * (1.0 - fv_a);")
+                                                    && GroundShader.Code().Contains("ALBEDO = av_alb;")
+                                                    && GroundShader.Code().Contains("EMISSION = fv_color * fv_a + av_alb * (1.0 - ground_metallic) * av_hemi"), "");
         Expect("V0 wet: the veil under the sky and the foam",
-               GroundShader.Code(true).Contains("ALBEDO = alb * (1.0 - k) * (1.0 - f) * (1.0 - fv_a);")
-               && GroundShader.Code(true).Contains("EMISSION = (fv_color * fv_a * (1.0 - k) + tw_sky * k) * (1.0 - f) + vec3(f);"), "");
-        Expect("V0 plain: the same mix on its colour", GroundShader.PlainCode().Contains("ALBEDO = plain_albedo * (1.0 - fv_a);")
+               GroundShader.Code(true).Contains("vec3 av_alb = alb * (1.0 - k) * (1.0 - f) * (1.0 - fv_a);")
+               && GroundShader.Code(true).Contains("EMISSION = (fv_color * fv_a * (1.0 - k) + tw_sky * k) * (1.0 - f) + vec3(f) + av_alb * (1.0 - metal) * av_hemi"), "");
+        Expect("V0 plain: the same mix on its colour", GroundShader.PlainCode().Contains("vec3 av_alb = plain_albedo * (1.0 - fv_a);")
                                                       && GroundShader.PlainCode().Contains("float fv_a = fv_amount(v_world);"), "");
 
         var mats = new[] { new ShaderMaterial { Shader = dry }, new ShaderMaterial { Shader = wet }, new ShaderMaterial { Shader = plain } };
@@ -141,7 +144,7 @@ public static class VeilCheck
         Expect("V4 no avatar: the empty memory, the neutral texel", Tex(mats[1], "fv_cells_b") == VeilUniforms.Neutral
                                                                  && Tex(mats[1], "fv_cells_a") == VeilUniforms.Neutral
                                                                  && source.ExploredRequests == 1, "");
-        return $"veil[V0 40/49/22, V1 cells 2 grid 5x4, V2 edge 1/0.5/0.25/0, V3 fade 0.6 s, V4 0.36; {VeilUniforms.Summary()}]";
+        return $"veil[V0 41/50/23, V1 cells 2 grid 5x4, V2 edge 1/0.5/0.25/0, V3 fade 0.6 s, V4 0.36; {VeilUniforms.Summary()}]";
     }
 
     /// <summary>

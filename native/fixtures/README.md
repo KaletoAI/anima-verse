@@ -488,7 +488,8 @@ path `"Path_Blend "` (trimmed + lower-cased → `path_blend`), meadow `meadow_te
   both level arrays, the near rect, the frame, the rings, base step, normal span, the cap texture, its geometry and
   fit) + roughness/metallic + the basement hole's `hole_rect` / `hole_on` (Task 16, off at the build); the water
   variant adds 5 `tw_*` (`tw_wave`, `tw_kind`, `tw_flow`, `tw_look`, `tw_sky`) + 4 lift uniforms (`tl_water`,
-  `tl_water_sd`, `tl_water_geom`, `tl_water_levels`) = **42** (each variant + the veil's 7 `fv_*` since Task 26: **40** / **49** / **22**) — since Task 25 the fragment reads the lift's own sd
+  `tl_water_sd`, `tl_water_geom`, `tl_water_levels`) = **42** (each variant + the veil's 7 `fv_*` since Task 26: 40 / 49 / 22; + the hemisphere term `av_hemi` on each
+  since Task 26b: **41** / **50** / **23**) — since Task 25 the fragment reads the lift's own sd
   field and lattice (`tl_sd_at`, `tl_water_geom`), the old `tw_sd` / `tw_geom` window is gone; the
   plain terrain is the 14 + its colour = **15**. Godot's dummy renderer runs the shader-language front end, so a
   shader that does not parse reports none.
@@ -809,7 +810,9 @@ extent 1), `mirror.glb` (wood quad + the pane of smoke_mirror_plane [1], extent 
   lamp 3 in the cellar at level −1 / bottom −3, lamp 4 candle with glow 0.12, lamp 5 fire), height 2: world
   (64 + x, 3.875 + x/32 + 2, 120) — lamp 1 (65, **5.90625**, 120); lamp 3 has no lift (level −1): (67, **2.875**, 120).
   The lantern row at (−40, 100) is 107 m from the focus (64, 5.875, 120). Night 1, storey 0 (cellar hidden): by
-  distance **1, 2, 4, 5, 6, 7**. Second tick: gain 0.5 → lamp 1's energy 2 · 0.5 / π = **0.3183099** (Task 21: Godot energy = three intensity / π);
+  distance **1, 2, 4, 5, 6, 7** — the first tick fades in from gain 0, so all six lamps are at energy 0 and **hidden**
+  (Task 26b: Godot clusters a visible omni light whatever its energy). Second tick: gain 0.5 → every lit lamp shown, a dark
+  one stays hidden; lamp 1's energy 2 · 0.5 / π = **0.3183099** (Task 21: Godot energy = three intensity / π);
   candle within ±8 %; fire colour between #ffb35c and #ff6a20. Day (night 0): lamp 2 drops, survivors keep their
   slots, lamp 8 fills slot 1 → **1, 8, 4, 5, 6, 7**; lamp 2's halo hides. Cellar storey (night 1): only the cellar room
   is shown → **3**; the parlour's halos hide.
@@ -875,6 +878,14 @@ Fill from (−30, 20, −25) to the origin: /√1925 → (−0.683763, 0.455842,
 **Materials** `building_original.glb`: all 8 materials Lambert + `DisableReceiveShadows` after `GlbLoader.BrowserLook`;
 the scatter shader `diffuse_lambert, shadows_disabled`; a terrain tile `CastShadow = Off`; `--msaa` default 4×, `0` off.
 
+**L6 the terrain's hemisphere term** (Task 26b). The pair light lights a Lambert surface with
+`linear(colour) · E · π · max(N·L, 0) / π`, the lower negative one subtracts the same for −n.y, so the pair adds
+`linear(colour) · E · n.y` for every n.y; the ground shaders add exactly that (× albedo × (1 − metallic), as Godot does for
+the lights) as `av_hemi · n.y` and the terrain sits on render layer 20 (bit 1 << 19), which both pair lights' cull mask
+(0xFFFFFFFF without that bit) leaves out. Noon: `av_hemi` = (n.y = 1) − (n.y = 0) = (0.364070 − 0.244732, 0.421837 −
+0.290635, 0.493380 − 0.293024) = **(0.119338, 0.131202, 0.200357)** = 1.55 · (S − G)/2/π. Ambient + term · n.y equals the
+lit sum at n.y = 1, 0.75, 0.5, 0.2, 0, −0.5, −1 (1e-6); sun and fill keep layer 20, the pair keeps layer 1.
+
 
 ## Fog (Task 22, `Check/FogCheck.cs`, no fixture world)
 
@@ -928,7 +939,8 @@ Sources: terrainLod.ts (`createTerrainLod`: `setField`, `buildFar`, `buildNear`,
 `Core/Terrain/TerrainLod.cs`, vector-checked in `dotnet test` (terrain_lod.json); `nodeHasWater` has no shared vector
 yet — its hand cases (smoke_terrain_lod.mjs § (c)) run in `TerrainFieldTests`.
 
-**T0 shaders.** ground **40**, ground-water **49**, terrain-plain **22** uniforms (Task 26: 33 / 42 / 15 + the veil's 7; Task 25: the wet one was 44 with the separate fragment window) (counts under "Ground surfaces"). The
+**T0 shaders.** ground **41**, ground-water **50**, terrain-plain **23** uniforms (Task 26b: + `av_hemi` each;
+Task 26: 33 / 42 / 15 + the veil's 7; Task 25: the wet one was 44 with the separate fragment window) (counts under "Ground surfaces"). The
 text prints `TL_PATCH_N = 32.0`, `TL_MORPH_START = 0.5`, `TL_CAP_NONE = 6.0`, six rings, the descent j = 5 … 1, the
 outline band `sd / 0.5` and `TL_SD_DRY = -10000.0` — the twin (`Core/Terrain/TerrainShaderTwin.cs`) reads the same
 numbers from C#. Only the wet program has `tl_lift`.
@@ -1085,7 +1097,7 @@ walk.ts (`ghostCutY`, `groundWaterLevel`, `groundScope`), propWater.ts + propWat
 prop_water.json); the ripple's sample coordinates have no shared vector — its identities (smoke_water_shade.mjs § [5]/[6])
 are hand tests in `WaterExtrasTests`.
 
-**W0 shaders.** `ground-water` **49** uniforms (42 + the veil's 7, Task 26) (its look reads the lift's `tl_sd_at` + `tl_inside` and `tl_water_geom`,
+**W0 shaders.** `ground-water` **50** uniforms (42 + the veil's 7, Task 26, + `av_hemi`, Task 26b) (its look reads the lift's `tl_sd_at` + `tl_inside` and `tl_water_geom`,
 no `tw_sd` / `tw_geom`), `waterfall-curtain` 4, `waterfall-foam` 1, `prop-water` 4, `water-ghost[back|disabled|front]`
 5 each; every one compiles in the headless front end (a bogus render mode does not — `depth_test_inverted` is a real
 4.7.2 mode). The wave map is three's `CanvasTexture` uploaded with flipY, so three's sample (u, v) reads canvas row
@@ -1140,7 +1152,8 @@ The exploration haze of `client3d/src/scene/fogVeil.ts` on the three ground shad
 (`fog_veil.json`), the state (A/B, crossfade, strength, `syncExplored`) is hand-tested in `FogVeilStateTests`.
 
 **V0 shaders.** +7 uniforms on every variant (`fv_cells_a`, `fv_cells_b`, `fv_geom_a`, `fv_geom_b`, `fv_mix`,
-`fv_alpha`, `fv_color`): ground **40**, ground-water **49**, terrain-plain **22**. The samplers are
+`fv_alpha`, `fv_color`): ground 40, ground-water 49, terrain-plain 22 (Task 26b: **41** / **50** / **23** with
+`av_hemi`). The samplers are
 `hint_default_black, filter_linear, repeat_disable` (three's LinearFilter + ClampToEdge; an unbound sampler reads
 "unexplored"); `uv = (p / 64.00 − geom.xy) / geom.zw`; `fv_alpha ≤ 0` reads no texture. Output (three mixes the FINISHED
 colour, Godot has no hook after the lighting): dry and plain `ALBEDO · (1 − a)` + `EMISSION = colour · a`; wet — the
