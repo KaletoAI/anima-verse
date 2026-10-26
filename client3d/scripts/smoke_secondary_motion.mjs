@@ -46,8 +46,59 @@
  * is ballistic p(t)=p(0)+v*t, including overdamped parameter values.
  * Both renderers share the solver; matrices use bounded transverse scales, inverse-transpose
  * normals, immutable bind transforms, chain FK, and instance ownership.
+ *
+ * Shared Task 33 oracle derivations (JSON labels below; no solver recordings):
+ * [S1] omega=0 => p'=p+v*h, v'=v. (1,0,0)+(2,0,0)*.25
+ * = (1.5,0,0), v'=(2,0,0). With p=(1,2,3), v=(2,-4,6),
+ * p'=(1.5,1,4.5), v'=(2,-4,6); arbitrary target and its velocity cancel.
+ * [S2] h=0 gives identity propagation: p=(1,2,3), v=(4,5,6).
+ * [S3] critical omega=4*pi, x=0, relative velocity w=(-3,0,0).
+ * h=1/30, u=omega*h=.4188790204786391, exp(-u)=.6577837688198456.
+ * Absolute p_x=3*h-3*h*exp(-u)=.03422162311801544;
+ * v_x=3-3*exp(-u)*(1-u)=1.8532441558504768; Y,Z remain zero.
+ * The relative displacement is -.06577837688198456 (the original impulse).
+ * [S4] zeta=0, f=.25 => omega=pi/2: at h=1, cos(pi/2)=0,
+ * sin(pi/2)=1; x0=1,v0=0 gives p=(0,0,0), v=(-pi/2,0,0),
+ * -pi/2=-1.5707963267948966.
+ * [S5] x=w=0 eliminates both damped modes at any damping. Hence target
+ * (1,2,3)+(4,5,6)*.25=(2,3.25,4.5), v=(4,5,6).
+ * [S6] f=1/(2*pi)=.15915494309189535, zeta=1.25 gives omega=1,
+ * roots -1.25 +/- sqrt(1.25^2-1)=-.5,-2. Starting x=1,w=-.5
+ * selects the slow root alone: h=2 => p_x=exp(-1)=.36787944117144233,
+ * v_x=-.5*exp(-1)=-.18393972058572117; Y,Z remain zero.
+ * [A1] limit2 has knee1: angles0,.5,1 return0,.5,1.
+ * [A2] angle2,limit2 => 1+tanh(1)=1.7615941559557649,
+ * using tanh(1)=(exp(2)-1)/(exp(2)+1). [A3] limits0,-1 return0.
+ * [B1] smoothstep(.75/1.5)=.5. Arithmetic means: gravity1->.4=.7,
+ * gain1->0=.5, freq2->0=1, flatten0->.2=.1, spill0->.8=.4,
+ * zeta1->0=.5. [B2] t=1 at1.5s gives gain0.
+ * [B3] elapsed -1 clamps to0: gravity1,gain1,freq2; elapsed3 clamps
+ * to1: gravity.4,gain0,freq0. [B4] means length1.5->.5=1,
+ * girth.8->2=1.4. Missing spread=.5, head_sag=1 and flatten_floor
+ * inherits target squash_min=.1, so each constant remains .5,1,.1.
+ * [C1-C4] Numeric column-major bind matrices: anchor and c1 identity;
+ * c2 translates (0,-1,0). Rings at y=-.5,-1.5 have radius .1 and
+ * unit weights on c1,c2 respectively. Gravity/gain/flatten/stretch are0.
+ * Each link scales once: half-width=.1*girth, centre distance=.5*length
+ * or1.5*length. Thus (girth,length)=(2,1): (.2,.5),(.2,1.5);
+ * (1,1.5): (.1,.75),(.1,2.25); (2,1.5): (.2,.75),(.2,2.25).
+ * For C1-C3 the anchor world matrix is identity; c1 has diagonal
+ * (girth,length,girth,1), translation0; c2 has the SAME diagonal and
+ * translation (0,-length,0). All off-diagonal entries are0.
+ * Rest60 rotates about the root without changing these distances, so C4
+ * equals C3. Four vertices per ring keep the centroid on its chain axis.
+ * Float32 geometry requires1e-6 tolerance; matrices themselves are doubles.
+ *
+ * Admin harness repair: the current viewer JSX receives statusPanel, supplied
+ * as null here because only its motion prop is under test. Advanced validation
+ * requires length/girth defaults1; the remount key now lives in side panels.
  */
 import assert from 'node:assert/strict';
+import { runSecondaryVectors } from './secondaryVectorDispatch.mjs';
+const checkVectors = async name => {
+  const result = await runSecondaryVectors(name);
+  assert.equal(result.failed, 0, `${name}: vector failures`);
+};
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import * as THREE from 'three';
@@ -868,13 +919,9 @@ try {
   }
   console.log('ok finite extremes and bounded zero-frequency transition (pi/240 per frame)');
   const settle=f=>{for(let i=0;i<600;i++) f.solver.update(1/120);};
-  const blended=C.blendMotionParams(defaults,{...defaults,gravity:.4,gain:0,freq_hz:0,flatten:.2,spill:.8,zeta:0},.75);
-  near(blended.gravity,.7); near(blended.gain,.5); near(blended.freq_hz,1);
-  near(blended.flatten,.1); near(blended.spill,.4); near(blended.zeta,.5);
-  near(C.blendMotionParams(defaults,{...defaults,gain:0},1.5).gain,0);
+  await checkVectors('secondary_params');
   console.log('ok P4 multipliers blend at hand-derived midpoint and endpoint');
-  const zero=C.stepSecondaryParticle(new THREE.Vector3(1,0,0),new THREE.Vector3(2,0,0),new THREE.Vector3(),new THREE.Vector3(),{...defaults,freq_hz:0,zeta:5},.25);
-  near(zero.p.x,1.5); near(zero.v.x,2);
+  await checkVectors('secondary_particle');
   const noSpring=fixture({freq_hz:0,zeta:5}); noSpring.anchor.rotation.x=-Math.PI/2; settle(noSpring);
   near(noSpring.point().distanceTo(new THREE.Vector3(0,1,0)),0);
   console.log('ok P4 explicit zero frequency stays finite');
@@ -1042,6 +1089,8 @@ try {
     assert.ok(saturated>previous && saturated<=limit);
     previous=saturated;
   }
+  await checkVectors('secondary_angle');
+  // Keep the original ten-degree dimensional cross-check alongside JSON cases.
   near(C.softMotionAngle(limit,limit),limit/2*(1+Math.tanh(1)),1e-12);
   assert.equal(C.softMotionAngle(1,0),0);
   console.log('ok soft limit hand-derived, monotonic and bounded');
@@ -1165,7 +1214,7 @@ try {
   const fieldJSX=fieldSource.match(/<Model3DViewer[\s\S]*?\/>/)[0];
   const compiledField=await transform(`return (${fieldJSX})`,{loader:'tsx',jsxFactory:'h'});
   const h=(tag,props,...children)=>({tag,props,children});
-  const viewerElement=new Function('h','Model3DViewer','st','model','viewerUrl','mixamo','clipUrl','bust','previewMotion','motionToolbar','rigless',compiledField.code)(h,'Model3DViewer',response,response.model,response.model.url,false,'','revision',response.motion,null,false);
+  const viewerElement=new Function('h','Model3DViewer','st','model','viewerUrl','mixamo','clipUrl','bust','previewMotion','motionToolbar','rigless','statusPanel',compiledField.code)(h,'Model3DViewer',response,response.model,response.model.url,false,'','revision',response.motion,null,false,null);
   const adminMotion=viewerElement.props.motion;
   assert.equal(adminMotion,response.motion);
   const viewerSource=await readFile('frontend/src/tabs/characters/Model3DViewer.tsx','utf8');
@@ -1212,7 +1261,7 @@ try {
   const renderEditor=new Function('h','Fragment','useState','useI18n','MotionPreviewHint',...Object.keys(helpers),editorCode.code+'; return ExtensionMotionDraft')(
     h,'fragment',useState,()=>({t:x=>x}),'preview-hint',...Object.values(helpers));
   const editorCalls=[];
-  const defaults={straighten_deg:0,freetext_clothing_gain:1,stretch:0,spread:.5,flatten_floor:.8,axis_gain:[1,1,1],freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,spill_max_deg:30,head_sag:1,flatten:1,spill:0,translate:0,rest_max_deg:45,squash:[.8,1.2]};
+  const defaults={length:1,girth:1,straighten_deg:0,freetext_clothing_gain:1,stretch:0,spread:.5,flatten_floor:.8,axis_gain:[1,1,1],freq_hz:2,zeta:.7,gravity:1,gain:.9,max_deg:30,sag_max_deg:30,spill_max_deg:30,head_sag:1,flatten:1,spill:0,translate:0,rest_max_deg:45,squash:[.8,1.2]};
   const props={defaults,overrides:{},disabled:false,onSave:async value=>{editorCalls.push(value);return true}};
   const allNodes=node=>Array.isArray(node)?node.flatMap(allNodes):node?.children?[node,...node.children.flatMap(allNodes)]:[];
   const nodes=()=>allNodes(renderEditor(props));
@@ -1241,7 +1290,7 @@ try {
   nodes().find(node=>node.tag==='button'&&node.children[0]==='Reset').props.onClick();
   await Promise.resolve();
   assert.equal(editorCalls.pop(),undefined,'Reset deletes overrides');
-  assert.match(fieldSource,/key=\{`\$\{character\}:\$\{st.model\?\.signature/);
+  assert.match(await readFile('frontend/src/tabs/characters/Model3DSidePanels.tsx','utf8'),/key=\{`\$\{character\}:\$\{st.model\?\.signature/);
   console.log('ok character draft survives polling, Enter saves edited overrides, validates and resets');
   }
 
@@ -1340,24 +1389,7 @@ try {
   // vertices of radius .1 at link1 y=-.5 and link2 y=-1.5. girth g and
   // length l scale each link once: half-width .1*g on BOTH links, distances
   // .5*l and 1.5*l from the root (child head follows the lengthened parent).
-  for (const [girth,length,rest] of [[2,1,0],[1,1.5,0],[2,1.5,0],[2,1.5,60]]) {
-    const croot=new THREE.Group(), canchor=new THREE.Bone(); croot.add(canchor);
-    const l1=new THREE.Bone(), l2=new THREE.Bone(); l1.name='c1'; l2.name='c2'; canchor.add(l1); l1.add(l2); l2.position.set(0,-1,0);
-    const ring=[0.1,-0.5,0, -0.1,-0.5,0, 0,-0.5,0.1, 0,-0.5,-0.1, 0.1,-1.5,0, -0.1,-1.5,0, 0,-1.5,0.1, 0,-1.5,-0.1];
-    const cg=new THREE.BufferGeometry(); cg.setAttribute('position',new THREE.Float32BufferAttribute(ring,3));
-    cg.setAttribute('skinIndex',new THREE.Uint16BufferAttribute([1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0],4));
-    cg.setAttribute('skinWeight',new THREE.Float32BufferAttribute(Array.from({length:8},()=>[1,0,0,0]).flat(),4));
-    const cm=new THREE.SkinnedMesh(cg,new THREE.MeshBasicMaterial()); croot.add(cm); croot.updateMatrixWorld(true); cm.bind(new THREE.Skeleton([canchor,l1,l2]));
-    const chain=C.createSecondaryMotion(THREE,croot,{rev:'chain',groups:{chain:{...defaults,bones:['c1','c2'],gravity:0,gain:0,flatten:0,stretch:0,squash:[.5,2],rest_max_deg:90,rest_deg:rest,length,girth}}});
-    for(let i=0;i<400;i++)chain.update(1/120);
-    croot.updateMatrixWorld(true);
-    const v=i=>cm.applyBoneTransform(i,new THREE.Vector3().fromBufferAttribute(cg.getAttribute('position'),i)).applyMatrix4(cm.matrixWorld);
-    for(const [a,b,dist] of [[0,1,.5],[4,5,1.5]]){
-      near(v(a).distanceTo(v(b))/2,.1*girth,1e-6);
-      near(v(a).add(v(b)).multiplyScalar(.5).length(),dist*length,1e-6);
-    }
-    chain.dispose();
-  }
+  await checkVectors('secondary_chain');
   console.log('ok chain girth/length scale each link once (no compounding), also with a rest angle');
   // Radius .36 / arc30: three equal chords have directions -10,0,10 degrees,
   // hence bind bends10. Pure core rings of radius .006 must all double at girth2.

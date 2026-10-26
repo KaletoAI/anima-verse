@@ -1,0 +1,61 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_secondary_motion.mjs",
+  "fixtures": {},
+  "cases": [
+    {
+      "label": "[A1] zero angle",
+      "fn": "softMotionAngle",
+      "args": [
+        0,
+        2
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[A1] linear below knee",
+      "fn": "softMotionAngle",
+      "args": [
+        0.5,
+        2
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[A1] knee",
+      "fn": "softMotionAngle",
+      "args": [
+        1,
+        2
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[A2] limit uses tanh one",
+      "fn": "softMotionAngle",
+      "args": [
+        2,
+        2
+      ],
+      "expect": 1.7615941559557649
+    },
+    {
+      "label": "[A3] zero budget",
+      "fn": "softMotionAngle",
+      "args": [
+        1,
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[A3] negative budget",
+      "fn": "softMotionAngle",
+      "args": [
+        1,
+        -1
+      ],
+      "expect": 0
+    }
+  ]
+}

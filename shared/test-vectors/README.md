@@ -378,3 +378,47 @@ values in centimetres; all times seconds, yaw radians):
 
 No Task 32 vector imports live config or reads current animation tables.
 Unknown function names fail through the shared runner; none are skipped.
+
+## Secondary motion and extension bones (Task 33)
+
+`timeout 300 node client3d/scripts/smoke_secondary_vectors.mjs` runs 22 cases
+without live config, assets, DOM, network or historical git sources. All four
+JSON files have the single source `client3d/scripts/smoke_secondary_motion.mjs`;
+its docstring holds the numbered hand derivations. The source smoke runs the
+same vectors and retains the integration, historical parity, allocation,
+reset/tier, normal and admin checks.
+
+| JSON | Cases | Dispatch function |
+|---|---:|---|
+| `secondary_particle.json` | 7 | `stepSecondaryParticle` |
+| `secondary_angle.json` | 6 | `softMotionAngle` |
+| `secondary_params.json` | 5 | `blendMotionParams` |
+| `secondary_chain.json` | 4 | `secondaryChain` |
+
+Native-facing test adapter signatures (metres, real seconds, radians unless
+an explicit parameter name ends in `_deg`):
+
+- `stepSecondaryParticle(p, v, target, targetVelocity, params, h) -> {p,v}`:
+  vectors are numeric `[x,y,z]` arrays; `params` is an explicit MotionGroup.
+  Calls the production exact oscillator and converts output vectors to arrays.
+- `softMotionAngle(angle, limit) -> number`: production function directly.
+- `blendMotionParams(from, to, elapsed) -> MotionGroup`: production function;
+  explicit configs, optional fields remain omitted to test documented fallbacks.
+  Only expected object keys are compared, as in the common vector contract.
+- `secondaryChain(data) -> {matrices,samples}`: `data.bones` is an ordered array
+  of `{name,parent,matrix}`, where parent is an index or null and matrix is a
+  16-number **column-major local bind matrix** (translation at indices 12–14).
+  Matrices decompose to Three position/quaternion/scale before binding. Input
+  matrices here are identity or translations (no shear). `positions`, `indices`,
+  `weights` are flat geometry attributes (3,4,4 components per vertex); positions
+  and weights use Float32, indices Uint16. The adapter creates a SkinnedMesh,
+  binds all bones in input order, creates the production solver with `payload`,
+  calls `update(dt)` exactly `frames` times and updates world matrices.
+  `matrices` contains all world bone matrices in input order, column-major.
+  For each `[a,b]` in `pairs`, `samples` contains `halfWidth` (half the world
+  distance between skinned vertices a,b) and `distance` (their midpoint's world
+  distance from the origin). This measures the same two ring pairs as the old
+  inline chain cases; no solver formula is duplicated in the adapter.
+
+The adapter is `client3d/scripts/secondaryVectorDispatch.mjs`; unknown functions
+fail through the common runner. No production TypeScript changed for Task 33.

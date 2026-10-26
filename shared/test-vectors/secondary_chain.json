@@ -1,0 +1,568 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_secondary_motion.mjs",
+  "fixtures": {
+    "chain": {
+      "bones": [
+        {
+          "name": "anchor",
+          "parent": null,
+          "matrix": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "name": "c1",
+          "parent": 0,
+          "matrix": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "name": "c2",
+          "parent": 1,
+          "matrix": [
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            -1,
+            0,
+            1
+          ]
+        }
+      ],
+      "positions": [
+        0.1,
+        -0.5,
+        0,
+        -0.1,
+        -0.5,
+        0,
+        0,
+        -0.5,
+        0.1,
+        0,
+        -0.5,
+        -0.1,
+        0.1,
+        -1.5,
+        0,
+        -0.1,
+        -1.5,
+        0,
+        0,
+        -1.5,
+        0.1,
+        0,
+        -1.5,
+        -0.1
+      ],
+      "indices": [
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0
+      ],
+      "weights": [
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      "frames": 400,
+      "dt": 0.008333333333333333,
+      "pairs": [
+        [
+          0,
+          1
+        ],
+        [
+          4,
+          5
+        ]
+      ]
+    }
+  },
+  "cases": [
+    {
+      "label": "[C1] girth only",
+      "fn": "secondaryChain",
+      "args": [
+        {
+          "$fixture": "chain",
+          "$with": {
+            "payload": {
+              "rev": "chain",
+              "groups": {
+                "chain": {
+                  "bones": [
+                    "c1",
+                    "c2"
+                  ],
+                  "freq_hz": 2,
+                  "zeta": 1,
+                  "gravity": 0,
+                  "gravity_scale": 1,
+                  "translate": 0,
+                  "flatten": 0,
+                  "sag_max_deg": 180,
+                  "spill": 0,
+                  "gain": 0,
+                  "max_deg": 180,
+                  "squash": [
+                    0.5,
+                    2
+                  ],
+                  "rest_deg": 0,
+                  "rest_max_deg": 90,
+                  "stretch": 0,
+                  "length": 1,
+                  "girth": 2
+                }
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "samples": [
+          {
+            "halfWidth": 0.2,
+            "distance": 0.5
+          },
+          {
+            "halfWidth": 0.2,
+            "distance": 1.5
+          }
+        ],
+        "matrices": [
+          [
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1
+          ],
+          [
+            2,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0,
+            0,
+            0,
+            1
+          ],
+          [
+            2,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0,
+            -1,
+            0,
+            1
+          ]
+        ]
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[C2] length only",
+      "fn": "secondaryChain",
+      "args": [
+        {
+          "$fixture": "chain",
+          "$with": {
+            "payload": {
+              "rev": "chain",
+              "groups": {
+                "chain": {
+                  "bones": [
+                    "c1",
+                    "c2"
+                  ],
+                  "freq_hz": 2,
+                  "zeta": 1,
+                  "gravity": 0,
+                  "gravity_scale": 1,
+                  "translate": 0,
+                  "flatten": 0,
+                  "sag_max_deg": 180,
+                  "spill": 0,
+                  "gain": 0,
+                  "max_deg": 180,
+                  "squash": [
+                    0.5,
+                    2
+                  ],
+                  "rest_deg": 0,
+                  "rest_max_deg": 90,
+                  "stretch": 0,
+                  "length": 1.5,
+                  "girth": 1
+                }
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "samples": [
+          {
+            "halfWidth": 0.1,
+            "distance": 0.75
+          },
+          {
+            "halfWidth": 0.1,
+            "distance": 2.25
+          }
+        ],
+        "matrices": [
+          [
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            0,
+            1.5,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            0,
+            1.5,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            -1.5,
+            0,
+            1
+          ]
+        ]
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[C3] both extents",
+      "fn": "secondaryChain",
+      "args": [
+        {
+          "$fixture": "chain",
+          "$with": {
+            "payload": {
+              "rev": "chain",
+              "groups": {
+                "chain": {
+                  "bones": [
+                    "c1",
+                    "c2"
+                  ],
+                  "freq_hz": 2,
+                  "zeta": 1,
+                  "gravity": 0,
+                  "gravity_scale": 1,
+                  "translate": 0,
+                  "flatten": 0,
+                  "sag_max_deg": 180,
+                  "spill": 0,
+                  "gain": 0,
+                  "max_deg": 180,
+                  "squash": [
+                    0.5,
+                    2
+                  ],
+                  "rest_deg": 0,
+                  "rest_max_deg": 90,
+                  "stretch": 0,
+                  "length": 1.5,
+                  "girth": 2
+                }
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "samples": [
+          {
+            "halfWidth": 0.2,
+            "distance": 0.75
+          },
+          {
+            "halfWidth": 0.2,
+            "distance": 2.25
+          }
+        ],
+        "matrices": [
+          [
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            1
+          ],
+          [
+            2,
+            0,
+            0,
+            0,
+            0,
+            1.5,
+            0,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0,
+            0,
+            0,
+            1
+          ],
+          [
+            2,
+            0,
+            0,
+            0,
+            0,
+            1.5,
+            0,
+            0,
+            0,
+            0,
+            2,
+            0,
+            0,
+            -1.5,
+            0,
+            1
+          ]
+        ]
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[C4] rest rotation preserves extents",
+      "fn": "secondaryChain",
+      "args": [
+        {
+          "$fixture": "chain",
+          "$with": {
+            "payload": {
+              "rev": "chain",
+              "groups": {
+                "chain": {
+                  "bones": [
+                    "c1",
+                    "c2"
+                  ],
+                  "freq_hz": 2,
+                  "zeta": 1,
+                  "gravity": 0,
+                  "gravity_scale": 1,
+                  "translate": 0,
+                  "flatten": 0,
+                  "sag_max_deg": 180,
+                  "spill": 0,
+                  "gain": 0,
+                  "max_deg": 180,
+                  "squash": [
+                    0.5,
+                    2
+                  ],
+                  "rest_deg": 60,
+                  "rest_max_deg": 90,
+                  "stretch": 0,
+                  "length": 1.5,
+                  "girth": 2
+                }
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "samples": [
+          {
+            "halfWidth": 0.2,
+            "distance": 0.75
+          },
+          {
+            "halfWidth": 0.2,
+            "distance": 2.25
+          }
+        ]
+      },
+      "eps": 1e-06
+    }
+  ]
+}

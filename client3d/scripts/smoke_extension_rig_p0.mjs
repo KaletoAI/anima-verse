@@ -3,7 +3,10 @@
  * Hand-derived expectations: same signature and revision => zero reloads;
  * changed motion alone => zero reloads, existing Figure sees the new payload;
  * changed revision alone or changed signature alone => exactly one reload.
- * Mesh request URLs include the revision so stat-based ETags cannot hide new bytes.
+ * URLs are opaque server inputs: low tier selects lowUrl verbatim, including its
+ * revision query; missing lowUrl falls back to url, and full tier uses url.
+ * Thus one low build requests exactly the supplied low URL, not a client-built
+ * ?tier=low&rev= URL: only the server knows the low asset path/cache identity.
  */
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -62,11 +65,15 @@ try {
     return { scene: new THREE.Group(), animations: [] };
   };
   const info = { url: '/characters/demo/model3d/file', format: 'glb', rig: 'mixamo',
+                 lowUrl: '/assets/demo-low.glb?v=server-revision-b',
                  modelRev: 'revision-b', motion };
   await lib.buildModel('demo', info, 'low');
-  const request = new URL(requestedUrl, 'http://example.test');
-  assert.equal(request.searchParams.get('tier'), 'low');
-  assert.equal(request.searchParams.get('rev'), 'revision-b');
+  assert.equal(requestedUrl, info.lowUrl);
+  await lib.buildModel('demo', info, 'full');
+  assert.equal(requestedUrl, info.url);
+  const { lowUrl, ...withoutLow } = info;
+  await lib.buildModel('demo', withoutLow, 'low');
+  assert.equal(requestedUrl, info.url);
   figure.dispose();
   console.log('PASS extension rig P0 client: revision reload and independent motion storage');
 } finally {
