@@ -67,7 +67,7 @@ public readonly record struct PerfSample(
     int TiersFull, int TiersLow, double ScatterLodMs);
 
 /// <summary>
-/// The HUD's performance readout (<c>{v:1, kind:'perf', value: PerfStats}</c>, client3d/src/hud/bus.ts /
+/// The HUD's performance readout (<c>{v:2, kind:'perf', value: PerfStats}</c>, client3d/src/hud/bus.ts /
 /// game/perfstats.ts) as the native client fills it. main.ts' cadences: the frame rate and the worst frame are
 /// sampled every frame, the heavy count on the 1 s LOD tick, the readout published every
 /// <see cref="PublishMs"/> — and nothing at all while <c>HudUiState.perfOn</c> is off; switching it off throws the

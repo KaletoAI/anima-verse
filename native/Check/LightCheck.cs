@@ -131,9 +131,14 @@ public static class LightCheck
                        && terrain.WetInstance.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off, "");
                 terrain.Free();
             }
-            Expect("L5 MSAA default 4×, --msaa=0 off", CliOptions.Parse(Array.Empty<string>()).Msaa == Viewport.Msaa.Msaa4X
-                   && CliOptions.Parse(new[] { "--msaa=0" }).Msaa == Viewport.Msaa.Disabled
-                   && CliOptions.Parse(new[] { "--msaa=2" }).Msaa == Viewport.Msaa.Msaa2X, "");
+            // Task 26d: no --msaa → the Graphics tab's default 2× (a bench run keeps 4×); --msaa wins over both.
+            Expect("L5 MSAA: default 2×, bench 4×, --msaa=0 off, --msaa=2 even for a bench",
+                   CliOptions.Parse(Array.Empty<string>()) is { Msaa: null, StartMsaa: Viewport.Msaa.Msaa2X }
+                   && CliOptions.Parse(new[] { "--bench" }).StartMsaa == Viewport.Msaa.Msaa4X
+                   && CliOptions.Parse(new[] { "--msaa=0" }).StartMsaa == Viewport.Msaa.Disabled
+                   && CliOptions.Parse(new[] { "--bench", "--msaa=2" }).StartMsaa == Viewport.Msaa.Msaa2X
+                   && CliOptions.MsaaOfSamples(Overview.GraphicsPrefs.MsaaSamplesOf("off")) == Viewport.Msaa.Disabled
+                   && CliOptions.MsaaOfSamples(Overview.GraphicsPrefs.MsaaSamplesOf("4x")) == Viewport.Msaa.Msaa4X, "");
             Energy("L5 a lamp of intensity 2 → 2/π", (float)StageLight.Energy(2), 0.636619772);
 
             // ---- L6 the hemisphere term on the terrain (Task 26b) ----

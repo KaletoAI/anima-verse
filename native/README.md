@@ -271,7 +271,7 @@ Arguments after `--` (no .env; all optional):
 | `--plain-ground` | keep the S1a one-colour terrain (no `/play/terrain-layers`, no surface textures); the bench result's `ground` key says `ground[plain: --plain-ground]` |
 | `--no-hud` | no HUD even when gdCEF is linked (the S2/S3 bench numbers were taken without it) |
 | `--no-water` | no water lift / water variant (= the browser's `&water=0`); the bench flags say `water: false` |
-| `--msaa=0\|2\|4\|8` | 3D multisample anti-aliasing of the main view; default 4 (the browser's `antialias: true`); `0` for a weak GPU or a bench comparison (the bench start line logs it) |
+| `--msaa=0\|2\|4\|8` | 3D multisample anti-aliasing of the main view; overrides the menu's Graphics tab for the whole run. Not given: the stored Graphics tab level (`av3d.view.graphics.v1`, default 2×), a bench run 4× as before; `0` for a weak GPU or a bench comparison (the bench start line logs it) |
 | `--offline=DIR` | build from a payload dump (`tools/dump_payloads.py`) instead of a server: no login, no HUD; prints the world/scatter/figure/shader summary lines and quits (with `--bench`: runs the drive, then quits) |
 | `--verify` | § B5a: log the full verify table of every mounted location (default: only a location with a deviation is logged, like the browser without `?verify=1`), plus each mount's `places[…]` line (Task 19) |
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |

@@ -62,6 +62,9 @@ public sealed class ShadowCasterGate
         if (_current is { } g) g._dirty = true;
     }
 
+    /// <summary>The next <see cref="Update"/> makes a pass whatever moved (the sun's shadow was switched back on).</summary>
+    public void Invalidate() => _dirty = true;
+
     /// <summary>Registers every instance under <paramref name="root"/> now and every one that enters the tree later.</summary>
     public void Attach(Node root)
     {

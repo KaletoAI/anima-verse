@@ -11,7 +11,7 @@ public readonly record struct HudRect(double X, double Y, double W, double H);
 
 /// <summary>
 /// The scene's copy of <c>HudUiState</c> (bus.ts) — written ONLY by the HUD
-/// (<c>{v:1, kind:'hud', patch}</c>), read by the input routing.
+/// (<c>{v:2, kind:'hud', patch}</c>), read by the input routing.
 /// </summary>
 public sealed class HudUi
 {
@@ -59,23 +59,28 @@ public sealed class HudUi
 public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, JsonArray? Args);
 
 /// <summary>
-/// Protocol v1 of client3d/src/hud/bridge.ts, scene side, as pure functions:
-/// the same validation (<c>valid()</c>: an object, <c>v === 1</c>, a <c>kind</c>),
+/// Protocol v2 of client3d/src/hud/bridge.ts (<c>HUD_BRIDGE_VERSION</c>), scene side, as pure functions:
+/// the same validation (<c>valid()</c>: an object, <c>v === 2</c>, a <c>kind</c>),
 /// the same name lists (<c>gameNames</c>, <c>uiNames</c>) and the same field
 /// ownership (<c>HUD_OWNED_FIELDS</c>). On the gdCEF wire each message is ONE
 /// JSON string. Keep the lists in step with bridge.ts/bus.ts — <c>--check</c>
 /// pins them by hand.
+///
+/// Version history (bridge.ts): both hosts must speak the SAME number; a message with
+/// another <c>v</c> is dropped with a reason (no negotiation, no fallback reader).
+///   - v1: the first wire (native spike S4).
+///   - v2 (Task 26d): game action <c>applyGraphicsPrefs(prefs)</c>, the menu's Graphics tab.
 /// </summary>
 public static class HudProtocol
 {
-    public const int Version = 1;
+    public const int Version = 2;
 
     /// <summary><c>gameNames</c> of bridge.ts — actions HUD → scene.</summary>
     public static readonly string[] GameActions =
     {
         "infoAction", "closeInfo", "closeOpenView", "pickPlacePose", "clearSelection", "setVolumes", "speak", "stopSpeech",
         "markResume", "zoomTo", "sayBubble", "enterEmbodied", "takeControl", "exitEmbodied", "rideElevator", "rideStairs",
-        "enterLocation", "backToTitle", "setShowAll", "applyAudioPrefs", "applyScatterPrefs", "setChatBox",
+        "enterLocation", "backToTitle", "setShowAll", "applyAudioPrefs", "applyScatterPrefs", "applyGraphicsPrefs", "setChatBox",
     };
 
     /// <summary><c>uiNames</c> of bridge.ts — actions scene → HUD.</summary>
@@ -95,7 +100,7 @@ public static class HudProtocol
     /// <summary>
     /// Parse + validate one inbound wire string. Returns null and a reason for
     /// everything bridge.ts would <c>reject()</c>: not JSON, not an object,
-    /// <c>v !== 1</c>, no <c>kind</c>, an unknown kind, an action whose name is not
+    /// <c>v !== </c><see cref="Version"/>, no <c>kind</c>, an unknown kind, an action whose name is not
     /// declared or whose <c>args</c> is not an array, a patch that is not an object.
     /// </summary>
     public static HudInbound? Parse(string raw, out string? reason)
@@ -111,7 +116,7 @@ public static class HudProtocol
         reason = null;
         if (node is not JsonObject msg) { reason = "not an object"; return null; }
         if (msg["v"] is not JsonValue v || v.GetValueKind() != JsonValueKind.Number || v.GetValue<double>() != Version)
-        { reason = "v is not 1"; return null; }
+        { reason = $"v is not {Version}"; return null; }
         if (!msg.ContainsKey("kind")) { reason = "no kind"; return null; }
         var kind = msg["kind"] is JsonValue k && k.GetValueKind() == JsonValueKind.String ? k.GetValue<string>() : "";
         switch (kind)
@@ -147,19 +152,19 @@ public static class HudProtocol
         return (accepted, dropped);
     }
 
-    /// <summary><c>{v:1, kind:'state', patch}</c></summary>
+    /// <summary><c>{v:2, kind:'state', patch}</c></summary>
     public static string State(JsonObject patch)
         => new JsonObject { ["v"] = Version, ["kind"] = "state", ["patch"] = patch.DeepClone() }.ToJsonString();
 
-    /// <summary><c>{v:1, kind:'boot', value}</c></summary>
+    /// <summary><c>{v:2, kind:'boot', value}</c></summary>
     public static string Boot(JsonObject value)
         => new JsonObject { ["v"] = Version, ["kind"] = "boot", ["value"] = value.DeepClone() }.ToJsonString();
 
-    /// <summary><c>{v:1, kind:'perf', value}</c> — the performance readout (<c>PerfStats</c> of bus.ts) or null.</summary>
+    /// <summary><c>{v:2, kind:'perf', value}</c> — the performance readout (<c>PerfStats</c> of bus.ts) or null.</summary>
     public static string Perf(JsonObject? value)
         => new JsonObject { ["v"] = Version, ["kind"] = "perf", ["value"] = value?.DeepClone() }.ToJsonString();
 
-    /// <summary><c>{v:1, kind:'ui', name, args}</c>; only the declared ui actions.</summary>
+    /// <summary><c>{v:2, kind:'ui', name, args}</c>; only the declared ui actions.</summary>
     public static string Ui(string name, params JsonNode?[] args)
     {
         if (!UiActions.Contains(name)) throw new ArgumentException($"undeclared ui action '{name}'");

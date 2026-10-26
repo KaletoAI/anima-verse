@@ -197,7 +197,7 @@ public partial class Main : Node3D
 
     /// <summary>
     /// The browser engine's stage (StageAmbience: sky background, hemisphere ambient, sun + fill, driven by the world
-    /// clock and the room ambience), the 3D anti-aliasing (<see cref="CliOptions.Msaa"/>), the overview camera and the
+    /// clock and the room ambience), the 3D anti-aliasing (<see cref="CliOptions.StartMsaa"/>; the stored Graphics tab follows after the login), the overview camera and the
     /// distance fog under it (<see cref="DistanceFog"/>).
     /// </summary>
     private void BuildStage()
@@ -207,7 +207,7 @@ public partial class Main : Node3D
         _shadowGate = new ShadowCasterGate();
         _shadowGate.Attach(this);
         _stage.Gate = _shadowGate;
-        GetViewport().Msaa3D = _options!.Msaa;
+        GetViewport().Msaa3D = _options!.StartMsaa;
         _camera = new OverviewCamera { Name = "Camera" };
         AddChild(_camera);
         _camera.Current = true;

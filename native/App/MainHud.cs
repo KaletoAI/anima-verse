@@ -36,6 +36,7 @@ public partial class Main : Node3D
             if (args.Count > 0 && args[0] is JsonValue v && v.TryGetValue<bool>(out var on)) _ = ApplyShowAllAsync(on);
         };
         hud.Handlers["applyScatterPrefs"] = ApplyScatterPrefs;
+        hud.Handlers["applyGraphicsPrefs"] = ApplyGraphicsPrefs;
         // Hud.tsx: a new speakable line of this room → npcs.say(speaker, text); unknown names are ignored.
         hud.Handlers["sayBubble"] = args =>
         {
@@ -104,6 +105,47 @@ public partial class Main : Node3D
         _scatter?.Field.SetLod(ScatterPrefs.LodCfgOf(prefs));
         Log($"scatter detail distances {prefs.ScatterNearM}/{prefs.ScatterFarM}/{prefs.ScatterCullM} m"
             + (_scatter is null ? " (kept for a scatter layer; none is drawn without --scatter)" : " applied"));
+    }
+
+    /// <summary>
+    /// <c>applyGraphicsPrefs(prefs)</c> from the menu's Graphics tab (Task 26d, bridge v2): checked again here
+    /// (<see cref="GraphicsPrefs.Check"/> — a malformed message leaves the picture alone), then applied at runtime. A
+    /// bench run keeps its picture (reproducibility): the change is logged and ignored.
+    /// </summary>
+    private void ApplyGraphicsPrefs(JsonArray args)
+    {
+        if (args.Count == 0 || args[0] is not JsonObject p)
+        {
+            Log("applyGraphicsPrefs: no prefs object — ignored");
+            return;
+        }
+        var check = GraphicsPrefs.Check(p["antiAliasing"], p["shadows"]);
+        if (check.Prefs is not { } prefs)
+        {
+            Log($"applyGraphicsPrefs refused ({check.Error}): {p.ToJsonString()}");
+            return;
+        }
+        if (_options!.Bench)
+        {
+            Log($"applyGraphicsPrefs ignored during a bench run (kept msaa {GetViewport().Msaa3D}, shadows as the run set them)");
+            return;
+        }
+        ApplyGraphics(prefs, "menu");
+    }
+
+    /// <summary>
+    /// The Graphics tab onto the frame: the viewport's 3D MSAA (<c>Viewport.msaa_3d</c>, settable at runtime) unless
+    /// <c>--msaa</c> was given (it wins for the whole run), and the sun's shadow with its caster gate
+    /// (<see cref="StageAmbience.Shadows"/>).
+    /// </summary>
+    private void ApplyGraphics(GraphicsPrefs prefs, string from)
+    {
+        var msaa = _options!.Msaa ?? CliOptions.MsaaOfSamples(GraphicsPrefs.MsaaSamplesOf(prefs.AntiAliasing));
+        if (GetViewport().Msaa3D != msaa) GetViewport().Msaa3D = msaa;
+        if (_stage is not null) _stage.Shadows = prefs.Shadows;
+        Log($"graphics ({from}): anti-aliasing {prefs.AntiAliasing}"
+            + (_options.Msaa is { } cli ? $" (--msaa wins: {cli})" : $" → msaa {msaa}")
+            + $", shadows {(prefs.Shadows ? "on" : "off")}");
     }
 
     /// <summary>

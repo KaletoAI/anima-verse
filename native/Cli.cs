@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using Godot;
+using AnimaNative.Overview;
 
 namespace AnimaNative;
 
@@ -40,8 +41,9 @@ namespace AnimaNative;
 ///                               longest frame while streaming); with --offline it then quits (Task 24)
 ///   --verify                    § B5a: log the full verify table of every mounted location (default: only
 ///                               locations with a deviation, like the browser without ?verify=1)
-///   --msaa=0|2|4|8              3D multisample anti-aliasing (default 4, like the browser's antialias: true; 0 = off
-///                               for a weak GPU or a bench comparison)
+///   --msaa=0|2|4|8              3D multisample anti-aliasing; overrides the menu's Graphics tab (Task 26d) for the whole
+///                               run (bench reproducibility). Not given: the stored Graphics tab level (default 2x),
+///                               a bench run 4x like before the setting existed
 ///   --check                     offline self-test from native/fixtures, then quit
 ///   --check verify | --check=verify   only the § B5a section of the self-test (fixture world + S3c world)
 ///   --check storeys | --check=storeys only the storey section (fixtures/storeys: the switch at runtime, Task 16)
@@ -90,8 +92,30 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
     public Vector2I? Size { get; init; }
     /// <summary><c>--verify</c>: the full § B5a table per mounted location (the browser's <c>?verify=1</c>).</summary>
     public bool Verify { get; init; }
-    /// <summary><c>--msaa=N</c>: the main viewport's 3D MSAA; default 4× like the browser (<c>antialias: true</c>).</summary>
-    public Viewport.Msaa Msaa { get; init; } = Viewport.Msaa.Msaa4X;
+    /// <summary>
+    /// <c>--msaa=N</c> as given; null = not given. Given, it wins over the menu's Graphics tab for the whole run;
+    /// <see cref="StartMsaa"/> is what the viewport starts with.
+    /// </summary>
+    public Viewport.Msaa? Msaa { get; init; }
+
+    /// <summary>A bench run without <c>--msaa</c> keeps 4×, the value every earlier bench result was measured at.</summary>
+    public const Viewport.Msaa BenchDefaultMsaa = Viewport.Msaa.Msaa4X;
+
+    /// <summary>
+    /// The viewport's MSAA at start: <c>--msaa</c>, else 4× for a bench run, else the Graphics tab's default level
+    /// (<see cref="GraphicsPrefs.Defaults"/>, 2×) until the stored prefs are read after the login.
+    /// </summary>
+    public Viewport.Msaa StartMsaa
+        => Msaa ?? (Bench ? BenchDefaultMsaa : MsaaOfSamples(GraphicsPrefs.MsaaSamplesOf(GraphicsPrefs.Defaults.AntiAliasing)));
+
+    /// <summary>A sample count (<see cref="GraphicsPrefs.MsaaSamplesOf"/>) → Godot's MSAA mode; 0 and anything unknown = off.</summary>
+    public static Viewport.Msaa MsaaOfSamples(int samples) => samples switch
+    {
+        2 => Viewport.Msaa.Msaa2X,
+        4 => Viewport.Msaa.Msaa4X,
+        8 => Viewport.Msaa.Msaa8X,
+        _ => Viewport.Msaa.Disabled,
+    };
     /// <summary><c>--fly=M[,DEG]</c>: the streaming sanity drive (distance in metres, heading in degrees); null = none.</summary>
     public (double Distance, double HeadingDeg)? Fly { get; init; }
     /// <summary><c>--check verify</c>: run only that section of the self-test; null = all of it.</summary>
@@ -108,7 +132,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         string? matrix = null;
         string? offline = null, checkOnly = null;
         Vector2I? size = null;
-        var msaa = Viewport.Msaa.Msaa4X;
+        Viewport.Msaa? msaa = null;
         (double, double)? fly = null;
         foreach (var raw in args)
         {

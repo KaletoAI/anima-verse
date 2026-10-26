@@ -51,6 +51,20 @@ public sealed class StageAmbience
     }
 
     /// <summary>
+    /// The menu's Graphics tab "Shadows" (Task 26d), at runtime: the sun's shadow on or off. While it is off the caster
+    /// gate makes no passes (nothing would read its layer); switched back on, the next <see cref="Track"/> makes one at
+    /// once, so the box is current in the first shadowed frame.
+    /// </summary>
+    public bool Shadows
+    {
+        get => Sun.ShadowEnabled;
+        set => Sun.ShadowEnabled = value;
+    }
+
+    /// <summary>The sun cast no shadow in the last <see cref="Track"/>: the gate skipped it and owes a pass.</summary>
+    private bool _gateIdle;
+
+    /// <summary>
     /// The distance fog pass (<c>scene.fog</c>): its colour is the clock's sky, written with the background
     /// (<c>setGameHour</c> copies the sky into both). Setting it hands it the current sky at once.
     /// </summary>
@@ -161,7 +175,14 @@ public sealed class StageAmbience
     {
         var (centre, pos) = StageLight.SunPlacement((target.X, target.Y, target.Z), Frame.SunAngle);
         var off = StageLight.SunOffset(Frame.SunAngle);
-        _gate?.Update(centre, off);
+        // No shadow (the Graphics tab, or the bench switch no-shadow): the caster gate's passes would be work for nothing.
+        if (!Sun.ShadowEnabled) _gateIdle = true;
+        else
+        {
+            if (_gateIdle) _gate?.Invalidate();
+            _gateIdle = false;
+            _gate?.Update(centre, off);
+        }
         Sun.Transform = new Transform3D(LightBasisOf(off), new Vector3((float)pos.X, (float)pos.Y, (float)pos.Z));
         float maxD = (float)ShadowFit.MaxDistanceM(cameraDist);
         if (Sun.DirectionalShadowMaxDistance != maxD) Sun.DirectionalShadowMaxDistance = maxD;

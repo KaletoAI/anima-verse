@@ -101,8 +101,9 @@ public partial class Main : Node3D
 
     /// <summary>
     /// main.ts at boot, from the HUD settings kept across starts (<see cref="HudStorage"/>): the admin's "show all
-    /// locations" picks the view the boot fetches (an admin only), the scatter detail distances the scatter LOD. The
-    /// HUD page reads the same entries from its seeded localStorage, so both sides start alike.
+    /// locations" picks the view the boot fetches (an admin only), the scatter detail distances the scatter LOD, the
+    /// Graphics tab the anti-aliasing and the shadows. The HUD page reads the same entries from its seeded localStorage,
+    /// so both sides start alike.
     /// </summary>
     private void ReadStoredStart()
     {
@@ -112,6 +113,8 @@ public partial class Main : Node3D
         _scatterPrefs = ScatterPrefs.Load(stored.GetValueOrDefault(HudStorage.ScatterPrefsKey));
         Log($"stored HUD settings: {stored.Count} entries; start view {(_showAll ? "show all locations" : "known locations")}, "
             + $"scatter {_scatterPrefs.ScatterNearM}/{_scatterPrefs.ScatterFarM}/{_scatterPrefs.ScatterCullM} m");
+        // The Graphics tab (Task 26d): nothing stored = 2×, shadows on. A bench run keeps its CLI picture.
+        if (!_options!.Bench) ApplyGraphics(GraphicsPrefs.Load(stored.GetValueOrDefault(GraphicsPrefs.Key)), "stored");
     }
 
     /// <summary>The login screen on its own layer above everything (it doubles as the loading screen).</summary>

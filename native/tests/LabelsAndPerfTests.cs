@@ -122,10 +122,10 @@ public class PerfStatsTests
         Assert.Equal(new[] { "posCorr", "pos409", "travBack", "travFwd", "travErrMaxM", "arrive", "place" },
                      ((JsonObject)json["sync"]!).Select(kv => kv.Key));
         var wire = JsonNode.Parse(HudProtocol.Perf(json))!.AsObject();
-        Assert.Equal(1, (int)wire["v"]!);
+        Assert.Equal(2, (int)wire["v"]!);
         Assert.Equal("perf", (string)wire["kind"]!);
         Assert.Equal(59.5, (double)wire["value"]!["fps"]!);
-        Assert.Equal("""{"v":1,"kind":"perf","value":null}""", HudProtocol.Perf(null));
+        Assert.Equal("""{"v":2,"kind":"perf","value":null}""", HudProtocol.Perf(null));
         Assert.Equal(300, PerfReadout.PublishMs);
         Assert.Equal(1000, PerfReadout.HeavyMs);
     }

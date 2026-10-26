@@ -122,6 +122,19 @@ public static class ShadowCheck
             far.Free();
             Expect("H2 a node that leaves the tree leaves the registry", gate.Registered == registered - 1, $"{gate.Registered}");
 
+            // Task 26d, the Graphics tab's Shadows at runtime: off → the sun casts nothing and the gate idles even when
+            // the target moves 500 m (a pass would be due); on again → a pass in that same frame, the box as before.
+            int passes = gate.Passes;
+            stage.Shadows = false;
+            stage.Track(at + new Vector3(500, 0, 0), 40);
+            Expect("H2 shadows off: no sun shadow, no gate pass", !stage.Sun.ShadowEnabled && gate.Passes == passes,
+                   $"{gate.Passes} vs {passes}");
+            stage.Shadows = true;
+            stage.Track(at, 40);
+            Expect("H2 shadows on again: one pass at once, the same casters inside",
+                   stage.Sun.ShadowEnabled && gate.Passes == passes + 1 && gate.Inside == insideBox,
+                   $"passes {gate.Passes} vs {passes + 1}, inside {gate.Inside} vs {insideBox}");
+
             // ---- H3 lights, scatter, fog ----
             int clustered = ProjectSettings.GetSetting("rendering/limits/cluster_builder/max_clustered_elements").AsInt32();
             Expect("H3 cluster budget 32 ≥ the lamp pool", clustered == 32 && clustered >= PropLights.PoolSize, $"{clustered}");
