@@ -35,15 +35,17 @@ What it draws after login:
   a model, and the avatar's OPEN location with its interior (see "Scene content");
 - **world props** — the single props of `/play/worldmap` `world_props` (§ A9a);
 - **figures** — the characters of `/play/worldmap`, polled at the browser's cadence
-  (see "Polling, push stream, boot stages" below), where the
-  browser's far view draws them (journey point along the route, the huddle in
-  front of / around their location, or their free point in the wilderness), on
-  the world ground; a moved figure lerps to its new point over the poll
+  (see "Polling, push stream, boot stages" below) and placed once a second from the cached map like the browser
+  (Task 29, see "Figures in their rooms"): journey point along the route, free point in the wilderness, and per
+  location the room ladder — seat, sit/lie surface, corridor stand, the server's point at the room floor, room
+  centre — or the huddle in front of / around the location on the TILE ground; hidden on another storey and in a
+  closed interior; a moved figure lerps to its new point over the poll
   interval and plays the `walking` pose's clip above 0.2 m/s, otherwise `standingClipFor(activity_animation)` —
   every figure plays its activity (read, cook, sit …). Model: `/characters/{name}/model3d` → the humanoid GLB
   (Meshopt-decoded), scaled to `height_cm`, metalness forced to 0; every load is a job of a width-3 queue (the
   avatar first, then the figure nearest the camera target), a transient failure retries after 30 s; FBX (generic
-  rig) and "no model" are capsule placeholders; a changed `model_sig` or `model_rev` reloads it; distance tiers
+  rig) is a capsule placeholder (Task 34); "no model" is the browser's fallback pool model, else the portrait
+  sprite; a changed `model_sig` or `model_rev` reloads it; distance tiers
   `full`/`low` (`low_url`) at 25/35 m with hysteresis, re-evaluated every second. Clips (Task 28): the WHOLE
   `/assets/animation-clips` library — downloaded through a width-4 queue in listing order, imported one per
   frame (`FBXDocument`), committed in listing order (first file per kind and set) — and per character the first
@@ -285,6 +287,7 @@ Arguments after `--` (no .env; all optional):
 | `--fly=M[,DEG]` | after the boot, fly the camera target M metres in a straight line (heading DEG: 0 = +x, 90 = +z) at 50 m/s, let the stream settle and log `fly done …` (tiles taken/evicted, the longest frame, the longest frame while streaming); with `--offline` it then quits |
 | `--check shadow` | only the shadow section (`Check/ShadowCheck.cs` on `fixtures/s3c`: the browser's caster classes, the 140 m caster box gate, the cluster budget, the scatter hemisphere term, the compute-fog default), then exit 0/1 |
 | `--check light` | only the light section (`Check/LightCheck.cs`: the game-hour stage at 6/7/9/12/18/22 h, hemisphere, shadow fit, material policy, MSAA option), then exit 0/1 |
+| `--check placement` | only the room placement section (`Check/PlacementCheck.cs` on `fixtures/placement`: seats, sit/lie surfaces, server points at the room floor, corridor stand, huddle on the tile ground, storey switch, closed interior, the fallback pool), then exit 0/1 |
 | `--check figures` | only the figure section (`Check/CheckRunner.cs` `CheckFigures` on the fixture world: whole library, set chain, actions and aliases, activity clips, one-shot hold, model revision, model queue, tiers 25/35, the importer cross-check `rest_reference.json`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
@@ -803,20 +806,51 @@ mode — `LocationSlot.Places` (`PlaceInventory`), every point through the vecto
 | `ElevatorStops[level]` | world `Vec3`: the pad's top face | `tile.elevatorStops` |
 | `Stairs[]` | `StairLink`: `Id`, `Foot`/`Head` (`Level`, world `Pos`), `At` (run foot, world xz), `Dir` (unit, world xz), `RunM`, `WidthM`, `Steps`, `Footprint` (world xz) | `tile.stairs` (`StairWorldLink`) |
 | `VerticalTargets[]` | `(Kind "elevator"/"stairs", Flight)` — flight −1 = the lift | `tile.verticalTargets` (without the mesh groups: native draws extras merged) |
-| `Corridors[]` | `CorridorStand`: `RoomId`, `Level`, `Anchor`/`Outline` (tile frame), `PlateTop`, `Stand` (world; null on storey 0) | `tile.corridors` + `roomCenters` |
+| `Corridors[]` | `CorridorStand`: `RoomId`, `Level`, `Anchor`/`Outline` (tile frame), `PlateTop`, `Stand` (world; storey 0 on the tile ground ladder since Task 29) | `tile.corridors` + `roomCenters` |
 
 `PlaceInventory.SlotFor` (`slotFor`) and `GlyphRows` (`buildGlyphs` over `/play/places` offers) read it; the rings
 are not drawn (the browser draws them only embodied — E7). The re-datum (`WorldBuilder.Redatum`) carries it like
-`reliftScene`. Two browser rungs are NOT ported because they have no shared vector yet and their first consumer is
-E5/E7: a room marker's height re-derivation from the room floor (`deriveRoomSpots` → `roomBaseFloorY`; here a room
-marker keeps its composed height, equal on a flat built plot) and a storey-0 corridor stand (`tileGroundY`'s ground
-ladder; `Stand` is null there).
+`reliftScene`: world-composed points and PROP markers ride the datum step and re-lift; ROOM markers are re-derived
+from their room's floor afterwards (Task 29, `deriveRoomSpots` → `roomBaseFloorY − drop + offsetY`), and the storey-0
+corridor stands stand on the tile's ground ladder.
 
 The scene's `problems[]` (`LocationSlot.Problems`) of the AVATAR's location are toasted through the HUD's `toast` action
 on every world-map poll, once per (location, kind, room), never one with `scope: "editor"` (`SceneProblems.Announce`,
 main.ts `announceSceneProblems`), and logged as `[scene] <loc>: <kind> — <message>`. With `--verify` / `--check` every
 mount logs a `places[markers=… prop=… slots=… stops=… flights=… targets=… corridors=… stands=… problems=… toastable=…]`
 line. Checked by `tests/ScenePlacesTests.cs` and the S3c section of `--check` (fixtures/README "Places").
+
+### Figures in their rooms (Task 29)
+
+The browser's `computeNpcPlacements` once a second over the cached map (`FigureManager.TickPlacement`, and on every
+poll), with each mounted location's view state NOW — interior fade (> 0.5 = revealed), shown storey, near ring:
+
+- **Core rules, vector-checked**: `Core/Figures/NpcPlacement.cs` (`huddleOffset`, `placeAtLocation` — the room ladder,
+  `npc_placement.json`), `Core/Figures/FigureGround.cs` (`placementOf`, `figureTransition`, `pollIsStale`,
+  `gateStandY`, `standY`, `tileWalkLadder`, `roomFloorLadder`, `roomStandLadder` — `figure_ground.json`,
+  `room_spots.json`, `place_poll.json`), `Core/Figures/RoomSpots.cs` (`polygonCentroid`, `roomSpotGrid`,
+  `furnitureUse`, `roomSpotsOf` — `room_spots.json`). The sort is JavaScript's `localeCompare` (`LocaleCompare`: .NET
+  InvariantCulture on ICU, proven against V8's order in `tests/FigurePlacementVectorTests.cs`). The floor rungs
+  `recipeFloorAt` / `declaredFloorAt` / `plateCeiling` have no shared vector yet: `tests/FigureGroundRungTests.cs`
+  holds the hand cases of `smoke_walk_math.mjs`.
+- **The tile's ground and stands** (`Core/Figures/FigureStands.cs`, filled by `World/WorldBuilder.Stands.cs` after the
+  mount, every re-lift and an interior tier swap): the ground ladder (`tileGroundY` = baked storey-0 lattices >
+  declared room floors > declared storey plates under the ceiling > the datum, against the world ground — the higher
+  wins; this fixes drift D6, figures used to stand on the world height alone), room floors (hull + declaration:
+  plate top, overlay y, diorama `walk_y_world + lift`), centres, sit/lie surfaces measured on the placed props'
+  world boxes, ROOM marker heights, corridor stands.
+- **Per figure**: seat by `place.id` (marker facing turned into the world, `tilt`/`roll` as the lean, Euler YXZ), the
+  sit/lie pool of its activity's family, the corridor stand, the server's `pos` at the room's standing height, the
+  centre; else the huddle on the tile ground. A standing figure faces its movement target's place. Hidden on another
+  storey (the switch of Task 16) and in a closed interior (the fade of Task 15). A view change SNAPS (no walk); a
+  real room change walks straight (the door route is Task 30).
+- **No model** (ruling P3-R10): the browser's fallback pool from `/static/client3d/models/manifest.json` (Soldier,
+  Xbot, Robot; assignments first, else `seededRandom('model:' + name)` over the rigs the clip library fits — their
+  own takes win their kinds), scaled to the manifest height; while the pool loads or when it fails, the portrait
+  sprite (`Figures/Portrait.cs`: seeded ring colour, the cut-out `avatar_url?transparent=1`, initials until it
+  arrives, sized `clamp(camDist·0.055, 1.7, 3.4)`, bobbing while it moves; its tag hangs below it).
+- `--check placement` (`Check/PlacementCheck.cs`, `fixtures/placement/`, README there) and `--offline` print a
+  `offline placement <loc> open[…] closed[…]` census per location.
 
 ### § B5a verify (Task 15)
 
@@ -983,13 +1017,13 @@ works the same way.
 | `Main.cs`, `Main.tscn` | entry scene: login → world build → camera → (`--bench`) the drive; `--check`/`--check-bench` dispatch |
 | `App/Main*.cs` | the rest of the entry scene's class, by concern: `MainSession` (login, session, back to the title), `MainWorld` (world build, boot stages, bench/offline), `MainSync` (poll, push stream, show all), `MainHud` (HUD game actions, picking, info panel) |
 | `Cli.cs` | command-line parameters |
-| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Water/` (`WaterShade` + the ripple twin, `WaterRaster`, `WaterProfile`, `Waterfalls`, `WaterGates`, `PropWater`), `Terrain/` (`TerrainLod`, `TerrainField`, `TerrainLodGlsl`, `TerrainShaderTwin`, `HeightTiles`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Ui/SessionFlow.cs` (login / character switch / back to title / lost session as one decision), `Ui/HudStorage.cs` (the kept HUD settings: file model, 256 KB cap, the handoff's seed script), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke), `Sync/` (Task 10: `PollScheduler` = pollCore.ts, `SyncStream` = syncHub.ts + `HttpEventSource`/`SseParser` for `/events/sync`, `BootTracker` + `BootRetry` = game/boot.ts + `retryBoot`, `LocationsCache`/`LocationsSync` = the ETag'd `/world/locations?view=3d`, `ConnectionState`, the frame-pumped `TimerQueue`) |
+| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Water/` (`WaterShade` + the ripple twin, `WaterRaster`, `WaterProfile`, `Waterfalls`, `WaterGates`, `PropWater`), `Terrain/` (`TerrainLod`, `TerrainField`, `TerrainLodGlsl`, `TerrainShaderTwin`, `HeightTiles`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Ui/SessionFlow.cs` (login / character switch / back to title / lost session as one decision), `Ui/HudStorage.cs` (the kept HUD settings: file model, 256 KB cap, the handoff's seed script), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/` (CharacterRows + the placement orchestration, NpcPlacement, FigureGround, RoomSpots, FigureStands, the clip rules), `Gltf/` (Meshopt decoder + its P/Invoke), `Sync/` (Task 10: `PollScheduler` = pollCore.ts, `SyncStream` = syncHub.ts + `HttpEventSource`/`SseParser` for `/events/sync`, `BootTracker` + `BootRetry` = game/boot.ts + `retryBoot`, `LocationsCache`/`LocationsSync` = the ETag'd `/world/locations?view=3d`, `ConnectionState`, the frame-pumped `TimerQueue`) |
 | `tests/` | xUnit project on Core (`dotnet test tests`) |
 | `test.sh` | `dotnet test` + build + headless `--check` |
 | `World/` | the Godot side of the world (payloads, height + anchor and the view rules are in `Core/World/`): the CDLOD terrain node (`TerrainLodNode.cs`), the waterfalls / underwater ghost / prop water sheets (`WaterfallLayer.cs`, `SubmergedGhost.cs`, `PropWaterSheets.cs`, `WorldBuilder.Water.cs`), `place()`, recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
 | `tools/dump_payloads.py` | Task S3c: dumps the client's HTTP answers from a COPY of a world for `--offline` |
 | `Gltf/` | runtime GLB import (the Meshopt decode is in `Core/Gltf/`) |
-| `Figures/` | world-map characters: placement rule, figures (fed by Main's poll), clip library (import, pick, retarget), rest-pose correction |
+| `Figures/` | world-map characters: figures (fed by Main's poll, placed by the room ladder once a second), portrait sprite, fallback pool, clip library (import, pick, retarget), rest-pose correction |
 | `Ui/` | login screen (server, user, password), `LauncherStore` (`user://launcher.json`), `HudStorageStore` (`user://hud_storage.json`), the overview camera, the label overlay (`LabelOverlay.cs`: projection, order, the label CSS in `LabelStyle`), the performance probe (`PerfProbe.cs`) |
 | `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |

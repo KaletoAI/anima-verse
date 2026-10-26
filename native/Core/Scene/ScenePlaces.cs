@@ -91,9 +91,8 @@ public sealed class CorridorStand
     public double? PlateTop { get; init; }
     /// <summary>
     /// The stand in world metres (<c>deriveCorridorCentres</c>): the anchor turned into the world, at datum + plate top +
-    /// <see cref="PlaceInventory.WalkClearanceM"/> on a declared storey. NULL on storey 0: there the browser asks the
-    /// tile's ground ladder (<c>tileGroundY</c> — baked surfaces, declared floors, plates, terrain), which has no shared
-    /// vector yet; its first consumer (E5 figures / E7 walking) ports it.
+    /// <see cref="PlaceInventory.WalkClearanceM"/> on a declared storey; on storey 0 the tile's ground ladder
+    /// (<c>tileGroundY</c>, AnimaNative.Figures.FigureStands) when the caller hands one in, else null.
     /// </summary>
     public Vec3? Stand { get; set; }
 }
@@ -230,28 +229,36 @@ public sealed class PlaceInventory
 
     /// <summary>
     /// <c>deriveCorridorCentres</c>: each corridor's anchor through the CURRENT tile frame, on a declared storey at
-    /// datum + plate top + clearance; storey 0 stays null (the ground ladder, see <see cref="CorridorStand.Stand"/>).
+    /// datum + plate top + clearance; on storey 0 at <paramref name="groundY"/> of that world point (the tile's ground
+    /// ladder <c>tileGroundY</c>), or null without one.
     /// </summary>
-    public void DeriveCorridorStands(TileFrame frame)
+    public void DeriveCorridorStands(TileFrame frame, Func<double, double, double>? groundY = null)
     {
         foreach (var c in Corridors)
-            c.Stand = c.PlateTop is { } top ? SceneView.TileToWorld(frame, c.Anchor.X, c.Anchor.Z, top + WalkClearanceM) : null;
+        {
+            if (c.PlateTop is { } top)
+            {
+                c.Stand = SceneView.TileToWorld(frame, c.Anchor.X, c.Anchor.Z, top + WalkClearanceM);
+                continue;
+            }
+            var at = SceneView.TileToWorld(frame, c.Anchor.X, c.Anchor.Z);
+            c.Stand = groundY is null ? null : at with { Y = groundY(at.X, at.Z) };
+        }
     }
 
     /// <summary>
     /// <c>reliftScene</c>'s part for this data, after the tile's datum moved by <paramref name="datumDelta"/> (the frame
     /// already stands on the new datum): the points composed in WORLD coordinates ride the datum step (lift stops, stair
-    /// landings, prop-marker slots); then every prop marker takes the lift the field gives at its own lift point
-    /// (<c>storeyGroundRelift</c>, one number per place, every slot alike); the corridor stands are derived again.
-    /// Returns whether a seat moved (<c>seatsMoved</c>).
+    /// landings, PROP-marker slots); then every prop marker takes the lift the field gives at its own lift point
+    /// (<c>storeyGroundRelift</c>, one number per place, every slot alike); the corridor stands are derived again (storey
+    /// 0 only with <paramref name="groundY"/>). Returns whether a seat moved (<c>seatsMoved</c>).
     ///
-    /// ROOM markers are where the browser differs: it re-derives them from the room's floor (<c>deriveRoomSpots</c> →
-    /// <c>roomBaseFloorY</c> − drop + offsetY, also right after the mount), a ladder with no shared vector yet. Here a
-    /// room marker keeps its composed height and is carried exactly like a prop marker — which equals the browser on a
-    /// flat built plot (the composed height IS ground + y_world − drop there) and differs on a slope or a declared room
-    /// floor. Porting <c>deriveRoomSpots</c> (with vectors) belongs to its first consumer, E5.
+    /// ROOM markers (not fixed) are left alone, as in the browser: their height is re-derived absolutely from the room's
+    /// floor (<c>deriveRoomSpots</c> → <c>roomBaseFloorY</c> − drop + offsetY, AnimaNative.Figures.FigureStands), which
+    /// the caller runs after this.
     /// </summary>
-    public bool Relift(TileFrame frame, double datumDelta, Func<double, double, double>? sampler)
+    public bool Relift(TileFrame frame, double datumDelta, Func<double, double, double>? sampler,
+                       Func<double, double, double>? groundY = null)
     {
         if (datumDelta != 0)
         {
@@ -266,12 +273,15 @@ public sealed class PlaceInventory
                 s.Head.Pos = s.Head.Pos with { Y = s.Head.Pos.Y + datumDelta };
             }
             foreach (var e in Entries())
+            {
+                if (!e.Fixed) continue;
                 for (int i = 0; i < e.Slots.Length; i++) e.Slots[i] = e.Slots[i] with { Y = e.Slots[i].Y + datumDelta };
+            }
         }
         bool seatsMoved = false;
         foreach (var e in Entries())
         {
-            if (e.Slots.Length == 0) continue;
+            if (!e.Fixed || e.Slots.Length == 0) continue;
             var step = StoreyGround.Relift(e.Lift, e.Level, e.LiftAt.X, e.LiftAt.Z, frame.Center.Y, sampler);
             if (step.Delta != 0)
             {
@@ -280,7 +290,7 @@ public sealed class PlaceInventory
             }
             e.Lift = step.Lift;
         }
-        DeriveCorridorStands(frame);
+        DeriveCorridorStands(frame, groundY);
         return seatsMoved;
     }
 

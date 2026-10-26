@@ -61,7 +61,7 @@ public static class BenchCheck
             var gotoQuery = options.Goto ?? "harbour";
             var builder = new WorldBuilder(source, Log, strict: true) { NoWater = options.NoWater };
             var stats = await builder.BuildAsync(world, gotoQuery);
-            var figures = new FigureManager(source, builder.Height!, Log, strict: true);
+            var figures = new FigureManager(source, builder.Height!, Log, strict: true) { Slots = () => builder.Slots };
             world.AddChild(figures);
             await figures.InitAsync();
             using (var map = await source.GetWorldMapAsync()) await figures.Apply(map.RootElement);

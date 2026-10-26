@@ -32,8 +32,9 @@ namespace AnimaNative.Check;
 ///      the arms hanging) → distance in [9.65, 9.95].
 ///   B2 the same ray 1 m to the side (z 31) and B3 0.15 m above her 1.60 m (y + 1.75): no figure.
 ///   B7 0.3 m beside Ada's axis at 1.2 m: nothing in her idle pose, her bind pose (T-pose) has the arm there.
-///   B4 Cleo's capsule (r 0.28, 1.70 m, feet (263, 4.875, −100)): along +z at mid height from z −110 →
-///      the 64-segment ring has a vertex exactly at −z → hit at z −100.28 → 9.72 m.
+///   B4 Cleo's PORTRAIT (no model, no pool in this fixture — Task 29; feet (263, 4.875, −100), sprite 2.6 m from
+///      0.15 − 0.052 to 0.15 + 2.548 over the feet): along +z at 0.85 m from z −110 → the quad through the axis facing the
+///      ray, z −100 → 10 m.
 ///   B5 Bram's capsule (1.80 m, feet (64, 4.0675, 132.32)) from straight above (y 50): the top pole at
 ///      4.0675 + 1.8 = 5.8675 → 44.1325 m.
 ///   B6 a ray along −z at Bram's y + 1.0 from z 150: Bram at 150 − (132.32 + 0.28) = 17.4 m, in front of the house
@@ -91,7 +92,7 @@ public static class PickCheck
 
         // ---- B: figures (own manager, own source: fresh counters) ----
         var source = new FixtureSource(fixtures);
-        var mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-pick] " + line), strict: true) { AutoTick = false };
+        var mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-pick] " + line), strict: true) { AutoTick = false, Slots = () => builder.Slots };
         world.AddChild(mgr);
         string figureInfo;
         try
@@ -121,7 +122,7 @@ public static class PickCheck
             Expect("B3 above Ada", mgr.CharacterAt(V(-60, AdaY + 1.75, 30), V(1, 0, 0)) is null, "hit");
             var b4 = mgr.CharacterAt(V(263, CleoY + 0.85, -110), V(0, 0, 1));
             Expect("B4 Cleo", b4?.Name == "Cleo Marsh", $"{b4}");
-            Near("B4 distance", b4!.Value.Distance, 9.72, 1e-3);
+            Near("B4 distance", b4!.Value.Distance, 10, 1e-3);
             var b5 = mgr.CharacterAt(V(64, 50, 132.32), down);
             Expect("B5 Bram", b5?.Name == "Bram Holt", $"{b5}");
             Near("B5 distance", b5!.Value.Distance, 50 - (BramY + 1.8), 1e-3);

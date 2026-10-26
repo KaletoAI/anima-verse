@@ -45,6 +45,8 @@ namespace AnimaNative;
 ///   --check                     offline self-test from native/fixtures, then quit
 ///   --check verify | --check=verify   only the § B5a section of the self-test (fixture world + S3c world)
 ///   --check storeys | --check=storeys only the storey section (fixtures/storeys: the switch at runtime, Task 16)
+///   --check placement | --check=placement only the room placement section (fixtures/placement: seats, surfaces, storeys,
+///                               closed interiors, the fallback pool, Task 29)
 ///   --check fidelity | --check=fidelity only the model-fidelity section (fixtures/fidelity: cuts, tiers, re-datum, sweep, Task 17)
 ///   --check props | --check=props     only the props section (fixtures/props: slots, mirrors, lights, doors, ambience, Task 18)
 ///   --check light | --check=light     only the light section (game-hour stage, hemisphere, shadow fit, MSAA, Task 21)
@@ -195,11 +197,11 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
 
     private static bool IsSection(string v)
         => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
-             or "scatter" or "veil" or "matrix" or "figures" or "shadow";
+             or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement";
 
     private static string CheckSection(string v) => IsSection(v)
         ? v : throw new ArgumentException("--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', "
-                                          + $"'terrain', 'stream', 'water', 'scatter', 'veil', 'matrix', 'figures' and 'shadow', got '{v}'");
+                                          + $"'terrain', 'stream', 'water', 'scatter', 'veil', 'matrix', 'figures', 'shadow' and 'placement', got '{v}'");
 
     public static Viewport.Msaa ParseMsaa(string v) => v switch
     {

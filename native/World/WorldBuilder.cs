@@ -148,6 +148,26 @@ public sealed class LocationSlot
     public PlaceInventory Places { get; init; } = new();
     /// <summary>The payload's <c>problems[]</c> (<c>scenes.get(loc).problems</c>, toasted for the avatar's location).</summary>
     public IReadOnlyList<SceneProblem> Problems { get; init; } = Array.Empty<SceneProblem>();
+    /// <summary>The scene recipe of the mount (the figure stands are derived from it again after every re-lift).</summary>
+    public ScenePayload? Scene { get; init; }
+    /// <summary><c>tile.isBuilding</c> (<c>!map3d.area_model</c>): the huddle lines up in front of a building, rings an area.</summary>
+    public bool IsBuilding { get; init; }
+    /// <summary>
+    /// The tile's figure ground and stands (E5, <see cref="Figures.FigureStands"/>): the ground ladder, the room floors,
+    /// centres, sit / lie surfaces, corridor stands; derived by <see cref="WorldBuilder.DeriveStands"/>.
+    /// </summary>
+    public Figures.FigureStands Stands { get; } = new();
+
+    /// <summary>
+    /// The tile as the figure placement reads it right now (view state + inventory, npcPlacement.ts <c>PlacementTile</c>).
+    /// </summary>
+    public Figures.PlacementTile PlacementView() => new()
+    {
+        Frame = Stands.Frame, Width = Width, IsBuilding = IsBuilding, Fade = Fade.Fade, LevelFilter = LevelFilter,
+        AlwaysVisibleRooms = Stands.AlwaysVisible, RoomCenters = Stands.RoomCenters, RoomLevels = Stands.RoomLevels,
+        RoomMarkers = Places.Markers, RoomSitSpots = Stands.SitSpots, RoomLieSpots = Stands.LieSpots,
+        Corridors = Figures.FigureStands.CorridorIds(Places),
+    };
 }
 
 /// <summary>
@@ -784,9 +804,10 @@ public sealed partial class WorldBuilder
             _log($"location {loc.Id} ({loc.Name}): ring={ring.ToString().ToLowerInvariant()}{(open ? $" OPEN storey {levelFilter}" : "")}"
                  + $"{(farShell ? " far-shell" : "")} — {rs.Primitives} primitives, skipped {rs.SkipSummary()}, "
                  + $"interior mounted {rs.InteriorMounted}; {models.Summary()}");
-        return new LocationSlot
+        var slot = new LocationSlot
         {
             Loc = loc, Ring = ring, Group = group, Width = width, Openable = openable, Open = open,
+            Scene = scene, IsBuilding = isBuilding,
             Height = measured ?? Overview.EventPinRule.DefaultPlaceHeight(isBuilding, natureSite, LocationView.DetectStyle(loc)),
             HeightMeasured = measured is not null,
             Fade = fade, LevelFilter = levelFilter, Verify = report, Storeys = storeys,
@@ -801,6 +822,8 @@ public sealed partial class WorldBuilder
             Places = places,
             Problems = scene.Problems.ToList(),
         };
+        DeriveStands(slot);
+        return slot;
     }
 
     /// <summary>The places data of a mount in one line (the <c>--verify</c> / <c>--check</c> log).</summary>

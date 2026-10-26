@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Gltf;
 using AnimaNative.Overview;
+using AnimaNative.Scatter;
 using AnimaNative.World;
 using Godot;
 using Json = AnimaNative.World.Json;
@@ -17,11 +18,14 @@ public sealed class FigureStats
 {
     public int Figures, GlbFigures, Placeholders, ClipsLoaded, ClipsFailed, BoundTracks, UnboundClips;
     public int ModelLoads, ModelFailures, Offmap, Polls, KindsBound, LowTier;
+    /// <summary>Task 29: figures the placement hides, figures on a seat or a sit/lie surface, pool models, portraits.</summary>
+    public int Hidden, Seated, PoolFigures, Portraits;
 
     public string Summary() =>
         $"figures={Figures} glb_figures={GlbFigures} placeholders={Placeholders} clips_loaded={ClipsLoaded} "
         + $"kinds_bound={KindsBound} bound_tracks={BoundTracks} unbound_clips={UnboundClips} model_loads={ModelLoads} "
-        + $"model_failures={ModelFailures} offmap={Offmap} clip_failures={ClipsFailed} low_tier={LowTier}";
+        + $"model_failures={ModelFailures} offmap={Offmap} clip_failures={ClipsFailed} low_tier={LowTier} "
+        + $"hidden={Hidden} seated={Seated} pool={PoolFigures} portraits={Portraits}";
 }
 
 /// <summary>
@@ -106,6 +110,8 @@ public partial class FigureManager : Node3D
         /// <summary>Godot static memory grown by the retarget of this template (bytes).</summary>
         public long ClipBytes { get; init; }
         public double FitMs { get; init; }
+        /// <summary><c>fit.fits</c>: at least one library clip adapted to this rig (the random pool takes only those).</summary>
+        public bool LibraryFits { get; init; }
     }
 
     private sealed record ModelInfo(string Url, string? LowUrl, string Format, string Rig, bool Normalized, string? ModelRev);
@@ -195,14 +201,13 @@ public partial class FigureManager : Node3D
     {
         Stats.Polls++;
         AvatarName = Json.Str(root, "avatar");
-        var rows = CharacterRow.ParseList(root);
-        var spots = FigurePlacement.Resolve(rows, MapPlace.ParsePlaced(root));
-        Stats.Offmap = rows.Count(r => !spots.ContainsKey(r.Name));
+        _rows = CharacterRow.ParseList(root);
+        _mapPlaces = MapPlace.ParsePlaced(root);
+        var plans = Place();
         var loads = new List<Task>();
-        foreach (var row in rows)
+        foreach (var row in _rows)
         {
-            if (!spots.TryGetValue(row.Name, out var spot)) continue;
-            var at = new Vector2((float)spot.X, (float)spot.Z);
+            if (!plans.TryGetValue(row.Name, out var plan)) continue;
             bool fresh = !_figures.TryGetValue(row.Name, out var fig);
             if (fresh)
             {
@@ -212,27 +217,101 @@ public partial class FigureManager : Node3D
             }
             if (row.HeightCm is > 30 and < 400) fig!.HeightM = row.HeightCm.Value / 100.0;
             if (row.AnimationSets.Count > 0) fig!.Sets = row.AnimationSets;   // setCharacterSets: only a non-empty chain
-            fig!.Rule = spot.Rule;
-            fig.Activity = row.ActivityAnimation;
-            fig.SetTarget(at, PollSeconds, snap: fresh);
-            fig.Advance(0, _height.GroundAt);
-            Gate(fig);
+            fig!.Activity = row.ActivityAnimation;
+            fig.AvatarUrl = row.AvatarUrl;
+            fig.IsAvatar = row.Name == AvatarName;
+            ApplyPlan(fig, plan, fresh);
             fig.WantedSig = row.ModelSig;
             fig.WantedRev = row.ModelRev;
             if (fresh)
             {
-                fig.SetBody(Figure.Capsule(fig.HeightM), false, null, null);
+                ShowStandIn(fig);
                 loads.Add(LoadModelAsync(fig));
             }
             else if (!fig.Loading && !fig.RetryPending && Changed(fig)) loads.Add(LoadModelAsync(fig));
         }
-        foreach (var gone in _figures.Keys.Where(n => !spots.ContainsKey(n)).ToList())
+        foreach (var gone in _figures.Keys.Where(n => !plans.ContainsKey(n)).ToList())
         {
             _figures[gone].QueueFree();
             _figures.Remove(gone);
+            _shown.Remove(gone);
         }
         UpdateStats();
         return Task.WhenAll(loads);
+    }
+
+    // ---- placement (Task 29: main.ts computeNpcPlacements, 1 Hz from the cached map) -------------------------------
+
+    /// <summary>The mounted locations (id → slot) the room placement reads; null = none (every row free or offmap).</summary>
+    public Func<IReadOnlyDictionary<string, LocationSlot>>? Slots { get; set; }
+    /// <summary>The last parsed rows and placed locations of <see cref="Apply"/> (the 1 Hz pass re-places from them).</summary>
+    private List<CharacterRow> _rows = new();
+    private Dictionary<string, MapPlace> _mapPlaces = new();
+    /// <summary>main.ts <c>shownPlacement</c>: where each figure was drawn last (room, interior revealed).</summary>
+    private readonly Dictionary<string, ShownPlacement> _shown = new();
+    private double _placeClock;
+    /// <summary>The placement pass interval (main.ts' <c>setInterval(…, 1000)</c> over <c>computeNpcStates(lastMap)</c>).</summary>
+    public const double PlaceTickS = 1.0;
+    /// <summary>The plans of the last placement pass, by name (the check reads them).</summary>
+    public IReadOnlyDictionary<string, FigurePlan> LastPlans => _lastPlans;
+    private Dictionary<string, FigurePlan> _lastPlans = new();
+
+    /// <summary>
+    /// One placement pass over the cached rows (<see cref="FigurePlacement.Plan"/>): the room ladder of every mounted
+    /// location with its view state NOW — fade, shown storey, near ring — so opening a building, switching a storey or
+    /// a re-lift reaches the figures within a second, as in the browser.
+    /// </summary>
+    private Dictionary<string, FigurePlan> Place()
+    {
+        var slots = Slots?.Invoke();
+        LocationPlacement? TileOf(string locId)
+        {
+            if (slots is null || locId.Length == 0 || !slots.TryGetValue(locId, out var slot)) return null;
+            if (!IsInstanceValid(slot.Group)) return null;
+            var stands = slot.Stands;
+            return new LocationPlacement(slot.PlacementView(), slot.Ring == Ring.Near, stands.TileGroundY, stands.RoomStandY);
+        }
+        var plans = FigurePlacement.Plan(_rows, TileOf, _height.GroundAt, _shown,
+            id => _mapPlaces.TryGetValue(id, out var p) ? new Vec3(p.X, 0, p.Z) : null);
+        _lastPlans = plans.ToDictionary(p => p.Name);
+        Stats.Offmap = _rows.Count(r => !_lastPlans.ContainsKey(r.Name));
+        Stats.Hidden = plans.Count(p => p.Hidden);
+        Stats.Seated = plans.Count(p => p.Rule is "seat" or "pool");
+        return _lastPlans;
+    }
+
+    /// <summary>npcs.update for one figure: target (snap or walk), facing, lean, visibility.</summary>
+    private void ApplyPlan(Figure fig, FigurePlan plan, bool fresh)
+    {
+        fig.Rule = plan.Rule;
+        fig.OnTerrain = plan.OnTerrain;
+        fig.Face = plan.Face is { } f ? new Vector3((float)f.X, 0, (float)f.Z) : null;
+        fig.Lean = plan.Lean;
+        fig.SetHidden(plan.Hidden);
+        fig.SetTarget(new Vector3((float)plan.Pos.X, (float)plan.Pos.Y, (float)plan.Pos.Z), PollSeconds, snap: fresh || plan.Snap);
+        fig.Advance(0, _height.GroundAt);
+        Gate(fig);
+    }
+
+    /// <summary>
+    /// The placement census of one location (the <c>--offline</c> report): its rows' plans counted by rule, how many are
+    /// hidden, and how many stand in front of the building although the server has them in a room.
+    /// </summary>
+    public string Census(string locId)
+    {
+        var rows = _rows.Where(r => r.LocationId == locId && _lastPlans.ContainsKey(r.Name)).ToList();
+        var plans = rows.Select(r => _lastPlans[r.Name]).ToList();
+        var rules = string.Join(" ", plans.GroupBy(p => p.Rule).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => $"{g.Key}={g.Count()}"));
+        int doorstep = rows.Count(r => r.RoomId.Length > 0 && _lastPlans[r.Name] is { Rule: "tile", Hidden: false });
+        return $"figures={plans.Count} {rules} hidden={plans.Count(p => p.Hidden)} visible_room_figures_on_doorstep={doorstep}";
+    }
+
+    /// <summary>The 1 Hz pass: re-place every figure from the cached rows (no model work — that is the poll's).</summary>
+    public void TickPlacement()
+    {
+        if (_rows.Count == 0) return;
+        foreach (var (name, plan) in Place())
+            if (_figures.TryGetValue(name, out var fig)) ApplyPlan(fig, plan, false);
     }
 
     /// <summary>
@@ -244,12 +323,19 @@ public partial class FigureManager : Node3D
 
     public void Tick(double dt)
     {
+        double camDist = CamDist?.Invoke() ?? DefaultCamDist;
         foreach (var fig in _figures.Values)
         {
             fig.Advance(dt, _height.GroundAt);
             Gate(fig);
+            fig.Portrait?.Tick(dt, camDist, fig.Moving);
         }
     }
+
+    /// <summary>The camera's orbit distance (the portrait sprites size with it, npcs.ts <c>camDist·0.055</c>).</summary>
+    public Func<double>? CamDist { get; set; }
+    /// <summary>Without a camera: the distance at which a portrait has its initial 2.6 m.</summary>
+    public const double DefaultCamDist = 2.6 / 0.055;
 
     /// <summary>
     /// npcs.ts <c>tickFigureTiers(camera, 25, 35)</c>: per figure with a server model, the distance from the camera
@@ -342,6 +428,12 @@ public partial class FigureManager : Node3D
     {
         if (!AutoTick) return;
         Tick(delta);
+        _placeClock += delta;
+        if (_placeClock >= PlaceTickS)
+        {
+            _placeClock = 0;
+            TickPlacement();
+        }
         _tierClock += delta;
         if (_tierClock < FigureTiers.TickS) return;
         _tierClock = 0;
@@ -385,11 +477,12 @@ public partial class FigureManager : Node3D
                 if (!Alive(fig)) return;   // vanished while loading
                 if (info is null)
                 {
+                    // apiModels.set(name, null): the fallback pool, else the portrait (instantiate).
                     _infos.Remove(fig.CharacterName);
-                    fig.SetBody(Figure.Capsule(fig.HeightM), false, null, null);
-                    fig.BoundTracks = fig.UnboundClips = 0;
+                    fig.Api = Figure.ModelAnswer.None;
                     fig.LoadedRev = "";
-                    _log($"figure {fig.CharacterName}: no model → placeholder");
+                    ShowStandIn(fig);
+                    _log($"figure {fig.CharacterName}: no model → {(fig.PoolModel is { } pm ? $"pool model {pm}" : "portrait")}");
                 }
                 else if (info.Format != "glb")
                 {
@@ -406,6 +499,7 @@ public partial class FigureManager : Node3D
                     var template = await GetTemplate(UrlFor(info, tier), info, fig.Sets);
                     if (!Alive(fig)) return;
                     _infos[fig.CharacterName] = info;
+                    fig.Api = Figure.ModelAnswer.Ready;
                     fig.LoadedRev = info.ModelRev;
                     Instantiate(fig, template, info, tier);
                 }
@@ -415,7 +509,13 @@ public partial class FigureManager : Node3D
             {
                 Stats.ModelFailures++;
                 retry = true;
-                _log($"figure {fig.CharacterName}: model failed: {e.Message} → placeholder, retrying in {RetryDelayS:0} s");
+                // firstAttemptFailed: the pool (or the portrait) stands in until the retry brings the model.
+                if (Alive(fig) && fig.Api != Figure.ModelAnswer.Ready)
+                {
+                    fig.Api = Figure.ModelAnswer.Failed;
+                    ShowStandIn(fig);
+                }
+                _log($"figure {fig.CharacterName}: model failed: {e.Message} → stand-in, retrying in {RetryDelayS:0} s");
             }
             finally
             {
@@ -486,7 +586,7 @@ public partial class FigureManager : Node3D
     /// rig the library along <paramref name="sets"/> fitted (<c>fitLibraryAsync</c>), in slices of at most
     /// <see cref="FitSliceMs"/> ms between frames.
     /// </summary>
-    private async Task<ModelTemplate> BuildTemplate(string url, ModelInfo info, IReadOnlyList<string> sets)
+    private async Task<ModelTemplate> BuildTemplate(string url, ModelInfo info, IReadOnlyList<string> sets, bool ownClips = false)
     {
         var bytes = await _source.GetBytesAsync(url);
         var plain = await Task.Run(() => GlbLoader.Prepare(bytes));
@@ -501,8 +601,15 @@ public partial class FigureManager : Node3D
         }
         double raw = Math.Max(size.Y, 0.01);
         var skel = ClipLibrary.Find<Skeleton3D>(root);
+        // The file's own takes (the pool's Soldier / Xbot / Robot): taken out of the import's player, kept per kind.
+        var own = ownClips ? TakeOwnClips(root) : new List<(string Kind, Animation Anim)>();
         if (info.Rig != "mixamo" || skel is null || skel.GetBoneCount() == 0)
-            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1 };
+        {
+            if (own.Count == 0) return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1 };
+            var ownLib = new AnimationLibrary();
+            foreach (var (kind, anim) in own) ownLib.AddAnimation(kind, anim);
+            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, Library = ownLib, Kinds = own.Select(o => o.Kind).ToList() };
+        }
 
         await Clips.WaitClipsAsync();
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -536,8 +643,14 @@ public partial class FigureManager : Node3D
         // '/', ':', ',' and '[' (Godot's animation-name rule) — such a kind stays unbound.
         var byName = bound.GroupBy(b => b.Kind.ToLowerInvariant()).ToDictionary(g => g.Key, g => g.Last().Anim!);
         var kinds = new List<string>();
-        foreach (var (kind, clipName) in ClipLibraryRules.BindActions(bound.Select(b => b.Kind).ToList()))
+        // A file's own take wins its kind (embedded first in the action order: [...model.clips, ...fit.extra]).
+        foreach (var (kind, anim) in own)
+            if (lib.AddAnimation(kind, anim) == Error.Ok) kinds.Add(kind);
+        var ownKinds = own.Select(o => o.Kind).ToHashSet();
+        foreach (var (kind, clipName) in ClipLibraryRules.BindActions(bound.Where(b => !ownKinds.Contains(b.Kind.ToLowerInvariant()))
+                                                                           .Select(b => b.Kind).ToList()))
         {
+            if (lib.HasAnimation(kind)) continue;
             if (lib.AddAnimation(kind, byName[clipName.ToLowerInvariant()]) == Error.Ok) kinds.Add(kind);
             else _log($"model {url}: action '{kind}' refused by Godot's animation-name rule");
         }
@@ -557,7 +670,37 @@ public partial class FigureManager : Node3D
         {
             Root = root, RawHeight = raw, Url = url, Library = lib, Kinds = kinds, ClipSets = setOf, BoundTracks = tracks,
             Unbound = missing.Count, Corrected = fixes?.Count ?? -1, Keys = keys, ClipBytes = clipBytes, FitMs = fitMs,
+            LibraryFits = bound.Count > 0,
         };
+    }
+
+    /// <summary>
+    /// A model file's own non-empty takes, lower-cased, looping (a take nobody flagged loops), taken out of the import's
+    /// AnimationPlayer (which is freed: the figure's one player carries them).
+    /// </summary>
+    private static List<(string Kind, Animation Anim)> TakeOwnClips(Node root)
+    {
+        var list = new List<(string, Animation)>();
+        foreach (var player in Walk(root).OfType<AnimationPlayer>().ToList())
+        {
+            foreach (var libName in player.GetAnimationLibraryList())
+            {
+                var lib = player.GetAnimationLibrary(libName);
+                foreach (var name in lib.GetAnimationList())
+                {
+                    var anim = lib.GetAnimation(name);
+                    if (anim.GetTrackCount() == 0) continue;
+                    var kind = name.ToString().ToLowerInvariant();
+                    if (list.Any(e => e.Item1 == kind)) continue;
+                    var copy = (Animation)anim.Duplicate();
+                    copy.LoopMode = Animation.LoopModeEnum.Linear;
+                    list.Add((kind, copy));
+                }
+            }
+            player.GetParent()?.RemoveChild(player);
+            player.Free();
+        }
+        return list;
     }
 
     /// <summary>Built templates and the keys of their retargeted clips (both tiers of every character).</summary>
@@ -601,10 +744,10 @@ public partial class FigureManager : Node3D
                      .SelectMany(mi => Enumerable.Range(0, mi.Mesh?.GetSurfaceCount() ?? 0).Select(s => mi.GetActiveMaterial(s)))
                      .OfType<BaseMaterial3D>().Count(m => m.Metallic != 0);
 
-    private void Instantiate(Figure fig, ModelTemplate t, ModelInfo info, FigureTier tier)
+    private void Instantiate(Figure fig, ModelTemplate t, ModelInfo info, FigureTier tier, double? poolHeight = null)
     {
         var inst = (Node3D)t.Root.Duplicate();
-        double scale = info.Normalized ? 1.0 : fig.HeightM / t.RawHeight;
+        double scale = poolHeight is { } ph ? ph / t.RawHeight : info.Normalized ? 1.0 : fig.HeightM / t.RawHeight;
         var body = new Node3D { Name = "Body", Scale = Vector3.One * (float)scale };
         body.AddChild(inst);
         AnimationPlayer? player = null;
@@ -623,6 +766,168 @@ public partial class FigureManager : Node3D
         fig.LoadedUrl = t.Url;
         fig.LoadedTier = tier;
         fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds);
+    }
+
+    // ---- the fallback pool and the portrait (Task 29, ruling P3-R10) -------------------------------------------------
+
+    /// <summary>Where the browser's fallback pool lives (served anonymously with the 3D client, § /static/client3d).</summary>
+    public const string PoolBase = "/static/client3d/models/";
+
+    private sealed record PoolModel(string Name, ModelTemplate Template, ModelInfo Info, double Height, bool AssignOnly);
+
+    private readonly List<PoolModel> _pool = new();
+    private Dictionary<string, string> _assignments = new();
+    private readonly HashSet<string> _waitingForPool = new();
+    private Task? _poolLoad;
+    /// <summary>figures.ts <c>poolState</c>: idle → loading → ready | failed (a failure retries after 30 s while someone waits).</summary>
+    public string PoolState { get; private set; } = "idle";
+    /// <summary>The pool's models in manifest order and whether the library fits each (for the check / report).</summary>
+    public IReadOnlyList<(string Name, bool LibraryFits)> PoolModels => _pool.Select(p => (p.Name, p.Template.LibraryFits)).ToList();
+    private readonly Dictionary<string, Task<Image?>> _portraits = new();
+
+    /// <summary>
+    /// figures.ts <c>instantiate(name)</c> for a figure without a server model on screen: when the server said "none" or
+    /// failed (or the manifest assigns this character a model) the pool is wanted — not ready yet → the portrait now and a
+    /// pool load (the figure waits for it); ready → the assigned model, else a seeded pick over the rigs the library
+    /// fits (<c>animatablePool</c>, <c>seededRandom('model:' + name)</c>); an empty pool → the portrait.
+    /// </summary>
+    private void ShowStandIn(Figure fig)
+    {
+        if (fig.Api == Figure.ModelAnswer.Ready) return;
+        bool wantsPool = fig.Api is Figure.ModelAnswer.None or Figure.ModelAnswer.Failed
+                         || (fig.Api == Figure.ModelAnswer.Unknown && _assignments.ContainsKey(fig.CharacterName));
+        if (wantsPool && PoolState != "ready")
+        {
+            _waitingForPool.Add(fig.CharacterName);
+            if (PoolState == "idle") _ = EnsurePool();
+            ShowPortrait(fig);
+            return;
+        }
+        var model = PickPoolModel(fig.CharacterName);
+        if (model is null)
+        {
+            ShowPortrait(fig);
+            return;
+        }
+        if (fig.PoolModel == model.Name && fig.Body is not null) return;
+        Instantiate(fig, model.Template, model.Info, FigureTier.Full, model.Height);
+        fig.MarkPool(model.Name, model.Height);
+        UpdateStats();
+    }
+
+    /// <summary>The pool model for a character (<c>instantiate</c>'s choice), null when the pool holds none.</summary>
+    private PoolModel? PickPoolModel(string name)
+    {
+        if (_pool.Count == 0) return null;
+        var assigned = _assignments.TryGetValue(name, out var a) ? a : name;
+        var model = _pool.FirstOrDefault(m => m.Name == assigned);
+        if (model is not null) return model;
+        var pool = FigureClips.AnimatablePool(_pool.Where(m => !m.AssignOnly).ToList(), m => m.Template.LibraryFits);
+        if (pool.Count == 0) return null;
+        var rnd = ScatterMath.SeededRandom("model:" + name);
+        return pool[(int)Math.Floor(rnd() * pool.Count)];
+    }
+
+    /// <summary>The portrait sprite (once per figure body; the picture is fetched once per URL).</summary>
+    private void ShowPortrait(Figure fig)
+    {
+        if (fig.Portrait is not null) return;
+        var portrait = new Portrait(fig.CharacterName, fig.IsAvatar);
+        fig.SetPortrait(portrait);
+        fig.BoundTracks = fig.UnboundClips = 0;
+        UpdateStats();
+        if (fig.AvatarUrl.Length == 0) return;
+        var url = Portrait.TransparentPortraitUrl(fig.AvatarUrl);
+        if (!_portraits.TryGetValue(url, out var load))
+            _portraits[url] = load = FetchPortrait(url);
+        _ = PictureWhenLoaded(fig, portrait, load);
+    }
+
+    /// <summary><c>img.onload = () =&gt; draw(img)</c>: on the main thread, only while that portrait is still the body.</summary>
+    private async Task PictureWhenLoaded(Figure fig, Portrait portrait, Task<Image?> load)
+    {
+        var img = await load;
+        if (img is not null && IsInstanceValid(fig) && ReferenceEquals(fig.Portrait, portrait)) portrait.SetPicture(img);
+    }
+
+    private async Task<Image?> FetchPortrait(string url)
+    {
+        try
+        {
+            var bytes = await _source.GetBytesAsync(url);
+            return Portrait.Decode(bytes);
+        }
+        catch (Exception e)
+        {
+            _log($"portrait {url}: {e.Message} — the initials stay");
+            return null;
+        }
+    }
+
+    /// <summary>figures.ts <c>ensureFallbackPool</c>: one load at a time; the waiting figures are served when it settles.</summary>
+    public Task EnsurePool() => _poolLoad ??= LoadPoolAsync();
+
+    /// <summary>
+    /// <c>loadManifestModels</c>: the manifest (<c>defaultHeight</c>, <c>models[]</c>, <c>assignments</c>), every model
+    /// that is not assign-only (or is assigned) built like a server model on a mixamo rig — its own takes first, the
+    /// library over the neutral set — scaled to its own height (<c>height ?? defaultHeight</c>). Nothing loaded = failed;
+    /// a failed pool is asked again after 30 s while figures wait for it.
+    /// </summary>
+    private async Task LoadPoolAsync()
+    {
+        PoolState = "loading";
+        try
+        {
+            using var doc = JsonDocument.Parse(await _source.GetBytesAsync(PoolBase + "manifest.json"));
+            var root = doc.RootElement;
+            double defaultHeight = Json.Num(root, "defaultHeight", DefaultHeightM);
+            var assignments = new Dictionary<string, string>();
+            if (root.TryGetProperty("assignments", out var asg) && asg.ValueKind == JsonValueKind.Object)
+                foreach (var p in asg.EnumerateObject())
+                    if (p.Value.ValueKind == JsonValueKind.String) assignments[p.Name] = p.Value.GetString()!;
+            _assignments = assignments;
+            var assigned = assignments.Values.ToHashSet();
+            foreach (var m in Json.Arr(root, "models"))
+            {
+                var name = Json.Str(m, "name");
+                var file = Json.Str(m, "url");
+                bool assignOnly = Json.Bool(m, "assignOnly");
+                if (name.Length == 0 || file.Length == 0 || (assignOnly && !assigned.Contains(name))) continue;
+                var url = PoolBase + file;
+                var info = new ModelInfo(url, null, "glb", "mixamo", false, null);
+                try
+                {
+                    var template = await BuildTemplate(url, info, Array.Empty<string>(), ownClips: true);
+                    _pool.Add(new PoolModel(name, template, info, Json.Num(m, "height", defaultHeight), assignOnly));
+                    _log($"pool model {name}: {template.Kinds.Count} actions, library {(template.LibraryFits ? "fits" : "does not fit")}");
+                }
+                catch (Exception e)
+                {
+                    _log($"pool model {name} failed: {e.Message}");
+                }
+            }
+            if (_pool.Count == 0) throw new InvalidOperationException("no fallback model loaded");
+            PoolState = "ready";
+        }
+        catch (Exception e)
+        {
+            PoolState = "failed";
+            _log($"fallback pool failed — portraits stand in, retrying in {RetryDelayS:0} s: {e.Message}");
+        }
+        if (!IsInstanceValid(this)) return;
+        var waiting = _waitingForPool.ToList();
+        if (PoolState == "ready") _waitingForPool.Clear();
+        foreach (var name in waiting)
+            if (_figures.TryGetValue(name, out var fig) && Alive(fig)) ShowStandIn(fig);
+        if (PoolState == "failed")
+        {
+            _poolLoad = null;
+            if (IsInsideTree() && _waitingForPool.Count > 0)
+                GetTree().CreateTimer(RetryDelayS).Timeout += () =>
+                {
+                    if (_waitingForPool.Count > 0 && PoolState == "failed") { PoolState = "idle"; _ = EnsurePool(); }
+                };
+        }
     }
 
     // ---- the figure pick (Task 9) ----------------------------------------------------------------
@@ -679,6 +984,17 @@ public partial class FigureManager : Node3D
             var c = fig.GlobalPosition + new Vector3(0, (float)(fig.HeightM / 2), 0);
             if (!RayMath.RaySphere(origin, new Vec3(d.X, d.Y, d.Z), new Vec3(c.X, c.Y, c.Z), PickSphereFactor * h)) continue;
             LastPickCandidates++;
+            if (fig.Portrait is { } portrait)
+            {
+                // three's Sprite.raycast hits the camera-facing quad; here the quad faces the ray (a vertical billboard
+                // through the sprite's axis), Scale × Scale with its anchor 2 % above its bottom edge.
+                if (PortraitHit(portrait, fig.GlobalPosition, o, d) is { } pt && pt < best)
+                {
+                    best = pt;
+                    bestName = fig.CharacterName;
+                }
+                continue;
+            }
             foreach (var mi in Walk(body).OfType<MeshInstance3D>())
             {
                 if (!mi.IsVisibleInTree() || mi.HasMeta(World.SubmergedGhost.Meta)) continue;
@@ -693,6 +1009,27 @@ public partial class FigureManager : Node3D
         }
         LastPickMs = sw.Elapsed.TotalMilliseconds;
         return bestName is null ? null : (bestName, best);
+    }
+
+    /// <summary>
+    /// The ray against a portrait sprite: the vertical plane through the figure's axis facing the ray (normal = −d
+    /// horizontal), hit when the point lies within half the sprite's size sideways and between its bottom and top edge
+    /// (root + lift − 0.02·size … + 0.98·size). A ray without a horizontal part, or one running away, misses.
+    /// </summary>
+    public static double? PortraitHit(Portrait portrait, Vector3 root, Vector3 o, Vector3 d)
+    {
+        var h = new Vector3(d.X, 0, d.Z);
+        if (h.LengthSquared() < 1e-12f) return null;
+        h = h.Normalized();
+        double denom = d.Dot(h);
+        double t = (root - o).Dot(h) / denom;
+        if (!(t > 0)) return null;
+        var p = o + d * (float)t;
+        double side = new Vector3(p.X - root.X, 0, p.Z - root.Z).Length();
+        double size = portrait.Scale;
+        double bottom = root.Y + portrait.Lift - Portrait.Anchor * size;
+        if (side > size / 2 || p.Y < bottom || p.Y > bottom + size) return null;
+        return t;
     }
 
     /// <summary>The ray against a skinned mesh in its current pose: world distance of the nearest hit, or null.</summary>
@@ -783,6 +1120,8 @@ public partial class FigureManager : Node3D
         Stats.UnboundClips = _figures.Values.Sum(f => f.UnboundClips);
         Stats.KindsBound = _figures.Values.Sum(f => f.ClipKinds.Count);
         Stats.LowTier = _figures.Values.Count(f => f.IsGlb && f.LoadedTier == FigureTier.Low);
+        Stats.PoolFigures = _figures.Values.Count(f => f.PoolModel is not null);
+        Stats.Portraits = _figures.Values.Count(f => f.Portrait is not null);
         Stats.ClipsLoaded = Clips.ClipsLoaded;
         Stats.ClipsFailed = Clips.ClipsFailed;
     }

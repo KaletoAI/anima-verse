@@ -150,6 +150,9 @@ public partial class Main : Node3D
                 // npcs.tickFigureTiers(camera.position) and setModelFocus (distance² to engine.target), main.ts.
                 CameraPosition = () => _camera is { } c && IsInstanceValid(c) ? c.GlobalPosition : null,
                 FocusTarget = () => _camera is { } c && IsInstanceValid(c) ? c.Target : null,
+                // Task 29: the room placement reads every mounted location's view state and stands.
+                Slots = () => builder.Slots,
+                CamDist = () => _camera is { } c && IsInstanceValid(c) ? c.Distance : FigureManager.DefaultCamDist,
             };
             world.AddChild(_figures);
             var tags = _tags = new NameTags(_figures, () => Time.GetTicksMsec()) { CamDist = () => _camera?.Distance ?? 0 };
@@ -214,6 +217,22 @@ public partial class Main : Node3D
                 if (_scatter is not null) Log("offline scatter " + _scatter.Summary() + " " + _scatter.Digest());
                 Log("offline figures " + FigureLine());
                 foreach (var f in _figures!.Ordered()) Log("offline " + FigureDetail(f));
+                // Task 29: every location with figures once OPEN (fade 1, storey 0) and once closed — where the room
+                // ladder puts them (seat, pool, corridor, pos, centre, tile = huddle) and who hides.
+                foreach (var (id, slot) in builder.Slots.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+                {
+                    double was = slot.Fade.Fade;
+                    slot.Fade.Snap(1);
+                    _figures.TickPlacement();
+                    string open = _figures.Census(id);
+                    slot.Fade.Snap(0);
+                    _figures.TickPlacement();
+                    string closed = _figures.Census(id);
+                    slot.Fade.Snap(was);
+                    if (!open.StartsWith("figures=0", StringComparison.Ordinal))
+                        Log($"offline placement {id} ({slot.Loc.Name}) open[{open}] closed[{closed}]");
+                }
+                _figures.TickPlacement();
                 Log($"offline memory static {Performance.GetMonitor(Performance.Monitor.MemoryStatic) / 1048576.0:0} MiB, "
                     + $"library {_figures.Clips.SourceKeys} source keys, figure templates "
                     + $"{_figures.TemplateKeys} keys ≈{_figures.TemplateKeys * FigureManager.KeyBytes / 1048576.0:0} MiB in {_figures.TemplateCount} templates");

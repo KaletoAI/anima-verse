@@ -1,0 +1,26 @@
+{
+  "signature": "placement-shed", "k": 1, "extent_m": 6, "storey_m": 3,
+  "boundary": [[-3, -3], [3, -3], [3, 3], [-3, 3]],
+  "levels": [{ "level": 0, "floor_y": 0 }],
+  "style": { "wall_color": "#d0c8b8", "floor_color": "#b8b0a0" },
+  "rooms": [
+    { "room_id": "s-room", "level": 0, "always_visible": false, "outline": [[-3, -3], [3, -3], [3, 3], [-3, 3]], "openings": [] }
+  ],
+  "outdoor_rooms": [],
+  "floor_plan": [
+    { "room_id": "s-room", "polygon_world": [[-3, -3], [3, -3], [3, 3], [-3, 3]], "floor_kind": "planks", "closed": true }
+  ],
+  "plates": [],
+  "walls": [
+    { "level": 0, "from": [-3, -3], "to": [3, -3], "base_y": 0, "height": 2.5, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [0, -1] }
+  ],
+  "extras": [],
+  "stairs": [],
+  "markers": [],
+  "doorways": [],
+  "problems": [],
+  "corridors": [],
+  "boundary_openings": [],
+  "models": [],
+  "figures": { "base_height_m_world": 1.7, "stand_clearance": 0.12 }
+}

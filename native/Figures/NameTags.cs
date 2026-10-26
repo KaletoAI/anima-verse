@@ -82,7 +82,7 @@ public sealed class NameTags
         {
             if (!_figures.Figures.TryGetValue(name, out var fig) || !GodotObject.IsInstanceValid(fig) || !fig.IsInsideTree()) continue;
             if (!OverviewLabels.TagVisible(camDist, hidden: !fig.IsVisibleInTree(), ownFirstPerson: false)) continue;
-            tag.Anchor = fig.GlobalPosition + new Vector3(0, (float)OverviewLabels.TagAnchorY(fig.HeightM), 0);
+            tag.Anchor = fig.GlobalPosition + new Vector3(0, (float)OverviewLabels.TagAnchorY(fig.TagHeight), 0);
             yield return tag;
         }
     }

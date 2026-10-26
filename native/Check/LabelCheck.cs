@@ -24,9 +24,10 @@ namespace AnimaNative.Check;
 /// (sin 0.650245, cos 0.759729). A point P lies at the lens depth d − (Py − Ty)·sin p − (Pz − Tz)·cos p.
 ///
 ///   T1 tag anchors = feet + height + 0.45: Ada (−50, 3.595947265625 + 1.60 + 0.45 = 5.645947265625, 30), Bram
-///      (64, 4.0675 + 1.80 + 0.45 = 6.3175, 132.32), Cleo (263, 4.875 + 1.70 + 0.45 = 7.025, −100).
+///      (64, 4.0675 + 1.80 + 0.45 = 6.3175, 132.32); Cleo has no model and no pool here, so she is a PORTRAIT and her
+///      tag hangs below it (tagAnchorY(null) = −0.15, Task 29): (263, 4.875 − 0.15 = 4.725, −100).
 ///      Depths at 40 m: Ada 40 − 1.578447·0.650245 + 102.32·0.759729 = 116.709; Bram 40 − 2.25·0.650245 = 38.537;
-///      Cleo 40 − 2.9575·0.650245 + 232.32·0.759729 = 214.577 — all between near 0.2 and far 800, so at 40 m ALL
+///      Cleo 40 − 0.6575·0.650245 + 232.32·0.759729 = 216.075 — all between near 0.2 and far 800, so at 40 m ALL
 ///      three tags show (camDist 40 < 55); at 60 m NONE (60 ≥ 55), whatever the depth.
 ///   T2 texts: Ada "Ada Wren", Bram "Bram Holt", Cleo travels (travel block, starts_in_s null, no eta_hhmm) →
 ///      "🚶 Cleo Marsh"; no row has an activity → "" (no second line); the fixture has no avatar → none gold.
@@ -57,7 +58,7 @@ public static class LabelCheck
         var cam = new OverviewCamera { Name = "LabelCheckCamera" };
         vp.AddChild(cam);
         var source = new FixtureSource(fixtures);
-        var mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-labels] " + line), strict: true) { AutoTick = false };
+        var mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-labels] " + line), strict: true) { AutoTick = false, Slots = () => builder.Slots };
         world.AddChild(mgr);
         try
         {
@@ -94,10 +95,10 @@ public static class LabelCheck
             Expect("T1 all tags at 40 m", tags40.Count == 3, $"{tags40.Count}");
             NearV("T1 Ada anchor", tags.Tags[Ada].Anchor, new Vector3(-50, 5.645947265625f, 30));
             NearV("T1 Bram anchor", tags.Tags[Bram].Anchor, new Vector3(64, 6.3175f, 132.32f));
-            NearV("T1 Cleo anchor", tags.Tags[Cleo].Anchor, new Vector3(263, 7.025f, -100));
+            NearV("T1 Cleo anchor", tags.Tags[Cleo].Anchor, new Vector3(263, 4.725f, -100));
             Near("T1 Ada depth", Depth(cam, tags.Tags[Ada].Anchor), 116.709, 0.02);
             Near("T1 Bram depth", Depth(cam, tags.Tags[Bram].Anchor), 38.537, 0.02);
-            Near("T1 Cleo depth", Depth(cam, tags.Tags[Cleo].Anchor), 214.577, 0.02);
+            Near("T1 Cleo depth", Depth(cam, tags.Tags[Cleo].Anchor), 216.075, 0.02);
             // Far → near: Cleo, Ada, Bram (the nearest drawn last, on top).
             Expect("T1 order far → near", tags40.Select(p => ((NameTags.Tag)p.Label).Character).SequenceEqual(new[] { Cleo, Ada, Bram }),
                    string.Join(",", tags40.Select(p => ((NameTags.Tag)p.Label).Character)));

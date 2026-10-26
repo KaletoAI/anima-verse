@@ -19,6 +19,9 @@ namespace AnimaNative.Figures;
 /// </summary>
 public partial class Figure : Node3D
 {
+    /// <summary>The server's answer for the model: not asked yet, a model, none (404 / no url), a transient failure.</summary>
+    public enum ModelAnswer { Unknown, Ready, None, Failed }
+
     public const double WalkSpeed = 0.2;   // m/s
 
     public string CharacterName { get; }
@@ -49,20 +52,66 @@ public partial class Figure : Node3D
     public int UnboundClips { get; set; }
 
     public bool IsGlb { get; private set; }
+
+    /// <summary>What the server said about this character's model (figures.ts <c>apiModels</c> + <c>firstAttemptFailed</c>).</summary>
+    public ModelAnswer Api { get; set; } = ModelAnswer.Unknown;
+    /// <summary>The row's <c>avatar_url</c> (the portrait picture) and whether it is the player's avatar (gold pointer).</summary>
+    public string AvatarUrl { get; set; } = "";
+    public bool IsAvatar { get; set; }
+    /// <summary>The portrait sprite while the figure has no model at all (null otherwise).</summary>
+    public Portrait? Portrait { get; private set; }
+    /// <summary>The fallback-pool model the body comes from (Soldier / Xbot / Robot), null otherwise.</summary>
+    public string? PoolModel { get; private set; }
+    /// <summary>A pool model's own height (the manifest's), which the body is scaled to instead of the character's.</summary>
+    public double? PoolHeight { get; private set; }
+
+    /// <summary>The height the name tag anchors on (<c>tagAnchorY(figure?.height ?? null)</c>): none for a portrait.</summary>
+    public double? TagHeight => Portrait is not null ? null : PoolHeight ?? HeightM;
+
+    /// <summary>Wear the portrait sprite (no model at all).</summary>
+    public void SetPortrait(Portrait portrait)
+    {
+        SetBody(portrait.Root, false, null, null);
+        Portrait = portrait;
+        PoolModel = null;
+        PoolHeight = null;
+    }
+
+    /// <summary>Mark the current body as a fallback-pool model of <paramref name="height"/> m.</summary>
+    public void MarkPool(string model, double height)
+    {
+        PoolModel = model;
+        PoolHeight = height;
+    }
     public AnimationPlayer? Player { get; private set; }
     public Skeleton3D? Skeleton { get; private set; }
     public Node3D? Body { get; private set; }
     /// <summary>The body's underwater ghost (<c>figure.ghost</c>), made with the body, built on the first submersion.</summary>
     public World.SubmergedGhost? Ghost { get; private set; }
 
-    // Lerp state, ground plane (x, z).
+    // Lerp state, ground plane (x, z) and the target height.
     private Vector2 _from, _to;
+    private float _fromY, _toY;
     private double _elapsed, _duration = 1;
     public Vector2 Shown { get; private set; }
     public Vector2 Target => _to;
+    /// <summary>The height the placement asks for at the target (a seat, a room floor, the tile ground).</summary>
+    public float TargetY => _toY;
     public bool Moving => _elapsed < _duration && PlannedSpeed > WalkSpeed;
     public double PlannedSpeed { get; private set; }
     public string Rule { get; set; } = "";
+    /// <summary>
+    /// The figure stands on the OPEN ground (journey, free point): its height follows the world terrain while it moves.
+    /// Otherwise (a tile placement — seat, room floor, huddle on the tile ground) the height goes from the old target's to
+    /// the new one's with the lerp (the browser eases it, Task 30).
+    /// </summary>
+    public bool OnTerrain { get; set; } = true;
+    /// <summary>The standing facing (world direction, y ignored): a seat's marker or the movement target; null = keep.</summary>
+    public Vector3? Face { get; set; }
+    /// <summary>A seat's lean in degrees (<c>setLean(tilt, roll)</c>, Euler YXZ like the browser's root); null = upright.</summary>
+    public (double Tilt, double Roll)? Lean { get; set; }
+    /// <summary>The placement hides the figure (another storey, a closed interior).</summary>
+    public bool Hidden { get; private set; }
 
     public Figure(string name)
     {
@@ -70,37 +119,81 @@ public partial class Figure : Node3D
         Name = ("Fig_" + name.Replace(' ', '_')).ValidateNodeName();
     }
 
-    /// <summary>New server target. The first one snaps; later ones lerp in over <paramref name="duration"/> s.</summary>
-    public void SetTarget(Vector2 to, double duration, bool snap)
+    /// <summary>
+    /// New server target (world x/z + the height the placement gives it). A snap (the first placement, a view change)
+    /// puts the figure there at once; otherwise a MOVED point lerps in over <paramref name="duration"/> s, while the same
+    /// point only takes the new height (a re-lift, a storey re-derive) without walking.
+    /// </summary>
+    public void SetTarget(Vector3 to, double duration, bool snap)
     {
+        var xz = new Vector2(to.X, to.Z);
         if (snap)
         {
-            _from = _to = Shown = to;
+            _from = _to = Shown = xz;
+            _fromY = _toY = to.Y;
             _elapsed = _duration = 1;
             PlannedSpeed = 0;
+        }
+        else if (xz == _to)
+        {
+            if (_elapsed >= _duration) _fromY = to.Y;
+            _toY = to.Y;
         }
         else
         {
             _from = Shown;
-            _to = to;
+            _fromY = Position.Y;
+            _to = xz;
+            _toY = to.Y;
             _elapsed = 0;
             _duration = Math.Max(duration, 1e-3);
             PlannedSpeed = (_to - _from).Length() / _duration;
             var d = _to - _from;
-            if (d.LengthSquared() > 1e-8) Rotation = new Vector3(0, Mathf.Atan2(d.X, d.Y), 0);
+            if (d.LengthSquared() > 1e-8) _walkYaw = Mathf.Atan2(d.X, d.Y);
         }
+        ApplyRotation();
         UpdateClip();
     }
 
-    /// <summary>Advance the lerp; <paramref name="groundAt"/> gives the world height at (x, z).</summary>
+    private float _walkYaw;
+
+    /// <summary>
+    /// The body's rotation: walking = the walking direction; standing = the placement's facing (a seat's marker or the
+    /// movement target, npcs.ts' standing rule) else the last direction; the seat's lean as X (tilt) and Z (roll) in
+    /// Godot's default Euler order YXZ — the browser's <c>rotation.order = 'YXZ'</c>.
+    /// </summary>
+    private void ApplyRotation()
+    {
+        float yaw = _walkYaw;
+        if (!Moving && Face is { } f && f.X * f.X + f.Z * f.Z >= 1e-6f) yaw = _walkYaw = Mathf.Atan2(f.X, f.Z);
+        var lean = Lean ?? (0, 0);
+        Rotation = new Vector3((float)(lean.Tilt * Math.PI / 180), yaw, (float)(lean.Roll * Math.PI / 180));
+    }
+
+    /// <summary>Show or hide the figure for the placement (<c>npc.root.visible = !st.hidden</c>).</summary>
+    public void SetHidden(bool hidden)
+    {
+        Hidden = hidden;
+        Visible = !hidden;
+    }
+
+    /// <summary>
+    /// Advance the lerp; <paramref name="groundAt"/> gives the world height at (x, z) for a figure
+    /// <see cref="OnTerrain"/>, the others go from the old target height to the new one.
+    /// </summary>
     public void Advance(double dt, Func<double, double, double> groundAt)
     {
         bool wasMoving = Moving;
         _elapsed = Math.Min(_elapsed + dt, _duration);
         float t = (float)(_elapsed / _duration);
         Shown = _from.Lerp(_to, t);
-        Position = new Vector3(Shown.X, (float)groundAt(Shown.X, Shown.Y), Shown.Y);
-        if (wasMoving != Moving) UpdateClip();
+        float y = OnTerrain ? (float)groundAt(Shown.X, Shown.Y) : Mathf.Lerp(_fromY, _toY, t);
+        Position = new Vector3(Shown.X, y, Shown.Y);
+        if (wasMoving != Moving)
+        {
+            ApplyRotation();
+            UpdateClip();
+        }
     }
 
     /// <summary>Swap the body. The old one is freed (it owns its duplicated meshes/skeleton).</summary>
@@ -111,6 +204,9 @@ public partial class Figure : Node3D
         Ghost?.Dispose();
         Body?.QueueFree();
         Body = body;
+        Portrait = null;
+        PoolModel = null;
+        PoolHeight = null;
         Ghost = new World.SubmergedGhost(body);
         IsGlb = isGlb;
         Skeleton = skeleton;

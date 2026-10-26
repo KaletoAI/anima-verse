@@ -192,22 +192,27 @@ public class ScenePlacesTests
     [Fact]
     public void ADatumStepCarriesTheWorldPointsAndTheReliftKeepsThemOnTheGround()
     {
-        // The whole field rises by 0.5 and the datum with it (10 → 10.5): stops, landings and seats ride +0.5
-        // (stops 10.6 / 13.6, foot 10.51, head 13.53, m1 10.23, m2 14.0); the re-lift then measures m1 at (97, 48):
+        // The whole field rises by 0.5 and the datum with it (10 → 10.5): stops, landings and PROP seats ride +0.5
+        // (stops 10.6 / 13.6, foot 10.51, head 13.53, m1 10.23); the ROOM marker m2 is not carried (13.5 stays — the
+        // browser re-derives it from its room's floor, FigureStands); the re-lift then measures m1 at (97, 48):
         // g' = 10.2, datum 10.5 → lift −0.3 = what it carries → no delta → no seat moved. The corridor stand is derived
-        // from the new datum: 10.5 + 3.01 = 13.51.
+        // from the new datum: 10.5 + 3.01 = 13.51; the storey-0 one stands on the ground ladder handed in, here
+        // g'(anchor (0, 0) → world (100, 50)) = 10.5.
         var inv = Compose();
         var frame = Frame with { Center = new Vec3(100, 10.5, 50) };
-        bool seats = inv.Relift(frame, 0.5, (x, z) => Ground(x, z) + 0.5);
+        bool seats = inv.Relift(frame, 0.5, (x, z) => Ground(x, z) + 0.5, (x, z) => Ground(x, z) + 0.5);
         Assert.False(seats);
         Assert.Equal(10.6, inv.ElevatorStops[0].Y, 9);
         Assert.Equal(13.6, inv.ElevatorStops[1].Y, 9);
         Assert.Equal(10.51, inv.Stairs[0].Foot.Pos.Y, 9);
         Assert.Equal(13.53, inv.Stairs[0].Head.Pos.Y, 9);
         Assert.Equal(10.23, inv.Markers["Hall"]["m1"].Slots[1].Y, 9);
-        Assert.Equal(14.0, inv.Markers["r-b"]["m2"].Slots[0].Y, 9);
+        Assert.Equal(13.5, inv.Markers["r-b"]["m2"].Slots[0].Y, 9);
         Assert.Equal(-0.3, inv.Markers["r-a"]["m1"].Lift, 9);
         Assert.Equal(13.51, inv.Corridors[0].Stand!.Value.Y, 9);
+        Assert.Equal(new Vec3(100, 10.5, 50), inv.Corridors[1].Stand!.Value);
+        // Without a ground ladder the storey-0 stand stays unknown.
+        inv.DeriveCorridorStands(frame);
         Assert.Null(inv.Corridors[1].Stand);
     }
 
@@ -215,17 +220,18 @@ public class ScenePlacesTests
     public void ATerrainChangeUnderASeatMovesItInPlace()
     {
         // The datum stays (delta 0), the field rises by 0.2 off the pin: m1 at (97, 48) → g'' = 9.9 → lift −0.1, delta
-        // +0.2 → slots 9.73 → 9.93, written into the SAME array a holder keeps; m3 (room marker, carried like a prop marker
-        // here) at (100, 60) → lift 0.2 → 10.4; m2 on storey 1 is not touched (13.5). Returns true.
+        // +0.2 → slots 9.73 → 9.93, written into the SAME array a holder keeps; the room markers m3 and m2 are not
+        // touched here (their heights are derived from the room floor, FigureStands). Returns true.
         var inv = Compose();
         var held = inv.Markers["r-a"]["m1"].Slots;
+        double m3 = inv.Markers["r-x"]["m3"].Slots[0].Y;
         bool seats = inv.Relift(Frame, 0, (x, z) => Ground(x, z) + 0.2);
         Assert.True(seats);
         Assert.Same(held, inv.Markers["r-a"]["m1"].Slots);
         Assert.Equal(9.93, held[0].Y, 9);
         Assert.Equal(9.93, held[1].Y, 9);
         Assert.Equal(-0.1, inv.Markers["r-a"]["m1"].Lift, 9);
-        Assert.Equal(10.4, inv.Markers["r-x"]["m3"].Slots[0].Y, 9);
+        Assert.Equal(m3, inv.Markers["r-x"]["m3"].Slots[0].Y, 9);
         Assert.Equal(13.5, inv.Markers["r-b"]["m2"].Slots[0].Y, 9);
         // A sampler with nothing to say keeps every lift (storeyGroundRelift: NaN → keep).
         Assert.False(inv.Relift(Frame, 0, (x, z) => double.NaN));

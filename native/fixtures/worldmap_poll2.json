@@ -6,7 +6,7 @@
     { "name": "Ada Wren", "location_id": "", "pos": { "x": -40.0, "z": 30.0 }, "pos_origin": null,
       "height_cm": 160, "room_id": "", "activity_animation": "reading", "travel": null, "model_sig": "ada-2",
       "model_rev": "r1", "animation_set": "female", "animation_sets": ["female"] },
-    { "name": "Cleo Marsh", "location_id": "", "pos": { "x": 250.0, "z": -100.0 }, "pos_origin": null,
+    { "name": "Cleo Marsh", "avatar_url": "/characters/Cleo%20Marsh/images/cleo.png", "location_id": "", "pos": { "x": 250.0, "z": -100.0 }, "pos_origin": null,
       "room_id": "", "activity_animation": "",
       "travel": { "target_id": "loc-yard", "waypoints": [[300.0, -200.0], [300.0, -100.0], [200.0, -100.0]],
                   "progress_m": 144.0, "total_m": 200.0, "starts_in_s": null,

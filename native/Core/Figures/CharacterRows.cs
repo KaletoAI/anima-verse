@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using AnimaNative.Overview;
+using AnimaNative.Scatter;
 using AnimaNative.World;
 
 namespace AnimaNative.Figures;
@@ -24,6 +26,18 @@ public sealed record CharacterRow(
 
     /// <summary><c>model_rev</c>: the model's content revision (null = field absent); a change reloads like <c>model_sig</c>.</summary>
     public string? ModelRev { get; init; }
+
+    /// <summary><c>room_id</c>: the room the character is in; "" = the location's ground (AV3D-8).</summary>
+    public string RoomId { get; init; } = "";
+
+    /// <summary><c>place</c>: the place the server seated the character on (id + slot), null = none.</summary>
+    public PlaceRef? Place { get; init; }
+
+    /// <summary><c>movement_target_id</c>: where the character means to go ("" = nowhere) — a standing figure faces it.</summary>
+    public string MovementTargetId { get; init; } = "";
+
+    /// <summary><c>avatar_url</c>: the portrait image a figure without a model shows ("" = none).</summary>
+    public string AvatarUrl { get; init; } = "";
 
     public static List<CharacterRow> ParseList(JsonElement root)
         => Json.Arr(root, "characters")
@@ -53,12 +67,24 @@ public sealed record CharacterRow(
             ? a.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
             : new List<string>();
         string? rev = c.TryGetProperty("model_rev", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
+        PlaceRef? place = null;
+        if (c.TryGetProperty("place", out var pl) && pl.ValueKind == JsonValueKind.Object && Json.Str(pl, "id") is { Length: > 0 } pid)
+        {
+            // slot: a number, or 'pair' (the mean of the slots, PlaceSlots.SlotFor(null)); anything else reads as slot 0.
+            int? slot = pl.TryGetProperty("slot", out var sl) && sl.ValueKind == JsonValueKind.String && sl.GetString() == "pair" ? null
+                : sl.ValueKind == JsonValueKind.Number ? (int)sl.GetDouble() : 0;
+            place = new PlaceRef(pid, slot);
+        }
         return new CharacterRow(Json.Str(c, "name"), Json.Str(c, "location_id"), px, pz,
                                 Json.NumOrNull(c, "height_cm"), sig, travel)
         {
             ActivityAnimation = Json.Str(c, "activity_animation"),
             AnimationSets = sets,
             ModelRev = rev,
+            RoomId = Json.Str(c, "room_id"),
+            Place = place,
+            MovementTargetId = Json.Str(c, "movement_target_id"),
+            AvatarUrl = Json.Str(c, "avatar_url"),
         };
     }
 }
@@ -107,94 +133,109 @@ public sealed record MapPlace(string Id, double X, double Z, double YawDeg, doub
     }
 }
 
-/// <summary>Where a character is drawn on the open map, and which rule said so.</summary>
+/// <summary>A journey point (<c>travellerState</c>): world x/z and the rule ("journey" / "journey-pos").</summary>
 public readonly record struct FigureSpot(double X, double Z, string Rule);
 
 /// <summary>
-/// WHICH characters stand on the map and WHERE — the browser's far view
-/// (client3d/src/main.ts <c>computeNpcPlacements</c> with every detail view
-/// closed, which is the only view the spike has: it draws no interiors).
-/// Pure, so <c>--check</c> derives every case by hand.
+/// WHERE one character is drawn and HOW it gets there — one entry of the browser's <c>computeNpcPlacements</c> (the
+/// avatar's own special cases are E6/E7). <see cref="Pos"/> in world metres; <see cref="Rule"/> = journey, journey-pos,
+/// free, tile (the huddle) or the room branch (seat, pool, corridor, pos, centre); <see cref="OnTerrain"/> = a point on
+/// the open ground (journey, free) whose height follows the world while the figure moves.
+/// </summary>
+public sealed record FigurePlan(string Name, Vec3 Pos, string Rule, bool Snap, bool Hidden, Vec3? Face,
+                                (double Tilt, double Roll)? Lean, bool OnTerrain, string? InRoom = null);
+
+/// <summary>What a location's BUILT tile hands the placement (main.ts <c>residency.get(loc).tile</c> + its lookups).</summary>
+public sealed record LocationPlacement(PlacementTile Tile, bool Near, Func<double, double, double> GroundY,
+                                       Func<string, double, double, double?> RoomStandY);
+
+/// <summary>
+/// WHICH characters stand on the map and WHERE — client3d/src/main.ts <c>computeNpcPlacements</c> without the avatar's
+/// own branches (suppressed journey, waiting for its place: E6/E7):
 ///
-///   1. <b>journey</b> (<c>travellerState</c>): <c>travel</c> with ≥ 2
-///      <c>waypoints</c> AND a <c>progress_m</c> → the point
-///      <c>progress_m</c> metres along the polyline (§ A11, the ONE formula;
-///      progress clamped to [0, total]). A journey whose route is withheld
-///      (fog) or degenerate falls back to <c>pos</c> when there is one.
-///   2. <b>tile</b> (<c>placementOf</c> → tile): the character's
-///      <c>location_id</c> names a PLACED location → the far-view huddle
-///      (<c>slotOffset</c>): characters of that location sorted by name, index
-///      i of n; a building lines them up in front of its south side at
-///      x = (i − (n−1)/2)·2.3, z = width·0.36, an area location stands them on
-///      a 2.6 m ring at angle 2π·i/n; tile-local → world with the pin and
-///      +yaw (<c>tileToWorld</c>). Room and seat placement only exist while an
-///      interior is revealed — never in this client.
-///   3. <b>free</b>: no placed location but a <c>pos</c> → that point
-///      (wilderness, § A1.4).
-///   4. otherwise <b>offmap</b> (not drawn).
+///   1. <b>journey</b> (<c>travellerState</c>): <c>travel</c> with ≥ 2 <c>waypoints</c> AND a <c>progress_m</c> → the
+///      point <c>progress_m</c> metres along the polyline (§ A11, progress clamped to [0, total]); a withheld or
+///      degenerate route falls back to <c>pos</c> ("journey-pos"); the figure stands on the world terrain.
+///   2. <c>placementOf(hasTile, pos)</c> (vector-checked): <b>free</b> = the point on the terrain (a snap when it was
+///      drawn in a room), <b>offmap</b> = not drawn;
+///   3. <b>tile</b>: per location, the room ladder <see cref="NpcPlacement.PlaceAtLocation"/> (seat, pool, corridor,
+///      server pos, centre; else the huddle on the tile ground), with facing, lean, hidden and snap from it.
 ///
-/// Height is the caller's: the world ground at (x, z) (<see cref="WorldHeight.GroundAt"/>).
-/// The avatar is treated like every other character (the browser's embodied
-/// avatar has its own driver; the spike has no avatar control).
+/// <paramref name="shown"/> is the session's <c>shownPlacement</c> map: a traveller or free figure is reset to
+/// {null, false}, a tile figure rewritten whenever its transition is not "stay". Pure, so tests derive it by hand.
 /// </summary>
 public static class FigurePlacement
 {
-    public static Dictionary<string, FigureSpot> Resolve(IReadOnlyList<CharacterRow> rows,
-                                                         IReadOnlyDictionary<string, MapPlace> placed)
+    public static List<FigurePlan> Plan(IReadOnlyList<CharacterRow> rows, Func<string, LocationPlacement?> tileOf,
+                                        Func<double, double, double> terrainY, Dictionary<string, ShownPlacement> shown,
+                                        Func<string, Vec3?> targetCentre)
     {
-        var spots = new Dictionary<string, FigureSpot>();
+        var plans = new List<FigurePlan>();
         var byLoc = new Dictionary<string, List<CharacterRow>>();
+        var order = new List<string>();
         foreach (var c in rows)
         {
-            if (c.Travel is { } tr)
+            if (Journey(c) is { } j)
             {
-                if (tr.Waypoints is { Count: >= 2 } wp && tr.ProgressM is { } prog)
-                {
-                    var (x, z) = PointAtDistance(wp, Math.Clamp(prog, 0, PolylineLength(wp)));
-                    spots[c.Name] = new FigureSpot(x, z, "journey");
-                    continue;
-                }
-                if (c.HasPos)
-                {
-                    spots[c.Name] = new FigureSpot(c.PosX!.Value, c.PosZ!.Value, "journey-pos");
-                    continue;
-                }
-            }
-            if (c.LocationId.Length > 0 && placed.ContainsKey(c.LocationId))
-            {
-                if (!byLoc.TryGetValue(c.LocationId, out var list)) byLoc[c.LocationId] = list = new List<CharacterRow>();
-                list.Add(c);
+                plans.Add(new FigurePlan(c.Name, new Vec3(j.X, terrainY(j.X, j.Z), j.Z), j.Rule, false, false, null, null, true));
+                shown[c.Name] = new ShownPlacement(null, false);
                 continue;
             }
-            if (c.HasPos) spots[c.Name] = new FigureSpot(c.PosX!.Value, c.PosZ!.Value, "free");
-        }
-        foreach (var (locId, chars) in byLoc)
-        {
-            var place = placed[locId];
-            chars.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.InvariantCulture));
-            for (int i = 0; i < chars.Count; i++)
+            var placement = FigureGround.PlacementOf(tileOf(c.LocationId) is not null, c.PosX, c.PosZ);
+            if (placement.Kind == PlacementKind.Free && placement.Pos is { } p)
             {
-                var (lx, lz) = SlotOffset(place, i, chars.Count);
-                var (x, z) = TileToWorld(place, lx, lz);
-                spots[chars[i].Name] = new FigureSpot(x, z, "tile");
+                bool wasInRoom = shown.TryGetValue(c.Name, out var prev) && prev.Room is not null;
+                plans.Add(new FigurePlan(c.Name, new Vec3(p.X, terrainY(p.X, p.Z), p.Z), "free", wasInRoom, false, null, null, true));
+                shown[c.Name] = new ShownPlacement(null, false);
+                continue;
+            }
+            if (placement.Kind == PlacementKind.Offmap) continue;
+            if (!byLoc.TryGetValue(c.LocationId, out var list))
+            {
+                byLoc[c.LocationId] = list = new List<CharacterRow>();
+                order.Add(c.LocationId);
+            }
+            list.Add(c);
+        }
+        foreach (var locId in order)
+        {
+            var loc = tileOf(locId)!;
+            var chars = byLoc[locId];
+            var roomOf = chars.ToDictionary(c => c.Name, c => c.RoomId);
+            var placed = NpcPlacement.PlaceAtLocation(
+                chars.Select(c => new PlacementRow(c.Name, c.HasPos ? new P2(c.PosX!.Value, c.PosZ!.Value) : null, c.Place,
+                                                   c.ActivityAnimation, c.MovementTargetId)).ToList(),
+                loc.Tile,
+                new PlacementContext
+                {
+                    LocId = locId, Near = loc.Near,
+                    RoomOf = name => roomOf.TryGetValue(name, out var r) ? r : null,
+                    ShownOf = name => shown.TryGetValue(name, out var s) ? s : null,
+                    RoomStandY = loc.RoomStandY, GroundY = loc.GroundY, TargetCentre = targetCentre,
+                });
+            foreach (var f in placed)
+            {
+                if (f.Transition != FigureTransition.Stay) shown[f.Row.Name] = new ShownPlacement(f.InRoom, f.InteriorShown);
+                plans.Add(new FigurePlan(f.Row.Name, f.Pos, f.Branch == "huddle" ? "tile" : f.Branch,
+                                         f.Transition == FigureTransition.Snap, f.Hidden, f.Face, f.Lean, false, f.InRoom));
             }
         }
-        return spots;
+        return plans;
     }
 
-    /// <summary><c>slotOffset</c> (main.ts): the row in front of a building, the ring on an open place.</summary>
-    public static (double X, double Z) SlotOffset(MapPlace place, int index, int count)
+    /// <summary>
+    /// <c>travellerState</c>: the point <c>progress_m</c> along ≥ 2 waypoints ("journey"), else — a withheld or
+    /// degenerate route — the row's own <c>pos</c> ("journey-pos"); null when the row is not travelling or has no point.
+    /// </summary>
+    public static FigureSpot? Journey(CharacterRow c)
     {
-        if (place.IsBuilding) return ((index - (count - 1) / 2.0) * 2.3, place.Width * 0.36);
-        double angle = index / (double)Math.Max(count, 1) * Math.PI * 2;
-        return (Math.Cos(angle) * 2.6, Math.Sin(angle) * 2.6);
-    }
-
-    /// <summary><c>tileToWorld</c> (tiles.ts): turn by +yaw, then add the pin (§ A1.1).</summary>
-    public static (double X, double Z) TileToWorld(MapPlace place, double lx, double lz)
-    {
-        double yaw = place.YawDeg * Math.PI / 180.0, c = Math.Cos(yaw), s = Math.Sin(yaw);
-        return (place.X + lx * c + lz * s, place.Z - lx * s + lz * c);
+        if (c.Travel is not { } tr) return null;
+        if (tr.Waypoints is { Count: >= 2 } wp && tr.ProgressM is { } prog)
+        {
+            var (x, z) = PointAtDistance(wp, Math.Clamp(prog, 0, PolylineLength(wp)));
+            return new FigureSpot(x, z, "journey");
+        }
+        return c.HasPos ? new FigureSpot(c.PosX!.Value, c.PosZ!.Value, "journey-pos") : null;
     }
 
     public static double PolylineLength(IReadOnlyList<(double X, double Z)> wp)

@@ -34,6 +34,7 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `s3c/` | Task S3c: a second, hand-written world (avatar, open/closed/far/gone locations, world props, a wet tile) — files missing there (`heightfield.json`, the ground files) are read from this directory; see "S3c world" |
 | `storeys/` | Task 16: a third, hand-written world (a tower with a cellar, two storeys above and an always-visible terrace; a pit with a ground model over a basement) for the storey switch at runtime — the ground files come from this directory; see "Storeys world" |
 | `fidelity/` | Task 17: a fourth, hand-written world (a plan hull with cutouts and padding, a room clip, two depth cuts on a turned location, a shell area, a changed scene for the sweep) — the ground files come from this directory; see "Fidelity world" |
+| `placement/` | Task 29: a hand-written world for the room placement (an inn with a hall, a bedroom and a loft over it, a storey corridor, a bench marker, a bed marker, a stool, a table and a cot; a closed shed) and the fallback pool (served from the repository's `static/client3d/models/`) — the ground files come from this directory; see "Placement world" |
 | `props/` | Task 18: a fifth, hand-written world (8 lamps + a world-prop lantern, a picture frame with a picture and a glass slot, three mirror panes, a door prop with a leaf, rooms with ambience, a corridor, a cellar storey) — the ground files come from this directory; see "Props world" |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
@@ -188,10 +189,13 @@ tread and the stringer + the level-1 plate (its storey's slab) = 9. With the hou
 |---|---|---|---|
 | Ada Wren | `location_id ""`, `pos` (−50, 30), `height_cm` 160, `model_sig` `ada-1` | GLB, rig `mixamo`, not `normalized` | **free** (wilderness) |
 | Bram Holt | `location_id` `loc-house`, `room_id` set, `pos` (63, 127), `height_cm` 180 | `format` `fbx`, rig `generic`, `texture_url` | **tile** (far-view huddle) |
-| Cleo Marsh | `location_id ""`, `travel` with waypoints, no `height_cm`, no `model_sig` | `null` = 404 | **journey** |
+| Cleo Marsh | `location_id ""`, `travel` with waypoints, no `height_cm`, no `model_sig`, `avatar_url` `/characters/Cleo%20Marsh/images/cleo.png` | `null` = 404 | **journey** |
 
-→ **figures = 3, glb_figures = 1, placeholders = 2** (FBX → capsule, 404 → capsule).
-The FBX file is never downloaded (the check asserts no byte request for Bram).
+→ **figures = 3, glb_figures = 1, placeholders = 2** (FBX → capsule; 404 → the fallback pool, whose manifest
+`/static/client3d/models/manifest.json` this fixture does not serve (404) → **pool failed → the portrait**, Task 29).
+The FBX file is never downloaded (the check asserts no byte request for Bram). Cleo's `avatar_url` is a character image
+(`/characters/{name}/images/{file}`), so it is asked for as the cut-out `…/cleo.png?transparent=1`
+(`transparentPortraitUrl`), answered with `props/poster.png` (2 × 2 PNG) → the picture replaces the initials "CM".
 
 **Ada** stands on her own point (no placed location): (−50, 30). Tile (−1, 0) is not
 loaded → overview: fx = (−50+256)/256 = 0.8046875 (i = 0, tx = 0.8046875),
@@ -199,12 +203,13 @@ fz = (30+256)/256 = 1.1171875 (j = 1, tz = 0.1171875);
 north = 0·(1−tx) + 4·tx = 3.21875, south = 0 + 8·tx = 6.4375,
 y = 3.21875·0.8828125 + 6.4375·0.1171875 = **3.595947265625** → (−50, 3.595947265625, 30).
 
-**Bram** is in `loc-house` (placed, no `map3d.area_model` → building), so the browser's
-far view puts him in the row in front of the building, whatever `pos`/`room_id` say:
-one character of one → x = (0 − 0)·2.3 = 0, z = width·0.36 with width = bounding box of
+**Bram** is in `loc-house` (placed, no `map3d.area_model` → building, a mounted tile). His `room_id` names no room
+the house scene gives a floor (no `floor_plan` entry → no centre), so the room ladder puts him in the huddle and does
+not hide him: one character of one → x = (0 − 0)·2.3 = 0, z = width·0.36 with width = bounding box of
 the boundary ±6 = 12 → z = 4.32; yaw 0 → world (64 + 0, 128 + 4.32) = (64, 132.32).
-That lies in the loaded tile (0, 0): h = 2·(64/64) + 132.32/64 = 2 + 2.0675 = **4.0675**
-(the tile is linear in i and j, so bilinear = linear) → (64, 4.0675, 132.32).
+Height = the TILE ground ladder (Task 29, `tileGroundY`): no lattice, no declared floor, no plate → the datum 4, against
+the world in the loaded tile (0, 0): h = 2·(64/64) + 132.32/64 = 2 + 2.0675 = 4.0675 (the tile is linear in i and j,
+so bilinear = linear) → the higher one, **4.0675** → (64, 4.0675, 132.32).
 
 **Cleo** walks the polyline (300, −200) → (300, −100) → (200, −100) (100 m + 100 m);
 `progress_m` 137 = 100 + 37 → 37 m along the second leg: (300 − 37, −100) = (263, −100).
@@ -216,8 +221,8 @@ y = 8·0.609375 = **4.875** → (263, 4.875, −100).
 min y −1.8e−7; Blender's `measured.dims_m` z = 1.74), not normalised in the fixture
 answer → scale = 1.60 / 1.74 → measured body height **1.60**. (The real server marks this
 file `normalized` — its sidecar lists the `normalize` step — and would draw it at 1.74;
-the fixture says `false` to exercise the scale rule.) Bram's capsule = 180 cm → **1.80**,
-Cleo has no `height_cm` → the browser default **1.70**.
+the fixture says `false` to exercise the scale rule.) Bram's capsule = 180 cm → **1.80**.
+Cleo is a portrait: no body height, her tag anchors at `tagAnchorY(null)` = −0.15 m (below the sprite).
 
 ### Clips (Task 27 poses, Task 28 the whole library)
 
@@ -340,15 +345,16 @@ low edition (one download of the `tier=low` URL, no model3d request — the tier
 back to full and the last low are cache swaps (no download): the full URL stays at 1 download, the low at 1. The
 low bake has the same 52 joints → 212 bound tracks as well.
 
-### Placement rule on its own (`CheckPlacementRule`)
+### Placement orchestration on its own (`CheckPlacementRule`, `FigurePlacement.Plan`)
 
-A building `h` at (10, 20), yaw 90°, width 10 with Amy and Zed (sorted: Amy i = 0,
-Zed i = 1 of 2): local x = ∓1.15, z = 3.6; world = (10 + lz·sin 90°, 20 − lx·sin 90°)
-→ Amy (13.6, 21.15), Zed (13.6, 18.85). An area place `m` at (−5, 5) with one character:
-ring angle 0 → (−2.4, 5) (its own `pos` is ignored — the tile wins). A traveller with a
-withheld route (`waypoints` null) but a `pos` → its pos; a one-point route without `pos`
-and a row with neither location nor `pos` → off the map; `progress_m` 99 on a 5 m line →
-the end point (3, 4).
+A hand tile `h`: centre (10, 0, 20), yaw 90° (tileToWorld(lx, lz) = (10 + lz, ·, 20 − lx)), width 10, a building,
+CLOSED (fade 0), room "hall" with a centre; tile ground 0.5, terrain 0.25 everywhere. Amy and Zed on its ground, Hal in
+"hall" → sorted Amy, Hal, Zed (i 0..2 of 3): x = (i − 1)·2.3, z = 3.6 → (13.6, 0.5, 22.3), (13.6, 0.5, 20),
+(13.6, 0.5, 17.7); Hal hidden (closed interior), the others not; all three snap (first placement) and their shown
+placement becomes {null, false}. A traveller with a withheld route (`waypoints` null) but a `pos` → its pos on the
+terrain (7, 0.25, 8, "journey-pos"); a one-point route without `pos` and a row with neither location nor `pos` → off
+the map; `progress_m` 99 on a 5 m line → the end point (3, 0.25, 4); Wil in the wilderness (5, 6) whose last placement
+was in a room → "free", a SNAP, shown reset to {null, false}.
 
 ### Importer cross-check against three (`rest_reference.json`)
 
@@ -780,6 +786,70 @@ wall on its storey (fade > 0.03); a room plate solid on the displayed storey, it
 - **Switch input** (1600 × 900, camera on the anchor at 20 m → the box centred at (800, 450) ± 1 px): a left click
   on `1.` → storey 1, the camera's click counter stays 0; a right-drag starting on `G` turns nothing; a click at
   (200, 800) → the camera's click (1).
+
+## Placement world (`placement/`, Task 29)
+
+`Check/PlacementCheck.cs`, `--check placement`. Ground from `fixtures/` (tile (0, 0): **g(x, z) = x/32 + z/64**). Built
+with `--goto=Inn`; the avatar Tess Vale is in the inn → **loc-inn near, OPEN, storey 0**; loc-shed at (100, 160) →
+**near**, closed. The check snaps the inn's fade to 1, the shed's to 0.
+
+**Inn** (`scene_loc-inn.json`): pin (64, 128), yaw 90° → tileToWorld(lx, lz) = (64 + lz, ·, 128 − lx), worldToTile(x, z) =
+(128 − z, x − 64); datum = g(64, 128) = 2 + 2 = **4**; boundary ±6 × ±4 → width 12, huddle z = 4.32. Rooms: `r-hall`
+(storey 0, x −6…0), `r-bed` (0, x 0…6), `r-loft` (1, all; its plate top 3.02), storey-1 corridor `__floor__1` (anchor
+(3, 3), on the storey's own plate, top 3.0). No building model → `modelWalkY` none → plate ceiling 1.2 → the storey-1
+plates are out of reach of the ground ladder.
+
+Stands (`DeriveStands`, every derivation through `roomSpotsOf`):
+- hall: centroid (−3, 0) → world (64, 131), floor = terrain g(64, 131) = 2 + 2.046875 = 4.046875 → centre
+  **(64, 4.056875, 131)**; bedroom: centroid (3, 0) → (64, 125), g = 3.953125 → **(64, 3.963125, 125)**; loft: declared
+  3.02 (its plate) → 4 + 3.02 = 7.02 at its centroid (0, 0) → **(64, 7.03, 128)**; corridor: 4 + 3.0 + 0.01 at
+  tileToWorld(3, 3) → **(67, 7.01, 125)**.
+- props are placeholders (bottom centre at the anchor, w along tile x, d along tile z, lift = g(anchor) − 4; tile x →
+  world −z, tile z → world +x): stool (−4, 2) → world (66, 132), lift 0.125, top 4.575, over the hall floor
+  4.575 − 4.046875 = 0.528 → **sit** (0.4 × 0.4) at **(66, 4.585, 132)**; table (−2, −2) → (62, 130), lift −0.03125,
+  top 4.86875, over 0.82 → nothing; cot (3, 3) → (67, 125), lift 0.046875, top 4.546875, over the bedroom floor 0.59,
+  footprint 2.0 × 0.9 → **lie** at **(67, 4.556875, 125)**.
+- bench1 (ROOM marker of the hall, slots (−3, ∓1), y_world 0.45, root_offset 0.4, facing 90, tilt 5): re-derived height
+  = base floor at the mean slot (−3, 0) → g(64, 131) 4.046875 − 0.4 + 0.45 = **4.096875**; bed1 (PROP marker, slot (3, 0),
+  y_world 0.55, facing 180): composed 4 + 0.55 + lift at its anchor (g(64, 125) − 4 = −0.046875) = **4.503125**.
+
+P1 — storey 0, open (rows sorted Ada, Bea, Cy, Dov, Eli, Fay, Gus, Ivo, Tess = i 0…8 at the inn):
+
+| figure | room / row | branch | world point | facing / lean | shown |
+|---|---|---|---|---|---|
+| Ada Ash | hall, place bench1 slot 1, sit | seat | slot (−3, 1) → **(65, 4.096875, 131)** | 90° → tile (1, 0) → world (0, −1): yaw **π**; lean **5°**, 0 | yes |
+| Bea Birch | bedroom, place bed1, lie | seat | **(64, 4.503125, 125)** | 180° → tile (0, −1) → world (−1, 0): yaw **−π/2** | yes |
+| Cy Cole | bedroom, lie-down (family lie) | pool | lie[1 mod 1] = the cot **(67, 4.556875, 125)** | — | yes |
+| Ivo Isle | hall, sit | pool | sit[2 mod 1] = the stool **(66, 4.585, 132)** (hall mates Ada 0, Dov 1, Ivo 2, Tess 3) | — | yes |
+| Dov Dunn | hall, pos (61, 131) | pos | local (−3, −3); g(61, 131) = 1.90625 + 2.046875 + 0.01 → **(61, 3.963125, 131)** | — | yes |
+| Tess Vale | hall, pos (63, 129) | pos | g(63, 129) = 1.96875 + 2.015625 + 0.01 → **(63, 3.994375, 129)** | — | yes |
+| Eli Elm | loft, no pos | centre | **(64, 7.03, 128)** | — | **hidden** (storey 1) |
+| Fay Fern | `__floor__1` | corridor | **(67, 7.01, 125)** | — | **hidden** (storey 1) |
+| Gus Gale | ground, target loc-shed | tile (huddle) | i 6: x = (6 − 4)·2.3 = 4.6 → **(68.32, ·, 123.4)**, y = standY(4, g = 2.135 + 1.928125) = **4.063125** | towards the shed pin: (31.68, 0, 36.6) → yaw atan2(31.68, 36.6) | yes |
+
+Shed (`scene_loc-shed.json`, pin (100, 160), yaw 0, datum g = 3.125 + 2.5 = **5.625**, width 6 → z 2.16, closed): Hal
+(room `s-room`, which has a centre) and Ivy (ground) sorted i 0, 1 → x ∓1.15 → Hal **(98.85, 5.625, 162.16)** — the TILE
+ladder: the datum 5.625 beats the world's g = 3.0890625 + 2.53375 = 5.6228125 (drift D6: the world alone would sink him
+2.2 mm) — **hidden** (closed interior); Ivy **(101.15, 5.6946875, 162.16)** (the world 3.1609375 + 2.53375 is higher),
+visible. Kai Kerr in the wilderness (20, 40): **free**, g = 0.625 + 0.625 = **1.25**. Counts: 12 figures, **hidden 3**
+(Eli, Fay, Hal), **seated 4** (seat + pool), offmap 0.
+
+P2 — storey 1: Eli, Fay and Gus visible (Gus is in no room); Ada, Bea, Cy, Dov, Ivo, Tess hidden. Back to storey 0:
+Eli hidden again, Ada visible.
+
+P3 — the inn closed (fade 0): every room figure is huddled AND hidden, a snap (a view change): Ada i 0, x = −9.2 →
+**(68.32, 4.27875, 137.2)** (g = 2.135 + 2.14375 above the datum); Tess i 8, x = 9.2 → (68.32, ·, 118.8), g = 3.99125 <
+datum → **4.0** (D6 again); no lean any more. Gus stays where he was (stay). Visible at the inn: Gus only. Opened again:
+Ada snaps back onto the bench, Cy onto the cot.
+
+P4 — the fallback pool: `model3d.json` answers null for everyone → the manifest (`repo:static/client3d/models/…`):
+Soldier, Xbot, Robot (T3mia is assign-only and assigned to nobody); the library (this directory's clip list, 5
+importable clips) fits Soldier and Xbot (mixamo bones), not the Robot (its own `Foot.L` … skeleton) → the random pool is
+[Soldier, Xbot]; `seededRandom('model:' + name)` (scatter.ts, FNV-1a + the murmur finaliser), first draw ·2: Ada Ash
+0.4481 → **Soldier**, Bea Birch 0.6390 → **Xbot**, Fay Fern 0.5009 → **Xbot**, Kai Kerr 0.6467 → **Xbot**, Tess Vale
+0.1066 → **Soldier** (computed with the browser's function in node, 2026-10-26). Height = manifest default **1.7**; the
+Soldier's own takes `Idle`, `Run`, `TPose`, `Walk` come first as `idle`, `run`, `tpose`, `walk`, the library adds
+`stand-relaxed` and the rest; the tag anchors on 1.7.
 
 ## Fidelity world (`fidelity/`, Task 17)
 

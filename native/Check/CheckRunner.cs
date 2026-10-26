@@ -52,7 +52,7 @@ public static class CheckRunner
     private static readonly Vector3 ExpAda = new(-50f, 3.595947265625f, 30f);     // free, overview
     private static readonly Vector3 ExpBram = new(64f, 4.0675f, 132.32f);         // house huddle, fine tile
     private static readonly Vector3 ExpCleo = new(263f, 4.875f, -100f);           // journey, overview
-    private const float ExpAdaHeight = 1.60f, ExpBramHeight = 1.80f, ExpCleoHeight = 1.70f;
+    private const float ExpAdaHeight = 1.60f, ExpBramHeight = 1.80f;
     private static readonly Vector3 ExpAdaHalfway = new(-45f, 3.68316650390625f, 30f);
     private static readonly Vector3 ExpCleoHalfway = new(259.5f, 4.875f, -100f);
     private static readonly Vector3 ExpAdaEnd = new(-40f, 3.7705078125f, 30f);
@@ -140,6 +140,12 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "placement")
+            {
+                var alone = await PlacementCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "storeys")
             {
                 var alone = await StoreysCheck.RunAsync(host, dir);
@@ -169,7 +175,7 @@ public static class CheckRunner
                 var b = new WorldBuilder(src, line => GD.Print("[check] " + line), strict: true);
                 await b.BuildAsync(w, Goto, new SyncCheck.BuildProbe().Hooks(src));
                 CheckPlacementRule();
-                var alone = await CheckFigures(w, src, b.Height!);
+                var alone = await CheckFigures(w, src, b);
                 b.Models?.FreeAll();
                 w.QueueFree();
                 GD.Print($"CHECK ok {alone}");
@@ -234,7 +240,7 @@ public static class CheckRunner
                    "house drew its recipe despite the model");
 
             CheckPlacementRule();
-            var figures = await CheckFigures(world, source, builder.Height!);
+            var figures = await CheckFigures(world, source, builder);
             var bench = BenchMathCheck.Run(source);
             var scatter = await ScatterCheck.RunAsync(world, source, builder.Height!, dir);
             var hud = HudCheck.Run(source);
@@ -247,6 +253,7 @@ public static class CheckRunner
             var sync = await SyncCheck.RunAsync(source, probe, dir);
             var verify = await VerifyCheck.RunAsync(host, dir);
             var storeys = await StoreysCheck.RunAsync(host, dir);
+            var placement = await PlacementCheck.RunAsync(host, dir);
             var fidelity = await FidelityCheck.RunAsync(host, dir);
             var props = await PropsCheck.RunAsync(host, dir);
             var light = LightCheck.Run(host, dir);
@@ -261,7 +268,7 @@ public static class CheckRunner
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;
@@ -375,10 +382,12 @@ public static class CheckRunner
     /// along its route; then the model revision, the clip choice per kind and the distance tiers.
     /// Every expectation is derived in native/fixtures/README.md ("Clips", "Clip choice", "Tiers").
     /// </summary>
-    private static async Task<string> CheckFigures(Node3D world, FixtureSource source, WorldHeight height)
+    private static async Task<string> CheckFigures(Node3D world, FixtureSource source, WorldBuilder builder)
     {
+        var height = builder.Height!;
         var mgr = new FigureManager(source, height, line => GD.Print("[check] " + line), strict: true)
         {
+            Slots = () => builder.Slots,
             AutoTick = false, PollSeconds = 5.0,   // the README derivation lerps over 5 s
             FocusTarget = () => new Vector3(263, 0, -100),   // Cleo's journey point: the model queue serves her first
         };
@@ -439,7 +448,13 @@ public static class CheckRunner
         Expect("Ada is GLB", ada.IsGlb && !bram.IsGlb && !cleo.IsGlb, "body kinds");
         Near("Ada height", ModelPlacement.Measure(ada.Body!, Transform3D.Identity).Size.Y, ExpAdaHeight);
         Near("Bram height", ModelPlacement.Measure(bram.Body!, Transform3D.Identity).Size.Y, ExpBramHeight);
-        Near("Cleo height", ModelPlacement.Measure(cleo.Body!, Transform3D.Identity).Size.Y, ExpCleoHeight);
+        // Cleo has no model and the fixture serves no fallback pool (its manifest is a 404): the portrait stands in
+        // (npcs.ts' sprite branch) — no tag height; her avatar_url is a character image, so it is asked for as a cut-out
+        // (?transparent=1, transparentPortraitUrl) and drawn instead of the initials "CM".
+        Expect("Cleo portrait", cleo.Portrait is { HasPicture: true } && cleo.TagHeight is null && mgr.PoolState == "failed"
+                                && st.Portraits == 1 && st.PoolFigures == 0, $"portrait {cleo.Portrait is not null} pool {mgr.PoolState}");
+        Expect("Cleo initials gone with the picture", cleo.Portrait!.Initials.Text == "CM" && !cleo.Portrait.Initials.Visible
+               && source.ByteRequests.Contains("/characters/Cleo%20Marsh/images/cleo.png?transparent=1"), cleo.Portrait.Initials.Text);
         Eq("Ada metallic materials (forced to 0)", FigureManager.MetallicMaterials(ada.Body!), 0);
         Expect("FBX model not fetched", !source.ByteRequests.Any(u => u.Contains("Bram", StringComparison.Ordinal)),
                string.Join(";", source.ByteRequests));
@@ -744,32 +759,49 @@ public static class CheckRunner
         finally { scene.Free(); }
     }
 
-    /// <summary>The far-view placement rule on its own: offmap, fogged route, huddle rows, ring, yaw.</summary>
+    /// <summary>
+    /// The placement orchestration on its own (<see cref="FigurePlacement.Plan"/>, main.ts <c>computeNpcPlacements</c>):
+    /// offmap, the fogged route, the clamped route, a free point that leaves a room (snap), and a CLOSED building whose
+    /// room figure hides while the rest huddle. A hand tile "h": centre (10, 0, 20), yaw 90° → tileToWorld(lx, lz) =
+    /// (10 + lz, ·, 20 − lx), width 10, fade 0, room "hall" with a centre; tile ground 0.5, terrain 0.25 everywhere.
+    /// </summary>
     private static void CheckPlacementRule()
     {
-        var house = new MapPlace("h", 10, 20, 90, 10, IsBuilding: true);
-        var meadow = new MapPlace("m", -5, 5, 0, 30, IsBuilding: false);
-        var placed = new Dictionary<string, MapPlace> { ["h"] = house, ["m"] = meadow };
+        var tile = new PlacementTile
+        {
+            Frame = new TileFrame(new Overview.Vec3(10, 0, 20), Math.PI / 2), Width = 10, IsBuilding = true,
+            RoomCenters = new Dictionary<string, Overview.Vec3> { ["hall"] = new(12, 0.3, 21) },
+        };
+        LocationPlacement? TileOf(string id) => id == "h" ? new LocationPlacement(tile, true, (_, _) => 0.5, (_, _, _) => null) : null;
         var rows = new List<CharacterRow>
         {
             new("Zed", "h", null, null, null, null, null),
             new("Amy", "h", null, null, null, null, null),
-            new("Mo", "m", 1, 1, null, null, null),
+            new("Hal", "h", null, null, null, null, null) { RoomId = "hall" },
             new("Nob", "", null, null, null, null, null),                                  // offmap
             new("Fog", "", 7, 8, null, null, new TravelInfo(null, null)),                // withheld route → pos
             new("Dot", "", null, null, null, null, new TravelInfo(new() { (1, 1) }, 0)),  // degenerate, no pos → offmap
             new("Run", "", 0, 0, null, null, new TravelInfo(new() { (0, 0), (3, 4) }, 99)), // clamped to the end
+            new("Wil", "", 5, 6, null, null, null),                                       // wilderness, came out of a room
         };
-        var spots = FigurePlacement.Resolve(rows, placed);
-        Expect("offmap", !spots.ContainsKey("Nob") && !spots.ContainsKey("Dot"), string.Join(",", spots.Keys));
-        Expect("fog → pos", spots["Fog"] is { X: 7, Z: 8, Rule: "journey-pos" }, $"{spots["Fog"]}");
-        Expect("route end", spots["Run"] is { X: 3, Z: 4, Rule: "journey" }, $"{spots["Run"]}");
-        // House, yaw 90°: Amy (i=0 of 2) local (−1.15, 3.6) → world (10 + 3.6, 20 + 1.15); Zed (1.15, 3.6) → (13.6, 18.85).
-        NearXZ("Amy huddle", spots["Amy"], 13.6, 21.15);
-        NearXZ("Zed huddle", spots["Zed"], 13.6, 18.85);
-        // Meadow ring, one character, angle 0 → (−5 + 2.6, 5); its own pos is ignored (tile wins).
-        NearXZ("Mo ring", spots["Mo"], -2.4, 5);
+        var shown = new Dictionary<string, ShownPlacement> { ["Wil"] = new("hall", true) };
+        var plans = FigurePlacement.Plan(rows, TileOf, (_, _) => 0.25, shown, _ => null).ToDictionary(p => p.Name);
+        Expect("offmap", !plans.ContainsKey("Nob") && !plans.ContainsKey("Dot"), string.Join(",", plans.Keys));
+        Expect("fog → pos", plans["Fog"] is { Rule: "journey-pos", OnTerrain: true } && plans["Fog"].Pos == new Overview.Vec3(7, 0.25, 8), $"{plans["Fog"]}");
+        Expect("route end", plans["Run"] is { Rule: "journey" } && plans["Run"].Pos == new Overview.Vec3(3, 0.25, 4), $"{plans["Run"]}");
+        Expect("free out of a room snaps", plans["Wil"] is { Rule: "free", Snap: true } && shown["Wil"] == new ShownPlacement(null, false), $"{plans["Wil"]}");
+        // Sorted Amy, Hal, Zed (i 0..2 of 3): x = (i − 1)·2.3, z = 3.6 → world (13.6, 0.5, 20 − x).
+        NearPlan("Amy huddle", plans["Amy"], 13.6, 0.5, 22.3);
+        NearPlan("Hal huddle", plans["Hal"], 13.6, 0.5, 20);
+        NearPlan("Zed huddle", plans["Zed"], 13.6, 0.5, 17.7);
+        Expect("closed interior hides the room figure", plans["Hal"].Hidden && !plans["Amy"].Hidden && !plans["Zed"].Hidden
+               && plans["Amy"] is { Rule: "tile", Snap: true }, "hidden flags");
+        Expect("shown placement written", shown["Amy"] == new ShownPlacement(null, false) && shown["Hal"] == new ShownPlacement(null, false), "shown");
     }
+
+    private static void NearPlan(string what, FigurePlan got, double x, double y, double z)
+        => Expect(what, Math.Abs(got.Pos.X - x) < 1e-6 && Math.Abs(got.Pos.Y - y) < 1e-6 && Math.Abs(got.Pos.Z - z) < 1e-6,
+                  $"got {got.Pos}, expected ({x}, {y}, {z})");
 
     private static JsonDocument Load(string file)
         => JsonDocument.Parse(File.ReadAllBytes(Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures", file)));
@@ -777,8 +809,6 @@ public static class CheckRunner
     private static void NearV(string what, Vector3 got, Vector3 want, float eps = 1e-3f)
         => Expect(what, got.DistanceTo(want) <= eps, $"got {got}, expected {want}");
 
-    private static void NearXZ(string what, FigureSpot got, double x, double z)
-        => Expect(what, Math.Abs(got.X - x) < 1e-6 && Math.Abs(got.Z - z) < 1e-6, $"got ({got.X}, {got.Z}), expected ({x}, {z})");
 
     /// <summary>The top face of the yard's holed plate as the native builder makes it (<see cref="RecipeGeometry.Plate"/>).</summary>
     private static float PlateArea(string dir)

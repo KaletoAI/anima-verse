@@ -130,6 +130,8 @@ public sealed partial class WorldBuilder
         {
             slot.Fade.Collect(slot.Group);
             slot.MeshVersion++;
+            // setSceneModelTier re-derives the rooms: the furniture boxes (sit / lie surfaces) are the new meshes'.
+            DeriveStands(slot);
             _log($"location {slot.Loc.Id} ({slot.Loc.Name}): {(building ? "building" : "interior")} models → {tier} ({swapped} swapped)");
         }
         return swapped;
@@ -309,6 +311,8 @@ public sealed partial class WorldBuilder
         }
         if (moved || relifted > 0) slot.MeshVersion++;
         bool seats = slot.Places.Relift(frame, moved ? step.Delta : 0, Height.GroundAt);
+        // reliftScene's tail: the room floors, stands, surfaces and ROOM markers re-derived, the corridors on the ground.
+        DeriveStands(slot);
         return (moved, relifted, seats);
     }
 
