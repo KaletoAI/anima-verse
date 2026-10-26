@@ -35,10 +35,11 @@ namespace AnimaNative.Check;
 ///   B4 Cleo's PORTRAIT (no model, no pool in this fixture — Task 29; feet (263, 4.875, −100), sprite 2.6 m from
 ///      0.15 − 0.052 to 0.15 + 2.548 over the feet): along +z at 0.85 m from z −110 → the quad through the axis facing the
 ///      ray, z −100 → 10 m.
-///   B5 Bram's capsule (1.80 m, feet (64, 4.0675, 132.32)) from straight above (y 50): the top pole at
-///      4.0675 + 1.8 = 5.8675 → 44.1325 m.
-///   B6 a ray along −z at Bram's y + 1.0 from z 150: Bram at 150 − (132.32 + 0.28) = 17.4 m, in front of the house
-///      (the house box ends at z ≤ 132); the chain gives the figure and keeps the panel.
+///   B5 Bram, the fixture animal (fixtures/animals/animal_takes.fbx, 0.5 m in the file, scaled 3.6 to his 1.80 m, feet
+///      (64, 4.0675, 132.32), yaw 0) from straight above (y 50): the body's flat top at 4.0675 + 1.8 = 5.8675 → 44.1325 m.
+///   B6 a ray along −z through his body (y + 1.5; the body box spans 0.3…0.5 of the file's height = 1.08…1.80 m, the
+///      file's z −0.25…0.35 after the bind centring): Bram at 150 − (132.32 + 0.35 · 3.6) = 16.42 m, in front of the
+///      house (the house box ends at z ≤ 132); the chain gives the figure and keeps the panel.
 ///   C  the camera's own ray: target (−50, ya + 1.0, 30) at 6 m → the centre pixel hits Ada at ≤ 6 m; 300 px to
 ///      the right is 300 · 6 · 2·tan(22.5°)/900 = 1.657 m off the axis → nothing.
 ///   E  the info panel of loc-house: Bram is there (room room-hall), no rooms in the row, no events, no avatar
@@ -126,10 +127,10 @@ public static class PickCheck
             var b5 = mgr.CharacterAt(V(64, 50, 132.32), down);
             Expect("B5 Bram", b5?.Name == "Bram Holt", $"{b5}");
             Near("B5 distance", b5!.Value.Distance, 50 - (BramY + 1.8), 1e-3);
-            var b6o = V(64, BramY + 1.0, 150);
+            var b6o = V(64, BramY + 1.5, 150);
             var b6 = mgr.CharacterAt(b6o, V(0, 0, -1));
             Expect("B6 Bram", b6?.Name == "Bram Holt", $"{b6}");
-            Near("B6 distance", b6!.Value.Distance, 17.4, 1e-3);
+            Near("B6 distance", b6!.Value.Distance, 150 - (132.32 + 0.35 * 3.6), 1e-3);
             var b6loc = picking.Pick(b6o, V(0, 0, -1));
             Expect("B6 the house behind him", b6loc is null || (b6loc.Value.Id == "loc-house" && b6loc.Value.Distance > b6.Value.Distance),
                    $"{b6loc}");

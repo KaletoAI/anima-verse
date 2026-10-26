@@ -14,8 +14,8 @@ namespace AnimaNative.Figures;
 ///
 ///   • TEXT per poll — the name with the travel prefix (<see cref="OverviewLabels.TagName"/>), the activity
 ///     (<c>activity || ''</c>, an empty line takes no room), the avatar's name in gold.
-///   • ANCHOR — the figure's root + <see cref="OverviewLabels.TagAnchorY"/> of its height (this client draws every
-///     figure with a body — a model or the capsule placeholder — so there is no portrait case).
+///   • ANCHOR — the figure's root + <see cref="OverviewLabels.TagAnchorY"/> of <see cref="Figure.TagHeight"/> (a model's
+///     height; a portrait has none, so its tag sits below the sprite).
 ///   • VISIBILITY per frame — <see cref="OverviewLabels.TagVisible"/> with the camera's eased distance; a hidden
 ///     figure hides its tag; there is no first-person body in this client yet (E7).
 ///   • BUBBLE — <c>say(name, text)</c>: unknown names are ignored, a new line replaces the old one, the text is

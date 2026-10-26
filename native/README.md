@@ -43,9 +43,12 @@ What it draws after login:
   3.4 m/s, running beyond 6 m, through doors, stair landings and lift stops, swimming where the ground says so —
   standing, it plays `standingClipFor(activity_animation)`: every figure plays its activity (read, cook, sit …). Model: `/characters/{name}/model3d` → the humanoid GLB
   (Meshopt-decoded), scaled to `height_cm`, metalness forced to 0; every load is a job of a width-3 queue (the
-  avatar first, then the figure nearest the camera target), a transient failure retries after 30 s; FBX (generic
-  rig) is a capsule placeholder (Task 34); "no model" is the browser's fallback pool model, else the portrait
-  sprite; a changed `model_sig` or `model_rev` reloads it; distance tiers
+  avatar first, then the figure nearest the camera target), a transient failure retries after 30 s; an FBX
+  (animals, rig `generic`) comes through Godot's `FBXDocument`, dressed in its separate `texture_url` (rows flipped
+  once: Godot's import turns v into 1 − v, the browser samples with `flipY = false`) and plays its own takes with the
+  `model.clips` loop flags (Task 34); a model without any action (no takes, rig `none`) walks procedurally — the
+  browser's leg chains swing (`Core/Figures/ProceduralGait.cs`, vectors `animal_legs` / `animal_gait`), standing it
+  breathes; "no model" is the browser's fallback pool model, else the portrait sprite; a changed `model_sig` or `model_rev` reloads it; distance tiers
   `full`/`low` (`low_url`) at 25/35 m with hysteresis, re-evaluated every second. Clips (Task 28): the WHOLE
   `/assets/animation-clips` library — downloaded through a width-4 queue in listing order, imported one per
   frame (`FBXDocument`), committed in listing order (first file per kind and set) — and per character the first

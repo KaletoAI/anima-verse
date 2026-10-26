@@ -1,0 +1,72 @@
+{
+ "avatar": "",
+ "current_location_id": "",
+ "characters": [
+  {
+   "name": "Rex Takes",
+   "location_id": "",
+   "pos": {
+    "x": -50,
+    "z": 30
+   },
+   "pos_origin": null,
+   "height_cm": 50,
+   "room_id": "",
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "rex-1",
+   "model_rev": "r1",
+   "animation_set": "animal",
+   "animation_sets": [
+    "animal"
+   ]
+  },
+  {
+   "name": "Spot Static",
+   "location_id": "",
+   "pos": {
+    "x": -50,
+    "z": 40
+   },
+   "pos_origin": null,
+   "height_cm": 50,
+   "room_id": "",
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "spot-1",
+   "model_rev": "r1",
+   "animation_set": "animal",
+   "animation_sets": [
+    "animal"
+   ]
+  },
+  {
+   "name": "Dot None",
+   "location_id": "",
+   "pos": {
+    "x": -50,
+    "z": 50
+   },
+   "pos_origin": null,
+   "height_cm": 50,
+   "room_id": "",
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "dot-1",
+   "model_rev": "r1",
+   "animation_set": "animal",
+   "animation_sets": [
+    "animal"
+   ]
+  }
+ ],
+ "events_by_location": {},
+ "world_bounds": {
+  "min_x": -104.0,
+  "min_z": -203.0,
+  "max_x": 300.0,
+  "max_z": 134.0
+ },
+ "height_sig": "fixture-s1a",
+ "fogged": false
+}

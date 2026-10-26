@@ -12,5 +12,7 @@
   "/assets/props/broadleaf/model.glb?tier=low": "repo:worlds/demo/props/broadleaf-df5830/model_1792265757.glb",
   "/assets/surface-textures/ground_grass.png": "ground_grass.png",
   "/characters/Cleo%20Marsh/images/cleo.png?transparent=1": "props/poster.png",
-  "/assets/surface-textures/dark_stone_2.jpg": "repo:shared/surface_textures/dark_stone_2_1785267141.jpg"
+  "/assets/surface-textures/dark_stone_2.jpg": "repo:shared/surface_textures/dark_stone_2_1785267141.jpg",
+  "/characters/Bram%20Holt/model3d/file?v=fixturebram00001": "animals/animal_takes.fbx",
+  "/characters/Bram%20Holt/model3d/texture?v=fixturebramtex01": "animals/animal_basecolor.png"
 }

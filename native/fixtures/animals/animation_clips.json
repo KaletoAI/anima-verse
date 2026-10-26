@@ -1,0 +1,20 @@
+{
+ "clips": [],
+ "kinds": [],
+ "movement_poses": {
+  "standing": {
+   "kind": "idle",
+   "public_kind": "idle"
+  },
+  "walking": {
+   "kind": "walk",
+   "public_kind": "walk"
+  },
+  "running": {
+   "kind": "run",
+   "public_kind": "run"
+  }
+ },
+ "transition_clips": [],
+ "transitions": []
+}

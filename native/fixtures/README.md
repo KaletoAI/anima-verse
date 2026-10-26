@@ -191,12 +191,14 @@ tread and the stringer + the level-1 plate (its storey's slab) = 9. With the hou
 | name | row | model3d answer | rule |
 |---|---|---|---|
 | Ada Wren | `location_id ""`, `pos` (−50, 30), `height_cm` 160, `model_sig` `ada-1` | GLB, rig `mixamo`, not `normalized` | **free** (wilderness) |
-| Bram Holt | `location_id` `loc-house`, `room_id` set, `pos` (63, 127), `height_cm` 180 | `format` `fbx`, rig `generic`, `texture_url` | **tile** (far-view huddle) |
+| Bram Holt | `location_id` `loc-house`, `room_id` set, `pos` (63, 127), `height_cm` 180 | `format` `fbx`, rig `generic`, `texture_url`, `clips` {walk loop, sit once} → `animals/animal_takes.fbx` + `animals/animal_basecolor.png` | **tile** (far-view huddle) |
 | Cleo Marsh | `location_id ""`, `travel` with waypoints, no `height_cm`, no `model_sig`, `avatar_url` `/characters/Cleo%20Marsh/images/cleo.png` | `null` = 404 | **journey** |
 
-→ **figures = 3, glb_figures = 1, placeholders = 2** (FBX → capsule; 404 → the fallback pool, whose manifest
-`/static/client3d/models/manifest.json` this fixture does not serve (404) → **pool failed → the portrait**, Task 29).
-The FBX file is never downloaded (the check asserts no byte request for Bram). Cleo's `avatar_url` is a character image
+→ **figures = 3, glb_figures = 2, placeholders = 1** (Bram's FBX is a model — Task 34, "Animals world"; 404 → the
+fallback pool, whose manifest `/static/client3d/models/manifest.json` this fixture does not serve (404) → **pool failed
+→ the portrait**, Task 29). Bram's FBX and its texture are downloaded once each (2 byte requests); his actions are his
+three takes **[idle, sit, walk]** (no alias adds one: `run`, `lie`, `dance`, `wave` find no needle), sit once, walk
+loops, and he stands in the idle take. Cleo's `avatar_url` is a character image
 (`/characters/{name}/images/{file}`), so it is asked for as the cut-out `…/cleo.png?transparent=1`
 (`transparentPortraitUrl`), answered with `props/poster.png` (2 × 2 PNG) → the picture replaces the initials "CM".
 
@@ -224,7 +226,8 @@ y = 8·0.609375 = **4.875** → (263, 4.875, −100).
 min y −1.8e−7; Blender's `measured.dims_m` z = 1.74), not normalised in the fixture
 answer → scale = 1.60 / 1.74 → measured body height **1.60**. (The real server marks this
 file `normalized` — its sidecar lists the `normalize` step — and would draw it at 1.74;
-the fixture says `false` to exercise the scale rule.) Bram's capsule = 180 cm → **1.80**.
+the fixture says `false` to exercise the scale rule.) Bram's FBX animal is 0.5 m tall in the file → scale 1.80 / 0.5
+= 3.6 → **1.80** (an animal that tall is a fixture's licence; the scale rule is the point).
 Cleo is a portrait: no body height, her tag anchors at `tagAnchorY(null)` = −0.15 m (below the sprite).
 
 ### Clips (Task 27 poses, Task 28 the whole library)
@@ -264,7 +267,7 @@ reading → "" (#9) — four clips. Her **actions** (the `Figure` constructor): 
 through `resolveClipName` (exact before substring, needle order ranks): `idle` ← needles idle (no name is or
 contains it), **stand** (`stand-relaxed` contains it) → alias `idle` = the stand-relaxed clip; `walk` literal;
 `run`, `sit`, `lie` (lie/lay/sleep), `dance` (dance/samba), `wave` (wave/greet): no name contains a needle (`waiting`
-holds none of them) → **actions [stand-relaxed, walk, waiting, reading, idle]**, kinds_bound = 5,
+holds none of them) → **actions [stand-relaxed, walk, waiting, reading, idle]**, kinds_bound = 5 + Bram's 3 = 8,
 `missingClipKinds` = none → unbound_clips = 0. The loop flag is the FILE's: Ada's `waiting` loops (#7) although
 the neutral #8 is a one-shot; `reading` is a one-shot.
 
@@ -1537,3 +1540,72 @@ and `Root` → `mixamorig:Spine1 (0,0,0)` → `mixamorig:Spine2 (0,1,0)` → `B 
 - **M8** information only: the tracked demo figure with an extension group (`worlds/demo`, 54 joints), one group over
   its non-Mixamo joints with the shipped declaration's parameters, a 1 s walk at 1.4 m/s and a 1 s stop at 60 fps: the
   particles built, the corrected surfaces and the largest stock-normal error its extension binds reach.
+
+## Animals world (`animals/`, Task 34, `Check/AnimalCheck.cs`, `--check animals`)
+
+The FBX files are written by Blender 5.2 with the server's quadruped exporter settings
+(`app/blender/scripts/quadruped_rig.py`: NLA strips as takes, no leaf bones, −Z forward / Y up, texture path
+stripped):
+
+    blender --background --factory-startup --python native/tools/animal_fbx.py -- native/fixtures/animals
+
+(`animal_takes.fbx` ≈ 240 KB — the exporter bakes every bone's T/R/S per frame and take —, `animal_static.fbx` ≈ 41 KB,
+`animal_basecolor.png` 4 × 8 px.) The tool's docstring lists the geometry; in Godot's frame (x, z, −y of Blender's,
+metres — the `Rig` node carries ×100 over the file's 0.01 units; three keeps the centimetres, which the scale
+`height / raw` cancels): body box x ±0.15, y 0.3…0.5, z −0.3…0.3; legs at x ±0.1, z ±0.2 (FL/FR at z +0.2), y 0…0.3;
+tail z −0.4…−0.3, y 0.43…0.47. Bones: `Body` (the spine, along the body, rolled 90° — so the hips' parent frame is NOT
+the world's), `Hip_{FL,FR,BL,BR}` head (±0.1, 0.3, ±0.2) → `Paw_*` head (±0.1, 0.05, ±0.2), `Tail` head (0, 0.45, −0.3);
+every vertex weighs 1 on one bone. Bounding box x ±0.15, y 0…0.5, z −0.4…0.3: 0.7 ≤ 1.5 · 0.5, so the clients'
+Z-up rule (`s.z > s.y · 1.5`) leaves it standing. Godot imports the bones in file order Body, Hip_FL, Paw_FL, Hip_FR,
+Paw_FR, Hip_BL, Paw_BL, Hip_BR, Paw_BR, Tail (three traverses them in another order; with exactly four legs the
+result does not depend on it).
+
+**Probes (Step 0, numbers measured, the browser's by three's FBXLoader on the same file):**
+- UVs: the file has body (0.375, 0.1875), legs (0.875, 0.4375), tail (0.125, 0.8125). three's FBXLoader keeps them;
+  Godot's import gives (0.375, 0.8125), (0.875, 0.5625), (0.125, 0.1875) — **v → 1 − v**. The browser draws the
+  texture with `flipY = false`: v = 0 is the image's top row, the texel is (⌊u·4⌋, ⌊v·8⌋ from the top). So the
+  native client flips the image rows once (`FigureManager.FbxTexture`): Godot's v' = 1 − v then reads row ⌊v'·8⌋ of
+  the flipped image = row ⌊v·8⌋ of the original.
+- Takes: three sees walk, idle, sit, each 13 keys at 24 fps for every bone (33 tracks); Godot's import names them
+  idle, sit, walk (alphabetical in the player), 0.5 s, keeps only the curves that differ from the node's imported
+  default (walk: the 4 hips) and adds samples on its 30 fps grid (0.1, 0.2667, 0.4333 s) — on linear keys these are
+  the linear values. A take whose curves are all constant arrives with NO track (probed with a variant whose idle
+  holds the tail at 30°: idle empty, the tail's 30° became the bone's imported pose). Without the dropped curves
+  Godot's mixer leaves the last walk value on a bone sit does not key (Hip_FL 16° measured) where three's sit puts it
+  back — hence `FigureManager.CompleteFbxTake`.
+- Texture: the FBX names `animal_basecolor.png`; Godot's FBX import looks for it next to the temporary file, fails
+  and logs two errors and a warning per model (harmless — the client dresses the mesh in `texture_url` itself).
+
+**Rex Takes** (`generic`, `animal_takes.fbx`, `clips` {walk loop, sit once}), **Spot Static** (`generic`,
+`animal_static.fbx`, no takes), **Dot None** (rig `none` on a COPY URL of `animal_takes.fbx` — a template is cached
+per URL), each `height_cm` 50 on its free point (−50, 30 / 40 / 50); `animation_clips.json` has no clips and the
+poses standing → idle, walking → walk, running → run.
+
+- **N1** scale 0.5 / 0.5 = 1, body height 0.5; bind anchoring (three's Figure constructor): x centre 0, z centre
+  (−0.4 + 0.3)/2 = −0.05 → **(0, 0, 0.05)**, the bottom on the root (the browser's offset on the same file:
+  (0, 0, 0.05)). Actions [idle, sit, walk] (no alias), idle loops (no flag), walk loops, sit once; Rex stands in idle.
+  Material: roughness 0.85, metallic 0, Lambert, no received shadows, clamped, the texture as albedo. Three texture
+  requests (one per URL).
+- **N2** per UV group (all vertices of a group lie in their part's box): body → texel (1, 1) = **(96, 48, 200)**, legs
+  (3, 3) = **(224, 112, 200)**, tail (0, 6) = **(32, 208, 200)**; without the flip the body would read (96, 208, 200)
+  (the counter-probe: dropping `FlipY` fails exactly there).
+- **N3** walk: Hip_FL keys 0 / +20° (frame 4 = 0.125 s) / 0 (0.25 s) / −20° (0.375 s), linear; after the 0.25 s
+  crossfade, at 0.3 s every hip is 20 · (0.3 − 0.25)/0.125 = **8°** from rest (both 0.2917 and 0.3333 s are on the
+  same straight segment). sit (one-shot) after 1 s: Hip_BL, Hip_BR at their last key **60°**, Hip_FL **0°** (the
+  counter-probe without `CompleteFbxTake`: 16°).
+- **N4** Spot and Dot (rig `none` drops the takes: `clips: rig === 'none' ? []`): static, four chains. In the root
+  frame (bind offset +0.05 in z, scale 1) the feet are the paws at y 0.05 (≤ 0 + 0.25 · 0.5), the hips 0.25 higher
+  (≥ 0.12 · 0.5), the tail (y 0.45) is no foot; `Body` has five child bones, so every chain stops at its hip. The
+  footprint is longer in z (0.3 < 0.7) → world axis X. By z: back pair BL, BR (z −0.15), front FL, FR (z 0.25); by x
+  inside each: **walk BL 0, FL π/2, BR π, FR 3π/2; trot BL = FR = 0, BR = FL = π** — the browser's findLegChains on
+  three's import of the same file gives the same (Step 0). The axis is stored in the rolled spine's frame (not X
+  there: the counter-probe storing the world axis fails with (0, −1, 0)) and turned back it is world X.
+- **N5** Spot, walk phase 0, one 0.1 s frame walking: phase 0.7; FL swings 0.45 · sin(0.7 + π/2) = 0.344179 rad
+  (19.720°), BL 0.45 · sin 0.7 = 0.289898, BR −0.289898, FR −0.344179; the body rises |sin 0.7| · 0.02 · 0.5 =
+  0.00644218. A swing s about world X turns the paw's 0.25 m shank: paw = (x_hip, 0.3 + bob − 0.25 cos s,
+  z_hip − 0.25 sin s) — FL (−0.1, 0.071104, 0.165644), BL (−0.1, 0.066874, −0.221464). Standing 0.5 s from idle phase 0:
+  phase 0.8, hips at rest, bob 0.012 · sin 0.8 = 0.00860827, scale 1 + 0.006 · sin 0.4 = 1.00233651. Running 0.1 s
+  from 0: phase 1.1, the diagonals BL/FR +0.45 · sin 1.1 = +0.401043 (22.978°), BR/FL −0.401043, bob |sin 1.1| · 0.01.
+- **N6** the second poll moves Spot 2 m and Dot 10 m along +x; one 0.1 s NPC frame: Spot walks 3.4 · 0.1 = 0.34 m
+  (≤ 6 m: no run), gait walk, phase 0.7, Hip_FL 19.720°; Dot runs 3.4 · 1.8 · 0.1 = 0.612 m, gait run, phase 1.1,
+  Hip_FL 22.978°.

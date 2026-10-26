@@ -1,0 +1,64 @@
+{
+ "Rex Takes": {
+  "signature": "rex-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "animal.fbx",
+   "signature": "rex-1",
+   "format": "fbx",
+   "rig": "generic",
+   "url": "/characters/Rex%20Takes/model3d/file?v=animalrex0001",
+   "texture_url": "/characters/Rex%20Takes/model3d/texture?v=animalrextex01",
+   "model_rev": "r1",
+   "clips": {
+    "walk": {
+     "loop": true
+    },
+    "sit": {
+     "loop": false
+    }
+   }
+  },
+  "animation_set": "animal",
+  "animation_sets": [
+   "animal"
+  ]
+ },
+ "Spot Static": {
+  "signature": "spot-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "animal.fbx",
+   "signature": "spot-1",
+   "format": "fbx",
+   "rig": "generic",
+   "url": "/characters/Spot%20Static/model3d/file?v=animalspot001",
+   "texture_url": "/characters/Spot%20Static/model3d/texture?v=animalspottex1",
+   "model_rev": "r1"
+  },
+  "animation_set": "animal",
+  "animation_sets": [
+   "animal"
+  ]
+ },
+ "Dot None": {
+  "signature": "dot-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "animal.fbx",
+   "signature": "dot-1",
+   "format": "fbx",
+   "rig": "none",
+   "url": "/characters/Dot%20None/model3d/file?v=animaldot0001",
+   "texture_url": "/characters/Dot%20None/model3d/texture?v=animaldottex01",
+   "model_rev": "r1"
+  },
+  "animation_set": "animal",
+  "animation_sets": [
+   "animal"
+  ]
+ }
+}

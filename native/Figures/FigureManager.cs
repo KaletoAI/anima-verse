@@ -47,14 +47,17 @@ public sealed class FigureStats
 ///   • model: <c>GET /characters/{name}/model3d</c> → <c>model.url</c> / <c>model.low_url</c> used unchanged (§ A7),
 ///     every load (model3d + GLB + fit) one job of a <see cref="FocusQueue"/> of width 3 — the avatar first, then
 ///     the figure nearest the camera target; a GLB is Meshopt-decoded and imported once per (URL, set chain) and
-///     duplicated per figure; FBX (generic rig) and "no model" (404 or <c>model</c> null) are capsule placeholders
-///     (Task 34 / Task 29); a transient failure retries after <see cref="RetryDelayS"/>; reloaded when the row's
+///     duplicated per figure; an FBX (animals, rig <c>generic</c>) is imported through Godot's FBXDocument and dressed
+///     in its separate <c>texture_url</c> (Task 34); "no model" (404 or <c>model</c> null) shows the fallback pool or
+///     the portrait (Task 29); a transient failure retries after <see cref="RetryDelayS"/>; reloaded when the row's
 ///     <c>model_sig</c> or <c>model_rev</c> changes (§ A11a, <c>refreshIfChanged</c>);
 ///   • looks: metalness forced to 0 on every material (characters are dielectrics, AV3D-14), roughness untouched;
 ///     scale <c>normalized</c> → 1, else height / raw bounding-box height (height = <c>height_cm</c>/100 when
 ///     30 &lt; cm &lt; 400, default 1.70 m; a Z-up export is stood up first);
-///   • clips: the WHOLE library along the character's set chain (<see cref="ClipLibrary.ClipsFor"/>), retargeted
-///     once per template, one action per kind + the synonym aliases; only a <c>mixamo</c> rig gets them;
+///   • clips: the file's own takes (every rig but <c>none</c>, loop flags from <c>model.clips</c>); on a <c>mixamo</c>
+///     rig also the WHOLE library along the character's set chain (<see cref="ClipLibrary.ClipsFor"/>), retargeted
+///     once per template; one action per kind + the synonym aliases; a rig without any action walks procedurally
+///     (<see cref="ProceduralGait"/>, Task 34);
 ///   • tiers: every <see cref="FigureTiers.TickS"/> the camera distance picks full (&lt; 25 m) / low (&gt; 35 m),
 ///     the band between keeps; a cached tier swaps at once, a missing one loads through the queue.
 /// </summary>
@@ -141,6 +144,8 @@ public partial class FigureManager : Node3D
 
     private sealed record ModelInfo(string Url, string? LowUrl, string Format, string Rig, bool Normalized, string? ModelRev)
     {
+        /// <summary><c>model.texture_url</c>: the separate base-colour texture of an FBX model (null = none).</summary>
+        public string? TextureUrl { get; init; }
         /// <summary><c>model.clips</c>: the loop flag per EXACT embedded take name (missing = loop).</summary>
         public IReadOnlyDictionary<string, bool> ClipLoops { get; init; } = new Dictionary<string, bool>();
         /// <summary>The answer's top-level <c>motion</c> (<c>extension_rig.motion_payload</c>); null = none.</summary>
@@ -750,15 +755,6 @@ public partial class FigureManager : Node3D
                     ShowStandIn(fig);
                     _log($"figure {fig.CharacterName}: no model → {(fig.PoolModel is { } pm ? $"pool model {pm}" : "portrait")}");
                 }
-                else if (info.Format != "glb")
-                {
-                    // Generic rig: FBX + separate texture (§ A7) — Task 34. Placeholder until then.
-                    _infos.Remove(fig.CharacterName);
-                    fig.SetBody(Figure.Capsule(fig.HeightM), false, null, null);
-                    fig.BoundTracks = fig.UnboundClips = 0;
-                    fig.LoadedRev = info.ModelRev;
-                    _log($"figure {fig.CharacterName}: {info.Format}/{info.Rig} model → placeholder");
-                }
                 else
                 {
                     var tier = fig.WantedTier;
@@ -836,6 +832,7 @@ public partial class FigureManager : Node3D
         if (rig.Length == 0) rig = Json.Str(root, "rig", "mixamo");
         var low = Json.Str(m, "low_url");
         var rev = Json.Str(m, "model_rev");
+        var texture = Json.Str(m, "texture_url");
         // applyEmbeddedClipLoops: the server's loop declaration per EXACT embedded take name (missing = loop).
         var loops = new Dictionary<string, bool>(StringComparer.Ordinal);
         if (m.TryGetProperty("clips", out var cl) && cl.ValueKind == JsonValueKind.Object)
@@ -844,7 +841,10 @@ public partial class FigureManager : Node3D
                     && lp.ValueKind is JsonValueKind.True or JsonValueKind.False)
                     loops[c.Name] = lp.ValueKind == JsonValueKind.True;
         return new ModelInfo(url, low.Length > 0 ? low : null, Json.Str(m, "format", "glb").ToLowerInvariant(), rig,
-                             Json.Bool(m, "normalized"), rev.Length > 0 ? rev : null) { ClipLoops = loops, Motion = MotionPayload.Of(root) };
+                             Json.Bool(m, "normalized"), rev.Length > 0 ? rev : null)
+        {
+            ClipLoops = loops, Motion = MotionPayload.Of(root), TextureUrl = texture.Length > 0 ? texture : null,
+        };
     }
 
     /// <summary>
@@ -863,7 +863,15 @@ public partial class FigureManager : Node3D
     }
 
     /// <summary>
-    /// <c>buildModel</c>: download, Meshopt decode off-thread, import, metalness 0, Z-up fix, raw height; the file's own
+    /// <c>loadFile(url, forceFbx)</c>: the FBX loader when the answer says <c>format: fbx</c> or the URL names a
+    /// <c>.fbx</c> file, glTF otherwise.
+    /// </summary>
+    public static bool IsFbx(string format, string url)
+        => format == "fbx" || System.Text.RegularExpressions.Regex.IsMatch(url, @"\.fbx(\?|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// <c>buildModel</c>: download, import (FBX through Godot's FBXDocument; a GLB Meshopt-decoded off-thread), an FBX's
+    /// separate texture (<see cref="DressInTexture"/>), metalness 0, Z-up fix, raw height; the file's own
     /// takes (every rig but <c>none</c>) with the server's loop flags; on a mixamo rig the library along
     /// <paramref name="sets"/> fitted (<c>fitLibraryAsync</c>) — an embedded take wins its kind, the library fills the
     /// rest — then, per rig, the bridges re-locked, pinned, lifted and turned (<see cref="FootLockMeasure"/>, baked into
@@ -874,8 +882,18 @@ public partial class FigureManager : Node3D
     private async Task<ModelTemplate> BuildTemplate(string url, ModelInfo info, IReadOnlyList<string> sets, double heightM)
     {
         var bytes = await _source.GetBytesAsync(url);
-        var plain = await Task.Run(() => GlbLoader.Prepare(bytes));
-        var (root, _) = GlbLoader.Import(plain, url);
+        Node3D root;
+        if (IsFbx(info.Format, url))
+        {
+            root = ClipLibrary.ImportFbxScene(bytes) as Node3D ?? throw new InvalidOperationException($"FBX {url}: the scene root is not a Node3D");
+            if (info.TextureUrl is { } textureUrl) DressInTexture(root, await LoadTexture(textureUrl));
+            else BrowserLook(root);
+        }
+        else
+        {
+            var plain = await Task.Run(() => GlbLoader.Prepare(bytes));
+            (root, _) = GlbLoader.Import(plain, url);
+        }
         root.Name = "Model";
         int metals = Dielectric(root);
         // three's Box3.setFromObject: a skinned mesh counts in its SKINNED rest pose (BridgeFit.BindBox), not by its
@@ -895,14 +913,26 @@ public partial class FigureManager : Node3D
         var skel = ClipLibrary.Find<Skeleton3D>(root);
         // The file's own takes (`clips: rig === 'none' ? [] : gltf.animations`): taken out of the import's player, kept
         // per kind with the server's loop flag of the exact take name — for server models and the pool alike.
-        var own = TakeOwnClips(root, info.ClipLoops);
+        var own = TakeOwnClips(root, info.ClipLoops, IsFbx(info.Format, url));
         if (info.Rig == "none") own.Clear();
         if (info.Rig != "mixamo" || skel is null || skel.GetBoneCount() == 0)
         {
-            if (own.Count == 0) return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, BindBox = bind };
+            // Generic rigs keep their own takes (animals: idle, walk, run, sit …); a rig left without any action walks
+            // procedurally (the Figure's leg chains).
+            if (own.Count == 0)
+            {
+                _log($"model {url}: {info.Format}/{info.Rig}, no takes, raw height {raw:0.###} m — procedural gait");
+                return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, BindBox = bind };
+            }
             var ownLib = new AnimationLibrary();
-            foreach (var (kind, anim) in own) ownLib.AddAnimation(kind, anim);
-            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, Library = ownLib, Kinds = own.Select(o => o.Kind).ToList(), BindBox = bind };
+            var actionKinds = new List<string>();
+            var byKind = own.ToDictionary(o => o.Kind, o => o.Anim);
+            // The Figure constructor's action table: every take by its lower-cased name, then the synonym aliases.
+            foreach (var (kind, clip) in ClipLibraryRules.BindActions(own.Select(o => o.Kind).ToList()))
+                if (ownLib.AddAnimation(kind, byKind[clip]) == Error.Ok) actionKinds.Add(kind);
+            _log($"model {url}: {info.Format}/{info.Rig}, raw height {raw:0.###} m, {own.Count} takes → {actionKinds.Count} actions "
+                 + $"[{string.Join(", ", actionKinds.Select(k => ownLib.GetAnimation(k).LoopMode == Animation.LoopModeEnum.None ? k + " (once)" : k))}]");
+            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, Library = ownLib, Kinds = actionKinds, BindBox = bind };
         }
 
         await Clips.WaitClipsAsync();
@@ -1035,22 +1065,35 @@ public partial class FigureManager : Node3D
     /// A model file's own non-empty takes, lower-cased, taken out of the import's AnimationPlayer (which is freed: the
     /// figure's one player carries them). The loop flag is the server's for the EXACT take name
     /// (<c>applyEmbeddedClipLoops</c>); a take nobody flagged loops.
+    ///
+    /// <b>FBX takes are completed</b> (<paramref name="fbx"/>): Godot's FBX import drops every curve that equals the
+    /// node's imported default (measured on fixtures/animals: walk keeps 4 of the 30 baked bone curves, a take whose
+    /// curves are all constant arrives EMPTY) and keeps that default as the bone's pose. three's FBXLoader keeps every
+    /// baked curve, so a take there poses EVERY bone — and switching from walk to sit puts the front hips back, where
+    /// Godot's mixer would leave the last walk value standing (16° measured). So each FBX take gets a one-key constant
+    /// track of the imported default for every bone position / rotation / scale it lacks (as <see cref="ClipLibrary"/>
+    /// does for the library clips), and an FBX take is kept even when the import left it without a track.
     /// </summary>
-    private static List<(string Kind, Animation Anim)> TakeOwnClips(Node root, IReadOnlyDictionary<string, bool>? loops = null)
+    private static List<(string Kind, Animation Anim)> TakeOwnClips(Node root, IReadOnlyDictionary<string, bool>? loops = null,
+                                                                   bool fbx = false)
     {
         var list = new List<(string, Animation)>();
         foreach (var player in Walk(root).OfType<AnimationPlayer>().ToList())
         {
+            var origin = player.GetNodeOrNull(player.RootNode);
+            var skel = ClipLibrary.Find<Skeleton3D>(root);
+            string? skelPath = fbx && origin is not null && skel is not null ? origin.GetPathTo(skel).ToString() : null;
             foreach (var libName in player.GetAnimationLibraryList())
             {
                 var lib = player.GetAnimationLibrary(libName);
                 foreach (var name in lib.GetAnimationList())
                 {
                     var anim = lib.GetAnimation(name);
-                    if (anim.GetTrackCount() == 0) continue;
+                    if (anim.GetTrackCount() == 0 && skelPath is null) continue;
                     var kind = name.ToString().ToLowerInvariant();
                     if (list.Any(e => e.Item1 == kind)) continue;
                     var copy = (Animation)anim.Duplicate();
+                    if (skelPath is not null) CompleteFbxTake(copy, skel!, skelPath);
                     bool loop = loops is null || !loops.TryGetValue(name.ToString(), out var l) || l;
                     copy.LoopMode = loop ? Animation.LoopModeEnum.Linear : Animation.LoopModeEnum.None;
                     list.Add((kind, copy));
@@ -1060,6 +1103,44 @@ public partial class FigureManager : Node3D
             player.Free();
         }
         return list;
+    }
+
+    /// <summary>
+    /// The constant tracks Godot dropped from an FBX take: for every bone of <paramref name="skel"/> and each of
+    /// position / rotation / scale the take does not key, one key at 0 s holding the bone's imported pose. Returns how
+    /// many tracks were added.
+    /// </summary>
+    public static int CompleteFbxTake(Animation anim, Skeleton3D skel, string skelPath)
+    {
+        var have = new HashSet<(string, Animation.TrackType)>();
+        for (int t = 0; t < anim.GetTrackCount(); t++) have.Add((anim.TrackGetPath(t).ToString(), anim.TrackGetType(t)));
+        int added = 0;
+        for (int b = 0; b < skel.GetBoneCount(); b++)
+        {
+            var path = $"{skelPath}:{skel.GetBoneName(b)}";
+            if (!have.Contains((path, Animation.TrackType.Position3D)))
+            {
+                int t = anim.AddTrack(Animation.TrackType.Position3D);
+                anim.TrackSetPath(t, path);
+                anim.PositionTrackInsertKey(t, 0, skel.GetBonePosePosition(b));
+                added++;
+            }
+            if (!have.Contains((path, Animation.TrackType.Rotation3D)))
+            {
+                int t = anim.AddTrack(Animation.TrackType.Rotation3D);
+                anim.TrackSetPath(t, path);
+                anim.RotationTrackInsertKey(t, 0, skel.GetBonePoseRotation(b));
+                added++;
+            }
+            if (!have.Contains((path, Animation.TrackType.Scale3D)))
+            {
+                int t = anim.AddTrack(Animation.TrackType.Scale3D);
+                anim.TrackSetPath(t, path);
+                anim.ScaleTrackInsertKey(t, 0, skel.GetBonePoseScale(b));
+                added++;
+            }
+        }
+        return added;
     }
 
     /// <summary>Built templates and the keys of their retargeted clips (both tiers of every character).</summary>
@@ -1097,6 +1178,68 @@ public partial class FigureManager : Node3D
         return changed;
     }
 
+    /// <summary>
+    /// A model's separate texture (<c>textureLoader.loadAsync(info.textureUrl)</c>): decoded, its rows flipped once
+    /// (see <see cref="DressInTexture"/>), mipmapped like three's. A download or decode failure throws — the model load
+    /// fails and retries like any transient error.
+    /// </summary>
+    private async Task<ImageTexture> LoadTexture(string url)
+    {
+        var bytes = await _source.GetBytesAsync(url);
+        var img = Portrait.Decode(bytes) ?? throw new InvalidOperationException($"texture {url}: not a PNG/JPEG/WebP");
+        return FbxTexture(img);
+    }
+
+    /// <summary>
+    /// The texture image as an FBX body samples it. Godot's FBX import turns the file's UV v into 1 − v (measured on
+    /// fixtures/animals: (0.375, 0.1875) arrives as (0.375, 0.8125)); three's FBXLoader keeps v, and the browser draws the
+    /// texture with <c>flipY = false</c>, so v = 0 is the image's TOP row. Flipping the rows once makes Godot's
+    /// v' = 1 − v land on the texel three samples: y' = (1 − v)·H in the flipped image is y = v·H in the original.
+    /// </summary>
+    public static ImageTexture FbxTexture(Image img)
+    {
+        if (img.IsCompressed()) img.Decompress();
+        img.FlipY();
+        img.GenerateMipmaps();
+        return ImageTexture.CreateFromImage(img);
+    }
+
+    /// <summary>
+    /// figures.ts <c>buildModel</c> with a <c>texture_url</c>: every mesh gets <c>MeshStandardMaterial({map, roughness:
+    /// 0.85, metalness: 0})</c> — here a StandardMaterial3D per mesh with the shared texture as albedo (sRGB, like three's
+    /// <c>SRGBColorSpace</c>), clamped at the edges (three's default wrap), plus the browser look every figure mesh has
+    /// (Lambert diffuse, no received shadows; <see cref="GlbLoader.BrowserLook"/>). Returns the meshes dressed.
+    /// </summary>
+    public static int DressInTexture(Node root, Texture2D texture)
+    {
+        int n = 0;
+        foreach (var mi in Walk(root).OfType<MeshInstance3D>())
+        {
+            if (mi.Mesh is null) continue;
+            var mat = new StandardMaterial3D
+            {
+                AlbedoTexture = texture, Roughness = 0.85f, Metallic = 0, TextureRepeat = false,
+                DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert, DisableReceiveShadows = true,
+            };
+            mi.MaterialOverride = null;
+            for (int s = 0; s < mi.Mesh.GetSurfaceCount(); s++) mi.SetSurfaceOverrideMaterial(s, mat);
+            n++;
+        }
+        return n;
+    }
+
+    /// <summary>An FBX without a texture keeps its own materials in the browser look (Lambert, no received shadows).</summary>
+    private static void BrowserLook(Node root)
+    {
+        foreach (var mi in Walk(root).OfType<MeshInstance3D>())
+            for (int s = 0; s < (mi.Mesh?.GetSurfaceCount() ?? 0); s++)
+                if (mi.GetActiveMaterial(s) is BaseMaterial3D b)
+                {
+                    b.DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert;
+                    b.DisableReceiveShadows = true;
+                }
+    }
+
     /// <summary>Every BaseMaterial3D under a body with a non-zero metallic (the check's probe).</summary>
     public static int MetallicMaterials(Node root)
         => Walk(root).OfType<MeshInstance3D>()
@@ -1130,9 +1273,12 @@ public partial class FigureManager : Node3D
         fig.Clock = () => _clock;
         fig.LoadedUrl = t.Url;
         fig.LoadedTier = tier;
-        // figures.ts Figure constructor: the body centred on its bind box in XZ, its lowest point on the root (P3-R14).
+        // figures.ts Figure constructor: the body centred on its bind box in XZ, its lowest point on the root (P3-R14);
+        // the box itself (scaled, before that shift — `findLegChains(inst, box)`) and `model.height` feed the gait.
         V3? bind = t.BindBox is { } bb ? FigureBind.Offset(bb.Min, bb.Max, scale) : null;
-        fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds, bind);
+        GaitBox? box = t.BindBox is { } b2 ? new GaitBox(b2.Min * scale, b2.Max * scale) : null;
+        fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds, bind,
+                    box, t.RawHeight * scale);
     }
 
     // ---- the fallback pool and the portrait (Task 29, ruling P3-R10) -------------------------------------------------
@@ -1331,7 +1477,7 @@ public partial class FigureManager : Node3D
     /// figures, and the distance (m). Every mesh of the figure counts (the whole hierarchy, as three's
     /// recursive intersect does): a skinned GLB part in its CURRENT pose — the vertices skinned on the CPU
     /// exactly as the shader skins them (<see cref="Skinning"/>), like three.js <c>SkinnedMesh.raycast</c> —
-    /// and an unskinned part or the capsule placeholder as stored. A sphere around each figure
+    /// and an unskinned part (the portrait's quad) as stored. A sphere around each figure
     /// (<see cref="PickSphereFactor"/>) keeps the skinning to the figures the ray can reach at all.
     /// </summary>
     public (string Name, double Distance)? CharacterAt(Vec3 origin, Vec3 dir)
@@ -1470,7 +1616,7 @@ public partial class FigureManager : Node3D
                t.Basis.Column2.X, t.Basis.Column2.Y, t.Basis.Column2.Z,
                t.Origin.X, t.Origin.Y, t.Origin.Z);
 
-    private static IEnumerable<Node> Walk(Node n)
+    internal static IEnumerable<Node> Walk(Node n)
     {
         yield return n;
         foreach (var c in n.GetChildren())

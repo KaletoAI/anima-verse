@@ -65,6 +65,8 @@ namespace AnimaNative;
 ///   --check figures | --check=figures only the figure section (whole clip library, set chain, activities, tiers, Task 28)
 ///   --check secondary | --check=secondary only the secondary-motion section (fixtures/secondary: extents, step trail,
 ///                               jump/frozen/far, anchor blend, normal correction; Task 33)
+///   --check animals | --check=animals only the animals section (fixtures/animals: FBX takes, texture UV, leg chains,
+///                               procedural gait, Task 34)
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
 public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
@@ -223,7 +225,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
 
     private static bool IsSection(string v)
         => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
-             or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement" or "walk" or "bridges" or "pairs" or "secondary";
+             or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement" or "walk" or "bridges" or "pairs" or "secondary" or "animals";
 
     private static string CheckSection(string v) => IsSection(v)
         ? v : throw new ArgumentException("--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', "

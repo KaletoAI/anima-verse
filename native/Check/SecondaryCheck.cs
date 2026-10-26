@@ -176,7 +176,9 @@ public static class SecondaryCheck
     {
         var (root, _) = GlbLoader.Import(GlbLoader.Prepare(glb), name);
         var skel = ClipLibrary.Find<Skeleton3D>(root)!;
-        var fig = new Figure(name) { SecondaryManual = true, Motion = payload };
+        // chain.glb carries no clip: a static body the browser would let breathe — kept still here, the numbers below
+        // are the motion's alone (the gait is --check animals').
+        var fig = new Figure(name) { SecondaryManual = true, Motion = payload, Procedural = false };
         world.AddChild(fig);
         fig.SetYaw(0);
         var body = new Node3D { Name = "Body" };
@@ -233,7 +235,7 @@ public static class SecondaryCheck
             var payload = Payload("demo", $"\"bones\":[{bones}],\"freq_hz\":2.2,\"zeta\":0.15,\"gravity\":0.35,\"gravity_scale\":1,\"spill\":0.5,"
                 + "\"flatten\":0.6,\"axis_gain\":[0.5,1,0.15],\"translate\":0.6,\"head_sag\":0.4,\"spill_max_deg\":30,\"gain\":1,\"max_deg\":30,"
                 + "\"squash\":[0.7,1.45],\"stretch\":0.7,\"flatten_floor\":0.5,\"sag_max_deg\":30,\"rest_deg\":0,\"rest_max_deg\":30");
-            var fig = new Figure("Demo") { SecondaryManual = true, Motion = payload };
+            var fig = new Figure("Demo") { SecondaryManual = true, Motion = payload, Procedural = false };
             world.AddChild(fig);
             fig.SetYaw(0);
             var body = new Node3D { Name = "Body" };

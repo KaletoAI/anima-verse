@@ -10,8 +10,10 @@ namespace AnimaNative.Figures;
 /// <summary>
 /// One character on the map. The node sits at the figure's FEET (the browser's NPC root) in world metres, turned to its
 /// facing; its body is either the character's GLB (scaled to its height, with an AnimationPlayer carrying the WHOLE
-/// retargeted clip library along its set chain, one action per kind plus the browser's synonym aliases), a fallback-pool
-/// model, the portrait sprite or a capsule placeholder.
+/// retargeted clip library along its set chain, one action per kind plus the browser's synonym aliases), an FBX animal
+/// with its own takes, a fallback-pool model or the portrait sprite. A model without any action (a clip-less animal rig,
+/// an unrigged mesh, rig <c>none</c>) moves procedurally like the browser's <c>isStatic</c> figure: walking swings the
+/// detected leg chains and bobs, standing breathes (<see cref="ProceduralGait"/>, Task 34).
 ///
 /// It WALKS like the browser's NPC (Task 30, npcs.ts <c>Npc</c> + figures.ts <c>Figure</c>): the 1 Hz placement writes
 /// the goal (<see cref="Target"/>), the stations of a room change (<see cref="Waypoints"/>) and a guided stair climb
@@ -53,6 +55,7 @@ public partial class Figure : Node3D
     /// <summary>Library kinds this humanoid figure could not bind (<c>missingClipKinds</c>) — it plays a stand-in.</summary>
     public int UnboundClips { get; set; }
 
+    /// <summary>The body is a model (GLB or FBX), not the portrait.</summary>
     public bool IsGlb { get; private set; }
 
     /// <summary>What the server said about this character's model (figures.ts <c>apiModels</c> + <c>firstAttemptFailed</c>).</summary>
@@ -204,9 +207,13 @@ public partial class Figure : Node3D
     /// <summary>Swap the body. The old one is freed (it owns its duplicated meshes/skeleton).</summary>
     /// <param name="clipKinds">the kinds the player's library holds, in bind order (null without a player).</param>
     /// <param name="bindOffset">the Figure constructor's anchoring (<see cref="FigureBind.Offset"/>: centred on the bind box
-    /// in XZ, its bottom on 0) in the root frame; null = the body already stands on its origin (capsule, portrait).</param>
+    /// in XZ, its bottom on 0) in the root frame; null = the body already stands on its origin (portrait).</param>
+    /// <param name="bindBox">the body's bind box in the root frame, scaled, BEFORE that anchoring (the browser's
+    /// <c>findLegChains(inst, box)</c> box); null = no mesh (no leg chains).</param>
+    /// <param name="bodyHeight">the model's height in metres (<c>model.height</c> = raw height × scale): the gait's bob.</param>
     public void SetBody(Node3D body, bool isGlb, Skeleton3D? skeleton, AnimationPlayer? player,
-                        IReadOnlyList<string>? clipKinds = null, V3? bindOffset = null)
+                        IReadOnlyList<string>? clipKinds = null, V3? bindOffset = null, GaitBox? bindBox = null,
+                        double bodyHeight = 0)
     {
         Secondary?.Release();
         Secondary = null;
@@ -231,8 +238,13 @@ public partial class Figure : Node3D
         var bind = bindOffset ?? V3.Zero;
         _travelBase = new P2(bind.X, bind.Z);
         _groundY = bind.Y;
+        BodyHeight = bodyHeight;
+        _legs.Clear();
+        _procedural = null;
         AddChild(body);
         ApplyBody();
+        // figures.ts Figure constructor: a rig without clips gets its leg chains for the procedural gait.
+        if (IsStatic && skeleton is not null && bindBox is { } box) FindLegs(skeleton, box);
         UpdateClip();
         // figures.ts Figure constructor: createSecondaryMotion(THREE, this.root, this.motion, model.template).
         _secondaryRev = Motion?.Rev;
@@ -426,7 +438,8 @@ public partial class Figure : Node3D
         _sink = sinkM;
         if (Player is null)
         {
-            SetClipDrop(terrainClip ? sinkM : 0);
+            // No actions: `resolved` is undefined in the browser, so the drop is 0 (a static rig's height is its bob's).
+            SetClipDrop(0);
             CurrentKind = kind;
             return;
         }
@@ -705,7 +718,10 @@ public partial class Figure : Node3D
         ApplyBody();
     }
 
-    /// <summary>The body: <c>(base + offset).xz</c>, height <c>groundY − drop + lift</c> (a portrait never drops).</summary>
+    /// <summary>
+    /// The body: <c>(base + offset).xz</c>, height <c>groundY − drop + lift</c> (a portrait never drops); a static rig's
+    /// height and scale are its procedural bob's and breath's alone, once the first frame computed them.
+    /// </summary>
     private void ApplyBody()
     {
         if (Body is not { } b || !IsInstanceValid(b)) return;
@@ -715,7 +731,107 @@ public partial class Figure : Node3D
             return;
         }
         var o = InstanceOffset();
-        b.Position = new Vector3((float)(_travelBase.X + o.X), (float)(_groundY - Drop + _lift), (float)(_travelBase.Z + o.Z));
+        double y = _procedural is { } p ? p.Y : _groundY - Drop + _lift;
+        b.Position = new Vector3((float)(_travelBase.X + o.X), (float)y, (float)(_travelBase.Z + o.Z));
+        if (_procedural is { } q) b.Scale = Vector3.One * (float)q.Scale;
+    }
+
+    // ---- the procedural gait of a clip-less rig (figures.ts isStatic, legs, walkPhase, idlePhase; Task 34) ----------
+
+    /// <summary>One leg chain on this body: the top joint, its bind rotation, the swing axis in its PARENT's frame.</summary>
+    public sealed record Leg(int Bone, int Foot, Quaternion Bind, Vector3 Axis, double PhaseWalk, double PhaseRun);
+
+    /// <summary><c>isStatic</c>: a model body without any action (no clips, an unrigged mesh, rig <c>none</c>).</summary>
+    public bool IsStatic => Body is not null && Portrait is null && _clipKinds.Count == 0;
+
+    /// <summary>The detected leg chains (<c>legs</c>); empty = the standing breath only.</summary>
+    public IReadOnlyList<Leg> Legs => _legs;
+    private readonly List<Leg> _legs = new();
+
+    /// <summary><c>model.height</c>: the drawn model's height in metres (the gait's bob is 2 % of it per step).</summary>
+    public double BodyHeight { get; private set; }
+
+    /// <summary>The gait clocks (<c>walkPhase</c> / <c>idlePhase</c>, radians, random at first like the browser's).</summary>
+    public double WalkPhase { get; set; } = Random.Shared.NextDouble() * Math.PI * 2;
+    public double IdlePhase { get; set; } = Random.Shared.NextDouble() * Math.PI * 2;
+
+    /// <summary>
+    /// The procedural motion runs (default). A check of ANOTHER subsystem on a clip-less fixture body (the secondary
+    /// motion's chain) switches it off, so the body stays where that check's numbers put it — like <see cref="SecondaryManual"/>.
+    /// </summary>
+    public bool Procedural { get; set; } = true;
+
+    /// <summary>The gait the last frame used (<c>proceduralGait(currentKind)</c>: "walk" / "run", null = standing).</summary>
+    public string? Gait { get; private set; }
+
+    /// <summary>The body's procedural height over the root and its scale (null until the first frame of a static rig).</summary>
+    private (double Y, double Scale)? _procedural;
+
+    /// <summary>
+    /// figures.ts <c>findLegChains(inst, box)</c>: every bone of the skeleton with its parent bone and its position in
+    /// the ROOT frame (the body anchored, as three reads <c>matrixWorld</c> after <c>root.updateMatrixWorld</c>) against
+    /// the bind box taken BEFORE the anchoring (the browser measures the box first) — <see cref="ProceduralGait.FindLegChains"/>;
+    /// each chain keeps its bind rotation and the world axis turned into its parent's frame
+    /// (<c>axis.applyQuaternion(parentWorldQuaternion.invert()).normalize()</c>).
+    /// </summary>
+    private void FindLegs(Skeleton3D skel, GaitBox box)
+    {
+        var toRoot = FrameOf(skel);
+        int n = skel.GetBoneCount();
+        var bones = new List<GaitBone>(n);
+        for (int i = 0; i < n; i++)
+        {
+            var p = toRoot * skel.GetBoneGlobalPose(i).Origin;
+            int parent = skel.GetBoneParent(i);
+            bones.Add(new GaitBone(skel.GetBoneName(i), parent >= 0 ? parent : null, new V3(p.X, p.Y, p.Z)));
+        }
+        foreach (var c in ProceduralGait.FindLegChains(bones, box))
+        {
+            int parent = skel.GetBoneParent(c.Bone);
+            var basis = parent >= 0 ? toRoot.Basis * skel.GetBoneGlobalPose(parent).Basis : toRoot.Basis;
+            var axis = (basis.GetRotationQuaternion().Inverse() * new Vector3((float)c.Axis.X, (float)c.Axis.Y, (float)c.Axis.Z)).Normalized();
+            _legs.Add(new Leg(c.Bone, c.Foot, skel.GetBonePoseRotation(c.Bone), axis, c.PhaseWalk, c.PhaseRun));
+        }
+        if (_legs.Count > 0) GD.Print($"[figures] {CharacterName}: procedural gait: {_legs.Count} leg chains detected");
+    }
+
+    /// <summary>The transform from <paramref name="node"/>'s space into this figure's root frame (no tree needed).</summary>
+    public Transform3D FrameOf(Node3D node)
+    {
+        var t = Transform3D.Identity;
+        for (Node? n = node; n is not null && n != this; n = n.GetParent())
+            if (n is Node3D n3) t = n3.Transform * t;
+        return t;
+    }
+
+    /// <summary>
+    /// The static branch of <c>Figure.update</c>: with a walking or running gait (<c>proceduralGait(currentKind)</c>,
+    /// by family) the leg chains swing <c>sin(phase + legPhase)·0.45</c> about their axes from the bind pose (the trot's
+    /// diagonals when running) and the body bobs <c>|sin phase|·0.02·height</c>; standing, the legs rest and the body
+    /// breathes (bob <c>sin·0.012</c> m, scale <c>1 + sin(phase/2)·0.006</c>).
+    /// </summary>
+    private void TickProcedural(double dt)
+    {
+        if (!IsStatic || !Procedural) return;
+        Gait = FigureClips.ProceduralGait(CurrentKind, Poses);
+        if (Gait is { } gait && _legs.Count > 0)
+        {
+            bool running = gait == "run";
+            WalkPhase = ProceduralGait.AdvancePhase(WalkPhase, dt, gait);
+            foreach (var leg in _legs)
+            {
+                var (swing, _) = ProceduralGait.GaitAmplitudes(WalkPhase, running ? leg.PhaseRun : leg.PhaseWalk, BodyHeight);
+                Skeleton?.SetBonePoseRotation(leg.Bone, new Quaternion(leg.Axis, (float)swing) * leg.Bind);
+            }
+            _procedural = (_groundY + ProceduralGait.GaitAmplitudes(WalkPhase, 0, BodyHeight).Bob, BaseScale);
+        }
+        else
+        {
+            foreach (var leg in _legs) Skeleton?.SetBonePoseRotation(leg.Bone, leg.Bind);   // rest pose
+            IdlePhase = ProceduralGait.AdvancePhase(IdlePhase, dt, null);
+            var (bob, scale) = ProceduralGait.IdleAmplitudes(IdlePhase);
+            _procedural = (_groundY + bob, BaseScale * scale);
+        }
     }
 
     /// <summary>Forget every bridge (a new body): gate, travel, turn and lift.</summary>
@@ -737,7 +853,8 @@ public partial class Figure : Node3D
         => run.FadeOutAt is { } at ? Math.Max(0, 1 - (_animTime - at) / ClipLibraryRules.CrossfadeS) : 1;
 
     /// <summary>
-    /// <c>Figure.update(dt)</c> for the native body: a turn remembered during a holding bridge becomes the target; the
+    /// <c>Figure.update(dt)</c> for the native body: a clip-less rig's procedural gait first (<see cref="TickProcedural"/>);
+    /// a turn remembered during a holding bridge becomes the target; the
     /// yaw eases; the animation advances (the player in manual mode, so pose and root motion stay in the same frame);
     /// a bridge that reached its end lets go; the turn ψ(t) goes onto the root and the instance is turned back about the
     /// pivot; the travel carries the instance; the lift follows the ramp, fading with the bridge's weight once it no
@@ -745,6 +862,7 @@ public partial class Figure : Node3D
     /// </summary>
     public void UpdateFigure(double dt)
     {
+        TickProcedural(dt);
         if (_pendingYaw is { } py && !HoldsFacing)
         {
             TargetYaw = py;
@@ -802,22 +920,5 @@ public partial class Figure : Node3D
         ApplyRotation();
         ApplyBody();
         TickSecondary();
-    }
-
-    /// <summary>Capsule placeholder standing on the node origin.</summary>
-    public static Node3D Capsule(double heightM)
-    {
-        float h = (float)Math.Max(heightM, 0.6);
-        float r = Math.Min(0.28f, h / 4f);
-        var mi = new MeshInstance3D
-        {
-            Name = "Placeholder",
-            Mesh = new CapsuleMesh { Height = h, Radius = r },
-            Position = new Vector3(0, h / 2f, 0),
-            MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color(0.85f, 0.45f, 0.2f), Roughness = 0.8f, DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert },
-        };
-        var root = new Node3D { Name = "Body" };
-        root.AddChild(mi);
-        return root;
     }
 }

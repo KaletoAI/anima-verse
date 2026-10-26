@@ -43,11 +43,13 @@ public static class CheckRunner
     private static readonly Vector2 ExpBuildingAnchor = new(1.5f, -2f);
 
     // ---- S1b figures (worldmap.json / worldmap_poll2.json, README "Figures") ----
-    private const int ExpFigures = 3, ExpGlbFigures = 1, ExpPlaceholders = 2, ExpClipsLoaded = 5, ExpClipsFailed = 4;
+    private const int ExpFigures = 3, ExpGlbFigures = 2, ExpPlaceholders = 1, ExpClipsLoaded = 5, ExpClipsFailed = 4;
     private const int ExpTracksPerClip = 53;                       // 52 rotations + the hips position
     private const int ExpBoundTracks = 4 * ExpTracksPerClip;        // Stand-Relaxed, walk, waiting (female), reading on Ada
     private static readonly string[] ExpIndexKinds = { "Stand-Relaxed", "walk", "waiting", "reading" };
     private static readonly string[] ExpActions = { "stand-relaxed", "walk", "waiting", "reading", "idle" };
+    // Bram's FBX (fixtures/animals/animal_takes.fbx): its own three takes, no library (rig generic) — README "Figures".
+    private static readonly string[] ExpBramActions = { "idle", "sit", "walk" };
     private const string Ada = "Ada Wren", Bram = "Bram Holt", Cleo = "Cleo Marsh";
     private static readonly Vector3 ExpAda = new(-50f, 3.595947265625f, 30f);     // free, overview
     private static readonly Vector3 ExpBram = new(64f, 4.0675f, 132.32f);         // house huddle, fine tile
@@ -163,6 +165,12 @@ public static class CheckRunner
             if (only == "secondary")
             {
                 var alone = await SecondaryCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
+            if (only == "animals")
+            {
+                var alone = await AnimalCheck.RunAsync(host, dir);
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
@@ -284,6 +292,7 @@ public static class CheckRunner
             var bridges = await BridgeCheck.RunAsync(host, dir);
             var pairs = await PairCheck.RunAsync(host, dir);
             var secondary = await SecondaryCheck.RunAsync(host, dir);
+            var animals = await AnimalCheck.RunAsync(host, dir);
             var fidelity = await FidelityCheck.RunAsync(host, dir);
             var props = await PropsCheck.RunAsync(host, dir);
             var light = LightCheck.Run(host, dir);
@@ -298,7 +307,7 @@ public static class CheckRunner
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {bridges} | {pairs} | {secondary} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {bridges} | {pairs} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;
@@ -458,7 +467,7 @@ public static class CheckRunner
         Eq("placeholders", st.Placeholders, ExpPlaceholders);
         Eq("clips_loaded", st.ClipsLoaded, ExpClipsLoaded);
         Eq("bound_tracks", st.BoundTracks, ExpBoundTracks);
-        Eq("kinds_bound (actions)", st.KindsBound, ExpActions.Length);
+        Eq("kinds_bound (actions)", st.KindsBound, ExpActions.Length + ExpBramActions.Length);
         Eq("unbound_clips", st.UnboundClips, 0);
         Eq("offmap", st.Offmap, 0);
         Eq("model_failures", st.ModelFailures, 0);
@@ -475,7 +484,7 @@ public static class CheckRunner
         NearV("Bram position", bram.Position, ExpBram);
         NearV("Cleo position", cleo.Position, ExpCleo);
         Near("Ada y = ground", ada.Position.Y, (float)height.GroundAt(-50, 30));
-        Expect("Ada is GLB", ada.IsGlb && !bram.IsGlb && !cleo.IsGlb, "body kinds");
+        Expect("Ada and Bram are models, Cleo is not", ada.IsGlb && bram.IsGlb && !cleo.IsGlb, "body kinds");
         Near("Ada height", ModelPlacement.Measure(ada.Body!, Transform3D.Identity).Size.Y, ExpAdaHeight);
         Near("Bram height", ModelPlacement.Measure(bram.Body!, Transform3D.Identity).Size.Y, ExpBramHeight);
         // Cleo has no model and the fixture serves no fallback pool (its manifest is a 404): the portrait stands in
@@ -486,8 +495,13 @@ public static class CheckRunner
         Expect("Cleo initials gone with the picture", cleo.Portrait!.Initials.Text == "CM" && !cleo.Portrait.Initials.Visible
                && source.ByteRequests.Contains("/characters/Cleo%20Marsh/images/cleo.png?transparent=1"), cleo.Portrait.Initials.Text);
         Eq("Ada metallic materials (forced to 0)", FigureManager.MetallicMaterials(ada.Body!), 0);
-        Expect("FBX model not fetched", !source.ByteRequests.Any(u => u.Contains("Bram", StringComparison.Ordinal)),
-               string.Join(";", source.ByteRequests));
+        // Bram: the FBX and its separate texture, each fetched once; his own takes with the model.clips flags.
+        Eq("Bram FBX + texture fetched once each", source.ByteRequests.Count(u => u.Contains("Bram", StringComparison.Ordinal)), 2);
+        Expect("Bram's actions are his takes", bram.ClipKinds.SequenceEqual(ExpBramActions) && bram.Legs.Count == 0,
+               string.Join(",", bram.ClipKinds));
+        Expect("Bram's sit is a one-shot, walk loops", bram.Player!.GetAnimation("sit").LoopMode == Animation.LoopModeEnum.None
+               && bram.Player.GetAnimation("walk").LoopMode == Animation.LoopModeEnum.Linear, "loop flags");
+        Expect("Bram stands: the idle take", bram.CurrentClip == "idle", bram.CurrentClip);
 
         // Ada's actions: the four kinds of her chain + the idle alias (CLIP_SYNONYMS: 'stand' ⊂ stand-relaxed).
         Expect("Ada actions", ada.ClipKinds.SequenceEqual(ExpActions), string.Join(",", ada.ClipKinds));
