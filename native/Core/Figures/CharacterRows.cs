@@ -16,6 +16,15 @@ public sealed record CharacterRow(
 {
     public bool HasPos => PosX.HasValue && PosZ.HasValue;
 
+    /// <summary><c>activity_animation</c>: THE clip kind of a standing figure (npcs.ts → <c>standingClipFor</c>); "" = none.</summary>
+    public string ActivityAnimation { get; init; } = "";
+
+    /// <summary><c>animation_sets</c>: the character's set chain (<c>setCharacterSets</c>), the neutral set implied last.</summary>
+    public IReadOnlyList<string> AnimationSets { get; init; } = Array.Empty<string>();
+
+    /// <summary><c>model_rev</c>: the model's content revision (null = field absent); a change reloads like <c>model_sig</c>.</summary>
+    public string? ModelRev { get; init; }
+
     public static List<CharacterRow> ParseList(JsonElement root)
         => Json.Arr(root, "characters")
                .Where(c => c.ValueKind == JsonValueKind.Object)
@@ -40,8 +49,17 @@ public sealed record CharacterRow(
             travel = new TravelInfo(wp, Json.NumOrNull(tr, "progress_m"));
         }
         string? sig = c.TryGetProperty("model_sig", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+        var sets = c.TryGetProperty("animation_sets", out var a) && a.ValueKind == JsonValueKind.Array
+            ? a.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList()
+            : new List<string>();
+        string? rev = c.TryGetProperty("model_rev", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
         return new CharacterRow(Json.Str(c, "name"), Json.Str(c, "location_id"), px, pz,
-                                Json.NumOrNull(c, "height_cm"), sig, travel);
+                                Json.NumOrNull(c, "height_cm"), sig, travel)
+        {
+            ActivityAnimation = Json.Str(c, "activity_animation"),
+            AnimationSets = sets,
+            ModelRev = rev,
+        };
     }
 }
 

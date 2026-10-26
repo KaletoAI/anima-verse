@@ -219,41 +219,46 @@ file `normalized` — its sidecar lists the `normalize` step — and would draw 
 the fixture says `false` to exercise the scale rule.) Bram's capsule = 180 cm → **1.80**,
 Cleo has no `height_cm` → the browser default **1.70**.
 
-### Clips
+### Clips (Task 27 poses, Task 28 the whole library)
 
-The clip choice follows the browser's movement poses (Task 27; rules: `native/Core/Figures/FigureClips.cs`,
+The clip choice follows the browser's movement poses (rules: `native/Core/Figures/FigureClips.cs`,
 vectors `shared/test-vectors/figure_clips.json`). `movement_poses` names three poses:
 `standing` → `" Stand-Relaxed "` (public `idle`), `walking` → `mob1-walk` (public `walk`),
 `running` → `""` (public `run`); the other four are absent. Resolved (`resolveMovementPoses`: trim +
 lower-case, blank or missing → the pose default): standing **stand-relaxed**, walking **mob1-walk**,
 running **run** (blank kind → default), swimming/treading_water/crawling/crawling_rest their defaults.
 
-What a figure asks for: standing `standingClipFor(none, none)` = the standing kind **stand-relaxed**;
-moving `moveClip(walk_run, false)` = the walking kind **mob1-walk**.
+**The listing** (`animation_clips.json`, nine entries, listing order = download priority and commit order;
+`urls.json` decides what exists):
 
-The library kinds native plays from — neutral set, solo, listing order, lower-cased — are
-`[idle, stand-relaxed, walk]` (entry 2, entry 4 `Stand-Relaxed`, entry 6; the pair half `role: a` and both
-`female` entries are not neutral solo clips). `resolveClipKind` over them:
+| # | kind (as committed) | set | file | flags | download |
+|---|---|---|---|---|---|
+| 1 | `stand-relaxed__a` (role `a` → `<kind>__<role>`) | "" | — | loop | **404** |
+| 2 | `idle` | "" | — | loop | **404** |
+| 3 | `stand-relaxed` | female | — | loop | **404** |
+| 4 | `Stand-Relaxed` (spelled as listed) | "" | `shared/models/clips/idle.fbx` | loop | ok |
+| 5 | `walk` | female | — | (missing = loop) | **404** |
+| 6 | `walk` | "" | `walk.fbx` | (missing = loop) | ok |
+| 7 | `waiting` | female | `female/waiting.fbx` | loop, `root_motion.mode` keep → root motion | ok |
+| 8 | `waiting` | "" | `waiting.fbx` | **one-shot** (`loop: false`) | ok |
+| 9 | `reading` | "" | `reading.fbx` | **one-shot**, `root_motion.mode` strip → no root motion | ok |
 
-- `stand-relaxed`: the first chain step is the kind itself and matches entry 4 exactly →
-  `stand-relaxed.fbx?v=fixturestand0001`.
-- `mob1-walk`: chain = `mob1-walk` (wanted), `walk` (public kind of its pose `walking`), no `CLIP_FALLBACK`
-  for `mob1-walk`, `walk` or the family `mob1`, then `stand-relaxed`, `idle` (standing played/public), `idle`
-  → `[mob1-walk, walk, stand-relaxed, idle]`. `mob1-walk`: no exact entry, and no entry of family `mob1`
-  (`idle` is family idle, `stand-relaxed` family stand, `walk` family walk) → nothing; `walk`: exact →
-  entry 6, `walk.fbx?v=fixturewalk00001`.
+→ **clips_loaded = 5, clip_failures = 4**, every URL requested exactly once over the whole run.
+`commitInListOrder` (first file per (kind, set) wins, a failed one leaves a gap): kinds in commit order
+**[Stand-Relaxed, walk, waiting, reading]** — `waiting` with two sets (female from #7, "" from #8); no female
+`stand-relaxed`/`walk` (both 404). The browser keeps the kind as the server spells it in the index and
+lower-cases only when it names the actions.
 
-The decoys a wrong pick would hit (their URLs are not in `urls.json`, so a wrong pick fails the check with a
-404): the plain `idle` (what a default table or the old literal role name would pick), the pair half, the
-`female` stand-relaxed and walk. The neutral solo `stand-relaxed` maps to `shared/models/clips/idle.fbx`, the
-neutral `walk` to `shared/models/clips/walk.fbx` → **clips_loaded = 2**, each URL downloaded exactly once over
-both polls. Ada's AnimationPlayer holds them under their kinds `stand-relaxed` and `walk` (the browser names a
-clip by its kind); standing she resolves `stand-relaxed` exactly, walking `mob1-walk` → `walk` (same chain).
-
-`transition_clips` (`resolveClipTransitions`, parsed now, played with the full library): row 1
-(`sitting`, `*`, `get-up-chair`, accel 0) kept; row 2 `" Stand-Relaxed "` → `stand-relaxed`, `Start-Walk` →
-`start-walk`, accel 12 capped to **8**; row 3 has an empty `from` → dropped → **2 rules**.
-`clipTransition(stand-relaxed, walk)` = row 2 (both named); `clipTransition(sitting, walk)` = row 1 (exit rule).
+**Ada's set chain** (`animation_sets: ["female"]` in both polls; `clipsFor` = per kind the first file along
+`[female, ""]`): Stand-Relaxed → "" (#4), walk → "" (#6, the female one failed), **waiting → female (#7)**,
+reading → "" (#9) — four clips. Her **actions** (the `Figure` constructor): the four names lower-cased —
+`stand-relaxed, walk, waiting, reading` — then the `CLIP_SYNONYMS` aliases a name does not carry literally,
+through `resolveClipName` (exact before substring, needle order ranks): `idle` ← needles idle (no name is or
+contains it), **stand** (`stand-relaxed` contains it) → alias `idle` = the stand-relaxed clip; `walk` literal;
+`run`, `sit`, `lie` (lie/lay/sleep), `dance` (dance/samba), `wave` (wave/greet): no name contains a needle (`waiting`
+holds none of them) → **actions [stand-relaxed, walk, waiting, reading, idle]**, kinds_bound = 5,
+`missingClipKinds` = none → unbound_clips = 0. The loop flag is the FILE's: Ada's `waiting` loops (#7) although
+the neutral #8 is a one-shot; `reading` is a one-shot.
 
 **Track list of the clip files** (from the FBX connection table, read with a 60-line
 binary-FBX reader outside the repo — not from Godot): both files hold 70 Model nodes
@@ -269,27 +274,71 @@ LeftRibbon1, LeftRibbon2, both Toe_End and the ten `…4` finger/thumb tips (17 
 Bound per clip = 52 rotation tracks + 1 hips position = **53**; stand-relaxed + walk on the one
 GLB figure → **bound_tracks = 106**, unbound_clips = 0.
 
-Godot's FBX importer emits only the curves that move (idle 40 rotation tracks, walk 20 —
-the check log shows them) and keeps the constant ones as the node default; the retarget
-writes those back as one-key tracks, which is why the count is the file's 53 and not
-41/21. The check proves both kinds bind: after one evaluation Ada's `LeftUpLeg` (a moving
-track) holds the standing clip's (`idle.fbx` served as stand-relaxed) key 0 and her `LeftForeArm` (no Godot track — constant in
-the file) the clip's node default; both differ from her own rest, so an unbound track
-would fail.
+Bound per clip = 52 rotation tracks + 1 hips position = **53** (all four files are takes on the reference
+rig; Ada carries the same 52 joints of each); four clips on the one GLB figure → **bound_tracks = 212**.
+
+Godot's FBX importer emits only the curves that move and keeps the constant ones as the node default; the
+retarget writes those back as one-key tracks, which is why the count is the file's 53. The check proves the
+binding on the standing clip (`idle.fbx` served as Stand-Relaxed): after one evaluation Ada's `LeftUpLeg` (a
+moving track) holds key 0 rest-corrected and her `LeftForeArm` (no Godot track — constant in the file) the
+corrected node default; both differ from her own rest, so an unbound track would fail.
+
+**Hips** (`mapHipsTrack`, vectors `hips_tracks.json`): with P the hips' parent frame in the template (root
+transform included, three's `parent.matrixWorld`), the local track value is `rest + P⁻¹·(0, b, 0)` with
+`b = (|y|·scaleFix − ref)·k`, `k = (P·rest).y / ref`, `ref` = the rig's rest hips height (1.1303). In world terms
+`P·value = P·rest + (0, b, 0)`: x and z stay at the rest (in place), and
+`y_world = (P·rest).y + (|y| − ref)·(P·rest).y/ref = |y|·(P·rest).y / ref` (scaleFix 1: idle's hips median ≈ 1.10 is
+not above 1.5 × 1.13). The check reads Ada's posed hips back in that frame and demands exactly this.
+
+### Clip choice (`CheckClipChoice`, `Figure.play` over Ada's five actions)
+
+| asked | `clipKindChain` (poses as above) | `resolveClipKind` → action | pace (`gotFamily` by family) |
+|---|---|---|---|
+| (poll 1, standing, `activity_animation` "") | `standingClipFor("", idleClip(walk_run)="")` = stand-relaxed | **stand-relaxed** (exact) | 1 |
+| `waiting` | [waiting, stand-relaxed, idle] | **waiting** (the female file) | 1 |
+| `idle` | [idle] | **idle** (the alias) | 1 (family idle found) |
+| `lie` | [lie, sit (CLIP_FALLBACK), stand-relaxed, idle] | **stand-relaxed** (lie/sit: no relative) | 1 (family lie ≠ idle/run) |
+| `Run-Fast` → `run-fast` | [run-fast, walk (fallback of family run), stand-relaxed, idle] | **walk** | **1.5** (run family missing) |
+| "" | the standing pose's kind stand-relaxed | **stand-relaxed** | 1 |
+
+The pace is the player's `speed_scale`; a switch to another action is `play(action, 0.25)` (the browser's
+`fadeIn/fadeOut(0.25)`), the same action for another kind only changes the pace.
 
 ### Second poll (`worldmap_poll2.json`)
 
-Bram is gone → **figures = 2**. Ada moves to (−40, 30) and her `model_sig` becomes
-`ada-2` → `model3d` is asked again (2 requests), the GLB URL is unchanged → no second
-download (template cache), clips not downloaded again. Cleo has no `model_sig` (absent
-both times) → not asked again. Cleo's `progress_m` 144 → (300 − 44, −100) = (256, −100).
+Bram is gone → **figures = 2**. Ada moves to (−40, 30), her `model_sig` becomes `ada-2` (`model_rev` stays r1)
+→ `model3d` is asked again (2 requests), the GLB URL is unchanged → no second download (template cache per URL
+and set chain), clips not downloaded again. Cleo has no `model_sig` and no `model_rev` (absent both times) →
+not asked again. Cleo's `progress_m` 144 → (300 − 44, −100) = (256, −100). Ada's row now says
+`activity_animation: "reading"`.
 
-Lerp over the poll interval (5 s): Ada plans 10 m / 5 s = 2 m/s > 0.2 → moving → `mob1-walk` → plays **walk**, facing +x
+Lerp over the poll interval (5 s): Ada plans 10 m / 5 s = 2 m/s > 0.2 → moving → `moveClip(walk_run, false)` =
+`mob1-walk` → chain [mob1-walk, walk, stand-relaxed, idle] → plays **walk** at pace 1 (family mob1), facing +x
 (rotation.y = atan2(10, 0) = π/2). After 2.5 s: Ada (−45, 30), y: fx = 211/256 =
 0.82421875, north = 3.296875, south = 6.59375, y = 3.296875·0.8828125 + 6.59375·0.1171875
 = **3.68316650390625**; Cleo (259.5, −100), y = 4.875 (same clamped cell). After 5 s: Ada
 at (−40, 30), fx = 216/256 = 0.84375, north = 3.375, south = 6.75, y = 2.9794921875 +
-0.791015625 = **3.7705078125**, arrived → standing → plays **stand-relaxed**.
+0.791015625 = **3.7705078125**, arrived → standing → `standingClipFor("reading", "")` = **reading** (exact),
+a one-shot: advanced past its end the player stops and the skeleton keeps the clip's LAST frame (her
+LeftUpLeg equals the bound track at t = length — the browser's `clampWhenFinished`).
+
+**Model revision** (`refreshIfChanged`): the same poll again (sig ada-2, rev r1 = the `model.model_rev` she was
+loaded with) → no request (still 2); the same poll with `model_rev: "r2"` → one reload → **3** requests, the
+GLB still downloaded once (same URL).
+
+**Model queue** (width 3, `createFocusQueue`): the three poll-1 jobs are pushed in one pass; the check's focus
+target is (263, 0, −100) (Cleo's journey point at y 0). Distances² Cleo 4.875² = 23.8, Bram (64, 4.0675,
+132.32): 199² + 4.0675² + 232.32² = 93 590, Ada (−50, 3.596, 30): 313² + 3.596² + 130² = 114 882 → start order **Cleo, Bram, Ada** (no avatar in the fixture; the avatar
+priority is a unit test, `FigureRuntimeRulesTests`).
+
+### Tiers (`CheckTiers`, npcs.ts `tickFigureTiers` with main.ts' 25/35 m)
+
+Ada's model3d answer carries `low_url` (the tracked low bake of the same Minerva GLB). Her wish starts **full**
+(`tierWanted.get(name) ?? 'full'`); per tick: distance < 25 → full, > 35 → low, else the last wish. The camera on
+her +x side at 30, 24, 30, 36, 30, 24, 36 m → **full, full, full, low, low, full, low**. The first low loads the
+low edition (one download of the `tier=low` URL, no model3d request — the tier reuses the answer it has), the way
+back to full and the last low are cache swaps (no download): the full URL stays at 1 download, the low at 1. The
+low bake has the same 52 joints → 212 bound tracks as well.
 
 ### Placement rule on its own (`CheckPlacementRule`)
 
@@ -301,39 +350,34 @@ withheld route (`waypoints` null) but a `pos` → its pos; a one-point route wit
 and a row with neither location nor `pos` → off the map; `progress_m` 99 on a 5 m line →
 the end point (3, 4).
 
-### Rest-pose correction against the browser (`rest_reference.json`)
+### Importer cross-check against three (`rest_reference.json`)
 
-The figure clips are rest-corrected like client3d does it (`q = K_p⁻¹·c·K_b`,
-`restCorrections` in `packages/scene-render/src/clipRetarget.ts`). The expected values are
-not hand-derived — they are the BROWSER'S OWN FUNCTION's output:
+The ORACLE of the rest-pose correction is now `shared/test-vectors/retarget.json` (hand cases [1]–[10] of
+`scripts/smoke_clip_retarget.mjs`, consumed by `native/tests/RetargetVectorTests.cs`); the C# math lives in
+`native/Core/Figures/RestCorrections.cs` on plain pose data. `rest_reference.json` stays as an IMPORTER
+cross-check only — it proves what no vector can: that Godot's FBX/glTF importers hand that math the same clip
+values and rests as three's loaders, and that the Godot adapter's sole sampling off the skinned mesh
+(`RestAdapter.SolesOf`, the input of `footStance`) finds what three's `restSolesOf` finds (Hagrid's foot stance).
+The values are the browser's own output:
 
     node native/fixtures/rest_reference.mjs      # from the repo root; needs npm install
 
-The script bundles itself with esbuild (like `scripts/smoke_clip_retarget.mjs`), loads the
-reference rig and the clips with three's `FBXLoader` and three demo bakes with
-`GLTFLoader` (images stripped — node cannot decode them; geometry/skin/skeleton intact),
-runs `restPoseOf` → `restCorrections` → `bindRelativeValues` and writes per model the
-corrected-bone count, the bones a stance rule turned, and for idle @ 0 s / 5 s and walk
-@ 0 s / 0.4 s the raw clip quaternion and the corrected one for 16 bones. Re-run it when
-the browser function, a clip or one of the rigs changes, and commit the JSON.
+The script bundles itself with esbuild, loads the reference rig and the clips with three's `FBXLoader` and
+three demo bakes with `GLTFLoader` (images stripped), runs `restPoseOf` → `restCorrections` →
+`bindRelativeValues` and writes per model the corrected-bone count, the bones a stance rule turned, and for idle
+@ 0 s / 5 s and walk @ 0 s / 0.4 s the raw clip quaternion and the corrected one for 16 bones. Re-run it when
+an importer, a clip or one of the rigs changes, and commit the JSON.
 
 | model | corrected bones | stance rule | why it is in |
 |---|---|---|---|
 | Minerva McGonagall | 51 (all but the hips) | none | the `--check` figure (Ada) |
-| Johanna Falk | 51 | **leg** (both legs, upleg → toebase) | exercises `legStance` |
-| Rubeus Hagrid | 51 | **foot** (both feet + toebase) | exercises `footStance` (sole read off the skinned mesh) |
+| Johanna Falk | 51 | **leg** (both legs, upleg → toebase) | `legStance` on real rests |
+| Rubeus Hagrid | 51 | **foot** (both feet + toebase) | the mesh-sole sampling feeding `footStance` |
 
-No demo rig trips `torsoStance` (Hagrid's trunk mean is 1.05°, the gate 6°), so that
-branch is ported but not compared.
-
-`CheckRestReference` demands, per model, the same corrected-bone count and stance set,
-and per sample and bone: Godot's clip value within 0.5° of three's (the two FBX importers
-agree — measured 0°) and the corrected rotation within **0.5°** of the browser's (measured
-max 0.056°, 192 comparisons). End to end on Ada: after `Seek` of the bound clip her
-skeleton's pose rotations are within 0.5° of the browser's corrected values (measured
-max 0.04°). Example, Minerva idle @ 5 s, RightArm: clip
-(0.5371679, -0.0387975, -0.114042, 0.8348292) → browser-corrected (0.316868, -0.5165012, -0.4071294, 0.6834235) — 72.3° apart, which
-is what the old verbatim copy put on her arm; the check allows 0.5°.
+`CheckRestReference` demands, per model, the same corrected-bone count and stance set, and per sample and bone:
+Godot's clip value within 0.5° of three's (measured 0°) and the corrected rotation within 0.5° (measured max
+0.056°, 192 comparisons); end to end on Ada after `Seek` of the bound clip, her pose within 0.5° (measured max
+0.04°).
 
 ## Scatter (Task S3)
 

@@ -54,6 +54,7 @@ namespace AnimaNative;
 ///   --check scatter | --check=scatter   only the scatter section (S3 reference + the worker rebuild, Task 26)
 ///   --check veil | --check=veil         only the exploration veil section (cells, crossfade, height ramp, shader, Task 26)
 ///   --check matrix | --check=matrix     only the bench-matrix section (every runtime switch on the fixture world, Task 26b)
+///   --check figures | --check=figures only the figure section (whole clip library, set chain, activities, tiers, Task 28)
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
 public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
@@ -190,11 +191,11 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
 
     private static bool IsSection(string v)
         => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
-             or "scatter" or "veil" or "matrix";
+             or "scatter" or "veil" or "matrix" or "figures";
 
     private static string CheckSection(string v) => IsSection(v)
         ? v : throw new ArgumentException("--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', "
-                                          + $"'terrain', 'stream', 'water', 'scatter', 'veil' and 'matrix', got '{v}'");
+                                          + $"'terrain', 'stream', 'water', 'scatter', 'veil', 'matrix' and 'figures', got '{v}'");
 
     public static Viewport.Msaa ParseMsaa(string v) => v switch
     {

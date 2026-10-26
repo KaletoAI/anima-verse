@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Gltf;
@@ -17,42 +16,53 @@ namespace AnimaNative.Figures;
 public sealed class FigureStats
 {
     public int Figures, GlbFigures, Placeholders, ClipsLoaded, ClipsFailed, BoundTracks, UnboundClips;
-    public int ModelLoads, ModelFailures, Offmap, Polls;
+    public int ModelLoads, ModelFailures, Offmap, Polls, KindsBound, LowTier;
 
     public string Summary() =>
         $"figures={Figures} glb_figures={GlbFigures} placeholders={Placeholders} clips_loaded={ClipsLoaded} "
-        + $"bound_tracks={BoundTracks} unbound_clips={UnboundClips} model_loads={ModelLoads} "
-        + $"model_failures={ModelFailures} offmap={Offmap} clip_failures={ClipsFailed}";
+        + $"kinds_bound={KindsBound} bound_tracks={BoundTracks} unbound_clips={UnboundClips} model_loads={ModelLoads} "
+        + $"model_failures={ModelFailures} offmap={Offmap} clip_failures={ClipsFailed} low_tier={LowTier}";
 }
 
 /// <summary>
-/// The figures of <c>GET /play/worldmap</c> on the open map (Task S1b).
+/// The figures of <c>GET /play/worldmap</c> on the open map — client3d's <c>FigureLibrary</c> + the model side of
+/// <c>NpcManager</c>:
 ///
-///   • which and where: <see cref="FigurePlacement.Resolve"/> (the browser's far view);
+///   • which and where: <see cref="FigurePlacement.Resolve"/> (the browser's far view; rooms are Task 29);
 ///     y = <see cref="WorldHeight.GroundAt"/> at the shown point, every frame;
-///   • fed by the client's world-map poll (<see cref="ApplyPolled"/>; the cadence is the browser's,
-///     Main's <see cref="Sync.PollScheduler"/>); new/vanished characters are added/removed; a moved
-///     target lerps in over the current poll interval (<see cref="PollSeconds"/>);
-///   • model: <c>GET /characters/{name}/model3d</c> → <c>model.url</c> used
-///     unchanged (§ A7); a GLB is Meshopt-decoded and imported once per URL and
-///     duplicated per figure; FBX (generic rig) and "no model" (404, or
-///     <c>model</c> null) are capsule placeholders; reloaded when the row's
-///     <c>model_sig</c> changes (§ A11a);
-///   • scale: <c>normalized</c> → 1, else height / raw bounding-box height,
-///     height = <c>height_cm</c>/100 when 30 &lt; cm &lt; 400, else the last
-///     known one, default 1.70 m (figures.ts <c>setCharacterHeight</c>,
-///     <c>BASE_FIGURE_HEIGHT_M</c>, <c>buildModel</c>; a Z-up export is stood up
-///     first like there);
-///   • clips: the standing + walking pose clips from <see cref="ClipLibrary"/>, retargeted once per
-///     model URL and shared by its figures; only a <c>mixamo</c> rig gets them.
+///   • fed by the client's world-map poll (<see cref="ApplyPolled"/>); a moved target lerps in over the poll
+///     interval (<see cref="PollSeconds"/>; NPC walking is Task 30); <c>activity_animation</c> is what a standing
+///     figure plays, <c>animation_sets</c> its set chain;
+///   • model: <c>GET /characters/{name}/model3d</c> → <c>model.url</c> / <c>model.low_url</c> used unchanged (§ A7),
+///     every load (model3d + GLB + fit) one job of a <see cref="FocusQueue"/> of width 3 — the avatar first, then
+///     the figure nearest the camera target; a GLB is Meshopt-decoded and imported once per (URL, set chain) and
+///     duplicated per figure; FBX (generic rig) and "no model" (404 or <c>model</c> null) are capsule placeholders
+///     (Task 34 / Task 29); a transient failure retries after <see cref="RetryDelayS"/>; reloaded when the row's
+///     <c>model_sig</c> or <c>model_rev</c> changes (§ A11a, <c>refreshIfChanged</c>);
+///   • looks: metalness forced to 0 on every material (characters are dielectrics, AV3D-14), roughness untouched;
+///     scale <c>normalized</c> → 1, else height / raw bounding-box height (height = <c>height_cm</c>/100 when
+///     30 &lt; cm &lt; 400, default 1.70 m; a Z-up export is stood up first);
+///   • clips: the WHOLE library along the character's set chain (<see cref="ClipLibrary.ClipsFor"/>), retargeted
+///     once per template, one action per kind + the synonym aliases; only a <c>mixamo</c> rig gets them;
+///   • tiers: every <see cref="FigureTiers.TickS"/> the camera distance picks full (&lt; 25 m) / low (&gt; 35 m),
+///     the band between keeps; a cached tier swaps at once, a missing one loads through the queue.
 /// </summary>
 public partial class FigureManager : Node3D
 {
     public const double DefaultHeightM = 1.70;
+    /// <summary>The browser's model queue width (<c>createFocusQueue({max: 3})</c>).</summary>
+    public const int ModelQueueWidth = 3;
+    /// <summary>A transient model failure retries after this many seconds (figures.ts: 30 000 ms).</summary>
+    public double RetryDelayS { get; set; } = 30;
     /// <summary>The current poll interval (s): a moved figure lerps to its new spot over it.</summary>
     public double PollSeconds { get; set; } = 3.0;
-    /// <summary>false in <c>--check</c>: time only moves through <see cref="Tick"/>.</summary>
+    /// <summary>false in <c>--check</c>: time only moves through <see cref="Tick"/>, tiers only through <see cref="TickTiers"/>.</summary>
     public bool AutoTick { get; set; } = true;
+
+    /// <summary>Where the camera is (tiers measure from it, npcs.ts <c>tickFigureTiers(camera.position)</c>); null = no tiers.</summary>
+    public Func<Vector3?>? CameraPosition { get; set; }
+    /// <summary>The orbit target (the model queue's distance, main.ts <c>setModelFocus</c>: distance² to <c>engine.target</c>).</summary>
+    public Func<Vector3?>? FocusTarget { get; set; }
 
     private readonly IWorldSource _source;
     private readonly WorldHeight _height;
@@ -60,8 +70,9 @@ public partial class FigureManager : Node3D
     private readonly bool _strict;
     private readonly Dictionary<string, Figure> _figures = new();
     private readonly Dictionary<string, Task<ModelTemplate>> _templates = new();
-    /// <summary>At most 4 model requests at a time (the browser's clip queue uses the same width).</summary>
-    private readonly SemaphoreSlim _net = new(4);
+    private readonly Dictionary<string, ModelInfo> _infos = new();
+    private readonly FocusQueue _models = new(ModelQueueWidth);
+    private double _tierClock;
 
     /// <summary>
     /// The mirror over a point for the underwater ghost (npcs.ts: <c>groundWaterLevel(typeAt(x, z).water_level, scope)</c>,
@@ -72,21 +83,32 @@ public partial class FigureManager : Node3D
     public ClipLibrary Clips { get; }
     public FigureStats Stats { get; } = new();
     public IReadOnlyDictionary<string, Figure> Figures => _figures;
+    /// <summary>The world map's <c>avatar</c> (the model queue serves it first).</summary>
+    public string AvatarName { get; private set; } = "";
+    /// <summary>The order the model jobs STARTED in (character names, a tier load included) — the queue's observable.</summary>
+    public List<string> ModelLoadOrder { get; } = new();
 
     private sealed class ModelTemplate
     {
         public required Node3D Root { get; init; }
         public required double RawHeight { get; init; }
+        public required string Url { get; init; }
         public AnimationLibrary? Library { get; init; }
-        /// <summary>The kinds in <see cref="Library"/>, in bind order (the figure's fallback is the first).</summary>
+        /// <summary>The action kinds in <see cref="Library"/>, in action order (the figure's fallback is the first).</summary>
         public IReadOnlyList<string> Kinds { get; init; } = Array.Empty<string>();
+        /// <summary>Library kind → the set its file came from (the set chain's decision).</summary>
+        public IReadOnlyDictionary<string, string> ClipSets { get; init; } = new Dictionary<string, string>();
         public int BoundTracks { get; init; }
         public int Unbound { get; init; }
         /// <summary>Bones with a rest correction; −1 = no rig (verbatim copy).</summary>
         public int Corrected { get; init; }
+        public long Keys { get; init; }
+        /// <summary>Godot static memory grown by the retarget of this template (bytes).</summary>
+        public long ClipBytes { get; init; }
+        public double FitMs { get; init; }
     }
 
-    private sealed record ModelInfo(string Url, string Format, string Rig, bool Normalized);
+    private sealed record ModelInfo(string Url, string? LowUrl, string Format, string Rig, bool Normalized, string? ModelRev);
 
     public FigureManager(IWorldSource source, WorldHeight height, Action<string> log, bool strict)
     {
@@ -95,24 +117,36 @@ public partial class FigureManager : Node3D
         _height = height;
         _log = log;
         _strict = strict;
-        Clips = new ClipLibrary(source, log);
+        Clips = new ClipLibrary(source, log) { NextFrame = NextFrame };
     }
 
-    /// <summary>Clip list + standing/moving clip import. A missing list leaves every figure in bind pose (online).</summary>
+    /// <summary>One frame later (inside the tree), else at once.</summary>
+    private async Task NextFrame()
+    {
+        if (IsInstanceValid(this) && IsInsideTree()) await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+    }
+
+    /// <summary>
+    /// Start the library (listing, rig, every clip) and wait for the LISTING only: the pose table is known, the
+    /// clips keep coming in the background — a model fit waits for them (<c>await this.settled</c>). A missing list
+    /// leaves every figure in bind pose (online); <c>strict</c> rethrows.
+    /// </summary>
     public async Task InitAsync()
     {
-        try { await Clips.LoadClipsAsync(); }
-        catch (Exception e) when (!_strict) { _log($"clips: list failed: {e.Message} — figures stay in bind pose"); }
-        Stats.ClipsLoaded = Clips.ClipsLoaded;
-        Stats.ClipsFailed = Clips.ClipsFailed;
+        var load = Clips.LoadClipsAsync();
+        await Task.WhenAny(load, Clips.ListingParsed);
+        if (load.IsFaulted)
+        {
+            if (_strict) await load;
+            _log($"clips: list failed: {load.Exception?.InnerException?.Message} — figures stay in bind pose");
+        }
     }
 
     private readonly TaskCompletionSource _firstPoll = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>
-    /// Completes when the FIRST poll's figures and the model loads it started
-    /// are done (failed loads included — they are counted, not awaited again).
-    /// The bench (S2) starts after it.
+    /// Completes when the FIRST poll's figures and the model loads it started are done (failed loads included —
+    /// they are counted, not awaited again). The bench (S2) starts after it.
     /// </summary>
     public Task FirstPollDone => _firstPoll.Task;
 
@@ -153,14 +187,14 @@ public partial class FigureManager : Node3D
     }
 
     /// <summary>
-    /// One world-map payload: resolve the spots, add/move/remove figures and
-    /// start model (re)loads. Reads the JSON synchronously; the returned task
-    /// completes when the loads it started are done (the check awaits it, the
-    /// poll loop does not).
+    /// One world-map payload: resolve the spots, add/move/remove figures, hand each its activity and set chain,
+    /// start model (re)loads. Reads the JSON synchronously; the returned task completes when the loads it started
+    /// are done (the check awaits it, the poll loop does not).
     /// </summary>
     public Task Apply(JsonElement root)
     {
         Stats.Polls++;
+        AvatarName = Json.Str(root, "avatar");
         var rows = CharacterRow.ParseList(root);
         var spots = FigurePlacement.Resolve(rows, MapPlace.ParsePlaced(root));
         Stats.Offmap = rows.Count(r => !spots.ContainsKey(r.Name));
@@ -177,21 +211,20 @@ public partial class FigureManager : Node3D
                 AddChild(fig);
             }
             if (row.HeightCm is > 30 and < 400) fig!.HeightM = row.HeightCm.Value / 100.0;
+            if (row.AnimationSets.Count > 0) fig!.Sets = row.AnimationSets;   // setCharacterSets: only a non-empty chain
             fig!.Rule = spot.Rule;
+            fig.Activity = row.ActivityAnimation;
             fig.SetTarget(at, PollSeconds, snap: fresh);
             fig.Advance(0, _height.GroundAt);
             Gate(fig);
+            fig.WantedSig = row.ModelSig;
+            fig.WantedRev = row.ModelRev;
             if (fresh)
             {
                 fig.SetBody(Figure.Capsule(fig.HeightM), false, null, null);
-                fig.WantedSig = row.ModelSig;
                 loads.Add(LoadModelAsync(fig));
             }
-            else if (row.ModelSig != fig.WantedSig)
-            {
-                fig.WantedSig = row.ModelSig;
-                if (!fig.Loading) loads.Add(LoadModelAsync(fig));
-            }
+            else if (!fig.Loading && !fig.RetryPending && Changed(fig)) loads.Add(LoadModelAsync(fig));
         }
         foreach (var gone in _figures.Keys.Where(n => !spots.ContainsKey(n)).ToList())
         {
@@ -202,6 +235,13 @@ public partial class FigureManager : Node3D
         return Task.WhenAll(loads);
     }
 
+    /// <summary>
+    /// <c>refreshIfChanged(name, model_sig, model_rev)</c>: the signature differs, or the row carries a revision
+    /// other than the one the model was loaded with (an absent revision never reloads).
+    /// </summary>
+    private static bool Changed(Figure fig)
+        => fig.WantedSig != fig.LoadedSig || (fig.WantedRev is not null && fig.WantedRev != fig.LoadedRev);
+
     public void Tick(double dt)
     {
         foreach (var fig in _figures.Values)
@@ -209,6 +249,81 @@ public partial class FigureManager : Node3D
             fig.Advance(dt, _height.GroundAt);
             Gate(fig);
         }
+    }
+
+    /// <summary>
+    /// npcs.ts <c>tickFigureTiers(camera, 25, 35)</c>: per figure with a server model, the distance from the camera
+    /// picks its tier (<see cref="FigureTiers.Next"/>); a change swaps from the template cache at once or loads the
+    /// missing tier. Returns the loads it started.
+    /// </summary>
+    public Task TickTiers(Vector3 camera)
+    {
+        var loads = new List<Task>();
+        foreach (var fig in _figures.Values)
+        {
+            if (!_infos.ContainsKey(fig.CharacterName)) continue;   // no server model: the tier means nothing
+            var next = FigureTiers.Next(fig.WantedTier, camera.DistanceTo(fig.Position));
+            if (next == fig.WantedTier) continue;
+            fig.WantedTier = next;
+            loads.Add(SyncTier(fig));
+        }
+        UpdateStats();
+        return Task.WhenAll(loads);
+    }
+
+    /// <summary>
+    /// <c>syncTier</c>: bring the body to the wanted tier — a template already built swaps at once, otherwise ONE load
+    /// through the model queue, then check again (the wish may have changed meanwhile). A failure gives up until the
+    /// next tier change.
+    /// </summary>
+    private Task SyncTier(Figure fig)
+    {
+        if (fig.Loading || fig.WantedTier == fig.LoadedTier || !_infos.TryGetValue(fig.CharacterName, out var info)) return Task.CompletedTask;
+        var want = fig.WantedTier;
+        var url = UrlFor(info, want);
+        if (url == fig.LoadedUrl)
+        {
+            // No low edition (low_url absent → url): the same mesh, nothing to swap.
+            fig.LoadedTier = want;
+            return Task.CompletedTask;
+        }
+        if (_templates.TryGetValue(TemplateKey(url, fig.Sets), out var cached) && cached.IsCompletedSuccessfully)
+        {
+            Instantiate(fig, cached.Result, info, want);
+            return Task.CompletedTask;
+        }
+        fig.Loading = true;
+        return _models.Push(Job(fig, async () =>
+        {
+            try
+            {
+                var template = await GetTemplate(url, info, fig.Sets);
+                if (Alive(fig) && fig.LoadedSig == fig.WantedSig) Instantiate(fig, template, info, want);
+            }
+            catch (Exception e) when (!_strict)
+            {
+                _log($"figure {fig.CharacterName}: {want} tier could not be loaded: {e.Message}");
+            }
+            finally { fig.Loading = false; }
+            if (Alive(fig) && fig.WantedTier != fig.LoadedTier && fig.LoadedUrl != UrlFor(info, fig.WantedTier)) await SyncTier(fig);
+        }));
+    }
+
+    /// <summary>The URL of a tier: <c>low</c> → <c>low_url ?? url</c> (buildModel).</summary>
+    private static string UrlFor(ModelInfo info, FigureTier tier) => tier == FigureTier.Low ? info.LowUrl ?? info.Url : info.Url;
+
+    /// <summary>One model-queue job of a figure: the avatar first, then by distance² to the camera target.</summary>
+    private FocusJob Job(Figure fig, Func<Task> run)
+        => new(() => FocusDistance(fig), async () =>
+        {
+            ModelLoadOrder.Add(fig.CharacterName);
+            await run();
+        }, fig.CharacterName, fig.CharacterName == AvatarName);
+
+    private double FocusDistance(Figure fig)
+    {
+        if (!IsInstanceValid(fig) || FocusTarget?.Invoke() is not { } t) return double.PositiveInfinity;
+        return fig.Position.DistanceSquaredTo(t);
     }
 
     /// <summary>
@@ -225,7 +340,12 @@ public partial class FigureManager : Node3D
 
     public override void _Process(double delta)
     {
-        if (AutoTick) Tick(delta);
+        if (!AutoTick) return;
+        Tick(delta);
+        _tierClock += delta;
+        if (_tierClock < FigureTiers.TickS) return;
+        _tierClock = 0;
+        if (CameraPosition?.Invoke() is { } cam) _ = TickTiers(cam);
     }
 
     /// <summary>Templates live outside the tree (their meshes/skeletons are only duplicated): free them here.</summary>
@@ -246,49 +366,86 @@ public partial class FigureManager : Node3D
     public List<Figure> Ordered()
         => _figures.Values.OrderBy(f => f.CharacterName, StringComparer.Ordinal).ToList();
 
+    /// <summary>
+    /// <c>fetchCharacterModel</c>: one queue job — model3d, then the template of the wanted tier, then the body.
+    /// 404 / no <c>model.url</c> → placeholder; a transient error → placeholder now, another try in
+    /// <see cref="RetryDelayS"/> s. Reloads again when the row moved on meanwhile.
+    /// </summary>
     private async Task LoadModelAsync(Figure fig)
     {
         fig.Loading = true;
         var sig = fig.WantedSig;
-        try
+        var rev = fig.WantedRev;
+        bool retry = false;
+        await _models.Push(Job(fig, async () =>
         {
-            var info = await FetchInfo(fig.CharacterName);
-            if (!Alive(fig)) return;   // vanished while loading
-            if (info is null)
+            try
             {
-                fig.SetBody(Figure.Capsule(fig.HeightM), false, null, null);
-                fig.BoundTracks = 0;
-                fig.UnboundClips = 0;
-                _log($"figure {fig.CharacterName}: no model → placeholder");
+                var info = await FetchInfo(fig.CharacterName);
+                if (!Alive(fig)) return;   // vanished while loading
+                if (info is null)
+                {
+                    _infos.Remove(fig.CharacterName);
+                    fig.SetBody(Figure.Capsule(fig.HeightM), false, null, null);
+                    fig.BoundTracks = fig.UnboundClips = 0;
+                    fig.LoadedRev = "";
+                    _log($"figure {fig.CharacterName}: no model → placeholder");
+                }
+                else if (info.Format != "glb")
+                {
+                    // Generic rig: FBX + separate texture (§ A7) — Task 34. Placeholder until then.
+                    _infos.Remove(fig.CharacterName);
+                    fig.SetBody(Figure.Capsule(fig.HeightM), false, null, null);
+                    fig.BoundTracks = fig.UnboundClips = 0;
+                    fig.LoadedRev = info.ModelRev;
+                    _log($"figure {fig.CharacterName}: {info.Format}/{info.Rig} model → placeholder");
+                }
+                else
+                {
+                    var tier = fig.WantedTier;
+                    var template = await GetTemplate(UrlFor(info, tier), info, fig.Sets);
+                    if (!Alive(fig)) return;
+                    _infos[fig.CharacterName] = info;
+                    fig.LoadedRev = info.ModelRev;
+                    Instantiate(fig, template, info, tier);
+                }
+                Stats.ModelLoads++;
             }
-            else if (info.Format != "glb")
+            catch (Exception e) when (!_strict)
             {
-                // Generic rig: FBX + separate texture (§ A7). Spike: placeholder.
-                fig.SetBody(Figure.Capsule(fig.HeightM), false, null, null);
-                fig.BoundTracks = 0;
-                fig.UnboundClips = 0;
-                _log($"figure {fig.CharacterName}: {info.Format}/{info.Rig} model → placeholder");
+                Stats.ModelFailures++;
+                retry = true;
+                _log($"figure {fig.CharacterName}: model failed: {e.Message} → placeholder, retrying in {RetryDelayS:0} s");
             }
-            else
+            finally
             {
-                var template = await GetTemplate(info);
-                if (!Alive(fig)) return;
-                Instantiate(fig, template, info);
+                fig.LoadedSig = sig;
+                fig.Loading = false;
+                if (IsInstanceValid(this)) UpdateStats();
             }
-            Stats.ModelLoads++;
-        }
-        catch (Exception e) when (!_strict)
+        }));
+        if (!Alive(fig)) return;
+        if (retry)
         {
-            Stats.ModelFailures++;
-            _log($"figure {fig.CharacterName}: model failed: {e.Message} → placeholder");
+            ScheduleRetry(fig);
+            return;
         }
-        finally
+        // The row moved on while this load ran (a revision the model3d answer does not carry is NOT a reason by
+        // itself: the browser asks again only on the next poll).
+        if (fig.WantedSig != sig || fig.WantedRev != rev) await LoadModelAsync(fig);
+        else if (fig.WantedTier != fig.LoadedTier) await SyncTier(fig);
+    }
+
+    /// <summary>The browser's <c>setTimeout(fetchCharacterModel, 30 000)</c> after a transient failure.</summary>
+    private void ScheduleRetry(Figure fig)
+    {
+        if (!IsInsideTree()) return;
+        fig.RetryPending = true;
+        GetTree().CreateTimer(RetryDelayS).Timeout += () =>
         {
-            fig.LoadedSig = sig;
-            fig.Loading = false;
-            if (IsInstanceValid(this)) UpdateStats();
-        }
-        if (Alive(fig) && fig.WantedSig != sig) await LoadModelAsync(fig);
+            fig.RetryPending = false;
+            if (Alive(fig) && !fig.Loading) _ = LoadModelAsync(fig);
+        };
     }
 
     /// <summary>Still the figure shown for its character (not removed, not replaced by a new one of that name).</summary>
@@ -298,11 +455,7 @@ public partial class FigureManager : Node3D
     /// <summary><c>getCharacterModel</c> (api.ts): null for 404 or a payload without <c>model.url</c>.</summary>
     private async Task<ModelInfo?> FetchInfo(string name)
     {
-        JsonDocument? fetched;
-        await _net.WaitAsync();
-        try { fetched = await _source.GetCharacterModelAsync(name); }
-        finally { _net.Release(); }
-        using var doc = fetched;
+        using var doc = await _source.GetCharacterModelAsync(name);
         if (doc is null) return null;
         var root = doc.RootElement;
         if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("model", out var m)
@@ -311,25 +464,35 @@ public partial class FigureManager : Node3D
         if (url.Length == 0) return null;
         var rig = Json.Str(m, "rig");
         if (rig.Length == 0) rig = Json.Str(root, "rig", "mixamo");
-        return new ModelInfo(url, Json.Str(m, "format", "glb").ToLowerInvariant(), rig, Json.Bool(m, "normalized"));
+        var low = Json.Str(m, "low_url");
+        var rev = Json.Str(m, "model_rev");
+        return new ModelInfo(url, low.Length > 0 ? low : null, Json.Str(m, "format", "glb").ToLowerInvariant(), rig,
+                             Json.Bool(m, "normalized"), rev.Length > 0 ? rev : null);
     }
 
-    private Task<ModelTemplate> GetTemplate(ModelInfo info)
+    /// <summary>A template is one model URL fitted along one set chain (the browser fits per character, the URL is per character).</summary>
+    private static string TemplateKey(string url, IReadOnlyList<string> sets) => url + "|" + string.Join(",", sets);
+
+    private Task<ModelTemplate> GetTemplate(string url, ModelInfo info, IReadOnlyList<string> sets)
     {
-        if (!_templates.TryGetValue(info.Url, out var task) || task.IsFaulted)
-            _templates[info.Url] = task = BuildTemplate(info);
+        var key = TemplateKey(url, sets);
+        if (!_templates.TryGetValue(key, out var task) || task.IsFaulted)
+            _templates[key] = task = BuildTemplate(url, info, sets);
         return task;
     }
 
-    private async Task<ModelTemplate> BuildTemplate(ModelInfo info)
+    /// <summary>
+    /// <c>buildModel</c>: download, Meshopt decode off-thread, import, metalness 0, Z-up fix, raw height; on a mixamo
+    /// rig the library along <paramref name="sets"/> fitted (<c>fitLibraryAsync</c>), in slices of at most
+    /// <see cref="FitSliceMs"/> ms between frames.
+    /// </summary>
+    private async Task<ModelTemplate> BuildTemplate(string url, ModelInfo info, IReadOnlyList<string> sets)
     {
-        byte[] bytes;
-        await _net.WaitAsync();
-        try { bytes = await _source.GetBytesAsync(info.Url); }
-        finally { _net.Release(); }
+        var bytes = await _source.GetBytesAsync(url);
         var plain = await Task.Run(() => GlbLoader.Prepare(bytes));
-        var (root, _) = GlbLoader.Import(plain, info.Url);
+        var (root, _) = GlbLoader.Import(plain, url);
         root.Name = "Model";
+        int metals = Dielectric(root);
         var size = ModelPlacement.Measure(root, Transform3D.Identity).Size;
         if (size.Z > size.Y * 1.5f)   // stand a Z-up export upright (buildModel)
         {
@@ -338,43 +501,107 @@ public partial class FigureManager : Node3D
         }
         double raw = Math.Max(size.Y, 0.01);
         var skel = ClipLibrary.Find<Skeleton3D>(root);
-        AnimationLibrary? lib = null;
-        var kinds = new List<string>();
-        int bound = 0, unbound = 0, corrected = -1;
-        if (info.Rig == "mixamo" && skel is not null && skel.GetBoneCount() > 0)
+        if (info.Rig != "mixamo" || skel is null || skel.GetBoneCount() == 0)
+            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1 };
+
+        await Clips.WaitClipsAsync();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var candidates = Clips.ClipsFor(sets);
+        // The browser's rest-pose correction against the reference rig (restCorrections, once per model).
+        var fixes = Clips.DonorRest is { } donor ? RestAdapter.Build(donor, root, skel) : null;
+        double restMs = sw.Elapsed.TotalMilliseconds;
+        var (standRef, standSource) = Clips.StandingReference(candidates);
+        bool rigKnown = standSource == "rig";
+        var lib = new AnimationLibrary();
+        var bound = new List<BoundClip>();
+        var setOf = new Dictionary<string, string>();
+        int tracks = 0;
+        long keys = 0;
+        var slice = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var clip in candidates)
         {
-            await Clips.WaitClipsAsync();
-            // The browser's rest-pose correction against the reference rig
-            // (restCorrections, built once per model like fitLibraryAsync does).
-            var fixes = Clips.DonorRest is { } donor ? RestCorrections.Build(donor, root, skel) : null;
-            corrected = fixes?.Count ?? -1;
-            lib = new AnimationLibrary();
-            // One animation per library kind, named by the kind like the browser's
-            // clip index; the figure picks among them with resolveClipKind.
-            foreach (var wanted in Clips.WantedKinds)
+            if (slice.Elapsed.TotalMilliseconds > FitSliceMs)
             {
-                var entry = Clips.Chosen.GetValueOrDefault(wanted);
-                if (entry is not null && lib.HasAnimation(entry.Kind)) continue;
-                var clip = entry is null ? null : Clips.ByKind.GetValueOrDefault(entry.Kind);
-                var b = clip is null ? new BoundClip(entry?.Kind ?? wanted, null, 0) : Clips.Retarget(clip, root, skel, fixes);
-                // AddAnimation refuses a name with '/', ':', ',' or '[' (Godot's animation-name rule).
-                if (b.Anim is null || lib.AddAnimation(b.Kind, b.Anim) != Error.Ok)
-                {
-                    unbound++;
-                    _log($"model {info.Url}: clip '{b.Kind}' for '{wanted}' not bound ({b.Tracks} tracks) — the figure plays what it has");
-                    continue;
-                }
-                kinds.Add(b.Kind);
-                bound += b.Tracks;
+                await NextFrame();
+                slice.Restart();
             }
-            _log($"model {info.Url}: {skel.GetBoneCount()} bones, raw height {raw:0.###} m, {bound} clip tracks bound, "
-                 + (corrected >= 0 ? $"{corrected} bones rest-corrected" : "no rig: verbatim copy"));
+            var b = ClipLibrary.Retarget(clip, root, skel, fixes, standRef ?? 0, rigKnown);
+            if (b.Anim is null) continue;
+            bound.Add(b);
+            setOf[clip.Kind] = clip.Set;
+            tracks += b.Tracks;
+            keys += b.Keys;
         }
-        return new ModelTemplate { Root = root, RawHeight = raw, Library = lib, Kinds = kinds, BoundTracks = bound,
-                                   Unbound = unbound, Corrected = corrected };
+        // One action per clip name lower-cased + the synonym aliases (Figure constructor); AddAnimation refuses
+        // '/', ':', ',' and '[' (Godot's animation-name rule) — such a kind stays unbound.
+        var byName = bound.GroupBy(b => b.Kind.ToLowerInvariant()).ToDictionary(g => g.Key, g => g.Last().Anim!);
+        var kinds = new List<string>();
+        foreach (var (kind, clipName) in ClipLibraryRules.BindActions(bound.Select(b => b.Kind).ToList()))
+        {
+            if (lib.AddAnimation(kind, byName[clipName.ToLowerInvariant()]) == Error.Ok) kinds.Add(kind);
+            else _log($"model {url}: action '{kind}' refused by Godot's animation-name rule");
+        }
+        var missing = FigureClips.MissingClipKinds(candidates.Select(c => c.Kind), kinds);
+        // Clip memory of this template: Godot keeps a 3D track key as TKey<T> {real_t transition; double time; T value}
+        // = 32 bytes for a quaternion (4 + 4 pad + 8 + 16) and, aligned, for a Vector3 — the static-memory monitor
+        // cannot attribute it (three templates fit at once and the GC frees mesh arrays meanwhile).
+        long clipBytes = keys * KeyBytes;
+        double fitMs = sw.Elapsed.TotalMilliseconds;
+        if (missing.Count > 0)
+            _log($"model {url}: {missing.Count} of {candidates.Count} library clip kinds NOT bound — {string.Join(", ", missing)}");
+        _log($"model {url}: {skel.GetBoneCount()} bones, raw height {raw:0.###} m, {metals} materials metallic→0, "
+             + $"{bound.Count} clips → {kinds.Count} actions (sets [{string.Join(",", sets)}]), {tracks} tracks, {keys} keys, "
+             + $"clip memory ≈{clipBytes / 1048576.0:0.0} MiB, fit {fitMs:0} ms (rest + soles {restMs:0} ms), "
+             + (fixes is not null ? $"{fixes.Count} bones rest-corrected" : "no rig: verbatim copy") + $", stand ref {standSource}");
+        return new ModelTemplate
+        {
+            Root = root, RawHeight = raw, Url = url, Library = lib, Kinds = kinds, ClipSets = setOf, BoundTracks = tracks,
+            Unbound = missing.Count, Corrected = fixes?.Count ?? -1, Keys = keys, ClipBytes = clipBytes, FitMs = fitMs,
+        };
     }
 
-    private void Instantiate(Figure fig, ModelTemplate t, ModelInfo info)
+    /// <summary>Built templates and the keys of their retargeted clips (both tiers of every character).</summary>
+    public int TemplateCount => _templates.Values.Count(t => t.IsCompletedSuccessfully);
+    public long TemplateKeys => _templates.Values.Where(t => t.IsCompletedSuccessfully).Sum(t => t.Result.Keys);
+
+    /// <summary>Bytes per retargeted key (Godot's <c>TKey&lt;Quaternion&gt;</c>), for the clip-memory estimate.</summary>
+    public const long KeyBytes = 32;
+
+    /// <summary>The browser's fit slice budget (<c>FIT_SLICE_MS</c>): a frame is yielded once a slice ran this long.</summary>
+    public const double FitSliceMs = 12;
+
+    /// <summary>
+    /// Characters are DIELECTRICS (figures.ts <c>buildModel</c>, AV3D-14): metalness 0 on every material of the model —
+    /// Godot multiplies the metallic texture by <c>metallic</c>, so 0 zeroes an embedded MR map like three's
+    /// <c>metalness = 0</c>; roughness is not touched. Returns how many materials had a non-zero metallic.
+    /// </summary>
+    private static int Dielectric(Node root)
+    {
+        int changed = 0;
+        var seen = new HashSet<ulong>();
+        void Fix(Material? m)
+        {
+            if (m is not BaseMaterial3D bm || !seen.Add(bm.GetInstanceId())) return;
+            if (bm.Metallic != 0) changed++;
+            bm.Metallic = 0;
+        }
+        foreach (var mi in Walk(root).OfType<MeshInstance3D>())
+        {
+            Fix(mi.MaterialOverride);
+            for (int s = 0; s < mi.GetSurfaceOverrideMaterialCount(); s++) Fix(mi.GetSurfaceOverrideMaterial(s));
+            if (mi.Mesh is { } mesh)
+                for (int s = 0; s < mesh.GetSurfaceCount(); s++) Fix(mesh.SurfaceGetMaterial(s));
+        }
+        return changed;
+    }
+
+    /// <summary>Every BaseMaterial3D under a body with a non-zero metallic (the check's probe).</summary>
+    public static int MetallicMaterials(Node root)
+        => Walk(root).OfType<MeshInstance3D>()
+                     .SelectMany(mi => Enumerable.Range(0, mi.Mesh?.GetSurfaceCount() ?? 0).Select(s => mi.GetActiveMaterial(s)))
+                     .OfType<BaseMaterial3D>().Count(m => m.Metallic != 0);
+
+    private void Instantiate(Figure fig, ModelTemplate t, ModelInfo info, FigureTier tier)
     {
         var inst = (Node3D)t.Root.Duplicate();
         double scale = info.Normalized ? 1.0 : fig.HeightM / t.RawHeight;
@@ -388,8 +615,13 @@ public partial class FigureManager : Node3D
             player.AddAnimationLibrary("", t.Library);
         }
         fig.BoundTracks = t.BoundTracks;
-        fig.UnboundClips = t.Library is null && info.Rig == "mixamo" ? Clips.WantedKinds.Count : t.Unbound;
+        fig.UnboundClips = t.Unbound;
+        fig.ClipSets = t.ClipSets;
+        fig.ClipKeys = t.Keys;
+        fig.ClipBytes = t.ClipBytes;
         fig.Poses = Clips.Poses;
+        fig.LoadedUrl = t.Url;
+        fig.LoadedTier = tier;
         fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds);
     }
 
@@ -541,13 +773,16 @@ public partial class FigureManager : Node3D
             yield return d;
     }
 
-    private void UpdateStats()
+    /// <summary>Recount (the check reads <see cref="Stats"/> after the library came in).</summary>
+    public void UpdateStats()
     {
         Stats.Figures = _figures.Count;
         Stats.GlbFigures = _figures.Values.Count(f => f.IsGlb);
         Stats.Placeholders = Stats.Figures - Stats.GlbFigures;
         Stats.BoundTracks = _figures.Values.Sum(f => f.BoundTracks);
         Stats.UnboundClips = _figures.Values.Sum(f => f.UnboundClips);
+        Stats.KindsBound = _figures.Values.Sum(f => f.ClipKinds.Count);
+        Stats.LowTier = _figures.Values.Count(f => f.IsGlb && f.LoadedTier == FigureTier.Low);
         Stats.ClipsLoaded = Clips.ClipsLoaded;
         Stats.ClipsFailed = Clips.ClipsFailed;
     }

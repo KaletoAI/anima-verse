@@ -144,7 +144,13 @@ public partial class Main : Node3D
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
             boot.Report("visible");
 
-            _figures = new FigureManager(_source!, builder.Height!, Log, strict: false) { WaterLevelAt = builder.FigureWaterLevel };
+            _figures = new FigureManager(_source!, builder.Height!, Log, strict: false)
+            {
+                WaterLevelAt = builder.FigureWaterLevel,
+                // npcs.tickFigureTiers(camera.position) and setModelFocus (distance² to engine.target), main.ts.
+                CameraPosition = () => _camera is { } c && IsInstanceValid(c) ? c.GlobalPosition : null,
+                FocusTarget = () => _camera is { } c && IsInstanceValid(c) ? c.Target : null,
+            };
             world.AddChild(_figures);
             var tags = _tags = new NameTags(_figures, () => Time.GetTicksMsec()) { CamDist = () => _camera?.Distance ?? 0 };
             _labelOverlay.Sources.Add(tags.Visible);
@@ -207,6 +213,10 @@ public partial class Main : Node3D
                 Log("offline world " + stats.Summary());
                 if (_scatter is not null) Log("offline scatter " + _scatter.Summary() + " " + _scatter.Digest());
                 Log("offline figures " + FigureLine());
+                foreach (var f in _figures!.Ordered()) Log("offline " + FigureDetail(f));
+                Log($"offline memory static {Performance.GetMonitor(Performance.Monitor.MemoryStatic) / 1048576.0:0} MiB, "
+                    + $"library {_figures.Clips.SourceKeys} source keys, figure templates "
+                    + $"{_figures.TemplateKeys} keys ≈{_figures.TemplateKeys * FigureManager.KeyBytes / 1048576.0:0} MiB in {_figures.TemplateCount} templates");
                 if (_streamer is not null) Log("offline " + _streamer.Summary());
                 Log("offline " + VeilUniforms.Summary());
                 foreach (var line in ShaderSafety.Lines) Log("offline " + line);
@@ -409,6 +419,12 @@ public partial class Main : Node3D
                + $", {wading.Count} in water"
                + (wading.Count > 0 ? $" [{string.Join(", ", wading.Select(f => $"{f.CharacterName} bed {f.Position.Y:0.##} cut {f.Ghost!.CutY:0.##}"))}]" : "");
     }
+
+    /// <summary>One figure for the offline log: body, actions, set chain, what it asks for and what plays, tier, clip memory.</summary>
+    private static string FigureDetail(Figure f)
+        => $"figure {f.CharacterName}: {(f.IsGlb ? "model" : "placeholder")}, {f.ClipKinds.Count} actions, sets [{string.Join(",", f.Sets)}], "
+           + $"activity '{f.Activity}' → asks '{f.CurrentKind}' plays '{f.CurrentClip}' pace {f.CurrentPace:0.##}, "
+           + $"tier {f.LoadedTier}, {f.ClipKeys} clip keys, {f.ClipBytes / 1048576.0:0.0} MiB";
 
     /// <summary>The overview camera's bindings (engine.ts), for the status line.</summary>
     private const string CameraHint = "drag: pan, right/middle or Shift+drag: orbit, wheel: zoom, WASD/arrows: move, Q/E: turn, +/-: zoom";

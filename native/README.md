@@ -39,17 +39,21 @@ What it draws after login:
   browser's far view draws them (journey point along the route, the huddle in
   front of / around their location, or their free point in the wilderness), on
   the world ground; a moved figure lerps to its new point over the poll
-  interval and plays the `walking` pose's clip above 0.2 m/s, the `standing` pose's otherwise. Model:
-  `/characters/{name}/model3d` → the humanoid GLB (Meshopt-decoded), scaled to
-  `height_cm`; FBX (generic rig) and "no model" are capsule placeholders; a
-  changed `model_sig` reloads it. Clips: the neutral-set clips of
-  `/assets/animation-clips` that its `movement_poses` name for standing and walking, resolved
-  with the browser's rules (`Core/Figures/FigureClips.cs`, `resolveClipKind`), each FBX
-  downloaded and imported once at runtime (`FBXDocument`), retargeted by bone
-  name with the browser's rest-pose correction against `/assets/animation-rig`
-  (`Figures/RestCorrection.cs`, port of `restCorrections` in
-  `packages/scene-render/src/clipRetarget.ts`), hips height scaled (see
-  `Figures/ClipLibrary.cs` for what the browser does on top);
+  interval and plays the `walking` pose's clip above 0.2 m/s, otherwise `standingClipFor(activity_animation)` —
+  every figure plays its activity (read, cook, sit …). Model: `/characters/{name}/model3d` → the humanoid GLB
+  (Meshopt-decoded), scaled to `height_cm`, metalness forced to 0; every load is a job of a width-3 queue (the
+  avatar first, then the figure nearest the camera target), a transient failure retries after 30 s; FBX (generic
+  rig) and "no model" are capsule placeholders; a changed `model_sig` or `model_rev` reloads it; distance tiers
+  `full`/`low` (`low_url`) at 25/35 m with hysteresis, re-evaluated every second. Clips (Task 28): the WHOLE
+  `/assets/animation-clips` library — downloaded through a width-4 queue in listing order, imported one per
+  frame (`FBXDocument`), committed in listing order (first file per kind and set) — and per character the first
+  file of each kind along its set chain (`animation_sets` + neutral), with that file's loop flag (a one-shot holds
+  its last frame); one action per kind plus the browser's synonym aliases, played through `resolveClipKind` with
+  the stand-in paces and a 0.25 s crossfade. Retarget by bone name with the browser's rest-pose correction against
+  `/assets/animation-rig` (`Core/Figures/RestCorrections.cs` on plain pose data, vectors
+  `shared/test-vectors/retarget.json`; the Godot side only reads rests and samples soles,
+  `Figures/RestCorrection.cs`) and the browser's hips mapper (`Core/Figures/HipsTrack.cs`, bounce, scale healing,
+  root path; vectors `hips_tracks.json`). Transition clips are parsed, played in Task 31;
 - a sun + fill light and ambient comparable to the browser, sky colour, no fog (since Task 21: the game-hour stage,
   see "Game-hour light, sky and shadows");
 - with `--scatter`: the authored scatter of the painted areas and the automatic
@@ -280,6 +284,7 @@ Arguments after `--` (no .env; all optional):
 | `--check stream` | only the terrain streaming section (`Check/StreamCheck.cs`: a fake server answering height, statistics and mask batches for a ten-tile strip — batches, LRU, windows, `height_sig`/`terrain_sig` reloads, re-datum, re-index), then exit 0/1 |
 | `--fly=M[,DEG]` | after the boot, fly the camera target M metres in a straight line (heading DEG: 0 = +x, 90 = +z) at 50 m/s, let the stream settle and log `fly done …` (tiles taken/evicted, the longest frame, the longest frame while streaming); with `--offline` it then quits |
 | `--check light` | only the light section (`Check/LightCheck.cs`: the game-hour stage at 6/7/9/12/18/22 h, hemisphere, shadow fit, material policy, MSAA option), then exit 0/1 |
+| `--check figures` | only the figure section (`Check/CheckRunner.cs` `CheckFigures` on the fixture world: whole library, set chain, actions and aliases, activity clips, one-shot hold, model revision, model queue, tiers 25/35, the importer cross-check `rest_reference.json`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
 Camera (the browser's overview camera, `Ui/OverviewCamera.cs` + `Core/Overview/OverviewControl.cs`):

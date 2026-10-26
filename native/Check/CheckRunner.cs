@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using AnimaNative.Figures;
 using AnimaNative.Gltf;
@@ -42,9 +43,11 @@ public static class CheckRunner
     private static readonly Vector2 ExpBuildingAnchor = new(1.5f, -2f);
 
     // ---- S1b figures (worldmap.json / worldmap_poll2.json, README "Figures") ----
-    private const int ExpFigures = 3, ExpGlbFigures = 1, ExpPlaceholders = 2, ExpClipsLoaded = 2;
+    private const int ExpFigures = 3, ExpGlbFigures = 1, ExpPlaceholders = 2, ExpClipsLoaded = 5, ExpClipsFailed = 4;
     private const int ExpTracksPerClip = 53;                       // 52 rotations + the hips position
-    private const int ExpBoundTracks = 2 * ExpTracksPerClip;        // idle + walk on the one GLB figure
+    private const int ExpBoundTracks = 4 * ExpTracksPerClip;        // Stand-Relaxed, walk, waiting (female), reading on Ada
+    private static readonly string[] ExpIndexKinds = { "Stand-Relaxed", "walk", "waiting", "reading" };
+    private static readonly string[] ExpActions = { "stand-relaxed", "walk", "waiting", "reading", "idle" };
     private const string Ada = "Ada Wren", Bram = "Bram Holt", Cleo = "Cleo Marsh";
     private static readonly Vector3 ExpAda = new(-50f, 3.595947265625f, 30f);     // free, overview
     private static readonly Vector3 ExpBram = new(64f, 4.0675f, 132.32f);         // house huddle, fine tile
@@ -56,9 +59,8 @@ public static class CheckRunner
     // movement_poses (README "Clips"): standing plays stand-relaxed (exact), walking names mob1-walk,
     // which the library lacks → its public kind walk.
     private const string ExpStandingKind = "stand-relaxed", ExpMovingWant = "mob1-walk", ExpMovingKind = "walk";
-    private const string IdleUrl = "/assets/animation-clips/stand-relaxed.fbx?v=fixturestand0001";
-    private const string WalkUrl = "/assets/animation-clips/walk.fbx?v=fixturewalk00001";
     private const string AdaUrl = "/characters/Ada%20Wren/model3d/file?v=fixtureada000001";
+    private const string AdaLowUrl = "/characters/Ada%20Wren/model3d/file?tier=low&v=fixtureadalow01";
 
     public static async Task<int> RunAsync(Node3D host, string? only = null)
     {
@@ -150,6 +152,21 @@ public static class CheckRunner
                 b.Models?.FreeAll();
                 w.QueueFree();
                 GD.Print($"CHECK ok scatter {alone}");
+                return 0;
+            }
+            if (only == "figures")
+            {
+                // The fixture world (heights) and the figure section alone — clips, set chain, activities, tiers (Task 28).
+                var src = new FixtureSource(dir);
+                var w = new Node3D { Name = "CheckWorld" };
+                host.AddChild(w);
+                var b = new WorldBuilder(src, line => GD.Print("[check] " + line), strict: true);
+                await b.BuildAsync(w, Goto, new SyncCheck.BuildProbe().Hooks(src));
+                CheckPlacementRule();
+                var alone = await CheckFigures(w, src, b.Height!);
+                b.Models?.FreeAll();
+                w.QueueFree();
+                GD.Print($"CHECK ok {alone}");
                 return 0;
             }
             var meshopt = CheckMeshopt(dir);
@@ -346,13 +363,18 @@ public static class CheckRunner
     }
 
     /// <summary>
-    /// Figures (Task S1b), two polls. Poll 1: three characters (free GLB,
-    /// FBX in a location huddle, model-less traveller); poll 2: one moved and
-    /// re-signed, one vanished, one further along its route.
+    /// Figures (Task S1b, whole library Task 28), two polls. Poll 1: three characters (free GLB, FBX in a location
+    /// huddle, model-less traveller); poll 2: one moved, re-signed and given an activity, one vanished, one further
+    /// along its route; then the model revision, the clip choice per kind and the distance tiers.
+    /// Every expectation is derived in native/fixtures/README.md ("Clips", "Clip choice", "Tiers").
     /// </summary>
     private static async Task<string> CheckFigures(Node3D world, FixtureSource source, WorldHeight height)
     {
-        var mgr = new FigureManager(source, height, line => GD.Print("[check] " + line), strict: true) { AutoTick = false, PollSeconds = 5.0 };   // the README derivation lerps over 5 s
+        var mgr = new FigureManager(source, height, line => GD.Print("[check] " + line), strict: true)
+        {
+            AutoTick = false, PollSeconds = 5.0,   // the README derivation lerps over 5 s
+            FocusTarget = () => new Vector3(263, 0, -100),   // Cleo's journey point: the model queue serves her first
+        };
         world.AddChild(mgr);
         await mgr.InitAsync();
         var clips = mgr.Clips;
@@ -360,15 +382,29 @@ public static class CheckRunner
         Expect("walking pose → its clip", clips.MovingKind == ExpMovingWant, clips.MovingKind);
         Expect("blank running kind → default run", FigureClips.MoveClip(FigureClips.WalkRun, true, clips.Poses) == "run",
                FigureClips.MoveClip(FigureClips.WalkRun, true, clips.Poses));
-        Expect("standing resolves exactly", clips.Chosen.GetValueOrDefault(ExpStandingKind)?.Url == IdleUrl,
-               clips.Chosen.GetValueOrDefault(ExpStandingKind)?.Url ?? "null");
-        Expect("walking falls back to its public kind", clips.Chosen.GetValueOrDefault(ExpMovingWant)?.Url == WalkUrl,
-               clips.Chosen.GetValueOrDefault(ExpMovingWant)?.Url ?? "null");
         Eq("transition rules (junk row dropped)", clips.Transitions.Count, 2);
         var start = FigureClips.Transition(ExpStandingKind, ExpMovingKind, clips.Transitions);
         Expect("transition stand-relaxed → walk", start is { Kind: "start-walk", Accel: 8 }, $"{start}");
         var getUp = FigureClips.Transition("sitting", ExpMovingKind, clips.Transitions);
         Expect("exit rule sitting → *", getUp is { Kind: "get-up-chair", Accel: 0 }, $"{getUp}");
+
+        // ---- the whole library: 9 listed, 5 imported, 4 × 404, commit in listing order ----
+        await clips.WaitClipsAsync();
+        Eq("listed clips", clips.Entries.Count, 9);
+        Eq("clips imported", clips.ClipsLoaded, ExpClipsLoaded);
+        Eq("clips failed (404)", clips.ClipsFailed, ExpClipsFailed);
+        Expect("pair half named <kind>__<role>", clips.Entries[0].Kind == "stand-relaxed__a", clips.Entries[0].Kind);
+        Expect("committed kinds in listing order", clips.Index.Kinds.SequenceEqual(ExpIndexKinds), string.Join(",", clips.Index.Kinds));
+        Expect("female stand-relaxed and walk failed → no slot", clips.Clip("stand-relaxed", "female") is null && clips.Clip("walk", "female") is null, "slot");
+        Expect("loop flags per FILE", clips.Clip("waiting", "female")!.Loop && !clips.Clip("waiting")!.Loop
+                                      && !clips.Clip("reading")!.Loop && clips.Clip("walk")!.Loop, "flags");
+        Expect("root motion: keep yes, strip no, missing no", clips.Clip("waiting", "female")!.RootMotion
+                                      && !clips.Clip("reading")!.RootMotion && !clips.Clip("walk")!.RootMotion, "root motion");
+        var chain = clips.ClipsFor(new[] { "female" }).Select(c => $"{c.Kind}/{c.Set}").ToList();
+        Expect("set chain [female, '']", chain.SequenceEqual(new[] { "Stand-Relaxed/", "walk/", "waiting/female", "reading/" }),
+               string.Join(",", chain));
+        Eq("each clip URL downloaded once", clips.Entries.Count(e => source.ByteRequests.Count(u => u == e.Url) == 1), 9);
+
         using (var map = Load("worldmap.json")) await mgr.Apply(map.RootElement);
         var st = mgr.Stats;
         Eq("figures", st.Figures, ExpFigures);
@@ -376,9 +412,12 @@ public static class CheckRunner
         Eq("placeholders", st.Placeholders, ExpPlaceholders);
         Eq("clips_loaded", st.ClipsLoaded, ExpClipsLoaded);
         Eq("bound_tracks", st.BoundTracks, ExpBoundTracks);
+        Eq("kinds_bound (actions)", st.KindsBound, ExpActions.Length);
         Eq("unbound_clips", st.UnboundClips, 0);
         Eq("offmap", st.Offmap, 0);
         Eq("model_failures", st.ModelFailures, 0);
+        Expect("model queue: nearest the focus first", mgr.ModelLoadOrder.Take(3).SequenceEqual(new[] { Cleo, Bram, Ada }),
+               string.Join(",", mgr.ModelLoadOrder));
         var poll1 = st.Summary();
 
         var ada = mgr.Figures[Ada];
@@ -394,18 +433,25 @@ public static class CheckRunner
         Near("Ada height", ModelPlacement.Measure(ada.Body!, Transform3D.Identity).Size.Y, ExpAdaHeight);
         Near("Bram height", ModelPlacement.Measure(bram.Body!, Transform3D.Identity).Size.Y, ExpBramHeight);
         Near("Cleo height", ModelPlacement.Measure(cleo.Body!, Transform3D.Identity).Size.Y, ExpCleoHeight);
-
-        // Clip cache: one download per clip URL, the FBX model is never fetched.
-        Eq("idle downloads", source.ByteRequests.Count(u => u == IdleUrl), 1);
-        Eq("walk downloads", source.ByteRequests.Count(u => u == WalkUrl), 1);
+        Eq("Ada metallic materials (forced to 0)", FigureManager.MetallicMaterials(ada.Body!), 0);
         Expect("FBX model not fetched", !source.ByteRequests.Any(u => u.Contains("Bram", StringComparison.Ordinal)),
                string.Join(";", source.ByteRequests));
 
+        // Ada's actions: the four kinds of her chain + the idle alias (CLIP_SYNONYMS: 'stand' ⊂ stand-relaxed).
+        Expect("Ada actions", ada.ClipKinds.SequenceEqual(ExpActions), string.Join(",", ada.ClipKinds));
+        var player = ada.Player!;
+        Expect("waiting from the female set", ada.ClipSets.GetValueOrDefault("waiting") == "female", $"{ada.ClipSets.GetValueOrDefault("waiting")}");
+        Expect("waiting loops (female file)", player.GetAnimation("waiting").LoopMode == Animation.LoopModeEnum.Linear, "not looping");
+        Expect("reading one-shot", player.GetAnimation("reading").LoopMode == Animation.LoopModeEnum.None, "loops");
+        Expect("idle alias = the stand-relaxed clip", player.GetAnimation("idle") == player.GetAnimation(ExpStandingKind), "other clip");
+        ExpectClip(ada, "poll 1 standing", ExpStandingKind, ExpStandingKind, 1);
+
         // The binding itself: after one evaluation the skeleton holds the clip's values.
-        CheckBinding(mgr, ada, ExpStandingKind);
-        // The rest correction against the browser's own numbers (rest_reference.json).
+        CheckBinding(mgr, ada);
+        CheckClipChoice(ada);
+        // The importer cross-check (rest_reference.json): FBX values and the mesh-sole sampling against three's.
         var restInfo = CheckRestReference(mgr, ada, source);
-        ada.UpdateClip();
+        ada.Replay();
 
         // ---- poll 2 ----
         using (var map = Load("worldmap_poll2.json")) await mgr.Apply(map.RootElement);
@@ -415,11 +461,11 @@ public static class CheckRunner
         Eq("Ada model3d requests (model_sig changed)", source.ModelRequests.Count(n => n == Ada), 2);
         Eq("Ada GLB downloads (same URL, cached)", source.ByteRequests.Count(u => u == AdaUrl), 1);
         Eq("Cleo model3d requests (sig absent, unchanged)", source.ModelRequests.Count(n => n == Cleo), 1);
-        Eq("clips still loaded once", source.ByteRequests.Count(u => u == IdleUrl || u == WalkUrl), 2);
+        Eq("clips still downloaded once", clips.Entries.Count(e => source.ByteRequests.Count(u => u == e.Url) == 1), 9);
         Eq("poll2 bound_tracks", st.BoundTracks, ExpBoundTracks);
         Expect("Ada reloaded", ada.LoadedSig == "ada-2" && ada.IsGlb, ada.LoadedSig ?? "null");
-        Expect("Ada walks (2 m/s)", ada.Moving && ada.Player?.CurrentAnimation == ExpMovingKind,
-               $"{ada.PlannedSpeed} {ada.Player?.CurrentAnimation}");
+        Expect("Ada walks (2 m/s)", ada.Moving, $"{ada.PlannedSpeed}");
+        ExpectClip(ada, "poll 2 moving", ExpMovingWant, ExpMovingKind, 1);
         Near("Ada faces +x", ada.Rotation.Y, Mathf.Pi / 2f);
         NearV("Ada still at the old point", ada.Position, ExpAda);
         mgr.Tick(2.5);
@@ -427,27 +473,114 @@ public static class CheckRunner
         NearV("Cleo halfway", cleo.Position, ExpCleoHalfway);
         mgr.Tick(2.5);
         NearV("Ada arrived", ada.Position, ExpAdaEnd);
-        Expect("Ada stands after arriving", !ada.Moving && ada.Player?.CurrentAnimation == ExpStandingKind,
-               ada.Player?.CurrentAnimation ?? "no player");
+        Expect("Ada stands after arriving", !ada.Moving, "moving");
+        ExpectClip(ada, "poll 2 arrived: activity_animation", "reading", "reading", 1);
+        CheckHoldsLastFrame(ada, "reading");
 
+        // ---- model_rev (refreshIfChanged): unchanged → nothing, changed → one reload, the GLB stays cached ----
+        using (var map = Load("worldmap_poll2.json")) await mgr.Apply(map.RootElement);
+        Eq("same sig + rev: no model3d request", source.ModelRequests.Count(n => n == Ada), 2);
+        await mgr.Apply(WithRev("worldmap_poll2.json", Ada, "r2"));
+        Eq("model_rev changed: one model3d request", source.ModelRequests.Count(n => n == Ada), 3);
+        Eq("model_rev reload: GLB still cached", source.ByteRequests.Count(u => u == AdaUrl), 1);
+
+        var tiers = await CheckTiers(mgr, ada, source);
         var info = RestMismatch(source, ada);
+        var memory = $"ada clips {ada.ClipKinds.Count} actions {ada.ClipKeys} keys {ada.ClipBytes / 1048576.0:0.00} MiB";
         mgr.QueueFree();
         return $"figures {poll1} | poll2 figures={st.Figures} glb_figures={st.GlbFigures} placeholders={st.Placeholders} "
-               + $"model_loads={st.ModelLoads} | {restInfo} | {info}";
+               + $"model_loads={st.ModelLoads} | {tiers} | {memory} | {restInfo} | {info}";
+    }
+
+    /// <summary>The figure plays <paramref name="clip"/> for <paramref name="kind"/> at <paramref name="pace"/>.</summary>
+    private static void ExpectClip(Figure fig, string what, string kind, string clip, double pace)
+        => Expect($"{fig.CharacterName} {what}", fig.CurrentKind == kind && fig.CurrentClip == clip
+                                                 && Math.Abs(fig.CurrentPace - pace) < 1e-9
+                                                 && Math.Abs(fig.Player!.SpeedScale - pace) < 1e-6,
+                  $"kind {fig.CurrentKind} clip {fig.CurrentClip} pace {fig.CurrentPace}, expected {kind}/{clip}/{pace}");
+
+    /// <summary>
+    /// <c>Figure.play(kind)</c> on Ada's five actions (README "Clip choice"): exact, the female file, the alias,
+    /// a curated stand-in, a run served by the walk take at pace 1.5; then back to what she wants.
+    /// </summary>
+    private static void CheckClipChoice(Figure ada)
+    {
+        ada.Play("waiting");
+        ExpectClip(ada, "waiting", "waiting", "waiting", 1);
+        ada.Play("idle");
+        ExpectClip(ada, "idle (alias)", "idle", "idle", 1);
+        ada.Play("lie");
+        ExpectClip(ada, "lie → standing stand-in", "lie", ExpStandingKind, 1);
+        ada.Play("Run-Fast");
+        ExpectClip(ada, "run-fast → walk take, sped up", "run-fast", ExpMovingKind, 1.5);
+        ada.Play("");
+        ExpectClip(ada, "empty kind = the standing pose", ExpStandingKind, ExpStandingKind, 1);
+        ada.Replay();
+        ExpectClip(ada, "replay", ExpStandingKind, ExpStandingKind, 1);
+    }
+
+    /// <summary>A one-shot holds its LAST frame once it ran out (the browser's <c>clampWhenFinished</c>).</summary>
+    private static void CheckHoldsLastFrame(Figure fig, string action)
+    {
+        var player = fig.Player!;
+        var skel = fig.Skeleton!;
+        var anim = player.GetAnimation(action);
+        player.Advance(anim.Length + 1.0);
+        Expect($"{action} finished", !player.IsPlaying(), "still playing");
+        int bone = skel.FindBone("mixamorig_LeftUpLeg");
+        var model = (Node3D)fig.Body!.GetChild(0);
+        int track = anim.FindTrack(new NodePath($"{model.GetPathTo(skel)}:mixamorig_LeftUpLeg"), Animation.TrackType.Rotation3D);
+        Expect($"{action} LeftUpLeg track", track >= 0, "missing");
+        var last = anim.RotationTrackInterpolate(track, anim.Length);
+        var got = skel.GetBonePoseRotation(bone);
+        Expect($"{action} holds its last frame", got.IsEqualApprox(last) || got.IsEqualApprox(-last), $"{got} vs {last}");
     }
 
     /// <summary>
-    /// Evaluate the clip once and read the skeleton back: a moving bone holds
-    /// the clip's key 0 verbatim, a bone Godot left without a track holds the
-    /// clip's node default (the restored constant), the hips are in place at
-    /// the scaled height.
+    /// The distance tiers (README "Tiers", npcs.ts <c>tickFigureTiers</c> with 25/35 m): the camera on Ada's +x side
+    /// at 30, 24, 30, 36, 30, 24, 36 m → full, full, full, low, low, full, low; the low edition downloads once, the
+    /// way back is a cache swap.
     /// </summary>
-    private static void CheckBinding(FigureManager mgr, Figure fig, string role)
+    private static async Task<string> CheckTiers(FigureManager mgr, Figure ada, FixtureSource source)
+    {
+        var expected = new[] { (30f, FigureTier.Full), (24f, FigureTier.Full), (30f, FigureTier.Full), (36f, FigureTier.Low),
+                               (30f, FigureTier.Low), (24f, FigureTier.Full), (36f, FigureTier.Low) };
+        var seen = new List<string>();
+        foreach (var (d, tier) in expected)
+        {
+            await mgr.TickTiers(ada.Position + new Vector3(d, 0, 0));
+            seen.Add($"{d}→{ada.LoadedTier}");
+            Expect($"tier at {d} m", ada.WantedTier == tier && ada.LoadedTier == tier
+                                     && ada.LoadedUrl == (tier == FigureTier.Low ? AdaLowUrl : AdaUrl),
+                   $"wanted {ada.WantedTier} loaded {ada.LoadedTier} url {ada.LoadedUrl}");
+        }
+        Eq("low edition downloaded once", source.ByteRequests.Count(u => u == AdaLowUrl), 1);
+        Eq("full edition still downloaded once", source.ByteRequests.Count(u => u == AdaUrl), 1);
+        Eq("tiers ask no model3d", source.ModelRequests.Count(n => n == Ada), 3);
+        Eq("low tier bound tracks", ada.BoundTracks, ExpBoundTracks);
+        return "tiers " + string.Join(" ", seen);
+    }
+
+    /// <summary>A world-map fixture with one character's <c>model_rev</c> replaced.</summary>
+    private static JsonElement WithRev(string file, string name, string rev)
+    {
+        var node = JsonNode.Parse(File.ReadAllText(Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures", file)))!;
+        foreach (var c in node["characters"]!.AsArray())
+            if (c!["name"]!.GetValue<string>() == name) c["model_rev"] = rev;
+        return JsonDocument.Parse(node.ToJsonString()).RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Evaluate the standing clip once and read the skeleton back: a moving bone holds the clip's key 0 corrected, a
+    /// bone Godot left without a track holds the clip's node default (the restored constant), the hips stand in place
+    /// with their WORLD height scaled by the standing reference: y_world = y0 · hipsRestWorldY / ref (README "Clips").
+    /// </summary>
+    private static void CheckBinding(FigureManager mgr, Figure fig)
     {
         var player = fig.Player ?? throw new InvalidOperationException("no AnimationPlayer");
         var skel = fig.Skeleton ?? throw new InvalidOperationException("no skeleton");
-        var clip = mgr.Clips.ByKind[role]!;
-        Expect($"{role} playing", player.CurrentAnimation == role, player.CurrentAnimation);
+        var clip = mgr.Clips.Clip("Stand-Relaxed")!;
+        Expect("stand-relaxed playing", player.CurrentAnimation == ExpStandingKind, player.CurrentAnimation);
         player.Seek(0, true);
 
         void SameRot(string bone, Quaternion want)
@@ -455,47 +588,44 @@ public static class CheckRunner
             int i = skel.FindBone(bone);
             Expect($"{bone} on skeleton", i >= 0, "missing");
             var got = skel.GetBonePoseRotation(i);
-            Expect($"{role} {bone} rotation", got.IsEqualApprox(want) || got.IsEqualApprox(-want), $"{got} vs {want}");
+            Expect($"stand-relaxed {bone} rotation", got.IsEqualApprox(want) || got.IsEqualApprox(-want), $"{got} vs {want}");
         }
         string moving = "mixamorig_LeftUpLeg", constant = "mixamorig_LeftForeArm";
         Expect("LeftUpLeg has a track", clip.RotationTracks.ContainsKey(moving), "no track");
         Expect("LeftForeArm has none (constant in the file)", !clip.RotationTracks.ContainsKey(constant), "has a track");
-        // Both are rest-corrected (q = K_p⁻¹·c·K_b) with this skeleton's factors.
-        var fixes = RestCorrections.Build(mgr.Clips.DonorRest!, (Node3D)skel.GetParent().GetParent(), skel);
+        var model = (Node3D)fig.Body!.GetChild(0);
+        var fixes = RestAdapter.Build(mgr.Clips.DonorRest!, model, skel);
         Quaternion Fixed(string bone, Quaternion c)
-            => fixes.TryGetValue(ClipLibrary.NormBone(bone), out var f) ? RestCorrections.Apply(f, c).Normalized() : c;
+            => fixes.TryGetValue(ClipLibrary.NormBone(bone), out var f) ? RestAdapter.Apply(f, c).Normalized() : c;
         SameRot(moving, Fixed(moving, clip.Anim.TrackGetKeyValue(clip.RotationTracks[moving], 0).AsQuaternion()));
         SameRot(constant, Fixed(constant, clip.RestRotations[Array.IndexOf(clip.Bones, constant)]));
 
-        int h = skel.FindBone("mixamorig_Hips");
-        var rest = skel.GetBoneRest(h).Origin;
-        var pose = skel.GetBonePosePosition(h);
-        double refY = mgr.Clips.StandingHipsY(clip);
+        var (h, parent) = ClipLibrary.HipsParentFrame(model, skel);
+        var restWorld = parent * skel.GetBoneRest(h).Origin;
+        var poseWorld = parent * skel.GetBonePosePosition(h);
+        double refY = mgr.Clips.DonorHipsY!.Value;
         double y0 = Math.Abs(clip.Anim.TrackGetKeyValue(clip.PositionTracks["mixamorig_Hips"], 0).AsVector3().Y);
-        Near("hips x in place", pose.X, rest.X, 1e-5f);
-        Near("hips z in place", pose.Z, rest.Z, 1e-5f);
-        Near("hips y = y0 · rest/ref", pose.Y, (float)(y0 * rest.Y / refY), 1e-5f);
+        Near("hips x in place", poseWorld.X, restWorld.X, 1e-5f);
+        Near("hips z in place", poseWorld.Z, restWorld.Z, 1e-5f);
+        Near("hips world y = y0 · rest/ref", poseWorld.Y, (float)(y0 * restWorld.Y / refY), 1e-5f);
     }
 
     /// <summary>
-    /// The rest-pose correction against the BROWSER'S OWN function:
-    /// <c>native/fixtures/rest_reference.json</c> is written by
-    /// <c>native/fixtures/rest_reference.mjs</c>, which runs
-    /// <c>restCorrections</c>/<c>bindRelativeValues</c> of
-    /// packages/scene-render/src/clipRetarget.ts on three's loaders with the same
-    /// files. Three tracked demo rigs: Minerva (= Ada; no stance rule), Johanna
-    /// (leg stance), Hagrid (torso + foot stance). Per model: the corrected-bone
-    /// count and the stance bones must match; per clip/time/bone the clip value
-    /// (importer agreement) and the corrected rotation must lie within 0.5°.
-    /// For Ada the corrected rotations are also read back off her skeleton after
-    /// the AnimationPlayer evaluated the bound clip (end to end).
+    /// IMPORTER CROSS-CHECK, not the oracle of the correction (that is shared/test-vectors/retarget.json):
+    /// <c>native/fixtures/rest_reference.json</c> (written by <c>native/fixtures/rest_reference.mjs</c> on three's
+    /// loaders) proves what no vector can — that Godot's FBX/glTF importers hand the Core math the same clip values and
+    /// rests as three's, and that the Godot adapter's mesh-sole sampling (<see cref="RestAdapter.SolesOf"/>) finds the
+    /// soles three's <c>restSolesOf</c> finds. Three tracked demo rigs: Minerva (= Ada; no stance rule), Johanna (leg
+    /// stance), Hagrid (torso + foot stance). Per model: corrected-bone count and stance bones; per clip/time/bone the
+    /// clip value and the corrected rotation within 0.5°; for Ada the pose read back off her skeleton.
     /// </summary>
     private static string CheckRestReference(FigureManager mgr, Figure ada, FixtureSource source)
     {
         // The reference names the clip FILES (idle.fbx / walk.fbx); the fixture library serves them as the
-        // standing pose's stand-relaxed and the walking pose's walk.
+        // standing pose's Stand-Relaxed and the walking pose's walk.
         static string SampleKind(JsonElement sample)
             => sample.GetProperty("clip").GetString() == "idle" ? ExpStandingKind : ExpMovingKind;
+        ClipSource ClipOf(string action) => mgr.Clips.Clip(action == ExpStandingKind ? "Stand-Relaxed" : action)!;
         const double TolDeg = 0.5;
         var donor = mgr.Clips.DonorRest ?? throw new InvalidOperationException("reference rig not loaded");
         Expect("rig hips height", mgr.Clips.DonorHipsY is > 1.13 and < 1.131, $"{mgr.Clips.DonorHipsY}");
@@ -522,7 +652,7 @@ public static class CheckRunner
             {
                 var skel = ClipLibrary.Find<Skeleton3D>(root)!;
                 var stance = new HashSet<string>();
-                var fixes = RestCorrections.Build(donor, root, skel, stanceBones: stance);
+                var fixes = RestAdapter.Build(donor, root, skel, stanceBones: stance);
                 Eq($"{name} corrected bones", fixes.Count, model.GetProperty("corrected_bones").GetInt32());
                 var wantStance = model.GetProperty("stance_bones").EnumerateArray().Select(e => e.GetString()!).ToHashSet();
                 Expect($"{name} stance bones", stance.SetEquals(wantStance),
@@ -530,14 +660,14 @@ public static class CheckRunner
                 foreach (var sample in model.GetProperty("samples").EnumerateArray())
                 {
                     var role = SampleKind(sample);
-                    var clip = mgr.Clips.ByKind[role]!;
+                    var clip = ClipOf(role);
                     double t = sample.GetProperty("time").GetDouble();
                     foreach (var bone in sample.GetProperty("bones").EnumerateObject())
                     {
                         var c = Sample(clip, bone.Name, t);
                         double dc = Deg(c, Q(bone.Value.GetProperty("clip")));
                         var key = ClipLibrary.NormBone(bone.Name);
-                        var q = fixes.TryGetValue(key, out var f) ? RestCorrections.Apply(f, c) : c;
+                        var q = fixes.TryGetValue(key, out var f) ? RestAdapter.Apply(f, c) : c;
                         double dq = Deg(q, Q(bone.Value.GetProperty("corrected")));
                         maxClip = Math.Max(maxClip, dc);
                         if (dq > maxFixed) { maxFixed = dq; worst = $"{name}/{role}@{t}/{bone.Name}"; }
@@ -570,7 +700,7 @@ public static class CheckRunner
                 Expect($"Ada pose {role}@{t} {bone.Name} vs browser", d <= TolDeg, $"{d:0.###}°");
             }
         }
-        return $"rest_reference models={models} compared={compared} max_clip_dev={maxClip:0.####}° "
+        return $"rest_reference (importer cross-check) models={models} compared={compared} max_clip_dev={maxClip:0.####}° "
                + $"max_corrected_dev={maxFixed:0.####}° ({worst}) max_pose_dev={maxPose:0.####}°";
     }
 

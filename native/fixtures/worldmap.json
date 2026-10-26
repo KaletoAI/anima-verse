@@ -13,7 +13,8 @@
   ],
   "characters": [
     { "name": "Ada Wren", "location_id": "", "pos": { "x": -50.0, "z": 30.0 }, "pos_origin": null,
-      "height_cm": 160, "room_id": "", "activity_animation": "", "travel": null, "model_sig": "ada-1" },
+      "height_cm": 160, "room_id": "", "activity_animation": "", "travel": null, "model_sig": "ada-1",
+      "model_rev": "r1", "animation_set": "female", "animation_sets": ["female"] },
     { "name": "Bram Holt", "location_id": "loc-house", "pos": { "x": 63.0, "z": 127.0 }, "pos_origin": null,
       "height_cm": 180, "room_id": "room-hall", "activity_animation": "", "travel": null, "model_sig": "bram-1" },
     { "name": "Cleo Marsh", "location_id": "", "pos": { "x": 260.0, "z": -100.0 }, "pos_origin": null,

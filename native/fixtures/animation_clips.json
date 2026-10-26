@@ -11,9 +11,17 @@
     { "kind": "walk", "role": "", "set": "female", "name": "walk", "filename": "walk.fbx",
       "url": "/assets/animation-clips/female/walk.fbx?v=fixturefemale002" },
     { "kind": "walk", "role": "", "set": "", "name": "walk", "filename": "walk.fbx",
-      "url": "/assets/animation-clips/walk.fbx?v=fixturewalk00001" }
+      "url": "/assets/animation-clips/walk.fbx?v=fixturewalk00001" },
+    { "kind": "waiting", "role": "", "set": "female", "name": "waiting", "filename": "waiting.fbx",
+      "url": "/assets/animation-clips/female/waiting.fbx?v=fixturefemale003", "loop": true,
+      "root_motion": { "mode": "keep", "travel_m": [0.0, 0.0] } },
+    { "kind": "waiting", "role": "", "set": "", "name": "waiting", "filename": "waiting.fbx",
+      "url": "/assets/animation-clips/waiting.fbx?v=fixturewaiting01", "loop": false },
+    { "kind": "reading", "role": "", "set": "", "name": "reading", "filename": "reading.fbx",
+      "url": "/assets/animation-clips/reading.fbx?v=fixturereading01", "loop": false,
+      "root_motion": { "mode": "strip", "travel_m": [0.0, 0.0] } }
   ],
-  "kinds": ["idle", "stand-relaxed", "walk"],
+  "kinds": ["idle", "reading", "stand-relaxed", "waiting", "walk"],
   "movement_poses": {
     "standing": { "kind": " Stand-Relaxed ", "public_kind": "idle" },
     "walking": { "kind": "mob1-walk", "public_kind": "walk" },

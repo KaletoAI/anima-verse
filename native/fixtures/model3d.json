@@ -2,7 +2,8 @@
   "Ada Wren": {
     "signature": "ada-1", "has_input": true, "pending": false,
     "model": { "filename": "aa1f6d51558d.glb", "signature": "ada-1", "format": "glb", "rig": "mixamo",
-               "url": "/characters/Ada%20Wren/model3d/file?v=fixtureada000001", "model_rev": "r1" },
+               "url": "/characters/Ada%20Wren/model3d/file?v=fixtureada000001", "model_rev": "r1",
+               "low_url": "/characters/Ada%20Wren/model3d/file?tier=low&v=fixtureadalow01" },
     "animation_set": "", "animation_sets": []
   },
   "Bram Holt": {

@@ -309,6 +309,44 @@ public static class FigureClips
         return family == "run" ? "run" : family == "walk" ? "walk" : null;
     }
 
+    /// <summary>
+    /// <c>missingClipKinds(offered, bound)</c>: the offered kinds a rig cannot play — trimmed, lower-cased, blanks
+    /// dropped, de-duplicated, sorted (JS default sort = UTF-16 code unit order = <see cref="StringComparer.Ordinal"/>).
+    /// </summary>
+    public static List<string> MissingClipKinds(IEnumerable<string> offered, IEnumerable<string> bound)
+    {
+        var have = new HashSet<string>(bound.Select(k => k.Trim().ToLowerInvariant()).Where(k => k.Length > 0), StringComparer.Ordinal);
+        var missing = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var raw in offered)
+        {
+            var kind = raw.Trim().ToLowerInvariant();
+            if (kind.Length > 0 && !have.Contains(kind)) missing.Add(kind);
+        }
+        return missing.ToList();
+    }
+
+    /// <summary>
+    /// <c>resolveClipName(names, needles)</c>: per needle in order, the clip that IS it before one that contains it
+    /// (names trimmed + lower-cased, the cleaned name returned); <c>""</c> when nothing stands in.
+    /// </summary>
+    public static string ResolveClipName(IReadOnlyList<string> names, IReadOnlyList<string> needles)
+    {
+        var clean = names.Select(n => n.Trim().ToLowerInvariant()).ToList();
+        foreach (var needle in needles)
+        {
+            var hit = clean.FirstOrDefault(n => n == needle) ?? clean.FirstOrDefault(n => n.Contains(needle, StringComparison.Ordinal));
+            if (!string.IsNullOrEmpty(hit)) return hit;
+        }
+        return "";
+    }
+
+    /// <summary><c>animatablePool(pool)</c>: the entries the library fits, or all of them when none does.</summary>
+    public static List<T> AnimatablePool<T>(IReadOnlyList<T> pool, Func<T, bool> libraryFits)
+    {
+        var fitting = pool.Where(libraryFits).ToList();
+        return fitting.Count > 0 ? fitting : pool.ToList();
+    }
+
     // ---- JS coercions -----------------------------------------------------------------------------
 
     /// <summary>JS <c>String(v ?? '')</c> for a JSON value.</summary>

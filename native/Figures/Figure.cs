@@ -9,26 +9,43 @@ namespace AnimaNative.Figures;
 /// One character on the map. The node sits at the figure's FEET in world
 /// metres (y = world ground), turned to its walking direction; its body is
 /// either the character's GLB (scaled to its height, with an AnimationPlayer
-/// carrying the retargeted standing/moving clips) or a capsule placeholder.
+/// carrying the WHOLE retargeted clip library along its set chain, one action per
+/// kind plus the browser's synonym aliases) or a capsule placeholder.
 ///
-/// Motion between polls is the spike's simple rule: a new target lerps in over
-/// the poll interval (<see cref="FigureManager.PollSeconds"/>); while the
-/// planned speed exceeds <see cref="WalkSpeed"/> the walking pose's clip plays, else the standing pose's.
+/// Motion between polls is still the spike's simple rule (NPC walking is Task 30): a new
+/// target lerps in over the poll interval (<see cref="FigureManager.PollSeconds"/>); while
+/// the planned speed exceeds <see cref="WalkSpeed"/> the walking pose's clip plays, else
+/// <c>standingClipFor(activity_animation)</c> — every figure plays its activity.
 /// </summary>
 public partial class Figure : Node3D
 {
     public const double WalkSpeed = 0.2;   // m/s
-    private const float Blend = 0.2f;
 
     public string CharacterName { get; }
     /// <summary>The model_sig the current body was loaded for (null = none / placeholder without a store).</summary>
     public string? LoadedSig { get; set; }
     public string? WantedSig { get; set; }
+    /// <summary>The row's <c>model_rev</c> (null = absent) and the <c>model.model_rev</c> the body was loaded with (null = none).</summary>
+    public string? WantedRev { get; set; }
+    public string? LoadedRev { get; set; }
     public bool Loading { get; set; }
+    /// <summary>A load failed transiently and a retry is scheduled (30 s, the browser's <c>setTimeout</c>).</summary>
+    public bool RetryPending { get; set; }
     public double HeightM { get; set; } = FigureManager.DefaultHeightM;
-    /// <summary>Clip tracks bound on this figure's skeleton (all roles).</summary>
+    /// <summary>The character's set chain (<c>animation_sets</c>, the last non-empty one, like <c>setCharacterSets</c>).</summary>
+    public IReadOnlyList<string> Sets { get; set; } = Array.Empty<string>();
+    /// <summary>The wanted distance tier (view state) and the tier/URL of the body on screen.</summary>
+    public FigureTier WantedTier { get; set; } = FigureTier.Full;
+    public FigureTier LoadedTier { get; set; } = FigureTier.Full;
+    public string? LoadedUrl { get; set; }
+    /// <summary>Library kind → the set its file came from (the set chain's choice), for the check and the log.</summary>
+    public IReadOnlyDictionary<string, string> ClipSets { get; set; } = new Dictionary<string, string>();
+    /// <summary>Keys of the retargeted clips this figure's template carries, and their estimated memory (keys × <see cref="FigureManager.KeyBytes"/>).</summary>
+    public long ClipKeys { get; set; }
+    public long ClipBytes { get; set; }
+    /// <summary>Clip tracks bound on this figure's skeleton (every kind of its library).</summary>
     public int BoundTracks { get; set; }
-    /// <summary>Wanted clips (standing/moving) a humanoid figure could not bind — it plays what it has, or the bind pose.</summary>
+    /// <summary>Library kinds this humanoid figure could not bind (<c>missingClipKinds</c>) — it plays a stand-in.</summary>
     public int UnboundClips { get; set; }
 
     public bool IsGlb { get; private set; }
@@ -99,6 +116,8 @@ public partial class Figure : Node3D
         Skeleton = skeleton;
         Player = player;
         _clipKinds = player is null ? Array.Empty<string>() : clipKinds ?? Array.Empty<string>();
+        CurrentKind = CurrentClip = "";
+        CurrentPace = 1;
         AddChild(body);
         UpdateClip();
     }
@@ -109,28 +128,59 @@ public partial class Figure : Node3D
     /// <summary>The server's movement poses the clip choice reads (the clip library's table).</summary>
     public PoseClips Poses { get; set; } = PoseClips.Default;
 
+    /// <summary>The row's <c>activity_animation</c> (npcs.ts <c>npc.animation</c>): what a STANDING figure plays.</summary>
+    public string Activity { get; set; } = "";
+
+    /// <summary>The action kinds of the bound library, in action order (<c>[...this.actions.keys()]</c>).</summary>
+    public IReadOnlyList<string> ClipKinds => _clipKinds;
     private IReadOnlyList<string> _clipKinds = Array.Empty<string>();
 
-    /// <summary>
-    /// The kind this figure asks for — the browser's decision through
-    /// <see cref="FigureClips"/>: moving = <c>moveClip(walk_run, walking)</c>,
-    /// standing = <c>standingClipFor(none, none)</c>. Native has no activity
-    /// clip and no ground movement yet, so both name the pose table's clips.
-    /// </summary>
-    public string WantedClip => Moving ? ClipLibrary.MovingKindOf(Poses) : ClipLibrary.StandingKindOf(Poses);
+    /// <summary>The kind last asked for (<c>currentKind</c>), the action that plays it (<c>""</c> = bind pose) and its pace.</summary>
+    public string CurrentKind { get; private set; } = "";
+    public string CurrentClip { get; private set; } = "";
+    public double CurrentPace { get; private set; } = 1;
 
     /// <summary>
-    /// Play the wanted kind as the browser's <c>Figure.play</c> resolves it:
-    /// <c>resolveClipKind</c> over the kinds this figure has bound, else the
-    /// first bound clip, else the bind pose.
+    /// The kind this figure asks for — npcs.ts' one clip decision through <see cref="FigureClips"/>: moving =
+    /// <c>moveClip(walk_run, walking)</c>, standing = <c>standingClipFor(activity_animation, idleClip(walk_run))</c>.
+    /// The ground word (swim/crawl) and the run rule arrive with NPC walking (Task 30); until then the ground is dry.
     /// </summary>
-    public void UpdateClip()
+    public string WantedClip => Moving ? ClipLibrary.MovingKindOf(Poses)
+        : FigureClips.StandingClipFor(Activity, FigureClips.IdleClip(FigureClips.WalkRun, Poses), Poses);
+
+    /// <summary>Ask for the wanted clip (<see cref="Play"/> of <see cref="WantedClip"/>).</summary>
+    public void UpdateClip() => Play(WantedClip);
+
+    /// <summary>Forget what plays and ask again (after something drove the player directly, e.g. a check).</summary>
+    public void Replay()
     {
-        if (Player is null) return;
-        var want = FigureClips.ResolveClipKind(WantedClip, _clipKinds, Poses);
-        if (want.Length == 0) want = _clipKinds.FirstOrDefault(k => Player.HasAnimation(k)) ?? "";
-        if (want.Length == 0) return;   // nothing bound: bind pose
-        if (Player.CurrentAnimation != want) Player.Play(want, Blend);
+        CurrentKind = CurrentClip = "";
+        UpdateClip();
+    }
+
+    /// <summary>
+    /// <c>Figure.play(kind)</c> without the bridges (Task 31): the kind lower-cased (empty = the standing pose);
+    /// nothing changes when it was asked for already; <c>resolveClipKind</c> over the bound actions, else the
+    /// first action; the stand-in pace (<see cref="ClipLibraryRules.StandInPace"/>); the action's own loop flag
+    /// (baked into its Animation: a one-shot holds its last frame — Godot's <c>LOOP_NONE</c> stops there);
+    /// a crossfade of <see cref="ClipLibraryRules.CrossfadeS"/> from the start of the clip.
+    /// </summary>
+    public void Play(string rawKind)
+    {
+        var kind = (rawKind.Length > 0 ? rawKind : FigureClips.PoseKind(FigureClips.Standing, Poses)).ToLowerInvariant();
+        if (Player is null || kind == CurrentKind) return;
+        var chosen = FigureClips.ResolveClipKind(kind, _clipKinds, Poses);
+        var resolved = chosen.Length > 0 ? chosen : _clipKinds.FirstOrDefault() ?? "";
+        double pace = ClipLibraryRules.StandInPace(kind, chosen);
+        CurrentKind = kind;
+        if (resolved.Length == 0 || !Player.HasAnimation(resolved)) return;   // nothing bound: bind pose
+        CurrentPace = pace;
+        Player.SpeedScale = (float)pace;
+        // The same action keeps playing (a stand-in for another kind): only its pace changes.
+        if (resolved == CurrentClip) return;
+        // A different action starts from its first frame (the browser's reset().fadeIn(0.25)).
+        Player.Play(resolved, ClipLibraryRules.CrossfadeS);
+        CurrentClip = resolved;
     }
 
     /// <summary>Capsule placeholder standing on the node origin.</summary>
