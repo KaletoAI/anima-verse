@@ -2549,15 +2549,17 @@ def test_threshold_base_y() -> None:
     # whose plateau is 0.05 m the pool's declared 0.12 sank the room centre to
     # 0.13 instead of 0.17; on a high plateau the old spot filter matched
     # nothing at all and the declaration was silently dropped. The 6 x 6 ray
-    # raster is gone ("Ein Boden" E5b) and the conversion is the same one, now
-    # in `roomFloorWorldY` — pinned here because the lookup around it needs a
-    # THREE scene and cannot be computed purely.
+    # raster is gone ("Ein Boden" E5b) and the conversion is the same one: the
+    # rule `datumY + declared` is the pure `ground.roomFloorLadder`
+    # (hand-derived in `client3d/scripts/smoke_room_spots.mjs` [6]); what is
+    # pinned here is that `tiles.ts` hands it the TILE's height as the datum,
+    # because the lookup around it needs a THREE scene.
     tiles_ts = (Path(__file__).resolve().parents[1]
                 / "client3d" / "src" / "scene" / "tiles.ts")
     tsrc = tiles_ts.read_text(encoding="utf-8") if tiles_ts.exists() else ""
     check("client3d/src/scene/tiles.ts is where it is", bool(tsrc), str(tiles_ts))
     check("the declared floor enters the derivation as a WORLD height",
-          "return tile.center.y + floor.declared;" in tsrc)
+          "roomFloorLadder(tile.center.y, null, floor.declared" in tsrc)
     check("...and the 6 x 6 ray raster that used to guess it is gone",
           "sampleRoomWalkables" not in tsrc and "Raycaster" not in tsrc)
 

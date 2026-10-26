@@ -305,7 +305,7 @@
  * `main.ts` `slopeBlockedBetween`. The server half is hand-derived in
  * `scripts/smoke_slope_gate.py`.
  *
- * --- gateStandY: THE HEIGHT THE GATE COMPARES (plan-huette-dach task 2) ----
+ * --- [G1] gateStandY: THE HEIGHT THE GATE COMPARES (plan-huette-dach task 2)
  * `slopeBlocks` judges a DIFFERENCE, and until 2026-08-28 the client looked
  * that difference up on the terrain alone while the server looked it up on
  * the whole standing ladder (`model_surface.stand_height_at`, in the gate of
@@ -668,6 +668,17 @@
  *      {nearM 20, farM 40, cullM 300} (what that cfg then does is (J4) of
  *      `smoke_scatter_math.mjs`).
  *
+ * --- SHARED VECTORS — `shared/test-vectors/figure_ground.json` -------------
+ * The input -> value cases of [B2] `placementOf` and [B5] `figureTransition`
+ * (derived in the PLACEMENT block of the body), [G1] `gateStandY`, [G2]
+ * `standY` and [G3] `tileWalkLadder` (in this header) run from that file, which the
+ * native client's C# tests read too (plan Task 29). A non-finite INPUT is
+ * written `{"$number": "NaN" | "Infinity"}` and decoded by the dispatch; an
+ * absent `placementOf` point is an omitted argument. WHAT STAYS INLINE: the
+ * `undefined` previous placement of [B5] (JSON has no undefined; `null` is
+ * the vector case) and every check that composes the rules with
+ * `declaredFloorAt` / `groundStoreyFloors` / `slopeBlocks`.
+ *
  * --- SHARED VECTORS — `shared/test-vectors/overview_hud.json` --------------
  * The input -> value cases of the four sections above run from that file,
  * which the native client's C# tests read too; each label starts with the
@@ -813,6 +824,32 @@
  * out. `plateCeiling` STAYS and now applies to every display alike: it is the
  * storey question, and an uncapped plate pick would hoist a ground-floor
  * figure onto the slab above it.
+ *
+ * --- [G3] tileWalkLadder: THE RUNG ORDER AS A RULE (Task 29) ---------------
+ * `tiles.tileWalkY` asks its lookups (the storey-0 lattice, the declarations,
+ * the plates) and hands the answers to `ground.tileWalkLadder(datumY, baked,
+ * declared, plate)`, the first rung that answers winning. `baked` is already
+ * WORLD metres; `declared` and `plate` are tile-local over the datum; the
+ * clearance 0.01 goes on every drawn rung and never on the datum:
+ *   (0.5, 1.2, 0.3, 2.9)       -> 1.2 + 0.01         = 1.21   rung 0 wins
+ *   (0.5, null, 0.3, 2.9)      -> 0.5 + 0.3 + 0.01   = 0.81   rung 1 wins
+ *   (0.5, null, 0, 2.9)        -> 0.5 + 0 + 0.01     = 0.51   0 is a VALUE
+ *   (0.5, null, null, 2.9)     -> 0.5 + 2.9 + 0.01   = 3.41   rung 2
+ *   (−0.3, null, null, −2.5)   -> −0.3 − 2.5 + 0.01  = −2.79  a basement
+ *   (0.5, null, null, null)    -> 0.5                          the datum
+ *
+ * --- [G2] standY: THE TILE AND THE WORLD, THE HIGHER WINS -------------------
+ * `standY(walkY, terrainY)` (ground.ts, user decision 2026-08-13) reconciles
+ * the tile's answer above with the world ground. A non-finite tile answer
+ * reads as 0; a non-finite world answer leaves the tile answer alone:
+ *   (0.08, 0.18)  -> 0.18   the relief out-tops the hut's declaration
+ *   (0.08, 0)     -> 0.08   on level ground the tile answers
+ *   (−0.3, −0.8)  -> −0.3   max, whatever the sign
+ *   (NaN, 1.4)    -> max(0, 1.4) = 1.4
+ *   (NaN, −0.8)   -> max(0, −0.8) = 0    the docstring's own example
+ *   (1.2, NaN)    -> max(1.2, 1.2) = 1.2
+ *   (NaN, NaN)    -> 0
+ *   (Infinity, 2) -> max(0, 2) = 2       Infinity is no height either
  *
  * --- THE HEADLINE OF E5: built and natural are ONE chain -------------------
  * § A16.9 of docs/schnittstellen-3d.md states the ladder in one line:
@@ -1051,6 +1088,21 @@ async function main() {
   });
   passed += hudVectors.passed;
   failed += hudVectors.failed;
+
+  // ---- figure_ground.json: [B2] [B5] [G1] [G2] [G3] (see "SHARED VECTORS").
+  // A non-finite input travels as {"$number": "NaN" | "Infinity"}.
+  console.log('\n(vectors) shared/test-vectors/figure_ground.json');
+  const num = (v) => (v !== null && typeof v === 'object' && '$number' in v ? Number(v.$number) : v);
+  const groundVectors = runVectors(loadVectors('figure_ground'), {
+    placementOf: (hasTile, ...pos) => placementOf(hasTile, ...pos.map(
+      (p) => (p && typeof p === 'object' ? { x: num(p.x), z: num(p.z) } : p))),
+    figureTransition,
+    gateStandY: (baked, declared, terrain) => gateStandY(num(baked), num(declared), num(terrain)),
+    standY: (walkY, terrainY) => ground.standY(num(walkY), num(terrainY)),
+    tileWalkLadder: ground.tileWalkLadder,
+  });
+  passed += groundVectors.passed;
+  failed += groundVectors.failed;
 
   // --- the CELL maths: GONE (E4 task 5) ------------------------------------
   // `cellOf`, `stepDirection`, `clampToCell`, `keepAhead`, `splitDiagonal` and
@@ -1737,10 +1789,11 @@ async function main() {
     const STEP = 0.4;
     const SLOPE = 40;
     // Flat terrain at 0, a hut whose baked lattice answers its roof at 2.5 m.
-    const outside = gateStandY(null, null, 0);         // no rung but the ground
+    // [G1] The single-call cases (0 off the lattice, 2.5 on it, the
+    // declaration rung, the terrain floor and the NaN fall-throughs) run from
+    // figure_ground.json; the two heights are composed into the climb here.
+    const outside = gateStandY(null, null, 0);         // no rung but the ground: 0
     const onRoof = gateStandY(2.5, null, 0);           // rung 0 answers 2.5
-    check('off the lattice the gate stands on the terrain', outside, 0);
-    check('over the lattice it stands on the lattice', onRoof, 2.5);
     // THE CLIMB the server refuses: 2.5 m up, over a 0.15 m walking lead
     // (step: 2.5 > 0.4) and over a 1.12 m report step (slope: 65.8676° > 40).
     check('a 2.5 m lattice is a wall over a 0.15 m lead',
@@ -1755,24 +1808,14 @@ async function main() {
     // figure walks up and is snapped back three times a second.
     check('RED: terrain only sees no step at all',
       slopeBlocks(0 - 0, 0.15, STEP, SLOPE), false);
-    // RUNG 1, where no lattice answers: the room's own declared floor, a
-    // podium 1.2 m over the flat ground.
-    check('the declaration carries the gate where no lattice answers',
-      gateStandY(null, 1.2, 0), 1.2);
-    check('...and a lattice outranks it (ruling R1)',
-      gateStandY(2.5, 1.2, 0), 2.5);
-    // RUNG 2 is also the LOWER BOUND (Entscheid 5): a hollow in a diorama
-    // never sinks the gate below the ground the figure stands on.
-    check('the terrain is the floor under both upper rungs',
-      gateStandY(-0.5, null, 0.3), 0.3);
-    check('...and under a declaration as well', gateStandY(null, -0.5, 0.3), 0.3);
-    // A sampler with nothing to say is not a height: NaN must neither become
-    // a rung nor drag the answer to NaN.
-    check('a lattice that answers nonsense falls to the next rung',
-      gateStandY(NaN, 1.2, 0), 1.2);
-    check('...and with no rung left, to the ground', gateStandY(NaN, NaN, 0.3), 0.3);
-    check('a terrain sampler with nothing to say leaves the lattice standing',
-      gateStandY(2.5, null, NaN), 2.5);
+    // [G1] RUNG 1, where no lattice answers: the room's own declared floor, a
+    // podium 1.2 m over the flat ground (1.2; under a 2.5 lattice 2.5, ruling
+    // R1). RUNG 2 is also the LOWER BOUND (Entscheid 5): a hollow in a
+    // diorama never sinks the gate below the ground (−0.5 over terrain 0.3 ->
+    // 0.3, lattice or declaration). A sampler with nothing to say is not a
+    // height: NaN neither becomes a rung (NaN, 1.2, 0 -> 1.2; NaN, NaN, 0.3
+    // -> 0.3) nor drags the answer to NaN (2.5, null, NaN -> 2.5). Those
+    // seven cases run from figure_ground.json.
 
     // --- groundStoreyFloors: RUNG 1 IS STOREY 0 ONLY (review finding 1) ----
     // The server's declaration list is built from storey-0 rooms alone
@@ -4848,70 +4891,46 @@ async function main() {
    * --- PLACEMENT: where a figure is drawn, and whether it walks there -------
    * (`client3d/src/game/placement.ts`, acceptance findings B2 + B5)
    *
-   * `placementOf(hasTile, pos)`: a tile places the figure; without one the
+   * [B2] `placementOf(hasTile, pos)`: a tile places the figure; without one the
    * free metre point does; without either there is nothing to draw. THE POINT
    * OF IT is the wilderness — `location_id: ""` has been a legal state since
    * E1, and the figure list used to drop those characters, which took the
    * player's own figure off the map mid-walk.
+   *   (true, (12, 34)) / (true, null)  -> tile   the tile decides
+   *   (false, (12.5, −3.25))           -> free at (12.5, −3.25)
+   *   (false, (0, 0))                  -> free at (0, 0): 0 is not "missing"
+   *   (false, null) / (false, absent)  -> offmap
+   *   (false, (NaN, 0)) / (false, (0, Infinity)) -> offmap: not finite
    */
-  console.log('\nplacement — tile, free point or nothing at all');
-  check('a character on a built tile is placed by the tile',
-    placementOf(true, { x: 12, z: 34 }), { kind: 'tile' });
-  check('…even without a point of its own',
-    placementOf(true, null), { kind: 'tile' });
-  check('WILDERNESS: no tile but a point = a standing figure there',
-    placementOf(false, { x: 12.5, z: -3.25 }),
-    { kind: 'free', pos: { x: 12.5, z: -3.25 } });
-  check('the origin is a point like any other (0 is not "missing")',
-    placementOf(false, { x: 0, z: 0 }), { kind: 'free', pos: { x: 0, z: 0 } });
-  check('no tile and no point: nothing to draw',
-    placementOf(false, null), { kind: 'offmap' });
-  check('an absent point is the same answer',
-    placementOf(false, undefined), { kind: 'offmap' });
-  check('a non-finite coordinate is not a place',
-    placementOf(false, { x: NaN, z: 0 }), { kind: 'offmap' });
-  check('…nor is an infinite one',
-    placementOf(false, { x: 0, z: Infinity }), { kind: 'offmap' });
+  // [B2] — the cases run from figure_ground.json (see "SHARED VECTORS").
+  console.log('\nplacement — [B2] runs from figure_ground.json');
 
   /**
-   * `figureTransition(prev, next)`: SNAP on a visibility change, ROUTE on a
+   * [B5] `figureTransition(prev, next)`: SNAP on a visibility change, ROUTE on a
    * room change, STAY otherwise. The finding (B5) is the first line of the
    * table: opening the detail view flipped the drawn room from null to the
    * room the character had been standing in all along, and the door routing
    * read that as "it just walked in" — from the outdoor huddle spot, through
    * the front door, into the room it never left.
+   *   prev none                      -> snap    (the first placement)
+   *   {null, closed} -> {hall, open} -> snap    VIEW OPENS
+   *   {hall, open} -> {null, closed} -> snap    VIEW CLOSES
+   *   {hall, open} -> {kitchen, open} -> route  a real room change
+   *   {hall, open} -> {null, open}   -> route   room -> ground (outside door)
+   *   {null, open} -> {hall, open}   -> route   …and back
+   *   {hall, open} -> {hall, open}   -> stay
+   *   {null, closed} -> {null, closed} -> stay
+   *   {null, closed} <-> {null, open} -> stay   a GROUND figure is not
+   *                                             teleported when the view opens
+   *                                             over it (review, fix round 2)
+   *   {hall, closed} -> {hall, open} -> stay    the same room, the same spot
+   *   {hall, closed} -> {kitchen, open} -> snap the visibility change wins
+   * The cases run from figure_ground.json; JSON has no `undefined`, so that
+   * reading of "nothing drawn yet" stays here.
    */
-  console.log('placement — snap on a view change, route on a room change');
-  const SHOWN = (room, interiorShown) => ({ room, interiorShown });
-  check('the FIRST placement of a figure never walks',
-    figureTransition(null, SHOWN('hall', true)), 'snap');
+  console.log('placement — [B5] runs from figure_ground.json; undefined stays here');
   check('…and undefined is the same "nothing drawn yet"',
-    figureTransition(undefined, SHOWN(null, false)), 'snap');
-  check('VIEW OPENS: outside/closed -> in its room = snap, not a walk',
-    figureTransition(SHOWN(null, false), SHOWN('hall', true)), 'snap');
-  check('VIEW CLOSES: in its room -> the outdoor spot = snap as well',
-    figureTransition(SHOWN('hall', true), SHOWN(null, false)), 'snap');
-  check('a real room change inside the open view routes through the door',
-    figureTransition(SHOWN('hall', true), SHOWN('kitchen', true)), 'route');
-  check('room -> ground inside the open view routes too (the outside door)',
-    figureTransition(SHOWN('hall', true), SHOWN(null, true)), 'route');
-  check('…and ground -> room the same way back',
-    figureTransition(SHOWN(null, true), SHOWN('hall', true)), 'route');
-  check('nothing changed: whatever the figure is doing keeps running',
-    figureTransition(SHOWN('hall', true), SHOWN('hall', true)), 'stay');
-  check('standing outside a closed interior is just as quiet',
-    figureTransition(SHOWN(null, false), SHOWN(null, false)), 'stay');
-  // The same room means the same placement, whatever the view does — a figure
-  // crossing the open GROUND of a tile must not be teleported onto its spot
-  // because somebody opened the detail view (review finding, fix round 2).
-  check('a GROUND figure is not snapped when the view opens over it',
-    figureTransition(SHOWN(null, false), SHOWN(null, true)), 'stay');
-  check('…nor when it closes again',
-    figureTransition(SHOWN(null, true), SHOWN(null, false)), 'stay');
-  check('a figure inside a room the view keeps showing stays put too',
-    figureTransition(SHOWN('hall', false), SHOWN('hall', true)), 'stay');
-  check('a visibility change wins even when the room changes with it',
-    figureTransition(SHOWN('hall', false), SHOWN('kitchen', true)), 'snap');
+    figureTransition(undefined, { room: null, interiorShown: false }), 'snap');
 
   console.log('\nground — the mesh rung is GONE (red counter-probes, E5b)');
   const { ROOF_CLEARANCE_M, plateCeiling, recipeFloorAt, WALK_CLEARANCE_M,

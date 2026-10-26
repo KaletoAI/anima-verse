@@ -1,0 +1,20 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_places_client.mjs",
+  "cases": [
+    {"label": "[9] poll before correction (100 < 150) is stale", "fn": "pollIsStale",
+     "args": [100, 150], "expect": true},
+    {"label": "[9] poll after correction (200 > 150) is current", "fn": "pollIsStale",
+     "args": [200, 150], "expect": false},
+    {"label": "[9] pollIsStale(1000, Infinity) — release in flight", "fn": "pollIsStale",
+     "args": [1000, null], "expect": true},
+    {"label": "[9] pollIsStale(120, 200) — asked before the answer", "fn": "pollIsStale",
+     "args": [120, 200], "expect": true},
+    {"label": "[9] pollIsStale(300, 200) — asked after the answer", "fn": "pollIsStale",
+     "args": [300, 200], "expect": false},
+    {"label": "[9] pollIsStale(200, 200) — the same instant is not older", "fn": "pollIsStale",
+     "args": [200, 200], "expect": false},
+    {"label": "[9] pollIsStale(0, 0) — no seat change of our own, ever", "fn": "pollIsStale",
+     "args": [0, 0], "expect": false}
+  ]
+}

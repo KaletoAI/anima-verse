@@ -205,6 +205,18 @@ remain local checks; they are not dropped or silently skipped.
 | `hips_tracks.json` | `client3d/scripts/smoke_rig_stand_ref.mjs` | `standingHipsRef`, `clipHipsDrop`, structural `hipsTrackMedian`, `mapHipsTrack`. Tracks are `{name, values}`; matrices are column-major. Mapper outputs typed arrays as ordinary arrays; `rootPath` is null when disabled. The non-finite input probe and real-rig checks stay local. |
 | `retarget.json` | `scripts/smoke_clip_retarget.mjs` | Hand cases [1]–[10] through the pose-data form of `restCorrections`, including heel/toe stance data, quaternion values, driven heads, deformation and counter-probes. The complete adapter contract is in the source smoke and `scripts/retargetVectorDispatch.mjs`; quaternions are `[x,y,z,w]`. Original scene-object/skinning/identity probes also remain. |
 
-Run the four source smokes above with `timeout 300 node <source>`. They execute
+Run the four source smokes above with `timeout 300 node <source>`.
+
+## E5 room placement (Task 29, TypeScript side)
+
+A non-finite **input** is written `{"$number": "NaN" | "Infinity"}` and decoded by the
+dispatch (never a non-finite JSON number); other conventions are named per file.
+
+| File | Canonical source smoke | Functions |
+|---|---|---|
+| `npc_placement.json` | `client3d/scripts/smoke_npc_placement.mjs` | `huddleOffset`, `placeAtLocationValue` — the room ladder of `computeNpcPlacements` (`client3d/src/game/npcPlacement.ts`): rows, `roomOf` (object), the tile's view state + inventory as JSON (`yaw` in radians, maps as objects, `corridors` as room ids) and a context whose standing heights / huddle ground are `[a, b, c]` planes (tile-local resp. world). The seat point is `slotFor` (`scene_models.json`). Returns one `{name, branch, pos, face, lean, inRoom, interiorShown, hidden, transition}` per row, in `localeCompare` order; `null` = no facing / lean |
+| `figure_ground.json` | `client3d/scripts/smoke_walk_math.mjs` | `placementOf`, `figureTransition` (`game/placement.ts`; an absent point = an omitted argument), `gateStandY` (`game/walk.ts`), `standY`, `tileWalkLadder` (`game/ground.ts`, the rung order of `tiles.tileWalkY`) |
+| `room_spots.json` | `client3d/scripts/smoke_room_spots.mjs` | `polygonCentroid`, `roomSpotGridHead` (`roomSpotGrid` → `{length, first, firstDist}`), `roomSpotConstants`, `furnitureUse`, `roomFloorLadder` / `roomStandLadder` (`game/ground.ts`; `null` = undefined for `declared` / `centreY`), `roomSpotsOfValue` (`game/roomSpots.ts`, the core of `tiles.deriveRoomSpots`; samplers as `[a, b, c]` planes over tile-local metres) |
+| `place_poll.json` | `client3d/scripts/smoke_places_client.mjs` | `pollIsStale` (`game/placement.ts`); `null` = Infinity | They execute
 every new case; unknown function names fail through the unchanged shared runner.
 These files do not depend on recorded model output or `native/fixtures/rest_reference.json`.

@@ -25,7 +25,6 @@ import { fitDistance, worldCentreXZ } from './scene/cameraMath';
 import { viewHeading } from './scene/cameraFraming';
 import { enterEmbodied, exitEmbodied, type EmbodyDeps } from './game/embody';
 import { FigureLibrary } from './scene/figures';
-import { animFamily } from './scene/clipCoverage';
 import { slotFor, type PlaceEntry } from './scene/placeSlot';
 import { buildGlyphs, clearPropHighlight, disposeGlyphs, highlightProp, hitPlace,
   hitProp, pickableProps, type PickableProp, type PlacedPropRef,
@@ -86,8 +85,9 @@ import { mountShell, mountDetail, reliftScene, SceneLibrary, setSceneModelTier,
   unmountDetail, unmountShell } from './scene/sceneRecipe';
 import { declaredFloorAt, WALK_CLEARANCE_M } from './game/ground';
 import { entryOfferNear, type EntryTile, type Opening } from './game/enterLocation';
-import { figureTransition, pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
+import { pickablePlaceFor, PLACE_PICK_RADIUS_M, placementOf, pollIsStale,
   type ShownPlacement } from './game/placement';
+import { placeAtLocation } from './game/npcPlacement';
 import { bootStatus } from './ui';
 import { markBootStart, withPhase, reportBootStage, setBootNote, getBootState, bootReport, subscribeBoot, subscribeBootReport } from './game/boot';
 import { connectSceneSide, pointInRects, postMessageTransport } from './hud/bridge';
@@ -2584,19 +2584,9 @@ async function startApp(username: string, role: string) {
   setInterval(pollRooms, ROOMS_POLL_MS);
 
   // --- NPC target positions ----------------------------------------------------
-  /** Where a character stands on a tile, in TILE-LOCAL metres — the caller
-   *  turns it into the world with the footprint (`tileToWorld`). The row in
-   *  front of a building scales with the footprint (0.36 of the edge, which is
-   *  the old 3.6 m on a 10 m location); the ring around an open place stays an
-   *  absolute 2.6 m, because it is a huddle of people and not a property line. */
-  function slotOffset(tile: Tile, index: number, count: number): { x: number; z: number } {
-    if (tile.isBuilding) {
-      // Line up in front of the building (south side).
-      return { x: (index - (count - 1) / 2) * 2.3, z: tile.width * 0.36 };
-    }
-    const angle = (index / Math.max(count, 1)) * Math.PI * 2;
-    return { x: Math.cos(angle) * 2.6, z: Math.sin(angle) * 2.6 };
-  }
+  // Where a character stands on a tile without a room spot (the huddle in
+  // front of a building / the ring on an open place) is `huddleOffset` in
+  // `game/npcPlacement.ts`, part of the pure room ladder below.
 
   /**
    * Render state of a character on a JOURNEY (contract § A11), or null when it
@@ -2725,108 +2715,36 @@ async function startApp(username: string, role: string) {
     }
     for (const [locId, chars] of byLoc) {
       const tile = residency.get(locId)!.tile;
-      chars.sort((a, b) => a.name.localeCompare(b.name));
-      const roomMates = new Map<string, string[]>();
-      for (const c of chars) {
-        const room = roomOf.get(c.name);
-        if (room) (roomMates.get(room) ?? roomMates.set(room, []).get(room)!).push(c.name);
-      }
-      chars.forEach((c, i) => {
-        // Travellers never get here — `travellerState` took them out of the
-        // grouping above, route and all (contract § A11: the server computes,
-        // we render).
-        let pos: THREE.Vector3;
+      // WHERE each figure is drawn is the pure ladder of `game/npcPlacement.ts`
+      // (seat > sit/lie surface > corridor stand > the server's `pos` at the
+      // room's floor > room centre; the huddle outside a revealed room), and so
+      // are its facing, lean, visibility and snap/route/stay. WHERE the figure
+      // stands is the server's word twice over: a character the server SEATED
+      // (plan-posen-plaetze.md § 4) carries `place`, looked up by marker ID; a
+      // character WITHOUT a place stands on its own `pos`, which the server
+      // picks INSIDE the room (§ A1.4, T4). The client chooses no room point of
+      // its own; the one HEIGHT question a payload point cannot answer — a
+      // sitting or lying figure without a marker — is put on a surface sampled
+      // off the furniture itself. Travellers never get here — `travellerState`
+      // took them out of the grouping above (§ A11).
+      const placed = placeAtLocation(chars, tile, {
+        locId,
+        near: residency.get(locId)?.ring === 'near',
+        roomOf: (name) => roomOf.get(name),
+        shownOf: (name) => shownPlacement.get(name),
+        seatOf: slotFor,
+        roomStandY: (room, lx, lz) => roomStandY(tile, room, lx, lz),
+        // Stand on the building mesh's baked ground skin instead of sinking
+        // into it at y=0.
+        groundY: (x, z) => tileGroundY(tile, new THREE.Vector3(x, 0, z)),
+        targetCentre: (id) => places.get(id)?.center,
+      });
+      for (const p of placed) {
+        const c = p.row;
+        const pos = new THREE.Vector3(p.pos.x, p.pos.y, p.pos.z);
         let via: THREE.Vector3[] | undefined;
-        let face: THREE.Vector3 | undefined;
-        let lean: { tilt: number; roll: number } | undefined;
-        const room = roomOf.get(c.name);
-        const roomCenter = room ? tile.roomCenters.get(room) : undefined;
-        // Is the inside of this location REVEALED for this character right
-        // now? Permanently visible rooms count at every zoom level. This is a
-        // pure VIEW state — it says nothing about where the character is, only
-        // about whether the client can draw it there (finding B5).
-        const interiorShown = tile.fade > 0.5
-          || (!!room && tile.alwaysVisibleRooms.has(room));
-        const inRoom = roomCenter && room && interiorShown ? room : null;
-        if (inRoom && roomCenter) {
-          const mates = roomMates.get(inRoom)!;
-          const idx = mates.indexOf(c.name);
-          // WHERE the figure stands is the server's word, twice over. A
-          // character the server SEATED (plan-posen-plaetze.md § 4) carries
-          // `place`, and the seat is looked up by marker ID — no clip kind is
-          // matched against a marker any more (the kind-keyed markers of
-          // AV3D-11 are gone). A character WITHOUT a place stands on its own
-          // `pos`, which the server now picks INSIDE the room as well (§ A1.4,
-          // T4): free of walls, furniture, door zones and room mates. The
-          // client chooses no room point of its own any more — the 6 x 6
-          // raster by alphabetical index and the huddle around the room centre
-          // are gone. What is left in between is the one HEIGHT question a
-          // payload point cannot answer: a sitting or lying figure without a
-          // marker is put on a surface sampled off the furniture itself.
-          const kind = c.activity_animation || '';
-          const near = residency.get(locId)?.ring === 'near';
-          const held = near && c.place ? tile.roomMarkers.get(inRoom)?.get(c.place.id) : undefined;
-          // The seat point itself — `undefined` for a marker that named no
-          // slots, which then falls down the ladder like a missing marker.
-          const seat = held && c.place ? slotFor(held, c.place.slot) : undefined;
-          const sit = near ? tile.roomSitSpots.get(inRoom) : undefined;
-          const lieDown = near ? tile.roomLieSpots.get(inRoom) : undefined;
-          // The surface choice runs over the FAMILY — `sit-cmu` is a sitting
-          // and belongs on the sit surfaces.
-          const family = animFamily(kind);
-          const pool = family === 'lie' ? (lieDown?.length ? lieDown : sit)
-            : family === 'sit' ? (sit?.length ? sit : lieDown) : undefined;
-          if (held && seat) {
-            // The server seated this figure: its slot, its facing, its lean —
-            // nothing is chosen here.
-            pos = seat.clone();
-            if (held.rotation !== undefined) {
-              // `facing` is TILE-LOCAL like every other payload angle, and a
-              // gaze is a DIRECTION: it turns with the footprint but is not
-              // shifted by its centre. The position two lines up went through
-              // `tileToWorld`; without the same turn here a seated figure on
-              // a rotated location sits in the right chair looking off by the
-              // location's yaw. The counter-sense of `facing` itself
-              // (scene_recipe.py `_marker_facing`) is untouched — this changes
-              // the FRAME, not the convention.
-              const a = THREE.MathUtils.degToRad(held.rotation);
-              const dir = tileDirToWorld(tile, Math.sin(a), Math.cos(a));
-              face = new THREE.Vector3(dir.x, 0, dir.z);
-            }
-            if (held.tilt || held.roll) lean = { tilt: held.tilt || 0, roll: held.roll || 0 };
-          } else if (pool?.length) {
-            pos = pool[idx % pool.length].clone();
-          } else if (tile.corridors.some((cor) => cor.roomId === inRoom)) {
-            // A STOREY CORRIDOR (§ A13c) is no room with a hull: the server
-            // picks no standing point in it, and `pos` is whatever point the
-            // figure last stood on. Its own anchor is the server's answer for
-            // that storey (`floor_anchor`: inside the outline, outside every
-            // room, largest clearance) — so the figure is drawn there, and
-            // that is still the server's geometry, not the client's.
-            pos = roomCenter.clone();
-          } else if (c.pos) {
-            // THE SERVER'S STANDING POINT. The payload point is a WORLD metre
-            // like every other `pos`; only the height is the client's, and it
-            // is the room's own floor AT THAT POINT — the same ladder the
-            // avatar walks on indoors (baked lattice, declared floor,
-            // terrain), asked per figure instead of once per room, so a figure
-            // on a diorama's hillock stands on the hillock.
-            const local = worldToTile(tile, c.pos.x, c.pos.z);
-            pos = new THREE.Vector3(c.pos.x,
-                                    roomStandY(tile, inRoom, local.x, local.z) ?? roomCenter.y,
-                                    c.pos.z);
-          } else {
-            // No point at all (a character that was never positioned): the
-            // room's centre is the only thing left.
-            pos = roomCenter.clone();
-          }
-        } else {
-          const slot = slotOffset(tile, i, chars.length);
-          pos = tileToWorld(tile, slot.x, slot.z);
-          // Stand on the building mesh's baked ground skin instead of
-          // sinking into it at y=0.
-          pos.setY(tileGroundY(tile, pos));
-        }
+        const face = p.face ? new THREE.Vector3(p.face.x, p.face.y, p.face.z) : undefined;
+        const { lean, inRoom, interiorShown, transition } = p;
         // Door routing: a real room change walks through the DOOR, not through
         // a wall. Which door is a payload question, not a heuristic
         // (plan-betreten-und-tueren.md § 4.1): two rooms that share a wall have
@@ -2851,9 +2769,7 @@ async function startApp(username: string, role: string) {
         // outdoor huddle spot through the front door. `figureTransition` keeps
         // the two apart; a snap places the figure without a walk.
         const prevShown = shownPlacement.get(c.name);
-        const nextShown: ShownPlacement = { room: inRoom, interiorShown };
-        const transition = figureTransition(prevShown, nextShown);
-        if (transition !== 'stay') shownPlacement.set(c.name, nextShown);
+        if (transition !== 'stay') shownPlacement.set(c.name, { room: inRoom, interiorShown });
         if (transition === 'route') {
           const scene = scenes.get(tile.loc.id);
           // Asked in the TILE frame (no origin): `doorStop` turns the marker
@@ -2912,19 +2828,14 @@ async function startApp(username: string, role: string) {
         }
         // A destination without a running journey (the target survived, the
         // journey did not): no line — that belongs to the ROUTE now — but the
-        // figure still looks the way it means to go, or its standing animation
-        // points at a random neighbour.
-        const targetTile = c.movement_target_id ? places.get(c.movement_target_id) : undefined;
-        if (targetTile && c.movement_target_id !== locId && !face) {
-          face = targetTile.center.clone().sub(pos).setY(0);
-        }
-        // Storey switch: hide figures on storeys other than the selected one.
-        const wrongStorey = !!inRoom && tile.fade > 0.5
-          && !tile.alwaysVisibleRooms.has(inRoom)
-          && (tile.roomLevels.get(inRoom) ?? 0) !== tile.levelFilter;
-        // A character the server has in a ROOM of this tile belongs inside it.
+        // figure still looks the way it means to go (`face` from the ladder),
+        // or its standing animation points at a random neighbour.
+        //
+        // HIDDEN (from the ladder): a figure on a storey other than the
+        // selected one, and — the storey switch's sibling — a character the
+        // server has in a ROOM of this tile belongs inside it.
         // With the interior closed there is nothing to draw it in, and the
-        // `else` branch above lines it up in FRONT of the building — the whole
+        // huddle branch lines it up in FRONT of the building — the whole
         // tavern standing on the doorstep, which is the acceptance finding.
         // So it simply is not drawn until the interior opens; then the room
         // placement takes over unchanged (`inRoom` flips and the figure is
@@ -2937,8 +2848,7 @@ async function startApp(username: string, role: string) {
         // figure standing outside the building it is in. The way back is the
         // Self panel's "Take control" now (`gameActions.takeControl`), which
         // needs no figure to click on, so the exemption is gone.
-        const roomIsClosed = !inRoom && !!room && !!roomCenter;
-        const hidden = wrongStorey || roomIsClosed;
+        const hidden = p.hidden;
         if (hidden) hiddenChars.add(c.name);
         states.push({
           char: c,
@@ -2952,7 +2862,7 @@ async function startApp(username: string, role: string) {
           // nowhere to walk from either.
           snap: transition === 'snap',
         });
-      });
+      }
     }
     return states;
   }

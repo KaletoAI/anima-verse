@@ -216,6 +216,62 @@ export function standY(walkY: number, terrainY: number): number {
   return Math.max(walk, terrain);
 }
 
+/**
+ * THE TILE'S OWN WALKING HEIGHT as a rule over its rung answers — the pure
+ * half of `tiles.tileWalkY`, which does the lookups and hands their results
+ * in (WORLD metres for `baked`, TILE-LOCAL over `datumY` for the other two;
+ * `null` = the rung has nothing to say):
+ *
+ *   baked    -> baked + WALK_CLEARANCE_M             rung 0, storey-0 lattice
+ *   declared -> datumY + declared + WALK_CLEARANCE_M rung 1, a room's walk_y
+ *   plate    -> datumY + plate + WALK_CLEARANCE_M    rung 2, a declared storey
+ *   none     -> datumY                               the terrain at the anchor
+ *
+ * The first rung that answers wins; the lower ones are not consulted (the
+ * caller may leave them `null` once a higher one answered). The terrain rung
+ * carries no clearance: on storey 0 the sole stands on the ground itself.
+ * Hand oracle: `client3d/scripts/smoke_walk_math.mjs` (figure_ground.json).
+ */
+export function tileWalkLadder(datumY: number, baked: number | null,
+                               declared: number | null, plate: number | null): number {
+  if (baked !== null) return baked + WALK_CLEARANCE_M;
+  if (declared !== null) return datumY + declared + WALK_CLEARANCE_M;
+  if (plate !== null) return datumY + plate + WALK_CLEARANCE_M;
+  return datumY;
+}
+
+/**
+ * THE FLOOR OF ONE ROOM as a rule over its rung answers — the pure half of
+ * `tiles.roomFloorAt` (and, with `baked = null`, of the marker floor
+ * `roomBaseFloorY`). WORLD metres:
+ *
+ *   baked     !== null      -> baked              the room's own lattices
+ *   declared  !== undefined -> datumY + declared  the payload's statement
+ *   terrain   finite        -> terrain            the world ground
+ *   otherwise               -> datumY             a room needs SOME height
+ *
+ * `declared` is tile-local over `datumY`; a sampler with nothing to say hands
+ * `NaN` as `terrain`. Hand oracle: `client3d/scripts/smoke_room_spots.mjs` [6].
+ */
+export function roomFloorLadder(datumY: number, baked: number | null,
+                                declared: number | undefined, terrain: number): number {
+  if (baked !== null) return baked;
+  if (declared !== undefined) return datumY + declared;
+  return Number.isFinite(terrain) ? terrain : datumY;
+}
+
+/**
+ * THE STANDING HEIGHT in a room — the pure half of `tiles.roomStandY`: the
+ * room's floor plus the drawing clearance, or, for a room without a floor of
+ * its own (a storey corridor), its stand centre's height; `null` when the tile
+ * knows neither. Hand oracle: `client3d/scripts/smoke_room_spots.mjs` [6].
+ */
+export function roomStandLadder(floorY: number | null,
+                                centreY: number | undefined): number | null {
+  if (floorY !== null) return floorY + WALK_CLEARANCE_M;
+  return centreY ?? null;
+}
+
 // `plateLift` stood here until 2026-08-21 ("Ein Boden" E3, plan § 3.1): the
 // drawn mirror of `standY` that lifted every vertex of a tile's own footprint
 // plate onto the world ground, clamped so the plate never sank below the floor

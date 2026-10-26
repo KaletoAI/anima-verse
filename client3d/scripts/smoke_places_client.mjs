@@ -95,6 +95,12 @@
  *       `pollIsStale(0, 0)`          -> false: no seat change of our own has
  *       ever been answered (the start value, and the value a FAILED release
  *       falls back to) — every poll counts, the server's word stands.
+ *       The correction clock: `pollIsStale(100, 150)` -> true (100 < 150),
+ *       `pollIsStale(200, 150)` -> false (200 > 150).
+ *       These cases run from `shared/test-vectors/place_poll.json` (plan
+ *       Task 29), which the native client's C# tests read too; `Infinity` is
+ *       written `null` there (JSON has no Infinity) and mapped back by the
+ *       dispatch below.
  *
  *  [10] WHICH CLIP A STANDING FIGURE PLAYS, `standingClipFor(animation,
  *       groundIdle)` — the expression the frame loop of `npcs.tick()` runs for
@@ -136,7 +142,9 @@ async function main() {
     if (esbuildResult.status !== 0) process.exit(esbuildResult.status ?? 1)
     const runResult = spawnSync('node', [bundlePath], {
       stdio: 'inherit',
-      env: { ...process.env, SMOKE_BUNDLED: '1' },
+      // The bundle runs from /tmp, so the repo root travels with it (the
+      // shared vector file is read from there).
+      env: { ...process.env, SMOKE_BUNDLED: '1', SMOKE_ROOT: root },
     })
     process.exit(runResult.status ?? 1)
   }
@@ -273,24 +281,17 @@ async function main() {
   checkTrue('a diorama with no diorama place of its own is nothing to click',
     pickableProps([{ ...dio, roomId: 'c' }], propEntries, allOffers).length === 0)
 
-  // Correction clock: 100 < 150 is stale; 200 > 150 is current.
   // --- the stale poll and the standing clip (plan-aufstehen.md) ------------
   const { pollIsStale } = await import('../src/game/placement.ts')
-  checkTrue('poll before correction', pollIsStale(100, 150) === true)
-  checkTrue('poll after correction', pollIsStale(200, 150) === false)
   const { standingClipFor, poseClip, setMovementPoses } = await import('../src/game/walk.ts')
 
   console.log('[9] a poll asked before our own seat change was answered is stale')
-  checkTrue('pollIsStale(1000, Infinity) — release in flight',
-    pollIsStale(1000, Infinity) === true)
-  checkTrue('pollIsStale(120, 200) — asked before the answer',
-    pollIsStale(120, 200) === true)
-  checkTrue('pollIsStale(300, 200) — asked after the answer',
-    pollIsStale(300, 200) === false)
-  checkTrue('pollIsStale(200, 200) — the same instant is not older',
-    pollIsStale(200, 200) === false)
-  checkTrue('pollIsStale(0, 0) — no seat change of our own, ever',
-    pollIsStale(0, 0) === false)
+  console.log('(vectors) shared/test-vectors/place_poll.json')
+  const { loadVectorFile, runVectors } = await import('../../shared/test-vectors/vectors.mjs')
+  const polls = runVectors(
+    loadVectorFile(path.join(process.env.SMOKE_ROOT, 'shared/test-vectors/place_poll.json')),
+    { pollIsStale: (polledAt, ownChangeAt) => pollIsStale(polledAt, ownChangeAt ?? Infinity) })
+  for (let i = 0; i < polls.failed; i++) FAILED.push('place_poll.json')
 
   setMovementPoses({standing: {kind: 'local-standing', public_kind: 'idle'}})
   checkTrue('default standing comes from the fixed pose', standingClipFor(undefined, '') === poseClip('standing'))

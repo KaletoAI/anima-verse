@@ -9,11 +9,12 @@ import { highestSurfaceAt, tileDatumStep, worldToLocalXZ } from '@anima/scene-re
 import type { CutoutHandle, PlacedSurface, SceneModelSpec,
   SurfaceMaterialSpec } from '@anima/scene-render';
 import type { WorldLocation } from '../types';
-import { declaredFloorAt, furnitureUse, plateCeiling, polygonCentroid,
-  recipeFloorAt, roomSpotGrid, standY, WALK_CLEARANCE_M,
+import { declaredFloorAt, plateCeiling, recipeFloorAt, roomFloorLadder,
+  roomStandLadder, standY, tileWalkLadder, WALK_CLEARANCE_M,
   type DeclaredFloor, type GroundModelInfo, type WalkPlate } from '../game/ground';
 import { pointInPolygon, polygonBounds, sanitizePolygon } from '../game/polygon';
 import { roomRectOf } from '../game/roomAt';
+import { roomSpotsOf, type SpotBox, type SpotPoint } from '../game/roomSpots';
 import type { SubmergedGhost } from './submergedGhost';
 import type { PlaceEntry } from './placeSlot';
 import { storeyPieceOpacity } from './storeyDisplay';
@@ -952,96 +953,61 @@ export function deriveRoomSpots(tile: Tile, roomId: string,
   const floor = tile.roomFloors.get(roomId);
   if (!floor) return;
   tile.group.updateMatrixWorld(true);
-  const { hull } = floor;
-  // The room's OWN frame: the bounding box of its hull carries the raster and
-  // the label rectangle, the area centroid carries the centre (`roomRectOf`).
-  const rect = roomRectOf(hull);
-  if (!rect) return;
-  const { x: bx, z: bz, w, d } = rect;
-  tile.roomRects.set(roomId, rect);
+  // A hull without a finite point has no rectangle and gets no stands; asked
+  // before any prop is measured, as it always was.
+  if (!roomRectOf(floor.hull)) return;
 
-  // THE RASTER, only as the centre's fallback: since the SERVER picks the
-  // point a figure stands on (§ A1.4, T4) nothing hands out stands here any
-  // more, but an L-shaped room still needs an interior point when its centroid
-  // falls outside — and the raster is inside by construction.
-  const grid = roomSpotGrid(hull, bx, bz, w, d);
-  // THE CENTRE is the area centroid of the drawn hull. On an L-shaped room
-  // that point can lie OUTSIDE the room, and then the nearest raster point is
-  // taken instead: it is inside by construction (the raster is filtered by the
-  // hull) and it is already computed. A full pole-of-inaccessibility would
-  // refine that by a few centimetres and cost a grid search per room — the
-  // consumers are a huddle, a label and a walk goal, none of which can tell
-  // the difference.
-  const cen = polygonCentroid(hull);
-  const inside = cen && pointInPolygon(cen.x, cen.z, hull) ? cen : (grid[0] ?? null);
-  const cx = inside ? inside.x : bx;
-  const cz = inside ? inside.z : bz;
-
-  const floorY = roomFloorWorldY(tile, roomId, floor, cx, cz);
-  // The centre, ONE instance under id AND name — the readers key by both.
-  const centre = tileToWorld(tile, cx, cz, 0).setY(floorY + WALK_CLEARANCE_M);
-  tile.roomCenters.set(roomId, centre);
-  const roomName = tile.loc.rooms.find((r) => r.id === roomId)?.name;
-  if (roomName) tile.roomCenters.set(roomName, centre);
-
-  // SIT / LIE: the top face of a placed prop, measured on the prop. Its own
-  // bounding box says how high and how large the surface is; `furnitureUse`
-  // says what a 1.70 m figure can do with it.
-  const sit: THREE.Vector3[] = [];
-  const lie: THREE.Vector3[] = [];
+  // SIT / LIE are measured on the OBJECT: each placed prop's own world
+  // bounding box (an empty one is no surface). What a 1.70 m figure can do
+  // with it, the centre, the floor and the marker heights are the pure
+  // `roomSpotsOf` (game/roomSpots.ts) — the RASTER only as the centre's
+  // fallback for an L-shaped room whose centroid falls outside, the floor
+  // under the centre with this room's lattices, the marker floor without them
+  // (finding 2026-10-20, "Dachboden": a table in the middle must not lift a
+  // lying place) and sampled once per place at the mean of its slots.
+  const boxes: SpotBox[] = [];
   const box = new THREE.Box3();
   for (const obj of props) {
     if (!obj) continue;
     box.setFromObject(obj);
     if (box.isEmpty()) continue;
-    const use = furnitureUse(floorY, box.max.y,
-                             box.max.x - box.min.x, box.max.z - box.min.z);
-    if (!use) continue;
-    const at = new THREE.Vector3((box.min.x + box.max.x) / 2,
-                                 box.max.y + WALK_CLEARANCE_M,
-                                 (box.min.z + box.max.z) / 2);
-    (use === 'lie' ? lie : sit).push(at);
+    boxes.push({ min: { x: box.min.x, y: box.min.y, z: box.min.z },
+                 max: { x: box.max.x, y: box.max.y, z: box.max.z } });
   }
+  const entries = [...(tile.roomMarkers.get(roomId)?.values() ?? [])];
+  const spots = roomSpotsOf({
+    hull: floor.hull, frame: tile, props: boxes, markers: entries,
+    floorAt: (lx, lz) => roomFloorWorldY(tile, roomId, floor, lx, lz),
+    baseFloorAt: (lx, lz) => roomBaseFloorY(tile, floor, lx, lz),
+  });
+  if (!spots) return;
+  tile.roomRects.set(roomId, spots.rect);
 
+  // The centre, ONE instance under id AND name — the readers key by both.
+  const centre = new THREE.Vector3(spots.centre.x, spots.centre.y, spots.centre.z);
+  tile.roomCenters.set(roomId, centre);
+  const roomName = tile.loc.rooms.find((r) => r.id === roomId)?.name;
+  if (roomName) tile.roomCenters.set(roomName, centre);
+
+  const toVectors = (list: SpotPoint[]) => list.map((p) => new THREE.Vector3(p.x, p.y, p.z));
   const put = (map: Map<string, THREE.Vector3[]>, list: THREE.Vector3[]) => {
     if (!list.length) return;
     map.set(roomId, list);
     if (roomName) map.set(roomName, list);
   };
-  put(tile.roomSitSpots, sit);
-  put(tile.roomLieSpots, lie);
+  put(tile.roomSitSpots, toVectors(spots.sit));
+  put(tile.roomLieSpots, toVectors(spots.lie));
 
-  // MARKER HEIGHTS sit on the room's floor plus their own lift over the storey
-  // datum the composer measured them against — `offsetY` IS `y_world − datum`
-  // (`mountShell` / `mountDetail`), so this is the composed height with the room's real floor
-  // put under it. On a built ground floor `floorY` is the storey datum and the
-  // line reproduces the payload exactly; where the ROOM declares a floor of its
-  // own (a podium, a sunken lounge, a hut in a lake, an upper storey's plate)
-  // the marker follows it.
-  //
-  // THE FLOOR UNDER THE PLACE, NOT UNDER THE ROOM'S CENTRE, and without the
-  // room's baked lattices (`roomBaseFloorY`; finding 2026-10-20, "Dachboden"):
-  // `floorY` above is the centre's STAND height, and in a diorama room that is
-  // whatever furniture stands in the middle — a table 0.69 m high lifted a
-  // lying place by exactly that. The offset already carries the furniture
-  // under the place, and on a slope the terrain counts where the place is.
-  // Sampled once per place, at the mean of its slots: the slots of one place
-  // share one height (`npcs.tickInteraction` reads slot 0 for a pair).
-  //
-  // WRITTEN ABSOLUTELY, never as a delta: a model tier swap re-derives the same
-  // room (`setSceneModelTier`), and a relative correction would apply twice.
-  // `fixed` markers (prop markers) are finished and are never touched. Every
-  // SLOT of a place is written, in place — a figure the server seated holds
-  // a reference to its slot vector and follows it.
-  for (const e of tile.roomMarkers.get(roomId)?.values() ?? []) {
-    if (e.fixed || !e.slots.length) continue;
-    let mx = 0;
-    let mz = 0;
-    for (const s of e.slots) { mx += s.x; mz += s.z; }
-    const at = worldToTile(tile, mx / e.slots.length, mz / e.slots.length);
-    const y = roomBaseFloorY(tile, floor, at.x, at.z) - e.drop + e.offsetY;
+  // MARKER HEIGHTS: WRITTEN ABSOLUTELY, never as a delta — a model tier swap
+  // re-derives the same room (`setSceneModelTier`), and a relative correction
+  // would apply twice. `fixed` markers (prop markers) are finished and never
+  // touched. Every SLOT of a place is written, in place — a figure the server
+  // seated holds a reference to its slot vector and follows it.
+  entries.forEach((e, i) => {
+    const y = spots.markerY[i];
+    if (y === null) return;
     for (const s of e.slots) s.setY(y);
-  }
+  });
 }
 
 /**
@@ -1075,7 +1041,7 @@ export function bakedFloorAt(tile: Tile, lx: number, lz: number,
 function roomFloorWorldY(tile: Tile, roomId: string, floor: RoomFloor,
                          lx: number, lz: number): number {
   const baked = bakedFloorAt(tile, lx, lz, (e) => e.roomId === roomId);
-  if (baked !== null) return baked;
+  if (baked !== null) return roomFloorLadder(tile.center.y, baked, floor.declared, NaN);
   return roomBaseFloorY(tile, floor, lx, lz);
 }
 
@@ -1086,10 +1052,13 @@ function roomFloorWorldY(tile: Tile, roomId: string, floor: RoomFloor,
  *  lattice), so a diorama's surface added on top would count that furniture
  *  twice. */
 function roomBaseFloorY(tile: Tile, floor: RoomFloor, lx: number, lz: number): number {
-  if (floor.declared !== undefined) return tile.center.y + floor.declared;
-  const w = tileToWorld(tile, lx, lz, 0);
-  const y = worldGroundAt ? worldGroundAt(w.x, w.z) : NaN;
-  return Number.isFinite(y) ? y : tile.center.y;
+  // The terrain is sampled only where the declaration leaves it the answer.
+  let terrain = NaN;
+  if (floor.declared === undefined) {
+    const w = tileToWorld(tile, lx, lz, 0);
+    terrain = worldGroundAt ? worldGroundAt(w.x, w.z) : NaN;
+  }
+  return roomFloorLadder(tile.center.y, null, floor.declared, terrain);
 }
 
 /** The same floor for a room the caller names, or `null` when the tile has no
@@ -1109,9 +1078,8 @@ export function roomFloorAt(tile: Tile, roomId: string,
  *  handshake upstairs or in the cellar stays on that storey. */
 export function roomStandY(tile: Tile, roomId: string,
                            lx: number, lz: number): number | null {
-  const y = roomFloorAt(tile, roomId, lx, lz);
-  if (y !== null) return y + WALK_CLEARANCE_M;
-  return tile.roomCenters.get(roomId)?.y ?? null;
+  return roomStandLadder(roomFloorAt(tile, roomId, lx, lz),
+                         tile.roomCenters.get(roomId)?.y);
 }
 
 /**
@@ -1173,27 +1141,24 @@ export function tileGroundY(tile: Tile, at: THREE.Vector3): number {
  * in front; there is one.
  */
 function tileWalkY(tile: Tile, at: THREE.Vector3): number {
-  const lift = tile.center.y;
   // ONE turn into the tile's frame for all three data rungs — they ask about
   // the same point, and turning it three times only invited them to drift.
+  // Each rung is asked only while every rung above it is silent; the order
+  // and the clearances are the pure `tileWalkLadder` (game/ground.ts).
   const local = worldToTile(tile, at.x, at.z);
   const baked = bakedFloorAt(tile, local.x, local.z, (e) => e.level === 0);
-  if (baked !== null) return baked + WALK_CLEARANCE_M;
-  if (tile.declaredFloors.length) {
-    const declared = declaredFloorAt(tile.declaredFloors, local.x, local.z);
-    if (declared !== null) return tile.center.y + declared + WALK_CLEARANCE_M;
-  }
-  if (tile.walkPlates.length) {
+  const declared = baked === null && tile.declaredFloors.length
+    ? declaredFloorAt(tile.declaredFloors, local.x, local.z) : null;
+  let plate: number | null = null;
+  if (baked === null && declared === null && tile.walkPlates.length) {
     const info: GroundModelInfo = {
       display: tile.modelIsGround ? 'ground'
         : tile.modelIsShellArea ? 'shell_area' : 'shell',
       walkY: tile.modelWalkY,
     };
-    const floor = recipeFloorAt(tile.walkPlates, local.x, local.z,
-                                plateCeiling(info));
-    if (floor !== null) return tile.center.y + floor + WALK_CLEARANCE_M;
+    plate = recipeFloorAt(tile.walkPlates, local.x, local.z, plateCeiling(info));
   }
-  return lift;
+  return tileWalkLadder(tile.center.y, baked, declared, plate);
 }
 
 /** Fade neighbours occluding the camera view of an open interior. */
