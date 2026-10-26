@@ -1,0 +1,1321 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_clip_coverage.mjs",
+  "cases": [
+    {
+      "label": "[1] library swim missing, own walk/idle bound",
+      "fn": "missingClipKinds",
+      "args": [
+        [
+          "walk",
+          "idle",
+          "swim"
+        ],
+        [
+          "walk",
+          "idle"
+        ]
+      ],
+      "expect": [
+        "swim"
+      ]
+    },
+    {
+      "label": "[1] case and padding are not kinds of their own",
+      "fn": "missingClipKinds",
+      "args": [
+        [
+          "Swim",
+          " WALK "
+        ],
+        [
+          "swim"
+        ]
+      ],
+      "expect": [
+        "walk"
+      ]
+    },
+    {
+      "label": "[1] everything bound -> nothing missing",
+      "fn": "missingClipKinds",
+      "args": [
+        [
+          "walk",
+          "swim"
+        ],
+        [
+          "walk",
+          "swim"
+        ]
+      ],
+      "expect": []
+    },
+    {
+      "label": "[1] nothing bound (the Robot case) -> all, sorted",
+      "fn": "missingClipKinds",
+      "args": [
+        [
+          "swim",
+          "yoga",
+          "walk"
+        ],
+        []
+      ],
+      "expect": [
+        "swim",
+        "walk",
+        "yoga"
+      ]
+    },
+    {
+      "label": "[1] embedded clip wins its kind -> kind is not missing",
+      "fn": "missingClipKinds",
+      "args": [
+        [
+          "walk"
+        ],
+        [
+          "walk"
+        ]
+      ],
+      "expect": []
+    },
+    {
+      "label": "[1] nameless clips are no kinds",
+      "fn": "missingClipKinds",
+      "args": [
+        [
+          "",
+          "swim"
+        ],
+        [
+          ""
+        ]
+      ],
+      "expect": [
+        "swim"
+      ]
+    },
+    {
+      "label": "[1] duplicates collapse",
+      "fn": "missingClipKinds",
+      "args": [
+        [
+          "swim",
+          "Swim"
+        ],
+        []
+      ],
+      "expect": [
+        "swim"
+      ]
+    },
+    {
+      "label": "[1] empty library offers nothing to miss",
+      "fn": "missingClipKinds",
+      "args": [
+        [],
+        [
+          "walk"
+        ]
+      ],
+      "expect": []
+    },
+    {
+      "label": "[1b] a needle takes its OWN clip, not the longer kind listed first",
+      "fn": "resolveClipName",
+      "args": [
+        [
+          "swim-idle",
+          "swim"
+        ],
+        [
+          "swim"
+        ]
+      ],
+      "expect": "swim"
+    },
+    {
+      "label": "[1b] ...and the substring pass still reaches when there is no exact one",
+      "fn": "resolveClipName",
+      "args": [
+        [
+          "swim-idle"
+        ],
+        [
+          "swim"
+        ]
+      ],
+      "expect": "swim-idle"
+    },
+    {
+      "label": "[1b] walk beats walking",
+      "fn": "resolveClipName",
+      "args": [
+        [
+          "walk",
+          "walking"
+        ],
+        [
+          "walk"
+        ]
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1b] walking still stands in for walk",
+      "fn": "resolveClipName",
+      "args": [
+        [
+          "walking"
+        ],
+        [
+          "walk"
+        ]
+      ],
+      "expect": "walking"
+    },
+    {
+      "label": "[1b] the needle order ranks: `laying` before the exactly-named `sleep`",
+      "fn": "resolveClipName",
+      "args": [
+        [
+          "laying",
+          "sleep"
+        ],
+        [
+          "lie",
+          "lay",
+          "sleep"
+        ]
+      ],
+      "expect": "laying"
+    },
+    {
+      "label": "[1b] ...and a substring hit on the FIRST needle ends it",
+      "fn": "resolveClipName",
+      "args": [
+        [
+          "sleep",
+          "lie-down"
+        ],
+        [
+          "lie",
+          "lay",
+          "sleep"
+        ]
+      ],
+      "expect": "lie-down"
+    },
+    {
+      "label": "[1b] names are trimmed and lower-cased",
+      "fn": "resolveClipName",
+      "args": [
+        [
+          " Idle ",
+          "walk"
+        ],
+        [
+          "idle"
+        ]
+      ],
+      "expect": "idle"
+    },
+    {
+      "label": "[1b] nothing stands in -> empty",
+      "fn": "resolveClipName",
+      "args": [
+        [
+          "walk"
+        ],
+        [
+          "idle",
+          "stand"
+        ]
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[1b] no clips at all -> empty",
+      "fn": "resolveClipName",
+      "args": [
+        [],
+        [
+          "idle"
+        ]
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[1c] walk is its own family",
+      "fn": "animFamily",
+      "args": [
+        "walk"
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1c] THE RENAME: walk-cmu is a walk",
+      "fn": "animFamily",
+      "args": [
+        "walk-cmu"
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1c] run-fast is a run",
+      "fn": "animFamily",
+      "args": [
+        "run-fast"
+      ],
+      "expect": "run"
+    },
+    {
+      "label": "[1c] trimmed and lower-cased",
+      "fn": "animFamily",
+      "args": [
+        "  RUN  "
+      ],
+      "expect": "run"
+    },
+    {
+      "label": "[1c] swim-idle belongs to swim",
+      "fn": "animFamily",
+      "args": [
+        "swim-idle"
+      ],
+      "expect": "swim"
+    },
+    {
+      "label": "[1c] treading-water is its own thing",
+      "fn": "animFamily",
+      "args": [
+        "treading-water"
+      ],
+      "expect": "treading"
+    },
+    {
+      "label": "[1c] the inner underscore is no separator",
+      "fn": "animFamily",
+      "args": [
+        "sit_a"
+      ],
+      "expect": "sit_a"
+    },
+    {
+      "label": "[1c] an empty kind is idle",
+      "fn": "animFamily",
+      "args": [
+        ""
+      ],
+      "expect": "idle"
+    },
+    {
+      "label": "[1c] ...and so is a missing one",
+      "fn": "animFamily",
+      "args": [
+        null
+      ],
+      "expect": "idle"
+    },
+    {
+      "label": "[1c] a leading dash separates nothing",
+      "fn": "animFamily",
+      "args": [
+        "-cmu"
+      ],
+      "expect": "-cmu"
+    },
+    {
+      "label": "[1d] THE FINDING: a rig on walk serves a wanted walk-cmu",
+      "fn": "matchAnimKind",
+      "args": [
+        [
+          "walk",
+          "idle"
+        ],
+        "walk-cmu"
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1d] ...and a marker on walk-cmu serves a wanted walk",
+      "fn": "matchAnimKind",
+      "args": [
+        [
+          "walk-cmu",
+          "idle"
+        ],
+        "walk"
+      ],
+      "expect": "walk-cmu"
+    },
+    {
+      "label": "[1d] the exact kind beats the relative listed first",
+      "fn": "matchAnimKind",
+      "args": [
+        [
+          "walk",
+          "walk-cmu"
+        ],
+        "walk-cmu"
+      ],
+      "expect": "walk-cmu"
+    },
+    {
+      "label": "[1d] among relatives the family BASE wins",
+      "fn": "matchAnimKind",
+      "args": [
+        [
+          "walk-mixamo",
+          "walk"
+        ],
+        "walk-cmu"
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1d] ...and without a base the first listed one",
+      "fn": "matchAnimKind",
+      "args": [
+        [
+          "walk-mixamo",
+          "walk-cmu"
+        ],
+        "walk"
+      ],
+      "expect": "walk-mixamo"
+    },
+    {
+      "label": "[1d] the entry comes back exactly as passed in",
+      "fn": "matchAnimKind",
+      "args": [
+        [
+          " Walk "
+        ],
+        "walk-cmu"
+      ],
+      "expect": " Walk "
+    },
+    {
+      "label": "[1d] run-fast takes itself",
+      "fn": "matchAnimKind",
+      "args": [
+        [
+          "run",
+          "run-fast"
+        ],
+        "run-fast"
+      ],
+      "expect": "run-fast"
+    },
+    {
+      "label": "[1d] idle-loop stands in for idle",
+      "fn": "matchAnimKind",
+      "args": [
+        [
+          "idle-loop"
+        ],
+        "idle"
+      ],
+      "expect": "idle-loop"
+    },
+    {
+      "label": "[1d] another family is no match",
+      "fn": "matchAnimKind",
+      "args": [
+        [
+          "idle",
+          "sit"
+        ],
+        "walk-cmu"
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[1d] nothing available -> empty",
+      "fn": "matchAnimKind",
+      "args": [
+        [],
+        "walk"
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[1d] no kind wanted -> empty",
+      "fn": "matchAnimKind",
+      "args": [
+        [
+          "walk"
+        ],
+        ""
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[1e] a renamed kind needs no stand-in of its own",
+      "fn": "clipKindChain",
+      "args": [
+        "walk-cmu"
+      ],
+      "expect": [
+        "walk-cmu",
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] walk likewise",
+      "fn": "clipKindChain",
+      "args": [
+        "walk"
+      ],
+      "expect": [
+        "walk",
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] run falls to walk",
+      "fn": "clipKindChain",
+      "args": [
+        "run"
+      ],
+      "expect": [
+        "run",
+        "walk",
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] run-fast reaches walk through the FAMILY entry",
+      "fn": "clipKindChain",
+      "args": [
+        "run-fast"
+      ],
+      "expect": [
+        "run-fast",
+        "walk",
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] swim-idle: own entry, then swim's",
+      "fn": "clipKindChain",
+      "args": [
+        "swim-idle"
+      ],
+      "expect": [
+        "swim-idle",
+        "swim",
+        "walk",
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] the treader stands rather than walks",
+      "fn": "clipKindChain",
+      "args": [
+        "treading-water"
+      ],
+      "expect": [
+        "treading-water",
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] lie sits down",
+      "fn": "clipKindChain",
+      "args": [
+        "lie"
+      ],
+      "expect": [
+        "lie",
+        "sit",
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] idle is the floor itself",
+      "fn": "clipKindChain",
+      "args": [
+        "idle"
+      ],
+      "expect": [
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] an empty kind is idle",
+      "fn": "clipKindChain",
+      "args": [
+        ""
+      ],
+      "expect": [
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] THE FINDING: walk-cmu plays the rig's old walk take",
+      "fn": "resolveClipKind",
+      "args": [
+        "walk-cmu",
+        [
+          "walk",
+          "idle"
+        ]
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1e] ...and the exact take stays preferred where it exists",
+      "fn": "resolveClipKind",
+      "args": [
+        "walk-cmu",
+        [
+          "walk",
+          "walk-cmu",
+          "idle"
+        ]
+      ],
+      "expect": "walk-cmu"
+    },
+    {
+      "label": "[1e] ...and a wanted walk finds the walk-cmu take",
+      "fn": "resolveClipKind",
+      "args": [
+        "walk",
+        [
+          "walk-cmu",
+          "idle"
+        ]
+      ],
+      "expect": "walk-cmu"
+    },
+    {
+      "label": "[1e] no gait at all -> idle",
+      "fn": "resolveClipKind",
+      "args": [
+        "walk-cmu",
+        [
+          "idle"
+        ]
+      ],
+      "expect": "idle"
+    },
+    {
+      "label": "[1e] nothing of the sort -> empty",
+      "fn": "resolveClipKind",
+      "args": [
+        "walk-cmu",
+        [
+          "sit"
+        ]
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[1e] run-fast takes the run take before the walk one",
+      "fn": "resolveClipKind",
+      "args": [
+        "run-fast",
+        [
+          "run",
+          "walk",
+          "idle"
+        ]
+      ],
+      "expect": "run"
+    },
+    {
+      "label": "[1e] ...and walks when there is no run take",
+      "fn": "resolveClipKind",
+      "args": [
+        "run-fast",
+        [
+          "walk",
+          "idle"
+        ]
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1e] ...even when the walk take carries the new name",
+      "fn": "resolveClipKind",
+      "args": [
+        "run-fast",
+        [
+          "walk-cmu",
+          "idle"
+        ]
+      ],
+      "expect": "walk-cmu"
+    },
+    {
+      "label": "[1e] run -> walk, unchanged",
+      "fn": "resolveClipKind",
+      "args": [
+        "run",
+        [
+          "walk",
+          "idle"
+        ]
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1e] swim -> walk, unchanged",
+      "fn": "resolveClipKind",
+      "args": [
+        "swim",
+        [
+          "walk",
+          "idle"
+        ]
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1e] swim-idle -> swim, unchanged",
+      "fn": "resolveClipKind",
+      "args": [
+        "swim-idle",
+        [
+          "swim",
+          "walk"
+        ]
+      ],
+      "expect": "swim"
+    },
+    {
+      "label": "[1e] treading-water stands, it does not walk on water",
+      "fn": "resolveClipKind",
+      "args": [
+        "treading-water",
+        [
+          "walk",
+          "idle"
+        ]
+      ],
+      "expect": "idle"
+    },
+    {
+      "label": "[1e] idle is untouched",
+      "fn": "resolveClipKind",
+      "args": [
+        "idle",
+        [
+          "idle",
+          "walk"
+        ]
+      ],
+      "expect": "idle"
+    },
+    {
+      "label": "[1e] ...and a rig without any idle answers nothing",
+      "fn": "resolveClipKind",
+      "args": [
+        "idle",
+        [
+          "walk"
+        ]
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[1f] walk",
+      "fn": "proceduralGait",
+      "args": [
+        "walk"
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1f] THE GATE FIRES for walk-cmu (the static-rig finding)",
+      "fn": "proceduralGait",
+      "args": [
+        "walk-cmu"
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1f] run",
+      "fn": "proceduralGait",
+      "args": [
+        "run"
+      ],
+      "expect": "run"
+    },
+    {
+      "label": "[1f] run-fast is still a run",
+      "fn": "proceduralGait",
+      "args": [
+        "run-fast"
+      ],
+      "expect": "run"
+    },
+    {
+      "label": "[1f] case does not matter",
+      "fn": "proceduralGait",
+      "args": [
+        "RUN"
+      ],
+      "expect": "run"
+    },
+    {
+      "label": "[1f] idle stands",
+      "fn": "proceduralGait",
+      "args": [
+        "idle"
+      ],
+      "expect": null
+    },
+    {
+      "label": "[1f] sit stands",
+      "fn": "proceduralGait",
+      "args": [
+        "sit"
+      ],
+      "expect": null
+    },
+    {
+      "label": "[1f] swim stands (no gait for a stroke)",
+      "fn": "proceduralGait",
+      "args": [
+        "swim"
+      ],
+      "expect": null
+    },
+    {
+      "label": "[1f] no kind stands",
+      "fn": "proceduralGait",
+      "args": [
+        ""
+      ],
+      "expect": null
+    },
+    {
+      "label": "[1f] null stands",
+      "fn": "proceduralGait",
+      "args": [
+        null
+      ],
+      "expect": null
+    },
+    {
+      "label": "[1f] `walking` is a family of its own, as it always was",
+      "fn": "proceduralGait",
+      "args": [
+        "walking"
+      ],
+      "expect": null
+    },
+    {
+      "label": "[1e] local walk chain",
+      "fn": "clipKindChain",
+      "args": [
+        "mob1-walk",
+        {
+          "standing": {
+            "kind": "mob1-stand-relaxed-idle-v2",
+            "publicKind": "idle"
+          },
+          "walking": {
+            "kind": "mob1-walk",
+            "publicKind": "walk"
+          },
+          "running": {
+            "kind": "mob1-jog",
+            "publicKind": "run"
+          },
+          "swimming": {
+            "kind": "breast-stroke",
+            "publicKind": "breast-stroke"
+          },
+          "treading_water": {
+            "kind": "treading-water",
+            "publicKind": "treading-water"
+          },
+          "crawling": {
+            "kind": "crawl",
+            "publicKind": "crawl"
+          },
+          "crawling_rest": {
+            "kind": "crawl-rest",
+            "publicKind": "crawl-rest"
+          }
+        }
+      ],
+      "expect": [
+        "mob1-walk",
+        "walk",
+        "mob1-stand-relaxed-idle-v2",
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] missing local walk uses public walk",
+      "fn": "resolveClipKind",
+      "args": [
+        "mob1-walk",
+        [
+          "walk",
+          "idle"
+        ],
+        {
+          "standing": {
+            "kind": "mob1-stand-relaxed-idle-v2",
+            "publicKind": "idle"
+          },
+          "walking": {
+            "kind": "mob1-walk",
+            "publicKind": "walk"
+          },
+          "running": {
+            "kind": "mob1-jog",
+            "publicKind": "run"
+          },
+          "swimming": {
+            "kind": "breast-stroke",
+            "publicKind": "breast-stroke"
+          },
+          "treading_water": {
+            "kind": "treading-water",
+            "publicKind": "treading-water"
+          },
+          "crawling": {
+            "kind": "crawl",
+            "publicKind": "crawl"
+          },
+          "crawling_rest": {
+            "kind": "crawl-rest",
+            "publicKind": "crawl-rest"
+          }
+        }
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1e] missing local run can walk",
+      "fn": "resolveClipKind",
+      "args": [
+        "mob1-jog",
+        [
+          "walk",
+          "idle"
+        ],
+        {
+          "standing": {
+            "kind": "mob1-stand-relaxed-idle-v2",
+            "publicKind": "idle"
+          },
+          "walking": {
+            "kind": "mob1-walk",
+            "publicKind": "walk"
+          },
+          "running": {
+            "kind": "mob1-jog",
+            "publicKind": "run"
+          },
+          "swimming": {
+            "kind": "breast-stroke",
+            "publicKind": "breast-stroke"
+          },
+          "treading_water": {
+            "kind": "treading-water",
+            "publicKind": "treading-water"
+          },
+          "crawling": {
+            "kind": "crawl",
+            "publicKind": "crawl"
+          },
+          "crawling_rest": {
+            "kind": "crawl-rest",
+            "publicKind": "crawl-rest"
+          }
+        }
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1f] procedural local walk",
+      "fn": "proceduralGait",
+      "args": [
+        "mob1-walk",
+        {
+          "standing": {
+            "kind": "mob1-stand-relaxed-idle-v2",
+            "publicKind": "idle"
+          },
+          "walking": {
+            "kind": "mob1-walk",
+            "publicKind": "walk"
+          },
+          "running": {
+            "kind": "mob1-jog",
+            "publicKind": "run"
+          },
+          "swimming": {
+            "kind": "breast-stroke",
+            "publicKind": "breast-stroke"
+          },
+          "treading_water": {
+            "kind": "treading-water",
+            "publicKind": "treading-water"
+          },
+          "crawling": {
+            "kind": "crawl",
+            "publicKind": "crawl"
+          },
+          "crawling_rest": {
+            "kind": "crawl-rest",
+            "publicKind": "crawl-rest"
+          }
+        }
+      ],
+      "expect": "walk"
+    },
+    {
+      "label": "[1f] procedural local run",
+      "fn": "proceduralGait",
+      "args": [
+        "mob1-jog",
+        {
+          "standing": {
+            "kind": "mob1-stand-relaxed-idle-v2",
+            "publicKind": "idle"
+          },
+          "walking": {
+            "kind": "mob1-walk",
+            "publicKind": "walk"
+          },
+          "running": {
+            "kind": "mob1-jog",
+            "publicKind": "run"
+          },
+          "swimming": {
+            "kind": "breast-stroke",
+            "publicKind": "breast-stroke"
+          },
+          "treading_water": {
+            "kind": "treading-water",
+            "publicKind": "treading-water"
+          },
+          "crawling": {
+            "kind": "crawl",
+            "publicKind": "crawl"
+          },
+          "crawling_rest": {
+            "kind": "crawl-rest",
+            "publicKind": "crawl-rest"
+          }
+        }
+      ],
+      "expect": "run"
+    },
+    {
+      "label": "[1e] exact local clip wins",
+      "fn": "resolveClipKind",
+      "args": [
+        "mob1-walk",
+        [
+          "mob1-walk",
+          "walk",
+          "idle"
+        ],
+        {
+          "standing": {
+            "kind": "mob1-stand-relaxed-idle-v2",
+            "publicKind": "idle"
+          },
+          "walking": {
+            "kind": "mob1-walk",
+            "publicKind": "walk"
+          },
+          "running": {
+            "kind": "mob1-jog",
+            "publicKind": "run"
+          },
+          "swimming": {
+            "kind": "breast-stroke",
+            "publicKind": "breast-stroke"
+          },
+          "treading_water": {
+            "kind": "treading-water",
+            "publicKind": "treading-water"
+          },
+          "crawling": {
+            "kind": "crawl",
+            "publicKind": "crawl"
+          },
+          "crawling_rest": {
+            "kind": "crawl-rest",
+            "publicKind": "crawl-rest"
+          }
+        }
+      ],
+      "expect": "mob1-walk"
+    },
+    {
+      "label": "[1e] public running precedes walking",
+      "fn": "resolveClipKind",
+      "args": [
+        "mob1-jog",
+        [
+          "run",
+          "walk",
+          "idle"
+        ],
+        {
+          "standing": {
+            "kind": "mob1-stand-relaxed-idle-v2",
+            "publicKind": "idle"
+          },
+          "walking": {
+            "kind": "mob1-walk",
+            "publicKind": "walk"
+          },
+          "running": {
+            "kind": "mob1-jog",
+            "publicKind": "run"
+          },
+          "swimming": {
+            "kind": "breast-stroke",
+            "publicKind": "breast-stroke"
+          },
+          "treading_water": {
+            "kind": "treading-water",
+            "publicKind": "treading-water"
+          },
+          "crawling": {
+            "kind": "crawl",
+            "publicKind": "crawl"
+          },
+          "crawling_rest": {
+            "kind": "crawl-rest",
+            "publicKind": "crawl-rest"
+          }
+        }
+      ],
+      "expect": "run"
+    },
+    {
+      "label": "[1e] no usable clip stays empty",
+      "fn": "resolveClipKind",
+      "args": [
+        "mob1-walk",
+        [
+          "sit"
+        ],
+        {
+          "standing": {
+            "kind": "mob1-stand-relaxed-idle-v2",
+            "publicKind": "idle"
+          },
+          "walking": {
+            "kind": "mob1-walk",
+            "publicKind": "walk"
+          },
+          "running": {
+            "kind": "mob1-jog",
+            "publicKind": "run"
+          },
+          "swimming": {
+            "kind": "breast-stroke",
+            "publicKind": "breast-stroke"
+          },
+          "treading_water": {
+            "kind": "treading-water",
+            "publicKind": "treading-water"
+          },
+          "crawling": {
+            "kind": "crawl",
+            "publicKind": "crawl"
+          },
+          "crawling_rest": {
+            "kind": "crawl-rest",
+            "publicKind": "crawl-rest"
+          }
+        }
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[1e] custom crawling falls through public crawl to walk",
+      "fn": "clipKindChain",
+      "args": [
+        "missing-crawl",
+        {
+          "standing": {
+            "kind": "idle",
+            "publicKind": "idle"
+          },
+          "walking": {
+            "kind": "walk",
+            "publicKind": "walk"
+          },
+          "running": {
+            "kind": "run",
+            "publicKind": "run"
+          },
+          "swimming": {
+            "kind": "breast-stroke",
+            "publicKind": "breast-stroke"
+          },
+          "treading_water": {
+            "kind": "treading-water",
+            "publicKind": "treading-water"
+          },
+          "crawling": {
+            "kind": "missing-crawl",
+            "publicKind": "crawl"
+          },
+          "crawling_rest": {
+            "kind": "missing-rest",
+            "publicKind": "crawl-rest"
+          }
+        }
+      ],
+      "expect": [
+        "missing-crawl",
+        "crawl",
+        "walk",
+        "idle"
+      ]
+    },
+    {
+      "label": "[1e] custom resting falls through public rest to idle",
+      "fn": "clipKindChain",
+      "args": [
+        "missing-rest",
+        {
+          "standing": {
+            "kind": "idle",
+            "publicKind": "idle"
+          },
+          "walking": {
+            "kind": "walk",
+            "publicKind": "walk"
+          },
+          "running": {
+            "kind": "run",
+            "publicKind": "run"
+          },
+          "swimming": {
+            "kind": "breast-stroke",
+            "publicKind": "breast-stroke"
+          },
+          "treading_water": {
+            "kind": "treading-water",
+            "publicKind": "treading-water"
+          },
+          "crawling": {
+            "kind": "missing-crawl",
+            "publicKind": "crawl"
+          },
+          "crawling_rest": {
+            "kind": "missing-rest",
+            "publicKind": "crawl-rest"
+          }
+        }
+      ],
+      "expect": [
+        "missing-rest",
+        "crawl-rest",
+        "idle"
+      ]
+    },
+    {
+      "label": "[2] library-deaf rig drops out while fitting ones exist",
+      "fn": "animatablePool",
+      "args": [
+        [
+          {
+            "name": "Soldier",
+            "libraryFits": true
+          },
+          {
+            "name": "Xbot",
+            "libraryFits": true
+          },
+          {
+            "name": "Robot",
+            "libraryFits": false
+          }
+        ]
+      ],
+      "expect": [
+        "Soldier",
+        "Xbot"
+      ]
+    },
+    {
+      "label": "[2] no rig fits (offline, no library) -> pool stays whole",
+      "fn": "animatablePool",
+      "args": [
+        [
+          {
+            "name": "Soldier",
+            "libraryFits": false
+          },
+          {
+            "name": "Xbot",
+            "libraryFits": false
+          },
+          {
+            "name": "Robot",
+            "libraryFits": false
+          }
+        ]
+      ],
+      "expect": [
+        "Soldier",
+        "Xbot",
+        "Robot"
+      ]
+    },
+    {
+      "label": "[2] all fit -> all stay",
+      "fn": "animatablePool",
+      "args": [
+        [
+          {
+            "name": "Soldier",
+            "libraryFits": true
+          },
+          {
+            "name": "Xbot",
+            "libraryFits": true
+          }
+        ]
+      ],
+      "expect": [
+        "Soldier",
+        "Xbot"
+      ]
+    },
+    {
+      "label": "[2] empty pool stays empty",
+      "fn": "animatablePool",
+      "args": [
+        []
+      ],
+      "expect": []
+    },
+    {
+      "label": "[2] single deaf rig is better than none",
+      "fn": "animatablePool",
+      "args": [
+        [
+          {
+            "name": "Robot",
+            "libraryFits": false
+          }
+        ]
+      ],
+      "expect": [
+        "Robot"
+      ]
+    }
+  ]
+}

@@ -195,3 +195,16 @@ Fixture resolution happens before these adapters. None of the adapters derives
 an expectation from production output. The original non-finite, relational,
 shader-source and mutation probes that cannot be ordinary pure function calls
 remain local checks; they are not dropped or silently skipped.
+
+## E5 figure pipeline (Task 28, TypeScript side)
+
+| File | Canonical source smoke | Functions |
+|---|---|---|
+| `clip_commit.json` | `client3d/scripts/smoke_clip_order.mjs` | `commitInListOrderValue` — `commitInListOrder` with plain clip records and the smoke's flag/rename/pair-root callbacks. The last argument selects a result path through objects/maps; `["hasKind", kind]` tests index membership. Missing results remain absent. |
+| `clip_coverage.json` | `client3d/scripts/smoke_clip_coverage.mjs` | Missing kinds, alias/family matching, clip chains/resolution, procedural gait and animatable pool. Pose tables are explicit resolved tables. `animatablePool` returns names in the adapter; null for `animFamily` represents the original undefined argument. Local mutation, module-state and consumer-source probes remain in the smoke. |
+| `hips_tracks.json` | `client3d/scripts/smoke_rig_stand_ref.mjs` | `standingHipsRef`, `clipHipsDrop`, structural `hipsTrackMedian`, `mapHipsTrack`. Tracks are `{name, values}`; matrices are column-major. Mapper outputs typed arrays as ordinary arrays; `rootPath` is null when disabled. The non-finite input probe and real-rig checks stay local. |
+| `retarget.json` | `scripts/smoke_clip_retarget.mjs` | Hand cases [1]–[10] through the pose-data form of `restCorrections`, including heel/toe stance data, quaternion values, driven heads, deformation and counter-probes. The complete adapter contract is in the source smoke and `scripts/retargetVectorDispatch.mjs`; quaternions are `[x,y,z,w]`. Original scene-object/skinning/identity probes also remain. |
+
+Run the four source smokes above with `timeout 300 node <source>`. They execute
+every new case; unknown function names fail through the unchanged shared runner.
+These files do not depend on recorded model output or `native/fixtures/rest_reference.json`.

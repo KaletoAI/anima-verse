@@ -142,7 +142,50 @@
  *     atan2(a,.3). Rx(-tilt) gives delta y=-a cos(tilt)+.3 sin(tilt)=0.
  *     +10° triggers; +5° and -10° do not; (10+4)/2=7° levels each side.
  *     Undoing Rz(±6°) leg spread before the foot turn levels the same points.
+ *
+ * Shared retarget.json adapters: bones are ordered records
+ * [normalisedName, parentName|null, localTurns, localPosition]. A turn is
+ * [axis, degrees], multiplied in listed order; armature holds the outer turns.
+ * The adapter accumulates WORLD orientations and positions into RestPose data,
+ * never a scene object. soles are ankle-relative heel/toe points; it transforms
+ * these INPUT points into the root-bone frame. omitPositions removes samples
+ * for missing-data probes. C# should assemble the same pose maps.
+ * retargetConstantDeformations returns donorDeformation^-1*targetDeformation
+ * for each bone, checking the common rigid G of [6]. retargetPositions also
+ * accepts a per-bone animated turns object (identity when omitted).
+ * retargetFactors returns left/right quaternion arrays [x,y,z,w]; retargetKeys
+ * returns the ordered corrected names; retargetDrive/Values apply a local
+ * rotation; retargetPositions drives every joint with identity and returns
+ * world heads. retargetSoleDeltas returns heel.y-toe.y after deformation.
+ * retargetDeformation multiplies the driven value by inverse target world
+ * rest; retargetWorld accumulates driven orientations; retargetHas checks
+ * presence; bindRelativeClipSummary also exposes track/clip object identity.
+ * For [3], A=17 -> (.1478094111,.9890158634), A=-35 ->
+ * (-.3007057995,.9537169507) as sin/cos(A/2), A=0 -> identity.
+ * All original scene-object, skinning and identity/invariant probes stay below.
+ *
+ * Numeric expansions for the shared expectations, BY HAND:
+ * a rotation by d has component sin(d/2) and scalar cos(d/2).
+ * For d=2,8,10,15,20,30,40,50,67 degrees these pairs are respectively
+ * (.0174524064,.9998476952), (.0697564737,.9975640503),
+ * (.0871557427,.9961946981), (.1305261922,.9914448614),
+ * (.1736481777,.9848077530), (.2588190451,.9659258263),
+ * (.3420201433,.9396926208), (.4226182617,.9063077870),
+ * (.5519369853,.8338858221). For -5 and -9 degrees they are
+ * (-.0436193874,.9990482216), (-.0784590957,.9969173337).
+ * [4] Ry(50)*Rx(40) gives (cy*sx,sy*cx,-sy*sx,cy*cx) =
+ * (.3099755192,.3971312620,-.1445439585,.8516507396).
+ * [5] Ry(-20)*Rx(40) gives (.3368240888,-.1631759112,
+ * .0593911746,.9254165784). [6] Rx(-90)=(−sqrt(.5),0,0,sqrt(.5)).
+ * [9] With no stance correction, K_spine=Rx(angle); when corrected all
+ * sagittal factors cancel. Head alone 15 degrees retains neck/head factors.
+ * sin5*.1=.0087155743 and .1+.1*cos5=.1996194698.
+ * [10] heel.y=-.1+.3*tan(tilt): 10 -> -.0471019058,
+ * 4 -> -.0790219564, 5 -> -.0737534009, -10 -> -.1528980942.
+ * The levelled heel-minus-toe y is 0 on both sides, including spread=6.
  */
+import { loadVectorFile, runVectors } from '../shared/test-vectors/vectors.mjs'
+import { retargetVectorDispatch } from './retargetVectorDispatch.mjs'
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
@@ -176,7 +219,9 @@ async function main() {
     await import('../packages/scene-render/src/clipRetarget.ts')
   const THREE = await import('three')
 
-  const failures = []
+  const vectorResult = runVectors(loadVectorFile(path.join(process.cwd(), 'shared/test-vectors/retarget.json')), retargetVectorDispatch(THREE,
+    { restCorrections, bindRelativeValues, bindRelativeClip }))
+  const failures = vectorResult.failed ? ['shared retarget vectors'] : []
   const check = (label, ok, detail = '') => {
     console.log(`  ${ok ? '✓' : '✗'} ${label}${detail ? ` — ${detail}` : ''}`)
     if (!ok) failures.push(label)
@@ -561,6 +606,7 @@ async function main() {
   check('no SkinnedMesh: no foot correction',
     restCorrections(THREE, donorFeet, feet(10, 10, 0, false)).size === 0)
 
+  console.log(`shared retarget: ${vectorResult.passed} ok, ${vectorResult.failed} failed`)
   console.log(failures.length
     ? `\n${failures.length} FAILED: ${failures.join(', ')}`
     : '\nall checks passed')

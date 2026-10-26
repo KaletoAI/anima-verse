@@ -102,6 +102,8 @@ export interface RestPose {
   parentBone: Map<string, string | null>
   /** each bone's REST head position, accumulated the same way as `world` */
   position: Map<string, Vector3>
+  /** Lowest heel/toe points in the root-bone frame, from the mesh adapter. */
+  soles?: Map<string, { heel: Vector3; toe: Vector3 }>
 }
 
 /** `K_p⁻¹` and `K_b` of one bone — the two factors of `q = left·c·right`. */
@@ -279,30 +281,10 @@ function torsoStance(three: THREE, donor: RestPose, self: RestPose,
   return out
 }
 
-/**
- * FOOT STANCE. Measure the sole, not ankle→toebase pitch: over 110 rigs
- * their correlation is only 0.13; the worst visible heel-up sole (+13.2°)
- * has an ordinary joint pitch (+5.9°). Sole tilt has median −0.1°, p10 −8.2°,
- * p90 +5.2°, max +13.2°; >6°: 6 rigs, >8°: 3, >10°: 1.
- * Only a heel-up pair mean above 6° triggers: negative tilt commonly comes
- * from shoes with curved-up toes and must keep that shape.
- *
- * In the root rest frame (z forward), take the lowest heel vertex behind
- * the ankle and lowest toe vertex ahead of the ball, assigned by dominant
- * foot/toe skin joint. tilt=atan2(heel.y−toe.y, |toe.z−heel.z|).
- * With Rx(φ), y'=y cosφ−z sinφ; the heel→toe line has Δy=−a, Δz=b>0,
- * so y'=0 requires tanφ=−a/b, hence φ=−tilt (smoke verifies the sign).
- * Each foot subtree gets S=Rx(φ). If legStance supplies S_leg, measure
- * the line on S_leg-rotated offsets instead and use S=Rx(φ*)·S_leg.
- * K_b=R̃_d⁻¹·S·R̃_t gives deformation M_d·G·S about the ankle.
- * Missing either joint or either sole part leaves the whole pair alone.
- * client3d's footLockMeasure / legPin run on the ADAPTED clip and therefore
- * see the corrected foot automatically.
- */
-function footStance(three: THREE, target: Object3D, self: RestPose,
-                    targetRoot: Quaternion | undefined,
-                    legs: Map<string, Quaternion>): Map<string, Quaternion> {
-  const out = new Map<string, Quaternion>()
+/** Sample skinned geometry once; the correction kernel consumes only pose data. */
+export function restSolesOf(three: THREE, target: Object3D, self: RestPose): NonNullable<RestPose['soles']> {
+  let targetRoot: Quaternion | undefined
+  for (const [key, above] of self.parentBone) if (above === null) { targetRoot = self.world.get(key); break }
   const inverseRoot = targetRoot?.clone().invert()
   const sides = ['left', 'right'].map((side) => {
     const ankle = self.position.get(`${side}foot`)?.clone()
@@ -312,7 +294,7 @@ function footStance(three: THREE, target: Object3D, self: RestPose,
     return { side, ankle, ball, heel: new three.Vector3(0, Infinity, 0),
       toe: new three.Vector3(0, Infinity, 0) }
   })
-  if (sides.some((s) => s === null)) return out
+  if (sides.some((s) => s === null)) return new Map()
   target.updateMatrixWorld(true)
   const v = new three.Vector3()
   target.traverse((node) => {
@@ -341,6 +323,54 @@ function footStance(three: THREE, target: Object3D, self: RestPose,
       if (v.z > side.ball.z && v.y < side.toe.y) side.toe.copy(v)
     }
   })
+  const out: NonNullable<RestPose['soles']> = new Map()
+  for (const side of sides) {
+    if (Number.isFinite(side!.heel.y) && Number.isFinite(side!.toe.y)) {
+      out.set(side!.side, { heel: side!.heel, toe: side!.toe })
+    }
+  }
+  return out
+}
+
+/**
+ * FOOT STANCE. Measure the sole, not ankle→toebase pitch: over 110 rigs
+ * their correlation is only 0.13; the worst visible heel-up sole (+13.2°)
+ * has an ordinary joint pitch (+5.9°). Sole tilt has median −0.1°, p10 −8.2°,
+ * p90 +5.2°, max +13.2°; >6°: 6 rigs, >8°: 3, >10°: 1.
+ * Only a heel-up pair mean above 6° triggers: negative tilt commonly comes
+ * from shoes with curved-up toes and must keep that shape.
+ *
+ * In the root rest frame (z forward), take the lowest heel vertex behind
+ * the ankle and lowest toe vertex ahead of the ball, assigned by dominant
+ * foot/toe skin joint. tilt=atan2(heel.y−toe.y, |toe.z−heel.z|).
+ * With Rx(φ), y'=y cosφ−z sinφ; the heel→toe line has Δy=−a, Δz=b>0,
+ * so y'=0 requires tanφ=−a/b, hence φ=−tilt (smoke verifies the sign).
+ * Each foot subtree gets S=Rx(φ). If legStance supplies S_leg, measure
+ * the line on S_leg-rotated offsets instead and use S=Rx(φ*)·S_leg.
+ * K_b=R̃_d⁻¹·S·R̃_t gives deformation M_d·G·S about the ankle.
+ * Missing either joint or either sole part leaves the whole pair alone.
+ * client3d's footLockMeasure / legPin run on the ADAPTED clip and therefore
+ * see the corrected foot automatically.
+ */
+function footStance(three: THREE, self: RestPose,
+                    targetRoot: Quaternion | undefined,
+                    legs: Map<string, Quaternion>): Map<string, Quaternion> {
+  const out = new Map<string, Quaternion>()
+  const inverseRoot = targetRoot?.clone().invert()
+  const sides = ['left', 'right'].map((side) => {
+    const ankle = self.position.get(`${side}foot`)?.clone()
+    const ball = self.position.get(`${side}toebase`)?.clone()
+    if (!ankle || !ball) return null
+    if (inverseRoot) { ankle.applyQuaternion(inverseRoot); ball.applyQuaternion(inverseRoot) }
+    return { side, ankle, ball, heel: new three.Vector3(0, Infinity, 0),
+      toe: new three.Vector3(0, Infinity, 0) }
+  })
+  if (sides.some((s) => s === null)) return out
+  for (const side of sides) {
+    const sole = self.soles?.get(side!.side)
+    if (!sole) return out
+    side!.heel.copy(sole.heel); side!.toe.copy(sole.toe)
+  }
   if (sides.some((s) => !Number.isFinite(s!.heel.y) || !Number.isFinite(s!.toe.y))) return out
   const tilt = (heel: Vector3, toe: Vector3): number =>
     Math.atan2(heel.y - toe.y, Math.abs(toe.z - heel.z))
@@ -375,17 +405,22 @@ function footStance(three: THREE, target: Object3D, self: RestPose,
  * `left = K_p⁻¹` and `right = K_b` per bone (`q = left·c·right`), both built
  * from the ACCUMULATED world rests of donor and target.
  *
+ * The pose-data overload takes RestPose (including optional root-frame soles)
+ * and never visits scene objects. Object3D callers use the same kernel after
+ * restPoseOf/restSolesOf have sampled their scene.
+ *
  * Bones whose two factors are both under `epsDeg` are LEFT OUT, so a caller
  * that finds no entry keeps its track untouched and pays nothing. That also
  * makes the identity case exact rather than merely close.
  */
 export function restCorrections(three: THREE,
                                 donor: RestPose,
-                                target: Object3D,
+                                target: Object3D | RestPose,
                                 epsDeg = 0.05): Map<string, RestCorrection> {
   const out = new Map<string, RestCorrection>()
   if (!donor.world.size) return out
-  const self = restPoseOf(three, target)
+  const self = 'world' in target ? target : restPoseOf(three, target)
+  if (!('world' in target)) self.soles = restSolesOf(three, target, self)
   // Both rests, read in their own rig's ROOT BONE frame — that is what divides
   // the figure's standing attitude out of the comparison.
   const rootRest = (pose: RestPose): Quaternion | undefined => {
@@ -404,7 +439,7 @@ export function restCorrections(three: THREE,
     // leg under the spine keeps the leg rule there rather than failing to load.
     if (!stance.has(key)) stance.set(key, s)
   }
-  for (const [key, s] of footStance(three, target, self, targetRoot, stance)) {
+  for (const [key, s] of footStance(three, self, targetRoot, stance)) {
     stance.set(key, s)
   }
   const k = new Map<string, Quaternion>()

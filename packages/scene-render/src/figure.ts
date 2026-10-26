@@ -49,7 +49,7 @@
  * that lived here was deleted 2026-08-28: it had already drifted from the
  * catalog's groups).
  */
-import type { AnimationClip, Object3D } from 'three'
+import type { Object3D } from 'three'
 import { normBoneName } from './clipRetarget'
 
 /** The figure of this contract: 1.70 m, everywhere and always (§ A3). */
@@ -84,7 +84,7 @@ export function figureRootY(surfaceY: number, rootOffset?: number | null): numbe
  * `null` is not zero: a clip without the track carries no height information,
  * and a zero would read as "hips on the floor".
  */
-export function hipsTrackMedian(clip: AnimationClip | null | undefined): number | null {
+export function hipsTrackMedian(clip: { tracks: readonly { name: string; values: ArrayLike<number> }[] } | null | undefined): number | null {
   const ys: number[] = []
   for (const track of clip?.tracks || []) {
     if (!track.name.endsWith('.position')) continue

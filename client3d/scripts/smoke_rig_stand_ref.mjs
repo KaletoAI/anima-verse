@@ -54,7 +54,24 @@
  *      rig, rig served: LEFT foot lowest bone (LeftFoot / LeftToeBase /
  *      LeftToe_End) over the bind floor, median over the window:
  *      |value| ≤ 0.5 cm (measured −0.18 with the rig reference).
+ * [R8] hipsTrackMedian takes absolute y from hips position tracks only,
+ * sorts ascending and chooses floor(n/2): y=[-3,1,2,4] -> [1,2,3,4]
+ * -> 3 (upper middle, not average); no track -> null. Other properties and
+ * other bones do not contribute. Multiple matching tracks share one sample list.
+ * [R9] mapHipsTrack: ref=100, world hips=2 -> k=.02. Rest=[1,2,3].
+ * y=100,50,-150 -> bounce=0,-1,1 -> local [1,2,3],[1,1,3],[1,3,3].
+ * Raw xz=(10,20),(20,40),(0,10), relative to frame zero, times=0,1,2:
+ * path=(0,0),(.2,.4),(-.2,-.2). A median of 200 exceeds 1.5*100,
+ * so scaleFix=.5: y=200,100,-300 gives the same bounce, xz is halved.
+ * At median=150 the strict threshold keeps scaleFix=1.
+ * Without a served rig or without root motion, rootPath=null.
+ * Parent inverse with linear diagonal (2,3,4), translation (7,8,9):
+ * apply(0,-1,0)=(7,5,9), subtract translation -> (0,-3,0),
+ * add rest -> (1,-1,3); zero bounce still maps to rest (1,2,3).
+ * For parent inverse Rz(90), world (0,-1,0) becomes (1,0,0),
+ * so adding rest gives (2,2,3), independent of its translation.
  */
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -96,7 +113,7 @@ async function loadClient() {
     const entry = [
       `export { adaptExternalClips } from '${src}/scene/figures';`,
       'export { standingHipsRef, rigHipsHeight, clipHipsDrop, restPoseOf,'
-        + ' restCorrections } from \'@anima/scene-render\';',
+        + ' restCorrections, hipsTrackMedian, mapHipsTrack } from \'@anima/scene-render\';',
     ].join('\n');
     const built = await esbuild.build({
       stdin: { contents: entry, resolveDir: dir, loader: 'ts' },
@@ -126,19 +143,19 @@ async function main() {
 
   console.log('[R1-R4] the rule');
   {
-    const r = C.standingHipsRef(113.032, 110.179);
-    check('[R1] rig served → the rig rest', r.ref === 113.032 && r.source === 'rig', JSON.stringify(r));
-    const idle = C.standingHipsRef(undefined, 110.179);
-    check('[R2] no rig → the idle median', idle.ref === 110.179 && idle.source === 'idle', JSON.stringify(idle));
-    const zero = C.standingHipsRef(0, 110.179);
-    check('[R2] rig height 0 → idle', zero.ref === 110.179 && zero.source === 'idle', JSON.stringify(zero));
+    const vectors = runVectors(loadVectors('hips_tracks'), {
+      standingHipsRef: C.standingHipsRef,
+      clipHipsDrop: C.clipHipsDrop,
+      hipsTrackMedian: C.hipsTrackMedian,
+      mapHipsTrack: (values, times, options) => {
+        const out = C.mapHipsTrack(values, times, options);
+        return { values: Array.from(out.values),
+          rootPath: out.rootPath ? { times: Array.from(out.rootPath.times), xz: Array.from(out.rootPath.xz) } : null };
+      },
+    });
+    passed += vectors.passed; failed += vectors.failed;
     const nan = C.standingHipsRef(NaN, 110.179);
     check('[R2] rig height NaN → idle', nan.ref === 110.179 && nan.source === 'idle', JSON.stringify(nan));
-    const none = C.standingHipsRef(undefined, null);
-    check('[R3] neither → none', none.ref === null && none.source === 'none', JSON.stringify(none));
-    const drop0 = C.clipHipsDrop(0.98013, 65.961, none.ref);
-    check('[R3] clipHipsDrop without a reference = 0', drop0 === 0, String(drop0));
-    near('[R4] clipHipsDrop(0.98013, 65.961, 113.032)', C.clipHipsDrop(0.98013, 65.961, 113.032), 0.40816, 1e-5);
   }
 
   console.log('[R5] rigHipsHeight');

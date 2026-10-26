@@ -13,7 +13,7 @@ import {
 } from './clipCoverage';
 import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
-  createSecondaryMotion, bindRelativeValues, hipsTrackMedian, normBoneName, restCorrections, restPoseOf,
+  createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
   rigHipsHeight, standingHipsRef,
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose } from '@anima/scene-render';
@@ -552,7 +552,6 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
   }
 
   const q = new THREE.Quaternion();
-  const v = new THREE.Vector3();
   // The source's STANDING reference: `standingHipsRef` of @anima/scene-render
   // — the reference rig's REST hips height (`donorHipsY`), the ONE rule the
   // admin previews use too (`clipHipsDrop` there, the rescaled track here come
@@ -596,12 +595,6 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
     donorHipsY, idleRest !== null && idleRest > 1e-6 ? idleRest : clusterRest);
   if (standSource !== 'rig') warnNoStandRig();
   const sourceRest = standRef ?? 0;
-  // Scale healing per clip: normalise an outlier's |y| values onto the
-  // reference before the bounce is computed.
-  const scaleFixOf = (clip: THREE.AnimationClip): number => {
-    const m = medians.get(clip) || 0;
-    return sourceRest > 1e-6 && m > sourceRest * 1.5 ? sourceRest / m : 1;
-  };
   const out: THREE.AnimationClip[] = [];
   for (const clip of clips) {
     const tracks: THREE.KeyframeTrack[] = [];
@@ -639,18 +632,12 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
         // Take only the VERTICAL hips motion (relative to the source's STANDING
         // reference — that is how sitting/lying clips lower the hips) and
         // discard locomotion/drift — the client moves the root itself.
-        const k = hipsPosScale / sourceRest;
-        const scaleFix = scaleFixOf(clip);
-        const rest = hips.position;
-        const vals = new Float32Array(track.values.length);
-        for (let i = 0; i < track.values.length; i += 3) {
-          const bounce = (Math.abs(track.values[i + 1]) * scaleFix - sourceRest) * k; // world delta in m
-          v.set(0, bounce, 0).applyMatrix4(hipsPosMatrix); // into parent space (direction+scale)
-          v.sub(new THREE.Vector3().setFromMatrixPosition(hipsPosMatrix!)); // direction part only
-          v.add(rest);
-          v.toArray(vals, i);
-        }
-        tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.position`, [...track.times], [...vals]));
+        const mapped = mapHipsTrack(track.values, track.times, {
+          sourceRest, median: medians.get(clip) || 0, hipsPosScale,
+          parentInverse: hipsPosMatrix.elements, rest: hips.position.toArray(),
+          rootMotion: !!clipRootMotionFlags.get(clip), rigKnown: standSource === 'rig',
+        });
+        tracks.push(new THREE.VectorKeyframeTrack(`${bone.name}.position`, [...track.times], [...mapped.values]));
         // …and the HORIZONTAL travel is kept aside rather than thrown away —
         // for a clip whose file says it carries one (the listing's
         // `root_motion`, `setClipRootMotion`). It is built from the RAW
@@ -668,17 +655,7 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
         // (+Z forward, +X the figure's left) — the frame of the figure root.
         const rigKnown = standSource === 'rig';
         if (clipRootMotionFlags.get(clip) && !rigKnown) warnNoTravelRig(clip.name);
-        if (clipRootMotionFlags.get(clip) && rigKnown) {
-          const n = track.times.length;
-          const xz = new Float32Array(n * 2);
-          const x0 = track.values[0] * scaleFix;
-          const z0 = track.values[2] * scaleFix;
-          for (let i = 0; i < n; i++) {
-            xz[i * 2] = (track.values[i * 3] * scaleFix - x0) * k;
-            xz[i * 2 + 1] = (track.values[i * 3 + 2] * scaleFix - z0) * k;
-          }
-          rootPath = { times: Float32Array.from(track.times), xz };
-        }
+        rootPath = mapped.rootPath;
       }
     }
     if (tracks.length >= MIN_CLIP_TRACKS) {

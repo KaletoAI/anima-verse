@@ -1,0 +1,4830 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "scripts/smoke_clip_retarget.mjs",
+  "fixtures": {
+    "D": {
+      "bones": [
+        [
+          "hips",
+          null,
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        [
+          "leftfoot",
+          "hips",
+          [
+            [
+              "y",
+              30
+            ]
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ]
+      ],
+      "armature": []
+    },
+    "T": {
+      "bones": [
+        [
+          "hips",
+          null,
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        [
+          "leftfoot",
+          "hips",
+          [
+            [
+              "y",
+              50
+            ]
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ]
+      ],
+      "armature": []
+    },
+    "CHAIN_D": {
+      "bones": [
+        [
+          "hips",
+          null,
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        [
+          "leftshoulder",
+          "hips",
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        [
+          "leftarm",
+          "leftshoulder",
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ]
+      ]
+    },
+    "CHAIN_T": {
+      "bones": [
+        [
+          "hips",
+          null,
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        [
+          "leftshoulder",
+          "hips",
+          [
+            [
+              "y",
+              20
+            ]
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        [
+          "leftarm",
+          "leftshoulder",
+          [
+            [
+              "y",
+              -20
+            ]
+          ],
+          [
+            0,
+            0,
+            0
+          ]
+        ]
+      ]
+    },
+    "SPINE_D": {
+      "bones": [
+        [
+          "hips",
+          null,
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        [
+          "spine",
+          "hips",
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ]
+      ],
+      "armature": []
+    },
+    "LEGS": {
+      "bones": [
+        [
+          "hips",
+          null,
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        [
+          "leftupleg",
+          "hips",
+          [],
+          [
+            0.1,
+            0,
+            0
+          ]
+        ],
+        [
+          "leftleg",
+          "leftupleg",
+          [],
+          [
+            0,
+            -0.45,
+            0
+          ]
+        ],
+        [
+          "leftfoot",
+          "leftleg",
+          [],
+          [
+            0,
+            -0.45,
+            0
+          ]
+        ],
+        [
+          "rightupleg",
+          "hips",
+          [],
+          [
+            -0.1,
+            0,
+            0
+          ]
+        ],
+        [
+          "rightleg",
+          "rightupleg",
+          [],
+          [
+            0,
+            -0.45,
+            0
+          ]
+        ],
+        [
+          "rightfoot",
+          "rightleg",
+          [],
+          [
+            0,
+            -0.45,
+            0
+          ]
+        ]
+      ]
+    },
+    "TORSO": {
+      "bones": [
+        [
+          "hips",
+          null,
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        [
+          "spine",
+          "hips",
+          [
+            [
+              "x",
+              0
+            ]
+          ],
+          [
+            0,
+            0.1,
+            0
+          ]
+        ],
+        [
+          "spine1",
+          "spine",
+          [
+            [
+              "x",
+              0
+            ]
+          ],
+          [
+            0,
+            0.1,
+            0
+          ]
+        ],
+        [
+          "spine2",
+          "spine1",
+          [
+            [
+              "x",
+              0
+            ]
+          ],
+          [
+            0,
+            0.1,
+            0
+          ]
+        ],
+        [
+          "leftshoulder",
+          "spine2",
+          [],
+          [
+            0.05,
+            0.05,
+            0
+          ]
+        ],
+        [
+          "neck",
+          "spine2",
+          [
+            [
+              "x",
+              0
+            ]
+          ],
+          [
+            0,
+            0.1,
+            0
+          ]
+        ],
+        [
+          "head",
+          "neck",
+          [
+            [
+              "x",
+              0
+            ]
+          ],
+          [
+            0,
+            0.1,
+            0
+          ]
+        ],
+        [
+          "leftupleg",
+          "hips",
+          [],
+          [
+            0.1,
+            -0.1,
+            0
+          ]
+        ]
+      ]
+    },
+    "FEET": {
+      "bones": [
+        [
+          "hips",
+          null,
+          [],
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        [
+          "leftupleg",
+          "hips",
+          [],
+          [
+            0.1,
+            0,
+            0
+          ]
+        ],
+        [
+          "leftleg",
+          "leftupleg",
+          [],
+          [
+            0,
+            -0.45,
+            0
+          ]
+        ],
+        [
+          "leftfoot",
+          "leftleg",
+          [],
+          [
+            0,
+            -0.45,
+            0
+          ]
+        ],
+        [
+          "lefttoebase",
+          "leftfoot",
+          [],
+          [
+            0,
+            -0.05,
+            0.12
+          ]
+        ],
+        [
+          "rightupleg",
+          "hips",
+          [],
+          [
+            -0.1,
+            0,
+            0
+          ]
+        ],
+        [
+          "rightleg",
+          "rightupleg",
+          [],
+          [
+            0,
+            -0.45,
+            0
+          ]
+        ],
+        [
+          "rightfoot",
+          "rightleg",
+          [],
+          [
+            0,
+            -0.45,
+            0
+          ]
+        ],
+        [
+          "righttoebase",
+          "rightfoot",
+          [],
+          [
+            0,
+            -0.05,
+            0.12
+          ]
+        ]
+      ]
+    }
+  },
+  "cases": [
+    {
+      "label": "[1] right twenty degrees, left identity",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        }
+      ],
+      "expect": {
+        "leftfoot": {
+          "left": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "right": [
+            0,
+            0.1736481777,
+            0,
+            0.984807753
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[2] identity omitted",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "D"
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[2] identity keeps array",
+      "fn": "bindRelativeValues",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "D"
+        },
+        "leftfoot",
+        []
+      ],
+      "expect": null,
+      "eps": 1e-07
+    },
+    {
+      "label": "[2] sub threshold",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "hips",
+              [
+                [
+                  "y",
+                  30.04
+                ]
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "armature": []
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[2] above threshold",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "hips",
+              [
+                [
+                  "y",
+                  30.2
+                ]
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "armature": []
+        }
+      ],
+      "expect": [
+        "leftfoot"
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[3] driven 0",
+      "fn": "retargetDrive",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            30
+          ]
+        ]
+      ],
+      "expect": [
+        0,
+        0.4226182617,
+        0,
+        0.906307787
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[3] float track 0",
+      "fn": "bindRelativeValues",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            30
+          ]
+        ]
+      ],
+      "expect": [
+        0,
+        0.4226182617,
+        0,
+        0.906307787
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[3] driven 17",
+      "fn": "retargetDrive",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            47
+          ]
+        ]
+      ],
+      "expect": [
+        0,
+        0.5519369853,
+        0,
+        0.8338858221
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[3] float track 17",
+      "fn": "bindRelativeValues",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            47
+          ]
+        ]
+      ],
+      "expect": [
+        0,
+        0.5519369853,
+        0,
+        0.8338858221
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[3] driven -35",
+      "fn": "retargetDrive",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            -5
+          ]
+        ]
+      ],
+      "expect": [
+        0,
+        0.1305261922,
+        0,
+        0.9914448614
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[3] float track -35",
+      "fn": "bindRelativeValues",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            -5
+          ]
+        ]
+      ],
+      "expect": [
+        0,
+        0.1305261922,
+        0,
+        0.9914448614
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[4] right order at rest",
+      "fn": "retargetDrive",
+      "args": [
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "hips",
+              [
+                [
+                  "x",
+                  40
+                ]
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "armature": []
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "hips",
+              [
+                [
+                  "y",
+                  50
+                ],
+                [
+                  "x",
+                  40
+                ]
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "armature": []
+        },
+        "leftfoot",
+        [
+          [
+            "x",
+            40
+          ]
+        ]
+      ],
+      "expect": [
+        0.3099755192,
+        0.397131262,
+        -0.1445439585,
+        0.8516507396
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[4] wrong order counter probe",
+      "fn": "retargetCounterProbe",
+      "args": [
+        "order"
+      ],
+      "expect": 33.2,
+      "eps": 0.05
+    },
+    {
+      "label": "[5] child factors",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "CHAIN_D"
+        },
+        {
+          "$fixture": "CHAIN_T"
+        }
+      ],
+      "expect": {
+        "leftarm": {
+          "left": [
+            0,
+            -0.1736481777,
+            0,
+            0.984807753
+          ],
+          "right": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[5] child drive",
+      "fn": "retargetDrive",
+      "args": [
+        {
+          "$fixture": "CHAIN_D"
+        },
+        {
+          "$fixture": "CHAIN_T"
+        },
+        "leftarm",
+        [
+          [
+            "x",
+            40
+          ]
+        ]
+      ],
+      "expect": [
+        0.3368240888,
+        -0.1631759112,
+        0.0593911746,
+        0.9254165784
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[5] local rule counter probe",
+      "fn": "retargetCounterProbe",
+      "args": [
+        "local"
+      ],
+      "expect": 13.62,
+      "eps": 0.05
+    },
+    {
+      "label": "[6] global hips attitude",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "SPINE_D"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [
+                [
+                  "y",
+                  15
+                ]
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "armature": []
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[6] pelvis feature",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "SPINE_D"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [
+                [
+                  "y",
+                  15
+                ]
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "y",
+                  -15
+                ]
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "armature": []
+        }
+      ],
+      "expect": {
+        "spine": {
+          "left": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "right": [
+            0,
+            -0.1305261922,
+            0,
+            0.9914448614
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[6] armature root factor",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "SPINE_D"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "armature": [
+            [
+              "x",
+              90
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "hips": {
+          "left": [
+            -0.7071067812,
+            0,
+            0,
+            0.7071067812
+          ],
+          "right": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[6] armature corrects root only",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "SPINE_D"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "armature": [
+            [
+              "x",
+              90
+            ]
+          ]
+        }
+      ],
+      "expect": [
+        "hips"
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[7] quaternion transplant",
+      "fn": "bindRelativeValues",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            30
+          ]
+        ]
+      ],
+      "expect": [
+        0,
+        0.4226182617,
+        0,
+        0.906307787
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[8] spread six disappears",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "LEGS"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  6
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  -6
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[8] swing after spread correction",
+      "fn": "retargetDrive",
+      "args": [
+        {
+          "$fixture": "LEGS"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  6
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  -6
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ]
+          ]
+        },
+        "leftupleg",
+        [
+          [
+            "x",
+            30
+          ]
+        ]
+      ],
+      "expect": [
+        0.2588190451,
+        0,
+        0,
+        0.9659258263
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[8] small spread retained",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "LEGS"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  2
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  -2
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "leftupleg": {
+          "left": [
+            0,
+            0,
+            0,
+            1
+          ],
+          "right": [
+            0,
+            0,
+            0.0174524064,
+            0.9998476952
+          ]
+        },
+        "leftleg": {
+          "left": [
+            0,
+            0,
+            -0.0174524064,
+            0.9998476952
+          ],
+          "right": [
+            0,
+            0,
+            0.0174524064,
+            0.9998476952
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[8] mixed pair below threshold",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "LEGS"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  8
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  4
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "leftupleg": {
+          "right": [
+            0,
+            0,
+            0.0697564737,
+            0.9975640503
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[8] fore aft stays",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "LEGS"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  6
+                ],
+                [
+                  "x",
+                  10
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  -6
+                ],
+                [
+                  "x",
+                  10
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "leftupleg": {
+          "right": [
+            0.0871557427,
+            0,
+            0,
+            0.9961946981
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[9] ten torso upright",
+      "fn": "retargetPositions",
+      "args": [
+        {
+          "$fixture": "TORSO"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  -10
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "spine1": [
+          0,
+          0.2,
+          0
+        ],
+        "spine2": [
+          0,
+          0.3,
+          0
+        ],
+        "neck": [
+          0,
+          0.4,
+          0
+        ],
+        "head": [
+          0,
+          0.5,
+          0
+        ],
+        "leftshoulder": [
+          0.05,
+          0.35,
+          0
+        ]
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[9] seven torso upright",
+      "fn": "retargetPositions",
+      "args": [
+        {
+          "$fixture": "TORSO"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  -7
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "spine1": [
+          0,
+          0.2,
+          0
+        ],
+        "spine2": [
+          0,
+          0.3,
+          0
+        ],
+        "neck": [
+          0,
+          0.4,
+          0
+        ],
+        "head": [
+          0,
+          0.5,
+          0
+        ],
+        "leftshoulder": [
+          0.05,
+          0.35,
+          0
+        ]
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[9] varied torso upright",
+      "fn": "retargetPositions",
+      "args": [
+        {
+          "$fixture": "TORSO"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  -12
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  11
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  -14
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "spine1": [
+          0,
+          0.2,
+          0
+        ],
+        "spine2": [
+          0,
+          0.3,
+          0
+        ],
+        "neck": [
+          0,
+          0.4,
+          0
+        ],
+        "head": [
+          0,
+          0.5,
+          0
+        ],
+        "leftshoulder": [
+          0.05,
+          0.35,
+          0
+        ]
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[9] root torso upright",
+      "fn": "retargetPositions",
+      "args": [
+        {
+          "$fixture": "TORSO"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [
+                [
+                  "x",
+                  23
+                ]
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  -10
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "spine1": [
+          0,
+          0.2,
+          0
+        ],
+        "spine2": [
+          0,
+          0.3,
+          0
+        ],
+        "neck": [
+          0,
+          0.4,
+          0
+        ],
+        "head": [
+          0,
+          0.5,
+          0
+        ],
+        "leftshoulder": [
+          0.05,
+          0.35,
+          0
+        ]
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[9] five keeps own rest",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "TORSO"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  -5
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "spine": {
+          "right": [
+            -0.0436193874,
+            0,
+            0,
+            0.9990482216
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[9] boundary keeps own rest",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "TORSO"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  -9
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  9
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "spine": {
+          "right": [
+            -0.0784590957,
+            0,
+            0,
+            0.9969173337
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[9] head keeps own rest",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "TORSO"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  15
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "neck": {
+          "right": [
+            0.1305261922,
+            0,
+            0,
+            0.9914448614
+          ]
+        },
+        "head": {
+          "left": [
+            -0.1305261922,
+            0,
+            0,
+            0.9914448614
+          ],
+          "right": [
+            0.1305261922,
+            0,
+            0,
+            0.9914448614
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[9] sideways retained",
+      "fn": "retargetPositions",
+      "args": [
+        {
+          "$fixture": "TORSO"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  -10
+                ],
+                [
+                  "z",
+                  5
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "spine1": [
+          -0.0087155743,
+          0.1996194698,
+          0
+        ]
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[9] missing head disables torso",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "$fixture": "TORSO"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  -10
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "spine": {
+          "right": [
+            -0.0871557427,
+            0,
+            0,
+            0.9961946981
+          ]
+        }
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[10] ten soles level",
+      "fn": "retargetSoleDeltas",
+      "args": [
+        {
+          "$fixture": "FEET"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "lefttoebase",
+              "leftfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "righttoebase",
+              "rightfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ]
+          ],
+          "soles": {
+            "left": {
+              "heel": [
+                0,
+                -0.0471019058,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            },
+            "right": {
+              "heel": [
+                0,
+                -0.0471019058,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            }
+          }
+        }
+      ],
+      "expect": [
+        0,
+        0
+      ],
+      "eps": 1e-06
+    },
+    {
+      "label": "[10] mixed soles level",
+      "fn": "retargetSoleDeltas",
+      "args": [
+        {
+          "$fixture": "FEET"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "lefttoebase",
+              "leftfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "righttoebase",
+              "rightfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ]
+          ],
+          "soles": {
+            "left": {
+              "heel": [
+                0,
+                -0.0471019058,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            },
+            "right": {
+              "heel": [
+                0,
+                -0.0790219564,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            }
+          }
+        }
+      ],
+      "expect": [
+        0,
+        0
+      ],
+      "eps": 1e-06
+    },
+    {
+      "label": "[10] spread soles level",
+      "fn": "retargetSoleDeltas",
+      "args": [
+        {
+          "$fixture": "FEET"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  6
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "lefttoebase",
+              "leftfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  -6
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "righttoebase",
+              "rightfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ]
+          ],
+          "soles": {
+            "left": {
+              "heel": [
+                0,
+                -0.0471019058,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            },
+            "right": {
+              "heel": [
+                0,
+                -0.0471019058,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            }
+          }
+        }
+      ],
+      "expect": [
+        0,
+        0
+      ],
+      "eps": 1e-06
+    },
+    {
+      "label": "[10] 5 keeps soles",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "FEET"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "lefttoebase",
+              "leftfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "righttoebase",
+              "rightfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ]
+          ],
+          "soles": {
+            "left": {
+              "heel": [
+                0,
+                -0.0737534009,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            },
+            "right": {
+              "heel": [
+                0,
+                -0.0737534009,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            }
+          }
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[10] -10 keeps soles",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "FEET"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "lefttoebase",
+              "leftfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "righttoebase",
+              "rightfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ]
+          ],
+          "soles": {
+            "left": {
+              "heel": [
+                0,
+                -0.1528980942,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            },
+            "right": {
+              "heel": [
+                0,
+                -0.1528980942,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            }
+          }
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[10] missing rightfoot",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "FEET"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "lefttoebase",
+              "leftfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ]
+          ],
+          "soles": {}
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[10] missing righttoebase",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "FEET"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "lefttoebase",
+              "leftfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ]
+          ],
+          "soles": {}
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[10] missing sole left",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "FEET"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "lefttoebase",
+              "leftfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "righttoebase",
+              "rightfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ]
+          ],
+          "soles": {
+            "right": {
+              "heel": [
+                0,
+                -0.0471019058,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            }
+          }
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[10] missing sole right",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "FEET"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "lefttoebase",
+              "leftfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  0
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "righttoebase",
+              "rightfoot",
+              [],
+              [
+                0,
+                -0.05,
+                0.12
+              ]
+            ]
+          ],
+          "soles": {
+            "left": {
+              "heel": [
+                0,
+                -0.0471019058,
+                -0.1
+              ],
+              "toe": [
+                0,
+                -0.1,
+                0.2
+              ]
+            }
+          }
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[10] no mesh sole data",
+      "fn": "retargetKeys",
+      "args": [
+        {
+          "$fixture": "FEET"
+        },
+        {
+          "$fixture": "FEET"
+        }
+      ],
+      "expect": [],
+      "eps": 1e-07
+    },
+    {
+      "label": "[3] deformation 0",
+      "fn": "retargetDeformation",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            30
+          ]
+        ]
+      ],
+      "expect": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[3] deformation 17",
+      "fn": "retargetDeformation",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            47
+          ]
+        ]
+      ],
+      "expect": [
+        0,
+        0.1478094111,
+        0,
+        0.9890158634
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[3] deformation -35",
+      "fn": "retargetDeformation",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            -5
+          ]
+        ]
+      ],
+      "expect": [
+        0,
+        -0.3007057995,
+        0,
+        0.9537169507
+      ],
+      "eps": 1e-07
+    },
+    {
+      "label": "[5] chain world deformation",
+      "fn": "retargetWorld",
+      "args": [
+        {
+          "$fixture": "CHAIN_D"
+        },
+        {
+          "$fixture": "CHAIN_T"
+        },
+        {
+          "leftarm": [
+            [
+              "x",
+              40
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "leftarm": [
+          0.3420201433,
+          0,
+          0,
+          0.9396926208
+        ]
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[9] leg factors absent",
+      "fn": "retargetHas",
+      "args": [
+        {
+          "$fixture": "TORSO"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  -10
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        },
+        "leftupleg"
+      ],
+      "expect": false,
+      "eps": 1e-07
+    },
+    {
+      "label": "[7] clip transplanted",
+      "fn": "bindRelativeClipSummary",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "T"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            30
+          ]
+        ],
+        [
+          0,
+          100,
+          0,
+          0,
+          110,
+          0
+        ]
+      ],
+      "expect": {
+        "sameClip": false,
+        "samePosition": true,
+        "positions": [
+          0,
+          100,
+          0,
+          0,
+          110,
+          0
+        ],
+        "quaternion": [
+          0,
+          0.4226182617,
+          0,
+          0.906307787
+        ]
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[7] clip identity",
+      "fn": "bindRelativeClipSummary",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        {
+          "$fixture": "D"
+        },
+        "leftfoot",
+        [
+          [
+            "y",
+            30
+          ]
+        ],
+        [
+          0,
+          100,
+          0,
+          0,
+          110,
+          0
+        ]
+      ],
+      "expect": {
+        "sameClip": true,
+        "samePosition": true,
+        "positions": [
+          0,
+          100,
+          0,
+          0,
+          110,
+          0
+        ],
+        "quaternion": [
+          0,
+          0.2588190451,
+          0,
+          0.9659258263
+        ]
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[6] constant rigid deformation on both bones",
+      "fn": "retargetConstantDeformations",
+      "args": [
+        {
+          "$fixture": "SPINE_D"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [
+                [
+                  "y",
+                  15
+                ]
+              ],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ]
+          ],
+          "armature": []
+        },
+        {
+          "hips": [
+            [
+              "y",
+              70
+            ]
+          ],
+          "spine": [
+            [
+              "x",
+              25
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "hips": [
+          0,
+          -0.1305261922,
+          0,
+          0.9914448614
+        ],
+        "spine": [
+          0,
+          -0.1305261922,
+          0,
+          0.9914448614
+        ]
+      },
+      "eps": 1e-07
+    },
+    {
+      "label": "[8] swung foot under hip",
+      "fn": "retargetPositions",
+      "args": [
+        {
+          "$fixture": "LEGS"
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  6
+                ]
+              ],
+              [
+                0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "leftleg",
+              "leftupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "leftfoot",
+              "leftleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightupleg",
+              "hips",
+              [
+                [
+                  "z",
+                  -6
+                ]
+              ],
+              [
+                -0.1,
+                0,
+                0
+              ]
+            ],
+            [
+              "rightleg",
+              "rightupleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ],
+            [
+              "rightfoot",
+              "rightleg",
+              [],
+              [
+                0,
+                -0.45,
+                0
+              ]
+            ]
+          ]
+        },
+        {
+          "leftupleg": [
+            [
+              "x",
+              30
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "leftfoot": [
+          0.1,
+          -0.779423,
+          -0.45
+        ]
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[9] missing donor head disables stance",
+      "fn": "retargetFactors",
+      "args": [
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ],
+          "omitPositions": [
+            "head"
+          ]
+        },
+        {
+          "bones": [
+            [
+              "hips",
+              null,
+              [],
+              [
+                0,
+                0,
+                0
+              ]
+            ],
+            [
+              "spine",
+              "hips",
+              [
+                [
+                  "x",
+                  -10
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine1",
+              "spine",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "spine2",
+              "spine1",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftshoulder",
+              "spine2",
+              [],
+              [
+                0.05,
+                0.05,
+                0
+              ]
+            ],
+            [
+              "neck",
+              "spine2",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "head",
+              "neck",
+              [
+                [
+                  "x",
+                  0
+                ]
+              ],
+              [
+                0,
+                0.1,
+                0
+              ]
+            ],
+            [
+              "leftupleg",
+              "hips",
+              [],
+              [
+                0.1,
+                -0.1,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "spine": {
+          "right": [
+            -0.0871557427,
+            0,
+            0,
+            0.9961946981
+          ]
+        }
+      },
+      "eps": 1e-07
+    }
+  ]
+}

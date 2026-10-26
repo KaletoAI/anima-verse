@@ -33,7 +33,7 @@ export type { GroundSampler, StoreyGroundStep,
 
 export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
-export { normBoneName, restPoseOf, restCorrections, bindRelativeValues,
+export { normBoneName, restPoseOf, restCorrections, restSolesOf, bindRelativeValues,
   bindRelativeClip, LEG_STANCE_TOLERANCE_DEG, TORSO_STANCE_TOLERANCE_DEG,
   FOOT_STANCE_TOLERANCE_DEG } from './clipRetarget'
 export type { RestPose, RestCorrection } from './clipRetarget'
@@ -166,3 +166,6 @@ export type { VerifyPoint, VerifyBox, VerifyMeasurement, VerifyResult } from './
 
 export { buildPropWater } from './propWater'
 export type { ScenePropWater } from './types'
+
+export { mapHipsTrack } from './hipsTrack'
+export type { HipsTrackOptions } from './hipsTrack'

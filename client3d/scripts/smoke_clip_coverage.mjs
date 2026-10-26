@@ -198,6 +198,7 @@
  *   []                         -> []
  *   [Robot−]                   -> [Robot]
  */
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -260,40 +261,18 @@ async function main() {
     movementPoseOf, setMovementPoses, CLIP_FALLBACK,
   } = await loadClipCoverage();
 
+  const vectors = runVectors(loadVectors('clip_coverage'), {
+    missingClipKinds, resolveClipName, matchAnimKind, clipKindChain,
+    resolveClipKind, proceduralGait,
+    // JSON null represents the original omitted/undefined family argument.
+    animFamily: kind => animFamily(kind ?? undefined),
+    animatablePool: pool => animatablePool(pool).map(m => m.name),
+  });
+  passed += vectors.passed; failed += vectors.failed;
   console.log('missingClipKinds — the kinds a rig cannot play');
-  check('library swim missing, own walk/idle bound',
-    missingClipKinds(['walk', 'idle', 'swim'], ['walk', 'idle']), ['swim']);
-  check('case and padding are not kinds of their own',
-    missingClipKinds(['Swim', ' WALK '], ['swim']), ['walk']);
-  check('everything bound -> nothing missing',
-    missingClipKinds(['walk', 'swim'], ['walk', 'swim']), []);
-  check('nothing bound (the Robot case) -> all, sorted',
-    missingClipKinds(['swim', 'yoga', 'walk'], []), ['swim', 'walk', 'yoga']);
-  check('embedded clip wins its kind -> kind is not missing',
-    missingClipKinds(['walk'], ['walk']), []);
-  check('nameless clips are no kinds',
-    missingClipKinds(['', 'swim'], ['']), ['swim']);
-  check('duplicates collapse',
-    missingClipKinds(['swim', 'Swim'], []), ['swim']);
-  check('empty library offers nothing to miss',
-    missingClipKinds([], ['walk']), []);
 
   console.log('resolveClipName — exact before substring');
-  check('a needle takes its OWN clip, not the longer kind listed first',
-    resolveClipName(['swim-idle', 'swim'], ['swim']), 'swim');
-  check('...and the substring pass still reaches when there is no exact one',
-    resolveClipName(['swim-idle'], ['swim']), 'swim-idle');
-  check('walk beats walking', resolveClipName(['walk', 'walking'], ['walk']), 'walk');
-  check('walking still stands in for walk',
-    resolveClipName(['walking'], ['walk']), 'walking');
-  check('the needle order ranks: `laying` before the exactly-named `sleep`',
-    resolveClipName(['laying', 'sleep'], ['lie', 'lay', 'sleep']), 'laying');
-  check('...and a substring hit on the FIRST needle ends it',
-    resolveClipName(['sleep', 'lie-down'], ['lie', 'lay', 'sleep']), 'lie-down');
-  check('names are trimmed and lower-cased',
-    resolveClipName([' Idle ', 'walk'], ['idle']), 'idle');
-  check('nothing stands in -> empty', resolveClipName(['walk'], ['idle', 'stand']), '');
-  check('no clips at all -> empty', resolveClipName([], ['idle']), '');
+
   // RED COUNTER-PROBE: the substring-only rule this replaces. It must DISAGREE
   // on the swim case — otherwise the exact pass proves nothing.
   const substringOnly = (names, needles) => {
@@ -307,35 +286,9 @@ async function main() {
     substringOnly(['swim-idle', 'swim'], ['swim']), 'swim-idle');
 
   console.log('animFamily — the family of a kind (first token before the `-`)');
-  check('walk is its own family', animFamily('walk'), 'walk');
-  check('THE RENAME: walk-cmu is a walk', animFamily('walk-cmu'), 'walk');
-  check('run-fast is a run', animFamily('run-fast'), 'run');
-  check('trimmed and lower-cased', animFamily('  RUN  '), 'run');
-  check('swim-idle belongs to swim', animFamily('swim-idle'), 'swim');
-  check('treading-water is its own thing', animFamily('treading-water'), 'treading');
-  check('the inner underscore is no separator', animFamily('sit_a'), 'sit_a');
-  check('an empty kind is idle', animFamily(''), 'idle');
-  check('...and so is a missing one', animFamily(undefined), 'idle');
-  check('a leading dash separates nothing', animFamily('-cmu'), '-cmu');
 
   console.log('matchAnimKind — exact, else the family, both ways');
-  check('THE FINDING: a rig on walk serves a wanted walk-cmu',
-    matchAnimKind(['walk', 'idle'], 'walk-cmu'), 'walk');
-  check('...and a marker on walk-cmu serves a wanted walk',
-    matchAnimKind(['walk-cmu', 'idle'], 'walk'), 'walk-cmu');
-  check('the exact kind beats the relative listed first',
-    matchAnimKind(['walk', 'walk-cmu'], 'walk-cmu'), 'walk-cmu');
-  check('among relatives the family BASE wins',
-    matchAnimKind(['walk-mixamo', 'walk'], 'walk-cmu'), 'walk');
-  check('...and without a base the first listed one',
-    matchAnimKind(['walk-mixamo', 'walk-cmu'], 'walk'), 'walk-mixamo');
-  check('the entry comes back exactly as passed in',
-    matchAnimKind([' Walk '], 'walk-cmu'), ' Walk ');
-  check('run-fast takes itself', matchAnimKind(['run', 'run-fast'], 'run-fast'), 'run-fast');
-  check('idle-loop stands in for idle', matchAnimKind(['idle-loop'], 'idle'), 'idle-loop');
-  check('another family is no match', matchAnimKind(['idle', 'sit'], 'walk-cmu'), '');
-  check('nothing available -> empty', matchAnimKind([], 'walk'), '');
-  check('no kind wanted -> empty', matchAnimKind(['walk'], ''), '');
+
   // RED COUNTER-PROBE: the exact-only lookup this replaces — the rig with the
   // old walk take finds NOTHING for walk-cmu, which is the reported bug.
   const exactOnly = (available, kind) => available.find((n) => n === kind) ?? '';
@@ -343,44 +296,9 @@ async function main() {
     exactOnly(['walk', 'idle'], 'walk-cmu'), '');
 
   console.log('clipKindChain — kind, its stand-in, its family\'s, idle');
-  check('a renamed kind needs no stand-in of its own',
-    clipKindChain('walk-cmu'), ['walk-cmu', 'idle']);
-  check('walk likewise', clipKindChain('walk'), ['walk', 'idle']);
-  check('run falls to walk', clipKindChain('run'), ['run', 'walk', 'idle']);
-  check('run-fast reaches walk through the FAMILY entry',
-    clipKindChain('run-fast'), ['run-fast', 'walk', 'idle']);
-  check('swim-idle: own entry, then swim\'s',
-    clipKindChain('swim-idle'), ['swim-idle', 'swim', 'walk', 'idle']);
-  check('the treader stands rather than walks',
-    clipKindChain('treading-water'), ['treading-water', 'idle']);
-  check('lie sits down', clipKindChain('lie'), ['lie', 'sit', 'idle']);
-  check('idle is the floor itself', clipKindChain('idle'), ['idle']);
-  check('an empty kind is idle', clipKindChain(''), ['idle']);
 
   console.log('resolveClipKind — which kind a rig actually plays');
-  check('THE FINDING: walk-cmu plays the rig\'s old walk take',
-    resolveClipKind('walk-cmu', ['walk', 'idle']), 'walk');
-  check('...and the exact take stays preferred where it exists',
-    resolveClipKind('walk-cmu', ['walk', 'walk-cmu', 'idle']), 'walk-cmu');
-  check('...and a wanted walk finds the walk-cmu take',
-    resolveClipKind('walk', ['walk-cmu', 'idle']), 'walk-cmu');
-  check('no gait at all -> idle', resolveClipKind('walk-cmu', ['idle']), 'idle');
-  check('nothing of the sort -> empty', resolveClipKind('walk-cmu', ['sit']), '');
-  check('run-fast takes the run take before the walk one',
-    resolveClipKind('run-fast', ['run', 'walk', 'idle']), 'run');
-  check('...and walks when there is no run take',
-    resolveClipKind('run-fast', ['walk', 'idle']), 'walk');
-  check('...even when the walk take carries the new name',
-    resolveClipKind('run-fast', ['walk-cmu', 'idle']), 'walk-cmu');
-  check('run -> walk, unchanged', resolveClipKind('run', ['walk', 'idle']), 'walk');
-  check('swim -> walk, unchanged', resolveClipKind('swim', ['walk', 'idle']), 'walk');
-  check('swim-idle -> swim, unchanged',
-    resolveClipKind('swim-idle', ['swim', 'walk']), 'swim');
-  check('treading-water stands, it does not walk on water',
-    resolveClipKind('treading-water', ['walk', 'idle']), 'idle');
-  check('idle is untouched', resolveClipKind('idle', ['idle', 'walk']), 'idle');
-  check('...and a rig without any idle answers nothing',
-    resolveClipKind('idle', ['walk']), '');
+
   // RED COUNTER-PROBE: the resolution before the family step — exact kind,
   // explicit stand-in, idle. It drops the walker to idle, statue-still.
   const preFix = (kind, bound) => {
@@ -391,19 +309,7 @@ async function main() {
     preFix('walk-cmu', ['walk', 'idle']), 'idle');
 
   console.log('proceduralGait — the gait a clip-less rig fakes');
-  check('walk', proceduralGait('walk'), 'walk');
-  check('THE GATE FIRES for walk-cmu (the static-rig finding)',
-    proceduralGait('walk-cmu'), 'walk');
-  check('run', proceduralGait('run'), 'run');
-  check('run-fast is still a run', proceduralGait('run-fast'), 'run');
-  check('case does not matter', proceduralGait('RUN'), 'run');
-  check('idle stands', proceduralGait('idle'), null);
-  check('sit stands', proceduralGait('sit'), null);
-  check('swim stands (no gait for a stroke)', proceduralGait('swim'), null);
-  check('no kind stands', proceduralGait(''), null);
-  check('null stands', proceduralGait(null), null);
-  check('`walking` is a family of its own, as it always was',
-    proceduralGait('walking'), null);
+
   // RED COUNTER-PROBE: the literal gate this replaces.
   const literalGate = (k) => (k === 'walk' || k === 'run' ? k : null);
   check('RED PROBE: the literal gate misses walk-cmu', literalGate('walk-cmu'), null);
@@ -413,22 +319,12 @@ async function main() {
   setMovementPoses({walking: {kind: 'mob1-walk', public_kind: 'walk'},
     running: {kind: 'mob1-jog', public_kind: 'run'},
     standing: {kind: 'mob1-stand-relaxed-idle-v2', public_kind: 'idle'}});
-  check('local walk chain', clipKindChain('mob1-walk'),
-    ['mob1-walk', 'walk', 'mob1-stand-relaxed-idle-v2', 'idle']);
-  check('missing local walk uses public walk', resolveClipKind('mob1-walk', ['walk', 'idle']), 'walk');
-  check('missing local run can walk', resolveClipKind('mob1-jog', ['walk', 'idle']), 'walk');
-  check('procedural local walk', proceduralGait('mob1-walk'), 'walk');
-  check('procedural local run', proceduralGait('mob1-jog'), 'run');
+
   check('crawl rest starts with idle', clipKindChain('crawl-rest').slice(0, 2), ['crawl-rest', 'idle']);
-  check('exact local clip wins', resolveClipKind('mob1-walk', ['mob1-walk', 'walk', 'idle']), 'mob1-walk');
-  check('public running precedes walking', resolveClipKind('mob1-jog', ['run', 'walk', 'idle']), 'run');
-  check('no usable clip stays empty', resolveClipKind('mob1-walk', ['sit']), '');
+
   setMovementPoses({crawling: {kind: 'missing-crawl', public_kind: 'crawl'},
     crawling_rest: {kind: 'missing-rest', public_kind: 'crawl-rest'}});
-  check('custom crawling falls through public crawl to walk',
-    clipKindChain('missing-crawl'), ['missing-crawl', 'crawl', 'walk', 'idle']);
-  check('custom resting falls through public rest to idle',
-    clipKindChain('missing-rest'), ['missing-rest', 'crawl-rest', 'idle']);
+
   setMovementPoses({});
 
   console.log('the rules are WIRED at their consumers');
@@ -452,18 +348,8 @@ async function main() {
 
   console.log('animatablePool — the rigs a character may be drawn from');
   const soldier = { name: 'Soldier', libraryFits: true };
-  const xbot = { name: 'Xbot', libraryFits: true };
   const robot = { name: 'Robot', libraryFits: false };
-  const deaf = [{ name: 'Soldier', libraryFits: false }, { name: 'Xbot', libraryFits: false }, robot];
-  check('library-deaf rig drops out while fitting ones exist',
-    animatablePool([soldier, xbot, robot]).map((m) => m.name), ['Soldier', 'Xbot']);
-  check('no rig fits (offline, no library) -> pool stays whole',
-    animatablePool(deaf).map((m) => m.name), ['Soldier', 'Xbot', 'Robot']);
-  check('all fit -> all stay',
-    animatablePool([soldier, xbot]).map((m) => m.name), ['Soldier', 'Xbot']);
-  check('empty pool stays empty', animatablePool([]), []);
-  check('single deaf rig is better than none',
-    animatablePool([robot]).map((m) => m.name), ['Robot']);
+
   const input = [soldier, robot];
   animatablePool(input).pop();
   check('the input pool is not mutated', input.map((m) => m.name), ['Soldier', 'Robot']);

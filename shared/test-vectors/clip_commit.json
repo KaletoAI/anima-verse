@@ -1,0 +1,351 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_clip_order.mjs",
+  "fixtures": {
+    "SOURCES": [
+      {
+        "kind": "walk",
+        "set": "A",
+        "url": "w1",
+        "loop": true
+      },
+      {
+        "kind": "walk",
+        "set": "A",
+        "url": "w2",
+        "loop": false
+      },
+      {
+        "kind": "idle",
+        "set": "B",
+        "url": "i1"
+      },
+      {
+        "kind": "handshake__a",
+        "set": "",
+        "url": "h1",
+        "rootMotion": true
+      }
+    ],
+    "RESULTS": [
+      {
+        "clip": {
+          "id": "w1"
+        }
+      },
+      {
+        "clip": {
+          "id": "w2"
+        }
+      },
+      {
+        "clip": {
+          "id": "i1"
+        }
+      },
+      {
+        "clip": {
+          "id": "h1"
+        }
+      }
+    ],
+    "FAILED": [
+      {
+        "clip": null
+      },
+      {
+        "clip": {
+          "id": "w2"
+        }
+      },
+      {
+        "clip": {
+          "id": "i1"
+        }
+      },
+      {
+        "clip": {
+          "id": "h1"
+        }
+      }
+    ],
+    "EXTENDED_SOURCES": [
+      {
+        "kind": "walk",
+        "set": "A",
+        "url": "w1",
+        "loop": true
+      },
+      {
+        "kind": "walk",
+        "set": "A",
+        "url": "w2",
+        "loop": false
+      },
+      {
+        "kind": "idle",
+        "set": "B",
+        "url": "i1"
+      },
+      {
+        "kind": "handshake__a",
+        "set": "",
+        "url": "h1",
+        "rootMotion": true
+      },
+      {
+        "kind": "handshake__a",
+        "set": "",
+        "url": "h2"
+      },
+      {
+        "kind": "handshake__b",
+        "set": "",
+        "url": "h3"
+      },
+      {
+        "kind": "missing",
+        "set": "",
+        "url": "gone"
+      }
+    ],
+    "EXTENDED_RESULTS": [
+      {
+        "clip": {
+          "id": "w1"
+        }
+      },
+      {
+        "clip": {
+          "id": "w2"
+        }
+      },
+      {
+        "clip": {
+          "id": "i1"
+        }
+      },
+      {
+        "clip": {
+          "id": "h1"
+        }
+      },
+      {
+        "clip": {
+          "id": "h2"
+        }
+      },
+      {
+        "clip": {
+          "id": "h3"
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "label": "[1] RESULTS: index.walk.A.id",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "SOURCES"
+        },
+        {
+          "$fixture": "RESULTS"
+        },
+        [
+          "index",
+          "walk",
+          "A",
+          "id"
+        ]
+      ],
+      "expect": "w1"
+    },
+    {
+      "label": "[1] RESULTS: index.walk.A.flags.loop",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "SOURCES"
+        },
+        {
+          "$fixture": "RESULTS"
+        },
+        [
+          "index",
+          "walk",
+          "A",
+          "flags",
+          "loop"
+        ]
+      ],
+      "expect": true
+    },
+    {
+      "label": "[1] RESULTS: index.idle.B.name",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "SOURCES"
+        },
+        {
+          "$fixture": "RESULTS"
+        },
+        [
+          "index",
+          "idle",
+          "B",
+          "name"
+        ]
+      ],
+      "expect": "idle"
+    },
+    {
+      "label": "[1] RESULTS: pairRoots.handshake__a",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "SOURCES"
+        },
+        {
+          "$fixture": "RESULTS"
+        },
+        [
+          "pairRoots",
+          "handshake__a"
+        ]
+      ],
+      "expect": "root:h1"
+    },
+    {
+      "label": "[1] RESULTS: index.handshake__a..flags.rootMotion",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "SOURCES"
+        },
+        {
+          "$fixture": "RESULTS"
+        },
+        [
+          "index",
+          "handshake__a",
+          "",
+          "flags",
+          "rootMotion"
+        ]
+      ],
+      "expect": true
+    },
+    {
+      "label": "[1] FAILED: index.walk.A.id",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "SOURCES"
+        },
+        {
+          "$fixture": "FAILED"
+        },
+        [
+          "index",
+          "walk",
+          "A",
+          "id"
+        ]
+      ],
+      "expect": "w2"
+    },
+    {
+      "label": "[1] FAILED: index.walk.A.flags.loop",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "SOURCES"
+        },
+        {
+          "$fixture": "FAILED"
+        },
+        [
+          "index",
+          "walk",
+          "A",
+          "flags",
+          "loop"
+        ]
+      ],
+      "expect": false
+    },
+    {
+      "label": "[1] EXTENDED_RESULTS: index.handshake__a..id",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "EXTENDED_SOURCES"
+        },
+        {
+          "$fixture": "EXTENDED_RESULTS"
+        },
+        [
+          "index",
+          "handshake__a",
+          "",
+          "id"
+        ]
+      ],
+      "expect": "h1"
+    },
+    {
+      "label": "[1] EXTENDED_RESULTS: pairRoots.handshake__a",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "EXTENDED_SOURCES"
+        },
+        {
+          "$fixture": "EXTENDED_RESULTS"
+        },
+        [
+          "pairRoots",
+          "handshake__a"
+        ]
+      ],
+      "expect": "root:h2"
+    },
+    {
+      "label": "[1] EXTENDED_RESULTS: pairRoots.handshake__b",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "EXTENDED_SOURCES"
+        },
+        {
+          "$fixture": "EXTENDED_RESULTS"
+        },
+        [
+          "pairRoots",
+          "handshake__b"
+        ]
+      ],
+      "expect": "root:h3"
+    },
+    {
+      "label": "[1] EXTENDED_RESULTS: hasKind.missing",
+      "fn": "commitInListOrderValue",
+      "args": [
+        {
+          "$fixture": "EXTENDED_SOURCES"
+        },
+        {
+          "$fixture": "EXTENDED_RESULTS"
+        },
+        [
+          "hasKind",
+          "missing"
+        ]
+      ],
+      "expect": false
+    }
+  ]
+}
