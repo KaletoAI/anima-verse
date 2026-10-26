@@ -1,0 +1,80 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_npc_walk.mjs",
+  "fixtures": {
+    "ORIGIN": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "TARGET": {
+      "x": 10,
+      "y": 2,
+      "z": 0
+    },
+    "LIFT": [
+      [
+        0,
+        {
+          "x": 2,
+          "y": 0,
+          "z": 1
+        }
+      ],
+      [
+        2,
+        {
+          "x": 2,
+          "y": 6,
+          "z": 1
+        }
+      ]
+    ]
+  },
+  "cases": [
+    {"label": "[1] empty route selects target in XZ", "fn": "npcGoal", "args": [{"$fixture": "ORIGIN"}, {"$fixture": "TARGET"}, []], "expect": {"goal": {"x": 10, "y": 2, "z": 0}, "retired": 0, "delta": {"x": 10, "y": 0, "z": 0}, "distToGoal": 10, "dist": 10, "moving": true}},
+    {"label": "[1] retire multiple close stations", "fn": "npcGoal", "args": [{"$fixture": "ORIGIN"}, {"$fixture": "TARGET"}, [{"x": 1, "y": 0, "z": 0}, {"x": 0, "y": 1, "z": 0}, {"x": 3, "y": 0, "z": 4}]], "expect": {"retired": 2, "distToGoal": 5, "dist": 15, "goal": {"x": 3, "y": 0, "z": 4}}},
+    {"label": "[1] strict waypoint radius", "fn": "npcGoal", "args": [{"$fixture": "ORIGIN"}, {"$fixture": "TARGET"}, [{"x": 1.5, "y": 0, "z": 0}]], "expect": {"retired": 0, "distToGoal": 1.5, "dist": 11.5}},
+    {"label": "[1] height keeps lift station pending", "fn": "npcGoal", "args": [{"$fixture": "ORIGIN"}, {"$fixture": "TARGET"}, [{"x": 0, "y": 2, "z": 0}]], "expect": {"retired": 0, "moving": false, "distToGoal": 0, "dist": 10}},
+    {"label": "[1] tight stair arrival radius", "fn": "npcGoal", "args": [{"$fixture": "ORIGIN"}, {"$fixture": "TARGET"}, [{"x": 0.1, "y": 0, "z": 0}], 0.05], "expect": {"retired": 0, "distToGoal": 0.1, "dist": 10.1}},
+    {"label": "[1] movement threshold itself stands", "fn": "npcGoal", "args": [{"$fixture": "ORIGIN"}, {"x": 0.05, "y": 9, "z": 0}, []], "expect": {"moving": false, "distToGoal": 0.05}},
+    {"label": "[1] exhausted stations use final target", "fn": "npcGoal", "args": [{"$fixture": "ORIGIN"}, {"$fixture": "TARGET"}, [{"x": 1, "y": 0, "z": 0}]], "expect": {"retired": 1, "dist": 10, "distToGoal": 10}},
+    {"label": "[2] six metres walks", "fn": "npcStepValue", "args": [6, false, "walk_run", false, 0.1, 1, 1], "expect": {"running": false, "step": 0.34}},
+    {"label": "[2] beyond six runs", "fn": "npcStepValue", "args": [7, false, "walk_run", false, 0.1, 1, 1], "expect": {"running": true, "step": 0.612}},
+    {"label": "[2] station adds ten to run distance", "fn": "npcStepValue", "args": [2, true, "walk_run", false, 0.1, 1, 1], "expect": {"running": true, "step": 0.612}},
+    {"label": "[2] walk terrain forbids run", "fn": "npcStepValue", "args": [7, false, "walk", false, 0.1, 1, 1], "expect": {"running": false, "step": 0.34}},
+    {"label": "[2] swim terrain forbids run", "fn": "npcStepValue", "args": [7, false, "swim", false, 0.1, 1, 1], "expect": {"running": false, "step": 0.34}},
+    {"label": "[2] crawl terrain forbids run", "fn": "npcStepValue", "args": [7, false, "crawl", false, 0.1, 1, 1], "expect": {"running": false, "step": 0.34}},
+    {"label": "[2] reckoning forbids boost without measurement", "fn": "npcStepValue", "args": [7, false, "walk_run", true, 0.1, 1, 1], "expect": {"running": false, "step": 0.34}},
+    {"label": "[2] pace scales ordinary step", "fn": "npcStepValue", "args": [6, false, "walk_run", false, 0.1, 0.4, 1], "expect": {"running": false, "step": 0.136}},
+    {"label": "[2] cap before bridge pace", "fn": "npcStepValue", "args": [0.1, false, "walk_run", false, 1, 1, 0.5], "expect": {"running": false, "step": 0.05}},
+    {"label": "[2] held bridge", "fn": "npcStepValue", "args": [7, false, "walk_run", false, 0.1, 1, 0], "expect": {"running": true, "step": 0}},
+    {"label": "[2] standing threshold does not step", "fn": "npcStepValue", "args": [0.05, false, "walk_run", false, 1, 1, 1], "expect": {"running": false, "step": 0}},
+    {"label": "[2] measured step uses bridge once", "fn": "npcStepValue", "args": [7, false, "walk_run", true, 0.1, 1, 0.5, 0.2], "expect": {"running": false, "step": 0.1}},
+    {"label": "[3] no neighbours", "fn": "neighbourFacing", "args": [{"$fixture": "ORIGIN"}, []], "expect": null},
+    {"label": "[3] strict sphere and centroid", "fn": "neighbourFacing", "args": [{"$fixture": "ORIGIN"}, [{"x": 2, "y": 0, "z": 0}, {"x": 0, "y": 2, "z": 2}, {"x": 4.5, "y": 0, "z": 0}, {"x": 0, "y": 5, "z": 0}]], "expect": {"x": 1, "y": 1, "z": 1}},
+    {"label": "[4] tiny facing ignored", "fn": "facingYaw", "args": [{"x": 0.0001, "y": 0, "z": 0}], "expect": null},
+    {"label": "[4] threshold is accepted", "fn": "facingYaw", "args": [{"x": 0, "y": 0, "z": 0.001}], "expect": 0},
+    {"label": "[4] east yaw", "fn": "facingYaw", "args": [{"x": 1, "y": 0, "z": 0}], "expect": 1.5707963267948966},
+    {"label": "[4] west yaw", "fn": "facingYaw", "args": [{"x": -1, "y": 0, "z": 0}], "expect": -1.5707963267948966},
+    {"label": "[4] facing gate includes Y", "fn": "facingYaw", "args": [{"x": 0, "y": 1, "z": 0}], "expect": 0},
+    {"label": "[5] yaw half step", "fn": "easeNpcYaw", "args": [0, 1, 0.05], "expect": 0.5},
+    {"label": "[5] yaw capped", "fn": "easeNpcYaw", "args": [0, 1, 0.2], "expect": 1},
+    {"label": "[5] yaw shortest across seam", "fn": "easeNpcYaw", "args": [3, -3, 0.05], "expect": 3.141592653589793},
+    {"label": "[5] yaw opposite seam", "fn": "easeNpcYaw", "args": [-3, 3, 0.05], "expect": -3.141592653589793},
+    {"label": "[5] exact positive pi retains sign", "fn": "easeNpcYaw", "args": [0, 3.141592653589793, 0.05], "expect": 1.5707963267948966},
+    {"label": "[5] exact negative pi retains sign", "fn": "easeNpcYaw", "args": [0, -3.141592653589793, 0.05], "expect": -1.5707963267948966},
+    {"label": "[5] Y ease four", "fn": "easeNpcY", "args": [2, 7, 0.1], "expect": 4},
+    {"label": "[5] Y capped", "fn": "easeNpcY", "args": [2, 7, 0.5], "expect": 7},
+    {"label": "[5] frozen Y", "fn": "easeNpcY", "args": [2, 7, 0], "expect": 2},
+    {"label": "[6] lift board then destination", "fn": "liftStops", "args": [{"$fixture": "LIFT"}, 0, 2], "expect": [{"x": 2, "y": 0, "z": 1}, {"x": 2, "y": 6, "z": 1}]},
+    {"label": "[6] missing source falls back to zero", "fn": "liftStops", "args": [{"$fixture": "LIFT"}, 1, 2], "expect": [{"x": 2, "y": 0, "z": 1}, {"x": 2, "y": 6, "z": 1}]},
+    {"label": "[6] missing destination retains duplicate zero", "fn": "liftStops", "args": [{"$fixture": "LIFT"}, 0, 3], "expect": [{"x": 2, "y": 0, "z": 1}, {"x": 2, "y": 0, "z": 1}]},
+    {"label": "[6] no lift stops", "fn": "liftStops", "args": [[], 0, 2], "expect": []},
+    {"label": "[6] no zero skips absent source", "fn": "liftStops", "args": [[[2, {"x": 2, "y": 6, "z": 1}]], 1, 2], "expect": [{"x": 2, "y": 6, "z": 1}]},
+    {"label": "[4] view facing wins", "fn": "standingFacing", "args": [{"x": 1, "y": 2, "z": 3}, {"x": 1, "y": 2, "z": 3}, {"x": 4, "y": 9, "z": 7}, 0], "expect": {"x": 0, "y": 0, "z": 1}},
+    {"label": "[4] marker facing wins", "fn": "standingFacing", "args": [{"x": 1, "y": 2, "z": 3}, {"x": 1, "y": 2, "z": 3}, {"x": 4, "y": 9, "z": 7}, null], "expect": {"x": 1, "y": 2, "z": 3}},
+    {"label": "[4] neighbour direction is horizontal", "fn": "standingFacing", "args": [{"x": 1, "y": 2, "z": 3}, null, {"x": 4, "y": 9, "z": 7}, null], "expect": {"x": 3, "y": 0, "z": 4}},
+    {"label": "[4] no request keeps facing", "fn": "standingFacing", "args": [{"x": 1, "y": 2, "z": 3}, null, null, null], "expect": null}
+  ]
+}

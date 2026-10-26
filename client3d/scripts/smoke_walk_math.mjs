@@ -4,6 +4,95 @@
  * stage 3, tasks 3 and 4) — `client3d/src/game/walk.ts` and
  * `client3d/src/game/clickmove.ts`.
  *
+ * --- ghostCutY: the same gate, and the LINE it answers --------------------
+ * WHY IT EXISTS. Every ghost site needs the pair "is it submerged" AND "at
+ * which world Y does the second draw stop" — the ghost discards everything
+ * above `uGhostCutY`, so a boolean is not enough. That pair used to be
+ * written out as `submergedInWater(b, l) ? l : null` at each site, and since
+ * the user decision of 2026-08-25 there are four of them and not two: the two
+ * figure sites in `scene/npcs.ts`, the world props (`scene/worldProps.ts`,
+ * mount + redrape) and the scene placements (`scene/sceneRecipe.ts`, mount +
+ * reliftScene + tier swap). One function, so none of them can hand in the
+ * GATED level, a boolean, or the bed.
+ *
+ * The table is the one above, read as a cut line — no new threshold, no new
+ * rule. `base` is what the thing STANDS ON: a figure's bed, a world prop's
+ * `worldPropBottom`, a scene placement's `tile.center.y + bottom_y + lift`.
+ *
+ * base 12.00, water null   -> null    (dry ground)
+ * base 12.00, water 11.90  -> null    (mirror UNDER the base)
+ * base 12.00, water 12.00  -> null    (exactly the waterline)
+ * base 12.00, water 12.04  -> null    (4 cm)
+ * base 12.00, water 12.05  -> 12.05   (5 cm: the rim ramp is up)
+ * base 12.00, water 12.60  -> 12.60   (a crate on a knee-deep ford's bed)
+ * base 12.00, water NaN    -> null    (a raster that knows nothing)
+ *
+ * --- Doorways (E3 acceptance "you cannot see the doors", rehung in B3) ---
+ *
+ * The server renders a door as a GAP in the wall segments, and a gap alone
+ * does not read as a door — so `client3d/src/game/doors.ts` says where the
+ * walk-through gaps are and main.ts lays a threshold quad into each.
+ *
+ * Until B3 this module DERIVED them: it recomputed every room opening
+ * (edge clamp, `width_m × k`) and measured the building entrance back out
+ * of the contour pieces (two colinear stretches exactly 0.8 m apart), for
+ * which it carried six constants of its own. It now READS `doorways[]`
+ * (plan-betreten-und-tueren.md § 4.1), the finished primitive the server
+ * already cut its walls and its hull from. The consumer rule of § 4.1 is
+ * "recompute NOTHING", so every number below is simply the payload's:
+ *
+ * mid    = at_world + origin      (origin = tile centre; the payload is
+ * tile-local, the scene is not)
+ * along  = along                  (unit direction of the wall)
+ * width  = width_m                (CLEAR width, already clamped)
+ * baseY  = base_y                 (foot of the wall the gap belongs to)
+ * roomIds= rooms                  (2 = party wall, 1 = door to outside)
+ *
+ * The fixture below carries rooms/openings and contour walls that CONTRADICT
+ * its doorways (a window, a room opening nobody cut, two contour pieces
+ * exactly 0.8 m apart). None of it may show up: if a single marker came from
+ * there, the derivation is back.
+ *
+ * d0  party wall r1|r2, mid (2,0),  along (0,1),  width 1,   base 0.10
+ * d1  r1 to the outside, mid (-1,-2), along (1,0), width 1,  base 0.10
+ * d2  r2 to the outside, mid (3,-2),  along (1,0), width 0.6, base 0.10
+ * d3  party wall r2|r3, mid (5,-1), along (1,0),  width 0.9, base 0.10
+ * d4  storey 1, room up, mid (0,2), along (1,0),  width 1,   base 2.30
+ * d5  HULL door of the hallway (§ A13c), mid (0,-3), along (1,0),
+ * width 1.2, base 0.10, rooms ['__floor__0'], outside, hull
+ *
+ * d5 is the case that has no room wall at all: a hallway is the complement
+ * of its storey's rooms, so the door is cut out of the BUILDING OUTLINE and
+ * `rooms[0]` is that wall-less corridor. For this module it is an outside
+ * door like any other — which is the point of the checks below.
+ * Its `outward_normal` [0,-1] is exactly `(along.z, -along.x)` of (1,0),
+ * i.e. the room-door construction: the fixture does NOT exercise the
+ * reversed-winding case, where the two come apart. Nothing is lost by that
+ * here — the client never reads the field (the server pre-computes the
+ * door-prop swing from it, § B1 "Woher `swing` kommt"), and the reversed
+ * ring is hand-derived on the server side in `scripts/smoke_floor_rooms.py`
+ * Part 8.
+ *
+ * Task 30 doorway decisions: roomDoor prefers the first outside entry, else
+ * the first entry naming the room: r1 -> (-1,-2), r2 -> (3,-2), r3 ->
+ * (5,-1), width .9; the hallway -> (0,-3), width 1.2. doorwayBetween
+ * finds the first entry naming BOTH distinct rooms: r1/r2 -> (2,0), ids
+ * [r1,r2]; r2/r3 -> (5,-1). Unknown, identical or unjoined ids -> null.
+ * Origin (40,-20) adds to these points: (5,-1) -> (45,-21).
+ * ghostCutY also keeps a jetty base 12 under level 13.5: depth 1.5 >= .05,
+ * cut 13.5. Non-finite bases/levels are dry. For the scene placement,
+ * -2-.28+2.335=.055; .30-.055=.245 -> .30, .09-.055=.035 -> null.
+ * floatBodyY(bed,level,sink) is floatRootY(bed,level,sink)-sink; the existing
+ * floatRootY hand table below supplies all 16 migrated root/body assertions.
+ *
+ * Task 30 SHARED VECTORS: npc_ground.json labels [30] refer to the
+ * hand tables in this header under groundScope, terrainPace, groundSink,
+ * sinkForState, floatRootY, wadeGate, ghostCutY, doorways and the elevator.
+ * Existing inline derivations remain beside each migrated call site. Only
+ * static inputs and hand expectations moved; counter-probes remain local.
+ * The Value adapters select a property path from the function result.
+ * Non-finite inputs use {"$number":"NaN"}; expectations stay finite.
+ *
  * Usage:  node client3d/scripts/smoke_walk_math.mjs
  *
  * Like `scripts/smoke_scene_recipe.py`, every expected number below is derived
@@ -1073,6 +1162,24 @@ async function main() {
     musicOn: true, ambientOn: true, ttsOn: 'auto',
   };
 
+
+  // Task 30: hand-derived ground, doorway and lift decisions moved intact.
+  const decodeNpc = (v) => Array.isArray(v) ? v.map(decodeNpc)
+    : v && typeof v === 'object' ? ('$number' in v ? Number(v.$number)
+      : Object.fromEntries(Object.entries(v).map(([k, x]) => [k, decodeNpc(x)]))) : v;
+  const npcFns = { ...walk, ...doors, ...elevator };
+  const npcDispatch = { floatBodyY: (bed, level, sink) => floatRootY(bed, level, sink) - sink };
+  for (const name of ['groundScope', 'terrainPace', 'sinkForState', 'groundSink',
+    'floatRootY', 'wadeGate', 'ghostCutY', 'roomDoor', 'doorwayBetween',
+    'elevatorLevels', 'elevatorTargetRoom']) {
+    npcDispatch[name] = (...args) => npcFns[name](...decodeNpc(args));
+    npcDispatch[name + 'Value'] = (args, fields) => fields.reduce(
+      (v, key) => v[key], npcFns[name](...decodeNpc(args)));
+  }
+  const npcVectors = runVectors(loadVectors('npc_ground'), npcDispatch);
+  passed += npcVectors.passed;
+  failed += npcVectors.failed;
+
   // ---- the shared vectors (see "SHARED VECTORS" in the header): bubbles,
   // boot progress, the info panel and the scatter-pref typing. A stage list
   // becomes the Set the TS function takes, a roomOf object the Map.
@@ -1206,16 +1313,12 @@ async function main() {
   // footprint, otherwise the wilderness. Hand table in the header.
   console.log('groundScope — how far the terrain rule reaches');
   {
-    check('nothing over the point is the wilderness',
-      groundScope(null, null), 'wilderness');
-    check('an area location is open ground', groundScope(true, null), 'open');
-    check('a building footprint is built', groundScope(false, null), 'built');
-    check('an interior room beats the area location it stands in',
-      groundScope(true, false), 'built');
-    check('an outdoor room beats the building it belongs to',
-      groundScope(false, true), 'open');
-    check('a room without a footprint still answers',
-      groundScope(null, true), 'open');
+    // Migrated to npc_ground.json: [30] nothing over the point is the wilderness
+    // Migrated to npc_ground.json: [30] an area location is open ground
+    // Migrated to npc_ground.json: [30] a building footprint is built
+    // Migrated to npc_ground.json: [30] an interior room beats the area location it stands in
+    // Migrated to npc_ground.json: [30] an outdoor room beats the building it belongs to
+    // Migrated to npc_ground.json: [30] a room without a footprint still answers
   }
 
   // --- terrainPace + moveClip (finding 3 + the round-2 reach) --------------
@@ -1225,26 +1328,20 @@ async function main() {
   console.log('terrainPace — the ground sets the pace as far as the sky');
   {
     check('MIN_PACE is the documented 0.25', MIN_PACE, 0.25);
-    check('grass out in the wilderness', terrainPace(1, 'wilderness'), 1);
-    check('...and inside an open place', terrainPace(1, 'open'), 1);
-    check('water in the wilderness', terrainPace(0.4, 'wilderness'), 0.4);
-    check('THE FINDING: the same water in an open place still slows',
-      terrainPace(0.4, 'open'), 0.4);
-    check('ROUND 2: under a roof it does not — the place has a floor',
-      terrainPace(0.4, 'built'), 1);
-    check('...not even a FAST ground reaches inside', terrainPace(2, 'built'), 1);
-    check('a factor-0 ground in an open place is neutral (never meant to be walked)',
-      terrainPace(0, 'open'), 1);
-    check('...and out in the open it is clamped, not neutralised',
-      terrainPace(0, 'wilderness'), MIN_PACE);
-    check('a crawling 0.1 is clamped in an open place as well',
-      terrainPace(0.1, 'open'), MIN_PACE);
-    check('...and 0.2 outside', terrainPace(0.2, 'wilderness'), MIN_PACE);
-    check('the catalog maximum passes through', terrainPace(2, 'wilderness'), 2);
-    check('a NaN factor walks at the normal pace', terrainPace(NaN, 'open'), 1);
-    check('a negative factor in an open place is the 0 case',
-      terrainPace(-1, 'open'), 1);
-    check('...and outside it the clamp', terrainPace(-1, 'wilderness'), MIN_PACE);
+    // Migrated to npc_ground.json: [30] grass out in the wilderness
+    // Migrated to npc_ground.json: [30] ...and inside an open place
+    // Migrated to npc_ground.json: [30] water in the wilderness
+    // Migrated to npc_ground.json: [30] THE FINDING: the same water in an open place still slows
+    // Migrated to npc_ground.json: [30] ROUND 2: under a roof it does not — the place has a floor
+    // Migrated to npc_ground.json: [30] ...not even a FAST ground reaches inside
+    // Migrated to npc_ground.json: [30] a factor-0 ground in an open place is neutral (never meant to be walked)
+    // Migrated to npc_ground.json: [30] ...and out in the open it is clamped, not neutralised
+    // Migrated to npc_ground.json: [30] a crawling 0.1 is clamped in an open place as well
+    // Migrated to npc_ground.json: [30] ...and 0.2 outside
+    // Migrated to npc_ground.json: [30] the catalog maximum passes through
+    // Migrated to npc_ground.json: [30] a NaN factor walks at the normal pace
+    // Migrated to npc_ground.json: [30] a negative factor in an open place is the 0 case
+    // Migrated to npc_ground.json: [30] ...and outside it the clamp
 
     // WHERE the pace is applied. The lead keeps the figure over the movement
     // threshold, the STEP carries the pace — hand-derived in the header.
@@ -1290,7 +1387,7 @@ async function main() {
     const oldRule = (f, scope) =>
       (scope === 'wilderness' ? Math.max(f, MIN_PACE) : 1);
     check('RED: the old rule walks the lake dry', oldRule(0.4, 'open'), 1);
-    check('...while the rule in force wades it', terrainPace(0.4, 'open'), 0.4);
+    // Migrated to npc_ground.json: [30] ...while the rule in force wades it
     check('...and both agree out in the wilderness',
       oldRule(0.4, 'wilderness'), terrainPace(0.4, 'wilderness'));
   }
@@ -1335,22 +1432,18 @@ async function main() {
 
   console.log('groundSink — how far the ground’s depth reaches');
   {
-    check('a lake takes 0.35 m of the moving body',
-      groundSink(0.35, 'wilderness'), 0.35);
-    check('...an open place is the same water', groundSink(0.35, 'open'), 0.35);
-    check('THE REACH: a tiled hall over the lake is a floor',
-      groundSink(0.35, 'built'), 0);
-    check('a ground without a depth sinks nobody', groundSink(0, 'wilderness'), 0);
-    check('...and neither does a negative one', groundSink(-1, 'open'), 0);
-    check('...nor a NaN one', groundSink(NaN, 'wilderness'), 0);
-    check('the clamp of the catalog travels through untouched',
-      groundSink(1.5, 'wilderness'), 1.5);
+    // Migrated to npc_ground.json: [30] a lake takes 0.35 m of the moving body
+    // Migrated to npc_ground.json: [30] ...an open place is the same water
+    // Migrated to npc_ground.json: [30] THE REACH: a tiled hall over the lake is a floor
+    // Migrated to npc_ground.json: [30] a ground without a depth sinks nobody
+    // Migrated to npc_ground.json: [30] ...and neither does a negative one
+    // Migrated to npc_ground.json: [30] ...nor a NaN one
+    // Migrated to npc_ground.json: [30] the clamp of the catalog travels through untouched
     // RED COUNTER-PROBE, EXECUTED: the rule before the reach gate existed,
     // written out here — the depth with nothing but the "says something" test.
     const ungated = (sink) => (Number.isFinite(sink) && sink > 0 ? sink : 0);
     check('RED: the ungated rule wades the tiled hall', ungated(0.35), 0.35);
-    check('...where the rule in force keeps the floor dry',
-      groundSink(0.35, 'built'), 0);
+    // Migrated to npc_ground.json: [30] ...where the rule in force keeps the floor dry
     check('...and outside a built place the two agree',
       groundSink(0.35, 'wilderness'), ungated(0.35));
   }
@@ -1359,26 +1452,19 @@ async function main() {
   {
     // The water seed of `shared/terrain/types.json`.
     const W = { move: 0.35, idle: 1.3 };
-    check('moving, the swimmer’s depth counts',
-      sinkForState(true, 'treading-water', W), 0.35);
-    check('...even where the ground names no clip at all: a bog swallows '
-      + 'ankles under a plain walk', sinkForState(true, '', W), 0.35);
-    check('waiting on a ground that names a standing clip, the treader’s does',
-      sinkForState(false, 'treading-water', W), 1.3);
-    check('THE STANDING GATE: without a ground idle clip nobody is sunk',
-      sinkForState(false, '', W), 0);
-    check('a ground with no waiting depth sinks nobody while waiting',
-      sinkForState(false, 'treading-water', { move: 0.35, idle: 0 }), 0);
-    check('...and one with no moving depth nobody while moving',
-      sinkForState(true, '', { move: 0, idle: 1.3 }), 0);
+    // Migrated to npc_ground.json: [30] moving, the swimmer’s depth counts
+    // Migrated to npc_ground.json: [30] ...even where the ground names no clip at all: a bog swallows ankles under a plain walk
+    // Migrated to npc_ground.json: [30] waiting on a ground that names a standing clip, the treader’s does
+    // Migrated to npc_ground.json: [30] THE STANDING GATE: without a ground idle clip nobody is sunk
+    // Migrated to npc_ground.json: [30] a ground with no waiting depth sinks nobody while waiting
+    // Migrated to npc_ground.json: [30] ...and one with no moving depth nobody while moving
     // RED COUNTER-PROBE, EXECUTED: the ONE-depth rule of finding 13, rebuilt.
     // It gives the treader whatever the swimmer got.
     const single = (moving, groundIdle, sink) =>
       (moving || groundIdle ? sink : 0);
     check('RED: with one depth the treader gets the swimmer’s 0.35',
       single(false, 'treading-water', W.move), 0.35);
-    check('...where the rule in force gives it the body length it hangs',
-      sinkForState(false, 'treading-water', W), 1.3);
+    // Migrated to npc_ground.json: [30] ...where the rule in force gives it the body length it hangs
     check('...and the moving case is the one place the two agree',
       single(true, 'treading-water', W.move),
       sinkForState(true, 'treading-water', W));
@@ -1393,22 +1479,11 @@ async function main() {
     // what `figures.Figure.play` drops the figure to).
     const root = (depth, sink) => floatRootY(L - depth, L, sink);
     const body = (depth, sink) => root(depth, sink) - sink;
-    for (const [depth, rMove, rIdle, bMove, bIdle] of [
-      [0.00, 3.35, 4.30, 3.00, 3.00],
-      [0.35, 3.00, 3.95, 2.65, 2.65],
-      [1.30, 3.00, 3.00, 2.65, 1.70],
-      [2.00, 3.00, 3.00, 2.65, 1.70],
-    ]) {
-      check(`depth ${depth} m: the swimmer's root`, root(depth, W.move), rMove);
-      check(`depth ${depth} m: the treader's root`, root(depth, W.idle), rIdle);
-      check(`depth ${depth} m: the swimmer's body`, body(depth, W.move), bMove);
-      check(`depth ${depth} m: the treader's body`, body(depth, W.idle), bIdle);
-    }
+    // The 16 root/body rows of the hand table now run from npc_ground.json.
     check('the swimmer crosses over at 0.35 m of water', root(W.move, W.move), L);
     check('...the treader only at 1.3 m — a body length before it floats',
       root(W.idle, W.idle), L);
-    check('OUT of the water nothing changed at all',
-      floatRootY(7.25, null, W.move), 7.25);
+    // Migrated to npc_ground.json: [30] OUT of the water nothing changed at all
     check('...the bog still swallows ankles from the terrain',
       floatRootY(7.25, null, 0.2) - 0.2, 7.05);
     // RED COUNTER-PROBE, EXECUTED: the pre-E4 rule, written out — the sink
@@ -1457,20 +1532,16 @@ async function main() {
         root: floatRootY(groundY, g.water, sink),
       };
     };
-    check('depth 0.4 m at a 1 m threshold: the gate hands back NOTHING',
-      wadeGate({ ...RIVER }, L - 0.4, 1.0), WADED);
+    // Migrated to npc_ground.json: [30] depth 0.4 m at a 1 m threshold: the gate hands back NOTHING
     check('...so a MOVING figure walks the ford, unsunk, on the bed',
       at(0.4, 1.0, true), { clip: 'walk', sink: 0, root: 4.6 });
     check('...and a WAITING one keeps its own standing clip on the bed',
       at(0.4, 1.0, false), { clip: 'idle', sink: 0, root: 4.6 });
-    check('depth 1.0 m IS the threshold — the word passes through',
-      wadeGate({ ...RIVER }, L - 1.0, 1.0), RIVER);
+    // Migrated to npc_ground.json: [30] depth 1.0 m IS the threshold — the word passes through
     // A water ground that does not swim (no `movement`, i.e. walk_run) is
     // gated the same way: shallow, its mirror goes, so the figure stands on
     // the bed instead of on the surface (floatRootY = max(bed, mirror)).
-    check('a walk_run water ground wades in the shallows too',
-      wadeGate({ movement: 'walk_run', sink: { move: 0, idle: 0 }, water: L },
-        L - 0.4, 1.0), WADED);
+    // Migrated to npc_ground.json: [30] a walk_run water ground wades in the shallows too
     check('...moving: the swim clip, 0.35 under the mirror',
       at(1.0, 1.0, true), { clip: 'breast-stroke', sink: 0.35, root: 5.0 });
     check('...waiting: treading water, and a 1.3 m foot still finds the '
@@ -1493,18 +1564,15 @@ async function main() {
       wadeGate({ ...RIVER }, L - 0.4, swimFrom(undefined)), WADED);
     check('...and swims its 1.6 m the same way',
       wadeGate({ ...RIVER }, L - 1.6, swimFrom(undefined)), RIVER);
-    check('a threshold of 0 swims the ankle-deep rim — the pre-W4c water',
-      wadeGate({ ...RIVER }, L - 0.05, 0), RIVER);
+    // Migrated to npc_ground.json: [30] a threshold of 0 swims the ankle-deep rim — the pre-W4c water
     // NOT WATER, NOT GATED — the case that keeps the rule out of every other
     // ground: with no mirror there is no depth to measure.
     const BOG = { movement: 'walk_run', sink: { move: 0.2, idle: 0.2 },
       water: null };
-    check('a bog carries no mirror, so nothing is taken from it',
-      wadeGate({ ...BOG }, 4.6, 1.0), BOG);
+    // Migrated to npc_ground.json: [30] a bog carries no mirror, so nothing is taken from it
     check('...it still swallows ankles while walking',
       sinkForState(true, '', wadeGate({ ...BOG }, 4.6, 1.0).sink), 0.2);
-    check('a NaN bed decides nothing either — the word survives',
-      wadeGate({ ...RIVER }, NaN, 1.0), RIVER);
+    // Migrated to npc_ground.json: [30] a NaN bed decides nothing either — the word survives
     // RED COUNTER-PROBE, EXECUTED: the pre-W4c rule is no gate at all.
     const ungated = (word) => word;
     check('RED: ungated, the 0.4 m ford is swum',
@@ -1572,8 +1640,7 @@ async function main() {
     const L = 12.6;
     const FORD = { movement: 'swim',
       sink: { move: 0.35, idle: 1.3 }, water: L };
-    check('RED: the wade gate calls a 0.6 m ford no water at all',
-      wadeGate({ ...FORD }, BED, 1.0).water, null);
+    // Migrated to npc_ground.json: [30] RED: the wade gate calls a 0.6 m ford no water at all
     check('RED: ...so gating the ghost on IT would leave the wader cut',
       submergedInWater(BED, wadeGate({ ...FORD }, BED, 1.0).water), false);
     check('...while the ungated level gives the wader its body back',
@@ -1610,21 +1677,15 @@ async function main() {
   console.log('ghostCutY — the gate and the waterline it cuts at');
   {
     const BASE = 12.0;
-    check('dry ground: no cut and no ghost', ghostCutY(BASE, null), null);
-    check('a mirror UNDER the base is not water over the object',
-      ghostCutY(BASE, 11.9), null);
-    check('exactly at the waterline: nothing is cut off yet',
-      ghostCutY(BASE, 12.0), null);
-    check('4 cm, still under the rim ramp', ghostCutY(BASE, 12.04), null);
-    check('5 cm: the cut is the water level itself',
-      ghostCutY(BASE, 12.05), 12.05);
-    check('a crate on the bed of a 0.6 m ford cuts at 12.60',
-      ghostCutY(BASE, 12.6), 12.6);
-    check('a jetty post whose base lies 1.5 m down cuts at 13.50',
-      ghostCutY(BASE, 13.5), 13.5);
-    check('a raster with nothing to say is dry', ghostCutY(BASE, NaN), null);
-    check('...and so is a base nobody could measure',
-      ghostCutY(NaN, 13.5), null);
+    // Migrated to npc_ground.json: [30] dry ground: no cut and no ghost
+    // Migrated to npc_ground.json: [30] a mirror UNDER the base is not water over the object
+    // Migrated to npc_ground.json: [30] exactly at the waterline: nothing is cut off yet
+    // Migrated to npc_ground.json: [30] 4 cm, still under the rim ramp
+    // Migrated to npc_ground.json: [30] 5 cm: the cut is the water level itself
+    // Migrated to npc_ground.json: [30] a crate on the bed of a 0.6 m ford cuts at 12.60
+    // Migrated to npc_ground.json: [30] a jetty post whose base lies 1.5 m down cuts at 13.50
+    // Migrated to npc_ground.json: [30] a raster with nothing to say is dry
+    // Migrated to npc_ground.json: [30] ...and so is a base nobody could measure
     // The cut is the LEVEL and never the base: a ghost cut at its own base
     // would discard the whole submerged half — i.e. exactly the half it exists
     // to draw — and show only the dry part it must not touch.
@@ -1634,17 +1695,13 @@ async function main() {
     // ground 2.50 m, offset_y 0.5 -> bottom 3.00; a lake standing at 3.40 m
     // over it is 0.40 m of water, so the cut is 3.40. Lower the lake to 3.02
     // and the 2 cm left are under the rim ramp: no ghost.
-    check('a world prop on a 2.5 m bed, lake at 3.40 -> cut 3.40',
-      ghostCutY(2.5 + 0.5, 3.4), 3.4);
-    check('...the same prop with 2 cm of water over it -> none',
-      ghostCutY(2.5 + 0.5, 3.02), null);
+    // Migrated to npc_ground.json: [30] a world prop on a 2.5 m bed, lake at 3.40 -> cut 3.40
+    // Migrated to npc_ground.json: [30] ...the same prop with 2 cm of water over it -> none
     // A SCENE placement's base is `tile.center.y + bottom_y + lift` (§ A16.9):
     // datum -2.00, bottom_y -0.28, lift +2.335 -> 0.055. A lake at 0.30 stands
     // 0.245 m over it, so the cut is 0.30; at 0.09 it is 0.035 m and dry.
-    check('a scene placement at 0.055 under a lake at 0.30 -> cut 0.30',
-      ghostCutY(-2.0 + -0.28 + 2.335, 0.3), 0.3);
-    check('...and 3.5 cm of water over the same placement -> none',
-      ghostCutY(-2.0 + -0.28 + 2.335, 0.09), null);
+    // Migrated to npc_ground.json: [30] a scene placement at 0.055 under a lake at 0.30 -> cut 0.30
+    // Migrated to npc_ground.json: [30] ...and 3.5 cm of water over the same placement -> none
   }
 
   // --- ghostWaterLevel: the ghost asks what the WATER asks (2026-08-27) -----
@@ -1717,8 +1774,7 @@ async function main() {
     // THE RED PROBE — the bug itself, in numbers. The measured shore case:
     // the bank ground sits 0.772 m under the dilated mirror (§ K-A E6 addendum)
     // and lies 1 m OUTSIDE the outline. The old gate saw only the level.
-    check('RED: the old level-only gate ghosted the bank diorama',
-      ghostCutY(BASE, BASE + 0.772), 12.772);
+    // Migrated to npc_ground.json: [30] RED: the old level-only gate ghosted the bank diorama
     check('...the gate that asks the outline too leaves it solid',
       ghostCutY(BASE, ghostWaterLevel(BASE + 0.772, inside(-1))), null);
   }
@@ -2104,10 +2160,10 @@ async function main() {
     // stop at (3,-3): k1 is hypot(5.5, 0.5) = 5.52 m away, the corridor 0 m —
     // and even from k1's own centre (where the corridor is 5.52 m off) the
     // corridor wins, because a storey's corridor beats every distance.
-    check('lift -> corridor', elevatorTargetRoom(-1, stops, rooms), '__floor__-1');
+    // Migrated to npc_ground.json: [30] lift -> corridor
     check('corridor wins regardless of distance', nearestRoomAt(-1, { x: -2.5, z: -2.5 }, rooms), '__floor__-1');
-    check('storey without corridor -> nearest room', elevatorTargetRoom(0, stops, rooms), 'eg');
-    check('levels served count the corridor', elevatorLevels(stops, rooms), [-1, 0]);
+    // Migrated to npc_ground.json: [30] storey without corridor -> nearest room
+    // Migrated to npc_ground.json: [30] levels served count the corridor
   }
 
   console.log('room-walk hook — storey source, lost figure, gated request (task 6)');
@@ -2444,7 +2500,7 @@ async function main() {
       elevatorAt({ x, z: 0 }, level, stops, rooms, scale);
 
     check('range is 1.5 figure metres', ELEVATOR_RANGE, 1.5);
-    check('both storeys have a stop AND a room', elevatorLevels(STOPS, ROOMS), [0, 1]);
+    // Migrated to npc_ground.json: [30] both storeys have a stop AND a room
     check('0.9 m at scale 1 is inside the range', at(2.9, 0, 1),
       { levels: [0, 1], current: 0, dist: 0.9 });
     check('...1.5 m IS the range and is already out (strict)', at(3.5, 0, 1), null);
@@ -2452,17 +2508,15 @@ async function main() {
     check('0.4 m at scale 0.3 is inside 0.45', at(2.4, 0, 0.3),
       { levels: [0, 1], current: 0, dist: 0.4 });
     check('...0.5 m is out', at(2.5, 0, 0.3), null);
-    check('a stop on a storey without a room does not count',
-      elevatorLevels([...STOPS, { level: 2, pos: { x: 2, z: 0 } }], ROOMS), [0, 1]);
+    // Migrated to npc_ground.json: [30] a stop on a storey without a room does not count
     check('one storey left is no ride at all',
       at(2.9, 0, 1, STOPS, ROOMS.filter((r) => r.level === 0)), null);
     check('a storey with a room but no stop has no holding point to stand at',
       at(2.9, 3, 1, STOPS, [...ROOMS, { id: 'shed', level: 3, center: { x: 0, z: 0 } }]), null);
     check('the own storey is never offered as a destination',
       elevatorOptions({ levels: [0, 1, 2], current: 1 }), [0, 2]);
-    check('the ride ends in the room nearest that storey\'s stop',
-      elevatorTargetRoom(1, STOPS, ROOMS), 'attic');
-    check('...and downwards likewise', elevatorTargetRoom(0, STOPS, ROOMS), 'hall');
+    // Migrated to npc_ground.json: [30] the ride ends in the room nearest that storey's stop
+    // Migrated to npc_ground.json: [30] ...and downwards likewise
 
     // Two storeys: one option, so F rides it instead of unfolding a picker
     // with a single button.
@@ -3563,46 +3617,32 @@ async function main() {
   // rule is "the outside door, else the first" — r1 has a party wall FIRST in
   // the list and an outside door second, so preference beats order.
   console.log('\nroomDoor — the outside door of a room, else its first');
-  check('r1 prefers its outside door over the party wall it is listed after',
-    roomDoor(doorScene, 'r1').mid, { x: -1, z: -2 });
-  check('r2 takes its outside door over both party walls', roomDoor(doorScene, 'r2').mid,
-    { x: 3, z: -2 });
-  check('r3 has no outside door, so its party wall answers',
-    { mid: roomDoor(doorScene, 'r3').mid, width: roomDoor(doorScene, 'r3').width },
-    { mid: { x: 5, z: -1 }, width: 0.9 });
-  check('the tile centre applies here too',
-    roomDoor(doorScene, 'r3', { x: 40, z: -20 }).mid, { x: 45, z: -21 });
+  // Migrated to npc_ground.json: [30] r1 prefers its outside door over the party wall it is listed after
+  // Migrated to npc_ground.json: [30] r2 takes its outside door over both party walls
+  // Migrated to npc_ground.json: [30] r3 has no outside door, so its party wall answers
+  // Migrated to npc_ground.json: [30] the tile centre applies here too
   // The hallway is where a figure leaving the building stands when no
   // rectangle holds it (§ A13b), and its way out is the HULL door: a figure
   // routed from `__floor__0` to the yard walks through this one.
-  check('the hallway takes its hull door as the way out',
-    { mid: roomDoor(doorScene, '__floor__0').mid,
-      width: roomDoor(doorScene, '__floor__0').width },
-    { mid: { x: 0, z: -3 }, width: 1.2 });
-  check('a room without any doorway has none', roomDoor(doorScene, 'nope'), null);
-  check('and neither has no room at all', roomDoor(doorScene, ''), null);
-  check('no payload, no door', roomDoor(null, 'r1'), null);
+  // Migrated to npc_ground.json: [30] the hallway takes its hull door as the way out
+  // Migrated to npc_ground.json: [30] a room without any doorway has none
+  // Migrated to npc_ground.json: [30] and neither has no room at all
+  // Migrated to npc_ground.json: [30] no payload, no door
 
   // BETWEEN two rooms: the NPC walk (main.ts) routes a room change through the
   // door that joins them — the entry whose `rooms` holds both. That is what
   // the removed single exit point per room could never answer.
   console.log('\ndoorwayBetween — the door that joins two rooms');
-  check('r1 and r2 are joined by the party wall',
-    { mid: doorwayBetween(doorScene, 'r1', 'r2').mid,
-      roomIds: doorwayBetween(doorScene, 'r1', 'r2').roomIds },
-    { mid: { x: 2, z: 0 }, roomIds: ['r1', 'r2'] });
-  check('the order of the two rooms does not matter',
-    doorwayBetween(doorScene, 'r2', 'r1').mid, { x: 2, z: 0 });
-  check('r1 and r3 share no wall', doorwayBetween(doorScene, 'r1', 'r3'), null);
-  check('a room is not joined to itself', doorwayBetween(doorScene, 'r1', 'r1'), null);
-  check('an unknown room joins nothing', doorwayBetween(doorScene, 'r1', 'nope'), null);
+  // Migrated to npc_ground.json: [30] r1 and r2 are joined by the party wall
+  // Migrated to npc_ground.json: [30] the order of the two rooms does not matter
+  // Migrated to npc_ground.json: [30] r1 and r3 share no wall
+  // Migrated to npc_ground.json: [30] a room is not joined to itself
+  // Migrated to npc_ground.json: [30] an unknown room joins nothing
   // A hull door names ONE room, so it joins the hallway to nothing indoors —
   // a figure going from a room into the hallway leaves through the room's own
   // door and walks in, exactly as it does towards the ground.
-  check('the hull door joins the hallway to no room',
-    doorwayBetween(doorScene, '__floor__0', 'r1'), null);
-  check('the tile centre applies here too',
-    doorwayBetween(doorScene, 'r2', 'r3', { x: 40, z: -20 }).mid, { x: 45, z: -21 });
+  // Migrated to npc_ground.json: [30] the hull door joins the hallway to no room
+  // Migrated to npc_ground.json: [30] the tile centre applies here too (72)
 
   // ── Audio prefs (stage 4, task 2) ────────────────────────────────────────
   console.log('\nprefs — the localStorage key and the shipped defaults');

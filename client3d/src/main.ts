@@ -1,3 +1,4 @@
+import { liftStops } from './game/npcWalk';
 import { waterRegionAt, type WaterHit } from './scene/propWaterMath';
 import { openable as sceneOpenable, buildingTier, interiorTier, doorMarkTransform,
   boundaryMarkTransform, basementHole, neighbourOccludes } from './scene/sceneView';
@@ -2816,10 +2817,7 @@ async function startApp(username: string, role: string) {
               const legs = stairLegs(links, chain);
               if (legs.length) npcs.setStairRide(c.name, { legs, leg: 0, armed: false });
             } else if (lf !== lt && tile.elevatorStops) {
-              const a = tile.elevatorStops.get(lf) ?? tile.elevatorStops.get(0);
-              const b = tile.elevatorStops.get(lt) ?? tile.elevatorStops.get(0);
-              if (a) stops.push(a.clone());                          // board the lift
-              if (b) stops.push(b.clone());                          // ride to the target storey
+              for (const stop of liftStops(tile.elevatorStops, lf, lt)) stops.push(stop.clone());
             }
             const enter = to ? roomDoor(scene, to) : null;
             if (enter) stops.push(doorStop(tile, enter));            // enter the new room

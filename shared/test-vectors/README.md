@@ -220,3 +220,21 @@ dispatch (never a non-finite JSON number); other conventions are named per file.
 | `place_poll.json` | `client3d/scripts/smoke_places_client.mjs` | `pollIsStale` (`game/placement.ts`); `null` = Infinity | They execute
 every new case; unknown function names fail through the unchanged shared runner.
 These files do not depend on recorded model output or `native/fixtures/rest_reference.json`.
+
+## E5 NPC walking (Task 30, TypeScript side)
+
+Run `timeout 300 node client3d/scripts/smoke_npc_walk.mjs` and
+`timeout 300 node client3d/scripts/smoke_walk_math.mjs`.
+
+| File | Canonical source smoke | Functions |
+|---|---|---|
+| `npc_walk.json` | `client3d/scripts/smoke_npc_walk.mjs` | `npcGoal`, `npcStepValue`, `neighbourFacing`, `standingFacing`, `facingYaw`, `easeNpcYaw`, `easeNpcY`, `liftStops` (`game/npcWalk.ts`). Points are `{x,y,z}` world metres; yaw is radians. `npcStepValue(d, hasWaypoint, movement, reckoning, dt, pace, paceLimit, reckonedStep=null)` constructs the goal plan with horizontal distance `d`, `dist=d+10` while a waypoint remains, and `moving=d>0.05`. `liftStops` takes `[level, point]` pairs instead of a Map. |
+| `npc_ground.json` | `client3d/scripts/smoke_walk_math.mjs` | `groundScope`, `terrainPace`, `sinkForState`, `groundSink`, `floatRootY`, `wadeGate`, `ghostCutY` (`game/walk.ts`); `roomDoor`, `doorwayBetween` (`game/doors.ts`); `elevatorLevels`, `elevatorTargetRoom` (`game/elevator.ts`). `floatBodyY(bed, level, sink)` returns `floatRootY(bed, level, sink)-sink`. A `nameValue(args, fields)` adapter calls `name(...args)` and selects the property path `fields`. Non-finite inputs use `{"$number":"NaN"}`. |
+
+`npc_ground.json` moves 96 existing checks without reducing the source smoke's
+1,151 passing checks. Local chain, counter-probe, invariant and state checks
+remain. The new walking smoke also executes all 25 cases of the unchanged
+`prop_water.json`, including `propWaterWord` and `groundWaterLevel`; those
+expectations are neither copied nor re-derived here. Stair rides keep the
+existing `stairs.rideStep` browser implementation; a native port can use waypoint
+Y easing until E7, as allowed by the Task 30 brief.

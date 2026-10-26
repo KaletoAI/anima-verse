@@ -5,8 +5,8 @@ import type { SyncCounters } from '../game/perfstats';
 import type { MapCharacter, MapInteraction } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
-import { MOVE_EPS_M, SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
-  canRun, movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, sinkForState, standingClipFor,
+import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
+  movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, sinkForState, standingClipFor,
   terrainPace, propWaterWord,
   type MovementType, type GroundScope, type GroundSink, type GroundWater } from '../game/walk';
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
@@ -19,16 +19,8 @@ import { settleOffset, type StandSettle } from './standSettle';
 import { seededRandom } from './textures';
 import { adoptTarget, advanceAlongPaces, stepShown, rateAt, pushErr, catchUpStep, clampProgress, deadReckonRate, deadReckonStep, densifyPolyline, pointAtDistance, remainingPoints, trimBucket, type ErrWindow, type MetrePoint } from './travelPath';
 
-/** Walking pace in METRES PER SECOND — and since E4 that is all it is: the
- *  metre world has one scale, so this number means the same thing on the map
- *  and inside a room. Exported because the player-driven avatar (E3-T3) has to
- *  move at exactly the NPC pace; a second constant would drift. */
-export const WALK_SPEED = 3.4;
-const RUN_DISTANCE = 6; // farther than this -> run animation
-/** How close a figure has to come to a planned waypoint before it walks on to
- *  the next one. Generous on purpose: the points are door and route stations,
- *  not marks to hit, and a figure that had to touch them would pivot on each. */
-const WAYPOINT_ARRIVE_M = 1.5;
+import { WALK_SPEED, RUN_DISTANCE, npcGoal, npcStep, neighbourFacing, standingFacing, easeNpcY } from '../game/npcWalk';
+export { WALK_SPEED } from '../game/npcWalk';
 
 /** What the ground says about a figure at one point: the clip its terrain type
  *  asks for while the figure MOVES (`anim`) and the one while it STANDS
@@ -596,7 +588,7 @@ export class NpcManager {
       if (Math.abs(drop) > 1e-6 && figure.shiftBridgeLift(drop)) npc.root.position.y = goalY;
       return;
     }
-    npc.root.position.y += (goalY - npc.root.position.y) * Math.min(1, dt * 4);
+    npc.root.position.y = easeNpcY(npc.root.position.y, goalY, dt);
   }
 
   /** Ask the figure for its clip — and when that opens a bridge the figure
@@ -1127,18 +1119,12 @@ export class NpcManager {
   /** Facing while standing: look at the centroid of the near neighbours
    *  (reads as a conversation circle); a lone figure faces the camera side. */
   private facingTargets(): Map<string, THREE.Vector3> {
-    const NEAR = 4.5;                       // world metres = "in the same conversation"
     const out = new Map<string, THREE.Vector3>();
     const list = [...this.npcs.values()];
     for (const npc of list) {
-      const near = list.filter(
-        (o) => o !== npc && o.root.position.distanceTo(npc.root.position) < NEAR
-      );
-      if (!near.length) continue;
-      const c = new THREE.Vector3();
-      for (const o of near) c.add(o.root.position);
-      c.divideScalar(near.length);
-      out.set(npc.name, c);
+      const c = neighbourFacing(npc.root.position,
+        list.filter((o) => o !== npc).map((o) => o.root.position));
+      if (c) out.set(npc.name, new THREE.Vector3(c.x, c.y, c.z));
     }
     return out;
   }
@@ -1465,20 +1451,13 @@ export class NpcManager {
           && this.applyBridgeTravel(npc)) {
         this.settleAfterBridge(npc);
       }
-      const retireM = npc.ride ? RIDE_ARRIVE_M : WAYPOINT_ARRIVE_M;
-      while (npc.waypoints.length
-        && npc.root.position.distanceTo(npc.waypoints[0]) < retireM) {
-        npc.waypoints.shift();
-      }
-      const goal = npc.waypoints[0] ?? npc.target;
-      const delta = goal.clone().sub(npc.root.position);
-      delta.y = 0;
-      const distToGoal = delta.length();
-      // The height the root had when this frame began — what a bridge that
-      // starts further down lifts the body by (`playLifting`).
+      const plan = npcGoal(npc.root.position, npc.target, npc.waypoints,
+        npc.ride ? RIDE_ARRIVE_M : undefined);
+      npc.waypoints.splice(0, plan.retired);
+      const delta = new THREE.Vector3(plan.delta.x, 0, plan.delta.z);
+      const { distToGoal, dist, moving } = plan;
+      // Preserve the height before a bridge starts below.
       const rootYBefore = npc.root.position.y;
-      const dist = npc.waypoints.length ? distToGoal + 10 : distToGoal;  // on the way = running
-      const moving = distToGoal > MOVE_EPS_M;
       // A TRAVELLER WITHOUT A ROUTE WALKS BY ITS OWN RECKONING, and never in
       // the run boost. Under fog the worldmap thins a foreign traveller's row
       // down to `pos` (decision `77dbdb61`: neither the goal nor the speed of
@@ -1497,7 +1476,7 @@ export class NpcManager {
       // old walk stands, minus the boost.
       const reckoning = npc.travelling && npc.name !== this.playerDriven;
       const stepGround = this.groundWordAt(npc.root.position.x, npc.root.position.z);
-      const running = !reckoning && dist > RUN_DISTANCE && canRun(stepGround.gm.movement);
+      const { running } = npcStep(plan, stepGround.gm.movement, reckoning, dt, npc.pace, 1);
       const reckonRate = reckoning ? npc.reckon?.rateMS ?? null : null;
       // A BRIDGE CLIP HOLDS THE FIGURE, and it holds it HERE — at the step,
       // the one place every figure's movement goes through. The gate used to
@@ -1525,21 +1504,20 @@ export class NpcManager {
         // the step is where the terrain pace belongs, because the goal is a
         // fixed lead ahead and a paced lead would fall under `MOVE_EPS_M`.
         // The run boost needs a ground that allows running (`canRun`).
-        let step: number;
+        let reckonedStep: number | null = null;
         if (reckonRate !== null) {
           // The reckoned figure reads its own ground here, BEFORE the step:
           // the pace belongs to the metre the figure is standing on, and the
           // sample below (`standRaw`) is taken after the move, for the clip
           // and the height of where it arrives.
           const paceRaw = this.groundMoveAt(npc.root.position.x, npc.root.position.z);
-          step = deadReckonStep(reckonRate, terrainPace(paceRaw.speed, paceRaw.scope),
+          reckonedStep = deadReckonStep(reckonRate, terrainPace(paceRaw.speed, paceRaw.scope),
                                 dt, distToGoal);
-        } else {
-          step = Math.min(distToGoal,
-            WALK_SPEED * dt * npc.pace * (running ? 1.8 : 1));
         }
+        const { step } = npcStep(plan, stepGround.gm.movement, reckoning,
+          dt, npc.pace, paceLimit, reckonedStep);
         const dir = delta.clone().normalize();
-        npc.root.position.addScaledVector(dir, step * paceLimit);
+        npc.root.position.addScaledVector(dir, step);
         npc.figure?.faceTowards(dir);
       }
       // WHAT THE GROUND SAYS UNDER THE FIGURE, once — the clips below and the
@@ -1617,13 +1595,8 @@ export class NpcManager {
         const viewYaw = viewDriven && firstPerson
           ? bodyYawForView(npc.figure.root.rotation.y, firstPerson.viewYaw) : null;
         const target = viewDriven ? undefined : faceTo.get(npc.name);
-        const dir = viewYaw !== null
-          ? new THREE.Vector3(Math.sin(viewYaw), 0, Math.cos(viewYaw))
-          : npc.face
-            ? npc.face.clone()
-            : target
-              ? target.clone().sub(npc.root.position).setY(0)
-              : null;
+        const facing = standingFacing(npc.root.position, npc.face, target ?? null, viewYaw);
+        const dir = facing ? new THREE.Vector3(facing.x, facing.y, facing.z) : null;
         // Not while a bridge holds the facing: the body getting up is the
         // clip's, and the frame after it ends asks again.
         if (dir && !npc.figure.holdsFacing) npc.figure.faceTowards(dir);

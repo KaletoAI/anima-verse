@@ -1,0 +1,309 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_walk_math.mjs",
+  "fixtures": {
+    "DOORS": {
+      "extent_m": 10,
+      "k": 1,
+      "levels": [
+        {
+          "level": 0,
+          "floor_y": 0
+        },
+        {
+          "level": 1,
+          "floor_y": 2.2
+        }
+      ],
+      "doorways": [
+        {
+          "level": 0,
+          "at_world": [
+            2,
+            0
+          ],
+          "along": [
+            0,
+            1
+          ],
+          "width_m": 1,
+          "base_y": 0.1,
+          "rooms": [
+            "r1",
+            "r2"
+          ],
+          "outside": false
+        },
+        {
+          "level": 0,
+          "at_world": [
+            -1,
+            -2
+          ],
+          "along": [
+            1,
+            0
+          ],
+          "width_m": 1,
+          "base_y": 0.1,
+          "rooms": [
+            "r1"
+          ],
+          "outside": true
+        },
+        {
+          "level": 0,
+          "at_world": [
+            3,
+            -2
+          ],
+          "along": [
+            1,
+            0
+          ],
+          "width_m": 0.6,
+          "base_y": 0.1,
+          "rooms": [
+            "r2"
+          ],
+          "outside": true
+        },
+        {
+          "level": 0,
+          "at_world": [
+            5,
+            -1
+          ],
+          "along": [
+            1,
+            0
+          ],
+          "width_m": 0.9,
+          "base_y": 0.1,
+          "rooms": [
+            "r2",
+            "r3"
+          ],
+          "outside": false
+        },
+        {
+          "level": 1,
+          "at_world": [
+            0,
+            2
+          ],
+          "along": [
+            1,
+            0
+          ],
+          "width_m": 1,
+          "base_y": 2.3,
+          "rooms": [
+            "up"
+          ],
+          "outside": true
+        },
+        {
+          "level": 0,
+          "at_world": [
+            0,
+            -3
+          ],
+          "along": [
+            1,
+            0
+          ],
+          "width_m": 1.2,
+          "base_y": 0.1,
+          "rooms": [
+            "__floor__0"
+          ],
+          "outside": true,
+          "hull": true,
+          "outward_normal": [
+            0,
+            -1
+          ]
+        }
+      ],
+      "rooms": [
+        {
+          "room_id": "r1",
+          "level": 0,
+          "outline": [
+            [
+              0.3,
+              0.3
+            ],
+            [
+              0.7,
+              0.3
+            ],
+            [
+              0.7,
+              0.7
+            ],
+            [
+              0.3,
+              0.7
+            ]
+          ],
+          "openings": [
+            {
+              "edge": 2,
+              "at": 0.5,
+              "width_m": 1.2,
+              "height_m": 1.2,
+              "sill_m": 0.9,
+              "type": "window"
+            },
+            {
+              "edge": 3,
+              "at": 0.5,
+              "width_m": 1,
+              "type": "door",
+              "to": "outside"
+            }
+          ]
+        }
+      ],
+      "walls": [
+        {
+          "level": 0,
+          "room_id": "r1",
+          "from": [
+            -2,
+            -2
+          ],
+          "to": [
+            -1.5,
+            -2
+          ],
+          "base_y": 0.1
+        },
+        {
+          "level": 0,
+          "from": [
+            -2,
+            3
+          ],
+          "to": [
+            0.6,
+            3
+          ],
+          "base_y": 0.08
+        },
+        {
+          "level": 0,
+          "from": [
+            1.4,
+            3
+          ],
+          "to": [
+            4,
+            3
+          ],
+          "base_y": 0.08
+        }
+      ]
+    }
+  },
+  "cases": [
+    {"label":"[30] nothing over the point is the wilderness","fn":"groundScope","args":[null,null],"expect":"wilderness"},
+    {"label":"[30] an area location is open ground","fn":"groundScope","args":[true,null],"expect":"open"},
+    {"label":"[30] a building footprint is built","fn":"groundScope","args":[false,null],"expect":"built"},
+    {"label":"[30] an interior room beats the area location it stands in","fn":"groundScope","args":[true,false],"expect":"built"},
+    {"label":"[30] an outdoor room beats the building it belongs to","fn":"groundScope","args":[false,true],"expect":"open"},
+    {"label":"[30] a room without a footprint still answers","fn":"groundScope","args":[null,true],"expect":"open"},
+    {"label":"[30] grass out in the wilderness","fn":"terrainPace","args":[1,"wilderness"],"expect":1},
+    {"label":"[30] ...and inside an open place","fn":"terrainPace","args":[1,"open"],"expect":1},
+    {"label":"[30] water in the wilderness","fn":"terrainPace","args":[0.4,"wilderness"],"expect":0.4},
+    {"label":"[30] THE FINDING: the same water in an open place still slows","fn":"terrainPace","args":[0.4,"open"],"expect":0.4},
+    {"label":"[30] ROUND 2: under a roof it does not — the place has a floor","fn":"terrainPace","args":[0.4,"built"],"expect":1},
+    {"label":"[30] ...not even a FAST ground reaches inside","fn":"terrainPace","args":[2,"built"],"expect":1},
+    {"label":"[30] a factor-0 ground in an open place is neutral (never meant to be walked)","fn":"terrainPace","args":[0,"open"],"expect":1},
+    {"label":"[30] the catalog maximum passes through","fn":"terrainPace","args":[2,"wilderness"],"expect":2},
+    {"label":"[30] a NaN factor walks at the normal pace","fn":"terrainPace","args":[{"$number":"NaN"},"open"],"expect":1},
+    {"label":"[30] a negative factor in an open place is the 0 case","fn":"terrainPace","args":[-1,"open"],"expect":1},
+    {"label":"[30] ...while the rule in force wades it","fn":"terrainPace","args":[0.4,"open"],"expect":0.4},
+    {"label":"[30] a lake takes 0.35 m of the moving body","fn":"groundSink","args":[0.35,"wilderness"],"expect":0.35},
+    {"label":"[30] ...an open place is the same water","fn":"groundSink","args":[0.35,"open"],"expect":0.35},
+    {"label":"[30] THE REACH: a tiled hall over the lake is a floor","fn":"groundSink","args":[0.35,"built"],"expect":0},
+    {"label":"[30] a ground without a depth sinks nobody","fn":"groundSink","args":[0,"wilderness"],"expect":0},
+    {"label":"[30] ...and neither does a negative one","fn":"groundSink","args":[-1,"open"],"expect":0},
+    {"label":"[30] ...nor a NaN one","fn":"groundSink","args":[{"$number":"NaN"},"wilderness"],"expect":0},
+    {"label":"[30] the clamp of the catalog travels through untouched","fn":"groundSink","args":[1.5,"wilderness"],"expect":1.5},
+    {"label":"[30] ...where the rule in force keeps the floor dry","fn":"groundSink","args":[0.35,"built"],"expect":0},
+    {"label":"[30] moving, the swimmer’s depth counts","fn":"sinkForState","args":[true,"treading-water",{"move":0.35,"idle":1.3}],"expect":0.35},
+    {"label":"[30] ...even where the ground names no clip at all: a bog swallows ankles under a plain walk","fn":"sinkForState","args":[true,"",{"move":0.35,"idle":1.3}],"expect":0.35},
+    {"label":"[30] waiting on a ground that names a standing clip, the treader’s does","fn":"sinkForState","args":[false,"treading-water",{"move":0.35,"idle":1.3}],"expect":1.3},
+    {"label":"[30] THE STANDING GATE: without a ground idle clip nobody is sunk","fn":"sinkForState","args":[false,"",{"move":0.35,"idle":1.3}],"expect":0},
+    {"label":"[30] a ground with no waiting depth sinks nobody while waiting","fn":"sinkForState","args":[false,"treading-water",{"move":0.35,"idle":0}],"expect":0},
+    {"label":"[30] ...and one with no moving depth nobody while moving","fn":"sinkForState","args":[true,"",{"move":0,"idle":1.3}],"expect":0},
+    {"label":"[30] ...where the rule in force gives it the body length it hangs","fn":"sinkForState","args":[false,"treading-water",{"move":0.35,"idle":1.3}],"expect":1.3},
+    {"label":"[30] OUT of the water nothing changed at all","fn":"floatRootY","args":[7.25,null,0.35],"expect":7.25},
+    {"label":"[30] depth 0.4 m at a 1 m threshold: the gate hands back NOTHING","fn":"wadeGate","args":[{"movement":"swim","sink":{"move":0.35,"idle":1.3},"water":5},4.6,1],"expect":{"movement":"walk_run","sink":{"move":0,"idle":0},"water":null}},
+    {"label":"[30] depth 1.0 m IS the threshold — the word passes through","fn":"wadeGate","args":[{"movement":"swim","sink":{"move":0.35,"idle":1.3},"water":5},4,1],"expect":{"movement":"swim","sink":{"move":0.35,"idle":1.3},"water":5}},
+    {"label":"[30] a walk_run water ground wades in the shallows too","fn":"wadeGate","args":[{"movement":"walk_run","sink":{"move":0,"idle":0},"water":5},4.6,1],"expect":{"movement":"walk_run","sink":{"move":0,"idle":0},"water":null}},
+    {"label":"[30] a threshold of 0 swims the ankle-deep rim — the pre-W4c water","fn":"wadeGate","args":[{"movement":"swim","sink":{"move":0.35,"idle":1.3},"water":5},4.95,0],"expect":{"movement":"swim","sink":{"move":0.35,"idle":1.3},"water":5}},
+    {"label":"[30] a bog carries no mirror, so nothing is taken from it","fn":"wadeGate","args":[{"movement":"walk_run","sink":{"move":0.2,"idle":0.2},"water":null},4.6,1],"expect":{"movement":"walk_run","sink":{"move":0.2,"idle":0.2},"water":null}},
+    {"label":"[30] a NaN bed decides nothing either — the word survives","fn":"wadeGate","args":[{"movement":"swim","sink":{"move":0.35,"idle":1.3},"water":5},{"$number":"NaN"},1],"expect":{"movement":"swim","sink":{"move":0.35,"idle":1.3},"water":5}},
+    {"label":"[30] RED: the wade gate calls a 0.6 m ford no water at all","fn":"wadeGateValue","args":[[{"movement":"swim","sink":{"move":0.35,"idle":1.3},"water":12.6},12,1],["water"]],"expect":null},
+    {"label":"[30] dry ground: no cut and no ghost","fn":"ghostCutY","args":[12,null],"expect":null},
+    {"label":"[30] a mirror UNDER the base is not water over the object","fn":"ghostCutY","args":[12,11.9],"expect":null},
+    {"label":"[30] exactly at the waterline: nothing is cut off yet","fn":"ghostCutY","args":[12,12],"expect":null},
+    {"label":"[30] 4 cm, still under the rim ramp","fn":"ghostCutY","args":[12,12.04],"expect":null},
+    {"label":"[30] 5 cm: the cut is the water level itself","fn":"ghostCutY","args":[12,12.05],"expect":12.05},
+    {"label":"[30] a crate on the bed of a 0.6 m ford cuts at 12.60","fn":"ghostCutY","args":[12,12.6],"expect":12.6},
+    {"label":"[30] a jetty post whose base lies 1.5 m down cuts at 13.50","fn":"ghostCutY","args":[12,13.5],"expect":13.5},
+    {"label":"[30] a raster with nothing to say is dry","fn":"ghostCutY","args":[12,{"$number":"NaN"}],"expect":null},
+    {"label":"[30] ...and so is a base nobody could measure","fn":"ghostCutY","args":[{"$number":"NaN"},13.5],"expect":null},
+    {"label":"[30] a world prop on a 2.5 m bed, lake at 3.40 -> cut 3.40","fn":"ghostCutY","args":[3,3.4],"expect":3.4},
+    {"label":"[30] ...the same prop with 2 cm of water over it -> none","fn":"ghostCutY","args":[3,3.02],"expect":null},
+    {"label":"[30] a scene placement at 0.055 under a lake at 0.30 -> cut 0.30","fn":"ghostCutY","args":[0.054999999999999716,0.3],"expect":0.3},
+    {"label":"[30] ...and 3.5 cm of water over the same placement -> none","fn":"ghostCutY","args":[0.054999999999999716,0.09],"expect":null},
+    {"label":"[30] RED: the old level-only gate ghosted the bank diorama","fn":"ghostCutY","args":[12,12.772],"expect":12.772},
+    {"label":"[30] lift -> corridor","fn":"elevatorTargetRoom","args":[-1,[{"level":-1,"pos":{"x":3,"z":-3}},{"level":0,"pos":{"x":3,"z":-3}}],[{"id":"k1","level":-1,"center":{"x":-2.5,"z":-2.5}},{"id":"__floor__-1","level":-1,"center":{"x":3,"z":-3},"floor":true},{"id":"eg","level":0,"center":{"x":-2,"z":-2.5}}]],"expect":"__floor__-1"},
+    {"label":"[30] storey without corridor -> nearest room","fn":"elevatorTargetRoom","args":[0,[{"level":-1,"pos":{"x":3,"z":-3}},{"level":0,"pos":{"x":3,"z":-3}}],[{"id":"k1","level":-1,"center":{"x":-2.5,"z":-2.5}},{"id":"__floor__-1","level":-1,"center":{"x":3,"z":-3},"floor":true},{"id":"eg","level":0,"center":{"x":-2,"z":-2.5}}]],"expect":"eg"},
+    {"label":"[30] levels served count the corridor","fn":"elevatorLevels","args":[[{"level":-1,"pos":{"x":3,"z":-3}},{"level":0,"pos":{"x":3,"z":-3}}],[{"id":"k1","level":-1,"center":{"x":-2.5,"z":-2.5}},{"id":"__floor__-1","level":-1,"center":{"x":3,"z":-3},"floor":true},{"id":"eg","level":0,"center":{"x":-2,"z":-2.5}}]],"expect":[-1,0]},
+    {"label":"[30] both storeys have a stop AND a room","fn":"elevatorLevels","args":[[{"level":0,"pos":{"x":2,"z":0}},{"level":1,"pos":{"x":2,"z":0}}],[{"id":"hall","level":0,"center":{"x":0,"z":0}},{"id":"store","level":0,"center":{"x":8,"z":0}},{"id":"attic","level":1,"center":{"x":1,"z":0}},{"id":"loft","level":1,"center":{"x":6,"z":0}}]],"expect":[0,1]},
+    {"label":"[30] a stop on a storey without a room does not count","fn":"elevatorLevels","args":[[{"level":0,"pos":{"x":2,"z":0}},{"level":1,"pos":{"x":2,"z":0}},{"level":2,"pos":{"x":2,"z":0}}],[{"id":"hall","level":0,"center":{"x":0,"z":0}},{"id":"store","level":0,"center":{"x":8,"z":0}},{"id":"attic","level":1,"center":{"x":1,"z":0}},{"id":"loft","level":1,"center":{"x":6,"z":0}}]],"expect":[0,1]},
+    {"label":"[30] the ride ends in the room nearest that storey's stop","fn":"elevatorTargetRoom","args":[1,[{"level":0,"pos":{"x":2,"z":0}},{"level":1,"pos":{"x":2,"z":0}}],[{"id":"hall","level":0,"center":{"x":0,"z":0}},{"id":"store","level":0,"center":{"x":8,"z":0}},{"id":"attic","level":1,"center":{"x":1,"z":0}},{"id":"loft","level":1,"center":{"x":6,"z":0}}]],"expect":"attic"},
+    {"label":"[30] ...and downwards likewise","fn":"elevatorTargetRoom","args":[0,[{"level":0,"pos":{"x":2,"z":0}},{"level":1,"pos":{"x":2,"z":0}}],[{"id":"hall","level":0,"center":{"x":0,"z":0}},{"id":"store","level":0,"center":{"x":8,"z":0}},{"id":"attic","level":1,"center":{"x":1,"z":0}},{"id":"loft","level":1,"center":{"x":6,"z":0}}]],"expect":"hall"},
+    {"label":"[30] r1 prefers its outside door over the party wall it is listed after","fn":"roomDoorValue","args":[[{"$fixture":"DOORS"},"r1"],["mid"]],"expect":{"x":-1,"z":-2}},
+    {"label":"[30] r2 takes its outside door over both party walls","fn":"roomDoorValue","args":[[{"$fixture":"DOORS"},"r2"],["mid"]],"expect":{"x":3,"z":-2}},
+    {"label":"[30] the tile centre applies here too","fn":"roomDoorValue","args":[[{"$fixture":"DOORS"},"r3",{"x":40,"z":-20}],["mid"]],"expect":{"x":45,"z":-21}},
+    {"label":"[30] a room without any doorway has none","fn":"roomDoor","args":[{"$fixture":"DOORS"},"nope"],"expect":null},
+    {"label":"[30] and neither has no room at all","fn":"roomDoor","args":[{"$fixture":"DOORS"},""],"expect":null},
+    {"label":"[30] no payload, no door","fn":"roomDoor","args":[null,"r1"],"expect":null},
+    {"label":"[30] the order of the two rooms does not matter","fn":"doorwayBetweenValue","args":[[{"$fixture":"DOORS"},"r2","r1"],["mid"]],"expect":{"x":2,"z":0}},
+    {"label":"[30] r1 and r3 share no wall","fn":"doorwayBetween","args":[{"$fixture":"DOORS"},"r1","r3"],"expect":null},
+    {"label":"[30] a room is not joined to itself","fn":"doorwayBetween","args":[{"$fixture":"DOORS"},"r1","r1"],"expect":null},
+    {"label":"[30] an unknown room joins nothing","fn":"doorwayBetween","args":[{"$fixture":"DOORS"},"r1","nope"],"expect":null},
+    {"label":"[30] the hull door joins the hallway to no room","fn":"doorwayBetween","args":[{"$fixture":"DOORS"},"__floor__0","r1"],"expect":null},
+    {"label":"[30] the tile centre applies here too (72)","fn":"doorwayBetweenValue","args":[[{"$fixture":"DOORS"},"r2","r3",{"x":40,"z":-20}],["mid"]],"expect":{"x":45,"z":-21}},
+    {"label":"[30] bed 3: swimmer root","fn":"floatRootY","args":[3,3,0.35],"expect":3.35},
+    {"label":"[30] bed 3: treader root","fn":"floatRootY","args":[3,3,1.3],"expect":4.3},
+    {"label":"[30] bed 3: swimmer body","fn":"floatBodyY","args":[3,3,0.35],"expect":3},
+    {"label":"[30] bed 3: treader body","fn":"floatBodyY","args":[3,3,1.3],"expect":3},
+    {"label":"[30] bed 2.65: swimmer root","fn":"floatRootY","args":[2.65,3,0.35],"expect":3},
+    {"label":"[30] bed 2.65: treader root","fn":"floatRootY","args":[2.65,3,1.3],"expect":3.95},
+    {"label":"[30] bed 2.65: swimmer body","fn":"floatBodyY","args":[2.65,3,0.35],"expect":2.65},
+    {"label":"[30] bed 2.65: treader body","fn":"floatBodyY","args":[2.65,3,1.3],"expect":2.65},
+    {"label":"[30] bed 1.7: swimmer root","fn":"floatRootY","args":[1.7,3,0.35],"expect":3},
+    {"label":"[30] bed 1.7: treader root","fn":"floatRootY","args":[1.7,3,1.3],"expect":3},
+    {"label":"[30] bed 1.7: swimmer body","fn":"floatBodyY","args":[1.7,3,0.35],"expect":2.65},
+    {"label":"[30] bed 1.7: treader body","fn":"floatBodyY","args":[1.7,3,1.3],"expect":1.7},
+    {"label":"[30] bed 1: swimmer root","fn":"floatRootY","args":[1,3,0.35],"expect":3},
+    {"label":"[30] bed 1: treader root","fn":"floatRootY","args":[1,3,1.3],"expect":3},
+    {"label":"[30] bed 1: swimmer body","fn":"floatBodyY","args":[1,3,0.35],"expect":2.65},
+    {"label":"[30] bed 1: treader body","fn":"floatBodyY","args":[1,3,1.3],"expect":1.7},
+    {"label":"[30] ...and out in the open it is clamped, not neutralised","fn":"terrainPace","args":[0,"wilderness"],"expect":0.25},
+    {"label":"[30] a crawling 0.1 is clamped in an open place as well","fn":"terrainPace","args":[0.1,"open"],"expect":0.25},
+    {"label":"[30] ...and 0.2 outside","fn":"terrainPace","args":[0.2,"wilderness"],"expect":0.25},
+    {"label":"[30] ...and outside it the clamp","fn":"terrainPace","args":[-1,"wilderness"],"expect":0.25},
+    {"label":"[30] r3 has no outside door, so its party wall answers","fn":"roomDoor","args":[{"$fixture":"DOORS"},"r3"],"expect":{"mid":{"x":5,"z":-1},"width":0.9}},
+    {"label":"[30] the hallway takes its hull door as the way out","fn":"roomDoor","args":[{"$fixture":"DOORS"},"__floor__0"],"expect":{"mid":{"x":0,"z":-3},"width":1.2}},
+    {"label":"[30] r1 and r2 are joined by the party wall","fn":"doorwayBetween","args":[{"$fixture":"DOORS"},"r1","r2"],"expect":{"mid":{"x":2,"z":0},"roomIds":["r1","r2"]}}
+  ]
+}

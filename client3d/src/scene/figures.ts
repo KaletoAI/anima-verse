@@ -1,3 +1,4 @@
+import { facingYaw, easeNpcYaw } from '../game/npcWalk';
 import { createFocusQueue } from '../game/focusQueue';
 import { commitInListOrder } from '../game/clipCommit';
 import type { ClipResult } from '../game/clipCommit';
@@ -2504,8 +2505,8 @@ export class Figure {
    *  (`holdsFacing`) the turn is only remembered — `snap` included — and
    *  eased into once the bridge has ended. */
   faceTowards(dir: THREE.Vector3, snap = false) {
-    if (dir.lengthSq() < 1e-6) return;
-    const yaw = Math.atan2(dir.x, dir.z);
+    const yaw = facingYaw(dir);
+    if (yaw === null) return;
     if (this.holdsFacing) {
       this.pendingYaw = yaw;
       return;
@@ -2639,10 +2640,7 @@ export class Figure {
       this.pendingYaw = null;
     }
     // take the shortest way round
-    let d = this.targetYaw - this.root.rotation.y;
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    this.root.rotation.y += d * Math.min(1, dt * 10);
+    this.root.rotation.y = easeNpcYaw(this.root.rotation.y, this.targetYaw, dt);
     this.mixer.update(dt);
     // Rules 2 and 3 of the root motion (see `travelBase`): the instance
     // follows the running bridge's travel, read at the action's OWN time — on
