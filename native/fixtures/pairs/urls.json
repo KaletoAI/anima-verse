@@ -1,0 +1,17 @@
+{
+ "/assets/animation-rig": "repo:shared/models/rig/reference.fbx",
+ "/assets/surface-textures/ground_grass.png": "../ground_grass.png",
+ "/assets/surface-textures/dark_stone_2.jpg": "repo:shared/surface_textures/dark_stone_2_1785267141.jpg",
+ "/characters/Mia/model3d/file?v=pairsmia0001": "repo:static/client3d/models/Test3_mia.glb",
+ "/characters/Sol/model3d/file?v=pairssol0001": "repo:static/client3d/models/Soldier.glb",
+ "/characters/Box%20Low/model3d/file?v=pairsbox0001": "low_box.glb",
+ "/assets/animation-clips/idle.fbx?v=pairsidle": "repo:shared/models/clips/idle.fbx",
+ "/assets/animation-clips/walk.fbx?v=pairswalk": "repo:shared/models/clips/walk.fbx",
+ "/assets/animation-clips/sitting-at-the-table.fbx?v=pairssittingatt": "repo:shared/models/clips/sitting-at-the-table.fbx",
+ "/assets/animation-clips/get-up-chair.fbx?v=pairsgetupchair": "repo:shared/models/clips/get-up-chair.fbx",
+ "/assets/animation-clips/greeting-handshake__a.fbx?v=pairsgreetingha": "repo:shared/models/clips/greeting-handshake__a.fbx",
+ "/assets/animation-clips/greeting-handshake__b.fbx?v=pairsgreetingha": "repo:shared/models/clips/greeting-handshake__b.fbx",
+ "/assets/animation-clips/greeting-hug__a.fbx?v=pairsgreetinghu": "repo:shared/models/clips/greeting-hug__a.fbx",
+ "/assets/animation-clips/greeting-hug__b.fbx?v=pairsgreetinghu": "repo:shared/models/clips/greeting-hug__b.fbx",
+ "/assets/animation-clips/comforting__b.fbx?v=pairscomforting": "repo:shared/models/clips/comforting__b.fbx"
+}

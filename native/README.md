@@ -290,6 +290,7 @@ Arguments after `--` (no .env; all optional):
 | `--check placement` | only the room placement section (`Check/PlacementCheck.cs` on `fixtures/placement`: seats, sit/lie surfaces, server points at the room floor, corridor stand, huddle on the tile ground, storey switch, closed interior, the fallback pool), then exit 0/1 |
 | `--check walk` | only the NPC walk section (`Check/WalkCheck.cs` on `fixtures/walk`: neighbour facing, treading water with the root eased to the mirror and the ghost, a door route, a 10 m run, a stair ride, swimming), then exit 0/1 |
 | `--check bridges` | only the bridge-clip section (`Check/BridgeCheck.cs` on `fixtures/bridges`: get-up-chair / get-up-bed re-locked, pinned, lifted and turned per rig, planted feet measured on the rendered bones, the hand-over and the kept spot, a ramping start-walk, the deadline), then exit 0/1 |
+| `--check pairs` | only the pair-clip section (`Check/PairCheck.cs` on `fixtures/pairs`: the halves' root paths, the anchor transform on the ground / a seat / a room, lockstep and the 0.3 s resync, a frozen world, the solo fallback, a handshake ending a bridge, the one-shot's end, the bind anchoring of every body), then exit 0/1 |
 | `--check figures` | only the figure section (`Check/CheckRunner.cs` `CheckFigures` on the fixture world: whole library, set chain, actions and aliases, activity clips, one-shot hold, model revision, model queue, tiers 25/35, the importer cross-check `rest_reference.json`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
@@ -874,10 +875,32 @@ to `Core/Figures/NpcWalk.cs` (vectors `npc_walk.json`, `npc_ground.json`), `Core
   `floatRootY` = max(bed + sink, mirror), eased ×4/s; the underwater ghost is cut at the UNGATED mirror over the bed.
 - **Stairs** (ruling P3-R9: `rideStep` ported here, E7 reuses it for the avatar): once the start landing is reached the
   ride owns the height — the ramp along the run — and it ends at the far landing.
-- Not yet: bridges and root motion (Task 31), pair clips (Task 32), journey routes and dead reckoning (E6), the
-  player-driven figure and first person (E7).
+- Not yet: journey routes and dead reckoning (E6), the player-driven figure and first person (E7).
 - `--check walk` (`Check/WalkCheck.cs`, `fixtures/walk/`, README there); `--offline` logs `offline walk …` lines: a
   figure moved 12 m over open ground, into the first painted water, and a room figure sent to another storey.
+
+### Pair clips and bind anchoring (Task 32)
+
+A worldmap row's `interaction` (§ A8a) runs the browser's pair (npcs.ts `adoptInteraction` / `tickInteraction`,
+figures.ts `playPair`; core `Core/Figures/PairClip.cs`, vectors `pair_clip_phase.json`, `pair_clip_geometry.json`,
+`pair_height.json`):
+- **Adoption** per poll (the stamp is the poll count: the 1 Hz pass over the cached map reconciles nothing): a new id
+  adopts the clip clock `elapsed_s / rate` and drops the figure's stations and climb; the same id takes rate and anchor
+  at once and snaps its local clock only when a NEW poll is more than 0.3 s off.
+- **Every frame**: the clip clock runs in REAL seconds while `rate > 0` (frozen = the player stands, `SpeedScale 0`);
+  the half `<kind>__<role>` plays at the phase (cycle wrapped, one-shot clamped a millisecond short of its end) and
+  re-seeks only beyond 0.2 s of drift; a running bridge ends there and its travel is dropped; the root stands at
+  `anchor + R_y(yaw) · pairRootAt(phase)` — at the place's first slot when the anchor names one, else the room's stand
+  (`roomStandY`), else the ground — and turns to the anchor's yaw. A half the library lacks (or a rig without a player)
+  falls back to the ordinary placement and the solo clip.
+- **The root path** of a half is its hips XZ (`extractRootPath`) — METRES as Godot imports the clip (the browser's
+  FBXLoader keeps Mixamo centimetres and divides by 100); a still-standing half whose constant hips curve Godot dropped
+  gets the one key of its node default.
+- **Bind anchoring** (ruling P3-R14, the Figure constructor / `anchorFigureBind`, vector `figure_normalisation.json`):
+  every model body is centred on its SKINNED bind box in XZ with its lowest point on the root (`FigureBind.Offset`);
+  the bridges' travel base and the body's `groundY` carry it. Test3_mia's mesh had its origin in the middle: it stood
+  0.85 m deep in the ground before.
+- `--check pairs` (`Check/PairCheck.cs`, `fixtures/pairs/`, README there).
 
 ### § B5a verify (Task 15)
 

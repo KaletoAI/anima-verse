@@ -94,6 +94,16 @@ public partial class FigureManager : Node3D
     /// footprint, the world outside — <see cref="World.WorldBuilder.FigureGroundY"/>); null = the world height.
     /// </summary>
     public Func<double, double, double>? GroundYAt { get; set; }
+    /// <summary>
+    /// main.ts <c>npcs.setPlaceAt</c>: the slot height of a place a pair is seated on — (the character's room, the place
+    /// id, anchor x, z) → slot 0's y, null = unknown (<see cref="World.WorldBuilder.PairSeatY"/>); null = no lookup.
+    /// </summary>
+    public Func<string, string, double, double, double?>? SeatYAt { get; set; }
+    /// <summary>
+    /// main.ts <c>npcs.setRoomStandAt</c>: the standing height of the character's room at a point (null = none,
+    /// <see cref="World.WorldBuilder.PairRoomStandY"/>); null = no lookup (every pair on the ground).
+    /// </summary>
+    public Func<string, double, double, double?>? RoomStandAt { get; set; }
 
     public ClipLibrary Clips { get; }
     public FigureStats Stats { get; } = new();
@@ -108,6 +118,8 @@ public partial class FigureManager : Node3D
         public required Node3D Root { get; init; }
         public required double RawHeight { get; init; }
         public required string Url { get; init; }
+        /// <summary>The bind box (three's <c>Box3.setFromObject</c>, skinned rest pose, the Z-up fix included); null = no mesh.</summary>
+        public (V3 Min, V3 Max)? BindBox { get; init; }
         public AnimationLibrary? Library { get; init; }
         /// <summary>The action kinds in <see cref="Library"/>, in action order (the figure's fallback is the first).</summary>
         public IReadOnlyList<string> Kinds { get; init; } = Array.Empty<string>();
@@ -310,6 +322,7 @@ public partial class FigureManager : Node3D
     private void ApplyPlan(Figure fig, FigurePlan plan, bool fresh)
     {
         fig.Rule = plan.Rule;
+        AdoptInteraction(fig);
         // THE GOAL: the server's point — or, after a stand-up, the spot the bridge left the figure on, for as long as the
         // server sends the SAME point (settleOffset against the kept server point); a different one voids the spot.
         if (fig.Settle is { } kept)
@@ -349,6 +362,20 @@ public partial class FigureManager : Node3D
         fig.ApplyRotation();
         fig.SetHidden(plan.Hidden);
         fig.Travelling = _rowByName.TryGetValue(fig.CharacterName, out var row) && row.Travelling;
+    }
+
+    /// <summary>
+    /// npcs.ts <c>adoptInteraction</c> from the row's <c>interaction</c> (§ A8a), stamped with the poll it came from (the
+    /// 1 Hz pass re-reads the SAME payload and reconciles nothing): a NEW interaction drops the stations and the climb —
+    /// the anchor places the figure, not a walk.
+    /// </summary>
+    private void AdoptInteraction(Figure fig)
+    {
+        var it = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.Interaction : null;
+        fig.Pair = PairPlay.Adopt(fig.Pair, it, Stats.Polls, out bool fresh);
+        if (!fresh) return;
+        fig.Waypoints.Clear();
+        fig.Ride = null;
     }
 
     /// <summary>
@@ -421,6 +448,8 @@ public partial class FigureManager : Node3D
 
     private void StepFigure(Figure fig, double dt, Vec3? neighbour, double camDist)
     {
+        // A running pair interaction places the figure and plays its half (npcs.ts: `tickInteraction` before anything).
+        if (fig.Pair is not null && TickPair(fig, dt)) return;
         // BRIDGE TRAVEL WITHOUT A ROUTE (rule 4, figures.ts travelBase): the bridge has ended and its body stands where
         // the clip carried it — the root moves there now, the body on screen does not move. The GOAL does not move with
         // it: it is the server's stand point (seat + travel); near it the NPC keeps the spot it stands on.
@@ -489,6 +518,31 @@ public partial class FigureManager : Node3D
                     plan.Moving || standIdle.Length > 0, standSink, rootYBefore, goalY);
         fig.UpdateFigure(dt);
         fig.Portrait?.Tick(dt, camDist, plan.Moving);
+    }
+
+    /// <summary>
+    /// npcs.ts <c>tickInteraction</c>: one frame of a pair interaction — the clock advances (<see cref="PairPlay.Advance"/>),
+    /// the half plays at the phase (<see cref="Figure.PlayPair"/>, which also ends a running bridge; a travel nobody took
+    /// is dropped: the ANCHOR places the figure), the root stands at <c>anchor + R_y(yaw)·pairRootAt(phase)</c> at the
+    /// place's slot height, else the room's stand, else the ground (<see cref="PairPlay.Place"/>), turned to the anchor's
+    /// yaw. False when the figure has no rig or the half is not loaded / bound: the ordinary placement and a solo clip.
+    /// </summary>
+    private bool TickPair(Figure fig, double dt)
+    {
+        var it = fig.Pair!;
+        if (fig.Player is null || fig.Portrait is not null) return false;
+        double phase = it.Advance(dt);
+        if (Clips.PairRootAt(it.Clip, phase) is not { } root) return false;
+        if (!fig.PlayPair(it.Clip, phase, it.Rate <= 0, it.Loop)) return false;
+        if (fig.HoldsTravel) fig.TakeTravel();
+        var room = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.RoomId : "";
+        var at = it.Place(root, (id, x, z) => SeatYAt?.Invoke(room, id, x, z),
+                          (x, z) => RoomStandAt?.Invoke(room, x, z),
+                          (x, z) => GroundYAt?.Invoke(x, z) ?? _height.GroundAt(x, z));
+        fig.Position = new Vector3((float)at.X, (float)at.Y, (float)at.Z);
+        fig.SetYaw(it.Anchor.Yaw);
+        fig.UpdateFigure(dt);
+        return true;
     }
 
     /// <summary>
@@ -806,13 +860,17 @@ public partial class FigureManager : Node3D
         // three's Box3.setFromObject: a skinned mesh counts in its SKINNED rest pose (BridgeFit.BindBox), not by its
         // mesh-space AABB — a rig whose bind poses carry the armature's scale or turn (Xbot, Test3_mia) is 100× off
         // and lying down by the plain AABB.
-        var size = BridgeFit.BindBox(root).Size;
-        if (size.Z > size.Y * 1.5f)   // stand a Z-up export upright (buildModel)
+        var box = BridgeFit.BindBox(root);
+        if (box.Size.Z > box.Size.Y * 1.5f)   // stand a Z-up export upright (buildModel)
         {
             root.Rotation = new Vector3(-Mathf.Pi / 2f, 0, 0);
-            size = BridgeFit.BindBox(root).Size;
+            box = BridgeFit.BindBox(root);
         }
+        var size = box.Size;
         double raw = Math.Max(size.Y, 0.01);
+        // The Figure constructor's anchoring box (`!box.isEmpty()`: a model without a mesh is not anchored).
+        (V3 Min, V3 Max)? bind = Walk(root).OfType<MeshInstance3D>().Any(m => m.Mesh is not null)
+            ? (new V3(box.Position.X, box.Position.Y, box.Position.Z), new V3(box.End.X, box.End.Y, box.End.Z)) : null;
         var skel = ClipLibrary.Find<Skeleton3D>(root);
         // The file's own takes (`clips: rig === 'none' ? [] : gltf.animations`): taken out of the import's player, kept
         // per kind with the server's loop flag of the exact take name — for server models and the pool alike.
@@ -820,10 +878,10 @@ public partial class FigureManager : Node3D
         if (info.Rig == "none") own.Clear();
         if (info.Rig != "mixamo" || skel is null || skel.GetBoneCount() == 0)
         {
-            if (own.Count == 0) return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1 };
+            if (own.Count == 0) return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, BindBox = bind };
             var ownLib = new AnimationLibrary();
             foreach (var (kind, anim) in own) ownLib.AddAnimation(kind, anim);
-            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, Library = ownLib, Kinds = own.Select(o => o.Kind).ToList() };
+            return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1, Library = ownLib, Kinds = own.Select(o => o.Kind).ToList(), BindBox = bind };
         }
 
         await Clips.WaitClipsAsync();
@@ -887,7 +945,7 @@ public partial class FigureManager : Node3D
              + (fixes is not null ? $"{fixes.Count} bones rest-corrected" : "no rig: verbatim copy") + $", stand ref {standSource}");
         return new ModelTemplate
         {
-            Root = root, RawHeight = raw, Url = url, Library = lib, Kinds = kinds, ClipSets = setOf, BoundTracks = tracks,
+            Root = root, RawHeight = raw, Url = url, BindBox = bind, Library = lib, Kinds = kinds, ClipSets = setOf, BoundTracks = tracks,
             Unbound = missing.Count, Corrected = fixes?.Count ?? -1, Keys = keys, ClipBytes = clipBytes, FitMs = fitMs,
             LibraryFits = bound.Count > 0, Extras = extras,
         };
@@ -1051,7 +1109,9 @@ public partial class FigureManager : Node3D
         fig.Clock = () => _clock;
         fig.LoadedUrl = t.Url;
         fig.LoadedTier = tier;
-        fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds);
+        // figures.ts Figure constructor: the body centred on its bind box in XZ, its lowest point on the root (P3-R14).
+        V3? bind = t.BindBox is { } bb ? FigureBind.Offset(bb.Min, bb.Max, scale) : null;
+        fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds, bind);
     }
 
     // ---- the fallback pool and the portrait (Task 29, ruling P3-R10) -------------------------------------------------

@@ -166,6 +166,29 @@ public sealed partial class WorldBuilder
         => TileAt(x, z) is { } t ? t.Slot.Stands.TileGroundY(x, z) : Height?.GroundAt(x, z) ?? 0;
 
     /// <summary>
+    /// main.ts <c>npcs.setPlaceAt</c> for a pair seated on a PLACE (§ A8a <c>anchor.place_id</c>): in the tile under the
+    /// anchor, the marker <paramref name="placeId"/> of the character's room — the height of its first slot (the slots of
+    /// one place share it); null when the room, the tile or the marker is unknown (or it has no slot).
+    /// </summary>
+    public double? PairSeatY(string room, string placeId, double x, double z)
+    {
+        if (room.Length == 0 || TileAt(x, z) is not { } t) return null;
+        return t.Slot.Places.Markers.TryGetValue(room, out var byId) && byId.TryGetValue(placeId, out var entry)
+               && entry.Slots.Length > 0 ? entry.Slots[0].Y : null;
+    }
+
+    /// <summary>
+    /// main.ts <c>npcs.setRoomStandAt</c> for a pair that met halfway: the standing height of the character's ROOM in the
+    /// tile under the point (<c>roomStandY</c> at its tile-local point) — the storey it is on, not the terrain under the
+    /// building; null without a room or a tile.
+    /// </summary>
+    public double? PairRoomStandY(string room, double x, double z)
+    {
+        if (room.Length == 0 || TileAt(x, z) is not { } t) return null;
+        return t.Slot.Stands.RoomStandY(room, t.Local.X, t.Local.Z);
+    }
+
+    /// <summary>
     /// main.ts <c>setTerrainMove</c>: what the ground says at a world point for the walking figure — ground.ts
     /// <c>typeAt</c> (movement word, sinks, mirror, swim threshold, speed), the scope (<see cref="ScopeAt"/>) and a prop
     /// water region over the point (<see cref="PropWaterAt"/>) carrying the gate bed it is measured against

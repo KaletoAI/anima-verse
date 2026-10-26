@@ -149,6 +149,9 @@ public partial class Main : Node3D
                 // main.ts setTerrainMove + setGroundHeight: the ground word and the height sampler every figure walks on.
                 GroundMoveAt = builder.FigureGroundMove,
                 GroundYAt = builder.FigureGroundY,
+                // npcs.setPlaceAt / setRoomStandAt: a pair's seat height and its room's stand (§ A8a).
+                SeatYAt = builder.PairSeatY,
+                RoomStandAt = builder.PairRoomStandY,
                 // npcs.tickFigureTiers(camera.position) and setModelFocus (distance² to engine.target), main.ts.
                 CameraPosition = () => _camera is { } c && IsInstanceValid(c) ? c.GlobalPosition : null,
                 FocusTarget = () => _camera is { } c && IsInstanceValid(c) ? c.Target : null,

@@ -263,7 +263,10 @@ public static class BridgeCheck
     private static double MaxFootMoveCm(Sample a, Sample b)
         => Points.Where(a.Feet.ContainsKey).Max(k => Flat(a.Feet[k] - b.Feet[k]) * 100);
 
-    /// <summary>The rig's rest floor in the figure's root frame: the lowest foot bone of the bind pose × the body scale.</summary>
+    /// <summary>
+    /// The rig's rest floor in the figure's root frame: the lowest foot bone of the bind pose × the body scale, on the
+    /// body's bind anchoring height (<c>groundY</c>: the mesh's lowest point on the root, Task 32).
+    /// </summary>
     private static double RestFloorM(Figure f)
     {
         var skel = f.Skeleton!;
@@ -274,7 +277,7 @@ public static class BridgeCheck
         double floor = double.PositiveInfinity;
         foreach (var k in Points.Concat(new[] { "lefttoe_end", "righttoe_end" }))
             if (byKey.TryGetValue(k, out int b)) floor = Math.Min(floor, pose.WorldPosition(b).Y);
-        return floor * f.BaseScale;
+        return floor * f.BaseScale + f.BindOffset.Y;
     }
 
     /// <summary>
@@ -296,7 +299,7 @@ public static class BridgeCheck
         foreach (var k in Points)
         {
             if (!byKey.TryGetValue(k, out int b) || frames.Count < 3) continue;
-            double rest = (pose.WorldPosition(b).Y * f.BaseScale - floorM) * 100;
+            double rest = (pose.WorldPosition(b).Y * f.BaseScale + f.BindOffset.Y - floorM) * 100;
             var h = frames.Select(s => (s.Feet[k].Y - s.Root.Y - floorM) * 100).ToArray();
             var sorted = h.OrderBy(x => x).ToArray();
             double ground = Math.Min(sorted[Math.Min(sorted.Length - 1, (int)Math.Floor(0.05 * (sorted.Length - 1)))], rest);

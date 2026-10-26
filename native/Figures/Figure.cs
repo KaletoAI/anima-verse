@@ -202,8 +202,10 @@ public partial class Figure : Node3D
 
     /// <summary>Swap the body. The old one is freed (it owns its duplicated meshes/skeleton).</summary>
     /// <param name="clipKinds">the kinds the player's library holds, in bind order (null without a player).</param>
+    /// <param name="bindOffset">the Figure constructor's anchoring (<see cref="FigureBind.Offset"/>: centred on the bind box
+    /// in XZ, its bottom on 0) in the root frame; null = the body already stands on its origin (capsule, portrait).</param>
     public void SetBody(Node3D body, bool isGlb, Skeleton3D? skeleton, AnimationPlayer? player,
-                        IReadOnlyList<string>? clipKinds = null)
+                        IReadOnlyList<string>? clipKinds = null, V3? bindOffset = null)
     {
         Ghost?.Dispose();
         Body?.QueueFree();
@@ -222,6 +224,9 @@ public partial class Figure : Node3D
         _sink = 0;
         Drop = 0;
         ResetBridges();
+        var bind = bindOffset ?? V3.Zero;
+        _travelBase = new P2(bind.X, bind.Z);
+        _groundY = bind.Y;
         AddChild(body);
         ApplyBody();
         UpdateClip();
@@ -300,8 +305,10 @@ public partial class Figure : Node3D
     private double _animTime;
     private double? _pendingYaw;
     // Root motion of a holding bridge (figures.ts `travelBase` … `holding`): the instance follows the travel, the
-    // owner takes it over (`TakeTravel`). The native body has no bind-box centring, so the base is the origin.
+    // owner takes it over (`TakeTravel`). The base is where the bind anchoring put the body in XZ (centred on its box).
     private P2 _travelBase = new(0, 0);
+    /// <summary>figures.ts <c>groundY</c>: the body's height that puts its lowest bind point on the root (feet on y = 0).</summary>
+    private double _groundY;
     private RootPath? _travelPath;
     private BridgeRun? _travelAction;
     private P2 _travelOrigin = new(0, 0);
@@ -317,6 +324,8 @@ public partial class Figure : Node3D
     private BridgeLiftSpec? _liftSpec;
     private double _liftStart, _lift, _liftCarry, _liftCarryAt;
 
+    /// <summary>The body's bind anchoring in the root frame (x, z = the centring base, y = <c>groundY</c>), for the check.</summary>
+    public V3 BindOffset => new(_travelBase.X, _groundY, _travelBase.Z);
     /// <summary>The lift applied right now (metres over the root), for the check.</summary>
     public double Lift => _lift;
     /// <summary>The instance's horizontal offset from its base in the root frame (the held travel, turned back by ψ).</summary>
@@ -384,6 +393,61 @@ public partial class Figure : Node3D
         Player.Play(resolved, ClipLibraryRules.CrossfadeS);
         CurrentClip = resolved;
     }
+
+    // ---- pair clips (figures.ts playPair, npcs.ts PairPlay, Task 32) -------------------------------------------------
+
+    /// <summary>The running pair interaction (npcs.ts <c>npc.interaction</c>): placement AND clip come from it; null = none.</summary>
+    public PairPlay? Pair { get; set; }
+
+    /// <summary>
+    /// <c>playPair(clipName, t, frozen, loop)</c>: play the half of a PAIR clip at the clip time <paramref name="t"/> (REAL
+    /// seconds, the phase <see cref="PairClip.Phase"/> derived). The pair takes the body over: a running bridge ends HERE
+    /// (its clip fades out), the ground drop is 0. The time is wrapped (cycle) or clamped a millisecond short of the end
+    /// (one-shot) against the length the loaded clip has; a new half starts with the 0.25 s fade at that time, the same
+    /// half re-seeks only when its own time drifted more than <see cref="PairClip.ResyncS"/> (measured on the circle for
+    /// a cycle). <paramref name="frozen"/> stops the player where it stands. False when the half is not bound on this rig.
+    /// </summary>
+    public bool PlayPair(string clipName, double t, bool frozen, bool loop)
+    {
+        if (Player is not { } p || !HasAction(clipName)) return false;
+        ReleaseBridge();
+        SetClipDrop(0);
+        _terrainClip = false;
+        _sink = 0;
+        var anim = p.GetAnimation(clipName);
+        double duration = anim.Length > 0 ? anim.Length : 1;
+        double clipT = Math.Max(t, 0);
+        double want = loop ? clipT % duration : Math.Min(clipT, duration - 1e-3);
+        if (CurrentClip != clipName)
+        {
+            // three sets the loop on the ACTION; Godot keeps it on the Animation, which the template's figures share —
+            // every one of them reads the same listing / interaction flag for this half.
+            var mode = loop ? Animation.LoopModeEnum.Linear : Animation.LoopModeEnum.None;
+            if (anim.LoopMode != mode) anim.LoopMode = mode;
+            if (_currentRun is { } run) run.FadeOutAt ??= _animTime;
+            _currentRun = null;
+            p.Play(clipName, ClipLibraryRules.CrossfadeS);
+            p.Seek(want, false);
+            CurrentKind = clipName;
+            CurrentClip = clipName;
+        }
+        else
+        {
+            double raw = Math.Abs(p.CurrentAnimationPosition - want);
+            if ((loop ? Math.Min(raw, duration - raw) : raw) > PairClip.ResyncS)
+            {
+                // A one-shot that ran out stopped (clampWhenFinished holds its last frame): restart it for the seek.
+                if (!p.IsPlaying()) p.Play(clipName);
+                p.Seek(want, false);
+            }
+        }
+        CurrentPace = 1;
+        p.SpeedScale = frozen ? 0 : 1;
+        return true;
+    }
+
+    /// <summary>The time the figure's player stands at (the action's own clock), for the check; NaN without a clip.</summary>
+    public double ClipTime => Player is { } p && CurrentClip.Length > 0 ? p.CurrentAnimationPosition : double.NaN;
 
     /// <summary>The bridge branch of <c>play</c>: the gate, the deadline, the held facing, the travel and the turn.</summary>
     private void StartBridge(string via, double accel)
@@ -587,7 +651,7 @@ public partial class Figure : Node3D
         ApplyBody();
     }
 
-    /// <summary>The body: <c>(base + offset).xz</c>, height <c>−drop + lift</c> (a portrait never drops).</summary>
+    /// <summary>The body: <c>(base + offset).xz</c>, height <c>groundY − drop + lift</c> (a portrait never drops).</summary>
     private void ApplyBody()
     {
         if (Body is not { } b || !IsInstanceValid(b)) return;
@@ -597,7 +661,7 @@ public partial class Figure : Node3D
             return;
         }
         var o = InstanceOffset();
-        b.Position = new Vector3((float)(_travelBase.X + o.X), (float)(-Drop + _lift), (float)(_travelBase.Z + o.Z));
+        b.Position = new Vector3((float)(_travelBase.X + o.X), (float)(_groundY - Drop + _lift), (float)(_travelBase.Z + o.Z));
     }
 
     /// <summary>Forget every bridge (a new body): gate, travel, turn and lift.</summary>

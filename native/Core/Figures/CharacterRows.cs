@@ -45,6 +45,9 @@ public sealed record CharacterRow(
     /// </summary>
     public bool Travelling { get; init; }
 
+    /// <summary><c>interaction</c>: the running pair interaction (§ A8a); null = none (or a block without an anchor).</summary>
+    public PairInteraction? Interaction { get; init; }
+
     public static List<CharacterRow> ParseList(JsonElement root)
         => Json.Arr(root, "characters")
                .Where(c => c.ValueKind == JsonValueKind.Object)
@@ -92,7 +95,25 @@ public sealed record CharacterRow(
             MovementTargetId = Json.Str(c, "movement_target_id"),
             AvatarUrl = Json.Str(c, "avatar_url"),
             Travelling = OverviewLabels.TagTravelling(TagTravel.FromJson(c)),
+            Interaction = ParseInteraction(c),
         };
+    }
+
+    /// <summary>
+    /// § A8a <c>interaction</c> as npcs.ts <c>adoptInteraction</c> reads it: no block or no <c>anchor</c> = none;
+    /// <c>rate ?? 0</c>, <c>clip_duration_s ?? 0</c>, <c>!!loop</c>, <c>anchor.place_id ?? null</c>; a missing
+    /// <c>elapsed_s</c> is NaN (the browser's <c>undefined</c>: no server clock to adopt).
+    /// </summary>
+    private static PairInteraction? ParseInteraction(JsonElement c)
+    {
+        if (!c.TryGetProperty("interaction", out var it) || it.ValueKind != JsonValueKind.Object) return null;
+        if (!it.TryGetProperty("anchor", out var a) || a.ValueKind != JsonValueKind.Object) return null;
+        string? place = a.TryGetProperty("place_id", out var pid) && pid.ValueKind == JsonValueKind.String ? pid.GetString() : null;
+        bool loop = it.TryGetProperty("loop", out var lp) && lp.ValueKind == JsonValueKind.True;
+        return new PairInteraction(Json.Str(it, "id"), Json.Str(it, "kind"), Json.Str(it, "role"), Json.Str(it, "partner"),
+                                   new PairAnchor(Json.Num(a, "x"), Json.Num(a, "z"), Json.Num(a, "yaw"), place),
+                                   Json.NumOrNull(it, "elapsed_s") ?? double.NaN, Json.NumOrNull(it, "clip_duration_s") ?? 0,
+                                   loop, Json.NumOrNull(it, "rate") ?? 0);
     }
 }
 

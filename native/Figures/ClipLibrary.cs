@@ -212,9 +212,45 @@ public sealed class ClipLibrary
         public ClipSource Rename(ClipSource clip, string kind) => clip.Kind == kind ? clip : clip with { Kind = kind };
         public void SetFlags(ClipSource clip, ClipSourceEntry source) { /* set at import from the same entry */ }
         public bool IsPair(string kind) => ClipLibraryRules.IsPairName(kind);
-        /// <summary>The pair root path (<c>extractRootPath</c>) belongs to the pair clips (Task 32); the half is indexed now.</summary>
-        public object? PairRoot(ClipSource clip) => null;
+        /// <summary>The pair half's root path (<c>extractRootPath</c>), see <see cref="PairRootOf"/>.</summary>
+        public object? PairRoot(ClipSource clip) => PairRootOf(clip);
     }
+
+    /// <summary>
+    /// figures.ts <c>extractRootPath(clip)</c> on an imported clip: its position tracks as three would list them
+    /// (<c>&lt;bone&gt;.position</c>, flat values) through <see cref="PairClip.ExtractRootPath"/> — in METRES already, Godot's
+    /// FBX import converts the Mixamo centimetres the browser's FBXLoader keeps (the handshake's hips x: −0.366742 m here,
+    /// −36.6742 cm there). Godot drops a CONSTANT curve and keeps its value as the bone's node default, so a half that
+    /// stands still (the handshake) gets its one key from that default — the browser's constant track, one key.
+    /// </summary>
+    public static RootPath PairRootOf(ClipSource clip)
+    {
+        var tracks = new List<PairTrack>();
+        foreach (var (bone, t) in clip.PositionTracks.OrderBy(kv => kv.Value))
+        {
+            int n = clip.Anim.TrackGetKeyCount(t);
+            var times = new float[n];
+            var values = new float[n * 3];
+            for (int k = 0; k < n; k++)
+            {
+                times[k] = (float)clip.Anim.TrackGetKeyTime(t, k);
+                var v = clip.Anim.TrackGetKeyValue(t, k).AsVector3();
+                values[k * 3] = v.X; values[k * 3 + 1] = v.Y; values[k * 3 + 2] = v.Z;
+            }
+            tracks.Add(new PairTrack(bone + ".position", times, values));
+        }
+        int hips = Array.FindIndex(clip.Bones, b => NormBone(b) == "hips");
+        if (hips >= 0 && !clip.PositionTracks.ContainsKey(clip.Bones[hips]))
+        {
+            var r = clip.RestPositions[hips];
+            tracks.Add(new PairTrack(clip.Bones[hips] + ".position", new float[] { 0 }, new[] { r.X, r.Y, r.Z }));
+        }
+        return PairClip.ExtractRootPath(tracks, 1);
+    }
+
+    /// <summary><c>pairRootAt(clipName, t)</c>: a pair half's root XZ at clip time t (clip-frame metres); null when not loaded.</summary>
+    public (double X, double Z)? PairRootAt(string clipName, double t)
+        => Index.PairRoots.TryGetValue(clipName, out var p) && p is RootPath path ? BridgeTravel.RootPathAt(path, t) : null;
 
     /// <summary><c>clipsFor(name)</c>: per kind the first file along <c>[...sets, '']</c>.</summary>
     public List<ClipSource> ClipsFor(IReadOnlyList<string>? sets)

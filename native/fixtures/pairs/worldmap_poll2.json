@@ -1,0 +1,265 @@
+{
+ "avatar": "",
+ "current_location_id": "loc-inn",
+ "locations": [
+  {
+   "id": "loc-inn",
+   "name": "Inn",
+   "pos_x": 64.0,
+   "pos_z": 128.0,
+   "yaw_deg": 90.0,
+   "plan_width_m": 12.0,
+   "boundary": [
+    [
+     -6,
+     -4
+    ],
+    [
+     6,
+     -4
+    ],
+    [
+     6,
+     4
+    ],
+    [
+     -6,
+     4
+    ]
+   ],
+   "openings": []
+  }
+ ],
+ "world_props": [],
+ "world_props_sig": "pairs",
+ "events_by_location": {},
+ "world_bounds": {
+  "min_x": 10.0,
+  "min_z": 30.0,
+  "max_x": 110.0,
+  "max_z": 170.0
+ },
+ "height_sig": "fixture-s1a",
+ "fogged": false,
+ "characters": [
+  {
+   "name": "Ann Hand",
+   "location_id": "",
+   "room_id": "",
+   "pos": {
+    "x": 20.0,
+    "z": 39.5
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "ann-1",
+   "interaction": {
+    "id": "hs1",
+    "kind": "greeting-handshake",
+    "role": "a",
+    "partner": "Ben Hand",
+    "anchor": {
+     "x": 20.0,
+     "z": 40.0,
+     "yaw": -1.5707963267948966,
+     "place_id": null
+    },
+    "started_at_game": "Y0001-D001T08:00:00",
+    "elapsed_s": 2.5,
+    "clip_duration_s": 3.533,
+    "loop": false,
+    "rate": 1
+   }
+  },
+  {
+   "name": "Ben Hand",
+   "location_id": "",
+   "room_id": "",
+   "pos": {
+    "x": 20.0,
+    "z": 41.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "ben-1",
+   "interaction": {
+    "id": "hs1",
+    "kind": "greeting-handshake",
+    "role": "b",
+    "partner": "Ann Hand",
+    "anchor": {
+     "x": 20.0,
+     "z": 40.0,
+     "yaw": -1.5707963267948966,
+     "place_id": null
+    },
+    "started_at_game": "Y0001-D001T08:00:00",
+    "elapsed_s": 2.5,
+    "clip_duration_s": 3.533,
+    "loop": false,
+    "rate": 1
+   }
+  },
+  {
+   "name": "Cy Seat",
+   "location_id": "loc-inn",
+   "room_id": "r-hall",
+   "pos": {
+    "x": 63.0,
+    "z": 131.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "cy-1",
+   "interaction": {
+    "id": "hug1",
+    "kind": "greeting-hug",
+    "role": "a",
+    "partner": "Dee Seat",
+    "anchor": {
+     "x": 64.0,
+     "z": 131.0,
+     "yaw": 0.0,
+     "place_id": "bench1"
+    },
+    "started_at_game": "Y0001-D001T08:00:00",
+    "elapsed_s": 1.6,
+    "clip_duration_s": 4.033,
+    "loop": true,
+    "rate": 1
+   }
+  },
+  {
+   "name": "Dee Seat",
+   "location_id": "loc-inn",
+   "room_id": "r-hall",
+   "pos": {
+    "x": 65.0,
+    "z": 131.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "dee-1",
+   "interaction": {
+    "id": "hug1",
+    "kind": "greeting-hug",
+    "role": "b",
+    "partner": "Cy Seat",
+    "anchor": {
+     "x": 64.0,
+     "z": 131.0,
+     "yaw": 0.0,
+     "place_id": "bench1"
+    },
+    "started_at_game": "Y0001-D001T08:00:00",
+    "elapsed_s": 1.6,
+    "clip_duration_s": 4.033,
+    "loop": true,
+    "rate": 1
+   }
+  },
+  {
+   "name": "Gil Loft",
+   "location_id": "loc-inn",
+   "room_id": "r-loft",
+   "pos": {
+    "x": 63.0,
+    "z": 128.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "gil-1"
+  },
+  {
+   "name": "Hal Loft",
+   "location_id": "loc-inn",
+   "room_id": "r-loft",
+   "pos": {
+    "x": 65.0,
+    "z": 128.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "hal-1"
+  },
+  {
+   "name": "Eve Solo",
+   "location_id": "",
+   "room_id": "",
+   "pos": {
+    "x": 30.0,
+    "z": 40.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "eve-1",
+   "interaction": {
+    "id": "cf1",
+    "kind": "comforting",
+    "role": "a",
+    "partner": "Fay Solo",
+    "anchor": {
+     "x": 30.5,
+     "z": 40.0,
+     "yaw": 0.0,
+     "place_id": null
+    },
+    "started_at_game": "Y0001-D001T08:00:00",
+    "elapsed_s": 0.0,
+    "clip_duration_s": 4.833,
+    "loop": true,
+    "rate": 1
+   }
+  },
+  {
+   "name": "Fay Solo",
+   "location_id": "",
+   "room_id": "",
+   "pos": {
+    "x": 31.0,
+    "z": 40.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "fay-1",
+   "interaction": {
+    "id": "cf1",
+    "kind": "comforting",
+    "role": "b",
+    "partner": "Eve Solo",
+    "anchor": {
+     "x": 30.5,
+     "z": 40.0,
+     "yaw": 0.0,
+     "place_id": null
+    },
+    "started_at_game": "Y0001-D001T08:00:00",
+    "elapsed_s": 0.0,
+    "clip_duration_s": 4.833,
+    "loop": true,
+    "rate": 1
+   }
+  },
+  {
+   "name": "Box Low",
+   "location_id": "",
+   "room_id": "",
+   "pos": {
+    "x": 40.0,
+    "z": 40.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null,
+   "model_sig": "box-1"
+  }
+ ]
+}

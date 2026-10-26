@@ -1,0 +1,146 @@
+{
+ "Ann Hand": {
+  "signature": "ann-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Test3_mia.glb",
+   "signature": "ann-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Mia/model3d/file?v=pairsmia0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ },
+ "Ben Hand": {
+  "signature": "ben-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Soldier.glb",
+   "signature": "ben-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Sol/model3d/file?v=pairssol0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ },
+ "Cy Seat": {
+  "signature": "cy-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Test3_mia.glb",
+   "signature": "cy-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Mia/model3d/file?v=pairsmia0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ },
+ "Dee Seat": {
+  "signature": "dee-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Soldier.glb",
+   "signature": "dee-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Sol/model3d/file?v=pairssol0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ },
+ "Gil Loft": {
+  "signature": "gil-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Soldier.glb",
+   "signature": "gil-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Sol/model3d/file?v=pairssol0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ },
+ "Hal Loft": {
+  "signature": "hal-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Test3_mia.glb",
+   "signature": "hal-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Mia/model3d/file?v=pairsmia0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ },
+ "Eve Solo": {
+  "signature": "eve-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Test3_mia.glb",
+   "signature": "eve-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Mia/model3d/file?v=pairsmia0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ },
+ "Fay Solo": {
+  "signature": "fay-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Soldier.glb",
+   "signature": "fay-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Sol/model3d/file?v=pairssol0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ },
+ "Box Low": {
+  "signature": "box-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "low_box.glb",
+   "signature": "box-1",
+   "format": "glb",
+   "rig": "none",
+   "normalized": false,
+   "url": "/characters/Box%20Low/model3d/file?v=pairsbox0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ }
+}

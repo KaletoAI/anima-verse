@@ -1,0 +1,53 @@
+{
+  "signature": "placement-inn", "k": 1, "extent_m": 12, "storey_m": 3,
+  "boundary": [[-6, -4], [6, -4], [6, 4], [-6, 4]],
+  "levels": [{ "level": 0, "floor_y": 0 }, { "level": 1, "floor_y": 3 }],
+  "style": { "wall_color": "#d0c8b8", "floor_color": "#b8b0a0", "glass_color": "#9cc3e0", "glass_opacity": 0.3,
+             "upper_wall_opacity": 0.45, "upper_floor_opacity": 0.4, "stair_color": "#8a7a66" },
+  "rooms": [
+    { "room_id": "r-hall", "level": 0, "always_visible": false, "outline": [[-6, -4], [0, -4], [0, 4], [-6, 4]], "openings": [] },
+    { "room_id": "r-bed", "level": 0, "always_visible": false, "outline": [[0, -4], [6, -4], [6, 4], [0, 4]], "openings": [] },
+    { "room_id": "r-loft", "level": 1, "always_visible": false, "outline": [[-6, -4], [6, -4], [6, 4], [-6, 4]], "openings": [] }
+  ],
+  "outdoor_rooms": [],
+  "floor_plan": [
+    { "room_id": "r-hall", "polygon_world": [[-6, -4], [0, -4], [0, 4], [-6, 4]], "floor_kind": "planks", "closed": true },
+    { "room_id": "r-bed", "polygon_world": [[0, -4], [6, -4], [6, 4], [0, 4]], "floor_kind": "planks", "closed": true }
+  ],
+  "plates": [
+    { "level": 1, "outline": [[-6, -4], [6, -4], [6, 4], [-6, 4]], "holes": [], "top_y": 3.0, "thickness": 0.2, "opacity_role": "upper" },
+    { "level": 1, "room_id": "r-loft", "outline": [[-6, -4], [6, -4], [6, 4], [-6, 4]], "holes": [], "top_y": 3.02, "thickness": 0.02, "opacity_role": "upper" }
+  ],
+  "walls": [
+    { "level": 0, "from": [-6, -4], "to": [6, -4], "base_y": 0, "height": 3, "thickness": 0.2, "opacity_role": "ground", "outward_normal": [0, -1] }
+  ],
+  "extras": [],
+  "stairs": [],
+  "markers": [
+    { "room_id": "r-hall", "id": "bench1", "group": "seat", "label": "Bench", "capacity": 2, "at_world": [-3, 0],
+      "slots": [[-3, -1], [-3, 1]], "y_world": 0.45, "root_offset": 0.4, "facing": 90, "tilt": 5, "roll": 0, "source": "room" },
+    { "room_id": "r-bed", "id": "bed1", "group": "lie", "label": "Bed", "capacity": 1, "at_world": [3, 0],
+      "slots": [[3, 0]], "y_world": 0.55, "facing": 180, "anchor": [3, 0], "source": "prop" }
+  ],
+  "doorways": [],
+  "problems": [],
+  "corridors": [
+    { "room_id": "__floor__1", "level": 1, "anchor": [3, 3], "outline": [[-6, -4], [6, -4], [6, 4], [-6, 4]] }
+  ],
+  "boundary_openings": [],
+  "models": [
+    { "role": "prop", "id": "stool", "room_id": "r-hall", "variants": {},
+      "placeholder_dims": { "w": 0.4, "d": 0.4, "h": 0.45 },
+      "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 0.45, "measure": "xyz",
+      "anchor": [-4, 2], "bottom_y": 0 },
+    { "role": "prop", "id": "table", "room_id": "r-hall", "variants": {},
+      "placeholder_dims": { "w": 1.2, "d": 0.8, "h": 0.9 },
+      "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 1.2, "measure": "xyz",
+      "anchor": [-2, -2], "bottom_y": 0 },
+    { "role": "prop", "id": "cot", "room_id": "r-bed", "variants": {},
+      "placeholder_dims": { "w": 0.9, "d": 2.0, "h": 0.5 },
+      "level": 0, "fix_euler": { "x": 0, "y": 0, "z": 0 }, "yaw_deg": 0, "max_m": 2.0, "measure": "xyz",
+      "anchor": [3, 3], "bottom_y": 0 }
+  ],
+  "figures": { "base_height_m_world": 1.7, "stand_clearance": 0.12 }
+}

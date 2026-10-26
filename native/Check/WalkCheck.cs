@@ -73,7 +73,9 @@ public static class WalkCheck
             Near("W1 Lia's root eased ×4/s towards the mirror", lia.Position.Y, 0.6, 1e-4);
             Expect("W1 Lia treads water", lia.CurrentKind == "treading-water" && Math.Abs(lia.Drop - 1.3) < 1e-9 && !lia.Moving,
                    $"kind {lia.CurrentKind} drop {lia.Drop}");
-            Expect("W1 Lia's body hangs the idle sink under the root", Math.Abs(lia.Body!.Position.Y + 1.3) < 1e-5, $"{lia.Body.Position}");
+            // The sink hangs the body under its bind anchoring (groundY: the mesh's lowest point on the root, Task 32).
+            Expect("W1 Lia's body hangs the idle sink under the root", Math.Abs(lia.Body!.Position.Y - lia.BindOffset.Y + 1.3) < 1e-5,
+                   $"{lia.Body.Position} bind {lia.BindOffset}");
             Expect("W1 Lia's ghost cut at the mirror", lia.Ghost is { Visible: true } g && Math.Abs(g.CutY - 1.5) < 1e-9,
                    $"ghost {lia.Ghost?.Visible} cut {lia.Ghost?.CutY}");
             Expect("W1 Dora stands dry", dora.CurrentKind == "stand-relaxed" && dora.Drop == 0 && dora.Ghost is not { Visible: true },

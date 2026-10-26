@@ -37,6 +37,7 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `placement/` | Task 29: a hand-written world for the room placement (an inn with a hall, a bedroom and a loft over it, a storey corridor, a bench marker, a bed marker, a stool, a table and a cot; a closed shed) and the fallback pool (served from the repository's `static/client3d/models/`) — the ground files come from this directory; see "Placement world" |
 | `walk/` | Task 30: a hand-written FLAT world for the NPC walk (a hall with two storey-0 rooms joined by a party-wall door, a loft over them reached by one flight, a lake with a constant 1.5 m mirror) and the fallback pool; its own `heightfield.json` (all 0, no tiles), `terrain.json` and `model3d.json`, the layer files from this directory; see "Walk world" |
 | `bridges/` | Task 31: the walk world's flat ground (copies of its `heightfield.json`, `locations.json`, `terrain.json`, `scene_loc-hall.json`) with three figures on open grass — real rigs (`Test3_mia.glb`, `Soldier.glb`), the real clips idle / walk / sitting-at-the-table / laying / get-up-chair / get-up-bed and `commanding.fbx` served as a ramping `start-walk`, the reference rig; its own `worldmap.json`, `worldmap_poll2.json`, `model3d.json`, `animation_clips.json`, `urls.json`; see "Bridges world" |
+| `pairs/` | Task 32: the placement world's inn (copies of its `scene_loc-inn.json`, the inn row of `locations.json`) on the ground of this directory, nine figures — real rigs (`Test3_mia.glb` for role a, `Soldier.glb` for role b), the real pair clips greeting-handshake / greeting-hug (both halves) and `comforting__b` alone, idle / walk / sitting-at-the-table / get-up-chair, the reference rig, and `low_box.glb` (a hand-made box whose mesh bottom lies at −0.3 m); `worldmap.json` + `worldmap_poll2.json` + `worldmap_poll3.json`; see "Pairs world" |
 | `props/` | Task 18: a fifth, hand-written world (8 lamps + a world-prop lantern, a picture frame with a picture and a glass slot, three mirror panes, a door prop with a leaf, rooms with ambience, a corridor, a cellar storey) — the ground files come from this directory; see "Props world" |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
@@ -1449,3 +1450,50 @@ Frames of 1/30 s from here (frame k = clip time k/30 of a bridge that opened on 
 - **B8** the deadline: the gate opens at start + length + 0.5 s (start = the clock of F1) even if the clip's end never
   came — still closed 1 µs before, open 1 µs after.
 
+## Pairs world (`pairs/`, Task 32, `Check/PairCheck.cs`, `--check pairs`)
+
+Ground from `fixtures/` (tile (0, 0): **g(x, z) = x/32 + z/64**), the inn of "Placement world" (pin (64, 128), yaw
+90° → tileToWorld(lx, lz) = (64 + lz, ·, 128 − lx); datum 4; bench1 re-derived to **4.096875**, its slots tile (−3, ∓1)
+→ world (63, 131) / (65, 131), centre (64, 131); the loft declared 3.02 → floor 7.02, stand **7.03**). The check snaps
+the inn's fade to 1. Models: role a → Test3_mia (raw height 2 m), role b → Soldier, 1.70 m each.
+
+**The halves' root paths** (Godot's FBX import is in metres; the browser's FBXLoader reads the same file in
+centimetres): the hips' rest x of the handshake halves is ∓0.366742 (constant: Godot drops the curve, the node default
+is the one key), of the hug ∓0.211896, of `comforting__b` +0.3 — the sidecars' `anchor_xz_m` (−0.367 / +0.367,
+−0.212 / +0.212, +0.300; 3 decimals), z = 0. `comforting__a` is not listed.
+
+**Box** (`low_box.glb`, written by `native/tools/box_glb.py`: one box, x 0.1…0.5, y −0.3…0.55, z −0.2…0, no rig, served as
+`rig: "none"`): raw height 0.85 → scale 1.70 / 0.85 = **2**; the anchoring offset = −(centre_x, min_y, centre_z) · 2 =
+**(−0.6, 0.6, 0.2)**: in the root frame the body's box is x −0.4…0.4, y **0**…1.70, z −0.2…0.2. Before, its bottom
+stood 0.6 m under the root. Test3_mia's skinned bind box spans y −1…1 (raw 2 m, scale 0.85) → body lifted **0.85 m**.
+
+Frames of 1/30 s. The anchor formula (§ A8a): x = ax + rx·cos(yaw) + rz·sin(yaw), z = az − rx·sin(yaw) + rz·cos(yaw).
+
+**Poll 1** (`worldmap.json`, stamp 1), then 30 frames:
+
+| figure | row | expectation |
+|---|---|---|
+| Ann Hand (a) | handshake `hs1`, anchor (20, 40), yaw −π/2 (c 0, s −1), elapsed 1.0, rate 1, one-shot 3.533 | (20, g, 40 + rx) = (20, **1.244270**, 39.633258); clip clock 1 + 1 = **2.0**; the player one frame ahead (seek, then advance) **2.0333** |
+| Ben Hand (b) | no interaction yet, pos (20, 41) | his point (20, g = 1.265625, 41), `idle` |
+| Cy Seat (a) / Dee Seat (b) | hug `hug1` on place `bench1`, anchor (64, 131), yaw 0, elapsed 0.5, loop 4.033 | (64 ∓ 0.211896, **4.096875**, 131) — slot 0, not the hall floor; clock **1.5**, players **1.5333** both |
+| Gil Loft | room r-loft, `sitting-at-the-table` | sits |
+| Eve Solo (a) / Fay Solo (b) | comforting `cf1`, anchor (30.5, 40), yaw 0, Eve's half missing | Eve on her own point (30, g = 1.5625, 40) with `idle`; Fay (30.8, g = 1.5875, 40) with `comforting__b` |
+| Box Low | free (40, 40) | root (40, g = 1.875, 40), body bottom on it |
+
+**Poll 2** (stamp 2): the handshake's `elapsed_s` 2.5 for Ann AND Ben (Ben's block arrives now); Cy/Dee 1.6; Gil's
+activity "" (stand). One frame:
+- Ann: |2.0 − 2.5| = 0.5 > 0.3 → snapped; Ben adopts 2.5; both clocks **2.5333**; Ann's player (2.0333) is 0.5 > 0.2
+  off the phase → re-seeked; both players **2.5667** — in phase (Δ 0). Ben at (20, g, 40 + 0.366742).
+- Cy/Dee: |1.5 − 1.6| = 0.1 ≤ 0.3 → the local clock stays: **1.5333**, still in lockstep.
+- Gil opens get-up-chair (sitting-at-the-table → *); 15 more frames: still bridging (4.767 s clip).
+
+**Poll 3** (stamp 3): Ann/Ben 3.2 (local 2.5 + 16/30 = 3.0333, 0.1667 ≤ 0.3 → kept: next frame **3.0667**); Cy/Dee
+`rate` 0, elapsed 2.0 (a frozen world: no server clock, the local 1.5 + 16/30 stays); Gil and Hal: handshake `hs2`,
+anchor (64, 128) yaw 0, place none, in the loft. One frame:
+- Gil: the bridge ENDS (not bridging, no held height), `greeting-handshake__a` plays; Gil (64 − 0.366742, **7.03**,
+  128), Hal (64 + 0.366742, 7.03, 128) — the room rung, not the ground g(64, 128) = 4. Ten more frames: no travel held,
+  the body on its base.
+- Cy/Dee frozen over those ten frames: players, clocks and roots unchanged.
+
+**One-shot end**: 20 more frames → the handshake clock 2.5 + 47/30 ≈ 4.07 > 3.533: phase clamped, the player stops at
+its end (**3.5333**) and holds it, Ann and Ben alike.
