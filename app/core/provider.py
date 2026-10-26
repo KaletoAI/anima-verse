@@ -109,7 +109,7 @@ class Provider:
                 return False
 
             elif self.type == "anthropic":
-                # Anthropic Claude API: GET /models mit x-api-key Header
+                # Anthropic Claude API: GET /models with an x-api-key header.
                 url = f"{self.api_base.rstrip('/')}/models"
                 anth_headers = {
                     "x-api-key": self.api_key,
@@ -219,9 +219,10 @@ class Provider:
                     data = resp.json()
                     raw = data.get("data", []) if isinstance(data, dict) else data
                     for m in raw:
-                        # Skip non-chat models (image, video, audio, etc.)
+                        # Language catalogs use chat (Together) or text (Venice).
+                        # Keep untyped OpenAI entries; exclude image/video/audio.
                         mtype = m.get("type", "")
-                        if mtype and mtype != "chat":
+                        if mtype and mtype not in ("chat", "text"):
                             continue
 
                         # Serverless filter: skip models without per-token pricing
@@ -232,10 +233,8 @@ class Provider:
                             if not has_serverless:
                                 continue
 
-                        # Vision/VL/OCR-Modelle werden NICHT mehr ausgefiltert
-                        # (die App hat Bild-Tasks, die ein Vision-Modell brauchen)
-                        # — nur per Flag gekennzeichnet, damit die UI sie als
-                        # "(vision)" markieren kann.
+                        # Keep vision/VL/OCR models for image tasks and flag them
+                        # so the UI can mark them as "(vision)".
                         mid = m.get("id", "").lower()
                         display = m.get("display_name", "").lower()
                         is_vision = any(tag in mid or tag in display for tag in

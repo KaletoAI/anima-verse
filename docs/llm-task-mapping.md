@@ -29,6 +29,12 @@ raises it per detected repetition, only on entries that set it. Measured value
 for a 111B RP model: 1.03 base, ceiling 1.05; from 1.08 on marker lines break
 and replies drift into English.
 
+The LLMs editor loads provider model catalogs through `Provider.list_models()`.
+OpenAI-compatible catalogs accept language models with type `chat` (Together),
+`text` (Venice), or no type (OpenAI); other declared types are excluded.
+Together's zero-input-and-output-pricing filter still excludes non-serverless
+entries. Regression check: `scripts/smoke_provider_models.py`.
+
 Each entry can also set `extra_params` to a JSON object of additional HTTP
 request-body fields, independently of its task assignments. The LLMs editor's
 Venice help button inserts `{"venice_parameters":{"disable_thinking":true}}`;
