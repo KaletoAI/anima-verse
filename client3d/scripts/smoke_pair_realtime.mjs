@@ -4,10 +4,8 @@
  * one place that turns the server's game-clock numbers (§ A8a) into the time
  * the mixer of `scene/figures.ts` `playPair()` is seeked to.
  *
- * Usage:  node client3d/scripts/smoke_pair_realtime.mjs
- *         (needs esbuild — reachable as `node_modules/esbuild` from the repo
- *          root; the module itself is import-free and is transpiled, not
- *          bundled.)
+ * Usage: timeout 300 node client3d/scripts/smoke_pair_realtime.mjs
+ *        (needs three and esbuild; expectations live in pair_clip_phase.json.)
  *
  * Every number below is derived BY HAND in this docstring from the rule of
  * plan-animationen-echtzeit-stehplatz.md E1/T1, never recorded from the
@@ -80,7 +78,8 @@
  *                           that are exact in binary so the boundary is real)
  *
  * A frozen world never snaps at all (no server position, [2]), and adoption —
- * no local clock — always takes the server's value whatever the drift.
+ * no local clock — always takes the server's value whatever the drift:
+ * rate 2, elapsed 99 -> 99/2 = 49.5 real seconds.
  *
  * ============================================================================
  * [5] THE FRAME ADVANCE (how `scene/npcs.ts` composes it)
@@ -106,121 +105,7 @@
  * plus the three.js loop mode. That needs a mixer and a rig; the numbers it
  * works with are the ones pinned here.
  */
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
-
-/** Transpile the import-free module and import it as plain ESM. */
-async function loadModule(relPath) {
-  const esbuild = await import('esbuild');
-  const dir = await mkdtemp(join(tmpdir(), 'pairclip-'));
-  try {
-    const source = await readFile(join(ROOT, relPath), 'utf8');
-    const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
-    const file = join(dir, 'mod.mjs');
-    await writeFile(file, out.code, 'utf8');
-    return await import(`file://${file}`);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
-let passed = 0;
-let failed = 0;
-function near(label, actual, expected, eps = 1e-6) {
-  const ok = Number.isFinite(actual) && Math.abs(actual - expected) <= eps;
-  if (ok) { passed += 1; console.log(`  ok   ${label}: ${actual.toFixed(4)}`); }
-  else { failed += 1; console.log(`  FAIL ${label}: got ${actual}, want ${expected} ±${eps}`); }
-}
-
-const CYCLE = 0.533;
-const ONCE = 2.533;
-
-const { pairClipPhase, PAIR_SNAP_S } = await loadModule('client3d/src/game/pairClip.ts');
-
-console.log('[1] the clip clock is REAL time — one phase for every game speed');
-for (const [rate, elapsed] of [[2, 6], [1, 3], [0.5, 1.5]]) {
-  const r = pairClipPhase({ elapsedGameS: elapsed, rate, loop: true, clipDurationS: CYCLE });
-  near(`rate ${rate}, elapsed ${elapsed} game-s → clipT`, r.clipT, 3);
-  near(`rate ${rate}, elapsed ${elapsed} game-s → phase`, r.phase, 0.335);
-}
-
-console.log('\n[2] rate 0 freezes the phase');
-{
-  const held = pairClipPhase({
-    elapsedGameS: 6, rate: 0, loop: true, clipDurationS: CYCLE, localClipT: 0.4 });
-  near('frozen, local clock 0.4 → clipT', held.clipT, 0.4);
-  near('frozen, local clock 0.4 → phase', held.phase, 0.4);
-  const fresh = pairClipPhase({ elapsedGameS: 6, rate: 0, loop: true, clipDurationS: CYCLE });
-  near('frozen adoption → clipT', fresh.clipT, 0);
-  near('frozen adoption → phase', fresh.phase, 0);
-}
-
-console.log('\n[3] a one-shot clip holds its last frame');
-{
-  const late = pairClipPhase({ elapsedGameS: 10, rate: 1, loop: false, clipDurationS: ONCE });
-  near('rate 1, elapsed 10 → clipT', late.clipT, 10);
-  near('… → phase clamped to the clip length', late.phase, 2.533);
-  near('below the end nothing is clamped',
-    pairClipPhase({ elapsedGameS: 2, rate: 1, loop: false, clipDurationS: ONCE }).phase, 2.0);
-  near('exactly at the end',
-    pairClipPhase({ elapsedGameS: 2.533, rate: 1, loop: false, clipDurationS: ONCE }).phase, 2.533);
-  near('the same clock in a LOOPING clip of that length wraps',
-    pairClipPhase({ elapsedGameS: 10, rate: 1, loop: true, clipDurationS: ONCE }).phase, 2.401);
-}
-
-console.log('\n[4] a poll snaps only a genuine drift');
-{
-  const base = { rate: 2, loop: true, clipDurationS: CYCLE, localClipT: 3.0 };
-  const keep = pairClipPhase({ ...base, elapsedGameS: 6.5 });
-  near('drift 0.25 ≤ 0.3 → the local clock stands', keep.clipT, 3.0);
-  near('… → phase', keep.phase, 0.335);
-  const snap = pairClipPhase({ ...base, elapsedGameS: 7.0 });
-  near('drift 0.50 > 0.3 → the server value wins', snap.clipT, 3.5);
-  near('… → phase', snap.phase, 0.302);
-  near('the threshold is "more than" (snapS 0.5, drift 0.5 → keep)',
-    pairClipPhase({ ...base, elapsedGameS: 7.0, snapS: 0.5 }).clipT, 3.0);
-  near('a frozen world never snaps',
-    pairClipPhase({ ...base, rate: 0, elapsedGameS: 99 }).clipT, 3.0);
-  near('adoption takes the server value whatever the drift',
-    pairClipPhase({ ...base, localClipT: undefined, elapsedGameS: 99 }).clipT, 49.5);
-  near('PAIR_SNAP_S is the documented 0.3 real s', PAIR_SNAP_S, 0.3);
-}
-
-console.log('\n[5] the frame advance as scene/npcs.ts composes it');
-{
-  const step = (clipT, rate, dt) => {
-    const next = rate > 0 ? clipT + dt : clipT;
-    return pairClipPhase({
-      elapsedGameS: null, rate, loop: true, clipDurationS: CYCLE, localClipT: next });
-  };
-  for (const rate of [1, 2]) {
-    let clipT = 3.0;
-    let phase = 0;
-    for (let i = 0; i < 3; i += 1) ({ clipT, phase } = step(clipT, rate, 1 / 60));
-    near(`rate ${rate}: three 1/60 s frames → clipT`, clipT, 3.05);
-    near(`rate ${rate}: … → phase`, phase, 0.385);
-  }
-  let clipT = 3.0;
-  let phase = 0;
-  for (let i = 0; i < 3; i += 1) ({ clipT, phase } = step(clipT, 0, 1 / 60));
-  near('frozen: three frames add nothing → clipT', clipT, 3.0);
-  near('frozen: … → phase', phase, 0.335);
-}
-
-console.log('\n[6] degenerate inputs');
-{
-  near('clip length 0 → the phase is the clock itself',
-    pairClipPhase({ elapsedGameS: 3, rate: 1, loop: true, clipDurationS: 0 }).phase, 3.0);
-  near('clip length 0, one-shot → the same',
-    pairClipPhase({ elapsedGameS: 3, rate: 1, loop: false, clipDurationS: 0 }).phase, 3.0);
-  near('a negative local clock never seeks backwards',
-    pairClipPhase({ elapsedGameS: null, rate: 1, loop: true, clipDurationS: CYCLE,
-      localClipT: -2 }).phase, 0);
-}
-
+import { runPairVectors } from './pairVectorDispatch.mjs';
+const { passed, failed } = await runPairVectors('pair_clip_phase');
 console.log(`\n${passed} ok, ${failed} failed`);
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

@@ -1,0 +1,555 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_clip_pair.mjs",
+  "fixtures": {
+    "toy": {
+      "times": [
+        0,
+        1
+      ],
+      "xz": [
+        0,
+        0,
+        2,
+        4
+      ]
+    },
+    "pair": {
+      "tile": {
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "surfaces": [],
+        "roomFloors": [
+          [
+            "og",
+            {
+              "hull": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  4,
+                  0
+                ],
+                [
+                  4,
+                  4
+                ]
+              ],
+              "declared": 3.2
+            }
+          ],
+          [
+            "keller",
+            {
+              "hull": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  4,
+                  0
+                ],
+                [
+                  4,
+                  4
+                ]
+              ],
+              "declared": -2.8
+            }
+          ]
+        ],
+        "roomCenters": [
+          [
+            "flur",
+            [
+              2,
+              6.41,
+              2
+            ]
+          ]
+        ]
+      },
+      "root": {
+        "x": 0.3,
+        "z": 0
+      },
+      "anchor": {
+        "x": 10,
+        "z": 22,
+        "yaw": 0
+      },
+      "terrainY": 0.5,
+      "room": null,
+      "placeId": null,
+      "seatSlots": null
+    }
+  },
+  "cases": [
+    {
+      "label": "[1] greeting-handshake__a",
+      "fn": "isPairClipName",
+      "args": [
+        "greeting-handshake__a"
+      ],
+      "expect": true,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] greeting-handshake__b",
+      "fn": "isPairClipName",
+      "args": [
+        "greeting-handshake__b"
+      ],
+      "expect": true,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] idle",
+      "fn": "isPairClipName",
+      "args": [
+        "idle"
+      ],
+      "expect": false,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] x__c",
+      "fn": "isPairClipName",
+      "args": [
+        "x__c"
+      ],
+      "expect": false,
+      "eps": 1e-09
+    },
+    {
+      "label": "[4] before",
+      "fn": "pairRootPathValue",
+      "args": [
+        {
+          "$fixture": "toy"
+        },
+        -1,
+        "x"
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[4] after",
+      "fn": "pairRootPathValue",
+      "args": [
+        {
+          "$fixture": "toy"
+        },
+        5,
+        "x"
+      ],
+      "expect": 2,
+      "eps": 1e-09
+    },
+    {
+      "label": "[4] mid x",
+      "fn": "pairRootPathValue",
+      "args": [
+        {
+          "$fixture": "toy"
+        },
+        0.5,
+        "x"
+      ],
+      "expect": 1,
+      "eps": 1e-09
+    },
+    {
+      "label": "[4] mid z",
+      "fn": "pairRootPathValue",
+      "args": [
+        {
+          "$fixture": "toy"
+        },
+        0.5,
+        "z"
+      ],
+      "expect": 2,
+      "eps": 1e-09
+    },
+    {
+      "label": "[3] A x",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "root": {
+              "x": -0.367,
+              "z": 0
+            },
+            "anchor": {
+              "x": 10,
+              "z": 22,
+              "yaw": -1.5707963267948966
+            }
+          }
+        },
+        "x"
+      ],
+      "expect": 10,
+      "eps": 1e-09
+    },
+    {
+      "label": "[3] A z",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "root": {
+              "x": -0.367,
+              "z": 0
+            },
+            "anchor": {
+              "x": 10,
+              "z": 22,
+              "yaw": -1.5707963267948966
+            }
+          }
+        },
+        "z"
+      ],
+      "expect": 21.633,
+      "eps": 1e-09
+    },
+    {
+      "label": "[3] B x",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "root": {
+              "x": 0.367,
+              "z": 0
+            },
+            "anchor": {
+              "x": 10,
+              "z": 22,
+              "yaw": -1.5707963267948966
+            }
+          }
+        },
+        "x"
+      ],
+      "expect": 10,
+      "eps": 1e-09
+    },
+    {
+      "label": "[3] B z",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "root": {
+              "x": 0.367,
+              "z": 0
+            },
+            "anchor": {
+              "x": 10,
+              "z": 22,
+              "yaw": -1.5707963267948966
+            }
+          }
+        },
+        "z"
+      ],
+      "expect": 22.367,
+      "eps": 1e-09
+    },
+    {
+      "label": "[3] clip +X world +Z x",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "root": {
+              "x": 1,
+              "z": 0
+            },
+            "anchor": {
+              "x": 0,
+              "z": 0,
+              "yaw": -1.5707963267948966
+            }
+          }
+        },
+        "x"
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[3] clip +X world +Z z",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "root": {
+              "x": 1,
+              "z": 0
+            },
+            "anchor": {
+              "x": 0,
+              "z": 0,
+              "yaw": -1.5707963267948966
+            }
+          }
+        },
+        "z"
+      ],
+      "expect": 1,
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] hips centimetres to metres ignoring Y",
+      "fn": "extractPairRootPath",
+      "args": [
+        [
+          {
+            "name": "mixamorig:Hips.position",
+            "times": [
+              0,
+              1
+            ],
+            "values": [
+              -36.7,
+              100,
+              0,
+              36.7,
+              120,
+              40
+            ]
+          }
+        ]
+      ],
+      "expect": {
+        "times": [
+          0,
+          1
+        ],
+        "xz": [
+          -0.367,
+          0,
+          0.367,
+          0.4
+        ]
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[2] missing hips zero path",
+      "fn": "extractPairRootPath",
+      "args": [
+        [
+          {
+            "name": "Spine.position",
+            "times": [
+              0,
+              1
+            ],
+            "values": [
+              100,
+              0,
+              200,
+              300,
+              0,
+              400
+            ]
+          }
+        ]
+      ],
+      "expect": {
+        "times": [
+          0
+        ],
+        "xz": [
+          0,
+          0
+        ]
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] unprefixed case-insensitive hips",
+      "fn": "extractPairRootPath",
+      "args": [
+        [
+          {
+            "name": "hIpS.position",
+            "times": [
+              0,
+              2
+            ],
+            "values": [
+              100,
+              200,
+              -300,
+              200,
+              400,
+              -100
+            ]
+          }
+        ]
+      ],
+      "expect": {
+        "times": [
+          0,
+          2
+        ],
+        "xz": [
+          1,
+          -3,
+          2,
+          -1
+        ]
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] first hips position track wins",
+      "fn": "extractPairRootPath",
+      "args": [
+        [
+          {
+            "name": "mixamorig:Hips.position",
+            "times": [
+              0,
+              1
+            ],
+            "values": [
+              -36.7,
+              100,
+              0,
+              36.7,
+              120,
+              40
+            ]
+          },
+          {
+            "name": "Hips.position",
+            "times": [
+              0
+            ],
+            "values": [
+              900,
+              900,
+              900
+            ]
+          }
+        ]
+      ],
+      "expect": {
+        "times": [
+          0,
+          1
+        ],
+        "xz": [
+          -0.367,
+          0,
+          0.367,
+          0.4
+        ]
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[3] yaw zero keeps both components",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "root": {
+              "x": 2,
+              "z": 3
+            }
+          }
+        },
+        "x"
+      ],
+      "expect": 12,
+      "eps": 1e-09
+    },
+    {
+      "label": "[3] yaw zero keeps Z",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "root": {
+              "x": 2,
+              "z": 3
+            }
+          }
+        },
+        "z"
+      ],
+      "expect": 25,
+      "eps": 1e-09
+    },
+    {
+      "label": "[3] positive quarter turn X",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "root": {
+              "x": 2,
+              "z": 3
+            },
+            "anchor": {
+              "x": 10,
+              "z": 22,
+              "yaw": 1.5707963267948966
+            }
+          }
+        },
+        "x"
+      ],
+      "expect": 13,
+      "eps": 1e-09
+    },
+    {
+      "label": "[3] positive quarter turn Z",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "root": {
+              "x": 2,
+              "z": 3
+            },
+            "anchor": {
+              "x": 10,
+              "z": 22,
+              "yaw": 1.5707963267948966
+            }
+          }
+        },
+        "z"
+      ],
+      "expect": 20,
+      "eps": 1e-09
+    }
+  ]
+}

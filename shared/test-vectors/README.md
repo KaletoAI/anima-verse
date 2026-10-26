@@ -315,3 +315,66 @@ live server table. Real-clip source selection through `bridgeSources.mjs`
 stays in the integration sections of the root/lift smokes. The known three
 `smoke_bridge_root` [B14] hand-over failures keep their original bounds and
 production implementation; they are not converted into passing vectors.
+
+## Pair clips and figure normalisation (Task 32)
+
+`smoke_pair_vectors.mjs` runs all 70 cases without live tables, model files,
+network or a DOM. The canonical source smokes also run their own vectors:
+
+| JSON | Source smoke | Cases |
+|---|---|---:|
+| `pair_clip_phase.json` | `smoke_pair_realtime.mjs` | 32 |
+| `pair_clip_geometry.json` | `smoke_clip_pair.mjs` | 22 |
+| `pair_height.json` | `smoke_pair_storey.mjs` | 12 |
+| `figure_normalisation.json` | `smoke_figure_normalisation.mjs` | 4 |
+
+All source paths are under `client3d/scripts/`. Derivations stay in those
+smokes' docstrings. `pairVectorDispatch.mjs` only constructs Three objects,
+executes production functions and selects result fields. No production code
+was extracted or changed. The real-FBX/GLB integration checks in
+`smoke_clip_pair.mjs` remain, including track shape and the RED counter-probe;
+they still use real model files and sidecars, outside the standalone vectors.
+
+Native-facing adapter signatures (all distances metres except raw track
+values in centimetres; all times seconds, yaw radians):
+
+- `pairClipValue(input, field) -> number`: selects `clipT` or `phase` from
+  `pairClipPhase(input)`. `input` has `elapsedGameS` (number/null), `rate`,
+  `loop`, `clipDurationS`, optional `localClipT`, optional `snapS`.
+  Omitted local time means adoption. `pairSnapS() -> number` reads the
+  production constant. `pairFrames(input, frames, field)` advances local time
+  by each real frame dt only when rate > 0, then reconciles and carries the
+  returned clock to the next frame, exactly like the original smoke.
+- `isPairClipName(name) -> boolean` calls production directly.
+- `extractPairRootPath(tracks) -> {times,xz}` constructs an AnimationClip of
+  VectorKeyframeTracks (`{name,times,values}`), calls `extractRootPath`, and
+  converts its Float32 arrays to JSON arrays. `xz` is interleaved X,Z. Values
+  and times are quantised to float32 as in the browser; these cases use 1e-6
+  tolerance where needed. Missing hips returns `{times:[0],xz:[0,0]}`.
+- `pairRootPathValue(path,t,field) -> number` constructs Float32 path arrays,
+  calls `rootPathAt`, and selects `x` or `z`.
+- `pairRoomStandY(tile,room,x,z) -> number|null`: calls `roomStandY` with an
+  explicit tile. `center` is `[x,y,z]`, `roomFloors` is an array of
+  `[roomId,{hull,declared}]`, `roomCenters` an array of `[roomId,[x,y,z]]`;
+  the adapter restores Three vectors and Maps. These fixtures have no surfaces.
+- `pairPlacementValue(data,field) -> number` runs one real `NpcManager.tick`
+  (dt 1/30) with a minimal injected NPC and a stub figure whose `playPair`
+  succeeds, `holdsTravel` is false and `setFirstPerson` is available.
+  Explicit inputs: `tile`, `root:{x,z}` (the returned pair root),
+  `anchor:{x,z,yaw}`, `terrainY`, `room` (id/null), `placeId` (id/null),
+  `seatSlots` (`[{y},...]`/null). Room coordinates subtract anchor XZ as in the
+  original storey smoke. A non-null place id permits the slot lookup; null
+  slots represent a missing place. Selects root position `x`, `y` or `z`.
+  This exercises the browser's actual anchor transform and height precedence,
+  rather than implementing a second formula in the adapter.
+- `anchorFigureBindValue({min,max,height,initialPosition,initialScale})`
+  creates a bind geometry with the two bbox corners, calls production
+  `anchorFigureBind(THREE,pivot,height)` and returns
+  `{scale,position:[x,y,z],min:[x,y,z],max:[x,y,z]}` of the grounded result.
+  The helper resets pivot scale/position, scales to height, centres XZ and
+  grounds the feet. Empty geometry is outside these cases; a flat bbox tests
+  its existing zero-height denominator fallback. The separate Figure
+  constructor's centring block is unchanged.
+
+No Task 32 vector imports live config or reads current animation tables.
+Unknown function names fail through the shared runner; none are skipped.

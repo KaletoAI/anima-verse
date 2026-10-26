@@ -1,0 +1,524 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_pair_realtime.mjs",
+  "cases": [
+    {
+      "label": "[1] rate 2 clipT",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 6,
+          "rate": 2,
+          "loop": true,
+          "clipDurationS": 0.533
+        },
+        "clipT"
+      ],
+      "expect": 3,
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] rate 2 phase",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 6,
+          "rate": 2,
+          "loop": true,
+          "clipDurationS": 0.533
+        },
+        "phase"
+      ],
+      "expect": 0.335,
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] rate 1 clipT",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 3,
+          "rate": 1,
+          "loop": true,
+          "clipDurationS": 0.533
+        },
+        "clipT"
+      ],
+      "expect": 3,
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] rate 1 phase",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 3,
+          "rate": 1,
+          "loop": true,
+          "clipDurationS": 0.533
+        },
+        "phase"
+      ],
+      "expect": 0.335,
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] rate 0.5 clipT",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 1.5,
+          "rate": 0.5,
+          "loop": true,
+          "clipDurationS": 0.533
+        },
+        "clipT"
+      ],
+      "expect": 3,
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] rate 0.5 phase",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 1.5,
+          "rate": 0.5,
+          "loop": true,
+          "clipDurationS": 0.533
+        },
+        "phase"
+      ],
+      "expect": 0.335,
+      "eps": 1e-06
+    },
+    {
+      "label": "[2] frozen held clipT",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 6,
+          "rate": 0,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 0.4
+        },
+        "clipT"
+      ],
+      "expect": 0.4,
+      "eps": 1e-06
+    },
+    {
+      "label": "[2] frozen held phase",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 6,
+          "rate": 0,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 0.4
+        },
+        "phase"
+      ],
+      "expect": 0.4,
+      "eps": 1e-06
+    },
+    {
+      "label": "[2] frozen adopt clipT",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 6,
+          "rate": 0,
+          "loop": true,
+          "clipDurationS": 0.533
+        },
+        "clipT"
+      ],
+      "expect": 0,
+      "eps": 1e-06
+    },
+    {
+      "label": "[2] frozen adopt phase",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 6,
+          "rate": 0,
+          "loop": true,
+          "clipDurationS": 0.533
+        },
+        "phase"
+      ],
+      "expect": 0,
+      "eps": 1e-06
+    },
+    {
+      "label": "[3] late clock",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 10,
+          "rate": 1,
+          "loop": false,
+          "clipDurationS": 2.533
+        },
+        "clipT"
+      ],
+      "expect": 10,
+      "eps": 1e-06
+    },
+    {
+      "label": "[3] late phase",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 10,
+          "rate": 1,
+          "loop": false,
+          "clipDurationS": 2.533
+        },
+        "phase"
+      ],
+      "expect": 2.533,
+      "eps": 1e-06
+    },
+    {
+      "label": "[3] below",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 2,
+          "rate": 1,
+          "loop": false,
+          "clipDurationS": 2.533
+        },
+        "phase"
+      ],
+      "expect": 2,
+      "eps": 1e-06
+    },
+    {
+      "label": "[3] end",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 2.533,
+          "rate": 1,
+          "loop": false,
+          "clipDurationS": 2.533
+        },
+        "phase"
+      ],
+      "expect": 2.533,
+      "eps": 1e-06
+    },
+    {
+      "label": "[3] loop",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 10,
+          "rate": 1,
+          "loop": true,
+          "clipDurationS": 2.533
+        },
+        "phase"
+      ],
+      "expect": 2.401,
+      "eps": 1e-06
+    },
+    {
+      "label": "[4] keep clock",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 6.5,
+          "rate": 2,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        "clipT"
+      ],
+      "expect": 3,
+      "eps": 1e-06
+    },
+    {
+      "label": "[4] keep phase",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 6.5,
+          "rate": 2,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        "phase"
+      ],
+      "expect": 0.335,
+      "eps": 1e-06
+    },
+    {
+      "label": "[4] snap clock",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 7,
+          "rate": 2,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        "clipT"
+      ],
+      "expect": 3.5,
+      "eps": 1e-06
+    },
+    {
+      "label": "[4] snap phase",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 7,
+          "rate": 2,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        "phase"
+      ],
+      "expect": 0.302,
+      "eps": 1e-06
+    },
+    {
+      "label": "[4] strict threshold",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 7,
+          "rate": 2,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3,
+          "snapS": 0.5
+        },
+        "clipT"
+      ],
+      "expect": 3,
+      "eps": 1e-06
+    },
+    {
+      "label": "[4] frozen",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 99,
+          "rate": 0,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        "clipT"
+      ],
+      "expect": 3,
+      "eps": 1e-06
+    },
+    {
+      "label": "[4] adopt",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 99,
+          "rate": 2,
+          "loop": true,
+          "clipDurationS": 0.533
+        },
+        "clipT"
+      ],
+      "expect": 49.5,
+      "eps": 1e-06
+    },
+    {
+      "label": "[4] PAIR_SNAP_S",
+      "fn": "pairSnapS",
+      "args": [],
+      "expect": 0.3,
+      "eps": 1e-06
+    },
+    {
+      "label": "[5] rate 1 three frames clipT",
+      "fn": "pairFrames",
+      "args": [
+        {
+          "elapsedGameS": null,
+          "rate": 1,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        [
+          0.016666666666666666,
+          0.016666666666666666,
+          0.016666666666666666
+        ],
+        "clipT"
+      ],
+      "expect": 3.05,
+      "eps": 1e-06
+    },
+    {
+      "label": "[5] rate 1 three frames phase",
+      "fn": "pairFrames",
+      "args": [
+        {
+          "elapsedGameS": null,
+          "rate": 1,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        [
+          0.016666666666666666,
+          0.016666666666666666,
+          0.016666666666666666
+        ],
+        "phase"
+      ],
+      "expect": 0.385,
+      "eps": 1e-06
+    },
+    {
+      "label": "[5] rate 2 three frames clipT",
+      "fn": "pairFrames",
+      "args": [
+        {
+          "elapsedGameS": null,
+          "rate": 2,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        [
+          0.016666666666666666,
+          0.016666666666666666,
+          0.016666666666666666
+        ],
+        "clipT"
+      ],
+      "expect": 3.05,
+      "eps": 1e-06
+    },
+    {
+      "label": "[5] rate 2 three frames phase",
+      "fn": "pairFrames",
+      "args": [
+        {
+          "elapsedGameS": null,
+          "rate": 2,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        [
+          0.016666666666666666,
+          0.016666666666666666,
+          0.016666666666666666
+        ],
+        "phase"
+      ],
+      "expect": 0.385,
+      "eps": 1e-06
+    },
+    {
+      "label": "[5] rate 0 three frames clipT",
+      "fn": "pairFrames",
+      "args": [
+        {
+          "elapsedGameS": null,
+          "rate": 0,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        [
+          0.016666666666666666,
+          0.016666666666666666,
+          0.016666666666666666
+        ],
+        "clipT"
+      ],
+      "expect": 3,
+      "eps": 1e-06
+    },
+    {
+      "label": "[5] rate 0 three frames phase",
+      "fn": "pairFrames",
+      "args": [
+        {
+          "elapsedGameS": null,
+          "rate": 0,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": 3
+        },
+        [
+          0.016666666666666666,
+          0.016666666666666666,
+          0.016666666666666666
+        ],
+        "phase"
+      ],
+      "expect": 0.335,
+      "eps": 1e-06
+    },
+    {
+      "label": "[6] zero duration loop True",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 3,
+          "rate": 1,
+          "loop": true,
+          "clipDurationS": 0
+        },
+        "phase"
+      ],
+      "expect": 3,
+      "eps": 1e-06
+    },
+    {
+      "label": "[6] zero duration loop False",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": 3,
+          "rate": 1,
+          "loop": false,
+          "clipDurationS": 0
+        },
+        "phase"
+      ],
+      "expect": 3,
+      "eps": 1e-06
+    },
+    {
+      "label": "[6] negative local",
+      "fn": "pairClipValue",
+      "args": [
+        {
+          "elapsedGameS": null,
+          "rate": 1,
+          "loop": true,
+          "clipDurationS": 0.533,
+          "localClipT": -2
+        },
+        "phase"
+      ],
+      "expect": 0,
+      "eps": 1e-06
+    }
+  ]
+}

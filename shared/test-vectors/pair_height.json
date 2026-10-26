@@ -1,0 +1,323 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_pair_storey.mjs",
+  "fixtures": {
+    "tile": {
+      "center": [
+        0,
+        0,
+        0
+      ],
+      "surfaces": [],
+      "roomFloors": [
+        [
+          "og",
+          {
+            "hull": [
+              [
+                0,
+                0
+              ],
+              [
+                4,
+                0
+              ],
+              [
+                4,
+                4
+              ]
+            ],
+            "declared": 3.2
+          }
+        ],
+        [
+          "keller",
+          {
+            "hull": [
+              [
+                0,
+                0
+              ],
+              [
+                4,
+                0
+              ],
+              [
+                4,
+                4
+              ]
+            ],
+            "declared": -2.8
+          }
+        ]
+      ],
+      "roomCenters": [
+        [
+          "flur",
+          [
+            2,
+            6.41,
+            2
+          ]
+        ]
+      ]
+    },
+    "pair": {
+      "tile": {
+        "center": [
+          0,
+          0,
+          0
+        ],
+        "surfaces": [],
+        "roomFloors": [
+          [
+            "og",
+            {
+              "hull": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  4,
+                  0
+                ],
+                [
+                  4,
+                  4
+                ]
+              ],
+              "declared": 3.2
+            }
+          ],
+          [
+            "keller",
+            {
+              "hull": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  4,
+                  0
+                ],
+                [
+                  4,
+                  4
+                ]
+              ],
+              "declared": -2.8
+            }
+          ]
+        ],
+        "roomCenters": [
+          [
+            "flur",
+            [
+              2,
+              6.41,
+              2
+            ]
+          ]
+        ]
+      },
+      "root": {
+        "x": 0.3,
+        "z": 0
+      },
+      "anchor": {
+        "x": 10,
+        "z": 22,
+        "yaw": 0
+      },
+      "terrainY": 0.5,
+      "room": "og",
+      "placeId": null,
+      "seatSlots": null
+    }
+  },
+  "cases": [
+    {
+      "label": "[1] og",
+      "fn": "pairRoomStandY",
+      "args": [
+        {
+          "$fixture": "tile"
+        },
+        "og",
+        1,
+        2
+      ],
+      "expect": 3.21,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] keller",
+      "fn": "pairRoomStandY",
+      "args": [
+        {
+          "$fixture": "tile"
+        },
+        "keller",
+        1,
+        2
+      ],
+      "expect": -2.79,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] flur",
+      "fn": "pairRoomStandY",
+      "args": [
+        {
+          "$fixture": "tile"
+        },
+        "flur",
+        1,
+        2
+      ],
+      "expect": 6.41,
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] nowhere",
+      "fn": "pairRoomStandY",
+      "args": [
+        {
+          "$fixture": "tile"
+        },
+        "nowhere",
+        1,
+        2
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[2a] upper floor x",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair"
+        },
+        "x"
+      ],
+      "expect": 10.3,
+      "eps": 1e-09
+    },
+    {
+      "label": "[2a] upper floor z",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair"
+        },
+        "z"
+      ],
+      "expect": 22,
+      "eps": 1e-09
+    },
+    {
+      "label": "[2a] upper floor y",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair"
+        },
+        "y"
+      ],
+      "expect": 3.21,
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] cellar",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "room": "keller"
+          }
+        },
+        "y"
+      ],
+      "expect": -2.79,
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] terrain",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "room": null
+          }
+        },
+        "y"
+      ],
+      "expect": 0.5,
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] seat",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "placeId": "sofa",
+            "seatSlots": [
+              {
+                "y": 3.65
+              }
+            ]
+          }
+        },
+        "y"
+      ],
+      "expect": 3.65,
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] zero-height first seat wins over room and second slot",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "placeId": "sofa",
+            "seatSlots": [
+              {
+                "y": 0
+              },
+              {
+                "y": 9
+              }
+            ]
+          }
+        },
+        "y"
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] missing named seat falls back to room",
+      "fn": "pairPlacementValue",
+      "args": [
+        {
+          "$fixture": "pair",
+          "$with": {
+            "placeId": "missing"
+          }
+        },
+        "y"
+      ],
+      "expect": 3.21,
+      "eps": 1e-09
+    }
+  ]
+}

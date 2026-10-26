@@ -45,7 +45,18 @@
  *   [4] `rootPathAt` clamps: before the first key it answers the first key,
  *       after the last the last, and between two keys it interpolates
  *       linearly (hand case: keys at t = 0 → x 0 and t = 1 → x 2 give x = 1
- *       at t = 0.5).
+ *       at t = 0.5); z 0 -> 4 gives z = 2 at the same midpoint.
+ *
+ * Shared synthetic cases (same production functions, no files):
+ * [2] Hips keys (-36.7,100,0), (36.7,120,40) cm at 0,1 s
+ *     give XZ (-0.367,0),(0.367,0.4) m by /100; Y is ignored.
+ *     First matching hips position wins; Spine alone gives the default
+ *     time [0], XZ [0,0]. Unprefixed hIpS keys (100,200,-300),
+ *     (200,400,-100) at 0,2 give XZ (1,-3),(2,-1).
+ * [3] d/2 = 0.734/2 = 0.367; yaw -pi/2 has c=0,s=-1:
+ *     A (-0.367,0) -> (10,21.633), B (0.367,0) -> (10,22.367).
+ *     Unit +X at origin -> (0,1). Yaw 0: root (2,3), anchor
+ *     (10,22) -> (12,25). Yaw +pi/2: c=0,s=1 -> (13,20).
  *
  *   [5] the time base: the clip's duration equals the sidecar's
  *       `duration_s` (±1 frame = 0.034 s) — the server sends that number as
@@ -68,6 +79,7 @@
  *       adding one such track (100x the bone's rest offset) and watches the
  *       body length run away (> 2×).
  */
+import { runPairVectors } from './pairVectorDispatch.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -98,7 +110,7 @@ async function loadClient() {
   const dir = await mkdtemp(join(ROOT, 'client3d/scripts/.smoke-'));
   try {
     const src = join(ROOT, 'client3d/src/scene');
-    const entry = `export { extractRootPath, isPairClipName, rootPathAt } from '${src}/figures';`;
+    const entry = `export { extractRootPath, rootPathAt } from '${src}/figures';`;
     const built = await esbuild.build({
       stdin: { contents: entry, resolveDir: dir, loader: 'ts' },
       bundle: true, platform: 'node', format: 'esm', write: false,
@@ -125,15 +137,12 @@ function place(anchor, yaw, p) {
 
 async function main() {
   const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
-  const { extractRootPath, isPairClipName, rootPathAt } = await loadClient();
+  const { extractRootPath, rootPathAt } = await loadClient();
   const side = JSON.parse(await readFile(join(CLIP_DIR, 'greeting-handshake.json'), 'utf8'));
   const geo = side.geometry;
 
-  console.log('[1] naming');
-  check('greeting-handshake__a is a pair half', isPairClipName('greeting-handshake__a'));
-  check('greeting-handshake__b is a pair half', isPairClipName('greeting-handshake__b'));
-  check('idle is not', !isPairClipName('idle'));
-  check('x__c is not (only a/b are roles)', !isPairClipName('x__c'));
+  const vectors = await runPairVectors('pair_clip_geometry');
+  passed += vectors.passed; failed += vectors.failed;
 
   console.log('\n[2] root paths of the two halves (raw FBX, hips track)');
   const fbx = new FBXLoader();
@@ -176,18 +185,6 @@ async function main() {
   near('A lands south of the anchor: z', wa.z, 22 - geo.root_distance_m / 2, 0.02);
   near('B lands north of the anchor: x', wb.x, 10, 0.02);
   near('B lands north of the anchor: z', wb.z, 22 + geo.root_distance_m / 2, 0.02);
-  // the clip's +X axis itself must come out as world +Z
-  const ux = place({ x: 0, z: 0 }, yaw, { x: 1, z: 0 });
-  near('clip +X → world +Z (x)', ux.x, 0, 1e-9);
-  near('clip +X → world +Z (z)', ux.z, 1, 1e-9);
-
-  console.log('\n[4] rootPathAt — clamping and interpolation (hand cases)');
-  const toy = { times: new Float32Array([0, 1]), xz: new Float32Array([0, 0, 2, 4]) };
-  near('before the first key → first key', rootPathAt(toy, -1).x, 0, 1e-9);
-  near('after the last key → last key', rootPathAt(toy, 5).x, 2, 1e-9);
-  near('midway → linear (x)', rootPathAt(toy, 0.5).x, 1, 1e-9);
-  near('midway → linear (z)', rootPathAt(toy, 0.5).z, 2, 1e-9);
-
   console.log('\n[5] time base');
   near('clip duration == sidecar duration_s', paths.a.duration, side.duration_s, 0.034);
   near('both halves have the same duration', paths.b.duration, paths.a.duration, 1e-3);
