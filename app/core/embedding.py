@@ -22,10 +22,13 @@ played in, and an English-only model cannot rank that. That combination is
 reported by ``english_model_language_mismatch`` (admin validation) and logged
 once per process the first time the internal model is used.
 """
+import hashlib
+import json
 import threading
 from typing import List, Optional
 
 from app.core import config
+from app.core.llm_client import merge_extra_params
 from app.core.log import get_logger
 
 logger = get_logger("embedding")
@@ -127,11 +130,12 @@ def effective_backend(embedding_cfg: Optional[dict] = None) -> str:
 def current_model_id() -> str:
     """Identifier of the model ``embed()`` would use right now.
 
-    Vectors from two different models are not comparable, so every persisted
-    vector is stamped with this string and a mismatch means "re-embed". Shape:
-    ``internal:<model>`` / ``external:<model>``. Returns ``""`` when no model
-    can be resolved at all — the caller then skips the feature, exactly as it
-    does for a ``None`` vector.
+    Vectors from two different models or request-body variants are not
+    comparable, so every persisted vector is stamped with this string and a
+    mismatch means "re-embed". Shape: ``internal:<model>`` or
+    ``external:<model>[:<extra_params digest>]``. Returns ``""`` when no
+    model can be resolved at all — the caller then skips the feature, exactly
+    as it does for a ``None`` vector.
     """
     cfg = config.get("embedding", {}) or {}
     backend = (cfg.get("backend") or "auto").strip().lower()
@@ -140,6 +144,9 @@ def current_model_id() -> str:
         return internal_id
     inst, prov = _resolve_external()
     external_id = f"external:{inst.model}" if (inst and prov) else ""
+    if external_id and inst.extra_params:
+        canonical = json.dumps(inst.extra_params, sort_keys=True, separators=(",", ":"))
+        external_id += ":" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     if backend == "external":
         return external_id
     return external_id or internal_id
@@ -328,7 +335,8 @@ def _embed_external(text: str) -> Optional[List[float]]:
         import httpx
         resp = httpx.post(
             f"{api_base}/embeddings",
-            json={"model": inst.model, "input": prefix + text},
+            json=merge_extra_params(
+                {"model": inst.model, "input": prefix + text}, inst.extra_params),
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=float(prov.timeout or 30),
         )

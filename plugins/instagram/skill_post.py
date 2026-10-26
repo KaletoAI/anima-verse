@@ -34,27 +34,22 @@ from app.core.timeutils import parse_iso, utc_now, utc_now_iso
 
 logger = get_logger("instagram_skill")
 
-# Sprachcode -> englischer Sprachname fuer Caption-/Bildanalyse-Prompts.
-# Frueher binaer ("de"->Deutsch, sonst English) — jede andere Sprache landete
-# faelschlich auf Englisch. Jetzt vollstaendig + konsistent.
+# Language code to English name for caption/image-analysis prompts.
+# Previously binary ("de" -> German, everything else -> English); now
+# every supported language is mapped consistently.
 _LANG_NAMES = {"de": "German", "en": "English", "fr": "French",
                "es": "Spanish", "it": "Italian", "ja": "Japanese",
                "pt": "Portuguese", "nl": "Dutch", "ru": "Russian"}
 
 class InstagramSkill(PluginSkill):
-    """
-    Erstellt Instagram-Posts fuer Agenten.
+    """Create Instagram posts for agents.
 
-    3-Schritt-Flow:
-    1. Bild generieren via ImageGenerationSkill (ohne Galerie-Eintrag)
-    2. Generiertes Bild vom LLM analysieren lassen (Vision)
-    3. Natuerlichen Instagram-Caption aus der Analyse generieren
-
-    Input: Bildbeschreibung (z.B. "Sonnenuntergang am Meer")
+    Generate an image without a gallery entry, analyse it with a vision LLM,
+    then write a natural caption from the analysis.
     """
 
     SKILL_ID = "instagram"
-    DEFERRED = True  # Post wird erst nach Chat-Antwort erstellt
+    DEFERRED = True  # The post is created after the chat response.
     # [INTENT: instagram_post | caption=...] (F6) — dispatched here.
     INTENT_TYPES = ("instagram_post",)
     INTENT_PAYLOAD_KEYS = ("caption",)
@@ -88,19 +83,13 @@ class InstagramSkill(PluginSkill):
         ensure_registered()
         logger.info("Instagram skill initialized")
 
-    def _get_vision_llm_config(self, character_name: str) -> Dict[str, Any]:
-        """Loads Vision LLM config via Router (Task: image_recognition)."""
+    def _get_vision_llm(self, character_name: str):
+        """Resolve the image_recognition LLM for this character."""
         from app.core.llm_router import resolve_llm
         instance = resolve_llm("image_recognition", agent_name=character_name)
-        if instance:
-            return {
-                "model": instance.model,
-                "api_base": instance.api_base,
-                "api_key": instance.api_key,
-            }
-
-        logger.warning("No image_recognition LLM instance available. Check LLM_DEFAULT_IMAGE_RECOGNITION_MODEL in .env")
-        return None
+        if not instance:
+            logger.warning("No image_recognition LLM instance available for %s", character_name)
+        return instance
 
     def _get_image_skill(self):
         """Returns the core image service (wave-6 split) or None."""
@@ -109,16 +98,10 @@ class InstagramSkill(PluginSkill):
         return svc if svc.enabled else None
 
     def _parse_input(self, raw_input: str) -> Dict[str, Any]:
-        """Parst den Input.
-
-        Akzeptiert:
-          - JSON-Felder im ctx: {"image_prompt": "...", "caption": "..."}
-          - Einfacher String: nur image_prompt
-          - Legacy: 'IMAGE: ... | CAPTION: ...'
-        """
+        """Parse JSON fields, a plain image prompt, or IMAGE/CAPTION legacy input."""
         ctx = self._parse_base_input(raw_input)
 
-        # JSON-Felder bevorzugen
+        # Prefer explicit JSON fields.
         image_prompt_field = (ctx.get("image_prompt") or "").strip()
         caption_field = (ctx.get("caption") or "").strip()
 
@@ -134,7 +117,7 @@ class InstagramSkill(PluginSkill):
             if cap_part.upper().startswith("CAPTION:"):
                 caption = caption or cap_part[8:].strip()
 
-        # IMAGE: Prefix entfernen
+        # Remove the IMAGE: prefix.
         if image_prompt.upper().startswith("IMAGE:"):
             image_prompt = image_prompt[6:].strip()
 
@@ -146,44 +129,37 @@ class InstagramSkill(PluginSkill):
         }
 
     def _extract_filename(self, image_result: str) -> str:
-        """Extrahiert den Bild-Dateinamen aus dem ImageGenerationSkill-Ergebnis."""
+        """Extract the image filename from the image-generation result."""
         match = re.search(r'/images/([^?)\n]+)', image_result)
         return match.group(1) if match else ""
 
     def _extract_hashtags(self, caption: str) -> list:
-        """Extrahiert #hashtags aus dem Caption-Text."""
+        """Extract hashtags from a caption."""
         return re.findall(r'#(\w+)', caption)
 
     def _generate_caption(self, image_path: str, character_name: str, image_prompt: str, current_location: Optional[str] = None, current_activity: Optional[str] = None, chat_text: str = "", draft_caption: str = "") -> Optional[str]:
-        """
-        Schritt 2+3: LLM analysiert das generierte Bild und schreibt einen natuerlichen Caption.
-
-        Nutzt ein Vision-faehiges LLM um das Bild zu analysieren und einen
-        authentischen Instagram-Post-Text in der Persoenlichkeit des Agenten zu verfassen.
+        """Analyse the generated image and write a natural caption.
 
         Args:
-            image_path: Pfad zum generierten Bild
-            character_name: Name des Agenten
-            image_prompt: Ursprüngliche Bildbeschreibung
-            current_location: Aktuelle Location des Agenten (optional)
-            current_activity: Aktuelle Activity des Agenten (optional)
-            chat_text: Chat-Text mit der aktuellen Situation (optional)
-            draft_caption: Vom aufrufenden LLM mitgegebene Caption-Idee (optional) —
-                wird als Inspiration an das Vision-LLM uebergeben, das daraus
-                einen vollstaendigen Post formuliert.
+            image_path: Path to the generated image.
+            character_name: Name of the agent.
+            image_prompt: Original image description.
+            current_location: Current location, if available.
+            current_activity: Current activity, if available.
+            chat_text: Current situation, if available.
+            draft_caption: The calling LLM's idea to inspire a complete post.
         """
-        from app.core.llm_client import LLMClient
 
         logger.info("Instagram Caption-Generierung gestartet...")
         logger.info(f"Bildpfad: {image_path}")
         logger.info(f"Agent: {character_name}")
         
-        # Prüfe ob Datei existiert
+        # Check that the image exists.
         if not os.path.exists(image_path):
             logger.error(f"Bilddatei existiert nicht: {image_path}")
             return None
         
-        # Bild als Base64 laden
+        # Encode the image as base64.
         try:
             with open(image_path, 'rb') as f:
                 image_bytes = f.read()
@@ -193,7 +169,7 @@ class InstagramSkill(PluginSkill):
             logger.error(f"Fehler beim Laden des Bildes: {e}")
             return None
 
-        # Agent-Persoenlichkeit laden
+        # Load the agent's personality.
         personality = get_character_personality(character_name) or ""
 
         # Per-Agent Config
@@ -220,7 +196,7 @@ class InstagramSkill(PluginSkill):
             context_info = "\n\nKONTEXT MEINES MOMENTS:\n" + "\n".join(context_parts)
             context_info += "\nNutze diesen Kontext fuer einen passenden, authentischen Post.\n"
 
-        # Draft-Caption aus dem Thought-LLM als Inspiration einfliessen lassen
+        # Use the thought LLM's draft caption as inspiration.
         if draft_caption:
             context_info += (
                 "\n\nMEINE KURZE NOTIZ-IDEE (dient als Einstieg/Inspiration, "
@@ -229,7 +205,7 @@ class InstagramSkill(PluginSkill):
                 f"\"{draft_caption}\"\n"
             )
 
-        # Persoenlichkeit in den Prompt einbauen
+        # Include the personality in the prompt.
         style_description = (
             f"Your style: {personality}" if personality
             else "Your style: friendly, confident and approachable.")
@@ -245,31 +221,17 @@ class InstagramSkill(PluginSkill):
             context_info=context_info)
 
         try:
-            # Per-Agent Vision-LLM Config (with LLM Service support)
-            vcfg = self._get_vision_llm_config(character_name)
+            # Use the routed provider and its request-body settings for captions.
+            instance = self._get_vision_llm(character_name)
+            if not instance:
+                return None
+            llm = instance.create_llm(
+                temperature=instance.temperature,
+                max_tokens=instance.max_tokens or 300)
+            logger.info("LLM initialized: %s @ %s", instance.model,
+                        instance.api_base or "default")
 
-            # Temperature/max_tokens aus Routing-Entry
-            caption_temperature = 0.8
-            caption_max_tokens = 300
-            try:
-                from app.core.llm_router import resolve_llm
-                _ir_inst = resolve_llm("image_recognition", agent_name=character_name)
-                if _ir_inst:
-                    caption_temperature = _ir_inst.temperature
-                    caption_max_tokens = _ir_inst.max_tokens or 300
-            except Exception:
-                pass
-
-            llm = LLMClient(
-                model=vcfg["model"],
-                api_key=vcfg["api_key"],
-                api_base=vcfg["api_base"],
-                temperature=caption_temperature,
-                max_tokens=caption_max_tokens,
-                request_timeout=int(os.environ.get("LLM_REQUEST_TIMEOUT", "120")))
-            logger.info(f"LLM initialized: {vcfg['model']} @ {vcfg['api_base'] or 'default'}")
-
-            # Message mit Bild und Text erstellen
+            # Send the image and text together.
             image_url = f"data:image/png;base64,{base64_image}"
             message = {"role": "user", "content": [
                 {"type": "text", "text": prompt_text},
@@ -280,7 +242,7 @@ class InstagramSkill(PluginSkill):
             logger.debug(f"Text: {len(prompt_text)} chars")
             logger.debug(f"Image URL: data:image/png;base64,... ({len(image_url)} chars total)")
             logger.debug(f"Content items: {len(message['content'])}")
-            logger.info(f"Sende an LLM {vcfg['model']}...")
+            logger.info("Sending to LLM %s...", instance.model)
             
             from app.core.llm_queue import get_llm_queue, Priority
             response = get_llm_queue().submit(
@@ -291,12 +253,12 @@ class InstagramSkill(PluginSkill):
                 agent_name=character_name)
             caption = response.content.strip()
 
-            # Cleanup: Artefakte und Metadaten entfernen
+            # Remove artifacts and metadata from the generated caption.
             caption = re.sub(r'^(?:Bildtext|Caption|Post\s*Text|Text\s*\d*)\s*:\s*', '', caption, flags=re.MULTILINE)
             caption = re.sub(r'\*\*I\s+feel\s+[^*]+\*\*\.?\s*', '', caption, flags=re.IGNORECASE)
             caption = re.sub(r'\bI\s+feel\s+\w+(?:\s+\w+)?\.?\s*$', '', caption, flags=re.IGNORECASE)
             caption = ' '.join(caption.split()).strip()
-            # Anfuehrungszeichen entfernen falls LLM sie einpackt
+            # Remove surrounding quotes when the LLM adds them.
             if caption.startswith('"') and caption.endswith('"'):
                 caption = caption[1:-1]
             if caption.startswith("'") and caption.endswith("'"):
@@ -311,12 +273,7 @@ class InstagramSkill(PluginSkill):
             return None
 
     def _analyze_image(self, image_path: str, character_name: str) -> Optional[str]:
-        """Analysiert ein generiertes Bild via Vision-LLM und gibt eine sachliche Beschreibung zurueck.
-
-        Wird nach der Bildgenerierung aufgerufen um eine objektive Bildbeschreibung
-        in den Metadaten zu speichern.
-        """
-        from app.core.llm_client import LLMClient
+        """Describe the generated image objectively for its post metadata."""
 
         logger.info("Instagram Bildanalyse gestartet...")
 
@@ -342,18 +299,11 @@ class InstagramSkill(PluginSkill):
             "image_analysis", language_name=lang_name)
 
         try:
-            vcfg = self._get_vision_llm_config(character_name)
-            if not vcfg:
-                logger.warning("Kein Vision-LLM fuer Bildanalyse verfuegbar")
+            instance = self._get_vision_llm(character_name)
+            if not instance:
+                logger.warning("No vision LLM available for image analysis")
                 return None
-
-            llm = LLMClient(
-                model=vcfg["model"],
-                api_key=vcfg["api_key"],
-                api_base=vcfg["api_base"],
-                temperature=0.3,
-                max_tokens=500,
-                request_timeout=int(os.environ.get("LLM_REQUEST_TIMEOUT", "120")))
+            llm = instance.create_llm(temperature=0.3, max_tokens=500)
 
             image_url = f"data:image/png;base64,{base64_image}"
             messages = [
@@ -710,12 +660,12 @@ class InstagramSkill(PluginSkill):
         return format_example(fmt, self.name, "relaxing at a cafe with coffee")
 
     def memorize_result(self, result: str, character_name: str) -> bool:
-        """Speichert Instagram-Posts als Memory (fuer Scheduler-Aufrufe)."""
+        """Store Instagram posts as memories for scheduled calls."""
         if not result or "Fehler" in result[:20] or "Error" in result[:20]:
             return False
         try:
             from app.models.memory import add_memory
-            # Nur die wesentliche Info speichern (nicht die ganze URL etc.)
+            # Keep only the essential information, not the full URL.
             content = f"Ich habe einen Instagram-Post erstellt: {result[:500]}"
             add_memory(
                 character_name=character_name,

@@ -1722,14 +1722,14 @@ class ImageService:
                 "api_key": instance.api_key,
                 "temperature": instance.temperature,
                 "max_tokens": instance.max_tokens,
+                "instance": instance,
+                "extra_params": instance.extra_params,
             }
         logger.warning("No LLM available for task=image_recognition (check LLM Routing)")
         return None
 
     def _generate_image_analysis(self, image_path: str, character_name: str) -> Optional[str]:
         """Describe the image objectively through the vision LLM."""
-        from app.core.llm_client import LLMClient
-
         if not os.path.exists(image_path):
             return None
 
@@ -1756,13 +1756,7 @@ class ImageService:
             if not vcfg:
                 return None
 
-            llm = LLMClient(
-                model=vcfg["model"],
-                api_key=vcfg["api_key"],
-                api_base=vcfg["api_base"],
-                temperature=0.3,
-                max_tokens=500,
-                request_timeout=int(os.environ.get("LLM_REQUEST_TIMEOUT", "120")))
+            llm = vcfg["instance"].create_llm(temperature=0.3, max_tokens=500)
 
             image_url = f"data:image/png;base64,{base64_image}"
             messages = [
@@ -1815,7 +1809,6 @@ class ImageService:
             return None
 
         try:
-            from app.core.llm_client import LLMClient
             from app.core.llm_queue import get_llm_queue, Priority
 
             vcfg = self._get_vision_llm_config(character_name)
@@ -1823,13 +1816,8 @@ class ImageService:
                 # Use the shortened raw text if extraction fails.
                 return clean[:200]
 
-            llm = LLMClient(
-                model=vcfg["model"],
-                api_key=vcfg["api_key"],
-                api_base=vcfg["api_base"],
-                temperature=0.5,
-                max_tokens=100,
-                request_timeout=30)
+            llm = vcfg["instance"].create_llm(temperature=0.5, max_tokens=100,
+                                               request_timeout=30)
 
             if photographer_subjects:
                 subject_names = ", ".join(photographer_subjects)
@@ -1920,15 +1908,9 @@ class ImageService:
 
         def _run_llm(vcfg: Dict[str, Any], system: str, source: str):
             try:
-                from app.core.llm_client import LLMClient
                 from app.core.llm_queue import get_llm_queue, Priority
-                llm = LLMClient(
-                    model=vcfg["model"],
-                    api_key=vcfg["api_key"],
-                    api_base=vcfg["api_base"],
-                    temperature=0.1,
-                    max_tokens=200,
-                    request_timeout=30)
+                llm = vcfg["instance"].create_llm(temperature=0.1, max_tokens=200,
+                                                   request_timeout=30)
                 response = get_llm_queue().submit(
                     task_type="tool",
                     priority=Priority.HIGH,

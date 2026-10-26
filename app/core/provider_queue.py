@@ -35,7 +35,7 @@ from app.core.llm_lanes import Overflow
 from .provider import Provider
 from .llm_queue import LLMTask, Priority
 from .turn_trace import current_trace
-from app.utils.llm_logger import get_model_name
+from app.utils.llm_logger import get_max_tokens, get_model_name
 
 from app.core.log import get_logger
 logger = get_logger("provider_queue")
@@ -1704,6 +1704,10 @@ class ProviderQueue:
                                 response = _wait_for_future(future2, task, task_timeout)
                             response = _strip_thinking(response)
                         finally:
+                            # The retry may have used a doubled limit; extra_body
+                            # can also keep its own limit despite the temporary
+                            # top-level change. Log what the last request sent.
+                            max_tokens = _get_max_tokens_safe(task._llm)
                             task._llm.max_tokens = orig_max
 
                     task.result = response
@@ -1800,17 +1804,8 @@ def _strip_thinking(response) -> Any:
 
 
 def _get_max_tokens_safe(llm) -> int:
-    """Extracts max_tokens from the LLM instance.
-
-    Returns 0 when the client carries no completion limit — that is "no limit
-    configured, the provider's default budget applies", NOT "could not be
-    determined". Both client classes always define ``max_tokens`` (the
-    Anthropic one even forces a value), so a missing attribute cannot occur;
-    ``tokens.max: 0`` in llm_calls.jsonl therefore reads unambiguously as
-    "unlimited from our side".
-    """
-    val = getattr(llm, "max_tokens", None)
-    return int(val) if val else 0
+    """Extract the actual completion limit, or 0 when omitted from the body."""
+    return get_max_tokens(llm)
 
 
 def _log_task_result(task: LLMTask, model_name: str, max_tokens: int, response,

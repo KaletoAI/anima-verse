@@ -15,13 +15,15 @@ Also living here:
 
 Streaming runs separately but uses the same resolver.
 """
+import json
 import os
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core import config
-from app.core.llm_client import AnthropicLLMClient, LLMClient
+from app.core.llm_client import AnthropicLLMClient, LLMClient, merge_extra_params
 from app.core.llm_queue import get_llm_queue
 from app.core.log import get_logger
 from app.core.provider import Provider
@@ -32,7 +34,7 @@ logger = get_logger("llm_router")
 
 
 # ---------------------------------------------------------------------------
-# LLMInstance + Fabriken
+# LLMInstance + factories
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -49,6 +51,7 @@ class LLMInstance:
     chat_template: Optional[str] = None
     # The entry's repetition_penalty; None = not sent (see LLMClient).
     repetition_penalty: Optional[float] = None
+    extra_params: Dict[str, Any] = field(default_factory=dict, repr=False)
     _provider: Optional[Provider] = field(default=None, repr=False)
     pinned: bool = False
 
@@ -90,15 +93,17 @@ class LLMInstance:
         model = overrides.get("model") or self.model
         api_key = overrides.get("api_key") or self.api_key
         api_base = overrides.get("api_base") or self.api_base
-        temperature = float(overrides.get("temperature") or self.temperature)
-        max_tok = overrides.get("max_tokens") or self.max_tokens
+        temperature = float(overrides["temperature"]) if overrides.get("temperature") is not None else self.temperature
+        max_tok = overrides["max_tokens"] if "max_tokens" in overrides else self.max_tokens
         max_tokens = int(max_tok) if max_tok else None
         provider_timeout = self._provider.timeout if self._provider else None
-        timeout = provider_timeout or int(os.environ.get("LLM_REQUEST_TIMEOUT", "120"))
+        timeout = (overrides.get("request_timeout") or provider_timeout
+                   or int(os.environ.get("LLM_REQUEST_TIMEOUT", "120")))
         frequency_penalty = overrides.get("frequency_penalty")
         top_p = overrides.get("top_p")
         repetition_penalty = overrides.get("repetition_penalty",
                                            self.repetition_penalty)
+        extra_params = merge_extra_params(self.extra_params, overrides.get("extra_params") or {})
 
         if self._provider and self._provider.type == "anthropic":
             client = AnthropicLLMClient(
@@ -107,7 +112,8 @@ class LLMInstance:
                 api_base=api_base,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                request_timeout=timeout)
+                request_timeout=timeout,
+                extra_params=extra_params)
         else:
             client = LLMClient(
                 model=model,
@@ -120,7 +126,8 @@ class LLMInstance:
                                or self.chat_template),
                 frequency_penalty=frequency_penalty,
                 top_p=top_p,
-                repetition_penalty=repetition_penalty)
+                repetition_penalty=repetition_penalty,
+                extra_params=extra_params)
         client.provider_name = self.provider_name
         return client
 
@@ -144,10 +151,7 @@ def get_llm_instance_by_name(model_name: str) -> Optional[LLMInstance]:
     if not provider:
         logger.warning("get_llm_instance_by_name: No provider found for '%s'", model_name)
         return None
-    return LLMInstance(
-        provider_name=provider.name,
-        model=model_name,
-        _provider=provider)
+    return _named_instance(provider, model_name)
 
 
 def create_llm_instance(
@@ -155,7 +159,8 @@ def create_llm_instance(
     model: str,
     provider_name: str = "",
     temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None) -> Optional[LLMInstance]:
+    max_tokens: Optional[int] = None,
+    routing_entry: Optional[dict] = None) -> Optional[LLMInstance]:
     """Creates an LLMInstance for a concrete model (for the dev routes)."""
     pm = get_provider_manager()
 
@@ -165,20 +170,69 @@ def create_llm_instance(
     provider = None
     if provider_name:
         provider = pm.get_provider(provider_name)
-    if not provider:
+    if not provider and routing_entry is None:
         provider = pm.find_provider_for_model(model)
 
     if not provider:
         logger.warning("No provider found for model '%s' (task=%s)", model, task)
         return None
 
-    return LLMInstance(
-        provider_name=provider.name,
-        model=model,
-        tasks=[task],
-        temperature=temperature if temperature is not None else 0.7,
-        max_tokens=max_tokens,
-        _provider=provider)
+    instance = (_instance_for(task, routing_entry, provider) if routing_entry is not None
+                else _named_instance(provider, model))
+    instance.tasks = [task]
+    instance.temperature = temperature if temperature is not None else instance.temperature
+    instance.max_tokens = max_tokens if max_tokens is not None else instance.max_tokens
+    return instance
+
+
+def parse_extra_params(raw: Any) -> Dict[str, Any]:
+    """Accept a JSON object (or editor JSON text); reject non-finite numbers."""
+    if isinstance(raw, str):
+        if not raw.strip():
+            return {}
+        try:
+            raw = json.loads(raw, parse_constant=lambda _: _reject_non_finite())
+        except ValueError as exc:
+            if str(exc) == "extra_params must contain only finite numbers":
+                raise
+            raise ValueError("extra_params must be a valid JSON object") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("extra_params must be a JSON object")
+    _check_finite(raw)
+    return raw
+
+
+def _reject_non_finite():
+    raise ValueError("extra_params must contain only finite numbers")
+
+
+def _check_finite(value: Any) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        _reject_non_finite()
+    if isinstance(value, dict):
+        for nested in value.values():
+            _check_finite(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            _check_finite(nested)
+
+
+def _named_instance(provider: Provider, model: str) -> LLMInstance:
+    """Use the first enabled entry for this provider/model, if one is saved."""
+    for entry in _load_routing():
+        if (isinstance(entry, dict) and entry.get("enabled") is not False
+                and entry.get("provider") == provider.name and entry.get("model") == model):
+            return _instance_for("", entry, provider)
+    return LLMInstance(provider_name=provider.name, model=model, _provider=provider)
+
+
+def _entry_extra_params(entry: dict) -> Dict[str, Any]:
+    try:
+        return parse_extra_params(entry.get("extra_params", {}))
+    except ValueError:
+        logger.warning("Invalid extra_params on routing entry %s/%s; ignored",
+                       entry.get("provider"), entry.get("model"))
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +285,7 @@ async def _warmup_one(entry: dict) -> None:
         model=model,
         temperature=0.0,
         max_tokens=1,
+        extra_params=_entry_extra_params(entry),
         _provider=provider,
     )
     try:
@@ -410,6 +465,7 @@ def _instance_for(task: str, entry: dict, provider: Provider) -> LLMInstance:
         max_tokens=max_tokens,
         chat_template=(entry.get("chat_template") or "") or None,
         repetition_penalty=repetition_penalty,
+        extra_params=_entry_extra_params(entry),
         _provider=provider)
 
 

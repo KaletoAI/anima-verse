@@ -298,7 +298,7 @@ SECTIONS = {
                 # sampling setting.
                 "fields": ["name", "preload_on_startup", "provider",
                            "model", "max_concurrent", "accepts_overflow", "temperature",
-                           "repetition_penalty", "max_tokens", "chat_template", "tasks"],
+                           "repetition_penalty", "max_tokens", "chat_template", "extra_params", "tasks"],
                 # Rendered as a click toggle in the collapsed entry header
                 # instead of inside the accordion body.
                 "header_fields": ["enabled"],
@@ -374,6 +374,12 @@ SECTIONS = {
                 "type": "text",
                 "label": "Chat Template (optional)",
                 "description": "Jinja chat_template — only set if the provider's tokenizer has no default template (some Infermatic / vLLM finetunes since transformers v4.44). Sent via extra_body.chat_template. Leave empty to use the provider default.",
+            },
+            "extra_params": {
+                "type": "json_object",
+                "label": "Extra request parameters",
+                "default": {},
+                "description": "JSON object merged into the LLM request body. Explicit request fields take precedence. Use the Venice template to disable thinking on Venice models.",
             },
             "tasks": {
                 "type": "task_order_list",

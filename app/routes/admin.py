@@ -45,10 +45,19 @@ def model_capabilities_page():
 
 @router.get("/models/data")
 def model_capabilities_data() -> Dict[str, Any]:
-    """JSON API: every available model plus its capabilities."""
+    """JSON API: every available model plus its capabilities and routing labels."""
+    from app.core import config, config_admin
     pm = get_provider_manager()
     all_caps = get_all_capabilities()
     suit_all = get_all_suitability()  # Key: "provider::model" (lowercased)
+    routing = config.get("llm_routing", [])
+    routing_entries = [
+        {"index": index, "provider": entry["provider"], "model": entry["model"],
+         "name": str(entry.get("name") or f"Entry #{index + 1}")}
+        for index, entry in enumerate(routing if isinstance(routing, list) else [])
+        if isinstance(entry, dict) and entry.get("enabled") is not False
+        and isinstance(entry.get("provider"), str) and isinstance(entry.get("model"), str)
+    ]
 
     # Collect every model from every provider
     models: List[Dict[str, Any]] = []
@@ -116,6 +125,8 @@ def model_capabilities_data() -> Dict[str, Any]:
         "models": models,
         "unmatched_entries": unmatched,
         "all_capabilities": {k: v for k, v in all_caps.items() if not k.startswith("_")},
+        "routing_entries": routing_entries,
+        "routing_revision": config_admin.layer_revision("instance"),
         "default_tool_instruction": default_instruction,
     }
 
@@ -176,11 +187,21 @@ def _build_models_html() -> str:
         <div id="suitCases" class="info-text" style="margin-bottom:8px;">Loading test cases…</div>
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <select id="suitProvider" onchange="suitLoadModels()"><option value="">Provider…</option></select>
-            <input type="text" id="suitSearch" placeholder="Modell suchen…" style="min-width:160px;" oninput="suitRenderModels()" />
+            <input type="text" id="suitSearch" placeholder="Search models…" style="min-width:160px;" oninput="suitRenderModels()" />
             <select id="suitModel" style="min-width:240px;" onchange="suitOnModelChange()"><option value="">Model…</option></select>
+            <label for="suitEntry">LLM entry</label>
+            <select id="suitEntry" style="min-width:200px;"><option value="">Select a model…</option></select>
             <span id="suitModelCount" class="info-text"></span>
             <button class="btn btn-primary" id="suitStartBtn" onclick="suitStart()">Start test</button>
             <span id="suitStatus" class="info-text"></span>
+        </div>
+        <div style="margin-top:10px;">
+            <label><input type="checkbox" id="suitOverride" onchange="suitOverrideChanged()"> Use temporary request parameters (saved LLM entry settings still apply)</label>
+            <div id="suitOverrideFields" hidden>
+                <textarea id="suitExtraParams" aria-label="Temporary request parameters (JSON object)" placeholder="{}" oninput="suitValidateExtraParams()" style="display:block;width:100%;min-height:72px;margin-top:6px;">{}</textarea>
+                <button class="btn" type="button" onclick="suitVeniceTemplate()">Venice template</button>
+                <span id="suitExtraError" role="alert" style="color:#f85149;"></span>
+            </div>
         </div>
         <div id="suitJobs" style="margin-top:10px;"></div>
         <div id="suitProgress" style="margin-top:10px;"></div>

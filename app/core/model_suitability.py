@@ -1,27 +1,26 @@
-"""Model Suitability Test — prueft ein konkretes Modell auf Tool-/Helper-Eignung.
+"""Model Suitability Test — measures a specific model's tool/helper fitness.
 
-LOG-ABGELEITET: die Testfaelle stammen aus echten Aufrufen in
-``logs/llm_calls.jsonl`` (Feld ``prompt`` = {system, user}, plus die reale
-Antwort als "golden"). Damit testet der Test exakt das, was die App in der
-Praxis verlangt — statt synthetischer Spielzeug-Prompts.
+LOG-DERIVED: cases come from real calls in ``logs/llm_calls.jsonl`` (the
+``prompt`` {system, user} and actual response as the golden). The test thus
+measures what the application actually needs instead of toy prompts.
 
-Ablauf:
-1. Einmalig wird aus dem Log ein EINGEFRORENER Fixture-Satz extrahiert
-   (``storage/suitability_cases.json``): pro Task echte {system,user}-Prompts,
-   deren geloggte Antwort gueltig war, inkl. Positiv- (golden feuert ein Tool)
-   und Negativ-/Abstain-Faellen (golden = NONE). Eingefroren = gleiche Faelle
-   fuer jedes Modell -> Scores vergleichbar.
-2. Replay der echten Prompts gegen das Kandidaten-Modell; validiert mit
-   produktionsnahen Parsern je Format (echtes ``<tool name="X">…</tool>``-Format,
-   JSON-Schema, Abstain, Text). Tool-Faelle werden mehrfach gelaufen (Konsistenz).
+Workflow:
+1. Extract a FROZEN fixture set once into ``storage/suitability_cases.json``:
+   real {system, user} prompts per task with valid logged responses, both
+   positive (golden invokes a tool) and negative/abstain (golden = NONE).
+   Frozen cases make scores comparable across models.
+2. Replay those prompts against a candidate model and validate them with
+   production-like parsers for each format (actual ``<tool name="X">…</tool>``
+   tags, JSON schema, abstention and text). Tool cases run repeatedly to
+   measure consistency.
 
-Schluesselsignal (kalibriert an echtem RP-Modell "Fallen Command"): RP-Modelle
-geben Tool-Calls im FALSCHEN Format aus (``**SetActivity: …**`` statt
-``<tool name="SetActivity">…</tool>``) und ertraenken sie in Prosa -> der
-Projekt-Parser fuehrt NICHTS aus -> faellt hier durch.
+Key signal (calibrated against a real RP model): RP models emit tool calls
+in the WRONG format (``**SetActivity: …**`` rather than
+``<tool name="SetActivity">…</tool>``), buried in prose. The application
+parser then executes NOTHING, so such calls fail here.
 
-Result -> ``shared/config/model_capabilities.json`` (``tested_*`` +
-``tested_suitability`` + ``tested_verdict``), shown on the "Model Capabilities"
+Results go to ``shared/config/model_capabilities.json`` (``tested_*`` +
+``tested_suitability`` + ``tested_verdict``), shown on the Model Capabilities
 page. Shared across all worlds and tracked in git; the models' RAW answers go to
 the gitignored ``model_capabilities_outputs.json`` next to it, because the test
 replays real logged prompts and the answers quote the world.
@@ -43,14 +42,14 @@ Verdict = Tuple[bool, bool, str]  # (ok, hallucinated, detail)
 
 _LOG_PATH = Path("./logs/llm_calls.jsonl")
 _TAG_RE = re.compile(r'<tool\s+name="(\w+)">([\s\S]*?)</tool>')
-# Pseudo-Tool-Marker, die RP-Modelle statt des echten Formats verwenden
+# Pseudo-tool markers used by RP models instead of the actual tool format.
 _PSEUDO_RE = re.compile(r'(?im)(?:^|\n)\s*(?:\*\*|\[|#+\s*)?\s*'
                         r'(SetActivity|SetPose|SetLocation|Act|ChangeOutfit|TalkTo|'
                         r'SendMessage|ImageGenerator|Instagram|Retrospect)\s*[:=]')
 
-# Tool-Tasks (Tool-LLM-Entscheidung) vs. Helper-Tasks
+# Tool tasks (tool-LLM decisions) vs. helper tasks.
 _TOOL_TASKS = {"thought", "intent"}
-# Anzahl Faelle je Task + ob mehrfach (Konsistenz) gelaufen wird
+# Case counts per task, and whether the case runs repeatedly for consistency.
 _SELECT = [
     ("thought", 8),
     ("intent", 4),
@@ -69,7 +68,7 @@ def _cases_path() -> Path:
 
 
 # ---------------------------------------------------------------------------
-# JSON-Helfer
+# JSON helpers
 # ---------------------------------------------------------------------------
 
 def _strip_fences(text: str) -> str:
@@ -81,7 +80,7 @@ def _strip_fences(text: str) -> str:
 
 
 def _first_json(text: str, array: bool = False):
-    """Produktionsnah: erstes {…} bzw. […] aus dem Text ziehen und parsen."""
+    """Extract and parse the first {…} or […] from text, as production does."""
     s = _strip_fences(text)
     pat = r"\[[\s\S]*\]" if array else r"\{[\s\S]*\}"
     m = re.search(pat, s)
@@ -94,7 +93,7 @@ def _first_json(text: str, array: bool = False):
 
 
 # ---------------------------------------------------------------------------
-# Fixture-Builder (aus dem Log)
+# Fixture builder (from the log)
 # ---------------------------------------------------------------------------
 
 def _prompt_of(entry: dict) -> Tuple[str, str]:
@@ -130,8 +129,8 @@ def _build_expect(fmt: str, golden: str) -> Dict[str, Any]:
 
 
 def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
-    """Extrahiert einen eingefrorenen Fixture-Satz aus dem LLM-Log und speichert
-    ihn nach ``storage/suitability_cases.json``. Gibt eine Zusammenfassung zurueck."""
+    """Extract frozen fixtures from the LLM log and save them under storage;
+    return a summary of the resulting cases."""
     path = log_path or _LOG_PATH
     rows: List[dict] = []
     if path.exists():
@@ -147,8 +146,7 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
     allowed = sorted({m.group(1) for e in rows if e.get("task") == "thought"
                       for m in _TAG_RE.finditer(e.get("response") or "")})
 
-    # --- Pass 1: Kandidaten je Task sammeln (mehr als n, um ungueltige Goldens
-    #     ueberspringen zu koennen) ---
+    # Pass 1: gather more than n candidates per task to skip invalid goldens.
     pool: Dict[str, List[tuple]] = {}
     for task, n in _SELECT:
         seen = set()
@@ -172,8 +170,8 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
             cand.append((system, user, golden, fmt))
         pool[task] = cand
 
-    # Gehaertete JSON-Keys: Schnittmenge ueber ALLE json-Goldens eines Tasks
-    # (entfernt idiosynkratische Keys wie 'action', die nur in einem Golden waren).
+    # Hardened JSON keys: intersection across ALL JSON goldens of a task;
+    # drops idiosyncratic keys such as 'action' found in only one golden.
     task_keys: Dict[str, List[str]] = {}
     for task, cand in pool.items():
         keysets = []
@@ -186,8 +184,8 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
             inter = set.intersection(*keysets) if len(keysets) > 1 else keysets[0]
             task_keys[task] = sorted(inter)
 
-    # --- Pass 2: Cases bauen; nur Goldens, die ihren EIGENEN Validator bestehen
-    #     (filtert Prosa-/Muell-/uneindeutige Goldens raus). ---
+    # Pass 2: keep only goldens accepted by their OWN validator,
+    # filtering prose, garbage and ambiguous golden responses.
     cases: List[Dict[str, Any]] = []
     skipped = 0
     for task, n in _SELECT:
@@ -261,7 +259,7 @@ def cases_info() -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Validatoren je Format
+# Validators by format
 # ---------------------------------------------------------------------------
 
 def _strip_tool_noise(text: str) -> str:
@@ -336,8 +334,8 @@ def _v_text(out: str, expect: dict, allowed: List[str]) -> Verdict:
 
 _VALIDATORS = {"tool": _v_tool, "abstain": _v_abstain, "json": _v_json, "text": _v_text}
 
-# Infrastruktur-/Erreichbarkeits-Fehler (Provider down, non-serverless, Timeout)
-# — KEINE Modell-Aussage. Solche Laeufe werden NICHT gespeichert.
+# Infrastructure/availability errors are NOT evidence about the model;
+# do not save results for those runs.
 _INFRA_MARKERS = ("call error", "unable to access", "connection", "timeout",
                   "service unavailable", "bad gateway", "error code: 5",
                   "error code: 4", "non-serverless", "remote end closed")
@@ -352,10 +350,12 @@ def _is_infra_error(detail: str) -> bool:
 # Runner
 # ---------------------------------------------------------------------------
 
-def iter_suitability_results(model_full: str) -> Iterator[Dict[str, Any]]:
-    """Spielt die Fixture-Faelle gegen ein Modell und yieldet NDJSON-Events."""
+def iter_suitability_results(
+    model_full: str, extra_params: Optional[Dict[str, Any]] = None,
+    routing_entry: Optional[dict] = None,
+) -> Iterator[Dict[str, Any]]:
+    """Run frozen fixture cases against a model and yield NDJSON events."""
     from app.core.llm_router import create_llm_instance
-
     data = load_cases(auto_build=True)
     cases = data.get("cases", [])
     allowed = data.get("allowed_tools", [])
@@ -363,7 +363,8 @@ def iter_suitability_results(model_full: str) -> Iterator[Dict[str, Any]]:
         yield {"type": "error", "message": "No test cases — is logs/llm_calls.jsonl present?"}
         return
 
-    inst = create_llm_instance("suitability_test", model_full)
+    inst = create_llm_instance("suitability_test", model_full,
+                               routing_entry=routing_entry)
     if inst is None:
         yield {"type": "error", "message": f"No provider found for model '{model_full}'"}
         return
@@ -371,13 +372,14 @@ def iter_suitability_results(model_full: str) -> Iterator[Dict[str, Any]]:
         yield {"type": "error", "message": f"Provider '{inst.provider_name}' is not available"}
         return
     try:
-        client = inst.create_llm(temperature=0.3, max_tokens=900)
+        client = inst.create_llm(temperature=0.3, max_tokens=900,
+                                 extra_params=extra_params or {})
     except Exception as e:
         yield {"type": "error", "message": f"client init failed: {e}"}
         return
 
     def ask(system: str, user: str):
-        """Gibt (text, dauer_s, completion_tokens) zurueck."""
+        """Return (text, duration_s, completion_tokens)."""
         t0 = time.monotonic()
         resp = client.invoke([
             {"role": "system", "content": system},
@@ -410,19 +412,19 @@ def iter_suitability_results(model_full: str) -> Iterator[Dict[str, Any]]:
                 durs.append(0.0)
                 toks.append(0)
                 outputs.append("")
-        # Konsistenz: bestehen nur bei Mehrheit; Halluzination bei Mehrheit
+        # Pass and hallucination need a majority across repeats.
         npass = sum(1 for r in runs if r[0])
         nhall = sum(1 for r in runs if r[1])
         need = (repeats // 2) + 1
         ok = npass >= need
         hall = nhall >= need
         infra = any(_is_infra_error(r[2]) for r in runs)
-        # Detail + Output vom repraesentativsten Run (erster Fail, sonst erster)
+        # Take detail and output from the first failure, otherwise the first run.
         rep_idx = next((i for i, r in enumerate(runs) if not r[0]), 0)
         detail = runs[rep_idx][2]
         if repeats > 1:
             detail = f"{npass}/{repeats} runs ok — {detail}"
-        # Speed: Dauer (Mittel ueber gueltige Runs) + tok/s
+        # Speed: mean duration of valid runs plus tokens per second.
         valid_durs = [d for d in durs if d > 0]
         avg_dt = round(sum(valid_durs) / len(valid_durs), 2) if valid_durs else 0.0
         tot_tok = sum(toks)
@@ -431,7 +433,7 @@ def iter_suitability_results(model_full: str) -> Iterator[Dict[str, Any]]:
                "ok": bool(ok), "hallucinated": bool(hall), "detail": detail,
                "infra": bool(infra), "duration_s": avg_dt, "tok_s": tps,
                "tok": tot_tok, "dur_total": round(sum(valid_durs), 2),
-               # Roh-Output (gekuerzt) — Material zum Template-Optimieren
+               # Truncated raw output for prompt-template diagnosis.
                "output": (outputs[rep_idx] or "")[:600]}
         results.append(rec)
         yield {"type": "check", "index": idx, **{k: rec[k] for k in
@@ -455,7 +457,7 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
     tool_hall = sum(1 for r in tool if r["hallucinated"])
     tool_ok = bool(tool_rate >= 0.85 and tool_hall == 0)
     helper_ok = bool(helper_rate >= 0.70)
-    # Speed-Aggregat
+    # Aggregate speed.
     total_tok = sum(int(r.get("tok") or 0) for r in results)
     total_dur = sum(float(r.get("dur_total") or 0.0) for r in results)
     lat = [r["duration_s"] for r in results if r.get("duration_s")]
@@ -481,9 +483,8 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
 
 
 def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, Any]]) -> bool:
-    """Speichert das Ergebnis — ABER NICHT, wenn Infrastruktur-Fehler auftraten
-    (Provider down/non-serverless/Timeout) → solche Laeufe sind keine Modell-
-    Aussage. Gibt True zurueck, wenn gespeichert wurde."""
+    """Persist results only when no infrastructure errors occurred:
+    provider outages and timeouts do not say anything about model quality."""
     if summary.get("infra") or any(r.get("infra") for r in results):
         logger.info("Suitability NOT saved for %s — infrastructure error (provider "
                     "unreachable/non-serverless)", model_full)
@@ -497,8 +498,8 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
                       ("id", "label", "category", "ok", "hallucinated", "detail",
                        "duration_s", "tok_s")} for r in results]
     raw_outputs = {r["id"]: r.get("output") or "" for r in results if r.get("output")}
-    # Geschluesselt nach vollem Provider::Model → gleiches Modell auf anderer HW
-    # ueberschreibt sich NICHT mehr.
+    # Keyed by full Provider::Model; identical models on different hardware
+    # do not overwrite one another.
     record = {
         "tested_date": summary["date"],
         "tested_score": summary["score"],
@@ -529,15 +530,20 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
 
 
 # ---------------------------------------------------------------------------
-# Asynchroner Job-Runner (Start im Hintergrund-Thread, Status pollbar)
+# Asynchronous job runner (background thread, pollable status)
 # ---------------------------------------------------------------------------
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = threading.Lock()
 
+class SuitabilityTestConflict(RuntimeError):
+    """A different request is already testing this provider/model."""
 
-def _run_job(model_full: str) -> None:
+
+def _run_job(model_full: str, extra_params: Optional[Dict[str, Any]] = None,
+             routing_entry: Optional[dict] = None) -> None:
     try:
-        for ev in iter_suitability_results(model_full):
+        for ev in iter_suitability_results(
+                model_full, extra_params=extra_params, routing_entry=routing_entry):
             t = ev.get("type")
             with _JOBS_LOCK:
                 job = _JOBS.get(model_full)
@@ -569,34 +575,45 @@ def _run_job(model_full: str) -> None:
 
 def _snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
     j = dict(job)
+    j.pop("_request", None)
     j["checks"] = list(job.get("checks") or [])
     return j
 
 
-def start_test(model_full: str) -> Dict[str, Any]:
-    """Startet den Eignungstest fuer ein Modell im Hintergrund. Laeuft bereits
-    ein Job fuer dasselbe Modell, wird dessen aktueller Status zurueckgegeben."""
+def start_test(model_full: str, extra_params: Optional[Dict[str, Any]] = None,
+               routing_entry: Optional[dict] = None,
+               entry_index: Optional[int] = None) -> Dict[str, Any]:
+    """Run a model test, reusing only an identical active request."""
+    request = (entry_index, routing_entry, extra_params)
     with _JOBS_LOCK:
         cur = _JOBS.get(model_full)
         if cur and cur.get("status") == "running":
+            if cur.get("_request") != request:
+                raise SuitabilityTestConflict(
+                    "A different suitability test is already running for this model")
             return _snapshot(cur)
+        entry_name = (str(routing_entry.get("name") or
+                          (f"Entry #{entry_index + 1}" if entry_index is not None
+                           else "Saved LLM entry")) if routing_entry else "")
         job = {"model": model_full, "status": "running", "total": 0, "done": 0,
-               "checks": [], "summary": None, "error": None}
+               "checks": [], "summary": None, "error": None,
+               "entry_index": entry_index, "entry_name": entry_name,
+               "_request": request}
         _JOBS[model_full] = job
-    threading.Thread(target=_run_job, args=(model_full,), daemon=True,
-                     name="suit-test").start()
+    threading.Thread(target=_run_job, args=(model_full, extra_params, routing_entry),
+                     daemon=True, name="suit-test").start()
     with _JOBS_LOCK:
         return _snapshot(_JOBS[model_full])
 
 
 def get_job(model_full: str) -> Optional[Dict[str, Any]]:
-    """Aktueller Status eines (laufenden oder fertigen) Jobs, oder None."""
+    """Current status of a running or completed job, if any."""
     with _JOBS_LOCK:
         job = _JOBS.get(model_full)
         return _snapshot(job) if job else None
 
 
 def list_jobs() -> List[Dict[str, Any]]:
-    """Alle bekannten Jobs (fuer 'laeuft noch'-Anzeige nach Reload)."""
+    """All known jobs, for restoring the running-jobs view after reload."""
     with _JOBS_LOCK:
         return [_snapshot(j) for j in _JOBS.values()]

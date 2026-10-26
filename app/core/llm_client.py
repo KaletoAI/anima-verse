@@ -13,6 +13,7 @@ Provides:
 import asyncio
 import time
 import openai
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
@@ -215,6 +216,28 @@ def _is_gemma_model(model_name: str) -> bool:
     return "gemma" in lower
 
 
+def merge_extra_params(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
+    """Deep-merge JSON bodies, with override values winning and neither input mutated."""
+    if not base:
+        return deepcopy(overrides)
+    result = deepcopy(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = merge_extra_params(result[key], value)
+        else:
+            result[key] = deepcopy(value)
+    return result
+
+def _merge_sdk_dict_fields(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep SDK-provided nested fields when extra_body overrides their parent."""
+    extra_body = kwargs.get("extra_body")
+    if extra_body:
+        for key, value in extra_body.items():
+            if isinstance(value, dict) and isinstance(kwargs.get(key), dict):
+                extra_body[key] = merge_extra_params(kwargs[key], value)
+    return kwargs
+
+
 class LLMClient:
     """Replaces ChatOpenAI — holds the config and offers invoke() + astream().
 
@@ -235,7 +258,8 @@ class LLMClient:
         chat_template: Optional[str] = None,
         frequency_penalty: Optional[float] = None,
         top_p: Optional[float] = None,
-        repetition_penalty: Optional[float] = None):
+        repetition_penalty: Optional[float] = None,
+        extra_params: Optional[Dict[str, Any]] = None):
         self.model = model
         self.model_name = model
         self.openai_api_key = api_key
@@ -262,6 +286,7 @@ class LLMClient:
         # also counts the PROMPT tokens, so it is what reaches a reply copied
         # from the history. None = do not send it (the routing entry has none).
         self.repetition_penalty = repetition_penalty
+        self.extra_params = deepcopy(extra_params) if extra_params else {}
 
         client_kwargs = {
             "api_key": api_key,
@@ -302,9 +327,13 @@ class LLMClient:
             extra_body["chat_template"] = self.chat_template
         if self.repetition_penalty is not None:
             extra_body["repetition_penalty"] = float(self.repetition_penalty)
+        # The SDK overlays extra_body onto these top-level kwargs when it
+        # serializes the request; log metadata must use that same precedence.
+        if self.extra_params:
+            extra_body = merge_extra_params(extra_body, self.extra_params)
         if extra_body:
             kwargs["extra_body"] = extra_body
-        return kwargs
+        return _merge_sdk_dict_fields(kwargs)
 
     def invoke(self, messages: List) -> LLMResponse:
         """Synchronous LLM call (for the provider_queue.py worker threads)."""
@@ -344,8 +373,10 @@ class LLMClient:
         openai_msgs = to_openai_messages(messages)
         kwargs = self._build_kwargs()
         _usage_key = (self.base_url, self.model)
-        if _usage_key not in _NO_STREAM_USAGE:
+        explicit_stream_options = "stream_options" in self.extra_params
+        if not explicit_stream_options and _usage_key not in _NO_STREAM_USAGE:
             kwargs["stream_options"] = {"include_usage": True}
+        _merge_sdk_dict_fields(kwargs)
         max_attempts, base = _busy_retry_policy()
         attempt = 0
         # Busy-retry only around connection setup — once chunks start flowing a
@@ -356,7 +387,8 @@ class LLMClient:
                     messages=openai_msgs, stream=True, **kwargs)
                 break
             except Exception as e:
-                if "stream_options" in kwargs and _rejects_stream_options(e):
+                if (not explicit_stream_options and "stream_options" in kwargs
+                        and _rejects_stream_options(e)):
                     logger.info("%s @ %s refuses stream_options — streaming "
                                 "without usage from now on", self.model, self.base_url)
                     _NO_STREAM_USAGE.add(_usage_key)
@@ -588,7 +620,8 @@ class AnthropicLLMClient:
         api_base: str = "https://api.anthropic.com/v1",
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
-        request_timeout: int = 120):
+        request_timeout: int = 120,
+        extra_params: Optional[Dict[str, Any]] = None):
         import anthropic
 
         self.model = model
@@ -599,6 +632,7 @@ class AnthropicLLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens or 4096  # Anthropic requires max_tokens
         self.request_timeout = request_timeout
+        self.extra_params = deepcopy(extra_params) if extra_params else {}
 
         # The SDK expects the base URL without /v1
         base = api_base.rstrip("/")
@@ -614,12 +648,16 @@ class AnthropicLLMClient:
         kwargs: Dict[str, Any] = {
             "model": self.model,
             "messages": msgs,
-            "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
         if system:
             kwargs["system"] = system
-        return kwargs
+        # This Anthropic SDK has no temperature kwarg; send it through the
+        # supported extra_body channel, then let explicit params override it.
+        # The SDK overlays extra_body onto max_tokens as well as temperature.
+        kwargs["extra_body"] = merge_extra_params(
+            {"temperature": self.temperature}, self.extra_params)
+        return _merge_sdk_dict_fields(kwargs)
 
     def invoke(self, messages: List) -> LLMResponse:
         """Synchronous LLM call."""

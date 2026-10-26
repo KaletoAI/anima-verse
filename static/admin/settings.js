@@ -1350,6 +1350,14 @@ function renderInput(f, val, path) {
         case 'text':
             return '<textarea id="' + esc(id) + '" ' + _phAttr(f)
                 + 'onchange="setVal(\'' + sJs(path) + '\', this.value)">' + esc(val) + '</textarea>';
+        case 'json_object':
+            return '<textarea id="' + esc(id) + '" aria-label="' + esc(f.label) + '" '
+                + 'oninput="validateJsonObjectField(\'' + sJs(path) + '\', this)">'
+                + esc(JSON_OBJECT_DRAFTS.has(path) ? JSON_OBJECT_DRAFTS.get(path)
+                    : (val && Object.keys(val).length ? JSON.stringify(val, null, 2) : '')) + '</textarea>'
+                + '<button type="button" class="btn btn-sm" onclick="applyVeniceTemplate(\'' + sJs(path) + '\')">Venice template</button>'
+                + '<div class="desc" role="alert" id="error-' + esc(path) + '">'
+                + (INVALID_JSON_OBJECTS.has(path) ? 'Enter a valid JSON object.' : '') + '</div>';
         case 'provider_select':
             return renderProviderSelect(val, path);
         case 'model_select':
@@ -1856,6 +1864,18 @@ async function resetToDefault(path) {
     const shipped = shippedAt(path);
     if (shipped.has) setVal(path, shipped.value);
     else deleteVal(path);
+    // Replaced routing entries must not inherit index-keyed JSON editor state.
+    if (path === 'llm_routing' || path.startsWith('llm_routing[')) {
+        const resetDepth = parsePath(path).length;
+        const removed = draftPath => resetDepth <= parsePath(draftPath).length
+            && pathsOverlap(path, draftPath);
+        for (const draftPath of JSON_OBJECT_DRAFTS.keys()) {
+            if (removed(draftPath)) JSON_OBJECT_DRAFTS.delete(draftPath);
+        }
+        for (const invalidPath of INVALID_JSON_OBJECTS) {
+            if (removed(invalidPath)) INVALID_JSON_OBJECTS.delete(invalidPath);
+        }
+    }
     RESETS.add(path);
     for (const override of [...OVERRIDES]) {
         if (override === path || override.startsWith(path + '.')) OVERRIDES.delete(override);
@@ -1885,6 +1905,92 @@ async function setOnlyOverrides(value) {
     try { localStorage.setItem('settings-only-overrides', String(value)); } catch (e) { /* storage unavailable */ }
     buildNav();
     if (ACTIVE_SECTION && !ACTIVE_SECTION.startsWith('_')) await renderSection(ACTIVE_SECTION, ACTIVE_PAGE);
+}
+
+const INVALID_JSON_OBJECTS = new Set();
+const JSON_OBJECT_DRAFTS = new Map();
+
+// Keep index-keyed editor state attached to entries when the routing array shifts.
+function remapRoutingJsonDrafts(index, deleting) {
+    const prefix = /^llm_routing\[(\d+)\]\.extra_params$/;
+    const drafts = new Map();
+    const invalid = new Set();
+    for (const [path, value] of JSON_OBJECT_DRAFTS) {
+        const match = prefix.exec(path);
+        const oldIndex = match ? Number(match[1]) : -1;
+        if (oldIndex < 0) {
+            drafts.set(path, value);
+        } else if (!(deleting && oldIndex === index)) {
+            const next = oldIndex > index ? oldIndex + (deleting ? -1 : 1) : oldIndex;
+            drafts.set(`llm_routing[${next}].extra_params`, value);
+        }
+    }
+    for (const path of INVALID_JSON_OBJECTS) {
+        const match = prefix.exec(path);
+        const oldIndex = match ? Number(match[1]) : -1;
+        if (oldIndex < 0) invalid.add(path);
+        else if (!(deleting && oldIndex === index)) {
+            const next = oldIndex > index ? oldIndex + (deleting ? -1 : 1) : oldIndex;
+            invalid.add(`llm_routing[${next}].extra_params`);
+        }
+    }
+    if (!deleting) {
+        const source = `llm_routing[${index}].extra_params`;
+        const clone = `llm_routing[${index + 1}].extra_params`;
+        if (drafts.has(source)) drafts.set(clone, drafts.get(source));
+        if (invalid.has(source)) invalid.add(clone);
+    }
+    JSON_OBJECT_DRAFTS.clear();
+    INVALID_JSON_OBJECTS.clear();
+    for (const [path, value] of drafts) JSON_OBJECT_DRAFTS.set(path, value);
+    for (const path of invalid) INVALID_JSON_OBJECTS.add(path);
+}
+
+function validateJsonObjectField(path, input) {
+    const error = document.getElementById('error-' + path);
+    JSON_OBJECT_DRAFTS.set(path, input.value);
+    try {
+        const value = input.value.trim() ? JSON.parse(input.value) : {};
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            throw new Error('Enter a JSON object (not an array or scalar).');
+        }
+        const requireFinite = node => {
+            if (typeof node === 'number' && !Number.isFinite(node))
+                throw new Error('Numbers must be finite.');
+            if (node && typeof node === 'object')
+                for (const child of Object.values(node)) requireFinite(child);
+        };
+        requireFinite(value);
+        INVALID_JSON_OBJECTS.delete(path);
+        input.setCustomValidity('');
+        if (error) error.textContent = '';
+        setVal(path, value);
+        return true;
+    } catch (e) {
+        INVALID_JSON_OBJECTS.add(path);
+        input.setCustomValidity('Enter a valid JSON object.');
+        if (error) error.textContent = e instanceof SyntaxError ? 'Invalid JSON: ' + e.message : e.message;
+        return false;
+    }
+}
+
+function applyVeniceTemplate(path) {
+    const input = document.getElementById('f-' + path);
+    if (!input) return;
+    input.value = JSON.stringify({venice_parameters: {disable_thinking: true}}, null, 2);
+    validateJsonObjectField(path, input);
+}
+
+function validateJsonObjectsBeforeSave() {
+    document.querySelectorAll('textarea[id^="f-llm_routing["]').forEach(input => {
+        if (input.id.endsWith('.extra_params')) validateJsonObjectField(input.id.slice(2), input);
+    });
+    if (!INVALID_JSON_OBJECTS.size) return true;
+    const path = [...INVALID_JSON_OBJECTS][0];
+    const input = document.getElementById('f-' + path);
+    if (input) { input.focus(); input.reportValidity(); }
+    toast('Fix invalid extra request parameters before saving.', 'error');
+    return false;
 }
 
 function setVal(path, value) {
@@ -2082,6 +2188,7 @@ async function removeItem(path) {
     const arrPath = (typeof last === 'number')
         ? path.replace(/\[\d+\]$/, '')
         : path.replace(/\.[^.\[\]]+$/, '');
+    if (arrPath === 'llm_routing') remapRoutingJsonDrafts(last, true);
     delete SELECTED_ITEM[arrPath];
     renderSection(ACTIVE_SECTION);
 }
@@ -2108,6 +2215,7 @@ async function duplicateItem(path) {
         touchPath(path);
         parent.splice(last + 1, 0, copy);
         const arrPath = path.replace(/\[\d+\]$/, '');
+        if (arrPath === 'llm_routing') remapRoutingJsonDrafts(last, false);
         SELECTED_ITEM[arrPath] = arrPath + '[' + (last + 1) + ']';
     } else {
         // Dict: ask the user for a new key — keep it dot-free (the editor's
@@ -2307,6 +2415,7 @@ async function runActionButton(endpoint, method, path, bodyFrom, confirmMsg, btn
 }
 
 async function saveConfig() {
+    if (!validateJsonObjectsBeforeSave()) return;
     const btn = document.getElementById('btn-save');
     btn.disabled = true;
     btn.textContent = 'Saving...';

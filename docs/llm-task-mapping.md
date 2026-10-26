@@ -29,6 +29,34 @@ raises it per detected repetition, only on entries that set it. Measured value
 for a 111B RP model: 1.03 base, ceiling 1.05; from 1.08 on marker lines break
 and replies drift into English.
 
+Each entry can also set `extra_params` to a JSON object of additional HTTP
+request-body fields, independently of its task assignments. The LLMs editor's
+Venice help button inserts `{"venice_parameters":{"disable_thinking":true}}`;
+the template is editable and does not apply to other entries automatically.
+Leave it empty for no additional fields. OpenAI-compatible SDKs receive these
+fields through `extra_body` (write the body fields, not `extra_body`, in the
+editor). Explicit fields override generated body values; nested objects merge
+recursively, while arrays and scalar values replace existing values. Provider
+endpoints, credentials and headers are not configurable through this field.
+Saved parameters must be JSON objects containing finite numbers only, including
+numbers nested inside arrays or objects; invalid input is rejected before save.
+Literal request strings, including stop sequences beginning with `***`, are
+saved unchanged; they are not secret placeholders. External embedding
+parameters contribute to the persisted vector-cache identity, so a changed
+body does not reuse vectors produced under the previous settings. Logs and
+replay defaults report the effective sampler and token values after explicit
+body overrides.
+The Model Capabilities suitability test selects the configured LLM entry for the
+model. If several saved entries use the same provider and model, choose one by
+name in the LLM entry dropdown; a changed routing revision or invalid selection
+is rejected rather than silently testing whichever entry now occupies that index.
+Models without a saved entry can still be tested.
+Optional temporary request parameters merge into the chosen entry only for
+that run and do not change saved settings. A second request for the same model
+while a different entry or temporary override is running receives HTTP 409;
+the running job identifies its entry by name and index. The same request
+construction serves both tests and normal synchronous or streaming calls.
+
 ### Cache lanes — how many calls a model runs at once
 
 `max_concurrent` on an entry (admin label **"Lanes"**, LLMs page) is not a
@@ -153,9 +181,9 @@ id must occur as a string literal in some caller under `app/` or `plugins/`
   are no longer in the catalog, with a remove button.
   **Order is written as the position in the chain (1..n), not typed in.**
 - **LLMs** — the per-entry editor: name, enabled, preload on startup, provider,
-  model, temperature, max tokens, chat template. The tasks of an entry are
-  read-only chips here; deleting an entry asks inline and names the tasks that
-  would lose their only LLM.
+  model, temperature, max tokens, chat template and additional request body
+  (JSON). The tasks of an entry are read-only chips here; deleting an entry
+  asks inline and names the tasks that would lose their only LLM.
   **Search models…** loads the selected provider's models on focus and filters
   their names by case-insensitive substring. Clearing the search restores the
   full list; changing provider clears the search. Filtering never changes the

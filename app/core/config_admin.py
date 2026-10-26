@@ -77,6 +77,8 @@ def rebase_layer(scope: str, own: dict, base: dict, current: dict, resets=()) ->
     holds a stored value conflicts instead of silently discarding that change."""
     schema = config_scope.schema_for(scope)
     mine = merge_sensitive(own, base)
+    if scope == config_scope.INSTANCE:
+        _restore_request_body_params(mine, own)
     _preserve_unsent_subarray_fields(mine, base, schema)
     if scope == config_scope.INSTANCE:
         _preserve_unsent_image_routing(mine, base)
@@ -437,6 +439,17 @@ def _preserve_unsent_image_routing(merged: dict, current: dict) -> None:
         new_ig["routing"] = cur_ig["routing"]
 
 
+def _restore_request_body_params(merged: dict, source: dict) -> None:
+    """Request-body JSON is literal data, never a masked secret placeholder."""
+    source_entries = source.get("llm_routing")
+    merged_entries = merged.get("llm_routing")
+    if isinstance(source_entries, list) and isinstance(merged_entries, list):
+        for item, target in zip(source_entries, merged_entries):
+            if (isinstance(item, dict) and isinstance(target, dict)
+                    and "extra_params" in item):
+                target["extra_params"] = copy.deepcopy(item["extra_params"])
+
+
 def drop_masked(value: Any) -> Any:
     """``value`` with every '***'-masked string blanked to "" — for a payload
     part that has no stored counterpart to unmask from. A mask is never
@@ -609,6 +622,8 @@ def prepare_layer(scope: str, values: dict, resets=(), confirm_drop=(), base_rev
             raise LayerStale([], "unknown_base")
         own = rebase_layer(scope, own, base, current, resets)
     merged = merge_sensitive(own, current)
+    if scope == config_scope.INSTANCE:
+        _restore_request_body_params(merged, own)
     _preserve_unsent_subarray_fields(merged, current, schema)
     if scope == config_scope.INSTANCE:
         _preserve_unsent_image_routing(merged, current)

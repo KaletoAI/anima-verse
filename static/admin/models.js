@@ -2,6 +2,8 @@
 let allModels = [];
 let unmatchedEntries = [];
 let defaultToolInstruction = '';
+let suitEntries = [];         // public routing labels and indices, never entry settings
+let suitRoutingRevision = '';
 let sortField = '';
 let sortDir = 0; // 0=none, 1=asc, -1=desc
 
@@ -20,11 +22,14 @@ async function loadData() {
     allModels = data.models || [];
     unmatchedEntries = data.unmatched_entries || [];
     defaultToolInstruction = data.default_tool_instruction || '';
+    suitEntries = data.routing_entries || [];
+    suitRoutingRevision = data.routing_revision || '';
+    suitRenderEntries();
 
-    // Provider-Filter befuellen
+    // Populate the provider filter.
     const providers = [...new Set(allModels.map(m => m.provider))].sort();
     const provSel = document.getElementById('filterProvider');
-    provSel.innerHTML = '<option value="">Alle Provider</option>';
+    provSel.innerHTML = '<option value="">All providers</option>';
     providers.forEach(p => { provSel.add(new Option(p, p)); });
 
     renderAll();
@@ -36,7 +41,7 @@ function filterTable() {
 
 function sortBy(field) {
     if (sortField === field) {
-        // Gleiche Spalte: asc -> desc -> kein Sort
+        // Same column: ascending -> descending -> unsorted.
         if (sortDir === 1) sortDir = -1;
         else if (sortDir === -1) { sortDir = 0; sortField = ''; }
         else sortDir = 1;
@@ -223,12 +228,12 @@ function testBadge(caps, modelName) {
     let cls = 'ok';
     if (ok === 0) cls = 'fail';
     else if (hall > 0) cls = 'warn';
-    // Verdict dominiert: ein Modell, das den strengen Tool-Test nicht besteht,
-    // wird NICHT gruen markiert, auch wenn der Rohscore hoch ist.
+    // Verdict takes precedence: a model failing the strict tool test is not
+    // marked green even when its raw score is high.
     if (verdict && verdict.tool === false) cls = (hall > 0 ? 'fail' : 'warn');
 
-    // Welches Modell wurde WIRKLICH getestet? (Substring-Matching kann fremde
-    // results.) testedBare = the name without the provider prefix.
+    // Which model was ACTUALLY tested? Substring matching can inherit results
+    // from another model. testedBare omits the provider prefix.
     const testedFull = (suit && suit.model) ? suit.model : '';
     const testedBare = testedFull.indexOf('::') >= 0 ? testedFull.split('::').pop() : testedFull;
     const inherited = !!(testedBare && modelName && testedBare.toLowerCase() !== modelName.toLowerCase());
@@ -275,8 +280,8 @@ function testBadge(caps, modelName) {
 
 function capToggle(modelName, field, value) {
     let cls, label;
-    if (value === true) { cls = 'cap-yes'; label = 'Ja'; }
-    else if (value === false) { cls = 'cap-no'; label = 'Nein'; }
+    if (value === true) { cls = 'cap-yes'; label = 'Yes'; }
+    else if (value === false) { cls = 'cap-no'; label = 'No'; }
     else { cls = 'cap-unknown'; label = '?'; }
     return `<span class="cap-toggle ${cls}" data-model="${esc(modelName)}" data-field="${field}" data-value="${esc(value)}" onclick="toggleCap(this)">${label}</span>`;
 }
@@ -289,8 +294,8 @@ function toggleCap(el) {
     else next = true;
 
     el.setAttribute('data-value', String(next));
-    if (next === true) { el.className = 'cap-toggle cap-yes'; el.textContent = 'Ja'; }
-    else if (next === false) { el.className = 'cap-toggle cap-no'; el.textContent = 'Nein'; }
+    if (next === true) { el.className = 'cap-toggle cap-yes'; el.textContent = 'Yes'; }
+    else if (next === false) { el.className = 'cap-toggle cap-no'; el.textContent = 'No'; }
     else { el.className = 'cap-toggle cap-unknown'; el.textContent = '?'; }
 
     saveFromElement(el);
@@ -301,7 +306,7 @@ function saveRow(inputEl) {
 }
 
 async function saveFromElement(el) {
-    // Modellname aus Element oder Zeile
+    // Model name from the element or its row.
     const modelName = el.getAttribute('data-model') || el.closest('tr').querySelector('[data-model]').getAttribute('data-model');
 
     // Find every element for this model (main row + detail row)
@@ -331,13 +336,13 @@ async function saveFromElement(el) {
             indicator.classList.add('show');
             setTimeout(() => indicator.classList.remove('show'), 1500);
         }
-        // Update lokalen State
+        // Update local state.
         const m = allModels.find(x => x.name === modelName);
         if (m) {
             m.has_custom_entry = true;
             m.capabilities = { tool_calling, vision, notes_de, tool_instruction };
         }
-        // Zahnrad-Button gelb markieren wenn Instruktion gesetzt
+        // Highlight the instruction button when an instruction is set.
         const instrId = 'instr-' + cssId(modelName);
         const instrRow = document.getElementById(instrId);
         if (instrRow) {
@@ -420,10 +425,11 @@ function cssId(s) {
     return String(s).replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-// ── Tool/Helper Suitability Test (asynchron, läuft im Hintergrund) ──
+// ── Tool/Helper Suitability Test (runs in the background) ──
 let suitPollTimer = null;
 let suitCur = { provider: '', model: '' };
 let suitModels = [];          // every model of the selected provider
+let suitEntryModel = '';      // key for retaining selection on data refresh only
 let suitVision = new Set();   // of those, the vision-capable ones
 let suitLoadErr = '';         // error text from loading the model list
 
@@ -437,10 +443,10 @@ async function suitInit() {
             (d.providers || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
     } catch (e) { /* ignore */ }
     suitCasesInfo();
-    suitJobsRefresh();  // startet eigenen Poll-Loop
+    suitJobsRefresh();  // starts its own polling loop
 }
 
-// Liste ALLER Test-Jobs (laufend/fertig) — parallele Taucher auf einen Blick.
+// List ALL test jobs (running and completed).
 async function suitJobsRefresh() {
     if (suitJobsTimer) { clearTimeout(suitJobsTimer); suitJobsTimer = null; }
     const el = document.getElementById('suitJobs');
@@ -453,10 +459,10 @@ async function suitJobsRefresh() {
     const running = jobs.filter(j => j.status === 'running');
     if (!jobs.length) { el.innerHTML = ''; }
     else {
-        // laufende zuerst, dann der Rest
+        // Running jobs first, followed by completed jobs.
         jobs.sort((a, b) => (a.status === 'running' ? 0 : 1) - (b.status === 'running' ? 0 : 1));
-        el.innerHTML = '<div class="info-text" style="margin-bottom:4px;">Test-Jobs ('
-            + running.length + ' laufend):</div>'
+        el.innerHTML = '<div class="info-text" style="margin-bottom:4px;">Test jobs ('
+            + running.length + ' running):</div>'
             + jobs.map(j => {
                 const v = j.verdict || {};
                 let st, col;
@@ -467,8 +473,9 @@ async function suitJobsRefresh() {
                 else { st = j.status || ''; col = '#8b949e'; }
                 const dot = j.status === 'running' ? '⏳' : (j.status === 'error' ? '❌' : '✔');
                 return '<div style="padding:2px 0; cursor:pointer; font-size:13px;" '
-                    + 'onclick="suitSelectJob(\'' + escJs(j.model) + '\')" title="Anzeigen">'
+                    + 'onclick="suitSelectJob(\'' + escJs(j.model) + '\')" title="Show details">'
                     + dot + ' <b>' + esc(j.model) + '</b> '
+                    + (j.entry_name ? '<span class="info-text">(' + esc(j.entry_name) + ')</span> ' : '')
                     + '<span style="color:' + col + ';">' + esc(st) + '</span></div>';
             }).join('');
     }
@@ -476,7 +483,7 @@ async function suitJobsRefresh() {
     suitJobsTimer = setTimeout(suitJobsRefresh, running.length ? 2000 : 8000);
 }
 
-// Job aus der Liste anklicken → in der Detailansicht zeigen.
+// Show a selected job in the detail view.
 function suitSelectJob(modelFull) {
     const idx = modelFull.indexOf('::');
     suitCur = idx >= 0
@@ -508,6 +515,8 @@ async function suitRebuild() {
 async function suitLoadModels() {
     const prov = document.getElementById('suitProvider').value;
     const msel = document.getElementById('suitModel');
+    msel.value = '';
+    suitRenderEntries();
     suitModels = []; suitVision = new Set();
     if (!prov) { suitRenderModels(); return; }
     msel.innerHTML = '<option value="">Loading…</option>';
@@ -520,7 +529,7 @@ async function suitLoadModels() {
     } catch (e) { suitModels = []; suitLoadErr = 'error'; }
     suitRenderModels();
 }
-// Modell-Select aus suitModels bauen, gefiltert nach dem Suchfeld.
+// Build the model dropdown from suitModels, filtered by search.
 function suitRenderModels() {
     const msel = document.getElementById('suitModel');
     const cnt = document.getElementById('suitModelCount');
@@ -536,31 +545,106 @@ function suitRenderModels() {
     msel.innerHTML = '<option value="">Model…</option>' +
         filtered.map(m => `<option value="${esc(m)}"${m === prev ? ' selected' : ''}>${esc(m)}${suitVision.has(m) ? ' (vision)' : ''}</option>`).join('');
     if (cnt) cnt.textContent = q ? (filtered.length + '/' + suitModels.length) : (suitModels.length + ' models');
+    if (!filtered.includes(prev)) suitRenderEntries();
+}
+function suitRenderEntries() {
+    const select = document.getElementById('suitEntry');
+    if (!select) return;
+    const provider = document.getElementById('suitProvider').value;
+    const model = document.getElementById('suitModel').value;
+    const key = provider + '::' + model;
+    const previous = suitEntryModel === key ? select.value : '';
+    const entries = model ? suitEntries.filter(e => e.provider === provider && e.model === model) : [];
+    select.replaceChildren();
+    if (!model) select.add(new Option('Select a model…', ''));
+    else if (!entries.length) select.add(new Option('No saved LLM entry (temporary parameters optional)', ''));
+    else {
+        select.add(new Option(entries.length > 1 ? 'Select an LLM entry…' : 'LLM entry…', ''));
+        entries.forEach(e => select.add(new Option(e.name + ' (#' + (e.index + 1) + ')', String(e.index))));
+        select.value = entries.some(e => String(e.index) === previous) ? previous
+            : (entries.length === 1 ? String(entries[0].index) : '');
+    }
+    suitEntryModel = key;
+}
+function suitFinite(value) {
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (Array.isArray(value)) return value.every(suitFinite);
+    if (value && typeof value === 'object') return Object.values(value).every(suitFinite);
+    return true;
 }
 function suitOnModelChange() {
     suitCur = { provider: document.getElementById('suitProvider').value,
                 model: document.getElementById('suitModel').value };
+    suitRenderEntries();
     if (suitPollTimer) { clearTimeout(suitPollTimer); suitPollTimer = null; }
     document.getElementById('suitProgress').innerHTML = '';
     document.getElementById('suitStatus').textContent = '';
-    if (suitCur.model) suitPoll();  // bereits laufenden/fertigen Job anzeigen
+    if (suitCur.model) suitPoll();  // show an existing job
+}
+function suitOverrideChanged() {
+    document.getElementById('suitOverrideFields').hidden = !document.getElementById('suitOverride').checked;
+    suitValidateExtraParams();
+}
+function suitVeniceTemplate() {
+    document.getElementById('suitExtraParams').value =
+        JSON.stringify({venice_parameters: {disable_thinking: true}}, null, 2);
+    document.getElementById('suitOverride').checked = true;
+    suitOverrideChanged();
+}
+function suitValidateExtraParams() {
+    const input = document.getElementById('suitExtraParams');
+    const error = document.getElementById('suitExtraError');
+    if (!document.getElementById('suitOverride').checked) {
+        error.textContent = '';
+        return null;
+    }
+    try {
+        const value = input.value.trim() ? JSON.parse(input.value) : {};
+        if (!value || typeof value !== 'object' || Array.isArray(value))
+            throw new Error('Enter a JSON object (not an array or scalar).');
+        if (!suitFinite(value))
+            throw new Error('Request parameters must contain only finite numbers.');
+        error.textContent = '';
+        return value;
+    } catch (e) {
+        error.textContent = e instanceof SyntaxError ? 'Invalid JSON: ' + e.message : e.message;
+        return null;
+    }
 }
 async function suitStart() {
     const provider = document.getElementById('suitProvider').value;
     const model = document.getElementById('suitModel').value;
     const status = document.getElementById('suitStatus');
     if (!model) { status.textContent = 'Please pick a model'; return; }
+    const entry = document.getElementById('suitEntry');
+    const matches = suitEntries.filter(e => e.provider === provider && e.model === model);
+    if (matches.length && !matches.some(e => String(e.index) === entry.value)) {
+        status.textContent = 'Please select an LLM entry';
+        return;
+    }
+    const override = document.getElementById('suitOverride').checked;
+    const extraParams = suitValidateExtraParams();
+    if (override && extraParams === null) { status.textContent = 'Fix temporary request parameters before starting.'; return; }
     document.getElementById('suitStartBtn').disabled = true;
-    status.textContent = 'Starte…';
+    status.textContent = 'Starting…';
     document.getElementById('suitProgress').innerHTML = '';
     suitCur = { provider, model };
     try {
-        await fetch('/admin/settings/llm-suitability-test/start', {
+        const r = await fetch('/admin/settings/llm-suitability-test/start', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider, model }),
+            body: JSON.stringify({ provider, model,
+                ...(matches.length ? {
+                    entry_index: Number(entry.value),
+                    routing_revision: suitRoutingRevision,
+                } : {}),
+                ...(override ? {extra_params: extraParams} : {}) }),
         });
+        if (!r.ok) {
+            const data = await r.json().catch(() => ({}));
+            throw new Error(typeof data.detail === 'string' ? data.detail : 'HTTP ' + r.status);
+        }
         suitPoll();
-        suitJobsRefresh();  // neuen Job sofort in der Liste zeigen
+        suitJobsRefresh();
     } catch (e) {
         status.textContent = 'Error: ' + e.message;
         document.getElementById('suitStartBtn').disabled = false;
@@ -572,7 +656,8 @@ function suitRenderJob(job) {
     const checks = job.checks || [];
     if (job.status === 'running') {
         document.getElementById('suitStartBtn').disabled = true;
-        status.textContent = 'Running… (' + (job.done || 0) + '/' + (job.total || '?') + ')';
+        status.textContent = 'Running' + (job.entry_name ? ' ' + job.entry_name : '') +
+            '… (' + (job.done || 0) + '/' + (job.total || '?') + ')';
     } else if (job.status === 'done') {
         const s = job.summary || {}; const v = s.verdict || {}; const sp = s.speed || {};
         const speedTxt = (sp.tok_per_s ? ' · ⚡ ' + esc(sp.tok_per_s) + ' tok/s' : '')
@@ -580,11 +665,11 @@ function suitRenderJob(job) {
         const infraTxt = (s.infra || s.saved === false)
             ? ' <span style="color:#d29922;">⚠ NOT saved (infrastructure error — provider unreachable)</span>'
             : '';
-        status.innerHTML = 'Fertig ✔ — Tool: '
+        status.innerHTML = 'Finished ✔' + (job.entry_name ? ' (' + esc(job.entry_name) + ')' : '') + ' — Tool: '
             + (v.tool ? '<span style="color:#3fb950;">SUITABLE</span>' : '<span style="color:#f85149;">not suitable</span>')
             + ' · Helper: ' + (v.helper ? '<span style="color:#3fb950;">suitable</span>' : '<span style="color:#f85149;">not suitable</span>')
             + ' · Score ' + esc(s.score || '') + ' (Tool ' + esc(s.tool || '') + ', Helper ' + esc(s.helper || '')
-            + ', Halluz ' + esc(s.hallucinations || 0) + ')' + speedTxt + infraTxt;
+            + ', Hallucinations ' + esc(s.hallucinations || 0) + ')' + speedTxt + infraTxt;
     } else if (job.status === 'error') {
         status.innerHTML = '<span style="color:#f85149;">Error: ' + esc(job.error || '') + '</span>';
     } else {
@@ -614,7 +699,7 @@ async function suitPoll() {
             suitPollTimer = setTimeout(suitPoll, 1500);
         } else {
             document.getElementById('suitStartBtn').disabled = false;
-            if (job.status === 'done') loadData();  // Tabelle/Badge aktualisieren
+            if (job.status === 'done') loadData();  // Refresh table and badges.
         }
     } catch (e) {
         suitPollTimer = setTimeout(suitPoll, 2500);

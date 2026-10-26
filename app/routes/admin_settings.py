@@ -1228,16 +1228,25 @@ def _llm_task_state_runtime_preset_sync(user, data: Any):
 
 
 def _validate_llm_routing(routing) -> str:
-    """Check that each (task, order) occurs once in llm_routing.
+    """Check task order uniqueness and valid per-entry extra_params objects.
 
     Return an empty string on success, otherwise an error message.
     """
+    from app.core.llm_router import parse_extra_params
     if not isinstance(routing, list):
         return ""
     seen: dict = {}  # (task, order) -> entry_index
     for idx, entry in enumerate(routing):
         if not isinstance(entry, dict):
             continue
+        if "extra_params" in entry:
+            try:
+                parse_extra_params(entry["extra_params"])
+            except ValueError as exc:
+                return f"LLM Routing: entry #{idx+1}: {exc}"
+            if not isinstance(entry["extra_params"], dict):
+                return (f"LLM Routing: entry #{idx+1}: "
+                        "extra_params must be a JSON object")
         # Runtime ignores disabled entries, so their order may overlap.
         if entry.get("enabled") is False:
             continue
@@ -1645,7 +1654,10 @@ async def llm_suitability_test_start(request: Request, user=Depends(require_admi
     Poll .../status for progress/results. The final result is saved to
     model_capabilities.json.
     """
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "body must be valid JSON") from exc
     return await asyncio.to_thread(_llm_suitability_test_start_sync,
                                    user, body)
 
@@ -1653,13 +1665,51 @@ async def llm_suitability_test_start(request: Request, user=Depends(require_admi
 def _llm_suitability_test_start_sync(user, body: Any):
     """The blocking body of ``llm_suitability_test_start`` — runs in the
     threadpool."""
-    from app.core.model_suitability import start_test
-    provider = str((body or {}).get("provider") or "").strip()
-    model = str((body or {}).get("model") or "").strip()
+    from copy import deepcopy
+    from app.core.llm_router import parse_extra_params
+    from app.core.model_suitability import SuitabilityTestConflict, start_test
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be a JSON object")
+    provider = str(body.get("provider") or "").strip()
+    model = str(body.get("model") or "").strip()
     if not model:
         raise HTTPException(400, "model required")
+    extra_params = None
+    if "extra_params" in body:
+        try:
+            extra_params = parse_extra_params(body["extra_params"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    if not provider:
+        from app.core.provider_manager import get_provider_manager
+        found = get_provider_manager().find_provider_for_model(model)
+        provider = found.name if found else ""
+    routing = config.get("llm_routing", [])
+    routing = routing if isinstance(routing, list) else []
+    matching = [index for index, entry in enumerate(routing)
+                if isinstance(entry, dict) and entry.get("enabled") is not False
+                and entry.get("provider") == provider and entry.get("model") == model]
+    selected = None
+    index = None
+    if "entry_index" in body:
+        index = body["entry_index"]
+        if not isinstance(index, int) or isinstance(index, bool) or index not in matching:
+            raise HTTPException(400, "Selected LLM entry is no longer valid for this provider/model")
+        from app.core.config_admin import layer_revision
+        if body.get("routing_revision") != layer_revision("instance"):
+            raise HTTPException(409, "LLM routing changed; reload Model Capabilities and select the entry again")
+        selected = deepcopy(routing[index])
+    elif len(matching) > 1:
+        raise HTTPException(400, "Select an LLM entry for this provider/model")
+    elif matching:
+        index = matching[0]
+        selected = deepcopy(routing[index])
     full = f"{provider}::{model}" if provider else model
-    return start_test(full)
+    try:
+        return start_test(full, extra_params=extra_params, routing_entry=selected,
+                          entry_index=index)
+    except SuitabilityTestConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get("/settings/llm-suitability-test/status")
@@ -1686,6 +1736,8 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
             "status": j.get("status", ""),
             "done": j.get("done", 0),
             "total": j.get("total", 0),
+            "entry_index": j.get("entry_index"),
+            "entry_name": j.get("entry_name", ""),
             "score": s.get("score", ""),
             "verdict": s.get("verdict") or {},
         })

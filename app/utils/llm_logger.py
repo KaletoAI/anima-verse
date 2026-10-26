@@ -45,6 +45,14 @@ def _template_basename(template_path: str, fallback_task: str) -> str:
     return name or fallback_task or ""
 
 
+def _request_value(llm: Any, attr: str) -> Any:
+    """Extra body fields replace matching SDK kwargs in the sent request."""
+    extra = getattr(llm, "extra_params", None)
+    if isinstance(extra, dict) and attr in extra:
+        return extra[attr]
+    return getattr(llm, attr, None)
+
+
 def _sampler_info(llm: Any) -> Dict[str, float]:
     """The sampler values a call actually ran with, as far as the client knows.
 
@@ -57,7 +65,7 @@ def _sampler_info(llm: Any) -> Dict[str, float]:
     out: Dict[str, float] = {}
     for attr in ("temperature", "frequency_penalty", "top_p",
                  "repetition_penalty"):
-        value = getattr(llm, attr, None)
+        value = _request_value(llm, attr)
         if value is None:
             continue
         try:
@@ -107,9 +115,8 @@ def log_llm_call(
         tokens_output: output tokens (real or estimated)
         max_tokens: the completion limit this call was sent with. ``0`` means
             no limit was configured on the client, so the provider's own
-            default budget applied — it never means "unknown", because every
-            client carries the attribute (see
-            ``provider_queue._get_max_tokens_safe``).
+            default budget applied; body overrides take precedence over the
+            client's top-level limit.
         tokens_cached: prompt tokens the backend served from its prompt/prefix
             cache, as the provider reported them (``llm_client.usage_from_openai``).
             ``None`` = the backend reported nothing — the field is then left
@@ -154,15 +161,15 @@ def log_llm_call(
             (the archive keeps monthly buckets) stays honest about which lines
             carry the information at all.
         llm: the client instance the call was made with, if the caller has it.
-            Its sampler values (temperature, frequency_penalty, top_p) are
-            written as ``sampler``. Replay correlation attributes are retained
-            as ``replay_of`` and ``replay_id``.
-            Sampler values matter because two of them
-            are raised REACTIVELY per call by the anti-repetition net — without
-            them in the line, a degenerated answer can only be traced back by
-            correlating against ``main.log`` timestamps, which is how the
-            2026-08-02 token-salad case had to be solved. Values that are not
-            set are left out; an absent key means "provider default".
+            Its effective sampler values (temperature, frequency_penalty,
+            top_p, repetition_penalty) are written as ``sampler``; extra_params
+            body overrides win over matching top-level values. Replay
+            correlation attributes are retained as ``replay_of`` and
+            ``replay_id``. Sampler values matter because two of them are raised
+            REACTIVELY per call by the anti-repetition net — without them in
+            the line, a degenerated answer can only be traced back by
+            correlating against ``main.log`` timestamps. Values that are not
+            sent are left out; an absent key means \"provider default\".
     """
     if not trace_id or not trace_kind:
         try:
@@ -310,9 +317,17 @@ def get_model_name(llm) -> str:
 
 
 def get_max_tokens(llm) -> int:
-    """Extracts max_tokens from an LLMClient."""
-    val = getattr(llm, "max_tokens", None)
-    return int(val) if val else 0
+    """Return the effective completion limit, or 0 if absent/unreadable."""
+    extra = getattr(llm, "extra_params", None)
+    if isinstance(extra, dict) and "max_completion_tokens" in extra:
+        val = extra["max_completion_tokens"]
+    else:
+        val = _request_value(llm, "max_tokens")
+    try:
+        return int(val) if val is not None else 0
+    except (TypeError, ValueError, OverflowError):
+        # Logging must not strand a worker before its cleanup/finally block.
+        return 0
 
 
 def _archive_pruned_lines(path: Path, buckets: Dict[str, List[str]]) -> None:

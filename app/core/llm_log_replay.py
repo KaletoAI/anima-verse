@@ -137,7 +137,13 @@ def _find_source(path: Path, identifier: str) -> dict:
 def replay_entry(path: Path, *, entry_id: str, provider: str, model: str,
                  temperature: float, max_tokens: int, top_p: float | None = None,
                  frequency_penalty: float | None = None) -> dict:
-    """Send the recorded messages once through the explicitly selected queue."""
+    """Send the recorded messages once through the explicitly selected queue.
+
+    A selected routing entry's extra_params keep their normal SDK precedence
+    over positive form values. The one exception is max_tokens=0: the form
+    explicitly requests no client output limit, so its saved body limit is
+    removed from this temporary instance only.
+    """
     source = _find_source(path, entry_id)
     try:
         messages = request_messages(source)
@@ -164,11 +170,18 @@ def replay_entry(path: Path, *, entry_id: str, provider: str, model: str,
             raise ReplayError(400, "Anthropic temperature must be between 0 and 1.")
 
     instance = create_llm_instance("llm_replay", model, provider_name=provider,
-                                   temperature=temperature, max_tokens=max_tokens or None)
+                                   temperature=temperature, max_tokens=max_tokens)
     if instance is None or instance.provider_name != provider:
         raise ReplayError(503, "The selected provider could not be resolved without fallback.")
     try:
-        client = instance.create_llm(top_p=top_p, frequency_penalty=frequency_penalty)
+        # A zero in the replay form means no output limit on OpenAI-compatible
+        # calls, including when the routing entry carries a saved body limit.
+        if max_tokens == 0:
+            instance.extra_params = {
+                k: v for k, v in instance.extra_params.items()
+                if k not in ("max_tokens", "max_completion_tokens")}
+        client = instance.create_llm(max_tokens=max_tokens, top_p=top_p,
+                                     frequency_penalty=frequency_penalty)
     except Exception as exc:
         raise ReplayError(503, f"The selected provider client could not be created: {exc}") from exc
     client.replay_of = entry_id

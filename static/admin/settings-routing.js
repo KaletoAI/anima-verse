@@ -8,9 +8,9 @@
 //   llms     — the per-LLM editor (provider/model/sampling), tasks read-only
 //   overview — what the server would route right now (read-only)
 //
-// The config model is unchanged: CONFIG.llm_routing is a list of LLM entries
+// CONFIG.llm_routing is a list of LLM entries
 // {name, enabled, preload_on_startup, provider, model, temperature, max_tokens,
-//  chat_template, tasks: [{task, order}]}. Only the Tasks page edits the
+//  extra_params, chat_template, tasks: [{task, order}]}. Only the Tasks page edits the
 // `tasks` lists — a task's chain is its assignments across ALL entries, ordered.
 
 // >>> harness-extract:routingModel
@@ -1026,6 +1026,7 @@ async function rtDeleteEntryConfirm(idx) {
     const tasks = (entry.tasks || []).map(t => t && t.task).filter(Boolean);
     touchPath('llm_routing');
     routing.splice(idx, 1);
+    remapRoutingJsonDrafts(idx, true);
     // The removed entry left holes in its tasks' chains — close them.
     for (const tid of tasks) renumberTask(routing, tid);
     // Every remembered accordion path above the removed index now points at
