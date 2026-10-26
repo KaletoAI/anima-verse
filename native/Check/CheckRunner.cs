@@ -561,11 +561,40 @@ public static class CheckRunner
         Eq("model_rev reload: GLB still cached", source.ByteRequests.Count(u => u == AdaUrl), 1);
 
         var tiers = await CheckTiers(mgr, ada, source);
+        int modelLoads = st.ModelLoads;   // the summary's poll-2 count, before the retirement step reloads Ada once more
+        var retired = await CheckRetire(mgr, ada, source);
         var info = RestMismatch(source, ada);
         var memory = $"ada clips {ada.ClipKinds.Count} actions {ada.ClipKeys} keys {ada.ClipBytes / 1048576.0:0.00} MiB";
         mgr.QueueFree();
         return $"figures {poll1} | poll2 figures={st.Figures} glb_figures={st.GlbFigures} placeholders={st.Placeholders} "
-               + $"model_loads={st.ModelLoads} | {tiers} | {memory} | {restInfo} | {info}";
+               + $"model_loads={modelLoads} | {tiers} | {retired} | {memory} | {restInfo} | {info}";
+    }
+
+    /// <summary>
+    /// Task 35 (figures.ts <c>retireModels</c> / <c>freeRetired</c>, README "Retired models"): while both of Ada's tier
+    /// templates are current nothing is freed; once her model changes (rev r3, the answer now serves the old LOW file as
+    /// her only edition) and the new body is live, the replaced full edition's template is freed — exactly one — and the
+    /// figure keeps playing on the template it uses.
+    /// </summary>
+    private static async Task<string> CheckRetire(FigureManager mgr, Figure ada, FixtureSource source)
+    {
+        int before = mgr.TemplateCount;
+        Eq("nothing stale while both tiers are current", mgr.RetireStaleTemplates(), 0);
+        source.ModelAnswers[Ada] = "{\"model\": {\"format\": \"glb\", \"rig\": \"mixamo\", \"url\": \"" + AdaLowUrl
+                                   + "\", \"model_rev\": \"r3\"}, \"animation_sets\": []}";
+        try
+        {
+            await mgr.Apply(WithRev("worldmap_poll2.json", Ada, "r3"));
+        }
+        finally { source.ModelAnswers.Remove(Ada); }
+        Expect("Ada on her new model", ada.LoadedRev == "r3" && ada.LoadedUrl == AdaLowUrl && ada.Player is not null,
+               $"rev {ada.LoadedRev} url {ada.LoadedUrl}");
+        Eq("the replaced full edition is freed", mgr.RetireStaleTemplates(), 1);
+        Eq("templates after the retirement", mgr.TemplateCount, before - 1);
+        Eq("a second pass frees nothing", mgr.RetireStaleTemplates(), 0);
+        Expect("Ada still animates on the template she uses", ada.Animates && ada.Player!.HasAnimation(ada.CurrentClip),
+               ada.CurrentClip);
+        return $"retired 1 of {before} templates after the model change";
     }
 
     /// <summary>The figure plays <paramref name="clip"/> for <paramref name="kind"/> at <paramref name="pace"/>.</summary>

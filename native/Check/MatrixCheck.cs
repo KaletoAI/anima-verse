@@ -182,6 +182,10 @@ public static class MatrixCheck
                 Expect("M3 fog-pass headless: n/a, the screen pass fogs the main view", !sw.Applied && fog.PassInMainView
                        && !fog.ComputeActive && fog.Compute is { Available: false }, sw.Detail);
                 break;
+            case "no-figures":
+                // The props world carries no figure manager: the pass runs and says so (the offline world switches 15 figures).
+                Expect("M1 no-figures without figures: n/a, said so", !sw.Applied && sw.Detail == "no figure manager", sw.Detail);
+                break;
             case "shadow-full-view":
                 Expect("M1 shadow-full-view: every caster carries the caster layer", sw.Applied && c.Gate!.Off
                        && c.Gate.Inside > 0, sw.Detail);

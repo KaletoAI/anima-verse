@@ -31,6 +31,8 @@ namespace AnimaNative.Check;
 ///   • the result keys in the browser's order plus the native extras, gpu/render
 ///     times null (headless dummy renderer), flags {goto, scatter false, water
 ///     false, vsync};
+///   • the figure keys (Task 35) after the stream keys: <c>figures</c> = the figures on the map, <c>figuresAnimated</c>
+///     = those moving every frame, <c>clipMemMiB</c> = the manager's clip memory, one decimal;
 ///   • the free camera is handed back (processing on, pose restored);
 ///   • the written file parses to the printed object.
 ///
@@ -108,6 +110,7 @@ public static class BenchCheck
             result["water"] = stats.WaterSummary();
             result["terrain"] = builder.Terrain!.Summary();
             streamer.AddBenchKeys(result);
+            figures.AddBenchKeys(result);
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(host, result, file);
             Expect("panel", host.GetNodeOrNull("BenchResult") is not null, "no result panel");
@@ -115,12 +118,19 @@ public static class BenchCheck
                    BenchOutput.Line(result));
 
             Expect("keys", result.Select(kv => kv.Key).SequenceEqual((scatter is null ? Keys : Keys.Append("scatterLayers")).Append("ground").Append("water").Append("terrain")
-                                                   .Append("streamMaxFrameMs").Append("streamFrames").Append("stream")),
+                                                   .Append("streamMaxFrameMs").Append("streamFrames").Append("stream")
+                                                   .Append("figures").Append("figuresAnimated").Append("clipMemMiB")),
                    string.Join(",", result.Select(kv => kv.Key)));
             int streamFrames = (int)result["streamFrames"]!;
             Expect("stream probe keys", streamFrames >= 0 && (streamFrames == 0) == (result["streamMaxFrameMs"] is null)
                                         && ((string?)result["stream"])!.StartsWith("stream[", StringComparison.Ordinal),
                    $"{streamFrames} / {result["streamMaxFrameMs"]?.ToJsonString() ?? "null"}");
+            // Task 35: the figure keys — the fixture world's figures, those moving every frame, their clip memory.
+            int figs = (int)result["figures"]!, animated = (int)result["figuresAnimated"]!;
+            double clipMem = (double)result["clipMemMiB"]!;
+            Expect("figure keys", figs == figures.Figures.Count && figs > 0 && animated == figures.FiguresAnimated && animated <= figs
+                                  && clipMem == Math.Round(figures.ClipMemMiB, 1) && clipMem >= 0,
+                   $"figures {figs} animated {animated} clipMemMiB {clipMem}");
             Expect("backend", (string?)result["backend"] == "godot-forward+", $"{result["backend"]}");
             Expect("msaa = the viewport's samples", (int)result["msaa"]! == BenchRunner.MsaaSamples(host.GetViewport().Msaa3D),
                    $"{result["msaa"]} vs {host.GetViewport().Msaa3D}");

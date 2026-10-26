@@ -29,7 +29,12 @@ namespace AnimaNative.Check;
 ///   Q5 the solo fallback: a half the library lacks leaves its figure at its own point with its ordinary clip, the
 ///      partner still plays at the anchor;
 ///   Q6 <c>playPair</c> ends a running bridge (getting up from a chair when the handshake comes);
-///   Q7 a one-shot holds its last frame, both partners alike.
+///   Q7 a one-shot holds its last frame, both partners alike;
+///   Q8 the loop flag is per figure (Task 35): two figures sharing one Animation, one playing it once and one as a cycle,
+///      each keeps its own end — the shared Animation keeps the listing's flag, the one-shot figure plays a bit-identical
+///      twin;
+///   Q9 clip memory (Task 35): the one-call key writer stores every key bit for bit as the key-by-key insert and frees
+///      less memory; the same model fitted at another height shares every clip object except the re-locked bridges.
 /// </summary>
 public static class PairCheck
 {
@@ -180,9 +185,53 @@ public static class PairCheck
             NearD("Q7 Ben holds the last frame", ben.ClipTime, len, 2e-3);
             NearD("Q7 Ann and Ben end together", ann.ClipTime - ben.ClipTime, 0, ClipTol);
 
-            var report = $"pairs Q0..Q7 ok (box bottom {boxAabb.Position.Y:0.000} m, {string.Join(", ", bodyOffsets)}; handshake ±{-ra.X:0.000} m, "
-                         + $"hug ±{-ha.X:0.000} m; seat 4.097, loft 7.03; resync Δ {Math.Abs(ann.ClipTime - ben.ClipTime) * 1000:0.0} ms; "
-                         + "frozen 10 frames; solo Eve)";
+            double resyncMs = Math.Abs(ann.ClipTime - ben.ClipTime) * 1000;
+
+            // ---- Q8 the loop flag is per figure (Task 35): Ann and Hal share Test3_mia's greeting-hug__a (listed: cycle) ----
+            const string hug = "greeting-hug__a";
+            var sharedHug = ann.Player.GetAnimation(hug);
+            Expect("Q8 Ann and Hal play the same shared Animation", sharedHug.GetInstanceId() == hal.Player!.GetAnimation(hug).GetInstanceId(),
+                   "two objects");
+            Expect("Q8 the listing calls the hug a cycle", sharedHug.LoopMode == Animation.LoopModeEnum.Linear, $"{sharedHug.LoopMode}");
+            double hugLen = sharedHug.Length;
+            // Directly, without the manager's tick (which would put their handshakes back): Hal one-shot, Ann cycling —
+            // the order the old code lost: the LAST writer's flag on the shared Animation won for both.
+            hal.PlayPair(hug, 0.2, false, loop: false);
+            ann.PlayPair(hug, 0.2, false, loop: true);
+            int steps = (int)Math.Ceiling((hugLen + 0.5) / Dt);
+            for (int i = 0; i < steps; i++)
+            {
+                hal.UpdateFigure(Dt);
+                ann.UpdateFigure(Dt);
+            }
+            double ran = 0.2 + steps * Dt;
+            NearD("Q8 Hal holds the hug's last frame (one-shot)", hal.ClipTime, hugLen, 2e-3);
+            NearD("Q8 Ann's hug wrapped around (cycle)", ann.ClipTime, ran % hugLen, 2e-3);
+            Expect("Q8 the shared Animation keeps the listing's flag", sharedHug.LoopMode == Animation.LoopModeEnum.Linear, $"{sharedHug.LoopMode}");
+            var twin = hal.LoopTwin(hug);
+            Expect("Q8 Hal plays his own one-shot twin, Ann the shared cycle", twin is { LoopMode: Animation.LoopModeEnum.None }
+                   && hal.Player.AssignedAnimation == $"{Figure.LoopTwinLibrary}/{hug}" && ann.Player.AssignedAnimation == hug
+                   && ann.LoopTwin(hug) is null, $"hal {hal.Player.AssignedAnimation} ann {ann.Player.AssignedAnimation}");
+            Expect("Q8 the twin carries the shared keys bit for bit", SameKeys(sharedHug, twin!, out string why), why);
+
+            // ---- Q9 clip memory (Task 35, ruling P3-R11) ----
+            var kw = mgr.CompareKeyWritersForCheck("Ann Hand");
+            Expect("Q9 one-call keys = inserted keys, bit for bit", kw.Mismatches == 0 && kw.Keys > 0,
+                   $"{kw.Mismatches} mismatches, first {kw.FirstMismatch}");
+            Expect("Q9 the one-call tracks hold less memory", kw.BulkBytes < kw.InsertBytes || kw.InsertBytes == 0,
+                   $"bulk {kw.BulkBytes} B, insert {kw.InsertBytes} B");
+            var refit = await mgr.RefitAtHeightForCheck("Ann Hand", 1.5);
+            Expect("Q9 the same model at 1.50 m shares every clip but the re-locked bridges", refit.OtherOwn == 0
+                   && refit.SameObject > 0 && refit.SameObject + refit.RootMotionOwn == refit.Actions,
+                   $"{refit.Actions} actions: {refit.SameObject} shared objects, {refit.RootMotionOwn} root-motion own, {refit.OtherOwn} other own");
+            string memory = $"keys {kw.Keys} in {kw.Tracks} tracks bit-identical, freed {kw.BulkBytes / 1024.0:0} KiB one-call vs "
+                            + $"{kw.InsertBytes / 1024.0:0} KiB inserted; refit at 1.50 m: {refit.SameObject}/{refit.Actions} actions shared, "
+                            + $"{refit.RootMotionOwn} root-motion own";
+            GD.Print($"[check-pairs] Q9 {memory}");
+
+            var report = $"pairs Q0..Q9 ok (box bottom {boxAabb.Position.Y:0.000} m, {string.Join(", ", bodyOffsets)}; handshake ±{-ra.X:0.000} m, "
+                         + $"hug ±{-ha.X:0.000} m; seat 4.097, loft 7.03; resync Δ {resyncMs:0.0} ms; "
+                         + $"frozen 10 frames; solo Eve; loop twin Hal once / Ann cycle; {memory})";
             GD.Print($"[check-pairs] {report}");
             return report;
         }
@@ -190,6 +239,24 @@ public static class PairCheck
         {
             world.QueueFree();
         }
+    }
+
+    /// <summary>Two animations with the same tracks and keys, bit for bit (times, transitions, values).</summary>
+    private static bool SameKeys(Animation a, Animation b, out string why)
+    {
+        why = "";
+        if (a.GetTrackCount() != b.GetTrackCount() || a.Length != b.Length) { why = "header"; return false; }
+        for (int t = 0; t < a.GetTrackCount(); t++)
+        {
+            int n = a.TrackGetKeyCount(t);
+            if (a.TrackGetPath(t) != b.TrackGetPath(t) || a.TrackGetType(t) != b.TrackGetType(t) || n != b.TrackGetKeyCount(t)
+                || a.TrackGetInterpolationType(t) != b.TrackGetInterpolationType(t)) { why = $"track {t}"; return false; }
+            for (int k = 0; k < n; k++)
+                if (BitConverter.DoubleToInt64Bits(a.TrackGetKeyTime(t, k)) != BitConverter.DoubleToInt64Bits(b.TrackGetKeyTime(t, k))
+                    || a.TrackGetKeyTransition(t, k) != b.TrackGetKeyTransition(t, k)
+                    || !a.TrackGetKeyValue(t, k).Equals(b.TrackGetKeyValue(t, k))) { why = $"track {a.TrackGetPath(t)} key {k}"; return false; }
+        }
+        return true;
     }
 
     private static async Task Apply(FigureManager mgr, string dir, string file)

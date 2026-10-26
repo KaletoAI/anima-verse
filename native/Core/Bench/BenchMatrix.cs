@@ -45,6 +45,7 @@ public static class BenchMatrix
         new("terrain-lod-coarse", "the CDLOD terrain with the pixel scale halved (= allowed pixel error 2 -> 4 px, rings shrink up to one level)"),
         new("shadow-atlas-2048", "the directional shadow atlas 4096 -> 2048 px (texel twice as large)"),
         new("fog-pass", "the distance fog as the screen-texture pass (the fallback, --fog=pass) instead of the compute pass (the default)"),
+        new("no-figures", "every figure hidden and its frame tick stopped (no walking, no clip advance, no skinning, nothing drawn)"),
     };
 
     public static BenchVariant? Find(string name) => Variants.FirstOrDefault(v => v.Name == name);

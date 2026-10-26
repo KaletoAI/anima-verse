@@ -360,6 +360,16 @@ low edition (one download of the `tier=low` URL, no model3d request — the tier
 back to full and the last low are cache swaps (no download): the full URL stays at 1 download, the low at 1. The
 low bake has the same 52 joints → 212 bound tracks as well.
 
+### Retired models (`CheckRetire`, Task 35, figures.ts `retireModels` / `freeRetired`)
+
+After the tiers Ada wears her low edition and three templates are built: Ada full, Ada low, Bram. A retirement pass
+frees **nothing** — every template's URL is named by a current model3d answer (Bram's answer stays known although his
+figure left in poll 2, like the browser's `tierCache`). Then Ada's model changes: `model_rev` r3, and the answer
+(a check override, `FixtureSource.ModelAnswers`) now serves the old LOW file as her only edition (no `low_url`). The
+reload reuses the low template (same URL, set chain and height → no download), so Ada's body is live on it. The full
+edition's URL is now named by no answer and shown by no figure → the pass frees **exactly 1** template and the count
+drops 3 → 2; a second pass frees 0; Ada keeps animating on the template she uses.
+
 ### Placement orchestration on its own (`CheckPlacementRule`, `FigurePlacement.Plan`)
 
 A hand tile `h`: centre (10, 0, 20), yaw 90° (tileToWorld(lx, lz) = (10 + lz, ·, 20 − lx)), width 10, a building,
@@ -1029,8 +1039,9 @@ compute; `fv_alpha` 0; rings hidden; ghost + its twin meshes + the sheet hidden;
 hidden; every cut surface wears its `Source`; pixel scale factor 0.5; atlas 4096 → 2048 in the detail), then restored —
 one snapshot of everything the switches touch must equal the one taken before. Headless has no RenderingDevice: the
 compute fog (the default since Task 26c) is unavailable, the screen pass fogs the main view, and `fog-pass` reports
-`applied: false`. The schedule (Task 26c) is 2n − 1 = 27 passes for the 14 variants: baselines at every even position,
-the 13 variants in their order at the odd ones.
+`applied: false`. The props world has no figure manager, so `no-figures` (Task 35) reports `applied: false` with the
+detail "no figure manager". The schedule (Task 26c) is 2n − 1 = 29 passes for the 15 variants: baselines at every even
+position, the 14 variants in their order at the odd ones.
 
 ## Shadow casters (Task 26c, `Check/ShadowCheck.cs`, `--check shadow`, S3c world)
 
@@ -1500,6 +1511,22 @@ anchor (64, 128) yaw 0, place none, in the loft. One frame:
 
 **One-shot end**: 20 more frames → the handshake clock 2.5 + 47/30 ≈ 4.07 > 3.533: phase clamped, the player stops at
 its end (**3.5333**) and holds it, Ann and Ben alike.
+
+**Q8 loop flag per figure** (Task 35): Ann and Hal both wear Test3_mia, so their players bind the SAME
+`greeting-hug__a` Animation; the listing calls the hug a cycle (`loop` absent → Linear), length **4.0333 s**. Called
+directly (no manager tick, which would put their handshakes back): Hal `playPair(hug, 0.2, loop: false)`, then Ann
+`playPair(hug, 0.2, loop: true)` — the order in which the old code's last write (Linear) made BOTH loop. Now the shared
+Animation stays Linear, Hal plays his own twin `loop/greeting-hug__a` (LoopMode None, every key bit for bit the
+shared one's), Ann the shared clip. ⌈(4.0333 + 0.5) · 30⌉ = 136 frames of 1/30 s: Hal holds the last frame
+(**4.0333**), Ann has wrapped: (0.2 + 136/30) mod 4.0333 = 4.7333 − 4.0333 = **0.7**.
+
+**Q9 clip memory** (Task 35, ruling P3-R11): every library clip of Ann's template is retargeted twice — through the
+one-call key writer and key by key — and compared track by track, key by key: time bits, transition and value bits all
+equal (41 718 keys, 477 tracks); freed, the one-call set gives back less static memory (1352 KiB against 1573 KiB on
+this machine — the key-by-key vectors carry the 1.5× growth's spare slots). Then Ann's model is fitted again at
+1.50 m (its own template: the height is in the key): of its 11 actions 10 play the very same Animation objects as her
+1.70 m template (identical content → shared), and the one that does not is the root-motion bridge `get-up-chair`,
+re-locked at the new scale.
 
 ## Secondary motion (`secondary/chain.glb`, Task 33, `Check/SecondaryCheck.cs`, `--check secondary`)
 

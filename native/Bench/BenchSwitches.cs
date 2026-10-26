@@ -49,6 +49,7 @@ public static class BenchSwitches
         "terrain-lod-coarse" => TerrainCoarse(c),
         "shadow-atlas-2048" => Atlas2048(),
         "fog-pass" => FogPass(c),
+        "no-figures" => NoFigures(c),
         _ => throw new ArgumentException($"bench matrix: no switch for variant '{variant}'"),
     };
 
@@ -236,6 +237,25 @@ public static class BenchSwitches
         RenderingServer.DirectionalShadowAtlasSetSize(2048, bits);
         return new("shadow-atlas-2048", size != 2048, $"directional shadow atlas {size} → 2048 px",
                    () => RenderingServer.DirectionalShadowAtlasSetSize(size, bits));
+    }
+
+    /// <summary>
+    /// Task 35: the figures' whole cost — the figure layer hidden (bodies, portraits, ghosts: nothing drawn, no skinning)
+    /// AND its frame tick stopped (no walk, no clip advance, no placement / tier pass). Restore resumes both; the figures
+    /// continue from where they stood.
+    /// </summary>
+    private static BenchSwitch NoFigures(BenchSwitchContext c)
+    {
+        if (c.Figures is not { } f || !GodotObject.IsInstanceValid(f)) return new("no-figures", false, "no figure manager", Nothing);
+        bool visible = f.Visible, tick = f.AutoTick;
+        int count = f.Figures.Count, animated = f.FiguresAnimated;
+        f.Visible = false;
+        f.AutoTick = false;
+        return new("no-figures", count > 0, $"{count} figures ({animated} animated) hidden, their frame tick stopped", () =>
+        {
+            f.Visible = visible;
+            f.AutoTick = tick;
+        });
     }
 
     private static BenchSwitch FogPass(BenchSwitchContext c)

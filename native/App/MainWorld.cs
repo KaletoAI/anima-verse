@@ -240,9 +240,7 @@ public partial class Main : Node3D
                 _figures.TickPlacement();
                 // Task 30: the NPC walk on this world's data — two synthetic polls (open ground, a room change).
                 OfflineWalkProbe(builder);
-                Log($"offline memory static {Performance.GetMonitor(Performance.Monitor.MemoryStatic) / 1048576.0:0} MiB, "
-                    + $"library {_figures.Clips.SourceKeys} source keys, figure templates "
-                    + $"{_figures.TemplateKeys} keys ≈{_figures.TemplateKeys * FigureManager.KeyBytes / 1048576.0:0} MiB in {_figures.TemplateCount} templates");
+                Log("offline " + FigureMemoryLine(probe: true));
                 if (_streamer is not null) Log("offline " + _streamer.Summary());
                 Log("offline " + VeilUniforms.Summary());
                 foreach (var line in ShaderSafety.Lines) Log("offline " + line);
@@ -398,6 +396,13 @@ public partial class Main : Node3D
             st.AddBenchKeys(result);
             Log($"bench stream: max frame while streaming {st.Probe.StreamMaxMs:0.##} ms over {st.Probe.StreamFrames} frames; {st.Summary()}");
         }
+        // Extra keys (Task 35): the figures on the map, how many of them animate every frame, their clip memory (MiB).
+        if (_figures is { } figs && IsInstanceValid(figs))
+        {
+            figs.AddBenchKeys(result);
+            Log("bench " + FigureMemoryLine(probe: _options!.Offline is not null && !_memoryProbed));
+            _memoryProbed = true;
+        }
         // Extra key (Task 26c): what the shadow pass draws at the drive's last pose (CPU census, the requested aspect).
         if (_stage is not null && _camera is not null)
         {
@@ -445,6 +450,34 @@ public partial class Main : Node3D
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
         } while (layer.Busy && Time.GetTicksMsec() - start < 60000);
         Log($"scatter settled after {(Time.GetTicksMsec() - start) / 1000.0:0.0} s: {layer.Summary()}");
+    }
+
+    /// <summary>
+    /// Task 35: the figures' memory — figures, templates, fit times, bound / unique clip keys and their estimate, then
+    /// Godot's monitors (static memory, objects, resources) and the managed heap. With <paramref name="probe"/> and the
+    /// debug engine's static-memory monitor, also <see cref="FigureManager.ProbeClipMemory"/>: one template re-fitted, the
+    /// bytes its Animations really hold.
+    /// </summary>
+    private bool _memoryProbed;
+
+    private string FigureMemoryLine(bool probe)
+    {
+        var f = _figures!;
+        var fits = f.FitTimes.OrderBy(x => x).ToList();
+        string fit = fits.Count == 0 ? "none" : $"{fits[0]:0}/{fits[fits.Count / 2]:0}/{fits[^1]:0} ms min/median/max";
+        string line = $"figures memory: {f.Figures.Count} figures ({f.FiguresAnimated} animated), {f.TemplateCount} templates "
+                      + $"(fit {fit}), {f.TemplateKeys} keys bound, {f.UniqueClipKeys} held ({f.SharedClipCount} clips shared) "
+                      + $"≈{f.ClipMemMiB:0.0} MiB at {FigureManager.KeyBytes} B/key, library {f.Clips.SourceKeys} source keys, "
+                      + $"tracks written in one call {KeyWriter.BulkTracks}, key by key {KeyWriter.InsertedTracks}";
+        double staticMiB = Performance.GetMonitor(Performance.Monitor.MemoryStatic) / 1048576.0;
+        if (probe && staticMiB > 0 && f.ProbeClipMemory() is { } p)
+            line += $"; probe: {p.Clips} clips {p.Keys} keys allocated {p.Allocated / 1048576.0:0.00} MiB, freed {p.Freed / 1048576.0:0.00} MiB "
+                    + $"= {(p.Keys > 0 ? (double)p.Freed / p.Keys : 0):0.0} B/key";
+        var gc = GC.GetGCMemoryInfo();
+        line += $"; static {staticMiB:0} MiB, objects {Performance.GetMonitor(Performance.Monitor.ObjectCount):0}, "
+                + $"resources {Performance.GetMonitor(Performance.Monitor.ObjectResourceCount):0}; managed heap {gc.HeapSizeBytes / 1048576.0:0} MiB "
+                + $"(GC total {GC.GetTotalMemory(false) / 1048576.0:0} MiB, collections {GC.CollectionCount(0)}/{GC.CollectionCount(1)}/{GC.CollectionCount(2)})";
+        return line;
     }
 
     private string FigureLine()

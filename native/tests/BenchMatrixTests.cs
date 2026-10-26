@@ -16,7 +16,7 @@ public class BenchMatrixTests
 {
     // ---- the matrix ----------------------------------------------------------------------------------------------------
 
-    /// <summary>Task 26b's eleven switches, Task 26c's shadow-full-view and the fog-pass fallback after the baseline = 14.</summary>
+    /// <summary>Task 26b's eleven switches, Task 26c's shadow-full-view, the fog-pass fallback and Task 35's no-figures after the baseline = 15.</summary>
     [Fact]
     public void VariantsAreTheTasksListInOrder()
     {
@@ -25,7 +25,7 @@ public class BenchMatrixTests
         {
             "baseline", "no-shadow", "shadow-full-view", "no-hemi-extra-lights", "no-fog-pass", "no-veil", "no-backdrop",
             "no-water-extras", "no-mirrors", "no-prop-lights", "no-cut-shader", "terrain-lod-coarse", "shadow-atlas-2048",
-            "fog-pass",
+            "fog-pass", "no-figures",
         }, names);
         Assert.All(BenchMatrix.Variants, v => Assert.False(string.IsNullOrWhiteSpace(v.Switches)));
     }
@@ -42,14 +42,14 @@ public class BenchMatrixTests
         Assert.Contains("no-sky", e.Message);
     }
 
-    /// <summary>B V₁ B V₂ B: two variants make five passes; the baseline alone is one; the full matrix 2·13 + 1 = 27.</summary>
+    /// <summary>B V₁ B V₂ B: two variants make five passes; the baseline alone is one; the full matrix 2·14 + 1 = 29 (Task 35 added no-figures).</summary>
     [Fact]
     public void ScheduleInterleavesTheBaseline()
     {
         Assert.Equal(new[] { "baseline", "no-shadow", "baseline", "fog-pass", "baseline" },
                      BenchMatrix.Schedule(BenchMatrix.Select("fog-pass,no-shadow")).Select(v => v.Name));
         Assert.Equal(new[] { "baseline" }, BenchMatrix.Schedule(BenchMatrix.Select("baseline")).Select(v => v.Name));
-        Assert.Equal(27, BenchMatrix.Schedule(BenchMatrix.Variants).Count);
+        Assert.Equal(29, BenchMatrix.Schedule(BenchMatrix.Variants).Count);
     }
 
     /// <summary>

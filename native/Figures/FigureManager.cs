@@ -133,8 +133,16 @@ public partial class FigureManager : Node3D
         /// <summary>Bones with a rest correction; −1 = no rig (verbatim copy).</summary>
         public int Corrected { get; init; }
         public long Keys { get; init; }
-        /// <summary>Godot static memory grown by the retarget of this template (bytes).</summary>
+        /// <summary>Keys of the clips this template created itself (<see cref="Keys"/> minus the ones it shares).</summary>
+        public long OwnKeys { get; init; }
+        /// <summary>Bound clips taken over from an earlier template because their content is identical (<see cref="ShareIdentical"/>).</summary>
+        public int SharedClips { get; init; }
+        /// <summary>The estimated memory of this template's OWN clip keys (<see cref="OwnKeys"/> × <see cref="KeyBytes"/>).</summary>
         public long ClipBytes { get; init; }
+        /// <summary>Every bound library clip of this template and its key count (shared ones included).</summary>
+        public IReadOnlyDictionary<Animation, long> AnimKeys { get; init; } = new Dictionary<Animation, long>();
+        /// <summary>The set chain the library was fitted along (for <see cref="ProbeClipMemory"/>).</summary>
+        public IReadOnlyList<string> Sets { get; init; } = Array.Empty<string>();
         public double FitMs { get; init; }
         /// <summary><c>fit.fits</c>: at least one library clip adapted to this rig (the random pool takes only those).</summary>
         public bool LibraryFits { get; init; }
@@ -708,8 +716,58 @@ public partial class FigureManager : Node3D
         _tierClock += delta;
         if (_tierClock < FigureTiers.TickS) return;
         _tierClock = 0;
+        RetireStaleTemplates();
         if (CameraPosition?.Invoke() is { } cam) _ = TickTiers(cam);
     }
+
+    /// <summary>
+    /// figures.ts <c>retireModels</c> / <c>freeRetired</c>: a character whose model changed (a new <c>model_sig</c> /
+    /// <c>model_rev</c> = a new URL) leaves both tier templates of its OLD model behind. Once no figure shows such a
+    /// template and no load is running, it is freed — its mesh copy, its skeleton and every clip no live template
+    /// shares. A template stays while any character's current model names its URL (both tiers stay cached, like the
+    /// browser's <c>tierCache</c>). Runs on the 1 Hz tier tick; returns how many templates were freed.
+    /// </summary>
+    public int RetireStaleTemplates()
+    {
+        // Never while a template is being built: it may already bind a clip of a template this pass would free.
+        if (_figures.Values.Any(f => f.Loading) || _templates.Values.Any(t => !t.IsCompleted) || PoolState == "loading") return 0;
+        var live = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var info in _infos.Values)
+        {
+            live.Add(info.Url);
+            if (info.LowUrl is { } low) live.Add(low);
+        }
+        foreach (var fig in _figures.Values)
+            if (fig.LoadedUrl is { } u) live.Add(u);
+        var stale = _templates.Where(kv => kv.Value.IsCompleted && !(kv.Value.IsCompletedSuccessfully && live.Contains(kv.Value.Result.Url)))
+                              .Select(kv => kv.Key).ToList();
+        if (stale.Count == 0) return 0;
+        var freed = new List<ModelTemplate>();
+        foreach (var key in stale)
+        {
+            var task = _templates[key];
+            _templates.Remove(key);
+            if (task.IsCompletedSuccessfully) freed.Add(task.Result);
+        }
+        // The clips another template still binds stay (they are shared, ShareIdentical); the rest go with the template.
+        var kept = new HashSet<Animation>(_templates.Values.Where(t => t.IsCompletedSuccessfully).Select(t => t.Result)
+                                                   .Concat(_pool.Select(p => p.Template))
+                                                   .Where(t => t.Library is not null).SelectMany(t => LibraryAnims(t.Library!)));
+        foreach (var t in freed)
+        {
+            var anims = t.Library is { } lib ? LibraryAnims(lib).Where(a => !kept.Contains(a)).Distinct().ToList() : new List<Animation>();
+            foreach (var digest in _sharedClips.Where(kv => anims.Contains(kv.Value)).Select(kv => kv.Key).ToList())
+                _sharedClips.Remove(digest);
+            if (IsInstanceValid(t.Root)) t.Root.Free();
+            t.Library?.Dispose();
+            foreach (var a in anims) a.Dispose();
+        }
+        _log($"figures: {freed.Count} template(s) of replaced models freed ({string.Join(", ", freed.Select(t => t.Url))})");
+        return freed.Count;
+    }
+
+    private static IEnumerable<Animation> LibraryAnims(AnimationLibrary lib)
+        => lib.GetAnimationList().Select(n => lib.GetAnimation(n));
 
     /// <summary>Templates live outside the tree (their meshes/skeletons are only duplicated): free them here.</summary>
     public override void _ExitTree()
@@ -946,8 +1004,8 @@ public partial class FigureManager : Node3D
         var lib = new AnimationLibrary();
         var bound = new List<BoundClip>();
         var setOf = new Dictionary<string, string>();
-        int tracks = 0;
-        long keys = 0;
+        int tracks = 0, sharedClips = 0;
+        long keys = 0, ownKeys = 0;
         var slice = System.Diagnostics.Stopwatch.StartNew();
         foreach (var clip in candidates)
         {
@@ -958,6 +1016,7 @@ public partial class FigureManager : Node3D
             }
             var b = ClipLibrary.Retarget(clip, root, skel, fixes, standRef ?? 0, rigKnown);
             if (b.Anim is null) continue;
+            b = ShareIdentical(b, ref sharedClips, ref ownKeys);
             bound.Add(b);
             setOf[clip.Kind] = clip.Set;
             tracks += b.Tracks;
@@ -983,21 +1042,23 @@ public partial class FigureManager : Node3D
         var extra = bound.Where(b => !ownKinds.Contains(b.Kind.ToLowerInvariant())).ToList();
         double scale = info.Normalized ? 1 : heightM / raw;
         var extras = await FitBridgesAndGround(url, root, skel, extra, scale);
-        // Clip memory of this template: Godot keeps a 3D track key as TKey<T> {real_t transition; double time; T value}
-        // = 32 bytes for a quaternion (4 + 4 pad + 8 + 16) and, aligned, for a Vector3 — the static-memory monitor
-        // cannot attribute it (three templates fit at once and the GC frees mesh arrays meanwhile).
-        long clipBytes = keys * KeyBytes;
+        // Clip memory of this template's OWN clips: keys × the measured bytes per key (KeyBytes) — the static-memory
+        // monitor cannot attribute it here (three templates fit at once and the GC frees mesh arrays meanwhile).
+        long clipBytes = ownKeys * KeyBytes;
         double fitMs = sw.Elapsed.TotalMilliseconds;
         if (missing.Count > 0)
             _log($"model {url}: {missing.Count} of {candidates.Count} library clip kinds NOT bound — {string.Join(", ", missing)}");
         _log($"model {url}: {skel.GetBoneCount()} bones, raw height {raw:0.###} m, {metals} materials metallic→0, "
              + $"{bound.Count} clips → {kinds.Count} actions (sets [{string.Join(",", sets)}]), {tracks} tracks, {keys} keys, "
-             + $"clip memory ≈{clipBytes / 1048576.0:0.0} MiB, fit {fitMs:0} ms (rest + soles {restMs:0} ms), "
+             + $"{sharedClips} clips shared with an earlier template, own clip memory ≈{clipBytes / 1048576.0:0.0} MiB, "
+             + $"fit {fitMs:0} ms (rest + soles {restMs:0} ms), "
              + (fixes is not null ? $"{fixes.Count} bones rest-corrected" : "no rig: verbatim copy") + $", stand ref {standSource}");
         return new ModelTemplate
         {
             Root = root, RawHeight = raw, Url = url, BindBox = bind, Library = lib, Kinds = kinds, ClipSets = setOf, BoundTracks = tracks,
-            Unbound = missing.Count, Corrected = fixes?.Count ?? -1, Keys = keys, ClipBytes = clipBytes, FitMs = fitMs,
+            Unbound = missing.Count, Corrected = fixes?.Count ?? -1, Keys = keys, OwnKeys = ownKeys, SharedClips = sharedClips,
+            ClipBytes = clipBytes, FitMs = fitMs, Sets = sets.ToArray(),
+            AnimKeys = bound.GroupBy(b => b.Anim!).ToDictionary(g => g.Key, g => g.First().Keys),
             LibraryFits = bound.Count > 0, Extras = extras,
         };
     }
@@ -1146,9 +1207,209 @@ public partial class FigureManager : Node3D
     /// <summary>Built templates and the keys of their retargeted clips (both tiers of every character).</summary>
     public int TemplateCount => _templates.Values.Count(t => t.IsCompletedSuccessfully);
     public long TemplateKeys => _templates.Values.Where(t => t.IsCompletedSuccessfully).Sum(t => t.Result.Keys);
+    /// <summary>Keys actually held by the templates and the fallback pool: every distinct bound Animation once (a clip shared by
+    /// <see cref="ShareIdentical"/> counts once).</summary>
+    public long UniqueClipKeys => _templates.Values.Where(t => t.IsCompletedSuccessfully).Select(t => t.Result)
+                                            .Concat(_pool.Select(p => p.Template))
+                                            .SelectMany(t => t.AnimKeys).DistinctBy(kv => kv.Key).Sum(kv => kv.Value);
+    /// <summary>Bound clips that templates took over from earlier ones instead of keeping a copy.</summary>
+    public int SharedClipCount => _templates.Values.Where(t => t.IsCompletedSuccessfully).Sum(t => t.Result.SharedClips);
+    /// <summary>The estimated clip memory of all templates in MiB (<see cref="UniqueClipKeys"/> × <see cref="KeyBytes"/>).</summary>
+    public double ClipMemMiB => UniqueClipKeys * KeyBytes / 1048576.0;
+    /// <summary>Fit times (ms) of the templates that fitted the library, in build order.</summary>
+    public List<double> FitTimes => _templates.Values.Where(t => t.IsCompletedSuccessfully && t.Result.Keys > 0)
+                                              .Select(t => t.Result.FitMs).ToList();
+    /// <summary>
+    /// The bench result's figure keys (Task 35), after the stream keys: <c>figures</c> (on the map), <c>figuresAnimated</c>
+    /// (moving every frame, <see cref="FiguresAnimated"/>) and <c>clipMemMiB</c> (<see cref="ClipMemMiB"/>, one decimal).
+    /// </summary>
+    public void AddBenchKeys(System.Text.Json.Nodes.JsonObject result)
+    {
+        result["figures"] = _figures.Count;
+        result["figuresAnimated"] = FiguresAnimated;
+        result["clipMemMiB"] = Math.Round(ClipMemMiB, 1);
+    }
 
-    /// <summary>Bytes per retargeted key (Godot's <c>TKey&lt;Quaternion&gt;</c>), for the clip-memory estimate.</summary>
-    public const long KeyBytes = 32;
+    /// <summary>Figures whose body moves every frame: a clip player, or a clip-less rig walking procedurally.</summary>
+    public int FiguresAnimated => _figures.Values.Count(f => IsInstanceValid(f) && f.Animates);
+
+    /// <summary>
+    /// Bytes one retargeted key costs in Godot's static memory, MEASURED (Task 35, <see cref="ProbeClipMemory"/> on the
+    /// world copy: one male template, 109 clips, 320 063 keys, 10.90 MiB freed = 35.7 B/key; 41.4 B/key before the
+    /// one-call key writer, <see cref="KeyWriter"/>): the 32 B of a <c>TKey&lt;Quaternion&gt;</c> plus each track's own
+    /// header. The release export has no static-memory monitor, so the bench's <c>clipMemMiB</c> is keys × this.
+    /// </summary>
+    public const long KeyBytes = 36;
+
+    /// <summary>
+    /// Bound clips by <see cref="BoundClip.Digest"/>: the first template that produced a clip keeps it here, and every later
+    /// template whose retarget comes out bit-identical (same rig rests, corrections, hips frame and standing reference — the
+    /// same model at another height or set chain, the fallback pool's models) plays that same <see cref="Animation"/>
+    /// instead of a copy. The two tiers of ONE model do not match: the server's low bake moves the rests by ~1e-6 and the
+    /// fitted clips then differ by up to 2.5° on a bone (measured on the world copy) — a near-match would change what
+    /// plays. Root-motion clips never enter: the bridge fit rewrites them per template (<see cref="BridgeFit.WriteBack"/>).
+    /// </summary>
+    private readonly Dictionary<string, Animation> _sharedClips = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The clip-memory reduction of ruling P3-R11 (Task 35): a freshly retargeted clip whose digest an earlier template
+    /// already holds is dropped and that template's <see cref="Animation"/> is bound instead — the same keys bit for bit,
+    /// so nothing that plays changes. Returns the clip to bind; counts shared clips and the keys this template keeps.
+    /// </summary>
+    private BoundClip ShareIdentical(BoundClip b, ref int shared, ref long ownKeys)
+    {
+        if (b.RootPath is not null || b.Digest is not { } digest || b.Anim is null)
+        {
+            ownKeys += b.Keys;
+            return b;
+        }
+        if (_sharedClips.TryGetValue(digest, out var held) && IsInstanceValid(held))
+        {
+            b.Anim.Dispose();
+            shared++;
+            return b with { Anim = held };
+        }
+        _sharedClips[digest] = b.Anim;
+        ownKeys += b.Keys;
+        return b;
+    }
+
+    /// <summary>
+    /// Check helper (Task 35, <c>--check pairs</c> Q9): <paramref name="name"/>'s model fitted once more at
+    /// <paramref name="heightM"/> (a template of its own: the height is part of the key). Returns the action count, how
+    /// many actions play the very same Animation object as the figure's own template, how many of those that differ are
+    /// root-motion clips (re-locked at the new scale, never shared), and the new template's shared-clip count.
+    /// </summary>
+    public async Task<(int Actions, int SameObject, int RootMotionOwn, int OtherOwn, int SharedClips)> RefitAtHeightForCheck(string name, double heightM)
+    {
+        var fig = _figures[name];
+        var info = _infos[name];
+        var a = await GetTemplate(info.Url, info, fig.Sets, fig.HeightM);
+        var b = await GetTemplate(info.Url, info, fig.Sets, heightM);
+        int same = 0, rootOwn = 0, otherOwn = 0;
+        foreach (var kind in b.Kinds)
+        {
+            var anim = b.Library!.GetAnimation(kind);
+            if (a.Library!.HasAnimation(kind) && a.Library.GetAnimation(kind).GetInstanceId() == anim.GetInstanceId()) same++;
+            else if (b.Extras.TryGetValue(anim, out var x) && x.Path is not null) rootOwn++;
+            else otherOwn++;
+        }
+        return (b.Kinds.Count, same, rootOwn, otherOwn, b.SharedClips);
+    }
+
+    /// <summary>
+    /// Check helper (Task 35, <c>--check pairs</c> Q9): every library clip of <paramref name="name"/>'s template retargeted
+    /// twice — through <see cref="KeyWriter"/>'s one-call path and key by key (<see cref="KeyWriter.ForceInsert"/>) — and
+    /// compared bit for bit (track type, path, interpolation, key count, time, transition, value), with Godot's static
+    /// memory each set of Animations gives back when freed (0 without the debug monitor).
+    /// </summary>
+    public (int Clips, int Tracks, long Keys, int Mismatches, string FirstMismatch, long BulkBytes, long InsertBytes) CompareKeyWritersForCheck(string name)
+    {
+        var fig = _figures[name];
+        var info = _infos[name];
+        var t = _templates[TemplateKey(fig.LoadedUrl ?? info.Url, fig.Sets, fig.HeightM)].Result;
+        var skel = ClipLibrary.Find<Skeleton3D>(t.Root)!;
+        var candidates = Clips.ClipsFor(t.Sets);
+        var fixes = Clips.DonorRest is { } donor ? RestAdapter.Build(donor, t.Root, skel) : null;
+        var (standRef, standSource) = Clips.StandingReference(candidates);
+        List<Animation> Fit(bool insert)
+        {
+            KeyWriter.ForceInsert = insert;
+            try
+            {
+                return candidates.Select(c => ClipLibrary.Retarget(c, t.Root, skel, fixes, standRef ?? 0, standSource == "rig").Anim)
+                                 .OfType<Animation>().ToList();
+            }
+            finally { KeyWriter.ForceInsert = false; }
+        }
+        long Free(List<Animation> anims)
+        {
+            ulong before = OS.GetStaticMemoryUsage();
+            foreach (var x in anims) x.Dispose();
+            return (long)before - (long)OS.GetStaticMemoryUsage();
+        }
+        var bulk = Fit(false);
+        var insert = Fit(true);
+        int tracks = 0, bad = 0;
+        long keys = 0;
+        string first = "";
+        void Bad(string what)
+        {
+            bad++;
+            if (first.Length == 0) first = what;
+        }
+        for (int c = 0; c < Math.Min(bulk.Count, insert.Count); c++)
+        {
+            Animation x = bulk[c], y = insert[c];
+            if (x.GetTrackCount() != y.GetTrackCount() || x.Length != y.Length || x.LoopMode != y.LoopMode) { Bad($"clip {c} header"); continue; }
+            for (int tr = 0; tr < x.GetTrackCount(); tr++)
+            {
+                tracks++;
+                int n = x.TrackGetKeyCount(tr);
+                if (x.TrackGetType(tr) != y.TrackGetType(tr) || x.TrackGetPath(tr) != y.TrackGetPath(tr)
+                    || x.TrackGetInterpolationType(tr) != y.TrackGetInterpolationType(tr) || n != y.TrackGetKeyCount(tr))
+                {
+                    Bad($"clip {c} track {tr} header");
+                    continue;
+                }
+                for (int k = 0; k < n; k++)
+                {
+                    keys++;
+                    if (BitConverter.DoubleToInt64Bits(x.TrackGetKeyTime(tr, k)) != BitConverter.DoubleToInt64Bits(y.TrackGetKeyTime(tr, k))
+                        || x.TrackGetKeyTransition(tr, k) != y.TrackGetKeyTransition(tr, k)
+                        || !SameBits(x.TrackGetKeyValue(tr, k), y.TrackGetKeyValue(tr, k)))
+                        Bad($"clip {c} track {x.TrackGetPath(tr)} key {k}");
+                }
+            }
+        }
+        if (bulk.Count != insert.Count) Bad($"{bulk.Count} vs {insert.Count} clips");
+        int clips = bulk.Count;
+        long bulkBytes = Free(bulk), insertBytes = Free(insert);
+        return (clips, tracks, keys, bad, first, bulkBytes, insertBytes);
+    }
+
+    private static bool SameBits(Variant a, Variant b) => a.VariantType == b.VariantType && a.VariantType switch
+    {
+        Variant.Type.Quaternion => Bits(a.AsQuaternion()) == Bits(b.AsQuaternion()),
+        Variant.Type.Vector3 => Bits(a.AsVector3()) == Bits(b.AsVector3()),
+        _ => a.Equals(b),
+    };
+
+    private static (int, int, int, int) Bits(Quaternion q)
+        => (BitConverter.SingleToInt32Bits(q.X), BitConverter.SingleToInt32Bits(q.Y), BitConverter.SingleToInt32Bits(q.Z), BitConverter.SingleToInt32Bits(q.W));
+
+    private static (int, int, int, int) Bits(Vector3 v)
+        => (BitConverter.SingleToInt32Bits(v.X), BitConverter.SingleToInt32Bits(v.Y), BitConverter.SingleToInt32Bits(v.Z), 0);
+
+    /// <summary>
+    /// Task 35's memory probe (offline only, needs the debug engine's static-memory monitor): re-runs the retarget of the
+    /// first fitted template synchronously and reads Godot's static memory around it — what the new Animations hold
+    /// (allocated) and what disposing them gives back (freed). Null when no fitted template exists.
+    /// </summary>
+    public (long Allocated, long Freed, long Keys, int Clips)? ProbeClipMemory()
+    {
+        var t = _templates.Values.Where(x => x.IsCompletedSuccessfully && x.Result.Keys > 0).Select(x => x.Result).FirstOrDefault();
+        if (t is null || ClipLibrary.Find<Skeleton3D>(t.Root) is not { } skel) return null;
+        var candidates = Clips.ClipsFor(t.Sets);
+        var fixes = Clips.DonorRest is { } donor ? RestAdapter.Build(donor, t.Root, skel) : null;
+        var (standRef, standSource) = Clips.StandingReference(candidates);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        ulong before = OS.GetStaticMemoryUsage();
+        var made = new List<Animation>();
+        long keys = 0;
+        foreach (var clip in candidates)
+        {
+            var b = ClipLibrary.Retarget(clip, t.Root, skel, fixes, standRef ?? 0, standSource == "rig");
+            if (b.Anim is null) continue;
+            made.Add(b.Anim);
+            keys += b.Keys;
+        }
+        ulong after = OS.GetStaticMemoryUsage();
+        foreach (var a in made) a.Dispose();
+        ulong freed = OS.GetStaticMemoryUsage();
+        return ((long)after - (long)before, (long)after - (long)freed, keys, made.Count);
+    }
 
     /// <summary>The browser's fit slice budget (<c>FIT_SLICE_MS</c>): a frame is yielded once a slice ran this long.</summary>
     public const double FitSliceMs = 12;
@@ -1248,6 +1509,7 @@ public partial class FigureManager : Node3D
 
     private void Instantiate(Figure fig, ModelTemplate t, ModelInfo info, FigureTier tier, double? poolHeight = null)
     {
+        if (!IsInstanceValid(t.Root)) return;   // retired meanwhile (RetireStaleTemplates): the next poll loads the new model
         var inst = (Node3D)t.Root.Duplicate();
         double scale = poolHeight is { } ph ? ph / t.RawHeight : info.Normalized ? 1.0 : fig.HeightM / t.RawHeight;
         var body = new Node3D { Name = "Body", Scale = Vector3.One * (float)scale };

@@ -228,6 +228,7 @@ public partial class Figure : Node3D
         IsGlb = isGlb;
         Skeleton = skeleton;
         Player = player;
+        _loopTwins = null;   // the twins belonged to the old player
         _clipKinds = player is null ? Array.Empty<string>() : clipKinds ?? Array.Empty<string>();
         CurrentKind = CurrentClip = "";
         CurrentPace = 1;
@@ -461,6 +462,46 @@ public partial class Figure : Node3D
         CurrentClip = resolved;
     }
 
+    // ---- loop flags per figure (Task 35) ------------------------------------------------------------------------------
+
+    /// <summary>The figure's own library of loop twins (<see cref="LoopTwinLibrary"/>), null until one is needed.</summary>
+    private AnimationLibrary? _loopTwins;
+
+    /// <summary>The library name the loop twins are registered under on this figure's player.</summary>
+    public const string LoopTwinLibrary = "loop";
+
+    /// <summary>
+    /// The name to hand to the player for <paramref name="clip"/> played with <paramref name="loop"/>. three keeps the
+    /// loop on the ACTION, one per figure; Godot keeps it on the <see cref="Animation"/>, which every figure of the
+    /// template — and, since Task 35, every template whose retarget came out identical — shares. So the shared
+    /// Animation keeps the listing's flag forever, and a figure that needs the OTHER flag (a pair interaction stored
+    /// with a different <c>loop</c> than the listing, a bridge the listing calls a cycle) plays its own twin: a copy of
+    /// that one clip, bit for bit the same keys, with the other loop mode, in the figure's own library
+    /// <c>loop/&lt;clip&gt;</c>. Built once per figure and clip; the shared Animation is never written.
+    /// </summary>
+    public string PlayName(string clip, bool loop)
+    {
+        if (Player is not { } p || !p.HasAnimation(clip)) return clip;
+        var shared = p.GetAnimation(clip);
+        var mode = loop ? Animation.LoopModeEnum.Linear : Animation.LoopModeEnum.None;
+        if (shared.LoopMode == mode) return clip;
+        if (_loopTwins is null)
+        {
+            _loopTwins = new AnimationLibrary();
+            p.AddAnimationLibrary(LoopTwinLibrary, _loopTwins);
+        }
+        if (!_loopTwins.HasAnimation(clip))
+        {
+            var twin = KeyWriter.Copy(shared);
+            twin.LoopMode = mode;
+            _loopTwins.AddAnimation(clip, twin);
+        }
+        return $"{LoopTwinLibrary}/{clip}";
+    }
+
+    /// <summary>The figure's loop twin of <paramref name="clip"/> (null = none built), for the check.</summary>
+    public Animation? LoopTwin(string clip) => _loopTwins is { } l && l.HasAnimation(clip) ? l.GetAnimation(clip) : null;
+
     // ---- pair clips (figures.ts playPair, npcs.ts PairPlay, Task 32) -------------------------------------------------
 
     /// <summary>The running pair interaction (npcs.ts <c>npc.interaction</c>): placement AND clip come from it; null = none.</summary>
@@ -487,13 +528,12 @@ public partial class Figure : Node3D
         double want = loop ? clipT % duration : Math.Min(clipT, duration - 1e-3);
         if (CurrentClip != clipName)
         {
-            // three sets the loop on the ACTION; Godot keeps it on the Animation, which the template's figures share —
-            // every one of them reads the same listing / interaction flag for this half.
-            var mode = loop ? Animation.LoopModeEnum.Linear : Animation.LoopModeEnum.None;
-            if (anim.LoopMode != mode) anim.LoopMode = mode;
+            // three sets the loop on THIS figure's action (setLoop); the shared Animation keeps the listing's flag and a
+            // figure that needs the other one plays its own twin (PlayName).
+            var name = PlayName(clipName, loop);
             if (_currentRun is { } run) run.FadeOutAt ??= _animTime;
             _currentRun = null;
-            p.Play(clipName, ClipLibraryRules.CrossfadeS);
+            p.Play(name, ClipLibraryRules.CrossfadeS);
             p.Seek(want, false);
             CurrentKind = clipName;
             CurrentClip = clipName;
@@ -503,8 +543,9 @@ public partial class Figure : Node3D
             double raw = Math.Abs(p.CurrentAnimationPosition - want);
             if ((loop ? Math.Min(raw, duration - raw) : raw) > PairClip.ResyncS)
             {
-                // A one-shot that ran out stopped (clampWhenFinished holds its last frame): restart it for the seek.
-                if (!p.IsPlaying()) p.Play(clipName);
+                // A one-shot that ran out stopped (clampWhenFinished holds its last frame): restart it for the seek —
+                // under the name it was started with (the clip, or this figure's loop twin of it).
+                if (!p.IsPlaying()) p.Play(p.AssignedAnimation.ToString() is { Length: > 0 } started ? started : clipName);
                 p.Seek(want, false);
             }
         }
@@ -547,9 +588,11 @@ public partial class Figure : Node3D
         StartTurn(_travelPath is not null ? run.Extras?.Turn : null, run);
         GD.Print($"[figures] {CharacterName}: bridge {CurrentKind} -> {via}");
         if (_currentRun is { } prev) prev.FadeOutAt ??= _animTime;
-        if (Player.CurrentAnimation == via) Player.Seek(0, false);
+        // figures.ts: `bridge.setLoop(THREE.LoopOnce, 1)` — a bridge is a one-shot whatever the listing says.
+        var name = PlayName(via, false);
+        if (Player.CurrentAnimation == name) Player.Seek(0, false);
         Player.SpeedScale = 1;
-        Player.Play(via, BridgeLift.BridgeFadeInS);
+        Player.Play(name, BridgeLift.BridgeFadeInS);
         _currentRun = run;
         CurrentKind = via;
         CurrentClip = via;
@@ -743,6 +786,8 @@ public partial class Figure : Node3D
 
     /// <summary><c>isStatic</c>: a model body without any action (no clips, an unrigged mesh, rig <c>none</c>).</summary>
     public bool IsStatic => Body is not null && Portrait is null && _clipKinds.Count == 0;
+    /// <summary>The body moves every frame: a clip player, or a clip-less body walking or breathing procedurally (bench <c>figuresAnimated</c>).</summary>
+    public bool Animates => Player is not null || (IsStatic && Procedural);
 
     /// <summary>The detected leg chains (<c>legs</c>); empty = the standing breath only.</summary>
     public IReadOnlyList<Leg> Legs => _legs;

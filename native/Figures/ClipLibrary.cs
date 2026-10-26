@@ -38,8 +38,11 @@ public sealed record ClipSource
 }
 
 /// <summary>What one clip produced on one skeleton: the bound animation (null under <see cref="ClipLibrary.MinTracks"/>),
-/// its track and key counts, and the root path of a root-motion clip (re-locked per rig at fit time, carried by the bridges).</summary>
-public sealed record BoundClip(string Kind, Animation? Anim, int Tracks, long Keys, RootPath? RootPath);
+/// its track and key counts, the root path of a root-motion clip (re-locked per rig at fit time, carried by the bridges)
+/// and the <see cref="Digest"/> of everything written into the animation (SHA-256 over length, loop mode and every
+/// track's path, type, interpolation and key bits, in insertion order): two bound clips with the same digest hold the
+/// same keys bit for bit, so one <see cref="Animation"/> can serve both (Task 35, <see cref="FigureManager"/>).</summary>
+public sealed record BoundClip(string Kind, Animation? Anim, int Tracks, long Keys, RootPath? RootPath, string? Digest = null);
 
 /// <summary>
 /// The server's WHOLE clip library on the native side — client3d's <c>FigureLibrary.load</c>:
@@ -425,6 +428,9 @@ public sealed class ClipLibrary
             Length = clip.Anim.Length,
             LoopMode = clip.Loop ? Animation.LoopModeEnum.Linear : Animation.LoopModeEnum.None,
         };
+        var digest = new ContentDigest();
+        digest.Add(anim.Length);
+        digest.Add((int)anim.LoopMode);
         int tracks = 0;
         long keys = 0;
         RootPath? rootPath = null;
@@ -441,18 +447,31 @@ public sealed class ClipLibrary
             else if (corrections is not null && corrections.TryGetValue(key, out var rf)) fix = q => RestAdapter.Apply(rf, q);
             int rt = anim.AddTrack(Animation.TrackType.Rotation3D);
             anim.TrackSetPath(rt, path);
+            digest.Add(path.ToString());
+            digest.Add((int)Animation.TrackType.Rotation3D);
             if (clip.RotationTracks.TryGetValue(name, out int st))
             {
-                anim.TrackSetInterpolationType(rt, clip.Anim.TrackGetInterpolationType(st));
+                var interp = clip.Anim.TrackGetInterpolationType(st);
+                anim.TrackSetInterpolationType(rt, interp);
+                digest.Add((int)interp);
                 int n = clip.Anim.TrackGetKeyCount(st);
+                var rotTimes = new double[n];
+                var rots = new Quaternion[n];
                 for (int k = 0; k < n; k++)
-                    anim.RotationTrackInsertKey(rt, clip.Anim.TrackGetKeyTime(st, k),
-                                                fix(clip.Anim.TrackGetKeyValue(st, k).AsQuaternion()).Normalized());
+                {
+                    rotTimes[k] = clip.Anim.TrackGetKeyTime(st, k);
+                    rots[k] = fix(clip.Anim.TrackGetKeyValue(st, k).AsQuaternion()).Normalized();
+                    digest.Add(rotTimes[k], rots[k]);
+                }
+                KeyWriter.Rotations(anim, rt, rotTimes, rots);
                 keys += n;
             }
             else
             {
-                anim.RotationTrackInsertKey(rt, 0, fix(clip.RestRotations[b]).Normalized());
+                var q = fix(clip.RestRotations[b]).Normalized();
+                KeyWriter.Rotations(anim, rt, new[] { 0.0 }, new[] { q });
+                digest.Add(-1);
+                digest.Add(0.0, q);
                 keys++;
             }
             tracks++;
@@ -465,9 +484,13 @@ public sealed class ClipLibrary
             var times = new List<double>();
             int pt = anim.AddTrack(Animation.TrackType.Position3D);
             anim.TrackSetPath(pt, path);
+            digest.Add(path.ToString());
+            digest.Add((int)Animation.TrackType.Position3D);
             if (clip.PositionTracks.TryGetValue(name, out int sp))
             {
-                anim.TrackSetInterpolationType(pt, clip.Anim.TrackGetInterpolationType(sp));
+                var interp = clip.Anim.TrackGetInterpolationType(sp);
+                anim.TrackSetInterpolationType(pt, interp);
+                digest.Add((int)interp);
                 for (int k = 0; k < clip.Anim.TrackGetKeyCount(sp); k++)
                 {
                     var v = clip.Anim.TrackGetKeyValue(sp, k).AsVector3();
@@ -480,18 +503,24 @@ public sealed class ClipLibrary
                 var v = clip.RestPositions[b];
                 raw.Add(v.X); raw.Add(v.Y); raw.Add(v.Z);
                 times.Add(0);
+                digest.Add(-1);
             }
             var (values, rp) = HipsTrack.Map(raw, times, new HipsTrackOptions(
                 sourceRest, clip.HipsMedian ?? 0, restWorldY > 1e-6 ? restWorldY : 1,
                 ColumnMajor(parentXf.AffineInverse()), new V3(restLocal.X, restLocal.Y, restLocal.Z),
                 clip.RootMotion, rigKnown));
+            var poss = new Vector3[times.Count];
             for (int k = 0; k < times.Count; k++)
-                anim.PositionTrackInsertKey(pt, times[k], new Vector3(values[k * 3], values[k * 3 + 1], values[k * 3 + 2]));
+            {
+                poss[k] = new Vector3(values[k * 3], values[k * 3 + 1], values[k * 3 + 2]);
+                digest.Add(times[k], poss[k]);
+            }
+            KeyWriter.Positions(anim, pt, times.ToArray(), poss);
             keys += times.Count;
             rootPath = rp;
             tracks++;
         }
-        if (tracks >= MinTracks) return new BoundClip(clip.Kind, anim, tracks, keys, rootPath);
+        if (tracks >= MinTracks) return new BoundClip(clip.Kind, anim, tracks, keys, rootPath, digest.Finish());
         anim.Dispose();
         return new BoundClip(clip.Kind, null, tracks, 0, null);
     }
@@ -514,6 +543,212 @@ public sealed class ClipLibrary
         foreach (var child in root.GetChildren())
             if (Find<T>(child) is { } hit) return hit;
         return null;
+    }
+}
+
+/// <summary>
+/// Writes a fresh track's keys in ONE call instead of one <c>*_track_insert_key</c> per key (Task 35, ruling P3-R11).
+///
+/// Godot keeps a track's keys in a vector that grows by 1.5× while keys are inserted one by one, so an inserted track
+/// holds on average a quarter more slots than keys (measured on the world copy: 41.4 B per retargeted key instead of
+/// the 32 B of a <c>TKey&lt;Quaternion&gt;</c>). Setting the track's <c>keys</c> property sizes the vector exactly.
+///
+/// That property carries the times as 32-bit floats, and the insert merges a key into its neighbour when their
+/// times are within Godot's <c>is_equal_approx</c>. So the bulk path is taken only when it stores EXACTLY what the
+/// inserts would have stored: every time representable as a float (the clip FBX takes are — 0 of 20 083 fixture keys
+/// were not) and strictly ascending with gaps far above that merge tolerance. Anything else is inserted key by key.
+/// The bound clip is therefore the same bit for bit either way; only its vector's spare capacity is gone.
+/// </summary>
+public static class KeyWriter
+{
+    /// <summary>Godot's merge tolerance for two key times (<c>CMP_EPSILON</c>, relative above 1 s), with a safety factor of 10.</summary>
+    private const double MergeGap = 1e-4;
+
+    /// <summary>The check's switch: write every retargeted track key by key (the reference the bulk path is compared with).</summary>
+    public static bool ForceInsert { get; set; }
+
+    /// <summary>Retargeted tracks written in one call / key by key since the start (the offline memory line reports both).</summary>
+    public static long BulkTracks { get; private set; }
+    public static long InsertedTracks { get; private set; }
+
+    /// <summary>True when setting these times as floats stores them unchanged and no insert would have merged two keys.</summary>
+    public static bool BulkSafe(IReadOnlyList<double> times)
+    {
+        for (int k = 0; k < times.Count; k++)
+        {
+            double t = times[k];
+            if ((double)(float)t != t || !double.IsFinite(t)) return false;
+            if (k > 0 && !(t - times[k - 1] > MergeGap * Math.Max(1, Math.Abs(t)))) return false;
+        }
+        return true;
+    }
+
+    public static void Rotations(Animation anim, int track, double[] times, Quaternion[] values)
+    {
+        if (ForceInsert || !BulkSafe(times))
+        {
+            for (int k = 0; k < times.Length; k++) anim.RotationTrackInsertKey(track, times[k], values[k]);
+            InsertedTracks++;
+            return;
+        }
+        BulkTracks++;
+        var flat = new float[times.Length * 6];   // ROTATION_TRACK_SIZE: time, transition, x, y, z, w
+        for (int k = 0; k < times.Length; k++)
+        {
+            int o = k * 6;
+            flat[o] = (float)times[k];
+            flat[o + 1] = 1f;
+            flat[o + 2] = values[k].X;
+            flat[o + 3] = values[k].Y;
+            flat[o + 4] = values[k].Z;
+            flat[o + 5] = values[k].W;
+        }
+        anim.Set($"tracks/{track}/keys", flat);
+    }
+
+    /// <summary>
+    /// A copy of <paramref name="src"/> with the same keys bit for bit (times, transitions, values; every position /
+    /// rotation / scale track written through the same exactness gate). An animation carrying any other track type is
+    /// duplicated by Godot instead. Used for a figure's loop twin (<see cref="Figure.PlayName"/>).
+    /// </summary>
+    public static Animation Copy(Animation src)
+    {
+        int n = src.GetTrackCount();
+        for (int t = 0; t < n; t++)
+            if (src.TrackGetType(t) is not (Animation.TrackType.Position3D or Animation.TrackType.Rotation3D or Animation.TrackType.Scale3D))
+                return (Animation)src.Duplicate();
+        var dst = new Animation { Length = src.Length, LoopMode = src.LoopMode, Step = src.Step };
+        for (int t = 0; t < n; t++)
+        {
+            var type = src.TrackGetType(t);
+            int d = dst.AddTrack(type);
+            dst.TrackSetPath(d, src.TrackGetPath(t));
+            dst.TrackSetInterpolationType(d, src.TrackGetInterpolationType(t));
+            dst.TrackSetInterpolationLoopWrap(d, src.TrackGetInterpolationLoopWrap(t));
+            dst.TrackSetEnabled(d, src.TrackIsEnabled(t));
+            dst.TrackSetImported(d, src.TrackIsImported(t));
+            int keys = src.TrackGetKeyCount(t);
+            var times = new double[keys];
+            var trans = new float[keys];
+            var vals = new Variant[keys];
+            for (int k = 0; k < keys; k++)
+            {
+                times[k] = src.TrackGetKeyTime(t, k);
+                trans[k] = src.TrackGetKeyTransition(t, k);
+                vals[k] = src.TrackGetKeyValue(t, k);
+            }
+            int width = type == Animation.TrackType.Rotation3D ? 6 : 5;
+            if (BulkSafe(times))
+            {
+                var flat = new float[keys * width];
+                for (int k = 0; k < keys; k++)
+                {
+                    int o = k * width;
+                    flat[o] = (float)times[k];
+                    flat[o + 1] = trans[k];
+                    if (type == Animation.TrackType.Rotation3D)
+                    {
+                        var q = vals[k].AsQuaternion();
+                        flat[o + 2] = q.X; flat[o + 3] = q.Y; flat[o + 4] = q.Z; flat[o + 5] = q.W;
+                    }
+                    else
+                    {
+                        var v = vals[k].AsVector3();
+                        flat[o + 2] = v.X; flat[o + 3] = v.Y; flat[o + 4] = v.Z;
+                    }
+                }
+                dst.Set($"tracks/{d}/keys", flat);
+            }
+            else
+                for (int k = 0; k < keys; k++) dst.TrackInsertKey(d, times[k], vals[k], trans[k]);
+        }
+        return dst;
+    }
+
+    public static void Positions(Animation anim, int track, double[] times, Vector3[] values)
+    {
+        if (ForceInsert || !BulkSafe(times))
+        {
+            for (int k = 0; k < times.Length; k++) anim.PositionTrackInsertKey(track, times[k], values[k]);
+            InsertedTracks++;
+            return;
+        }
+        BulkTracks++;
+        var flat = new float[times.Length * 5];   // POSITION_TRACK_SIZE: time, transition, x, y, z
+        for (int k = 0; k < times.Length; k++)
+        {
+            int o = k * 5;
+            flat[o] = (float)times[k];
+            flat[o + 1] = 1f;
+            flat[o + 2] = values[k].X;
+            flat[o + 3] = values[k].Y;
+            flat[o + 4] = values[k].Z;
+        }
+        anim.Set($"tracks/{track}/keys", flat);
+    }
+}
+
+/// <summary>
+/// The incremental SHA-256 of a retargeted clip (<see cref="BoundClip.Digest"/>): the exact bits handed to Godot —
+/// doubles and floats by their IEEE bit patterns, strings as UTF-8 with their length — so equal digests mean equal
+/// content, not merely close values. Buffered: a template hashes ~300 000 keys in a few milliseconds.
+/// </summary>
+internal sealed class ContentDigest
+{
+    private readonly System.Security.Cryptography.IncrementalHash _hash =
+        System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+    private readonly byte[] _buf = new byte[4096];
+    private int _n;
+
+    private Span<byte> Room(int bytes)
+    {
+        if (_n + bytes > _buf.Length) Flush();
+        var span = _buf.AsSpan(_n, bytes);
+        _n += bytes;
+        return span;
+    }
+
+    private void Flush()
+    {
+        if (_n == 0) return;
+        _hash.AppendData(_buf, 0, _n);
+        _n = 0;
+    }
+
+    public void Add(int v) => System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(Room(4), v);
+    public void Add(double v) => System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(Room(8), BitConverter.DoubleToInt64Bits(v));
+
+    public void Add(string s)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(s);
+        Add(bytes.Length);
+        Flush();
+        _hash.AppendData(bytes);
+    }
+
+    public void Add(double time, Quaternion q)
+    {
+        var span = Room(24);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(span, BitConverter.DoubleToInt64Bits(time));
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[8..], q.X);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[12..], q.Y);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[16..], q.Z);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[20..], q.W);
+    }
+
+    public void Add(double time, Vector3 v)
+    {
+        var span = Room(20);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(span, BitConverter.DoubleToInt64Bits(time));
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[8..], v.X);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[12..], v.Y);
+        System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(span[16..], v.Z);
+    }
+
+    public string Finish()
+    {
+        Flush();
+        return Convert.ToHexString(_hash.GetHashAndReset());
     }
 }
 

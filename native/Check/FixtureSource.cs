@@ -143,9 +143,14 @@ public sealed class FixtureSource : IWorldSource
         return Task.FromResult(File.ReadAllBytes(Resolve(file)));
     }
 
+    /// <summary>A check's replacement model3d answer per character (raw JSON; "null" = no model), before model3d.json.</summary>
+    public Dictionary<string, string> ModelAnswers { get; } = new();
+
     public Task<JsonDocument?> GetCharacterModelAsync(string name)
     {
         ModelRequests.Add(name);
+        if (ModelAnswers.TryGetValue(name, out var raw))
+            return Task.FromResult(raw == "null" ? null : (JsonDocument?)JsonDocument.Parse(raw));
         using var all = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(_dir, "model3d.json")));
         if (!all.RootElement.TryGetProperty(name, out var answer) || answer.ValueKind == JsonValueKind.Null)
             return Task.FromResult<JsonDocument?>(null);
