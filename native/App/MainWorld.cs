@@ -146,7 +146,9 @@ public partial class Main : Node3D
 
             _figures = new FigureManager(_source!, builder.Height!, Log, strict: false)
             {
-                WaterLevelAt = builder.FigureWaterLevel,
+                // main.ts setTerrainMove + setGroundHeight: the ground word and the height sampler every figure walks on.
+                GroundMoveAt = builder.FigureGroundMove,
+                GroundYAt = builder.FigureGroundY,
                 // npcs.tickFigureTiers(camera.position) and setModelFocus (distance² to engine.target), main.ts.
                 CameraPosition = () => _camera is { } c && IsInstanceValid(c) ? c.GlobalPosition : null,
                 FocusTarget = () => _camera is { } c && IsInstanceValid(c) ? c.Target : null,
@@ -233,6 +235,8 @@ public partial class Main : Node3D
                         Log($"offline placement {id} ({slot.Loc.Name}) open[{open}] closed[{closed}]");
                 }
                 _figures.TickPlacement();
+                // Task 30: the NPC walk on this world's data — two synthetic polls (open ground, a room change).
+                OfflineWalkProbe(builder);
                 Log($"offline memory static {Performance.GetMonitor(Performance.Monitor.MemoryStatic) / 1048576.0:0} MiB, "
                     + $"library {_figures.Clips.SourceKeys} source keys, figure templates "
                     + $"{_figures.TemplateKeys} keys ≈{_figures.TemplateKeys * FigureManager.KeyBytes / 1048576.0:0} MiB in {_figures.TemplateCount} templates");

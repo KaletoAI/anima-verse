@@ -35,6 +35,7 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `storeys/` | Task 16: a third, hand-written world (a tower with a cellar, two storeys above and an always-visible terrace; a pit with a ground model over a basement) for the storey switch at runtime — the ground files come from this directory; see "Storeys world" |
 | `fidelity/` | Task 17: a fourth, hand-written world (a plan hull with cutouts and padding, a room clip, two depth cuts on a turned location, a shell area, a changed scene for the sweep) — the ground files come from this directory; see "Fidelity world" |
 | `placement/` | Task 29: a hand-written world for the room placement (an inn with a hall, a bedroom and a loft over it, a storey corridor, a bench marker, a bed marker, a stool, a table and a cot; a closed shed) and the fallback pool (served from the repository's `static/client3d/models/`) — the ground files come from this directory; see "Placement world" |
+| `walk/` | Task 30: a hand-written FLAT world for the NPC walk (a hall with two storey-0 rooms joined by a party-wall door, a loft over them reached by one flight, a lake with a constant 1.5 m mirror) and the fallback pool; its own `heightfield.json` (all 0, no tiles), `terrain.json` and `model3d.json`, the layer files from this directory; see "Walk world" |
 | `props/` | Task 18: a fifth, hand-written world (8 lamps + a world-prop lantern, a picture frame with a picture and a glass slot, three mirror panes, a door prop with a leaf, rooms with ambience, a corridor, a cellar storey) — the ground files come from this directory; see "Props world" |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
@@ -315,15 +316,24 @@ Bram is gone → **figures = 2**. Ada moves to (−40, 30), her `model_sig` beco
 → `model3d` is asked again (2 requests), the GLB URL is unchanged → no second download (template cache per URL
 and set chain), clips not downloaded again. Cleo has no `model_sig` and no `model_rev` (absent both times) →
 not asked again. Cleo's `progress_m` 144 → (300 − 44, −100) = (256, −100). Ada's row now says
-`activity_animation: "reading"`.
+`activity_animation: "reading"`. Cleo is TRAVELLING (`travel` without `starts_in_s`): she walks her 7 m without the
+run boost (npcs.ts `reckoning`), 1.7 m per frame — (261.3, 4.875, −100) after frame 1, (256, 4.875, −100) after
+frame 5 (y: the same clamped overview cell, 4.875).
 
-Lerp over the poll interval (5 s): Ada plans 10 m / 5 s = 2 m/s > 0.2 → moving → `moveClip(walk_run, false)` =
-`mob1-walk` → chain [mob1-walk, walk, stand-relaxed, idle] → plays **walk** at pace 1 (family mob1), facing +x
-(rotation.y = atan2(10, 0) = π/2). After 2.5 s: Ada (−45, 30), y: fx = 211/256 =
-0.82421875, north = 3.296875, south = 6.59375, y = 3.296875·0.8828125 + 6.59375·0.1171875
-= **3.68316650390625**; Cleo (259.5, −100), y = 4.875 (same clamped cell). After 5 s: Ada
-at (−40, 30), fx = 216/256 = 0.84375, north = 3.375, south = 6.75, y = 2.9794921875 +
-0.791015625 = **3.7705078125**, arrived → standing → `standingClipFor("reading", "")` = **reading** (exact),
+The browser's NPC walk (Task 30, `npcWalk.ts`, vectors `npc_walk.json`), stepped by the check in frames of
+dt = 0.5 s. Nothing moves until the first frame: Ada still stands at (−50, 3.595947265625, 30). Her goal is the free
+point (−40, 30) at its terrain height **3.7705078125** (fx = 216/256 = 0.84375, north = 3.375, south = 6.75,
+y = 2.9794921875 + 0.791015625); the ground under her is `grass` (no `meta.movement` → `walk_run`, no water).
+- Frame 1: distance 10 > `RUN_DISTANCE` 6 on `walk_run`, not travelling → **runs**: step = min(10, 3.4·0.5·1.8 = 3.06)
+  → x = **−46.94**; the root height eases ×4/s: min(1, 0.5·4) = 1 → y = 3.7705078125 at once. She turns into the step:
+  yaw target atan2(1, 0) = π/2, eased min(1, 0.5·10) = 1 → **π/2**. The clip: `moveClip(walk_run, true)` = the running
+  pose's kind **run** → chain [run, walk (`CLIP_FALLBACK` of the run family), stand-relaxed, idle] → the **walk** take
+  at the stand-in pace **1.5** (no run family bound).
+- Frame 2: 6.94 > 6 → runs again → x = −43.88. Frame 3: 3.88 ≤ 6 → walks min(3.88, 1.7) → x = **−42.18**, clip
+  `moveClip(walk_run, false)` = `mob1-walk` → chain [mob1-walk, walk, stand-relaxed, idle] → **walk** at pace 1.
+- Frame 4: 2.18 → 1.7 → −40.48. Frame 5: 0.48 → the whole 0.48 (the direction is exactly +1 on x, so x lands on
+  **−40** exactly). Frame 6: distance 0 ≤ 0.05 → standing; no marker, no neighbour within 4.5 m → she keeps facing
+  +x; `standingClipFor("reading", "")` = **reading** (exact),
 a one-shot: advanced past its end the player stops and the skeleton keeps the clip's LAST frame (her
 LeftUpLeg equals the bound track at t = length — the browser's `clampWhenFinished`).
 
@@ -812,6 +822,9 @@ Stands (`DeriveStands`, every derivation through `roomSpotsOf`):
 - bench1 (ROOM marker of the hall, slots (−3, ∓1), y_world 0.45, root_offset 0.4, facing 90, tilt 5): re-derived height
   = base floor at the mean slot (−3, 0) → g(64, 131) 4.046875 − 0.4 + 0.45 = **4.096875**; bed1 (PROP marker, slot (3, 0),
   y_world 0.55, facing 180): composed 4 + 0.55 + lift at its anchor (g(64, 125) − 4 = −0.046875) = **4.503125**.
+
+After the pool, ONE frame of 0.1 s (Task 30): the facing is eased ×10/s → min(1, 0.1·10) = the whole turn; every
+figure was snapped onto its point, so nobody steps and no height moves.
 
 P1 — storey 0, open (rows sorted Ada, Bea, Cy, Dov, Eli, Fay, Gus, Ivo, Tess = i 0…8 at the inn):
 
@@ -1321,3 +1334,58 @@ copied); a material bound afterwards gets that state at once.
 **V4 strength.** Camera 32.5 m above its target → t = (32.5 − 20)/25 = 0.5 → smoothstep 0.5 → 0.72 · 0.5 = **0.36**;
 `fogged: false` (show all) → **0**; fogged again → 0.36; a new sky reaches every material; an empty signature (no
 avatar) → the empty memory, B = the neutral texel (no request), after the fade A as well.
+
+## Walk world (`walk/`, Task 30, `Check/WalkCheck.cs`, `--check walk`)
+
+The browser's NPC walk (`client3d/src/scene/npcs.ts` `tick`, pure rules `game/npcWalk.ts` / `walk.ts` / `doors.ts` /
+`stairs.ts`; vectors `npc_walk.json`, `npc_ground.json`; the stair module by hand in `tests/StairsTests.cs`). Constants:
+WALK_SPEED 3.4 m/s, run ×1.8 beyond 6 m (+10 m while a station is left, only on `walk_run` ground, never travelling),
+stations retire at 1.5 m (0.4 m while a stair ride runs), standing at ≤ 0.05 m, yaw eased `min(1, 10·dt)`, root height
+`min(1, 4·dt)`, neighbours within 4.5 m. At dt = 0.25 s: run step 1.53 m, walk step 0.85 m, the height ease is whole.
+
+**The world.** Flat: `heightfield.json` all 0, no tiles → every terrain height and the datum are **0**. `terrain.json`:
+default `grass` (no movement word → `walk_run`), a `lake` area x 20…60, z −20…20 with `meta.movement swim`,
+`move_sink_m` 0.35, `idle_sink_m` 1.3, `swim_from_m` 1 and a constant water profile → mirror **1.5** over a bed 0
+(1.5 ≥ 1 → swim). The hall `loc-hall` at (100, 0), yaw 0 → tileToWorld(lx, lz) = (100 + lx, ·, lz); rooms `r-a`
+(storey 0, x −6…0), `r-b` (storey 0, x 0…6), `r-up` (storey 1, its plate top 3.02). Doorways: the party wall `r-a`/`r-b`
+at tile (0, 2), base 0 → world **(100, 0, 2)**; `r-b`'s outside door (3, 4). One flight storey 0 → 1: at (0.5, −2),
+dir +x, run 2.5, width 1, foot landing (0, 0.01, −2) → world **(100, 0.01, −2)**, head landing (3.5, 3.01, −2) → world
+**(103.5, 3.01, −2)**; `stairY` = 0.01 + clamp((x − 100.5)/2.5, 0, 1)·3. Centres: r-a (97, 0.01, 0), r-b (103, 0.01, 0),
+r-up (100, 3.02 + 0.01, 0) = **(100, 3.03, 0)**. Inside the footprint the scope is built (room rectangles), so the
+ground word there is `walk_run`, dry.
+
+**W1 — poll 1** (`worldmap.json`; avatar Dora → the hall open, the check snaps fade 1). Every figure is a pool body
+(model3d answers null). Placed and snapped: Dora (r-a, pos (97, 1)) at **(97, 0.01, 1)**, Sam (r-a, (97, 2)) at
+(97, 0.01, 2), Rex free at (−80, 0, 60), Lia free at (40, 0, 0) (the terrain under her: the bed). Frame 0.1 s:
+- Dora's only neighbour within 4.5 m is Sam (1 m): direction (0, 0, 1) → yaw **0**; Sam's is Dora: (0, 0, −1) → target
+  π, from 0 the shortest turn is +π (the wrap keeps +π), eased min(1, 1) → **π**. Rex has neither marker nor neighbour:
+  his target stays the initial π (south) → **π**.
+- Lia stands in the lake: `idleClip(swim)` = **treading-water**, the idle sink 1.3 (`sinkForState(false, …)`, the
+  wilderness keeps it) → `floatRootY(0, 1.5, 1.3)` = max(1.3, 1.5) = 1.5; eased from 0: 0 + 1.5·min(1, 0.4) =
+  **0.6**; the body drops 1.3 under the root; the ghost `ghostCutY(bed 0, 1.5)` = **1.5** (1.5 ≥ 0.05). Dora plays the
+  standing pose `stand-relaxed`, dry (no drop, no ghost).
+Frame 0.25 s: Lia's root 0.6 + 0.9·1 = **1.5**.
+
+**W2 — poll 2** (`worldmap_poll2.json`). Dora → r-b (103, 1): a ROUTE (room change, interior shown both times):
+`doorwayBetween(r-a, r-b)` → stations **[(100, 0, 2)]**. Sam → r-up (no pos → its centre (100, 3.03, 0), hidden on
+storey 1): no shared doorway → leave by `roomDoor(r-a)` (its only doorway, the party wall) (100, 0, 2), storey 0 → 1 by
+the stair chain [foot, head], no door into r-up → stations **[(100, 0, 2), (100, 0.01, −2), (103.5, 3.01, −2)]** and the
+ride (one leg, UNARMED). Rex → (−70, 60), Lia → (46.8, 0). Frames of 0.25 s:
+
+| frame | Dora | Sam | Rex | Lia |
+|---|---|---|---|---|
+| F1 | door 3.162 away (+10) → run 1.53 along (3, 1)/√10 → **(98.451485, 0, 1.483828)** (y eased to the door's 0) | door 3 → run → (98.53, 0, 2) | 10 > 6 → run → **−78.47** | swim 0.85 (no run on `swim`) → **40.85**, root max(0.35, 1.5) = 1.5, **breast-stroke**, drop 0.35, ghost 1.5 |
+| F2 | door 1.632 ≥ 1.5 → run 1.53 → **(99.902971, 0, 1.967657)** — the door is still ahead (straight to the goal would keep z = 1) | 1.47 → **(100, 0, 2)** | 8.47 → run → −76.94 | |
+| F3 | door 0.102 < 1.5 → retired; goal (103, 0.01, 1) 3.2447 ≤ 6 → **walk** 0.85 → **(100.714291, 0.01, 1.714163)** | door 0 < 0.4 → retired; stair foot 4 (+10) → run → (100, 0.01, 0.47) | 6.94 > 6 → run → **−75.41** | |
+| F4 | 2.3947 left | 2.47 → run → (100, 0.01, −1.06) | 5.41 ≤ 6 → **walk** → **−74.56** | |
+| F5 | 1.5447 left | 0.94 → **(100, 0.01, −2)**: the foot landing (3D 0 < 0.4) ARMS the ride; `stairY` t = 0 → 0.01 | | |
+| F6 | 0.6947 → **(103, 0.01, 1)** | foot retired; head 3.5 (+10) → run → x 101.53; `stairY` t = 1.03/2.5 = 0.412 → **1.246** | | |
+| F7 | | head 1.97 → run 1.53 → x 103.06; t = 2.56/2.5 → 1 → **3.01** | | 7·0.85 → **45.95** |
+| F8 | | head 0.44 ≥ 0.4 → 0.44 → **(103.5, 3.01, −2)**; the ride ends there (3D 0 < 0.4) | | 0.85 → **46.8** |
+| F9 | | head retired (1.5 m again); goal r-up 4.0311 ≤ 6 → walk along (−3.5, 2)/4.0311 → **(102.761993, 3.03, −1.578282)** | | |
+| F10 | | 2.3311 left | 0.31 → **−70** | |
+| F13 | | 3.1811 − 3·0.85 = 0.6311 → **(100, 3.03, 0)** | | |
+
+Clips: Dora runs `run` (the run pose's kind) at F1, walks `mob1-walk` from F3; Rex walks `mob1-walk` from F4; Sam walks
+`mob1-walk` from F9 and stands in `stand-relaxed` at F14. F14: everyone stands; Lia treads water again (drop 1.3), her
+root stays at max(0 + 1.3, 1.5) = **1.5**.

@@ -1,0 +1,336 @@
+{
+ "signature": "walk-hall",
+ "k": 1,
+ "extent_m": 12,
+ "storey_m": 3,
+ "boundary": [
+  [
+   -6,
+   -4
+  ],
+  [
+   6,
+   -4
+  ],
+  [
+   6,
+   4
+  ],
+  [
+   -6,
+   4
+  ]
+ ],
+ "levels": [
+  {
+   "level": 0,
+   "floor_y": 0
+  },
+  {
+   "level": 1,
+   "floor_y": 3
+  }
+ ],
+ "style": {
+  "wall_color": "#d0c8b8",
+  "floor_color": "#b8b0a0",
+  "glass_color": "#9cc3e0",
+  "glass_opacity": 0.3,
+  "upper_wall_opacity": 0.45,
+  "upper_floor_opacity": 0.4,
+  "stair_color": "#8a7a66"
+ },
+ "rooms": [
+  {
+   "room_id": "r-a",
+   "level": 0,
+   "always_visible": false,
+   "outline": [
+    [
+     -6,
+     -4
+    ],
+    [
+     0,
+     -4
+    ],
+    [
+     0,
+     4
+    ],
+    [
+     -6,
+     4
+    ]
+   ],
+   "openings": []
+  },
+  {
+   "room_id": "r-b",
+   "level": 0,
+   "always_visible": false,
+   "outline": [
+    [
+     0,
+     -4
+    ],
+    [
+     6,
+     -4
+    ],
+    [
+     6,
+     4
+    ],
+    [
+     0,
+     4
+    ]
+   ],
+   "openings": []
+  },
+  {
+   "room_id": "r-up",
+   "level": 1,
+   "always_visible": false,
+   "outline": [
+    [
+     -6,
+     -4
+    ],
+    [
+     6,
+     -4
+    ],
+    [
+     6,
+     4
+    ],
+    [
+     -6,
+     4
+    ]
+   ],
+   "openings": []
+  }
+ ],
+ "outdoor_rooms": [],
+ "floor_plan": [
+  {
+   "room_id": "r-a",
+   "polygon_world": [
+    [
+     -6,
+     -4
+    ],
+    [
+     0,
+     -4
+    ],
+    [
+     0,
+     4
+    ],
+    [
+     -6,
+     4
+    ]
+   ],
+   "floor_kind": "planks",
+   "closed": true
+  },
+  {
+   "room_id": "r-b",
+   "polygon_world": [
+    [
+     0,
+     -4
+    ],
+    [
+     6,
+     -4
+    ],
+    [
+     6,
+     4
+    ],
+    [
+     0,
+     4
+    ]
+   ],
+   "floor_kind": "planks",
+   "closed": true
+  }
+ ],
+ "plates": [
+  {
+   "level": 1,
+   "outline": [
+    [
+     -6,
+     -4
+    ],
+    [
+     6,
+     -4
+    ],
+    [
+     6,
+     4
+    ],
+    [
+     -6,
+     4
+    ]
+   ],
+   "holes": [],
+   "top_y": 3.0,
+   "thickness": 0.2,
+   "opacity_role": "upper"
+  },
+  {
+   "level": 1,
+   "room_id": "r-up",
+   "outline": [
+    [
+     -6,
+     -4
+    ],
+    [
+     6,
+     -4
+    ],
+    [
+     6,
+     4
+    ],
+    [
+     -6,
+     4
+    ]
+   ],
+   "holes": [],
+   "top_y": 3.02,
+   "thickness": 0.02,
+   "opacity_role": "upper"
+  }
+ ],
+ "walls": [
+  {
+   "level": 0,
+   "from": [
+    -6,
+    -4
+   ],
+   "to": [
+    6,
+    -4
+   ],
+   "base_y": 0,
+   "height": 3,
+   "thickness": 0.2,
+   "opacity_role": "ground",
+   "outward_normal": [
+    0,
+    -1
+   ]
+  }
+ ],
+ "extras": [],
+ "stairs": [
+  {
+   "id": 1,
+   "from_level": 0,
+   "to_level": 1,
+   "at": [
+    0.5,
+    -2
+   ],
+   "dir_deg": 90,
+   "run_m": 2.5,
+   "rise_m": 3.0,
+   "steps": 10,
+   "tread_m": 0.25,
+   "width_m": 1.0,
+   "foot": [
+    0,
+    0.01,
+    -2
+   ],
+   "head": [
+    3.5,
+    3.01,
+    -2
+   ],
+   "footprint": [
+    [
+     0.5,
+     -2.5
+    ],
+    [
+     3.0,
+     -2.5
+    ],
+    [
+     3.0,
+     -1.5
+    ],
+    [
+     0.5,
+     -1.5
+    ]
+   ]
+  }
+ ],
+ "markers": [],
+ "doorways": [
+  {
+   "level": 0,
+   "at_world": [
+    0,
+    2
+   ],
+   "along": [
+    0,
+    1
+   ],
+   "type": "door",
+   "width_m": 1.0,
+   "height_m": 2.1,
+   "base_y": 0,
+   "rooms": [
+    "r-a",
+    "r-b"
+   ],
+   "outside": false
+  },
+  {
+   "level": 0,
+   "at_world": [
+    3,
+    4
+   ],
+   "along": [
+    1,
+    0
+   ],
+   "type": "door",
+   "width_m": 1.2,
+   "height_m": 2.1,
+   "base_y": 0,
+   "rooms": [
+    "r-b"
+   ],
+   "outside": true
+  }
+ ],
+ "problems": [],
+ "corridors": [],
+ "boundary_openings": [],
+ "models": [],
+ "figures": {
+  "base_height_m_world": 1.7,
+  "stand_clearance": 0.12
+ }
+}

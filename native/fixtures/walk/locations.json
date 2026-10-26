@@ -1,0 +1,24 @@
+{
+ "locations": [
+  {
+   "id": "loc-hall",
+   "name": "Hall",
+   "terrain": null,
+   "map3d": null,
+   "rooms": [
+    {
+     "id": "r-a",
+     "name": "Front"
+    },
+    {
+     "id": "r-b",
+     "name": "Back"
+    },
+    {
+     "id": "r-up",
+     "name": "Loft"
+    }
+   ]
+  }
+ ]
+}

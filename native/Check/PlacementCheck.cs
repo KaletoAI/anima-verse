@@ -68,6 +68,9 @@ public static class PlacementCheck
             using (var map = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "worldmap.json"))))
                 await mgr.Apply(map.RootElement);
             await mgr.EnsurePool();
+            // One frame of 0.1 s (Task 30): the facing is EASED ×10/s like the browser's (min(1, 0.1·10) = the whole turn);
+            // every figure was snapped onto its point, so nobody steps.
+            mgr.Tick(0.1);
 
             // ---- P1 the open inn, storey 0 ----
             Fig(mgr, "Ada Ash", "seat", 65, 4.096875, 131, visible: true);

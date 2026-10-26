@@ -17,7 +17,25 @@ public sealed record TerrainTypeInfo(string Kind, string Color, double Undergrow
 {
     /// <summary><c>swayFor</c>'s clamp of a type's <c>sway_m</c> (client3d ground.ts <c>SWAY_MIN_M</c>/<c>SWAY_MAX_M</c>); the scatter shaders read the same bounds.</summary>
     public const double SwayMinM = 0.01, SwayMaxM = 0.5;
+
+    /// <summary>
+    /// The walking half of ground.ts <c>typeAt</c> for this kind (§ A9): <c>speed_factor</c> (junk = 1),
+    /// <c>movementOf(meta.movement, 'wilderness')</c>, the two sinks (<c>meta.move_sink_m</c>/<c>idle_sink_m</c> read with
+    /// <c>Number()</c>, only for a <c>swim</c> ground, ≤ 0 / junk = 0) and <c>swimFrom(meta.swim_from_m)</c>.
+    /// </summary>
+    public double SpeedFactor { get; init; } = 1;
+    public string Movement { get; init; } = Figures.FigureClips.WalkRun;
+    public double MoveSinkM { get; init; }
+    public double IdleSinkM { get; init; }
+    public double SwimFromM { get; init; } = Water.WaterGates.SwimFromDefaultM;
 }
+
+/// <summary>
+/// ground.ts <c>TerrainPoint</c> as the walking figure reads it: the movement word, the raw speed factor, the sinks,
+/// the swim threshold and the mirror over the point (null = not water).
+/// </summary>
+public readonly record struct TerrainPoint(string Kind, double SpeedFactor, string Movement, double MoveSinkM,
+                                           double IdleSinkM, double SwimFromM, double? WaterLevel);
 
 /// <summary>A painted area: id, kind, the RAW polygon (junk corners as NaN — <c>cleanRing</c> drops them),
 /// its scatter rows, and how many rows of the kinds the spike does not port (along/edge/center).</summary>
@@ -95,6 +113,14 @@ public sealed class TerrainPayload
             e.TryGetProperty("variants", out var v) ? Map(v) : new Dictionary<string, string>(), mv);
     }
 
+    /// <summary>typeAt's <c>depth(raw)</c>: <c>Number(raw)</c>, finite and &gt; 0, else 0 (junk is no depth, never NaN).</summary>
+    private static double Depth(JsonElement meta, string name)
+    {
+        if (meta.ValueKind != JsonValueKind.Object || !meta.TryGetProperty(name, out var v)) return 0;
+        double d = Scene.Js.Number(v);
+        return double.IsFinite(d) && d > 0 ? d : 0;
+    }
+
     /// <summary>The falls of one area's meta (ground.ts <c>rebuildAreas</c>): only an area with a profile has any.</summary>
     private static IReadOnlyList<Water.Waterfall> FallsOf(JsonElement? meta)
     {
@@ -120,6 +146,27 @@ public sealed class TerrainPayload
         return level;
     }
 
+    /// <summary>
+    /// ground.ts <c>typeAt(x, z)</c>: the LAST (topmost) painted area containing the point decides the kind and the
+    /// mirror (<see cref="WaterLevelAt"/>); no area = the world's default kind; a kind without a catalog entry walks
+    /// plainly (speed 1, <c>walk_run</c>, no sinks, the default swim threshold).
+    /// </summary>
+    public TerrainPoint TypeAt(double x, double z)
+    {
+        string hit = "";
+        double? level = null;
+        foreach (var a in Areas)
+        {
+            if (!ScatterMath.PointInRing(x, z, a.Polygon)) continue;
+            hit = a.Kind ?? "";
+            level = a.Profile?.LevelAt(x, z);
+        }
+        var kind = hit.Length > 0 ? hit : DefaultKind;
+        if (TypeOf(kind) is not { } t)
+            return new TerrainPoint(kind, 1, Figures.FigureClips.WalkRun, 0, 0, Water.WaterGates.SwimFromDefaultM, level);
+        return new TerrainPoint(kind, t.SpeedFactor, t.Movement, t.MoveSinkM, t.IdleSinkM, t.SwimFromM, level);
+    }
+
     public static TerrainPayload Parse(JsonElement root)
     {
         var t = new TerrainPayload { DefaultKind = Json.Str(root, "default_kind"), Sig = Json.Str(root, "sig") };
@@ -134,7 +181,14 @@ public sealed class TerrainPayload
                 !double.IsFinite(ug) || ug <= 0 ? 0 : Math.Min(ug, 1),                                  // undergrowthFor
                 !double.IsFinite(sway) || sway <= 0 ? 0 : Math.Min(Math.Max(sway, TerrainTypeInfo.SwayMinM), TerrainTypeInfo.SwayMaxM), // swayFor
                 (ty.TryGetProperty("surface", out var sf) && sf.ValueKind == JsonValueKind.String ? sf.GetString() ?? "" : "")
-                    .Trim().ToLowerInvariant());                                                         // surfaceOfType
+                    .Trim().ToLowerInvariant())                                                          // surfaceOfType
+            {
+                SpeedFactor = NumOrNull(ty, "speed_factor") is { } spd && double.IsFinite(spd) ? spd : 1,
+                Movement = Figures.FigureClips.MovementOf(StrOrNull(meta, "movement"), Water.GroundScope.Wilderness),
+                MoveSinkM = StrOrNull(meta, "movement") == Figures.FigureClips.Swim ? Depth(meta, "move_sink_m") : 0,
+                IdleSinkM = StrOrNull(meta, "movement") == Figures.FigureClips.Swim ? Depth(meta, "idle_sink_m") : 0,
+                SwimFromM = Water.WaterGates.SwimFrom(NumOrNull(meta, "swim_from_m")),
+            };
         }
         foreach (var a in Json.Arr(root, "areas"))
         {

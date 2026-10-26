@@ -7,6 +7,8 @@ using AnimaNative.Api;
 using AnimaNative.Gltf;
 using AnimaNative.Overview;
 using AnimaNative.Scatter;
+using AnimaNative.Scene;
+using AnimaNative.Water;
 using AnimaNative.World;
 using Godot;
 using Json = AnimaNative.World.Json;
@@ -20,6 +22,8 @@ public sealed class FigureStats
     public int ModelLoads, ModelFailures, Offmap, Polls, KindsBound, LowTier;
     /// <summary>Task 29: figures the placement hides, figures on a seat or a sit/lie surface, pool models, portraits.</summary>
     public int Hidden, Seated, PoolFigures, Portraits;
+    /// <summary>Task 30: snaps that moved a figure more than 0.5 m (npcs.ts <c>syncCounters.place</c>).</summary>
+    public int PlaceSnaps;
 
     public string Summary() =>
         $"figures={Figures} glb_figures={GlbFigures} placeholders={Placeholders} clips_loaded={ClipsLoaded} "
@@ -32,10 +36,13 @@ public sealed class FigureStats
 /// The figures of <c>GET /play/worldmap</c> on the open map — client3d's <c>FigureLibrary</c> + the model side of
 /// <c>NpcManager</c>:
 ///
-///   • which and where: <see cref="FigurePlacement.Resolve"/> (the browser's far view; rooms are Task 29);
-///     y = <see cref="WorldHeight.GroundAt"/> at the shown point, every frame;
-///   • fed by the client's world-map poll (<see cref="ApplyPolled"/>); a moved target lerps in over the poll
-///     interval (<see cref="PollSeconds"/>; NPC walking is Task 30); <c>activity_animation</c> is what a standing
+///   • which and where: <see cref="FigurePlacement.Plan"/> once a second from the cached map (journeys, free points,
+///     the room ladder of every mounted location — Task 29), a real room change routed through doors, stairs or the
+///     lift (<see cref="NpcRoute"/>);
+///   • how it gets there: every frame the browser's NPC walk (<see cref="Tick"/>, Task 30) — 3.4 m/s, running beyond
+///     6 m, stations retired at 1.5 m, the yaw eased ×10/s, the root height ×4/s, the ground word deciding swim / crawl
+///     / treading and the float over water, the underwater ghost, the stair ride;
+///   • fed by the client's world-map poll (<see cref="ApplyPolled"/>); <c>activity_animation</c> is what a standing
 ///     figure plays, <c>animation_sets</c> its set chain;
 ///   • model: <c>GET /characters/{name}/model3d</c> → <c>model.url</c> / <c>model.low_url</c> used unchanged (§ A7),
 ///     every load (model3d + GLB + fit) one job of a <see cref="FocusQueue"/> of width 3 — the avatar first, then
@@ -58,8 +65,6 @@ public partial class FigureManager : Node3D
     public const int ModelQueueWidth = 3;
     /// <summary>A transient model failure retries after this many seconds (figures.ts: 30 000 ms).</summary>
     public double RetryDelayS { get; set; } = 30;
-    /// <summary>The current poll interval (s): a moved figure lerps to its new spot over it.</summary>
-    public double PollSeconds { get; set; } = 3.0;
     /// <summary>false in <c>--check</c>: time only moves through <see cref="Tick"/>, tiers only through <see cref="TickTiers"/>.</summary>
     public bool AutoTick { get; set; } = true;
 
@@ -79,10 +84,16 @@ public partial class FigureManager : Node3D
     private double _tierClock;
 
     /// <summary>
-    /// The mirror over a point for the underwater ghost (npcs.ts: <c>groundWaterLevel(typeAt(x, z).water_level, scope)</c>,
-    /// <see cref="World.WorldBuilder.FigureWaterLevel"/>); null = no ghosts at all.
+    /// What the GROUND says at a world point (npcs.ts <c>groundMoveAt</c>, main.ts <c>setTerrainMove</c>:
+    /// <see cref="World.WorldBuilder.FigureGroundMove"/>) — movement word, sinks, mirror, swim threshold, speed, scope,
+    /// prop water; null = the world without painted ground (walk, run, no water, no ghosts).
     /// </summary>
-    public Func<double, double, double?>? WaterLevelAt { get; set; }
+    public Func<double, double, GroundMove>? GroundMoveAt { get; set; }
+    /// <summary>
+    /// The ground height under a figure (npcs.ts <c>groundY</c>, main.ts <c>groundY</c>: the tile ladder inside a
+    /// footprint, the world outside — <see cref="World.WorldBuilder.FigureGroundY"/>); null = the world height.
+    /// </summary>
+    public Func<double, double, double>? GroundYAt { get; set; }
 
     public ClipLibrary Clips { get; }
     public FigureStats Stats { get; } = new();
@@ -202,6 +213,7 @@ public partial class FigureManager : Node3D
         Stats.Polls++;
         AvatarName = Json.Str(root, "avatar");
         _rows = CharacterRow.ParseList(root);
+        _rowByName = _rows.GroupBy(r => r.Name).ToDictionary(g => g.Key, g => g.Last());
         _mapPlaces = MapPlace.ParsePlaced(root);
         var plans = Place();
         var loads = new List<Task>();
@@ -246,6 +258,7 @@ public partial class FigureManager : Node3D
     public Func<IReadOnlyDictionary<string, LocationSlot>>? Slots { get; set; }
     /// <summary>The last parsed rows and placed locations of <see cref="Apply"/> (the 1 Hz pass re-places from them).</summary>
     private List<CharacterRow> _rows = new();
+    private Dictionary<string, CharacterRow> _rowByName = new();
     private Dictionary<string, MapPlace> _mapPlaces = new();
     /// <summary>main.ts <c>shownPlacement</c>: where each figure was drawn last (room, interior revealed).</summary>
     private readonly Dictionary<string, ShownPlacement> _shown = new();
@@ -269,7 +282,10 @@ public partial class FigureManager : Node3D
             if (slots is null || locId.Length == 0 || !slots.TryGetValue(locId, out var slot)) return null;
             if (!IsInstanceValid(slot.Group)) return null;
             var stands = slot.Stands;
-            return new LocationPlacement(slot.PlacementView(), slot.Ring == Ring.Near, stands.TileGroundY, stands.RoomStandY);
+            return new LocationPlacement(slot.PlacementView(), slot.Ring == Ring.Near, stands.TileGroundY, stands.RoomStandY)
+            {
+                Route = slot.RouteView(),
+            };
         }
         var plans = FigurePlacement.Plan(_rows, TileOf, _height.GroundAt, _shown,
             id => _mapPlaces.TryGetValue(id, out var p) ? new Vec3(p.X, 0, p.Z) : null);
@@ -280,17 +296,44 @@ public partial class FigureManager : Node3D
         return _lastPlans;
     }
 
-    /// <summary>npcs.update for one figure: target (snap or walk), facing, lean, visibility.</summary>
+    /// <summary>
+    /// npcs.ts <c>update</c> for one figure (and main.ts' ride bookkeeping of a routed room change): a NEW goal adopts the
+    /// route's stations (<c>st.via</c>); a snap — the first placement, a view change — puts the figure on it at once,
+    /// stations and climb dropped; then goal, pace 1, facing, lean, visibility and the travelling flag.
+    /// </summary>
     private void ApplyPlan(Figure fig, FigurePlan plan, bool fresh)
     {
         fig.Rule = plan.Rule;
-        fig.OnTerrain = plan.OnTerrain;
-        fig.Face = plan.Face is { } f ? new Vector3((float)f.X, 0, (float)f.Z) : null;
+        var goal = new Vector3((float)plan.Pos.X, (float)plan.Pos.Y, (float)plan.Pos.Z);
+        if (fresh)
+        {
+            // createNpc: the first sync puts the figure on its point — no walk across the whole map.
+            fig.SnapTo(goal);
+        }
+        else
+        {
+            // main.ts: a routed room change ends whatever climb the figure was on (the avatar's own climb excepted), and
+            // a climb over stairs becomes the ride — unarmed, the figure is still a room away.
+            if (plan.Routed && fig.CharacterName != AvatarName) fig.Ride = null;
+            if (plan.Legs.Count > 0) fig.Ride = new Scene.StairRide { Legs = plan.Legs };
+            if (fig.Target != goal)
+            {
+                fig.Waypoints.Clear();
+                if (plan.Via is { } via) fig.Waypoints.AddRange(via.Select(v => new Vector3((float)v.X, (float)v.Y, (float)v.Z)));
+            }
+            if (plan.Snap)
+            {
+                if (fig.Position.DistanceTo(goal) > 0.5f) Stats.PlaceSnaps++;
+                fig.SnapTo(goal);
+            }
+        }
+        fig.Target = goal;
+        fig.Pace = 1;
+        fig.Face = plan.Face is { } f ? new Vector3((float)f.X, (float)f.Y, (float)f.Z) : null;
         fig.Lean = plan.Lean;
+        fig.ApplyRotation();
         fig.SetHidden(plan.Hidden);
-        fig.SetTarget(new Vector3((float)plan.Pos.X, (float)plan.Pos.Y, (float)plan.Pos.Z), PollSeconds, snap: fresh || plan.Snap);
-        fig.Advance(0, _height.GroundAt);
-        Gate(fig);
+        fig.Travelling = _rowByName.TryGetValue(fig.CharacterName, out var row) && row.Travelling;
     }
 
     /// <summary>
@@ -321,15 +364,101 @@ public partial class FigureManager : Node3D
     private static bool Changed(Figure fig)
         => fig.WantedSig != fig.LoadedSig || (fig.WantedRev is not null && fig.WantedRev != fig.LoadedRev);
 
+    /// <summary>
+    /// The per-frame walk of every figure — npcs.ts <c>tick</c> without a server route (journeys follow their polled
+    /// point by reckoning until E6), the bridges (Task 31) and the player-driven figure (E7):
+    ///
+    ///   1. the plan (<see cref="NpcWalk.Goal"/>): stations retire at 1.5 m (a stair ride at 0.4 m), the goal is the first
+    ///      left, else the target; standing at ≤ 0.05 m;
+    ///   2. the step (<see cref="NpcWalk.Step"/>): 3.4 m/s, running ×1.8 beyond 6 m (+10 m while a station is left) on a
+    ///      ground that lets one run, never for a traveller; the figure turns into the step;
+    ///   3. the ground word where it now stands (<see cref="WalkGround.WordOf"/>): the underwater ghost cut at the UNGATED
+    ///      mirror over the bed; the sink of the state (move / idle) cut by the scope;
+    ///   4. the height: a guided climb answers it outright (<see cref="Stairs.RideStep"/>), else the root eases ×4/s to
+    ///      <c>floatRootY(station or target y, mirror, sink)</c>;
+    ///   5. standing: the marker's facing, else the neighbours' centroid within 4.5 m, else keep;
+    ///   6. the clip: <c>moveClip(movement, run)</c> moving, else <c>standingClipFor(activity, idleClip(movement))</c>,
+    ///      the ground's clips dropped by the sink; the yaw eases ×10/s.
+    /// </summary>
     public void Tick(double dt)
     {
         double camDist = CamDist?.Invoke() ?? DefaultCamDist;
-        foreach (var fig in _figures.Values)
+        // npcs.ts facingTargets(): every figure's neighbours, measured before anybody steps this frame.
+        var all = _figures.Values.ToList();
+        var positions = all.Select(f => V(f.Position)).ToList();
+        var faceTo = new Dictionary<Figure, Vec3>();
+        for (int i = 0; i < all.Count; i++)
+            if (NpcWalk.NeighbourFacing(positions[i], positions.Where((_, j) => j != i)) is { } c) faceTo[all[i]] = c;
+        foreach (var fig in all) StepFigure(fig, dt, faceTo.TryGetValue(fig, out var n) ? n : null, camDist);
+    }
+
+    private static Vec3 V(Vector3 v) => new(v.X, v.Y, v.Z);
+
+    /// <summary>npcs.ts <c>groundWordAt(x, z)</c>: the raw ground word, the bed under the point and the gated word.</summary>
+    public GroundWord WordAt(double x, double z)
+        => WalkGround.WordOf(GroundMoveAt?.Invoke(x, z) ?? GroundMove.Plain, GroundYAt?.Invoke(x, z) ?? _height.GroundAt(x, z));
+
+    private void StepFigure(Figure fig, double dt, Vec3? neighbour, double camDist)
+    {
+        var pos = V(fig.Position);
+        var plan = NpcWalk.Goal(pos, V(fig.Target), fig.Waypoints.Select(V).ToList(),
+                                fig.Ride is not null ? Stairs.RideArriveM : NpcWalk.WaypointArriveM);
+        fig.Waypoints.RemoveRange(0, plan.Retired);
+        bool reckoning = fig.Travelling;
+        var stepGround = WordAt(pos.X, pos.Z);
+        var (running, _) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning, dt, fig.Pace, 1);
+        // The bridge gate (paceLimitFor, Figure.paceLimit) is Task 31's: nothing holds a figure yet.
+        const double paceLimit = 1;
+        if (plan.Moving && paceLimit > 0)
         {
-            fig.Advance(dt, _height.GroundAt);
-            Gate(fig);
-            fig.Portrait?.Tick(dt, camDist, fig.Moving);
+            var (_, step) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning, dt, fig.Pace, paceLimit);
+            double len = plan.DistToGoal;
+            double dx = plan.Delta.X / len, dz = plan.Delta.Z / len;
+            pos = new Vec3(pos.X + dx * step, pos.Y, pos.Z + dz * step);
+            fig.FaceTowards(new Vector3((float)dx, 0, (float)dz));
         }
+        var stand = WordAt(pos.X, pos.Z);
+        var raw = stand.Raw;
+        if (fig.Portrait is null)
+            fig.SetSubmerged(WaterGates.GhostCutY(stand.BedY, WaterGates.GroundWaterLevel(raw.Water, raw.Scope)));
+        var standIdle = FigureClips.IdleClip(stand.Word.Movement, fig.Poses);
+        double standSink = WalkGround.GroundSink(WalkGround.SinkForState(plan.Moving, standIdle, stand.Word.Sink),
+                                                 WalkGround.SinkScope(raw));
+        // THE HEIGHT: the ride's ramp outright, else the root eases to the station's (or the goal's) height, floated.
+        double? rideY = null;
+        if (fig.Ride is { } ride)
+        {
+            var r = Stairs.RideStep(ride, pos.X, pos.Y, pos.Z);
+            if (r.Done) fig.Ride = null;
+            else
+            {
+                ride.Leg = r.Leg;
+                ride.Armed = r.Armed;
+                rideY = r.Y;
+            }
+        }
+        double y;
+        if (rideY is { } ry) y = ry;
+        else
+        {
+            double goalY = WalkGround.FloatRootY(fig.Waypoints.Count > 0 ? fig.Waypoints[0].Y : fig.Target.Y,
+                                                 stand.Word.Water, standSink);
+            y = NpcWalk.EaseY(pos.Y, goalY, dt);
+        }
+        fig.Position = new Vector3((float)pos.X, (float)y, (float)pos.Z);
+        var standingClip = FigureClips.StandingClipFor(fig.Activity, standIdle, fig.Poses);
+        if (!plan.Moving && fig.Portrait is null)
+        {
+            var marker = fig.Face is { } f ? new Vec3(f.X, f.Y, f.Z) : (Vec3?)null;
+            if (NpcWalk.StandingFacing(new Vec3(pos.X, y, pos.Z), marker, neighbour, null) is { } dir)
+                fig.FaceTowards(new Vector3((float)dir.X, (float)dir.Y, (float)dir.Z));
+        }
+        bool run = !reckoning && plan.Dist > NpcWalk.RunDistance;
+        fig.SetMotion(plan.Moving, plan.Moving && run && FigureClips.CanRun(stand.Word.Movement), stand.Word.Movement);
+        fig.Play(plan.Moving ? FigureClips.MoveClip(stand.Word.Movement, run, fig.Poses) : standingClip,
+                 plan.Moving || standIdle.Length > 0, standSink);
+        fig.TickYaw(dt);
+        fig.Portrait?.Tick(dt, camDist, plan.Moving);
     }
 
     /// <summary>The camera's orbit distance (the portrait sprites size with it, npcs.ts <c>camDist·0.055</c>).</summary>
@@ -410,18 +539,6 @@ public partial class FigureManager : Node3D
     {
         if (!IsInstanceValid(fig) || FocusTarget?.Invoke() is not { } t) return double.PositiveInfinity;
         return fig.Position.DistanceSquaredTo(t);
-    }
-
-    /// <summary>
-    /// THE UNDERWATER GHOST of a figure, every frame (npcs.ts): <c>ghostCutY(bedY, groundWaterLevel(…))</c> on the UNGATED
-    /// water level — a wader is exactly the figure the opaque water surface cuts in half. The figure stands on the bed
-    /// (<see cref="WorldHeight.GroundAt"/>) until E5 brings swimming.
-    /// </summary>
-    private void Gate(Figure fig)
-    {
-        if (WaterLevelAt is not { } at) return;
-        var p = fig.Position;
-        fig.SetSubmerged(Water.WaterGates.GhostCutY(p.Y, at(p.X, p.Z)));
     }
 
     public override void _Process(double delta)

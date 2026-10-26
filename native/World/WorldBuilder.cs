@@ -150,6 +150,30 @@ public sealed class LocationSlot
     public IReadOnlyList<SceneProblem> Problems { get; init; } = Array.Empty<SceneProblem>();
     /// <summary>The scene recipe of the mount (the figure stands are derived from it again after every re-lift).</summary>
     public ScenePayload? Scene { get; init; }
+    /// <summary>The location's rooms as <c>/world/locations?view=3d</c> lists them (<c>tile.loc.rooms</c>): id → name.</summary>
+    public IReadOnlyDictionary<string, string> DetailRooms { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
+    /// What a room change of a figure walks through (main.ts' <c>route</c> branch, <see cref="Figures.NpcRoute"/>): the
+    /// scene's doorways in the tile frame, <c>roomIdOf</c> over the location's rooms (id or name → id), the room levels,
+    /// the world flights and the lift stops of the mount. Null without a scene.
+    /// </summary>
+    public Figures.RouteTile? RouteView()
+    {
+        if (Scene is not { } scene) return null;
+        var rooms = DetailRooms;
+        return new Figures.RouteTile
+        {
+            Frame = Stands.Frame, Doorways = scene.Doorways, RoomLevels = Stands.RoomLevels,
+            RoomIdOf = raw =>
+            {
+                if (string.IsNullOrEmpty(raw)) return null;
+                foreach (var (id, name) in rooms) if (id == raw || name == raw) return id;
+                return null;
+            },
+            Stairs = Places.Stairs, LiftStops = Places.ElevatorStops,
+        };
+    }
     /// <summary><c>tile.isBuilding</c> (<c>!map3d.area_model</c>): the huddle lines up in front of a building, rings an area.</summary>
     public bool IsBuilding { get; init; }
     /// <summary>
@@ -816,6 +840,7 @@ public sealed partial class WorldBuilder
             RoomRects = StoreyView.RoomHulls(scene).Select(h => (h.Key, Rect: Ambience.RoomRectOf(h.Value)))
                                   .Where(r => r.Rect is not null).Select(r => new KeyValuePair<string, RoomRect>(r.Key, r.Rect!.Value)).ToList(),
             Corridors = scene.Corridors.ToList(),
+            DetailRooms = DetailRooms(loc.Id),
             RoomAmbience = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Ambience),
             // mountShell's places part (markers, lift stops, flights, vertical targets, corridor stands) in the frame
             // the group stands in now; the re-datum carries it (Redatum → PlaceInventory.Relift).
@@ -1193,6 +1218,7 @@ public sealed partial class WorldBuilder
             stats.WorldPropRows++;
             double bottom = height.GroundAt(x, z) + Json.Num(wp, "offset_y") + Json.Num(wp, "ground_offset_m");
             var spec = WorldPropSpec(wp, x, z, bottom);
+            if (spec.Water.Length > 0) lock (_worldPropWaterSpecs) _worldPropWaterSpecs.Add(spec);   // worldProps.waterAt reads every row
             // worldProps.ts redrapeOne: a row's light is registered whatever its tier (a culled landmark still lights),
             // at (x + offset x, bottom + height, z + offset z) in world metres.
             if (spec.Light is { } light && PropLights is { } pool)

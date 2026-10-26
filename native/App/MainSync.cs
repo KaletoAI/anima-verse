@@ -116,7 +116,6 @@ public partial class Main : Node3D
         try
         {
             if (_locSync is not null && _locSync.Differs(LocationsSync.MapRev(map))) _ = _locSync.SyncAsync();
-            _figures.PollSeconds = (_poll?.IntervalMs(WorldmapKey) ?? PollSpec.Worldmap3d.IntervalMs) / 1000.0;
             _figures.ApplyPolled(map);
             var clock = ConnectionState.ClockOf(map);
             if (_conn.Ok(clock))

@@ -1,0 +1,94 @@
+{
+ "avatar": "Dora Door",
+ "current_location_id": "loc-hall",
+ "locations": [
+  {
+   "id": "loc-hall",
+   "name": "Hall",
+   "pos_x": 100.0,
+   "pos_z": 0.0,
+   "yaw_deg": 0.0,
+   "plan_width_m": 12.0,
+   "boundary": [
+    [
+     -6,
+     -4
+    ],
+    [
+     6,
+     -4
+    ],
+    [
+     6,
+     4
+    ],
+    [
+     -6,
+     4
+    ]
+   ],
+   "openings": []
+  }
+ ],
+ "world_props": [],
+ "world_props_sig": "walk",
+ "events_by_location": {},
+ "world_bounds": {
+  "min_x": -100.0,
+  "min_z": -40.0,
+  "max_x": 120.0,
+  "max_z": 80.0
+ },
+ "height_sig": "walk-flat",
+ "fogged": false,
+ "characters": [
+  {
+   "name": "Dora Door",
+   "location_id": "loc-hall",
+   "room_id": "r-a",
+   "pos": {
+    "x": 97.0,
+    "z": 1.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null
+  },
+  {
+   "name": "Sam Stair",
+   "location_id": "loc-hall",
+   "room_id": "r-a",
+   "pos": {
+    "x": 97.0,
+    "z": 2.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null
+  },
+  {
+   "name": "Rex Run",
+   "location_id": "",
+   "room_id": "",
+   "pos": {
+    "x": -80.0,
+    "z": 60.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null
+  },
+  {
+   "name": "Lia Lake",
+   "location_id": "",
+   "room_id": "",
+   "pos": {
+    "x": 40.0,
+    "z": 0.0
+   },
+   "height_cm": 170,
+   "activity_animation": "",
+   "travel": null
+  }
+ ]
+}

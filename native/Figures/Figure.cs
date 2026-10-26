@@ -1,21 +1,22 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using AnimaNative.Overview;
 using Godot;
 
 namespace AnimaNative.Figures;
 
 /// <summary>
-/// One character on the map. The node sits at the figure's FEET in world
-/// metres (y = world ground), turned to its walking direction; its body is
-/// either the character's GLB (scaled to its height, with an AnimationPlayer
-/// carrying the WHOLE retargeted clip library along its set chain, one action per
-/// kind plus the browser's synonym aliases) or a capsule placeholder.
+/// One character on the map. The node sits at the figure's FEET (the browser's NPC root) in world metres, turned to its
+/// facing; its body is either the character's GLB (scaled to its height, with an AnimationPlayer carrying the WHOLE
+/// retargeted clip library along its set chain, one action per kind plus the browser's synonym aliases), a fallback-pool
+/// model, the portrait sprite or a capsule placeholder.
 ///
-/// Motion between polls is still the spike's simple rule (NPC walking is Task 30): a new
-/// target lerps in over the poll interval (<see cref="FigureManager.PollSeconds"/>); while
-/// the planned speed exceeds <see cref="WalkSpeed"/> the walking pose's clip plays, else
-/// <c>standingClipFor(activity_animation)</c> — every figure plays its activity.
+/// It WALKS like the browser's NPC (Task 30, npcs.ts <c>Npc</c> + figures.ts <c>Figure</c>): the 1 Hz placement writes
+/// the goal (<see cref="Target"/>), the stations of a room change (<see cref="Waypoints"/>) and a guided stair climb
+/// (<see cref="Ride"/>); <see cref="FigureManager"/> steps it every frame through <see cref="NpcWalk"/>. The yaw eases
+/// ×10/s towards the last asked direction (<see cref="FaceTowards"/>), the clip follows the ground word
+/// (<see cref="Play(string, bool, double)"/>).
 /// </summary>
 public partial class Figure : Node3D
 {
@@ -72,6 +73,7 @@ public partial class Figure : Node3D
     public void SetPortrait(Portrait portrait)
     {
         SetBody(portrait.Root, false, null, null);
+        portrait.Root.Position = Vector3.Zero;   // a sprite never drops into the ground (no clip, npcs.ts' sprite branch)
         Portrait = portrait;
         PoolModel = null;
         PoolHeight = null;
@@ -89,29 +91,36 @@ public partial class Figure : Node3D
     /// <summary>The body's underwater ghost (<c>figure.ghost</c>), made with the body, built on the first submersion.</summary>
     public World.SubmergedGhost? Ghost { get; private set; }
 
-    // Lerp state, ground plane (x, z) and the target height.
-    private Vector2 _from, _to;
-    private float _fromY, _toY;
-    private double _elapsed, _duration = 1;
-    public Vector2 Shown { get; private set; }
-    public Vector2 Target => _to;
-    /// <summary>The height the placement asks for at the target (a seat, a room floor, the tile ground).</summary>
-    public float TargetY => _toY;
-    public bool Moving => _elapsed < _duration && PlannedSpeed > WalkSpeed;
-    public double PlannedSpeed { get; private set; }
+    // ---- walking state (npcs.ts Npc) ---------------------------------------------------------------------------------
+
+    /// <summary>The goal the figure walks to (<c>npc.target</c>): the placement's point, y included.</summary>
+    public Vector3 Target { get; set; }
+    /// <summary>The stations left on the way (<c>npc.waypoints</c>): doors, stair landings, lift stops.</summary>
+    public List<Vector3> Waypoints { get; } = new();
+    /// <summary>The guided stair climb while one runs (<c>npc.ride</c>, stairs.ts <c>StairRide</c>); null = none.</summary>
+    public Scene.StairRide? Ride { get; set; }
+    /// <summary>The ground pace of the next step (<c>npc.pace</c>): 1 for every figure the server drives.</summary>
+    public double Pace { get; set; } = 1;
+    /// <summary>The payload says the character is under way (<c>npc.travelling</c>): it walks without the run boost.</summary>
+    public bool Travelling { get; set; }
+    /// <summary>The last frame moved the figure (<c>plan.moving</c>) and, moving, ran.</summary>
+    public bool Moving { get; private set; }
+    public bool Running { get; private set; }
+    /// <summary>The ground word the last frame stood on (the movement type: walk_run / walk / swim / crawl).</summary>
+    public string Movement { get; private set; } = FigureClips.WalkRun;
+    /// <summary>The body's drop under the root (the ground's sink while the ground names the clip, figures.ts <c>setClipDrop</c>).</summary>
+    public double Drop { get; private set; }
     public string Rule { get; set; } = "";
-    /// <summary>
-    /// The figure stands on the OPEN ground (journey, free point): its height follows the world terrain while it moves.
-    /// Otherwise (a tile placement — seat, room floor, huddle on the tile ground) the height goes from the old target's to
-    /// the new one's with the lerp (the browser eases it, Task 30).
-    /// </summary>
-    public bool OnTerrain { get; set; } = true;
-    /// <summary>The standing facing (world direction, y ignored): a seat's marker or the movement target; null = keep.</summary>
+    /// <summary>The standing facing (world direction, y ignored): a seat's marker or the movement target; null = none.</summary>
     public Vector3? Face { get; set; }
     /// <summary>A seat's lean in degrees (<c>setLean(tilt, roll)</c>, Euler YXZ like the browser's root); null = upright.</summary>
     public (double Tilt, double Roll)? Lean { get; set; }
     /// <summary>The placement hides the figure (another storey, a closed interior).</summary>
     public bool Hidden { get; private set; }
+
+    /// <summary>The root's yaw now and the yaw it eases to (figures.ts <c>root.rotation.y</c> / <c>targetYaw</c>: south, π).</summary>
+    public double Yaw { get; private set; }
+    public double TargetYaw { get; private set; } = Math.PI;
 
     public Figure(string name)
     {
@@ -120,54 +129,52 @@ public partial class Figure : Node3D
     }
 
     /// <summary>
-    /// New server target (world x/z + the height the placement gives it). A snap (the first placement, a view change)
-    /// puts the figure there at once; otherwise a MOVED point lerps in over <paramref name="duration"/> s, while the same
-    /// point only takes the new height (a re-lift, a storey re-derive) without walking.
+    /// <c>faceTowards(dir, snap)</c>: the yaw of <paramref name="dir"/> (<see cref="NpcWalk.FacingYaw"/>; too short =
+    /// nothing) becomes the target; <paramref name="snap"/> turns the body at once.
     /// </summary>
-    public void SetTarget(Vector3 to, double duration, bool snap)
+    public void FaceTowards(Vector3 dir, bool snap = false)
     {
-        var xz = new Vector2(to.X, to.Z);
-        if (snap)
-        {
-            _from = _to = Shown = xz;
-            _fromY = _toY = to.Y;
-            _elapsed = _duration = 1;
-            PlannedSpeed = 0;
-        }
-        else if (xz == _to)
-        {
-            if (_elapsed >= _duration) _fromY = to.Y;
-            _toY = to.Y;
-        }
-        else
-        {
-            _from = Shown;
-            _fromY = Position.Y;
-            _to = xz;
-            _toY = to.Y;
-            _elapsed = 0;
-            _duration = Math.Max(duration, 1e-3);
-            PlannedSpeed = (_to - _from).Length() / _duration;
-            var d = _to - _from;
-            if (d.LengthSquared() > 1e-8) _walkYaw = Mathf.Atan2(d.X, d.Y);
-        }
+        if (NpcWalk.FacingYaw(new Vec3(dir.X, dir.Y, dir.Z)) is not { } yaw) return;
+        TargetYaw = yaw;
+        if (snap) Yaw = yaw;
         ApplyRotation();
-        UpdateClip();
     }
 
-    private float _walkYaw;
+    /// <summary>The per-frame turn (figures.ts <c>update</c>): the shortest way, eased ×10/s.</summary>
+    public void TickYaw(double dt)
+    {
+        Yaw = NpcWalk.EaseYaw(Yaw, TargetYaw, dt);
+        ApplyRotation();
+    }
 
     /// <summary>
-    /// The body's rotation: walking = the walking direction; standing = the placement's facing (a seat's marker or the
-    /// movement target, npcs.ts' standing rule) else the last direction; the seat's lean as X (tilt) and Z (roll) in
-    /// Godot's default Euler order YXZ — the browser's <c>rotation.order = 'YXZ'</c>.
+    /// Put the figure at <paramref name="at"/> (a snap: the first placement, a view change) — stations and climb dropped,
+    /// goal = the point (npcs.ts <c>update</c>'s <c>st.snap</c> branch).
     /// </summary>
-    private void ApplyRotation()
+    public void SnapTo(Vector3 at)
     {
-        float yaw = _walkYaw;
-        if (!Moving && Face is { } f && f.X * f.X + f.Z * f.Z >= 1e-6f) yaw = _walkYaw = Mathf.Atan2(f.X, f.Z);
+        Position = at;
+        Target = at;
+        Waypoints.Clear();
+        Ride = null;
+    }
+
+    /// <summary>The frame's motion outcome (the manager's step): moving, running, the ground word.</summary>
+    public void SetMotion(bool moving, bool running, string movement)
+    {
+        Moving = moving;
+        Running = moving && running;
+        Movement = movement;
+    }
+
+    /// <summary>
+    /// The root's rotation: the eased yaw, and the seat's lean as X (tilt) and Z (roll) in Godot's default Euler order
+    /// YXZ — the browser's <c>rotation.order = 'YXZ'</c>.
+    /// </summary>
+    public void ApplyRotation()
+    {
         var lean = Lean ?? (0, 0);
-        Rotation = new Vector3((float)(lean.Tilt * Math.PI / 180), yaw, (float)(lean.Roll * Math.PI / 180));
+        Rotation = new Vector3((float)(lean.Tilt * Math.PI / 180), (float)Yaw, (float)(lean.Roll * Math.PI / 180));
     }
 
     /// <summary>Show or hide the figure for the placement (<c>npc.root.visible = !st.hidden</c>).</summary>
@@ -175,25 +182,6 @@ public partial class Figure : Node3D
     {
         Hidden = hidden;
         Visible = !hidden;
-    }
-
-    /// <summary>
-    /// Advance the lerp; <paramref name="groundAt"/> gives the world height at (x, z) for a figure
-    /// <see cref="OnTerrain"/>, the others go from the old target height to the new one.
-    /// </summary>
-    public void Advance(double dt, Func<double, double, double> groundAt)
-    {
-        bool wasMoving = Moving;
-        _elapsed = Math.Min(_elapsed + dt, _duration);
-        float t = (float)(_elapsed / _duration);
-        Shown = _from.Lerp(_to, t);
-        float y = OnTerrain ? (float)groundAt(Shown.X, Shown.Y) : Mathf.Lerp(_fromY, _toY, t);
-        Position = new Vector3(Shown.X, y, Shown.Y);
-        if (wasMoving != Moving)
-        {
-            ApplyRotation();
-            UpdateClip();
-        }
     }
 
     /// <summary>Swap the body. The old one is freed (it owns its duplicated meshes/skeleton).</summary>
@@ -214,6 +202,9 @@ public partial class Figure : Node3D
         _clipKinds = player is null ? Array.Empty<string>() : clipKinds ?? Array.Empty<string>();
         CurrentKind = CurrentClip = "";
         CurrentPace = 1;
+        _terrainClip = false;
+        _sink = 0;
+        Drop = 0;
         AddChild(body);
         UpdateClip();
     }
@@ -237,15 +228,13 @@ public partial class Figure : Node3D
     public double CurrentPace { get; private set; } = 1;
 
     /// <summary>
-    /// The kind this figure asks for — npcs.ts' one clip decision through <see cref="FigureClips"/>: moving =
-    /// <c>moveClip(walk_run, walking)</c>, standing = <c>standingClipFor(activity_animation, idleClip(walk_run))</c>.
-    /// The ground word (swim/crawl) and the run rule arrive with NPC walking (Task 30); until then the ground is dry.
+    /// What the figure asked for last (<c>play(kind, terrainClip, sink)</c> of the manager's frame; "" = the standing
+    /// pose) — a new body plays it again at once.
     /// </summary>
-    public string WantedClip => Moving ? ClipLibrary.MovingKindOf(Poses)
-        : FigureClips.StandingClipFor(Activity, FigureClips.IdleClip(FigureClips.WalkRun, Poses), Poses);
+    public (string Kind, bool TerrainClip, double Sink) WantedClip { get; private set; } = ("", false, 0);
 
-    /// <summary>Ask for the wanted clip (<see cref="Play"/> of <see cref="WantedClip"/>).</summary>
-    public void UpdateClip() => Play(WantedClip);
+    /// <summary>Ask for the wanted clip again (<see cref="Play(string, bool, double)"/> of <see cref="WantedClip"/>).</summary>
+    public void UpdateClip() => Play(WantedClip.Kind, WantedClip.TerrainClip, WantedClip.Sink);
 
     /// <summary>Forget what plays and ask again (after something drove the player directly, e.g. a check).</summary>
     public void Replay()
@@ -254,17 +243,28 @@ public partial class Figure : Node3D
         UpdateClip();
     }
 
+    private bool _terrainClip;
+    private double _sink;
+
     /// <summary>
-    /// <c>Figure.play(kind)</c> without the bridges (Task 31): the kind lower-cased (empty = the standing pose);
-    /// nothing changes when it was asked for already; <c>resolveClipKind</c> over the bound actions, else the
-    /// first action; the stand-in pace (<see cref="ClipLibraryRules.StandInPace"/>); the action's own loop flag
-    /// (baked into its Animation: a one-shot holds its last frame — Godot's <c>LOOP_NONE</c> stops there);
-    /// a crossfade of <see cref="ClipLibraryRules.CrossfadeS"/> from the start of the clip.
+    /// <c>Figure.play(kind, terrainClip, sink)</c> without the bridges (Task 31): the kind lower-cased (empty = the
+    /// standing pose); nothing changes when kind, gate and sink were asked for already; the body DROPS by the ground's
+    /// sink while the ground names the clip (<c>setClipDrop(clipGroundOffset·scale + sink)</c> — the measured clip
+    /// ground offset is Task 31's, 0 until then); <c>resolveClipKind</c> over the bound actions, else the first
+    /// action; the stand-in pace (<see cref="ClipLibraryRules.StandInPace"/>); the action's own loop flag (baked into
+    /// its Animation: a one-shot holds its last frame — Godot's <c>LOOP_NONE</c> stops there); a crossfade of
+    /// <see cref="ClipLibraryRules.CrossfadeS"/> from the start of the clip.
     /// </summary>
-    public void Play(string rawKind)
+    public void Play(string rawKind, bool terrainClip = false, double sink = 0)
     {
+        WantedClip = (rawKind, terrainClip, sink);
         var kind = (rawKind.Length > 0 ? rawKind : FigureClips.PoseKind(FigureClips.Standing, Poses)).ToLowerInvariant();
-        if (Player is null || kind == CurrentKind) return;
+        double sinkM = terrainClip && double.IsFinite(sink) && sink > 0 ? sink : 0;
+        if (kind == CurrentKind && terrainClip == _terrainClip && sinkM == _sink) return;
+        _terrainClip = terrainClip;
+        _sink = sinkM;
+        SetDrop(terrainClip ? sinkM : 0);
+        if (Player is null) return;
         var chosen = FigureClips.ResolveClipKind(kind, _clipKinds, Poses);
         var resolved = chosen.Length > 0 ? chosen : _clipKinds.FirstOrDefault() ?? "";
         double pace = ClipLibraryRules.StandInPace(kind, chosen);
@@ -277,6 +277,13 @@ public partial class Figure : Node3D
         // A different action starts from its first frame (the browser's reset().fadeIn(0.25)).
         Player.Play(resolved, ClipLibraryRules.CrossfadeS);
         CurrentClip = resolved;
+    }
+
+    /// <summary>figures.ts <c>setClipDrop</c>: the body hangs <paramref name="drop"/> m under the root (a portrait never drops).</summary>
+    private void SetDrop(double drop)
+    {
+        Drop = drop;
+        if (Body is { } b && Portrait is null && IsInstanceValid(b)) b.Position = new Vector3(0, (float)-drop, 0);
     }
 
     /// <summary>Capsule placeholder standing on the node origin.</summary>

@@ -39,6 +39,12 @@ public sealed record CharacterRow(
     /// <summary><c>avatar_url</c>: the portrait image a figure without a model shows ("" = none).</summary>
     public string AvatarUrl { get; init; } = "";
 
+    /// <summary>
+    /// <c>tagTravelling(travel)</c>: a travel block whose start does not lie ahead — the figure is under way (npcs.ts
+    /// <c>npc.travelling</c>: it walks without the run boost).
+    /// </summary>
+    public bool Travelling { get; init; }
+
     public static List<CharacterRow> ParseList(JsonElement root)
         => Json.Arr(root, "characters")
                .Where(c => c.ValueKind == JsonValueKind.Object)
@@ -85,6 +91,7 @@ public sealed record CharacterRow(
             Place = place,
             MovementTargetId = Json.Str(c, "movement_target_id"),
             AvatarUrl = Json.Str(c, "avatar_url"),
+            Travelling = OverviewLabels.TagTravelling(TagTravel.FromJson(c)),
         };
     }
 }
@@ -143,11 +150,23 @@ public readonly record struct FigureSpot(double X, double Z, string Rule);
 /// the open ground (journey, free) whose height follows the world while the figure moves.
 /// </summary>
 public sealed record FigurePlan(string Name, Vec3 Pos, string Rule, bool Snap, bool Hidden, Vec3? Face,
-                                (double Tilt, double Roll)? Lean, bool OnTerrain, string? InRoom = null);
+                                (double Tilt, double Roll)? Lean, bool OnTerrain, string? InRoom = null)
+{
+    /// <summary>A real room change was routed this pass (<c>transition === 'route'</c>): a climb left from before ends.</summary>
+    public bool Routed { get; init; }
+    /// <summary>The stations of that route (doors, landings, lift stops; npcs.ts <c>st.via</c>); null = none.</summary>
+    public IReadOnlyList<Vec3>? Via { get; init; }
+    /// <summary>The stair legs of that route (the NPC's guided climb, unarmed); empty = no ride.</summary>
+    public IReadOnlyList<Scene.StairLeg> Legs { get; init; } = Array.Empty<Scene.StairLeg>();
+}
 
 /// <summary>What a location's BUILT tile hands the placement (main.ts <c>residency.get(loc).tile</c> + its lookups).</summary>
 public sealed record LocationPlacement(PlacementTile Tile, bool Near, Func<double, double, double> GroundY,
-                                       Func<string, double, double, double?> RoomStandY);
+                                       Func<string, double, double, double?> RoomStandY)
+{
+    /// <summary>The doors, stairs and lift of the mounted scene for a room change (null = no routing: straight line).</summary>
+    public RouteTile? Route { get; init; }
+}
 
 /// <summary>
 /// WHICH characters stand on the map and WHERE — client3d/src/main.ts <c>computeNpcPlacements</c> without the avatar's
@@ -215,9 +234,18 @@ public static class FigurePlacement
                 });
             foreach (var f in placed)
             {
+                // main.ts: the room the figure was drawn in is read BEFORE the new placement is filed — the start of the walk.
+                var prevRoom = shown.TryGetValue(f.Row.Name, out var prev) ? prev.Room : null;
                 if (f.Transition != FigureTransition.Stay) shown[f.Row.Name] = new ShownPlacement(f.InRoom, f.InteriorShown);
+                NpcRoutePlan? route = f.Transition == FigureTransition.Route && loc.Route is { } rt
+                    ? NpcRoute.Plan(rt, prevRoom, f.InRoom) : null;
                 plans.Add(new FigurePlan(f.Row.Name, f.Pos, f.Branch == "huddle" ? "tile" : f.Branch,
-                                         f.Transition == FigureTransition.Snap, f.Hidden, f.Face, f.Lean, false, f.InRoom));
+                                         f.Transition == FigureTransition.Snap, f.Hidden, f.Face, f.Lean, false, f.InRoom)
+                {
+                    Routed = f.Transition == FigureTransition.Route,
+                    Via = route is { Via.Count: > 0 } ? route.Via : null,
+                    Legs = route?.Legs ?? (IReadOnlyList<Scene.StairLeg>)Array.Empty<Scene.StairLeg>(),
+                });
             }
         }
         return plans;

@@ -53,8 +53,10 @@ public static class CheckRunner
     private static readonly Vector3 ExpBram = new(64f, 4.0675f, 132.32f);         // house huddle, fine tile
     private static readonly Vector3 ExpCleo = new(263f, 4.875f, -100f);           // journey, overview
     private const float ExpAdaHeight = 1.60f, ExpBramHeight = 1.80f;
-    private static readonly Vector3 ExpAdaHalfway = new(-45f, 3.68316650390625f, 30f);
-    private static readonly Vector3 ExpCleoHalfway = new(259.5f, 4.875f, -100f);
+    // Poll 2 walked in 0.5 s frames (README "Second poll"): Ada runs 3.06 m twice, then walks 1.7 m twice and 0.48 m.
+    private static readonly Vector3 ExpAdaRun1 = new(-46.94f, 3.7705078125f, 30f);
+    private static readonly Vector3 ExpAdaWalk1 = new(-42.18f, 3.7705078125f, 30f);
+    private static readonly Vector3 ExpCleoStep1 = new(261.3f, 4.875f, -100f);
     private static readonly Vector3 ExpAdaEnd = new(-40f, 3.7705078125f, 30f);
     // movement_poses (README "Clips"): standing plays stand-relaxed (exact), walking names mob1-walk,
     // which the library lacks → its public kind walk.
@@ -143,6 +145,12 @@ public static class CheckRunner
             if (only == "placement")
             {
                 var alone = await PlacementCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
+            if (only == "walk")
+            {
+                var alone = await WalkCheck.RunAsync(host, dir);
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
@@ -254,6 +262,7 @@ public static class CheckRunner
             var verify = await VerifyCheck.RunAsync(host, dir);
             var storeys = await StoreysCheck.RunAsync(host, dir);
             var placement = await PlacementCheck.RunAsync(host, dir);
+            var walk = await WalkCheck.RunAsync(host, dir);
             var fidelity = await FidelityCheck.RunAsync(host, dir);
             var props = await PropsCheck.RunAsync(host, dir);
             var light = LightCheck.Run(host, dir);
@@ -268,7 +277,7 @@ public static class CheckRunner
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;
@@ -388,7 +397,7 @@ public static class CheckRunner
         var mgr = new FigureManager(source, height, line => GD.Print("[check] " + line), strict: true)
         {
             Slots = () => builder.Slots,
-            AutoTick = false, PollSeconds = 5.0,   // the README derivation lerps over 5 s
+            AutoTick = false,
             FocusTarget = () => new Vector3(263, 0, -100),   // Cleo's journey point: the model queue serves her first
         };
         world.AddChild(mgr);
@@ -486,16 +495,26 @@ public static class CheckRunner
         Eq("clips still downloaded once", clips.Entries.Count(e => source.ByteRequests.Count(u => u == e.Url) == 1), 9);
         Eq("poll2 bound_tracks", st.BoundTracks, ExpBoundTracks);
         Expect("Ada reloaded", ada.LoadedSig == "ada-2" && ada.IsGlb, ada.LoadedSig ?? "null");
-        Expect("Ada walks (2 m/s)", ada.Moving, $"{ada.PlannedSpeed}");
-        ExpectClip(ada, "poll 2 moving", ExpMovingWant, ExpMovingKind, 1);
-        Near("Ada faces +x", ada.Rotation.Y, Mathf.Pi / 2f);
         NearV("Ada still at the old point", ada.Position, ExpAda);
-        mgr.Tick(2.5);
-        NearV("Ada halfway", ada.Position, ExpAdaHalfway);
-        NearV("Cleo halfway", cleo.Position, ExpCleoHalfway);
-        mgr.Tick(2.5);
+        mgr.Tick(0.5);
+        Expect("Ada runs (10 m > 6)", ada.Moving && ada.Running, $"moving {ada.Moving} running {ada.Running}");
+        ExpectClip(ada, "poll 2 running: the walk take as the run stand-in", "run", ExpMovingKind, 1.5);
+        Near("Ada faces +x", ada.Rotation.Y, Mathf.Pi / 2f);
+        NearV("Ada after one run step", ada.Position, ExpAdaRun1);
+        Expect("Cleo walks, never runs (travelling)", cleo.Moving && !cleo.Running, $"moving {cleo.Moving} running {cleo.Running}");
+        NearV("Cleo after one walk step", cleo.Position, ExpCleoStep1);
+        mgr.Tick(0.5);
+        mgr.Tick(0.5);
+        NearV("Ada walks the last 3.88 m", ada.Position, ExpAdaWalk1);
+        Expect("Ada walks", ada.Moving && !ada.Running, "running");
+        ExpectClip(ada, "poll 2 walking", ExpMovingWant, ExpMovingKind, 1);
+        mgr.Tick(0.5);
+        mgr.Tick(0.5);
         NearV("Ada arrived", ada.Position, ExpAdaEnd);
+        mgr.Tick(0.5);
         Expect("Ada stands after arriving", !ada.Moving, "moving");
+        NearV("Cleo at her polled point", cleo.Position, new Vector3(256f, 4.875f, -100f));
+        Near("Ada keeps facing +x (no neighbour, no marker)", ada.Rotation.Y, Mathf.Pi / 2f);
         ExpectClip(ada, "poll 2 arrived: activity_animation", "reading", "reading", 1);
         CheckHoldsLastFrame(ada, "reading");
 

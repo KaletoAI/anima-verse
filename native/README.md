@@ -39,9 +39,9 @@ What it draws after login:
   (Task 29, see "Figures in their rooms"): journey point along the route, free point in the wilderness, and per
   location the room ladder — seat, sit/lie surface, corridor stand, the server's point at the room floor, room
   centre — or the huddle in front of / around the location on the TILE ground; hidden on another storey and in a
-  closed interior; a moved figure lerps to its new point over the poll
-  interval and plays the `walking` pose's clip above 0.2 m/s, otherwise `standingClipFor(activity_animation)` —
-  every figure plays its activity (read, cook, sit …). Model: `/characters/{name}/model3d` → the humanoid GLB
+  closed interior; every frame a figure WALKS to its point like the browser's NPC (Task 30, see "NPC walking"):
+  3.4 m/s, running beyond 6 m, through doors, stair landings and lift stops, swimming where the ground says so —
+  standing, it plays `standingClipFor(activity_animation)`: every figure plays its activity (read, cook, sit …). Model: `/characters/{name}/model3d` → the humanoid GLB
   (Meshopt-decoded), scaled to `height_cm`, metalness forced to 0; every load is a job of a width-3 queue (the
   avatar first, then the figure nearest the camera target), a transient failure retries after 30 s; FBX (generic
   rig) is a capsule placeholder (Task 34); "no model" is the browser's fallback pool model, else the portrait
@@ -288,6 +288,7 @@ Arguments after `--` (no .env; all optional):
 | `--check shadow` | only the shadow section (`Check/ShadowCheck.cs` on `fixtures/s3c`: the browser's caster classes, the 140 m caster box gate, the cluster budget, the scatter hemisphere term, the compute-fog default), then exit 0/1 |
 | `--check light` | only the light section (`Check/LightCheck.cs`: the game-hour stage at 6/7/9/12/18/22 h, hemisphere, shadow fit, material policy, MSAA option), then exit 0/1 |
 | `--check placement` | only the room placement section (`Check/PlacementCheck.cs` on `fixtures/placement`: seats, sit/lie surfaces, server points at the room floor, corridor stand, huddle on the tile ground, storey switch, closed interior, the fallback pool), then exit 0/1 |
+| `--check walk` | only the NPC walk section (`Check/WalkCheck.cs` on `fixtures/walk`: neighbour facing, treading water with the root eased to the mirror and the ghost, a door route, a 10 m run, a stair ride, swimming), then exit 0/1 |
 | `--check figures` | only the figure section (`Check/CheckRunner.cs` `CheckFigures` on the fixture world: whole library, set chain, actions and aliases, activity clips, one-shot hold, model revision, model queue, tiers 25/35, the importer cross-check `rest_reference.json`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
@@ -843,7 +844,7 @@ poll), with each mounted location's view state NOW — interior fade (> 0.5 = re
   sit/lie pool of its activity's family, the corridor stand, the server's `pos` at the room's standing height, the
   centre; else the huddle on the tile ground. A standing figure faces its movement target's place. Hidden on another
   storey (the switch of Task 16) and in a closed interior (the fade of Task 15). A view change SNAPS (no walk); a
-  real room change walks straight (the door route is Task 30).
+  real room change WALKS its door route (Task 30, below).
 - **No model** (ruling P3-R10): the browser's fallback pool from `/static/client3d/models/manifest.json` (Soldier,
   Xbot, Robot; assignments first, else `seededRandom('model:' + name)` over the rigs the clip library fits — their
   own takes win their kinds), scaled to the manifest height; while the pool loads or when it fails, the portrait
@@ -851,6 +852,31 @@ poll), with each mounted location's view state NOW — interior fade (> 0.5 = re
   arrives, sized `clamp(camDist·0.055, 1.7, 3.4)`, bobbing while it moves; its tag hangs below it).
 - `--check placement` (`Check/PlacementCheck.cs`, `fixtures/placement/`, README there) and `--offline` print a
   `offline placement <loc> open[…] closed[…]` census per location.
+
+### NPC walking (Task 30)
+
+The browser's `NpcManager` walk (`client3d/src/scene/npcs.ts` `update`/`tick`, pure rules `game/npcWalk.ts`), ported
+to `Core/Figures/NpcWalk.cs` (vectors `npc_walk.json`, `npc_ground.json`), `Core/Scene/Doors.cs`, `Core/Scene/Stairs.cs`
+(the stair module by hand, `tests/StairsTests.cs`) and `Core/Figures/NpcRoute.cs`; the frame is
+`FigureManager.Tick`:
+- **Once a second** (the placement pass) a NEW goal adopts its stations; a snap (first sight, a view change) puts the
+  figure on it. A real room change is ROUTED (main.ts): the party-wall doorway if the two rooms share one, else out by
+  the old room's door (`roomDoor`: the outside door first), the storey change by STAIRS first (`stairChain`, the legs
+  become the figure's ride, unarmed) else the lift stops, in by the new room's door.
+- **Every frame**: stations retire at 1.5 m (0.4 m during a ride); the step is 3.4 m/s, ×1.8 beyond 6 m (+10 m while a
+  station is left) on a ground that lets one run, never for a travelling character (journeys follow their polled
+  point until E6); the yaw eases ×10/s; standing, the marker's facing beats the neighbours' centroid within 4.5 m.
+- **The ground word** under the figure (`WorldBuilder.FigureGroundMove`: ground.ts `typeAt` + the scope + prop water;
+  `FigureGroundY`: the tile ladder inside a footprint, the world outside): swim / crawl / walk / walk_run, the sinks,
+  the mirror. The clip is `moveClip(movement, run)` moving, `standingClipFor(activity, idleClip(movement))` standing;
+  a clip the ground names drops the body by the ground's sink (move / idle depth); over water the root rides
+  `floatRootY` = max(bed + sink, mirror), eased ×4/s; the underwater ghost is cut at the UNGATED mirror over the bed.
+- **Stairs** (ruling P3-R9: `rideStep` ported here, E7 reuses it for the avatar): once the start landing is reached the
+  ride owns the height — the ramp along the run — and it ends at the far landing.
+- Not yet: bridges and root motion (Task 31), pair clips (Task 32), journey routes and dead reckoning (E6), the
+  player-driven figure and first person (E7).
+- `--check walk` (`Check/WalkCheck.cs`, `fixtures/walk/`, README there); `--offline` logs `offline walk …` lines: a
+  figure moved 12 m over open ground, into the first painted water, and a room figure sent to another storey.
 
 ### § B5a verify (Task 15)
 
