@@ -119,7 +119,9 @@ The figures of the browser, every number on the E5 vectors (`figure_clips`, `ret
 - **hair and extension sway** (secondary motion with the exact skin normals, Task 33); **animals** with their own FBX
   takes, else the procedural gait (Task 34);
 - **measured** (Task 35, see "Clip memory and figure cost"): clip memory per template, fit time per model, the frame
-  cost of the figures (`--bench-matrix=no-figures`) and the figure keys of every bench result.
+  cost of the figures (`--bench-matrix=no-figures`) and the figure keys of every bench result;
+- **clips fitted on first play** (Task 35b, see "Lazy clip fit"): the boot's `figures` stage ~9 s instead of ~44 s on
+  the world copy; a clip a figure plays for the first time arrives a few frames later (the figure keeps what it plays).
 
 ## Requirements (build machine)
 
@@ -313,6 +315,7 @@ Arguments after `--` (no .env; all optional):
 | `--check walk` | only the NPC walk section (`Check/WalkCheck.cs` on `fixtures/walk`: neighbour facing, treading water with the root eased to the mirror and the ghost, a door route, a 10 m run, a stair ride, swimming), then exit 0/1 |
 | `--check bridges` | only the bridge-clip section (`Check/BridgeCheck.cs` on `fixtures/bridges`: get-up-chair / get-up-bed re-locked, pinned, lifted and turned per rig, planted feet measured on the rendered bones, the hand-over and the kept spot, a ramping start-walk, the deadline), then exit 0/1 |
 | `--check pairs` | only the pair-clip section (`Check/PairCheck.cs` on `fixtures/pairs`: the halves' root paths, the anchor transform on the ground / a seat / a room, lockstep and the 0.3 s resync, a frozen world, the solo fallback, a handshake ending a bridge, the one-shot's end, the bind anchoring of every body), then exit 0/1 |
+| `--check clips` | only the lazy clip-fit section (`Check/ClipFitCheck.cs` on `fixtures/bridges` + `fixtures/pairs`: what the build fits, bridges and a pair half asked for the first time later — the figures hold, then play — and every lazily fitted clip against an eager fit: keys, extras and poses bit for bit), then exit 0/1 |
 | `--check figures` | only the figure section (`Check/CheckRunner.cs` `CheckFigures` on the fixture world: whole library, set chain, actions and aliases, activity clips, one-shot hold, model revision, model queue, tiers 25/35, the importer cross-check `rest_reference.json`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
@@ -968,11 +971,43 @@ Measured on the world copy (`--offline`, 14 model figures + 1 portrait, the dump
   with another `loop`, a bridge — always one-shot like the browser's `bridge.setLoop(LoopOnce)`) plays its own
   bit-identical twin `loop/<clip>` (`Figure.PlayName`, `--check pairs` Q8).
 
-The offline log's `figures memory:` line (and the bench log's `bench figures memory:`) states figures, templates, fit
-times min/median/max, keys bound vs held, the estimate at `FigureManager.KeyBytes` = 36 B/key, the probe (debug engine
-only), Godot's static memory / objects / resources and the managed heap. Every bench result carries `figures`,
-`figuresAnimated` and `clipMemMiB`; `--bench-matrix=no-figures` measures what the figures cost per frame (all hidden
-and their tick stopped against the interleaved baselines).
+The offline log's `figures memory:` line (and the bench log's `bench figures memory:`) states figures, templates, build
+fit times min/median/max, keys planned / fitted / held, the estimate at `FigureManager.KeyBytes` = 36 B/key, the per-clip
+fit times at build and on first use (wall, main thread, worker) with the longest main-thread turn and body swap, the
+probe (debug engine only), Godot's static memory / objects / resources and the managed heap (with the probe: live after
+a full collection). Every bench result carries `figures`, `figuresAnimated` and `clipMemMiB`;
+`--bench-matrix=no-figures` measures what the figures cost per frame (all hidden and their tick stopped against the
+interleaved baselines).
+
+### Lazy clip fit (Task 35b, ruling P3-R15)
+
+Task 35 measured the cost of fitting the WHOLE library per template: ~40 s of the boot (mostly the per-clip ground
+measurement of Task 31), ~11 MiB per template (~300 MiB in a world where every character has its own model at both
+tiers) and main-thread frames of 30–60 ms whenever a figure's other tier was fitted during play. Now
+(`Figures/TemplateClips.cs`, `FigureManager.ClipFit`):
+
+- **The build only PLANS** the library: per candidate clip whether it binds on the rig (the fit's own loop, counting
+  only) and the action table — so a figure's kinds, bound tracks and keys, missing kinds are what they were. It FITS
+  the movement poses (standing, walking, running, swimming, treading water, crawling) and, before a figure is shown on
+  a template, what that figure plays (its activity, its current clip on a tier swap, its pair half).
+- **Every other clip is fitted when a figure first needs it** (play / crossfade / bridge / pair) and then serves every
+  figure of the template. Until it is in, the figure keeps what it plays; a bridge waiting for its clip holds the figure
+  (pace 0, the height too), a pair half holds it on its point.
+- **Off the main thread**: the retarget's key math (`ClipLibrary.Compute`, on keys read once at the clip import), the
+  bridge relock and the ground measurement run on worker threads; the engine work (writing the Animation, sampling it,
+  adding it to the library) runs on the main thread in turns of ≤ `FigureManager.ClipBudgetMs` (4 ms) per frame. The
+  model's GLB is parsed on a worker too; the scene generation, bind box gathering, rest correction and plan each take
+  their own frame. A template keeps only the ~1 000 vertices the ground measurement samples, not a copy of its mesh.
+- **Identity**: `--check clips` compares every lazily fitted clip (the bridges fitted on their first play, the rest
+  afterwards) with an eager fit of the same world — every key, the travel/turn/lift/ground extras and the skeleton pose
+  at five times per clip bit for bit. Every other check runs `ClipFitMode.OnDemandSync` (the same plan, a needed clip
+  fitted inside the call that asks for it) and gives the numbers of the eager fit.
+
+On the world copy (`--offline`, same dump as Task 35): boot `figures` stage 44.6 s → 9.1 s; fit per template
+2.3–5.6 s → 24–75 ms (plan + movement poses); a clip on first use ~13 ms wall, ≤ 4 ms per main-thread turn; after the
+bench drive (28 templates) clip keys held 2.69 M ≈ 92 MiB → 0.17 M ≈ 6 MiB, fitted (= what a world with a distinct model
+per character holds) 8.83 M ≈ 300 MiB → 0.41 M ≈ 14 MiB; Godot's static memory 2728 → 2527 MiB; no headless frame
+over 15 ms of process time in the drive (before: ~490 samples).
 
 ### § B5a verify (Task 15)
 

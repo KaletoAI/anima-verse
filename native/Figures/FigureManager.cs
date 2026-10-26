@@ -55,9 +55,9 @@ public sealed class FigureStats
 ///     scale <c>normalized</c> → 1, else height / raw bounding-box height (height = <c>height_cm</c>/100 when
 ///     30 &lt; cm &lt; 400, default 1.70 m; a Z-up export is stood up first);
 ///   • clips: the file's own takes (every rig but <c>none</c>, loop flags from <c>model.clips</c>); on a <c>mixamo</c>
-///     rig also the WHOLE library along the character's set chain (<see cref="ClipLibrary.ClipsFor"/>), retargeted
-///     once per template; one action per kind + the synonym aliases; a rig without any action walks procedurally
-///     (<see cref="ProceduralGait"/>, Task 34);
+///     rig also the WHOLE library along the character's set chain (<see cref="ClipLibrary.ClipsFor"/>), planned once per
+///     template and each clip fitted when a figure first needs it (<see cref="TemplateClips"/>, Task 35b); one action
+///     per kind + the synonym aliases; a rig without any action walks procedurally (<see cref="ProceduralGait"/>, Task 34);
 ///   • tiers: every <see cref="FigureTiers.TickS"/> the camera distance picks full (&lt; 25 m) / low (&gt; 35 m),
 ///     the band between keeps; a cached tier swaps at once, a missing one loads through the queue.
 /// </summary>
@@ -1066,7 +1066,6 @@ public partial class FigureManager : Node3D
         }
 
         await Clips.WaitClipsAsync();
-        GD.Print($"[DBGMEM] before plan {url}: live {GC.GetTotalMemory(true) / 1048576.0:0} MiB");
         await NextFrame();
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var candidates = Clips.ClipsFor(sets);
@@ -1096,7 +1095,6 @@ public partial class FigureManager : Node3D
         if (ClipFit == ClipFitMode.Eager) await lazy.EnsureAllAsync();
         else await lazy.EnsureAsync(movement);
         lazy.Built = true;
-        GD.Print($"[DBGMEM] after fit {url}: live {GC.GetTotalMemory(true) / 1048576.0:0} MiB");
         double fitMs = sw.Elapsed.TotalMilliseconds;
         if (missing.Count > 0)
             _log($"model {url}: {missing.Count} of {candidates.Count} library clip kinds NOT bound — {string.Join(", ", missing)}");
