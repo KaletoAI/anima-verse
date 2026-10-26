@@ -12,7 +12,7 @@
  * Its only dependency is the server-resolved movement poses in game/walk.
  * That module stays import-free, keeping these rules usable without a GPU.
  */
-import { movementPoseOf, poseClip, publicClip } from '../game/walk';
+import { movementPoseOf, poseClip, publicClip, type PoseClips } from '../game/walk';
 
 /**
  * The library kinds a model cannot play — offered minus bound, lower-cased,
@@ -159,14 +159,14 @@ export const CLIP_FALLBACK: Readonly<Record<string, string>> = {
 /** Try the requested kind, its public pose, explicit stand-ins for both,
  * the family's stand-in, and finally the played/public standing pose and idle.
  * Each step accepts family relatives through matchAnimKind. */
-export function clipKindChain(kind: string): string[] {
+export function clipKindChain(kind: string, poses?: Readonly<PoseClips>): string[] {
   const want = (kind ?? '').trim().toLowerCase() || 'idle';
   const family = animFamily(want);
-  const pose = movementPoseOf(want);
-  const pub = pose ? publicClip(pose) : '';
+  const pose = movementPoseOf(want, poses);
+  const pub = pose ? publicClip(pose, poses) : '';
   const chain: string[] = [];
   const steps = [want, pub, CLIP_FALLBACK[want], CLIP_FALLBACK[pub],
-    CLIP_FALLBACK[family], poseClip('standing'), publicClip('standing'), 'idle'];
+    CLIP_FALLBACK[family], poseClip('standing', poses), publicClip('standing', poses), 'idle'];
   for (const step of steps) {
     if (step && !chain.includes(step)) chain.push(step);
   }
@@ -181,8 +181,9 @@ export function clipKindChain(kind: string): string[] {
  *
  * As above, the entry is returned as it was passed in.
  */
-export function resolveClipKind(kind: string, bound: readonly string[]): string {
-  for (const step of clipKindChain(kind)) {
+export function resolveClipKind(kind: string, bound: readonly string[],
+                                poses?: Readonly<PoseClips>): string {
+  for (const step of clipKindChain(kind, poses)) {
     const hit = matchAnimKind(bound, step);
     if (hit) return hit;
   }
@@ -190,8 +191,9 @@ export function resolveClipKind(kind: string, bound: readonly string[]): string 
 }
 
 /** Clip-less rigs use the walking/running pose first, then the kind family. */
-export function proceduralGait(kind: string | null | undefined): 'walk' | 'run' | null {
-  const pose = movementPoseOf(kind);
+export function proceduralGait(kind: string | null | undefined,
+                               poses?: Readonly<PoseClips>): 'walk' | 'run' | null {
+  const pose = movementPoseOf(kind, poses);
   if (pose === 'walking') return 'walk';
   if (pose === 'running') return 'run';
   const family = animFamily(kind);

@@ -1,8 +1,11 @@
 /**
  * Pure walking maths of the embodied mode — FREE WALKING since E4 task 5.
  *
- * Everything here is a function of its arguments: no Three.js, no module
- * state, no DOM. That is what makes `client3d/scripts/smoke_walk_math.mjs` able to
+ * Everything here is a function of its arguments: no Three.js, no DOM, and
+ * module state only for the two server tables (movement poses, clip
+ * transitions), which every rule also takes as an explicit argument
+ * (`client3d/scripts/smoke_figure_clips.mjs`). That is what makes
+ * `client3d/scripts/smoke_walk_math.mjs` able to
  * check it with hand-derived numbers — the file is transpiled and imported as
  * plain ESM, so it must stay IMPORT-FREE as well.
  *
@@ -203,38 +206,60 @@ const MOVEMENT_DEFAULTS: Record<MovementPose, string> = {
   standing: 'idle', walking: 'walk', running: 'run', swimming: 'breast-stroke',
   treading_water: 'treading-water', crawling: 'crawl', crawling_rest: 'crawl-rest',
 };
-type PoseClips = Record<MovementPose, {kind: string; publicKind: string}>;
-let movementPoses: PoseClips;
+/** Played (`kind`) and public (`publicKind`) clip of every fixed pose. */
+export type PoseClips = Record<MovementPose, {kind: string; publicKind: string}>;
 
-export function setMovementPoses(raw: unknown): Readonly<PoseClips> {
+/**
+ * The server's `movement_poses` payload as a full table — PURE. Every pose
+ * gets an entry: a missing, blank or non-string `kind` / `public_kind` falls
+ * back to the pose's default clip, a given one is trimmed and lower-cased.
+ */
+export function resolveMovementPoses(raw: unknown): PoseClips {
   const src = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
   const clean = (value: unknown, fallback: string) =>
     typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : fallback;
-  movementPoses = Object.fromEntries(MOVEMENT_POSES.map((pose) => {
+  return Object.fromEntries(MOVEMENT_POSES.map((pose) => {
     const value = src[pose];
     const entry = value && typeof value === 'object' ? value as Record<string, unknown> : {};
     return [pose, {kind: clean(entry.kind, MOVEMENT_DEFAULTS[pose]),
       publicKind: clean(entry.public_kind, MOVEMENT_DEFAULTS[pose])}];
   })) as PoseClips;
+}
+
+/** The table the figures play from — the one piece of module state, set from
+ *  the clip library. Every function below takes an explicit `poses` instead
+ *  and only defaults to this one, so the rules stay pure functions of their
+ *  arguments for the smokes and the native client. */
+let movementPoses: PoseClips = resolveMovementPoses(null);
+
+export function setMovementPoses(raw: unknown): Readonly<PoseClips> {
+  movementPoses = resolveMovementPoses(raw);
   return Object.fromEntries(MOVEMENT_POSES.map((pose) => [pose, {...movementPoses[pose]}])) as PoseClips;
 }
-setMovementPoses(null);
 
-export function poseClip(pose: MovementPose): string { return movementPoses[pose].kind; }
-export function publicClip(pose: MovementPose): string { return movementPoses[pose].publicKind; }
-export function movementPoseOf(kind: string | null | undefined): MovementPose | '' {
+export function poseClip(pose: MovementPose, poses: Readonly<PoseClips> = movementPoses): string {
+  return poses[pose].kind;
+}
+export function publicClip(pose: MovementPose, poses: Readonly<PoseClips> = movementPoses): string {
+  return poses[pose].publicKind;
+}
+/** The fixed pose a clip kind plays — by played kind first, then by public
+ *  kind, `''` for a kind no pose names. */
+export function movementPoseOf(kind: string | null | undefined,
+                               poses: Readonly<PoseClips> = movementPoses): MovementPose | '' {
   const want = (kind ?? '').trim().toLowerCase();
-  return MOVEMENT_POSES.find((pose) => poseClip(pose) === want)
-    || MOVEMENT_POSES.find((pose) => publicClip(pose) === want) || '';
+  return MOVEMENT_POSES.find((pose) => poseClip(pose, poses) === want)
+    || MOVEMENT_POSES.find((pose) => publicClip(pose, poses) === want) || '';
 }
 export function movementOf(raw: unknown, scope: GroundScope): MovementType {
   return scope !== 'built' && (raw === 'walk_run' || raw === 'walk' || raw === 'swim' || raw === 'crawl')
     ? raw : 'walk_run';
 }
 export function canRun(movement: MovementType): boolean { return movement === 'walk_run'; }
-export function moveClip(movement: MovementType, running: boolean): string {
+export function moveClip(movement: MovementType, running: boolean,
+                         poses: Readonly<PoseClips> = movementPoses): string {
   return poseClip(movement === 'swim' ? 'swimming' : movement === 'crawl' ? 'crawling'
-    : canRun(movement) && running ? 'running' : 'walking');
+    : canRun(movement) && running ? 'running' : 'walking', poses);
 }
 
 /**
@@ -264,11 +289,19 @@ export interface ClipTransition {
 const TRANSITION_ANY = '*';
 let clipTransitions: ClipTransition[] = [];
 
-/** Takes the server's transition table over. Junk is no table — a broken
- *  payload must not cost the figures their plain clip switching. */
+/** Takes the server's transition table over. */
 export function setClipTransitions(raw: unknown): ClipTransition[] {
+  clipTransitions = resolveClipTransitions(raw);
+  return clipTransitions;
+}
+
+/** The server's `transition_clips` as rules — PURE. Junk is no table — a
+ *  broken payload must not cost the figures their plain clip switching. A row
+ *  without `from`, `to` or `kind` is dropped, names are trimmed and
+ *  lower-cased, `accel` is 0 unless a positive number and capped at 8. */
+export function resolveClipTransitions(raw: unknown): ClipTransition[] {
   const list = Array.isArray(raw) ? raw : [];
-  clipTransitions = list.flatMap((r) => {
+  return list.flatMap((r) => {
     if (!r || typeof r !== 'object') return [];
     const e = r as Record<string, unknown>;
     const from = String(e.from ?? '').trim().toLowerCase();
@@ -278,7 +311,6 @@ export function setClipTransitions(raw: unknown): ClipTransition[] {
     const accel = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 8) : 0;
     return from && to && kind ? [{ from, to, kind, accel }] : [];
   });
-  return clipTransitions;
 }
 
 /**
@@ -290,14 +322,14 @@ export function setClipTransitions(raw: unknown): ClipTransition[] {
  * enter rule. Switching onto the same clip is never a transition — a figure
  * that keeps walking must not stand up first.
  */
-export function clipTransition(from: string | null | undefined,
-                               to: string): ClipTransition | null {
+export function clipTransition(from: string | null | undefined, to: string,
+                               table: readonly ClipTransition[] = clipTransitions): ClipTransition | null {
   const src = String(from ?? '').trim().toLowerCase();
   const dst = String(to ?? '').trim().toLowerCase();
   if (!src || !dst || src === dst) return null;
   let wildTo: ClipTransition | null = null;
   let wildFrom: ClipTransition | null = null;
-  for (const r of clipTransitions) {
+  for (const r of table) {
     if (r.from === src && r.to === dst) return r;
     if (r.from === src && r.to === TRANSITION_ANY && !wildTo) wildTo = r;
     else if (r.from === TRANSITION_ANY && r.to === dst && !wildFrom) wildFrom = r;
@@ -331,9 +363,10 @@ export function bridgePace(accel: number, elapsedS: number): number {
 }
 
 /** Only swimming and crawling override a standing activity pose. */
-export function idleClip(movement: MovementType): string {
-  return movement === 'swim' ? poseClip('treading_water')
-    : movement === 'crawl' ? poseClip('crawling_rest') : '';
+export function idleClip(movement: MovementType,
+                         poses: Readonly<PoseClips> = movementPoses): string {
+  return movement === 'swim' ? poseClip('treading_water', poses)
+    : movement === 'crawl' ? poseClip('crawling_rest', poses) : '';
 }
 
 /**
@@ -357,8 +390,9 @@ export function idleClip(movement: MovementType): string {
  * PURE, and hand-derived in `client3d/scripts/smoke_places_client.mjs` [10].
  */
 export function standingClipFor(animation: string | undefined,
-                                groundIdle: string | undefined): string {
-  return groundIdle || animation || poseClip('standing');
+                                groundIdle: string | undefined,
+                                poses: Readonly<PoseClips> = movementPoses): string {
+  return groundIdle || animation || poseClip('standing', poses);
 }
 
 /**

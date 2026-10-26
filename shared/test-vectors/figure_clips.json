@@ -1,0 +1,157 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_figure_clips.mjs",
+  "fixtures": {
+    "RAW_SERVER": {
+      "walking": { "kind": " MOB1-Walk ", "public_kind": "walk" },
+      "standing": { "kind": "mob1-stand-relaxed-idle-v2", "public_kind": "idle" },
+      "running": { "kind": " ", "public_kind": 42 },
+      "crawling": null
+    },
+    "POSES_DEFAULT": {
+      "standing": { "kind": "idle", "publicKind": "idle" },
+      "walking": { "kind": "walk", "publicKind": "walk" },
+      "running": { "kind": "run", "publicKind": "run" },
+      "swimming": { "kind": "breast-stroke", "publicKind": "breast-stroke" },
+      "treading_water": { "kind": "treading-water", "publicKind": "treading-water" },
+      "crawling": { "kind": "crawl", "publicKind": "crawl" },
+      "crawling_rest": { "kind": "crawl-rest", "publicKind": "crawl-rest" }
+    },
+    "POSES_SERVER": {
+      "standing": { "kind": "mob1-stand-relaxed-idle-v2", "publicKind": "idle" },
+      "walking": { "kind": "mob1-walk", "publicKind": "walk" },
+      "running": { "kind": "run", "publicKind": "run" },
+      "swimming": { "kind": "breast-stroke", "publicKind": "breast-stroke" },
+      "treading_water": { "kind": "treading-water", "publicKind": "treading-water" },
+      "crawling": { "kind": "crawl", "publicKind": "crawl" },
+      "crawling_rest": { "kind": "crawl-rest", "publicKind": "crawl-rest" }
+    },
+    "RAW_TABLE": [
+      { "from": " Sleeping ", "to": "standing", "kind": "get-up-bed", "accel": 0 },
+      { "from": "sitting", "to": "*", "kind": "get-up-chair" },
+      { "from": "*", "to": "sitting", "kind": "sit-down", "accel": "x" },
+      { "from": "standing", "to": "walking", "kind": "walk", "accel": 1 },
+      { "from": "standing", "to": "*", "kind": "stretch", "accel": 12 },
+      { "from": "", "to": "walking", "kind": "lost" },
+      { "from": "lying", "to": "standing" },
+      null,
+      "junk"
+    ],
+    "TABLE": [
+      { "from": "sleeping", "to": "standing", "kind": "get-up-bed", "accel": 0 },
+      { "from": "sitting", "to": "*", "kind": "get-up-chair", "accel": 0 },
+      { "from": "*", "to": "sitting", "kind": "sit-down", "accel": 0 },
+      { "from": "standing", "to": "walking", "kind": "walk", "accel": 1 },
+      { "from": "standing", "to": "*", "kind": "stretch", "accel": 8 }
+    ]
+  },
+  "cases": [
+    { "label": "[1] no payload: every pose plays its default clip", "fn": "resolveMovementPoses",
+      "args": [null],
+      "expect": {
+        "standing": { "kind": "idle", "publicKind": "idle" },
+        "walking": { "kind": "walk", "publicKind": "walk" },
+        "running": { "kind": "run", "publicKind": "run" },
+        "swimming": { "kind": "breast-stroke", "publicKind": "breast-stroke" },
+        "treading_water": { "kind": "treading-water", "publicKind": "treading-water" },
+        "crawling": { "kind": "crawl", "publicKind": "crawl" },
+        "crawling_rest": { "kind": "crawl-rest", "publicKind": "crawl-rest" } } },
+    { "label": "[2] server payload: trimmed, lower-cased, junk falls back per field", "fn": "resolveMovementPoses",
+      "args": [{ "$fixture": "RAW_SERVER" }],
+      "expect": {
+        "standing": { "kind": "mob1-stand-relaxed-idle-v2", "publicKind": "idle" },
+        "walking": { "kind": "mob1-walk", "publicKind": "walk" },
+        "running": { "kind": "run", "publicKind": "run" },
+        "swimming": { "kind": "breast-stroke", "publicKind": "breast-stroke" },
+        "treading_water": { "kind": "treading-water", "publicKind": "treading-water" },
+        "crawling": { "kind": "crawl", "publicKind": "crawl" },
+        "crawling_rest": { "kind": "crawl-rest", "publicKind": "crawl-rest" } } },
+    { "label": "[3] a string payload is no table", "fn": "resolveMovementPoses",
+      "args": ["junk"], "expect": { "standing": { "kind": "idle", "publicKind": "idle" } } },
+
+    { "label": "[4a] walk_run walking", "fn": "moveClip", "args": ["walk_run", false, { "$fixture": "POSES_DEFAULT" }], "expect": "walk" },
+    { "label": "[4b] walk_run running", "fn": "moveClip", "args": ["walk_run", true, { "$fixture": "POSES_DEFAULT" }], "expect": "run" },
+    { "label": "[4c] walk ground never runs", "fn": "moveClip", "args": ["walk", true, { "$fixture": "POSES_DEFAULT" }], "expect": "walk" },
+    { "label": "[4d] swim moving", "fn": "moveClip", "args": ["swim", true, { "$fixture": "POSES_DEFAULT" }], "expect": "breast-stroke" },
+    { "label": "[4e] crawl moving", "fn": "moveClip", "args": ["crawl", false, { "$fixture": "POSES_DEFAULT" }], "expect": "crawl" },
+    { "label": "[4f] server walking clip", "fn": "moveClip", "args": ["walk_run", false, { "$fixture": "POSES_SERVER" }], "expect": "mob1-walk" },
+    { "label": "[4g] server running falls back to run", "fn": "moveClip", "args": ["walk_run", true, { "$fixture": "POSES_SERVER" }], "expect": "run" },
+
+    { "label": "[5a] swim standing treads", "fn": "idleClip", "args": ["swim", { "$fixture": "POSES_DEFAULT" }], "expect": "treading-water" },
+    { "label": "[5b] crawl standing rests", "fn": "idleClip", "args": ["crawl", { "$fixture": "POSES_DEFAULT" }], "expect": "crawl-rest" },
+    { "label": "[5c] walk_run names no standing clip", "fn": "idleClip", "args": ["walk_run", { "$fixture": "POSES_DEFAULT" }], "expect": "" },
+    { "label": "[5d] walk names no standing clip", "fn": "idleClip", "args": ["walk", { "$fixture": "POSES_SERVER" }], "expect": "" },
+
+    { "label": "[6a] nothing named: the server standing pose", "fn": "standingClipFor", "args": [null, "", { "$fixture": "POSES_SERVER" }], "expect": "mob1-stand-relaxed-idle-v2" },
+    { "label": "[6b] nothing named, default table", "fn": "standingClipFor", "args": [null, "", { "$fixture": "POSES_DEFAULT" }], "expect": "idle" },
+    { "label": "[6c] activity clip", "fn": "standingClipFor", "args": ["sit", "", { "$fixture": "POSES_SERVER" }], "expect": "sit" },
+    { "label": "[6d] the ground beats the activity", "fn": "standingClipFor", "args": ["sit", "treading-water", { "$fixture": "POSES_SERVER" }], "expect": "treading-water" },
+
+    { "label": "[7a] swim in the wilderness", "fn": "movementOf", "args": ["swim", "wilderness"], "expect": "swim" },
+    { "label": "[7b] crawl in the open", "fn": "movementOf", "args": ["crawl", "open"], "expect": "crawl" },
+    { "label": "[7c] a built place is a floor", "fn": "movementOf", "args": ["swim", "built"], "expect": "walk_run" },
+    { "label": "[7d] unknown word", "fn": "movementOf", "args": ["fly", "open"], "expect": "walk_run" },
+    { "label": "[7e] no word", "fn": "movementOf", "args": [null, "wilderness"], "expect": "walk_run" },
+    { "label": "[7f] walk_run may run", "fn": "canRun", "args": ["walk_run"], "expect": true },
+    { "label": "[7g] walk may not run", "fn": "canRun", "args": ["walk"], "expect": false },
+
+    { "label": "[8a] played kind", "fn": "movementPoseOf", "args": ["mob1-walk", { "$fixture": "POSES_SERVER" }], "expect": "walking" },
+    { "label": "[8b] public kind", "fn": "movementPoseOf", "args": ["walk", { "$fixture": "POSES_SERVER" }], "expect": "walking" },
+    { "label": "[8c] trimmed and lower-cased", "fn": "movementPoseOf", "args": [" Idle ", { "$fixture": "POSES_SERVER" }], "expect": "standing" },
+    { "label": "[8d] a kind no pose names", "fn": "movementPoseOf", "args": ["dance", { "$fixture": "POSES_SERVER" }], "expect": "" },
+    { "label": "[8e] old walking clip without the server table", "fn": "movementPoseOf", "args": ["mob1-walk", { "$fixture": "POSES_DEFAULT" }], "expect": "" },
+
+    { "label": "[9] transition table: junk rows dropped, names cleaned, accel 0..8", "fn": "resolveClipTransitions",
+      "args": [{ "$fixture": "RAW_TABLE" }],
+      "expect": [
+        { "from": "sleeping", "to": "standing", "kind": "get-up-bed", "accel": 0 },
+        { "from": "sitting", "to": "*", "kind": "get-up-chair", "accel": 0 },
+        { "from": "*", "to": "sitting", "kind": "sit-down", "accel": 0 },
+        { "from": "standing", "to": "walking", "kind": "walk", "accel": 1 },
+        { "from": "standing", "to": "*", "kind": "stretch", "accel": 8 } ] },
+    { "label": "[9b] a non-list is no table", "fn": "resolveClipTransitions", "args": [{ "from": "a", "to": "b", "kind": "c" }], "expect": [] },
+
+    { "label": "[10a] both named", "fn": "clipTransition", "args": ["sleeping", "standing", { "$fixture": "TABLE" }],
+      "expect": { "from": "sleeping", "to": "standing", "kind": "get-up-bed", "accel": 0 } },
+    { "label": "[10b] exit rule, input cleaned", "fn": "clipTransition", "args": [" Sitting ", "walking", { "$fixture": "TABLE" }],
+      "expect": { "from": "sitting", "to": "*", "kind": "get-up-chair", "accel": 0 } },
+    { "label": "[10c] exit rule beats enter rule", "fn": "clipTransition", "args": ["standing", "sitting", { "$fixture": "TABLE" }],
+      "expect": { "from": "standing", "to": "*", "kind": "stretch", "accel": 8 } },
+    { "label": "[10d] enter rule", "fn": "clipTransition", "args": ["walking", "sitting", { "$fixture": "TABLE" }],
+      "expect": { "from": "*", "to": "sitting", "kind": "sit-down", "accel": 0 } },
+    { "label": "[10e] both named beats the exit rule", "fn": "clipTransition", "args": ["standing", "walking", { "$fixture": "TABLE" }],
+      "expect": { "from": "standing", "to": "walking", "kind": "walk", "accel": 1 } },
+    { "label": "[10f] same clip is never a transition", "fn": "clipTransition", "args": ["walking", "walking", { "$fixture": "TABLE" }], "expect": null },
+    { "label": "[10g] no from clip", "fn": "clipTransition", "args": ["", "walking", { "$fixture": "TABLE" }], "expect": null },
+    { "label": "[10h] dropped row matches nothing", "fn": "clipTransition", "args": ["lying", "standing", { "$fixture": "TABLE" }], "expect": null },
+
+    { "label": "[11a] accel 0 holds", "fn": "bridgePace", "args": [0, 5], "expect": 0 },
+    { "label": "[11b] negative accel holds", "fn": "bridgePace", "args": [-1, 1], "expect": 0 },
+    { "label": "[11c] ramp start is the floor", "fn": "bridgePace", "args": [1, 0], "expect": 0.02 },
+    { "label": "[11d] negative elapsed is the start", "fn": "bridgePace", "args": [1, -3], "expect": 0.02 },
+    { "label": "[11e] half a second at accel 1", "fn": "bridgePace", "args": [1, 0.5], "expect": 0.5 },
+    { "label": "[11f] below the floor", "fn": "bridgePace", "args": [2, 0.005], "expect": 0.02 },
+    { "label": "[11g] full speed cap", "fn": "bridgePace", "args": [0.5, 4], "expect": 1 },
+
+    { "label": "[12a] swim chain", "fn": "clipKindChain", "args": ["swim", { "$fixture": "POSES_DEFAULT" }], "expect": ["swim", "walk", "idle"] },
+    { "label": "[12b] server walking chain", "fn": "clipKindChain", "args": ["mob1-walk", { "$fixture": "POSES_SERVER" }],
+      "expect": ["mob1-walk", "walk", "mob1-stand-relaxed-idle-v2", "idle"] },
+    { "label": "[12c] empty kind is idle", "fn": "clipKindChain", "args": ["", { "$fixture": "POSES_DEFAULT" }], "expect": ["idle"] },
+    { "label": "[12d] treading water", "fn": "clipKindChain", "args": ["treading-water", { "$fixture": "POSES_DEFAULT" }], "expect": ["treading-water", "idle"] },
+    { "label": "[12e] family stand-in", "fn": "clipKindChain", "args": ["run-fast", { "$fixture": "POSES_DEFAULT" }], "expect": ["run-fast", "walk", "idle"] },
+
+    { "label": "[13a] server walking on a walk-cmu rig", "fn": "resolveClipKind", "args": ["mob1-walk", ["idle", "walk-cmu"], { "$fixture": "POSES_SERVER" }], "expect": "walk-cmu" },
+    { "label": "[13b] swim on a rig without swimming", "fn": "resolveClipKind", "args": ["swim", ["Idle", "walk"], { "$fixture": "POSES_DEFAULT" }], "expect": "walk" },
+    { "label": "[13c] family base beats a later relative", "fn": "resolveClipKind", "args": ["run-fast", ["run", "run-fast-2"], { "$fixture": "POSES_DEFAULT" }], "expect": "run" },
+    { "label": "[13d] nothing of the sort", "fn": "resolveClipKind", "args": ["dance", ["sit"], { "$fixture": "POSES_DEFAULT" }], "expect": "" },
+    { "label": "[13e] entry returned as passed in", "fn": "resolveClipKind", "args": ["treading-water", ["Idle"], { "$fixture": "POSES_DEFAULT" }], "expect": "Idle" },
+
+    { "label": "[14a] server walking pose", "fn": "proceduralGait", "args": ["mob1-walk", { "$fixture": "POSES_SERVER" }], "expect": "walk" },
+    { "label": "[14b] same kind without the table", "fn": "proceduralGait", "args": ["mob1-walk", { "$fixture": "POSES_DEFAULT" }], "expect": null },
+    { "label": "[14c] running pose", "fn": "proceduralGait", "args": ["run", { "$fixture": "POSES_DEFAULT" }], "expect": "run" },
+    { "label": "[14d] run family", "fn": "proceduralGait", "args": ["run-fast", { "$fixture": "POSES_DEFAULT" }], "expect": "run" },
+    { "label": "[14e] walk family", "fn": "proceduralGait", "args": ["walk-cmu", { "$fixture": "POSES_DEFAULT" }], "expect": "walk" },
+    { "label": "[14f] idle has no gait", "fn": "proceduralGait", "args": ["idle", { "$fixture": "POSES_DEFAULT" }], "expect": null },
+    { "label": "[14g] swimming has no gait", "fn": "proceduralGait", "args": ["breast-stroke", { "$fixture": "POSES_DEFAULT" }], "expect": null }
+  ]
+}
