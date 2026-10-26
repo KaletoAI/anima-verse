@@ -379,8 +379,49 @@ const NEAR_MARGIN_MIN_M = 16;
 
 // ── The pyramid ────────────────────────────────────────────────────────────
 
-/** One level of a height pyramid: its lattice and where its rows sit in the
- *  packed texture. The ORIGIN is the pyramid's — decimation keeps it. */
+/** Fine-lattice window policy, shared by runtime construction and vector tests. */
+export function nearWindow(keys: readonly string[], tileM: number, step: number,
+                           overviewStep: number | undefined, anchorX: number, anchorZ: number
+): { x0: number; z0: number; cols: number; rows: number } | null {
+  if (!keys.length || !(step > 0) || !(tileM > 0)) return null;
+  let x0 = Infinity;
+  let z0 = Infinity;
+  let x1 = -Infinity;
+  let z1 = -Infinity;
+  for (const key of keys) {
+    const [tx, tz] = key.split(',').map(Number);
+    if (!Number.isFinite(tx) || !Number.isFinite(tz)) continue;
+    x0 = Math.min(x0, tx * tileM);
+    z0 = Math.min(z0, tz * tileM);
+    x1 = Math.max(x1, (tx + 1) * tileM);
+    z1 = Math.max(z1, (tz + 1) * tileM);
+  }
+  if (!Number.isFinite(x0)) return null;
+  const ovStep = overviewStep ?? step;
+  const margin = Math.max(NEAR_MARGIN_MIN_M, NEAR_MARGIN_CELLS * ovStep);
+  x0 -= margin; z0 -= margin; x1 += margin; z1 += margin;
+  // Snapped onto the fine lattice, which is anchored at the world origin —
+  // the tile origins are multiples of `tileM` and `tileM` is a multiple of
+  // the step, so the window's lattice IS the tiles' lattice.
+  x0 = Math.floor(x0 / step) * step;
+  z0 = Math.floor(z0 / step) * step;
+  let cols = Math.floor((x1 - x0) / step) + 1;
+  let rows = Math.floor((z1 - z0) / step) + 1;
+  if (cols > NEAR_MAX_TEXELS || rows > NEAR_MAX_TEXELS) {
+    // The cap bites only for a tile size this client has never seen. Centre
+    // what is left on the anchor so the player at least stands in it.
+    const halfX = Math.min(cols, NEAR_MAX_TEXELS) * step / 2;
+    const halfZ = Math.min(rows, NEAR_MAX_TEXELS) * step / 2;
+    x0 = Math.floor((anchorX - halfX) / step) * step;
+    z0 = Math.floor((anchorZ - halfZ) / step) * step;
+    cols = Math.min(cols, NEAR_MAX_TEXELS);
+    rows = Math.min(rows, NEAR_MAX_TEXELS);
+  }
+  if (cols < 2 || rows < 2) return null;
+  return { x0, z0, cols, rows };
+}
+
+/** One pyramid level; decimation keeps the origin of the base lattice. */
 export interface PyramidLevel {
   cols: number;
   rows: number;
@@ -3211,41 +3252,10 @@ export function createTerrainLod(): TerrainLod {
    */
   function buildNear(c: WorldHeightTiles, step: number,
                      anchorX: number, anchorZ: number): HeightPyramid | null {
-    if (!c.tiles?.size || !(step > 0) || !(c.tileM > 0)) return null;
-    let x0 = Infinity;
-    let z0 = Infinity;
-    let x1 = -Infinity;
-    let z1 = -Infinity;
-    for (const key of c.tiles.keys()) {
-      const [tx, tz] = key.split(',').map(Number);
-      if (!Number.isFinite(tx) || !Number.isFinite(tz)) continue;
-      x0 = Math.min(x0, tx * c.tileM);
-      z0 = Math.min(z0, tz * c.tileM);
-      x1 = Math.max(x1, (tx + 1) * c.tileM);
-      z1 = Math.max(z1, (tz + 1) * c.tileM);
-    }
-    if (!Number.isFinite(x0)) return null;
-    const ovStep = c.overview?.step_m ?? step;
-    const margin = Math.max(NEAR_MARGIN_MIN_M, NEAR_MARGIN_CELLS * ovStep);
-    x0 -= margin; z0 -= margin; x1 += margin; z1 += margin;
-    // Snapped onto the fine lattice, which is anchored at the world origin —
-    // the tile origins are multiples of `tileM` and `tileM` is a multiple of
-    // the step, so the window's lattice IS the tiles' lattice.
-    x0 = Math.floor(x0 / step) * step;
-    z0 = Math.floor(z0 / step) * step;
-    let cols = Math.floor((x1 - x0) / step) + 1;
-    let rows = Math.floor((z1 - z0) / step) + 1;
-    if (cols > NEAR_MAX_TEXELS || rows > NEAR_MAX_TEXELS) {
-      // The cap bites only for a tile size this client has never seen. Centre
-      // what is left on the anchor so the player at least stands in it.
-      const halfX = Math.min(cols, NEAR_MAX_TEXELS) * step / 2;
-      const halfZ = Math.min(rows, NEAR_MAX_TEXELS) * step / 2;
-      x0 = Math.floor((anchorX - halfX) / step) * step;
-      z0 = Math.floor((anchorZ - halfZ) / step) * step;
-      cols = Math.min(cols, NEAR_MAX_TEXELS);
-      rows = Math.min(rows, NEAR_MAX_TEXELS);
-    }
-    if (cols < 2 || rows < 2) return null;
+    const window = nearWindow(Array.from(c.tiles?.keys() ?? []), c.tileM, step,
+                              c.overview?.step_m, anchorX, anchorZ);
+    if (!window) return null;
+    const { x0, z0, cols, rows } = window;
     const pyr = buildPyramid((x, z) => heightAt(c, x, z), x0, z0, step,
                              cols, rows, MAX_LOD_LEVELS);
     nearRect = [x0, z0, x0 + (cols - 1) * step, z0 + (rows - 1) * step];

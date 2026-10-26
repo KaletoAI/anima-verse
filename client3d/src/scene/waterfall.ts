@@ -217,6 +217,28 @@ function patchCurtain(mat: THREE.Material, speedTilesS: number,
   mat.customProgramCacheKey = () => WATERFALL_CACHE_KEY;
 }
 
+/** Curtain vertices in lip-left, lip-right, foot-left, foot-right order. */
+export function waterfallQuad(fall: Waterfall): { positions: number[]; bottom: [number, number] } | null {
+  const height = fall.topY - fall.bottomY;
+  if (!(height > 0) || !(fall.width > 0)) return null;
+  const acrossX = fall.dirZ;
+  const acrossZ = -fall.dirX;
+  const halfW = fall.width * 0.5;
+  // The wet face's own half-run, and the lean that carries the foot clear of it.
+  const halfRun = Math.max(fall.chordM, 0) * 0.5;
+  const lean = WATERFALL_LEAN * height;
+  const topX = fall.x - fall.dirX * halfRun;
+  const topZ = fall.z - fall.dirZ * halfRun;
+  const botX = fall.x + fall.dirX * (halfRun + lean);
+  const botZ = fall.z + fall.dirZ * (halfRun + lean);
+  return { bottom: [botX, botZ], positions: [
+    topX - acrossX * halfW, fall.topY, topZ - acrossZ * halfW,
+    topX + acrossX * halfW, fall.topY, topZ + acrossZ * halfW,
+    botX - acrossX * halfW, fall.bottomY, botZ - acrossZ * halfW,
+    botX + acrossX * halfW, fall.bottomY, botZ + acrossZ * halfW,
+  ] };
+}
+
 /**
  * The two meshes of ONE fall: the curtain and the white water at its foot.
  *
@@ -240,29 +262,16 @@ function patchCurtain(mat: THREE.Material, speedTilesS: number,
 export function buildWaterfall(fall: Waterfall,
                                sink: { dispose(): void }[]): THREE.Mesh[] {
   const height = fall.topY - fall.bottomY;
-  if (!(height > 0) || !(fall.width > 0)) return [];
+  const quad = waterfallQuad(fall);
+  if (!quad) return [];
+  const [botX, botZ] = quad.bottom;
   // THE one wave normal map of the process, built on first ask and shared with
   // every water pixel the terrain shades (K-A E4).
   const map = surfaceWaveNormal(THREE) as THREE.Texture;
 
   // ── the curtain ──────────────────────────────────────────────────────────
-  const acrossX = fall.dirZ;
-  const acrossZ = -fall.dirX;
-  const halfW = fall.width * 0.5;
-  // The wet face's own half-run, and the lean that carries the foot clear of it.
-  const halfRun = Math.max(fall.chordM, 0) * 0.5;
-  const lean = WATERFALL_LEAN * height;
-  const topX = fall.x - fall.dirX * halfRun;
-  const topZ = fall.z - fall.dirZ * halfRun;
-  const botX = fall.x + fall.dirX * (halfRun + lean);
-  const botZ = fall.z + fall.dirZ * (halfRun + lean);
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-    topX - acrossX * halfW, fall.topY, topZ - acrossZ * halfW,
-    topX + acrossX * halfW, fall.topY, topZ + acrossZ * halfW,
-    botX - acrossX * halfW, fall.bottomY, botZ - acrossZ * halfW,
-    botX + acrossX * halfW, fall.bottomY, botZ + acrossZ * halfW,
-  ]), 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(quad.positions), 3));
   // u across the stream, v from the pool (0) up to the lip (1) — the shader
   // reads both, and the drift is in v.
   geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([

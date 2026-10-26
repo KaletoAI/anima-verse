@@ -1,0 +1,27 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_shadow_snap.mjs",
+  "cases": [
+    {"label": "[1] shadow_snap: (a) 140 / 2048","fn": "shadowTexelM","args": [],"expect": 0.068359375,"eps": 0},
+    {"label": "[2] shadow_snap: …x-axis = (5/13, 0, 12/13): x","fn": "lightBasisValue","args": [[[-60,6.4,25]],["x",0]],"expect": 0.38461538461538464,"eps": 1e-12},
+    {"label": "[2] shadow_snap: …y","fn": "lightBasisValue","args": [[[-60,6.4,25]],["x",1]],"expect": 0,"eps": 1e-12},
+    {"label": "[2] shadow_snap: …z","fn": "lightBasisValue","args": [[[-60,6.4,25]],["x",2]],"expect": 0.9230769230769231,"eps": 1e-12},
+    {"label": "[20] clock midnight","fn": "gameHourLights","args": [0],"expect": {"sunAngle": -1.5707963267948966,"sun": 10466528,"sky": 1712960,"sunIntensity": 0.25,"hemiIntensity": 0.35,"fillIntensity": 0.15},"eps": 1e-09},
+    {"label": "[20] clock noon","fn": "gameHourLights","args": [12],"expect": {"sunAngle": 1.5707963267948966,"sun": 16773848,"sky": 10471400,"sunIntensity": 2.25,"hemiIntensity": 1.55,"fillIntensity": 0.55},"eps": 1e-09},
+    {"label": "[20] clock wrap noon","fn": "gameHourLights","args": [-12],"expect": {"sunAngle": 1.5707963267948966,"sun": 16773848,"sky": 10471400,"sunIntensity": 2.25,"hemiIntensity": 1.55,"fillIntensity": 0.55},"eps": 1e-09},
+    {"label": "[20] clock dawn","fn": "gameHourLights","args": [6],"expect": {"sunAngle": 0,"sun": 10466528,"sky": 1712960,"sunIntensity": 0.25,"hemiIntensity": 0.35,"fillIntensity": 0.15},"eps": 1e-09},
+    {"label": "[20] night noon cross reference","fn": "nightFactorAt","args": [12],"expect": 0,"eps": 1e-09},
+    {"label": "[20] night midnight cross reference","fn": "nightFactorAt","args": [0],"expect": 1,"eps": 1e-09},
+    {"label": "[20] fog before","fn": "fogFactor","args": [0],"expect": 0,"eps": 1e-09},
+    {"label": "[20] fog near","fn": "fogFactor","args": [220],"expect": 0,"eps": 1e-09},
+    {"label": "[20] fog quarter","fn": "fogFactor","args": [295],"expect": 0.15625,"eps": 1e-09},
+    {"label": "[20] fog halfway","fn": "fogFactor","args": [370],"expect": 0.5,"eps": 1e-09},
+    {"label": "[20] fog three quarters","fn": "fogFactor","args": [445],"expect": 0.84375,"eps": 1e-09},
+    {"label": "[20] fog far","fn": "fogFactor","args": [520],"expect": 1,"eps": 1e-09},
+    {"label": "[20] fog beyond","fn": "fogFactor","args": [800],"expect": 1,"eps": 1e-09},
+    {"label": "[20] light basis axial","fn": "lightBasis","args": [[0,0,1]],"expect": {"x": [1,0,0],"y": [0,1,0],"z": [0,0,1]},"eps": 1e-09},
+    {"label": "[20] shadow axial below half","fn": "snapShadowCentre","args": [{"target": [0.02,0.02,7],"offset": [0,0,1]}],"expect": [0,0,7],"eps": 1e-09},
+    {"label": "[20] shadow axial above half","fn": "snapShadowCentre","args": [{"target": [0.04,-0.04,7],"offset": [0,0,1]}],"expect": [0.068359375,-0.068359375,7],"eps": 1e-09},
+    {"label": "[20] clock interpolated dawn","fn": "gameHourLights","args": [6.965167479061995],"expect": {"sunAngle": 0.25268025514207865,"sun": 16766123,"sky": 13152950,"sunIntensity": 0.75,"hemiIntensity": 0.65,"fillIntensity": 0.25},"eps": 1e-09}
+  ]
+}

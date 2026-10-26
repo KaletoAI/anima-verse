@@ -311,6 +311,7 @@
  * they are the ONLY meshes a painted water still produces: the surface itself
  * is the terrain (`scene/waterShade.ts`).
  */
+import { vectorCase, vectorArgs, vectorValue } from './e3VectorSupport.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -336,6 +337,11 @@ async function loadPure(...relPaths) {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+function vector(label, fns) {
+  const result = vectorCase("water", label, fns);
+  passed += result.passed; failed += result.failed;
 }
 
 let failed = 0;
@@ -405,7 +411,7 @@ check('RED: …which is this many degrees off the fall\'s own direction',
 // ── [3] the flat river ─────────────────────────────────────────────────────
 console.log('\n[3] a river losing 4 m over 200 m is a valley, not a fall');
 const FLAT = { axis: [[0, 0, 0, 10], [100, 0, 100, 8], [200, 0, 200, 6]] };
-checkEq('no fall anywhere on it', waterfallsFrom(FLAT, 6), []);
+vector("[3] waterfall: no fall anywhere on it", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
 check('RED: its drop DOES pass the drop threshold', 10 - 8, 2);
 check('RED: …and its slope misses the slope one by two orders',
   2 / 100, 0.02);
@@ -414,34 +420,28 @@ check('RED: …and its slope misses the slope one by two orders',
 console.log('\n[4] the thresholds are strict, and each is tested alone');
 const DROP_AT = { axis: [[0, 0, 0, 10], [1, 0, 1, 9], [2, 0, 2, 8.5]] };
 const DROP_OVER = { axis: [[0, 0, 0, 10], [1, 0, 1, 8.999], [2, 0, 2, 8.5]] };
-checkEq('a drop of EXACTLY 1.0 m is not past 1.0 m',
-  waterfallsFrom(DROP_AT, 6), []);
-check('one millimetre more is', waterfallsFrom(DROP_OVER, 6).length, 1);
-check('…and it is that segment', waterfallsFrom(DROP_OVER, 6)[0].topY, 10);
-check('…down to', waterfallsFrom(DROP_OVER, 6)[0].bottomY, 8.999);
+vector("[4] waterfall: a drop of EXACTLY 1.0 m is not past 1.0 m", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
+vector("[4] waterfall: one millimetre more is", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[4] waterfall: …and it is that segment", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[4] waterfall: …down to", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 const SLOPE_AT = { axis: [[0, 0, 0, 10], [4, 0, 4, 8], [8, 0, 8, 7]] };
 const SLOPE_OVER = { axis: [[0, 0, 0, 10], [3.9, 0, 3.9, 8], [8, 0, 8, 7]] };
-checkEq('a slope of EXACTLY 0.5 is not past 0.5',
-  waterfallsFrom(SLOPE_AT, 6), []);
+vector("[4] waterfall: a slope of EXACTLY 0.5 is not past 0.5", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
 check('RED: …though its drop is twice the drop threshold', 10 - 8, 2);
-check('ten centimetres less run and it is a fall',
-  waterfallsFrom(SLOPE_OVER, 6).length, 1);
-check('…at the middle of that segment',
-  waterfallsFrom(SLOPE_OVER, 6)[0].x, 1.95);
+vector("[4] waterfall: ten centimetres less run and it is a fall", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[4] waterfall: …at the middle of that segment", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 check('…whose slope is', 2 / 3.9, 0.5128205128205128, 1e-15);
 
 // ── [5] the two-knot polygon river ─────────────────────────────────────────
 console.log('\n[5] a polygon river is ONE ramp — steep is not enough');
 const POLY = { axis: [[0, 0, 0, 10], [0, -3, 3, 4]] };
-checkEq('no fall, though both thresholds pass', waterfallsFrom(POLY, 6), []);
+vector("[5] waterfall: no fall, though both thresholds pass", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
 check('RED: its drop', 10 - 4, 6);
 check('RED: …and its slope, both well past', 6 / 3, 2);
-checkEq('a lake — one knot — has no segment at all',
-  waterfallsFrom({ axis: [[12, -4, 0, 3.25]] }, 6), []);
-checkEq('and neither has an empty axis', waterfallsFrom({ axis: [] }, 6), []);
-checkEq('nor a missing profile', waterfallsFrom(null, 6), []);
-checkEq('nor junk in the axis slot',
-  waterfallsFrom({ axis: 'downhill' }, 6), []);
+vector("[5] waterfall: a lake — one knot — has no segment at all", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
+vector("[5] waterfall: and neither has an empty axis", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
+vector("[5] waterfall: nor a missing profile", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
+vector("[5] waterfall: nor junk in the axis slot", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
 checkEq('a knot carrying a NaN is a broken axis, and draws nothing',
   waterfallsFrom({ axis: [[0, 0, 0, 10], [0, -3, 3, NaN], [0, -6, 6, 1]] }, 6),
   []);
@@ -451,39 +451,30 @@ console.log('\n[6] a staircase river is a staircase');
 const STAIRS = { axis: [[0, 0, 0, 20], [2, 0, 2, 18], [22, 0, 22, 17.8],
   [24, 0, 24, 15], [44, 0, 44, 14.8]] };
 const stairs = waterfallsFrom(STAIRS, 6);
-check('two falls', stairs.length, 2);
-check('the first one\'s midpoint', stairs[0]?.x, 1);
-check('…from', stairs[0]?.topY, 20);
-check('…down to', stairs[0]?.bottomY, 18);
-check('the second one\'s midpoint', stairs[1]?.x, 23);
+vector("[6] waterfall: two falls", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[6] waterfall: the first one's midpoint", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[6] waterfall: …from", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[6] waterfall: …down to", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[6] waterfall: the second one's midpoint", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 check('…from', stairs[1]?.topY, 17.8);
 check('…down to', stairs[1]?.bottomY, 15);
 console.log('\n[6b] and water never falls upward');
-checkEq('a RISING segment is no fall',
-  waterfallsFrom({ axis: [[0, 0, 0, 4], [0, -3, 3, 10], [0, -6, 6, 9]] }, 6),
-  []);
-checkEq('a segment of no length names no direction either',
-  waterfallsFrom({ axis: [[0, 0, 0, 10], [0, 0, 0, 4], [0, -6, 6, 3.9]] }, 6),
-  []);
+vector("[6b] waterfall: a RISING segment is no fall", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
+vector("[6b] waterfall: a segment of no length names no direction either", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
 
 // ── [7] the width ──────────────────────────────────────────────────────────
 console.log('\n[7] the width is the drawn ribbon\'s, or there is no curtain');
-check('the recipe\'s own width', strokeWidthM(PLAN_META), 6);
-check('a numeric STRING is a number — the payload is JSON either way',
-  strokeWidthM({ stroke: { width_m: '6' } }), 6);
-checkEq('a polygon area has no recipe', strokeWidthM({}), null);
+vector("[7] waterfall: the recipe's own width", { strokeWidthM: (...args) => strokeWidthM(...vectorArgs(args)) });
+vector("[7] waterfall: a numeric STRING is a number — the payload is JSON either way", { strokeWidthM: (...args) => strokeWidthM(...vectorArgs(args)) });
+vector("[7] waterfall: a polygon area has no recipe", { strokeWidthM: (...args) => strokeWidthM(...vectorArgs(args)) });
 checkEq('no meta at all', strokeWidthM(undefined), null);
-checkEq('junk in the slot is no recipe', strokeWidthM({ stroke: 'wide' }), null);
-checkEq('a width of zero is no width', strokeWidthM({ stroke: { width_m: 0 } }),
-  null);
+vector("[7] waterfall: junk in the slot is no recipe", { strokeWidthM: (...args) => strokeWidthM(...vectorArgs(args)) });
+vector("[7] waterfall: a width of zero is no width", { strokeWidthM: (...args) => strokeWidthM(...vectorArgs(args)) });
 checkEq('…and neither is a NaN',
   strokeWidthM({ stroke: { width_m: NaN } }), null);
-checkEq('without a width the steep segment draws nothing',
-  waterfallsFrom(PLAN_AXIS, null), []);
-checkEq('…and a zero width draws nothing either',
-  waterfallsFrom(PLAN_AXIS, 0), []);
-check('a width that arrives as a string still spans the stream',
-  waterfallsFrom(PLAN_AXIS, '6')[0]?.width, 6);
+vector("[7] waterfall: without a width the steep segment draws nothing", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
+vector("[7] waterfall: …and a zero width draws nothing either", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
+vector("[7] waterfall: a width that arrives as a string still spans the stream", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 
 // ── [9] the cliff between two clicks ───────────────────────────────────────
 console.log('\n[9] the payload the server really ships for a two-click river');
@@ -513,8 +504,7 @@ check('…which is three times WATERFALL_MIN_SLOPE',
 check('the curtain spans the drawn ribbon', cliffFalls[0]?.width, 6);
 // RED: the very same river, as the CLICKS alone described it before W5b.
 const CLICKS_ONLY = { axis: [[0, 0, 0, 3], [100, 0, 100, 0]] };
-checkEq('RED: the two-knot axis of the same two clicks has NO fall at all',
-  waterfallsFrom(CLICKS_ONLY, 6), []);
+vector("[9] waterfall: RED: the two-knot axis of the same two clicks has NO fall at all", { waterfallsFrom: (...args) => waterfallsFrom(...vectorArgs(args)) });
 const clickDrop = CLICKS_ONLY.axis[0][3] - CLICKS_ONLY.axis[1][3];
 const clickSlope = clickDrop / (CLICKS_ONLY.axis[1][2] - CLICKS_ONLY.axis[0][2]);
 check('RED: …its drop is three times the drop threshold',
@@ -535,37 +525,34 @@ check('RED: …and so does the second', SPLIT.axis[1][3] - SPLIT.axis[2][3], 0.9
 check('RED: …yet each is steeper than the slope threshold',
   (SPLIT.axis[0][3] - SPLIT.axis[1][3]) / (SPLIT.axis[1][2] - SPLIT.axis[0][2]),
   0.6, 1e-15);
-check('so the run is one fall, not none', split.length, 1);
+vector("[10] waterfall: so the run is one fall, not none", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 check('its drop is the run\'s, 3.0 − 1.2', split[0]?.topY - split[0]?.bottomY,
   1.8, 1e-15);
-check('it leaves at the first knot\'s level', split[0]?.topY, 3);
-check('…and arrives at the last one\'s', split[0]?.bottomY, 1.2);
-check('it stands at the arc midpoint — the clicked knot itself', split[0]?.x,
-  1.5);
-check('…on the line', split[0]?.z, 0);
-check('and points along the chord of the run', split[0]?.dirX, 1);
-check('…which here is the drawn line', split[0]?.dirZ, 0);
+vector("[10] waterfall: it leaves at the first knot's level", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10] waterfall: …and arrives at the last one's", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10] waterfall: it stands at the arc midpoint — the clicked knot itself", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10] waterfall: …on the line", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10] waterfall: and points along the chord of the run", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10] waterfall: …which here is the drawn line", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 
 console.log('\n[10b] three steps: the midpoint falls INSIDE a segment');
 const THREE = { axis: [[0, 0, 0, 3], [1.5, 0, 1.5, 2.1], [3, 0, 3, 1.2],
   [4.5, 0, 4.5, 0.3]] };
 const three = waterfallsFrom(THREE, 6);
-check('still one fall', three.length, 1);
+vector("[10b] waterfall: still one fall", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 check('drop 3.0 − 0.3', three[0]?.topY - three[0]?.bottomY, 2.7, 1e-15);
-check('arc midpoint s = 2.25, half way along the SECOND segment', three[0]?.x,
-  2.25);
+vector("[10b] waterfall: arc midpoint s = 2.25, half way along the SECOND segment", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 
 console.log('\n[10c] a bent fall hangs at its elbow, not beside the water');
 const BENT = { axis: [[0, 0, 0, 3], [1.5, 0, 1.5, 2.1], [1.5, -1.5, 3, 1.2]] };
 const bent = waterfallsFrom(BENT, 6);
-check('one fall', bent.length, 1);
-check('the arc midpoint is the elbow (x)', bent[0]?.x, 1.5);
-check('…and (z)', bent[0]?.z, 0);
+vector("[10c] waterfall: one fall", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10c] waterfall: the arc midpoint is the elbow (x)", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10c] waterfall: …and (z)", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 check('RED: the CHORD midpoint would sit in the dry corner (x)',
   (BENT.axis[0][0] + BENT.axis[2][0]) * 0.5, 0.75);
 check('RED: …and (z)', (BENT.axis[0][1] + BENT.axis[2][1]) * 0.5, -0.75);
-check('the direction IS the chord, √4.5 long (x)', bent[0]?.dirX, 0.7071068,
-  1e-7);
+vector("[10c] waterfall: the direction IS the chord, √4.5 long (x)", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 check('…and (z)', bent[0]?.dirZ, -0.7071068, 1e-7);
 check('it is a unit direction', Math.hypot(bent[0]?.dirX, bent[0]?.dirZ), 1,
   1e-15);
@@ -579,11 +566,11 @@ check('RED: the pool loses this little over 20 m',
 check('RED: …i.e. a slope of 0.005, far short of the threshold',
   (POOLED.axis[2][3] - POOLED.axis[3][3])
   / (POOLED.axis[3][2] - POOLED.axis[2][2]), 0.005, 1e-15);
-check('two falls, not one long curtain', pooled.length, 2);
-check('the first from', pooled[0]?.topY, 6);
-check('…down to', pooled[0]?.bottomY, 4.2);
-check('…at its arc midpoint', pooled[0]?.x, 1.5);
-check('the second from', pooled[1]?.topY, 4.1);
+vector("[10d] waterfall: two falls, not one long curtain", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10d] waterfall: the first from", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10d] waterfall: …down to", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10d] waterfall: …at its arc midpoint", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
+vector("[10d] waterfall: the second from", { waterfallsFromValue: (args, path) => vectorValue(waterfallsFrom(...vectorArgs(args)), path) });
 check('…down to', pooled[1]?.bottomY, 2.3);
 check('…at its arc midpoint', pooled[1]?.x, 24.5);
 

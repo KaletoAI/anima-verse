@@ -215,6 +215,31 @@ function makeWaveNormal(T: THREE): Texture {
   canvas.width = canvas.height = N
   const ctx = canvas.getContext('2d')!
   const img = ctx.createImageData(N, N)
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const rgba = waveNormalSample(x, y, N)
+      const i = (y * N + x) * 4
+      img.data[i] = rgba[0]
+      img.data[i + 1] = rgba[1]
+      img.data[i + 2] = rgba[2]
+      img.data[i + 3] = rgba[3]
+    }
+  }
+  ctx.putImageData(img, 0, 0)
+  const tex = new T.CanvasTexture(canvas)
+  tex.wrapS = tex.wrapT = T.RepeatWrapping
+  // Anisotropic filtering, because a lake is nearly always seen at a grazing
+  // angle: an isotropic mip has to pick the WIDER of the two footprints, so it
+  // either blurs the ripple away across the view direction or aliases it along
+  // it. three clamps this to what the device offers, so 4 is a wish, not a
+  // requirement.
+  tex.anisotropy = 4
+  tex.needsUpdate = true
+  return tex
+}
+
+/** One RGBA8 texel of the shared periodic wave normal, without a canvas. */
+export function waveNormalSample(x: number, y: number, N = 256): [number, number, number, number] {
   // fx, fy integer -> the height is periodic on the unit square.
   const layers: [number, number, number, number][] = [
     // fx, fy, amplitude, phase
@@ -231,38 +256,22 @@ function makeWaveNormal(T: THREE): Texture {
     return s
   }
   const d = 1 / N
-  for (let y = 0; y < N; y++) {
-    for (let x = 0; x < N; x++) {
-      const u = x / N
-      const v = y / N
-      // Central differences -> gradient -> normal (tangent space, +z up).
-      const dx = (h(u + d, v) - h(u - d, v)) / (2 * d)
-      const dy = (h(u, v + d) - h(u, v - d)) / (2 * d)
-      const sc = 0.02
-      let nx = -dx * sc
-      let ny = -dy * sc
-      const nz = 1
-      const len = Math.hypot(nx, ny, nz) || 1
-      nx /= len
-      ny /= len
-      const i = (y * N + x) * 4
-      img.data[i] = Math.round((nx * 0.5 + 0.5) * 255)
-      img.data[i + 1] = Math.round((ny * 0.5 + 0.5) * 255)
-      img.data[i + 2] = Math.round((nz / len * 0.5 + 0.5) * 255)
-      img.data[i + 3] = 255
-    }
-  }
-  ctx.putImageData(img, 0, 0)
-  const tex = new T.CanvasTexture(canvas)
-  tex.wrapS = tex.wrapT = T.RepeatWrapping
-  // Anisotropic filtering, because a lake is nearly always seen at a grazing
-  // angle: an isotropic mip has to pick the WIDER of the two footprints, so it
-  // either blurs the ripple away across the view direction or aliases it along
-  // it. three clamps this to what the device offers, so 4 is a wish, not a
-  // requirement.
-  tex.anisotropy = 4
-  tex.needsUpdate = true
-  return tex
+  const u = x / N
+  const v = y / N
+  // Central differences -> gradient -> normal (tangent space, +z up).
+  const dx = (h(u + d, v) - h(u - d, v)) / (2 * d)
+  const dy = (h(u, v + d) - h(u, v - d)) / (2 * d)
+  const sc = 0.02
+  let nx = -dx * sc
+  let ny = -dy * sc
+  const nz = 1
+  const len = Math.hypot(nx, ny, nz) || 1
+  nx /= len
+  ny /= len
+  const r = Math.round((nx * 0.5 + 0.5) * 255)
+  const g = Math.round((ny * 0.5 + 0.5) * 255)
+  const b = Math.round((nz / len * 0.5 + 0.5) * 255)
+  return [r, g, b, 255]
 }
 
 /**

@@ -287,6 +287,7 @@
  * of E2, `maxWorldHeightIn` / `worldHeightRangeIn` with them — the last two
  * read the drawn ground and had no caller left once the fog was gone.
  */
+import { vectorCase, vectorArgs, vectorValue } from './e3VectorSupport.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -349,6 +350,11 @@ async function loadWaterRaster() {
   }
 }
 
+function vector(label, fns) {
+  const result = vectorCase("height_tiles", label, fns);
+  passed += result.passed; failed += result.failed;
+}
+
 let failed = 0;
 let passed = 0;
 function check(label, actual, expected, eps = 1e-9) {
@@ -379,37 +385,26 @@ const FIELD = {
 };
 
 console.log('[1] the peak and its flanks');
-check('(0, 0) the peak', sampleWorldHeight(FIELD, 0, 0), 5);
-check('(2, 0) half a cell east', sampleWorldHeight(FIELD, 2, 0), 2.5);
-check('(2, 2) diagonally between', sampleWorldHeight(FIELD, 2, 2), 1.25);
-check('(0, -2) half a cell north', sampleWorldHeight(FIELD, 0, -2), 2.5);
-check('(-2, 0) half a cell west', sampleWorldHeight(FIELD, -2, 0), 2.5);
-check('(-4, -4) the corner point', sampleWorldHeight(FIELD, -4, -4), 0);
+vector("[1] world_height: (0, 0) the peak", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[1] world_height: (2, 0) half a cell east", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[1] world_height: (2, 2) diagonally between", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[1] world_height: (0, -2) half a cell north", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[1] world_height: (-2, 0) half a cell west", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[1] world_height: (-4, -4) the corner point", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
 
 console.log('[2] outside the grid: the border, which is the flat world');
-check('(100, 0) far east', sampleWorldHeight(FIELD, 100, 0), 0);
-check('(-100, -100) far north-west', sampleWorldHeight(FIELD, -100, -100), 0);
-check('(0, 100) far south', sampleWorldHeight(FIELD, 0, 100), 0);
+vector("[2] world_height: (100, 0) far east", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[2] world_height: (-100, -100) far north-west", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[2] world_height: (0, 100) far south", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
 
 console.log('[3] degenerate fields carry no relief');
-check('a single row', sampleWorldHeight(
-  { origin_x: 0, origin_z: 0, step_m: 4, rows: 1, cols: 3, heights: [[1, 2, 3]] },
-  4, 0), 0);
-check('a single column', sampleWorldHeight(
-  { origin_x: 0, origin_z: 0, step_m: 4, rows: 3, cols: 1, heights: [[1], [2], [3]] },
-  0, 4), 0);
-check('step 0', sampleWorldHeight(
-  { origin_x: 0, origin_z: 0, step_m: 0, rows: 2, cols: 2, heights: [[1, 1], [1, 1]] },
-  0, 0), 0);
-check('the empty world', sampleWorldHeight(
-  { origin_x: 0, origin_z: 0, step_m: 4, rows: 0, cols: 0, heights: [] }, 0, 0), 0);
-check('a ragged row is a height, not a crash', sampleWorldHeight(
-  { origin_x: 0, origin_z: 0, step_m: 4, rows: 2, cols: 2, heights: [[0, 10], [0]] },
-  2, 2), 2.5);
-check('rows/cols lying about the array', sampleWorldHeight(
-  { origin_x: 0, origin_z: 0, step_m: 4, rows: 99, cols: 99, heights: [[0, 10], [0, 10]] },
-  2, 2), 5);
-check('no field at all', sampleWorldHeight(null, 0, 0), 0);
+vector("[3] world_height: a single row", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[3] world_height: a single column", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[3] world_height: step 0", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[3] world_height: the empty world", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[3] world_height: a ragged row is a height, not a crash", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[3] world_height: rows/cols lying about the array", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[3] world_height: no field at all", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
 check('undefined', sampleWorldHeight(undefined, 12, 34), 0);
 
 function checkBool(label, actual, expected) {
@@ -437,8 +432,8 @@ const SLOPE = 40;
 checkBool('`groundLift` no longer exists', groundMod.groundLift === undefined, true);
 const hereH = sampleWorldHeight(FIELD, -2, 0);
 const thereH = sampleWorldHeight(FIELD, -1, 0);
-check('the flank at (-2, 0)', hereH, 2.5);
-check('the flank at (-1, 0)', thereH, 3.75);
+vector("[4] world_height: the flank at (-2, 0)", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[4] world_height: the flank at (-1, 0)", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
 check('the rise over one metre', thereH - hereH, 1.25);
 checkBool('atan(1.25/1) = 51.34 deg > 40 -> the step is refused',
   slopeBlocks(thereH - hereH, 1, STEP, SLOPE), true);
@@ -450,8 +445,7 @@ checkBool('RED COUNTER-PROBE: on flat ground the mirror sees nothing',
 // 1.25 — to 2.25 through the innermost of them, and to 1.45 through the
 // outermost. Both readings are gone; the point is 1.25, the height the SERVER
 // judges it by.
-check('the point at (2, 2) is the world field and nothing added',
-  sampleWorldHeight(FIELD, 2, 2), 1.25);
+vector("[4] world_height: the point at (2, 2) is the world field and nothing added", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
 checkBool('RED: the old innermost-patch answer 2.25 is not reachable',
   sampleWorldHeight(FIELD, 2, 2) === 2.25, false);
 checkBool('RED: nor the outermost-patch answer 1.45',
@@ -463,8 +457,8 @@ const PLATEAU = {
   origin_x: -4, origin_z: -4, step_m: 4, rows: 3, cols: 3,
   heights: [[5, 5, 5], [5, 5, 5], [5, 5, 5]],
 };
-check('the plateau at its centre', sampleWorldHeight(PLATEAU, 0, 0), 5);
-check('...and a metre away', sampleWorldHeight(PLATEAU, 1, 1), 5);
+vector("[4] world_height: the plateau at its centre", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[4] world_height: ...and a metre away", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
 checkBool('a step on the plateau is never refused',
   slopeBlocks(sampleWorldHeight(PLATEAU, 1, 1) - sampleWorldHeight(PLATEAU, 0, 0),
     0.15, STEP, SLOPE), false);
@@ -474,8 +468,8 @@ console.log('\n[5] standY — where the figure stands inside a footprint');
 // height at (2, 2) and the world ground at (2, 0).
 const tileY = sampleWorldHeight(FIELD, 2, 2);
 const worldY = sampleWorldHeight(FIELD, 2, 0);
-check('the tile centre height', tileY, 1.25);
-check('the world ground further in', worldY, 2.5);
+vector("[5] world_height: the tile centre height", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
+vector("[5] world_height: the world ground further in", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
 check('the hill runs through the plate -> the hill wins',
   standY(tileY, worldY), 2.5);
 check('RED COUNTER-PROBE: min instead of max is the finding itself',
@@ -563,33 +557,26 @@ checkText('negative tiles are ordinary tiles',
 console.log('[8a] the precedence table');
 check('a point in a loaded tile reads the fine ramp',
   heightAt(COMPOSITE, 128, 8), 1);
-check('...where the overview would have said something else',
-  sampleWorldHeight(OVERVIEW, 128, 8), 0.59375);
+vector("[8a] world_height: ...where the overview would have said something else", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
 check('the eastern tile answers for its own square',
   heightAt(COMPOSITE, 384, 8), 3);
-check('...against an overview reading of', sampleWorldHeight(OVERVIEW, 384, 8),
-  1.59375);
+vector("[8a] world_height: ...against an overview reading of", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
 check('an indexed but unloaded tile falls to the overview',
   heightAt(COMPOSITE, 100, 300), 3.90625);
 check('no overview under an unloaded tile: the flat world',
   heightAt(
     { tileM: TILE_M, overview: null, tiles: new Map([['0,0', TILE_00]]) },
     100, 300), 0);
-check('an empty composite is flat', heightAt(
-  { tileM: TILE_M, overview: null, tiles: new Map() }, 0, 0), 0);
-check('no composite at all is flat', heightAt(null, 128, 8), 0);
+vector("[8a] world_height: an empty composite is flat", { heightAt: (...args) => heightAt(...vectorArgs(args)) });
+vector("[8a] world_height: no composite at all is flat", { heightAt: (...args) => heightAt(...vectorArgs(args)) });
 
 console.log('[8b] the two rasters are never mixed for one point');
 const SHORT_TILE = {
   origin_x: 0, origin_z: 0, step_m: 4, rows: 3, cols: 3,
   heights: [[0, 1, 2], [0, 1, 2], [0, 1, 2]],
 };
-check('a loaded tile answers alone, even where it has no support point',
-  heightAt(
-    { tileM: TILE_M, overview: OVERVIEW, tiles: new Map([['0,0', SHORT_TILE]]) },
-    128, 8), 2);
-check('...and that is NOT the overview it refused to mix in',
-  sampleWorldHeight(OVERVIEW, 128, 8), 0.59375);
+vector("[8b] world_height: a loaded tile answers alone, even where it has no support point", { heightAt: (...args) => heightAt(...vectorArgs(args)) });
+vector("[8b] world_height: ...and that is NOT the overview it refused to mix in", { sampleWorldHeight: (...args) => sampleWorldHeight(...vectorArgs(args)) });
 
 console.log('[8c] the seam is continuous, because both sides carry the point');
 check('the western tile carries the seam column',
@@ -978,7 +965,7 @@ check('…nor a field without a step', waterTileFrom(0, 0, 0,
   { level: [[1, 2], [3, 4]] }) === null ? 1 : 0, 1);
 const CONV = waterTileFrom(0, 0, 2, { level: [[1, null], [null, 4]] });
 check('null becomes NaN', Number.isNaN(CONV.level[0][1]) ? 1 : 0, 1);
-check('…and a number stays itself', CONV.level[1][1], 4);
+vector("[9] world_height: …and a number stays itself", { waterTileFromValue: (args, path) => vectorValue(waterTileFrom(...vectorArgs(args)), path) });
 check('a tile without flow arrays holds null, not zeros',
   CONV.flowX === null && CONV.flowZ === null ? 1 : 0, 1);
 check('a tile whose wire carries NO sd reads dry everywhere — an older bake '
@@ -1082,7 +1069,7 @@ check('the far corner is the river', rasterKindAt(KIND_R, 4, 4) === 'river' ? 1 
 const OLDBAKE = waterTileFrom(0, 0, 2, { level: [[1, 1], [1, 1]] });
 check('a v9 tile carries a one-entry palette of the empty name',
   OLDBAKE.kinds.length === 1 && OLDBAKE.kinds[0] === '' ? 1 : 0, 1);
-check('…and every texel indexes it', OLDBAKE.kindIdx[1][1], 0);
+vector("[9] world_height: …and every texel indexes it", { waterTileFromValue: (args, path) => vectorValue(waterTileFrom(...vectorArgs(args)), path) });
 check('a point in a tile that has not arrived names no kind',
   rasterKindAt(KIND_R, 900, 900) === '' ? 1 : 0, 1);
 check('…and so does an empty raster',
@@ -1091,9 +1078,7 @@ check('…and none at all', rasterKindAt(null, 0, 0) === '' ? 1 : 0, 1);
 // AN INDEX OUTSIDE THE PALETTE is not a crash and not a guess: it falls to 0,
 // the primary water, at the ONE boundary conversion, exactly as the level's
 // null falls to NaN there.
-check('an out-of-range index is clamped at the wire boundary',
-  waterTileFrom(0, 0, 2, { level: [[1, 1], [1, 1]], kinds: ['lake'],
-                           kind_idx: [[0, 7], [-1, 0]] }).kindIdx[0][1], 0);
+vector("[9] world_height: an out-of-range index is clamped at the wire boundary", { waterTileFromValue: (args, path) => vectorValue(waterTileFrom(...vectorArgs(args)), path) });
 
 // ============================================================================
 // [W5] THE MIP LIMIT IS A PROPERTY OF THE FIELD, not of a renderer (F1)

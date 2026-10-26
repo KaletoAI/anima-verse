@@ -1,0 +1,305 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_water_shade.mjs",
+  "fixtures": {
+    "INPUT_1": [
+      {
+        "class": "water",
+        "tint": "#002e57",
+        "map_strength": 0.75,
+        "wave_m": 1.6,
+        "speed": 0.25,
+        "sky_mix": 0.55,
+        "roughness": 0.08
+      },
+      1.2
+    ],
+    "INPUT_2": [
+      {
+        "class": "water",
+        "tint": "#002e57",
+        "wave_m": 2,
+        "speed": 0.05,
+        "flow_speed": 0,
+        "sky_mix": 0.55,
+        "roughness": 0.08
+      },
+      4
+    ],
+    "INPUT_3": [
+      {
+        "class": "water",
+        "tint": "#3f7fb8",
+        "wave_m": 1.2,
+        "speed": 0.05,
+        "flow_speed": 1,
+        "sky_mix": 0.55,
+        "roughness": 0.08
+      },
+      1.2
+    ],
+    "INPUT_4": [
+      {
+        "axis": [
+          [
+            0,
+            0,
+            0,
+            6
+          ],
+          [
+            1.5,
+            0,
+            1.5,
+            5.1
+          ],
+          [
+            3,
+            0,
+            3,
+            4.2
+          ],
+          [
+            23,
+            0,
+            23,
+            4.1
+          ],
+          [
+            24.5,
+            0,
+            24.5,
+            3.2
+          ],
+          [
+            26,
+            0,
+            26,
+            2.3
+          ]
+        ]
+      },
+      6
+    ],
+    "INPUT_5": {
+      "$raster": {
+        "tileM": 2,
+        "tiles": [
+          [
+            "0,0",
+            [
+              0,
+              0,
+              2,
+              {
+                "level": [
+                  [
+                    2,
+                    4
+                  ],
+                  [
+                    6,
+                    8
+                  ]
+                ],
+                "sd": [
+                  [
+                    0,
+                    2
+                  ],
+                  [
+                    4,
+                    6
+                  ]
+                ],
+                "kinds": [
+                  "lake",
+                  "river"
+                ],
+                "kind_idx": [
+                  [
+                    0,
+                    1
+                  ],
+                  [
+                    1,
+                    0
+                  ]
+                ],
+                "flow_x": [
+                  [
+                    1,
+                    3
+                  ],
+                  [
+                    1,
+                    3
+                  ]
+                ],
+                "flow_z": [
+                  [
+                    2,
+                    2
+                  ],
+                  [
+                    4,
+                    4
+                  ]
+                ]
+              }
+            ]
+          ]
+        ]
+      }
+    }
+  },
+  "cases": [
+    {"label": "[1] water_shade: the lake's opaque depth is ¾ of its bed","fn": "waterOpaqueDepthM","args": [2],"expect": 1.5,"eps": 1e-09},
+    {"label": "[1] water_shade: …and the river's is the 1 m floor, not its own 0.9","fn": "waterOpaqueDepthM","args": [1.2],"expect": 1,"eps": 1e-09},
+    {"label": "[1] water_shade: lake, depth 0.15","fn": "waterAbsorb","args": [0.15,1.5,0.05],"expect": 0.028,"eps": 1e-09},
+    {"label": "[1] water_shade: lake, depth 0.30","fn": "waterAbsorb","args": [0.3,1.5,0.05],"expect": 0.104,"eps": 1e-09},
+    {"label": "[1] water_shade: lake, depth 0.375","fn": "waterAbsorb","args": [0.375,1.5,0.05],"expect": 0.15625,"eps": 1e-09},
+    {"label": "[1] water_shade: lake, depth 0.75","fn": "waterAbsorb","args": [0.75,1.5,0.05],"expect": 0.5,"eps": 1e-09},
+    {"label": "[1] water_shade: lake, depth 1.125","fn": "waterAbsorb","args": [1.125,1.5,0.05],"expect": 0.84375,"eps": 1e-09},
+    {"label": "[1] water_shade: lake, depth 1.5 — the bed is gone","fn": "waterAbsorb","args": [1.5,1.5,0.05],"expect": 1,"eps": 1e-09},
+    {"label": "[1] water_shade: lake, depth 2.0 — and stays gone","fn": "waterAbsorb","args": [2,1.5,0.05],"expect": 1,"eps": 1e-09},
+    {"label": "[1] water_shade: river, depth 0.1","fn": "waterAbsorb","args": [0.1,1,0.05],"expect": 0.028,"eps": 1e-09},
+    {"label": "[1] water_shade: river, depth 0.2","fn": "waterAbsorb","args": [0.2,1,0.05],"expect": 0.104,"eps": 1e-09},
+    {"label": "[1] water_shade: river, depth 0.25","fn": "waterAbsorb","args": [0.25,1,0.05],"expect": 0.15625,"eps": 1e-09},
+    {"label": "[1] water_shade: river, depth 0.5","fn": "waterAbsorb","args": [0.5,1,0.05],"expect": 0.5,"eps": 1e-09},
+    {"label": "[1] water_shade: river, depth 0.75","fn": "waterAbsorb","args": [0.75,1,0.05],"expect": 0.84375,"eps": 1e-09},
+    {"label": "[1] water_shade: river, depth 1.0 — the same six answers, over the floored band","fn": "waterAbsorb","args": [1,1,0.05],"expect": 1,"eps": 1e-09},
+    {"label": "[1] water_shade: RED: at 0.5 m the ¾ band had hidden 0.58299 of the river bed","fn": "waterAbsorb","args": [0.5,0.9,0.05],"expect": 0.5829903978052126,"eps": 1e-15},
+    {"label": "[1] water_shade: …and the floor leaves half of it readable","fn": "waterAbsorb","args": [0.5,1,0.05],"expect": 0.5,"eps": 1e-09},
+    {"label": "[1] water_shade: the rim ramp halves the curve at half a floor-pixel","fn": "waterAbsorb","args": [0.025,1.5,0.05],"expect": 0.00041203703703,"eps": 1e-12},
+    {"label": "[1] water_shade: …and a FAT pixel widens the ramp instead of the water","fn": "waterAbsorb","args": [0.5,1.5,2],"expect": 0.06481481481481481,"eps": 1e-12},
+    {"label": "[2] water_shade: depth 0.15","fn": "waterFoamAt","args": [0.15,1.5,0.05],"expect": 0.130412109375,"eps": 1e-12},
+    {"label": "[2] water_shade: depth 0.3","fn": "waterFoamAt","args": [0.3,1.5,0.05],"expect": 0.0895,"eps": 1e-12},
+    {"label": "[2] water_shade: depth 0.45","fn": "waterFoamAt","args": [0.45,1.5,0.05],"expect": 0.037412109375,"eps": 1e-12},
+    {"label": "[2] water_shade: depth 0.6 — gone","fn": "waterFoamAt","args": [0.6,1.5,0.05],"expect": 0,"eps": 1e-09},
+    {"label": "[2] water_shade: depth 1.0 — still gone","fn": "waterFoamAt","args": [1,1.5,0.05],"expect": 0,"eps": 1e-09},
+    {"label": "[2] water_shade: the rim ramp is what keeps the white line from stepping","fn": "waterFoamAt","args": [0.025,1.5,0.05],"expect": 0.074652325059,"eps": 1e-11},
+    {"label": "[2] water_shade: a SHALLOWER bed foams the same band, only better covered","fn": "waterFoamAt","args": [0.3,1,0.05],"expect": 0.1455,"eps": 1e-12},
+    {"label": "[3] water_shade: RED: a depth of 0 absorbs nothing","fn": "waterAbsorb","args": [0,1.5,0.05],"expect": 0,"eps": 1e-09},
+    {"label": "[3] water_shade: RED: …and foams nothing","fn": "waterFoamAt","args": [0,1.5,0.05],"expect": 0,"eps": 1e-09},
+    {"label": "[3] water_shade: RED: a NEGATIVE depth is not water either","fn": "waterAbsorb","args": [-1,1.5,0.05],"expect": 0,"eps": 1e-09},
+    {"label": "[4] water_shade: a kind that declares nothing: sky_mix","fn": "waterLookFromValue","args": [[null,null],["skyMix"]],"expect": 0.55,"eps": 1e-09},
+    {"label": "[4] water_shade: …wave_m","fn": "waterLookFromValue","args": [[null,null],["waveM"]],"expect": 1.6,"eps": 1e-09},
+    {"label": "[4] water_shade: …speed","fn": "waterLookFromValue","args": [[null,null],["speed"]],"expect": 0.05,"eps": 1e-09},
+    {"label": "[4] water_shade: …roughness","fn": "waterLookFromValue","args": [[null,null],["roughness"]],"expect": 0.08,"eps": 1e-09},
+    {"label": "[4] water_shade: …metalness","fn": "waterLookFromValue","args": [[null,null],["metalness"]],"expect": 0.15,"eps": 1e-09},
+    {"label": "[4] water_shade: …and the default lake's opaque depth","fn": "waterLookFromValue","args": [[null,null],["opaqueDepthM"]],"expect": 1.5,"eps": 1e-09},
+    {"label": "[4] water_shade: …its speed","fn": "waterLookFromValue","args": [{"$fixture": "INPUT_1"},["speed"]],"expect": 0.25,"eps": 1e-09},
+    {"label": "[4] water_shade: …and its opaque depth follows the AREA's bed, floored at a metre","fn": "waterLookFromValue","args": [{"$fixture": "INPUT_1"},["opaqueDepthM"]],"expect": 1,"eps": 1e-09},
+    {"label": "[4] water_shade: a wavelength below the floor is lifted to it","fn": "waterLookFromValue","args": [[{"class": "water","wave_m": 0},null],["waveM"]],"expect": 0.05,"eps": 1e-09},
+    {"label": "[4] water_shade: an EMPTY table is still one row, so no fetch is out of range","fn": "packWaterLookValue","args": [[[]],["length"]],"expect": 12,"eps": 1e-09},
+    {"label": "[7c] water_shade: at 10 cm inside the outline the water share is at most","fn": "waterInside","args": [0.1],"expect": 0.104,"eps": 1e-09},
+    {"label": "[8] water_shade: a kind that declares nothing carries it into the look","fn": "waterLookFromValue","args": [[null,null],["flowSpeed"]],"expect": 0.5,"eps": 1e-09},
+    {"label": "[8] water_shade: …and a kind that declares 0.15 carries that","fn": "waterLookFromValue","args": [[{"class": "water","flow_speed": 0.15},null],["flowSpeed"]],"expect": 0.15,"eps": 1e-09},
+    {"label": "[10] water_shade: …and a dry pixel is no surface at all","fn": "waterSurface","args": [0,0.05,1,1.5],"expect": 0,"eps": 1e-09},
+    {"label": "[10] water_shade: …so at the opaque depth it is 1 exactly","fn": "waterShallowRamp","args": [1.5,1.5],"expect": 1,"eps": 1e-09},
+    {"label": "[10] water_shade: the ABSORPTION is unchanged — the colour still follows the depth","fn": "waterAbsorb","args": [0.05,1.5,0.05],"expect": 0.003259259259259259,"eps": 1e-12},
+    {"label": "[10] water_shade: …at 30 cm","fn": "waterAbsorb","args": [0.3,1.5,0.05],"expect": 0.104,"eps": 1e-12},
+    {"label": "[10] water_shade: …and at the opaque depth","fn": "waterAbsorb","args": [1.5,1.5,0.05],"expect": 1,"eps": 1e-09},
+    {"label": "[10] water_shade: …and at a quarter of a floor-pixel it is the ramp times the curve","fn": "waterAbsorb","args": [0.025,1.5,0.05],"expect": 0.00041203703703703704,"eps": 1e-12},
+    {"label": "[11] water_shade: the lake's opaque depth is ¾ of its 4 m bed","fn": "waterLookFromValue","args": [{"$fixture": "INPUT_2"},["opaqueDepthM"]],"expect": 3,"eps": 1e-09},
+    {"label": "[11] water_shade: …and the river's is the floor over its 1.2 m one","fn": "waterLookFromValue","args": [{"$fixture": "INPUT_3"},["opaqueDepthM"]],"expect": 1,"eps": 1e-09},
+    {"label": "[11] water_shade: …the lake does not flow","fn": "waterLookFromValue","args": [{"$fixture": "INPUT_2"},["flowSpeed"]],"expect": 0,"eps": 1e-09},
+    {"label": "[11] water_shade: …and the river runs at 1 m/s","fn": "waterLookFromValue","args": [{"$fixture": "INPUT_3"},["flowSpeed"]],"expect": 1,"eps": 1e-09},
+    {"label": "[1] water_plane: the nine numbers arrive verbatim","fn": "waterProfileOf","args": [{"flow_dir_deg": 270,"water_level_up": 7.4,"water_level_down": 2.6,"water_level_effective": 5,"water_depth_effective": 1,"water_profile": {"level_up": 7.4,"level_down": 2.6,"flow_dir_deg": 270,"axis_x": 50,"axis_z": -30,"dir_x": -1,"dir_z": 0,"s_min": -30,"s_max": 30,"axis": [[80,-30,-30,7.4],[20,-30,30,2.6]]}}],"expect": {"level_up": 7.4,"level_down": 2.6,"flow_dir_deg": 270,"axis_x": 50,"axis_z": -30,"dir_x": -1,"dir_z": 0,"s_min": -30,"s_max": 30,"axis": [[80,-30,-30,7.4],[20,-30,30,2.6]]},"eps": 1e-09},
+    {"label": "[1] water_plane: a still lake is a profile too, with an empty span","fn": "waterProfileOf","args": [{"water_level_effective": 3.25,"water_depth_effective": 2,"water_profile": {"level_up": 3.25,"level_down": 3.25,"flow_dir_deg": null,"axis_x": 12,"axis_z": -4,"dir_x": 0,"dir_z": 0,"s_min": 0,"s_max": 0,"axis": [[12,-4,0,3.25]]}}],"expect": {"level_up": 3.25,"level_down": 3.25,"flow_dir_deg": null,"axis_x": 12,"axis_z": -4,"dir_x": 0,"dir_z": 0,"s_min": 0,"s_max": 0,"axis": [[12,-4,0,3.25]]},"eps": 1e-09},
+    {"label": "[1] water_plane: the MID level alone is no profile — that is the flat client's number","fn": "waterProfileOf","args": [{"water_level_effective": 3.25}],"expect": null,"eps": 1e-09},
+    {"label": "[1] water_plane: the AUTHORED level alone is none either","fn": "waterProfileOf","args": [{"water_level": 3.25}],"expect": null,"eps": 1e-09},
+    {"label": "[1] water_plane: an area that is not water","fn": "waterProfileOf","args": [{}],"expect": null,"eps": 1e-09},
+    {"label": "[1] water_plane: a MISSING number is missing, not zero","fn": "waterProfileOf","args": [{"water_profile": {"level_up": 1,"level_down": 1}}],"expect": null,"eps": 1e-09},
+    {"label": "[1] water_plane: junk in the slot is not a profile","fn": "waterProfileOf","args": [{"water_profile": "yes"}],"expect": null,"eps": 1e-09},
+    {"label": "[1b] water_plane: the hairpin arrives with three knots, verbatim","fn": "waterProfileOfValue","args": [[{"water_depth_effective": 1.2,"water_profile": {"level_up": 10,"level_down": 6,"flow_dir_deg": 128.10757687751484,"axis_x": 150,"axis_z": 300,"dir_x": 0.7868534173559047,"dir_z": -0.6171399351811018,"s_min": 0,"s_max": 64.81512169239521,"axis": [[150,300,0,10],[249,280,101,8],[201,260,153,6]]}}],["axis"]],"expect": [[150,300,0,10],[249,280,101,8],[201,260,153,6]],"eps": 1e-09},
+    {"label": "[2] water_plane: the band of the DEFAULT lake is ¾ of its 2.0 m bed","fn": "waterOpaqueDepthM","args": [2],"expect": 1.5,"eps": 1e-09},
+    {"label": "[2a] water_plane: a 1.2 m river is fully drawn at 1.0 m — ¾ is 0.9, the FLOOR wins","fn": "waterOpaqueDepthM","args": [1.2],"expect": 1,"eps": 1e-09},
+    {"label": "[2a] water_plane: a 0.6 m pond at the same floor, not at its own 0.45 m","fn": "waterOpaqueDepthM","args": [0.6],"expect": 1,"eps": 1e-09},
+    {"label": "[2a] water_plane: 4/3 m is the break-even — ¾ of it IS the floor","fn": "waterOpaqueDepthM","args": [1.3333333333333333],"expect": 1,"eps": 1e-15},
+    {"label": "[2a] water_plane: …and a hair deeper the fraction takes over again","fn": "waterOpaqueDepthM","args": [1.4],"expect": 1.05,"eps": 1e-15},
+    {"label": "[2a] water_plane: the deepest lake the bake allows (20 m) at 15 m","fn": "waterOpaqueDepthM","args": [20],"expect": 15,"eps": 1e-09},
+    {"label": "[2a] water_plane: …and so does junk in it","fn": "waterOpaqueDepthM","args": ["deep"],"expect": 1.5,"eps": 1e-09},
+    {"label": "[2a] water_plane: …and a depth of zero, which is no water at all","fn": "waterOpaqueDepthM","args": [0],"expect": 1.5,"eps": 1e-09},
+    {"label": "[2a] water_plane: a numeric STRING is a number — the payload is JSON either way","fn": "waterOpaqueDepthM","args": ["1.2"],"expect": 1,"eps": 1e-09},
+    {"label": "[2a] water_plane: RED: the OLD constant band drew that same deepest water at only","fn": "waterShoreAlpha","args": [0.9,1.5],"expect": 0.648,"eps": 1e-09},
+    {"label": "[2a] water_plane: RED: at half a metre the ¾ rule had already hidden 0.58299 of the bed","fn": "waterShoreAlpha","args": [0.5,0.9],"expect": 0.5829903978052126,"eps": 1e-15},
+    {"label": "[2b] water_plane: foam at depth 0","fn": "waterFoam","args": [0],"expect": 1,"eps": 1e-09},
+    {"label": "[2b] water_plane: foam at depth 0.15","fn": "waterFoam","args": [0.15],"expect": 0.84375,"eps": 1e-09},
+    {"label": "[2b] water_plane: foam at depth 0.3","fn": "waterFoam","args": [0.3],"expect": 0.5,"eps": 1e-09},
+    {"label": "[2b] water_plane: foam at depth 0.45","fn": "waterFoam","args": [0.45],"expect": 0.15625,"eps": 1e-09},
+    {"label": "[2b] water_plane: foam at depth 0.6 — gone","fn": "waterFoam","args": [0.6],"expect": 0,"eps": 1e-09},
+    {"label": "[2b] water_plane: foam at depth 2 — long gone","fn": "waterFoam","args": [2],"expect": 0,"eps": 1e-09},
+    {"label": "[2b] water_plane: the river's rim carries the same foam as the lake's","fn": "waterFoam","args": [0],"expect": 1,"eps": 1e-09},
+    {"label": "[2b] water_plane: …and at 0.3 m the foam is the same half-gone lace over both","fn": "waterFoam","args": [0.3],"expect": 0.5,"eps": 1e-09},
+    {"label": "[2d] water_plane: half a pixel in, half the fade","fn": "waterEdgeFade","args": [0.025,0.05],"expect": 0.5,"eps": 1e-09},
+    {"label": "[2d] water_plane: one pixel in, the fade is done","fn": "waterEdgeFade","args": [0.05,0.05],"expect": 1,"eps": 1e-09},
+    {"label": "[2d] water_plane: a pixel narrower than the floor still spends the floor","fn": "waterEdgeFade","args": [0.025,0.001],"expect": 0.5,"eps": 1e-09},
+    {"label": "[2d] water_plane: a metre-wide pixel far away spends the metre","fn": "waterEdgeFade","args": [0.5,1],"expect": 0.5,"eps": 1e-09},
+    {"label": "[4e] water_plane: the opaque depth of this river is the 1 m floor, not ¾ of its 1.0 m bed","fn": "waterOpaqueDepthM","args": [1],"expect": 1,"eps": 1e-12},
+    {"label": "[7] water_plane: the fixture river is 1.0 m deep, and the floor draws it fully at 1.0 m","fn": "waterOpaqueDepthM","args": [1],"expect": 1,"eps": 1e-09},
+    {"label": "[3] waterfall: no fall anywhere on it","fn": "waterfallsFrom","args": [{"axis": [[0,0,0,10],[100,0,100,8],[200,0,200,6]]},6],"expect": [],"eps": 1e-12},
+    {"label": "[4] waterfall: a drop of EXACTLY 1.0 m is not past 1.0 m","fn": "waterfallsFrom","args": [{"axis": [[0,0,0,10],[1,0,1,9],[2,0,2,8.5]]},6],"expect": [],"eps": 1e-12},
+    {"label": "[4] waterfall: one millimetre more is","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,10],[1,0,1,8.999],[2,0,2,8.5]]},6],["length"]],"expect": 1,"eps": 1e-12},
+    {"label": "[4] waterfall: …and it is that segment","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,10],[1,0,1,8.999],[2,0,2,8.5]]},6],[0,"topY"]],"expect": 10,"eps": 1e-12},
+    {"label": "[4] waterfall: …down to","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,10],[1,0,1,8.999],[2,0,2,8.5]]},6],[0,"bottomY"]],"expect": 8.999,"eps": 1e-12},
+    {"label": "[4] waterfall: a slope of EXACTLY 0.5 is not past 0.5","fn": "waterfallsFrom","args": [{"axis": [[0,0,0,10],[4,0,4,8],[8,0,8,7]]},6],"expect": [],"eps": 1e-12},
+    {"label": "[4] waterfall: ten centimetres less run and it is a fall","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,10],[3.9,0,3.9,8],[8,0,8,7]]},6],["length"]],"expect": 1,"eps": 1e-12},
+    {"label": "[4] waterfall: …at the middle of that segment","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,10],[3.9,0,3.9,8],[8,0,8,7]]},6],[0,"x"]],"expect": 1.95,"eps": 1e-12},
+    {"label": "[5] waterfall: no fall, though both thresholds pass","fn": "waterfallsFrom","args": [{"axis": [[0,0,0,10],[0,-3,3,4]]},6],"expect": [],"eps": 1e-12},
+    {"label": "[5] waterfall: a lake — one knot — has no segment at all","fn": "waterfallsFrom","args": [{"axis": [[12,-4,0,3.25]]},6],"expect": [],"eps": 1e-12},
+    {"label": "[5] waterfall: and neither has an empty axis","fn": "waterfallsFrom","args": [{"axis": []},6],"expect": [],"eps": 1e-12},
+    {"label": "[5] waterfall: nor a missing profile","fn": "waterfallsFrom","args": [null,6],"expect": [],"eps": 1e-12},
+    {"label": "[5] waterfall: nor junk in the axis slot","fn": "waterfallsFrom","args": [{"axis": "downhill"},6],"expect": [],"eps": 1e-12},
+    {"label": "[6] waterfall: two falls","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,20],[2,0,2,18],[22,0,22,17.8],[24,0,24,15],[44,0,44,14.8]]},6],["length"]],"expect": 2,"eps": 1e-12},
+    {"label": "[6] waterfall: the first one's midpoint","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,20],[2,0,2,18],[22,0,22,17.8],[24,0,24,15],[44,0,44,14.8]]},6],[0,"x"]],"expect": 1,"eps": 1e-12},
+    {"label": "[6] waterfall: …from","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,20],[2,0,2,18],[22,0,22,17.8],[24,0,24,15],[44,0,44,14.8]]},6],[0,"topY"]],"expect": 20,"eps": 1e-12},
+    {"label": "[6] waterfall: …down to","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,20],[2,0,2,18],[22,0,22,17.8],[24,0,24,15],[44,0,44,14.8]]},6],[0,"bottomY"]],"expect": 18,"eps": 1e-12},
+    {"label": "[6] waterfall: the second one's midpoint","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,20],[2,0,2,18],[22,0,22,17.8],[24,0,24,15],[44,0,44,14.8]]},6],[1,"x"]],"expect": 23,"eps": 1e-12},
+    {"label": "[6b] waterfall: a RISING segment is no fall","fn": "waterfallsFrom","args": [{"axis": [[0,0,0,4],[0,-3,3,10],[0,-6,6,9]]},6],"expect": [],"eps": 1e-12},
+    {"label": "[6b] waterfall: a segment of no length names no direction either","fn": "waterfallsFrom","args": [{"axis": [[0,0,0,10],[0,0,0,4],[0,-6,6,3.9]]},6],"expect": [],"eps": 1e-12},
+    {"label": "[7] waterfall: the recipe's own width","fn": "strokeWidthM","args": [{"stroke": {"points": [[0,0],[20,0],[21.8,-2.4],[33.8,-18.4]],"width_m": 6},"water_profile": {"axis": [[0,0,0,10],[20,0,20,9.8],[21.8,-2.4,23,4],[33.8,-18.4,43,3.9]]}}],"expect": 6,"eps": 1e-12},
+    {"label": "[7] waterfall: a numeric STRING is a number — the payload is JSON either way","fn": "strokeWidthM","args": [{"stroke": {"width_m": "6"}}],"expect": 6,"eps": 1e-12},
+    {"label": "[7] waterfall: a polygon area has no recipe","fn": "strokeWidthM","args": [{}],"expect": null,"eps": 1e-12},
+    {"label": "[7] waterfall: junk in the slot is no recipe","fn": "strokeWidthM","args": [{"stroke": "wide"}],"expect": null,"eps": 1e-12},
+    {"label": "[7] waterfall: a width of zero is no width","fn": "strokeWidthM","args": [{"stroke": {"width_m": 0}}],"expect": null,"eps": 1e-12},
+    {"label": "[7] waterfall: without a width the steep segment draws nothing","fn": "waterfallsFrom","args": [{"axis": [[0,0,0,10],[20,0,20,9.8],[21.8,-2.4,23,4],[33.8,-18.4,43,3.9]]},null],"expect": [],"eps": 1e-12},
+    {"label": "[7] waterfall: …and a zero width draws nothing either","fn": "waterfallsFrom","args": [{"axis": [[0,0,0,10],[20,0,20,9.8],[21.8,-2.4,23,4],[33.8,-18.4,43,3.9]]},0],"expect": [],"eps": 1e-12},
+    {"label": "[7] waterfall: a width that arrives as a string still spans the stream","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,10],[20,0,20,9.8],[21.8,-2.4,23,4],[33.8,-18.4,43,3.9]]},"6"],[0,"width"]],"expect": 6,"eps": 1e-12},
+    {"label": "[9] waterfall: RED: the two-knot axis of the same two clicks has NO fall at all","fn": "waterfallsFrom","args": [{"axis": [[0,0,0,3],[100,0,100,0]]},6],"expect": [],"eps": 1e-12},
+    {"label": "[10] waterfall: so the run is one fall, not none","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[3,0,3,1.2]]},6],["length"]],"expect": 1,"eps": 1e-12},
+    {"label": "[10] waterfall: it leaves at the first knot's level","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[3,0,3,1.2]]},6],[0,"topY"]],"expect": 3,"eps": 1e-12},
+    {"label": "[10] waterfall: …and arrives at the last one's","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[3,0,3,1.2]]},6],[0,"bottomY"]],"expect": 1.2,"eps": 1e-12},
+    {"label": "[10] waterfall: it stands at the arc midpoint — the clicked knot itself","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[3,0,3,1.2]]},6],[0,"x"]],"expect": 1.5,"eps": 1e-12},
+    {"label": "[10] waterfall: …on the line","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[3,0,3,1.2]]},6],[0,"z"]],"expect": 0,"eps": 1e-12},
+    {"label": "[10] waterfall: and points along the chord of the run","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[3,0,3,1.2]]},6],[0,"dirX"]],"expect": 1,"eps": 1e-12},
+    {"label": "[10] waterfall: …which here is the drawn line","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[3,0,3,1.2]]},6],[0,"dirZ"]],"expect": 0,"eps": 1e-12},
+    {"label": "[10b] waterfall: still one fall","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[3,0,3,1.2],[4.5,0,4.5,0.3]]},6],["length"]],"expect": 1,"eps": 1e-12},
+    {"label": "[10b] waterfall: arc midpoint s = 2.25, half way along the SECOND segment","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[3,0,3,1.2],[4.5,0,4.5,0.3]]},6],[0,"x"]],"expect": 2.25,"eps": 1e-12},
+    {"label": "[10c] waterfall: one fall","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[1.5,-1.5,3,1.2]]},6],["length"]],"expect": 1,"eps": 1e-12},
+    {"label": "[10c] waterfall: the arc midpoint is the elbow (x)","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[1.5,-1.5,3,1.2]]},6],[0,"x"]],"expect": 1.5,"eps": 1e-12},
+    {"label": "[10c] waterfall: …and (z)","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[1.5,-1.5,3,1.2]]},6],[0,"z"]],"expect": 0,"eps": 1e-12},
+    {"label": "[10c] waterfall: the direction IS the chord, √4.5 long (x)","fn": "waterfallsFromValue","args": [[{"axis": [[0,0,0,3],[1.5,0,1.5,2.1],[1.5,-1.5,3,1.2]]},6],[0,"dirX"]],"expect": 0.7071068,"eps": 1e-07},
+    {"label": "[10d] waterfall: two falls, not one long curtain","fn": "waterfallsFromValue","args": [{"$fixture": "INPUT_4"},["length"]],"expect": 2,"eps": 1e-12},
+    {"label": "[10d] waterfall: the first from","fn": "waterfallsFromValue","args": [{"$fixture": "INPUT_4"},[0,"topY"]],"expect": 6,"eps": 1e-12},
+    {"label": "[10d] waterfall: …down to","fn": "waterfallsFromValue","args": [{"$fixture": "INPUT_4"},[0,"bottomY"]],"expect": 4.2,"eps": 1e-12},
+    {"label": "[10d] waterfall: …at its arc midpoint","fn": "waterfallsFromValue","args": [{"$fixture": "INPUT_4"},[0,"x"]],"expect": 1.5,"eps": 1e-12},
+    {"label": "[10d] waterfall: the second from","fn": "waterfallsFromValue","args": [{"$fixture": "INPUT_4"},[1,"topY"]],"expect": 4.1,"eps": 1e-12},
+    {"label": "[20] raster level centre","fn": "rasterLevelAt","args": [{"$fixture": "INPUT_5"},1,1],"expect": 5,"eps": 1e-09},
+    {"label": "[20] raster sd centre","fn": "rasterSdAt","args": [{"$fixture": "INPUT_5"},1,1],"expect": 3,"eps": 1e-09},
+    {"label": "[20] raster kind nearest","fn": "rasterKindAt","args": [{"$fixture": "INPUT_5"},1,0],"expect": "river","eps": 1e-09},
+    {"label": "[20] raster flow centre","fn": "rasterFlowAt","args": [{"$fixture": "INPUT_5"},1,1],"expect": [2,3],"eps": 1e-09},
+    {"label": "[20] raster absent dry","fn": "rasterLevelAt","args": [{"$fixture": "INPUT_5"},3,3],"expect": null,"eps": 1e-09},
+    {"label": "[20] raster absent sd","fn": "rasterSdAt","args": [{"$fixture": "INPUT_5"},3,3],"expect": -10000,"eps": 1e-09},
+    {"label": "[20] masked zero corner","fn": "waterBilinear","args": [2,{"$number": "NaN"},{"$number": "NaN"},{"$number": "NaN"},0,0],"expect": 2,"eps": 1e-09},
+    {"label": "[20] masked positive dry","fn": "waterBilinear","args": [2,{"$number": "NaN"},6,8,0.5,0.5],"expect": null,"eps": 1e-09},
+    {"label": "[20] gate half","fn": "waterInside","args": [0.25],"expect": 0.5,"eps": 1e-09},
+    {"label": "[20] curtain east","fn": "waterfallQuad","args": [{"x": 10,"z": 20,"dirX": 1,"dirZ": 0,"width": 4,"topY": 8,"bottomY": 3,"chordM": 6}],"expect": {"positions": [7,8,22,7,8,18,14.5,3,22,14.5,3,18],"bottom": [14.5,20]},"eps": 1e-09},
+    {"label": "[20] curtain south","fn": "waterfallQuad","args": [{"x": 10,"z": 20,"dirX": 0,"dirZ": 1,"width": 4,"topY": 8,"bottomY": 3,"chordM": 6}],"expect": {"positions": [8,8,17,12,8,17,8,3,24.5,12,3,24.5],"bottom": [10,24.5]},"eps": 1e-09},
+    {"label": "[20] curtain no drop","fn": "waterfallQuad","args": [{"x": 10,"z": 20,"dirX": 1,"dirZ": 0,"width": 4,"topY": 3,"bottomY": 3,"chordM": 6}],"expect": null,"eps": 1e-09},
+    {"label": "[20] wave texel origin","fn": "waveNormalSample","args": [0,0],"expect": [136,103,252,255],"eps": 1e-09},
+    {"label": "[20] wave texel periodic","fn": "waveNormalSample","args": [256,256],"expect": [136,103,252,255],"eps": 1e-09},
+    {"label": "[20] profile river midpoint","fn": "waterLevelAt","args": [{"axis": [[0,0,0,10],[10,0,10,6]],"level": 10},5,0],"expect": 8,"eps": 1e-09}
+  ]
+}

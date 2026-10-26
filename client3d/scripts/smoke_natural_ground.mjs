@@ -178,6 +178,7 @@
  * drapes. What replaced them is checked in `smoke_layer_cut.mjs`, including the
  * counter-probes that the ladders are really GONE.
  */
+import { vectorCase, vectorArgs, vectorValue } from './e3VectorSupport.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -415,6 +416,11 @@ const WATER_MARKS = [
   ['frag', 'float wMask = texture2D( uMask, vWaterUv ).r;'],
 ];
 
+function vector(label, fns) {
+  const result = vectorCase("layer_ground", label, fns);
+  passed += result.passed; failed += result.failed;
+}
+
 let failed = 0;
 let passed = 0;
 function check(label, actual, expected) {
@@ -630,8 +636,7 @@ async function main() {
     [M.NG_AO_DOWN, M.NG_AO_UP], [0.12, 0.06]);
   check('it is the DIFFERENCE that counts, not the altitude',
     [q(M.ngAoShade(102, 100)), q(M.ngAoShade(2, 0))], [-0.12, -0.12]);
-  check('the ring is four taps at three metres', M.ngAoTaps(),
-    [[3, 0], [-3, 0], [0, 3], [0, -3]]);
+  vector("[5] natural_ground: the ring is four taps at three metres", { ngAoTaps: (...args) => M.ngAoTaps(...vectorArgs(args)) });
   const grid = { origin_x: -100, origin_z: -100, step_m: 10, rows: 21, cols: 21 };
   const at = (x, z) => {
     const uv = M.ngFieldUv(x, z, grid);

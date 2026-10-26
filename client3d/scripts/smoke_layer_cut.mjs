@@ -165,7 +165,207 @@
  * `(kind, edge_blend_m, bed_kind)`, so two ponds of one kind on two beds are
  * two rows with two images. A client whose `layerKey` left `bed_kind` out would
  * see one string for both worlds and keep yesterday's slice array standing.
+
+ *
+ * Shared-vector companion hand derivations (also retained at their original sites):
+ * Companion: smoke_natural_ground.mjs
+
+ * Smoke check for the NATURAL GROUND — the three-stage shader patch that makes
+ * the open world's ground stop looking like wallpaper, and the arithmetic that
+ * steers it (§ B5a: strings and numbers, never screenshots).
+ *
+ * Usage:  node client3d/scripts/smoke_natural_ground.mjs
+ *         (bundles the client's naturalGround + ground modules; needs three)
+ *
+ * ===========================================================================
+ * WHAT IS UNDER TEST
+ * ===========================================================================
+ * `client3d/src/scene/naturalGround.ts` patches the OPEN-WORLD ground material
+ * (the CDLOD terrain of `scene/ground.ts`, and the one water drape left beside
+ * it) with three stages:
+ *   (1) ANTI-TILE   the ground texture sampled a second time at 0.23× the
+ *                   scale, shifted half a UV, blended by value noise over
+ *                   world metres — one image, two periods, no visible repeat.
+ *   (2) COLOUR      brightness and saturation modulated by ±8 % over a ~25 m
+ *                   noise. Never hue. The ONE stage a single-coloured kind
+ *                   gets as well, which is why it stands outside `USE_MAP`.
+ *   (3) HEIGHT AO   four taps in a 3 m ring out of the world's own heightfield
+ *                   against the fragment's own height: lower than its
+ *                   surroundings darkens by up to 12 %, higher brightens by up
+ *                   to 6 %.
+ * THERE WAS A FOURTH — a painted area fading out over the last 1.5 m of itself
+ * — and it is gone with "Ein Boden" E3: a ground boundary is a CUT in the one
+ * terrain surface now, its width the layer's own `edge_blend_m`, and it is
+ * checked in `smoke_layer_cut.mjs`. Everything left here reads nothing but the
+ * fragment's own world position, so the patch takes no arguments and every
+ * ground compiles to one program.
+ * The amplitudes live in `naturalGroundMath.ts` and the GLSL is PRINTED out of
+ * them, so a hand check on the function and a string check on the composed
+ * shader measure one number rather than two copies of it.
+ *
+ * Four things can silently break, and all four are checked here without a GPU:
+ *  - the patch is the SECOND writer of `onBeforeCompile` on every ground
+ *    material (`patchHole` is already in the slot). An ASSIGNMENT would throw
+ *    the basement hole away — the rule this repo learned the hard way with the
+ *    water shader (`smoke_surface_patch.mjs`), measured by the mutant of [8a].
+ *  - WATER is not a case any more. It used to be a mesh with a shader of its
+ *    own, which this patch stepped aside for; since Wasser v2 K-A E5 a water
+ *    pixel IS a pixel of this very ground and is shaded as water after it
+ *    (`scene/waterShade.ts`). Section [6] is the RED probe on that.
+ *  - a FLAT world must be EXACTLY neutral, not almost. The switch is the
+ *    shared `uNgStrength` uniform at 0 plus the shader's own guard — the same
+ *    shape the view corridor uses for an unembodied client.
+ *  - the AO SIGN. Turned around, the ditches light up and the ridges go grey;
+ *    it looks deliberate and it is the exact opposite of ground. Two mutants
+ *    in [8b]/[8c], one on the pure function and one on the emitted GLSL.
+ *
+ * The patches are handed a STUB SHADER whose vertex/fragment strings carry the
+ * real `#include` anchors of three's `meshphysical` shader, and the resulting
+ * strings are read.
+ *
+ * THE ANCHORS (both `#include` LINES, because `onBeforeCompile` sees the shader
+ * BEFORE three resolves its includes):
+ *   vertex   `#include <project_vertex>`   the fragment's world position
+ *   fragment `#include <map_fragment>`     where the texture lands in
+ *                                          `diffuseColor` — everything the
+ *                                          patch does modifies what is already
+ *                                          there, so it goes AFTER it
+ *
+ * ---------------------------------------------------------------------------
+ * [1] THE PATCH ALONE — every line, the four uniforms, the key
+ * ---------------------------------------------------------------------------
+ * The three stages in the composed fragment shader, the world position in the
+ * vertex shader, the anti-tile stage inside `#ifdef USE_MAP` (a single-coloured
+ * kind has no repeat to break) and the AO inside `if ( uNgStrength > 0.0 )`.
+ * The key is the constant `natural-ground`: every number is either a GLSL
+ * literal or a shared uniform, so all ground materials of a world compile to
+ * ONE program.
+ *
+ * ---------------------------------------------------------------------------
+ * [2] THE CHAIN — basement hole and natural ground on ONE material
+ * ---------------------------------------------------------------------------
+ * That is the real composition of `materialFor`. Every hole line AND every
+ * natural-ground line must be in the composed shader, both uniform families
+ * bound, and the key must be `ground-hole+natural-ground` — the two in the
+ * order they were applied. Patching twice is still one patch (the WeakSet), or
+ * the shader would declare `vNgWorld` and `ngNoise` twice and not compile.
+ *
+ * ---------------------------------------------------------------------------
+ * [3] THE SHARED UNIFORMS — one upload reaches every ground material
+ * ---------------------------------------------------------------------------
+ * The `surfaceTimeUniform` pattern: two materials hand the SAME four objects
+ * into their shaders, and one call to `setNaturalGroundField` shows up in both.
+ * Without it a world with two hundred painted areas would hold two hundred
+ * copies of the height texture.
+ *
+ * ---------------------------------------------------------------------------
+ * [4] THE HEIGHT TEXTURE — what `setNaturalGroundField` uploads
+ * ---------------------------------------------------------------------------
+ * A 3×3 field of a single 4 m hill, and the four numbers the shader addresses
+ * it with: R16F, linearly filtered, clamped at the edge, `uNgField` =
+ * (origin_x, origin_z, step, 0), `uNgFieldSize` = (cols, rows). Half float
+ * rather than full because WebGL2 filters R16F in core; the round trip of 4.0
+ * and 22.5 must come back exact, which pins the packing.
+ * NEUTRALITY, three ways, all of them the same promise: a world nobody has
+ * shaped (every support point at the same height), a field that never arrived
+ * (`null`), and a field too small to have an interior all answer strength 0 —
+ * and the shader's guard then reads nothing at all.
+ *
+ * ---------------------------------------------------------------------------
+ * [5] THE ARITHMETIC — `naturalGroundMath`, by hand
+ * ---------------------------------------------------------------------------
+ * With span 2 m, down 12 % and up 6 %:
+ *   surroundings level with the fragment      ->  0        (flat is neutral)
+ *   surroundings 1 m higher   -> t = 0.5      -> -0.06     (a shallow hollow)
+ *   surroundings 2 m higher   -> t = 1        -> -0.12     (fully spent)
+ *   surroundings 8 m higher   -> t clamped 1  -> -0.12     (a valley is not
+ *                                                           four hollows)
+ *   surroundings 1 m lower    -> t = -0.5     -> +0.03
+ *   surroundings 2 m lower    -> t = -1       -> +0.06     (half the darkening)
+ * The field UV is on TEXEL CENTRES: support point i lies at the centre of texel
+ * i, so its coordinate is (i + 0.5)/cols. For a 21×21 field at origin (−100,
+ * −100) and 10 m step: x = −100 -> 0.5/21, x = +100 -> 20.5/21, x = −105 -> 0
+ * (the outer edge, still inside), x = −110 -> outside and therefore neutral.
+ * Getting that half wrong shifts the whole shading by half a support cell.
+ * The colour factors: noise 1 -> 1.08, noise 0 -> 0.92, noise 0.5 -> 1 exactly.
+ * The second UV: (1, 1) -> (0.73, 0.73), (0, 0) -> (0.5, 0.5).
+ *
+ * ---------------------------------------------------------------------------
+ * [6] THE PATCH GOES ON THE ONE GROUND MATERIAL, AND WATER IS NO EXCEPTION
+ * ---------------------------------------------------------------------------
+ * Until Wasser v2 K-A E5 a painted lake was a MESH with a rippled material of
+ * its own, and this patch had to step aside for it (`isWaterClass`, applied in
+ * the deleted `materialFor`): a second sample of the water texture and a relief
+ * shading on top would have fought the ripple, the fresnel and the roughness
+ * mask. There is no such material any more — the one ground material this
+ * client builds is the terrain's, made WITHOUT a surface spec at all
+ * (`material: null`, so it can never be a water surface), and a water pixel is
+ * a pixel of that very ground, shaded as water afterwards
+ * (`scene/waterShade.ts`). The section is therefore a RED one: the guard is
+ * gone from the tree, the composition it guarded exists nowhere, and the patch
+ * still lands on a plain ground material exactly as it did.
+ *
+ * ---------------------------------------------------------------------------
+ * [7] THE WIRING, pinned by reading the source
+ * ---------------------------------------------------------------------------
+ * A patch is worth nothing where nobody applies it. `rebuildBase` is a closure
+ * over fetched payloads and cannot be called from here, so its lines are pinned
+ * against the source text: the hole first, then the veil and the natural
+ * ground, the field handed over in `applyHeight` and given back in `dispose`.
+ * It is applied EXACTLY ONCE in the file since Wasser v2 K-A E5 — the terrain's
+ * material is the only ground material left — and nowhere else: the admin
+ * preview and the shared package must not import any of this (view polish is
+ * not geometry, § B2).
+ *
+ * ---------------------------------------------------------------------------
+ * [8] THE RED COUNTER-CHECKS — five mutants, five losses
+ * ---------------------------------------------------------------------------
+ * (a) ASSIGNMENT INSTEAD OF CHAIN. The bundle is rebuilt with the line that
+ *     calls the previous callback deleted. Fed a material that already carries
+ *     the basement hole, the mutant's shader contains NOT ONE hole line while
+ *     every natural-ground line is still there — so the probe measures the loss
+ *     of the chain, not a broken module.
+ * (b) THE AO SIGN, in the pure function: `-down·t` becomes `+down·t`, and the
+ *     hollow that the truth darkens comes out BRIGHTER.
+ * (c) THE AO SIGN, in the emitted GLSL: both minus signs of the shade line are
+ *     dropped. The mutant's shader loses the line the truth carries — which is
+ *     what makes the string check in [1] a check on the sign rather than on the
+ *     presence of a substring.
+ * (d) THE FLAT WORLD. The neutrality test drops out of `setNaturalGroundField`,
+ *     so a world nobody has shaped is shaded against its own zero — the mutant
+ *     answers strength 1 for the very field the truth answers 0 for.
+ * (e) THE HALF TEXEL. `+ 0.5` drops out of the world -> UV mapping, which puts
+ *     every support point on a texel CORNER and slides the whole shading half
+ *     a support cell. This is the mutant the mapping was made a function for:
+ *     while the line stood twice, one copy could lose it and every string
+ *     check still found the other.
+ * (f) AN UNPRINTABLE CONSTANT (7.005 m). The module must refuse to LOAD;
+ *     without the assert `toFixed` would round it to 7.01 and the shader would
+ *     spend a different number than the maths does.
+ *
+ * THREE MUTANTS LEFT WITH E3, and they left with their subject: the band
+ * refinement, the fringe line and the render-order ladder of the transparent
+ * drapes. What replaced them is checked in `smoke_layer_cut.mjs`, including the
+ * counter-probes that the ladders are really GONE.
+
+ *
+ * [20] Shared natural-ground and cut cases:
+ * A zero blend has no push: sd.25 stays.25. At world(-10,-46), the
+ * noise input is(-10/2+5,-46/2+23)=(0,0), so sin0=0 and hash0=0.
+ * Push=(2*0-1)*min(.5,blend/2): blend1.5 ->-.5, blend.6 ->-.3.
+ * Uniform layer2 in tileM1, idStep1, sdStep.5 makes one id pair[2,2],
+ * four distance bytes255, origin0, idSize1,sdSize2. Decode is
+ * (255-128)/15.875=8. Pair[2,2] picks layer2 even at x=-1: texel
+ * address clamps, and equality returns the uniform layer before an sd test.
+ * Detail uv(1,1)=1*.23+.5=(.73,.73). Tint factors are
+ * 1+.08*(2n-1): n1=>1.08,n0=>.92,n.5=>1. AO t=(mean-own)/2,
+ * clamped[-1,1]; +1 m=>t.5=>-.12*.5=-.06; +8=>-.12;
+ * -1=>-.06*(-.5)=.03; -8=>.06. Texture centre at world0 on a2x2
+ * step2 grid is((0/2+.5)/2,(0/2+.5)/2)=(.25,.25), inside.
+ * The constants case pins the declared noise(.5 m,2 m), detail(.23,.5),
+ * mix(7 m,.5), tint(25 m,.08), AO(3 m,2 m,.12,.06) contracts.
  */
+import { vectorCase, vectorArgs, vectorValue } from './e3VectorSupport.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -187,6 +387,11 @@ async function loadPure(rel) {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+function vector(label, fns) {
+  const result = vectorCase("layer_ground", label, fns);
+  passed += result.passed; failed += result.failed;
 }
 
 let failed = 0;
@@ -219,27 +424,22 @@ const { decodeSd, layerPairAt, layerSdAt, layerSdBlockAt, layerWeight,
 
 // --- [1] the cut ------------------------------------------------------------
 console.log('[1] layerWeight — the soft blend and the anti-aliased hard cut');
-check('b = 1.5, half a width out: nothing of A', layerWeight(-0.75, 1.5, 0.1), 0);
-check('…a quarter of the way in, on the smoothstep curve',
-  layerWeight(-0.375, 1.5, 0.1), 0.15625);
-check('…ON the line it is exactly half, whatever the width',
-  layerWeight(0, 1.5, 0.1), 0.5);
-check('…and at width 8 it is still exactly half', layerWeight(0, 8, 0.1), 0.5);
-check('…three quarters of the way', layerWeight(0.375, 1.5, 0.1), 0.84375);
-check('…half a width in: all of A', layerWeight(0.75, 1.5, 0.1), 1);
+vector("[1] layer_cut: b = 1.5, half a width out: nothing of A", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: …a quarter of the way in, on the smoothstep curve", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: …ON the line it is exactly half, whatever the width", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: …and at width 8 it is still exactly half", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: …three quarters of the way", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: …half a width in: all of A", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
 checkEq('…and past it, clamped',
   [layerWeight(20, 1.5, 0.1), layerWeight(-20, 1.5, 0.1)], [1, 0]);
 console.log('  — the hard cut (b = 0) is one PIXEL wide, wherever the camera is');
-check('standing on it (a pixel is 0.1 m): 2.5 cm out', layerWeight(-0.025, 0, 0.1), 0.25);
-check('…on the line', layerWeight(0, 0, 0.1), 0.5);
-check('…2.5 cm in', layerWeight(0.025, 0, 0.1), 0.75);
-check('…and 5 cm in it is whole', layerWeight(0.05, 0, 0.1), 1);
-check('far away (a pixel is 4 m): a whole metre in is only three quarters',
-  layerWeight(1, 0, 4), 0.75);
-check('…which is the AVERAGE the far edge needs instead of a shimmer',
-  layerWeight(0, 0, 4), 0.5);
-check('a hard cut with no derivative at all still answers, and answers hard',
-  layerWeight(1, 0, 0), 1);
+vector("[1] layer_cut: standing on it (a pixel is 0.1 m): 2.5 cm out", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: …on the line", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: …2.5 cm in", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: …and 5 cm in it is whole", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: far away (a pixel is 4 m): a whole metre in is only three quarters", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: …which is the AVERAGE the far edge needs instead of a shimmer", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
+vector("[1] layer_cut: a hard cut with no derivative at all still answers, and answers hard", { layerWeight: (...args) => layerWeight(...vectorArgs(args)) });
 
 // --- [2] the noise push -----------------------------------------------------
 console.log('\n[2] lcPushedSd — an organic border, and a hard cut that stays hard');
@@ -302,8 +502,7 @@ check('…and the distance is what turns over', layerSdAt(win, 1.75, 2),
   decodeSd(124, 128, 127 / 8), 1e-12);
 check('…on the other side', layerSdAt(win, 2.25, 2),
   decodeSd(132, 128, 127 / 8), 1e-12);
-check('the decode is the server\'s own arithmetic',
-  decodeSd(124, 128, 127 / 8), -4 / (127 / 8), 1e-12);
+vector("[3] layer_cut: the decode is the server's own arithmetic", { decodeSd: (...args) => decodeSd(...vectorArgs(args)) });
 console.log('  — and the gate the undergrowth reads (decision 5.2)');
 checkEq('west of the line the ground is layer 0, east of it layer 1',
   [topLayerAt(win, 0.25, 2), topLayerAt(win, 1.75, 2),
@@ -329,8 +528,7 @@ checkEq('…and the tile beside it keeps its own pair',
 // second row of tiles is surplus and stays at the neutral fill — bare ground.
 checkEq('the surplus of the square window is bare ground',
   [layerPairAt(two, 2, 6), topLayerAt(two, 2, 6)], [[0, 0], 0]);
-checkEq('an empty batch has no window at all',
-  packLayerWindow(new Map(), FMT), null);
+vector("[4] layer_cut: an empty batch has no window at all", { packLayerWindow: (...args) => packLayerWindow(...vectorArgs(args)) });
 
 // --- [4b] TWO BOUNDARIES IN ONE NEIGHBOURHOOD -------------------------------
 // The RED probe of the second finding round (2026-08-21). The numbers are the

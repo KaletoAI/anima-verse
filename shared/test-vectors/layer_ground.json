@@ -1,0 +1,70 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_layer_cut.mjs",
+  "fixtures": {
+    "INPUT_1": {
+      "tile_m": 1,
+      "id_step_m": 1,
+      "sd_step_m": 0.5,
+      "sd_band_m": 8,
+      "sd_zero": 128,
+      "sd_codes_per_m": 15.875
+    },
+    "INPUT_2": {
+      "$layerWindow": [
+        {
+          "$map": [
+            [
+              "0,0",
+              {
+                "uniform": 2
+              }
+            ]
+          ]
+        },
+        {
+          "tile_m": 1,
+          "id_step_m": 1,
+          "sd_step_m": 0.5,
+          "sd_band_m": 8,
+          "sd_zero": 128,
+          "sd_codes_per_m": 15.875
+        }
+      ]
+    }
+  },
+  "cases": [
+    {"label": "[1] layer_cut: b = 1.5, half a width out: nothing of A","fn": "layerWeight","args": [-0.75,1.5,0.1],"expect": 0,"eps": 1e-09},
+    {"label": "[1] layer_cut: …a quarter of the way in, on the smoothstep curve","fn": "layerWeight","args": [-0.375,1.5,0.1],"expect": 0.15625,"eps": 1e-09},
+    {"label": "[1] layer_cut: …ON the line it is exactly half, whatever the width","fn": "layerWeight","args": [0,1.5,0.1],"expect": 0.5,"eps": 1e-09},
+    {"label": "[1] layer_cut: …and at width 8 it is still exactly half","fn": "layerWeight","args": [0,8,0.1],"expect": 0.5,"eps": 1e-09},
+    {"label": "[1] layer_cut: …three quarters of the way","fn": "layerWeight","args": [0.375,1.5,0.1],"expect": 0.84375,"eps": 1e-09},
+    {"label": "[1] layer_cut: …half a width in: all of A","fn": "layerWeight","args": [0.75,1.5,0.1],"expect": 1,"eps": 1e-09},
+    {"label": "[1] layer_cut: standing on it (a pixel is 0.1 m): 2.5 cm out","fn": "layerWeight","args": [-0.025,0,0.1],"expect": 0.25,"eps": 1e-09},
+    {"label": "[1] layer_cut: …on the line","fn": "layerWeight","args": [0,0,0.1],"expect": 0.5,"eps": 1e-09},
+    {"label": "[1] layer_cut: …2.5 cm in","fn": "layerWeight","args": [0.025,0,0.1],"expect": 0.75,"eps": 1e-09},
+    {"label": "[1] layer_cut: …and 5 cm in it is whole","fn": "layerWeight","args": [0.05,0,0.1],"expect": 1,"eps": 1e-09},
+    {"label": "[1] layer_cut: far away (a pixel is 4 m): a whole metre in is only three quarters","fn": "layerWeight","args": [1,0,4],"expect": 0.75,"eps": 1e-09},
+    {"label": "[1] layer_cut: …which is the AVERAGE the far edge needs instead of a shimmer","fn": "layerWeight","args": [0,0,4],"expect": 0.5,"eps": 1e-09},
+    {"label": "[1] layer_cut: a hard cut with no derivative at all still answers, and answers hard","fn": "layerWeight","args": [1,0,0],"expect": 1,"eps": 1e-09},
+    {"label": "[3] layer_cut: the decode is the server's own arithmetic","fn": "decodeSd","args": [124,128,15.875],"expect": -0.25196850393700787,"eps": 1e-12},
+    {"label": "[4] layer_cut: an empty batch has no window at all","fn": "packLayerWindow","args": [{"$map": []},{"sig": "hand","tile_m": 4,"id_step_m": 1,"sd_step_m": 0.5,"sd_band_m": 8,"sd_zero": 128,"sd_codes_per_m": 15.875}],"expect": null,"eps": 1e-09},
+    {"label": "[5] natural_ground: the ring is four taps at three metres","fn": "ngAoTaps","args": [],"expect": [[3,0],[-3,0],[0,3],[0,-3]],"eps": 1e-09},
+    {"label": "[20] hard cut no noise","fn": "lcPushedSd","args": [0.25,0,12.34,56.78],"expect": 0.25,"eps": 1e-09},
+    {"label": "[20] edge origin wide","fn": "lcPushedSd","args": [0,1.5,-10,-46],"expect": -0.5,"eps": 1e-09},
+    {"label": "[20] edge origin narrow","fn": "lcPushedSd","args": [0,0.6,-10,-46],"expect": -0.3,"eps": 1e-09},
+    {"label": "[20] uniform window","fn": "packLayerWindow","args": [{"$map": [["0,0",{"uniform": 2}]]},{"$fixture": "INPUT_1"}],"expect": {"originX": 0,"originZ": 0,"idStep": 1,"sdStep": 0.5,"idSize": 1,"sdSize": 2,"id": [2,2],"sd": [255,255,255,255],"sdZero": 128,"sdCodesPerM": 15.875,"sdBandM": 8},"eps": 1e-09},
+    {"label": "[20] uniform sd","fn": "layerSdBlockAt","args": [{"$fixture": "INPUT_2"},0.5,0.5],"expect": 8,"eps": 1e-09},
+    {"label": "[20] uniform top","fn": "topLayerAt","args": [{"$fixture": "INPUT_2"},0.5,0.5],"expect": 2,"eps": 1e-09},
+    {"label": "[20] uniform border clamps","fn": "topLayerAt","args": [{"$fixture": "INPUT_2"},-1,0.5],"expect": 2,"eps": 1e-09},
+    {"label": "[20] detail uv","fn": "ngDetailUv","args": [1,1],"expect": [0.73,0.73],"eps": 1e-09},
+    {"label": "[20] tint extrema","fn": "ngTintFactors","args": [1,0],"expect": {"brightness": 1.08,"saturation": 0.92},"eps": 1e-09},
+    {"label": "[20] tint neutral","fn": "ngTintFactors","args": [0.5,0.5],"expect": {"brightness": 1,"saturation": 1},"eps": 1e-09},
+    {"label": "[20] AO hollow half","fn": "ngAoShade","args": [1,0],"expect": -0.06,"eps": 1e-09},
+    {"label": "[20] AO hollow clamped","fn": "ngAoShade","args": [8,0],"expect": -0.12,"eps": 1e-09},
+    {"label": "[20] AO ridge half","fn": "ngAoShade","args": [-1,0],"expect": 0.03,"eps": 1e-09},
+    {"label": "[20] AO ridge clamped","fn": "ngAoShade","args": [-8,0],"expect": 0.06,"eps": 1e-09},
+    {"label": "[20] field texel centre","fn": "ngFieldUv","args": [0,0,{"origin_x": 0,"origin_z": 0,"step_m": 2,"cols": 2,"rows": 2}],"expect": {"u": 0.25,"v": 0.25,"inside": true},"eps": 1e-09},
+    {"label": "[20] ground constants","fn": "e3Constants","args": [],"expect": {"LC_EDGE_NOISE_M": 0.5,"LC_EDGE_WAVE_M": 2,"NG_DETAIL_SCALE": 0.23,"NG_DETAIL_OFFSET": 0.5,"NG_MIX_M": 7,"NG_MIX_MAX": 0.5,"NG_TINT_M": 25,"NG_TINT_AMP": 0.08,"NG_AO_RING_M": 3,"NG_AO_SPAN_M": 2,"NG_AO_DOWN": 0.12,"NG_AO_UP": 0.06},"eps": 1e-09}
+  ]
+}

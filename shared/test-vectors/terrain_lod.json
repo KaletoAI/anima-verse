@@ -1,0 +1,1516 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_terrain_lod.mjs",
+  "fixtures": {
+    "INPUT_1": {
+      "$select": {
+        "x0": 0,
+        "z0": 0,
+        "x1": 64,
+        "z1": 64,
+        "leafM": 64,
+        "levels": 1,
+        "minLodDistance": 128,
+        "camX": 0,
+        "camY": 0,
+        "camZ": 0,
+        "bounds": {
+          "min": 0,
+          "max": 0
+        }
+      }
+    },
+    "PEAK_PYRAMID": {
+      "$pyramid": [
+        {
+          "$grid": {
+            "origin_x": 0,
+            "origin_z": 0,
+            "step_m": 2,
+            "rows": 5,
+            "cols": 5,
+            "heights": [
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                8,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              [
+                0,
+                0,
+                0,
+                0,
+                0
+              ]
+            ]
+          }
+        },
+        0,
+        0,
+        2,
+        5,
+        5,
+        3
+      ]
+    }
+  },
+  "cases": [
+    {
+      "label": "[4] terrain_lod: (j) without an error list",
+      "fn": "lodRanges",
+      "args": [
+        128,
+        6
+      ],
+      "expect": [
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[4] terrain_lod: (l) the hostile error list, capped",
+      "fn": "lodRanges",
+      "args": [
+        128,
+        3,
+        [
+          0,
+          10,
+          3
+        ],
+        200
+      ],
+      "expect": [
+        256,
+        300,
+        512
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[4] terrain_lod: (m) a flat world has no ranges",
+      "fn": "lodRanges",
+      "args": [
+        0,
+        6,
+        [
+          0,
+          0.5862,
+          0.85,
+          1,
+          1.1636,
+          3.3132
+        ],
+        2000
+      ],
+      "expect": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[8] terrain_lod: (w) λ(0)",
+      "fn": "lodLambda",
+      "args": [
+        0,
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[8] terrain_lod: (w) λ(64)",
+      "fn": "lodLambda",
+      "args": [
+        64,
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[8] terrain_lod: (w) λ(96)",
+      "fn": "lodLambda",
+      "args": [
+        96,
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": 0.5,
+      "eps": 1e-09
+    },
+    {
+      "label": "[8] terrain_lod: (w) λ(128) = one whole level",
+      "fn": "lodLambda",
+      "args": [
+        128,
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": 1,
+      "eps": 1e-09
+    },
+    {
+      "label": "[8] terrain_lod: (w) λ(192) — level 1's ramp only STARTS here",
+      "fn": "lodLambda",
+      "args": [
+        192,
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": 1,
+      "eps": 1e-09
+    },
+    {
+      "label": "[8] terrain_lod: (w) λ(224)",
+      "fn": "lodLambda",
+      "args": [
+        224,
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": 1.5,
+      "eps": 1e-09
+    },
+    {
+      "label": "[8] terrain_lod: (w) λ(256)",
+      "fn": "lodLambda",
+      "args": [
+        256,
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": 2,
+      "eps": 1e-09
+    },
+    {
+      "label": "[8] terrain_lod: (w) λ(400)",
+      "fn": "lodLambda",
+      "args": [
+        400,
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": 2.125,
+      "eps": 1e-09
+    },
+    {
+      "label": "[8] terrain_lod: (w) λ(512)",
+      "fn": "lodLambda",
+      "args": [
+        512,
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": 3,
+      "eps": 1e-09
+    },
+    {
+      "label": "[16] terrain_lod: …and for the 0.40 m lift a real shore has, this far",
+      "fn": "liftedHeight",
+      "args": [
+        0,
+        0.4,
+        0.05
+      ],
+      "expect": 0.0112,
+      "eps": 1e-09
+    },
+    {
+      "label": "[17] terrain_lod: …and so is a mirror OUTSIDE the outline, however deep",
+      "fn": "liftedDepth",
+      "args": [
+        3,
+        4.2,
+        -0.001
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[17] terrain_lod: …and ON the outline, where the ramp starts",
+      "fn": "liftedDepth",
+      "args": [
+        3,
+        4.2,
+        0
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[19] terrain_lod: …and a world without a drop has no grid to allocate",
+      "fn": "buildLodCapGrid",
+      "args": [
+        {
+          "$map": []
+        },
+        256
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] window one tile",
+      "fn": "nearWindow",
+      "args": [
+        [
+          "0,0"
+        ],
+        256,
+        2,
+        4,
+        0,
+        0
+      ],
+      "expect": {
+        "x0": -16,
+        "z0": -16,
+        "cols": 145,
+        "rows": 145
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] window negative tile",
+      "fn": "nearWindow",
+      "args": [
+        [
+          "-1,-1"
+        ],
+        256,
+        2,
+        4,
+        0,
+        0
+      ],
+      "expect": {
+        "x0": -272,
+        "z0": -272,
+        "cols": 145,
+        "rows": 145
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] window overview margin",
+      "fn": "nearWindow",
+      "args": [
+        [
+          "0,0"
+        ],
+        256,
+        2,
+        40,
+        0,
+        0
+      ],
+      "expect": {
+        "x0": -80,
+        "z0": -80,
+        "cols": 209,
+        "rows": 209
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] window capped",
+      "fn": "nearWindow",
+      "args": [
+        [
+          "0,0"
+        ],
+        4096,
+        2,
+        4,
+        100,
+        0
+      ],
+      "expect": {
+        "x0": -926,
+        "z0": -1026,
+        "cols": 1025,
+        "rows": 1025
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] window cap recentres both axes",
+      "fn": "nearWindow",
+      "args": [
+        [
+          "0,0",
+          "16,0"
+        ],
+        256,
+        2,
+        4,
+        0,
+        0
+      ],
+      "expect": {
+        "x0": -1026,
+        "z0": -146,
+        "cols": 1025,
+        "rows": 145
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] window empty",
+      "fn": "nearWindow",
+      "args": [
+        [],
+        256,
+        2,
+        4,
+        0,
+        0
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] window invalid keys",
+      "fn": "nearWindow",
+      "args": [
+        [
+          "bad"
+        ],
+        256,
+        2,
+        4,
+        0,
+        0
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] window no step",
+      "fn": "nearWindow",
+      "args": [
+        [
+          "0,0"
+        ],
+        256,
+        0,
+        4,
+        0,
+        0
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] errors maxima",
+      "fn": "levelErrorsFrom",
+      "args": [
+        {
+          "$map": [
+            [
+              "0,0",
+              {
+                "err": [
+                  1,
+                  4
+                ]
+              }
+            ],
+            [
+              "1,0",
+              {
+                "err": [
+                  3,
+                  2
+                ]
+              }
+            ]
+          ]
+        },
+        [
+          4,
+          8
+        ],
+        2,
+        3
+      ],
+      "expect": [
+        0,
+        3,
+        4
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] bounds union",
+      "fn": "nodeBounds",
+      "args": [
+        {
+          "$map": [
+            [
+              "0,0",
+              {
+                "min": -2,
+                "max": 3
+              }
+            ],
+            [
+              "1,0",
+              {
+                "min": -5,
+                "max": 9
+              }
+            ]
+          ]
+        },
+        16,
+        {
+          "min": -20,
+          "max": 20
+        },
+        0,
+        0,
+        32
+      ],
+      "expect": {
+        "min": -5,
+        "max": 9
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] bounds own tile",
+      "fn": "nodeBounds",
+      "args": [
+        {
+          "$map": [
+            [
+              "0,0",
+              {
+                "min": -2,
+                "max": 3
+              }
+            ]
+          ]
+        },
+        16,
+        {
+          "min": -20,
+          "max": 20
+        },
+        0,
+        0,
+        16
+      ],
+      "expect": {
+        "min": -2,
+        "max": 3
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] selection single leaf",
+      "fn": "selectLodNodes",
+      "args": [
+        {
+          "$fixture": "INPUT_1"
+        }
+      ],
+      "expect": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] selection fitted single leaf",
+      "fn": "selectLodFitted",
+      "args": [
+        {
+          "$fixture": "INPUT_1"
+        }
+      ],
+      "expect": {
+        "nodes": [
+          {
+            "x": 0,
+            "z": 0,
+            "size": 64,
+            "level": 0,
+            "cells": 32,
+            "morph": 0
+          }
+        ],
+        "ranges": [
+          128
+        ],
+        "coarsenings": 0,
+        "capRelax": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] pyramid decimation",
+      "fn": "buildPyramid",
+      "args": [
+        {
+          "$plane": [
+            0.5,
+            0,
+            0
+          ]
+        },
+        0,
+        0,
+        2,
+        3,
+        3,
+        3
+      ],
+      "expect": {
+        "originX": 0,
+        "originZ": 0,
+        "step": 2,
+        "texW": 3,
+        "texH": 5,
+        "levels": [
+          {
+            "cols": 3,
+            "rows": 3,
+            "step": 2,
+            "row0": 0
+          },
+          {
+            "cols": 2,
+            "rows": 2,
+            "step": 4,
+            "row0": 3
+          }
+        ],
+        "data": [
+          0,
+          1,
+          2,
+          0,
+          1,
+          2,
+          0,
+          1,
+          2,
+          0,
+          2,
+          0,
+          0,
+          2,
+          0
+        ]
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] pyramid level base",
+      "fn": "pyramidLevelFor",
+      "args": [
+        {
+          "$pyramid": [
+            {
+              "$plane": [
+                0.5,
+                0,
+                0
+              ]
+            },
+            0,
+            0,
+            2,
+            3,
+            3,
+            3
+          ]
+        },
+        2
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] pyramid level coarse",
+      "fn": "pyramidLevelFor",
+      "args": [
+        {
+          "$pyramid": [
+            {
+              "$plane": [
+                0.5,
+                0,
+                0
+              ]
+            },
+            0,
+            0,
+            2,
+            3,
+            3,
+            3
+          ]
+        },
+        4
+      ],
+      "expect": 1,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] pyramid level clamped",
+      "fn": "pyramidLevelFor",
+      "args": [
+        {
+          "$pyramid": [
+            {
+              "$plane": [
+                0.5,
+                0,
+                0
+              ]
+            },
+            0,
+            0,
+            2,
+            3,
+            3,
+            3
+          ]
+        },
+        64
+      ],
+      "expect": 1,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] morph half to parent",
+      "fn": "morphedVertex",
+      "args": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        },
+        1,
+        1,
+        null,
+        null,
+        null,
+        null,
+        0.5
+      ],
+      "expect": {
+        "x": 1,
+        "z": 1,
+        "y": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] vertex at own camera",
+      "fn": "lodVertex",
+      "args": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        },
+        1,
+        1,
+        null,
+        null,
+        null,
+        null,
+        {
+          "x": 2,
+          "y": 0,
+          "z": 2
+        },
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": {
+        "x": 2,
+        "z": 2,
+        "y": 0,
+        "t": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] fragment flat",
+      "fn": "fragmentNormal",
+      "args": [
+        null,
+        null,
+        null,
+        0,
+        0,
+        2
+      ],
+      "expect": {
+        "x": 0,
+        "y": 1,
+        "z": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] fragment slope",
+      "fn": "fragmentNormal",
+      "args": [
+        {
+          "$pyramid": [
+            {
+              "$plane": [
+                0.5,
+                0,
+                0
+              ]
+            },
+            0,
+            0,
+            2,
+            3,
+            3,
+            3
+          ]
+        },
+        [
+          0,
+          0,
+          4,
+          4
+        ],
+        null,
+        2,
+        2,
+        2
+      ],
+      "expect": {
+        "x": -0.4472135954999579,
+        "y": 0.8944271909999159,
+        "z": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] cap grid single tile",
+      "fn": "buildLodCapGrid",
+      "args": [
+        {
+          "$map": [
+            [
+              "0,0",
+              1
+            ]
+          ]
+        },
+        16
+      ],
+      "expect": {
+        "x0": -16,
+        "z0": -16,
+        "step": 16,
+        "cols": 4,
+        "rows": 4,
+        "min": 1,
+        "caps": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          1,
+          1,
+          6,
+          6,
+          1,
+          1,
+          6,
+          6,
+          6,
+          6,
+          6
+        ]
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] cap inside tile",
+      "fn": "lodCapAt",
+      "args": [
+        {
+          "$capGrid": [
+            {
+              "$map": [
+                [
+                  "0,0",
+                  1
+                ]
+              ]
+            },
+            16
+          ]
+        },
+        8,
+        8
+      ],
+      "expect": 1,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] cap outside",
+      "fn": "lodCapAt",
+      "args": [
+        {
+          "$capGrid": [
+            {
+              "$map": [
+                [
+                  "0,0",
+                  1
+                ]
+              ]
+            },
+            16
+          ]
+        },
+        100,
+        100
+      ],
+      "expect": 6,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] cap square inside",
+      "fn": "lodCapOverSquare",
+      "args": [
+        {
+          "$capGrid": [
+            {
+              "$map": [
+                [
+                  "0,0",
+                  1
+                ]
+              ]
+            },
+            16
+          ]
+        },
+        0,
+        0,
+        16
+      ],
+      "expect": 1,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] dry caps",
+      "fn": "waterTileCaps",
+      "args": [
+        null,
+        null,
+        16,
+        null
+      ],
+      "expect": [],
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] lift full",
+      "fn": "liftedHeight",
+      "args": [
+        2,
+        6,
+        0.5
+      ],
+      "expect": 6,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] lift half",
+      "fn": "liftedHeight",
+      "args": [
+        2,
+        6,
+        0.25
+      ],
+      "expect": 4,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] lift outside",
+      "fn": "liftedHeight",
+      "args": [
+        2,
+        6,
+        -1
+      ],
+      "expect": 2,
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] vertex half morph",
+      "fn": "lodVertex",
+      "args": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        },
+        1,
+        1,
+        null,
+        null,
+        null,
+        null,
+        {
+          "x": 98,
+          "y": 0,
+          "z": 2
+        },
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": {
+        "x": 1,
+        "z": 1,
+        "y": 0,
+        "t": 0.5
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[20] wet tile cap",
+      "fn": "waterTileCaps",
+      "args": [
+        {
+          "$pyramid": [
+            {
+              "$plane": [
+                0,
+                0,
+                10
+              ]
+            },
+            0,
+            0,
+            2,
+            3,
+            3,
+            2
+          ]
+        },
+        {
+          "$pyramid": [
+            {
+              "$plane": [
+                0,
+                0,
+                0
+              ]
+            },
+            0,
+            0,
+            2,
+            3,
+            3,
+            2
+          ]
+        },
+        4,
+        null,
+        2
+      ],
+      "expect": [
+        [
+          "0,0",
+          1
+        ],
+        [
+          "1,0",
+          0
+        ],
+        [
+          "0,1",
+          0
+        ],
+        [
+          "1,1",
+          0
+        ]
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[21] selection four leaves",
+      "fn": "selectLodNodes",
+      "args": [
+        {
+          "$select": {
+            "x0": 0,
+            "z0": 0,
+            "x1": 128,
+            "z1": 128,
+            "leafM": 64,
+            "levels": 2,
+            "minLodDistance": 128,
+            "camX": 0,
+            "camY": 0,
+            "camZ": 0,
+            "bounds": {
+              "min": 0,
+              "max": 0
+            }
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        },
+        {
+          "x": 64,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        },
+        {
+          "x": 0,
+          "z": 64,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        },
+        {
+          "x": 64,
+          "z": 64,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0.41421356237309515
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[21] selection root at strict boundary",
+      "fn": "selectLodNodes",
+      "args": [
+        {
+          "$select": {
+            "x0": 0,
+            "z0": 0,
+            "x1": 128,
+            "z1": 128,
+            "leafM": 64,
+            "levels": 2,
+            "minLodDistance": 128,
+            "camX": -128,
+            "camY": 0,
+            "camZ": 0,
+            "bounds": {
+              "min": 0,
+              "max": 0
+            }
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 128,
+          "level": 1,
+          "cells": 32,
+          "morph": 0
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[21] selection mixed quadrants",
+      "fn": "selectLodNodes",
+      "args": [
+        {
+          "$select": {
+            "x0": 0,
+            "z0": 0,
+            "x1": 128,
+            "z1": 128,
+            "leafM": 64,
+            "levels": 2,
+            "minLodDistance": 128,
+            "camX": -96,
+            "camY": 0,
+            "camZ": 0,
+            "bounds": {
+              "min": 0,
+              "max": 0
+            }
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0.5
+        },
+        {
+          "x": 64,
+          "z": 0,
+          "size": 64,
+          "level": 1,
+          "cells": 16,
+          "morph": 0
+        },
+        {
+          "x": 0,
+          "z": 64,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0.8027756377319946
+        },
+        {
+          "x": 64,
+          "z": 64,
+          "size": 64,
+          "level": 1,
+          "cells": 16,
+          "morph": 0
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[21] selection fit coarsens",
+      "fn": "selectLodFitted",
+      "args": [
+        {
+          "$select": {
+            "x0": 0,
+            "z0": 0,
+            "x1": 64,
+            "z1": 64,
+            "leafM": 1,
+            "levels": 2,
+            "minLodDistance": 200,
+            "camX": 32,
+            "camY": 0,
+            "camZ": 32,
+            "bounds": {
+              "min": 0,
+              "max": 0
+            }
+          }
+        }
+      ],
+      "expect": {
+        "ranges": [
+          25,
+          50
+        ],
+        "coarsenings": 3,
+        "capRelax": 3
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[21] nonflat morph own mip",
+      "fn": "morphedVertex",
+      "args": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        },
+        2,
+        2,
+        {
+          "$fixture": "PEAK_PYRAMID"
+        },
+        [
+          0,
+          0,
+          8,
+          8
+        ],
+        null,
+        null,
+        0
+      ],
+      "expect": {
+        "x": 4,
+        "z": 4,
+        "y": 8
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[21] nonflat morph coarse pair",
+      "fn": "morphedVertex",
+      "args": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        },
+        3,
+        3,
+        {
+          "$fixture": "PEAK_PYRAMID"
+        },
+        [
+          0,
+          0,
+          8,
+          8
+        ],
+        null,
+        null,
+        1.5
+      ],
+      "expect": {
+        "x": 2,
+        "z": 2,
+        "y": 1
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[21] nonflat owner descent",
+      "fn": "lodVertex",
+      "args": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        },
+        3,
+        3,
+        {
+          "$fixture": "PEAK_PYRAMID"
+        },
+        [
+          0,
+          0,
+          8,
+          8
+        ],
+        null,
+        null,
+        {
+          "x": 4,
+          "y": 232,
+          "z": 4
+        },
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": {
+        "x": 2,
+        "z": 2,
+        "y": 1,
+        "t": 1.5
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[21] nonflat owner twin",
+      "fn": "lodVertex",
+      "args": [
+        {
+          "x": 0,
+          "z": 0,
+          "size": 64,
+          "level": 0,
+          "cells": 32,
+          "morph": 0
+        },
+        2,
+        2,
+        {
+          "$fixture": "PEAK_PYRAMID"
+        },
+        [
+          0,
+          0,
+          8,
+          8
+        ],
+        null,
+        null,
+        {
+          "x": 4,
+          "y": 232,
+          "z": 4
+        },
+        [
+          128,
+          256,
+          512,
+          1024,
+          2048,
+          4096
+        ]
+      ],
+      "expect": {
+        "x": 2,
+        "z": 2,
+        "y": 1,
+        "t": 1.5
+      },
+      "eps": 1e-09
+    }
+  ]
+}

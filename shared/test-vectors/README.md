@@ -127,3 +127,69 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 | `mirror_plane.json` | `scripts/smoke_mirror_plane.mjs` | `planeOfFaces`, `planeOfSquareMix`, `mirrorBudgetRun`, `mirrorRefreshes` (`null` = Infinity), `mirrorPreset` (`packages/scene-render/src/mirrorSurface.ts`); wrappers in the smoke's header |
 | `slot_materials.json` | `scripts/smoke_slot_materials.mjs` | `slotFill`, `glassPreset`, `materialPresets` (`packages/scene-render/src/slotMaterials.ts`) |
 | `door_swing.json` | `client3d/scripts/smoke_door_swing.mjs` | `doorConstants`, `doorTargetAngle`, `doorDistance`, `easeAngle`, `doorSwingFrames` (`client3d/src/game/doorSwing.ts`); a `null` distance is Infinity |
+
+## E3 terrain, water and atmosphere
+
+Run `timeout 300 node client3d/scripts/smoke_e3_vectors.mjs` to execute **every**
+case in the seven E3 files. The original smokes also read their migrated cases;
+their shader, integration, invariant and mutation checks remain in place.
+Companion smoke headers are collected into the single canonical `source`'s
+opening docstring as well as retained at their original sites. `[20]` and `[21]` labels
+refer to the additional hand derivations in that docstring.
+
+| File | Canonical source smoke | Areas |
+|---|---|---|
+| `terrain_lod.json` | `client3d/scripts/smoke_terrain_lod.mjs` | Rings, error maxima, bounds/selection/fit, morphs, pyramids, caps, fragment normals, water lift, near-window policy |
+| `height_tiles.json` | `client3d/scripts/smoke_height_tiles.mjs` | Loading/batching, world/tile/lattice sampling, wire water-field decoding |
+| `layer_ground.json` | `client3d/scripts/smoke_layer_cut.mjs` | Cut weights/noise/decode/window/readers; natural-ground UV/tint/AO and constants |
+| `water.json` | `client3d/scripts/smoke_water_shade.mjs` | Look/packing, shore/foam/opaque/gate, profile and raster readers, waterfall detection/quad, wave-normal texel |
+| `sky_light.json` | `client3d/scripts/smoke_shadow_snap.mjs` | Clock lights, night-factor cross-reference, shadow basis/snap, distance fog |
+| `backdrop.json` | `client3d/scripts/smoke_backdrop_math.mjs` | Radius/height/clamp, compass, explicit-random and seeded ridge profiles |
+| `fog_veil.json` | `client3d/scripts/smoke_fog_veil.mjs` | Cell/key/grid, texture addressing, height/veil alpha, constants |
+
+The native consumer should mirror the adapters in
+`client3d/scripts/e3VectorDispatch.mjs`. These are ordinary JSON argument values,
+not extensions to the vector loader or comparator:
+
+- `{"$map": [[key, value], ...]}` is a map; `{"$set": [value, ...]}` is a set.
+- `{"$typed": "Float32Array" | "Uint8Array" | "Uint16Array", "values": [...]}`
+  constructs that input buffer. Output buffers compare as ordinary arrays;
+  output maps compare as ordered `[key, value]` pairs.
+- `{"$grid": worldHeightField}` is a sampler through `sampleWorldHeight`.
+- `{"$plane": [a, b, c]}` is the sampler `(x,z) => a*x+b*z+c`.
+- `{"$pyramid": [sampler, originX, originZ, step, cols, rows, levelCount]}`
+  constructs an input pyramid through `buildPyramid`.
+- `{"$capGrid": [map, tileM]}` constructs a cap-grid input through
+  `buildLodCapGrid`; `{"$layerWindow": [map, format]}` constructs a layer-window
+  input through `packLayerWindow`.
+- `{"$raster": {"tileM": n, "tiles": [[key, [originX, originZ, step, wire]], ...]}}`
+  constructs the wire-decoded water tiles with `waterTileFrom`.
+- `{"$rng": [number, ...]}` supplies a finite random stream; exhaustion throws.
+  Omitting this argument exercises the production seeded stream.
+- `{"$select": { ...selectionOptions, "bounds": {"min": n, "max": n}}}`
+  supplies a constant `boundsOf` callback for a small hand world.
+- `{"$number": "NaN"}` is a non-finite **input** for masked water interpolation.
+  Water's non-finite dry **output** is explicitly represented as `null` by the
+  E3 adapter; no non-finite JSON number or comparator exception is introduced.
+- `latticeSample` takes a row matrix instead of the first callback; the adapter
+  reads `matrix[j][i]`, with missing entries zero, and forwards the other args.
+- `fooValue` takes `[fooArgs, propertyPath]` as its two arguments, invokes `foo`,
+  and follows the path (strings for fields, integers for array indices). This
+  preserves former individual scalar assertions, including buffer lengths,
+  without combining them into fewer checks. For example,
+  `waterLookFromValue([null,null],["skyMix"])` in call notation corresponds to
+  `args: [[null,null],["skyMix"]]` and expects `0.55`.
+- `gameHourLights` returns `sunAngle`, `sun`, `sky`, `sunIntensity`,
+  `hemiIntensity`, `fillIntensity`. The two colours are packed **sRGB integers**
+  in this JSON adapter; the production function retains Three's working-space
+  `Color` objects so the engine performs exactly the same colour operations.
+- `waterfallQuad` returns `{positions: [12 coordinates], bottom: [x,z]}` or
+  `null` for non-positive height/width. Positions retain the original lip-left,
+  lip-right, foot-left, foot-right order; `bottom` also places the foam disc.
+- `e3Constants()` returns the exported numeric/string constants. As usual, only
+  the expectation's keys are compared.
+
+Fixture resolution happens before these adapters. None of the adapters derives
+an expectation from production output. The original non-finite, relational,
+shader-source and mutation probes that cannot be ordinary pure function calls
+remain local checks; they are not dropped or silently skipped.

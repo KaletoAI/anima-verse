@@ -1,0 +1,20 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_backdrop_math.mjs",
+  "cases": [
+    {"label": "[0] backdrop_math: A1 the front ring stands at 380 m","fn": "layerRadiusM","args": [0],"expect": 380,"eps": 1e-09},
+    {"label": "[0] backdrop_math: A1 the back ring 60 m farther out","fn": "layerRadiusM","args": [1],"expect": 440,"eps": 1e-09},
+    {"label": "[0] backdrop_math: A2 the front ring keeps its height","fn": "layerHeightFactor","args": [0],"expect": 1,"eps": 1e-09},
+    {"label": "[0] backdrop_math: A2 the back ring is 25 % taller","fn": "layerHeightFactor","args": [1],"expect": 1.25,"eps": 1e-09},
+    {"label": "[0] backdrop_math: F1 5 m is lifted to the floor","fn": "clampBackdropHeightM","args": [5],"expect": 20,"eps": 1e-09},
+    {"label": "[0] backdrop_math: F1 1000 m is cut to the ceiling","fn": "clampBackdropHeightM","args": [1000],"expect": 300,"eps": 1e-09},
+    {"label": "[0] backdrop_math: F1 120 m passes through","fn": "clampBackdropHeightM","args": [120],"expect": 120,"eps": 1e-09},
+    {"label": "[0] backdrop_math: F1 a string is no height","fn": "clampBackdropHeightM","args": ["200"],"expect": 120,"eps": 1e-09},
+    {"label": "[20] ridge north","fn": "ridgeProfile","args": [1,[[157.5,202.5]],100,8,{"$rng": [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}],"expect": [{"angleDeg": 157.5,"peakH": 0,"layer": 0},{"angleDeg": 180,"peakH": 100,"layer": 0},{"angleDeg": 202.5,"peakH": 0,"layer": 0},{"angleDeg": 157.5,"peakH": 0,"layer": 1},{"angleDeg": 180,"peakH": 125,"layer": 1},{"angleDeg": 202.5,"peakH": 0,"layer": 1}],"eps": 1e-09},
+    {"label": "[20] seeded empty arcs","fn": "ridgeProfile","args": [7,[],100,8],"expect": [],"eps": 1e-09},
+    {"label": "[20] seeded zero span","fn": "ridgeProfile","args": [8,[[10,10]],100,8],"expect": [],"eps": 1e-09},
+    {"label": "[20] compass south","fn": "ridgeDirection","args": [0],"expect": [0,1],"eps": 1e-09},
+    {"label": "[20] compass north","fn": "ridgeDirection","args": [180],"expect": [0,-1],"eps": 1e-09},
+    {"label": "[20] ridge seeded north","fn": "ridgeProfile","args": [7,[[157.5,202.5]],100,8],"expect": [{"angleDeg": 157.5,"peakH": 0,"layer": 0},{"angleDeg": 180,"peakH": 66.38405470992438,"layer": 0},{"angleDeg": 202.5,"peakH": 0,"layer": 0},{"angleDeg": 157.5,"peakH": 0,"layer": 1},{"angleDeg": 180,"peakH": 105.24720753892325,"layer": 1},{"angleDeg": 202.5,"peakH": 0,"layer": 1}],"eps": 1e-09}
+  ]
+}

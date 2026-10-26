@@ -1,3 +1,4 @@
+import { gameHourLights } from './skyLight';
 import { isTypingTarget } from '../hud/dom';
 import { createPropLightPool } from './lightPool';
 import { nightFactorAt } from './ambience';
@@ -278,32 +279,13 @@ export class Engine {
 
   /** Set the time of day (hour 0..24): sun position, light colours, sky, fog. */
   setGameHour(hour: number) {
-    const h = ((hour % 24) + 24) % 24;
-    // Sun arc: 6:00 = east (0), 12:00 = zenith (PI/2), 18:00 = west (PI)
-    this.sunAngle = ((h - 6) / 12) * Math.PI;
-    const day = THREE.MathUtils.clamp(Math.sin(this.sunAngle), 0, 1);       // 0 at night, 1 at noon
-    const dusk = THREE.MathUtils.clamp(1 - Math.abs(h - 12) / 6, 0, 1);     // closeness to midday
-
-    const noon = new THREE.Color(0xfff2d8);
-    const warm = new THREE.Color(0xffb066);   // dawn/dusk red
-    const night = new THREE.Color(0x9fb4e0);  // moonlight (cool)
-    const sunColor = day > 0.05
-      ? warm.clone().lerp(noon, THREE.MathUtils.smoothstep(day, 0.05, 0.45))
-      : night.clone();
+    const lights = gameHourLights(hour);
+    const { sun: sunColor, sky } = lights;
+    this.sunAngle = lights.sunAngle;
     this.sun.color.copy(sunColor);
-    this.sun.intensity = 0.25 + day * 2.0;
-
-    this.hemi.intensity = 0.35 + day * 1.2;
-    this.fill.intensity = 0.15 + day * 0.4;
-
-    const skyDay = new THREE.Color(0x9fc7e8);
-    const skyDusk = new THREE.Color(0xe89a63);
-    const skyNight = new THREE.Color(0x1a2340);
-    const sky = day > 0.15
-      ? skyDay.clone()
-      : skyNight.clone().lerp(skyDusk, THREE.MathUtils.clamp(day / 0.15, 0, 1) * (dusk > 0.05 ? 1 : 0.3));
-    // The blend factor reaches 1 at day=0.15 — a continuous handover to the night branch
-    if (day > 0.15 && day < 0.35) sky.lerp(skyDusk, (0.35 - day) / 0.2);
+    this.sun.intensity = lights.sunIntensity;
+    this.hemi.intensity = lights.hemiIntensity;
+    this.fill.intensity = lights.fillIntensity;
     (this.scene.background as THREE.Color).copy(sky);
     // The fog can be ABSENT: the isolation panel (`debug3d.ts`, toggle 3) takes
     // it out of the scene, and a colour written into nothing would crash the
@@ -314,8 +296,8 @@ export class Engine {
       hemi: this.baseLights?.hemi ?? this.hemi.color.clone(),
       ground: this.baseLights?.ground ?? this.hemi.groundColor.clone(),
       fill: this.baseLights?.fill ?? this.fill.color.clone(),
-      sunIntensity: .25 + day * 2, hemiIntensity: .35 + day * 1.2,
-      fillIntensity: .15 + day * .4,
+      sunIntensity: lights.sunIntensity, hemiIntensity: lights.hemiIntensity,
+      fillIntensity: lights.fillIntensity,
     };
     // …and so does the exploration veil: haze is the air between the eye and
     // the ground, so it takes the colour of that air rather than a grey of its

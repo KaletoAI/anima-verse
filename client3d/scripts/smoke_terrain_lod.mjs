@@ -742,7 +742,73 @@
  *      quadrant, one instance either way — but the quadrant carries the
  *      PARENT's spacing over the child's square, so it costs a quarter of the
  *      triangles: 335 275 per frame against 436 779, 77 %.
+ *
+ * [20] Shared E3 extraction cases, derived independently:
+ * Near windows union tile boxes, grow each side by max(16,2*overviewStep),
+ * floor origins onto the step, then count floor(span/step)+1 support points.
+ * A 256 m tile at step2 with margin16 gives origin(-16,-16), span288,
+ * 145 points. Tile(-1,-1) starts -256-16=-272, same count. Overview40
+ * makes margin80: origin -80, span416, 209 points. Tile4096 makes
+ * (4096+32)/2+1=2065 points, capped to1025. Half span=1025*2/2=1025;
+ * anchor(100,0) gives floor(-925/2)*2=-926 and floor(-1025/2)*2=-1026.
+ * Keys(0,0),(16,0) span4352+32=4384:2193 columns,145 rows. When EITHER
+ * axis caps, BOTH recenter: x=-1026, z=floor(-145/2)*2=-146.
+ * No keys, no readable keys, or no positive step means no window.
+ * Errors [1,4],[3,2] at steps4,8 take maxima3,4; level0 is0.
+ * Bounds union known spans [-2,3],[-5,9] to[-5,9]; absent statistics
+ * are skipped (the global [-20,20] is used only when none are known).
+ * A single64 m leaf at the camera selects exactly (0,0,64,L0,cells32,
+ * morph0), ranges[128], coarsenings0,capRelax0. No fit step is needed.
+ * The plane h=x/2 on a3x3 step2 lattice is rows[0,1,2] three times;
+ * decimation retains corners[0,2] twice. Packed width3, rows3+2=5:
+ * [0,1,2,0,1,2,0,1,2,0,2,0,0,2,0], padding0. Levels have row0=0,3
+ * and steps2,4. round(log2(step/2)) gives0,1,clamped1 at step64.
+ * Vertex(1,1) of size64/cells32 starts(2,2); half morph snaps halfway
+ * to(0,0), hence(1,1), flat y0. At camera(2,0,2), distance0 gives t0.
+ * At camera(98,0,2), distance96 gives (96-64)/(128-64)=.5, same half
+ * morph. No field gives normal(0,1,0). On h=x/2, at(2,2), span2:
+ * hx=2,hz=0, vector(-2,4,0)/sqrt20=(-.4472135954999579,
+ * .8944271909999159,0). A cap1 at tile0 of16 m creates a4x4 corner
+ * grid from(-16,-16): central2x2 values1, perimeter6; min1. Thus
+ * cap(8,8)=1, cap(100,100)=6, minimum over[0,16]^2=1.
+ * No water/height gives no caps. Flat water10 over ground0 on a3x3
+ * step2 grid lifts every support point. TileM4 includes endpoint tiles:
+ * (0,0) has a complete3x3 block so cap1; tiles(1,0),(0,1),(1,1) only
+ * have an endpoint row/column, so cap0. Iteration is z then x.
+ * Lift h2,w6: inside(.5)=1 ->6; inside(.25)=.5 ->4; outside(-1)=0 ->2.
+ *
+ * [21] Review additions: nontrivial selection and height/mip morph.
+ * A128 m square, leaf64, two levels, bounds y0, camera(0,0,0)
+ * splits its root: child distances0,64,64,64sqrt2 are all<128.
+ * Child order is(0,0),(64,0),(0,64),(64,64), each size64,L0,cells32.
+ * Morphs are0,0,0,(64sqrt2-64)/64=sqrt2-1=.41421356237309515.
+ * Camera(-128,0,0) is EXACTLY128 from the root: no split, size128,L1,
+ * cells32,morph0. Camera(-96,0,0) splits the root, but alternates
+ * leaf/parent-quadrant: near distances96 and sqrt(96^2+64^2) are<128,
+ * far distances160 and sqrt(160^2+64^2) are>=128. Near morphs are
+ * (96-64)/64=.5 and sqrt(3.25)-1=.8027756377319946; far pieces
+ * retain parentL1,cells16,size64,morph0 (distances below192).
+ * Budget case:64 m square,leaf1,two levels,camera(32,0,32),ranges
+ * [200,400]. There are32^2=1024 roots. All split, making4096 leaves,
+ * the exact ceiling. Halving to100 then50 still splits all four children
+ * per root: even the farthest child is only32sqrt2=45.2548 m away.
+ * Halving to25 leaves at least the corner root unsplit (distance>25),
+ * so at most4093 pieces, strictly below4096: exactly3 coarsenings,
+ * capRelax3,ranges[25,50]. No node count is inferred from a sampled run.
+ * Nonflat fixture: a5x5 step2 grid, all zero except centre(4,4)=8.
+ * Mip1 is3x3 step4 with centre8; mip2 is2x2 step8, all zero.
+ * At gx=gz=2,t0, position(4,4) reads fine height8. At gx=gz=3,t1.5,
+ * k1,f.5 snaps indices between2 and0 to1, hence position(2,2).
+ * At(2,2), mip1 bilinear weight on its8 m peak is.5*.5=.25:
+ * height2; mip2 height0. Pair interpolation gives(2+0)/2=1.
+ * For lodVertex camera(4,232,4), the raw(6,6) vertex has height0
+ * and distance sqrt(232^2+8), between224 and256. Its2-cell owner is
+ * (4,4), height8, distance232-8=224, lambda=1+(224-192)/64=1.5.
+ * Larger owner blocks land at(0,0), distance sqrt(232^2+32)<256,
+ * so lambda<2 and cannot claim level2 or higher. Thus both index3
+ * and its index2 twin use owner t1.5, position(2,2),height1.
  */
+import { vectorCase, vectorArgs, vectorValue } from './e3VectorSupport.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -866,6 +932,11 @@ async function loadLod() {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+function vector(label, fns) {
+  const result = vectorCase("terrain_lod", label, fns);
+  passed += result.passed; failed += result.failed;
 }
 
 let failed = 0;
@@ -1133,8 +1204,7 @@ check('(i) RED: level 1 is NOT the sampler, and misses by more than a metre',
 
 // ── [4] the ranges ──────────────────────────────────────────────────────────
 console.log('\n[4] the LOD ranges — geometry, widened by the error bound, capped at one doubling');
-checkEq('(j) without an error list', lodRanges(128, 6),
-  [128, 256, 512, 1024, 2048, 4096]);
+vector("[4] terrain_lod: (j) without an error list", { lodRanges: (...args) => lodRanges(...vectorArgs(args)) });
 const ERR = [0, 0.5862, 0.85, 1.0, 1.1636, 3.3132];
 check('the error rule may widen a ring by one doubling', MAX_RANGE_WIDENING, 2);
 checkEq('(k) with the contract\'s own example errors at 2 000 px/m/m',
@@ -1154,8 +1224,7 @@ checkEq('…the levels the cap held, and what they had asked for',
  * [256, 512].
  */
 const HOSTILE = [0, 10, 3];
-checkEq('(l) the hostile error list, capped', lodRanges(128, 3, HOSTILE, 200),
-  [256, 300, 512]);
+vector("[4] terrain_lod: (l) the hostile error list, capped", { lodRanges: (...args) => lodRanges(...vectorArgs(args)) });
 /**
  * THE LADDER AS IT WAS BEFORE THE CAP, written out from its own arithmetic
  * rather than by calling the shipped function — `MAX_RANGE_WIDENING` cannot be
@@ -1193,7 +1262,7 @@ const capMono = (err, scale) => {
 checkEq('…while every capped ladder is monotone and inside one doubling',
   [capMono(ERR, 2000), capMono(HOSTILE, 200), capMono([0, 9, 9, 9, 9, 9], 5000)],
   [true, true, true]);
-checkEq('(m) a flat world has no ranges', lodRanges(0, 6, ERR, 2000), [0, 0, 0, 0, 0, 0]);
+vector("[4] terrain_lod: (m) a flat world has no ranges", { lodRanges: (...args) => lodRanges(...vectorArgs(args)) });
 
 /**
  * (m2) THE ERROR LIST IS TAKEN OVER *ALL* TILES — `levelErrorsFrom`, and what
@@ -1394,15 +1463,15 @@ check('the last vertex of a 256 m node sits on the 200 m frame',
 // ── [8] the morph belongs to the vertex ─────────────────────────────────────
 console.log('\n[8] two neighbours describe ONE polyline — the morph is per vertex');
 const RANGES = lodRanges(128, 6);
-check('(w) λ(0)', lodLambda(0, RANGES), 0);
-check('(w) λ(64)', lodLambda(64, RANGES), 0);
-check('(w) λ(96)', lodLambda(96, RANGES), 0.5);
-check('(w) λ(128) = one whole level', lodLambda(128, RANGES), 1);
-check('(w) λ(192) — level 1\'s ramp only STARTS here', lodLambda(192, RANGES), 1);
-check('(w) λ(224)', lodLambda(224, RANGES), 1.5);
-check('(w) λ(256)', lodLambda(256, RANGES), 2);
-check('(w) λ(400)', lodLambda(400, RANGES), 2.125);
-check('(w) λ(512)', lodLambda(512, RANGES), 3);
+vector("[8] terrain_lod: (w) λ(0)", { lodLambda: (...args) => lodLambda(...vectorArgs(args)) });
+vector("[8] terrain_lod: (w) λ(64)", { lodLambda: (...args) => lodLambda(...vectorArgs(args)) });
+vector("[8] terrain_lod: (w) λ(96)", { lodLambda: (...args) => lodLambda(...vectorArgs(args)) });
+vector("[8] terrain_lod: (w) λ(128) = one whole level", { lodLambda: (...args) => lodLambda(...vectorArgs(args)) });
+vector("[8] terrain_lod: (w) λ(192) — level 1's ramp only STARTS here", { lodLambda: (...args) => lodLambda(...vectorArgs(args)) });
+vector("[8] terrain_lod: (w) λ(224)", { lodLambda: (...args) => lodLambda(...vectorArgs(args)) });
+vector("[8] terrain_lod: (w) λ(256)", { lodLambda: (...args) => lodLambda(...vectorArgs(args)) });
+vector("[8] terrain_lod: (w) λ(400)", { lodLambda: (...args) => lodLambda(...vectorArgs(args)) });
+vector("[8] terrain_lod: (w) λ(512)", { lodLambda: (...args) => lodLambda(...vectorArgs(args)) });
 // A 6 m step every other 4 m of z — see the docstring: the 2 m, 4 m and 8 m
 // mips all read it differently, at the very points the two nodes meet on.
 const SEAM = buildPyramid((x, z) => ((Math.floor(z / 4) % 2 === 1) ? 6 : 0),
@@ -3247,8 +3316,7 @@ checkEq('RED: every one of those five stood at the full metre before the ramp',
 // it falls under a centimetre for every lift under 0.357 m.
 check('the drawn surface 5 cm in is this far over the figure\'s ground',
   flatAt(10, 0.05) - 0, 0.028);
-check('…and for the 0.40 m lift a real shore has, this far',
-  liftedHeight(0, 0.4, 0.05), 0.0112);
+vector("[16] terrain_lod: …and for the 0.40 m lift a real shore has, this far", { liftedHeight: (...args) => liftedHeight(...vectorArgs(args)) });
 checkEq('RED: before the ramp that gap was the whole lift',
   [flatAt(10, UNGATED) - 0, oldRule(0, 0.4, 0.05)], [1, 0.4]);
 // x = 15 is left out on purpose: its cell already meets the dry texel at 16, so
@@ -3452,9 +3520,8 @@ check('liftedDepth: a mirror 1.2 m over the bed, well inside the outline',
   liftedDepth(3, 4.2, UNGATED), 1.2);
 check('…a mirror UNDER the bed is dry', liftedDepth(5, 4.2, UNGATED), 0);
 check('…and the dry sentinel is dry', liftedDepth(5, NaN, UNGATED), 0);
-check('…and so is a mirror OUTSIDE the outline, however deep',
-  liftedDepth(3, 4.2, -0.001), 0);
-check('…and ON the outline, where the ramp starts', liftedDepth(3, 4.2, 0), 0);
+vector("[17] terrain_lod: …and so is a mirror OUTSIDE the outline, however deep", { liftedDepth: (...args) => liftedDepth(...vectorArgs(args)) });
+vector("[17] terrain_lod: …and ON the outline, where the ramp starts", { liftedDepth: (...args) => liftedDepth(...vectorArgs(args)) });
 // THE RAMP, on the shipped function: 1.2 m of water times the gate's curve.
 checkEq('the shipped depth follows the gate metre for metre',
   [0, 0.05, 0.1, 0.125, 0.25, 0.375, 0.5, 1]
@@ -3797,8 +3864,7 @@ check('…the ramp is CONTINUOUS, not a step (a quarter of the way)',
 check('(g) past the grid there is no cap', lodCapAt(GRID, 1000, 200), LOD_CAP_NONE);
 check('…nor before it', lodCapAt(GRID, 1000, -100), LOD_CAP_NONE);
 check('…nor without a grid at all', lodCapAt(null, 0, 0), LOD_CAP_NONE);
-checkEq('…and a world without a drop has no grid to allocate',
-  buildLodCapGrid(new Map(), 256), null);
+vector("[19] terrain_lod: …and a world without a drop has no grid to allocate", { buildLodCapGrid: (...args) => buildLodCapGrid(...vectorArgs(args)) });
 // The selection reads the same field through a square, and must never answer
 // ABOVE it — a node coarser than the cap the shader applies inside it would be
 // a node without the vertices λ_eff places.

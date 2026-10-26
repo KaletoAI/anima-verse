@@ -507,6 +507,7 @@
  * The direction survives all of it untouched — the shader divides by the very
  * length it multiplies by.
  */
+import { vectorCase, vectorArgs, vectorValue } from './e3VectorSupport.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -533,6 +534,11 @@ async function loadPure(...relPaths) {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+function vector(label, fns) {
+  const result = vectorCase("water", label, fns);
+  passed += result.passed; failed += result.failed;
 }
 
 let failed = 0;
@@ -638,14 +644,11 @@ const CLIFF_META = { water_depth_effective: 1.0,
 console.log('[1] the water is a PROFILE, and only the payload names it');
 const RIVER = waterProfileOf(RIVER_META);
 const LAKE = waterProfileOf(LAKE_META);
-checkEq('the nine numbers arrive verbatim', RIVER, RIVER_META.water_profile);
-checkEq('a still lake is a profile too, with an empty span', LAKE,
-  LAKE_META.water_profile);
-checkEq('the MID level alone is no profile — that is the flat client\'s number',
-  waterProfileOf({ water_level_effective: 3.25 }), null);
-checkEq('the AUTHORED level alone is none either',
-  waterProfileOf({ water_level: 3.25 }), null);
-checkEq('an area that is not water', waterProfileOf({}), null);
+vector("[1] water_plane: the nine numbers arrive verbatim", { waterProfileOf: (...args) => waterProfileOf(...vectorArgs(args)) });
+vector("[1] water_plane: a still lake is a profile too, with an empty span", { waterProfileOf: (...args) => waterProfileOf(...vectorArgs(args)) });
+vector("[1] water_plane: the MID level alone is no profile — that is the flat client's number", { waterProfileOf: (...args) => waterProfileOf(...vectorArgs(args)) });
+vector("[1] water_plane: the AUTHORED level alone is none either", { waterProfileOf: (...args) => waterProfileOf(...vectorArgs(args)) });
+vector("[1] water_plane: an area that is not water", { waterProfileOf: (...args) => waterProfileOf(...vectorArgs(args)) });
 checkEq('no meta at all', waterProfileOf(undefined), null);
 checkEq('a profile with one unreadable number is NO profile',
   waterProfileOf({ water_profile: { ...LAKE_META.water_profile,
@@ -653,17 +656,14 @@ checkEq('a profile with one unreadable number is NO profile',
 checkEq('…and Infinity is not a height either',
   waterProfileOf({ water_profile: { ...LAKE_META.water_profile,
     axis_x: Infinity } }), null);
-checkEq('a MISSING number is missing, not zero',
-  waterProfileOf({ water_profile: { level_up: 1, level_down: 1 } }), null);
-checkEq('junk in the slot is not a profile',
-  waterProfileOf({ water_profile: 'yes' }), null);
+vector("[1] water_plane: a MISSING number is missing, not zero", { waterProfileOf: (...args) => waterProfileOf(...vectorArgs(args)) });
+vector("[1] water_plane: junk in the slot is not a profile", { waterProfileOf: (...args) => waterProfileOf(...vectorArgs(args)) });
 check('a sea at world zero is still a profile',
   waterProfileOf({ water_profile: { ...LAKE_META.water_profile, level_up: 0,
     level_down: 0 } })?.level_up, 0);
 
 console.log('\n[1b] the AXIS is checked like every other number (W4a)');
-checkEq('the hairpin arrives with three knots, verbatim',
-  waterProfileOf(HAIRPIN_META).axis, HAIRPIN_META.water_profile.axis);
+vector("[1b] water_plane: the hairpin arrives with three knots, verbatim", { waterProfileOfValue: (args, path) => vectorValue(waterProfileOf(...vectorArgs(args)), path) });
 checkEq('no axis at all is no water — it is what the level is read from',
   waterProfileOf({ water_profile: { ...LAKE_META.water_profile,
     axis: undefined } }), null);
@@ -685,7 +685,7 @@ console.log('\n[2] the shore ramp, out of the water DEPTH');
 /** The default lake's band — what an area without a shipped depth falls back
  *  to, and the number every table below is derived against. */
 const LAKE_BAND = waterOpaqueDepthM(2.0);
-check('the band of the DEFAULT lake is ¾ of its 2.0 m bed', LAKE_BAND, 1.5);
+vector("[2] water_plane: the band of the DEFAULT lake is ¾ of its 2.0 m bed", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
 check('the foam reaches 0.6 m', WATER_FOAM_BAND_M, 0.6);
 check('the foam whitens by 0.6', WATER_FOAM_STRENGTH, 0.6);
 check('alpha at depth 0 — not water, the pixel stays the dry ground it is',
@@ -711,24 +711,17 @@ check('a bed ABOVE the water line is not water',
 console.log('\n[2a] W4b: the band is the AREA\'s own ¾, not one constant');
 /** The seeded river kind: 1.2 m of bed, so 0.9 m of it are opaque. */
 const RIVER_BAND = waterOpaqueDepthM(1.2);
-check('a 1.2 m river is fully drawn at 1.0 m — ¾ is 0.9, the FLOOR wins',
-  RIVER_BAND, 1.0);
-check('a 0.6 m pond at the same floor, not at its own 0.45 m',
-  waterOpaqueDepthM(0.6), 1.0);
-check('4/3 m is the break-even — ¾ of it IS the floor',
-  waterOpaqueDepthM(4 / 3), 1.0, 1e-15);
-check('…and a hair deeper the fraction takes over again',
-  waterOpaqueDepthM(1.4), 1.05, 1e-15);
+vector("[2a] water_plane: a 1.2 m river is fully drawn at 1.0 m — ¾ is 0.9, the FLOOR wins", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
+vector("[2a] water_plane: a 0.6 m pond at the same floor, not at its own 0.45 m", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
+vector("[2a] water_plane: 4/3 m is the break-even — ¾ of it IS the floor", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
+vector("[2a] water_plane: …and a hair deeper the fraction takes over again", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
 check('the floor itself', WATER_MIN_SEE_DEPTH_M, 1.0);
-check('the deepest lake the bake allows (20 m) at 15 m',
-  waterOpaqueDepthM(20), 15);
+vector("[2a] water_plane: the deepest lake the bake allows (20 m) at 15 m", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
 check('a payload without the field falls back to the default lake',
   waterOpaqueDepthM(undefined), 1.5);
-check('…and so does junk in it', waterOpaqueDepthM('deep'), 1.5);
-check('…and a depth of zero, which is no water at all',
-  waterOpaqueDepthM(0), 1.5);
-check('a numeric STRING is a number — the payload is JSON either way',
-  waterOpaqueDepthM('1.2'), 1.0);
+vector("[2a] water_plane: …and so does junk in it", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
+vector("[2a] water_plane: …and a depth of zero, which is no water at all", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
+vector("[2a] water_plane: a numeric STRING is a number — the payload is JSON either way", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
 // The same six fractions of the band as the lake's table above — the law is
 // the fraction (with the metre floor under it), the metres are the area's.
 check('river alpha at depth 0.1', waterShoreAlpha(0.1, RIVER_BAND), 0.028);
@@ -743,8 +736,7 @@ check('river alpha at depth 1.0 — the band is through',
   waterShoreAlpha(1.0, RIVER_BAND), 1);
 check('river alpha at its full 1.2 m — clamped',
   waterShoreAlpha(1.2, RIVER_BAND), 1);
-check('RED: the OLD constant band drew that same deepest water at only',
-  waterShoreAlpha(0.9, 1.5), 0.648);
+vector("[2a] water_plane: RED: the OLD constant band drew that same deepest water at only", { waterShoreAlpha: (...args) => waterShoreAlpha(...vectorArgs(args)) });
 check('…which is the "see-through in the middle of the river" finding, in one '
   + 'number: the river gains this much opacity',
   waterShoreAlpha(0.9, RIVER_BAND) - waterShoreAlpha(0.9, 1.5), 0.324,
@@ -753,8 +745,7 @@ check('…which is the "see-through in the middle of the river" finding, in one 
 // the river went opaque at 0.9 m, i.e. its bed was gone at the depth a wading
 // figure stands waist-deep in; with the floor 0.5 m of it still shows half the
 // bed. The two numbers at 0.5 m of depth:
-check('RED: at half a metre the ¾ rule had already hidden 0.58299 of the bed',
-  waterShoreAlpha(0.5, 0.9), 0.5829903978052126, 1e-15);
+vector("[2a] water_plane: RED: at half a metre the ¾ rule had already hidden 0.58299 of the bed", { waterShoreAlpha: (...args) => waterShoreAlpha(...vectorArgs(args)) });
 check('…and the floored band hides exactly half of it',
   waterShoreAlpha(0.5, RIVER_BAND), 0.5);
 check('a 0.6 m pond NEVER reaches full absorption — its own deepest point',
@@ -763,19 +754,17 @@ check('…i.e. this much of its bed is readable everywhere in it',
   1 - waterShoreAlpha(0.6, waterOpaqueDepthM(0.6)), 0.352, 1e-15);
 
 console.log('\n[2b] the foam band');
-check('foam at depth 0', waterFoam(0), 1);
-check('foam at depth 0.15', waterFoam(0.15), 0.84375);
-check('foam at depth 0.3', waterFoam(0.3), 0.5);
-check('foam at depth 0.45', waterFoam(0.45), 0.15625);
-check('foam at depth 0.6 — gone', waterFoam(0.6), 0);
-check('foam at depth 2 — long gone', waterFoam(2), 0);
+vector("[2b] water_plane: foam at depth 0", { waterFoam: (...args) => waterFoam(...vectorArgs(args)) });
+vector("[2b] water_plane: foam at depth 0.15", { waterFoam: (...args) => waterFoam(...vectorArgs(args)) });
+vector("[2b] water_plane: foam at depth 0.3", { waterFoam: (...args) => waterFoam(...vectorArgs(args)) });
+vector("[2b] water_plane: foam at depth 0.45", { waterFoam: (...args) => waterFoam(...vectorArgs(args)) });
+vector("[2b] water_plane: foam at depth 0.6 — gone", { waterFoam: (...args) => waterFoam(...vectorArgs(args)) });
+vector("[2b] water_plane: foam at depth 2 — long gone", { waterFoam: (...args) => waterFoam(...vectorArgs(args)) });
 // The FOAM does not scale with the band (W4b): half a metre of broken water is
 // half a metre of broken water, in a pond and in a lake — while the ramp under
 // it is the area's own.
-check('the river\'s rim carries the same foam as the lake\'s',
-  waterFoam(0), 1);
-check('…and at 0.3 m the foam is the same half-gone lace over both',
-  waterFoam(0.3), 0.5);
+vector("[2b] water_plane: the river's rim carries the same foam as the lake's", { waterFoam: (...args) => waterFoam(...vectorArgs(args)) });
+vector("[2b] water_plane: …and at 0.3 m the foam is the same half-gone lace over both", { waterFoam: (...args) => waterFoam(...vectorArgs(args)) });
 // 0.3 m over the river's 1.0 m band is t = 0.3 -> 3·0.09 − 2·0.027 = 0.216,
 // against the lake's t = 0.2 -> 0.104.
 check('…while the ramp under it is already further along on the river',
@@ -796,12 +785,10 @@ check('RED: without it the rim carried the foam\'s full whitening',
   waterFoam(0) * WATER_FOAM_STRENGTH, 0.6);
 check('…with it the rim carries nothing at all',
   waterFoam(0) * WATER_FOAM_STRENGTH * waterEdgeFade(0, 0.05), 0);
-check('half a pixel in, half the fade', waterEdgeFade(0.025, 0.05), 0.5);
-check('one pixel in, the fade is done', waterEdgeFade(0.05, 0.05), 1);
-check('a pixel narrower than the floor still spends the floor',
-  waterEdgeFade(0.025, 0.001), 0.5);
-check('a metre-wide pixel far away spends the metre',
-  waterEdgeFade(0.5, 1), 0.5);
+vector("[2d] water_plane: half a pixel in, half the fade", { waterEdgeFade: (...args) => waterEdgeFade(...vectorArgs(args)) });
+vector("[2d] water_plane: one pixel in, the fade is done", { waterEdgeFade: (...args) => waterEdgeFade(...vectorArgs(args)) });
+vector("[2d] water_plane: a pixel narrower than the floor still spends the floor", { waterEdgeFade: (...args) => waterEdgeFade(...vectorArgs(args)) });
+vector("[2d] water_plane: a metre-wide pixel far away spends the metre", { waterEdgeFade: (...args) => waterEdgeFade(...vectorArgs(args)) });
 
 // ── [3] the E1 invariant, and the red counter-probe ────────────────────────
 console.log('\n[3] the E1 carve invariant, re-derived on the client side');
@@ -932,8 +919,7 @@ check('…i.e. 1.47 m of water standing on ground that is at 0 — the mound',
 // The shore reads the DEPTH under the pixel, so the same two probes decide how
 // opaque the surface is (docstring [2], `waterOpaqueDepthM` = ¾ of the bed
 // depth). Upstream the bed is 1.0 m under a level of 3.0, i.e. the full depth.
-check('the opaque depth of this river is the 1 m floor, not ¾ of its 1.0 m bed',
-  waterOpaqueDepthM(CLIFF_META.water_depth_effective), 1.0, 1e-12);
+vector("[4e] water_plane: the opaque depth of this river is the 1 m floor, not ¾ of its 1.0 m bed", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
 check('upstream the water is its full 1.0 m deep, i.e. fully opaque',
   waterShoreAlpha(3.0 - 2.0,
     waterOpaqueDepthM(CLIFF_META.water_depth_effective)), 1, 1e-12);
@@ -1023,8 +1009,7 @@ console.log('\n[7] the shore measures the LOCAL level, and needed no change');
 // to the 1.0 m of `WATER_MIN_SEE_DEPTH_M`, so its constant 1.0 m of depth is
 // OPAQUE at exactly its deepest point — under the old lake band it was 20/27.
 const FIX_BAND = waterOpaqueDepthM(RIVER_META.water_depth_effective);
-check('the fixture river is 1.0 m deep, and the floor draws it fully at 1.0 m',
-  FIX_BAND, 1.0);
+vector("[7] water_plane: the fixture river is 1.0 m deep, and the floor draws it fully at 1.0 m", { waterOpaqueDepthM: (...args) => waterOpaqueDepthM(...vectorArgs(args)) });
 check('the alpha over the river is 1 at every x — it is deeper than its band',
   Math.min(...[20, 26, 50, 74, 80].map(
     (x) => waterShoreAlpha(level(x) - bed(x), FIX_BAND))),

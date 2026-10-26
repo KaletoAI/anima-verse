@@ -87,7 +87,35 @@
  * (j) A LIGHT STRAIGHT OVERHEAD is not a division by zero: `up × z`
  *     degenerates, the +Z reference takes over, and the basis stays finite and
  *     orthonormal.
+ *
+ * [20] Clock and fog extraction cases (sky_light.json):
+ * Hour wraps modulo24: -12 becomes12. sunAngle=(h-6)*pi/12;
+ * h0=>-pi/2=-1.5707963267948966,h6=>0,h12=>pi/2.
+ * Day=max(0,sin(angle)) gives0,0,1. Intensities(.25+2day,
+ * .35+1.2day,.15+.4day) are(.25,.35,.15) at night/dawn,
+ * (2.25,1.55,.55) at noon. At day0 the sun is moon0x9fb4e0
+ * (decimal10466528), sky0x1a2340(decimal1712960). At day1:
+ * sun0xfff2d8(decimal16773848), sky0x9fc7e8(decimal10471400).
+ * Interpolated dawn: h=6+12*asin(.25)/pi=6.965167479061995,
+ * angle=.25268025514207865,day=.25. Sun smoothstep(.05,.45,.25)
+ * is.5. Sky blend=(.35-.25)/.2=.5. Convert sRGB channel c to linear
+ * by c/12.92 below.04045, otherwise((c+.055)/1.055)^2.4, interpolate,
+ * then inverse transfer and round*255. Warm/noon midpoint gives linear
+ * (1,.661038377022,.409776816987), bytes(255,212,171)=0xffd4ab
+ * (decimal16766123). Day/dusk midpoint gives linear(.576828157005,
+ * .447134019279,.465862037608), bytes(200,178,182)=0xc8b2b6
+ * (decimal13152950). Intensities are(.75,.65,.25).
+ * nightFactorAt cross-reference (ambience.json's source derives the full
+ * clock): clamp(1-3day) is1 at midnight,0 at noon.
+ * Fog uses view-space depth, not radius: t=clamp((depth-220)/300).
+ * Depths0/220=>0,295=>.25,370=>.5,445=>.75,520/800=>1.
+ * 3t^2-2t^3 gives0,.15625,.5,.84375,1 at those positions.
+ * For light offset(0,0,1), basis axes are the identity. A shadow texel
+ * is140/2048=.068359375. Target xy.02 is.2925714 texels, rounds0;
+ * xy(.04,-.04) is(+.5851429,-.5851429), rounds(+1,-1), giving
+ * (+.068359375,-.068359375). Depth z7 never moves.
  */
+import { vectorCase, vectorArgs, vectorValue } from './e3VectorSupport.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -110,6 +138,11 @@ async function loadPure(rel) {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+function vector(label, fns) {
+  const result = vectorCase("sky_light", label, fns);
+  passed += result.passed; failed += result.failed;
 }
 
 let failed = 0;
@@ -155,7 +188,7 @@ const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 console.log('[1] one shadow texel is 6.8 cm of ground');
 check('the frustum half-width', SHADOW_HALF_M, 70);
 check('the map resolution', SHADOW_MAP_PX, 2048);
-check('(a) 140 / 2048', shadowTexelM(), 0.068359375, 0);
+vector("[1] shadow_snap: (a) 140 / 2048", { shadowTexelM: (...args) => shadowTexelM(...vectorArgs(args)) });
 const TEXEL = shadowTexelM();
 
 // ── [2] the light basis ─────────────────────────────────────────────────────
@@ -170,9 +203,9 @@ const LEN = Math.hypot(...OFFSET);
 check('(b) z = offset / |offset|, x', B.z[0], -60 / LEN, 1e-12);
 check('…y', B.z[1], 6.4 / LEN, 1e-12);
 check('…z', B.z[2], 25 / LEN, 1e-12);
-check('…x-axis = (5/13, 0, 12/13): x', B.x[0], 5 / 13, 1e-12);
-check('…y', B.x[1], 0, 1e-12);
-check('…z', B.x[2], 12 / 13, 1e-12);
+vector("[2] shadow_snap: …x-axis = (5/13, 0, 12/13): x", { lightBasisValue: (args, path) => vectorValue(lightBasis(...vectorArgs(args)), path) });
+vector("[2] shadow_snap: …y", { lightBasisValue: (args, path) => vectorValue(lightBasis(...vectorArgs(args)), path) });
+vector("[2] shadow_snap: …z", { lightBasisValue: (args, path) => vectorValue(lightBasis(...vectorArgs(args)), path) });
 check('(c) |x|', Math.hypot(...B.x), 1, 1e-12);
 check('…|y|', Math.hypot(...B.y), 1, 1e-12);
 check('…|z|', Math.hypot(...B.z), 1, 1e-12);

@@ -157,7 +157,28 @@
  *      tear a hole into the ring.
  * (J4) The compass mirrored (cos/sin swapped): 180° becomes (cos, sin) =
  *      (−1, 0), i.e. WEST — an arc authored as "N" would stand in the west.
+ *
+ * [0] Vector cases carrying A/F labels use the lettered hand
+ * calculations above: radii380/440, factors1/1.25, clamps20/300/120.
+ * [20] Shared ridge cases: the north arc has endpoints157.5/202.5
+ * at0 and the sole inner8-segment node180 at100/125 (derivations C/A).
+ * Six objects carry the angles, heights and layer0/1. Empty arcs and
+ * zero-span arcs remain empty even on the seeded path. Compass0/180
+ * is(0,1)/(0,-1) by H.
+ * For a NONEMPTY seeded case, use the documented unsigned32-bit FNV
+ * recurrence h=(h xor char)*16777619 mod2^32, initially2166136261.
+ * The text "backdrop-7-l0" finishes at1822100270; "backdrop-7-l1"
+ * at1838877889. Each draw applies a=(h xor(h>>>15))*2246822519,
+ * b=(a xor(a>>>13))*3266489917 (both mod2^32), then h=b xor(b>>>16).
+ * Successive unsigned states, calculated with that integer recurrence:
+ * l0:1511548076,4280321300,56394140,760984436,1669887557;
+ * l1:211144938,1895373586,2072848599,3986337067,3060965876.
+ * The north peak is node4, the FIFTH draw. Heights therefore are
+ * 100*(.45+.55*1669887557/4294967296)=66.38405470992438 and
+ * 125*(.45+.55*3060965876/4294967296)=105.24720753892325.
+ * Endpoints remain0 at157.5/202.5; the layer numbers remain0/1.
  */
+import { vectorCase, vectorArgs, vectorValue } from './e3VectorSupport.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -186,6 +207,11 @@ async function loadTs(src, mutate) {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+function vector(label, fns) {
+  const result = vectorCase("backdrop", label, fns);
+  passed += result.passed; failed += result.failed;
 }
 
 let failed = 0;
@@ -255,11 +281,11 @@ async function main() {
   } = await loadTs(SRC);
 
   console.log('(A) the two layer offsets');
-  check('A1 the front ring stands at 380 m', layerRadiusM(0), 380);
-  check('A1 the back ring 60 m farther out', layerRadiusM(1), 440);
+  vector("[0] backdrop_math: A1 the front ring stands at 380 m", { layerRadiusM: (...args) => layerRadiusM(...vectorArgs(args)) });
+  vector("[0] backdrop_math: A1 the back ring 60 m farther out", { layerRadiusM: (...args) => layerRadiusM(...vectorArgs(args)) });
   check('A1 …and that IS the design constant', BACKDROP_DIST_M + BACKDROP_LAYER_GAP_M, 440);
-  check('A2 the front ring keeps its height', layerHeightFactor(0), 1);
-  check('A2 the back ring is 25 % taller', layerHeightFactor(1), 1.25);
+  vector("[0] backdrop_math: A2 the front ring keeps its height", { layerHeightFactor: (...args) => layerHeightFactor(...vectorArgs(args)) });
+  vector("[0] backdrop_math: A2 the back ring is 25 % taller", { layerHeightFactor: (...args) => layerHeightFactor(...vectorArgs(args)) });
   check('A2 …which is the declared share', 1 + BACKDROP_LAYER_HEIGHT_K, 1.25);
 
   console.log('\n(B) the full ring — [0,360], segments 8, height 100, r = 1');
@@ -301,12 +327,12 @@ async function main() {
   check('E …and 12° is the ramp it uses', RIDGE_TAPER_DEG, 12);
 
   console.log('\n(F) the clamps');
-  check('F1 5 m is lifted to the floor', clampBackdropHeightM(5), 20);
-  check('F1 1000 m is cut to the ceiling', clampBackdropHeightM(1000), 300);
-  check('F1 120 m passes through', clampBackdropHeightM(120), 120);
+  vector("[0] backdrop_math: F1 5 m is lifted to the floor", { clampBackdropHeightM: (...args) => clampBackdropHeightM(...vectorArgs(args)) });
+  vector("[0] backdrop_math: F1 1000 m is cut to the ceiling", { clampBackdropHeightM: (...args) => clampBackdropHeightM(...vectorArgs(args)) });
+  vector("[0] backdrop_math: F1 120 m passes through", { clampBackdropHeightM: (...args) => clampBackdropHeightM(...vectorArgs(args)) });
   check('F1 NaN is no height', clampBackdropHeightM(NaN), 120);
   check('F1 nothing is no height', clampBackdropHeightM(undefined), 120);
-  check('F1 a string is no height', clampBackdropHeightM('200'), 120);
+  vector("[0] backdrop_math: F1 a string is no height", { clampBackdropHeightM: (...args) => clampBackdropHeightM(...vectorArgs(args)) });
   const low = ridgeProfile(1, [[157.5, 202.5]], 5, 8, flat(1, 16));
   check('F2 a 5 m setting draws the 20 m floor', layerPairs(low, 0)[1][1], 20);
   check('F2 …with the back ridge at 25 m', layerPairs(low, 1)[1][1], 25);

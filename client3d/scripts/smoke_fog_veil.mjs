@@ -229,7 +229,15 @@
  * lake got a rippled material of its own here and the veil would have fought
  * that shader for the `opaque_fragment` anchor; the terrain's one material is
  * never a water material, so the check below is that no such branch is left.
+ *
+ * [20] Shared texture and constant cases: cell0 in a3x3 padded
+ * grid starts at cx0=cz0=-1. World32 is its centre: texel coordinate
+ * (32/64-(-1))/3=1.5/3=.5 on both axes. Index(0,0) is1*3+1=4.
+ * Constants pin the server64 m cell, one padding cell,32 m half-cell
+ * blend,20/45 m height ends,.72 maximum alpha,.6 s fade and2048 cap
+ * (the contracts derived in sections1/3/5/6/7 and the header above).
  */
+import { vectorCase, vectorArgs, vectorValue } from './e3VectorSupport.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -241,6 +249,11 @@ const VEIL_SRC = join(ROOT, 'client3d/src/scene/fogVeil.ts');
 const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
 
 let passed = 0;
+function vector(label, fns) {
+  const result = vectorCase("fog_veil", label, fns);
+  passed += result.passed; failed += result.failed;
+}
+
 let failed = 0;
 
 function eq(label, got, want) {
@@ -370,43 +383,40 @@ const M = await loadMath();
 
 console.log('[1] fogCellOf — floor division, the server’s twin');
 eq('(a) FOG_CELL_M is the server’s 64 m', M.FOG_CELL_M, 64);
-eq('(b) 0 → 0', M.fogCellOf(0), 0);
-eq('…63.999 → 0', M.fogCellOf(63.999), 0);
-eq('…64 → 1', M.fogCellOf(64), 1);
-eq('…100 → 1', M.fogCellOf(100), 1);
-eq('…900 → 14', M.fogCellOf(900), 14);
-eq('…950 → 14', M.fogCellOf(950), 14);
-eq('(c) RED: −1 → −1, not 0', M.fogCellOf(-1), -1);
-eq('…−64 → −1', M.fogCellOf(-64), -1);
-eq('…−65 → −2', M.fogCellOf(-65), -2);
+vector("[1] fog_veil: (b) 0 → 0", { fogCellOf: (...args) => M.fogCellOf(...vectorArgs(args)) });
+vector("[1] fog_veil: …63.999 → 0", { fogCellOf: (...args) => M.fogCellOf(...vectorArgs(args)) });
+vector("[1] fog_veil: …64 → 1", { fogCellOf: (...args) => M.fogCellOf(...vectorArgs(args)) });
+vector("[1] fog_veil: …100 → 1", { fogCellOf: (...args) => M.fogCellOf(...vectorArgs(args)) });
+vector("[1] fog_veil: …900 → 14", { fogCellOf: (...args) => M.fogCellOf(...vectorArgs(args)) });
+vector("[1] fog_veil: …950 → 14", { fogCellOf: (...args) => M.fogCellOf(...vectorArgs(args)) });
+vector("[1] fog_veil: (c) RED: −1 → −1, not 0", { fogCellOf: (...args) => M.fogCellOf(...vectorArgs(args)) });
+vector("[1] fog_veil: …−64 → −1", { fogCellOf: (...args) => M.fogCellOf(...vectorArgs(args)) });
+vector("[1] fog_veil: …−65 → −2", { fogCellOf: (...args) => M.fogCellOf(...vectorArgs(args)) });
 
 // ── [2] fogParseCell ────────────────────────────────────────────────────────
 
 console.log('\n[2] fogParseCell — two integers, or nothing');
-eq('(d) "0,0"', M.fogParseCell('0,0'), [0, 0]);
-eq('…"-1,2"', M.fogParseCell('-1,2'), [-1, 2]);
-eq('…"14,1"', M.fogParseCell('14,1'), [14, 1]);
-eq('(e) RED: "3.5,1" is dropped', M.fogParseCell('3.5,1'), null);
-eq('…RED: "+3,1"', M.fogParseCell('+3,1'), null);
-eq('…RED: " 3,1"', M.fogParseCell(' 3,1'), null);
-eq('…RED: "3,1,2"', M.fogParseCell('3,1,2'), null);
-eq('…RED: "3"', M.fogParseCell('3'), null);
-eq('…RED: "a,b"', M.fogParseCell('a,b'), null);
-eq('…RED: ""', M.fogParseCell(''), null);
+vector("[2] fog_veil: (d) \"0,0\"", { fogParseCell: (...args) => M.fogParseCell(...vectorArgs(args)) });
+vector("[2] fog_veil: …\"-1,2\"", { fogParseCell: (...args) => M.fogParseCell(...vectorArgs(args)) });
+vector("[2] fog_veil: …\"14,1\"", { fogParseCell: (...args) => M.fogParseCell(...vectorArgs(args)) });
+vector("[2] fog_veil: (e) RED: \"3.5,1\" is dropped", { fogParseCell: (...args) => M.fogParseCell(...vectorArgs(args)) });
+vector("[2] fog_veil: …RED: \"+3,1\"", { fogParseCell: (...args) => M.fogParseCell(...vectorArgs(args)) });
+vector("[2] fog_veil: …RED: \" 3,1\"", { fogParseCell: (...args) => M.fogParseCell(...vectorArgs(args)) });
+vector("[2] fog_veil: …RED: \"3,1,2\"", { fogParseCell: (...args) => M.fogParseCell(...vectorArgs(args)) });
+vector("[2] fog_veil: …RED: \"3\"", { fogParseCell: (...args) => M.fogParseCell(...vectorArgs(args)) });
+vector("[2] fog_veil: …RED: \"a,b\"", { fogParseCell: (...args) => M.fogParseCell(...vectorArgs(args)) });
+vector("[2] fog_veil: …RED: \"\"", { fogParseCell: (...args) => M.fogParseCell(...vectorArgs(args)) });
 
 // ── [3] fogGrid ─────────────────────────────────────────────────────────────
 
 console.log('\n[3] fogGrid — bounding box + one cell of zeros on every side');
 eq('(f) FOG_PAD_CELLS', M.FOG_PAD_CELLS, 1);
-eq('(g) ["0,0"]', M.fogGrid(['0,0']), { cx0: -1, cz0: -1, cols: 3, rows: 3 });
-eq('(h) ["0,0","2,1"]', M.fogGrid(['0,0', '2,1']),
-   { cx0: -1, cz0: -1, cols: 5, rows: 4 });
-eq('(i) ["-3,-3"]', M.fogGrid(['-3,-3']),
-   { cx0: -4, cz0: -4, cols: 3, rows: 3 });
-eq('(j) an unreadable key is skipped, not guessed at',
-   M.fogGrid(['0,0', 'nope']), { cx0: -1, cz0: -1, cols: 3, rows: 3 });
-eq('(k) the empty set has no box', M.fogGrid([]), null);
-eq('…and neither has one of nothing but noise', M.fogGrid(['nope']), null);
+vector("[3] fog_veil: (g) [\"0,0\"]", { fogGrid: (...args) => M.fogGrid(...vectorArgs(args)) });
+vector("[3] fog_veil: (h) [\"0,0\",\"2,1\"]", { fogGrid: (...args) => M.fogGrid(...vectorArgs(args)) });
+vector("[3] fog_veil: (i) [\"-3,-3\"]", { fogGrid: (...args) => M.fogGrid(...vectorArgs(args)) });
+vector("[3] fog_veil: (j) an unreadable key is skipped, not guessed at", { fogGrid: (...args) => M.fogGrid(...vectorArgs(args)) });
+vector("[3] fog_veil: (k) the empty set has no box", { fogGrid: (...args) => M.fogGrid(...vectorArgs(args)) });
+vector("[3] fog_veil: …and neither has one of nothing but noise", { fogGrid: (...args) => M.fogGrid(...vectorArgs(args)) });
 
 // ── [4] fogTexUv ────────────────────────────────────────────────────────────
 
@@ -456,13 +466,13 @@ eq('(q) FOG_BLEND_M is half a cell', M.FOG_BLEND_M, 32);
 console.log('\n[6] fogHeightAlpha — smoothstep, both ends exact');
 eq('(t) FOG_CLEAR_H_M', M.FOG_CLEAR_H_M, 20);
 eq('…FOG_FULL_H_M', M.FOG_FULL_H_M, 45);
-eq('(u) h = 0 → EXACTLY 0', M.fogHeightAlpha(0), 0);
-eq('…h = 20 → EXACTLY 0', M.fogHeightAlpha(20), 0);
-near('…h = 26.25 → 0.15625', M.fogHeightAlpha(26.25), 0.15625);
-near('…h = 32.5 → 0.5', M.fogHeightAlpha(32.5), 0.5);
-near('…h = 38.75 → 0.84375', M.fogHeightAlpha(38.75), 0.84375);
-eq('…h = 45 → EXACTLY 1', M.fogHeightAlpha(45), 1);
-eq('…h = 200 → 1', M.fogHeightAlpha(200), 1);
+vector("[6] fog_veil: (u) h = 0 → EXACTLY 0", { fogHeightAlpha: (...args) => M.fogHeightAlpha(...vectorArgs(args)) });
+vector("[6] fog_veil: …h = 20 → EXACTLY 0", { fogHeightAlpha: (...args) => M.fogHeightAlpha(...vectorArgs(args)) });
+vector("[6] fog_veil: …h = 26.25 → 0.15625", { fogHeightAlpha: (...args) => M.fogHeightAlpha(...vectorArgs(args)) });
+vector("[6] fog_veil: …h = 32.5 → 0.5", { fogHeightAlpha: (...args) => M.fogHeightAlpha(...vectorArgs(args)) });
+vector("[6] fog_veil: …h = 38.75 → 0.84375", { fogHeightAlpha: (...args) => M.fogHeightAlpha(...vectorArgs(args)) });
+vector("[6] fog_veil: …h = 45 → EXACTLY 1", { fogHeightAlpha: (...args) => M.fogHeightAlpha(...vectorArgs(args)) });
+vector("[6] fog_veil: …h = 200 → 1", { fogHeightAlpha: (...args) => M.fogHeightAlpha(...vectorArgs(args)) });
 {
   let bad = 0;
   let prev = -1;
@@ -490,14 +500,14 @@ eq('…h = 200 → 1', M.fogHeightAlpha(200), 1);
 
 console.log('\n[7] fogVeilAlpha — the product');
 eq('(y) FOG_ALPHA_MAX ("haze, not black")', M.FOG_ALPHA_MAX, 0.72);
-near('(z) h 32.5, explored 0 → 0.36', M.fogVeilAlpha(32.5, 0), 0.36);
-near('…h 32.5, explored 0.5 → 0.18', M.fogVeilAlpha(32.5, 0.5), 0.18);
-eq('…h 32.5, explored 1 → 0', M.fogVeilAlpha(32.5, 1), 0);
-near('…h 45, explored 0 → 0.72', M.fogVeilAlpha(45, 0), 0.72);
-near('…h 45, explored 0.5 → 0.36', M.fogVeilAlpha(45, 0.5), 0.36);
-eq('(aa) h 10 → 0 whatever the ground remembers', M.fogVeilAlpha(10, 0), 0);
-eq('(ab) explored 2 is clamped, not subtracted', M.fogVeilAlpha(45, 2), 0);
-near('…and explored −1 likewise', M.fogVeilAlpha(45, -1), 0.72);
+vector("[7] fog_veil: (z) h 32.5, explored 0 → 0.36", { fogVeilAlpha: (...args) => M.fogVeilAlpha(...vectorArgs(args)) });
+vector("[7] fog_veil: …h 32.5, explored 0.5 → 0.18", { fogVeilAlpha: (...args) => M.fogVeilAlpha(...vectorArgs(args)) });
+vector("[7] fog_veil: …h 32.5, explored 1 → 0", { fogVeilAlpha: (...args) => M.fogVeilAlpha(...vectorArgs(args)) });
+vector("[7] fog_veil: …h 45, explored 0 → 0.72", { fogVeilAlpha: (...args) => M.fogVeilAlpha(...vectorArgs(args)) });
+vector("[7] fog_veil: …h 45, explored 0.5 → 0.36", { fogVeilAlpha: (...args) => M.fogVeilAlpha(...vectorArgs(args)) });
+vector("[7] fog_veil: (aa) h 10 → 0 whatever the ground remembers", { fogVeilAlpha: (...args) => M.fogVeilAlpha(...vectorArgs(args)) });
+vector("[7] fog_veil: (ab) explored 2 is clamped, not subtracted", { fogVeilAlpha: (...args) => M.fogVeilAlpha(...vectorArgs(args)) });
+vector("[7] fog_veil: …and explored −1 likewise", { fogVeilAlpha: (...args) => M.fogVeilAlpha(...vectorArgs(args)) });
 
 // ── [8]/[9] the module on the GPU side ──────────────────────────────────────
 
