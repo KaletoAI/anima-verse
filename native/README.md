@@ -283,6 +283,7 @@ Arguments after `--` (no .env; all optional):
 | `--check veil` | only the exploration veil (`Check/VeilCheck.cs`, `fixtures/explored.json`: shaders, cells texture, soft edge, crossfade, strength, colour), then exit 0/1 |
 | `--check stream` | only the terrain streaming section (`Check/StreamCheck.cs`: a fake server answering height, statistics and mask batches for a ten-tile strip — batches, LRU, windows, `height_sig`/`terrain_sig` reloads, re-datum, re-index), then exit 0/1 |
 | `--fly=M[,DEG]` | after the boot, fly the camera target M metres in a straight line (heading DEG: 0 = +x, 90 = +z) at 50 m/s, let the stream settle and log `fly done …` (tiles taken/evicted, the longest frame, the longest frame while streaming); with `--offline` it then quits |
+| `--check shadow` | only the shadow section (`Check/ShadowCheck.cs` on `fixtures/s3c`: the browser's caster classes, the 140 m caster box gate, the cluster budget, the scatter hemisphere term, the compute-fog default), then exit 0/1 |
 | `--check light` | only the light section (`Check/LightCheck.cs`: the game-hour stage at 6/7/9/12/18/22 h, hemisphere, shadow fit, material policy, MSAA option), then exit 0/1 |
 | `--check figures` | only the figure section (`Check/CheckRunner.cs` `CheckFigures` on the fixture world: whole library, set chain, actions and aliases, activity clips, one-shot hold, model revision, model queue, tiers 25/35, the importer cross-check `rest_reference.json`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
@@ -380,13 +381,20 @@ the fly drive's `max while streaming` below 33 ms with scatter on (the bench dri
 its `streamMaxFrameMs` is normally null — the fly drive is the streaming probe). Every result also goes to the
 server's `logs/bench.jsonl`.
 
-### Bench matrix (Task 26b)
+### Bench matrix (Task 26b, interleaved since Task 26c)
 
 `--bench-matrix` runs the drive of `--bench` once per variant, in ONE process, on the SAME world and anchor, with the
-same warm-up and duration — each pass with exactly ONE feature switched off at runtime (`Bench/BenchSwitches.cs`: a node
-hidden, a uniform zeroed, a light flag, a renderer setting; nothing is rebuilt) and put back after it. It implies
-`--bench` (window size, start, `--quit-after-bench`); `--bench-matrix=A,B,…` runs only those variants (the baseline is
-always added). 14 passes × 23 s ≈ 5.5 min:
+same warm-up and duration — each pass with exactly ONE feature switched off (or one technique swapped) at runtime
+(`Bench/BenchSwitches.cs`: a node hidden, a uniform zeroed, a light flag, a renderer setting; nothing is rebuilt) and put
+back after it. It implies `--bench` (window size, start, `--quit-after-bench`); `--bench-matrix=A,B,…` runs only those
+variants (the baseline is always added).
+
+**Drift.** A laptop iGPU warms up and clocks down over the minutes a matrix takes (the second run of 2026-10-26 had
+its middle passes 2–3 ms slower than the baseline although each switched something off). So a **baseline pass runs
+between every two variants** (B V₁ B V₂ … Vₙ B, `BenchMatrix.Schedule`) and every variant is reported against the MEAN
+of the two baselines right around it (`BenchMatrix.NeighbourDeltas`) — a drift that is linear over those three passes
+cancels; each baseline shows its own drift against the first. The full matrix is 13 variants + 14 baselines = 27 passes
+× 23 s ≈ 10.5 min; a subset (`--bench-matrix=no-shadow,fog-pass`) is 2n + 1 passes:
 
 ```bash
 ./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench-matrix --quit-after-bench --size=3816x1030 --msaa=0
@@ -394,10 +402,11 @@ always added). 14 passes × 23 s ≈ 5.5 min:
 
 | variant | what is switched (and restored) |
 |---|---|
-| `baseline` | nothing |
+| `baseline` | nothing (between every two variants) |
 | `no-shadow` | the sun's `ShadowEnabled` off: no shadow pass, no shadow sampling |
-| `no-hemi-extra-lights` | ambient only: the two hemisphere pair lights hidden AND the terrain's hemisphere shader term (`av_hemi`) zeroed |
-| `no-fog-pass` | the distance fog off (`DistanceFog.Off`): no screen/depth copy, no full-screen pass |
+| `shadow-full-view` | the browser's 140 m caster box off (`ShadowCasterGate.Off`): every caster in Godot's own frustum fit draws into the shadow pass (the pre-26c caster area) |
+| `no-hemi-extra-lights` | ambient only: the two hemisphere pair lights hidden AND the hemisphere shader term (`av_hemi`: terrain, scatter, undergrowth) zeroed |
+| `no-fog-pass` | the distance fog off (`DistanceFog.Off`): no compute pass, no screen pass, no copies |
 | `no-veil` | `fv_alpha` 0 on every ground material (`VeilUniforms.Off`) — its uniform branch reads no texture |
 | `no-backdrop` | the mountain backdrop rings hidden |
 | `no-water-extras` | the terrain water's ripple (`tw_ripple_on` 0), every underwater ghost (`SubmergedGhost.Off`), the waterfalls and the prop water sheets |
@@ -406,24 +415,34 @@ always added). 14 passes × 23 s ≈ 5.5 min:
 | `no-cut-shader` | every cut surface wears its plain source material instead of the cut shader port (`CutMaterials.Plain`; holes and clips are gone meanwhile) |
 | `terrain-lod-coarse` | the CDLOD selection with the pixel scale × 0.5 (`TerrainLodNode.PixelScaleFactor`) = allowed screen error 2 → 4 px |
 | `shadow-atlas-2048` | `RenderingServer.DirectionalShadowAtlasSetSize(2048)` instead of 4096 |
-| `fog-compute` | the candidate (not a feature off): the distance fog as the compute pass instead of the screen pass (see `--fog`) |
-| `baseline-end` | nothing — the drift control (a laptop iGPU warms up over five minutes; compare it with `baseline`) |
+| `fog-pass` | the fallback (not a feature off): the distance fog as the screen-texture pass instead of the compute pass (see `--fog`) |
 
 Every pass prints its `[bench] result {json}` line with the extra keys `variant`, `switch` (what it did, with counts),
-`applied` (false = there was nothing to switch, e.g. no mirror in reach or no GPU for `fog-compute` — the pass still
-runs), `matrixId`, `matrixPass`, `matrixPasses`; appends it to ONE file `user://bench-matrix-<yyyyMMdd-HHmmss>.jsonl`
-(path printed) and posts it to `/play/bench-result` (→ the server's `logs/bench.jsonl`). After the last pass the summary
-table (fps, frame median/P95, GPU median, ΔGPU against `baseline`, draws, triangles) is printed as `[bench-matrix] …`
-lines and shown in a panel. `--check matrix` switches every variant on the props fixture and proves each restore puts
-back exactly what was there.
+`applied` (false = there was nothing to switch, e.g. no mirror in reach, or no GPU for the compute fog so `fog-pass`
+changes nothing — the pass still runs), `matrixId`, `matrixPass`, `matrixPasses`, and `shadowCasters` (below); appends it
+to ONE file `user://bench-matrix-<yyyyMMdd-HHmmss>.jsonl` (path printed) and posts it to `/play/bench-result` (→ the
+server's `logs/bench.jsonl`). After the last pass the summary table (per pass: fps, frame median/P95, GPU median, the
+reference = the neighbouring baselines' mean, ΔGPU against it, draws, triangles), the variants sorted by ΔGPU and the
+baselines' drift are printed as `[bench-matrix] …` lines and shown in a panel; one closing `matrixSummary` line with
+every pass's `gpuRefMs` / `gpuDeltaMs` goes into the local file. `--check matrix` switches every variant on the props
+fixture and proves each restore puts back exactly what was there.
 
-**`--fog=pass|compute`** — the distance fog as the screen pass (default) or as ONE compute pass on the colour buffer
-(`World/FogComputeEffect.cs`, a `CompositorEffect` at post-transparent on the overview camera; kernel and its CPU twin in
-`Core/Sky/FogCompute.cs`). The numbers are the screen pass's (opaque pixels: identical, unit-tested), the road is cheaper:
-no copy of the colour buffer with its full mip chain and no depth copy every frame (with MSAA also no extra pre-transparent
-resolves). Needs a GPU; without one, or when the kernel does not compile (logged), the screen pass stays. Differences: a
-transparent surface beyond 220 m is fogged by the opaque depth behind it; mirror reflections are not fogged (they show a
-room at ≤ 12 m).
+**`shadowCasters`** (every bench result, Task 26c, `Bench/ShadowCensus.cs`): what the directional shadow pass draws at
+the drive's last pose, counted on the CPU against Godot's own caster volume (light-space box of the camera frustum slice,
+at the requested `--size` aspect) and the sun's caster mask: `shadow-casters[draws=… tris=… instances=… <class>=instances/draws/tris …]`
+plus the gate's `registered`/`inside`/`passes`/`last_ms`. Godot's light culler can only drop more, so it is an upper bound;
+the headless renderer reports no draws at all, which is why it exists.
+
+**`--fog=compute|pass`** — the distance fog as ONE compute pass on the colour buffer (**the default since Task 26c**;
+`World/FogComputeEffect.cs`, a `CompositorEffect` at post-transparent on the overview camera; kernel and its CPU twin in
+`Core/Sky/FogCompute.cs`) or as the screen-texture pass (`--fog=pass`, the fallback). The numbers are the screen pass's
+(opaque pixels: identical display bytes, unit-tested to 1e-12 against the pass's own blend), the road is cheaper: no copy
+of the colour buffer with its full mip chain and no depth copy every frame (with MSAA also no extra pre-transparent
+resolves). Needs a GPU; without one, or when the kernel does not compile (logged), the screen pass fogs by itself. The
+pass quad stays visible on render layer 18 for the mirrors' cameras (their reflections are fogged as before); only the
+overview camera leaves that layer out while the compute pass runs. Difference: a transparent surface beyond 220 m
+(glass, a fading location) is mixed in display space with the opaque depth behind it, where the screen pass attenuated
+it by (1 − f) in linear space — neither is the browser's per-material fog for transparents.
 
 ## CDLOD terrain (Task 23)
 
@@ -724,8 +743,9 @@ computes every value of it:
   surface. On the TERRAIN the pair is a shader term instead (Task 26b, `World/HemiUniforms.cs`): the terrain instances
   sit on render layer 20, which the two pair lights skip (`light_cull_mask`), and every ground shader adds
   `ALBEDO · (1 − METALLIC) · av_hemi · n.y` to its emission — the exact sum Godot forms for the pair — so the screen's
-  largest surface no longer runs two extra `light_compute` per pixel. Models, scatter, recipe pieces and figures keep
-  the lights. No sky reflection (`ReflectedLightSource.Disabled`), sun/fill `light_specular` 1 (Godot's 0.5 halves the
+  largest surface no longer runs two extra `light_compute` per pixel. Since Task 26c the scatter and the undergrowth do
+  the same (`Scatter/ScatterShaders.cs`, their nodes on layer 20, n = the shading normal after Godot's back-face flip).
+  Models, recipe pieces and figures (StandardMaterial3D) keep the lights. No sky reflection (`ReflectedLightSource.Disabled`), sun/fill `light_specular` 1 (Godot's 0.5 halves the
   directional GGX; omni lights already double theirs), linear tone map (three's NoToneMapping).
 - **Materials**: Lambert diffuse like three's MeshStandardMaterial on every imported GLB (`GlbLoader.BrowserLook`), the
   scatter, the recipe fallback and the placeholders; GLB meshes and the scatter receive no shadow (three's
@@ -733,6 +753,24 @@ computes every value of it:
 - **Shadow**: one orthogonal directional shadow (Godot fits it to the camera frustum up to
   `ceil((camera distance + 70)/10)·10` m and snaps it to texels itself) on the 4096 atlas — 3.8–10.6 cm per texel over
   the zoom range, 7.2 cm at the boot zoom against the browser's 6.8 cm.
+- **Shadow casters like the browser** (Task 26c). *Where*: three draws into its shadow map only what its orthographic
+  shadow camera sees — ±70 m around the snapped centre in the light plane, 0.5–300 m from the sun. Godot culls casters
+  against the light-space box of the whole camera slice instead (at aspect 3.7 several times that). `World/ShadowCasterGate.cs`
+  registers every GeometryInstance3D through the tree's `node_added`/`node_removed`, puts render layer 19 on the
+  casters whose bounds meet the browser's prism + 8 m (`Core/Sky/ShadowBoxGate.cs`; a pass when the centre moved 4 m,
+  the light turned, casters came or went, and every 0.5 s for walkers) and the sun's `shadow_caster_mask` is that layer:
+  inside the box the shadow is the browser's, outside there is none — as in the browser. *What*: three's per-class
+  `castShadow` — building models and the far-shell copies cast; inside an interior only the plates of a storey above
+  ground with a thickness (`plate.level > 0 && plate.thickness > 0`); walls, extras, recipe placements, world props,
+  stand-ins, sprites, scatter, undergrowth, terrain never; outside an interior everything follows the shell flag of the
+  crossfade (on below fade 0.4), and a location without an interior keeps its construction flags (`applyTileFade`
+  returns early). Bench variant `shadow-full-view` switches the box off.
+- **Clustered lights** (Task 26c, `project.godot`): `rendering/limits/cluster_builder/max_clustered_elements` = 32
+  (default 512). Godot clears, rasterises into and packs its cluster render buffer every frame in which ANY omni light is
+  visible; at 3816×1030 that buffer is 41.8 MB at 512 and 2.6 MB at 32. The world has at most the six prop lamps and no
+  spot lights, decals or probes. The lamps themselves follow the browser exactly (`pickLights`: a `when: night` lamp only
+  above night 0.3, an `always` lamp — most of them, by day too — only in a shown room and within range + 30 m); an
+  empty or dark slot is hidden (Task 26b).
 - **MSAA** 4× by default (`--msaa=0|2|4|8`).
 - **Prop lamps** (Task 26b): a pool slot without a source or at energy 0 is hidden — Godot clusters every visible omni
   light by its range (4096 m for a range-0 lamp) whatever its energy.

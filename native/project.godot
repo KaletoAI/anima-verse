@@ -21,3 +21,9 @@ project/assembly_name="AnimaNative"
 [rendering]
 
 renderer/rendering_method="forward_plus"
+; Task 26c: the clustered-element budget per type (Godot 4.7.2 cluster_builder_rd.cpp). The cluster render buffer is
+; clusters × (5·N/32 + 5·N) × 4 bytes and is cleared, rasterised into and packed every frame in which ANY omni light is
+; visible: at the default N = 512 and 3816×1030 (120 × 33 = 3960 clusters of 32 px) that is 41.8 MB cleared per frame
+; (2.6 MB at N = 32); the always-cleared cluster buffer drops from 3.8 to 2.6 MB. The world has at most the six prop
+; lamps (PropLights.PoolSize) and no spot lights, decals or probes, so 32 (Godot's minimum) clusters every one of them.
+limits/cluster_builder/max_clustered_elements=32

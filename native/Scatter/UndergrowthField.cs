@@ -359,6 +359,8 @@ public partial class UndergrowthField : Node3D
             Multimesh = mm,
             MaterialOverride = MaterialFor(area),
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            // The hemisphere pair is the shader's term here (ScatterShaders): the pair lights skip this layer.
+            Layers = World.HemiUniforms.Layer,
             Visible = false,
         };
         AddChild(node);

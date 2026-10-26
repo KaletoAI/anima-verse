@@ -5,15 +5,15 @@ namespace AnimaNative.World;
 
 /// <summary>
 /// The distance fog as a compute pass (<see cref="FogCompute"/>, Task 26b): a <see cref="CompositorEffect"/> on the overview
-/// camera at <c>POST_TRANSPARENT</c> that fogs the resolved colour buffer in place from the depth texture. Off by default
-/// (<c>--fog=compute</c> or the bench variant <c>fog-compute</c> switch it on; the screen pass of
-/// <see cref="DistanceFog"/> is hidden while it runs, so exactly one of the two fogs a frame).
+/// camera at <c>POST_TRANSPARENT</c> that fogs the resolved colour buffer in place from the depth texture. The default since
+/// Task 26c (<c>--fog=pass</c> or the bench variant <c>fog-pass</c> switch it off; the overview camera does not draw the
+/// screen pass of <see cref="DistanceFog"/> while it runs, so exactly one of the two fogs a frame).
 ///
 /// Threading: the kernel is compiled and freed on the render thread (<c>RenderingServer.CallOnRenderThread</c>), the
 /// callback runs there; the main thread only writes the sky colour and the lens into one immutable record. Without a
 /// <see cref="RenderingDevice"/> (the headless dummy renderer of <c>--check</c> / <c>--offline</c>) nothing is created and
-/// <see cref="Available"/> stays false. Mirror cameras do not carry the effect — a mirror's reflection is a room at
-/// arm's length (≤ 12 m refresh, the fog starts at 220 m); with the screen pass hidden it shows no fog.
+/// <see cref="Available"/> stays false. Mirror cameras do not carry the effect: they keep drawing the screen pass (its quad
+/// stays visible on <see cref="DistanceFog.PassLayer"/>, only the overview camera leaves that layer out).
 /// </summary>
 public partial class FogComputeEffect : CompositorEffect
 {

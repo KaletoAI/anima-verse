@@ -124,6 +124,8 @@ public partial class EventPins : Node3D
                 OutlineSize = 0,
                 RenderPriority = 10,
                 Modulate = Colors.White,
+                // A browser sprite casts nothing (three's castShadow default false; Task 26c).
+                CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
             };
         }
         return new Sprite3D
@@ -136,6 +138,7 @@ public partial class EventPins : Node3D
             DoubleSided = true,
             RenderPriority = 10,
             TextureFilter = BaseMaterial3D.TextureFilterEnum.LinearWithMipmaps,
+            CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
         };
     }
 

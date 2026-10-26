@@ -111,6 +111,7 @@ public sealed partial class WorldBuilder
             rec.WantUrl = null;
             if (template is null) return;   // keep what stands
             var placed = ModelPlacement.Place(ModelCache.Instance(template), rec.Spec);
+            if (!rec.IsBuilding) SceneModels.CastNone(placed);
             var old = rec.Node;
             // A real mesh from here on (a stand-in box takes no cutouts and no clip, a mesh does).
             rec.Placeholder = false;

@@ -935,11 +935,29 @@ lit sum at n.y = 1, 0.75, 0.5, 0.2, 0, −0.5, −1 (1e-6); sun and fill keep la
 The props world (above) with the stage at noon, a camera carrying the fog pass and its compute twin, a backdrop ring
 (seed 7, arc [90, 135] → 2 rings), the veil at full height (45 m, fogged → alpha 0.72) and one underwater ghost + one prop
 water sheet hung on the world props' water list; three prop ticks at night light the pool and grant a mirror pass. Every
-variant of `BenchMatrix.Variants` is switched and read back on the live nodes (sun shadow off; both pair lights hidden and
-`av_hemi` 0 on every bound ground material; fog pass hidden and no compute; `fv_alpha` 0; rings hidden; ghost + its twin
-meshes + the sheet hidden; mirror `Tick` grants 0; the light pool hidden; every cut surface wears its `Source`; pixel scale
-factor 0.5; atlas 4096 → 2048 in the detail), then restored — one snapshot of everything the switches touch must equal the
-one taken before. Headless has no RenderingDevice: `fog-compute` reports `applied: false` and the screen pass stays.
+variant of `BenchMatrix.Variants` is switched and read back on the live nodes (sun shadow off; the caster gate off with
+more instances on its layer; both pair lights hidden and `av_hemi` 0 on every bound material; fog pass hidden and no
+compute; `fv_alpha` 0; rings hidden; ghost + its twin meshes + the sheet hidden; mirror `Tick` grants 0; the light pool
+hidden; every cut surface wears its `Source`; pixel scale factor 0.5; atlas 4096 → 2048 in the detail), then restored —
+one snapshot of everything the switches touch must equal the one taken before. Headless has no RenderingDevice: the
+compute fog (the default since Task 26c) is unavailable, the screen pass fogs the main view, and `fog-pass` reports
+`applied: false`. The schedule (Task 26c) is 2n − 1 = 27 passes for the 14 variants: baselines at every even position,
+the 13 variants in their order at the odd ones.
+
+## Shadow casters (Task 26c, `Check/ShadowCheck.cs`, `--check shadow`, S3c world)
+
+The S3c world (above), built fresh. **H1** world props (2 placed) cast nothing. loc-open's interior: its plates are
+level 1 thickness 0.2 (contour → `Recipe_slab1_*`), level 1 thickness 0.02 (room r-up → `Recipe_plate1_*`) and level 0
+thickness 0 (r-garden) — so by `castShadow = level > 0 && thickness > 0` exactly the tags slab1 and plate1 cast; walls
+(`wall*`), extras (`other`), the chair/door/window/room placements and the stand-in box do not. The 3 meshes outside the
+interior (the building GLB's 2 meshes and the garden plate) cast at fade 0 and stop at fade 1 (shell flag below 0.4); the
+interior keeps its flags through the fade. A bare group with a casting and a non-casting mesh and NO interior keeps both
+flags at fade 1 and back at 0. **H2** the stage at noon with the gate on the world: the sun's caster mask is 1 << 18; one
+pass at loc-open's datum (camera distance 40) gives the 3 shell meshes the layer; a box 300 m along +x (light x at noon,
+beyond 78 m) and a box on the hemisphere layer at the target do not; the gate off gives the far box the layer, on again
+takes it away; freeing the far box drops the registry by one. **H3** `max_clustered_elements` = 32 ≥ 6; a scatter tuft
+material is bound to `av_hemi` and the textured two-sided shader prints the term; `--fog` defaults to compute, `pass` /
+`compute` parse; the pass quad is on layer 18 (1 << 17) and, headless, the overview camera keeps that layer (no compute).
 
 
 ## Fog (Task 22, `Check/FogCheck.cs`, no fixture world)

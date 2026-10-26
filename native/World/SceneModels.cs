@@ -81,6 +81,8 @@ public static class SceneModels
                 var ph = Placeholder(d, phMaterials);
                 ph.Position = new Vector3((float)spec.AnchorX, (float)(spec.BottomY + lift), (float)spec.AnchorZ);
                 ph.Rotation = new Vector3(0, (float)(spec.YawDeg * Math.PI / 180.0), 0);
+                // buildPlaceholder: receiveShadow only — three's castShadow default false (Task 26c).
+                CastNone(ph);
                 parent.AddChild(ph);
                 stats.Placeholders++;
                 return ph;
@@ -90,6 +92,7 @@ public static class SceneModels
         }
         var placed = ModelPlacement.Place(ModelCache.Instance(template), spec);
         if (lift != 0) placed.Position += new Vector3(0, (float)lift, 0);
+        if (kind != "building") CastNone(placed);
         parent.AddChild(placed);
         stats.Placed[kind]++;
         stats.Vertices += template.Counts.Vertices;
@@ -98,6 +101,18 @@ public static class SceneModels
         if (tier == "low") stats.Low++;
         else stats.Full++;
         return placed;
+    }
+
+    /// <summary>
+    /// The browser's caster classes (Task 26c): only a location's BUILDING model casts by construction
+    /// (<c>applySceneBuilding</c>: <c>castShadow = true</c>); recipe placements (props, doors, windows, rooms), world
+    /// props (worldProps.ts) and stand-in boxes keep three's default <c>castShadow = false</c>. The crossfade then turns
+    /// everything outside an interior to the shell's flag (<see cref="LocationFade"/>, tiles.ts <c>applyTileFade</c>).
+    /// </summary>
+    public static void CastNone(Node root)
+    {
+        if (root is GeometryInstance3D g) g.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
+        foreach (var c in root.GetChildren()) CastNone(c);
     }
 
     /// <summary>A placement that is the grey stand-in box, not a mesh (<see cref="Placeholder"/>).</summary>

@@ -23,6 +23,12 @@ namespace AnimaNative.Scatter;
 /// (× instance colour for the undergrowth), roughness/metallic, alpha cut, Lambert diffuse + GGX, and no received
 /// shadows (the browser's scatter and undergrowth meshes keep three's <c>receiveShadow = false</c>). Not ported: the camera-avatar
 /// corridor fade (<c>applyOcclusionFade</c>) and the ground hole patch.
+///
+/// The hemisphere pair as a shader term (Task 26c, like the terrain's in Task 26b — <see cref="World.HemiUniforms"/>): the
+/// scatter and undergrowth nodes sit on <see cref="World.HemiUniforms.Layer"/>, which the two pair lights skip, and the
+/// fragment adds <c>EMISSION = albedo · (1 − metallic) · av_hemi · n.y</c> instead — the exact sum Godot forms for the
+/// pair on a Lambert surface (<c>colour·E·π · max(N·L, 0)/π</c> each, the lower one negative, then × albedo × ao ×
+/// (1 − metallic); ao is 1, n is the shading normal after Godot's back-face flip, which is what the lights read).
 /// </summary>
 public static class ScatterShaders
 {
@@ -69,6 +75,7 @@ uniform vec4 albedo_color : source_color = vec4(1.0);
 uniform float roughness_v = 0.95;
 uniform float metallic_v = 0.0;
 uniform float sway_ref = 1.0;
+uniform vec3 av_hemi = vec3(0.0);
 {(alphaCut ? "uniform float alpha_cut = 0.5;" : "")}
 void vertex() {{{bend}
 }}
@@ -77,6 +84,7 @@ void fragment() {{
 	ALBEDO = c.rgb;
 	ROUGHNESS = roughness_v;
 	METALLIC = metallic_v;
+	EMISSION = c.rgb * (1.0 - metallic_v) * av_hemi * normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz).y;
 {(alphaCut ? "	ALPHA = c.a;\n	ALPHA_SCISSOR_THRESHOLD = alpha_cut;" : "")}
 }}
 ";
@@ -97,6 +105,7 @@ void fragment() {{
     public static ShaderMaterial Tuft(string kindColor, double sway, double refH)
     {
         var m = new ShaderMaterial { Shader = Get(Amp(sway), false, false, false, false) };
+        World.HemiUniforms.Bind(m);
         m.SetShaderParameter("albedo_color", ScaledColor(kindColor, 0.75));
         m.SetShaderParameter("roughness_v", 0.95f);
         m.SetShaderParameter("sway_ref", (float)(refH > 0 ? refH : 1));
@@ -111,6 +120,7 @@ void fragment() {{
         bool cullOff = std is { CullMode: BaseMaterial3D.CullModeEnum.Disabled };
         var tex = std?.AlbedoTexture;
         var m = new ShaderMaterial { Shader = Get(Amp(sway), tex is not null, false, alphaCut, cullOff) };
+        World.HemiUniforms.Bind(m);
         m.SetShaderParameter("albedo_color", std?.AlbedoColor ?? Colors.White);
         if (tex is not null) m.SetShaderParameter("albedo_tex", tex);
         m.SetShaderParameter("roughness_v", std?.Roughness ?? 1f);
@@ -125,6 +135,7 @@ void fragment() {{
     public static ShaderMaterial Undergrowth(Texture2D tex, string kindColor, double swayM)
     {
         var m = new ShaderMaterial { Shader = Get(Amp(swayM), true, true, true, false) };
+        World.HemiUniforms.Bind(m);
         m.SetShaderParameter("albedo_color", ScaledColor(kindColor, UndergrowthMath.Albedo * UndergrowthMath.BladeTintMax));
         m.SetShaderParameter("albedo_tex", tex);
         m.SetShaderParameter("roughness_v", 0.95f);

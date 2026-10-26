@@ -13,8 +13,9 @@ namespace AnimaNative.World;
 /// instead — <c>EMISSION += ALBEDO · (1 − METALLIC) · av_hemi · n.y</c>, which is the exact sum Godot forms for the pair
 /// (<c>diffuse_light += colour·energy·π · max(N·L, 0)/π</c>, then <c>× albedo × ao × (1 − metallic)</c>; ao is 1, the
 /// ground writes no AO) — and the terrain instances sit on <see cref="Layer"/>, which the two pair lights do not light
-/// (<c>light_cull_mask</c>; the shader skips a masked directional light before <c>light_compute</c>). Everything else
-/// (models, scatter, recipe pieces, figures) keeps the pair lights.
+/// (<c>light_cull_mask</c>; the shader skips a masked directional light before <c>light_compute</c>). Since Task 26c the
+/// scatter and the undergrowth do the same (Scatter/ScatterShaders.cs, their nodes on <see cref="Layer"/>). Everything
+/// else (models, recipe pieces, figures — StandardMaterial3D) keeps the pair lights.
 ///
 /// <c>av_hemi</c> = the pair's linear colour × its energy (<c>Color.SrgbToLinear() · E</c>, Godot's own decode), pushed by
 /// the stage on every clock/ambience change to every bound material, like <see cref="VeilUniforms"/>.
@@ -62,7 +63,7 @@ public static class HemiUniforms
         return live;
     }
 
-    /// <summary>A ground material: the current term now, every later change too.</summary>
+    /// <summary>A ground or scatter material: the current term now, every later change too.</summary>
     public static void Bind(ShaderMaterial? material)
     {
         if (material is null) return;

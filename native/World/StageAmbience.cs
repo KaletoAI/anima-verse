@@ -33,6 +33,22 @@ public sealed class StageAmbience
     private bool _dirty = true;
     private ShaderMaterial? _water;
     private DistanceFog? _fog;
+    private ShadowCasterGate? _gate;
+
+    /// <summary>
+    /// The browser's shadow box (Task 26c): with a gate the sun casts only from instances on
+    /// <see cref="ShadowCasterGate.Layer"/>, which <see cref="Track"/> keeps on the casters inside the box; without one
+    /// (the checks' bare stage) every layer casts.
+    /// </summary>
+    public ShadowCasterGate? Gate
+    {
+        get => _gate;
+        set
+        {
+            _gate = value;
+            Sun.ShadowCasterMask = value is null ? 0xFFFFFFFFu : ShadowCasterGate.Layer;
+        }
+    }
 
     /// <summary>
     /// The distance fog pass (<c>scene.fog</c>): its colour is the clock's sky, written with the background
@@ -138,12 +154,14 @@ public sealed class StageAmbience
 
     /// <summary>
     /// The frame's sun: on the texel-snapped camera target (<c>snapShadowCentre</c>) at the clock's offset, shining
-    /// towards it; the shadow's max distance follows the camera distance (<see cref="ShadowFit.MaxDistanceM"/>).
+    /// towards it; the shadow's max distance follows the camera distance (<see cref="ShadowFit.MaxDistanceM"/>); the
+    /// caster gate follows the same snapped centre (<see cref="Gate"/>).
     /// </summary>
     public void Track(Vector3 target, double cameraDist)
     {
-        var (_, pos) = StageLight.SunPlacement((target.X, target.Y, target.Z), Frame.SunAngle);
+        var (centre, pos) = StageLight.SunPlacement((target.X, target.Y, target.Z), Frame.SunAngle);
         var off = StageLight.SunOffset(Frame.SunAngle);
+        _gate?.Update(centre, off);
         Sun.Transform = new Transform3D(LightBasisOf(off), new Vector3((float)pos.X, (float)pos.Y, (float)pos.Z));
         float maxD = (float)ShadowFit.MaxDistanceM(cameraDist);
         if (Sun.DirectionalShadowMaxDistance != maxD) Sun.DirectionalShadowMaxDistance = maxD;

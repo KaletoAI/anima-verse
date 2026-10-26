@@ -15,7 +15,8 @@ namespace AnimaNative.World;
 ///   • interior group visible at fade &gt; 0.03 (it is mounted once and held at fade 0 — no rebuild to open);
 ///   • roof parts (a fading building model: display shell / shell_area / roof_only, and the far-shell copies)
 ///     at opacity max(0, 1 − 1.4·f), hidden from f ≥ 0.95;
-///   • everything outside the interior casts shadows while f &lt; 0.4;
+///   • everything outside the interior casts shadows while f &lt; 0.4 (only when there IS an interior — without one the
+///     construction flags stand, as the browser returns early);
 ///   • the cutouts of a building model open at f &gt; 0.03 (not on a shell area): the <c>cut_on</c> uniform of its
 ///     cut materials (<see cref="CutHandle.SetCutoutsEnabled"/>, the browser's <c>setTileCutoutsEnabled</c> —
 ///     per fragment, no second model); a ground model hides altogether while a storey below ground is shown
@@ -78,7 +79,9 @@ public sealed class LocationFade
         {
             _allMeshes.Add(g);
             // The flat overlays (door marks) never cast: the browser's would only at f < 0.4, where they are hidden.
-            if ((Interior is null || !Interior.IsAncestorOf(g)) && !g.HasMeta(OverlayMeta)) _shellMeshes.Add(g);
+            // Without an interior applyTileFade returns before its shadow traverse: every mesh keeps its construction
+            // flag (the building model casts, the rest does not — SceneModels.CastNone, RecipePiece.Cast; Task 26c).
+            if (Interior is not null && !Interior.IsAncestorOf(g) && !g.HasMeta(OverlayMeta)) _shellMeshes.Add(g);
         }
         _look = null;
         _cutOn = null;
@@ -119,6 +122,7 @@ public sealed class LocationFade
             _shadow = look.ShellShadow;
             var mode = look.ShellShadow ? GeometryInstance3D.ShadowCastingSetting.On : GeometryInstance3D.ShadowCastingSetting.Off;
             foreach (var g in _shellMeshes) g.CastShadow = mode;
+            ShadowCasterGate.MarkDirty();
         }
         if (_look is not { } prev || prev.InteriorVisible != look.InteriorVisible)
         {

@@ -367,6 +367,13 @@ public static class ScatterCheck
         int lowN = 0, highN = 0;
         CompareBins(field, fx.GetProperty("measured"), ref lowN, ref highN);
         var (layers, baseN, visible, _) = CheckUndergrowth("worker: ", ug, wantUg, cp);
+        // Task 26c: every scatter / undergrowth node carries the hemisphere as its shader term — on the layer the pair
+        // lights skip, its material bound to the stage's value.
+        var nodes = field.GetChildren().Concat(ug.GetChildren()).OfType<MultiMeshInstance3D>().ToList();
+        var bound = World.HemiUniforms.Materials();
+        Expect("worker: scatter nodes on the hemisphere layer with a bound term", nodes.Count > 0
+               && nodes.All(n => n.Layers == World.HemiUniforms.Layer && n.MaterialOverride is ShaderMaterial sm && bound.Contains(sm)),
+               $"{nodes.Count(n => n.Layers != World.HemiUniforms.Layer)} of {nodes.Count} off the layer");
         return $"worker[rebuilds={field.Rebuilds - rebuilds0} discarded={field.Discarded - discarded0} drawn={lowN + highN} "
                + $"ug_cells_built={ug.CellsBuilt - built0} ug_layers={layers} ug_base={baseN} ug_drawn={visible} "
                + $"build_ms={field.MaxBuildMs:0.#} mount_ms={field.MaxApplyMs:0.##}]";

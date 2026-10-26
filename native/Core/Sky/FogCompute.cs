@@ -4,8 +4,8 @@ using AnimaNative.Scene;
 namespace AnimaNative.Sky;
 
 /// <summary>
-/// The distance fog of <see cref="FogPost"/> as ONE compute pass on the finished colour buffer (Task 26b candidate,
-/// <c>--fog=compute</c>, bench variant <c>fog-compute</c>) — the same numbers, a cheaper road.
+/// The distance fog of <see cref="FogPost"/> as ONE compute pass on the finished colour buffer (Task 26b; the default since
+/// Task 26c, <c>--fog=pass</c> / bench variant <c>fog-pass</c> = the screen pass) — the same numbers, a cheaper road.
 ///
 /// <b>What the screen pass costs besides itself.</b> A spatial shader that reads <c>hint_screen_texture</c> and
 /// <c>hint_depth_texture</c> makes Godot 4.7.2 (renderer_scene_render_rd.cpp <c>_render_buffers_copy_screen_texture</c> /

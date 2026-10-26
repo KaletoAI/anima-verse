@@ -18,11 +18,12 @@ namespace AnimaNative.Check;
 /// its compute twin under a camera, a backdrop ring and one ghost + one prop water sheet hung onto the world props'
 /// water list — read back from the live nodes:
 ///
-///   M0 the variant list: baseline first, baseline-end last, every name has a switch, a subset keeps the baseline;
+///   M0 the variant list: baseline first, every name has a switch, a subset keeps the baseline; the schedule puts a
+///      baseline between every two variants and at both ends (Task 26c: drift);
 ///   M1 each variant switches exactly its feature (the light, the uniform, the node, the flag, the material);
 ///   M2 its restore puts back EVERYTHING the switches can touch (one snapshot of all of it equals the one taken before);
-///   M3 the headless honesty: the compute fog has no RenderingDevice here, so its pass says "applied: false" and the
-///      screen pass stays.
+///   M3 the headless honesty: the compute fog has no RenderingDevice here, so the screen pass fogs anyway and the
+///      <c>fog-pass</c> variant says "applied: false".
 /// </summary>
 public static class MatrixCheck
 {
@@ -36,17 +37,25 @@ public static class MatrixCheck
         root.AddChild(world);
         bool ghostOff = SubmergedGhost.Off;
         WorldBuilder? built = null;
+        ShadowCasterGate? gate = null;
         try
         {
             // ---- M0 the list ----
             var names = BenchMatrix.Variants.Select(v => v.Name).ToList();
-            Expect("M0 baseline first, baseline-end last", names[0] == BenchMatrix.Baseline && names[^1] == BenchMatrix.BaselineEnd
-                   && names.Distinct().Count() == names.Count, string.Join(",", names));
+            Expect("M0 baseline first, every name once", names[0] == BenchMatrix.Baseline && names.Distinct().Count() == names.Count,
+                   string.Join(",", names));
+            var schedule = BenchMatrix.Schedule(BenchMatrix.Variants).Select(v => v.Name).ToList();
+            Expect("M0 the schedule interleaves the baseline (B V B … V B)", schedule.Count == 2 * names.Count - 1
+                   && schedule.Where((_, i) => i % 2 == 0).All(n => n == BenchMatrix.Baseline)
+                   && schedule.Where((_, i) => i % 2 == 1).SequenceEqual(names.Skip(1)), string.Join(",", schedule));
             Expect("M0 a subset keeps the baseline in front", BenchMatrix.Select("no-shadow,no-veil").Select(v => v.Name)
                    .SequenceEqual(new[] { BenchMatrix.Baseline, "no-shadow", "no-veil" }), "");
 
             var stage = StageAmbience.Build(root);
             stage.SetHour(12);
+            gate = new ShadowCasterGate();
+            gate.Attach(root);
+            stage.Gate = gate;
             var camera = new Camera3D { Name = "MatrixCamera" };
             root.AddChild(camera);
             var fog = DistanceFog.Attach(camera, compute: true);
@@ -77,7 +86,10 @@ public static class MatrixCheck
             var spec = new SceneModelSpec("prop", "ghost", "ghost", false, new Dictionary<string, string>(), null, 0, 0, 0, 0, 0, 1,
                                           "", null, 0, 0, 0);
             builder.WorldPropWater.Add((spec, ghostRoot, new List<MeshInstance3D> { sheet }, ghost));
-            var ctx = new BenchSwitchContext { Stage = stage, Fog = fog, Backdrop = () => backdrop, Builder = builder };
+            var ctx = new BenchSwitchContext { Stage = stage, Fog = fog, Backdrop = () => backdrop, Builder = builder, Gate = gate };
+            fog.UseCompute = true;   // Main's default (Task 26c); headless the screen pass stays all the same
+            fog.Decide();
+            stage.Track(focus, 40);
 
             var pool = builder.PropLights!;
             var mirrors = builder.Mirrors!;
@@ -99,8 +111,8 @@ public static class MatrixCheck
                 string after = Snapshot(ctx, cuts);
                 Expect($"M2 {v.Name} restores everything", after == before, $"\nbefore {before}\nafter  {after}");
             }
-            return $"matrix M0..M3 ok ({BenchMatrix.Variants.Count} variants, {applied.Count} switched on the props world: "
-                   + $"{string.Join(" ", applied)}; fog-compute n/a headless, every restore = the snapshot before)";
+            return $"matrix M0..M3 ok ({BenchMatrix.Variants.Count} variants, {schedule.Count} passes interleaved, {applied.Count} "
+                   + $"switched on the props world: {string.Join(" ", applied)}; fog-pass n/a headless, every restore = the snapshot before)";
         }
         finally
         {
@@ -108,6 +120,7 @@ public static class MatrixCheck
             VeilUniforms.Off = false;
             HemiUniforms.Off = false;
             CutMaterials.Plain = false;
+            gate?.Detach();
             built?.Models?.FreeAll();
             root.QueueFree();
         }
@@ -120,7 +133,7 @@ public static class MatrixCheck
         var b = c.Builder!;
         switch (variant)
         {
-            case BenchMatrix.Baseline or BenchMatrix.BaselineEnd:
+            case BenchMatrix.Baseline:
                 Expect($"M1 {variant} switches nothing", sw.Applied && sw.Detail == "nothing switched", sw.Detail);
                 break;
             case "no-shadow":
@@ -164,10 +177,14 @@ public static class MatrixCheck
                 Expect("M1 shadow-atlas-2048 from the project's 4096", sw.Applied && BenchSwitches.AtlasSetting().Size == 4096
                        && sw.Detail.Contains("4096 → 2048"), sw.Detail);
                 break;
-            case "fog-compute":
-                // M3: no RenderingDevice on the dummy renderer — the switch says so and the screen pass stays.
-                Expect("M3 fog-compute headless: n/a, the screen pass stays", !sw.Applied && fog.Visible && !fog.ComputeActive
-                       && fog.Compute is { Available: false }, sw.Detail);
+            case "fog-pass":
+                // M3: no RenderingDevice on the dummy renderer — the screen pass fogs anyway, the switch says so.
+                Expect("M3 fog-pass headless: n/a, the screen pass fogs the main view", !sw.Applied && fog.PassInMainView
+                       && !fog.ComputeActive && fog.Compute is { Available: false }, sw.Detail);
+                break;
+            case "shadow-full-view":
+                Expect("M1 shadow-full-view: every caster carries the caster layer", sw.Applied && c.Gate!.Off
+                       && c.Gate.Inside > 0, sw.Detail);
                 break;
             default:
                 throw new InvalidOperationException($"matrix check: no expectation for variant '{variant}'");
@@ -186,7 +203,8 @@ public static class MatrixCheck
         {
             s.Sun.ShadowEnabled, s.HemiUp.Visible, s.HemiDown.Visible, HemiUniforms.Off,
             string.Join(",", HemiUniforms.Materials().Select(m => m.GetShaderParameter(HemiUniforms.Uniform).AsVector3())),
-            fog.Visible, fog.Off, fog.UseCompute, fog.ComputeActive, VeilUniforms.Off,
+            fog.Visible, fog.Off, fog.UseCompute, fog.ComputeActive, fog.PassInMainView, VeilUniforms.Off,
+            c.Gate!.Off, c.Gate.Inside,
             string.Join(",", VeilUniforms.Materials().Select(m => m.GetShaderParameter("fv_alpha").AsSingle())),
             c.Backdrop!()!.Visible, wet?.GetShaderParameter("tw_ripple_on").ToString(), SubmergedGhost.Off, ghost!.Visible,
             string.Join(",", ghost.Parts.Select(p => p.Visible)), sheets[0].Visible, b.Waterfalls?.Visible,

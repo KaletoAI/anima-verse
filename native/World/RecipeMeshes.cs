@@ -85,9 +85,12 @@ public readonly record struct PieceUnit(string Room, bool Outdoor, StoreyRole Ro
 /// <summary>
 /// One mounted recipe mesh: its unit, and for a ghosted piece whose storey rule can make it solid (a room plate, an
 /// outdoor outline wall) the solid twin of its material (<see cref="Solid"/>, worn as <c>MaterialOverride</c> — the
-/// browser writes <c>material.opacity</c> instead); null when the piece is solid anyway.
+/// browser writes <c>material.opacity</c> instead); null when the piece is solid anyway. <see cref="Cast"/> is the
+/// browser's construction flag (Task 26c): only an upper storey's plate with a thickness casts
+/// (<c>castShadow = plate.level &gt; 0 &amp;&amp; plate.thickness &gt; 0</c>); walls and extras keep three's default false.
+/// The mesh carries it as its <c>cast_shadow</c>; the crossfade overrides it outside an interior (<see cref="LocationFade"/>).
 /// </summary>
-public sealed record RecipePiece(MeshInstance3D Mesh, PieceUnit Unit, Material? Solid);
+public sealed record RecipePiece(MeshInstance3D Mesh, PieceUnit Unit, Material? Solid, bool Cast);
 
 /// <summary>
 /// The recipe meshes of one location (sceneRecipe.ts <c>mountShell</c>):
@@ -167,14 +170,16 @@ public static class RecipeMeshes
             var unit = new PieceUnit(room, outdoorPiece, slab ? StoreyRole.Slab : StoreyRole.RoomPlate, p.Level);
             var ghost = materials.Plate(p, scene);
             // A slab only ever shows on its own storey, at opacity 1 (applyLevelDisplay); a room plate keeps its ghost
-            // and gets the solid twin storeyPieceOpacity hands the displayed storey.
+            // and gets the solid twin storeyPieceOpacity hands the displayed storey. The caster flag is part of the
+            // surface key, so a casting and a non-casting plate never share one mesh.
             MeshData emitted = slab
-                ? pieces.Plate(unit, p, ghost with { Opacity = 1 }, null)
-                : pieces.Plate(unit, p, ghost, ghost.Opacity < 1 ? ghost with { Opacity = 1 } : null);
+                ? pieces.Plate(unit, p, ghost with { Opacity = 1 }, null, PlateCasts(p))
+                : pieces.Plate(unit, p, ghost, ghost.Opacity < 1 ? ghost with { Opacity = 1 } : null, PlateCasts(p));
             if (!outdoorPiece) stats.InteriorMounted++;
             bool shownOpen = slab ? StoreyView.SlabVisible(p.Level, filter) : ParentShownOpen(room);
             bool shellCopy = view.FarShell && !outdoorPiece && SceneView.FarShellPiece("plate", p.Level, p.RoomId, false);
-            if (shellCopy) shellB.Plate(default, p, materials.Plate(p, scene, 1), null);
+            // buildFarShell: every copy casts (copy.castShadow = true).
+            if (shellCopy) shellB.Plate(default, p, materials.Plate(p, scene, 1), null, true);
             measured.Add(new MeasuredPrimitive(SceneVerifier.PlateName(p), SceneVerify.PlateTargets(p), Builder.FloatBounds(emitted)));
 
             if (view.Open) { if (shownOpen) stats.Plates++; else stats.Storey++; }
@@ -213,7 +218,7 @@ public static class RecipeMeshes
                     stats.InteriorMounted++;
                 }
             }
-            if (shellCopy) shellB.Wall(default, w, materials.Wall(w, scene, false, 1), false, null);
+            if (shellCopy) shellB.Wall(default, w, materials.Wall(w, scene, false, 1), false, null, true);
             // A pane a model fills: the browser builds it invisible and measures it; here it is measured from the
             // geometry it would be (its box, through the same location frame) without drawing it.
             emitted ??= RecipeGeometry.Wall(w, 0);
@@ -254,22 +259,25 @@ public static class RecipeMeshes
         return (layers, stats);
     }
 
-    /// <summary>Triangles per unit and material, written into one mesh each.</summary>
+    /// <summary>sceneRecipe.ts: <c>mesh.castShadow = plate.level &gt; 0 &amp;&amp; plate.thickness &gt; 0</c>.</summary>
+    public static bool PlateCasts(ScenePlate p) => p.Level > 0 && p.Thickness > 0;
+
+    /// <summary>Triangles per unit, material and caster flag, written into one mesh each.</summary>
     private sealed class Builder
     {
-        private readonly Dictionary<(PieceUnit Unit, string Look), (RecipeLook Look, RecipeLook? Solid, SurfaceTool St)> _surfaces = new();
+        private readonly Dictionary<(PieceUnit Unit, string Look, bool Cast), (RecipeLook Look, RecipeLook? Solid, SurfaceTool St)> _surfaces = new();
         private readonly RecipeMaterials _materials;
         public int Triangles { get; private set; }
 
         public Builder(RecipeMaterials materials) => _materials = materials;
 
-        private SurfaceTool For(PieceUnit unit, RecipeLook look, RecipeLook? solid)
+        private SurfaceTool For(PieceUnit unit, RecipeLook look, RecipeLook? solid, bool cast)
         {
-            if (_surfaces.TryGetValue((unit, look.Key), out var s)) return s.St;
+            if (_surfaces.TryGetValue((unit, look.Key, cast), out var s)) return s.St;
             var st = new SurfaceTool();
             st.Begin(Mesh.PrimitiveType.Triangles);
             st.SetCustomFormat(0, SurfaceTool.CustomFormat.RgbaFloat);
-            _surfaces[(unit, look.Key)] = (look, solid, st);
+            _surfaces[(unit, look.Key, cast)] = (look, solid, st);
             return st;
         }
 
@@ -277,11 +285,15 @@ public static class RecipeMeshes
         {
             var list = new List<RecipePiece>();
             int i = 0;
-            foreach (var ((unit, _), (look, solid, st)) in _surfaces)
+            foreach (var ((unit, _, cast), (look, solid, st)) in _surfaces)
             {
                 st.SetMaterial(materials.Get(look));
-                var mesh = new MeshInstance3D { Name = $"{name}_{unit.Tag}_{i++}", Mesh = st.Commit() };
-                list.Add(new RecipePiece(mesh, unit, solid is { } sl ? materials.Get(sl) : null));
+                var mesh = new MeshInstance3D
+                {
+                    Name = $"{name}_{unit.Tag}_{i++}", Mesh = st.Commit(),
+                    CastShadow = cast ? GeometryInstance3D.ShadowCastingSetting.On : GeometryInstance3D.ShadowCastingSetting.Off,
+                };
+                list.Add(new RecipePiece(mesh, unit, solid is { } sl ? materials.Get(sl) : null, cast));
             }
             return list;
         }
@@ -315,13 +327,13 @@ public static class RecipeMeshes
         }
 
         /// <summary><c>buildWall</c> (<see cref="RecipeGeometry.Wall"/>); an outline wall carries its midpoint and outward normal in CUSTOM0.</summary>
-        public MeshData Wall(PieceUnit unit, SceneWall w, RecipeLook look, bool cull, RecipeLook? solid)
+        public MeshData Wall(PieceUnit unit, SceneWall w, RecipeLook look, bool cull, RecipeLook? solid, bool cast = false)
         {
             var t = PrimitiveMath.WallTransform(w);
             var custom = cull ? new Color((float)t.Position.X, (float)t.Position.Z, (float)w.OutwardNormal.X, (float)w.OutwardNormal.Z)
                               : new Color(0, 0, 0, 0);
             var m = RecipeGeometry.Wall(w, look.TextureKind.Length > 0 ? TileOf(look) : 0);
-            Emit(For(unit, look, solid), m, 1, custom);
+            Emit(For(unit, look, solid, cast), m, 1, custom);
             return m;
         }
 
@@ -335,14 +347,14 @@ public static class RecipeMeshes
 
         /// <summary><c>buildExtra</c> (<see cref="RecipeGeometry.Extra"/>): its own size, XYZ Euler, world-scale uvs.</summary>
         public void Extra(PieceUnit unit, SceneExtra e, RecipeLook look)
-            => Emit(For(unit, look, null), RecipeGeometry.Extra(e, look.TextureKind.Length > 0 ? TileOf(look) : 0), 1, new Color(0, 0, 0, 0));
+            => Emit(For(unit, look, null, false), RecipeGeometry.Extra(e, look.TextureKind.Length > 0 ? TileOf(look) : 0), 1, new Color(0, 0, 0, 0));
 
         /// <summary><c>buildPlate</c> (<see cref="RecipeGeometry.Plate"/>); its uvs are shape metres, tiled by 1 / tile size.</summary>
-        public MeshData Plate(PieceUnit unit, ScenePlate p, RecipeLook look, RecipeLook? solid)
+        public MeshData Plate(PieceUnit unit, ScenePlate p, RecipeLook look, RecipeLook? solid, bool cast)
         {
             double tileM = look.TextureKind.Length > 0 ? TileOf(look) : 0;
             var m = RecipeGeometry.Plate(p);
-            Emit(For(unit, look, solid), m, tileM > 0 ? 1 / tileM : 1, new Color(0, 0, 0, 0));
+            Emit(For(unit, look, solid, cast), m, tileM > 0 ? 1 / tileM : 1, new Color(0, 0, 0, 0));
             return m;
         }
 

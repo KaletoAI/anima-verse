@@ -15,6 +15,8 @@ public sealed class BenchSwitchContext
     public Func<WorldBackdrop?>? Backdrop { get; init; }
     public WorldBuilder? Builder { get; init; }
     public FigureManager? Figures { get; init; }
+    /// <summary>The browser's shadow-caster box (Task 26c).</summary>
+    public ShadowCasterGate? Gate { get; init; }
 }
 
 /// <summary>A switch in force: whether it found anything to switch, what it did, and how to put it back.</summary>
@@ -33,8 +35,9 @@ public static class BenchSwitches
 
     public static BenchSwitch Apply(string variant, BenchSwitchContext c) => variant switch
     {
-        BenchMatrix.Baseline or BenchMatrix.BaselineEnd => new(variant, true, "nothing switched", Nothing),
+        BenchMatrix.Baseline => new(variant, true, "nothing switched", Nothing),
         "no-shadow" => NoShadow(c),
+        "shadow-full-view" => ShadowFullView(c),
         "no-hemi-extra-lights" => NoHemi(c),
         "no-fog-pass" => NoFog(c),
         "no-veil" => NoVeil(),
@@ -45,7 +48,7 @@ public static class BenchSwitches
         "no-cut-shader" => NoCutShader(),
         "terrain-lod-coarse" => TerrainCoarse(c),
         "shadow-atlas-2048" => Atlas2048(),
-        "fog-compute" => FogCompute(c),
+        "fog-pass" => FogPass(c),
         _ => throw new ArgumentException($"bench matrix: no switch for variant '{variant}'"),
     };
 
@@ -57,6 +60,21 @@ public static class BenchSwitches
         return new("no-shadow", was, was ? "sun shadow off" : "the sun had no shadow", () => s.Sun.ShadowEnabled = was);
     }
 
+    private static BenchSwitch ShadowFullView(BenchSwitchContext c)
+    {
+        if (c.Gate is not { } g) return new("shadow-full-view", false, "no caster gate", Nothing);
+        bool was = g.Off;
+        int inside = g.Inside;
+        g.Off = true;
+        g.MarkPass();
+        return new("shadow-full-view", !was, $"caster box off: {g.Inside} of {g.Registered} instances carry the caster layer (box: {inside})",
+                   () =>
+                   {
+                       g.Off = was;
+                       g.MarkPass();
+                   });
+    }
+
     private static BenchSwitch NoHemi(BenchSwitchContext c)
     {
         if (c.Stage is not { } s) return new("no-hemi-extra-lights", false, "no stage", Nothing);
@@ -65,7 +83,7 @@ public static class BenchSwitches
         s.HemiDown.Visible = false;
         HemiUniforms.Off = true;
         int mats = HemiUniforms.Materials().Count;
-        return new("no-hemi-extra-lights", true, $"2 pair lights hidden, the term zero on {mats} ground materials (ambient only)", () =>
+        return new("no-hemi-extra-lights", true, $"2 pair lights hidden, the term zero on {mats} ground/scatter materials (ambient only)", () =>
         {
             s.HemiUp.Visible = up;
             s.HemiDown.Visible = down;
@@ -220,18 +238,19 @@ public static class BenchSwitches
                    () => RenderingServer.DirectionalShadowAtlasSetSize(size, bits));
     }
 
-    private static BenchSwitch FogCompute(BenchSwitchContext c)
+    private static BenchSwitch FogPass(BenchSwitchContext c)
     {
-        if (c.Fog is not { } f || !GodotObject.IsInstanceValid(f)) return new("fog-compute", false, "no fog", Nothing);
-        bool was = f.UseCompute;
-        f.UseCompute = true;
-        f.Decide();
+        if (c.Fog is not { } f || !GodotObject.IsInstanceValid(f)) return new("fog-pass", false, "no fog", Nothing);
         bool live = f.ComputeActive;
-        string why = live ? "the compute pass fogs the frame, the screen pass is hidden"
-                     : f.Compute is null ? "no compute effect on the camera — the screen pass stays"
-                     : f.Compute.Error.Length > 0 ? "the kernel did not compile — the screen pass stays: " + f.Compute.Error
-                     : "no RenderingDevice (headless) — the screen pass stays";
-        return new("fog-compute", live, why, () =>
+        bool was = f.UseCompute;
+        f.UseCompute = false;
+        f.Decide();
+        string why = live ? "the screen pass fogs the frame, the compute pass is off"
+                     : f.Compute is null ? "no compute effect on the camera — the screen pass fogs anyway"
+                     : f.Compute.Error.Length > 0 ? "the kernel did not compile — the screen pass fogs anyway: " + f.Compute.Error
+                     : !was ? "--fog=pass — the screen pass fogs anyway"
+                     : "no RenderingDevice (headless) — the screen pass fogs anyway";
+        return new("fog-pass", live, why, () =>
         {
             f.UseCompute = was;
             f.Decide();

@@ -372,6 +372,18 @@ public partial class Main : Node3D
             st.AddBenchKeys(result);
             Log($"bench stream: max frame while streaming {st.Probe.StreamMaxMs:0.##} ms over {st.Probe.StreamFrames} frames; {st.Summary()}");
         }
+        // Extra key (Task 26c): what the shadow pass draws at the drive's last pose (CPU census, the requested aspect).
+        if (_stage is not null && _camera is not null)
+        {
+            var size = _options!.Size ?? (Vector2I)GetViewport().GetVisibleRect().Size;
+            double aspect = size.Y > 0 ? (double)size.X / size.Y : 16.0 / 9.0;
+            string census = Bench.ShadowCensus.Summary(Bench.ShadowCensus.Count(this, _camera, _stage.Sun, aspect));
+            if (_shadowGate is { } gate)
+                census += $" gate[registered={gate.Registered} inside={gate.Inside} passes={gate.Passes} last_ms={gate.LastPassMs:0.###}"
+                          + $"{(gate.Off ? " off" : "")}]";
+            result["shadowCasters"] = census;
+            Log("bench " + census);
+        }
     }
 
     /// <summary>Sends the result to the server's bench log, then honours <c>--quit-after-bench</c>.</summary>

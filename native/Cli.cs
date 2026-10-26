@@ -19,10 +19,12 @@ namespace AnimaNative;
 ///   --goto=ID|NAME              bench anchor: location id or name substring
 ///   --bench                     run the camera drive once the world has loaded
 ///   --bench-matrix[=A,B,…]      the drive once per variant in ONE process, each pass with one feature switched off at
-///                               runtime (Task 26b, Bench/BenchSwitches.cs; README "Bench matrix"); =A,B,… runs only
-///                               those variants (plus the baseline). Implies --bench for window, start and quit rules
-///   --fog=pass|compute          the distance fog as the screen pass (default) or the compute pass (Task 26b candidate;
-///                               needs a GPU, falls back to the screen pass)
+///                               runtime and a baseline pass between every two variants (drift: each variant against
+///                               its two neighbouring baselines) (Task 26b/26c, Bench/BenchSwitches.cs; README "Bench
+///                               matrix"); =A,B,… runs only those variants (plus the baselines). Implies --bench for
+///                               window, start and quit rules
+///   --fog=compute|pass          the distance fog as ONE compute pass (default since Task 26c; needs a GPU, falls back to
+///                               the screen pass by itself) or as the screen-texture pass (the fallback)
 ///   --size=WxH                  window size (bench default 1920x1080)
 ///   --vsync=on|off              keep V-sync during the bench (default off)
 ///   --quit-after-bench          exit after the result file is written
@@ -54,6 +56,8 @@ namespace AnimaNative;
 ///   --check scatter | --check=scatter   only the scatter section (S3 reference + the worker rebuild, Task 26)
 ///   --check veil | --check=veil         only the exploration veil section (cells, crossfade, height ramp, shader, Task 26)
 ///   --check matrix | --check=matrix     only the bench-matrix section (every runtime switch on the fixture world, Task 26b)
+///   --check shadow | --check=shadow     only the shadow-caster section (browser caster classes, the 140 m box gate, cluster
+///                               budget, scatter hemisphere term, compute-fog default; Task 26c)
 ///   --check figures | --check=figures only the figure section (whole clip library, set chain, activities, tiers, Task 28)
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
@@ -64,8 +68,8 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
     public bool Bench { get; init; }
     /// <summary><c>--bench-matrix[=A,B,…]</c>: null = no matrix; "" = every variant; else the comma list (Task 26b).</summary>
     public string? BenchMatrix { get; init; }
-    /// <summary><c>--fog=compute</c>: the distance fog as the compute pass (Task 26b); false = the screen pass.</summary>
-    public bool FogCompute { get; init; }
+    /// <summary>The distance fog as the compute pass (the default, Task 26c); false = <c>--fog=pass</c>, the screen pass.</summary>
+    public bool FogCompute { get; init; } = true;
     public bool CheckBench { get; init; }
     public bool QuitAfterBench { get; init; }
     /// <summary>Both scatter layers on — the default, like the browser; <c>--no-scatter</c> = the browser's <c>&amp;scatter=0</c>.</summary>
@@ -98,7 +102,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         string? server = null;
         string? user = null, gotoQuery = null;
         bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = true, noHud = false, plainGround = false;
-        bool noWater = false, verify = false, fogCompute = false;
+        bool noWater = false, verify = false, fogCompute = true;
         string? matrix = null;
         string? offline = null, checkOnly = null;
         Vector2I? size = null;
@@ -191,11 +195,11 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
 
     private static bool IsSection(string v)
         => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
-             or "scatter" or "veil" or "matrix" or "figures";
+             or "scatter" or "veil" or "matrix" or "figures" or "shadow";
 
     private static string CheckSection(string v) => IsSection(v)
         ? v : throw new ArgumentException("--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', "
-                                          + $"'terrain', 'stream', 'water', 'scatter', 'veil', 'matrix' and 'figures', got '{v}'");
+                                          + $"'terrain', 'stream', 'water', 'scatter', 'veil', 'matrix', 'figures' and 'shadow', got '{v}'");
 
     public static Viewport.Msaa ParseMsaa(string v) => v switch
     {

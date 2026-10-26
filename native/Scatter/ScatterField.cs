@@ -495,6 +495,8 @@ public partial class ScatterField : Node3D
             Multimesh = low,
             MaterialOverride = tuftMat,
             CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+            // The hemisphere pair is the shader's term here (ScatterShaders): the pair lights skip this layer.
+            Layers = World.HemiUniforms.Layer,
             Visible = false,
         };
         AddChild(lowNode);
@@ -718,6 +720,8 @@ public partial class ScatterField : Node3D
                     Multimesh = p.High,
                     MaterialOverride = mat,
                     CastShadow = GeometryInstance3D.ShadowCastingSetting.Off,
+                    // The hemisphere pair is the shader's term here (ScatterShaders): the pair lights skip this layer.
+                    Layers = World.HemiUniforms.Layer,
                     Visible = false,
                 };
                 AddChild(p.HighNode);

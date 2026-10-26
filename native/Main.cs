@@ -41,6 +41,7 @@ public partial class Main : Node3D
     private WorldBuilder? _builder;
     private Label? _status;
     private OverviewCamera? _camera;
+    private ShadowCasterGate? _shadowGate;
     private FigureManager? _figures;
     private ScatterLayer? _scatter;
     /// <summary>The terrain streaming of the world (Task 24): anchor, loaders, signatures, the streaming probe.</summary>
@@ -202,13 +203,17 @@ public partial class Main : Node3D
     private void BuildStage()
     {
         _stage = StageAmbience.Build(this, () => _builder?.Ground?.WaterMaterial);
+        // Task 26c: the browser's 140 m shadow box — only casters inside it carry the sun's caster layer.
+        _shadowGate = new ShadowCasterGate();
+        _shadowGate.Attach(this);
+        _stage.Gate = _shadowGate;
         GetViewport().Msaa3D = _options!.Msaa;
         _camera = new OverviewCamera { Name = "Camera" };
         AddChild(_camera);
         _camera.Current = true;
         _camera.JumpTo(Vector3.Zero, OverviewControl.InitialDist);
         // engine.ts `scene.fog`: the distance fog as one screen pass under the camera, its colour the stage's sky.
-        // Task 26b: the compute twin rides on the camera too (disabled unless --fog=compute or the matrix's fog-compute).
+        // Task 26b/26c: the compute twin rides on the camera too and fogs the frame by default (--fog=pass: the screen pass).
         _stage.Fog = DistanceFog.Attach(_camera, compute: true);
         _stage.Fog.UseCompute = _options.FogCompute;
         // The click chain (engine.ts pointerup): figure → [seat/glyph/stair: E2/E7] → location → nothing.
@@ -233,6 +238,7 @@ public partial class Main : Node3D
     {
         StopSync();
         _stop.Cancel();
+        _shadowGate?.Detach();
         World.VeilUniforms.Reset();
         World.HemiUniforms.Reset();
         _builder?.Models?.FreeAll();
