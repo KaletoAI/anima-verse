@@ -111,24 +111,41 @@ public static class Stairs
            && Math.Abs(a.Pos.Z - b.Pos.Z) < 1e-6;
 
     /// <summary>
-    /// <c>rideStep(ride, x, y, z)</c>: arm the current leg at its start landing, retire it (only armed) at its end —
-    /// in a loop, so a leg that ends where the next begins hands over in one call; the height is the armed leg's ramp.
+    /// <c>rideStep(ride, x, y, z, from?)</c>: arm the current leg at its start landing, retire it (only armed) at its end
+    /// — in a loop, so a leg that ends where the next begins hands over in one call; the height is the armed leg's ramp.
     /// Pure: the caller writes leg and armed back and drops the ride on <c>done</c>.
+    /// <para>
+    /// A landing is reached by the frame's SWEPT xz segment from <paramref name="from"/> (where the figure stood when
+    /// the frame began; null = a point test) to (x, z), measured at the segment point nearest the landing. The walk
+    /// retires a landing at the START of a frame and turns away in the same step, so on a long frame the end point is
+    /// already past the radius — a ride that missed its end there never ends and keeps lifting the figure wherever it
+    /// later crosses that flight. The height measured with: the floor's <paramref name="y"/> while a leg waits to arm,
+    /// the armed leg's own ramp (<see cref="StairY"/>, <paramref name="y"/> off the run's width) once armed —
+    /// <paramref name="y"/> is the root height from before this frame's ramp answer and lags it on a long frame.
+    /// </para>
     /// </summary>
-    public static RideStepResult RideStep(StairRide ride, double x, double y, double z)
+    public static RideStepResult RideStep(StairRide ride, double x, double y, double z, P2? from = null)
     {
-        bool At(StairLanding p)
+        double fx = from?.X ?? x, fz = from?.Z ?? z;
+        double sx = x - fx, sz = z - fz;
+        double len2 = sx * sx + sz * sz;
+        // Within the arrival radius of p anywhere on this frame's segment, the height there being heightAt's.
+        bool Reached(StairLanding p, Func<double, double, double> heightAt)
         {
-            double dx = p.Pos.X - x, dy = p.Pos.Y - y, dz = p.Pos.Z - z;
+            double t = len2 > 0 ? Math.Min(1, Math.Max(0, ((p.Pos.X - fx) * sx + (p.Pos.Z - fz) * sz) / len2)) : 0;
+            double qx = fx + sx * t, qz = fz + sz * t;
+            double dx = p.Pos.X - qx, dy = heightAt(qx, qz) - p.Pos.Y, dz = p.Pos.Z - qz;
             return Math.Sqrt(dx * dx + dy * dy + dz * dz) < RideArriveM;
         }
+        double Floor(double qx, double qz) => y;
         int leg = ride.Leg;
         bool armed = ride.Armed;
         while (leg < ride.Legs.Count)
         {
             var cur = ride.Legs[leg];
-            if (!armed && At(cur.Start)) armed = true;
-            if (armed && At(cur.End))
+            if (!armed && Reached(cur.Start, Floor)) armed = true;
+            // Only an ARMED leg can end: the end landing of a stacked leg lies over its own start.
+            if (armed && Reached(cur.End, (qx, qz) => StairY(cur.Flight, qx, qz) ?? y))
             {
                 leg += 1;
                 armed = false;

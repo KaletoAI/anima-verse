@@ -526,7 +526,8 @@ public class FootLockMeasureVectorTests
 ///   stairChainValue       Chain + fields        ["landingHeights"] = [chain[1].y, chain[2].y]
 ///   stairLegToValue       LegTo + fields
 ///   stairLegsValue        Stairs.Legs + fields
-///   rideSequenceValue     Stairs.RideStep       per point, leg/armed written back; the last result + state {leg, armed, done}
+///   rideSequenceValue     Stairs.RideStep       per [x,y,z(,fromX,fromZ)], leg/armed written back; the last result + state {leg, armed, done}
+///   rideWalkValue         NpcWalk + RideStep    the npcs.ts frame on dry ground at dt: {doneFrame, doneTime, doneAt, ride, orders[{pos, peakY}]}
 ///   rideArrivalClearsRun  RIDE_ARRIVE_M &lt; 0.5
 ///   nearestRoomAt         Elevator.NearestRoomAt
 ///   constant              the module constants
@@ -652,7 +653,10 @@ public class StairsVectorTests
             foreach (var pt in (JsonArray)a[1]!)
             {
                 var p = BridgeVectorAdapters.Pt(pt);
-                step = Stairs.RideStep(ride, p.X, p.Y, p.Z);
+                // [x, y, z, fromX, fromZ]: the frame's swept start.
+                var arr = (JsonArray)pt!;
+                P2? from = arr.Count > 3 ? new P2(N(arr[3]), N(arr[4])) : null;
+                step = Stairs.RideStep(ride, p.X, p.Y, p.Z, from);
                 ride.Leg = step.Leg;
                 ride.Armed = step.Armed;
             }
@@ -660,6 +664,73 @@ public class StairsVectorTests
             {
                 ["leg"] = step.Leg, ["armed"] = step.Armed, ["y"] = step.Y, ["done"] = step.Done,
                 ["state"] = new JsonObject { ["leg"] = step.Leg, ["armed"] = step.Armed, ["done"] = step.Done },
+            };
+            return BridgeVectorAdapters.Select(value, a[2]);
+        },
+        // The NPC frame of npcs.ts tick on dry ground, reduced to what a ride touches (FigureManager.StepFigure): retire
+        // (the ride's radius while a ride runs), step, ask the ride from the frame's start point, write the height back.
+        ["rideWalkValue"] = a =>
+        {
+            Arity(a, 3, 3);
+            var walk = a[0]!;
+            double dt = N(a[1]);
+            StairRide? ride = Ride(walk["ride"], new Flights());
+            var start = BridgeVectorAdapters.Pt(walk["start"]);
+            double px = start.X, py = start.Y, pz = start.Z;
+            int frame = 0;
+            int? doneFrame = null;
+            JsonNode? doneAt = null;
+            var orders = new JsonArray();
+            foreach (var order in (JsonArray)walk["orders"]!)
+            {
+                var waypoints = ((JsonArray)order!["waypoints"]!).Select(w =>
+                {
+                    var q = BridgeVectorAdapters.Pt(w);
+                    return new Vec3(q.X, q.Y, q.Z);
+                }).ToList();
+                var tp = BridgeVectorAdapters.Pt(order["target"]);
+                var target = new Vec3(tp.X, tp.Y, tp.Z);
+                double peakY = double.NegativeInfinity;
+                for (int i = 0, n = (int)Math.Round(N(order["seconds"]) / dt, MidpointRounding.AwayFromZero); i < n; i++)
+                {
+                    frame += 1;
+                    var from = new P2(px, pz);
+                    var plan = NpcWalk.Goal(new Vec3(px, py, pz), target, waypoints,
+                                            ride is not null ? Stairs.RideArriveM : NpcWalk.WaypointArriveM);
+                    waypoints.RemoveRange(0, plan.Retired);
+                    if (plan.Moving)
+                    {
+                        var (_, step) = NpcWalk.Step(plan, FigureClips.WalkRun, false, dt, 1, 1);
+                        px += plan.Delta.X / plan.DistToGoal * step;
+                        pz += plan.Delta.Z / plan.DistToGoal * step;
+                    }
+                    double? rideY = null;
+                    if (ride is not null)
+                    {
+                        var r = Stairs.RideStep(ride, px, py, pz, from);
+                        if (r.Done)
+                        {
+                            ride = null;
+                            doneFrame = frame;
+                            doneAt = new JsonArray(px, pz);
+                        }
+                        else
+                        {
+                            ride.Leg = r.Leg;
+                            ride.Armed = r.Armed;
+                            rideY = r.Y;
+                        }
+                    }
+                    py = rideY ?? NpcWalk.EaseY(py, (waypoints.Count > 0 ? waypoints[0] : target).Y, dt);
+                    peakY = Math.Max(peakY, py);
+                }
+                orders.Add(new JsonObject { ["pos"] = new JsonArray(px, py, pz), ["peakY"] = peakY });
+            }
+            var value = new JsonObject
+            {
+                ["doneFrame"] = doneFrame, ["doneTime"] = doneFrame is { } f ? f * dt : null, ["doneAt"] = doneAt,
+                ["ride"] = ride is null ? null : new JsonObject { ["leg"] = ride.Leg, ["armed"] = ride.Armed },
+                ["orders"] = orders,
             };
             return BridgeVectorAdapters.Select(value, a[2]);
         },

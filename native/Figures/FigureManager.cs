@@ -462,7 +462,7 @@ public partial class FigureManager : Node3D
     ///      ground that lets one run, never for a traveller; the figure turns into the step;
     ///   3. the ground word where it now stands (<see cref="WalkGround.WordOf"/>): the underwater ghost cut at the UNGATED
     ///      mirror over the bed; the sink of the state (move / idle) cut by the scope;
-    ///   4. the height: a guided climb answers it outright (<see cref="Stairs.RideStep"/>), else the root eases ×4/s to
+    ///   4. the height: a guided climb answers it outright (<see cref="Stairs.RideStep"/>, swept from the frame start), else the root eases ×4/s to
     ///      <c>floatRootY(station or target y, mirror, sink)</c>;
     ///   5. standing: the marker's facing, else the neighbours' centroid within 4.5 m, else keep;
     ///   6. the clip: <c>moveClip(movement, run)</c> moving, else <c>standingClipFor(activity, idleClip(movement))</c>,
@@ -500,6 +500,8 @@ public partial class FigureManager : Node3D
         // it: it is the server's stand point (seat + travel); near it the NPC keeps the spot it stands on.
         if (fig.Player is not null && !fig.Bridging && fig.HoldsTravel && ApplyBridgeTravel(fig)) SettleAfterBridge(fig);
         var pos = V(fig.Position);
+        // Where this frame starts, for the ride's swept test below: the walk retires a landing from HERE.
+        var frameFrom = new P2(pos.X, pos.Z);
         var plan = NpcWalk.Goal(pos, V(fig.Target), fig.Waypoints.Select(V).ToList(),
                                 fig.Ride is not null ? Stairs.RideArriveM : NpcWalk.WaypointArriveM);
         fig.Waypoints.RemoveRange(0, plan.Retired);
@@ -532,7 +534,7 @@ public partial class FigureManager : Node3D
         double? rideY = null;
         if (fig.Ride is { } ride)
         {
-            var r = Stairs.RideStep(ride, pos.X, pos.Y, pos.Z);
+            var r = Stairs.RideStep(ride, pos.X, pos.Y, pos.Z, frameFrom);
             if (r.Done) fig.Ride = null;
             else
             {
