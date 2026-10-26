@@ -57,7 +57,8 @@ public static class TerrainBuilder
                                                          Ground.WaterTileField? water = null)
     {
         int rows = g.Rows, cols = g.Cols;
-        var node = new MeshInstance3D { Name = name };
+        // The terrain casts no shadow, like the browser's ground (three's castShadow = false; it only receives).
+        var node = new MeshInstance3D { Name = name, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off };
         if (rows < 2 || cols < 2) return (node, new GridMeshStats(0, 0));
 
         var verts = new Vector3[rows * cols];
@@ -125,5 +126,6 @@ public static class Materials
         VertexColorIsSrgb = true,
         Roughness = 0.95f,
         Metallic = 0f,
+        DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
     };
 }

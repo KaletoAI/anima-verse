@@ -156,11 +156,4 @@ public class PropsCoreTests
         Assert.False(pool.Update(0.01, new Vec3(0, 0, 0), 0.45, new HashSet<string>()).Halos.Single().Visible);
         Assert.False(pool.Update(0.01, new Vec3(0, 0, 0), 0.3, shown).Halos.Single().Visible);
     }
-
-    [Fact]
-    public void StageScaleIsTheBrowserSunAtItsDefaultAngle()
-    {
-        // 1 / (0.25 + 2·sin(0.35π)); sin(0.35π) = 0.8910065241883679 → 1 / 2.0320130483767358.
-        Near(1 / 2.0320130483767358, Ambience.StageScale);
-    }
 }

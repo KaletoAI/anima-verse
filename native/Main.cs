@@ -192,39 +192,14 @@ public partial class Main : Node3D
         Log($"window size requested {s.X}x{s.Y}, got {DisplayServer.WindowGetSize().X}x{DisplayServer.WindowGetSize().Y}");
     }
 
-    /// <summary>Sky colour, ambient, sun + fill like the browser engine (no fog, no water).</summary>
+    /// <summary>
+    /// The browser engine's stage (StageAmbience: sky background, hemisphere ambient, sun + fill, driven by the world
+    /// clock and the room ambience), the 3D anti-aliasing (<see cref="CliOptions.Msaa"/>) and the overview camera.
+    /// </summary>
     private void BuildStage()
     {
-        var env = new Godot.Environment
-        {
-            BackgroundMode = Godot.Environment.BGMode.Color,
-            BackgroundColor = new Color("9fc7e8"),
-            AmbientLightSource = Godot.Environment.AmbientSource.Color,
-            AmbientLightColor = new Color("dfeeff"),
-            AmbientLightEnergy = 0.7f,
-            TonemapMode = Godot.Environment.ToneMapper.Linear,
-        };
-        AddChild(new WorldEnvironment { Name = "Env", Environment = env });
-        var sun = new DirectionalLight3D
-        {
-            Name = "Sun",
-            LightColor = new Color("fff2d8"),
-            LightEnergy = 1.0f,
-            ShadowEnabled = true,
-            DirectionalShadowMaxDistance = 200f,
-            RotationDegrees = new Vector3(-50f, -35f, 0f),
-        };
-        AddChild(sun);
-        var fill = new DirectionalLight3D
-        {
-            Name = "Fill",
-            LightColor = new Color("dde8ff"),
-            LightEnergy = 0.25f,
-            RotationDegrees = new Vector3(-35f, 130f, 0f),
-        };
-        AddChild(fill);
-        // The room ambience scales and tints this stage (StageAmbience; neutral base until E3).
-        _stage = new StageAmbience { Sun = sun, Fill = fill, Env = env, Water = () => _builder?.Ground?.WaterMaterial };
+        _stage = StageAmbience.Build(this, () => _builder?.Ground?.WaterMaterial);
+        GetViewport().Msaa3D = _options!.Msaa;
         _camera = new OverviewCamera { Name = "Camera" };
         AddChild(_camera);
         _camera.Current = true;

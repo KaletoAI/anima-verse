@@ -115,7 +115,7 @@ public partial class Figure : Node3D
             Name = "Placeholder",
             Mesh = new CapsuleMesh { Height = h, Radius = r },
             Position = new Vector3(0, h / 2f, 0),
-            MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color(0.85f, 0.45f, 0.2f), Roughness = 0.8f },
+            MaterialOverride = new StandardMaterial3D { AlbedoColor = new Color(0.85f, 0.45f, 0.2f), Roughness = 0.8f, DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert },
         };
         var root = new Node3D { Name = "Body" };
         root.AddChild(mi);

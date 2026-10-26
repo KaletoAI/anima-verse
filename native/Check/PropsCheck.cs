@@ -137,12 +137,12 @@ public static class PropsCheck
             Expect("P3 night, storey 0", pool.State.Selected.SequenceEqual(new[] { "1", "2", "4", "5", "6", "7" }), string.Join(",", pool.State.Selected));
             Expect("P3 fresh slots at gain 0", pool.Lamps.All(l => l.LightEnergy == 0f), "");
             builder.TickProps(0.2, null, focus, 1);
-            // Gain 0.5: lamp 1 (no flicker) 2 · 0.5 · StageScale = 0.4921228241122002.
+            // Gain 0.5: lamp 1 (no flicker) 2 · 0.5 / π = 0.3183098861837907 (Task 21: Godot energy = three intensity / π).
             var l0 = pool.Lamps[0];
-            Expect("P3 lamp slot 0", Math.Abs(l0.LightEnergy - 0.49212282f) < 1e-6 && l0.Position.DistanceTo(new Vector3(65, 5.90625f, 120)) < 1e-5
+            Expect("P3 lamp slot 0", Math.Abs(l0.LightEnergy - 0.31830989f) < 1e-6 && l0.Position.DistanceTo(new Vector3(65, 5.90625f, 120)) < 1e-5
                    && l0.OmniRange == 4f && l0.OmniAttenuation == 2f && !l0.ShadowEnabled, $"{l0.LightEnergy} {l0.Position}");
-            Expect("P3 night lamp at full night gain", Math.Abs(pool.Lamps[1].LightEnergy - 0.49212282f) < 1e-6, $"{pool.Lamps[1].LightEnergy}");
-            float candle = pool.Lamps[2].LightEnergy / 0.49212282f;
+            Expect("P3 night lamp at full night gain", Math.Abs(pool.Lamps[1].LightEnergy - 0.31830989f) < 1e-6, $"{pool.Lamps[1].LightEnergy}");
+            float candle = pool.Lamps[2].LightEnergy / 0.31830989f;
             Expect("P3 candle within ±8 %", candle >= 0.92f - 1e-5 && candle <= 1.08f + 1e-5, $"{candle}");
             var fire = pool.Lamps[3].LightColor;
             Expect("P3 fire colour between #ffb35c and #ff6a20", fire.G <= new Color("ffb35c").G + 1e-5 && fire.G >= new Color("ff6a20").G - 1e-5, $"{fire}");
@@ -184,25 +184,30 @@ public static class PropsCheck
             Expect("P5 corridor outside the rooms", At(5.5, 5.5) is { Daylight: 0.8, Tint: "" }, $"{At(5.5, 5.5)}");
             Expect("P5 cellar rect (any storey)", At(-4, -4) is { Daylight: 0.2, Tint: "#8899ff" }, $"{At(-4, -4)}");
             Expect("P5 not the open location", At(0, 0, null) is null && At(0, 0, "loc-x") is null, "");
-            var sun = new DirectionalLight3D();
-            var fill = new DirectionalLight3D();
-            var env = new Godot.Environment();
-            var stage = new StageAmbience { Sun = sun, Fill = fill, Env = env };
+            // The stage under the room ambience at noon (Task 21: base = the clock, energies = three intensity / π;
+            // noon: sun 2.25, fill 0.55, hemi 1.55 — fixtures/README "Light").
+            var stageHost = new Node3D { Name = "PropsStage" };
+            host.AddChild(stageHost);
+            var stage = StageAmbience.Build(stageHost);
+            stage.SetHour(12);
+            var noonSun = stage.Sun.LightColor;
             var target = Ambience.Target(At(0, 0));
             var amb = Ambience.Step(AmbienceState.Neutral, target, 0.5);
             stage.Apply(amb);
-            // k = 1 − 1/e: daylight 1 − 0.6k = 0.6207276647028654 → sun 0.62073, fill 0.15518, ambient 0.43451.
-            Expect("P5 one τ towards the parlour", Math.Abs(sun.LightEnergy - 0.62072766f) < 1e-6 && Math.Abs(fill.LightEnergy - 0.15518192f) < 1e-6
-                   && Math.Abs(env.AmbientLightEnergy - 0.43450937f) < 1e-6 && Math.Abs(amb.G - 0.881012600691095) < 1e-12
-                   && Math.Abs(amb.B - 0.7496306806208457) < 1e-12, $"{sun.LightEnergy} {fill.LightEnergy} {env.AmbientLightEnergy}");
+            var sun = stage.Sun;
+            // k = 1 − 1/e: daylight 1 − 0.6k = 0.6207276647028654 → sun 2.25·d/π = 0.44456, fill 0.55·d/π = 0.10867,
+            // ambient 1.55·d/π = 0.30625.
+            Expect("P5 one τ towards the parlour", Math.Abs(sun.LightEnergy - 0.44456344f) < 1e-6 && Math.Abs(stage.Fill.LightEnergy - 0.10867106f) < 1e-6
+                   && Math.Abs(stage.Env.AmbientLightEnergy - 0.30625482f) < 1e-6 && Math.Abs(amb.G - 0.881012600691095) < 1e-12
+                   && Math.Abs(amb.B - 0.7496306806208457) < 1e-12, $"{sun.LightEnergy} {stage.Fill.LightEnergy} {stage.Env.AmbientLightEnergy}");
             Expect("P5 tinted in linear space (red stays, green drops)", Math.Abs(sun.LightColor.R - 1f) < 1e-5
-                   && sun.LightColor.G < StageAmbience.SunBase.G - 0.01f, $"{sun.LightColor}");
+                   && sun.LightColor.G < noonSun.G - 0.01f, $"{sun.LightColor}");
             for (int i = 0; i < 4; i++) amb = Ambience.Step(amb, Ambience.Target(At(3, 3)), 0.125);
             stage.Apply(amb);
-            // Back towards neutral for 4 × 0.125 = one τ: 1 − (1 − 0.62073)/e = 0.8604735052391023.
-            Expect("P5 back towards neutral", Math.Abs(amb.Daylight - 0.8604735052391023) < 1e-12 && Math.Abs(sun.LightEnergy - 0.8604735f) < 1e-6,
+            // Back towards neutral for 4 × 0.125 = one τ: 1 − (1 − 0.62073)/e = 0.8604735052391023 → sun 2.25·d/π = 0.61627.
+            Expect("P5 back towards neutral", Math.Abs(amb.Daylight - 0.8604735052391023) < 1e-12 && Math.Abs(sun.LightEnergy - 0.61626875f) < 1e-6,
                    $"{amb.Daylight}");
-            sun.Free(); fill.Free();
+            stageHost.QueueFree();
 
             // ---- P6 lamps follow the re-lift ----
             builder.Height!.AddTiles(new[] { new HeightTile((0, 0), new HeightGrid(0, 0, 64, 5, 5, Enumerable.Repeat(10f, 25).ToArray())) });

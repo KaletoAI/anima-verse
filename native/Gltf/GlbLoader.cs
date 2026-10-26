@@ -26,10 +26,31 @@ public static class GlbLoader
         var err = doc.AppendFromBuffer(plainGlb, "", state);
         if (err != Error.Ok) throw new InvalidOperationException($"GLTF import of {label} failed: {err}");
         var counts = Count(state);
+        BrowserLook(state);
         var node = doc.GenerateScene(state) as Node3D
                    ?? throw new InvalidOperationException($"GLTF scene of {label} is empty");
         node.Name = "Glb";
         return (node, counts);
+    }
+
+    /// <summary>
+    /// The browser's look for every imported material (three's GLTFLoader makes MeshStandardMaterials): Lambert diffuse
+    /// (Godot's default is Burley; three's standard material is Lambert + GGX) and no received shadows — every GLB mesh in
+    /// the browser (buildings, far shells, props, figures) keeps three's <c>receiveShadow = false</c>; only the ground,
+    /// the storey plates and the placeholders receive. Runs on the state before <c>GenerateScene</c>, so the scene's
+    /// surfaces and every later clone (cut twins, slot fills) start from these values.
+    /// </summary>
+    public static int BrowserLook(GltfState state)
+    {
+        int n = 0;
+        foreach (var m in state.GetMaterials())
+        {
+            if (m is not BaseMaterial3D b) continue;
+            b.DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert;
+            b.DisableReceiveShadows = true;
+            n++;
+        }
+        return n;
     }
 
     /// <summary>

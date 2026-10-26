@@ -30,11 +30,14 @@ namespace AnimaNative;
 ///                               (with --bench: runs the drive, then quits)
 ///   --verify                    § B5a: log the full verify table of every mounted location (default: only
 ///                               locations with a deviation, like the browser without ?verify=1)
+///   --msaa=0|2|4|8              3D multisample anti-aliasing (default 4, like the browser's antialias: true; 0 = off
+///                               for a weak GPU or a bench comparison)
 ///   --check                     offline self-test from native/fixtures, then quit
 ///   --check verify | --check=verify   only the § B5a section of the self-test (fixture world + S3c world)
 ///   --check storeys | --check=storeys only the storey section (fixtures/storeys: the switch at runtime, Task 16)
 ///   --check fidelity | --check=fidelity only the model-fidelity section (fixtures/fidelity: cuts, tiers, re-datum, sweep, Task 17)
 ///   --check props | --check=props     only the props section (fixtures/props: slots, mirrors, lights, doors, ambience, Task 18)
+///   --check light | --check=light     only the light section (game-hour stage, hemisphere, shadow fit, MSAA, Task 21)
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
 public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
@@ -60,6 +63,8 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
     public Vector2I? Size { get; init; }
     /// <summary><c>--verify</c>: the full § B5a table per mounted location (the browser's <c>?verify=1</c>).</summary>
     public bool Verify { get; init; }
+    /// <summary><c>--msaa=N</c>: the main viewport's 3D MSAA; default 4× like the browser (<c>antialias: true</c>).</summary>
+    public Viewport.Msaa Msaa { get; init; } = Viewport.Msaa.Msaa4X;
     /// <summary><c>--check verify</c>: run only that section of the self-test; null = all of it.</summary>
     public string? CheckOnly { get; init; }
 
@@ -73,12 +78,13 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         bool noWater = false, verify = false;
         string? offline = null, checkOnly = null;
         Vector2I? size = null;
+        var msaa = Viewport.Msaa.Msaa4X;
         foreach (var raw in args)
         {
             var arg = raw.Trim();
             if (arg == "--check") check = true;
             else if (TryValue(arg, "--check", out var only)) { check = true; checkOnly = CheckSection(only); }
-            else if (check && checkOnly is null && arg is "verify" or "storeys" or "fidelity" or "props") checkOnly = arg;
+            else if (check && checkOnly is null && arg is "verify" or "storeys" or "fidelity" or "props" or "light") checkOnly = arg;
             else if (arg == "--verify") verify = true;
             else if (arg == "--bench") bench = true;
             else if (arg == "--check-bench") checkBench = true;
@@ -95,6 +101,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             else if (TryValue(arg, "--user", out v)) user = v;
             else if (TryValue(arg, "--goto", out v)) gotoQuery = v;
             else if (TryValue(arg, "--size", out v)) size = ParseSize(v);
+            else if (TryValue(arg, "--msaa", out v)) msaa = ParseMsaa(v);
             else if (TryValue(arg, "--vsync", out v))
                 vsync = v switch
                 {
@@ -121,11 +128,21 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             Size = size,
             Verify = verify,
             CheckOnly = checkOnly,
+            Msaa = msaa,
         };
     }
 
-    private static string CheckSection(string v) => v is "verify" or "storeys" or "fidelity" or "props"
-        ? v : throw new ArgumentException($"--check= knows only 'verify', 'storeys', 'fidelity' and 'props', got '{v}'");
+    private static string CheckSection(string v) => v is "verify" or "storeys" or "fidelity" or "props" or "light"
+        ? v : throw new ArgumentException($"--check= knows only 'verify', 'storeys', 'fidelity', 'props' and 'light', got '{v}'");
+
+    public static Viewport.Msaa ParseMsaa(string v) => v switch
+    {
+        "0" or "off" => Viewport.Msaa.Disabled,
+        "2" => Viewport.Msaa.Msaa2X,
+        "4" => Viewport.Msaa.Msaa4X,
+        "8" => Viewport.Msaa.Msaa8X,
+        _ => throw new ArgumentException($"--msaa must be 0, 2, 4 or 8, got '{v}'"),
+    };
 
     private static Vector2I ParseSize(string v)
     {

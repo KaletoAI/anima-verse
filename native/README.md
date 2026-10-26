@@ -48,7 +48,8 @@ What it draws after login:
   (`Figures/RestCorrection.cs`, port of `restCorrections` in
   `packages/scene-render/src/clipRetarget.ts`), hips height scaled (see
   `Figures/ClipLibrary.cs` for what the browser does on top);
-- a sun + fill light and ambient comparable to the browser, sky colour, no fog;
+- a sun + fill light and ambient comparable to the browser, sky colour, no fog (since Task 21: the game-hour stage,
+  see "Game-hour light, sky and shadows");
 - with `--scatter`: the authored scatter of the painted areas and the automatic
   undergrowth (see "Scatter").
 
@@ -246,6 +247,7 @@ Arguments after `--` (no .env; all optional):
 | `--plain-ground` | keep the S1a one-colour terrain (no `/play/terrain-layers`, no surface textures); the bench result's `ground` key says `ground[plain: --plain-ground]` |
 | `--no-hud` | no HUD even when gdCEF is linked (the S2/S3 bench numbers were taken without it) |
 | `--no-water` | no water lift / water variant (= the browser's `&water=0`); the bench flags say `water: false` |
+| `--msaa=0\|2\|4\|8` | 3D multisample anti-aliasing of the main view; default 4 (the browser's `antialias: true`); `0` for a weak GPU or a bench comparison (the bench start line logs it) |
 | `--offline=DIR` | build from a payload dump (`tools/dump_payloads.py`) instead of a server: no login, no HUD; prints the world/scatter/figure/shader summary lines and quits (with `--bench`: runs the drive, then quits) |
 | `--verify` | § B5a: log the full verify table of every mounted location (default: only a location with a deviation is logged, like the browser without `?verify=1`), plus each mount's `places[…]` line (Task 19) |
 | `--check` | offline self-test from `fixtures/` (see `fixtures/README.md`), then exit 0/1 |
@@ -253,6 +255,7 @@ Arguments after `--` (no .env; all optional):
 | `--check storeys` | only the storey section (`fixtures/storeys/`, `Check/StoreysCheck.cs`: the switch at runtime, hole, marks, labels, pointer), then exit 0/1 |
 | `--check fidelity` | only the model-fidelity section (`fixtures/fidelity/`, `Check/FidelityCheck.cs`: neutralisation, clip, cutouts, depth cut, tier swap, re-datum, sweep), then exit 0/1 |
 | `--check props` | only the props section (`fixtures/props/`, `Check/PropsCheck.cs`: slots, mirrors, prop lights, doors, ambience), then exit 0/1 |
+| `--check light` | only the light section (`Check/LightCheck.cs`: the game-hour stage at 6/7/9/12/18/22 h, hemisphere, shadow fit, material policy, MSAA option), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
 Camera (the browser's overview camera, `Ui/OverviewCamera.cs` + `Core/Overview/OverviewControl.cs`):
@@ -494,15 +497,42 @@ mesh is in the transparent pass only while a fade runs. The cutouts of a buildin
 - **Prop lights** (`World/PropLightPool.cs`, `Core/Scene/PropLights.cs`): six OmniLight3D slots (no shadows,
   attenuation 2 = three's decay 2 with the range window), re-picked at 5 Hz from every source (`pickLights`: night
   gate, shown room, range + 30 m, nearest, sticky slots), 0.4 s fades, candle/fire flicker, additive billboard halos
-  of 2·glow_m; energy = intensity × `Ambience.StageScale` (the factor the native stage was derived with). The night
-  factor comes from the world map's `game_time.hour_fraction` (every 60 s), like the browser's.
+  of 2·glow_m; energy = intensity / π (the stage's mapping, Task 21). The night factor comes from the world map's
+  `game_time.hour_fraction` (every 60 s), like the browser's.
 - **Room ambience** (`World/StageAmbience.cs`, `Core/Scene/Ambience.cs`): the room under the camera target in the open
   location (smallest room rectangle, else the storey corridor) eases daylight/tint with τ 0.5 onto sun, fill, ambient
-  and the water's sky — on the fixed stage as a NEUTRAL BASE until E3 brings the game-hour light model.
+  and the water's sky — multiplied onto the game-hour base since Task 21.
 - **Door props** (`World/DoorProps.cs`): the `leaf` node hangs in a pivot from `leafPivot`; shut in the overview, the
   swing (`Core/Scene/DoorSwing.cs`) waits for an avatar (E7).
 - Checked by `--check props` (fixtures/props, README there), the vector tests (light_pool, ambience, mirror_plane,
   slot_materials, door_swing) and `tests/PropsCoreTests.cs`.
+
+### Game-hour light, sky and shadows (Task 21)
+
+`World/StageAmbience.cs` builds the browser engine's stage once and `Core/Sky/StageLight.cs` (Godot-free, unit-tested)
+computes every value of it:
+
+- **The clock** (`engine.setGameHour`, `gameHourLights` on `sky_light.json`): read from the worldmap poll's
+  `game_time.hour_fraction` at boot and every 60 s; it moves the sun (`(60 cos a, 80 max(0.08, sin a), 25)` from the
+  texel-snapped camera target, `snapShadowCentre`), sets the sun colour, the three intensities, the sky background and the
+  water's `tw_sky`, and the night factor for the lamps. Before the first reading the browser constructor's stage stands.
+  The room ambience multiplies this base (`applyAmbience`); the sky background stays.
+- **Units: Godot energy = three intensity / π** for sun, fill, hemisphere and prop lamps (three divides every light by π
+  in its BRDF, Godot multiplies directional/omni energy by π and divides by π in Lambert, and its ambient has no π). The
+  old stage factor 1/2.032 was 1.55× too bright. Light/ambient/background colours are three's LINEAR colours encoded
+  with the exact inverse of Godot's `srgb_to_linear` (`GodotSrgb.Encode`).
+- **Hemisphere**: an ambient colour (S + G)/2 plus two shadowless, specular-free directional lights of colour (S − G)/2,
+  one straight down and one straight up with `light_negative` — exactly three's `mix(G, S, ½ + ½·n.y)` on a Lambert
+  surface. No sky reflection (`ReflectedLightSource.Disabled`), sun/fill `light_specular` 1 (Godot's 0.5 halves the
+  directional GGX; omni lights already double theirs), linear tone map (three's NoToneMapping).
+- **Materials**: Lambert diffuse like three's MeshStandardMaterial on every imported GLB (`GlbLoader.BrowserLook`), the
+  scatter, the recipe fallback and the placeholders; GLB meshes and the scatter receive no shadow (three's
+  `receiveShadow = false` there — only ground, plates and placeholders receive); the terrain casts none.
+- **Shadow**: one orthogonal directional shadow (Godot fits it to the camera frustum up to
+  `ceil((camera distance + 70)/10)·10` m and snaps it to texels itself) on the 4096 atlas — 3.8–10.6 cm per texel over
+  the zoom range, 7.2 cm at the boot zoom against the browser's 6.8 cm.
+- **MSAA** 4× by default (`--msaa=0|2|4|8`).
+- Checked by `--check light` and `tests/StageLightTests.cs`.
 
 ### Storeys at runtime (Task 16)
 

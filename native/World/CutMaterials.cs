@@ -93,7 +93,8 @@ public static class CutMaterials
             var u = padding > 0 ? CutShader.Pack(clipWorld, cutoutsWorld, padding, plane) : probe;
             for (int s = 0; s < mi.Mesh.GetSurfaceCount(); s++)
             {
-                var src = mi.GetSurfaceOverrideMaterial(s) ?? mi.Mesh.SurfaceGetMaterial(s) ?? new StandardMaterial3D();
+                var src = mi.GetSurfaceOverrideMaterial(s) ?? mi.Mesh.SurfaceGetMaterial(s)
+                          ?? new StandardMaterial3D { DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert, DisableReceiveShadows = true };
                 if (!converted.TryGetValue((src, padding), out var mat)) converted[(src, padding)] = mat = Convert(src, u);
                 if (mat is null) { handle.Fallbacks++; TotalFallbacks++; continue; }
                 mi.SetSurfaceOverrideMaterial(s, mat);

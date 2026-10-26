@@ -6,11 +6,9 @@ using Godot;
 namespace AnimaNative;
 
 /// <summary>
-/// Main, lights: the night gate from the world clock, the prop lights / mirror passes / door swing of the frame, and
-/// the room ambience eased onto the stage (main.ts' frame hook + <c>engine.applyAmbience</c>).
-///
-/// NEUTRAL BASE UNTIL E3: no game-hour light model yet — <see cref="StageAmbience"/> scales and tints the fixed stage
-/// of <see cref="BuildStage"/>; the night factor is the only thing the world clock drives so far.
+/// Main, lights: the world clock (<c>engine.setGameHour</c>: sun, sky, colours, intensities and the night gate), the
+/// prop lights / mirror passes / door swing of the frame, the room ambience eased onto the clock base
+/// (<c>engine.applyAmbience</c>) and the sun following the camera target (engine.ts frame()).
 /// </summary>
 public partial class Main : Node3D
 {
@@ -22,12 +20,22 @@ public partial class Main : Node3D
     private double _night;
     private AmbienceState _ambience = AmbienceState.Neutral;
 
-    /// <summary><c>takeGameHour</c>: a map with a numeric <c>game_time.hour_fraction</c> sets the night factor.</summary>
+    /// <summary>
+    /// <c>takeGameHour</c> → <c>engine.setGameHour</c>: a map with a numeric <c>game_time.hour_fraction</c> moves the sun,
+    /// the sky and the light colours/intensities and sets the night factor (<c>onDayNight</c>).
+    /// </summary>
     private void TakeGameHour(JsonElement map)
     {
         if (Ambience.GameHourOf(map) is not { } hour) return;
         double night = Ambience.NightFactorAt(hour);
-        if (night != _night) Log($"world clock {hour:0.00} h → night {night:0.###}");
+        bool changed = _stage?.Hour != hour;
+        _stage?.SetHour(hour);
+        if (changed && _stage is not null)
+        {
+            var f = _stage.Frame;
+            Log($"world clock {hour:0.00} h → night {night:0.###}, sun {f.Sun.Energy:0.###} hemi {f.Ambient.Energy:0.###} "
+                + $"fill {f.Fill.Energy:0.###} (Godot energy = three intensity / π)");
+        }
         _night = night;
     }
 
@@ -43,5 +51,6 @@ public partial class Main : Node3D
         var target = Ambience.Target(_builder.AmbienceAt(_openView.OpenId, focus));
         _ambience = Ambience.Step(_ambience, target, delta);
         _stage?.Apply(_ambience);
+        _stage?.Track(focus, _camera.Distance);
     }
 }

@@ -26,15 +26,6 @@ public static class Ambience
     /// <summary>The easing time constant τ in seconds.</summary>
     public const double TauS = 0.5;
 
-    /// <summary>
-    /// The native stage's light scale (NOT a browser value, a native one, until E3 brings the game-hour light model):
-    /// the stage in Main.BuildStage is the browser engine's lights at its default sun angle 0.35π divided by the browser
-    /// sun's intensity there, 0.25 + 2·sin(0.35π) = 2.0320… (sun 2.032 → 1.0, hemi 0.35 + 1.2·0.891 = 1.419 → 0.70,
-    /// fill 0.15 + 0.4·0.891 = 0.506 → 0.25). A three intensity becomes a Godot energy by the same factor, so the prop
-    /// lamps keep the browser's balance against the stage.
-    /// </summary>
-    public static readonly double StageScale = 1 / (0.25 + 2 * Math.Sin(0.35 * Math.PI));
-
     /// <summary><c>ambienceTarget</c>: daylight ?? 1; a "#rrggbb" tint → its bytes / 255 (sRGB), none → white.</summary>
     public static AmbienceState Target(SceneAmbience? a)
     {

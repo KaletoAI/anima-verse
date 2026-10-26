@@ -13,9 +13,13 @@ namespace AnimaNative.World;
 /// (not limited by the pool: a distant lamp still glows). The state is <see cref="LightPoolState"/> (Godot-free,
 /// vector-checked arithmetic); this node only copies its outputs onto the lights and halos.
 ///
-/// Units: a three intensity (candela, decay 2) becomes an OmniLight3D energy times <see cref="Ambience.StageScale"/>
-/// — the factor the native stage was derived with — and attenuation 2 with range <c>range_m</c> is three's
-/// <c>getDistanceAttenuation</c> with decay 2 and cutoff <c>range_m</c> (the same windowed inverse square).
+/// Units: a three PointLight intensity I (decay 2, distance <c>range_m</c>) becomes an OmniLight3D energy I/π
+/// (<see cref="Sky.StageLight.Energy"/>, the stage's mapping). three lights a Lambert surface with
+/// <c>albedo/π · I · colour · N·L · (1 − (d/R)⁴)₊² / max(d², 0.01)</c> (lights_pars_begin <c>getDistanceAttenuation</c>);
+/// Godot 4.7.2 with <c>(albedo/π) · (E·π) · colour · N·L · (1 − (d/R)⁴)₊² · max(d, 1e-4)^−attenuation</c>
+/// (light_storage.cpp ×π, scene_forward_lights_inc.glsl <c>get_omni_attenuation</c>). With attenuation 2 and range R =
+/// <c>range_m</c> both agree for d ≥ 0.1 m. The omni specular amount is <c>light_specular · 2</c> = 1 at Godot's default
+/// 0.5, three's unscaled GGX.
 /// </summary>
 public sealed partial class PropLightPool : Node3D
 {
@@ -112,7 +116,7 @@ public sealed partial class PropLightPool : Node3D
             lamp.Position = new Vector3((float)s.Pos.X, (float)s.Pos.Y, (float)s.Pos.Z);
             lamp.OmniRange = s.RangeM > 0 ? (float)s.RangeM : UnboundedRangeM;
             lamp.LightColor = LampColour(s.Colour, s.FireMix);
-            lamp.LightEnergy = (float)(s.Intensity * Ambience.StageScale);
+            lamp.LightEnergy = (float)Sky.StageLight.Energy(s.Intensity);
         }
         foreach (var h in halos)
         {

@@ -118,6 +118,7 @@ void fragment() {{
                 Metallic = (float)look.Metalness,
                 Transparency = translucent ? BaseMaterial3D.TransparencyEnum.Alpha : BaseMaterial3D.TransparencyEnum.Disabled,
                 CullMode = look.DoubleSided ? BaseMaterial3D.CullModeEnum.Disabled : BaseMaterial3D.CullModeEnum.Back,
+                DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert,
             };
             if (translucent) ((StandardMaterial3D)m).AlbedoColor = ((StandardMaterial3D)m).AlbedoColor with { A = (float)look.Opacity };
         }

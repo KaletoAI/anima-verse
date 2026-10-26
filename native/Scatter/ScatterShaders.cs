@@ -20,7 +20,8 @@ namespace AnimaNative.Scatter;
 /// node sits at the origin, so <c>MODEL_MATRIX</c> is three's <c>instanceMatrix</c>.
 ///
 /// Fragment side, kept to what three's MeshStandardMaterial does with these inputs: albedo map × colour
-/// (× instance colour for the undergrowth), roughness/metallic, alpha cut. Not ported: the camera-avatar
+/// (× instance colour for the undergrowth), roughness/metallic, alpha cut, Lambert diffuse + GGX, and no received
+/// shadows (the browser's scatter and undergrowth meshes keep three's <c>receiveShadow = false</c>). Not ported: the camera-avatar
 /// corridor fade (<c>applyOcclusionFade</c>) and the ground hole patch.
 /// </summary>
 public static class ScatterShaders
@@ -62,7 +63,7 @@ public static class ScatterShaders
         string albedo = textured ? "texture(albedo_tex, UV) * albedo_color" : "albedo_color";
         if (instanceColor) albedo = $"({albedo}) * COLOR";
         return $@"shader_type spatial;
-render_mode {(cullDisabled ? "cull_disabled" : "cull_back")}, depth_draw_opaque, diffuse_burley, specular_schlick_ggx;
+render_mode {(cullDisabled ? "cull_disabled" : "cull_back")}, depth_draw_opaque, diffuse_lambert, specular_schlick_ggx, shadows_disabled;
 uniform vec4 albedo_color : source_color = vec4(1.0);
 {(textured ? "uniform sampler2D albedo_tex : source_color, filter_linear_mipmap, repeat_enable;" : "")}
 uniform float roughness_v = 0.95;

@@ -760,7 +760,7 @@ extent 1), `mirror.glb` (wood quad + the pane of smoke_mirror_plane [1], extent 
   lamp 3 in the cellar at level −1 / bottom −3, lamp 4 candle with glow 0.12, lamp 5 fire), height 2: world
   (64 + x, 3.875 + x/32 + 2, 120) — lamp 1 (65, **5.90625**, 120); lamp 3 has no lift (level −1): (67, **2.875**, 120).
   The lantern row at (−40, 100) is 107 m from the focus (64, 5.875, 120). Night 1, storey 0 (cellar hidden): by
-  distance **1, 2, 4, 5, 6, 7**. Second tick: gain 0.5 → lamp 1's energy 2 · 0.5 · StageScale = **0.4921228**;
+  distance **1, 2, 4, 5, 6, 7**. Second tick: gain 0.5 → lamp 1's energy 2 · 0.5 / π = **0.3183099** (Task 21: Godot energy = three intensity / π);
   candle within ±8 %; fire colour between #ffb35c and #ff6a20. Day (night 0): lamp 2 drops, survivors keep their
   slots, lamp 8 fills slot 1 → **1, 8, 4, 5, 6, 7**; lamp 2's halo hides. Cellar storey (night 1): only the cellar room
   is shown → **3**; the parlour's halos hide.
@@ -770,10 +770,59 @@ extent 1), `mirror.glb` (wood quad + the pane of smoke_mirror_plane [1], extent 
   frame → **0.05** rad; the next overview frame eases it back to 0 (|0.05| ≤ one step).
 - **P5** the open location, focus at local (0, 0) → parlour (area 100; the cellar rect (−4, −4) is elsewhere);
   (3, 3) → the closet (area 4) → no ambience; (5.5, 5.5) → no rect → the corridor r-hall → 0.8; (−4, −4) → the cellar
-  rect (area 4 < 100, any storey) → 0.2; a closed / unknown location → none. Stage from neutral towards the parlour
-  for dt 0.5: k = 1 − 1/e, daylight 1 − 0.6k = **0.6207276647** → sun 0.62073, fill 0.15518, ambient 0.43451;
+  rect (area 4 < 100, any storey) → 0.2; a closed / unknown location → none. Stage at noon (sun 2.25, fill 0.55, hemi
+  1.55), from neutral towards the parlour for dt 0.5: k = 1 − 1/e, daylight 1 − 0.6k = **0.6207276647** → sun
+  2.25·d/π = 0.444563, fill 0.55·d/π = 0.108671, ambient 1.55·d/π = 0.306255;
   tint g = 1 − (48/255)k = 0.8810126, b = 1 − (101/255)k = 0.7496307 (the sun's red stays 1); then 4 × 0.125 s back to
-  neutral = one τ: 1 − (1 − 0.62073)/e = **0.8604735**.
+  neutral = one τ: 1 − (1 − 0.62073)/e = **0.8604735** → sun 2.25·0.8604735/π = 0.616269.
 - **P6** a flat tile (0,0) at 10 m: datum 10, lamp 1's lift 0 → (65, **12**, 120).
 - **P7** `game_time.hour_fraction` 22 → sin((16/12)π) < 0 → night **1**.
+
+## Light (Task 21, `Check/LightCheck.cs`, no fixture world)
+
+The stage of `World/StageAmbience.Build` (the call Main makes), read back from Godot. Sources: engine.ts (constructor,
+`setGameHour`, `applyAmbience`, frame()), skyLight.ts `gameHourLights`, three r185 ColorManagement, Godot 4.7.2
+`color.h` / `light_storage.cpp` / `render_scene_data_rd.cpp`.
+
+**Mapping.** three lights a Lambert surface with albedo/π · I · colour · N·L (directional) and albedo/π · I · mix(G, S,
+½ + ½·n.y) (hemisphere); Godot with albedo · E · colour · N·L (energy ×π in light_storage.cpp, Lambert ÷π) and albedo · E
+· colour (ambient, no π). So **E = I / π**. A light/ambient/background `Color` is sRGB-encoded (Godot decodes it with
+`srgb_to_linear`), so a three linear colour c goes in as `linear_to_srgb(c)` with Godot's exponent 1/2.4; an unblended
+hex therefore arrives as **its bytes / 255** (three's decode and Godot's decode are the same formula). The water's
+`tw_sky` takes the sRGB BYTES of `getHex(sky · daylight · tint)` / 255, as scene-render's `setSurfaceSky` does.
+
+**Hours** (a = (h − 6)/12 · π, day = clamp(sin a, 0, 1), dusk = clamp(1 − |h − 12|/6, 0, 1); I_sun = 0.25 + 2·day,
+I_hemi = 0.35 + 1.2·day, I_fill = 0.15 + 0.4·day; offset (60 cos a, 80 max(0.08, sin a), 25), the light's +Z = the offset
+normalised; night = clamp(1 − 3·day, 0, 1)):
+
+| h | day | sun → Godot | sky → Godot / tw_sky bytes | E sun / hemi / fill | +Z (towards the sun) | night |
+|---|---|---|---|---|---|---|
+| 6 | 0 | moon 9fb4e0 → (159, 180, 224)/255 | night 1a2340 → (26, 35, 64)/255 | 0.25/π, 0.35/π, 0.15/π | (60, 6.4, 25)/√4265.96 = (0.918635, 0.097988, 0.382764) | 1 |
+| 7 | sin 15° = 0.258819 | warm→noon by smoothstep(0.522048) = 0.533050: linear (1, 0.676035, 0.428080) → (1, 0.841203, 0.685835) | day→dusk by (0.35 − 0.2588)/0.2 = 0.4559: → (0.771432, 0.707033, 0.732679); bytes (197, 180, 187) | 0.767638/π, 0.660583/π, 0.253528/π | (57.9555, 20.7055, 25)/66.4265 = (0.872468, 0.311703, 0.376352) | 1 − 3·0.2588 = 0.223543 |
+| 9 | 0.707107 | noon fff2d8 → (255, 242, 216)/255 | day 9fc7e8 → (159, 199, 232)/255 | 1.664214/π, 1.198528/π, 0.432843/π | (42.4264, 56.5685, 25)/75 = (0.565685, 0.754247, 0.333333) | 0 |
+| 12 | 1 | noon | day | 2.25/π = 0.716197, 1.55/π = 0.493380, 0.55/π = 0.175070 | (0, 80, 25)/83.8153 = (0, 0.954480, 0.298275) | 0 |
+| 18 | 1.2e-16 (≤ 0.05) | moon | night (dusk 0 → factor 0.3 · 0) | 0.25/π, 0.35/π, 0.15/π | (−60, 6.4, 25) → (−0.918635, 0.097988, 0.382764) | 1 |
+| 22 | 0 (sin 240° < 0) | moon | night | 0.25/π, 0.35/π, 0.15/π | (60 cos 240°, 6.4, 25) = (−30, 6.4, 25)/39.5722 = (−0.758108, 0.161730, 0.631756) | 1 |
+
+Proof per hour: Godot's renderer colour `Color.SrgbToLinear() · E · π` equals three's linear colour · I (1e-5).
+
+**Before the clock** (constructor): sun 2.0/π = 0.636620, hemi 1.5/π = 0.477465, fill 0.5/π = 0.159155, sun fff2d8,
+sky 9fc7e8; an ambience applied now changes nothing (`applyAmbience` has no `baseLights` yet); `tw_sky` stays.
+
+**Hemisphere** S = linear(dfeeff) = (0.737911, 0.854993, 1), G = linear(8a9a78) = (0.254152, 0.323470, 0.188021).
+Ambient colour (S + G)/2 = (0.496031, 0.589068, 0.593910) → Godot (0.732737, 0.791229, 0.794121); pair colour (S − G)/2 =
+(0.241879, 0.265925, 0.406090) → Godot (0.529008, 0.552531, 0.669733); all three at E = I_hemi/π. Godot's sum
+ambient·E + pair·E·max(0, n.y) − pair·E·max(0, −n.y) at noon: n.y = 1 → 1.55·S/π = (0.364070, 0.421837, 0.493380); n.y = 0
+→ 1.55·(S + G)/2/π = (0.244732, 0.290635, 0.293024); n.y = −1 → 1.55·G/π = (0.125394, 0.159433, 0.092667) — three's values.
+Fill from (−30, 20, −25) to the origin: /√1925 → (−0.683763, 0.455842, −0.569803).
+
+**Ambience** daylight 0.5 at noon: every energy halved; tw_sky = getHex(linear(9f, c7, e8) · 0.5) = (0.173352, 0.285562,
+0.403476) → sRGB bytes (116, 146, 170); the background stays.
+
+**Shadow fit** max distance ceil((d + 70)/10)·10: d 80 → 150, 5 → 80, 150 → 220. Godot's fit at 150 m (45° vertical,
+16:9, near 0.2): far corners (±110.4569, ±62.1320, 150), centre z 75.1, radius √(110.4569² + 62.1320² + 74.9²) = 147.2112
+× 4096/4094 = 147.2831 → texel 2r/4096 = **0.0719156 m** (browser 140/2048 = 0.0683594 m). Atlas 4096 (Godot default).
+
+**Materials** `building_original.glb`: all 8 materials Lambert + `DisableReceiveShadows` after `GlbLoader.BrowserLook`;
+the scatter shader `diffuse_lambert, shadows_disabled`; a terrain tile `CastShadow = Off`; `--msaa` default 4×, `0` off.
 

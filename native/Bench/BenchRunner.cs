@@ -100,7 +100,7 @@ public partial class BenchRunner : Node
         _camera.SetProcessUnhandledInput(false);
         PlaceCamera(0);
         GD.Print($"[bench] warm-up {_s.Warmup}s; drive {_s.Duration}s; anchor ({_s.Anchor.X}, {_s.Anchor.Y}, {_s.Anchor.Z})"
-                 + (_s.Anchor.LocationId is { } id ? $" {id}" : "") + $"; vsync {(_s.Vsync ? "on" : "off")}");
+                 + (_s.Anchor.LocationId is { } id ? $" {id}" : "") + $"; vsync {(_s.Vsync ? "on" : "off")}; msaa {GetViewport().Msaa3D}");
     }
 
     public override void _Process(double delta)
