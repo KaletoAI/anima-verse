@@ -231,6 +231,7 @@ public partial class Main : Node3D
     {
         StopSync();
         _stop.Cancel();
+        World.VeilUniforms.Reset();
         _builder?.Models?.FreeAll();
         if (_hud is not null && IsInstanceValid(_hud))
         {
@@ -268,6 +269,7 @@ public partial class Main : Node3D
             SyncLocks();
             _builder.TickView(delta, _camera.GlobalPosition);
             TickLights(delta);
+            TickVeil(delta);
         }
         // The overview auto-close of main.ts' frame hook (no auto-reopen). The measuring runs keep their world.
         if (_interactive && _openView.OpenId is { } open && _camera is not null)

@@ -111,6 +111,12 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "veil")
+            {
+                var alone = await VeilCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "backdrop")
             {
                 var alone = BackdropCheck.Run(host);
@@ -217,10 +223,11 @@ public static class CheckRunner
             var terrainLine = await TerrainCheck.RunAsync(host, dir);
             var streamLine = await StreamCheck.RunAsync(host, dir);
             var waterLine = WaterCheck.Run(host, dir);
+            var veilLine = await VeilCheck.RunAsync(host, dir);
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

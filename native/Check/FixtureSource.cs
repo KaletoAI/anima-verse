@@ -28,6 +28,7 @@ namespace AnimaNative.Check;
 ///   terrain_layers_tiles.json  → GET /play/terrain-layers?keys=… (only the requested AND indexed keys,
 ///                                the format block and the table — like the server's batch_payload)
 ///   surface_textures.json      → GET /assets/surface-textures
+///   explored.json              → GET /play/explored (absent = 404)
 ///   (tiles.json's per-tile <c>stats</c>) → GET /play/heightfield/stats (only the requested AND indexed keys)
 /// </summary>
 public sealed class FixtureSource : IWorldSource
@@ -180,6 +181,18 @@ public sealed class FixtureSource : IWorldSource
     }
 
     public Task<JsonDocument> GetSurfaceTexturesAsync() => Doc("surface_textures.json");
+
+    /// <summary>Every <c>/play/explored</c> call.</summary>
+    public int ExploredRequests { get; private set; }
+
+    /// <summary><c>explored.json</c> → GET /play/explored; no file = 404 (a dump made before the veil).</summary>
+    public Task<JsonDocument> GetExploredAsync()
+    {
+        ExploredRequests++;
+        return File.Exists(PathOf("explored.json"))
+            ? Doc("explored.json")
+            : Task.FromException<JsonDocument>(new ApiException(404, "/play/explored", "no explored.json in " + _dir));
+    }
 
     private JsonDocument Big(string file)
     {

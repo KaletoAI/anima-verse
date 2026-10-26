@@ -1,4 +1,5 @@
 using System.Globalization;
+using AnimaNative.Sky;
 using AnimaNative.Terrain;
 using AnimaNative.Water;
 using Godot;
@@ -27,8 +28,14 @@ namespace AnimaNative.Ground;
 /// 5. the basement hole (<c>patchHole</c>, Task 16): while <c>hole_on</c>, a fragment whose world xz lies strictly
 ///    inside <c>hole_rect</c> (minX, minZ, maxX, maxZ) is discarded — the open view looks down into a cellar.
 ///
-/// Not ported (per-fragment work the browser does and Godot does not — favours Godot): the fog veil
-/// (<c>applyFogVeil</c>, the fog-of-war haze).
+/// 6. the exploration veil (<c>applyFogVeil</c>, <c>scene/fogVeil.ts</c>, Task 26) on every variant, plain included: the
+///    explored-cells textures A/B (one R8 texel per 64 m cell, linear filter = the 32 m soft edge, clamp to the zero
+///    ring), crossfaded by <c>fv_mix</c>; the haze takes <c>fv_alpha · (1 − explored)</c> of the FINISHED colour
+///    (<c>mix(outgoingLight, uFogColor, a)</c> at three's <c>opaque_fragment</c>). Godot has no hook after the lighting,
+///    so the mix goes in as <c>ALBEDO · (1 − a)</c> plus <c>EMISSION = colour · a</c> — exact for the diffuse and
+///    ambient share, the matte specular is not scaled (the water variant's trade, see there). On the wet pieces the
+///    browser's veil runs BEFORE the water's sky/foam mixes (its body is inserted first), so the haze sits under them.
+///    <c>fv_alpha</c> = 0 reads no texture (the uniform branch of the browser).
 ///
 /// Differences that are cost-neutral: the id masks are RG8 UNORM textures read with <c>texelFetch</c> and
 /// decoded <c>round(v·255)</c> (Godot's <see cref="Image"/> has no RG8UI format; the browser reads RG8UI
@@ -53,22 +60,25 @@ public static class GroundShader
 
     /// <summary>
     /// The plain terrain: the same vertex stage (dry, no lift) and the same shading normal, one matte colour, Lambert —
-    /// what the S1a vertex-colour material was on the fixed meshes. 15 uniforms: the 14 of the stage + the colour.
+    /// what the S1a vertex-colour material was on the fixed meshes, and the veil. 22 uniforms: the 14 of the stage + the
+    /// colour + the veil's 7.
     /// </summary>
     public static string PlainCode() => $@"shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_lambert, specular_schlick_ggx;
 
 uniform vec3 plain_albedo : source_color = vec3({PlainColor.R.ToString("0.00", CultureInfo.InvariantCulture)}, {PlainColor.G.ToString("0.00", CultureInfo.InvariantCulture)}, {PlainColor.B.ToString("0.00", CultureInfo.InvariantCulture)});
-{TerrainLodGlsl.Chunk(false)}
+{VeilUniformBlock}{TerrainLodGlsl.Chunk(false)}
 varying vec2 v_world;
-
+{VeilFunctions()}
 void vertex() {{
 {TerrainLodGlsl.VertexBody}
 	v_world = tl_world.xz;
 }}
 
 void fragment() {{
-	ALBEDO = plain_albedo;
+	float fv_a = fv_amount(v_world);
+	ALBEDO = plain_albedo * (1.0 - fv_a);
+	EMISSION = fv_color * fv_a;
 	ROUGHNESS = {L(PlainRoughness)};
 	METALLIC = 0.0;
 	NORMAL = normalize((VIEW_MATRIX * vec4(tl_normal_at(v_world), 0.0)).xyz);
@@ -118,9 +128,9 @@ uniform float ground_metallic = 0.02;
 // ---- basement hole (ground.ts patchHole) ----
 uniform vec4 hole_rect = vec4(0.0);   // minX, minZ, maxX, maxZ (world)
 uniform float hole_on = 0.0;
-{(water ? WaterUniforms : "")}{TerrainLodGlsl.Chunk(water)}
+{VeilUniformBlock}{(water ? WaterUniforms : "")}{TerrainLodGlsl.Chunk(water)}
 varying vec2 v_world;
-
+{VeilFunctions()}
 void vertex() {{
 {TerrainLodGlsl.VertexBody}
 	v_world = tl_world.xz;{(water ? "\n\tv_wet = tl_wet;" : "")}
@@ -242,10 +252,46 @@ void fragment() {{
 ";
     }
 
-    private const string DryFragment = @"	ALBEDO = alb;
+    private const string DryFragment = @"	float fv_a = fv_amount(p);
+	ALBEDO = alb * (1.0 - fv_a);
+	EMISSION = fv_color * fv_a;
 	ROUGHNESS = ground_roughness;
 	METALLIC = ground_metallic;
 	NORMAL = normalize((VIEW_MATRIX * vec4(tl_normal_at(p), 0.0)).xyz);";
+
+    // ── The exploration veil (fogVeil.ts, Task 26) ─────────────────────────────────────────────────────────────────────
+    // Seven uniforms, bound and pushed by VeilUniforms (World/VeilUniforms.cs) — the browser's shared uniform objects.
+
+    /// <summary>The veil's uniform names, in declaration order (the binding and the check use this list).</summary>
+    public static readonly string[] VeilUniformNames =
+        { "fv_cells_a", "fv_cells_b", "fv_geom_a", "fv_geom_b", "fv_mix", "fv_alpha", "fv_color" };
+
+    public const string VeilUniformBlock = @"
+// ---- exploration veil (fogVeil.ts) ----
+uniform sampler2D fv_cells_a : hint_default_black, filter_linear, repeat_disable;
+uniform sampler2D fv_cells_b : hint_default_black, filter_linear, repeat_disable;
+uniform vec4 fv_geom_a = vec4(0.0, 0.0, 1.0, 1.0);   // cx0, cz0, cols, rows (cells)
+uniform vec4 fv_geom_b = vec4(0.0, 0.0, 1.0, 1.0);
+uniform float fv_mix = 1.0;                           // 0 = A, 1 = B
+uniform float fv_alpha = 0.0;                         // 0.72 · height ramp, 0 = off
+uniform vec3 fv_color = vec3(0.0);                    // the sky, linear
+";
+
+    /// <summary>
+    /// <c>fogExploredAt</c> (texel centres on cell centres, so the linear filter ramps over the 64 m between two and
+    /// crosses 0.5 on the shared boundary) and the amount of haze at a plan point.
+    /// </summary>
+    public static string VeilFunctions() => $@"
+float fv_explored_at(sampler2D cells, vec4 geom, vec2 p) {{
+	vec2 uv = (p / {L(FogVeil.CellM)} - geom.xy) / geom.zw;
+	return texture(cells, uv).r;
+}}
+float fv_amount(vec2 p) {{
+	if (fv_alpha <= 0.0) return 0.0;
+	float seen = mix(fv_explored_at(fv_cells_a, fv_geom_a, p), fv_explored_at(fv_cells_b, fv_geom_b, p), fv_mix);
+	return fv_alpha * (1.0 - clamp(seen, 0.0, 1.0));
+}}
+";
 
     // ── The water variant (Wasser v2 K-A: client3d/src/scene/waterShade.ts terrainWaterFragmentGlsl) ──────────
     // The wet pieces' vertices are LIFTED onto the mirror by the vertex stage (TerrainLodGlsl tl_lift, per tap of the
@@ -389,8 +435,10 @@ vec3 tw_ripple(vec2 p, vec2 gx, vec2 gy, float wave_m, float speed, float flow_s
 	float fres = pow(1.0 - clamp(dot(VIEW, NORMAL), 0.0, 1.0), 3.0);
 	float k = clamp(fres * tw_skymix, 0.0, 1.0) * tw_s;
 	float f = tw_foam * {L(WaterShade.FoamStrength)};
-	ALBEDO = alb * (1.0 - k) * (1.0 - f);
-	EMISSION = tw_sky * k * (1.0 - f) + vec3(f);
+	// The veil first, then the sky and the foam (the browser's insertion order): ((L·(1 − a) + C·a)·(1 − k) + S·k)·(1 − f) + f.
+	float fv_a = fv_amount(p);
+	ALBEDO = alb * (1.0 - k) * (1.0 - f) * (1.0 - fv_a);
+	EMISSION = (fv_color * fv_a * (1.0 - k) + tw_sky * k) * (1.0 - f) + vec3(f);
 	ROUGHNESS = rough;
 	METALLIC = metal;";
 }

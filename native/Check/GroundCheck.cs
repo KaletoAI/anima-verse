@@ -174,10 +174,13 @@ public static class GroundCheck
         var mat = g.Material;
         Expect("material shader", mat.Shader == GroundShader.Get(), "");
         // Godot's dummy renderer runs the shader-language front end too (material_storage.cpp shader_set_code):
-        // a shader that does not parse reports NO uniforms. 33 = the hand count of the declarations (15 layer cut +
-        // natural ground, 14 of the CDLOD stage, roughness/metallic, the basement hole's hole_rect / hole_on).
+        // a shader that does not parse reports NO uniforms. 40 = the hand count of the declarations (15 layer cut +
+        // natural ground, 14 of the CDLOD stage, roughness/metallic, the basement hole's hole_rect / hole_on, the
+        // exploration veil's 7 fv_* — Task 26).
         int uniforms = mat.Shader.GetShaderUniformList().Count;
-        Expect("ground shader compiles (front end) with its 33 uniforms", uniforms == 33, $"{uniforms}");
+        Expect("ground shader compiles (front end) with its 40 uniforms", uniforms == 40, $"{uniforms}");
+        Expect("ground material bound to the veil", VeilUniforms.Materials().Contains(mat)
+                                                   && mat.GetShaderParameter("fv_cells_a").As<Texture2D>() is not null, "");
         Expect("ground hole off at the build", (float)mat.GetShaderParameter("hole_on") == 0f, "");
         Param(mat, "lc_near", new Vector4(64, 96, 1, 128));
         Param(mat, "lc_near_sd_geom", new Vector4(64, 96, 0.5f, 256));

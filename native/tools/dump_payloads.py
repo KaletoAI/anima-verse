@@ -28,6 +28,7 @@ What is written (names as ``native/fixtures/`` uses them, see
     heightfield.json            GET /play/heightfield
     tiles.json                  every indexed tile of /play/heightfield/tiles, merged
     worldmap.json               GET /play/worldmap (the fogged player view)
+    explored.json               GET /play/explored (the avatar's exploration memory, the veil's cells)
     locations.json              GET /world/locations?view=3d
     scene_<id>.json             GET /play/locations/<id>/scene (absent = 404)
     model_meta_<id>.json        GET /play/locations/<id>/model/meta (not read by the client)
@@ -260,6 +261,9 @@ def _dump_all(client, out: Path, world: Path, served: dict) -> int:
     summary["avatar"] = wm.get("avatar")
     summary["worldmap_locations"] = len(wm.get("locations") or [])
     summary["world_props"] = len(wm.get("world_props") or [])
+    explored = _get(client, "/play/explored")
+    _write(out, "explored.json", explored)
+    summary["explored_cells"] = len(explored.get("cells") or [])
     _write(out, "locations.json", _get(client, "/world/locations?view=3d"))
 
     urls = []

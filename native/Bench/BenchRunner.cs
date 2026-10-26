@@ -162,7 +162,7 @@ public partial class BenchRunner : Node
         var result = BuildResult(_s, summary, renderCpu, $"{(int)vp.X}x{(int)vp.Y}",
                                  info.ContainsKey("string") ? info["string"].AsString() : "",
                                  vendor.Length > 0 ? $"{adapter} ({vendor})" : adapter,
-                                 OS.GetProcessorName());
+                                 OS.GetProcessorName(), MsaaSamples(GetViewport().Msaa3D));
 
         // Restore normal play.
         RenderingServer.ViewportSetMeasureRenderTime(_viewport, false);
@@ -178,10 +178,11 @@ public partial class BenchRunner : Node
     /// <summary>
     /// The result object — the browser's keys in the browser's order
     /// (<c>bench.ts</c>: backend … size, the summary, fps/gpuMs/draws/triangles),
-    /// then the native extras <c>renderCpuMsMedian</c>, <c>godot</c>, <c>gpu</c>, <c>cpu</c>.
+    /// then the native extras <c>renderCpuMsMedian</c>, <c>godot</c>, <c>gpu</c>, <c>cpu</c> and <c>msaa</c> (the 3D
+    /// samples of the run: 0, 2, 4 or 8 — the E3 gate compares runs of equal size AND equal MSAA).
     /// </summary>
     public static JsonObject BuildResult(BenchSettings s, BenchSummary sum, double? renderCpuMsMedian, string size,
-                                         string godot, string gpu, string cpu)
+                                         string godot, string gpu, string cpu, int msaa)
     {
         var a = s.Anchor;
         return new JsonObject
@@ -223,6 +224,16 @@ public partial class BenchRunner : Node
             ["godot"] = godot,
             ["gpu"] = gpu,
             ["cpu"] = cpu,
+            ["msaa"] = msaa,
         };
     }
+
+    /// <summary>The 3D MSAA mode as a sample count (Disabled = 0).</summary>
+    public static int MsaaSamples(Viewport.Msaa m) => m switch
+    {
+        Viewport.Msaa.Msaa2X => 2,
+        Viewport.Msaa.Msaa4X => 4,
+        Viewport.Msaa.Msaa8X => 8,
+        _ => 0,
+    };
 }

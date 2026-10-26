@@ -109,6 +109,7 @@ public partial class TerrainLodNode : Node3D
         AddChild(_wet);
         _plain = new ShaderMaterial { Shader = GroundShader.Plain() };
         ShaderSafety.Ok(_plain.Shader, "terrain-plain");
+        VeilUniforms.Bind(_plain);
         _dryMat = _wetMat = _plain;
         SetMaterials(null, null);
     }

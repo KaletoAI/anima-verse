@@ -169,6 +169,9 @@ public sealed class StageAmbience
         Env.BackgroundColor = C(f.Background);
         // The fog colour follows the sky (engine.ts: `scene.fog.color.copy(sky)`); the ambience does not touch it.
         if (_fog is not null && GodotObject.IsInstanceValid(_fog)) _fog.SetSky(f.Background.Linear);
+        // …and so does the exploration veil (engine.ts setFogVeilSky(sky)): haze is the air between eye and ground.
+        var bg = f.Background.Linear;
+        VeilUniforms.SetSky(new Vector3((float)bg.R, (float)bg.G, (float)bg.B));
         _water = Water?.Invoke();
         if (f.WaterSky is { } w)
         {

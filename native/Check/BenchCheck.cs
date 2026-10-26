@@ -45,7 +45,7 @@ public static class BenchCheck
     {
         "backend", "path", "pathVersion", "duration", "warmup", "flags", "anchor", "size", "frames", "seconds",
         "fpsMean", "frameMsMedian", "frameMsP95", "cpuMsMedian", "cpuMsP95", "gpuMsMedian", "callsMedian",
-        "trisMedian", "fps", "gpuMs", "draws", "triangles", "renderCpuMsMedian", "godot", "gpu", "cpu",
+        "trisMedian", "fps", "gpuMs", "draws", "triangles", "renderCpuMsMedian", "godot", "gpu", "cpu", "msaa",
     };
 
     public static async Task<int> RunAsync(Node3D host, OverviewCamera camera, CliOptions options)
@@ -122,6 +122,8 @@ public static class BenchCheck
                                         && ((string?)result["stream"])!.StartsWith("stream[", StringComparison.Ordinal),
                    $"{streamFrames} / {result["streamMaxFrameMs"]?.ToJsonString() ?? "null"}");
             Expect("backend", (string?)result["backend"] == "godot-forward+", $"{result["backend"]}");
+            Expect("msaa = the viewport's samples", (int)result["msaa"]! == BenchRunner.MsaaSamples(host.GetViewport().Msaa3D),
+                   $"{result["msaa"]} vs {host.GetViewport().Msaa3D}");
             Expect("path", (string?)result["path"] == "shared/bench/camera_path_v1.json", $"{result["path"]}");
             Expect("duration/warmup", (double)result["duration"]! == Duration && (double)result["warmup"]! == Warmup, "");
             var flags = result["flags"]!.AsObject();

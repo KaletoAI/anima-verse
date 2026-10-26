@@ -65,6 +65,12 @@ public interface IWorldSource
     Task<JsonDocument> GetTerrainLayersAsync(IReadOnlyList<string> keys);
     /// <summary><c>GET /assets/surface-textures</c> (§ A7/§ A9): the bare array <c>[{kind, name, url, size_m, material?} | {kind, name, blend}]</c>.</summary>
     Task<JsonDocument> GetSurfaceTexturesAsync();
+    /// <summary>
+    /// <c>GET /play/explored</c> (§ A12): the avatar's exploration memory <c>{cells: ["cx,cz", …], sig}</c> — the veil's
+    /// cells, fetched on <c>explored_sig</c> only. A source that does not serve it answers 404 (the veil keeps standing).
+    /// </summary>
+    Task<JsonDocument> GetExploredAsync()
+        => Task.FromException<JsonDocument>(new ApiException(404, "/play/explored", "not served by this source"));
 }
 
 /// <summary>
@@ -292,6 +298,8 @@ public sealed class AnimaApi : IWorldSource, IDisposable
     }
 
     public Task<JsonDocument> GetSurfaceTexturesAsync() => GetJson("/assets/surface-textures");
+
+    public Task<JsonDocument> GetExploredAsync() => GetJson("/play/explored");
 
     /// <summary>JS <c>String.replace(',', ':')</c>: the FIRST occurrence only.</summary>
     private static string ReplaceFirst(string s, char from, char to)

@@ -35,6 +35,8 @@ public partial class Main : Node3D
         try
         {
             MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
+            // A new world: the veil starts from "nothing explored" with nothing bound (its module state).
+            VeilUniforms.Reset();
             var world = new Node3D { Name = "World" };
             AddChild(world);
             var builder = _builder = new WorldBuilder(_source!, Log, strict: false)
@@ -75,6 +77,8 @@ public partial class Main : Node3D
             world.AddChild(_streamer);
             // main.ts takeGameHour(): the world clock of the freshest map drives the night gate (every 60 s, below).
             TakeGameHour(builder.FirstMap!.Value);
+            // main.ts `void syncExplored(firstMap)`: the veil's memory on its own signature.
+            StartVeil(builder.FirstMap!.Value);
             _interactive = !_options.Bench && _options.Offline is null;
             _picking = new LocationPicking(builder);
             // main.ts: the avatar's location is the open one from the first mount on.
@@ -202,6 +206,7 @@ public partial class Main : Node3D
                 if (_scatter is not null) Log("offline scatter " + _scatter.Summary() + " " + _scatter.Digest());
                 Log("offline figures " + FigureLine());
                 if (_streamer is not null) Log("offline " + _streamer.Summary());
+                Log("offline " + VeilUniforms.Summary());
                 foreach (var line in ShaderSafety.Lines) Log("offline " + line);
                 GetTree().Quit(0);
                 return;

@@ -26,6 +26,7 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `terrain_layers.json` | `GET /play/terrain-layers` (§ A16.7) — the index: format, layer table, coarse id mask, tile keys — WRITTEN by `ground_fixture.mjs` |
 | `terrain_layers_tiles.json` | `GET /play/terrain-layers?keys=…` — every tile; the source answers only the requested AND indexed keys — WRITTEN by `ground_fixture.mjs` |
 | `surface_textures.json` | `GET /assets/surface-textures` — the library, a bare array like the server's — WRITTEN by `ground_fixture.mjs` |
+| `explored.json` | `GET /play/explored` (§ A12) — the avatar's exploration memory: two cells and their signature (see "Veil"); no file = 404 |
 | `ground_grass.png` | a 4 × 2 PNG of ONE colour (60, 140, 50, 255) — the `grass` surface image — WRITTEN by `ground_fixture.mjs` |
 | `ground_fixture.mjs` | plain node script that bakes the cut-down masks in the server's encoding (see "Ground surfaces") |
 | `ground_reference.json` | the browser's layer-cut / want-set / natural-ground / colour-slice values on these fixtures — WRITTEN by `ground_reference.mjs` |
@@ -461,7 +462,7 @@ path `"Path_Blend "` (trimmed + lower-cased → `path_blend`), meadow `meadow_te
   both level arrays, the near rect, the frame, the rings, base step, normal span, the cap texture, its geometry and
   fit) + roughness/metallic + the basement hole's `hole_rect` / `hole_on` (Task 16, off at the build); the water
   variant adds 5 `tw_*` (`tw_wave`, `tw_kind`, `tw_flow`, `tw_look`, `tw_sky`) + 4 lift uniforms (`tl_water`,
-  `tl_water_sd`, `tl_water_geom`, `tl_water_levels`) = **42** — since Task 25 the fragment reads the lift's own sd
+  `tl_water_sd`, `tl_water_geom`, `tl_water_levels`) = **42** (each variant + the veil's 7 `fv_*` since Task 26: **40** / **49** / **22**) — since Task 25 the fragment reads the lift's own sd
   field and lattice (`tl_sd_at`, `tl_water_geom`), the old `tw_sd` / `tw_geom` window is gone; the
   plain terrain is the 14 + its colour = **15**. Godot's dummy renderer runs the shader-language front end, so a
   shader that does not parse reports none.
@@ -901,7 +902,7 @@ Sources: terrainLod.ts (`createTerrainLod`: `setField`, `buildFar`, `buildNear`,
 `Core/Terrain/TerrainLod.cs`, vector-checked in `dotnet test` (terrain_lod.json); `nodeHasWater` has no shared vector
 yet — its hand cases (smoke_terrain_lod.mjs § (c)) run in `TerrainFieldTests`.
 
-**T0 shaders.** ground **33**, ground-water **42** (Task 25: was 44 with the separate fragment window), terrain-plain **15** uniforms (counts under "Ground surfaces"). The
+**T0 shaders.** ground **40**, ground-water **49**, terrain-plain **22** uniforms (Task 26: 33 / 42 / 15 + the veil's 7; Task 25: the wet one was 44 with the separate fragment window) (counts under "Ground surfaces"). The
 text prints `TL_PATCH_N = 32.0`, `TL_MORPH_START = 0.5`, `TL_CAP_NONE = 6.0`, six rings, the descent j = 5 … 1, the
 outline band `sd / 0.5` and `TL_SD_DRY = -10000.0` — the twin (`Core/Terrain/TerrainShaderTwin.cs`) reads the same
 numbers from C#. Only the wet program has `tl_lift`.
@@ -1058,7 +1059,7 @@ walk.ts (`ghostCutY`, `groundWaterLevel`, `groundScope`), propWater.ts + propWat
 prop_water.json); the ripple's sample coordinates have no shared vector — its identities (smoke_water_shade.mjs § [5]/[6])
 are hand tests in `WaterExtrasTests`.
 
-**W0 shaders.** `ground-water` **42** uniforms (its look reads the lift's `tl_sd_at` + `tl_inside` and `tl_water_geom`,
+**W0 shaders.** `ground-water` **49** uniforms (42 + the veil's 7, Task 26) (its look reads the lift's `tl_sd_at` + `tl_inside` and `tl_water_geom`,
 no `tw_sd` / `tw_geom`), `waterfall-curtain` 4, `waterfall-foam` 1, `prop-water` 4, `water-ghost[back|disabled|front]`
 5 each; every one compiles in the headless front end (a bogus render mode does not — `depth_test_inverted` is a real
 4.7.2 mode). The wave map is three's `CanvasTexture` uploaded with flipY, so three's sample (u, v) reads canvas row
@@ -1105,3 +1106,36 @@ a bed at 9 → **10**; in a built scope → dry; on the sandbank (topmost area w
 **1.75**; region 1 (2 × 2, y 2) → **2** at **2.25**; one material for `#3f7fb8|0.7`, albedo 0.25 · raw + 0.75 · linear =
 (**0.0990446**, **0.2836829**, **0.5398823**) (linear 0.0497066, 0.2122308, 0.4793202), opacity 0.7; re-lift 1.0 →
 **2.5**; the hour's sky reaches the cached material; at (3.5, 3.5) the higher mirror 2 + 0.25 = **2.25** (bed 1.75).
+
+## Veil (Task 26, `Check/VeilCheck.cs`, `--check veil`, fixture `explored.json`)
+
+The exploration haze of `client3d/src/scene/fogVeil.ts` on the three ground shaders and the shared uniforms
+(`World/VeilUniforms.cs`); its math (`fogGrid`, `fogTexUv`, `fogHeightAlpha`, …) is vector-checked in `dotnet test`
+(`fog_veil.json`), the state (A/B, crossfade, strength, `syncExplored`) is hand-tested in `FogVeilStateTests`.
+
+**V0 shaders.** +7 uniforms on every variant (`fv_cells_a`, `fv_cells_b`, `fv_geom_a`, `fv_geom_b`, `fv_mix`,
+`fv_alpha`, `fv_color`): ground **40**, ground-water **49**, terrain-plain **22**. The samplers are
+`hint_default_black, filter_linear, repeat_disable` (three's LinearFilter + ClampToEdge; an unbound sampler reads
+"unexplored"); `uv = (p / 64.00 − geom.xy) / geom.zw`; `fv_alpha ≤ 0` reads no texture. Output (three mixes the FINISHED
+colour, Godot has no hook after the lighting): dry and plain `ALBEDO · (1 − a)` + `EMISSION = colour · a`; wet — the
+browser inserts the veil's body before the water's `tlodWaterOut`, so ((L·(1 − a) + C·a)·(1 − k) + S·k)·(1 − f) + f →
+`ALBEDO = alb·(1 − k)(1 − f)(1 − a)`, `EMISSION = (C·a·(1 − k) + S·k)·(1 − f) + f`. Boot: alpha 0, mix 1, the neutral
+1 × 1 zero texel on both samplers, geometry (0, 0, 1, 1), colour 0x9fc7e8 linear = ((159/255 + 0.055)/1.055)^2.4 …
+= **(0.3467, 0.5711, 0.8069)**.
+
+**V1 cells.** `explored.json` = `["0,0", "2,1"]`, sig "2". Grid x 0…2, z 0…1 plus one ring → cx0 = cz0 = −1,
+cols = 2 + 1 + 2 = **5**, rows = 1 + 1 + 2 = **4**; texel of (0, 0): (1, 1) → 1·5 + 1 = **6**, of (2, 1): (3, 2) →
+2·5 + 3 = **13**. One request; the same signature again asks nothing. Every bound material: B = the new texture, A =
+the neutral texel, mix 0, `fv_geom_b` (−1, −1, 5, 4).
+
+**V2 the soft edge** (bilinear twin, texel coordinate = x/64 + 1 − 0.5 = x/64 + 0.5 on this grid): (32, 32) → 1.0
+(the centre of the explored cell); x = 64 → 1.5 → halfway between texel 1 (1) and texel 2 (0) = **0.5** on the shared
+boundary; x = 80 → 1.75 → **0.25**; x = 96 → 2.0 → **0** (32 m into the unexplored cell: FOG_BLEND_M); far outside →
+the clamped zero ring.
+
+**V3 crossfade.** 0.3 s → mix 0.3 / 0.6 = **0.5**; 0.6 s → 1, A takes B (both samplers on the new set, geometry
+copied); a material bound afterwards gets that state at once.
+
+**V4 strength.** Camera 32.5 m above its target → t = (32.5 − 20)/25 = 0.5 → smoothstep 0.5 → 0.72 · 0.5 = **0.36**;
+`fogged: false` (show all) → **0**; fogged again → 0.36; a new sky reaches every material; an empty signature (no
+avatar) → the empty memory, B = the neutral texel (no request), after the fade A as well.

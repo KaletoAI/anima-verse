@@ -76,6 +76,22 @@ vectors of `shared/test-vectors/scene_*.json` (and `light_pool`, `ambience`, `mi
 - **§ B5a verify** after every mount: `-- --verify` prints `[verify] <loc>: N numbers checked, no deviation > 0.01 m`
   per location (otherwise only a location with a deviation is logged).
 
+### What stage E3 shows (Phase 3, Tasks 20–26)
+
+The browser's open world round the places, every number on the E3 vectors (`terrain_lod`, `height_tiles`,
+`layer_ground`, `water`, `sky_light`, `backdrop`, `fog_veil`, `prop_water`):
+
+- **terrain without holes**: the CDLOD quadtree over the whole world frame, streamed 2 m tiles while flying (no
+  frame-sized stall: the field is built on a worker), the layer masks streamed with it (see "CDLOD terrain",
+  "Terrain streaming");
+- **the game hour**: the sun moves over the day, sky, light colours and intensities follow the clock, the shadow box
+  sits on the camera target, MSAA 4× by default (see "Game-hour light, sky and shadows");
+- **distance fog** 220–520 m in the sky's colour and the **mountain backdrop** rings (Task 22);
+- **water**: shore gradient and foam, flowing rivers, waterfalls, the underwater ghost, prop water sheets (see "Water");
+- **the exploration veil** over ground the avatar has never walked, in the overview only (see "Exploration veil");
+- **scatter without hitches**: the 64 m window rebuild of the scatter and the undergrowth runs on a worker (see
+  "Scatter").
+
 ## Requirements (build machine)
 
 - Godot **4.7.2 stable .NET** editor binary (`Godot_v4.7.2-stable_mono_linux.x86_64`)
@@ -259,6 +275,7 @@ Arguments after `--` (no .env; all optional):
 | `--check terrain` | only the CDLOD terrain section (`Check/TerrainCheck.cs`), then exit 0/1 |
 | `--check water` | only the water section (`Check/WaterCheck.cs`, `fixtures/water/`: shaders, shore gradient and foam band, waterfalls, underwater ghost, prop water sheets), then exit 0/1 |
 | `--check scatter` | only the scatter section (`Check/ScatterCheck.cs` on the fixture world: the S3 reference vectors, the runtime layers, and the Task 26 worker build — a moved window returns before it is rebuilt, a stale build is thrown away, the way back equals the reference), then exit 0/1 |
+| `--check veil` | only the exploration veil (`Check/VeilCheck.cs`, `fixtures/explored.json`: shaders, cells texture, soft edge, crossfade, strength, colour), then exit 0/1 |
 | `--check stream` | only the terrain streaming section (`Check/StreamCheck.cs`: a fake server answering height, statistics and mask batches for a ten-tile strip — batches, LRU, windows, `height_sig`/`terrain_sig` reloads, re-datum, re-index), then exit 0/1 |
 | `--fly=M[,DEG]` | after the boot, fly the camera target M metres in a straight line (heading DEG: 0 = +x, 90 = +z) at 50 m/s, let the stream settle and log `fly done …` (tiles taken/evicted, the longest frame, the longest frame while streaming); with `--offline` it then quits |
 | `--check light` | only the light section (`Check/LightCheck.cs`: the game-hour stage at 6/7/9/12/18/22 h, hemisphere, shadow fit, material policy, MSAA option), then exit 0/1 |
@@ -322,7 +339,7 @@ browser's (`backend: "godot-forward+"`, `path`, `pathVersion`, `duration`,
 heightSource}, `size`, `frames`, `seconds`, `fpsMean`, `frameMsMedian`,
 `frameMsP95`, `cpuMsMedian`, `cpuMsP95`, `gpuMsMedian`, `callsMedian`,
 `trisMedian`, `fps`, `gpuMs`, `draws`, `triangles`) plus `renderCpuMsMedian`,
-`godot`, `gpu`, `cpu`. Per frame: `dt` = wall delta (unclamped), `cpuMs` =
+`godot`, `gpu`, `cpu`, `msaa` (the 3D samples of the run, Task 26). Per frame: `dt` = wall delta (unclamped), `cpuMs` =
 `Performance.TimeProcess`, `renderCpuMs`/`gpuMs` = the viewport's measured render
 CPU/GPU time, draws/triangles = `RenderTotalDrawCallsInFrame` /
 `RenderTotalPrimitivesInFrame` (read in `_Process`, so they describe the
@@ -334,6 +351,25 @@ when the browser's ground material was drawn, `ground[plain…]` (with the
 reason) when the plain one was — compare only runs where it says `layers` —
 and `water` (Task S3c): `water[areas=… tiles=… kinds=… wet_texels=…]` when the
 water variant was drawn, `water[off: --no-water]` / `water[none…]` otherwise.
+
+### The E3 gate (Task 26)
+
+Against the spike's numbers (`development_instructions/bericht-native-spike.md`, Mondscheinsee at **3816×1030**:
+61.0 fps / 16.0 / 19.9 ms median / P95 with scatter and water, 77.7 / 12.5 / 16.0 ms without; 226 / 193 draws,
+5.70 M / 4.04 M triangles) at the SAME size — `--size=3816x1030` (or fullscreen on that monitor):
+
+```bash
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench --quit-after-bench --size=3816x1030
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench --quit-after-bench --size=3816x1030 --no-scatter --no-water
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench --quit-after-bench --size=3816x1030 --msaa=0
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --fly=2000
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --fly=2000 --no-scatter
+```
+
+Pass: median and P95 not worse than the spike's run with the same switches; draws, triangles and `msaa` reported;
+the fly drive's `max while streaming` below 33 ms with scatter on (the bench drive stays inside the boot ring, so
+its `streamMaxFrameMs` is normally null — the fly drive is the streaming probe). Every result also goes to the
+server's `logs/bench.jsonl`.
 
 ## CDLOD terrain (Task 23)
 
@@ -413,6 +449,28 @@ follow the game-hour sky (`StageAmbience`).
 
 The build summary carries `water_extras[falls= prop_sheets= ghosts=]`; `--offline` adds `N in water [name bed … cut …]`
 to the figures line.
+
+## Exploration veil (Task 26)
+
+Port of `client3d/src/scene/fogVeil.ts` + main.ts `syncExplored` (contract § A12): haze over the 64 m cells the avatar
+has never walked, on the open world's ground only (the CDLOD terrain, dry, wet and plain) — props, scatter, places and
+figures stay as they are (the server already withholds figures on unexplored ground).
+
+- `Core/Sky/FogVeil.cs` (vector-checked, `fog_veil.json`) — cells, grid with one zero ring, texel centres on cell
+  centres, the height ramp; `Core/Sky/FogVeilState.cs` — the cells texture of `setFogVeilCells`, the A/B crossfade
+  (0.6 s), the strength `0.72 · smoothstep((h − 20)/25)` of the camera height above its target, `fogged`, and
+  `ExploredSync` (`/play/explored` refetched only when `explored_sig` moves, the server's signature kept, a failure
+  keeps the veil);
+- `World/VeilUniforms.cs` — the shared uniforms (`fv_*`) on every bound ground material; a texture is made only when
+  the memory changed, per frame only the alpha (and for 0.6 s the mix) is written;
+- `Ground/GroundShader.cs` — two linear, clamped R8 samples mixed by `fv_mix`; the haze takes `alpha · (1 − explored)`
+  of the finished colour (ALBEDO · (1 − a) + EMISSION colour · a; under the water's sky and foam on wet ground). Its
+  colour is the clock's sky.
+
+The admin's "show all" view (`fogged: false`) has no veil; a session without an avatar (`explored_sig` empty) is a
+memory of nothing — the whole ground hazed in the overview, clear from about 20 m camera height down. The log says
+`veil: N explored cells (sig S), grid (cx0, cz0, cols, rows)`; `--offline` prints `offline veil[…]` (a dump needs
+`explored.json`, written by `tools/dump_payloads.py` since Task 26).
 
 ## Ground surfaces (Task S3b)
 
@@ -689,7 +747,7 @@ $GODOT --headless --path native -- --offline=/path/to/dump --goto=LOCATION
 
 The offline run builds the same world as online (`Check/FixtureSource.cs` serves
 the dump) and prints `offline world …`, `offline scatter …` (with a `digest=` of every placed instance — two runs
-that placed the same scatter print the same digest), `offline figures …`
+that placed the same scatter print the same digest), `offline figures …`, `offline veil[…]`
 and the shader lines, then quits; with `--verify` it also prints every location's verify table. The dump tool
 refuses every non-loopback connection and stubs the image service (a copy's config never makes it probe a gateway).
 
@@ -840,6 +898,6 @@ works the same way.
 | `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); the water numbers are `Core/Water/` (the tile field `Core/Ground/WaterTileField.cs`), the water's fields ride on the terrain's near lattice (`Core/Terrain/TerrainField.cs`) |
 | `Scatter/` | (payload, sampler and LOD/undergrowth maths are in `Core/Scatter/`) prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
 | `Bench/` | the bench driver and its output (camera path `loadPath`/`samplePath` and statistics `summarize`/`percentile` are in `Core/Bench/`) |
-| `Check/` | `--check`: fixture source and expectations, the S3c world (`S3cCheck.cs`: view rules, models, world props, water, shaders), § B5a (`VerifyCheck.cs`), the crossfade and occlusion (`PickCheck.cs` G), bench maths, scatter (`ScatterCheck.cs`, incl. the Task 26 worker build), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
+| `Check/` | `--check`: fixture source and expectations, the S3c world (`S3cCheck.cs`: view rules, models, world props, water, shaders), § B5a (`VerifyCheck.cs`), the crossfade and occlusion (`PickCheck.cs` G), bench maths, scatter (`ScatterCheck.cs`, incl. the Task 26 worker build), the exploration veil (`VeilCheck.cs`), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
 | `fixtures/` | offline payloads (incl. `terrain.json`, the scatter reference vectors, the cut-down layer bake + surface library + the ground reference values) + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
 | `third_party/meshoptimizer/` | meshoptimizer v1.3 sources (MIT, `src/*.cpp`, `meshoptimizer.h`, LICENSE) |
