@@ -1011,7 +1011,8 @@
  *
  * Task 31 stairs.json hand derivations (moved from the former inline checks):
  * [S1] chains; [S2] offers; [S3] height; [S4] leg selection;
- * [S5] ride sequence and radius; [S6] nearest room.
+ * [S5] ride sequence and radius; [S6] nearest room; [S7] the ride at any
+ * frame rate (Task 35c).
  * --- stairs: the chain routes per storey (stairs task 4) -----------------
  * A staircase spans exactly ONE storey (`foot.level + 1 === head.level`), so
  * a storey change over stairs is a CHAIN: one flight per step of the storey
@@ -1156,6 +1157,78 @@
  * the landing, so there is no walk up to the flight to wait for.
  * …and a figure standing a metre beside the run is on no flight at all,
  * armed or not: across = −1.0 + 2 = 1.0 > 0.6.
+ * --- [S7] the ride ends at its landing at ANY frame rate (Task 35c) -----
+ * The walk (`npcGoal`) retires a landing at the START of a frame, measured
+ * with the height the ride wrote the frame before, and steps towards the
+ * next station in the same frame. The ride used to test only the point the
+ * frame ENDS on, with the root height from BEFORE this frame's ramp answer.
+ * On a long frame both miss: the end point is already past the landing, the
+ * old height lags the ramp, and the leg never ends. Rule now: a landing is
+ * reached when the frame's SWEPT xz segment (from = where the frame began)
+ * comes within 0.4 m of it; the height measured is the floor's `y` while the
+ * leg waits to arm and the leg's own ramp once it is armed.
+ * On 1518fdf7 (point test; stairs.ts last changed in 3af42697) the cases
+ * (a), (b) swept, (c) swept and the dt 0.1 rows of (e)/(f) fail.
+ * Numbers: a running step is 3.4 · 1.8 · dt = 6.12 · dt — while a station
+ * remains the walk measures d + 10 > 6, so every frame of the approach runs:
+ * dt 1/60 → 0.102, 1/30 → 0.204, 0.1 → 0.612, 0.25 → 1.53 m. S0's ramp
+ * climbs 3.08 / 3.9 per metre of x and is clamped to the landing heights
+ * for x ≤ 2 (run start, 0.01) and x ≥ 5.9 (run end, 3.09).
+ * (a) ride_13 (S0 up, armed) at [6.096, −2] with the STALE root y 2.79:
+ * x ≥ 5.9, so the ramp says 3.09 and the head is hypot(0.304, 0) = 0.304
+ * < 0.4 away → the leg ends, the ride is over (leg 1, done). Measured with
+ * the stale y it is hypot(0.304, 0.3) = 0.427 > 0.4 — the old answer.
+ * (b) ride_13, a frame from [6.0, −2.3] to [6.8, −2.3]. Each end point is
+ * hypot(0.4, 0.3) = 0.5 > 0.4 from the head, so the point test keeps the
+ * leg armed with the ramp height there (across 0.3 ≤ 0.6, x ≥ 5.9) 3.09.
+ * Swept, the nearest point is [6.4, −2.3]: ramp 3.09, distance 0.3 → done.
+ * (c) ride_10 unarmed, a frame from [1.2, −2] to [2.112, −2] at floor y
+ * 0.01. The end point is 0.612 from the foot landing → unarmed, null. Swept,
+ * the segment passes x = 1.5 → distance 0 → armed, and the ramp at 2.112 is
+ * 0.01 + 0.112 · 3.08 / 3.9 = 0.01 + 0.34496 / 3.9 = 0.0984512820512…
+ * (d) The stack still holds: ride_10 on leg 1 (S1, start = foot [1.5, 3.09,
+ * −2] on storey 1); a storey-0 frame from [1.0, −2] to [2.0, −2] at y 0.01
+ * passes that xz at |0.01 − 3.09| = 3.08 > 0.4 → stays unarmed.
+ * (e) THE WALK, fixture walk_16: S0 walked DOWN (start = head, end = foot),
+ * unarmed, from [9.76, 3.09, −2] on storey 1; stations head [6.4, 3.09, −2]
+ * and foot [1.5, 0.01, −2], target [3.95, 0.01, −12]; 6 s of frames. Both
+ * stations lie ahead on z = −2, so the frame ends are x_k = 9.76 − s·k as
+ * long as no step is clamped onto a station (it is when the frame starts
+ * nearer than s).
+ *   dt 0.1 (s 0.612): k = 4 → 7.312 (0.912 from the head), k = 5 → 6.70
+ *   (0.3, frame start 0.912 > s: not clamped) → arms. Frame 6 starts 0.3
+ *   from the head at its ramp height 3.09 → the walk retires it and goes on
+ *   towards the foot, still in −x. k = 12 → 2.416 (0.916 from the foot),
+ *   k = 13 → 1.804 (0.304; not clamped). Frame 13 sweeps [2.416, 1.804]:
+ *   nearest 1.804, ramp 0.01 → 0.304 < 0.4 → done on frame 13, t = 1.3 s,
+ *   at [1.804, −2].
+ *   The OLD rule on frame 13: root y = ramp(2.416) = 0.01 + 0.416 · 3.08 /
+ *   3.9 = 0.3385333…, hypot(0.304, 0.3285333…) = 0.4476 > 0.4 → not done.
+ *   Frame 14 starts 0.304 from the foot → the walk retires it and turns to
+ *   the target: delta (2.146, −10), 10.2277 m, so z drops 10 · 0.612 /
+ *   10.2277 = 0.598 > 0.4 in that step and keeps falling — the foot is never
+ *   within 0.4 again and the ride stays armed for good.
+ *   dt 1/60 (s 0.102): k = 29 → 6.802 (0.402, not yet), k = 30 → 6.70 arms;
+ *   k = 77 → 1.906 (ramp 0.01, 0.406, not yet), k = 78 → 1.804 → done,
+ *   t = 78 / 60 = 1.3 s, at [1.804, −2].
+ *   dt 1/30 (s 0.204): k = 14 → 6.904 (0.504), k = 15 → 6.70 arms; k = 38
+ *   → 2.008 (0.508), k = 39 → 1.804 → done, t = 1.3 s, at [1.804, −2].
+ *   dt 0.25 (s 1.53): k = 1 → 8.23, k = 2 → 6.70 (0.3; start 1.83 > s)
+ *   arms; frame 3 retires the head; k = 3 → 5.17, 4 → 3.64, 5 → 2.11 (0.61
+ *   from the foot, < s): frame 6 is clamped onto the foot, [1.5, −2],
+ *   distance 0 → done on frame 6, t = 1.5 s.
+ *   So the ride ends within 0.4 m of its foot landing at every rate: on the
+ *   same point [1.804, −2] at t = 1.3 s for the three rates whose frame
+ *   grids meet there, on the landing itself where a 1.53 m step lands on it.
+ *   No ride is left afterwards. Heights: until it arms the figure eases
+ *   towards the head's 3.09 from 3.09, so the order's peak is 3.09; it ends
+ *   on the target's floor, 0.01 (eased at min(1, 4·dt) per frame for over
+ *   2.6 s after the ride: residual ≤ 0.33 · 0.6^47 at dt 0.1, eps 1e-6).
+ * (f) A LATER plain order — no route, which keeps whatever ride there is:
+ * from the target to [3.95, 0.01, −2], under the middle of the flight on
+ * storey 0, 6 s. With the ride over only the floor answers: peak and end
+ * height 0.01. The ride the old rule left armed at dt 0.1 answers the ramp
+ * there, 0.01 + 1.95 · 3.08 / 3.9 = 1.55 — 1.54 m into the air.
  * --- nearestRoomAt: where the climb ends up ------------------------------
  * The ride needs a ROOM to ask the server for, and stepping off a flight
  * puts you in the room the landing lies in — or, failing a hit, the nearest

@@ -256,7 +256,7 @@ The original real-rig, consumer, mutation and bake-invariance checks stay local.
 | `bridge_heading.json` | `client3d/scripts/smoke_bridge_heading.mjs` | 10 | `headingTrack`, `turnAt`, `constant` |
 | `stand_settle.json` | `client3d/scripts/smoke_stand_settle.mjs` | 8 | `settleOffset`, `constant` |
 | `foot_lock_measure.json` | `client3d/scripts/smoke_foot_lock_measure.mjs` | 58 | `relockValue`, `groundValue`, `hasGroundLiftTolerance` |
-| `stairs.json` | `client3d/scripts/smoke_walk_math.mjs` | 86 | `stairChain`, `stairsAt`, `stairY`, `stairLegTo`, `stairChainValue`, `stairLegToValue`, `stairLegsValue`, `rideSequenceValue`, `nearestRoomAt`, `rideArrivalClearsRun`, `constant` |
+| `stairs.json` | `client3d/scripts/smoke_walk_math.mjs` | 126 | `stairChain`, `stairsAt`, `stairY`, `stairLegTo`, `stairChainValue`, `stairLegToValue`, `stairLegsValue`, `rideSequenceValue`, `rideWalkValue`, `nearestRoomAt`, `rideArrivalClearsRun`, `constant` |
 
 The native consumer should mirror `client3d/scripts/bridgeVectorDispatch.mjs`.
 These are test adapters; no browser production functions were added or changed:
@@ -305,9 +305,26 @@ These are test adapters; no browser production functions were added or changed:
   `stairChainValue(stairs,from,to,fields)` additionally exposes
   `["landingHeights"]` as `[chain[1].y,chain[2].y]`.
 - `rideSequenceValue(initialRide, points, fields)` copies the initial ride,
-  calls `rideStep(ride,x,y,z)` for each `[x,y,z]`, and writes back `leg` and
-  `armed` between steps exactly as the NPC does. It selects from the last
-  result, also exposing `state: {leg,armed,done}`.
+  calls `rideStep(ride,x,y,z)` for each `[x,y,z]` — or
+  `rideStep(ride,x,y,z,{x:fromX,z:fromZ})` for a `[x,y,z,fromX,fromZ]`, the
+  frame's swept start — and writes back `leg` and `armed` between steps
+  exactly as the NPC does. It selects from the last result, also exposing
+  `state: {leg,armed,done}`.
+- `rideWalkValue(walk, dt, fields)` runs the NPC frame of `scene/npcs.ts`
+  `tick` on dry ground: `walk = {ride, start:[x,y,z], orders:[{waypoints:
+  [[x,y,z]…], target:[x,y,z], seconds}]}`; each order replaces waypoints and
+  target (never the ride) and runs `round(seconds/dt)` frames. A frame:
+  `from` = the position's xz; `npcGoal(pos, target, waypoints,
+  ride ? RIDE_ARRIVE_M : default)`, drop the retired waypoints; if `moving`,
+  step `npcStep(plan,'walk_run',false,dt,1,1).step` along
+  `delta / distToGoal`; if a ride runs, `rideStep(ride, pos.x, pos.y, pos.z,
+  from)` — `done` drops it (recording the frame and xz), otherwise write back
+  `leg`/`armed` and take its `y`; the height is that `y` when not null, else
+  `easeNpcY(pos.y, (waypoints[0] ?? target).y, dt)`. Result: `{doneFrame,
+  doneTime: doneFrame·dt, doneAt:[x,z], ride:{leg,armed}|null,
+  orders:[{pos:[x,y,z], peakY}]}` (frames count from 1 across all orders;
+  `null` where the ride never ended; `peakY` = the highest height at a
+  frame end of that order).
   `rideArrivalClearsRun()` checks `RIDE_ARRIVE_M < 0.5` (pad half + gap).
 
 No Task 31 vector reads `shared/config/clip_transitions.json` or any other

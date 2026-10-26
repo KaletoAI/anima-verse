@@ -16,7 +16,7 @@ async function modules() {
     try {
       const entry = ['scene/footLock', 'scene/legPin', 'scene/bridgeLift',
         'scene/bridgeTravel', 'scene/bridgeHeading', 'scene/standSettle',
-        'scene/footLockMeasure', 'game/stairs']
+        'scene/footLockMeasure', 'game/stairs', 'game/npcWalk']
         .map((p) => `export * from '${root}client3d/src/${p}.ts';`).join('\n');
       const built = await build({stdin: {contents: entry, resolveDir: root, loader: 'ts'},
         bundle: true, platform: 'node', format: 'esm', write: false,
@@ -126,11 +126,48 @@ export async function bridgeVectorDispatch() {
     rideSequenceValue: (initial, points, fields) => {
       const ride = structuredClone(initial);
       let step;
-      for (const [x,y,z] of points) {
-        step = m.rideStep(ride, x, y, z);
+      for (const [x,y,z,fromX,fromZ] of points) {
+        step = fromX === undefined ? m.rideStep(ride, x, y, z)
+          : m.rideStep(ride, x, y, z, {x:fromX, z:fromZ});
         ride.leg = step.leg; ride.armed = step.armed;
       }
       return select({...step, state:{leg:step.leg,armed:step.armed,done:step.done}}, fields);
+    },
+    // The NPC frame of `scene/npcs.ts` `tick` on dry ground, reduced to what a
+    // ride touches: retire (the ride's radius while a ride runs), step, ask
+    // the ride from the frame's start point, write the height back.
+    rideWalkValue: (walk, dt, fields) => {
+      let ride = structuredClone(walk.ride);
+      const pos = {x:walk.start[0], y:walk.start[1], z:walk.start[2]};
+      let frame = 0, doneFrame = null, doneAt = null;
+      const orders = [];
+      for (const order of walk.orders) {
+        const waypoints = order.waypoints.map(([x,y,z]) => ({x,y,z}));
+        const target = {x:order.target[0], y:order.target[1], z:order.target[2]};
+        let peakY = -Infinity;
+        for (let i = 0, n = Math.round(order.seconds / dt); i < n; i++) {
+          frame += 1;
+          const from = {x:pos.x, z:pos.z};
+          const plan = m.npcGoal(pos, target, waypoints, ride ? m.RIDE_ARRIVE_M : undefined);
+          waypoints.splice(0, plan.retired);
+          if (plan.moving) {
+            const {step} = m.npcStep(plan, 'walk_run', false, dt, 1, 1);
+            pos.x += plan.delta.x / plan.distToGoal * step;
+            pos.z += plan.delta.z / plan.distToGoal * step;
+          }
+          let rideY = null;
+          if (ride) {
+            const s = m.rideStep(ride, pos.x, pos.y, pos.z, from);
+            if (s.done) { ride = null; doneFrame = frame; doneAt = [pos.x, pos.z]; }
+            else { ride.leg = s.leg; ride.armed = s.armed; rideY = s.y; }
+          }
+          pos.y = rideY ?? m.easeNpcY(pos.y, (waypoints[0] ?? target).y, dt);
+          peakY = Math.max(peakY, pos.y);
+        }
+        orders.push({pos:[pos.x, pos.y, pos.z], peakY});
+      }
+      return select({doneFrame, doneTime:doneFrame === null ? null : doneFrame * dt, doneAt,
+        ride:ride && {leg:ride.leg, armed:ride.armed}, orders}, fields);
     },
   };
   return Object.fromEntries(Object.entries(dispatch).filter(([,v]) => typeof v === 'function')

@@ -599,7 +599,91 @@
           "z": 0
         }
       }
-    ]
+    ],
+    "walk_16": {
+      "ride": {
+        "legs": [
+          {
+            "flight": {
+              "foot": {
+                "level": 0,
+                "x": 1.5,
+                "y": 0.01,
+                "z": -2
+              },
+              "head": {
+                "level": 1,
+                "x": 6.4,
+                "y": 3.09,
+                "z": -2
+              },
+              "run": {
+                "at": {
+                  "x": 2,
+                  "z": -2
+                },
+                "dir": {
+                  "x": 1,
+                  "z": 0
+                },
+                "runM": 3.9,
+                "widthM": 1.2
+              }
+            },
+            "start": {
+              "level": 1,
+              "x": 6.4,
+              "y": 3.09,
+              "z": -2
+            },
+            "end": {
+              "level": 0,
+              "x": 1.5,
+              "y": 0.01,
+              "z": -2
+            }
+          }
+        ],
+        "leg": 0,
+        "armed": false
+      },
+      "start": [
+        9.76,
+        3.09,
+        -2
+      ],
+      "orders": [
+        {
+          "waypoints": [
+            [
+              6.4,
+              3.09,
+              -2
+            ],
+            [
+              1.5,
+              0.01,
+              -2
+            ]
+          ],
+          "target": [
+            3.95,
+            0.01,
+            -12
+          ],
+          "seconds": 6
+        },
+        {
+          "waypoints": [],
+          "target": [
+            3.95,
+            0.01,
+            -2
+          ],
+          "seconds": 6
+        }
+      ]
+    }
   },
   "cases": [
     {
@@ -2640,6 +2724,741 @@
       ],
       "expect": "__floor__-1",
       "eps": 0
+    },
+    {
+      "label": "[S7a] stale height still ends the leg",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_13"
+        },
+        [
+          [
+            6.096,
+            2.79,
+            -2
+          ]
+        ],
+        [
+          "state"
+        ]
+      ],
+      "expect": {
+        "leg": 1,
+        "armed": false,
+        "done": true
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7b] pass-by without sweep stays armed",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_13"
+        },
+        [
+          [
+            6.8,
+            2.5,
+            -2.3
+          ]
+        ],
+        [
+          "state"
+        ]
+      ],
+      "expect": {
+        "leg": 0,
+        "armed": true,
+        "done": false
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7b] pass-by without sweep height",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_13"
+        },
+        [
+          [
+            6.8,
+            2.5,
+            -2.3
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7b] pass-by swept ends the leg",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_13"
+        },
+        [
+          [
+            6.8,
+            2.5,
+            -2.3,
+            6.0,
+            -2.3
+          ]
+        ],
+        [
+          "state"
+        ]
+      ],
+      "expect": {
+        "leg": 1,
+        "armed": false,
+        "done": true
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7c] start not swept stays unarmed",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            2.112,
+            0.01,
+            -2
+          ]
+        ],
+        [
+          "state"
+        ]
+      ],
+      "expect": {
+        "leg": 0,
+        "armed": false,
+        "done": false
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7c] start swept arms",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            2.112,
+            0.01,
+            -2,
+            1.2,
+            -2
+          ]
+        ],
+        [
+          "state"
+        ]
+      ],
+      "expect": {
+        "leg": 0,
+        "armed": true,
+        "done": false
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7c] start swept height",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            2.112,
+            0.01,
+            -2,
+            1.2,
+            -2
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": 0.09845128205128205,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S7d] stacked landing swept from below",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10",
+          "$with": {
+            "leg": 1
+          }
+        },
+        [
+          [
+            2.0,
+            0.01,
+            -2,
+            1.0,
+            -2
+          ]
+        ],
+        [
+          "state"
+        ]
+      ],
+      "expect": {
+        "leg": 1,
+        "armed": false,
+        "done": false
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7e] dt 1/60 ride ends on frame",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.016666666666666666,
+        [
+          "doneFrame"
+        ]
+      ],
+      "expect": 78,
+      "eps": 0
+    },
+    {
+      "label": "[S7e] dt 1/60 ride ends at time",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.016666666666666666,
+        [
+          "doneTime"
+        ]
+      ],
+      "expect": 1.3,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7e] dt 1/60 ride ends at the foot landing",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.016666666666666666,
+        [
+          "doneAt"
+        ]
+      ],
+      "expect": [
+        1.804,
+        -2
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7e] dt 1/60 no ride left",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.016666666666666666,
+        [
+          "ride"
+        ]
+      ],
+      "expect": null,
+      "eps": 0
+    },
+    {
+      "label": "[S7e] dt 1/60 first order ends on the floor",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.016666666666666666,
+        [
+          "orders",
+          0,
+          "pos",
+          1
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7e] dt 1/60 first order peak",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.016666666666666666,
+        [
+          "orders",
+          0,
+          "peakY"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7f] dt 1/60 later crossing ends on the floor",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.016666666666666666,
+        [
+          "orders",
+          1,
+          "pos",
+          1
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7f] dt 1/60 later crossing never lifted",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.016666666666666666,
+        [
+          "orders",
+          1,
+          "peakY"
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7e] dt 1/30 ride ends on frame",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.03333333333333333,
+        [
+          "doneFrame"
+        ]
+      ],
+      "expect": 39,
+      "eps": 0
+    },
+    {
+      "label": "[S7e] dt 1/30 ride ends at time",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.03333333333333333,
+        [
+          "doneTime"
+        ]
+      ],
+      "expect": 1.3,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7e] dt 1/30 ride ends at the foot landing",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.03333333333333333,
+        [
+          "doneAt"
+        ]
+      ],
+      "expect": [
+        1.804,
+        -2
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7e] dt 1/30 no ride left",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.03333333333333333,
+        [
+          "ride"
+        ]
+      ],
+      "expect": null,
+      "eps": 0
+    },
+    {
+      "label": "[S7e] dt 1/30 first order ends on the floor",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.03333333333333333,
+        [
+          "orders",
+          0,
+          "pos",
+          1
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7e] dt 1/30 first order peak",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.03333333333333333,
+        [
+          "orders",
+          0,
+          "peakY"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7f] dt 1/30 later crossing ends on the floor",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.03333333333333333,
+        [
+          "orders",
+          1,
+          "pos",
+          1
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7f] dt 1/30 later crossing never lifted",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.03333333333333333,
+        [
+          "orders",
+          1,
+          "peakY"
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7e] dt 0.1 ride ends on frame",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.1,
+        [
+          "doneFrame"
+        ]
+      ],
+      "expect": 13,
+      "eps": 0
+    },
+    {
+      "label": "[S7e] dt 0.1 ride ends at time",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.1,
+        [
+          "doneTime"
+        ]
+      ],
+      "expect": 1.3,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7e] dt 0.1 ride ends at the foot landing",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.1,
+        [
+          "doneAt"
+        ]
+      ],
+      "expect": [
+        1.804,
+        -2
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7e] dt 0.1 no ride left",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.1,
+        [
+          "ride"
+        ]
+      ],
+      "expect": null,
+      "eps": 0
+    },
+    {
+      "label": "[S7e] dt 0.1 first order ends on the floor",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.1,
+        [
+          "orders",
+          0,
+          "pos",
+          1
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7e] dt 0.1 first order peak",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.1,
+        [
+          "orders",
+          0,
+          "peakY"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7f] dt 0.1 later crossing ends on the floor",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.1,
+        [
+          "orders",
+          1,
+          "pos",
+          1
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7f] dt 0.1 later crossing never lifted",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.1,
+        [
+          "orders",
+          1,
+          "peakY"
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7e] dt 0.25 ride ends on frame",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.25,
+        [
+          "doneFrame"
+        ]
+      ],
+      "expect": 6,
+      "eps": 0
+    },
+    {
+      "label": "[S7e] dt 0.25 ride ends at time",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.25,
+        [
+          "doneTime"
+        ]
+      ],
+      "expect": 1.5,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7e] dt 0.25 ride ends at the foot landing",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.25,
+        [
+          "doneAt"
+        ]
+      ],
+      "expect": [
+        1.5,
+        -2
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S7e] dt 0.25 no ride left",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.25,
+        [
+          "ride"
+        ]
+      ],
+      "expect": null,
+      "eps": 0
+    },
+    {
+      "label": "[S7e] dt 0.25 first order ends on the floor",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.25,
+        [
+          "orders",
+          0,
+          "pos",
+          1
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7e] dt 0.25 first order peak",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.25,
+        [
+          "orders",
+          0,
+          "peakY"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7f] dt 0.25 later crossing ends on the floor",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.25,
+        [
+          "orders",
+          1,
+          "pos",
+          1
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
+    },
+    {
+      "label": "[S7f] dt 0.25 later crossing never lifted",
+      "fn": "rideWalkValue",
+      "args": [
+        {
+          "$fixture": "walk_16"
+        },
+        0.25,
+        [
+          "orders",
+          1,
+          "peakY"
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-06
     }
   ]
 }

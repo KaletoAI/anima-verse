@@ -1451,6 +1451,9 @@ export class NpcManager {
           && this.applyBridgeTravel(npc)) {
         this.settleAfterBridge(npc);
       }
+      // Where this frame starts, for the ride's swept test below: the walk
+      // retires a landing from HERE, so the ride has to see this point too.
+      const frameFrom = { x: npc.root.position.x, z: npc.root.position.z };
       const plan = npcGoal(npc.root.position, npc.target, npc.waypoints,
         npc.ride ? RIDE_ARRIVE_M : undefined);
       npc.waypoints.splice(0, plan.retired);
@@ -1550,10 +1553,11 @@ export class NpcManager {
       // no sink either: a staircase is a floor, and the ground rules of water
       // do not reach into a stairwell.
       //
-      // The ride is asked AFTER the step, at the point the figure now stands
-      // on, and the whole rule is pure (`game/stairs.rideStep`): which leg,
-      // armed or not, the height, and whether the climb is over — this file
-      // only writes the answer back. It answers `null` while the figure is
+      // The ride is asked AFTER the step, for the stretch the figure walked
+      // this frame (`frameFrom` to where it now stands — a long frame steps
+      // past a landing the walk has just retired), and the whole rule is pure
+      // (`game/stairs.rideStep`): which leg, armed or not, the height, and
+      // whether the climb is over — this file only writes the answer back. It answers `null` while the figure is
       // walking TO a flight rather than on it, and then the old rule stands:
       // match the height to the CURRENT waypoint and blend, which is what
       // makes the vertical ride between two lift stops (AV3D-12).
@@ -1561,7 +1565,7 @@ export class NpcManager {
       let goalY: number;
       if (npc.ride) {
         const step = rideStep(npc.ride, npc.root.position.x,
-          npc.root.position.y, npc.root.position.z);
+          npc.root.position.y, npc.root.position.z, frameFrom);
         if (step.done) npc.ride = null;
         else {
           npc.ride.leg = step.leg;

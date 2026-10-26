@@ -275,23 +275,51 @@ function sameLanding(a: StairEndPoint, b: StairEndPoint): boolean {
  * The loop is a loop and not an `if` because a leg can be finished before it
  * begins: a chain whose next flight starts where the last one ended arms and
  * retires in the same frame, and the ride must not stall on it.
+ *
+ * A landing is reached by the frame's SWEPT segment, not by the point the
+ * frame ends on: `from` is where the figure stood when the frame began (xz;
+ * omitted = a point test). The walk retires a landing at the START of a frame
+ * and turns towards the next station in the same step, so at a long frame
+ * (10 fps, running: 0.61 m) the end point is already past the landing's
+ * radius — and a ride that missed its end there never ends, and keeps lifting
+ * the figure wherever it later crosses that flight. The segment holds the
+ * point the walk retired the landing from, so the ride ends no later than the
+ * walk leaves the landing, at any frame rate.
+ *
+ * The HEIGHT the test measures with: the floor's `y` while a leg waits to
+ * arm, and the leg's own ramp once it is armed — the height the figure is
+ * given for this very point. `y` is the root height from BEFORE this frame's
+ * ramp answer, and on a long frame it lags the ramp by more than the radius.
+ * Off the run's width the ramp has no answer and `y` stands in.
  */
 export function rideStep(
   ride: StairRide,
   x: number,
   y: number,
   z: number,
+  from?: { x: number; z: number },
 ): { leg: number; armed: boolean; y: number | null; done: boolean } {
-  const at = (p: StairEndPoint) =>
-    Math.hypot(p.x - x, p.y - y, p.z - z) < RIDE_ARRIVE_M;
+  const fx = from?.x ?? x, fz = from?.z ?? z;
+  const sx = x - fx, sz = z - fz;
+  const len2 = sx * sx + sz * sz;
+  /** Within the arrival radius of `p` anywhere on this frame's segment, the
+   *  height there being `heightAt`'s. The point of the segment nearest `p` in
+   *  xz is where it is measured. */
+  const reached = (p: StairEndPoint, heightAt: (qx: number, qz: number) => number) => {
+    const t = len2 > 0
+      ? Math.min(1, Math.max(0, ((p.x - fx) * sx + (p.z - fz) * sz) / len2)) : 0;
+    const qx = fx + sx * t, qz = fz + sz * t;
+    return Math.hypot(p.x - qx, heightAt(qx, qz) - p.y, p.z - qz) < RIDE_ARRIVE_M;
+  };
+  const floor = () => y;
   let leg = ride.leg;
   let armed = ride.armed;
   while (leg < ride.legs.length) {
     const cur = ride.legs[leg];
-    if (!armed && at(cur.start)) armed = true;
+    if (!armed && reached(cur.start, floor)) armed = true;
     // Only an ARMED leg can end: the end landing of a stacked leg lies over
     // its own start, and a ride that ended there would skip the flight.
-    if (armed && at(cur.end)) {
+    if (armed && reached(cur.end, (qx, qz) => stairY(cur.flight, qx, qz) ?? y)) {
       leg += 1;
       armed = false;
       continue;
