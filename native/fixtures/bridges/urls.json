@@ -1,0 +1,14 @@
+{
+ "/assets/animation-rig": "repo:shared/models/rig/reference.fbx",
+ "/assets/surface-textures/ground_grass.png": "../ground_grass.png",
+ "/assets/surface-textures/dark_stone_2.jpg": "repo:shared/surface_textures/dark_stone_2_1785267141.jpg",
+ "/assets/animation-clips/idle.fbx?v=bridgeidle": "repo:shared/models/clips/idle.fbx",
+ "/assets/animation-clips/walk.fbx?v=bridgewalk": "repo:shared/models/clips/walk.fbx",
+ "/assets/animation-clips/sitting-at-the-table.fbx?v=bridgesittingatt": "repo:shared/models/clips/sitting-at-the-table.fbx",
+ "/assets/animation-clips/laying.fbx?v=bridgelaying": "repo:shared/models/clips/laying.fbx",
+ "/assets/animation-clips/get-up-chair.fbx?v=bridgegetupchair": "repo:shared/models/clips/get-up-chair.fbx",
+ "/assets/animation-clips/get-up-bed.fbx?v=bridgegetupbed": "repo:shared/models/clips/get-up-bed.fbx",
+ "/assets/animation-clips/commanding.fbx?v=bridgestartwalk": "repo:shared/models/clips/commanding.fbx",
+ "/characters/Mia%20Chair/model3d/file?v=bridgemia0001": "repo:static/client3d/models/Test3_mia.glb",
+ "/characters/Bea%20Bed/model3d/file?v=bridgebea0001": "repo:static/client3d/models/Soldier.glb"
+}

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using AnimaNative.Overview;
+using AnimaNative.Scatter;
 
 namespace AnimaNative.Scene;
 
@@ -22,17 +23,48 @@ public sealed class StairRide
 /// <summary>What <see cref="Stairs.RideStep"/> answers: the leg, the arming, the height (null = the floor answers), done.</summary>
 public readonly record struct RideStepResult(int Leg, bool Armed, double? Y, bool Done);
 
+/// <summary>The stair offer (stairs.ts <c>StairPrompt</c>): up or down, the landing the ride ends on, the distance to the landing stood at.</summary>
+public sealed record StairPrompt(string Dir, StairLanding Dest, double Dist);
+
 /// <summary>
 /// ROUTING OVER STAIRS — client3d/src/game/stairs.ts (<c>stairChain</c>, <c>stairY</c>, <c>rideStep</c>,
 /// <c>stairLegs</c>, <c>stairLegTo</c>) on the native world flights (<see cref="PlaceInventory.Stairs"/>, already in world
 /// metres). The NPC storey change walks the chain's landings and the ride owns the height on the run (ruling P3-R9;
-/// the avatar reuses it in E7). No shared vector exists for this module yet: the cases of smoke_walk_math.mjs
-/// ("stairChain", "stairY", "stairLegTo / stairLegs", "rideStep") are copied verbatim into tests/StairsTests.cs.
+/// the avatar reuses it in E7). Vectors shared/test-vectors/stairs.json (hand derivations: smoke_walk_math.mjs); the
+/// earlier verbatim copies in tests/StairsTests.cs stay as the native cases.
 /// </summary>
 public static class Stairs
 {
     /// <summary><c>RIDE_ARRIVE_M</c>: a landing counts as reached within this 3D distance (and stations retire at it during a ride).</summary>
     public const double RideArriveM = 0.4;
+
+    /// <summary><c>STAIR_RANGE</c>: how close to a landing the avatar has to stand, FIGURE metres (× the figure scale).</summary>
+    public const double StairRange = 1.5;
+
+    /// <summary>
+    /// <c>stairsAt(pos, level, stairs, scale)</c>: the nearest landing of the avatar's OWN storey within
+    /// <see cref="StairRange"/>·scale (strictly closer; a tie keeps the first found) — at the foot the ride goes up, at
+    /// the head down, the destination is the other end; null when none is in reach.
+    /// </summary>
+    public static StairPrompt? StairsAt(P2 pos, int level, IReadOnlyList<StairLink> stairs, double scale)
+    {
+        double reach = StairRange * scale;
+        StairPrompt? best = null;
+        double bestDist = double.PositiveInfinity;
+        foreach (var s in stairs)
+        {
+            foreach (var (here, there, dir) in new[] { (s.Foot, s.Head, "up"), (s.Head, s.Foot, "down") })
+            {
+                if (here.Level != level) continue;
+                double dx = here.Pos.X - pos.X, dz = here.Pos.Z - pos.Z;
+                double dist = Math.Sqrt(dx * dx + dz * dz);
+                if (dist >= reach || dist >= bestDist) continue;
+                best = new StairPrompt(dir, there, dist);
+                bestDist = dist;
+            }
+        }
+        return best;
+    }
 
     /// <summary>
     /// <c>stairChain(stairs, from, to)</c>: per storey step the near then the far landing of the FIRST flight that

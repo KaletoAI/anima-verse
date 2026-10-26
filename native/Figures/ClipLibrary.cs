@@ -38,7 +38,7 @@ public sealed record ClipSource
 }
 
 /// <summary>What one clip produced on one skeleton: the bound animation (null under <see cref="ClipLibrary.MinTracks"/>),
-/// its track and key counts, and the root path of a root-motion clip (played by the bridges, Task 31).</summary>
+/// its track and key counts, and the root path of a root-motion clip (re-locked per rig at fit time, carried by the bridges).</summary>
 public sealed record BoundClip(string Kind, Animation? Anim, int Tracks, long Keys, RootPath? RootPath);
 
 /// <summary>
@@ -47,7 +47,7 @@ public sealed record BoundClip(string Kind, Animation? Anim, int Tracks, long Ke
 ///   • <b>listing</b> <c>GET /assets/animation-clips</c>: every <c>clips[]</c> entry is a source (a pair half as
 ///     <c>&lt;kind&gt;__&lt;role&gt;</c>, the kind as the server spells it), with its set, its loop flag (missing =
 ///     loop) and whether it carries root motion; <c>movement_poses</c> → <see cref="Poses"/>, <c>transition_clips</c>
-///     → <see cref="Transitions"/> (parsed; played by the bridges of Task 31);
+///     → <see cref="Transitions"/> (the bridges between two clips, <see cref="Figure.Play"/>);
 ///   • <b>downloads</b> through a <see cref="FocusQueue"/> of width 4 in listing order (distance = list index);
 ///   • <b>import</b> ONE clip per frame (Godot's runtime <c>FBXDocument</c> builds nodes on the main thread);
 ///   • <b>commit</b> in listing order (<see cref="ClipLibraryRules.CommitInListOrder"/>): the first file per
@@ -81,7 +81,7 @@ public sealed class ClipLibrary
     public List<ClipSourceEntry> Entries { get; } = new();
     /// <summary>The server's <c>movement_poses</c>, resolved; the default table before <see cref="Parse"/>.</summary>
     public PoseClips Poses { get; private set; } = PoseClips.Default;
-    /// <summary>The server's <c>transition_clips</c>, resolved. Parsed, played in Task 31.</summary>
+    /// <summary>The server's <c>transition_clips</c>, resolved: which bridge clip opens between two kinds.</summary>
     public IReadOnlyList<ClipTransition> Transitions { get; private set; } = Array.Empty<ClipTransition>();
     /// <summary>The committed library (empty until <see cref="LoadClipsAsync"/> is through).</summary>
     public ClipIndex<ClipSource> Index { get; private set; } = new();
@@ -460,19 +460,8 @@ public sealed class ClipLibrary
         return new BoundClip(clip.Kind, null, tracks, 0, null);
     }
 
-    /// <summary>The browser's <c>normBoneName</c>, plus a namespace strip and Godot's <c>_</c> spelling.</summary>
-    public static string NormBone(string name)
-    {
-        int colon = name.LastIndexOf(':');
-        var s = colon >= 0 ? name[(colon + 1)..] : name;
-        if (s.StartsWith("mixamorig", StringComparison.OrdinalIgnoreCase))
-        {
-            s = s[9..];
-            while (s.Length > 0 && char.IsDigit(s[0])) s = s[1..];
-            if (s.StartsWith('_')) s = s[1..];
-        }
-        return s.ToLowerInvariant();
-    }
+    /// <summary>The browser's <c>normBoneName</c>, plus a namespace strip and Godot's <c>_</c> spelling (<see cref="BoneNames.Norm"/>).</summary>
+    public static string NormBone(string name) => BoneNames.Norm(name);
 
     /// <summary>Release the imported animations (Godot resources held from C#).</summary>
     public void Release()

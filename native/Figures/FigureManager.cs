@@ -123,9 +123,15 @@ public partial class FigureManager : Node3D
         public double FitMs { get; init; }
         /// <summary><c>fit.fits</c>: at least one library clip adapted to this rig (the random pool takes only those).</summary>
         public bool LibraryFits { get; init; }
+        /// <summary>Per bound Animation: its bridge travel / turn / lift and ground offset (empty without a fit).</summary>
+        public IReadOnlyDictionary<Animation, ClipExtras> Extras { get; init; } = new Dictionary<Animation, ClipExtras>();
     }
 
-    private sealed record ModelInfo(string Url, string? LowUrl, string Format, string Rig, bool Normalized, string? ModelRev);
+    private sealed record ModelInfo(string Url, string? LowUrl, string Format, string Rig, bool Normalized, string? ModelRev)
+    {
+        /// <summary><c>model.clips</c>: the loop flag per EXACT embedded take name (missing = loop).</summary>
+        public IReadOnlyDictionary<string, bool> ClipLoops { get; init; } = new Dictionary<string, bool>();
+    }
 
     public FigureManager(IWorldSource source, WorldHeight height, Action<string> log, bool strict)
     {
@@ -304,7 +310,16 @@ public partial class FigureManager : Node3D
     private void ApplyPlan(Figure fig, FigurePlan plan, bool fresh)
     {
         fig.Rule = plan.Rule;
-        var goal = new Vector3((float)plan.Pos.X, (float)plan.Pos.Y, (float)plan.Pos.Z);
+        // THE GOAL: the server's point — or, after a stand-up, the spot the bridge left the figure on, for as long as the
+        // server sends the SAME point (settleOffset against the kept server point); a different one voids the spot.
+        if (fig.Settle is { } kept)
+        {
+            var offset = StandSettle.SettleOffset(new P2(kept.Server.X + kept.Offset.X, kept.Server.Z + kept.Offset.Z),
+                                                  new P2(plan.Pos.X, plan.Pos.Z), kept.Server);
+            fig.Settle = offset is { } o ? (kept.Server, o) : null;
+        }
+        var settle = fig.Settle?.Offset ?? new P2(0, 0);
+        var goal = new Vector3((float)(plan.Pos.X + settle.X), (float)plan.Pos.Y, (float)(plan.Pos.Z + settle.Z));
         if (fresh)
         {
             // createNpc: the first sync puts the figure on its point — no walk across the whole map.
@@ -366,7 +381,8 @@ public partial class FigureManager : Node3D
 
     /// <summary>
     /// The per-frame walk of every figure — npcs.ts <c>tick</c> without a server route (journeys follow their polled
-    /// point by reckoning until E6), the bridges (Task 31) and the player-driven figure (E7):
+    /// point by reckoning until E6) and the player-driven figure (E7); the bridges hold the step (paceLimitFor) and hand the
+    /// travel and the height over (takeTravel + settle, beginBridgeLift / shiftBridgeLift):
     ///
     ///   1. the plan (<see cref="NpcWalk.Goal"/>): stations retire at 1.5 m (a stair ride at 0.4 m), the goal is the first
     ///      left, else the target; standing at ≤ 0.05 m;
@@ -382,6 +398,7 @@ public partial class FigureManager : Node3D
     /// </summary>
     public void Tick(double dt)
     {
+        _clock += dt;
         double camDist = CamDist?.Invoke() ?? DefaultCamDist;
         // npcs.ts facingTargets(): every figure's neighbours, measured before anybody steps this frame.
         var all = _figures.Values.ToList();
@@ -394,21 +411,33 @@ public partial class FigureManager : Node3D
 
     private static Vec3 V(Vector3 v) => new(v.X, v.Y, v.Z);
 
+    /// <summary>The manager's frame clock (s): the sum of every <see cref="Tick"/> delta — the bridges' clock.</summary>
+    private double _clock;
+    public double Clock => _clock;
+
     /// <summary>npcs.ts <c>groundWordAt(x, z)</c>: the raw ground word, the bed under the point and the gated word.</summary>
     public GroundWord WordAt(double x, double z)
         => WalkGround.WordOf(GroundMoveAt?.Invoke(x, z) ?? GroundMove.Plain, GroundYAt?.Invoke(x, z) ?? _height.GroundAt(x, z));
 
     private void StepFigure(Figure fig, double dt, Vec3? neighbour, double camDist)
     {
+        // BRIDGE TRAVEL WITHOUT A ROUTE (rule 4, figures.ts travelBase): the bridge has ended and its body stands where
+        // the clip carried it — the root moves there now, the body on screen does not move. The GOAL does not move with
+        // it: it is the server's stand point (seat + travel); near it the NPC keeps the spot it stands on.
+        if (fig.Player is not null && !fig.Bridging && fig.HoldsTravel && ApplyBridgeTravel(fig)) SettleAfterBridge(fig);
         var pos = V(fig.Position);
         var plan = NpcWalk.Goal(pos, V(fig.Target), fig.Waypoints.Select(V).ToList(),
                                 fig.Ride is not null ? Stairs.RideArriveM : NpcWalk.WaypointArriveM);
         fig.Waypoints.RemoveRange(0, plan.Retired);
+        double rootYBefore = pos.Y;
         bool reckoning = fig.Travelling;
         var stepGround = WordAt(pos.X, pos.Z);
         var (running, _) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning, dt, fig.Pace, 1);
-        // The bridge gate (paceLimitFor, Figure.paceLimit) is Task 31's: nothing holds a figure yet.
-        const double paceLimit = 1;
+        // A BRIDGE CLIP HOLDS THE FIGURE at the step: asked for the clip this frame WILL ask for (paceLimitFor), because
+        // the clip is played after the step — on the frame a bridge starts, paceLimit would still say "nothing holds you".
+        double paceLimit = fig.Player is null ? 1
+            : plan.Moving && !fig.Bridging ? fig.PaceLimitFor(FigureClips.MoveClip(stepGround.Word.Movement, running, fig.Poses))
+            : fig.PaceLimit;
         if (plan.Moving && paceLimit > 0)
         {
             var (_, step) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning, dt, fig.Pace, paceLimit);
@@ -424,7 +453,8 @@ public partial class FigureManager : Node3D
         var standIdle = FigureClips.IdleClip(stand.Word.Movement, fig.Poses);
         double standSink = WalkGround.GroundSink(WalkGround.SinkForState(plan.Moving, standIdle, stand.Word.Sink),
                                                  WalkGround.SinkScope(raw));
-        // THE HEIGHT: the ride's ramp outright, else the root eases to the station's (or the goal's) height, floated.
+        // THE HEIGHT: the ride's ramp outright, else the root eases to the station's (or the goal's) height, floated —
+        // unless a bridge owns the height (easeRootY: a different floor is handed over to the lift instead).
         double? rideY = null;
         if (fig.Ride is { } ride)
         {
@@ -437,28 +467,76 @@ public partial class FigureManager : Node3D
                 rideY = r.Y;
             }
         }
-        double y;
-        if (rideY is { } ry) y = ry;
+        double y, goalY;
+        if (rideY is { } ry) y = goalY = ry;
         else
         {
-            double goalY = WalkGround.FloatRootY(fig.Waypoints.Count > 0 ? fig.Waypoints[0].Y : fig.Target.Y,
-                                                 stand.Word.Water, standSink);
-            y = NpcWalk.EaseY(pos.Y, goalY, dt);
+            goalY = WalkGround.FloatRootY(fig.Waypoints.Count > 0 ? fig.Waypoints[0].Y : fig.Target.Y, stand.Word.Water, standSink);
+            y = EaseRootY(fig, pos.Y, goalY, dt);
         }
         fig.Position = new Vector3((float)pos.X, (float)y, (float)pos.Z);
         var standingClip = FigureClips.StandingClipFor(fig.Activity, standIdle, fig.Poses);
         if (!plan.Moving && fig.Portrait is null)
         {
             var marker = fig.Face is { } f ? new Vec3(f.X, f.Y, f.Z) : (Vec3?)null;
-            if (NpcWalk.StandingFacing(new Vec3(pos.X, y, pos.Z), marker, neighbour, null) is { } dir)
+            // Not while a bridge holds the facing: the body getting up is the clip's.
+            if (NpcWalk.StandingFacing(new Vec3(pos.X, y, pos.Z), marker, neighbour, null) is { } dir && !fig.HoldsFacing)
                 fig.FaceTowards(new Vector3((float)dir.X, (float)dir.Y, (float)dir.Z));
         }
         bool run = !reckoning && plan.Dist > NpcWalk.RunDistance;
         fig.SetMotion(plan.Moving, plan.Moving && run && FigureClips.CanRun(stand.Word.Movement), stand.Word.Movement);
-        fig.Play(plan.Moving ? FigureClips.MoveClip(stand.Word.Movement, run, fig.Poses) : standingClip,
-                 plan.Moving || standIdle.Length > 0, standSink);
-        fig.TickYaw(dt);
+        PlayLifting(fig, plan.Moving ? FigureClips.MoveClip(stand.Word.Movement, run, fig.Poses) : standingClip,
+                    plan.Moving || standIdle.Length > 0, standSink, rootYBefore, goalY);
+        fig.UpdateFigure(dt);
         fig.Portrait?.Tick(dt, camDist, plan.Moving);
+    }
+
+    /// <summary>
+    /// npcs.ts <c>easeRootY</c>: the 4·dt ease towards <paramref name="goalY"/> — unless a bridge owns the height: then a
+    /// goal off the floor the bridge started over is handed to the lift (<see cref="Figure.ShiftBridgeLift"/>) and the
+    /// root goes onto it at once.
+    /// </summary>
+    private static double EaseRootY(Figure fig, double rootY, double goalY, double dt)
+    {
+        if (fig.HoldsHeight)
+        {
+            double drop = rootY - goalY;
+            if (Math.Abs(drop) > 1e-6 && fig.ShiftBridgeLift(drop)) return goalY;
+            return rootY;
+        }
+        return NpcWalk.EaseY(rootY, goalY, dt);
+    }
+
+    /// <summary>
+    /// npcs.ts <c>playLifting</c>: ask the figure for its clip — and when that opens a bridge the figure LIFTS, put the
+    /// root onto its goal height at once and hand the difference over (<see cref="Figure.BeginBridgeLift"/>).
+    /// </summary>
+    private static void PlayLifting(Figure fig, string kind, bool terrainClip, double sink, double rootYBefore, double goalY)
+    {
+        bool wasBridging = fig.Bridging;
+        fig.Play(kind, terrainClip, sink);
+        if (!wasBridging && fig.Bridging && fig.BeginBridgeLift(rootYBefore - goalY))
+            fig.Position = new Vector3(fig.Position.X, (float)goalY, fig.Position.Z);
+    }
+
+    /// <summary>npcs.ts <c>applyBridgeTravel</c>: the root takes the figure's held travel over; false when none was held.</summary>
+    private static bool ApplyBridgeTravel(Figure fig)
+    {
+        if (fig.TakeTravel() is not { } t) return false;
+        fig.Position = new Vector3((float)(fig.Position.X + t.X), fig.Position.Y, (float)(fig.Position.Z + t.Z));
+        return true;
+    }
+
+    /// <summary>
+    /// npcs.ts <c>settleAfterBridge</c>: the goal is the server's stand point (seat + the clip's travel); within
+    /// <see cref="StandSettle.StandAdoptM"/> of it the NPC keeps the spot its root now stands on.
+    /// </summary>
+    private static void SettleAfterBridge(Figure fig)
+    {
+        var server = fig.Settle is { } kept ? kept.Server : new P2(fig.Target.X, fig.Target.Z);
+        var offset = StandSettle.SettleOffset(new P2(fig.Position.X, fig.Position.Z), server, server);
+        fig.Settle = offset is { } o ? (server, o) : null;
+        fig.Target = new Vector3((float)(server.X + (offset?.X ?? 0)), fig.Target.Y, (float)(server.Z + (offset?.Z ?? 0)));
     }
 
     /// <summary>The camera's orbit distance (the portrait sprites size with it, npcs.ts <c>camDist·0.055</c>).</summary>
@@ -502,7 +580,7 @@ public partial class FigureManager : Node3D
             fig.LoadedTier = want;
             return Task.CompletedTask;
         }
-        if (_templates.TryGetValue(TemplateKey(url, fig.Sets), out var cached) && cached.IsCompletedSuccessfully)
+        if (_templates.TryGetValue(TemplateKey(url, fig.Sets, fig.HeightM), out var cached) && cached.IsCompletedSuccessfully)
         {
             Instantiate(fig, cached.Result, info, want);
             return Task.CompletedTask;
@@ -512,7 +590,7 @@ public partial class FigureManager : Node3D
         {
             try
             {
-                var template = await GetTemplate(url, info, fig.Sets);
+                var template = await GetTemplate(url, info, fig.Sets, fig.HeightM);
                 if (Alive(fig) && fig.LoadedSig == fig.WantedSig) Instantiate(fig, template, info, want);
             }
             catch (Exception e) when (!_strict)
@@ -613,7 +691,7 @@ public partial class FigureManager : Node3D
                 else
                 {
                     var tier = fig.WantedTier;
-                    var template = await GetTemplate(UrlFor(info, tier), info, fig.Sets);
+                    var template = await GetTemplate(UrlFor(info, tier), info, fig.Sets, fig.HeightM);
                     if (!Alive(fig)) return;
                     _infos[fig.CharacterName] = info;
                     fig.Api = Figure.ModelAnswer.Ready;
@@ -683,43 +761,63 @@ public partial class FigureManager : Node3D
         if (rig.Length == 0) rig = Json.Str(root, "rig", "mixamo");
         var low = Json.Str(m, "low_url");
         var rev = Json.Str(m, "model_rev");
+        // applyEmbeddedClipLoops: the server's loop declaration per EXACT embedded take name (missing = loop).
+        var loops = new Dictionary<string, bool>(StringComparer.Ordinal);
+        if (m.TryGetProperty("clips", out var cl) && cl.ValueKind == JsonValueKind.Object)
+            foreach (var c in cl.EnumerateObject())
+                if (c.Value.ValueKind == JsonValueKind.Object && c.Value.TryGetProperty("loop", out var lp)
+                    && lp.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    loops[c.Name] = lp.ValueKind == JsonValueKind.True;
         return new ModelInfo(url, low.Length > 0 ? low : null, Json.Str(m, "format", "glb").ToLowerInvariant(), rig,
-                             Json.Bool(m, "normalized"), rev.Length > 0 ? rev : null);
+                             Json.Bool(m, "normalized"), rev.Length > 0 ? rev : null) { ClipLoops = loops };
     }
 
-    /// <summary>A template is one model URL fitted along one set chain (the browser fits per character, the URL is per character).</summary>
-    private static string TemplateKey(string url, IReadOnlyList<string> sets) => url + "|" + string.Join(",", sets);
+    /// <summary>
+    /// A template is one model URL fitted along one set chain at one height (the browser fits per character, the URL is
+    /// per character; the height is the scale the bridges are re-locked at).
+    /// </summary>
+    private static string TemplateKey(string url, IReadOnlyList<string> sets, double heightM)
+        => url + "|" + string.Join(",", sets) + "|" + heightM.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
 
-    private Task<ModelTemplate> GetTemplate(string url, ModelInfo info, IReadOnlyList<string> sets)
+    private Task<ModelTemplate> GetTemplate(string url, ModelInfo info, IReadOnlyList<string> sets, double heightM)
     {
-        var key = TemplateKey(url, sets);
+        var key = TemplateKey(url, sets, heightM);
         if (!_templates.TryGetValue(key, out var task) || task.IsFaulted)
-            _templates[key] = task = BuildTemplate(url, info, sets);
+            _templates[key] = task = BuildTemplate(url, info, sets, heightM);
         return task;
     }
 
     /// <summary>
-    /// <c>buildModel</c>: download, Meshopt decode off-thread, import, metalness 0, Z-up fix, raw height; on a mixamo
-    /// rig the library along <paramref name="sets"/> fitted (<c>fitLibraryAsync</c>), in slices of at most
-    /// <see cref="FitSliceMs"/> ms between frames.
+    /// <c>buildModel</c>: download, Meshopt decode off-thread, import, metalness 0, Z-up fix, raw height; the file's own
+    /// takes (every rig but <c>none</c>) with the server's loop flags; on a mixamo rig the library along
+    /// <paramref name="sets"/> fitted (<c>fitLibraryAsync</c>) — an embedded take wins its kind, the library fills the
+    /// rest — then, per rig, the bridges re-locked, pinned, lifted and turned (<see cref="FootLockMeasure"/>, baked into
+    /// the bound Animation) and every library clip's ground offset measured (<see cref="ClipGround"/>), in slices of at
+    /// most <see cref="FitSliceMs"/> ms between frames. <paramref name="heightM"/> is the figure's height: the scale the
+    /// bridges are re-locked at is <c>normalized ? 1 : height / raw</c> (the figure's <c>baseScale</c>).
     /// </summary>
-    private async Task<ModelTemplate> BuildTemplate(string url, ModelInfo info, IReadOnlyList<string> sets, bool ownClips = false)
+    private async Task<ModelTemplate> BuildTemplate(string url, ModelInfo info, IReadOnlyList<string> sets, double heightM)
     {
         var bytes = await _source.GetBytesAsync(url);
         var plain = await Task.Run(() => GlbLoader.Prepare(bytes));
         var (root, _) = GlbLoader.Import(plain, url);
         root.Name = "Model";
         int metals = Dielectric(root);
-        var size = ModelPlacement.Measure(root, Transform3D.Identity).Size;
+        // three's Box3.setFromObject: a skinned mesh counts in its SKINNED rest pose (BridgeFit.BindBox), not by its
+        // mesh-space AABB — a rig whose bind poses carry the armature's scale or turn (Xbot, Test3_mia) is 100× off
+        // and lying down by the plain AABB.
+        var size = BridgeFit.BindBox(root).Size;
         if (size.Z > size.Y * 1.5f)   // stand a Z-up export upright (buildModel)
         {
             root.Rotation = new Vector3(-Mathf.Pi / 2f, 0, 0);
-            size = ModelPlacement.Measure(root, Transform3D.Identity).Size;
+            size = BridgeFit.BindBox(root).Size;
         }
         double raw = Math.Max(size.Y, 0.01);
         var skel = ClipLibrary.Find<Skeleton3D>(root);
-        // The file's own takes (the pool's Soldier / Xbot / Robot): taken out of the import's player, kept per kind.
-        var own = ownClips ? TakeOwnClips(root) : new List<(string Kind, Animation Anim)>();
+        // The file's own takes (`clips: rig === 'none' ? [] : gltf.animations`): taken out of the import's player, kept
+        // per kind with the server's loop flag of the exact take name — for server models and the pool alike.
+        var own = TakeOwnClips(root, info.ClipLoops);
+        if (info.Rig == "none") own.Clear();
         if (info.Rig != "mixamo" || skel is null || skel.GetBoneCount() == 0)
         {
             if (own.Count == 0) return new ModelTemplate { Root = root, RawHeight = raw, Url = url, Corrected = -1 };
@@ -772,6 +870,10 @@ public partial class FigureManager : Node3D
             else _log($"model {url}: action '{kind}' refused by Godot's animation-name rule");
         }
         var missing = FigureClips.MissingClipKinds(candidates.Select(c => c.Kind), kinds);
+        // The per-rig bridge fit and the ground offsets, on the library clips this rig keeps (`fit.extra`).
+        var extra = bound.Where(b => !ownKinds.Contains(b.Kind.ToLowerInvariant())).ToList();
+        double scale = info.Normalized ? 1 : heightM / raw;
+        var extras = await FitBridgesAndGround(url, root, skel, extra, scale);
         // Clip memory of this template: Godot keeps a 3D track key as TKey<T> {real_t transition; double time; T value}
         // = 32 bytes for a quaternion (4 + 4 pad + 8 + 16) and, aligned, for a Vector3 — the static-memory monitor
         // cannot attribute it (three templates fit at once and the GC frees mesh arrays meanwhile).
@@ -787,15 +889,75 @@ public partial class FigureManager : Node3D
         {
             Root = root, RawHeight = raw, Url = url, Library = lib, Kinds = kinds, ClipSets = setOf, BoundTracks = tracks,
             Unbound = missing.Count, Corrected = fixes?.Count ?? -1, Keys = keys, ClipBytes = clipBytes, FitMs = fitMs,
-            LibraryFits = bound.Count > 0,
+            LibraryFits = bound.Count > 0, Extras = extras,
         };
     }
 
     /// <summary>
-    /// A model file's own non-empty takes, lower-cased, looping (a take nobody flagged loops), taken out of the import's
-    /// AnimationPlayer (which is freed: the figure's one player carries them).
+    /// The per-rig part of <c>fitLibraryAsync</c> after the adaptation: <c>relockRootPaths</c> over the clips that carry a
+    /// travel (re-lock, leg pin, lift, turn — the rewritten tracks baked into their Animations), BEFORE
+    /// <c>measureGroundOffsets</c> over all of them (the pin rewrites the leg tracks the offsets are measured from). One
+    /// summary line per model; a fallback because the rig has no foot bones is a warning like the browser's.
     /// </summary>
-    private static List<(string Kind, Animation Anim)> TakeOwnClips(Node root)
+    private async Task<Dictionary<Animation, ClipExtras>> FitBridgesAndGround(string url, Node3D root, Skeleton3D skel,
+                                                                             List<BoundClip> extra, double scale)
+    {
+        var extras = new Dictionary<Animation, ClipExtras>();
+        if (extra.Count == 0 || !(scale > 0)) return extras;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var rig = BridgeFit.RigOf(root, skel);
+        var skelPath = root.GetPathTo(skel).ToString();
+        var lockLines = new List<string>();
+        bool missingFeet = false;
+        var slice = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var b in extra.Where(b => b.RootPath is not null))
+        {
+            if (slice.Elapsed.TotalMilliseconds > FitSliceMs)
+            {
+                await NextFrame();
+                slice.Restart();
+            }
+            var clip = BridgeFit.RelockClipOf(b.Kind, b.Anim!, b.RootPath!);
+            var reports = FootLockMeasure.Relock(new[] { clip }, rig, 1 / (100 * scale),
+                                                 line => lockLines.Add(line["foot lock per rig — ".Length..]));
+            missingFeet |= reports.Any(r => r.Reason == "no foot bones");
+            BridgeFit.WriteBack(clip, b.Anim!, skelPath);
+            extras[b.Anim!] = new ClipExtras
+            {
+                Path = clip.Path, Turn = clip.Turn, Lift = clip.Lift,
+                PivotFrame = clip.Turn is { } turn ? RigMath.Apply(rig.Root, turn.Pivot) : null,
+            };
+        }
+        double relockMs = sw.Elapsed.TotalMilliseconds;
+        if (lockLines.Count > 0)
+            _log($"{(missingFeet ? "WARN " : "")}model {url}: foot lock per rig — {string.Join(", ", lockLines)} ({relockMs:0} ms)");
+        var skins = BridgeFit.SkinsOf(root, skel);
+        if (skins.Count == 0) return extras;
+        var floats = new List<string>();
+        foreach (var b in extra)
+        {
+            if (slice.Elapsed.TotalMilliseconds > FitSliceMs)
+            {
+                await NextFrame();
+                slice.Restart();
+            }
+            var clip = BridgeFit.GroundClipOf(b.Kind, b.Anim!);
+            ClipGround.Measure(new[] { clip }, rig, skins);
+            if (!extras.TryGetValue(b.Anim!, out var x)) extras[b.Anim!] = x = new ClipExtras();
+            x.GroundOffset = clip.GroundOffset;
+            if (clip.GroundOffset * scale > 0.05) floats.Add($"{b.Kind} +{clip.GroundOffset * scale:0.00} m");
+        }
+        if (floats.Count > 0) _log($"model {url}: clips authored off the floor — {string.Join(", ", floats)} (dropped while walking that ground)");
+        _log($"model {url}: bridge fit {relockMs:0} ms, ground offsets {sw.Elapsed.TotalMilliseconds - relockMs:0} ms ({extra.Count} clips)");
+        return extras;
+    }
+
+    /// <summary>
+    /// A model file's own non-empty takes, lower-cased, taken out of the import's AnimationPlayer (which is freed: the
+    /// figure's one player carries them). The loop flag is the server's for the EXACT take name
+    /// (<c>applyEmbeddedClipLoops</c>); a take nobody flagged loops.
+    /// </summary>
+    private static List<(string Kind, Animation Anim)> TakeOwnClips(Node root, IReadOnlyDictionary<string, bool>? loops = null)
     {
         var list = new List<(string, Animation)>();
         foreach (var player in Walk(root).OfType<AnimationPlayer>().ToList())
@@ -810,7 +972,8 @@ public partial class FigureManager : Node3D
                     var kind = name.ToString().ToLowerInvariant();
                     if (list.Any(e => e.Item1 == kind)) continue;
                     var copy = (Animation)anim.Duplicate();
-                    copy.LoopMode = Animation.LoopModeEnum.Linear;
+                    bool loop = loops is null || !loops.TryGetValue(name.ToString(), out var l) || l;
+                    copy.LoopMode = loop ? Animation.LoopModeEnum.Linear : Animation.LoopModeEnum.None;
                     list.Add((kind, copy));
                 }
             }
@@ -870,7 +1033,9 @@ public partial class FigureManager : Node3D
         AnimationPlayer? player = null;
         if (t.Library is not null)
         {
-            player = new AnimationPlayer { Name = "Anim" };
+            // MANUAL: the figure advances its own player in UpdateFigure (three's mixer.update in Figure.update), so the
+            // pose and a bridge's root motion are computed in the same frame.
+            player = new AnimationPlayer { Name = "Anim", CallbackModeProcess = AnimationMixer.AnimationCallbackModeProcess.Manual };
             inst.AddChild(player);   // root_node ".." = the model root the track paths start from
             player.AddAnimationLibrary("", t.Library);
         }
@@ -880,6 +1045,10 @@ public partial class FigureManager : Node3D
         fig.ClipKeys = t.Keys;
         fig.ClipBytes = t.ClipBytes;
         fig.Poses = Clips.Poses;
+        fig.Transitions = Clips.Transitions;
+        fig.Extras = t.Extras;
+        fig.BaseScale = scale;
+        fig.Clock = () => _clock;
         fig.LoadedUrl = t.Url;
         fig.LoadedTier = tier;
         fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds);
@@ -1014,8 +1183,9 @@ public partial class FigureManager : Node3D
                 var info = new ModelInfo(url, null, "glb", "mixamo", false, null);
                 try
                 {
-                    var template = await BuildTemplate(url, info, Array.Empty<string>(), ownClips: true);
-                    _pool.Add(new PoolModel(name, template, info, Json.Num(m, "height", defaultHeight), assignOnly));
+                    double poolHeight = Json.Num(m, "height", defaultHeight);
+                    var template = await BuildTemplate(url, info, Array.Empty<string>(), poolHeight);
+                    _pool.Add(new PoolModel(name, template, info, poolHeight, assignOnly));
                     _log($"pool model {name}: {template.Kinds.Count} actions, library {(template.LibraryFits ? "fits" : "does not fit")}");
                 }
                 catch (Exception e)

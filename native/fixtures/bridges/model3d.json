@@ -1,0 +1,50 @@
+{
+ "Mia Chair": {
+  "signature": "mia-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Test3_mia.glb",
+   "signature": "mia-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Mia%20Chair/model3d/file?v=bridgemia0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ },
+ "Bea Bed": {
+  "signature": "bea-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Soldier.glb",
+   "signature": "bea-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Bea%20Bed/model3d/file?v=bridgebea0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ },
+ "Rae Ramp": {
+  "signature": "rae-1",
+  "has_input": true,
+  "pending": false,
+  "model": {
+   "filename": "Soldier.glb",
+   "signature": "rae-1",
+   "format": "glb",
+   "rig": "mixamo",
+   "normalized": false,
+   "url": "/characters/Bea%20Bed/model3d/file?v=bridgebea0001",
+   "model_rev": "r1"
+  },
+  "animation_set": "",
+  "animation_sets": []
+ }
+}

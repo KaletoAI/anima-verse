@@ -36,6 +36,7 @@ contract (docs/schnittstellen-3d.md) — not recorded from a run.
 | `fidelity/` | Task 17: a fourth, hand-written world (a plan hull with cutouts and padding, a room clip, two depth cuts on a turned location, a shell area, a changed scene for the sweep) — the ground files come from this directory; see "Fidelity world" |
 | `placement/` | Task 29: a hand-written world for the room placement (an inn with a hall, a bedroom and a loft over it, a storey corridor, a bench marker, a bed marker, a stool, a table and a cot; a closed shed) and the fallback pool (served from the repository's `static/client3d/models/`) — the ground files come from this directory; see "Placement world" |
 | `walk/` | Task 30: a hand-written FLAT world for the NPC walk (a hall with two storey-0 rooms joined by a party-wall door, a loft over them reached by one flight, a lake with a constant 1.5 m mirror) and the fallback pool; its own `heightfield.json` (all 0, no tiles), `terrain.json` and `model3d.json`, the layer files from this directory; see "Walk world" |
+| `bridges/` | Task 31: the walk world's flat ground (copies of its `heightfield.json`, `locations.json`, `terrain.json`, `scene_loc-hall.json`) with three figures on open grass — real rigs (`Test3_mia.glb`, `Soldier.glb`), the real clips idle / walk / sitting-at-the-table / laying / get-up-chair / get-up-bed and `commanding.fbx` served as a ramping `start-walk`, the reference rig; its own `worldmap.json`, `worldmap_poll2.json`, `model3d.json`, `animation_clips.json`, `urls.json`; see "Bridges world" |
 | `props/` | Task 18: a fifth, hand-written world (8 lamps + a world-prop lantern, a picture frame with a picture and a glass slot, three mirror panes, a door prop with a leaf, rooms with ambience, a corridor, a cellar storey) — the ground files come from this directory; see "Props world" |
 
 Read in place, never copied (`repo:` entries of `urls.json`; the fixture source looks
@@ -1389,3 +1390,62 @@ ride (one leg, UNARMED). Rex → (−70, 60), Lia → (46.8, 0). Frames of 0.25 
 Clips: Dora runs `run` (the run pose's kind) at F1, walks `mob1-walk` from F3; Rex walks `mob1-walk` from F4; Sam walks
 `mob1-walk` from F9 and stands in `stand-relaxed` at F14. F14: everyone stands; Lia treads water again (drop 1.3), her
 root stays at max(0 + 1.3, 1.5) = **1.5**.
+
+## Bridges world (`bridges/`, Task 31, `Check/BridgeCheck.cs`, `--check bridges`)
+
+Three figures on the walk world's flat grass (height 0 everywhere, no water there), 10 m apart — farther than the
+neighbour radius 4.5 m, so nobody faces anybody: Mia (Test3_mia.glb, not normalised, 1.70 m → scale 1.70 / raw),
+Bea and Rae (Soldier.glb, 1.70 m). The listing's transition table (`transition_clips`, resolved kinds):
+
+| from | to | bridge | accel |
+|---|---|---|---|
+| `sitting-at-the-table` | `*` | `get-up-chair` | 0 (holds) |
+| `laying` | `*` | `get-up-bed` | 0 (holds) |
+| `idle` | `walk` | `start-walk` | 0.5 (ramps) |
+
+`get-up-chair` / `get-up-bed` carry `root_motion.mode = foot_lock` with the sidecars' `travel_m` (0.035, 0.553) and
+(−0.574, −0.086); `start-walk` carries none.
+
+**Poll 1** (`worldmap.json`): Mia at (−60, 0, 30) sitting, Bea at (−50, 0, 30) lying, Rae at (−40, 0, 30) standing
+(`idle`, the standing pose). One 0.1 s frame turns everybody to the default target yaw π (the browser's
+`targetYaw = Math.PI`): the ease is `rot + d · min(1, 0.1 · 10)` = the target exactly. Then 30 frames of 1/30 s.
+Bea lies IN A BED: the room placement puts a lying root on the bed surface, which a free placement cannot express,
+so the check puts her root on a 0.40 m bed in the frame before poll 2.
+
+**Poll 2** (`worldmap_poll2.json`) — the server's stand points, `room_stand.bridge_stand_point` = seat + `travel_m ×
+height / ref_height_m` (ref 2.011 m, ratio r = 1.70 / 2.011 = 0.845351), turned by the facing π (`toWorld(x, z, π) =
+(−x, −z)`):
+
+- Mia: (−60, 30) + (−0.035 r, −0.553 r) = (−60.029587, 29.532521);
+- Bea: (−50, 30) + (0.574 r, 0.086 r) = (−49.514769, 30.072700);
+- Rae: 4 m north, (−40, 34) — 4 ≤ 6, so she walks (no run).
+
+Frames of 1/30 s from here (frame k = clip time k/30 of a bridge that opened on F1):
+
+- **B1** the fit per rig (`relockRootPaths`): both bridges carry a travel, a lift and a turn; the chair's
+  |ψ_end| ≤ 8°, the bed's ψ_end in [−115°, −98°] (smoke_bridge_root.mjs [B13]: measured −4.78 / −4.46 and
+  −105.83 / −105.55 on Test3_mia / Soldier).
+- **B2** F1: Mia's goal is 0.47 m away, so she would walk — `paceLimitFor(walk)` asks the rule that switching WOULD
+  open (sitting-at-the-table → * = get-up-chair, accel 0): `bridgePace(0, 0) = 0`, no step; the clip opens the bridge,
+  which holds the facing and the height. Bea: `rootYBefore − goalY = 0.40 − 0` is handed to the lift
+  (`beginBridgeLift(0.40)`), the root goes onto the floor (0); her lift is 0.40 until the ramp, which starts
+  `LIFT_RAMP_S` = 0.6 s before her first contact (≥ 0.25 s), i.e. after F1.
+- **B3** Mia's root stays on the seat on every bridge frame; get-up-chair runs its whole clip (4.767 s); the planted
+  feet measured on the RENDERED bones (the check's own contact detection, the importer's bands, frames ≥ 0.30 s):
+  ≤ 1.5 cm for both bridges ([6]; the browser measures 0.58 cm on Test3_mia's chair and 1.30 cm on Soldier's bed).
+- **B4** the hand-over in a 0 s frame (`takeTravel` + the owner's root moved by it): the rendered feet move ≤ 1 cm
+  ([7]); the root keeps base + ψ_end (π + ψ_end, 1e-6); the body is back on its base.
+- **B5** standSettle: the root lands within `STAND_ADOPT_M` = 0.25 m of the server's stand point (browser [B10] on
+  Test3_mia's chair: 9.6 cm) and keeps the spot — no step in the next 15 frames.
+- **B6** the lift's end: `endLift × baseScale` (1e-6), and with it the last frame's lowest foot point stands on the
+  rig's rest floor (± 0.1 cm: `endLift = restFloor − lowest` by definition). The chair's end WITHOUT the lift
+  (the clip as adapted and pinned, as the browser measures it): per side the lowest of Foot / ToeBase / Toe_End
+  over the rest floor, median from 3.5 s, within ± 1 cm ([B17]; browser Test3_mia −0.93 / 0.33 right / left).
+- **B7** Rae: step k = min(4, 3.4 / 30) · pace_k. F1: `paceLimitFor(walk)` = `bridgePace(0.5, 0)` = 0.02 (the ramp's
+  floor) → 0.0022667 m. The bridge opens on F1 at the clock of F1, so on frame k ≥ 2 it has run (k − 1)/30 s:
+  pace_k = max(0.02, min(1, 0.5 · (k − 1)/30)) = 0.02 (F2: 0.0167 < 0.02), 0.0333, 0.05, 0.0667, 0.0833, 0.1, 0.1167,
+  0.1333, 0.15 (F3 … F10); steps 3.4/30 × those. A ramping bridge keeps the facing (`holdsFacing` false) and has no
+  travel.
+- **B8** the deadline: the gate opens at start + length + 0.5 s (start = the clock of F1) even if the clip's end never
+  came — still closed 1 µs before, open 1 µs after.
+

@@ -1,0 +1,125 @@
+{
+ "clips": [
+  {
+   "kind": "idle",
+   "role": "",
+   "set": "",
+   "name": "idle",
+   "filename": "idle.fbx",
+   "url": "/assets/animation-clips/idle.fbx?v=bridgeidle",
+   "loop": true
+  },
+  {
+   "kind": "walk",
+   "role": "",
+   "set": "",
+   "name": "walk",
+   "filename": "walk.fbx",
+   "url": "/assets/animation-clips/walk.fbx?v=bridgewalk",
+   "loop": true
+  },
+  {
+   "kind": "sitting-at-the-table",
+   "role": "",
+   "set": "",
+   "name": "sitting-at-the-table",
+   "filename": "sitting-at-the-table.fbx",
+   "url": "/assets/animation-clips/sitting-at-the-table.fbx?v=bridgesittingatt",
+   "loop": true
+  },
+  {
+   "kind": "laying",
+   "role": "",
+   "set": "",
+   "name": "laying",
+   "filename": "laying.fbx",
+   "url": "/assets/animation-clips/laying.fbx?v=bridgelaying",
+   "loop": true
+  },
+  {
+   "kind": "get-up-chair",
+   "role": "",
+   "set": "",
+   "name": "get-up-chair",
+   "filename": "get-up-chair.fbx",
+   "url": "/assets/animation-clips/get-up-chair.fbx?v=bridgegetupchair",
+   "loop": false,
+   "root_motion": {
+    "mode": "foot_lock",
+    "travel_m": [
+     0.035,
+     0.553
+    ]
+   }
+  },
+  {
+   "kind": "get-up-bed",
+   "role": "",
+   "set": "",
+   "name": "get-up-bed",
+   "filename": "get-up-bed.fbx",
+   "url": "/assets/animation-clips/get-up-bed.fbx?v=bridgegetupbed",
+   "loop": false,
+   "root_motion": {
+    "mode": "foot_lock",
+    "travel_m": [
+     -0.574,
+     -0.086
+    ]
+   }
+  },
+  {
+   "kind": "start-walk",
+   "role": "",
+   "set": "",
+   "name": "start-walk",
+   "filename": "commanding.fbx",
+   "url": "/assets/animation-clips/commanding.fbx?v=bridgestartwalk",
+   "loop": false
+  }
+ ],
+ "kinds": [
+  "get-up-bed",
+  "get-up-chair",
+  "idle",
+  "laying",
+  "sitting-at-the-table",
+  "start-walk",
+  "walk"
+ ],
+ "movement_poses": {
+  "standing": {
+   "kind": "idle",
+   "public_kind": "idle"
+  },
+  "walking": {
+   "kind": "walk",
+   "public_kind": "walk"
+  },
+  "running": {
+   "kind": "",
+   "public_kind": "run"
+  }
+ },
+ "transition_clips": [
+  {
+   "from": "sitting-at-the-table",
+   "to": "*",
+   "kind": "get-up-chair",
+   "accel": 0
+  },
+  {
+   "from": "laying",
+   "to": "*",
+   "kind": "get-up-bed",
+   "accel": 0
+  },
+  {
+   "from": "idle",
+   "to": "walk",
+   "kind": "start-walk",
+   "accel": 0.5
+  }
+ ],
+ "transitions": []
+}

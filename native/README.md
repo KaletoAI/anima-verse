@@ -289,6 +289,7 @@ Arguments after `--` (no .env; all optional):
 | `--check light` | only the light section (`Check/LightCheck.cs`: the game-hour stage at 6/7/9/12/18/22 h, hemisphere, shadow fit, material policy, MSAA option), then exit 0/1 |
 | `--check placement` | only the room placement section (`Check/PlacementCheck.cs` on `fixtures/placement`: seats, sit/lie surfaces, server points at the room floor, corridor stand, huddle on the tile ground, storey switch, closed interior, the fallback pool), then exit 0/1 |
 | `--check walk` | only the NPC walk section (`Check/WalkCheck.cs` on `fixtures/walk`: neighbour facing, treading water with the root eased to the mirror and the ghost, a door route, a 10 m run, a stair ride, swimming), then exit 0/1 |
+| `--check bridges` | only the bridge-clip section (`Check/BridgeCheck.cs` on `fixtures/bridges`: get-up-chair / get-up-bed re-locked, pinned, lifted and turned per rig, planted feet measured on the rendered bones, the hand-over and the kept spot, a ramping start-walk, the deadline), then exit 0/1 |
 | `--check figures` | only the figure section (`Check/CheckRunner.cs` `CheckFigures` on the fixture world: whole library, set chain, actions and aliases, activity clips, one-shot hold, model revision, model queue, tiers 25/35, the importer cross-check `rest_reference.json`), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 

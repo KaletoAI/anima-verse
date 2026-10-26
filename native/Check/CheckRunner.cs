@@ -154,6 +154,12 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "bridges")
+            {
+                var alone = await BridgeCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "storeys")
             {
                 var alone = await StoreysCheck.RunAsync(host, dir);
@@ -263,6 +269,7 @@ public static class CheckRunner
             var storeys = await StoreysCheck.RunAsync(host, dir);
             var placement = await PlacementCheck.RunAsync(host, dir);
             var walk = await WalkCheck.RunAsync(host, dir);
+            var bridges = await BridgeCheck.RunAsync(host, dir);
             var fidelity = await FidelityCheck.RunAsync(host, dir);
             var props = await PropsCheck.RunAsync(host, dir);
             var light = LightCheck.Run(host, dir);
@@ -277,7 +284,7 @@ public static class CheckRunner
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {bridges} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;
