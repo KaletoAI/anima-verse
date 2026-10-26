@@ -39,13 +39,21 @@ public readonly record struct BoundClip(string Kind, Animation? Anim, int Tracks
 /// <summary>
 /// The server's clip library on the native side.
 ///
-/// <b>Which clip.</b> The browser plays the LOCOMOTION roles through the
-/// server's mapping (<c>locomotion: {walk, run, idle} → kind</c>,
-/// <c>game/walk.setLocomotionClips</c>: a missing/empty role keeps its own
-/// name), and resolves a kind along the character's set chain down to the
-/// neutral set. The spike uses the NEUTRAL set only (<c>set</c> empty), solo
-/// clips only (<c>role</c> empty): first listed entry whose lower-cased kind
-/// equals the role's kind. <c>loop</c> missing = loop (§ A8).
+/// <b>Which clip.</b> The server names the clip of every fixed movement pose
+/// (<c>movement_poses: {pose: {kind, public_kind}}</c>) and the bridge clips
+/// between two clips (<c>transition_clips</c>); <see cref="Parse"/> resolves
+/// both with the browser's rules (<see cref="FigureClips"/>, a port of
+/// <c>game/walk.ts</c> + <c>scene/clipCoverage.ts</c>). A standing figure plays
+/// <c>standingClipFor(none, none)</c> = the <c>standing</c> pose's clip, a moving
+/// one <c>moveClip(walk_run, walking)</c> = the <c>walking</c> pose's clip; each
+/// wanted kind is resolved against the library's kinds by
+/// <c>resolveClipKind</c> (exact, family relative, the pose's public kind,
+/// stand-ins, the standing pose, idle) — the same decisions as the browser.
+/// Native scope (Task 27): these two clips only, the NEUTRAL set only
+/// (<c>set</c> empty), solo clips only (<c>role</c> empty), the first listed
+/// entry of a kind. Activity clips, set chains, transitions in playback and
+/// the ground's swim/crawl clips follow with the full library.
+/// <c>loop</c> missing = loop (§ A8).
 ///
 /// <b>Import.</b> Each clip URL is downloaded and imported exactly once
 /// (<see cref="LoadAsync"/> caches the task per URL) with Godot's runtime
@@ -89,16 +97,20 @@ public readonly record struct BoundClip(string Kind, Animation? Anim, int Tracks
 public sealed class ClipLibrary
 {
     public const int MinTracks = 8;
-    public static readonly string[] Roles = { "idle", "walk" };
 
     private readonly IWorldSource _source;
     private readonly Action<string> _log;
     private readonly Dictionary<string, Task<ClipSource?>> _cache = new();
 
     public List<ClipEntry> Entries { get; } = new();
-    public Dictionary<string, string> Locomotion { get; } = new();
-    /// <summary>Role → clip, after <see cref="LoadRolesAsync"/>; null = no clip for that role.</summary>
-    public Dictionary<string, ClipSource?> ByRole { get; } = new();
+    /// <summary>The server's <c>movement_poses</c>, resolved (<c>resolveMovementPoses</c>); the default table before <see cref="Parse"/>.</summary>
+    public PoseClips Poses { get; private set; } = PoseClips.Default;
+    /// <summary>The server's <c>transition_clips</c>, resolved (<c>resolveClipTransitions</c>). Parsed, not yet played.</summary>
+    public IReadOnlyList<ClipTransition> Transitions { get; private set; } = Array.Empty<ClipTransition>();
+    /// <summary>Wanted kind → the library entry it resolved to (null = nothing of the sort), after <see cref="LoadClipsAsync"/>.</summary>
+    public Dictionary<string, ClipEntry?> Chosen { get; } = new();
+    /// <summary>Library kind → imported clip (null = the import failed), after <see cref="LoadClipsAsync"/>.</summary>
+    public Dictionary<string, ClipSource?> ByKind { get; } = new();
     public int ClipsLoaded { get; private set; }
     public int ClipsFailed { get; private set; }
 
@@ -107,6 +119,25 @@ public sealed class ClipLibrary
         _source = source;
         _log = log;
     }
+
+    /// <summary>What a standing figure plays: <c>standingClipFor(none, none, poses)</c> = the standing pose's clip.</summary>
+    public static string StandingKindOf(PoseClips poses) => FigureClips.StandingClipFor(null, null, poses);
+
+    /// <summary>What a moving figure plays: <c>moveClip(walk_run, false, poses)</c> = the walking pose's clip.</summary>
+    public static string MovingKindOf(PoseClips poses) => FigureClips.MoveClip(FigureClips.WalkRun, false, poses);
+
+    public string StandingKind => StandingKindOf(Poses);
+    public string MovingKind => MovingKindOf(Poses);
+
+    /// <summary>The kinds figures ask for (standing, moving), without repeats.</summary>
+    public IReadOnlyList<string> WantedKinds => new[] { StandingKind, MovingKind }.Distinct().ToList();
+
+    /// <summary>The imported clip a wanted kind resolved to, or null.</summary>
+    public ClipSource? ClipFor(string wanted)
+        => Chosen.GetValueOrDefault(wanted) is { } e ? ByKind.GetValueOrDefault(e.Kind) : null;
+
+    public ClipSource? Standing => ClipFor(StandingKind);
+    public ClipSource? Moving => ClipFor(MovingKind);
 
     public void Parse(JsonElement root)
     {
@@ -120,35 +151,36 @@ public sealed class ClipLibrary
             Entries.Add(new ClipEntry(Json.Str(c, "kind").ToLowerInvariant(), Json.Str(c, "role"),
                                       Json.Str(c, "set"), url, loop));
         }
-        Locomotion.Clear();
-        if (root.TryGetProperty("locomotion", out var loco) && loco.ValueKind == JsonValueKind.Object)
-            foreach (var p in loco.EnumerateObject())
-                if (p.Value.ValueKind == JsonValueKind.String)
-                    Locomotion[p.Name] = p.Value.GetString()!.Trim().ToLowerInvariant();
+        Poses = FigureClips.ResolveMovementPoses(root.TryGetProperty("movement_poses", out var mp) ? mp : null);
+        Transitions = FigureClips.ResolveClipTransitions(root.TryGetProperty("transition_clips", out var tc) ? tc : null);
     }
 
-    /// <summary>The kind a locomotion role plays (<c>locomotionClip</c>): the mapping, else the role's own name.</summary>
-    public string KindOf(string role)
-        => Locomotion.TryGetValue(role, out var k) && k.Length > 0 ? k : role;
+    /// <summary>The library kinds native plays from: neutral-set solo entries, listing order, no repeats.</summary>
+    public IReadOnlyList<string> NeutralKinds
+        => Entries.Where(e => e.Role.Length == 0 && e.Set.Length == 0).Select(e => e.Kind).Distinct().ToList();
 
-    /// <summary>Neutral-set solo clip of the role's kind, or null.</summary>
-    public ClipEntry? Pick(string role)
+    /// <summary>
+    /// The library entry a wanted kind plays (<c>resolveClipKind</c> over <see cref="NeutralKinds"/>):
+    /// the first neutral-set solo entry of the resolved kind, or null.
+    /// </summary>
+    public ClipEntry? Resolve(string wanted)
     {
-        var kind = KindOf(role);
-        return Entries.FirstOrDefault(e => e.Kind == kind && e.Role.Length == 0 && e.Set.Length == 0);
+        var kind = FigureClips.ResolveClipKind(wanted, NeutralKinds, Poses);
+        return kind.Length == 0 ? null
+            : Entries.FirstOrDefault(e => e.Kind == kind && e.Role.Length == 0 && e.Set.Length == 0);
     }
 
-    private Task? _roles;
+    private Task? _clips;
 
-    /// <summary>Fetch the list, then download + import the idle and walk clips (once each).</summary>
-    public Task LoadRolesAsync() => _roles ??= LoadRolesCore();
+    /// <summary>Fetch the list, then download + import the standing and moving clips (once each).</summary>
+    public Task LoadClipsAsync() => _clips ??= LoadClipsCore();
 
-    /// <summary>Completes when the role clips are in (or failed); never throws.</summary>
-    public async Task WaitRolesAsync()
+    /// <summary>Completes when the clips are in (or failed); never throws.</summary>
+    public async Task WaitClipsAsync()
     {
-        if (_roles is null) return;
-        try { await _roles; }
-        catch (Exception) { /* reported by the caller of LoadRolesAsync */ }
+        if (_clips is null) return;
+        try { await _clips; }
+        catch (Exception) { /* reported by the caller of LoadClipsAsync */ }
     }
 
     /// <summary>The reference rig the clips are authored on (<c>/assets/animation-rig</c>).</summary>
@@ -159,20 +191,21 @@ public sealed class ClipLibrary
     /// <summary>The rig's rest hips height (<c>rigHipsHeight</c>) — the standing reference when the rig is there.</summary>
     public double? DonorHipsY { get; private set; }
 
-    private async Task LoadRolesCore()
+    private async Task LoadClipsCore()
     {
         using (var doc = await _source.GetAnimationClipsAsync()) Parse(doc.RootElement);
         await LoadRigAsync();
-        foreach (var role in Roles)
+        foreach (var wanted in WantedKinds)
         {
-            var entry = Pick(role);
+            var entry = Resolve(wanted);
+            Chosen[wanted] = entry;
             if (entry is null)
             {
-                _log($"clips: no neutral-set clip of kind '{KindOf(role)}' for role {role}");
-                ByRole[role] = null;
+                _log($"clips: no neutral-set clip stands in for '{wanted}'");
                 continue;
             }
-            ByRole[role] = await LoadAsync(entry);
+            if (entry.Kind != wanted) _log($"clips: '{wanted}' plays the library's '{entry.Kind}'");
+            if (!ByKind.ContainsKey(entry.Kind)) ByKind[entry.Kind] = await LoadAsync(entry);
         }
     }
 
@@ -312,13 +345,15 @@ public sealed class ClipLibrary
     /// <summary>
     /// The source's standing hips height (<c>standingHipsRef</c>): the reference
     /// rig's rest hips height when the rig is loaded, else the median of the idle
-    /// clip's hips position track (the browser's no-rig fallback), else the
-    /// clip's own hips default.
+    /// clip's hips position track (the browser's no-rig fallback reads the clip
+    /// named <c>idle</c>; native has only two clips loaded, so the standing
+    /// clip stands in for the browser's cluster fallback), else the clip's own
+    /// hips default.
     /// </summary>
     public double StandingHipsY(ClipSource fallback)
     {
         if (DonorHipsY is > 0) return DonorHipsY.Value;
-        var src = ByRole.GetValueOrDefault("idle") ?? fallback;
+        var src = ByKind.GetValueOrDefault("idle") ?? Standing ?? fallback;
         int hb = Array.FindIndex(src.Bones, b => NormBone(b) == "hips");
         if (hb < 0) return 0;
         if (src.PositionTracks.TryGetValue(src.Bones[hb], out var t))
@@ -445,7 +480,8 @@ public sealed class ClipLibrary
         foreach (var task in _cache.Values)
             if (task.IsCompletedSuccessfully && task.Result is { } clip) clip.Anim.Dispose();
         _cache.Clear();
-        ByRole.Clear();
+        ByKind.Clear();
+        Chosen.Clear();
     }
 
     public static T? Find<T>(Node root) where T : Node

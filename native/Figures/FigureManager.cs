@@ -43,7 +43,7 @@ public sealed class FigureStats
 ///     known one, default 1.70 m (figures.ts <c>setCharacterHeight</c>,
 ///     <c>BASE_FIGURE_HEIGHT_M</c>, <c>buildModel</c>; a Z-up export is stood up
 ///     first like there);
-///   • clips: idle + walk from <see cref="ClipLibrary"/>, retargeted once per
+///   • clips: the standing + walking pose clips from <see cref="ClipLibrary"/>, retargeted once per
 ///     model URL and shared by its figures; only a <c>mixamo</c> rig gets them.
 /// </summary>
 public partial class FigureManager : Node3D
@@ -78,6 +78,8 @@ public partial class FigureManager : Node3D
         public required Node3D Root { get; init; }
         public required double RawHeight { get; init; }
         public AnimationLibrary? Library { get; init; }
+        /// <summary>The kinds in <see cref="Library"/>, in bind order (the figure's fallback is the first).</summary>
+        public IReadOnlyList<string> Kinds { get; init; } = Array.Empty<string>();
         public int BoundTracks { get; init; }
         public int Unbound { get; init; }
         /// <summary>Bones with a rest correction; −1 = no rig (verbatim copy).</summary>
@@ -96,10 +98,10 @@ public partial class FigureManager : Node3D
         Clips = new ClipLibrary(source, log);
     }
 
-    /// <summary>Clip list + idle/walk import. A missing list leaves every figure in bind pose (online).</summary>
+    /// <summary>Clip list + standing/moving clip import. A missing list leaves every figure in bind pose (online).</summary>
     public async Task InitAsync()
     {
-        try { await Clips.LoadRolesAsync(); }
+        try { await Clips.LoadClipsAsync(); }
         catch (Exception e) when (!_strict) { _log($"clips: list failed: {e.Message} — figures stay in bind pose"); }
         Stats.ClipsLoaded = Clips.ClipsLoaded;
         Stats.ClipsFailed = Clips.ClipsFailed;
@@ -337,33 +339,39 @@ public partial class FigureManager : Node3D
         double raw = Math.Max(size.Y, 0.01);
         var skel = ClipLibrary.Find<Skeleton3D>(root);
         AnimationLibrary? lib = null;
+        var kinds = new List<string>();
         int bound = 0, unbound = 0, corrected = -1;
         if (info.Rig == "mixamo" && skel is not null && skel.GetBoneCount() > 0)
         {
-            await Clips.WaitRolesAsync();
+            await Clips.WaitClipsAsync();
             // The browser's rest-pose correction against the reference rig
             // (restCorrections, built once per model like fitLibraryAsync does).
             var fixes = Clips.DonorRest is { } donor ? RestCorrections.Build(donor, root, skel) : null;
             corrected = fixes?.Count ?? -1;
             lib = new AnimationLibrary();
-            foreach (var role in ClipLibrary.Roles)
+            // One animation per library kind, named by the kind like the browser's
+            // clip index; the figure picks among them with resolveClipKind.
+            foreach (var wanted in Clips.WantedKinds)
             {
-                var clip = Clips.ByRole.GetValueOrDefault(role);
-                var b = clip is null ? new BoundClip(role, null, 0) : Clips.Retarget(clip, root, skel, fixes);
-                if (b.Anim is null)
+                var entry = Clips.Chosen.GetValueOrDefault(wanted);
+                if (entry is not null && lib.HasAnimation(entry.Kind)) continue;
+                var clip = entry is null ? null : Clips.ByKind.GetValueOrDefault(entry.Kind);
+                var b = clip is null ? new BoundClip(entry?.Kind ?? wanted, null, 0) : Clips.Retarget(clip, root, skel, fixes);
+                // AddAnimation refuses a name with '/', ':', ',' or '[' (Godot's animation-name rule).
+                if (b.Anim is null || lib.AddAnimation(b.Kind, b.Anim) != Error.Ok)
                 {
                     unbound++;
-                    _log($"model {info.Url}: clip '{role}' not bound ({b.Tracks} tracks) — bind pose for that role");
+                    _log($"model {info.Url}: clip '{b.Kind}' for '{wanted}' not bound ({b.Tracks} tracks) — the figure plays what it has");
                     continue;
                 }
-                lib.AddAnimation(role, b.Anim);
+                kinds.Add(b.Kind);
                 bound += b.Tracks;
             }
             _log($"model {info.Url}: {skel.GetBoneCount()} bones, raw height {raw:0.###} m, {bound} clip tracks bound, "
                  + (corrected >= 0 ? $"{corrected} bones rest-corrected" : "no rig: verbatim copy"));
         }
-        return new ModelTemplate { Root = root, RawHeight = raw, Library = lib, BoundTracks = bound, Unbound = unbound,
-                                   Corrected = corrected };
+        return new ModelTemplate { Root = root, RawHeight = raw, Library = lib, Kinds = kinds, BoundTracks = bound,
+                                   Unbound = unbound, Corrected = corrected };
     }
 
     private void Instantiate(Figure fig, ModelTemplate t, ModelInfo info)
@@ -380,8 +388,9 @@ public partial class FigureManager : Node3D
             player.AddAnimationLibrary("", t.Library);
         }
         fig.BoundTracks = t.BoundTracks;
-        fig.UnboundClips = t.Library is null && info.Rig == "mixamo" ? ClipLibrary.Roles.Length : t.Unbound;
-        fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player);
+        fig.UnboundClips = t.Library is null && info.Rig == "mixamo" ? Clips.WantedKinds.Count : t.Unbound;
+        fig.Poses = Clips.Poses;
+        fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds);
     }
 
     // ---- the figure pick (Task 9) ----------------------------------------------------------------

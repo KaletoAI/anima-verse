@@ -53,6 +53,9 @@ public static class CheckRunner
     private static readonly Vector3 ExpAdaHalfway = new(-45f, 3.68316650390625f, 30f);
     private static readonly Vector3 ExpCleoHalfway = new(259.5f, 4.875f, -100f);
     private static readonly Vector3 ExpAdaEnd = new(-40f, 3.7705078125f, 30f);
+    // movement_poses (README "Clips"): standing plays stand-relaxed (exact), walking names mob1-walk,
+    // which the library lacks → its public kind walk.
+    private const string ExpStandingKind = "stand-relaxed", ExpMovingWant = "mob1-walk", ExpMovingKind = "walk";
     private const string IdleUrl = "/assets/animation-clips/stand-relaxed.fbx?v=fixturestand0001";
     private const string WalkUrl = "/assets/animation-clips/walk.fbx?v=fixturewalk00001";
     private const string AdaUrl = "/characters/Ada%20Wren/model3d/file?v=fixtureada000001";
@@ -345,8 +348,20 @@ public static class CheckRunner
         var mgr = new FigureManager(source, height, line => GD.Print("[check] " + line), strict: true) { AutoTick = false, PollSeconds = 5.0 };   // the README derivation lerps over 5 s
         world.AddChild(mgr);
         await mgr.InitAsync();
-        Expect("idle role → mapped kind", mgr.Clips.KindOf("idle") == "stand-relaxed", mgr.Clips.KindOf("idle"));
-        Expect("run role keeps its name", mgr.Clips.KindOf("run") == "run", mgr.Clips.KindOf("run"));
+        var clips = mgr.Clips;
+        Expect("standing pose → its clip (trimmed, lower-cased)", clips.StandingKind == ExpStandingKind, clips.StandingKind);
+        Expect("walking pose → its clip", clips.MovingKind == ExpMovingWant, clips.MovingKind);
+        Expect("blank running kind → default run", FigureClips.MoveClip(FigureClips.WalkRun, true, clips.Poses) == "run",
+               FigureClips.MoveClip(FigureClips.WalkRun, true, clips.Poses));
+        Expect("standing resolves exactly", clips.Chosen.GetValueOrDefault(ExpStandingKind)?.Url == IdleUrl,
+               clips.Chosen.GetValueOrDefault(ExpStandingKind)?.Url ?? "null");
+        Expect("walking falls back to its public kind", clips.Chosen.GetValueOrDefault(ExpMovingWant)?.Url == WalkUrl,
+               clips.Chosen.GetValueOrDefault(ExpMovingWant)?.Url ?? "null");
+        Eq("transition rules (junk row dropped)", clips.Transitions.Count, 2);
+        var start = FigureClips.Transition(ExpStandingKind, ExpMovingKind, clips.Transitions);
+        Expect("transition stand-relaxed → walk", start is { Kind: "start-walk", Accel: 8 }, $"{start}");
+        var getUp = FigureClips.Transition("sitting", ExpMovingKind, clips.Transitions);
+        Expect("exit rule sitting → *", getUp is { Kind: "get-up-chair", Accel: 0 }, $"{getUp}");
         using (var map = Load("worldmap.json")) await mgr.Apply(map.RootElement);
         var st = mgr.Stats;
         Eq("figures", st.Figures, ExpFigures);
@@ -380,7 +395,7 @@ public static class CheckRunner
                string.Join(";", source.ByteRequests));
 
         // The binding itself: after one evaluation the skeleton holds the clip's values.
-        CheckBinding(mgr, ada, "idle");
+        CheckBinding(mgr, ada, ExpStandingKind);
         // The rest correction against the browser's own numbers (rest_reference.json).
         var restInfo = CheckRestReference(mgr, ada, source);
         ada.UpdateClip();
@@ -396,7 +411,7 @@ public static class CheckRunner
         Eq("clips still loaded once", source.ByteRequests.Count(u => u == IdleUrl || u == WalkUrl), 2);
         Eq("poll2 bound_tracks", st.BoundTracks, ExpBoundTracks);
         Expect("Ada reloaded", ada.LoadedSig == "ada-2" && ada.IsGlb, ada.LoadedSig ?? "null");
-        Expect("Ada walks (2 m/s)", ada.Moving && ada.Player?.CurrentAnimation == "walk",
+        Expect("Ada walks (2 m/s)", ada.Moving && ada.Player?.CurrentAnimation == ExpMovingKind,
                $"{ada.PlannedSpeed} {ada.Player?.CurrentAnimation}");
         Near("Ada faces +x", ada.Rotation.Y, Mathf.Pi / 2f);
         NearV("Ada still at the old point", ada.Position, ExpAda);
@@ -405,7 +420,7 @@ public static class CheckRunner
         NearV("Cleo halfway", cleo.Position, ExpCleoHalfway);
         mgr.Tick(2.5);
         NearV("Ada arrived", ada.Position, ExpAdaEnd);
-        Expect("Ada idles after arriving", !ada.Moving && ada.Player?.CurrentAnimation == "idle",
+        Expect("Ada stands after arriving", !ada.Moving && ada.Player?.CurrentAnimation == ExpStandingKind,
                ada.Player?.CurrentAnimation ?? "no player");
 
         var info = RestMismatch(source, ada);
@@ -424,7 +439,7 @@ public static class CheckRunner
     {
         var player = fig.Player ?? throw new InvalidOperationException("no AnimationPlayer");
         var skel = fig.Skeleton ?? throw new InvalidOperationException("no skeleton");
-        var clip = mgr.Clips.ByRole[role]!;
+        var clip = mgr.Clips.ByKind[role]!;
         Expect($"{role} playing", player.CurrentAnimation == role, player.CurrentAnimation);
         player.Seek(0, true);
 
@@ -470,6 +485,10 @@ public static class CheckRunner
     /// </summary>
     private static string CheckRestReference(FigureManager mgr, Figure ada, FixtureSource source)
     {
+        // The reference names the clip FILES (idle.fbx / walk.fbx); the fixture library serves them as the
+        // standing pose's stand-relaxed and the walking pose's walk.
+        static string SampleKind(JsonElement sample)
+            => sample.GetProperty("clip").GetString() == "idle" ? ExpStandingKind : ExpMovingKind;
         const double TolDeg = 0.5;
         var donor = mgr.Clips.DonorRest ?? throw new InvalidOperationException("reference rig not loaded");
         Expect("rig hips height", mgr.Clips.DonorHipsY is > 1.13 and < 1.131, $"{mgr.Clips.DonorHipsY}");
@@ -503,8 +522,8 @@ public static class CheckRunner
                        $"got [{string.Join(",", stance.OrderBy(x => x))}], browser [{string.Join(",", wantStance.OrderBy(x => x))}]");
                 foreach (var sample in model.GetProperty("samples").EnumerateArray())
                 {
-                    var role = sample.GetProperty("clip").GetString() == "idle" ? "idle" : "walk";
-                    var clip = mgr.Clips.ByRole[role]!;
+                    var role = SampleKind(sample);
+                    var clip = mgr.Clips.ByKind[role]!;
                     double t = sample.GetProperty("time").GetDouble();
                     foreach (var bone in sample.GetProperty("bones").EnumerateObject())
                     {
@@ -531,7 +550,7 @@ public static class CheckRunner
         var skelA = ada.Skeleton!;
         foreach (var sample in minerva.GetProperty("samples").EnumerateArray())
         {
-            var role = sample.GetProperty("clip").GetString() == "idle" ? "idle" : "walk";
+            var role = SampleKind(sample);
             double t = sample.GetProperty("time").GetDouble();
             player.Play(role, 0);
             player.Seek(t, true);

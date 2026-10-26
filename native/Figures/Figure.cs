@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Godot;
 
 namespace AnimaNative.Figures;
@@ -7,11 +9,11 @@ namespace AnimaNative.Figures;
 /// One character on the map. The node sits at the figure's FEET in world
 /// metres (y = world ground), turned to its walking direction; its body is
 /// either the character's GLB (scaled to its height, with an AnimationPlayer
-/// carrying the retargeted idle/walk clips) or a capsule placeholder.
+/// carrying the retargeted standing/moving clips) or a capsule placeholder.
 ///
 /// Motion between polls is the spike's simple rule: a new target lerps in over
 /// the poll interval (<see cref="FigureManager.PollSeconds"/>); while the
-/// planned speed exceeds <see cref="WalkSpeed"/> the walk clip plays, else idle.
+/// planned speed exceeds <see cref="WalkSpeed"/> the walking pose's clip plays, else the standing pose's.
 /// </summary>
 public partial class Figure : Node3D
 {
@@ -26,7 +28,7 @@ public partial class Figure : Node3D
     public double HeightM { get; set; } = FigureManager.DefaultHeightM;
     /// <summary>Clip tracks bound on this figure's skeleton (all roles).</summary>
     public int BoundTracks { get; set; }
-    /// <summary>Roles (idle/walk) a humanoid figure could not bind — it stands in bind pose for them.</summary>
+    /// <summary>Wanted clips (standing/moving) a humanoid figure could not bind — it plays what it has, or the bind pose.</summary>
     public int UnboundClips { get; set; }
 
     public bool IsGlb { get; private set; }
@@ -85,7 +87,9 @@ public partial class Figure : Node3D
     }
 
     /// <summary>Swap the body. The old one is freed (it owns its duplicated meshes/skeleton).</summary>
-    public void SetBody(Node3D body, bool isGlb, Skeleton3D? skeleton, AnimationPlayer? player)
+    /// <param name="clipKinds">the kinds the player's library holds, in bind order (null without a player).</param>
+    public void SetBody(Node3D body, bool isGlb, Skeleton3D? skeleton, AnimationPlayer? player,
+                        IReadOnlyList<string>? clipKinds = null)
     {
         Ghost?.Dispose();
         Body?.QueueFree();
@@ -94,6 +98,7 @@ public partial class Figure : Node3D
         IsGlb = isGlb;
         Skeleton = skeleton;
         Player = player;
+        _clipKinds = player is null ? Array.Empty<string>() : clipKinds ?? Array.Empty<string>();
         AddChild(body);
         UpdateClip();
     }
@@ -101,13 +106,29 @@ public partial class Figure : Node3D
     /// <summary><c>setSubmerged(level)</c>: the ghost cut at the mirror over the figure's bed, or hidden (null = dry).</summary>
     public void SetSubmerged(double? waterLevel) => Ghost?.Set(waterLevel);
 
-    public string WantedClip => Moving ? "walk" : "idle";
+    /// <summary>The server's movement poses the clip choice reads (the clip library's table).</summary>
+    public PoseClips Poses { get; set; } = PoseClips.Default;
 
+    private IReadOnlyList<string> _clipKinds = Array.Empty<string>();
+
+    /// <summary>
+    /// The kind this figure asks for — the browser's decision through
+    /// <see cref="FigureClips"/>: moving = <c>moveClip(walk_run, walking)</c>,
+    /// standing = <c>standingClipFor(none, none)</c>. Native has no activity
+    /// clip and no ground movement yet, so both name the pose table's clips.
+    /// </summary>
+    public string WantedClip => Moving ? ClipLibrary.MovingKindOf(Poses) : ClipLibrary.StandingKindOf(Poses);
+
+    /// <summary>
+    /// Play the wanted kind as the browser's <c>Figure.play</c> resolves it:
+    /// <c>resolveClipKind</c> over the kinds this figure has bound, else the
+    /// first bound clip, else the bind pose.
+    /// </summary>
     public void UpdateClip()
     {
         if (Player is null) return;
-        var want = WantedClip;
-        if (!Player.HasAnimation(want)) want = Player.HasAnimation("idle") ? "idle" : "";
+        var want = FigureClips.ResolveClipKind(WantedClip, _clipKinds, Poses);
+        if (want.Length == 0) want = _clipKinds.FirstOrDefault(k => Player.HasAnimation(k)) ?? "";
         if (want.Length == 0) return;   // nothing bound: bind pose
         if (Player.CurrentAnimation != want) Player.Play(want, Blend);
     }

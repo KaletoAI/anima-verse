@@ -221,13 +221,39 @@ Cleo has no `height_cm` → the browser default **1.70**.
 
 ### Clips
 
-`locomotion` maps `idle → "Stand-Relaxed"` (lower-cased: `stand-relaxed`), `walk → walk`,
-`run → ""` (keeps `run`). The list carries decoys that a wrong pick would hit (their URLs
-are not in `urls.json`, so a wrong pick fails the check with a 404): a pair half
-(`role: a`) and a `female`-set entry of `stand-relaxed`, a plain `idle` (the unmapped
-role name), a `female` walk. The neutral solo `stand-relaxed` maps to
-`shared/models/clips/idle.fbx`, the neutral `walk` to `shared/models/clips/walk.fbx`
-→ **clips_loaded = 2**, each URL downloaded exactly once over both polls.
+The clip choice follows the browser's movement poses (Task 27; rules: `native/Core/Figures/FigureClips.cs`,
+vectors `shared/test-vectors/figure_clips.json`). `movement_poses` names three poses:
+`standing` → `" Stand-Relaxed "` (public `idle`), `walking` → `mob1-walk` (public `walk`),
+`running` → `""` (public `run`); the other four are absent. Resolved (`resolveMovementPoses`: trim +
+lower-case, blank or missing → the pose default): standing **stand-relaxed**, walking **mob1-walk**,
+running **run** (blank kind → default), swimming/treading_water/crawling/crawling_rest their defaults.
+
+What a figure asks for: standing `standingClipFor(none, none)` = the standing kind **stand-relaxed**;
+moving `moveClip(walk_run, false)` = the walking kind **mob1-walk**.
+
+The library kinds native plays from — neutral set, solo, listing order, lower-cased — are
+`[idle, stand-relaxed, walk]` (entry 2, entry 4 `Stand-Relaxed`, entry 6; the pair half `role: a` and both
+`female` entries are not neutral solo clips). `resolveClipKind` over them:
+
+- `stand-relaxed`: the first chain step is the kind itself and matches entry 4 exactly →
+  `stand-relaxed.fbx?v=fixturestand0001`.
+- `mob1-walk`: chain = `mob1-walk` (wanted), `walk` (public kind of its pose `walking`), no `CLIP_FALLBACK`
+  for `mob1-walk`, `walk` or the family `mob1`, then `stand-relaxed`, `idle` (standing played/public), `idle`
+  → `[mob1-walk, walk, stand-relaxed, idle]`. `mob1-walk`: no exact entry, and no entry of family `mob1`
+  (`idle` is family idle, `stand-relaxed` family stand, `walk` family walk) → nothing; `walk`: exact →
+  entry 6, `walk.fbx?v=fixturewalk00001`.
+
+The decoys a wrong pick would hit (their URLs are not in `urls.json`, so a wrong pick fails the check with a
+404): the plain `idle` (what a default table or the old literal role name would pick), the pair half, the
+`female` stand-relaxed and walk. The neutral solo `stand-relaxed` maps to `shared/models/clips/idle.fbx`, the
+neutral `walk` to `shared/models/clips/walk.fbx` → **clips_loaded = 2**, each URL downloaded exactly once over
+both polls. Ada's AnimationPlayer holds them under their kinds `stand-relaxed` and `walk` (the browser names a
+clip by its kind); standing she resolves `stand-relaxed` exactly, walking `mob1-walk` → `walk` (same chain).
+
+`transition_clips` (`resolveClipTransitions`, parsed now, played with the full library): row 1
+(`sitting`, `*`, `get-up-chair`, accel 0) kept; row 2 `" Stand-Relaxed "` → `stand-relaxed`, `Start-Walk` →
+`start-walk`, accel 12 capped to **8**; row 3 has an empty `from` → dropped → **2 rules**.
+`clipTransition(stand-relaxed, walk)` = row 2 (both named); `clipTransition(sitting, walk)` = row 1 (exit rule).
 
 **Track list of the clip files** (from the FBX connection table, read with a 60-line
 binary-FBX reader outside the repo — not from Godot): both files hold 70 Model nodes
@@ -240,14 +266,14 @@ LeftRibbon1, LeftRibbon2, both Toe_End and the ten `…4` finger/thumb tips (17 
 **Ada's skeleton** (glTF `skins[0].joints`): 52 joints — exactly those 52 keyed bones
 (`mixamorig:` names; the 17 unkeyed reference bones are absent).
 
-Bound per clip = 52 rotation tracks + 1 hips position = **53**; idle + walk on the one
+Bound per clip = 52 rotation tracks + 1 hips position = **53**; stand-relaxed + walk on the one
 GLB figure → **bound_tracks = 106**, unbound_clips = 0.
 
 Godot's FBX importer emits only the curves that move (idle 40 rotation tracks, walk 20 —
 the check log shows them) and keeps the constant ones as the node default; the retarget
 writes those back as one-key tracks, which is why the count is the file's 53 and not
 41/21. The check proves both kinds bind: after one evaluation Ada's `LeftUpLeg` (a moving
-track) holds the idle clip's key 0 and her `LeftForeArm` (no Godot track — constant in
+track) holds the standing clip's (`idle.fbx` served as stand-relaxed) key 0 and her `LeftForeArm` (no Godot track — constant in
 the file) the clip's node default; both differ from her own rest, so an unbound track
 would fail.
 
@@ -258,12 +284,12 @@ Bram is gone → **figures = 2**. Ada moves to (−40, 30) and her `model_sig` b
 download (template cache), clips not downloaded again. Cleo has no `model_sig` (absent
 both times) → not asked again. Cleo's `progress_m` 144 → (300 − 44, −100) = (256, −100).
 
-Lerp over the poll interval (5 s): Ada plans 10 m / 5 s = 2 m/s > 0.2 → **walk**, facing +x
+Lerp over the poll interval (5 s): Ada plans 10 m / 5 s = 2 m/s > 0.2 → moving → `mob1-walk` → plays **walk**, facing +x
 (rotation.y = atan2(10, 0) = π/2). After 2.5 s: Ada (−45, 30), y: fx = 211/256 =
 0.82421875, north = 3.296875, south = 6.59375, y = 3.296875·0.8828125 + 6.59375·0.1171875
 = **3.68316650390625**; Cleo (259.5, −100), y = 4.875 (same clamped cell). After 5 s: Ada
 at (−40, 30), fx = 216/256 = 0.84375, north = 3.375, south = 6.75, y = 2.9794921875 +
-0.791015625 = **3.7705078125**, arrived → **idle**.
+0.791015625 = **3.7705078125**, arrived → standing → plays **stand-relaxed**.
 
 ### Placement rule on its own (`CheckPlacementRule`)
 

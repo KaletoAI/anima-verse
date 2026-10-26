@@ -39,11 +39,12 @@ What it draws after login:
   browser's far view draws them (journey point along the route, the huddle in
   front of / around their location, or their free point in the wilderness), on
   the world ground; a moved figure lerps to its new point over the poll
-  interval and plays `walk` above 0.2 m/s, `idle` otherwise. Model:
+  interval and plays the `walking` pose's clip above 0.2 m/s, the `standing` pose's otherwise. Model:
   `/characters/{name}/model3d` → the humanoid GLB (Meshopt-decoded), scaled to
   `height_cm`; FBX (generic rig) and "no model" are capsule placeholders; a
-  changed `model_sig` reloads it. Clips: the neutral-set `idle`/`walk` of
-  `/assets/animation-clips` (through its `locomotion` mapping), each FBX
+  changed `model_sig` reloads it. Clips: the neutral-set clips of
+  `/assets/animation-clips` that its `movement_poses` name for standing and walking, resolved
+  with the browser's rules (`Core/Figures/FigureClips.cs`, `resolveClipKind`), each FBX
   downloaded and imported once at runtime (`FBXDocument`), retargeted by bone
   name with the browser's rest-pose correction against `/assets/animation-rig`
   (`Figures/RestCorrection.cs`, port of `restCorrections` in

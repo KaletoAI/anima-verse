@@ -100,7 +100,7 @@ public static class PickCheck
             using (var map = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixtures, "worldmap.json"))))
                 await mgr.Apply(map.RootElement);
             var ada = mgr.Figures["Ada Wren"];
-            ada.Player!.Play("idle", 0);
+            ada.Player!.Play(mgr.Clips.Standing!.Kind, 0);   // the standing pose's clip
             ada.Player.Seek(0, true);
             NearV("Ada feet", ada.GlobalPosition, new Vector3(-50, AdaY, 30));
 
