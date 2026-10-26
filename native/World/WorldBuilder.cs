@@ -473,6 +473,16 @@ public sealed partial class WorldBuilder
         }
     }
 
+    /// <summary>
+    /// A ground built again during play (a new <c>terrain_sig</c>, a mask re-index): it replaces the standing one on the
+    /// terrain's programs (its water variant comes with the next field rebuild's window).
+    /// </summary>
+    public void ReplaceGround(GroundSurfaces ground)
+    {
+        Ground = ground;
+        Terrain?.SetMaterials(ground.Material, ground.WaterMaterial);
+    }
+
     /// <summary>What became of the water: drawn by the wet program, or why not.</summary>
     private void ApplyWaterOutcome(WorldStats stats, WorldHeight height)
     {

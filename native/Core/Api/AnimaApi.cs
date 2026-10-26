@@ -38,6 +38,13 @@ public interface IWorldSource
     Task<JsonDocument> GetHeightfieldAsync();
     /// <summary>At most <see cref="AnimaApi.HeightTileBatchMax"/> keys; tiles not in the index are absent.</summary>
     Task<JsonDocument> GetHeightTilesAsync(IReadOnlyList<(int Tx, int Tz)> keys);
+    /// <summary>
+    /// <c>GET /play/heightfield/stats?keys=tx:tz,…</c> (§ G2): the statistics the overview's cap kept back, at most
+    /// <see cref="AnimaApi.HeightTileBatchMax"/> keys (more is a 400), answered <c>{sig, tile_stats: {"tx,tz": …}}</c>.
+    /// A source that does not serve it answers 404 — the background fill then gives up (the level stays coarse).
+    /// </summary>
+    Task<JsonDocument> GetHeightTileStatsAsync(IReadOnlyList<(int Tx, int Tz)> keys)
+        => Task.FromException<JsonDocument>(new ApiException(404, "/play/heightfield/stats", "not served by this source"));
     /// <summary><c>GET /world/locations?view=3d</c> — ids, names, rooms, map3d; NO position (§ A1.3).</summary>
     Task<JsonDocument> GetLocations3dAsync();
     /// <summary>The scene recipe (§ B1); null on 404 (nothing to compose).</summary>
@@ -255,6 +262,15 @@ public sealed class AnimaApi : IWorldSource, IDisposable
         return GetJson("/play/heightfield/tiles?keys=" + Uri.EscapeDataString(query));
     }
 
+    /// <summary><c>GET /play/heightfield/stats?keys=tx:tz,…</c> — the same key spelling as the tile batch (<c>fetchHeightTileStats</c>).</summary>
+    public Task<JsonDocument> GetHeightTileStatsAsync(IReadOnlyList<(int Tx, int Tz)> keys)
+    {
+        if (keys.Count == 0 || keys.Count > HeightTileBatchMax)
+            throw new ArgumentOutOfRangeException(nameof(keys), $"1..{HeightTileBatchMax} keys per call");
+        var query = string.Join(",", keys.Select(k => $"{k.Tx}:{k.Tz}"));
+        return GetJson("/play/heightfield/stats?keys=" + Uri.EscapeDataString(query));
+    }
+
     public Task<JsonDocument?> GetLocationSceneAsync(string locationId)
         => GetJsonOrNull($"/play/locations/{Uri.EscapeDataString(locationId)}/scene");
 
@@ -321,7 +337,10 @@ public sealed class AnimaApi : IWorldSource, IDisposable
     private async Task<JsonDocument> ReadJson(HttpResponseMessage res, string path)
     {
         await EnsureOk(res, path);
-        var bytes = await res.Content.ReadAsByteArrayAsync();
+        // The body and its parse leave the caller's context: a height tile batch is ~8 MB of JSON, and parsing it on
+        // the Godot main thread was a frame-sized stall. EnsureOk (and with it the Unauthorized event) still runs on the
+        // caller's context, and the caller's own await resumes there as before.
+        var bytes = await res.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
         return JsonDocument.Parse(bytes);
     }
 

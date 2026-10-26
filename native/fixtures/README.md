@@ -969,3 +969,64 @@ at level 0 = `heightAt` (to 1e-4; the near lattice samples the tile, and h is li
 **T6.** Pixel scale = viewport height / (2 · tan 22.5°) = 1080 / (2 · (√2 − 1)) = **1303.6753236814712**; 0 without a
 viewport or lens. The frame without bounds is the 200 m square (−100 … 100); a point bound (5, 7) keeps (−55, −53) …
 (65, 67).
+
+## Terrain streaming (Task 24, `Check/StreamCheck.cs`, `--check stream`)
+
+Sources: ground.ts (`setHeightAnchor`, `refreshTiles`, `takeTiles`, `evictTiles`, `fillMissingStats`, `groundBusy`,
+`refreshLayerTiles`, `reindexLayers`, `applyHeight`, `sync`, `reload`), heightTiles.ts (`wantedTiles`, `tileBatches`),
+terrainLod.ts (`nearWindow`). The policy is unit-tested in `tests/TerrainStreamTests.cs`; this section is the client
+wired to it.
+
+**The world.** The main fixture (`--goto=harbour`, anchor (64, 128)) with the relief and the masks answered by hand
+(`StreamSource`): a strip of ten indexed tiles `0,0` … `9,0` (256 m), each a 2 × 2 grid flat at height k (+ the lift,
+0 then 5), its own stats min = max = height, err 0 except tile 9: err [0.5, 1, 2, 4, 8]. The overview: 12 × 4 at
+256 m from (−256, −256), flat at the lift, `tile_stats` empty and `tile_stats_complete: false`. The masks: the same ten
+keys (tile 256 m, id 1 m), each `uniform: 1`, under the cut `L1`. The LRU cap is shrunk to **4** for the check.
+
+Want set per axis (box distance ≤ 560 m; the strip is row 0 and every anchor has z = 128, inside it, so dz = 0):
+- anchor x = 64: tile 0 d 0, 1 d 192, 2 d 448, 3 d 704 → **0, 1, 2**;
+- x = 1000 (tile 3): 3 d 0, 4 d 1024 − 1000 = 24, 2 d 1000 − 768 = 232, 5 d 280, 1 d 488, 6 d 536, 0 d 744, 7 d 792 →
+  **3, 4, 2, 5, 1, 6**;
+- x = 2000 (tile 7): 7 d 0, 8 d 48, 6 d 208, 9 d 304, 5 d 464, 4 d 720 → **7, 8, 6, 9, 5**.
+
+**S0 boot.** Tiles `0,0;1,0;2,0` (one request), masks `0,0;1,0;2,0`, height revision 1 (one batch). Near window over
+tiles 0 … 2: x 0 … 768, z 0 … 256, margin max(16, 2 · 256) = 512 → (−512, −512) … (1280, 768), 897 × 641 (no cap).
+
+**S1 the statistics fill** (the overview is capped): 10 indexed, 3 known from the tiles → one request
+`stats 3,0;4,0;5,0;6,0;7,0;8,0;9,0`. Level errors at base step 2: level L ↔ mip 2 · 2^L m = mip index L − 1 → max over
+the tiles = tile 9's → **[0, 0.5, 1, 2, 4, 8]**. The idle poll (same signatures) reloads nothing; its frame:
+`world_bounds` (−104, −203) … (2600, 134) ± 60 → **(−164, −263) … (2660, 194)**.
+
+**S2 target (1000, 128).** Missing 3, 4, 5, 6 → `tiles 3,0;4,0;5,0;6,0` then `masks 3,0;4,0;5,0;6,0`.
+- LRU: before the batch the held tiles are touched in want order (2, then 1) → order 0, 2, 1; the batch appends 3, 4, 5,
+  6 → 7 > 4 → from the front, skipping wanted tiles: **0 evicted**, then 2, 1, 3 … 6 are all wanted → 6 held (over the
+  cap, as the rule says). Held **1 … 6**, revision 2, one field build.
+- Near window over tiles 1 … 6: x 256 … 1792 → −256 … 2304 → 1281 columns > 1025 → capped and centred on the anchor:
+  x₀ = ⌊(1000 − 1025) / 2⌋ · 2 = **−26**, z: 641 rows → half 641 → z₀ = ⌊(128 − 641) / 2⌋ · 2 = **−514** →
+  **(−26, −514) … (2022, 766)**. Ground at (1000, 128) = **3** (tile 3).
+- Masks: held 0 … 6, tile 0 left the want set → dropped → window over 1 … 6: origin (256, 0), span max(6, 1) = 6 →
+  id size 256 · 6 = **1536**.
+
+**S3 target (2000, 128).** Missing 7, 8, 9 → `tiles 7,0;8,0;9,0`, `masks 7,0;8,0;9,0`.
+- LRU: touch 6 then 5 → order 2, 1, 3, 4, 6, 5; append 7, 8, 9 → evict **2, 1, 3, 4** (5 evictions in all) → held
+  **5 … 9**, revision 3; ground at (2000, 128) = **7**.
+- Near window over 5 … 9: x 1280 … 2560 → 768 … 3072 → 1153 > 1025 → x₀ = ⌊(2000 − 1025) / 2⌋ · 2 = **974** →
+  **(974, −514) … (3022, 766)**.
+- Masks: 1 … 4 leave (5 dropped in all) → window over 5 … 9: origin 1280, span 5 → **1280**.
+
+**S4 new `height_sig` `s2`** (everything 5 m higher). The poll reloads: `height-index`; the tiles go with the old relief
+(0 held, revision **4**), the field is rebuilt at once without a near pyramid and with the new far pyramid (all **5**).
+The anchor forgot its tile, so the next tick at (2000, 128) refetches the want set in its order:
+`tiles 7,0;8,0;6,0;9,0;5,0` (revision 5, ground **12**); the fill (waiting while the ring was missing) then asks for the
+rest in index order: `stats 0,0;1,0;2,0;3,0;4,0`. The model tick sees the new revision: the house's tile 0 is not held,
+so its pin reads the overview, 5 instead of 0 → its datum moves **+5** (the yard too: 2 datums moved).
+
+**S5 new `terrain_sig` `t2`.** A new ground for the anchor: `terrain`, `mask-index`, masks in want order
+`7,0;8,0;6,0;9,0;5,0`; the terrain wears the new ground material; the held terrain signature is the payload's `t2`, so
+the same poll again reloads nothing.
+
+**S6 target back to (1000, 128) while the masks were re-cut (`L2`).** Height: missing 3, 4, 2, 1 (want order) →
+`tiles 3,0;4,0;2,0;1,0`; touched 5, 6 → order 7, 8, 9, 5, 6, + 3, 4, 2, 1 → evict **7, 8, 9** (8 in all) → held 1 … 6.
+Masks: missing 3, 4, 2, 1 → `masks 3,0;4,0;2,0;1,0` answers under `L2` ≠ `L1` → dropped, `mask-index` (says `L2`) →
+re-indexed: a new ground with that index (`terrain`, then the masks of the want set `3,0;4,0;2,0;5,0;1,0;6,0`), held
+masks 1 … 6, one re-index. Near window again (−26, −514) … (2022, 766).

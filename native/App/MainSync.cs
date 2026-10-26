@@ -126,6 +126,9 @@ public partial class Main : Node3D
             }
             if (_selected is not null) Select(_selected);   // refreshSelection(map)
             AnnounceSceneProblems(map);                      // what the composer found wrong (§ 4.3)
+            // terrainGround.sync(terrain_sig, world_bounds, …, height_sig): the frame, the loaders' idle occasion and
+            // the reload chains of the two signatures (Task 24).
+            _ = _streamer?.Sync(map);
             if (_interactive && _builder is not null && _builder.FreshOf(map).Count > 0)
             {
                 // Discovery needs details even when the endpoint revision has not changed.
@@ -214,6 +217,8 @@ public partial class Main : Node3D
             }
             if (_stop.IsCancellationRequested) return;
             _figures.ApplyPolled(map);
+            // main.ts syncs the ground right here with the switched view's frame (no three-second gap).
+            _ = _streamer?.Sync(map);
             var dropped = _builder.DropVanished(map);
             if (dropped.Count > 0)
             {

@@ -136,6 +136,18 @@ public sealed record TileStat(double Min, double Max, double[] Err)
             : Array.Empty<double>();
         return new TileStat(Field("min"), Field("max"), err);
     }
+
+    /// <summary>
+    /// A <c>{"tx,tz": {min, max, err}}</c> block of <paramref name="root"/> (<c>tile_stats</c> of the overview and of
+    /// <c>GET /play/heightfield/stats</c>), in payload order; absent or not an object = empty.
+    /// </summary>
+    public static Dictionary<string, TileStat> ParseMap(JsonElement root, string name)
+    {
+        var stats = new Dictionary<string, TileStat>(StringComparer.Ordinal);
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out var ts) && ts.ValueKind == JsonValueKind.Object)
+            foreach (var p in ts.EnumerateObject()) stats[p.Name] = Parse(p.Value);
+        return stats;
+    }
 }
 
 /// <summary><c>GET /play/heightfield</c>: the overview grid, the tile index and the quadtree half (mip levels, tile stats).</summary>
@@ -145,11 +157,18 @@ public sealed class HeightfieldOverview
     public double TileM { get; }
     public double TileStepM { get; }
     public HashSet<(int Tx, int Tz)> TileIndex { get; }
+    /// <summary>The index in payload order and spelling (<c>new Set(payload.tiles)</c>: the order the stats fill walks).</summary>
+    public List<string> TileKeys { get; init; } = new();
     public string Sig { get; }
     /// <summary><c>mip_levels_m</c> (<c>Array.isArray ? map(Number) : []</c>): the metre steps the stats' <c>err</c> lists follow.</summary>
     public double[] MipLevelsM { get; init; } = Array.Empty<double>();
     /// <summary><c>tile_stats</c> by key <c>"tx,tz"</c> (capped by the server at 64; the rest rides in with the tiles).</summary>
     public Dictionary<string, TileStat> TileStats { get; init; } = new(StringComparer.Ordinal);
+    /// <summary>
+    /// <c>payload.tile_stats_complete === false</c>: the server's cap kept statistics back, so the client fetches the
+    /// rest in the background (<c>fillMissingStats</c>). Anything but an explicit <c>false</c> = complete.
+    /// </summary>
+    public bool StatsIncomplete { get; init; }
 
     private HeightfieldOverview(HeightGrid grid, double tileM, double tileStepM,
                                 HashSet<(int, int)> index, string sig)
@@ -161,19 +180,20 @@ public sealed class HeightfieldOverview
     {
         var grid = HeightGrid.Parse(root, Json.Num(root, "step_m", 4.0));
         var index = new HashSet<(int, int)>();
+        var keys = new List<string>();
         foreach (var key in Json.Arr(root, "tiles"))
-            if (key.ValueKind == JsonValueKind.String && TryTileKey(key.GetString(), out var k)) index.Add(k);
+            if (key.ValueKind == JsonValueKind.String && TryTileKey(key.GetString(), out var k) && index.Add(k))
+                keys.Add(Terrain.HeightTiles.Key(k.Item1, k.Item2));
         var mips = root.TryGetProperty("mip_levels_m", out var m) && m.ValueKind == JsonValueKind.Array
             ? m.EnumerateArray().Select(v => Scene.Js.Number(v)).ToArray()
             : Array.Empty<double>();
-        var stats = new Dictionary<string, TileStat>(StringComparer.Ordinal);
-        if (root.TryGetProperty("tile_stats", out var ts) && ts.ValueKind == JsonValueKind.Object)
-            foreach (var p in ts.EnumerateObject()) stats[p.Name] = TileStat.Parse(p.Value);
         return new HeightfieldOverview(grid, Json.Num(root, "tile_m", 256.0), Json.Num(root, "tile_step_m", 2.0),
                                        index, Json.Str(root, "sig"))
         {
             MipLevelsM = mips,
-            TileStats = stats,
+            TileKeys = keys,
+            TileStats = TileStat.ParseMap(root, "tile_stats"),
+            StatsIncomplete = root.TryGetProperty("tile_stats_complete", out var c) && c.ValueKind == JsonValueKind.False,
         };
     }
 

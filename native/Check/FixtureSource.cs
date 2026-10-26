@@ -28,6 +28,7 @@ namespace AnimaNative.Check;
 ///   terrain_layers_tiles.json  → GET /play/terrain-layers?keys=… (only the requested AND indexed keys,
 ///                                the format block and the table — like the server's batch_payload)
 ///   surface_textures.json      → GET /assets/surface-textures
+///   (tiles.json's per-tile <c>stats</c>) → GET /play/heightfield/stats (only the requested AND indexed keys)
 /// </summary>
 public sealed class FixtureSource : IWorldSource
 {
@@ -41,6 +42,17 @@ public sealed class FixtureSource : IWorldSource
     public string Dir => _dir;
 
     public List<string> TileRequests { get; } = new();
+    /// <summary>Every <c>/play/heightfield/stats</c> call: the keys joined by ';'.</summary>
+    public List<string> StatsRequests { get; } = new();
+
+    /// <summary>
+    /// Answer the large requests (tiles, stats, masks) on the thread pool, as a server answers off the client's thread —
+    /// <c>--offline</c> sets it, so the streaming probe measures the client and not the fixture's own JSON work. The
+    /// <c>--check</c> runs keep the synchronous answers.
+    /// </summary>
+    public bool OffThread { get; init; }
+
+    private Task<T> Serve<T>(Func<T> answer) => OffThread ? Task.Run(answer) : Task.FromResult(answer());
     /// <summary>Every <c>/play/locations/{id}/scene</c> asked for.</summary>
     public List<string> SceneRequests { get; } = new();
     public List<string> ByteRequests { get; } = new();
@@ -74,7 +86,12 @@ public sealed class FixtureSource : IWorldSource
         if (keys.Count == 0 || keys.Count > AnimaApi.HeightTileBatchMax)
             throw new ArgumentOutOfRangeException(nameof(keys));
         var wanted = keys.Select(k => $"{k.Tx},{k.Tz}").ToHashSet();
-        TileRequests.AddRange(wanted);
+        lock (TileRequests) TileRequests.AddRange(wanted);
+        return Serve(() => TilesAnswer(wanted));
+    }
+
+    private JsonDocument TilesAnswer(HashSet<string> wanted)
+    {
         var root = Big("tiles.json").RootElement;
         var tiles = new Dictionary<string, JsonElement>();
         foreach (var p in root.GetProperty("tiles").EnumerateObject())
@@ -86,7 +103,25 @@ public sealed class FixtureSource : IWorldSource
             ["step_m"] = root.GetProperty("step_m").GetDouble(),
             ["tiles"] = tiles,
         };
-        return Task.FromResult(JsonDocument.Parse(JsonSerializer.Serialize(answer)));
+        return JsonDocument.Parse(JsonSerializer.Serialize(answer));
+    }
+
+    /// <summary>The statistics of the requested indexed tiles, read off tiles.json (the same arithmetic the server caches).</summary>
+    public Task<JsonDocument> GetHeightTileStatsAsync(IReadOnlyList<(int Tx, int Tz)> keys)
+    {
+        if (keys.Count == 0 || keys.Count > AnimaApi.HeightTileBatchMax)
+            throw new ArgumentOutOfRangeException(nameof(keys));
+        var wanted = keys.Select(k => $"{k.Tx},{k.Tz}").ToList();
+        lock (StatsRequests) StatsRequests.Add(string.Join(";", wanted));
+        return Serve(() =>
+        {
+            var root = Big("tiles.json").RootElement;
+            var stats = new Dictionary<string, JsonElement>();
+            foreach (var k in wanted)
+                if (root.GetProperty("tiles").TryGetProperty(k, out var t) && t.TryGetProperty("stats", out var st)) stats[k] = st;
+            var answer = new Dictionary<string, object> { ["sig"] = root.GetProperty("sig").GetString() ?? "", ["tile_stats"] = stats };
+            return JsonDocument.Parse(JsonSerializer.Serialize(answer));
+        });
     }
 
     /// <summary>A check's stand-in for a changed server scene: location id → the file answered from now on.</summary>
@@ -122,9 +157,15 @@ public sealed class FixtureSource : IWorldSource
 
     public Task<JsonDocument> GetTerrainLayersAsync(IReadOnlyList<string> keys)
     {
-        LayerRequests.Add(string.Join(";", keys));
+        lock (LayerRequests) LayerRequests.Add(string.Join(";", keys));
         if (keys.Count == 0) return Doc("terrain_layers.json");
         if (keys.Count > Ground.LayerCut.BatchMax) throw new ArgumentOutOfRangeException(nameof(keys));
+        var asked = keys.ToList();
+        return Serve(() => LayersAnswer(asked));
+    }
+
+    private JsonDocument LayersAnswer(IReadOnlyList<string> keys)
+    {
         using var index = JsonDocument.Parse(File.ReadAllBytes(PathOf("terrain_layers.json")));
         var indexed = index.RootElement.GetProperty("tile_keys").EnumerateArray().Select(k => k.GetString()).ToHashSet();
         var root = Big("terrain_layers_tiles.json").RootElement;
@@ -135,7 +176,7 @@ public sealed class FixtureSource : IWorldSource
         foreach (var k in keys)
             if (indexed.Contains(k) && root.GetProperty("tiles").TryGetProperty(k, out var t)) tiles[k] = t;
         answer["tiles"] = tiles;
-        return Task.FromResult(JsonDocument.Parse(JsonSerializer.Serialize(answer)));
+        return JsonDocument.Parse(JsonSerializer.Serialize(answer));
     }
 
     public Task<JsonDocument> GetSurfaceTexturesAsync() => Doc("surface_textures.json");

@@ -69,6 +69,30 @@ public partial class ScatterLayer : Node3D
         return layer;
     }
 
+    /// <summary><c>rebuildAreas</c> after the ground moved under both layers (a streamed batch, a new relief).</summary>
+    /// <param name="tiles">The tile squares whose ground changed (null = all of it, a new relief).</param>
+    public void Redrape(IReadOnlyCollection<(int Tx, int Tz)>? tiles = null, double tileM = 0)
+    {
+        Field.Redrape(tiles, tileM);
+        Undergrowth.Redrape(tiles, tileM);
+    }
+
+    /// <summary>
+    /// A new <c>terrain_sig</c>: the painted terrain is fetched again and both layers are rebuilt from it with the
+    /// current map's location outlines (<c>reload</c> → <c>rebuildAreas</c>).
+    /// </summary>
+    public async Task ReloadAsync(IWorldSource source, JsonElement worldmap)
+    {
+        using var doc = await source.GetTerrainAsync();
+        var terrain = TerrainPayload.Parse(doc.RootElement);
+        var locFp = TerrainPayload.LocationFootprints(worldmap);
+        Field.SetTerrain(terrain, locFp);
+        var all = new List<IReadOnlyList<P2>>(locFp);
+        all.AddRange(terrain.PropFootprints());
+        Undergrowth.SetAreas(UndergrowthField.AreasOf(terrain), all);
+        _log($"scatter: terrain reloaded ({terrain.Areas.Count} areas, {terrain.PropBoxes.Count} prop boxes)");
+    }
+
     public override void _Process(double delta)
     {
         var cam = GetViewport().GetCamera3D();
@@ -119,7 +143,7 @@ public partial class ScatterLayer : Node3D
     {
         var s = Field.Counts();
         var u = Undergrowth.Counts();
-        return $"scatter[{s}] undergrowth[{u}] triangles={s.Triangles + u.Triangles} rebuilds={Field.Rebuilds} "
+        return $"scatter[{s}] undergrowth[{u}] triangles={s.Triangles + u.Triangles} rebuilds={Field.Rebuilds} redrapes={Field.Redrapes} "
                + $"skipped_rows={Field.SkippedRows} lod_passes={LodPasses}";
     }
 }

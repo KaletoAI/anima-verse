@@ -92,22 +92,32 @@ public sealed class GroundSurfaces
     private readonly Dictionary<string, Image> _loaded = new();
     private TerrainPayload _catalog = null!;
 
+    /// <param name="water">Build the water variant over the loaded wet tiles now (the boot); false = the caller hands a
+    /// window later (<see cref="ApplyWaterWindow"/>, the streamed reload).</param>
+    /// <param name="index">The layer index already fetched (a re-index); null = fetch it.</param>
     public static async Task<GroundSurfaces> LoadAsync(IWorldSource source, WorldHeight height, double anchorX,
-                                                       double anchorZ, Action<string> log, bool water = true)
+                                                       double anchorZ, Action<string> log, bool water = true,
+                                                       LayerIndex? index = null)
     {
         var g = new GroundSurfaces();
-        await g.Run(source, height, anchorX, anchorZ, log);
+        await g.Run(source, height, anchorX, anchorZ, log, index);
         if (water) g.BuildWater(height, log);
         return g;
     }
 
-    private async Task Run(IWorldSource source, WorldHeight height, double anchorX, double anchorZ, Action<string> log)
+    /// <summary>The <c>sig</c> of the <c>/play/terrain</c> payload the ground was built from (<c>loadedSig</c>).</summary>
+    public string TerrainSig => _catalog.Sig;
+
+    private async Task Run(IWorldSource source, WorldHeight height, double anchorX, double anchorZ, Action<string> log,
+                           LayerIndex? index)
     {
         using (var terrain = await source.GetTerrainAsync()) _catalog = TerrainPayload.Parse(terrain.RootElement);
         await LoadLibrary(source, log);
 
-        using (var doc = await source.GetTerrainLayersAsync(Array.Empty<string>()))
-            Index = LayerCut.ParseIndex(doc.RootElement);
+        if (index is not null) Index = index;
+        else
+            using (var doc = await source.GetTerrainLayersAsync(Array.Empty<string>()))
+                Index = LayerCut.ParseIndex(doc.RootElement);
         Format = Index.Format;
         Layers = Index.Layers.Take(LayerCut.MaxLayers).ToList();
 
@@ -131,13 +141,18 @@ public sealed class GroundSurfaces
                 log($"ground: mask batch sig {batch.Format.Sig} differs from the index {Format.Sig} (the browser re-indexes; the spike keeps the tiles)");
             Tiles.AddRange(batch.Tiles);
         }
-        Window = LayerCut.Pack(Tiles, Format);
         Far = Index.Overview is { } ov && ov.Cols > 1 && ov.Rows > 1 && ov.StepM > 0 && ov.Id is { } ids
               && ids.Length >= ov.Cols * ov.Rows * 2 ? ov : null;
 
         await LoadSurfaceImages(source, log);
-        BuildSlices();
-        BuildAo(height);
+        // The slices (a copy + mipmaps per layer) and the window pack are CPU work on images and arrays: off the main
+        // thread, so a ground reload during play (a new terrain_sig, a re-index) does not stall a frame.
+        await Task.Run(() =>
+        {
+            BuildSlices();
+            Window = LayerCut.Pack(Tiles, Format);
+        });
+        BuildAo(height.Overview.Grid);
         BuildMaterial();
 
         Stats.Layers = Layers.Count;
@@ -318,15 +333,42 @@ public sealed class GroundSurfaces
 
     // ── Heights: the AO field ─────────────────────────────────────────────
 
-    private void BuildAo(WorldHeight height)
+    private void BuildAo(HeightGrid ov)
     {
-        var ov = height.Overview.Grid;
         // setNaturalGroundField: a field too small, or flat, switches the AO off exactly.
-        if (ov.Rows >= 2 && ov.Cols >= 2 && ov.Step > 0 && ov.Heights.Length > 0 && ov.Heights.Max() > ov.Heights.Min())
+        bool on = ov.Rows >= 2 && ov.Cols >= 2 && ov.Step > 0 && ov.Heights.Length > 0 && ov.Heights.Max() > ov.Heights.Min();
+        AoField = on ? ov : null;
+        Stats.AoStrength = on ? 1 : 0;
+    }
+
+    /// <summary>The AO uniforms of <see cref="AoField"/> on one material (R16F heights, texel-centre uv).</summary>
+    private void BindAo(ShaderMaterial mat)
+    {
+        if (AoField is { } ao)
         {
-            AoField = ov;
-            Stats.AoStrength = 1;
+            var half = new byte[ao.Heights.Length * 2];
+            for (int k = 0; k < ao.Heights.Length; k++)
+            {
+                ushort bits = BitConverter.HalfToUInt16Bits((Half)ao.Heights[k]);
+                half[2 * k] = (byte)(bits & 255);
+                half[2 * k + 1] = (byte)(bits >> 8);
+            }
+            mat.SetShaderParameter("ng_height", Tex(ao.Cols, ao.Rows, Image.Format.Rh, half));
+            mat.SetShaderParameter("ng_field", new Vector4((float)ao.OriginX, (float)ao.OriginZ, (float)ao.Step, 0));
+            mat.SetShaderParameter("ng_field_size", new Vector2(ao.Cols, ao.Rows));
         }
+        mat.SetShaderParameter("ng_strength", Stats.AoStrength);
+    }
+
+    /// <summary>
+    /// <c>setNaturalGroundField(payload)</c> for a NEW relief (<c>applyHeight</c>): the AO reads the new overview — on the
+    /// ground material and its water variant.
+    /// </summary>
+    public void SetAoField(HeightGrid overview)
+    {
+        BuildAo(overview);
+        BindAo(Material);
+        if (WaterMaterial is { } w) BindAo(w);
     }
 
     // ── The material ────────────────────────────────────────────────────────
@@ -355,14 +397,11 @@ public sealed class GroundSurfaces
         mat.SetShaderParameter("lc_layer", LayerParams);
         if (Window is { } w)
         {
-            mat.SetShaderParameter("lc_near_id", Tex(w.IdSize, w.IdSize, Image.Format.Rg8, w.Id));
-            mat.SetShaderParameter("lc_near_sd", Tex(w.SdSize, w.SdSize, Image.Format.R8, w.Sd));
-            mat.SetShaderParameter("lc_near", new Vector4((float)w.OriginX, (float)w.OriginZ, (float)w.IdStep, w.IdSize));
-            mat.SetShaderParameter("lc_near_sd_geom", new Vector4((float)w.OriginX, (float)w.OriginZ, (float)w.SdStep, w.SdSize));
-            mat.SetShaderParameter("lc_sd_code", new Vector2((float)w.SdZero, (float)w.SdCodesPerM));
-            mat.SetShaderParameter("lc_band_m", (float)w.SdBandM);
+            var (idImg, sdImg) = WindowImages(w);
+            _idTex = ImageTexture.CreateFromImage(idImg);
+            _sdTex = ImageTexture.CreateFromImage(sdImg);
         }
-        else mat.SetShaderParameter("lc_near", new Vector4(0, 0, 1, 0));
+        BindWindow(mat);
         if (Far is { } f)
         {
             mat.SetShaderParameter("lc_far_id", Tex(f.Cols, f.Rows, Image.Format.Rg8, f.Id![..(f.Cols * f.Rows * 2)]));
@@ -371,22 +410,63 @@ public sealed class GroundSurfaces
         }
         else mat.SetShaderParameter("lc_far_size", Vector2.Zero);
 
-        if (AoField is { } ao)
-        {
-            var half = new byte[ao.Heights.Length * 2];
-            for (int k = 0; k < ao.Heights.Length; k++)
-            {
-                ushort bits = BitConverter.HalfToUInt16Bits((Half)ao.Heights[k]);
-                half[2 * k] = (byte)(bits & 255);
-                half[2 * k + 1] = (byte)(bits >> 8);
-            }
-            mat.SetShaderParameter("ng_height", Tex(ao.Cols, ao.Rows, Image.Format.Rh, half));
-            mat.SetShaderParameter("ng_field", new Vector4((float)ao.OriginX, (float)ao.OriginZ, (float)ao.Step, 0));
-            mat.SetShaderParameter("ng_field_size", new Vector2(ao.Cols, ao.Rows));
-        }
-        mat.SetShaderParameter("ng_strength", Stats.AoStrength);
+        BindAo(mat);
 
         Material = mat;
+    }
+
+    private ImageTexture? _idTex, _sdTex;
+    /// <summary>How often a streamed mask window replaced the one standing (<see cref="SetLayerWindow"/>).</summary>
+    public int WindowSwaps { get; private set; }
+
+    /// <summary>The window's id (RG8) and sd (R8) images — CPU only, so a streamed window makes them on a worker thread.</summary>
+    public static (Image Id, Image Sd) WindowImages(LayerMaskWindow w)
+        => (Image.CreateFromData(w.IdSize, w.IdSize, false, Image.Format.Rg8, w.Id),
+            Image.CreateFromData(w.SdSize, w.SdSize, false, Image.Format.R8, w.Sd));
+
+    /// <summary>The window uniforms on one material (<c>lc_near.w</c> = 0: no window, the coarse overview mask only).</summary>
+    private void BindWindow(ShaderMaterial mat)
+    {
+        if (Window is { } w && _idTex is not null && _sdTex is not null)
+        {
+            mat.SetShaderParameter("lc_near_id", _idTex);
+            mat.SetShaderParameter("lc_near_sd", _sdTex);
+            mat.SetShaderParameter("lc_near", new Vector4((float)w.OriginX, (float)w.OriginZ, (float)w.IdStep, w.IdSize));
+            mat.SetShaderParameter("lc_near_sd_geom", new Vector4((float)w.OriginX, (float)w.OriginZ, (float)w.SdStep, w.SdSize));
+            mat.SetShaderParameter("lc_sd_code", new Vector2((float)w.SdZero, (float)w.SdCodesPerM));
+            mat.SetShaderParameter("lc_band_m", (float)w.SdBandM);
+        }
+        else mat.SetShaderParameter("lc_near", new Vector4(0, 0, 1, 0));
+    }
+
+    /// <summary>An image into the texture standing in its place: in place when size and format match, else a new one.</summary>
+    private static ImageTexture SwapTex(ImageTexture? old, Image img)
+    {
+        if (old is not null && old.GetWidth() == img.GetWidth() && old.GetHeight() == img.GetHeight() && old.GetFormat() == img.GetFormat())
+        {
+            old.Update(img);
+            return old;
+        }
+        return ImageTexture.CreateFromImage(img);
+    }
+
+    /// <summary>
+    /// <c>setLayerTiles(layerTiles, layerFmt)</c>, the main-thread half: the window the stream repacked (and its images,
+    /// made off the thread) onto the ground material and its water variant. Null = no window (the overview mask).
+    /// </summary>
+    public void SetLayerWindow(LayerMaskWindow? window, (Image Id, Image Sd)? images)
+    {
+        Window = window;
+        if (window is not null && images is { } im)
+        {
+            _idTex = SwapTex(_idTex, im.Id);
+            _sdTex = SwapTex(_sdTex, im.Sd);
+        }
+        WindowSwaps++;
+        Stats.WindowIdSize = window?.IdSize ?? 0;
+        Stats.WindowSdSize = window?.SdSize ?? 0;
+        BindWindow(Material);
+        if (WaterMaterial is { } w) BindWindow(w);
     }
 
     /// <summary>The basement hole the materials cut right now (null = none).</summary>
@@ -433,56 +513,117 @@ public sealed class GroundSurfaces
         if (wet.Count == 0) return;
         try
         {
-            var depthOf = new Dictionary<string, double?>();
-            foreach (var a in _catalog.Areas)
-                if (a.WaterProfile) depthOf[(a.Kind ?? "").ToLowerInvariant()] = a.WaterDepthEffective;
-            foreach (var layer in Layers)
-            {
-                if (!layer.Water) continue;
-                var kind = (layer.Kind ?? "").ToLowerInvariant();
-                if (WaterRowOfKind.ContainsKey(kind)) continue;
-                WaterRowOfKind[kind] = WaterLooks.Count;
-                var surface = SurfaceOf(layer.Kind ?? "");
-                JsonElement? spec = _materials.TryGetValue(surface, out var m) ? m : null;
-                WaterLooks.Add(WaterShade.LookFrom(spec, depthOf.TryGetValue(kind, out var d) ? d : null));
-            }
-            if (WaterLooks.Count == 0) WaterLooks.Add(WaterShade.LookFrom(null, null));
-            WaterWindow = WaterWindow.Build(wet.Select(t => (t.Key.Tx, t.Key.Tz, t.Water!)), height.Overview.TileM, WaterRowOfKind);
-            var shader = GroundShader.Get(water: true);
-            if (!ShaderSafety.Ok(shader, "ground-water")) { WaterWindow = null; return; }
-            var mat = new ShaderMaterial { Shader = shader };
-            foreach (var u in GroundShader.Get().GetShaderUniformList())
-            {
-                var name = (string)u.AsGodotDictionary()["name"];
-                mat.SetShaderParameter(name, Material.GetShaderParameter(name));
-            }
-            var w = WaterWindow!;
-            byte[] Bytes(float[] f)
-            {
-                var b = new byte[f.Length * 4];
-                Buffer.BlockCopy(f, 0, b, 0, b.Length);
-                return b;
-            }
-            mat.SetShaderParameter("tw_sd", Tex(w.Cols, w.Rows, Image.Format.Rf, Bytes(w.Sd)));
-            mat.SetShaderParameter("tw_kind", Tex(w.Cols, w.Rows, Image.Format.Rf, Bytes(w.KindRow)));
-            mat.SetShaderParameter("tw_flow", Tex(w.Cols, w.Rows, Image.Format.Rgf, Bytes(w.Flow)));
-            var look = WaterShade.Pack(WaterLooks);
-            mat.SetShaderParameter("tw_look", Tex(3, Math.Max(1, WaterLooks.Count), Image.Format.Rgbaf, Bytes(look)));
-            mat.SetShaderParameter("tw_geom", new Vector4((float)w.OriginX, (float)w.OriginZ, (float)w.Step, 1));
-            mat.SetShaderParameter("tw_sky", new Vector3((float)WaterShade.Sky.R, (float)WaterShade.Sky.G, (float)WaterShade.Sky.B));
-            mat.SetShaderParameter("tw_wave", ImageTexture.CreateFromImage(WaveNormalImage()));
-            WaterMaterial = mat;
-            Stats.WaterTiles = w.Tiles;
-            Stats.WaterKinds = WaterLooks.Count;
-            Stats.WaterTexels = w.WetTexels;
-            Stats.WaterAreas = _catalog.Areas.Count(a => a.WaterProfile);
-            log($"water: {w.Tiles} wet tiles, window {w.Cols}x{w.Rows} @ ({w.OriginX:0.#}, {w.OriginZ:0.#}), "
-                + $"{w.WetTexels} wet texels, kinds [{string.Join(", ", WaterRowOfKind.OrderBy(k => k.Value).Select(k => k.Key))}]");
+            BuildWaterLooks();
+            ApplyWaterWindow(WaterWindow.Build(wet.Select(t => (t.Key.Tx, t.Key.Tz, t.Water!)), height.Overview.TileM, WaterRowOfKind), log);
         }
         catch (Exception e)
         {
             WaterMaterial = null;
             log($"water: failed, drawing no water ({e.Message})");
         }
+    }
+
+    /// <summary>
+    /// <c>refreshWaterLook</c>: one row per WATER layer kind, in layer-table order; the look from the kind's surface
+    /// material and the bed depth of the LAST painted area of that kind; none at all = one default row. Once per ground.
+    /// </summary>
+    public void BuildWaterLooks()
+    {
+        if (WaterLooks.Count > 0) return;
+        var depthOf = new Dictionary<string, double?>();
+        foreach (var a in _catalog.Areas)
+            if (a.WaterProfile) depthOf[(a.Kind ?? "").ToLowerInvariant()] = a.WaterDepthEffective;
+        foreach (var layer in Layers)
+        {
+            if (!layer.Water) continue;
+            var kind = (layer.Kind ?? "").ToLowerInvariant();
+            if (WaterRowOfKind.ContainsKey(kind)) continue;
+            WaterRowOfKind[kind] = WaterLooks.Count;
+            var surface = SurfaceOf(layer.Kind ?? "");
+            JsonElement? spec = _materials.TryGetValue(surface, out var m) ? m : null;
+            WaterLooks.Add(WaterShade.LookFrom(spec, depthOf.TryGetValue(kind, out var d) ? d : null));
+        }
+        if (WaterLooks.Count == 0) WaterLooks.Add(WaterShade.LookFrom(null, null));
+    }
+
+    private bool _waterFailed;
+    private ImageTexture? _twSd, _twKind, _twFlow;
+
+    private static byte[] Bytes(float[] f)
+    {
+        var b = new byte[f.Length * 4];
+        Buffer.BlockCopy(f, 0, b, 0, b.Length);
+        return b;
+    }
+
+    /// <summary>
+    /// The water variant of the ground material, made once (the first wet tile the stream brings, or the boot's): the
+    /// ground's uniforms copied, the look table, the sky and the wave map. False when it cannot exist (its shader failed).
+    /// </summary>
+    private bool EnsureWaterMaterial()
+    {
+        if (WaterMaterial is not null) return true;
+        if (_waterFailed) return false;
+        var shader = GroundShader.Get(water: true);
+        if (!ShaderSafety.Ok(shader, "ground-water"))
+        {
+            _waterFailed = true;
+            return false;
+        }
+        BuildWaterLooks();
+        var mat = new ShaderMaterial { Shader = shader };
+        foreach (var u in GroundShader.Get().GetShaderUniformList())
+        {
+            var name = (string)u.AsGodotDictionary()["name"];
+            mat.SetShaderParameter(name, Material.GetShaderParameter(name));
+        }
+        var look = WaterShade.Pack(WaterLooks);
+        mat.SetShaderParameter("tw_look", Tex(3, Math.Max(1, WaterLooks.Count), Image.Format.Rgbaf, Bytes(look)));
+        mat.SetShaderParameter("tw_sky", new Vector3((float)WaterShade.Sky.R, (float)WaterShade.Sky.G, (float)WaterShade.Sky.B));
+        mat.SetShaderParameter("tw_wave", ImageTexture.CreateFromImage(WaveNormalImage()));
+        if (Hole is { } rect)
+        {
+            mat.SetShaderParameter("hole_on", 1f);
+            mat.SetShaderParameter("hole_rect", new Vector4((float)rect[0], (float)rect[1], (float)rect[2], (float)rect[3]));
+        }
+        WaterMaterial = mat;
+        return true;
+    }
+
+    /// <summary>The window's three images (sd R32F, kind row R32F, flow RG32F) — CPU only, made on a worker for a streamed window.</summary>
+    public static (Image Sd, Image Kind, Image Flow) WaterImages(WaterWindow w)
+        => (Image.CreateFromData(w.Cols, w.Rows, false, Image.Format.Rf, Bytes(w.Sd)),
+            Image.CreateFromData(w.Cols, w.Rows, false, Image.Format.Rf, Bytes(w.KindRow)),
+            Image.CreateFromData(w.Cols, w.Rows, false, Image.Format.Rgf, Bytes(w.Flow)));
+
+    /// <summary>
+    /// The water window the fragment's look reads (the wet tiles of the want set, merged on their 2 m lattice): the
+    /// water variant is made when the first wet window arrives; a null window = no water near the anchor (the variant
+    /// stays, reading dry). Images may come prepared from a worker; null = made here.
+    /// </summary>
+    public void ApplyWaterWindow(WaterWindow? w, Action<string> log, (Image Sd, Image Kind, Image Flow)? images = null)
+    {
+        WaterWindow = w;
+        if (w is null)
+        {
+            WaterMaterial?.SetShaderParameter("tw_geom", new Vector4(0, 0, 1, 0));
+            return;
+        }
+        if (!EnsureWaterMaterial()) return;
+        var mat = WaterMaterial!;
+        var (sd, kind, flow) = images ?? WaterImages(w);
+        _twSd = SwapTex(_twSd, sd);
+        _twKind = SwapTex(_twKind, kind);
+        _twFlow = SwapTex(_twFlow, flow);
+        mat.SetShaderParameter("tw_sd", _twSd);
+        mat.SetShaderParameter("tw_kind", _twKind);
+        mat.SetShaderParameter("tw_flow", _twFlow);
+        mat.SetShaderParameter("tw_geom", new Vector4((float)w.OriginX, (float)w.OriginZ, (float)w.Step, 1));
+        Stats.WaterTiles = w.Tiles;
+        Stats.WaterKinds = WaterLooks.Count;
+        Stats.WaterTexels = w.WetTexels;
+        Stats.WaterAreas = _catalog.Areas.Count(a => a.WaterProfile);
+        log($"water: {w.Tiles} wet tiles, window {w.Cols}x{w.Rows} @ ({w.OriginX:0.#}, {w.OriginZ:0.#}), "
+            + $"{w.WetTexels} wet texels, kinds [{string.Join(", ", WaterRowOfKind.OrderBy(k => k.Value).Select(k => k.Key))}]");
     }
 }

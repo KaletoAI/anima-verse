@@ -70,6 +70,8 @@ public partial class ScatterField : Node3D
     /// <summary>GAME clock of the worldmap (<c>game_time.total_seconds</c>) for reshuffling rows; NaN = none.</summary>
     public double GameSeconds { get; set; } = double.NaN;
     public int Rebuilds { get; private set; }
+    /// <summary>Re-samples because the ground changed under the window (<see cref="Redrape"/>), part of <see cref="Rebuilds"/>.</summary>
+    public int Redrapes { get; private set; }
     public int SkippedRows { get; private set; }
     public int LoadFailures { get; private set; }
     /// <summary>Loads in flight or a clearance re-sample armed.</summary>
@@ -170,6 +172,29 @@ public partial class ScatterField : Node3D
         }
         Rebuilds++;
         if (SkippedRows > 0) _log($"scatter: {SkippedRows} along/edge/center rows not ported (skipped)");
+    }
+
+    /// <summary>
+    /// The ground under the window changed (a streamed tile batch, a new relief): every prop samples it again
+    /// (<c>rebuildAreas</c> → <c>rebuildScatter</c>, props only).
+    /// </summary>
+    /// <param name="tiles">The changed tile squares (null = everything); the window is re-sampled only when one of its
+    /// cells touches one — a batch at the rim of the 560 m ring leaves the props round the anchor as they are.</param>
+    public void Redrape(IReadOnlyCollection<(int Tx, int Tz)>? tiles = null, double tileM = 0)
+    {
+        if (_areas.Count == 0) return;
+        if (tiles is not null && !_cells.Any(c => TileTouchesCell(tiles, tileM, c.Cx, c.Cz, ScatterMath.CellM))) return;
+        Redrapes++;
+        RebuildScatter();
+    }
+
+    /// <summary>Does any tile square touch the cell (closed squares: a shared edge counts — <c>floor</c> puts it in either)?</summary>
+    public static bool TileTouchesCell(IReadOnlyCollection<(int Tx, int Tz)> tiles, double tileM, int cx, int cz, double cellM)
+    {
+        double x0 = cx * cellM, z0 = cz * cellM;
+        foreach (var (tx, tz) in tiles)
+            if (x0 <= (tx + 1) * tileM && x0 + cellM >= tx * tileM && z0 <= (tz + 1) * tileM && z0 + cellM >= tz * tileM) return true;
+        return false;
     }
 
     /// <summary><c>rebuildScatter</c>: the window moved (or a clearance was measured) — props only.</summary>

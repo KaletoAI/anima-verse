@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using AnimaNative.Ground;
 using AnimaNative.Terrain;
 using Godot;
@@ -33,6 +34,7 @@ public partial class TerrainLodNode : Node3D
     private readonly MultiMeshInstance3D _dry, _wet;
     private readonly ShaderMaterial _plain;
     private ShaderMaterial _dryMat, _wetMat;
+    private ShaderMaterial? _pendingWet;
     private bool _wetProgram;
     private float[] _dryBuf = Array.Empty<float>(), _wetBuf = Array.Empty<float>();
     private List<LodNode> _lastDry = new(), _lastWet = new();
@@ -41,14 +43,19 @@ public partial class TerrainLodNode : Node3D
     private (double X, double Y, double Z, double Ps)? _lastEye;
     private int _loggedPx = -1;
 
-    public TerrainField Field { get; }
-    public TerrainUniforms Uniforms { get; }
+    public TerrainField Field { get; private set; }
+    public TerrainUniforms Uniforms { get; private set; }
     /// <summary>The textures as uploaded (null = none), and the images they were made of (the check reads them back).</summary>
-    public ImageTexture? NearTex { get; }
-    public ImageTexture? FarTex { get; }
-    public ImageTexture? CapTex { get; }
-    public ImageTexture? WaterTex { get; }
-    public ImageTexture? SdTex { get; }
+    public ImageTexture? NearTex { get; private set; }
+    public ImageTexture? FarTex { get; private set; }
+    public ImageTexture? CapTex { get; private set; }
+    public ImageTexture? WaterTex { get; private set; }
+    public ImageTexture? SdTex { get; private set; }
+    /// <summary>How often a streamed field replaced the one standing (<see cref="ApplyField"/>), and how many textures were
+    /// updated in place vs created anew.</summary>
+    public int FieldSwaps { get; private set; }
+    public int TexturesUpdated { get; private set; }
+    public int TexturesCreated { get; private set; }
     /// <summary>The frame drawn now (null before the first update).</summary>
     public TerrainFrame? Frame { get; private set; }
     /// <summary>The pixel scale and viewport height of the last automatic update (0 before one).</summary>
@@ -84,11 +91,12 @@ public partial class TerrainLodNode : Node3D
         Field = field;
         _log = log;
         Uniforms = field.Uniforms();
-        NearTex = Tex(Uniforms.Near);
-        FarTex = Tex(Uniforms.Far);
-        WaterTex = Tex(Uniforms.Water);
-        CapTex = Uniforms.Cap is { } c ? FloatTexture(c.Caps, c.Cols, c.Rows) : null;
-        SdTex = Uniforms.WaterSd is { } sd ? FloatTexture(sd.Data, sd.Cols, sd.Rows) : null;
+        var images = PrepareImages(field);
+        NearTex = Create(images.Near);
+        FarTex = Create(images.Far);
+        WaterTex = Create(images.Water);
+        CapTex = Create(images.Cap);
+        SdTex = Create(images.Sd);
         _dry = Instance("TerrainDry");
         _wet = Instance("TerrainWet");
         _wet.SetMeta("wet", true);
@@ -100,14 +108,91 @@ public partial class TerrainLodNode : Node3D
         SetMaterials(null, null);
     }
 
-    private static ImageTexture? Tex(HeightPyramid? p) => p is null ? null : FloatTexture(p.Data, p.TexW, p.TexH);
+    /// <summary>The R32F images of a field's pyramids, cap grid and sd field (null = none) — made off the main thread.</summary>
+    public sealed record TerrainImages(Image? Near, Image? Far, Image? Water, Image? Cap, Image? Sd);
+
+    /// <summary>
+    /// The images of <paramref name="f"/>'s textures. Pure CPU work on <see cref="Image"/>s (no server resource), so a
+    /// streamed field makes them on a worker thread; only <see cref="ApplyField"/> touches the GPU, on the main thread.
+    /// <paramref name="skipFar"/>: the far pyramid is the one already uploaded (no image).
+    /// </summary>
+    public static TerrainImages PrepareImages(TerrainField f, bool skipFar = false)
+    {
+        var u = f.Uniforms();
+        static Image? Pyr(HeightPyramid? p) => p is null ? null : FloatImage(p.Data, p.TexW, p.TexH);
+        return new TerrainImages(Pyr(u.Near), skipFar ? null : Pyr(u.Far), Pyr(u.Water),
+                                 u.Cap is { } c ? FloatImage(c.Caps, c.Cols, c.Rows) : null,
+                                 u.WaterSd is { } sd ? FloatImage(sd.Data, sd.Cols, sd.Rows) : null);
+    }
+
+    /// <summary>An R32F image of <paramref name="data"/> (row-major), straight from the float span (no byte copy).</summary>
+    public static Image FloatImage(float[] data, int w, int h)
+        => Image.CreateFromData(w, h, false, Image.Format.Rf, MemoryMarshal.AsBytes(data.AsSpan(0, w * h)));
 
     /// <summary>An R32F texture of <paramref name="data"/> (row-major), read by <c>texelFetch</c> only (no filtering, no mips).</summary>
-    public static ImageTexture FloatTexture(float[] data, int w, int h)
+    public static ImageTexture FloatTexture(float[] data, int w, int h) => ImageTexture.CreateFromImage(FloatImage(data, w, h));
+
+    private ImageTexture? Create(Image? img)
     {
-        var bytes = new byte[data.Length * 4];
-        Buffer.BlockCopy(data, 0, bytes, 0, bytes.Length);
-        return ImageTexture.CreateFromImage(Image.CreateFromData(w, h, false, Image.Format.Rf, bytes));
+        if (img is null) return null;
+        TexturesCreated++;
+        return ImageTexture.CreateFromImage(img);
+    }
+
+    /// <summary>
+    /// The image into the texture standing in its place: <see cref="ImageTexture.Update"/> when size and format match
+    /// (no new GPU allocation — the docs' advice for frequently changed textures), else a new texture. Null = none.
+    /// </summary>
+    private ImageTexture? Swap(ImageTexture? old, Image? img)
+    {
+        if (img is null) return null;
+        if (old is not null && old.GetWidth() == img.GetWidth() && old.GetHeight() == img.GetHeight() && old.GetFormat() == img.GetFormat())
+        {
+            old.Update(img);
+            TexturesUpdated++;
+            return old;
+        }
+        return Create(img);
+    }
+
+    /// <summary>
+    /// <c>setField</c> on the drawn terrain, the main-thread half of a streamed rebuild: the field and its prepared images
+    /// replace the standing ones (in-place texture updates where the size held), both materials are bound again, and the
+    /// next frame selects on the new field. <paramref name="images"/>.Far null with the same far pyramid = keep the
+    /// uploaded far texture. <paramref name="dry"/> / <paramref name="wet"/>: the ground material and its water variant
+    /// now (null = the plain terrain / no water variant), as <see cref="SetMaterials"/> takes them.
+    /// </summary>
+    public void ApplyField(TerrainField field, TerrainImages images, ShaderMaterial? dry, ShaderMaterial? wet)
+    {
+        bool sameFar = ReferenceEquals(field.Far, Field.Far);
+        Field = field;
+        Uniforms = field.Uniforms();
+        NearTex = Swap(NearTex, images.Near);
+        if (!sameFar || images.Far is not null) FarTex = Swap(FarTex, images.Far);
+        WaterTex = Swap(WaterTex, images.Water);
+        CapTex = Swap(CapTex, images.Cap);
+        SdTex = Swap(SdTex, images.Sd);
+        FieldSwaps++;
+        // Re-bind both programs (the wet one may come or go with the water) and force the next selection.
+        SetMaterials(dry, wet);
+        Frame = null;
+    }
+
+    /// <summary>The next frame selects again even when the eye has not moved (the level errors changed).</summary>
+    public void Invalidate() => _lastEye = null;
+
+    /// <summary>
+    /// <c>setExtent</c> on every sync (<c>rebuildBase(bounds)</c>): a moved world frame is written to both programs and
+    /// selected for at the next frame.
+    /// </summary>
+    public void SetExtent(double[] extent)
+    {
+        if (!Field.SetExtent(extent)) return;
+        Uniforms = Field.Uniforms();
+        var e = new Vector4((float)extent[0], (float)extent[1], (float)extent[2], (float)extent[3]);
+        _dryMat.SetShaderParameter("tl_extent", e);
+        if (_wetMat != _dryMat) _wetMat.SetShaderParameter("tl_extent", e);
+        _lastEye = null;
     }
 
     /// <summary>
@@ -168,6 +253,8 @@ public partial class TerrainLodNode : Node3D
     public void SetMaterials(ShaderMaterial? dry, ShaderMaterial? wet)
     {
         _dryMat = dry ?? _plain;
+        // A water variant given while the field has no wet tile is kept for the field that brings one (streaming).
+        _pendingWet = wet;
         _wetProgram = wet is not null && Field.WaterTileKeys is not null;
         _wetMat = _wetProgram ? wet! : _dryMat;
         Bind(_dryMat, water: false);

@@ -75,7 +75,19 @@ public sealed class TerrainField
     public NodeStatSpan GlobalRange { get; private init; }
     public double[] LevelErrorM { get; private set; } = new double[TerrainLod.MaxLodLevels];
     /// <summary>The world frame [x0, z0, x1, z1] every vertex is clamped to (<c>setExtent</c>).</summary>
-    public double[] Extent { get; private init; } = { -100, -100, 100, 100 };
+    public double[] Extent { get; private set; } = { -100, -100, 100, 100 };
+
+    /// <summary>
+    /// <c>setExtent</c> again (<c>rebuildBase(bounds)</c> on every sync): a new frame for the same field. The memos stay
+    /// — they are keyed by quadtree squares, whose bounds, caps and wet verdicts do not depend on the frame. Answers
+    /// whether the frame moved (the uniform then has to follow).
+    /// </summary>
+    public bool SetExtent(double[] extent)
+    {
+        if (extent.Length != 4 || extent.SequenceEqual(Extent)) return false;
+        Extent = (double[])extent.Clone();
+        return true;
+    }
 
     private readonly Dictionary<string, NodeStatSpan> _spans = new(StringComparer.Ordinal);
     /// <summary>The node squares are fixed quadtree cells: their bounds, caps and wet verdicts are memoised (the bounds until the stats change)
@@ -147,11 +159,14 @@ public sealed class TerrainField
     /// window anchored on (<paramref name="anchorX"/>, <paramref name="anchorZ"/>). <paramref name="water"/> null = the
     /// dry world (no lift, no cap, no wet program — <c>--no-water</c>, or a water variant that is not there).
     /// </summary>
-    public static TerrainField Build(WorldHeight height, double anchorX, double anchorZ, WaterRaster? water, double[] extent)
+    /// <param name="far">The far pyramid of the field this one replaces when the overview did not change (a streamed
+    /// tile batch moves only the near half): reused as it is instead of decimating the overview again.</param>
+    public static TerrainField Build(WorldHeight height, double anchorX, double anchorZ, WaterRaster? water, double[] extent,
+                                     HeightPyramid? far = null)
     {
         var ov = height.Overview;
         double baseStep = ov.TileStepM > 0 ? ov.TileStepM : FallbackBaseStepM;
-        var far = BuildFar(ov.Grid);
+        far ??= BuildFar(ov.Grid);
         HeightPyramid? near = null;
         double[]? nearRect = null;
         var keys = height.Tiles.Select(t => ((double)t.Key.Tx, (double)t.Key.Tz)).ToList();

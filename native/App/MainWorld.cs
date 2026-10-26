@@ -67,6 +67,12 @@ public partial class Main : Node3D
             };
             var stats = await builder.BuildAsync(world, _options!.Goto, hooks);
             Anchor = stats.Anchor;
+            // The terrain streaming (Task 24): the anchor follows the camera target, the poll's signatures reload.
+            var firstMap = builder.FirstMap!.Value;
+            _streamer = new TerrainStreamer(builder, _source!, () => _camera!.Target, Log,
+                                            World.Json.Str(firstMap, "height_sig"), World.Json.Str(firstMap, "terrain_sig"),
+                                            stats.Anchor.X, stats.Anchor.Z, water: !_options.NoWater && !_options.PlainGround);
+            world.AddChild(_streamer);
             // main.ts takeGameHour(): the world clock of the freshest map drives the night gate (every 60 s, below).
             TakeGameHour(builder.FirstMap!.Value);
             _interactive = !_options.Bench && _options.Offline is null;
@@ -124,6 +130,7 @@ public partial class Main : Node3D
                                                           () => cam.Target, Log);
                 if (_scatterPrefs != ScatterPrefs.Defaults) _scatter.Field.SetLod(ScatterPrefs.LodCfgOf(_scatterPrefs));
                 world.AddChild(_scatter);
+                _streamer.Scatter = _scatter;
             }
 
             // visible: the world stands and the camera looks at it — the next drawn frame shows it.
@@ -179,6 +186,7 @@ public partial class Main : Node3D
             boot.Report("arrival");
             Log("boot stages: " + boot.Describe());
 
+            if (_options.Fly is { } fly && !_options.Bench) await FlyAsync(fly.Distance, fly.HeadingDeg);
             if (_options.Offline is not null && !_options.Bench)
             {
                 if (_scatter is not null)
@@ -193,6 +201,7 @@ public partial class Main : Node3D
                 Log("offline world " + stats.Summary());
                 if (_scatter is not null) Log("offline scatter " + _scatter.Summary());
                 Log("offline figures " + FigureLine());
+                if (_streamer is not null) Log("offline " + _streamer.Summary());
                 foreach (var line in ShaderSafety.Lines) Log("offline " + line);
                 GetTree().Quit(0);
                 return;
@@ -212,6 +221,51 @@ public partial class Main : Node3D
             boot.SetNote(BootNote.Failed);
             if ((_options!.Bench && _options.QuitAfterBench) || _options.Offline is not null) GetTree().Quit(1);
         }
+    }
+
+    /// <summary><c>--fly</c>: the camera target's speed along the line (m/s) and the camera distance while flying (m).</summary>
+    public const double FlySpeedMps = 50, FlyCameraDistM = 80;
+
+    /// <summary>
+    /// <c>--fly=M[,DEG]</c>: the streaming sanity drive — the camera target flies <paramref name="distance"/> metres in a
+    /// straight line from where it stands (heading 0° = +x, 90° = +z) at <see cref="FlySpeedMps"/>, on the ground, at
+    /// <see cref="FlyCameraDistM"/>; then the stream settles (idle for 2 s, at most 60 s). Logs the probe (longest frame,
+    /// longest frame while streaming), the tiles taken / evicted and the builds.
+    /// </summary>
+    private async Task FlyAsync(double distance, double headingDeg)
+    {
+        if (_camera is not { } cam || _builder?.Height is not { } height || _streamer is not { } st) return;
+        var start = cam.Target;
+        double rad = headingDeg * Math.PI / 180;
+        var dir = new Vector3((float)Math.Cos(rad), 0, (float)Math.Sin(rad));
+        st.Probe.Reset();
+        int taken0 = st.Stream.Counters.TilesTaken, evicted0 = st.Stream.Counters.TilesEvicted, builds0 = st.FieldBuilds;
+        Log($"fly: {distance:0} m at {FlySpeedMps} m/s, heading {headingDeg:0.#}°, from ({start.X:0.#}, {start.Z:0.#})");
+        ulong last = Time.GetTicksUsec();
+        double t = 0;
+        while (true)
+        {
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+            ulong now = Time.GetTicksUsec();
+            t += (now - last) / 1e6;
+            last = now;
+            double d = Math.Min(distance, FlySpeedMps * t);
+            var p = start + dir * (float)d;
+            p.Y = (float)height.GroundAt(p.X, p.Z);
+            cam.JumpTo(p, FlyCameraDistM);
+            if (d >= distance) break;
+        }
+        double flewS = t;
+        await st.SettleAsync(maxSeconds: 60, quietSeconds: 2);
+        var end = cam.Target;
+        Log($"fly done in {flewS:0.0} s (+ settle): to ({end.X:0.#}, {end.Z:0.#}); tiles taken {st.Stream.Counters.TilesTaken - taken0}, "
+            + $"evicted {st.Stream.Counters.TilesEvicted - evicted0}, held {height.Tiles.Count}; field builds {st.FieldBuilds - builds0}; "
+            + $"frames {st.Probe.Frames}, max frame {st.Probe.MaxMs:0.##} ms, max while streaming {st.Probe.StreamMaxMs:0.##} ms "
+            + $"over {st.Probe.StreamFrames} frames; ground under the target {height.GroundAt(end.X, end.Z):0.###} m "
+            + $"(fine tile {(height.HasTile(height.TileKeyAt(end.X, end.Z)) ? "held" : "MISSING")})");
+        Log("fly " + st.Summary());
+        if (_builder.Terrain is { } terrain) Log("fly " + terrain.Summary());
+        if (_builder.Ground is { } g) Log("fly " + g.Stats.Summary());
     }
 
     /// <summary>One scene sweep (<see cref="WorldBuilder.SweepAsync"/>); never fatal — a failure waits for the next one.</summary>
@@ -264,6 +318,7 @@ public partial class Main : Node3D
                                                water: _waterDrawn);
         Log($"bench starts ({settings.Path.Keyframes.Length} keyframes)");
         builder.Terrain?.ResetPeak();
+        _streamer?.Probe.Reset();
         AddChild(new BenchRunner(_camera!, settings, result =>
         {
             if (_scatter is not null)
@@ -278,6 +333,12 @@ public partial class Main : Node3D
             result["water"] = _waterSummary;
             // Extra key (Task 23): the CDLOD terrain over the drive — the last frame, the largest one, the viewport.
             result["terrain"] = builder.Terrain?.Summary() ?? "terrain[none]";
+            // Extra keys (Task 24): the streaming probe over the drive (the longest frame while the terrain streamed).
+            if (_streamer is { } st)
+            {
+                st.AddBenchKeys(result);
+                Log($"bench stream: max frame while streaming {st.Probe.StreamMaxMs:0.##} ms over {st.Probe.StreamFrames} frames; {st.Summary()}");
+            }
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(this, result, file);
             _ = ReportBench(BenchOutput.Line(result));

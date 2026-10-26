@@ -256,6 +256,9 @@ Arguments after `--` (no .env; all optional):
 | `--check storeys` | only the storey section (`fixtures/storeys/`, `Check/StoreysCheck.cs`: the switch at runtime, hole, marks, labels, pointer), then exit 0/1 |
 | `--check fidelity` | only the model-fidelity section (`fixtures/fidelity/`, `Check/FidelityCheck.cs`: neutralisation, clip, cutouts, depth cut, tier swap, re-datum, sweep), then exit 0/1 |
 | `--check props` | only the props section (`fixtures/props/`, `Check/PropsCheck.cs`: slots, mirrors, prop lights, doors, ambience), then exit 0/1 |
+| `--check terrain` | only the CDLOD terrain section (`Check/TerrainCheck.cs`), then exit 0/1 |
+| `--check stream` | only the terrain streaming section (`Check/StreamCheck.cs`: a fake server answering height, statistics and mask batches for a ten-tile strip — batches, LRU, windows, `height_sig`/`terrain_sig` reloads, re-datum, re-index), then exit 0/1 |
+| `--fly=M[,DEG]` | after the boot, fly the camera target M metres in a straight line (heading DEG: 0 = +x, 90 = +z) at 50 m/s, let the stream settle and log `fly done …` (tiles taken/evicted, the longest frame, the longest frame while streaming); with `--offline` it then quits |
 | `--check light` | only the light section (`Check/LightCheck.cs`: the game-hour stage at 6/7/9/12/18/22 h, hemisphere, shadow fit, material policy, MSAA option), then exit 0/1 |
 | `--check-bench` | offline bench smoke: fixture world + a 0.5 s warm-up / 2 s drive on the headless dummy renderer, then exit 0/1 (with `--scatter`: the fixture's scatter layers ride along) |
 
@@ -350,9 +353,36 @@ Port of `client3d/src/scene/terrainLod.ts` (`createTerrainLod`), contract § A16
   the instance buffers are rewritten only when the piece list changes. No frustum culling (the browser's decision):
   world-sized AABBs. The terrain casts no shadow.
 
-Not yet: tile streaming, the stats fill for worlds over 64 tiles and the `height_sig`/`terrain_sig` reload chains
-(Task 24) — the near pyramid is the boot ring's. The world log line and the bench result carry
-`terrain[pieces= wet= draws= triangles= … cover=]` (`cover` = the share of the frame the pieces cover, 1 = no hole).
+The world log line and the bench result carry `terrain[pieces= wet= draws= triangles= … cover=]` (`cover` = the share
+of the frame the pieces cover, 1 = no hole).
+
+## Terrain streaming (Task 24)
+
+Port of the loaders of `client3d/src/scene/ground.ts` (`setHeightAnchor`, `refreshTiles`, `takeTiles`, `evictTiles`,
+`fillMissingStats`, `refreshLayerTiles`, `reindexLayers`, `applyHeight`, `sync`/`reload`) with the want set of
+`heightTiles.ts`:
+
+- `Core/Terrain/TerrainStream.cs` — the Godot-free state machine: the anchor (the camera target; the avatar from E7),
+  `wantedTiles` at 560 m, height batches of 64 by ONE loader, the LRU of 96 that never drops a wanted tile, a batch
+  under another `height_sig` dropped whole, a tile whose origin is not its key dropped; the background statistics
+  fill (64 per request, stepping aside while the ground is busy); mask batches of 16 with the want-set filter before
+  every repack and the re-index when a batch answers under another cut; the poll's `height_sig` / `terrain_sig`
+  reload chains. Plus `Coalescer` (one rebuild at a time, the rest folded into one) and `StreamProbe`. Unit-tested on
+  simulated camera paths in `tests/TerrainStreamTests.cs`.
+- `World/TerrainStreamer.cs` — the wiring: the anchor follows the camera target on main.ts' 1 Hz tick; a taken
+  height batch rebuilds the field ON A WORKER (near pyramid, water fields, the wet window, all images, from a
+  `WorldHeight.Snapshot`) and only uploads on the main thread (`ImageTexture.Update` when the size held); a mask batch
+  is packed on a worker and uploaded the same way; a new relief sets the AO, rebuilds the far pyramid and makes every
+  location re-datum (the Task 17 hook, through the height revision); a new `terrain_sig` builds a new ground for the
+  anchor and refetches the scatter's terrain; the scatter and the undergrowth re-sample the cells a changed tile
+  touches. Every frame's wall time feeds the probe.
+- `GET /play/heightfield/stats` is new to this client (`IWorldSource.GetHeightTileStatsAsync`); JSON bodies are now
+  parsed off the main thread (`AnimaApi.ReadJson`).
+
+The log says `stream: field rebuilt (… tiles, revision …) — … worker … ms, upload … ms` per build and every 10 s that
+saw streaming a `stream stream[held= stats= tiles taken= evicted= … session probe[… streaming_max= …]]` line. The
+bench result gets `streamMaxFrameMs` (the longest frame of the drive while the terrain streamed; null = nothing
+streamed), `streamFrames` and `stream`.
 
 ## Ground surfaces (Task S3b)
 

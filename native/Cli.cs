@@ -28,6 +28,9 @@ namespace AnimaNative;
 ///   --offline=DIR               build the world from a payload dump (native/tools/dump_payloads.py) instead of a
 ///                               server: no login, no HUD; prints the world/scatter/figure summary lines, then quits
 ///                               (with --bench: runs the drive, then quits)
+///   --fly=M[,DEG]               after the boot, fly the camera target M metres in a straight line (heading DEG, 0 = +x,
+///                               90 = +z; default 0) at 50 m/s and log the terrain streaming (tiles taken/evicted, the
+///                               longest frame while streaming); with --offline it then quits (Task 24)
 ///   --verify                    § B5a: log the full verify table of every mounted location (default: only
 ///                               locations with a deviation, like the browser without ?verify=1)
 ///   --msaa=0|2|4|8              3D multisample anti-aliasing (default 4, like the browser's antialias: true; 0 = off
@@ -41,6 +44,7 @@ namespace AnimaNative;
 ///   --check fog | --check=fog         only the distance-fog section (the screen pass, factor, colour, Task 22)
 ///   --check backdrop | --check=backdrop only the backdrop section (payload, strips, heights, tint, Task 22)
 ///   --check terrain | --check=terrain   only the CDLOD terrain section (field, selection, instances, shader twin, Task 23)
+///   --check stream | --check=stream     only the terrain streaming section (fake server: batches, LRU, masks, signatures, Task 24)
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
 public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
@@ -68,6 +72,8 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
     public bool Verify { get; init; }
     /// <summary><c>--msaa=N</c>: the main viewport's 3D MSAA; default 4× like the browser (<c>antialias: true</c>).</summary>
     public Viewport.Msaa Msaa { get; init; } = Viewport.Msaa.Msaa4X;
+    /// <summary><c>--fly=M[,DEG]</c>: the streaming sanity drive (distance in metres, heading in degrees); null = none.</summary>
+    public (double Distance, double HeadingDeg)? Fly { get; init; }
     /// <summary><c>--check verify</c>: run only that section of the self-test; null = all of it.</summary>
     public string? CheckOnly { get; init; }
 
@@ -82,12 +88,13 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         string? offline = null, checkOnly = null;
         Vector2I? size = null;
         var msaa = Viewport.Msaa.Msaa4X;
+        (double, double)? fly = null;
         foreach (var raw in args)
         {
             var arg = raw.Trim();
             if (arg == "--check") check = true;
             else if (TryValue(arg, "--check", out var only)) { check = true; checkOnly = CheckSection(only); }
-            else if (check && checkOnly is null && arg is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain") checkOnly = arg;
+            else if (check && checkOnly is null && arg is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream") checkOnly = arg;
             else if (arg == "--verify") verify = true;
             else if (arg == "--bench") bench = true;
             else if (arg == "--check-bench") checkBench = true;
@@ -98,6 +105,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             else if (arg == "--plain-ground") plainGround = true;
             else if (arg == "--no-water") noWater = true;
             else if (TryValue(arg, "--offline", out var off)) offline = off;
+            else if (TryValue(arg, "--fly", out var flyArg)) fly = ParseFly(flyArg);
             else if (TryValue(arg, "--server", out var v))
                 server = Ui.LauncherSettings.NormalizeServer(v)
                          ?? throw new ArgumentException($"--server must be an http(s) URL, got '{v}'");
@@ -132,11 +140,26 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             Verify = verify,
             CheckOnly = checkOnly,
             Msaa = msaa,
+            Fly = fly,
         };
     }
 
-    private static string CheckSection(string v) => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain"
-        ? v : throw new ArgumentException($"--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop' and 'terrain', got '{v}'");
+    /// <summary><c>--fly=M[,DEG]</c>: a positive distance in metres, an optional heading in degrees (invariant culture).</summary>
+    public static (double Distance, double HeadingDeg) ParseFly(string v)
+    {
+        var parts = v.Split(',');
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        if (parts.Length is < 1 or > 2
+            || !double.TryParse(parts[0], System.Globalization.NumberStyles.Float, ci, out var d) || !(d > 0) || !double.IsFinite(d))
+            throw new ArgumentException($"--fly must be METRES[,DEGREES] with METRES > 0, got '{v}'");
+        double heading = 0;
+        if (parts.Length == 2 && (!double.TryParse(parts[1], System.Globalization.NumberStyles.Float, ci, out heading) || !double.IsFinite(heading)))
+            throw new ArgumentException($"--fly heading must be a number of degrees, got '{parts[1]}'");
+        return (d, heading);
+    }
+
+    private static string CheckSection(string v) => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream"
+        ? v : throw new ArgumentException($"--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', 'terrain' and 'stream', got '{v}'");
 
     public static Viewport.Msaa ParseMsaa(string v) => v switch
     {

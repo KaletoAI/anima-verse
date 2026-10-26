@@ -106,6 +106,18 @@ public partial class UndergrowthField : Node3D
         if (_hasAnchor) RefreshCells();
     }
 
+    /// <summary>
+    /// The ground changed under the cells (<c>rebuildAreas</c> → <c>undergrowth.setAreas</c>): every cell is grown again
+    /// on the ground that stands now.
+    /// </summary>
+    /// <param name="tiles">The changed tile squares (null = every cell); only the cells touching one are grown again.</param>
+    public void Redrape(IReadOnlyCollection<(int Tx, int Tz)>? tiles = null, double tileM = 0)
+    {
+        foreach (var key in _cells.Keys.ToList())
+            if (tiles is null || ScatterField.TileTouchesCell(tiles, tileM, key.Item1, key.Item2, ScatterLod.UgCellM)) DropCell(key);
+        if (_hasAnchor) RefreshCells();
+    }
+
     public void SetAnchor(double x, double z)
     {
         if (!double.IsFinite(x) || !double.IsFinite(z)) return;

@@ -258,6 +258,20 @@ public class SyncStreamTests
 
     // ---- the HTTP transport -----------------------------------------------------------------------
 
+    /// <summary>
+    /// Holds the source's first request until the test has assigned its callbacks. The constructor starts the loop
+    /// behind one <c>Task.Yield</c> and counts on the creator's context to run that later (true on Godot's main
+    /// thread); under xUnit the loop resumes on another thread, so on a loaded machine it could request and dispatch
+    /// before <c>OnMessage</c>/<c>OnError</c>/<c>OnOpen</c> were set — the one-in-five flake seen in Task 23.
+    /// </summary>
+    private static Func<string, CancellationToken, Task<HttpResponseMessage>> Gated(
+        TaskCompletionSource gate, Func<string, CancellationToken, Task<HttpResponseMessage>> send)
+        => async (url, ct) =>
+        {
+            await gate.Task;
+            return await send(url, ct);
+        };
+
     private static HttpResponseMessage Stream(HttpStatusCode code, string body, string type = "text/event-stream")
     {
         var res = new HttpResponseMessage(code) { Content = new StringContent(body, Encoding.UTF8) };
@@ -276,15 +290,16 @@ public class SyncStreamTests
         var got = new List<string>();
         var errors = new List<int>();
         var failed = new TaskCompletionSource();
+        var armed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         HttpEventSource? src = null;
-        src = new HttpEventSource((url, ct) =>
+        src = new HttpEventSource(Gated(armed, (url, ct) =>
         {
             Assert.Equal("/events/sync", url);
             requests++;
             return Task.FromResult(requests == 1
                 ? Stream(HttpStatusCode.OK, "retry: 10\ndata: {\"resync\": true}\n\nevent: ping\ndata: {}\n\n")
                 : Stream(HttpStatusCode.Unauthorized, "{\"detail\":\"Not authenticated\"}", "application/json"));
-        }, "/events/sync");
+        }), "/events/sync");
         src.OnMessage = d => { lock (got) got.Add("msg " + d); };
         src.OnPing = () => { lock (got) got.Add("ping"); };
         src.OnError = () =>
@@ -292,6 +307,7 @@ public class SyncStreamTests
             lock (errors) errors.Add(src!.ReadyState);
             if (src.ReadyState == 2) failed.TrySetResult();
         };
+        armed.SetResult();
         await failed.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await src.Loop.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(new[] { "msg {\"resync\": true}", "ping" }, got);
@@ -306,14 +322,16 @@ public class SyncStreamTests
     {
         int requests = 0;
         var opened = new TaskCompletionSource();
-        var src = new HttpEventSource((_, _) =>
+        var armed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var src = new HttpEventSource(Gated(armed, (_, _) =>
         {
             requests++;
             var res = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new IdleStream()) };
             res.Content.Headers.ContentType = new MediaTypeHeaderValue("text/event-stream");
             return Task.FromResult(res);
-        }, "/events/sync");
+        }), "/events/sync");
         src.OnOpen = () => opened.TrySetResult();
+        armed.SetResult();
         await opened.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(1, src.ReadyState);
         src.Close();
@@ -350,15 +368,17 @@ public class SyncStreamTests
     {
         int requests = 0;
         var second = new TaskCompletionSource();
-        var src = new HttpEventSource((_, _) =>
+        var armed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var src = new HttpEventSource(Gated(armed, (_, _) =>
         {
             requests++;
             if (requests == 1) throw new HttpRequestException("connection refused");
             second.TrySetResult();
             return Task.FromResult(Stream(HttpStatusCode.OK, "retry: 10\n"));
-        }, "/events/sync", retryMs: 20);
+        }), "/events/sync", retryMs: 20);
         var states = new List<int>();
         src.OnError = () => { lock (states) states.Add(src.ReadyState); };
+        armed.SetResult();
         await second.Task.WaitAsync(TimeSpan.FromSeconds(10));
         src.Close();
         await src.Loop.WaitAsync(TimeSpan.FromSeconds(10));

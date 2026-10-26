@@ -43,6 +43,8 @@ public partial class Main : Node3D
     private OverviewCamera? _camera;
     private FigureManager? _figures;
     private ScatterLayer? _scatter;
+    /// <summary>The terrain streaming of the world (Task 24): anchor, loaders, signatures, the streaming probe.</summary>
+    private TerrainStreamer? _streamer;
     private string _groundSummary = "ground[plain]";
     private string _waterSummary = "water[none]";
     private bool _waterDrawn;
@@ -137,7 +139,7 @@ public partial class Main : Node3D
         if (_options.Offline is { } dump)
         {
             // --offline: the REAL world from a payload dump, headless-capable, no login, no HUD (Task S3c).
-            _source = new FixtureSource(System.IO.Path.GetFullPath(dump));
+            _source = new FixtureSource(System.IO.Path.GetFullPath(dump)) { OffThread = true };
             Log($"offline source: {((FixtureSource)_source).Dir}");
             await LoadWorldAsync();
             return;

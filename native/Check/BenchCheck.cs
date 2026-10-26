@@ -89,6 +89,11 @@ public static class BenchCheck
             Expect("anchor label", anchor.Source == Anchor.BenchSource, anchor.Source);
 
             camera.JumpTo(anchor.Position() + new Vector3(0, 1.5f, 0), 33);
+            // The terrain streaming rides along like in a real run (Task 24): its probe goes into the result.
+            var streamer = new TerrainStreamer(builder, source, () => camera.Target, Log, "", "", stats.Anchor.X, stats.Anchor.Z,
+                                               water: !options.NoWater);
+            world.AddChild(streamer);
+            streamer.Probe.Reset();
             var before = (camera.Target, camera.Distance);
             var done = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
             builder.Terrain!.ResetPeak();
@@ -102,14 +107,20 @@ public static class BenchCheck
             result["ground"] = stats.Ground.Summary();
             result["water"] = stats.WaterSummary();
             result["terrain"] = builder.Terrain!.Summary();
+            streamer.AddBenchKeys(result);
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(host, result, file);
             Expect("panel", host.GetNodeOrNull("BenchResult") is not null, "no result panel");
             Expect("printed line unescaped", BenchOutput.Line(result).Contains("\"backend\":\"godot-forward+\""),
                    BenchOutput.Line(result));
 
-            Expect("keys", result.Select(kv => kv.Key).SequenceEqual((scatter is null ? Keys : Keys.Append("scatterLayers")).Append("ground").Append("water").Append("terrain")),
+            Expect("keys", result.Select(kv => kv.Key).SequenceEqual((scatter is null ? Keys : Keys.Append("scatterLayers")).Append("ground").Append("water").Append("terrain")
+                                                   .Append("streamMaxFrameMs").Append("streamFrames").Append("stream")),
                    string.Join(",", result.Select(kv => kv.Key)));
+            int streamFrames = (int)result["streamFrames"]!;
+            Expect("stream probe keys", streamFrames >= 0 && (streamFrames == 0) == (result["streamMaxFrameMs"] is null)
+                                        && ((string?)result["stream"])!.StartsWith("stream[", StringComparison.Ordinal),
+                   $"{streamFrames} / {result["streamMaxFrameMs"]?.ToJsonString() ?? "null"}");
             Expect("backend", (string?)result["backend"] == "godot-forward+", $"{result["backend"]}");
             Expect("path", (string?)result["path"] == "shared/bench/camera_path_v1.json", $"{result["path"]}");
             Expect("duration/warmup", (double)result["duration"]! == Duration && (double)result["warmup"]! == Warmup, "");

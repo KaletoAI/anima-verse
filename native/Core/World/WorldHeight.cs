@@ -17,9 +17,15 @@ namespace AnimaNative.World;
 /// </summary>
 public sealed class WorldHeight
 {
-    public HeightfieldOverview Overview { get; }
+    /// <summary>The overview of the relief held now; a new <c>height_sig</c> replaces it (<see cref="Reset"/>).</summary>
+    public HeightfieldOverview Overview { get; private set; }
     private readonly Dictionary<(int, int), HeightTile> _tiles = new();
-    private readonly Dictionary<string, TileStat> _stats;
+    /// <summary>
+    /// The tiles in "last wanted" order (the browser's <c>relief.tiles</c> Map, whose insertion order IS the LRU:
+    /// <c>refreshTiles</c> re-inserts every wanted key, <c>evictTiles</c> drops from the front).
+    /// </summary>
+    private readonly List<(int, int)> _order = new();
+    private Dictionary<string, TileStat> _stats;
 
     public WorldHeight(HeightfieldOverview overview)
     {
@@ -30,10 +36,14 @@ public sealed class WorldHeight
 
     public IReadOnlyCollection<HeightTile> Tiles => _tiles.Values;
 
+    /// <summary>The held tile keys, oldest wanted first (the eviction order).</summary>
+    public IReadOnlyList<(int Tx, int Tz)> LruOrder => _order;
+
     /// <summary>
-    /// <c>relief.stats</c>: every tile statistic known — the overview's (at most 64) plus each loaded tile's own
-    /// (<c>takeTiles</c> overwrites, the same arithmetic on the same raster). The terrain quadtree's node bounds and
-    /// level errors read it.
+    /// <c>relief.stats</c>: every tile statistic known — the overview's (at most 64), each loaded tile's own
+    /// (<c>takeTiles</c> overwrites, the same arithmetic on the same raster) and every one the background fill fetched
+    /// (<see cref="AddStats"/>). An evicted tile keeps its statistic. The terrain quadtree's node bounds and level
+    /// errors read it.
     /// </summary>
     public IReadOnlyDictionary<string, TileStat> Stats => _stats;
 
@@ -42,11 +52,76 @@ public sealed class WorldHeight
         bool any = false;
         foreach (var t in tiles)
         {
+            // Map.set on a held key keeps its place; a new key goes to the back.
+            if (!_tiles.ContainsKey(t.Key)) _order.Add(t.Key);
             _tiles[t.Key] = t;
             if (t.Stats is { } st) _stats[Terrain.HeightTiles.Key(t.Key.Tx, t.Key.Tz)] = st;
             any = true;
         }
         if (any) Revision++;
+    }
+
+    /// <summary>
+    /// <c>refreshTiles</c>' "wanting a tile is USING it": a held key moves to the back of the eviction order (delete +
+    /// set on the Map). An unheld key does nothing.
+    /// </summary>
+    public void Touch((int Tx, int Tz) key)
+    {
+        int i = _order.IndexOf(key);
+        if (i < 0) return;
+        _order.RemoveAt(i);
+        _order.Add(key);
+    }
+
+    /// <summary>
+    /// <c>evictTiles</c>' delete: the tile (and with it its water, which lives in the tile) leaves; its statistic stays.
+    /// Not a revision: the browser bumps <c>heightRev</c> per batch taken, and an eviction only ever happens in the same
+    /// breath as one.
+    /// </summary>
+    public bool RemoveTile((int Tx, int Tz) key)
+    {
+        if (!_tiles.Remove(key)) return false;
+        _order.Remove(key);
+        return true;
+    }
+
+    /// <summary>The statistics the background fill brought (<c>fillMissingStats</c>: <c>relief.stats.set</c>).</summary>
+    public int AddStats(IEnumerable<KeyValuePair<string, TileStat>> stats)
+    {
+        int n = 0;
+        foreach (var (k, s) in stats)
+        {
+            _stats[k] = s;
+            n++;
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// <c>applyHeight</c>: a new relief (a new <c>height_sig</c>) throws the tiles away with the overview — a tile that
+    /// outlived its signature would be a piece of a world that no longer exists, and the sampler prefers the tile — and
+    /// the statistics start again from the new overview's. A revision: everything draped on the old field samples again.
+    /// </summary>
+    public void Reset(HeightfieldOverview overview)
+    {
+        Overview = overview;
+        _tiles.Clear();
+        _order.Clear();
+        _stats = new Dictionary<string, TileStat>(overview.TileStats, StringComparer.Ordinal);
+        Revision++;
+    }
+
+    /// <summary>
+    /// A frozen copy for a background build (the near pyramid, the water fields): the same overview and tile objects
+    /// (both immutable), copied containers — so the main thread may take and evict tiles while a worker reads this.
+    /// </summary>
+    public WorldHeight Snapshot()
+    {
+        var copy = new WorldHeight(Overview) { Revision = Revision };
+        foreach (var key in _order) copy._order.Add(key);
+        foreach (var (k, t) in _tiles) copy._tiles[k] = t;
+        copy._stats = new Dictionary<string, TileStat>(_stats, StringComparer.Ordinal);
+        return copy;
     }
 
     /// <summary>
@@ -62,8 +137,9 @@ public sealed class WorldHeight
     }
 
     /// <summary>
-    /// <c>terrainGround.heightRevision()</c>: counts up with every batch of tiles that lands, so whatever sampled the
-    /// field before (a location's datum, the § A16.9 lifts) knows to sample again (main.ts <c>tickModelTiers</c>).
+    /// <c>terrainGround.heightRevision()</c>: counts up with every batch of tiles that lands and with every new relief,
+    /// so whatever sampled the field before (a location's datum, the § A16.9 lifts, the scatter) knows to sample again
+    /// (main.ts <c>tickModelTiers</c>).
     /// </summary>
     public int Revision { get; private set; }
 
@@ -75,6 +151,9 @@ public sealed class WorldHeight
     public double GroundAt(double x, double z)
         => _tiles.TryGetValue(TileKeyAt(x, z), out var t) ? t.Grid.Sample(x, z) : Overview.Grid.Sample(x, z);
 
+    /// <summary>The overview's tile index in payload spelling (<c>"tx,tz"</c>) — the want set's universe.</summary>
+    public HashSet<string> IndexKeys() => Overview.TileKeys.ToHashSet(StringComparer.Ordinal);
+
     /// <summary>
     /// Index tiles whose 256 m square comes within <paramref name="radius"/> of (x, z) — the nearest point of the
     /// square, not its centre — nearest first, ties in key order: the browser's <c>wantedTiles</c>
@@ -82,9 +161,8 @@ public sealed class WorldHeight
     /// </summary>
     public List<(int Tx, int Tz)> IndexedTilesNear(double x, double z, double radius)
     {
-        var index = Overview.TileIndex.Select(k => $"{k.Tx},{k.Tz}").ToHashSet(StringComparer.Ordinal);
         var keys = new List<(int Tx, int Tz)>();
-        foreach (var key in Terrain.HeightTiles.WantedTiles(index, Overview.TileM, x, z, radius))
+        foreach (var key in Terrain.HeightTiles.WantedTiles(IndexKeys(), Overview.TileM, x, z, radius))
             if (HeightfieldOverview.TryTileKey(key, out var k)) keys.Add(k);
         return keys;
     }
