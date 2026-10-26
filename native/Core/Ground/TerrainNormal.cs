@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using AnimaNative.Terrain;
 using AnimaNative.World;
 
 namespace AnimaNative.Ground;
@@ -27,10 +29,6 @@ public sealed class HeightLattice
 /// </summary>
 public static class TerrainNormal
 {
-    /// <summary><c>NEAR_MAX_TEXELS</c>, <c>NEAR_MARGIN_CELLS</c>, <c>NEAR_MARGIN_MIN_M</c> (terrainLod.ts).</summary>
-    public const int NearMaxTexels = 1025, NearMarginCells = 2;
-    public const double NearMarginMinM = 16;
-
     /// <summary><c>buildFar</c> level 0: the overview heights at their own lattice.</summary>
     public static HeightLattice? BuildFar(HeightGrid ov)
     {
@@ -47,29 +45,11 @@ public static class TerrainNormal
     public static (HeightLattice Lattice, double[] Rect)? BuildNear(WorldHeight height, double step, double anchorX, double anchorZ)
     {
         double tileM = height.Overview.TileM;
-        if (height.Tiles.Count == 0 || !(step > 0) || !(tileM > 0)) return null;
-        double x0 = double.PositiveInfinity, z0 = double.PositiveInfinity, x1 = double.NegativeInfinity, z1 = double.NegativeInfinity;
-        foreach (var t in height.Tiles)
-        {
-            x0 = Math.Min(x0, t.Key.Tx * tileM); z0 = Math.Min(z0, t.Key.Tz * tileM);
-            x1 = Math.Max(x1, (t.Key.Tx + 1) * tileM); z1 = Math.Max(z1, (t.Key.Tz + 1) * tileM);
-        }
-        double ovStep = height.Overview.Grid.Step > 0 ? height.Overview.Grid.Step : step;
-        double margin = Math.Max(NearMarginMinM, NearMarginCells * ovStep);
-        x0 -= margin; z0 -= margin; x1 += margin; z1 += margin;
-        x0 = Math.Floor(x0 / step) * step;
-        z0 = Math.Floor(z0 / step) * step;
-        int cols = (int)Math.Floor((x1 - x0) / step) + 1;
-        int rows = (int)Math.Floor((z1 - z0) / step) + 1;
-        if (cols > NearMaxTexels || rows > NearMaxTexels)
-        {
-            double halfX = Math.Min(cols, NearMaxTexels) * step / 2, halfZ = Math.Min(rows, NearMaxTexels) * step / 2;
-            x0 = Math.Floor((anchorX - halfX) / step) * step;
-            z0 = Math.Floor((anchorZ - halfZ) / step) * step;
-            cols = Math.Min(cols, NearMaxTexels);
-            rows = Math.Min(rows, NearMaxTexels);
-        }
-        if (cols < 2 || rows < 2) return null;
+        var keys = new List<(double, double)>();
+        foreach (var t in height.Tiles) keys.Add((t.Key.Tx, t.Key.Tz));
+        // buildNear passes overview?.step_m; native always holds an overview.
+        if (TerrainLod.NearWindow(keys, tileM, step, height.Overview.Grid.Step, anchorX, anchorZ) is not { } win) return null;
+        var (x0, z0, cols, rows) = (win.X0, win.Z0, win.Cols, win.Rows);
         var h = new float[cols * rows];
         for (int j = 0; j < rows; j++)
         for (int i = 0; i < cols; i++)

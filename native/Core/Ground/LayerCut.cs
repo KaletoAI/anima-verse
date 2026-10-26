@@ -172,7 +172,8 @@ public static class LayerCut
 
     /// <summary><c>tileKeyAt</c> (scene-render worldHeight.ts).</summary>
     public static string TileKeyAt(double tileM, double x, double z)
-        => !(tileM > 0) ? "" : string.Create(CultureInfo.InvariantCulture, $"{Math.Floor(x / tileM)},{Math.Floor(z / tileM)}");
+        // + 0.0 turns −0 into 0: JS prints Math.floor(−0) as "0", .NET as "-0".
+        => !(tileM > 0) ? "" : string.Create(CultureInfo.InvariantCulture, $"{Math.Floor(x / tileM) + 0.0},{Math.Floor(z / tileM) + 0.0}");
 
     // ── Edge look ──────────────────────────────────────────────────────────
 

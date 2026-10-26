@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using AnimaNative.Ground;
 using AnimaNative.World;
+using AnimaNative.Water;
 using Godot;
 
 namespace AnimaNative.Check;
@@ -176,7 +177,7 @@ public static class S3cCheck
             {
                 int k = j * w.Cols + i;
                 float h = tile.Grid.At(i, j);
-                float lifted = (float)Water.Lifted(h, w.Level[k], w.Sd[k]);
+                float lifted = (float)WaterShade.Lifted(h, w.Level[k], w.Sd[k]);
                 Near($"s3c lift ({i},{j})", lifted, y);
                 Near($"s3c wet ({i},{j})", lifted - h, wet);
             }
@@ -192,7 +193,7 @@ public static class S3cCheck
             Expect("s3c water window", win.Cols == 5 && win.Rows == 5 && win.OriginX == 0 && win.OriginZ == 0 && win.Step == 64,
                    $"{win.Cols}x{win.Rows} @ ({win.OriginX}, {win.OriginZ}) step {win.Step}");
             Near("s3c window sd (1,0)", win.Sd[1], 0.25f);
-            Near("s3c window sd dry", win.Sd[2 * 5 + 2], (float)Water.SdDry);
+            Near("s3c window sd dry", win.Sd[2 * 5 + 2], (float)WaterShade.SdDry);
             Expect("s3c water look default", builder.Ground.WaterLooks.Count == 1
                    && Math.Abs(builder.Ground.WaterLooks[0].OpaqueDepthM - 1.5) < 1e-9, "");
 

@@ -71,7 +71,7 @@ public static class TerrainBuilder
             float y = g.At(i, j);
             if (water is not null && wet is not null && water.Rows == rows && water.Cols == cols)
             {
-                float lifted = (float)Ground.Water.Lifted(y, water.Level[k], water.Sd[k]);
+                float lifted = (float)Water.WaterShade.Lifted(y, water.Level[k], water.Sd[k]);
                 wet[k] = new Vector2(lifted - y, 0);
                 y = lifted;
             }

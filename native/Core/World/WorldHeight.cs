@@ -50,21 +50,17 @@ public sealed class WorldHeight
         => _tiles.TryGetValue(TileKeyAt(x, z), out var t) ? t.Grid.Sample(x, z) : Overview.Grid.Sample(x, z);
 
     /// <summary>
-    /// Index tiles whose 256 m square comes within <paramref name="radius"/> of
-    /// (x, z) — the nearest point of the square, not its centre.
+    /// Index tiles whose 256 m square comes within <paramref name="radius"/> of (x, z) — the nearest point of the
+    /// square, not its centre — nearest first, ties in key order: the browser's <c>wantedTiles</c>
+    /// (<see cref="Ground.LayerCut.WantedTiles"/>, the one port of it), so the boot ring fetches what the browser would.
     /// </summary>
     public List<(int Tx, int Tz)> IndexedTilesNear(double x, double z, double radius)
     {
-        double m = Overview.TileM;
-        return Overview.TileIndex
-            .Where(k =>
-            {
-                double dx = Math.Max(Math.Max(k.Tx * m - x, 0), x - (k.Tx + 1) * m);
-                double dz = Math.Max(Math.Max(k.Tz * m - z, 0), z - (k.Tz + 1) * m);
-                return dx * dx + dz * dz <= radius * radius;
-            })
-            .OrderBy(k => k.Tx).ThenBy(k => k.Tz)
-            .ToList();
+        var index = Overview.TileIndex.Select(k => $"{k.Tx},{k.Tz}").ToHashSet(StringComparer.Ordinal);
+        var keys = new List<(int Tx, int Tz)>();
+        foreach (var key in Ground.LayerCut.WantedTiles(index, Overview.TileM, x, z, radius))
+            if (HeightfieldOverview.TryTileKey(key, out var k)) keys.Add(k);
+        return keys;
     }
 }
 

@@ -126,7 +126,10 @@ public sealed class TerrainPayload
                 a.TryGetProperty("polygon", out var poly) ? Points(poly) : new List<P2>(), rows, other)
             {
                 WaterProfile = hasMeta && am.TryGetProperty("water_profile", out var wp) && wp.ValueKind == JsonValueKind.Object,
-                WaterDepthEffective = hasMeta ? NumOrNull(am, "water_depth_effective") : null,
+                // The browser hands the raw value to waterOpaqueDepthM, which reads it with Number(): a numeric
+                // string is a depth, junk is NaN (→ the default); absent stays null (undefined).
+                WaterDepthEffective = hasMeta && am.TryGetProperty("water_depth_effective", out var wd)
+                    ? Scene.Js.Number(wd) : null,
             });
         }
         foreach (var b in Json.Arr(root, "prop_boxes"))

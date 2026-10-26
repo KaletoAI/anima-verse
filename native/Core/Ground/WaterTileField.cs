@@ -56,9 +56,14 @@ public sealed record WaterTileField(double OriginX, double OriginZ, double Step,
         var kindF = Field("kind_idx", 0, out _);
         var fx = Field("flow_x", 0, out bool hasFx);
         var fz = Field("flow_z", 0, out bool hasFz);
-        var kinds = Json.Arr(w, "kinds").Where(k => k.ValueKind == JsonValueKind.String)
-                        .Select(k => k.GetString() ?? "").ToArray();
+        // waterTileFrom: the tile's own palette, a non-string entry as ''; a wire without one (a bake older than
+        // HEIGHT_BAKE_VERSION 10) is ONE entry of the empty name, which resolves to the primary water.
+        var kinds = w.TryGetProperty("kinds", out var ks) && ks.ValueKind == JsonValueKind.Array && ks.GetArrayLength() > 0
+            ? ks.EnumerateArray().Select(k => k.ValueKind == JsonValueKind.String ? k.GetString() ?? "" : "").ToArray()
+            : new[] { "" };
+        // An index outside the palette is clamped to 0 AT THE WIRE BOUNDARY, so no reader indexes past it.
+        var kindIdx = kindF.Select(v => v >= 0 && v < kinds.Length ? (int)Math.Floor(v) : 0).ToArray();
         return new WaterTileField(grid.OriginX, grid.OriginZ, grid.Step, rows, cols, level, sd, kinds,
-                                  kindF.Select(v => (int)v).ToArray(), hasFx ? fx : null, hasFz ? fz : null);
+                                  kindIdx, hasFx ? fx : null, hasFz ? fz : null);
     }
 }

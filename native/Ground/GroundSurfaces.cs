@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Scatter;
 using AnimaNative.World;
+using AnimaNative.Water;
 using Godot;
 using Json = AnimaNative.World.Json;
 
@@ -348,6 +349,15 @@ public sealed class GroundSurfaces
     private static ImageTexture Tex(int w, int h, Image.Format fmt, byte[] data)
         => ImageTexture.CreateFromImage(Image.CreateFromData(w, h, false, fmt, data));
 
+    /// <summary><c>makeWaveNormal</c>: the one 256² wave normal map (<see cref="WaterShade.WaveNormalBytes"/>), mipmapped.</summary>
+    private static Image WaveNormalImage()
+    {
+        const int n = 256;
+        var img = Image.CreateFromData(n, n, false, Image.Format.Rgba8, WaterShade.WaveNormalBytes(n));
+        img.GenerateMipmaps();
+        return img;
+    }
+
     private static ImageTexture FloatTex(HeightLattice lat)
     {
         var bytes = new byte[lat.H.Length * 4];
@@ -469,9 +479,9 @@ public sealed class GroundSurfaces
                 WaterRowOfKind[kind] = WaterLooks.Count;
                 var surface = SurfaceOf(layer.Kind ?? "");
                 JsonElement? spec = _materials.TryGetValue(surface, out var m) ? m : null;
-                WaterLooks.Add(Water.LookFrom(spec, depthOf.TryGetValue(kind, out var d) ? d : null));
+                WaterLooks.Add(WaterShade.LookFrom(spec, depthOf.TryGetValue(kind, out var d) ? d : null));
             }
-            if (WaterLooks.Count == 0) WaterLooks.Add(Water.LookFrom(null, null));
+            if (WaterLooks.Count == 0) WaterLooks.Add(WaterShade.LookFrom(null, null));
             WaterWindow = WaterWindow.Build(wet.Select(t => (t.Key.Tx, t.Key.Tz, t.Water!)), height.Overview.TileM, WaterRowOfKind);
             var shader = GroundShader.Get(water: true);
             if (!ShaderSafety.Ok(shader, "ground-water")) { WaterWindow = null; return; }
@@ -491,11 +501,11 @@ public sealed class GroundSurfaces
             mat.SetShaderParameter("tw_sd", Tex(w.Cols, w.Rows, Image.Format.Rf, Bytes(w.Sd)));
             mat.SetShaderParameter("tw_kind", Tex(w.Cols, w.Rows, Image.Format.Rf, Bytes(w.KindRow)));
             mat.SetShaderParameter("tw_flow", Tex(w.Cols, w.Rows, Image.Format.Rgf, Bytes(w.Flow)));
-            var look = Water.Pack(WaterLooks);
+            var look = WaterShade.Pack(WaterLooks);
             mat.SetShaderParameter("tw_look", Tex(3, Math.Max(1, WaterLooks.Count), Image.Format.Rgbaf, Bytes(look)));
             mat.SetShaderParameter("tw_geom", new Vector4((float)w.OriginX, (float)w.OriginZ, (float)w.Step, 1));
-            mat.SetShaderParameter("tw_sky", Water.Sky);
-            mat.SetShaderParameter("tw_wave", ImageTexture.CreateFromImage(Water.WaveNormal()));
+            mat.SetShaderParameter("tw_sky", new Vector3((float)WaterShade.Sky.R, (float)WaterShade.Sky.G, (float)WaterShade.Sky.B));
+            mat.SetShaderParameter("tw_wave", ImageTexture.CreateFromImage(WaveNormalImage()));
             WaterMaterial = mat;
             Stats.WaterTiles = w.Tiles;
             Stats.WaterKinds = WaterLooks.Count;

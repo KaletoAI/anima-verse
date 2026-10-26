@@ -1,5 +1,6 @@
 using AnimaNative.Ground;
 using AnimaNative.Scene;
+using AnimaNative.Water;
 using Godot;
 
 namespace AnimaNative.World;
@@ -38,7 +39,7 @@ public sealed class StageAmbience
         if (Env is not null) { Env.AmbientLightEnergy = (float)(AmbientEnergy * a.Daylight); Env.AmbientLightColor = Tinted(AmbientBase); }
         if (Water?.Invoke() is { } water)
         {
-            var sky = (new Color(Ground.Water.Sky.X, Ground.Water.Sky.Y, Ground.Water.Sky.Z).SrgbToLinear() * tint * (float)a.Daylight).LinearToSrgb();
+            var sky = (new Color((float)WaterShade.Sky.R, (float)WaterShade.Sky.G, (float)WaterShade.Sky.B).SrgbToLinear() * tint * (float)a.Daylight).LinearToSrgb();
             water.SetShaderParameter("tw_sky", new Vector3(sky.R, sky.G, sky.B));
         }
     }

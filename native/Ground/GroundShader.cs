@@ -1,4 +1,5 @@
 using System.Globalization;
+using AnimaNative.Water;
 using Godot;
 
 namespace AnimaNative.Ground;
@@ -256,7 +257,7 @@ void fragment() {{
 	NORMAL = normalize((VIEW_MATRIX * vec4(tl_normal_at(p), 0.0)).xyz);";
 
     // ── The water variant (Wasser v2 K-A: client3d/src/scene/waterShade.ts terrainWaterFragmentGlsl) ──────────
-    // The tile's vertices arrive LIFTED onto the mirror (Water.Lifted, the vertex stage's tlodLift done once on
+    // The tile's vertices arrive LIFTED onto the mirror (WaterShade.Lifted, the vertex stage's tlodLift done once on
     // the CPU) with the lift in UV2.x (vTlodWet). Every water field is sampled HERE at the pixel's own xz: the
     // signed distance (shore gate), the kind row (look table) and the flow (ripple drift).
 
@@ -336,7 +337,7 @@ float tw_smooth(float t) {{
 	return c * c * (3.0 - 2.0 * c);
 }}
 float tw_inside(float sd) {{
-	return tw_smooth(sd / {L(Water.SdBandM)});
+	return tw_smooth(sd / {L(WaterShade.SdBandM)});
 }}
 vec2 tw_frame(vec2 v, vec2 ax, vec2 ay, float aniso) {{
 	return ax * (dot(v, ax) / aniso) + ay * dot(v, ay);
@@ -386,7 +387,7 @@ vec3 tw_ripple(vec2 p, vec2 gx, vec2 gy, float wave_m, float speed, float flow_s
 	float tw_skymix = 0.0;
 	vec3 tw_n = vec3(0.0, 1.0, 0.0);
 	float d = v_wet;
-	float edge = max(fwidth(d), {L(Water.EdgeFadeM)});
+	float edge = max(fwidth(d), {L(WaterShade.EdgeFadeM)});
 	if (d > 0.0) {{
 		int rows = textureSize(tw_look, 0).y;
 		float inside = tw_inside(tw_sd_at(p));
@@ -397,10 +398,10 @@ vec3 tw_ripple(vec2 p, vec2 gx, vec2 gy, float wave_m, float speed, float flow_s
 			vec4 look1 = texelFetch(tw_look, ivec2(1, layer), 0);
 			vec4 look2 = texelFetch(tw_look, ivec2(2, layer), 0);
 			float shore = tw_smooth(d / max(look1.w, 1e-3));
-			tw_s = rim * mix({L(Water.ShallowSurfaceMin)}, 1.0, shore);
+			tw_s = rim * mix({L(WaterShade.ShallowSurfaceMin)}, 1.0, shore);
 			tw_a = shore * rim;
-			float raw_foam = 1.0 - tw_smooth(d / {L(Water.FoamBandM)});
-			tw_foam = raw_foam * min(shore + raw_foam * {L(Water.FoamMinCover)}, 1.0) * rim;
+			float raw_foam = 1.0 - tw_smooth(d / {L(WaterShade.FoamBandM)});
+			tw_foam = raw_foam * min(shore + raw_foam * {L(WaterShade.FoamMinCover)}, 1.0) * rim;
 			tw_skymix = look0.w;
 			tw_n = tw_ripple(p, dpdx, dpdy, max(look1.x, 0.05), look1.y, look1.z, mod(TIME, 3600.0));
 			alb = mix(alb, look0.rgb, tw_a);
@@ -415,7 +416,7 @@ vec3 tw_ripple(vec2 p, vec2 gx, vec2 gy, float wave_m, float speed, float flow_s
 	NORMAL = normalize((VIEW_MATRIX * vec4(nw, 0.0)).xyz);
 	float fres = pow(1.0 - clamp(dot(VIEW, NORMAL), 0.0, 1.0), 3.0);
 	float k = clamp(fres * tw_skymix, 0.0, 1.0) * tw_s;
-	float f = tw_foam * {L(Water.FoamStrength)};
+	float f = tw_foam * {L(WaterShade.FoamStrength)};
 	ALBEDO = alb * (1.0 - k) * (1.0 - f);
 	EMISSION = tw_sky * k * (1.0 - f) + vec3(f);
 	ROUGHNESS = rough;
