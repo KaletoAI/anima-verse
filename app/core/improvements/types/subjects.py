@@ -377,37 +377,21 @@ def generate_prop_image(ident: str, backend: str) -> None:
 # ---------------------------------------------------------------------------
 
 def expression_missing(name: str) -> bool:
-    """Whether the DEFAULT expression variant (mood "", pose "", worn outfit)
-    is missing — the same question the NPC finish gate asks, and a PEEK: a
-    check must not forge the variant's LRU bookkeeping."""
-    from app.core.expression_regen import peek_cached_expression
-    from app.core.model_refs import current_outfit_state
+    """Whether the selected set's default image is missing for the worn outfit."""
+    from app.core.expression_regen import expression_snapshot, get_cached_expression
     try:
-        pieces, items, _sig = current_outfit_state(name)
-        return peek_cached_expression(name, "", "", equipped_pieces=pieces,
-                                      equipped_items=items) is None
+        return get_cached_expression(expression_snapshot(name)) is None
     except Exception:  # noqa: BLE001 — an unreadable cache is "not done"
         return True
 
 
 def generate_expression(name: str) -> None:
-    """Blocking render of that default variant — the generator directly, so the
-    per-character ``expression_variants_enabled`` gate stays out of it (the
-    same call ``npc_assets`` makes).  It swallows every failure and answers
-    None, so the complaint is worded here.
-
-    ``generate_expression_image`` does not register in the module's own
-    in-flight set — only the trigger path does — so the busy question is asked
-    with ``is_generating`` on the exact variant coordinates.
-    """
+    """Render the default through the same dedup/publication path as NPC finishing."""
     from app.core import expression_regen
-    from app.core.model_refs import current_outfit_state
-    pieces, items, _sig = current_outfit_state(name)
-    if expression_regen.is_generating(name, "", "", equipped_pieces=pieces,
-                                      equipped_items=items):
+    request = expression_regen.expression_snapshot(name)
+    if expression_regen.expression_status(request)["state"] in ("pending", "running"):
         raise CandidateBusy(f"{name}: expression render already running")
-    if expression_regen.generate_expression_image(
-            name, "", "", equipped_pieces=pieces, equipped_items=items) is None:
+    if expression_regen.generate_expression_image(request) is None:
         raise RuntimeError("expression render failed")
 
 

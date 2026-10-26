@@ -1486,10 +1486,18 @@ def apply_profile_update(character_name: str, data: Dict[str, Any]) -> Dict[str,
                         or value < field.get("min", -math.inf)
                         or value > field.get("max", math.inf)):
                     raise HTTPException(status_code=400, detail=f"{key} outside allowed range")
+        if "expression_set" in fields and fields["expression_set"]:
+            from app.core.expression_sets import catalog_snapshot
+            if fields["expression_set"] not in catalog_snapshot().sets:
+                raise HTTPException(400, "Unknown expression set")
         before = {k: profile.get(k) for k in fields}
         profile.update(fields)
         stored = save_character_profile(character_name, profile)
     if not stored:
+        if fields.get("expression_set"):
+            from app.core.expression_sets import catalog_snapshot
+            if fields["expression_set"] not in catalog_snapshot().sets:
+                raise HTTPException(409, "Expression set changed before the profile was saved")
         # The admin form must not answer "saved" for a value that is gone
         # after the next reload.
         raise HTTPException(status_code=500, detail="profile not stored")
@@ -2552,7 +2560,7 @@ def build_current_location_payload(character_name: str) -> Dict[str, Any]:
     # Detailed activity description
     from app.models.character import get_character_profile, get_movement_target
     profile = get_character_profile(character_name)
-    activity_detail = ""  # current_activity_detail entfernt (Pose-Modell)
+    activity_detail = ""  # current_activity_detail was removed with the pose-model cutover.
     movement_target_id = get_movement_target(character_name) if locations_on else ""
     movement_target_name = _get_loc_name(movement_target_id) if movement_target_id else ""
     return {
@@ -2583,14 +2591,14 @@ def _wake_avatar_on_manual_move(character_name: str, moved: bool) -> None:
 
 
 async def apply_current_location(character_name: str, request) -> Dict[str, Any]:
-    """Aktualisiert den aktuellen virtuellen Aufenthaltsort"""
+    """Update the current virtual location."""
     from app.models.character import save_character_current_location
     data = await request.json()
     user_id = data.get("user_id", "")
     location = data.get("current_location", "")
     room = data.get("current_room", "")
 
-    # Name → ID aufloesen falls noetig
+    # Resolve a name to an ID when needed.
     from app.models.world import resolve_location as _resolve_loc, get_arrival_room_id
     from app.models.character import get_character_current_location, get_character_current_room, save_character_current_room, clear_pose_intent
     loc_obj = _resolve_loc(location)
@@ -2602,7 +2610,7 @@ async def apply_current_location(character_name: str, request) -> Dict[str, Any]
     # — its entry room, or the ground when none is declared.
     if not room and loc_obj and location_to_save != old_loc:
         room = get_arrival_room_id(loc_obj)
-    # Avatar: Outfit NICHT automatisch umstellen (manuelle User-Wahl bleibt).
+    # Avatar: preserve the manually chosen outfit instead of changing it automatically.
     from app.models.account import get_active_character
     _is_avatar = (get_active_character() == character_name)
 
@@ -2663,7 +2671,7 @@ async def apply_current_location(character_name: str, request) -> Dict[str, Any]
     if _is_avatar and room_changed:
         try:
             from app.core.room_entry import on_avatar_room_entry
-            # Room-Label aufloesen
+            # Resolve the room label.
             _room_label = ""
             if new_room and loc_obj:
                 from app.models.world import get_room_by_id

@@ -49,11 +49,11 @@ def default_pose_prompt() -> str:
     return _default_entry("pose").get("prompt", "")
 
 
-def default_expression_prompt() -> str:
-    """Default expression prompt: the ``_default`` entry of the expression
-    catalog. Read fresh on every call so a catalog edit (``reload_presets``)
-    applies without a restart."""
-    return _default_entry("expression").get("prompt", "")
+def default_expression_prompt(*, set_id: str) -> str:
+    """The default expression of the selected set, never another anatomy."""
+    from app.core.expression_sets import catalog_snapshot
+    cat = catalog_snapshot()
+    return cat.entries[cat.sets[set_id].default]["prompt"]
 
 
 def get_pose_prompt(pose_key: str) -> str:
@@ -64,12 +64,13 @@ def get_pose_prompt(pose_key: str) -> str:
     return prompt or default_pose_prompt()
 
 
-def get_expression_prompt(expression_key: str) -> str:
-    """Expression prompt for an exact catalog key. Unknown/empty key → the
-    prompt of the catalog's ``_default`` entry."""
-    entry = get_catalog("expression").get((expression_key or "").strip().lower())
-    prompt = (entry or {}).get("prompt", "")
-    return prompt or default_expression_prompt()
+def get_expression_prompt(expression_key: str, *, set_id: str) -> str:
+    """Look up a member within its explicit expression set."""
+    from app.core.expression_sets import catalog_snapshot, ExpressionSetError
+    cat = catalog_snapshot()
+    if set_id not in cat.sets or expression_key not in cat.sets[set_id].members:
+        raise ExpressionSetError("Expression is not a member of the selected set")
+    return cat.entries[expression_key]["prompt"]
 
 
 # ---------------------------------------------------------------------------
@@ -110,24 +111,23 @@ def is_partner_activity(pose_key: str) -> bool:
 # this memo an unknown mood would cost one embedding call plus one candidate
 # upsert per poll. Cleared by reload_presets(); a full memo is dropped whole
 # (moods are few, the cap only guards against a pathological producer).
-_EXPRESSION_KEY_MEMO: Dict[str, str] = {}
+_EXPRESSION_KEY_MEMO: Dict[tuple, str] = {}
 _MEMO_MAX_ENTRIES = 512
 
 
-def resolve_expression_key(mood_free_text: str) -> str:
-    """Map a free-text mood onto an expression catalog key.
-
-    Always returns a key that exists (the catalog default for empty/unknown
-    text); unabsorbed text is recorded as a candidate by the resolver.
-    """
+def resolve_expression_key(mood_free_text: str, *, set_id: str) -> str:
+    """Resolve mood within one set; generation scopes only this derived memo."""
+    from app.core.expression_sets import catalog_snapshot
+    cat = catalog_snapshot()
     text = (mood_free_text or "").strip().lower()
-    cached = _EXPRESSION_KEY_MEMO.get(text)
+    memo_key = (cat.revision, set_id, text)
+    cached = _EXPRESSION_KEY_MEMO.get(memo_key)
     if cached is not None:
         return cached
-    key, _how = resolve_to_catalog(text, "expression")
+    key, _how = resolve_to_catalog(text, "expression", set_id=set_id)
     if len(_EXPRESSION_KEY_MEMO) >= _MEMO_MAX_ENTRIES:
         _EXPRESSION_KEY_MEMO.clear()
-    _EXPRESSION_KEY_MEMO[text] = key
+    _EXPRESSION_KEY_MEMO[memo_key] = key
     return key
 
 

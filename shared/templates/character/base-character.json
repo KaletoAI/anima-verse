@@ -99,6 +99,25 @@
   ],
   "sections": [
     {
+      "id": "expression_cfg",
+      "label": "Expression images",
+      "label_de": "Ausdrucksbilder",
+      "column": 6,
+      "row": 10,
+      "fields": [
+        {
+          "key": "expression_set",
+          "type": "select",
+          "source": "expression_sets",
+          "label": "Expression set",
+          "label_de": "Ausdrucks-Set",
+          "default": "",
+          "hint": "Automatic selects the Humanoid or Animal set from this character's body type. Each visible outfit has one image per expression, independent of activity and temporary states.",
+          "hint_de": "Automatisch wählt anhand der Körperform dieses Characters Humanoid oder Animal. Jedes sichtbare Outfit hat ein Bild pro Ausdruck, unabhängig von Aktivität und vorübergehenden Zuständen."
+        }
+      ]
+    },
+    {
       "id": "body",
       "label": "Body",
       "label_de": "Körper",

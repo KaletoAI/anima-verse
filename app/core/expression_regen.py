@@ -1,96 +1,494 @@
-"""Expression Regeneration — generates outfit images with expression/pose variants.
-
-Lazy on-demand: the frontend requests an expression image via the endpoint,
-and this module generates it if not cached. Results live in the character's
-outfits/ directory, keyed by CATALOG KEYS: the cache-key space is
-|pose catalog| x |expression catalog| x outfit x state fingerprint — finite
-and lazily filled. Free text never reaches this module: callers pass the pose
-catalog key (``get_effective_pose_key``), the mood is mapped onto its
-expression key here (``resolve_expression_key``).
-"""
-
+"""Outfit-bound expression images and the explicit character reference renderer."""
+from collections import OrderedDict
+from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
+from pathlib import Path
 import re
 import shutil
+import tempfile
 import threading
-from pathlib import Path
+import time
+from types import MappingProxyType
 from typing import Any, Dict, Optional, Set
+import uuid
 
 from app.core.config_schema import field_default
+from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
-from app.core.expression_pose_maps import (
-    get_expression_prompt,
-    get_pose_prompt,
-    is_partner_activity,
-    resolve_expression_key)
 from app.imagegen.base import media_generation_enabled
 
 logger = get_logger(__name__)
-
-# The use cases of the reference renders that feed the image->3D chain: front
-# T-pose (humanoid / animal) plus the extra back and profile views. They are
-# the ones a per-character T-pose backend match applies to; every other use
-# case keeps the normal render match. Set in ``app/core/model_refs.py``.
 TPOSE_USE_CASES = ("tpose", "tpose_animal", "tpose_back", "tpose_side", "tpose_animal_view")
-
-# In-flight generation tracking (character:cache_key)
-_generating: Set[str] = set()
-_failed: Set[str] = set()  # tracks recently failed generations to avoid retry loops
-_generating_lock = threading.Lock()
-# Per-character mutex. The same character is serialized (file collision in
-# the sidecar write and ref-image sharing); different characters run in
-# parallel so multiple backends can generate at the same time. Backend
-# selection round-robins over equal-cost backends to spread the load.
-_char_generation_mutexes: Dict[str, threading.Lock] = {}
-_char_mutexes_create_lock = threading.Lock()
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+_state_lock = threading.RLock()
+_attempts = OrderedDict()
+_active = {}
+_pending = {}
+_epochs = {}
+_last_expression_time = {}
+_EXPRESSION_COOLDOWN = 300
+_COALESCE_WINDOW = 10.0
 
 
-def _get_char_mutex(character_name: str) -> threading.Lock:
-    with _char_mutexes_create_lock:
-        mx = _char_generation_mutexes.get(character_name)
-        if mx is None:
-            mx = threading.Lock()
-            _char_generation_mutexes[character_name] = mx
-        return mx
-
-# Env config — render-target spec format: "backend:<glob>"
-
-
-def _cleanup_stale_temps(expr_dir: Path) -> None:
-    """Removes leftover .tmp_ / _temp_ files from the expressions directory."""
-    count = 0
-    for f in expr_dir.iterdir():
-        if not f.is_file():
-            continue
-        if f.name.startswith(".tmp_") or f.name.startswith("_temp_"):
-            try:
-                f.unlink()
-                count += 1
-            except OSError:
-                pass
-    if count:
-        logger.info("Cleanup: %d stale temp files removed", count)
-
-
-def _get_expressions_dir(character_name: str) -> Path:
-    """Returns the expressions cache directory for a character.
-
-    The variant images live directly in the outfits/ folder (there are no
-    outfit images any more); variants partition themselves via the cache key
-    of character + equipped + pose key + expression key + state.
-    """
-    from app.models.character import get_character_outfits_dir
-    # get_character_outfits_dir creates outfits/ only under an EXISTING
-    # character dir — no mkdir here, or polling a deleted character's
-    # portrait would conjure a ghost directory.
-    return get_character_outfits_dir(character_name)
-
-
-def _safe_name(name: str) -> str:
-    """Replace spaces with underscores for safe filenames."""
+def _safe_name(name):
     return name.replace(" ", "_")
+
+
+def _get_expressions_dir(name):
+    """Read-only path: polling a deleted character cannot recreate it."""
+    from app.core.paths import get_storage_dir
+    base = get_storage_dir() / "characters"
+    folder = base / name / "outfits"
+    if Path(name).name != name or base.is_symlink() or folder.parent.is_symlink() or folder.is_symlink():
+        raise ValueError("Unsafe expression directory")
+    if folder.resolve().parent != (base / name).resolve():
+        raise ValueError("Expression directory escapes character storage")
+    return folder
+
+
+def publication_lock(name):
+    return keyed_lock("expression_publication", name)
+
+
+def render_lock(name):
+    return keyed_lock("expression_render", name)
+
+
+def mutation_epoch(name):
+    with publication_lock(name):
+        return _epochs.get(name, 0)
+
+
+def invalidate_publication(name):
+    """Caller holds publication lock; preserve tombstones across name reuse."""
+    with publication_lock(name):
+        _epochs[name] = _epochs.get(name, 0) + 1
+        with _state_lock:
+            for aid, attempt in list(_attempts.items()):
+                if attempt.character == name and attempt.state in ("pending", "running"):
+                    _finish(aid, "invalidated", error="Expression assets changed")
+
+
+def _freeze(value):
+    if isinstance(value, dict):
+        return MappingProxyType({k: _freeze(v) for k, v in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(v) for v in value)
+    return value
+
+
+def _thaw(value):
+    if isinstance(value, (dict, MappingProxyType)):
+        return {k: _thaw(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(v) for v in value]
+    return value
+
+
+def _digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
+
+@dataclass(frozen=True)
+class ExpressionSnapshot:
+    character: str
+    set_id: str
+    expression_key: str
+    outfit_raw: str
+    contract: str
+    stem: str
+    pose_prompt: str
+    expression_prompt: str
+    pieces: tuple
+    items: tuple
+    profile: object
+    mood: str
+    epoch: int
+
+
+def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None, equipped_items=None):
+    from app.models.character import get_character_profile
+    from app.models.inventory import get_equipped_pieces, get_equipped_items
+    from app.core.expression_sets import catalog_snapshot, set_for_character, ExpressionSetError
+    from app.core.expression_pose_maps import resolve_expression_key
+    from app.core.model_refs import outfit_signature_raw
+    from app.core.prompt_builder import person_description
+    while True:
+        with keyed_lock("character_profile", character):
+            profile = deepcopy(get_character_profile(character) or {})
+            if not profile:
+                raise ExpressionSetError("Character not found", 404)
+            cat = catalog_snapshot()
+            spec = set_for_character(character, profile=profile, catalog=cat)
+            pieces = dict(get_equipped_pieces(character) if equipped_pieces is None else equipped_pieces)
+            items = list(get_equipped_items(character) if equipped_items is None else equipped_items)
+            profile["equipped_pieces"] = pieces
+            profile["equipped_items"] = items
+            outfit = outfit_signature_raw(pieces, items, character, profile=profile)
+            appearance = person_description(character, body_profile=profile, apply_state_modifiers=False, neutral_state=True)
+            epoch = mutation_epoch(character)
+        expression = resolve_expression_key(mood, set_id=spec.id)
+        with keyed_lock("character_profile", character):
+            current = dict(get_character_profile(character) or {})
+            if not current:
+                raise ExpressionSetError("Character was removed during matching", 404)
+            latest = catalog_snapshot()
+            current_pieces = dict(get_equipped_pieces(character) if equipped_pieces is None else equipped_pieces)
+            current_items = list(get_equipped_items(character) if equipped_items is None else equipped_items)
+            current["equipped_pieces"], current["equipped_items"] = current_pieces, current_items
+            current_set = set_for_character(character, profile=current, catalog=latest)
+            current_outfit = outfit_signature_raw(current_pieces, current_items, character, profile=current)
+            current_appearance = person_description(character, body_profile=current, apply_state_modifiers=False, neutral_state=True)
+            if (latest.revision != cat.revision or current_set.id != spec.id
+                    or current_outfit != outfit or current_appearance != appearance
+                    or mutation_epoch(character) != epoch):
+                continue
+        if expression not in spec.members:
+            continue
+        prompt = cat.entries[expression]["prompt"]
+        contract = _digest({"version": 2, "pose_prompt": spec.pose_prompt, "expression_prompt": prompt})
+        identity = _digest({"version": 2, "set_id": spec.id, "expression_key": expression, "outfit_raw": outfit, "contract": contract})
+        return ExpressionSnapshot(character, spec.id, expression, outfit, contract,
+            f"{_safe_name(character)}_{identity[:24]}", spec.pose_prompt, prompt,
+            tuple(sorted(pieces.items())), tuple(sorted(set(items))), _freeze(profile), mood, epoch)
+
+
+def _metadata_matches(meta, request, *, exact=True):
+    from app.core.expression_sets import catalog_snapshot
+    if not isinstance(meta, dict) or meta.get("schema") != 2 or meta.get("neutral_state") is not True:
+        return False
+    if meta.get("expression_set") != request.set_id or meta.get("outfit_raw") != request.outfit_raw:
+        return False
+    cat = catalog_snapshot()
+    spec = cat.sets.get(request.set_id)
+    key = meta.get("expression_key")
+    if spec is None or key not in spec.members or (exact and key != request.expression_key):
+        return False
+    expected = _digest({"version": 2, "pose_prompt": spec.pose_prompt, "expression_prompt": cat.entries[key]["prompt"]})
+    return meta.get("contract") == expected and (not exact or meta.get("identity") == request.stem)
+
+
+def _cached_unlocked(request):
+    from app.core.http_files import content_version
+    directory = _get_expressions_dir(request.character)
+    sidecar = directory / f"{request.stem}.json"
+    if sidecar.is_symlink():
+        return None
+    try:
+        meta = json.loads(sidecar.read_text())
+        if not _metadata_matches(meta, request):
+            return None
+        for ext in _IMAGE_EXTS:
+            image = sidecar.with_suffix(ext)
+            if image.is_file() and not image.is_symlink() and content_version(image) == meta.get("content_version"):
+                return image
+    except (OSError, ValueError, TypeError):
+        pass
+    return None
+
+
+def get_cached_expression(request):
+    with keyed_lock("pose_catalog", "expression"):
+        with publication_lock(request.character):
+            return _cached_unlocked(request)
+
+
+def find_compatible_expression(request):
+    from app.core.expression_sets import catalog_snapshot
+    from app.core.http_files import content_version
+    with keyed_lock("pose_catalog", "expression"):
+        with publication_lock(request.character):
+            exact = _cached_unlocked(request)
+            if exact is not None:
+                return exact
+            spec = catalog_snapshot().sets[request.set_id]
+            candidates = []
+            for sidecar in _get_expressions_dir(request.character).glob("*.json"):
+                if sidecar.is_symlink():
+                    continue
+                try:
+                    meta = json.loads(sidecar.read_text())
+                    if not _metadata_matches(meta, request, exact=False):
+                        continue
+                    for ext in _IMAGE_EXTS:
+                        image = sidecar.with_suffix(ext)
+                        if image.is_file() and not image.is_symlink() and content_version(image) == meta.get("content_version"):
+                            candidates.append(((meta["expression_key"] == spec.default, image.stat().st_mtime_ns, image.name), image))
+                            break
+                except (OSError, ValueError, TypeError, KeyError):
+                    continue
+            return max(candidates, key=lambda row: row[0])[1] if candidates else None
+
+
+@dataclass(frozen=True)
+class ExpressionAttempt:
+    attempt_id: str
+    character: str
+    identity: str
+    state: str
+    epoch: int = 0
+    content_version: str = ""
+    error: str = ""
+
+
+def _finish(aid, state, *, version="", error=""):
+    with _state_lock:
+        attempt = _attempts[aid]
+        if attempt.state not in ("pending", "running"):
+            return attempt
+        _attempts[aid] = replace(attempt, state=state, content_version=version, error=error)
+        if state not in ("pending", "running"):
+            _attempts.move_to_end(aid)
+            if _active.get((attempt.character, attempt.identity)) == aid:
+                _active.pop((attempt.character, attempt.identity), None)
+            terminal = [key for key, value in _attempts.items() if value.state not in ("pending", "running")]
+            for key in terminal[:-512]:
+                _attempts.pop(key, None)
+        return _attempts[aid]
+
+
+def get_expression_attempt(character, attempt_id):
+    with _state_lock:
+        attempt = _attempts.get(attempt_id)
+        return attempt if attempt and attempt.character == character else None
+
+
+def _latest_attempt_unlocked(request):
+    return next((a for a in reversed(_attempts.values())
+                 if a.character == request.character and a.identity == request.stem
+                 and a.epoch == request.epoch), None)
+
+
+def expression_status(request):
+    from app.core.http_files import content_version
+    image = get_cached_expression(request)
+    fallback = image or find_compatible_expression(request)
+    with _state_lock:
+        aid = _active.get((request.character, request.stem))
+        attempt = _attempts.get(aid)
+        failed = _latest_attempt_unlocked(request)
+    state = attempt.state if attempt else "ready" if image else "failed" if failed and failed.state == "failed" else "missing"
+    return {"identity": request.stem, "state": state,
+            "content_version": content_version(image) if image else "",
+            "fallback_version": content_version(fallback) if fallback else "",
+            "error": failed.error if failed and state == "failed" else ""}
+
+
+def _register(request):
+    with _state_lock:
+        active = _active.get((request.character, request.stem))
+        if active:
+            return _attempts[active], False
+        attempt = ExpressionAttempt("expr_" + uuid.uuid4().hex, request.character, request.stem, "pending", epoch=request.epoch)
+        _attempts[attempt.attempt_id] = attempt
+        _active[(request.character, request.stem)] = attempt.attempt_id
+        return attempt, True
+
+
+def _allowed(request, ignore_feature_gate):
+    if not media_generation_enabled():
+        return False
+    if ignore_feature_gate:
+        return True
+    from app.models.character_template import is_feature_enabled
+    return is_feature_enabled(request.character, "expression_variants_enabled")
+
+
+def _execute(request, aid, force=False):
+    from app.core.http_files import content_version
+    with render_lock(request.character):
+        attempt = get_expression_attempt(request.character, aid)
+        if not attempt or attempt.state not in ("pending", "running"):
+            return get_cached_expression(request)
+        if mutation_epoch(request.character) != request.epoch:
+            _finish(aid, "invalidated", error="Expression assets changed")
+            return None
+        existing = get_cached_expression(request)
+        if existing and not force:
+            _finish(aid, "ready", version=content_version(existing))
+            return existing
+        if not media_generation_enabled():
+            _finish(aid, "failed", error="Media generation is disabled")
+            return None
+        _finish(aid, "running")
+        folder = _get_expressions_dir(request.character)
+        if not folder.parent.is_dir() or folder.is_symlink():
+            _finish(aid, "invalidated", error="Character storage is unavailable")
+            return None
+        folder.mkdir(exist_ok=True)
+        try:
+            with tempfile.TemporaryDirectory(prefix=".expression-", dir=folder) as stage:
+                stage = Path(stage)
+                rendered = render_character_image(request.character, output_stem=stage / request.stem,
+                    equipped_pieces=dict(request.pieces), equipped_items=list(request.items),
+                    pose_prompt=request.pose_prompt, expression_prompt=request.expression_prompt,
+                    appearance_profile=_thaw(request.profile), apply_state_modifiers=False, neutral_state=True)
+                if rendered is None:
+                    raise RuntimeError("Expression render failed")
+                metadata = json.loads(rendered.with_suffix(".json").read_text())
+                for obsolete in ("pose_key", "activity", "state_fingerprint"):
+                    metadata.pop(obsolete, None)
+                version = content_version(rendered)
+                metadata.update(schema=2, expression_set=request.set_id, expression_key=request.expression_key,
+                    outfit_raw=request.outfit_raw, contract=request.contract, identity=request.stem,
+                    pose_prompt=request.pose_prompt, expression_prompt=request.expression_prompt,
+                    neutral_state=True, mood=request.mood,
+                    content_version=version, image_sha256=hashlib.sha256(rendered.read_bytes()).hexdigest())
+                meta_stage = stage / "publication.json"
+                meta_stage.write_text(json.dumps(metadata, ensure_ascii=False, indent=2))
+                with keyed_lock("character_profile", request.character):
+                    with keyed_lock("pose_catalog", "expression"):
+                        with publication_lock(request.character):
+                            if _epochs.get(request.character, 0) != request.epoch or not folder.is_dir():
+                                _finish(aid, "invalidated", error="Expression assets changed during rendering")
+                                return None
+                            target = folder / rendered.name
+                            sidecar = target.with_suffix(".json")
+                            old_image = stage / "previous-image"
+                            old_meta = stage / "previous-meta"
+                            had_image, had_meta = target.exists(), sidecar.exists()
+                            if had_image:
+                                shutil.copy2(target, old_image)
+                            if had_meta:
+                                shutil.copy2(sidecar, old_meta)
+                            try:
+                                os.replace(rendered, target)
+                                os.replace(meta_stage, sidecar)
+                            except BaseException:
+                                if had_image:
+                                    os.replace(old_image, target)
+                                else:
+                                    target.unlink(missing_ok=True)
+                                if had_meta:
+                                    os.replace(old_meta, sidecar)
+                                else:
+                                    sidecar.unlink(missing_ok=True)
+                                raise
+                _finish(aid, "ready", version=version)
+                return target
+        except Exception as exc:
+            logger.exception("Expression render failed for %s", request.character)
+            _finish(aid, "failed", error=str(exc))
+            return None
+
+
+def generate_expression_image(request, *, force=False):
+    attempt, created = _register(request)
+    return _execute(request, attempt.attempt_id, force)
+
+
+def start_expression_attempt(request, *, force=False, ignore_feature_gate=False):
+    from app.core.http_files import content_version
+    attempt, created = _register(request)
+    if created:
+        image = get_cached_expression(request)
+        if image and not force:
+            return _finish(attempt.attempt_id, "ready", version=content_version(image))
+        if not _allowed(request, ignore_feature_gate):
+            return _finish(attempt.attempt_id, "failed", error="Expression generation is disabled")
+        threading.Thread(target=_execute, args=(request, attempt.attempt_id, force), daemon=True,
+                         name=f"expression-{request.character}").start()
+    return get_expression_attempt(request.character, attempt.attempt_id)
+
+
+def trigger_expression_generation(request, *, force=False, ignore_cooldown=False, ignore_feature_gate=False, coalesce=True):
+    if not force and get_cached_expression(request):
+        return False
+    if not _allowed(request, ignore_feature_gate):
+        return False
+    with _state_lock:
+        latest = _latest_attempt_unlocked(request)
+        if not force and latest and latest.state == "failed":
+            return False
+        if not ignore_cooldown and time.monotonic() - _last_expression_time.get(request.character, 0) < _EXPRESSION_COOLDOWN:
+            return False
+        attempt, created = _register(request)
+        if not created:
+            return True
+        old = _pending.pop(request.character, None)
+        if old:
+            old[0].cancel()
+            _finish(old[1], "superseded", error="A newer expression request replaced this one")
+        def fire():
+            with _state_lock:
+                pending = _pending.get(request.character)
+                if coalesce and (not pending or pending[1] != attempt.attempt_id):
+                    return
+                _pending.pop(request.character, None)
+                _last_expression_time[request.character] = time.monotonic()
+            _execute(request, attempt.attempt_id, force)
+        timer = threading.Timer(_COALESCE_WINDOW if coalesce else 0, fire)
+        timer.daemon = True
+        _pending[request.character] = (timer, attempt.attempt_id)
+        timer.start()
+    return True
+
+
+def delete_expression(character_name, filename):
+    folder = _get_expressions_dir(character_name)
+    if not filename or Path(filename).name != filename:
+        return False
+    image = folder / filename
+    if image.is_symlink() or image.resolve().parent != folder.resolve():
+        return False
+    with publication_lock(character_name):
+        invalidate_publication(character_name)
+        found = False
+        for path in (image, image.with_suffix(".json")):
+            if path.is_symlink():
+                raise ValueError("Expression symlinks cannot be deleted through the image API")
+            if path.is_file():
+                path.unlink()
+                found = True
+        return found
+
+
+def clear_expression_cache(character_name):
+    folder = _get_expressions_dir(character_name)
+    with publication_lock(character_name):
+        invalidate_publication(character_name)
+        if not folder.is_dir() or folder.is_symlink():
+            return 0
+        files = [p for p in folder.iterdir() if p.is_file() and not p.is_symlink() and p.suffix in (*_IMAGE_EXTS, ".json")]
+        for path in files:
+            path.unlink()
+        return len(files)
+
+
+def list_expressions(character_name):
+    from app.core.expression_cleanup import inventory
+    return inventory(character_name)
+
+
+def invalidate_variants_for_item(item_id):
+    from app.models.character import list_available_characters
+    removed = 0
+    if not item_id:
+        return removed
+    for name in list_available_characters():
+        _invalidate_outfit_caches_for_item(name, item_id)
+        with publication_lock(name):
+            invalidate_publication(name)
+            for sidecar in _get_expressions_dir(name).glob("*.json"):
+                if sidecar.is_symlink():
+                    continue
+                try:
+                    meta = json.loads(sidecar.read_text())
+                except (OSError, ValueError):
+                    continue
+                if item_id not in (meta.get("equipped_pieces") or {}).values() and item_id not in (meta.get("equipped_items") or []):
+                    continue
+                for ext in _IMAGE_EXTS:
+                    image = sidecar.with_suffix(ext)
+                    if image.is_file() and not image.is_symlink():
+                        image.unlink()
+                        removed += 1
+                sidecar.unlink()
+    return removed
 
 
 def _equipped_signature(equipped_pieces: Optional[Dict[str, str]] = None,
@@ -123,340 +521,6 @@ def _equipped_signature(equipped_pieces: Optional[Dict[str, str]] = None,
             parts.append("items:" + ",".join(cleaned))
     return "|".join(parts)
 
-
-def _canonical_pose_key(pose_key: str) -> str:
-    """The pose axis of the cache key: an EXACT catalog key.
-
-    Unknown or empty input collapses onto the catalog's default key — the
-    same entry ``get_pose_prompt`` renders for it, so key and image agree.
-    """
-    from app.core.pose_catalog import get_catalog, get_default_key
-    key = (pose_key or "").strip().lower()
-    if key and key in get_catalog("pose"):
-        return key
-    if key:
-        logger.debug("cache key: pose '%s' is not a catalog key → default", key)
-    return get_default_key("pose")
-
-
-def _cache_key(mood: str, pose_key: str,
-               character_name: str = "",
-               equipped_pieces: Optional[Dict[str, str]] = None,
-               equipped_items: Optional[list] = None,
-               state_fp: Optional[str] = None) -> str:
-    """Build a deterministic cache key.
-
-    Two catalog axes and nothing else: ``resolve_expression_key(mood)`` and
-    the exact pose catalog key the caller passed
-    (``character.get_effective_pose_key``). Together with the outfit
-    signature and the state fingerprint that makes the key space finite —
-    |pose catalog| x |expression catalog| x outfit x state — instead of
-    growing with every phrasing an LLM invents.
-
-    The outfit axis is ``model_refs.outfit_signature_raw`` — the SAME rule
-    the per-outfit render caches use, and the raw string rather than its
-    hash, because this key hashes it together with the two catalog axes (ONE
-    signature rule, never a second hash). For a character with a structured
-    outfit that string IS ``_equipped_signature(...)``, so no existing
-    variant moves; for one whose template has no outfit system (a temporary
-    NPC) it is the free-text ``outfit_description`` the image is actually
-    rendered from. Without it every such character in the world shared one
-    key and editing the outfit text invalidated nothing.
-
-    ``state_fp``: fingerprint of the triggered image-modifier state
-    (model_refs.state_fingerprint). ``None`` = look it up live for
-    ``character_name`` — every caller passes the character's CURRENT
-    mood/outfit anyway, the state belongs to that same snapshot. Pass ""
-    explicitly for a deliberately neutral render.
-    """
-    from app.core.model_refs import outfit_signature_raw
-    expression_key = resolve_expression_key(mood)
-    pose = _canonical_pose_key(pose_key)
-    eq = outfit_signature_raw(equipped_pieces, equipped_items, character_name)
-    if state_fp is None and character_name:
-        from app.core.model_refs import state_fingerprint
-        state_fp = state_fingerprint(character_name)
-    return variant_stem(character_name, expression_key, pose, eq, state_fp)
-
-
-def variant_stem(character_name: str, expression_key: str, pose: str,
-                 outfit_raw: str, state_fp: Optional[str]) -> str:
-    """The file stem of one expression variant — the ONE hash rule behind
-    :func:`_cache_key`.
-
-    Takes the pose key VERBATIM: the catalog canonicalisation happens in
-    ``_cache_key`` before it gets here. The pose-key rename
-    (``pose_rename``) needs exactly that — it re-derives the stem of a key
-    that is no longer in the catalog, which ``_canonical_pose_key`` would
-    collapse onto the default. ``state_fp`` "" and ``None`` hash alike.
-    """
-    raw = f"{expression_key}:{pose}:{outfit_raw}"
-    if state_fp:
-        raw += f":state={state_fp}"
-    h = hashlib.md5(raw.encode()).hexdigest()[:12]
-    if character_name:
-        return f"{_safe_name(character_name)}_{h}"
-    return h
-
-
-def get_cached_expression(character_name: str,
-                          mood: str, pose_key: str,
-                          equipped_pieces: Optional[Dict[str, str]] = None,
-                          equipped_items: Optional[list] = None) -> Optional[Path]:
-    """Check if a cached expression image exists. Returns path or None.
-
-    On a hit, updates the sidecar JSON with ``last_used_at`` (unix ts) and
-    increments ``use_count``. The LRU-Pruner uses these to decide which
-    variants to evict when a character exceeds its cap.
-    """
-    expr_dir = _get_expressions_dir(character_name)
-    key = _cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items)
-    for ext in (".png", ".jpg", ".webp"):
-        path = expr_dir / f"{key}{ext}"
-        if path.exists():
-            _touch_sidecar(path.with_suffix(".json"))
-            return path
-    return None
-
-
-def peek_cached_expression(character_name: str, mood: str, pose_key: str,
-                           equipped_pieces: Optional[Dict[str, str]] = None,
-                           equipped_items: Optional[list] = None) -> Optional[Path]:
-    """Like get_cached_expression but WITHOUT the side effect (no sidecar
-    touch) — for version/existence checks on every poll, so use_count/LRU
-    stay honest."""
-    expr_dir = _get_expressions_dir(character_name)
-    key = _cache_key(mood, pose_key, character_name, equipped_pieces,
-                     equipped_items)
-    for ext in (".png", ".jpg", ".webp"):
-        path = expr_dir / f"{key}{ext}"
-        if path.exists():
-            return path
-    return None
-
-
-def find_nearest_expression(character_name: str, mood: str,
-                            equipped_pieces: Optional[Dict[str, str]] = None,
-                            equipped_items: Optional[list] = None) -> Optional[Path]:
-    """Serving fallback: the cached variant whose recorded outfit is CLOSEST
-    to the given equipped state (app/core/outfit_match.py), so a character in
-    a never-rendered combination shows a near-matching image instead of an
-    arbitrary one. Outfit similarity dominates; an EQUAL expression key breaks
-    ties, then recency. Read-only — no sidecar touch, no generation trigger.
-    None when no variant records an outfit (sidecars without the fields)."""
-    from app.core.outfit_match import outfit_similarity
-    expr_dir = _get_expressions_dir(character_name)
-    if not expr_dir.is_dir():
-        return None
-    want_key = resolve_expression_key(mood)
-    best = None
-    for sidecar in expr_dir.glob(f"{_safe_name(character_name)}_*.json"):
-        img = next((sidecar.with_suffix(ext)
-                    for ext in (".png", ".jpg", ".webp")
-                    if sidecar.with_suffix(ext).exists()), None)
-        if img is None:
-            continue
-        try:
-            meta = json.loads(sidecar.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if not isinstance(meta.get("equipped_pieces"), dict):
-            continue  # legacy sidecar — outfit unknown, not comparable
-        score = outfit_similarity(equipped_pieces, equipped_items,
-                                  meta.get("equipped_pieces"),
-                                  meta.get("equipped_items") or [])
-        # Exact key equality — the sidecar records the key the image was
-        # rendered under, so no free text is re-resolved while serving.
-        expression_hit = str(meta.get("expression_key") or "") == want_key
-        key = (score, expression_hit, img.stat().st_mtime)
-        if best is None or key > best[0]:
-            best = (key, img)
-    return best[1] if best is not None else None
-
-
-def find_same_outfit_expression(character_name: str, mood: str, pose_key: str,
-                                equipped_pieces: Optional[Dict[str, str]] = None,
-                                equipped_items: Optional[list] = None) -> Optional[Path]:
-    """Reference fallback for a render: the cached variant of the SAME outfit
-    combination that is closest to the wanted moment — when the exact variant
-    (mood + pose + outfit + state) has not been rendered yet.
-
-    "Same outfit" is exact and uses the one hash rule: re-keying the variant
-    with the CURRENT outfit (its own expression, pose and state axes kept)
-    must reproduce its file stem. A variant of any other combination never
-    qualifies — unlike :func:`find_nearest_expression`, which serves the most
-    SIMILAR outfit to the UI.
-
-    Ranking among them: equal state fingerprint first (a state rewrites the
-    appearance the reference supplies), then equal pose key, then equal
-    expression key, then the newest file. Read-only — no sidecar touch, no
-    generation trigger. None when no variant of this outfit exists.
-    """
-    from app.core.model_refs import outfit_signature_raw, state_fingerprint
-    expr_dir = _get_expressions_dir(character_name)
-    if not expr_dir.is_dir():
-        return None
-    outfit_raw = outfit_signature_raw(equipped_pieces, equipped_items, character_name)
-    want_state = state_fingerprint(character_name)
-    want_pose = _canonical_pose_key(pose_key)
-    want_expression = resolve_expression_key(mood)
-    best = None
-    for sidecar in expr_dir.glob(f"{_safe_name(character_name)}_*.json"):
-        img = next((sidecar.with_suffix(ext)
-                    for ext in (".png", ".jpg", ".webp")
-                    if sidecar.with_suffix(ext).exists()), None)
-        if img is None:
-            continue
-        try:
-            meta = json.loads(sidecar.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        expression_key = str(meta.get("expression_key") or "")
-        if not expression_key:
-            continue  # legacy sidecar — its key axes are unknown
-        pose = _canonical_pose_key(str(meta.get("pose_key") or ""))
-        state = str(meta.get("state_fingerprint") or "")
-        if variant_stem(character_name, expression_key, pose, outfit_raw,
-                        state) != sidecar.stem:
-            continue  # rendered for another outfit combination
-        rank = (state == want_state, pose == want_pose,
-                expression_key == want_expression, img.stat().st_mtime)
-        if best is None or rank > best[0]:
-            best = (rank, img)
-    return best[1] if best is not None else None
-
-
-def _touch_sidecar(sidecar_path: Path) -> None:
-    """Best-effort update of last_used_at/use_count in a variant sidecar JSON.
-
-    Failures are logged at debug level only — a missing sidecar or a write
-    error must not break image-serving.
-    """
-    if not sidecar_path.exists():
-        return
-    import time as _time
-    try:
-        data = json.loads(sidecar_path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return
-        data["last_used_at"] = _time.time()
-        data["use_count"] = int(data.get("use_count", 0)) + 1
-        sidecar_path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        logger.debug("touch sidecar %s failed: %s", sidecar_path.name, e)
-
-
-_VARIANTS_MAX_PER_CHAR_DEFAULT = 30
-
-
-def _get_variants_cap() -> int:
-    """Read the per-character variants cap from config, with a sensible default."""
-    try:
-        from app.core import config as _cfg
-        val = int(_cfg.get("server.variants_max_per_character")
-                  or _VARIANTS_MAX_PER_CHAR_DEFAULT)
-        return max(5, min(500, val))
-    except Exception:
-        return _VARIANTS_MAX_PER_CHAR_DEFAULT
-
-
-def prune_variants(character_name: str, max_per_char: Optional[int] = None) -> int:
-    """LRU-Eviction: keep only the N most-recently-used variants for a character.
-
-    Sort order: variants with ``last_used_at`` win over variants without
-    (legacy entries get their file mtime as a tiebreaker). Among those with
-    the field, newest wins. Excess sidecars and their PNGs are deleted in
-    pairs. Returns the number of variant pairs removed.
-    """
-    cap = max_per_char if max_per_char is not None else _get_variants_cap()
-    expr_dir = _get_expressions_dir(character_name)
-    if not expr_dir.exists():
-        return 0
-    entries = []  # (sort_key, sidecar_path, image_path or None)
-    for sidecar in expr_dir.glob("*.json"):
-        last_used = 0.0
-        try:
-            meta = json.loads(sidecar.read_text(encoding="utf-8"))
-            if isinstance(meta, dict):
-                last_used = float(meta.get("last_used_at") or 0.0)
-        except Exception:
-            pass
-        if last_used <= 0:
-            try:
-                last_used = sidecar.stat().st_mtime
-            except OSError:
-                last_used = 0.0
-        img = None
-        for ext in (".png", ".jpg", ".webp"):
-            cand = sidecar.with_suffix(ext)
-            if cand.exists():
-                img = cand
-                break
-        entries.append((last_used, sidecar, img))
-    if len(entries) <= cap:
-        return 0
-    entries.sort(key=lambda e: e[0], reverse=True)  # newest first
-    removed = 0
-    for _ts, sidecar, img in entries[cap:]:
-        try:
-            if img and img.exists():
-                img.unlink()
-            sidecar.unlink()
-            removed += 1
-        except OSError as e:
-            logger.debug("prune %s failed: %s", sidecar.name, e)
-    if removed:
-        logger.info("Variant pruning %s: %d pairs removed (cap=%d)",
-                     character_name, removed, cap)
-    return removed
-
-
-def prune_variants_all(max_per_char: Optional[int] = None) -> int:
-    """Run prune_variants for every character. Returns total pairs removed."""
-    try:
-        from app.models.character import list_available_characters
-    except Exception:
-        return 0
-    total = 0
-    for char_name in list_available_characters():
-        try:
-            total += prune_variants(char_name, max_per_char=max_per_char)
-        except Exception as e:
-            logger.debug("prune_variants_all %s: %s", char_name, e)
-    return total
-
-
-def is_generating(character_name: str, mood: str, pose_key: str,
-                  equipped_pieces: Optional[Dict[str, str]] = None,
-                  equipped_items: Optional[list] = None) -> bool:
-    """True while a generation runs OR waits inside the coalesce window.
-
-    A pending coalesce counts as generating so the frontend polling does not
-    fire a new trigger per poll (which would reset the debounce timer) and
-    gets a 202 until the image is actually there.
-    """
-    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items)}"
-    with _generating_lock:
-        if key in _generating:
-            return True
-        pending = _pending_triggers.get(character_name)
-        if pending:
-            pending_key = f"{character_name}:{_cache_key(pending.get('mood', ''), pending.get('pose_key', ''), character_name, pending.get('equipped_pieces'), pending.get('equipped_items'))}"
-            if pending_key == key:
-                return True
-    return False
-
-
-def has_failed(character_name: str, mood: str, pose_key: str,
-               equipped_pieces: Optional[Dict[str, str]] = None,
-               equipped_items: Optional[list] = None) -> bool:
-    """Check if generation recently failed for this combo (avoids retry loops)."""
-    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items)}"
-    with _generating_lock:
-        return key in _failed
-
-
 def _invalidate_outfit_caches_for_item(character_name: str, item_id: str) -> Set[str]:
     """Drops the reference renders and meshes of one character that were made
     with this item, and re-arms the outfit render when the WORN combination
@@ -483,497 +547,27 @@ def _invalidate_outfit_caches_for_item(character_name: str, item_id: str) -> Set
         schedule_outfit_render(character_name)
     return purged
 
+def render_character_image(character_name: str, *, output_stem: Path,
+                           equipped_pieces: Dict[str, str],
+                           equipped_items: list, pose_prompt: str,
+                           expression_prompt: str, prompt_prefix: str = "",
+                           image_use_case: str = "expression",
+                           override_width: Optional[int] = None,
+                           override_height: Optional[int] = None,
+                           apply_state_modifiers: bool = True,
+                           neutral_state: bool = False,
+                           appearance_profile: Optional[Dict[str, Any]] = None,
+                           back_view: bool = False,
+                           reference_image: Optional[Path] = None,
+                           occasion: str = "", record_provenance: bool = False,
+                           bare_prompt: Optional[str] = None,
+                           mesh_input_profile: Optional[Dict[str, Any]] = None,
+                           backend: str = "", dialog_loras: Optional[list] = None,
+                           negative_prompt: str = "") -> Optional[Path]:
+    """Render explicit content to a caller-owned stem, without expression policy.
 
-def invalidate_variants_for_item(item_id: str) -> int:
-    """Deletes exactly those CACHED RENDERS whose equipped_pieces/items
-    contained the changed item — read from the .json sidecar next to the
-    image. Entries without a sidecar are skipped, not deleted wholesale.
-
-    All THREE per-outfit caches, not only the expression variants: the
-    reference renders (``model_refs/``, the T-pose that feeds image->3D) and
-    the meshes built from them (``model3d/``) key on the same outfit
-    signature, and that signature is built from item IDs — a changed
-    ``prompt_fragment`` renders a different picture under the very same
-    signature, so those entries would stay stale forever (the cache GC calls
-    them valid: their pieces still exist and still re-sign to the same hash).
-    Keeping the signature rule ID-based is deliberate — it costs no GPU
-    minute for an unrelated edit and leaves every existing world's cache
-    valid — so the invalidation has to be active here.
-
-    A character whose CURRENTLY worn combination was hit gets the ordinary
-    debounced outfit render re-armed (same path an equip takes), so the
-    reference images and the auto-mesh come back without a manual trigger.
-
-    Returns the number of deleted expression-variant FILES (the reference and
-    mesh purges are counted in signatures and logged separately).
-    """
-    if not item_id:
-        return 0
-    try:
-        from app.models.character import list_available_characters
-    except Exception:
-        return 0
-    total = 0
-    for char_name in list_available_characters():
-        try:
-            _invalidate_outfit_caches_for_item(char_name, item_id)
-            expr_dir = _get_expressions_dir(char_name)
-            if not expr_dir.exists():
-                continue
-            for sidecar in expr_dir.glob("*.json"):
-                try:
-                    meta = json.loads(sidecar.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
-                eq_pieces = meta.get("equipped_pieces") or {}
-                eq_items = meta.get("equipped_items") or []
-                in_pieces = item_id in (eq_pieces.values() if isinstance(eq_pieces, dict) else [])
-                in_items = item_id in eq_items
-                if not (in_pieces or in_items):
-                    continue
-                # Delete the image and its sidecar together
-                for ext in (".png", ".jpg", ".webp"):
-                    img = sidecar.with_suffix(ext)
-                    if img.exists():
-                        try:
-                            img.unlink()
-                            total += 1
-                        except OSError:
-                            pass
-                try:
-                    sidecar.unlink()
-                except OSError:
-                    pass
-        except Exception as e:
-            logger.debug("invalidate_variants_for_item %s: %s", char_name, e)
-    if total:
-        logger.info("Variant invalidation for item %s: %d files deleted", item_id, total)
-    return total
-
-
-def clear_failed_marker(character_name: str, mood: str, pose_key: str,
-                         equipped_pieces: Optional[Dict[str, str]] = None,
-                         equipped_items: Optional[list] = None) -> None:
-    """Removes the failed marker for one combination so the generation can be
-    attempted again."""
-    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items)}"
-    with _generating_lock:
-        _failed.discard(key)
-
-
-def clear_expression_cache(character_name: str) -> int:
-    """Clear all cached expression images for a character."""
-    expr_dir = _get_expressions_dir(character_name)
-    count = 0
-    if not expr_dir.is_dir():
-        return 0
-    for f in expr_dir.iterdir():
-        if not f.is_file():
-            continue
-        f.unlink()
-        count += 1
-    # Also clear failed-generation markers so variants are retried
-    with _generating_lock:
-        prefix = f"{character_name}:"
-        stale = {k for k in _failed if k.startswith(prefix)}
-        _failed.difference_update(stale)
-    if count or stale:
-        logger.info("Expression cache cleared: %d files, %d failed markers (%s)",
-                     count, len(stale), character_name)
-    return count
-
-
-# Image extensions a variant image can carry next to its .json sidecar.
-_VARIANT_IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp")
-
-
-def list_expressions(character_name: str) -> list:
-    """Lists all cached expression variants of a character with their
-    parameters (from the .json sidecar). Newest first.
-
-    Each entry: ``{file, mood, activity, equipped_pieces, equipped_items,
-    model, seed, provider, service, prompt, created_at, use_count,
-    last_used_at}`` — ``activity`` carries the pose catalog key. Images
-    without a sidecar (or sidecars without an image) are skipped; only
-    complete pairs are displayable.
-    """
-    expr_dir = _get_expressions_dir(character_name)
-    if not expr_dir.exists():
-        return []
-    # Resolve item ids to readable names (the sidecar only stores ids like
-    # "item_936518eb"). Cached per call so not every image pulls the same id
-    # from the DB again. Unknown ids fall back to the id.
-    from app.models.inventory import get_item
-    _name_cache: Dict[str, str] = {}
-
-    def _item_name(item_id: str) -> str:
-        iid = (item_id or "").strip()
-        if not iid:
-            return ""
-        if iid not in _name_cache:
-            try:
-                it = get_item(iid)
-            except Exception:
-                it = None
-            _name_cache[iid] = (it or {}).get("name", "") or iid
-        return _name_cache[iid]
-
-    out = []
-    for sidecar in expr_dir.glob("*.json"):
-        img = next((sidecar.with_suffix(ext) for ext in _VARIANT_IMG_EXTS
-                    if sidecar.with_suffix(ext).exists()), None)
-        if not img:
-            continue
-        try:
-            meta = json.loads(sidecar.read_text(encoding="utf-8"))
-            if not isinstance(meta, dict):
-                meta = {}
-        except Exception:
-            meta = {}
-        try:
-            mtime = sidecar.stat().st_mtime
-        except OSError:
-            mtime = 0.0
-        _pieces = meta.get("equipped_pieces", {}) or {}
-        _items = meta.get("equipped_items", []) or []
-        out.append({
-            "file": img.name,
-            "mood": meta.get("mood", "") or "",
-            "activity": meta.get("activity", "") or "",
-            # slot -> item NAME (instead of the raw id); list of item names.
-            "equipped_pieces": {slot: _item_name(iid)
-                                for slot, iid in _pieces.items()} if isinstance(_pieces, dict) else {},
-            "equipped_items": [_item_name(i) for i in _items] if isinstance(_items, list) else [],
-            "model": meta.get("model", "") or "",
-            "seed": meta.get("seed"),
-            "provider": meta.get("provider", "") or "",
-            "service": meta.get("service", "") or "",
-            "prompt": meta.get("prompt", "") or "",
-            "created_at": meta.get("created_at", "") or "",
-            "use_count": meta.get("use_count", 0) or 0,
-            "last_used_at": meta.get("last_used_at") or 0.0,
-            "_sort": meta.get("created_at", "") or mtime,
-        })
-    # Newest first: created_at (an ISO string sorts lexicographically) with
-    # mtime as the fallback. Mixed types -> normalize to string.
-    out.sort(key=lambda e: str(e.pop("_sort")), reverse=True)
-    return out
-
-
-def delete_expression(character_name: str, filename: str) -> bool:
-    """Deletes a single variant image + its .json sidecar.
-
-    Path-traversal safe: ``filename`` must be a plain file name inside the
-    expressions directory. Returns True if at least one file was removed.
-    """
-    expr_dir = _get_expressions_dir(character_name)
-    # Only the base name is allowed — no path components.
-    if not filename or filename != Path(filename).name:
-        return False
-    img = expr_dir / filename
-    try:
-        # The resolved path MUST stay inside the expressions dir (symlink/.. guard).
-        if img.resolve().parent != expr_dir.resolve():
-            return False
-    except OSError:
-        return False
-    removed = False
-    for p in (img, img.with_suffix(".json")):
-        try:
-            if p.exists():
-                p.unlink()
-                removed = True
-        except OSError as e:
-            logger.debug("delete_expression %s failed: %s", p.name, e)
-    if removed:
-        logger.info("Expression deleted: %s (%s)", filename, character_name)
-    return removed
-
-
-_EXPRESSION_COOLDOWN = 300  # seconds between expression generations per character
-_last_expression_time: Dict[str, float] = {}  # character_name -> timestamp
-
-# Coalesce window: triggers arriving for the same character inside it are
-# bundled (latest state wins). Keeps a single chat turn from producing several
-# variants (mood change → outfit unequip → pose extraction).
-#
-# Size: the extraction LLM (2 hops, intent + extraction) needs 6-12s in
-# practice to deliver the pose. With a window < 12s the mood-triggered variant
-# still fires with the old/unclassified pose before the extraction trigger can
-# take over. It is the compromise between "chat end until variant visible" and
-# "all triggers bundled".
-_COALESCE_WINDOW = 10.0
-_pending_triggers: Dict[str, Dict[str, Any]] = {}   # character → request dict
-_pending_timers: Dict[str, threading.Timer] = {}    # character → scheduled Timer
-
-
-def trigger_expression_generation(character_name: str,
-                                  mood: str, pose_key: str,
-                                  equipped_pieces: Optional[Dict[str, str]] = None,
-                                  equipped_items: Optional[list] = None,
-                                  ignore_cooldown: bool = False,
-                                  ignore_feature_gate: bool = False,
-                                  prompt_prefix: Optional[str] = None,
-                                  coalesce: bool = True) -> bool:
-    """Queue or start an expression generation.
-
-    ``pose_key`` is a pose CATALOG key (``character.get_effective_pose_key``),
-    never free text — the garbage/mood-leakage filter this function used to
-    run is obsolete: text that means nothing never becomes a key here, it is
-    absorbed by the catalog resolution at the write path.
-
-    By default triggers are bundled inside a short window
-    (_COALESCE_WINDOW): a chat turn typically fires three triggers in a row
-    (mood, outfit unequip, pose extraction), of which only the last carries
-    the final state. Instead of generating three images the trigger waits for
-    the end of the burst and then fires once with the newest state.
-
-    coalesce=False bypasses the debounce — for callers that want exactly one
-    immediate image (test helpers). Production paths (auto regen, chat
-    extraction, wardrobe preview, skills) leave coalesce at True.
-
-    Returns True if a trigger (or a pending trigger) was registered.
-    """
-    # Style/framing come from the "expression" use case (no env prefix).
-    if prompt_prefix is None:
-        prompt_prefix = ""
-
-    # The world's media master switch. Expression triggers are the most
-    # frequent render request in the app (every chat turn fires a few), so
-    # they stop HERE instead of filling the queue with refusals.
-    if not media_generation_enabled():
-        logger.info("Expression trigger [%s]: skipped — media generation is "
-                    "disabled for this world", character_name)
-        return False
-
-    if not ignore_feature_gate:
-        try:
-            from app.models.character_template import is_feature_enabled
-            if not is_feature_enabled(character_name, "expression_variants_enabled"):
-                return False
-        except Exception:
-            pass
-
-    # Partner poses (kissing, embracing, ...) are skipped entirely. The
-    # pipeline injects only ONE character, so the image model duplicates the
-    # subject to satisfy the "two people" implication of the pose prompt.
-    # Instead of generating a broken variant the avatar keeps its last good
-    # frame. Tagged via ``"solo": false`` in the pose catalog — no heuristic.
-    if is_partner_activity(pose_key):
-        logger.info(
-            "Expression trigger [%s]: pose '%s' is a partner pose (solo:false) → skip",
-            character_name, pose_key)
-        return False
-
-    if not coalesce:
-        return _do_trigger_expression_generation(
-            character_name, mood, pose_key,
-            equipped_pieces=equipped_pieces,
-            equipped_items=equipped_items,
-            ignore_cooldown=ignore_cooldown,
-            prompt_prefix=prompt_prefix)
-
-    new_key = _cache_key(mood, pose_key, character_name,
-                         equipped_pieces, equipped_items)
-    request = {
-        "mood": mood,
-        "pose_key": pose_key,
-        "equipped_pieces": equipped_pieces,
-        "equipped_items": equipped_items,
-        "ignore_cooldown": ignore_cooldown,
-        "prompt_prefix": prompt_prefix,
-    }
-
-    with _generating_lock:
-        existing = _pending_triggers.get(character_name)
-        if existing:
-            existing_key = _cache_key(existing.get("mood", ""),
-                                       existing.get("pose_key", ""),
-                                       character_name,
-                                       existing.get("equipped_pieces"),
-                                       existing.get("equipped_items"))
-            if existing_key == new_key:
-                # Identical request — do NOT reset the timer (frontend-polling
-                # protection), but raise ignore_cooldown if the new caller set it
-                if ignore_cooldown and not existing.get("ignore_cooldown"):
-                    existing["ignore_cooldown"] = True
-                return True
-            # State changed → cancel the old timer, set a new one
-            old_timer = _pending_timers.pop(character_name, None)
-            if old_timer:
-                try:
-                    old_timer.cancel()
-                except Exception:
-                    pass
-
-        _pending_triggers[character_name] = request
-        timer = threading.Timer(_COALESCE_WINDOW,
-                                _fire_coalesced_trigger,
-                                args=[character_name])
-        timer.daemon = True
-        _pending_timers[character_name] = timer
-        timer.start()
-    return True
-
-
-def _fire_coalesced_trigger(character_name: str) -> None:
-    """Fires the pending trigger of a character at the end of the coalesce window."""
-    with _generating_lock:
-        request = _pending_triggers.pop(character_name, None)
-        _pending_timers.pop(character_name, None)
-    if not request:
-        return
-    try:
-        _do_trigger_expression_generation(character_name, **request)
-    except Exception as e:
-        logger.error("Coalesced expression trigger for %s failed: %s",
-                      character_name, e)
-
-
-def _do_trigger_expression_generation(character_name: str,
-                                       mood: str, pose_key: str,
-                                       equipped_pieces: Optional[Dict[str, str]] = None,
-                                       equipped_items: Optional[list] = None,
-                                       ignore_cooldown: bool = False,
-                                       prompt_prefix: str = "") -> bool:
-    """The actual trigger logic: cooldown check, dedup, thread spawn.
-
-    Called either directly (coalesce=False) or by the timer at the end of the
-    coalesce window. The feature gate was already checked in the wrapper.
-    """
-    import time as _time
-
-    if not ignore_cooldown:
-        now = _time.monotonic()
-        last = _last_expression_time.get(character_name, 0)
-        if now - last < _EXPRESSION_COOLDOWN:
-            logger.debug("Expression cooldown active for %s (%ds left)",
-                         character_name, int(_EXPRESSION_COOLDOWN - (now - last)))
-            return False
-    else:
-        now = _time.monotonic()
-    _last_expression_time[character_name] = now
-
-    key = f"{character_name}:{_cache_key(mood, pose_key, character_name, equipped_pieces, equipped_items)}"
-    with _generating_lock:
-        if key in _generating:
-            return False
-        _generating.add(key)
-
-    def _run():
-        # Pending entry in the panel while waiting for the mutex, so stacked
-        # expression triggers are visible.
-        _pending_track_id = None
-        try:
-            from app.core.task_queue import get_task_queue
-            _pending_track_id = get_task_queue().track_start(
-                "expression_regen",
-                f"Variant: {character_name} ({pose_key or 'idle'})",
-                agent_name=character_name,
-                start_running=False)
-        except Exception:
-            _pending_track_id = None
-        try:
-            # Per-character mutex: the same character serially, different
-            # characters in parallel (they can go to different backends/GPUs).
-            with _get_char_mutex(character_name):
-                if _pending_track_id:
-                    # Discard the placeholder instead of cancelling it —
-                    # otherwise every expression trigger shows up as
-                    # "cancelled manually" in Recently.
-                    try:
-                        get_task_queue().track_discard(_pending_track_id)
-                    except Exception:
-                        pass
-                    _pending_track_id = None
-                result = generate_expression_image(character_name, mood, pose_key,
-                                                    equipped_pieces, equipped_items,
-                                                    prompt_prefix=prompt_prefix)
-            if result is None:
-                with _generating_lock:
-                    _failed.add(key)
-        finally:
-            if _pending_track_id:
-                try:
-                    get_task_queue().track_discard(_pending_track_id)
-                except Exception:
-                    pass
-            with _generating_lock:
-                _generating.discard(key)
-
-    t = threading.Thread(target=_run, daemon=True,
-                         name=f"expr-regen-{character_name}")
-    t.start()
-    return True
-
-
-def generate_expression_image(character_name: str,
-                              mood: str, pose_key: str,
-                              equipped_pieces: Optional[Dict[str, str]] = None,
-                              equipped_items: Optional[list] = None,
-                              prompt_prefix: str = "",
-                              pose_prompt_override: Optional[str] = None,
-                              expression_prompt_override: Optional[str] = None,
-                              image_use_case: str = "expression",
-                              output_stem: Optional[Path] = None,
-                              override_width: Optional[int] = None,
-                              override_height: Optional[int] = None,
-                              apply_state_modifiers: bool = True,
-                              back_view: bool = False,
-                              reference_image: Optional[Path] = None,
-                              occasion: str = "",
-                              record_provenance: bool = False,
-                              bare_prompt: Optional[str] = None,
-                              mesh_input_profile: Optional[Dict[str, Any]] = None,
-                              backend: str = "",
-                              dialog_loras: Optional[list] = None,
-                              negative_prompt: str = "") -> Optional[Path]:
-    """Generate an expression/pose variant.
-
-    Character + equipped items + pose + expression -> text-prompt-based
-    image generation. No outfit reference image needed. ``mood`` is free text
-    (resolved to its expression catalog key), ``pose_key`` is a pose CATALOG
-    key — both prompt and cache key come from the same two keys.
-
-    Prompt layering: the use-case style (camera/framing/lighting/background)
-    is prepended by the image service; THIS function composes the content
-    layers actor+appearance -> outfit -> pose -> expression. Overrides feed
-    a single layer verbatim and must not carry style fragments.
-
-    Reference-render extras (model_refs, AV3D):
-    - ``pose_prompt_override`` uses the given pose text verbatim (bypasses
-      the catalog lookup and the default pose).
-    - ``expression_prompt_override`` uses the given expression text verbatim
-      (``""`` omits the expression layer entirely).
-    - ``image_use_case`` picks the style use case (default "expression").
-    - ``output_stem`` (path without extension) stores the result there
-      instead of the expression-image cache — no cache bookkeeping.
-    - ``override_width`` / ``override_height`` win over the outfit image
-      format (a T-pose needs a wider frame than a portrait).
-    - ``apply_state_modifiers=False`` renders the NEUTRAL appearance (no
-      triggered image_modifier rewrites) — for cache entries whose key
-      deliberately carries no state (outfit-batch pre-warm).
-    - ``back_view=True`` renders the character from behind (the T-pose
-      back view): exposed body-slot fragments and their LoRAs survive only
-      for slots the species package declares visible from behind — the
-      others describe the front and drag the figure toward the camera.
-    - ``reference_image`` replaces the profile image as the identity
-      reference (the extra T-pose views slot the front render); it must lie
-      in the character's model_refs directory (``checked_reference_override``).
-    - ``occasion``: the image routing occasion — empty = "tpose" for the
-      T-pose use cases, else "expression".
-
-    - ``bare_prompt`` bypasses all content layers and character/slot LoRAs;
-      only the service use-case style is prepended.
-    - ``record_provenance`` freezes the explicit reference for the backend
-      and certifies its hash and the final processed image bytes in the sidecar.
-    - ``backend`` / ``dialog_loras`` / ``negative_prompt``: the image dialog's
-      picks for this one render. ``backend`` is explicit (that backend or an
-      error, no routing); ``dialog_loras`` REPLACE every stored LoRA list and
-      survive ``bare_prompt`` (``[]`` = none); empty ``negative_prompt`` keeps
-      the use-case negative.
-
-    Returns the path to the generated image, or None on failure.
+    Reference callers retain their own prompts, state and provenance policy.
+    Ordinary expressions pass a frozen neutral profile and publish separately.
     """
     from app.core.dependencies import get_skill_manager
     from app.models.character import (
@@ -1000,10 +594,12 @@ def generate_expression_image(character_name: str,
     # Outfit text via the central renderer (plan §4). equipped_pieces/items
     # are passed in so set previews work (override against the profile state).
     from app.models.character import get_character_profile as _gcp_render
-    _render_profile = (mesh_input_profile if _mesh_input and mesh_input_profile is not None
+    _render_profile = (appearance_profile if appearance_profile is not None else
+                       mesh_input_profile if _mesh_input and mesh_input_profile is not None
                        else _gcp_render(character_name) or {})
     _render_profile = dict(_render_profile)
     _render_profile["equipped_pieces"] = dict(equipped_pieces or {})
+    _render_profile["equipped_items"] = list(equipped_items or [])
     _rendered = {} if bare_prompt is not None else render_outfit(
         profile=_render_profile,
         equipped_pieces=equipped_pieces,
@@ -1027,53 +623,11 @@ def generate_expression_image(character_name: str,
         if _free_text.startswith("wearing: "):
             outfit_desc = _free_text[len("wearing: "):].strip()
 
-    # One state snapshot for key AND sidecar — the render below uses the
-    # same trigger state, so key, image and manifest describe one moment.
+    _state_fp = ""
     if apply_state_modifiers:
         from app.core.model_refs import state_fingerprint
         _state_fp = state_fingerprint(character_name)
-    else:
-        _state_fp = ""
-    # The two catalog axes — the same values go into the key, the prompt and
-    # the sidecar, so an image can never disagree with the key it hangs under.
-    _pose_key = (pose_key or "").strip().lower()
-    _expression_key = resolve_expression_key(mood)
-    cache_key = _cache_key(mood, _pose_key, character_name,
-                            equipped_pieces, equipped_items,
-                            state_fp=_state_fp)
-
-    logger.info("Expression generation: %s expression='%s' pose='%s' equipped=%d/%d",
-                character_name, _expression_key, _pose_key or "-",
-                len(equipped_pieces or {}), len(equipped_items or []))
-
-    # Resolve prompts via PromptBuilder — separated for correct ordering
     from app.core.prompt_builder import PromptBuilder
-    if expression_prompt_override is not None:
-        expression_prompt = expression_prompt_override.strip()
-    else:
-        expression_prompt = get_expression_prompt(_expression_key)
-    # Catalog pose prompts ("The person is seated…") are human-centric. Apply
-    # them only for humanoid characters; animals get the bare key as their
-    # pose text ("sleeping", "lying") — the image model maps that onto their
-    # anatomy without a human pose template.
-    _humanoid = True
-    try:
-        from app.models.character_template import is_feature_enabled as _ife
-        _humanoid = _ife(character_name, "humanoid")
-    except Exception:
-        pass
-    if pose_prompt_override is not None:
-        pose_prompt = pose_prompt_override.strip()
-    elif _humanoid:
-        # Empty/unknown key → the default pose prompt (admin override wins).
-        pose_prompt = get_pose_prompt(_pose_key)
-    else:
-        pose_prompt = _pose_key
-
-    # Active states (drunk, aroused, ...) flow into the appearance via
-    # prompt_filters.apply_image_modifiers (PromptBuilder person path) —
-    # additive fragments AND "A -> B" replacements, tag- or
-    # condition-triggered alike.
 
     if bare_prompt is not None:
         appearance, actor_label = "", character_name
@@ -1081,7 +635,8 @@ def generate_expression_image(character_name: str,
         _expr_builder = PromptBuilder(character_name,
                                       apply_state_modifiers=apply_state_modifiers,
                                       back_view=back_view, mesh_input=_mesh_input,
-                                      body_profile=_render_profile if _mesh_input else None)
+                                      neutral_state=neutral_state,
+                                      body_profile=_render_profile)
         persons = _expr_builder.detect_persons("", character_names=[character_name])
         appearance = persons[0].appearance if persons else get_character_appearance(character_name)
         actor_label = persons[0].actor_label if persons else character_name
@@ -1132,7 +687,7 @@ def generate_expression_image(character_name: str,
     loras_override = None
     try:
         from app.models.character import get_character_profile as _gcp
-        _prof = _gcp(character_name) or {}
+        _prof = _render_profile
         _char_override = _prof.get("outfit_imagegen") or {}
         if isinstance(_char_override, dict):
             m = (_char_override.get("model") or "").strip()
@@ -1271,15 +826,10 @@ def generate_expression_image(character_name: str,
         # place — prevents the frontend from picking up the unprocessed
         # image via polling. With output_stem the target is the model_refs
         # location instead of the expression-variant cache.
-        if output_stem is not None:
-            out_dir = output_stem.parent
-            out_stem_name = output_stem.name
-            # Only the own subdir, never the character dir above it.
-            if out_dir.parent.is_dir():
-                out_dir.mkdir(exist_ok=True)
-        else:
-            out_dir = _get_expressions_dir(character_name)
-            out_stem_name = cache_key
+        out_dir = output_stem.parent
+        out_stem_name = output_stem.name
+        if out_dir.parent.is_dir():
+            out_dir.mkdir(exist_ok=True)
         if not out_dir.is_dir():
             # The character was deleted during the render: drop the result
             # instead of recreating its directory as a ghost.
@@ -1326,9 +876,6 @@ def generate_expression_image(character_name: str,
         if tmp_path != final_tmp and tmp_path.exists():
             tmp_path.unlink()
 
-        # Cleanup: remove any leftover temp files
-        if not record_provenance:
-            _cleanup_stale_temps(out_dir)
 
         # Metadata JSON next to the image. equipped_pieces/items are recorded
         # so invalidate_variants_for_item can delete exactly the variants that
@@ -1353,13 +900,10 @@ def generate_expression_image(character_name: str,
             "seed": _gen_meta.get("seed", 0),
             "created_at": _gen_meta.get("created_at", ""),
             "duration_s": _gen_meta.get("duration_s", 0),
-            # Free-text mood for the admin listing, the KEYS for every
-            # machine-side comparison (find_nearest_expression).
-            "mood": mood,
-            "expression_key": _expression_key,
-            # The variant list in the admin UI shows this as "activity".
-            "activity": _pose_key,
-            "pose_key": _pose_key,
+            "mood": "",
+            "expression_key": "",
+            "activity": "",
+            "pose_key": "",
             "equipped_pieces": equipped_pieces or {},
             "equipped_items": equipped_items or [],
             "state_fingerprint": _state_fp,
@@ -1389,11 +933,6 @@ def generate_expression_image(character_name: str,
 
         logger.info("Expression image generated: %s", final_path.name)
 
-        # (The visual-analysis trigger that used to sit here fed the pose
-        # variant cache — removed with it, Aug 2026. Its example_image guard
-        # only ever deduplicated that analysis job; nothing is enqueued any
-        # more, so there is nothing left to deduplicate. The image cache
-        # itself is keyed by pose_key/expression_key and stays as it was.)
 
         return final_path
 
@@ -1405,131 +944,22 @@ def generate_expression_image(character_name: str,
             provenance_workspace.cleanup()
 
 
-def _update_refs_in_json(json_file: Path, rename_map: Dict[str, str],
-                         oid_to_safe: Optional[Dict[str, str]] = None) -> None:
-    """Update reference_images entries in a JSON file using the rename map.
-
-    Also uses oid_to_safe to fix references to deleted variants not in rename_map.
-    """
-    # Pattern: {8-hex-outfit-id}_{12-hex-hash}.ext  (old format without char name)
-    _old_variant_re = re.compile(r'^([0-9a-f]{8})_[0-9a-f]{12}\.\w+$')
+@contextmanager
+def expression_import_scope(character, archive):
+    """Validate selection before destructive import and isolate directory replacement."""
+    from app.core.expression_sets import catalog_snapshot, ExpressionSetError
+    from app.core.pose_catalog_edit import catalog_txn
     try:
-        data = json.loads(json_file.read_text(encoding="utf-8"))
-        refs = data.get("reference_images", {})
-        changed = False
-        for slot, ref_filename in refs.items():
-            if ref_filename in rename_map:
-                refs[slot] = rename_map[ref_filename]
-                changed = True
-            elif oid_to_safe:
-                m = _old_variant_re.match(ref_filename)
-                if m:
-                    oid = m.group(1)
-                    safe = oid_to_safe.get(oid)
-                    if safe:
-                        refs[slot] = f"{safe}_{ref_filename}"
-                        changed = True
-        if changed:
-            json_file.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8")
-    except Exception:
-        pass
-
-
-def migrate_variant_filenames() -> int:
-    """Rename old-format variant files ({oid}_{hash}) to new format ({CharName}_{oid}_{hash}).
-
-    Also updates reference_images entries in image JSON metadata.
-    Returns number of files renamed.
-    """
-    from app.models.character import (
-        get_character_outfits_dir, get_character_images_dir)
-    from app.core.paths import get_storage_dir
-
-    renamed = 0
-    sd = get_storage_dir()
-    chars_dir = sd / "characters"
-    if not chars_dir.exists():
-        return 0
-
-    # Phase 1: Rename variant files and build global rename map
-    global_rename_map: Dict[str, str] = {}  # old_name -> new_name
-    _oid_to_safe: Dict[str, str] = {}  # outfit_id -> safe character name
-    for char_dir in chars_dir.iterdir():
-        if not char_dir.is_dir():
-            continue
-        character_name = char_dir.name
-        safe = _safe_name(character_name)
-        variants_dir = char_dir / "outfits" / "variants"
-        if not variants_dir.exists():
-            continue
-
-        for f in variants_dir.iterdir():
-            if not f.is_file() or f.name.startswith("."):
-                continue
-            if f.stem.startswith(f"{safe}_"):
-                # Already migrated — record old->new mapping for JSON updates
-                old_name = f.name[len(safe) + 1:]  # strip "{safe}_" prefix
-                global_rename_map[old_name] = f.name
-                continue
-            new_name = f"{safe}_{f.name}"
-            old_path = variants_dir / f.name
-            new_path = variants_dir / new_name
-            if not new_path.exists():
-                old_path.rename(new_path)
-                renamed += 1
-            global_rename_map[f.name] = new_name
-
-    # Also build outfit_id -> safe_name map from outfit configs
-    # so we can fix references to deleted variant files too
-    for char_dir in chars_dir.iterdir():
-        if not char_dir.is_dir():
-            continue
-        safe = _safe_name(char_dir.name)
-        # Outfits are stored in character_profile.json under "outfits"
-        profile_json = char_dir / "character_profile.json"
-        if profile_json.exists():
-            try:
-                profile_data = json.loads(profile_json.read_text(encoding="utf-8"))
-                for o in profile_data.get("outfits", []):
-                    oid = o.get("id", "")
-                    if oid:
-                        _oid_to_safe[oid] = safe
-            except Exception:
-                pass
-        # Also derive from existing variant filenames (covers deleted outfits)
-        variants_dir = char_dir / "outfits" / "variants"
-        if variants_dir.exists():
-            for f in variants_dir.iterdir():
-                if f.is_file() and f.stem.startswith(f"{safe}_"):
-                    # e.g. Zula_18d0d47a_hash -> oid=18d0d47a
-                    parts = f.stem[len(safe) + 1:].split("_", 1)
-                    if parts:
-                        _oid_to_safe[parts[0]] = safe
-
-    if global_rename_map or _oid_to_safe:
-        # Phase 2: Update reference_images in ALL characters' image JSONs
-        for char_dir in chars_dir.iterdir():
-            if not char_dir.is_dir():
-                continue
-            images_dir = char_dir / "images"
-            if not images_dir.exists():
-                continue
-            for json_file in images_dir.glob("*.json"):
-                _update_refs_in_json(json_file, global_rename_map, _oid_to_safe)
-
-        # Phase 3: Update reference_images in Instagram JSONs
-        instagram_dir = sd / "instagram"
-        if instagram_dir.exists():
-            for json_file in instagram_dir.glob("*.json"):
-                _update_refs_in_json(json_file, global_rename_map, _oid_to_safe)
-            # Auch metadata/ Unterverzeichnis
-            meta_dir = instagram_dir / "metadata"
-            if meta_dir.exists():
-                for json_file in meta_dir.glob("*.json"):
-                    _update_refs_in_json(json_file, global_rename_map, _oid_to_safe)
-
-    if renamed:
-        logger.info("Variant migration: %d files renamed (character-name prefix)", renamed)
-    return renamed
+        rows = json.loads(archive.read("db/characters.json"))
+        row = next(row for row in rows if row.get("name") == character)
+        profile = json.loads(row.get("profile_json") or "{}")
+    except (KeyError, ValueError, TypeError, StopIteration) as exc:
+        raise ValueError("Character archive has no valid character profile") from exc
+    selected = str(profile.get("expression_set") or "")
+    if selected and selected not in catalog_snapshot().sets:
+        raise ExpressionSetError(f"Unknown imported expression set '{selected}'")
+    with render_lock(character), keyed_lock("character_profile", character), catalog_txn("expression"), publication_lock(character):
+        if selected and selected not in catalog_snapshot().sets:
+            raise ExpressionSetError(f"Imported expression set '{selected}' changed")
+        invalidate_publication(character)
+        yield

@@ -223,9 +223,22 @@ stops acting autonomously).
 - **Use-case-driven styling:** every render occasion is a *use case* and the style belongs to the
   use case; `image_family` (`natural` prose for Flux/Qwen vs. `keywords` tags for Z-Image/SD) selects
   both the prompt adapter and the style family.
-- Context-aware prompts (appearance, outfit, mood, activity, location, pose), reference-image slots
-  in the order Agent > Room > others > Items for face consistency, pose/expression variants, the
-  outfit decency/compliance system.
+- Context-aware scene prompts (appearance, outfit, mood, activity, location, pose), reference-image
+  slots in the order Agent > Room > others > Items for face consistency, and outfit decency/compliance.
+- **Reusable expression images:** one current image per character, visible outfit and member of its
+  selected expression set. *Game-Admin → Poses → Expressions* edits set members, aliases, default
+  expression and fixed image pose. Automatic selection uses **Humanoid (8)** or **Animal (4)** from
+  the character's body-form template; character and avatar settings can select a set explicitly.
+  Activity poses, free mood wording and temporary state modifiers do not create extra variants.
+  Completed images are reused; an explicit regeneration keeps the last good image until it succeeds.
+  Serving falls back only within the same set, outfit and current prompt contract, including when
+  media generation is disabled. T-pose, face and pose reference renders remain separate.
+  *Characters → Expressions → Preview expression cleanup* inspects history without changing files;
+  applying the reviewed preview removes only classified incompatible history and adopts proven
+  compatible images. Unverified files and valid other outfits are retained. There is no expression
+  LRU eviction: retained storage grows with distinct outfits rather than repeatedly rendering them.
+  Prefer World for local catalog edits: Shared membership changes affect other worlds, but their
+  complete World set overrides are not automatically rebased onto the changed Shared definition.
 - **Portrait controls:** *Game-Admin → Characters → Image* has separate render, portrait and T-pose
   backend matches in a compact responsive grid, with normal and T-pose LoRA overrides alongside.
   Backend activation is global; character overrides select backend matches, not separate

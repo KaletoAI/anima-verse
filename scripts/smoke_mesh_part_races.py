@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as tmp:
         profile['body_slots']['slot']['switch'] = 'off'
         return Path(tmp) / 'input.png'
     signature = mr.mesh_signature({}, [], '', '|mesh:fixture.slot=on')
-    with patch('app.models.character.get_character_profile', return_value=profile), patch.object(bs, 'slots_for_character', return_value=[slot]), patch.object(mr, 'get_model_refs_dir', return_value=Path(tmp)), patch.object(mr, 'is_humanoid', return_value=True), patch.object(mr, 'get_view_kinds', return_value={}), patch.object(mr, 'enabled_tpose_views', return_value=('back',)), patch.object(mr, 'find_ref_image', return_value=None), patch('app.core.expression_regen.generate_expression_image', side_effect=render), patch('app.core.prompt_filters.image_modifier_snapshot', return_value=nullcontext()):
+    with patch('app.models.character.get_character_profile', return_value=profile), patch.object(bs, 'slots_for_character', return_value=[slot]), patch.object(mr, 'get_model_refs_dir', return_value=Path(tmp)), patch.object(mr, 'is_humanoid', return_value=True), patch.object(mr, 'get_view_kinds', return_value={}), patch.object(mr, 'enabled_tpose_views', return_value=('back',)), patch.object(mr, 'find_ref_image', return_value=None), patch('app.core.expression_regen.render_character_image', side_effect=render), patch('app.core.prompt_filters.image_modifier_snapshot', return_value=nullcontext()):
         mr.generate_model_ref_images('', kinds=('tpose',), pieces={}, items=[], signature=signature)
     assert captured == ['on', 'on'], captured
 print('PASS mesh_part races: busy request retried, superseded signature rejected, profile snapshot')

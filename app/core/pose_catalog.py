@@ -345,6 +345,7 @@ def _load(axis: str) -> Dict[str, dict]:
             "solo": solo,
             "_default": bool(entry.get("_default", False)),
             "_store": origin.get(key, "shared"),
+            "label": str(entry.get("label") or key.replace("_", " ").title()),
         }
         if axis == "pose":
             norm["label"] = str(entry.get("label") or "").strip()
@@ -524,7 +525,13 @@ def reload_catalogs() -> None:
         _generation += 1
 
 
-def get_default_key(axis: str) -> str:
+def get_default_key(axis: str, *, set_id: str = "") -> str:
+    if axis == "expression":
+        from app.core.expression_sets import catalog_snapshot, ExpressionSetError
+        cat = catalog_snapshot()
+        if set_id not in cat.sets:
+            raise ExpressionSetError("A valid expression set is required")
+        return cat.sets[set_id].default
     for key, entry in get_catalog(axis).items():
         if entry["_default"]:
             return key
@@ -589,6 +596,12 @@ def pose_yaw_offset(pose_key: str) -> float:
 
 def validate_catalog(axis: str) -> List[str]:
     """Returns human-readable problems; empty list = catalog is sound."""
+    if axis == "expression":
+        from app.core.expression_sets import catalog_snapshot, validate_expression_catalog, ExpressionSetError
+        try:
+            return validate_expression_catalog(catalog_snapshot())
+        except ExpressionSetError as exc:
+            return [str(exc)]
     problems: List[str] = []
     catalog = get_catalog(axis)
     if not catalog:
@@ -723,19 +736,28 @@ def prewarm_alias_embeddings() -> None:
     Never raises."""
     try:
         from app.core.embedding import embed
-        for axis in ("expression", "pose"):
-            vecs = _alias_embeddings(axis, embed)
-            logger.info("Alias embeddings warmed: %s (%d aliases)", axis, len(vecs))
+        vecs = _alias_embeddings("pose", embed)
+        logger.info("Alias embeddings warmed: pose (%d aliases)", len(vecs))
+        from app.core.expression_sets import catalog_snapshot, alias_embeddings
+        snapshot = catalog_snapshot()
+        for spec in snapshot.sets.values():
+            vecs = alias_embeddings(snapshot, spec, embed)
+            logger.info("Expression aliases warmed: %s (%d aliases)", spec.id, len(vecs))
     except Exception as e:
         logger.warning("Alias embedding warm-up failed: %s", e)
 
 
-def resolve_to_catalog(text: str, axis: str, _embed=None) -> Tuple[str, str]:
+def resolve_to_catalog(text: str, axis: str, _embed=None, *, set_id: str = "") -> Tuple[str, str]:
     """Maps free text onto a catalog key. Never raises, never returns an
     unknown key. `_embed` overrides the embedding function (tests).
 
     Order: exact alias → decision model (plan-decision-models.md § 4.2,
     only when its point is active) → embedding → default."""
+    if axis == "expression":
+        from app.core.expression_sets import resolve_text
+        return resolve_text(text, set_id=set_id, embed_fn=_embed)
+    if set_id:
+        raise ValueError("Pose matching does not use an expression set")
     cleaned = (text or "").strip().lower()
     if not cleaned:
         return get_default_key(axis), "empty"
@@ -844,31 +866,31 @@ def split_key_detail(text: str, axis: str = "pose") -> Tuple[str, str]:
 
 # ── Candidates: free text the catalog could not absorb ───────────────────
 def record_candidate(axis: str, raw_text: str, nearest_key: str,
-                     distance: Optional[float]) -> None:
+                     distance: Optional[float], *, set_id: str = "") -> None:
     from app.core.db import transaction
     from app.core.timeutils import utc_now_iso
     now = utc_now_iso()
     try:
         with transaction() as conn:
             conn.execute(
-                "INSERT INTO pose_candidates (axis, raw_text, nearest_key, distance, "
+                "INSERT INTO pose_candidates (axis, set_id, raw_text, nearest_key, distance, "
                 " count, status, first_seen, last_seen) "
-                "VALUES (?, ?, ?, ?, 1, 'open', ?, ?) "
-                "ON CONFLICT(axis, raw_text) DO UPDATE SET "
+                "VALUES (?, ?, ?, ?, ?, 1, 'open', ?, ?) "
+                "ON CONFLICT(axis, set_id, raw_text) DO UPDATE SET "
                 " count = count + 1, last_seen = excluded.last_seen",
-                (axis, raw_text[:200], nearest_key or "", distance, now, now),
+                (axis, set_id, raw_text[:200], nearest_key or "", distance, now, now),
             )
     except Exception as e:
         logger.debug("record_candidate failed: %s", e)
 
 
-def list_candidates(axis: str, status: str = "open") -> List[dict]:
+def list_candidates(axis: str, status: str = "open", *, set_id: str = "") -> List[dict]:
     from app.core.db import get_connection
     try:
         rows = get_connection().execute(
             "SELECT raw_text, nearest_key, distance, count, first_seen, last_seen "
-            "FROM pose_candidates WHERE axis=? AND status=? "
-            "ORDER BY count DESC, last_seen DESC", (axis, status)).fetchall()
+            "FROM pose_candidates WHERE axis=? AND set_id=? AND status=? "
+            "ORDER BY count DESC, last_seen DESC", (axis, set_id, status)).fetchall()
         return [{"raw_text": r[0], "nearest_key": r[1], "distance": r[2],
                  "count": r[3], "first_seen": r[4], "last_seen": r[5]} for r in rows]
     except Exception as e:
@@ -876,7 +898,7 @@ def list_candidates(axis: str, status: str = "open") -> List[dict]:
         return []
 
 
-def delete_candidate(axis: str, raw_text: str) -> bool:
+def delete_candidate(axis: str, raw_text: str, *, set_id: str = "") -> bool:
     """Removes a candidate row for good.
 
     Used when a candidate was APPROVED into the catalog: the text now resolves
@@ -888,28 +910,28 @@ def delete_candidate(axis: str, raw_text: str) -> bool:
     try:
         with transaction() as conn:
             cur = conn.execute(
-                "DELETE FROM pose_candidates WHERE axis=? AND raw_text=?",
-                (axis, raw_text))
+                "DELETE FROM pose_candidates WHERE axis=? AND set_id=? AND raw_text=?",
+                (axis, set_id, raw_text))
             return cur.rowcount > 0
     except Exception as e:
         logger.warning("delete_candidate failed: %s", e)
         return False
 
 
-def set_candidate_status(axis: str, raw_text: str, status: str) -> bool:
+def set_candidate_status(axis: str, raw_text: str, status: str, *, set_id: str = "") -> bool:
     from app.core.db import transaction
     try:
         with transaction() as conn:
             cur = conn.execute(
-                "UPDATE pose_candidates SET status=? WHERE axis=? AND raw_text=?",
-                (status, axis, raw_text))
+                "UPDATE pose_candidates SET status=? WHERE axis=? AND set_id=? AND raw_text=?",
+                (status, axis, set_id, raw_text))
             return cur.rowcount > 0
     except Exception as e:
         logger.warning("set_candidate_status failed: %s", e)
         return False
 
 
-def dismiss_all_candidates(axis: str) -> int:
+def dismiss_all_candidates(axis: str, *, set_id: str = "") -> int:
     """Marks every OPEN candidate of ``axis`` as dismissed; returns how many
     rows changed. The reset after a producer change: rows recorded under the
     old free-text rules describe nothing about the new ones."""
@@ -918,7 +940,7 @@ def dismiss_all_candidates(axis: str) -> int:
         with transaction() as conn:
             cur = conn.execute(
                 "UPDATE pose_candidates SET status='dismissed' "
-                "WHERE axis=? AND status='open'", (axis,))
+                "WHERE axis=? AND set_id=? AND status='open'", (axis, set_id))
             return int(cur.rowcount or 0)
     except Exception as e:
         logger.warning("dismiss_all_candidates failed: %s", e)

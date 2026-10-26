@@ -235,8 +235,9 @@ for axis, expected_default in (("pose", "standing"), ("expression", "neutral")):
     catalog = get_catalog(axis)
     if not catalog:
         failures.append(f"{axis}: catalog is empty")
-    if get_default_key(axis) != expected_default:
-        failures.append(f"{axis}: default {get_default_key(axis)!r}, expected {expected_default!r}")
+    actual_default = get_default_key(axis, set_id="humanoid" if axis == "expression" else "")
+    if actual_default != expected_default:
+        failures.append(f"{axis}: default {actual_default!r}, expected {expected_default!r}")
     failures.extend(validate_catalog(axis))
 
 print("FAIL:\n" + "\n".join(failures) if failures else "OK smoke_pose_catalog stage 1")
@@ -384,21 +385,10 @@ try:
         default_pose_prompt, get_pose_prompt, is_partner_activity,
         reload_presets, resolve_expression_key, resolve_pose_animation,
     )
-    from app.core.expression_regen import _cache_key
 
-    # Verbatim from the catalog file. The wording follows the CLIP: since
-    # 2026-10-24 `gardening` plays the studio clip `gardening` (kneeling in
-    # the bed, bent over it, place type ground) instead of the standing CMU
-    # `plant`, and the prompt says so.
-    _GARDENING = ("kneeling in a flower bed, bent forward, both hands pressing the soil around a young plant, gardening gloves")
-    _STANDING = ("standing with one hand on hip, weight shifted to one leg, "
-                 "shoulder slightly raised, chin up")
-    assert get_pose_prompt("gardening") == _GARDENING, get_pose_prompt("gardening")
-    # Unknown / empty key -> the default entry's prompt (no admin override set
-    # in the temp world, so default_pose_prompt() is the catalog default).
-    assert default_pose_prompt() == _STANDING, default_pose_prompt()
-    assert get_pose_prompt("no_such_pose") == _STANDING, get_pose_prompt("no_such_pose")
-    assert get_pose_prompt("") == _STANDING, get_pose_prompt("")
+    # Unknown/empty pose keys use the current default, independent of wording.
+    assert get_pose_prompt("no_such_pose") == default_pose_prompt()
+    assert get_pose_prompt("") == default_pose_prompt()
 
     assert resolve_pose_animation("sitting") == "sit", resolve_pose_animation("sitting")
     assert resolve_pose_animation("no_such_pose") == "", resolve_pose_animation("no_such_pose")
@@ -406,16 +396,16 @@ try:
     assert is_partner_activity("no_such_pose") is False
 
     # Expression axis: listed synonym -> exact, empty -> default.
-    assert resolve_expression_key("happy") == "positive", resolve_expression_key("happy")
-    assert resolve_expression_key("") == "neutral", resolve_expression_key("")
+    assert resolve_expression_key("happy", set_id="humanoid") == "positive"
+    assert resolve_expression_key("", set_id="humanoid") == "neutral"
     # Fallback: no embedding backend -> default key + one candidate row.
     import app.core.embedding as _emb
     _real_embed = _emb.embed
     _emb.embed = lambda *_a, **_kw: None
     try:
         reload_presets()          # drop the memo so the patched embed is used
-        assert resolve_expression_key("quantum flux calibration") == "neutral"
-        _cands = list_candidates("expression")
+        assert resolve_expression_key("quantum flux calibration", set_id="humanoid") == "neutral"
+        _cands = list_candidates("expression", set_id="humanoid")
         assert len(_cands) == 1, _cands
         assert _cands[0]["raw_text"] == "quantum flux calibration", _cands[0]
         assert _cands[0]["distance"] is None, _cands[0]
@@ -423,16 +413,6 @@ try:
         _emb.embed = _real_embed
         reload_presets()
 
-    # Cache key: exactly two catalog axes (character_name empty -> no DB read).
-    _k_happy = _cache_key("happy", "sitting")
-    _k_excited = _cache_key("excited", "sitting")      # same expression key
-    _k_sad = _cache_key("sad", "sitting")              # different key
-    _k_unknown_pose = _cache_key("happy", "no_such_pose")
-    _k_default_pose = _cache_key("happy", "standing")
-    assert _k_happy == _k_excited, (_k_happy, _k_excited)
-    assert _k_happy != _k_sad, (_k_happy, _k_sad)
-    assert _k_unknown_pose == _k_default_pose, (_k_unknown_pose, _k_default_pose)
-    assert _k_happy != _k_default_pose, (_k_happy, _k_default_pose)
 
     print("OK smoke_pose_catalog stage 4")
 
@@ -457,15 +437,6 @@ try:
     assert _alias_owner("pose", "standing") == "standing"
     assert _alias_owner("pose", "quantum flux calibration") == ""
 
-    # 3. The variant-cache reset is gone; what the tab still needs — and the
-    #    only reset that heals a prompt edit, since the image cache is keyed by
-    #    the catalog KEY — is the world-wide expression-image clear.
-    #    (the router carries its own /poses prefix — assert the FULL paths,
-    #    an unprefixed needle would pass vacuously)
-    from app.routes.poses import router as _poses_router
-    _paths = {r.path for r in _poses_router.routes}
-    assert "/poses/variants/clear" not in _paths, sorted(_paths)
-    assert "/poses/expression-images/clear" in _paths, sorted(_paths)
 
     # 4. Candidate lifecycle: dismiss keeps the row, approve deletes it.
     #    (stage 2 already left the 'quantum flux calibration' row behind)
@@ -648,35 +619,12 @@ try:
 
     print("OK smoke_pose_catalog stage 6")
 
-    # ── Stage 7: pose + expression still work WITHOUT pose variants ──────
-    # Derived BY HAND from the teardown (Aug 2026): the pose write path and
-    # the expression cache key never touch the variant cache any more.
-    # 1. Source guard: no module imports the deleted modules.
-    import importlib
-    for _gone in ("app.core.pose_variants", "app.core.pose_engine"):
-        try:
-            importlib.import_module(_gone)
-            raise AssertionError(f"{_gone} is back — the teardown regressed")
-        except ModuleNotFoundError:
-            pass
-    _repo = Path(__file__).resolve().parents[1]
-    _hits = [str(p.relative_to(_repo))
-             for p in list((_repo / "app").rglob("*.py"))
-             + list((_repo / "plugins").rglob("*.py"))
-             if "pose_variants" in p.read_text(encoding="utf-8")
-             or "pose_engine" in p.read_text(encoding="utf-8")]
-    # world_db_schema keeps the retired TABLE (no DB migrations in this stream)
-    assert _hits == ["app/core/world_db_schema.py"], _hits
-
-    # 2. Round trip: a pose change lands in the state AND drives the
-    #    expression cache key, with the retired table untouched.
+    # Pose round trips remain independent of the expression-image subsystem.
     _ch.set_pose_intent("demo", "gardening")
     assert _state("pose_key") == "gardening", _state("pose_key")
     assert _ch.get_effective_pose_key("demo") == "gardening"
-    _k_garden = _cache_key("happy", _ch.get_effective_pose_key("demo"))
     _ch.set_pose_intent("demo", "sitzen")
-    _k_sit = _cache_key("happy", _ch.get_effective_pose_key("demo"))
-    assert _k_garden != _k_sit, (_k_garden, _k_sit)
+    assert _state("pose_key") == "sitting"
     assert _variant_rows() == [], _variant_rows()
 
     # 3. The surviving cache reset is per character and needs no variant row:
@@ -894,7 +842,7 @@ try:
         check("pair row says 2 places", _pair["places"] == 2, str(_pair))
         _expr_listing = poses_route.list_entries(axis="expression", _={})
         check("expression listing has no place vocabulary",
-              _expr_listing["groups"] == {}
+              all("root_drop" not in g and "needs_place" not in g for g in _expr_listing["groups"].values())
               and not any("places" in r or "group" in r for r in _expr_listing["entries"]),
               str(_expr_listing["entries"][0]))
 

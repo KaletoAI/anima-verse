@@ -118,6 +118,8 @@ os.environ["ANIMATION_CLIPS_DIR"] = str(_TMP / "clips")
 from app.core import paths  # noqa: E402
 
 paths.init(_TMP)
+from app.core.db import init_schema  # noqa: E402
+init_schema()
 assert paths.get_storage_dir() == _TMP.resolve(), paths.get_storage_dir()
 
 from app.core import config  # noqa: E402
@@ -395,25 +397,16 @@ def part_submitters():
     check("outfit_batch.start: says why", MESSAGE in str(res.get("error")),
           repr(res))
 
-    # expression_regen: the generator behind the trigger is replaced by a
-    # counter, so "did it start a render" is measured, not guessed.
-    orig_trigger = expression_regen._do_trigger_expression_generation
-    calls: list[str] = []
-    expression_regen._do_trigger_expression_generation = (
-        lambda *a, **kw: calls.append(a[0]) or True)
-    try:
-        got = expression_regen.trigger_expression_generation(
-            "Demo", "", "standing", ignore_feature_gate=True, coalesce=False)
-        check("expression trigger: off -> False", got is False, repr(got))
-        check("expression trigger: off -> nothing generated", calls == [],
-              repr(calls))
-        switch(True)
-        got = expression_regen.trigger_expression_generation(
-            "Demo", "", "standing", ignore_feature_gate=True, coalesce=False)
-        check("expression trigger: on -> the generator runs", len(calls) == 1,
-              repr(calls))
-    finally:
-        expression_regen._do_trigger_expression_generation = orig_trigger
+    # A real request stays missing rather than becoming a queued/failed attempt.
+    character_mod.save_character_profile("Demo", {
+        "template": "human-default", "character_appearance": "a person",
+    }, create_new=True)
+    request = expression_regen.expression_snapshot("Demo")
+    got = expression_regen.trigger_expression_generation(
+        request, ignore_feature_gate=True, coalesce=False)
+    check("expression trigger: off -> False", got is False, repr(got))
+    check("expression trigger: off -> no pending attempt",
+          expression_regen.expression_status(request)["state"] == "missing", "not missing")
 
     # npc_assets: the gate must place the NPC instead of pooling it forever.
     switch(False)

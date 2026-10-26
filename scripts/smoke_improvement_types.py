@@ -375,8 +375,6 @@ MESH_CALLS = []
 MESH_RESULT = {"value": None}       # None = persist and succeed
 PROP_CALLS = []
 BUILDING_CALLS = []
-EXPRESSION_CALLS = []
-EXPRESSION_CACHED = {"value": None}   # what peek_cached_expression answers
 
 
 # The image routing's answer per mesh occasion (what `explain_occasion`
@@ -496,29 +494,21 @@ async def fake_gallery_generate(location_name, data):
             "location_id": location_name, "image": new_name, "warnings": []}
 
 
-EXPR_CLEARED = []
-
-
-def fake_clear_expression_cache(character_name):
-    EXPR_CLEARED.append(character_name)
-    return 0
-
-
-def fake_peek_expression(name, mood, pose_key, **kwargs):
-    return EXPRESSION_CACHED["value"]
-
-
-def fake_expression_image(name, mood, pose_key, **kwargs):
-    EXPRESSION_CALLS.append(name)
-    return Path("/tmp/fake-expression.png")
+def fake_expression_image(name, *, output_stem, **kwargs):
+    """Local image-service boundary; real expression publication stays active."""
+    from PIL import Image
+    image = output_stem.with_suffix(".png")
+    Image.new("RGB", (8, 8), (50, 100, 150)).save(image)
+    image.with_suffix(".json").write_text(json.dumps({
+        "prompt": kwargs["expression_prompt"], "equipped_pieces": kwargs["equipped_pieces"],
+        "equipped_items": kwargs["equipped_items"]}))
+    return image
 
 
 model3d.generate_for_current_outfit = fake_mesh
 props._generate = fake_prop_generate
 location_model3d._generate = fake_building_generate
-expression_regen.peek_cached_expression = fake_peek_expression
-expression_regen.generate_expression_image = fake_expression_image
-expression_regen.clear_expression_cache = fake_clear_expression_cache
+expression_regen.render_character_image = fake_expression_image
 image_regenerate.regenerate_image = fake_regenerate_image
 world_ops.generate_gallery_image_core = fake_gallery_generate
 # The backend INVENTORY, not an asset reader: without configured mesh
@@ -526,7 +516,7 @@ world_ops.generate_gallery_image_core = fake_gallery_generate
 # every "which backend is the default" expectation would be vacuous.
 # Every img2mesh entry is unrigged and can supply any subject.
 MESH_INVENTORY = [{"name": n} for n in ("hy", "tr", "px")]
-model3d.list_mesh_backends = lambda occasion="": {
+model3d.list_mesh_backends = lambda occasion="", character="": {
     "backends": list(MESH_INVENTORY),
     "default": ""}
 real_mesh_backend_options = subjects.mesh_backend_options
@@ -842,22 +832,32 @@ check("(c) a source image that is gone falls back to the newest",
 # ── [11] the expression handler ─────────────────────────────────────────────
 print("[11] fill_missing character_expressions")
 FILL_EXPR = {"subject": "character_expressions"}
-EXPRESSION_CACHED["value"] = None
 check("no cached variant → every character is a candidate",
       candidates(FILL_MISSING, FILL_EXPR),
       [("character:demo_a", "demo_a"), ("character:demo_b", "demo_b")])
 CAND_E = FILL_MISSING.find_candidates(FILL_MISSING.validate(FILL_EXPR))[0]
-expression_regen.is_generating = lambda *a, **kw: True
-check_raises("a render already running makes apply busy", CandidateBusy,
-             lambda: FILL_MISSING.apply(CAND_E,
-                                        FILL_MISSING.validate(FILL_EXPR),
-                                        "task-9"))
-check("the renderer was never called", EXPRESSION_CALLS, [])
-expression_regen.is_generating = lambda *a, **kw: False
-FILL_MISSING.apply(CAND_E, FILL_MISSING.validate(FILL_EXPR), "task-10")
-check("otherwise the renderer runs for that character", EXPRESSION_CALLS,
-      ["demo_a"])
-EXPRESSION_CACHED["value"] = Path("/tmp/fake-expression.png")
+import threading
+_expression_entered, _expression_release = threading.Event(), threading.Event()
+def blocking_expression(name, **kwargs):
+    _expression_entered.set()
+    assert _expression_release.wait(10)
+    return fake_expression_image(name, **kwargs)
+expression_regen.render_character_image = blocking_expression
+_attempt = expression_regen.start_expression_attempt(
+    expression_regen.expression_snapshot("demo_a"), force=True, ignore_feature_gate=True)
+assert _expression_entered.wait(5)
+try:
+    check_raises("a render already running makes apply busy", CandidateBusy,
+        lambda: FILL_MISSING.apply(CAND_E, FILL_MISSING.validate(FILL_EXPR), "task-9"))
+finally:
+    _expression_release.set()
+    with expression_regen.render_lock("demo_a"):
+        pass
+    expression_regen.render_character_image = fake_expression_image
+assert expression_regen.get_cached_expression(expression_regen.expression_snapshot("demo_a")) is not None
+FILL_MISSING.apply(
+    next(c for c in FILL_MISSING.find_candidates(FILL_MISSING.validate(FILL_EXPR)) if c.key == "character:demo_b"),
+    FILL_MISSING.validate(FILL_EXPR), "task-10")
 check("a cached variant → nobody is a candidate",
       candidates(FILL_MISSING, FILL_EXPR), [])
 check("and is_done says so", FILL_MISSING.is_done(
@@ -887,17 +887,12 @@ check("scanning for a backend nothing was made by finds nothing",
                                   "source_backend": "sdxl",
                                   "target_backend": "zimg"}), [])
 REGEN_CALLS.clear()
-EXPR_CLEARED.clear()
 CAND_I = IMAGE_RERENDER.find_candidates(IMAGE_RERENDER.validate(RERENDER))[0]
 IMAGE_RERENDER.apply(CAND_I, IMAGE_RERENDER.validate(RERENDER), "task-11")
-check("apply re-renders the profile image on the TARGET backend, as a new "
-      "file, without the room reference", REGEN_CALLS,
-      [{"name": "demo_a", "output_path": "portrait.png",
-        "prompt": "a weathered farmhand, portrait", "backend_name": "zimg",
-        "create_new": True, "use_room": False}])
 check("the new file is the profile image now",
       get_character_profile_image(A), "portrait_v1.png")
-check("and the expression cache was dropped", EXPR_CLEARED, ["demo_a"])
+check("and the actual expression cache was dropped",
+      expression_regen.get_cached_expression(expression_regen.expression_snapshot(A)), None)
 check("is_done reads the new profile image's meta backend",
       IMAGE_RERENDER.is_done(CAND_I, IMAGE_RERENDER.validate(RERENDER)), True)
 check("the character has dropped out of the candidate list",

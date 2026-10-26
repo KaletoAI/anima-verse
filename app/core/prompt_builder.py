@@ -48,13 +48,13 @@ logger = get_logger("prompt_builder")
 
 @dataclass
 class Person:
-    """Eine erkannte Person."""
+    """A detected person."""
     name: str                   # Character-Name (z.B. "Kira", "Kai")
-    appearance: str             # Appearance-Text aus Profil
+    appearance: str             # Appearance text from the profile.
     gender: str                 # "female", "male", ""
-    actor_label: str = ""       # Wird auf name gesetzt (ehemals Woman1/Man1)
-    is_agent: bool = False      # Ist der erzeugende Character
-    is_user: bool = False       # Ist der User
+    actor_label: str = ""       # Set to the name (formerly Woman1/Man1).
+    is_agent: bool = False      # Whether this is the generating character.
+    is_user: bool = False       # Whether this is the user.
 
 
 @dataclass
@@ -99,7 +99,7 @@ class PromptVariables:
 
 @dataclass
 class EntryPointConfig:
-    """Konfiguration pro Entry-Point: welche Variablen werden befuellt."""
+    """Per-entry-point configuration: which variables are populated."""
     name: str
     auto_enhance: bool = True
     include_persons: bool = True
@@ -172,7 +172,7 @@ SELFIE_KEYWORDS = (
 
 
 def is_photographer_mode(character_name: str) -> bool:
-    """Liest photographer_mode aus Character-Config, tolerant gegen string/bool."""
+    """Read photographer_mode from character config, accepting string/bool values."""
     if not character_name:
         return False
     cfg = get_character_config(character_name) or {}
@@ -183,7 +183,7 @@ def is_photographer_mode(character_name: str) -> bool:
 
 
 def detect_selfie(text: str) -> bool:
-    """True wenn Text ein explizites Selfie-Wort enthaelt."""
+    """Whether the text contains an explicit selfie term."""
     if not text:
         return False
     return any(kw in text.lower() for kw in SELFIE_KEYWORDS)
@@ -243,7 +243,8 @@ def person_description(name: str, *,
                        back_view: bool = False,
                        mesh_input: bool = False,
                        body_profile: Optional[Dict[str, Any]] = None,
-                       include_exposed: bool = True) -> str:
+                       include_exposed: bool = True,
+                       neutral_state: bool = False) -> str:
     """THE text description of a person for image prompts.
 
     Every path that describes a person — PromptBuilder (chat images,
@@ -262,10 +263,11 @@ def person_description(name: str, *,
     feature dropped (``strip_face_terms``)."""
     from app.models.character import get_character_appearance, get_character_profile
     from app.models.character_template import get_template, resolve_profile_tokens
-    appearance = get_character_appearance(name) or ""
+    appearance = ((body_profile or {}).get("character_appearance", "")
+                  if body_profile is not None else get_character_appearance(name)) or ""
     if appearance and "{" in appearance:
         try:
-            profile = get_character_profile(name)
+            profile = body_profile if body_profile is not None else get_character_profile(name)
             tmpl = get_template(profile.get("template", "")) if profile.get("template") else None
             appearance = resolve_profile_tokens(
                 appearance, profile, template=tmpl, target_key="character_appearance"
@@ -280,7 +282,8 @@ def person_description(name: str, *,
     try:
         from app.core.body_slots import appearance_suffix
         suffix = appearance_suffix(name, profile=body_profile, back_view=back_view,
-                                   mesh_input=mesh_input, include_exposed=include_exposed)
+                                   mesh_input=mesh_input, include_exposed=include_exposed,
+                                   neutral_state=neutral_state)
     except Exception:
         suffix = ""
     if suffix:
@@ -319,7 +322,8 @@ class PromptBuilder:
                  apply_state_modifiers: bool = True,
                  back_view: bool = False,
                  mesh_input: bool = False,
-                 body_profile: Optional[Dict[str, Any]] = None):
+                 body_profile: Optional[Dict[str, Any]] = None,
+                 neutral_state: bool = False):
         self.user_id = ""
         self.character_name = character_name
         # State-triggered image_modifier directives rewrite the person
@@ -331,9 +335,10 @@ class PromptBuilder:
         self.back_view = back_view
         self.mesh_input = mesh_input
         self.body_profile = body_profile
+        self.neutral_state = neutral_state
 
     # ------------------------------------------------------------------
-    # Schritt 1: Personen erkennen
+    # Step 1: detect people.
     # ------------------------------------------------------------------
 
     def detect_persons(
@@ -342,15 +347,15 @@ class PromptBuilder:
         *,
         character_names: Optional[List[str]] = None,
         explicit_appearances: Optional[List[Dict[str, str]]] = None) -> List[Person]:
-        """Erkennt Personen im Text und weist neutrale Akteur-Labels zu.
+        """Detect people in text and assign neutral actor labels.
 
         Args:
-            text: Prompt-Text oder Chat-Text.
-            character_names: Explizite Namensliste (ueberspringt Auto-Detection).
-            explicit_appearances: Bereits aufgeloeste Appearances (ueberspringt alles).
+            text: Prompt or chat text.
+            character_names: Explicit names, bypassing auto-detection.
+            explicit_appearances: Resolved appearances, bypassing detection entirely.
 
         Returns:
-            Liste von Person-Objekten mit neutralen Akteur-Labels.
+            Person objects with neutral actor labels.
         """
         if explicit_appearances is not None:
             persons = self._persons_from_appearances(explicit_appearances)
@@ -401,7 +406,7 @@ class PromptBuilder:
         return persons
 
     def _resolve_by_names(self, names: List[str]) -> List[Person]:
-        """Loest Appearances fuer eine explizite Namensliste auf."""
+        """Resolve appearances for an explicit list of names."""
         persons = []
         avatar_name = self._avatar_name()
 
@@ -423,7 +428,7 @@ class PromptBuilder:
         return persons
 
     def _auto_detect(self, text: str) -> List[Person]:
-        """Erkennt Personen automatisch aus Prompt-Text (Pronomen + Namen)."""
+        """Automatically detect people in prompt text through pronouns and names."""
         padded = f" {text.lower()} "
         persons = []
 
@@ -456,11 +461,11 @@ class PromptBuilder:
                         name=avatar_name, appearance=user_app,
                         gender=gender, is_user=True))
 
-        # 3. Andere Characters nach Name (Duplikat-Check: Agent + User ueberspringen)
-        # Location-Strict: andere Characters duerfen nur ins Bild wenn sie am
-        # gleichen Ort wie der Agent sind. Schliesst aus dass Tool-LLM zufaellig
-        # Namen erwaehnt und der Code Charaktere ins Bild zieht die woanders
-        # sind ("Bianca trifft Diego" obwohl Diego schlaefft).
+        # 3. Other named characters, excluding duplicate agent/user entries.
+        # Strict location scope: other characters may appear only when they share
+        # the agent's location. This prevents an incidental tool-LLM name from
+        # pulling a character into the picture from somewhere else.
+        # For example, mentioning someone who is currently asleep must not pull them in.
         already_added = {p.name for p in persons}
         all_chars = list_available_characters()
         _agent_loc = (get_character_current_location(self.character_name) or "").strip()
@@ -468,7 +473,7 @@ class PromptBuilder:
             if char_name == self.character_name or char_name in already_added:
                 continue
             if re.search(r'\b' + re.escape(char_name.lower()) + r'\b', padded):
-                # Location-Check (strict): anderer Ort -> nicht ins Bild
+                # Strict location check: another location excludes the character.
                 if _agent_loc:
                     _other_loc = (get_character_current_location(char_name) or "").strip()
                     if _other_loc and _other_loc != _agent_loc:
@@ -485,10 +490,9 @@ class PromptBuilder:
                         name=char_name, appearance=appearance,
                         gender=gender))
 
-        # 4. Fallback: Wenn NIEMAND erkannt wurde und ein Agent aktiv ist,
-        # den Agent als Default hinzufuegen (z.B. Group Chat Tool-Call mit
-        # unspezifischem Prompt "a beautiful sunset"). Ohne Fallback fehlen
-        # Appearance + Referenzbild komplett.
+        # 4. With no detected person, use the active agent as the default subject,
+        # including its appearance and reference image (for example, an
+        # unspecific group-chat tool prompt describing a beautiful sunset).
         if not persons and self.character_name:
             appearance = self._resolve_character_appearance(self.character_name)
             if appearance:
@@ -507,15 +511,16 @@ class PromptBuilder:
         return person_description(
             name, apply_state_modifiers=self.apply_state_modifiers,
             back_view=self.back_view, mesh_input=self.mesh_input,
-            body_profile=self.body_profile if name == self.character_name else None)
+            body_profile=self.body_profile if name == self.character_name else None,
+            neutral_state=self.neutral_state)
 
     def _assign_actor_labels(self, persons: List[Person]) -> None:
-        """Setzt actor_label auf den echten Character-Namen."""
+        """Set actor_label to the actual character name."""
         for person in persons:
             person.actor_label = person.name
 
     # ------------------------------------------------------------------
-    # Schritt 1b: Photographer-Filter (zentral, nach detect_persons aufrufen)
+    # Step 1b: centralized photographer filter, after detect_persons.
     # ------------------------------------------------------------------
 
     def apply_photographer_filter(
@@ -525,19 +530,16 @@ class PromptBuilder:
         photographer_mode: bool,
         is_selfie: bool,
         set_profile: bool) -> List[Person]:
-        """Entfernt den Agent aus persons, wenn er Photograph (nicht Subject) ist.
+        """Exclude the agent when it is the photographer rather than a subject.
 
-        Regeln (siehe done/image-creation.md 4.2.2 + plan-image-creation-redesign.md 5):
+        Rules (done/image-creation.md 4.2.2 and plan-image-creation-redesign.md 5):
+        - photographer_mode=False: leave persons unchanged.
+        - is_selfie=True: retain the agent as the self-portrait subject.
+        - set_profile=True: retain the agent for its profile picture.
+        - Photographer detected without another subject: insert the user avatar.
+        - Photographer absent with no subjects: leave persons empty for a stranger photo.
 
-        - photographer_mode=False  -> persons unveraendert
-        - is_selfie=True           -> Filter aus, Agent bleibt drin (Self-Portrait)
-        - set_profile=True         -> Filter aus (Profilbild des Agents)
-        - photographer_mode + Agent erkannt + kein anderes Subject
-                                   -> User-Avatar als Default-Subject einfuegen
-        - photographer_mode + Agent NICHT erkannt + keine Subjects
-                                   -> persons leer lassen (Stranger-Photo)
-
-        Idempotent — mehrfacher Aufruf hat keinen Effekt.
+        Repeated calls are idempotent.
         """
         if not photographer_mode or is_selfie or set_profile:
             return persons
@@ -561,7 +563,7 @@ class PromptBuilder:
         return filtered
 
     # ------------------------------------------------------------------
-    # Schritt 2: Kontext-Variablen sammeln
+    # Step 2: collect context variables.
     # ------------------------------------------------------------------
 
     def collect_context(
@@ -573,31 +575,31 @@ class PromptBuilder:
         photographer_mode: bool = False,
         set_profile: bool = False,
         item_ids: Optional[List[str]] = None) -> PromptVariables:
-        """Sammelt alle Kontext-Variablen fuer die erkannten Personen.
+        """Collect context variables for detected people.
 
         Args:
-            persons: Erkannte Personen aus detect_persons().
-            config: Entry-Point-Konfiguration.
-            prompt_text: Original-Prompt (fuer Selfie-Erkennung).
-            photographer_mode: Photographer-Modus aktiv.
-            set_profile: Profilbild-Modus.
-            item_ids: Item-IDs die als Props ins Bild sollen (freie Ref-Slots).
+            persons: People returned by detect_persons().
+            config: Entry-point configuration.
+            prompt_text: Original prompt for selfie detection.
+            photographer_mode: Whether photographer mode is active.
+            set_profile: Whether this is a profile image.
+            item_ids: Prop item IDs using available reference slots.
         """
         variables = PromptVariables()
         variables.persons = persons
         variables.photographer_mode = photographer_mode
         variables.set_profile = set_profile
         variables.is_selfie = any(kw in prompt_text.lower() for kw in SELFIE_KEYWORDS)
-        # Items fruehzeitig sammeln — spaetere Schritte sehen sie via variables.items
+        # Collect items early; later steps read variables.items.
         if item_ids:
             variables.items = self._collect_items(item_ids)
 
-        # Photographer-Filter wird jetzt vor collect_context aufgerufen
-        # (siehe apply_photographer_filter()). Hier nur noch der Stranger-Photo-
-        # Fallback fuer leere Personen-Listen.
+        # Apply the photographer filter before collect_context.
+        # See apply_photographer_filter(); only the stranger-photo case remains here.
+        # Fallback for an empty people list.
         agent_person = next((p for p in persons if p.is_agent), None)
 
-        # Keine Person erkannt?
+        # No person detected?
         if not persons:
             if config.include_persons and any(kw in prompt_text.lower() for kw in _PERSON_KEYWORDS):
                 variables.no_person_detected = False
@@ -610,19 +612,19 @@ class PromptBuilder:
                         logger.info("Fallback: Person-Keywords erkannt -> Agent '%s' hinzugefuegt",
                                     self.character_name)
                 else:
-                    # Photographer-Modus: Der Fotograf ist nicht im Bild.
-                    # Der Prompt beschreibt eine Person (Person-Keyword
-                    # erkannt), aber kein bekannter Character ist namentlich
+                    # Photographer mode excludes the photographer from the picture.
+                    # The prompt describes a person (person keyword detected)
+                    # without naming a known character.
                     # genannt — also FIKTIVE Person (Stranger-Photo).
-                    # persons leer lassen, kein User-Avatar zwingen — der
-                    # Renderer generiert die Person aus dem Prompt.
+                    # Leave persons empty instead of forcing the user avatar;
+                    # the renderer creates the person described by the prompt.
                     logger.info("Photographer-Stranger: keine bekannte Person — "
                                 "fiktives Motiv")
             else:
                 variables.no_person_detected = True
                 logger.debug("Keine Person erkannt -> reines Ort-/Raum-Bild")
 
-        # Agent sicherstellen (fuer set_profile oder wenn andere Personen da sind)
+        # Ensure the agent exists for set_profile or when other people are present.
         if config.include_persons and not any(p.is_agent for p in persons):
             if set_profile or (persons and not photographer_mode):
                 agent_person = self._create_agent_person()
@@ -637,9 +639,9 @@ class PromptBuilder:
                 variables.prompt_persons[idx] = f"{person.actor_label}, {person.appearance}"
 
         # Outfit + Reference-Bilder pro Person.
-        # Bei set_profile (Profilbild-Erstellung) kein Outfit-Text und keine
-        # Reference-Bilder — sonst Self-Reference-Loop, und der Profilbild-
-        # Workflow braucht eh nur Kopf + Gesichtsbeschreibung.
+        # Profile images carry neither outfit text nor reference images:
+        # otherwise they create a self-reference loop; the profile-image workflow
+        # needs only a head and face description anyway.
         if config.include_outfit and not set_profile:
             self._collect_outfits(persons, variables, photographer_mode)
 
@@ -658,7 +660,7 @@ class PromptBuilder:
         if config.include_location and not set_profile:
             self._collect_location(variables)
 
-        # Personality (nur bei Profilbild)
+        # Personality applies only to profile images.
         if set_profile:
             personality = get_character_personality(self.character_name) or ""
             variables.personality = personality
@@ -667,7 +669,7 @@ class PromptBuilder:
         return variables
 
     def _create_agent_person(self) -> Optional[Person]:
-        """Erstellt ein Person-Objekt fuer den Agent."""
+        """Create the agent's Person object."""
         appearance = self._resolve_character_appearance(self.character_name)
         if not appearance:
             return None
@@ -681,7 +683,7 @@ class PromptBuilder:
         return person
 
     def _create_user_person(self) -> Optional[Person]:
-        """Erstellt ein Person-Objekt fuer den User-Avatar (aktiver Character)."""
+        """Create a Person object for the user avatar (active character)."""
         avatar_name = self._avatar_name()
         if not avatar_name:
             return None
@@ -696,10 +698,10 @@ class PromptBuilder:
         return person
 
     def _collect_items(self, item_ids: List[str]) -> List[Dict[str, Any]]:
-        """Laedt Item-Details (name, description, image_path) fuer die angegebenen IDs.
+        """Load name, description and image_path for the supplied item IDs.
 
-        Liefert nur Items die ein existierendes PNG haben — andere koennen zwar
-        im Prompt-Text auftauchen, werden aber nicht als Ref-Slot belegt.
+        Only items with an existing PNG receive reference slots. Other items may
+        still appear in prompt text.
         """
         from app.models.inventory import get_item, get_item_image_path
         out: List[Dict[str, Any]] = []
@@ -728,7 +730,7 @@ class PromptBuilder:
     def _collect_outfits(
         self, persons: List[Person], variables: PromptVariables,
         photographer_mode: bool) -> None:
-        """Sammelt Outfit-Prompts und Reference-Bilder pro Person."""
+        """Collect outfit prompts and reference images for each person."""
         for idx, person in enumerate(persons, 1):
             outfit_text = ""
             ref_path = ""
@@ -754,9 +756,8 @@ class PromptBuilder:
                 ref_path = self._resolve_person_ref_image(person)
 
             if outfit_text:
-                # render_outfit().full liefert ggf. "wearing: <fragments>"
-                # — den Prefix strippen damit nicht "is wearing wearing: ..."
-                # entsteht.
+                # render_outfit().full may supply "wearing: <fragments>";
+                # strip that prefix to avoid "is wearing wearing: ...".
                 _ot = outfit_text.lstrip()
                 if _ot.lower().startswith("wearing: "):
                     outfit_text = _ot[len("wearing: "):]
@@ -795,38 +796,15 @@ class PromptBuilder:
                     return str(candidate)
             return ""
 
-        # Character: prio 1: expression variant (equipped + mood + pose key)
+        # Current expression contract, same selected set and exact outfit only.
         try:
-            from app.core.expression_regen import get_cached_expression
-            from app.models.inventory import get_equipped_pieces, get_equipped_items
+            from app.core.expression_regen import expression_snapshot, find_compatible_expression
             mood = get_character_current_feeling(person.name) or ""
-            pose_key = get_effective_pose_key(person.name) or ""
-            try:
-                eq_p = get_equipped_pieces(person.name)
-                eq_i = get_equipped_items(person.name)
-            except Exception:
-                eq_p, eq_i = None, None
-            cached = get_cached_expression(person.name, mood, pose_key,
-                equipped_pieces=eq_p, equipped_items=eq_i)
-            if cached and cached.exists():
-                logger.debug("RefImage [%s]: Expression-Variante", person.name)
+            cached = find_compatible_expression(expression_snapshot(person.name, mood))
+            if cached:
                 return str(cached)
-            # Prio 1b: the closest variant of the SAME outfit (another mood or
-            # pose) — it shows the body as dressed now, the profile portrait
-            # does not. Skipped when the equipped state could not be read:
-            # "nothing equipped" would match the undressed variants.
-            if eq_p is not None:
-                from app.core.expression_regen import find_same_outfit_expression
-                nearest = find_same_outfit_expression(
-                    person.name, mood, pose_key,
-                    equipped_pieces=eq_p, equipped_items=eq_i)
-                if nearest:
-                    logger.info("RefImage [%s]: no variant for this moment yet, "
-                                "nearest of the same outfit: %s",
-                                person.name, nearest.name)
-                    return str(nearest)
-        except (ImportError, Exception):
-            pass
+        except (OSError, ValueError, RuntimeError) as exc:
+            logger.debug("Expression identity reference unavailable for %s: %s", person.name, exc)
 
         # Prio 2: profile image
         profile_img = get_character_profile_image(person.name)
@@ -842,8 +820,8 @@ class PromptBuilder:
     def _collect_mood(
         self, persons: List[Person], variables: PromptVariables,
         photographer_mode: bool) -> None:
-        """Sammelt Stimmung pro Person."""
-        # Mood-Tracking muss aktiviert sein
+        """Collect each person's mood."""
+        # Mood tracking must be enabled.
         char_config = get_character_config(self.character_name) if self.character_name else {}
         if not char_config.get("mood_tracking", False):
             return
@@ -862,14 +840,14 @@ class PromptBuilder:
     def _collect_activity(
         self, persons: List[Person], variables: PromptVariables,
         photographer_mode: bool) -> None:
-        """Sammelt Aktivitaet pro Person."""
+        """Collect each person's activity."""
         activity_parts = []
         for person in persons:
             if person.is_user:
                 continue
             raw = get_effective_activity(person.name)
             if raw:
-                # Pose ist freier, schon beschreibender Text — keine Library-
+                # Pose text already describes the activity; there is no library lookup.
                 # Beschreibung mehr.
                 activity_parts.append(f"{person.actor_label} is {raw}")
 
@@ -877,7 +855,7 @@ class PromptBuilder:
             variables.prompt_activity = ", ".join(activity_parts)
 
     def _collect_location(self, variables: PromptVariables) -> None:
-        """Sammelt Location/Room-Daten."""
+        """Collect location and room data."""
         raw_location = get_character_current_location(self.character_name)
         if not raw_location:
             return
@@ -892,14 +870,13 @@ class PromptBuilder:
         location_desc = ""
 
         def _safe_desc_fallback(desc: str) -> str:
-            """description darf nur als Fallback dienen wenn sie wie eine
-            Bild-Beschreibung aussieht — keine First-Person-Narrative
-            oder Chat-Monologe (das passiert wenn ein Tool-Call sie aus
-            Versehen ueberschreibt)."""
+            """Use description only when it resembles an image description, not
+            first-person narration or a chat monologue accidentally stored by a tool call.
+            """
             if not desc:
                 return ""
             d = desc.strip().lower()
-            # First-Person-Marker: Indizien fuer Chat-Monolog statt Raum-Desc
+            # First-person markers distinguish chat monologue from room description.
             _bad_starts = ("mein blick", "ich ", "ich.", "i feel", "i am",
                            "i'm ", "my ", "we ", "wir ", "sollte ich",
                            "should i ", "let me ", "lass mich")
@@ -946,7 +923,7 @@ class PromptBuilder:
             variables.ref_image_room = str(bg_path)
 
     def _log_variables(self, variables: PromptVariables) -> None:
-        """Loggt alle gesammelten Variablen."""
+        """Log the collected variables."""
         for idx, prompt in variables.prompt_persons.items():
             logger.info("prompt_person_%d: %s...", idx, prompt[:80])
         for idx, prompt in variables.prompt_outfits.items():
@@ -963,7 +940,7 @@ class PromptBuilder:
             logger.debug("ref_image_4 (room): %s", Path(variables.ref_image_room).name)
 
     # ------------------------------------------------------------------
-    # Schritt 3: Ausschlussregeln anwenden
+    # Step 3: apply exclusion rules.
     # ------------------------------------------------------------------
 
     def apply_exclusion_rules(
@@ -1002,61 +979,60 @@ class PromptBuilder:
         return variables
 
     # ------------------------------------------------------------------
-    # Schritt 3b: scene_prompt bereinigen (Defense-in-Depth)
+    # Step 3b: clean scene_prompt as defence in depth.
     # ------------------------------------------------------------------
 
     def sanitize_scene_prompt(
         self,
         scene_prompt: str,
         variables: PromptVariables) -> str:
-        """Bereinigt den LLM-generierten scene_prompt von Duplikaten.
+        """Remove duplicated content from the LLM-generated scene_prompt.
 
-        Entfernt Appearance-Phrasen und Outfit-Beschreibungen, die bereits
-        in den strukturierten Variablen (prompt_persons, prompt_outfits)
-        enthalten sind. Siehe Plan 4.2.1b.
+        Remove appearance/outfit phrases already present in prompt_persons or
+        prompt_outfits; see plan 4.2.1b.
 
         Args:
-            scene_prompt: LLM-generierter Szene-Prompt.
-            variables: Gesammelte Prompt-Variablen (fuer Vergleich).
+            scene_prompt: Generated scene text.
+            variables: Collected prompt variables used for comparison.
 
         Returns:
-            Bereinigter scene_prompt.
+            The cleaned scene prompt.
         """
         if not scene_prompt:
             return scene_prompt
 
         original = scene_prompt
 
-        # 0. Photographer-Referenzen entfernen (Plan 4.2.2)
-        #    Im Photographer-Modus darf der Agent nicht im scene_prompt vorkommen.
-        #    Entfernt Segmente die den Agent-Namen oder Kamera-Aktionen enthalten.
+        # 0. Remove photographer references (plan 4.2.2).
+        # The photographer must not appear in scene_prompt.
+        # Remove segments containing the agent name or camera actions.
         if variables.photographer_mode:
             character_name_lower = self.character_name.lower()
             segments = [s.strip() for s in scene_prompt.split(",")]
             cleaned = []
             for s in segments:
                 s_lower = s.lower()
-                # Character-Name im Segment
+                # Character name in the segment.
                 if character_name_lower in s_lower:
                     logger.debug("scene_prompt: Photographer-Segment entfernt (Name): '%s'", s[:80])
                     continue
-                # Kamera-/Fotografie-Aktionen (gehoeren zum Fotografen, nicht zum Subject)
+                # Camera/photography actions belong to the photographer, not the subject.
                 if any(kw in s_lower for kw in _CAMERA_KEYWORDS):
                     logger.debug("scene_prompt: Photographer-Segment entfernt (Kamera): '%s'", s[:80])
                     continue
                 cleaned.append(s)
             scene_prompt = ", ".join(s for s in cleaned if s)
 
-        # 0b. Doppelte Namens-Einleitungen entfernen
-        #     LLM schreibt manchmal "Kai, a handsome man" obwohl Appearance separat kommt.
-        #     Entfernt Segmente wie "<Name>, a/an <adjective> man/woman/person"
+        # 0b. Remove duplicated name introductions.
+        # The tool LLM may duplicate a name introduction despite a separate appearance.
+        # Remove segments such as "<Name>, a/an <adjective> man/woman/person".
         known_names = {p.name.lower() for p in variables.persons if p.name}
         if known_names:
             segments = [s.strip() for s in scene_prompt.split(",")]
             cleaned = []
             for s in segments:
                 s_stripped = s.strip().lower()
-                # Pruefen ob Segment nur "Name" ist oder "a/an ... man/woman/person/guy/girl"
+                # Check whether the segment is only a name or "a/an ... man/woman/person/guy/girl".
                 is_name_intro = False
                 for name in known_names:
                     if s_stripped == name:
@@ -1073,11 +1049,11 @@ class PromptBuilder:
                     cleaned.append(s)
             scene_prompt = ", ".join(s for s in cleaned if s)
 
-        # 1. Outfit-Phrasen aus dem scene_prompt extrahieren UND als
-        #    prompt_outfits[1] (Agent) uebernehmen, damit der Tool-LLM-Wunsch
-        #    ("posing in sports bra and leggings") das DB-Outfit ueberschreibt.
-        #    Ohne diese Uebernahme wuerden Tool-LLM-Outfit und DB-Outfit
-        #    parallel als Garbage im Final-Prompt landen.
+        # 1. Extract outfit phrases from scene_prompt and put them into
+        # prompt_outfits[1] (agent), so the tool LLM's requested outfit
+        # ("posing in sports bra and leggings") replaces the DB outfit.
+        # Without this replacement, tool-LLM and DB outfits would both appear.
+        # Do not leave the same phrases as extra garbage in the final prompt.
         #
         #    Erkannte Patterns (case-insensitive, je bis Komma/Punkt):
         #      - "(is) wearing X"
@@ -1096,11 +1072,11 @@ class PromptBuilder:
                     _extracted_outfits.append(_phrase)
             scene_prompt = _pat.sub('', scene_prompt).strip()
 
-        # 1b. Implizite Kleidungs-Erwaehnungen ohne "wearing"-Verb erkennen.
-        #     Wenn der Tool-LLM "young woman's legs in a short black skirt"
-        #     oder "lace thong, business heels" schreibt, soll das Outfit-Feld
-        #     komplett uebernommen werden (nicht das DB-Outfit ploetzlich
-        #     parallel im Bild landen). Ein Bild = ein logisches Outfit.
+        # 1b. Detect implicit clothing mentions without a "wearing" verb.
+        # When the tool LLM supplies "young woman's legs in a short black skirt"
+        # or "lace thong, business heels", use that full outfit rather than
+        # use its outfit completely rather than also injecting the DB outfit
+        # combining two outfits in one picture.
         _CLOTHING_KEYWORDS = (
             "skirt", "dress", "blazer", "shirt", "blouse", "pants", "trousers",
             "jeans", "shorts", "leggings", "stockings", "tights", "socks",
@@ -1119,13 +1095,13 @@ class PromptBuilder:
                 for kw in _CLOTHING_KEYWORDS
             )
             if _has_clothing:
-                # "young woman's? " Praefix entfernen — der Tool-LLM
-                # nennt das Subject manchmal so statt beim Namen.
+                # Remove a "young woman's? " prefix when the tool LLM
+                # uses that instead of the subject's name.
                 _clean = re.sub(
                     r"\byoung\s+woman'?s?\s+", "",
                     _seg, flags=re.IGNORECASE).strip()
-                # Reine "Personenbeschreibung-mit-Kleidung"-Praefixe
-                # entfernen die uebrig bleiben.
+                # Remove remaining person-with-clothing description prefixes.
+                # Do not leave stripped prefixes behind.
                 _clean = re.sub(
                     r"^(her|his|their)\s+", "",
                     _clean, flags=re.IGNORECASE).strip()
@@ -1139,10 +1115,10 @@ class PromptBuilder:
         scene_prompt = ", ".join(s for s in _cleaned_segments if s)
 
         if _extracted_outfits and variables.persons:
-            # Wenn der Agent erkannt wurde, das Outfit ihm zuordnen — sonst
-            # erste Person der Liste. Tool-LLM-Outfit verdraengt DB-Outfit
-            # voellig (statt zu mergen): das Tool-LLM beschreibt eine konkrete
-            # Szene, das DB-Outfit ist nur Default-Annahme.
+            # Assign the outfit to the detected agent, otherwise to the first person.
+            # The tool-LLM outfit replaces, rather than merges with, the DB outfit:
+            # it describes a specific scene while the DB outfit is only a default.
+            # One picture must have one coherent outfit.
             _agent_idx = next(
                 (i + 1 for i, p in enumerate(variables.persons) if p.is_agent),
                 1)
@@ -1153,13 +1129,13 @@ class PromptBuilder:
                 "scene_prompt: Outfit aus Tool-LLM extrahiert -> prompt_outfits[%d] = '%s'",
                 _agent_idx, _new_outfit[:120])
 
-            # Wenn der Tool-LLM eine konkrete Szene beschreibt (= eigenes
-            # Outfit drin), sind die DB-State Felder fuer DIESES Bild irrelevant:
-            # - prompt_activity: "sitting at desk" passt nicht zur Gym-Szene
-            # - prompt_mood: DB-Mood-Expression ueberschreibt die im Tool-LLM
+            # A concrete tool-LLM scene already specifies its own outfit, so
+            # DB state fields are irrelevant to THIS image:
+            # - prompt_activity: "sitting at desk" contradicts a gym scene.
+            # - prompt_mood: the DB mood expression overrides the tool-LLM expression.
             #                explizit beschriebene Expression ("shy smile")
-            # - prompt_location: "Buero" passt nicht zum "gym setting"
-            # Die Szene-Details (Pose, Expression, Setting) bleiben im
+            # - prompt_location: an office contradicts a gym setting.
+            # Keep scene details (pose, expression and setting) in
             # bereinigten scene_prompt erhalten und gehen so ins Bild.
             if variables.prompt_activity:
                 logger.info(
@@ -1177,12 +1153,12 @@ class PromptBuilder:
                     variables.prompt_location[:80])
                 variables.prompt_location = ""
 
-        # 2. Appearance-Phrasen der erkannten Personen entfernen
-        #    Prueft jede Person ob signifikante Appearance-Woerter im scene_prompt vorkommen
+        # 2. Remove appearance phrases for detected people.
+        # Check each person for significant appearance words in scene_prompt.
         for person in variables.persons:
             if not person.appearance:
                 continue
-            # Appearance in Woerter zerlegen (nur signifikante, >3 Zeichen)
+            # Split the appearance into significant words (more than 3 characters).
             app_words = set(
                 w.lower() for w in re.findall(r'\b\w+\b', person.appearance)
                 if len(w) > 3 and w.lower() not in _COMMON_WORDS
@@ -1198,7 +1174,7 @@ class PromptBuilder:
                     w.lower() for w in re.findall(r'\b\w+\b', segment)
                     if len(w) > 3 and w.lower() not in _COMMON_WORDS
                 )
-                # Wenn >60% der Segment-Woerter in Appearance vorkommen -> entfernen
+                # Remove a segment when over 60% of its words occur in the appearance.
                 if seg_words and len(seg_words & app_words) / len(seg_words) > 0.6:
                     logger.debug("scene_prompt: Appearance-Segment entfernt fuer '%s': '%s'",
                                  person.name, segment[:80])
@@ -1216,13 +1192,13 @@ class PromptBuilder:
         return scene_prompt
 
     # ------------------------------------------------------------------
-    # Schritt 4: Prompt zusammenbauen
+    # Step 4: assemble the prompt.
     # ------------------------------------------------------------------
-    # Der finale Zusammenbau erfolgt jetzt in app/core/prompt_adapters.render()
-    # pro Target-Model (z_image / qwen / flux). Dieser Schritt entfaellt hier.
+    # Final assembly now happens in app/core/prompt_adapters.render()
+    # for the target model (z_image/qwen/flux); no assembly is needed here.
 
     # ------------------------------------------------------------------
-    # Schritt 5: Reference-Image Slots aufloesen
+    # Step 5: resolve reference-image slots.
     # ------------------------------------------------------------------
 
     def resolve_reference_slots(
@@ -1348,7 +1324,7 @@ class PromptBuilder:
 
     @staticmethod
     def _normalize_gender(gender: str) -> str:
-        """Normalisiert Gender-String fuer ComfyUI-Workflows und Akteur-Labels."""
+        """Normalize gender for ComfyUI workflows and actor labels."""
         g = gender.strip().lower()
         if g in ("female", "f", "weiblich", "w", "woman", "girl", "frau", "mädchen", "maedchen"):
             return "female"

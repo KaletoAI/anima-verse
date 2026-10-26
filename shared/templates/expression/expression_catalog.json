@@ -20,8 +20,7 @@
         "wachsam",
         "aufmerksam",
         "hilfsbereit"
-      ],
-      "_default": true
+      ]
     },
     "positive": {
       "prompt": "warm genuine smile, bright eyes, raised cheeks, relaxed brow",
@@ -154,6 +153,40 @@
         "erstaunt",
         "verdutzt"
       ]
+    },
+    "animal_neutral": {
+      "label": "Neutral",
+      "prompt": "natural calm animal expression, relaxed ears and muscles, steady gaze",
+      "synonyms": ["neutral", "calm", "ruhig"]
+    },
+    "animal_attentive": {
+      "label": "Attentive",
+      "prompt": "alert attentive animal expression, ears oriented toward interest, focused gaze",
+      "synonyms": ["attentive", "curious", "alert", "neugierig", "aufmerksam", "wachsam"]
+    },
+    "animal_relaxed": {
+      "label": "Relaxed",
+      "prompt": "relaxed content animal expression, soft gaze, loose muscles, ears at ease",
+      "synonyms": ["relaxed", "happy", "content", "tired", "sleepy", "entspannt", "glücklich", "froh", "müde"]
+    },
+    "animal_defensive": {
+      "label": "Defensive",
+      "prompt": "defensive wary animal expression, tense muscles, guarded gaze, ears drawn back naturally",
+      "synonyms": ["defensive", "angry", "scared", "nervous", "worried", "besorgt", "ängstlich", "wütend"]
+    }
+  },
+  "groups": {
+    "humanoid": {
+      "label": "Humanoid",
+      "default": "neutral",
+      "pose_prompt": "standing naturally upright, arms resting at the sides, full body visible",
+      "members": ["neutral", "positive", "sad", "angry", "nervous", "tired", "aroused", "surprised"]
+    },
+    "animal": {
+      "label": "Animal",
+      "default": "animal_neutral",
+      "pose_prompt": "standing naturally in a relaxed neutral stance appropriate to the animal's anatomy, full body visible",
+      "members": ["animal_neutral", "animal_attentive", "animal_relaxed", "animal_defensive"]
     }
   }
 }

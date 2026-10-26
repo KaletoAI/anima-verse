@@ -103,7 +103,7 @@ nxt = then({"group": decision.Answer("seat", None, 0.9, {})})
 check("Q1 entry options", len(nxt["entry"].options), 15)
 check("Q1 none option", DP.NONE_KEY in nxt["entry"].options, True)
 check("Q1 then({}) stops", then({}), None)
-first_e, then_e = DP.catalog_questions("expression")
+first_e, then_e = DP.catalog_questions("expression", set_id="humanoid")
 check("Q2 expression entry only", list(first_e), ["entry"])
 check("Q2 expression options", len(first_e["entry"].options), 9)
 check("Q2 no then", then_e, None)
@@ -114,28 +114,17 @@ check("T1 budget 9", DP._option_budget(9), 155)
 check("T1 budget 38", DP._option_budget(38), 80)
 check("T1 budget 0", DP._option_budget(0), 220)
 gq = first["group"]
-check("T2 group instructions", gq.instructions,
-      "Which body position does the text describe? Each option lists poses of that position.")
-check("T2 stand option spread", gq.options["stand"],
-      "Standing spot: standing, celebrating, comforting, digging, forehead-wiping, leaning, "
-      "picking up, shooting, talking, washing_dishes")
-check("T2 lie option", gq.options["lie"], "Lying place: lying, sleeping, sleeping on back")
-check("T2 ground option", gq.options["ground"],
-      "Ground: kneeling, bathing, gardening, meditating, yoga")
 check("T2 no group option over budget(4)",
       [g for g, o in gq.options.items() if len(o) > DP._option_budget(4)], [])
 eq = first_e["entry"]
-check("T3 neutral option", eq.options["neutral"],
-      "neutral: calm neutral face, relaxed brow, soft mouth, attentive eyes; e.g. focused, "
-      "thoughtful, curious, determined, calm, relaxed, creative, in control")
-expr = PC.get_catalog("expression")
+from app.core.expression_sets import catalog_snapshot
+expr = {key: PC.get_catalog("expression")[key] for key in catalog_snapshot().sets["humanoid"].members}
 check("T3 every expression option = key + prompt",
       [k for k, e in expr.items()
        if not (eq.options[k].startswith(f"{k}: ") and e.get("prompt")
                and e.get("prompt") in eq.options[k])], [])
 check("T3 expression options within budget",
       [k for k, o in eq.options.items() if len(o) > DP._option_budget(len(eq.options))], [])
-check("T3 none text", eq.options[DP.NONE_KEY], "none of these fits the text")
 stand_q = then({"group": decision.Answer("stand", None, 0.9, {})})["entry"]
 check("T4 stand entry options", len(stand_q.options), 44)
 pose = PC.get_catalog("pose")

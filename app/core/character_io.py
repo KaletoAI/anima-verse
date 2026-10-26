@@ -395,93 +395,95 @@ def import_character_from_zip(
     # blind to the stores that name their character otherwise or inside JSON;
     # the re-init sweep at the end of this function closes that for fresh, and
     # a full clone restores its own rows over the top anyway.
-    if already_exists and overwrite:
-        with transaction() as t_conn:
-            _wipe_db_for_character(t_conn, character_name)
-        if char_dir.exists():
-            import shutil
-            shutil.rmtree(char_dir)
+    from app.core.expression_regen import expression_import_scope
+    with expression_import_scope(character_name, zf):
+        if already_exists and overwrite:
+            with transaction() as t_conn:
+                _wipe_db_for_character(t_conn, character_name)
+            if char_dir.exists():
+                import shutil
+                shutil.rmtree(char_dir)
 
-    # Restore filesystem
-    char_dir.mkdir(parents=True, exist_ok=True)
-    skip_files = _fresh_skip_files() if fresh else frozenset()
-    file_count = 0
-    files_skipped: List[str] = []
-    for member in zf.namelist():
-        if not member.startswith("files/"):
-            continue
-        rel = member[len("files/"):]
-        safe_rel = _safe_relpath(rel)
-        if not safe_rel:
-            continue
-        if _retired_model_file(safe_rel) or safe_rel in skip_files:
-            files_skipped.append(safe_rel)
-            continue
-        target = char_dir / safe_rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        from app.models.character_template import invalidate_source_file
-        try:
-            target.write_bytes(zf.read(member))
-        finally:
-            invalidate_source_file(target)
-        file_count += 1
+        # Restore filesystem
+        char_dir.mkdir(parents=True, exist_ok=True)
+        skip_files = _fresh_skip_files() if fresh else frozenset()
+        file_count = 0
+        files_skipped: List[str] = []
+        for member in zf.namelist():
+            if not member.startswith("files/"):
+                continue
+            rel = member[len("files/"):]
+            safe_rel = _safe_relpath(rel)
+            if not safe_rel:
+                continue
+            if _retired_model_file(safe_rel) or safe_rel in skip_files:
+                files_skipped.append(safe_rel)
+                continue
+            target = char_dir / safe_rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            from app.models.character_template import invalidate_source_file
+            try:
+                target.write_bytes(zf.read(member))
+            finally:
+                invalidate_source_file(target)
+            file_count += 1
 
-    # Restore DB — `characters` first so FK-like consumers see it.
-    db_stats: Dict[str, int] = {}
-    db_tables: List[str] = list(manifest.get("db_tables") or [])
+        # Restore DB — `characters` first so FK-like consumers see it.
+        db_stats: Dict[str, int] = {}
+        db_tables: List[str] = list(manifest.get("db_tables") or [])
 
-    def _restore_named(table: str) -> None:
-        path = f"db/{table}.json"
-        if path not in zf.namelist():
-            return
-        try:
-            rows = json.loads(zf.read(path))
-        except json.JSONDecodeError as e:
-            logger.warning("import: %s.json invalid JSON: %s", table, e)
-            return
-        if not isinstance(rows, list):
-            return
-        with transaction() as t_conn:
-            db_stats[table] = _restore_table(t_conn, table, rows)
+        def _restore_named(table: str) -> None:
+            path = f"db/{table}.json"
+            if path not in zf.namelist():
+                return
+            try:
+                rows = json.loads(zf.read(path))
+            except json.JSONDecodeError as e:
+                logger.warning("import: %s.json invalid JSON: %s", table, e)
+                return
+            if not isinstance(rows, list):
+                return
+            with transaction() as t_conn:
+                db_stats[table] = _restore_table(t_conn, table, rows)
 
-    if "characters" in db_tables:
-        _restore_named("characters")
-        # The imported row may reference a template that only exists in the
-        # source world (e.g. the private human-roleplay-nsfw). Remap it to an
-        # installed template so the character renders + its features resolve.
-        try:
-            from app.models.character_template import normalize_character_template
-            normalize_character_template(character_name)
-        except Exception as e:
-            logger.warning("import: template normalize failed for %s: %s",
-                           character_name, e)
-        # A character exported before height became a cm profile field still
-        # carries the legacy body_slots.build.height word, which renders nowhere
-        # now — normalize it to centimetres (same rule as the one-time boot
-        # migration; an unmappable custom word is left untouched).
-        try:
-            from app.core.height import migrate_profile_height
-            from app.models.character import (get_character_profile,
-                                              save_character_profile)
-            _prof = get_character_profile(character_name) or {}
-            _changed, _ = migrate_profile_height(_prof)
-            if _changed:
-                save_character_profile(character_name, _prof)
-        except Exception as e:
-            logger.warning("import: height normalize failed for %s: %s",
-                           character_name, e)
-    skip_tables = _fresh_skip_tables() if fresh else frozenset()
-    for table in db_tables:
-        if table == "characters":
-            continue
-        if table in skip_tables:
-            db_stats[table] = 0  # deliberately dropped (re-init)
-            continue
-        _restore_named(table)
+        if "characters" in db_tables:
+            _restore_named("characters")
+            # The imported row may reference a template that only exists in the
+            # source world (e.g. the private human-roleplay-nsfw). Remap it to an
+            # installed template so the character renders + its features resolve.
+            try:
+                from app.models.character_template import normalize_character_template
+                normalize_character_template(character_name)
+            except Exception as e:
+                logger.warning("import: template normalize failed for %s: %s",
+                               character_name, e)
+            # A character exported before height became a cm profile field still
+            # carries the legacy body_slots.build.height word, which renders nowhere
+            # now — normalize it to centimetres (same rule as the one-time boot
+            # migration; an unmappable custom word is left untouched).
+            try:
+                from app.core.height import migrate_profile_height
+                from app.models.character import (get_character_profile,
+                                                  save_character_profile)
+                _prof = get_character_profile(character_name) or {}
+                _changed, _ = migrate_profile_height(_prof)
+                if _changed:
+                    save_character_profile(character_name, _prof)
+            except Exception as e:
+                logger.warning("import: height normalize failed for %s: %s",
+                               character_name, e)
+        skip_tables = _fresh_skip_tables() if fresh else frozenset()
+        for table in db_tables:
+            if table == "characters":
+                continue
+            if table in skip_tables:
+                db_stats[table] = 0  # deliberately dropped (re-init)
+                continue
+            _restore_named(table)
 
-    # Embedded world items: restore ONLY those missing in the target world —
-    # never overwrite existing items (a character import must not mutate the
-    # world's item library). `items` is intentionally NOT in db_tables.
+        # Embedded world items: restore ONLY those missing in the target world —
+        # never overwrite existing items (a character import must not mutate the
+        # world's item library). `items` is intentionally NOT in db_tables.
     if "db/items.json" in zf.namelist():
         from app.core.content_io import restore_embedded_items
         new_ids = restore_embedded_items(zf)

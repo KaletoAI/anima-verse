@@ -30,6 +30,7 @@ interface SelfData {
   bar_meta: Record<string, BarMeta>
   conditions: BoostCondition[]
   profile_image: string
+  expression_version?: string
 }
 
 export function SelfPanel() {
@@ -134,7 +135,7 @@ export function SelfPanel() {
 
   const portraitUrl = data.profile_image
     ? transparentPortraitUrl(`/characters/${encodeURIComponent(data.avatar)}/images/${encodeURIComponent(data.profile_image)}`)
-    : `/characters/${encodeURIComponent(data.avatar)}/outfit-expression?fallback=default`
+    : `/characters/${encodeURIComponent(data.avatar)}/outfit-expression?fallback=default&v=${encodeURIComponent(data.expression_version || '')}`
   const bars = Object.entries(data.status_effects || {})
 
   return (

@@ -410,8 +410,8 @@ def section_g_h_ghost_dirs() -> None:
     print("\n[G] a deleted character stays deleted   [H] its thumbnails go")
     from app.core import model3d
     from app.core.expression_regen import (clear_expression_cache,
-                                           find_nearest_expression,
-                                           peek_cached_expression)
+                                           expression_snapshot, get_cached_expression,
+                                           find_compatible_expression)
     from app.core.model_refs import get_model_refs_dir
     from app.imagegen import service as svc
     from app.models.character import (delete_character, get_character_dir,
@@ -424,12 +424,13 @@ def section_g_h_ghost_dirs() -> None:
     (base / "images" / "p.png").write_bytes(png_bytes())
     thumb_of(base / "images" / "p.png")
     t0 = thumb_count()
+    expression_request = expression_snapshot(name)
     check("delete_character", delete_character(name), True)
     check("H: its thumbnail dropped", thumb_count(), t0 - 1)
     get_model_refs_dir(name)
     model3d.get_model3d_dir(name)
-    peek_cached_expression(name, "happy", "standing")
-    find_nearest_expression(name, "happy")
+    get_cached_expression(expression_request)
+    find_compatible_expression(expression_request)
     check("clear_expression_cache → 0", clear_expression_cache(name), 0)
     save_outfit_image_meta(name, "x.png", {"a": 1})
     real_find = model3d.find_model3d

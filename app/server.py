@@ -75,6 +75,9 @@ try:
 except Exception as _coe:
     logger.warning("catalog overlay migration failed: %s", _coe)
 
+from app.core.expression_sets_migration import migrate_catalog_metadata
+migrate_catalog_metadata()
+
 # Decision models (plan-decision-models.md): the core's decision points
 # register at import. Nothing is asked unless decision.enabled is on.
 import app.core.decision_points  # noqa: E402,F401
@@ -442,9 +445,6 @@ async def lifespan(app: FastAPI):
     if _orphan_stats.get("moved"):
         logger.info("Orphan-Bilder verschoben: %s", _orphan_stats)
 
-    # Migration: prefix variant filenames with the character name
-    from app.core.expression_regen import migrate_variant_filenames
-    migrate_variant_filenames()
 
     # Migration: rename the legacy narrator-speaker sentinel to the canonical
     # STORYTELLER_SPEAKER in all persisted rows (idempotent, world_kv-marked).

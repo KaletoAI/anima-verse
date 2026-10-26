@@ -232,9 +232,9 @@ def _replace_last_state_entry(character_name: str, change_type: str, value: str,
     record_state_change(character_name, change_type, value, metadata)
 
 
-# Runtime-Keys: werden in character_state gespeichert, in profile_json NICHT.
-# get_character_profile injiziert sie in die Rueckgabe, save_character_profile
-# extrahiert sie vor dem Persistieren von profile_json.
+# Runtime keys live in character_state, never in profile_json.
+# get_character_profile injects them into its returned dictionary;
+# save_character_profile extracts them before persisting profile_json.
 _STATE_COLS = ("current_location", "current_room", "current_activity",
                "current_feeling", "location_changed_at", "activity_changed_at")
 
@@ -353,7 +353,7 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
                     result[k] = meta[k]
     except Exception:
         pass
-    # None-Platzhalter entfernen, damit profile.get(k) fehlende Keys meldet
+    # Remove None placeholders so profile.get(k) reports missing keys.
     return {k: v for k, v in result.items() if v is not None}
 
 
@@ -495,6 +495,35 @@ def _is_real_character(name: str) -> bool:
     return True
 
 
+def _expression_profile_write(save):
+    """Serialize explicit set selection with catalog deletion and profile writes."""
+    from functools import wraps
+    @wraps(save)
+    def guarded(character_name, profile, *args, **kwargs):
+        import sqlite3
+        from contextlib import nullcontext
+        from app.core.keyed_lock import keyed_lock
+        from app.core.pose_catalog_edit import catalog_txn, CatalogEditError
+        from app.core.expression_sets import catalog_snapshot
+        from app.core.paths import StorageNotInitialised
+        with keyed_lock("character_profile", character_name):
+            try:
+                row = get_connection().execute("SELECT profile_json FROM characters WHERE name=?", (character_name,)).fetchone()
+                old = json.loads(row[0] or "{}") if row else {}
+                selected = str(profile.get("expression_set") or "")
+                changed = row is None or selected != str(old.get("expression_set") or "")
+                with catalog_txn("expression") if changed and selected else nullcontext():
+                    if changed and selected and selected not in catalog_snapshot().sets:
+                        logger.error("Profile not stored: unknown expression set %r for %s", selected, character_name)
+                        return False
+                    return save(character_name, profile, *args, **kwargs)
+            except (sqlite3.Error, OSError, StorageNotInitialised, json.JSONDecodeError, CatalogEditError) as exc:
+                logger.error("Profile not stored for %s: %s", character_name, exc)
+                return False
+    return guarded
+
+
+@_expression_profile_write
 def save_character_profile(character_name: str, profile: Dict[str, Any],
                            create_new: bool = False) -> bool:
     """Stores a character's profile in the DB.
@@ -713,7 +742,7 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
                 merged_state["activity_changed_at"],
                 meta_json,
             ))
-            # Typisierte Felder nur updaten wenn vom Caller mitgegeben.
+            # Update typed fields only when supplied by the caller.
             if state_typed:
                 set_parts = []
                 values: List[Any] = []
@@ -737,7 +766,7 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     for k, v in state_meta.items():
         profile[k] = v
     for name, value in state_typed.items():
-        # Read-Cast: bool/int wie er sich beim Reload anfuehlt
+        # Read cast: restore the same bool/int types used on reload.
         read_cast = next((rc for n, _t, rc, _wc in _STATE_TYPED_COLS if n == name),
                          lambda v: v)
         profile[name] = read_cast(value)
@@ -948,74 +977,78 @@ def delete_character(character_name: str) -> bool:
                            _step.__name__, character_name, e)
 
     # 1) DB sweep
-    try:
-        stored_tx_1 = False
-        with transaction() as conn:
-            tables = [r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()]
-            for tbl in tables:
-                cols = {c[1] for c in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
-                if "character_name" in cols:
-                    conn.execute(f"DELETE FROM {tbl} WHERE character_name=?", (character_name,))
-            # Special columns: tables whose character reference has another name:
-            # characters.name, relationships.from_char/to_char,
-            # llm_call_stats.agent_name, chat_messages.partner.
-            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='characters'").fetchone():
-                conn.execute("DELETE FROM characters WHERE name=?", (character_name,))
-            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='relationships'").fetchone():
-                conn.execute("DELETE FROM relationships WHERE from_char=? OR to_char=?",
-                             (character_name, character_name))
-            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='llm_call_stats'").fetchone():
-                conn.execute("DELETE FROM llm_call_stats WHERE agent_name=?", (character_name,))
-            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='chat_messages'").fetchone():
-                conn.execute("DELETE FROM chat_messages WHERE partner=?", (character_name,))
-            # Tables that reference a character through OTHER columns than
-            # character_name — column names read off world_db_schema.py:
-            # parties(party_id, leader, members), party_invites(inviter,
-            # invitee), interaction_invites(inviter, invitee),
-            # intents(owner, participants). Step 0b already ended the live
-            # ones through the engines; this is the belt for rows whose
-            # counterpart never got that far (a stale invitation, a party
-            # row an earlier crash left behind).
-            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='parties'").fetchone():
-                conn.execute("DELETE FROM parties WHERE leader=?", (character_name,))
-            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='party_invites'").fetchone():
-                conn.execute("DELETE FROM party_invites WHERE inviter=? OR invitee=?",
-                             (character_name, character_name))
-            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_invites'").fetchone():
-                conn.execute("DELETE FROM interaction_invites WHERE inviter=? OR invitee=?",
-                             (character_name, character_name))
-            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='intents'").fetchone():
-                conn.execute("DELETE FROM intents WHERE owner=?", (character_name,))
-            _prune_party_memberships(conn, character_name)
-            stored_tx_1 = True
-    except Exception as e:
-        logger.error("delete_character DB-Fehler fuer %s: %s", character_name, e)
-        return False
+    from app.core.expression_regen import publication_lock, invalidate_publication
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name), publication_lock(character_name):
+        invalidate_publication(character_name)
+        try:
+            stored_tx_1 = False
+            with transaction() as conn:
+                tables = [r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()]
+                for tbl in tables:
+                    cols = {c[1] for c in conn.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                    if "character_name" in cols:
+                        conn.execute(f"DELETE FROM {tbl} WHERE character_name=?", (character_name,))
+                # Special columns: tables whose character reference has another name:
+                # characters.name, relationships.from_char/to_char,
+                # llm_call_stats.agent_name, chat_messages.partner.
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='characters'").fetchone():
+                    conn.execute("DELETE FROM characters WHERE name=?", (character_name,))
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='relationships'").fetchone():
+                    conn.execute("DELETE FROM relationships WHERE from_char=? OR to_char=?",
+                                 (character_name, character_name))
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='llm_call_stats'").fetchone():
+                    conn.execute("DELETE FROM llm_call_stats WHERE agent_name=?", (character_name,))
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='chat_messages'").fetchone():
+                    conn.execute("DELETE FROM chat_messages WHERE partner=?", (character_name,))
+                # Tables that reference a character through OTHER columns than
+                # character_name — column names read off world_db_schema.py:
+                # parties(party_id, leader, members), party_invites(inviter,
+                # invitee), interaction_invites(inviter, invitee),
+                # intents(owner, participants). Step 0b already ended the live
+                # ones through the engines; this is the belt for rows whose
+                # counterpart never got that far (a stale invitation, a party
+                # row an earlier crash left behind).
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='parties'").fetchone():
+                    conn.execute("DELETE FROM parties WHERE leader=?", (character_name,))
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='party_invites'").fetchone():
+                    conn.execute("DELETE FROM party_invites WHERE inviter=? OR invitee=?",
+                                 (character_name, character_name))
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='interaction_invites'").fetchone():
+                    conn.execute("DELETE FROM interaction_invites WHERE inviter=? OR invitee=?",
+                                 (character_name, character_name))
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='intents'").fetchone():
+                    conn.execute("DELETE FROM intents WHERE owner=?", (character_name,))
+                _prune_party_memberships(conn, character_name)
+                stored_tx_1 = True
+        except Exception as e:
+            logger.error("delete_character DB-Fehler fuer %s: %s", character_name, e)
+            return False
 
-    from app.core import sync_topics
-    if stored_tx_1:
-        sync_topics.moved(character_name, old_loc, "")
-    if stored_tx_1:
-        sync_topics.avatars(old_party, ("presence", "notices"))
-    # 2) Remove the storage directory — after the DB sweep. The cached
-    #    thumbnails of its images go first (their key needs the live path).
-    try:
-        char_dir = get_user_characters_dir() / character_name
-        images_dir = char_dir / "images"
-        if images_dir.is_dir():
-            from app.core.thumbnails import forget_sources
-            forget_sources(f for f in images_dir.iterdir() if f.is_file())
-        if char_dir.exists():
-            import shutil
-            shutil.rmtree(char_dir)
-    except Exception as e:
-        logger.warning("delete_character: directory of %s not removable: %s",
-                       character_name, e)
+        from app.core import sync_topics
+        if stored_tx_1:
+            sync_topics.moved(character_name, old_loc, "")
+        if stored_tx_1:
+            sync_topics.avatars(old_party, ("presence", "notices"))
+        # 2) Remove the storage directory — after the DB sweep. The cached
+        #    thumbnails of its images go first (their key needs the live path).
+        try:
+            char_dir = get_user_characters_dir() / character_name
+            images_dir = char_dir / "images"
+            if images_dir.is_dir():
+                from app.core.thumbnails import forget_sources
+                forget_sources(f for f in images_dir.iterdir() if f.is_file())
+            if char_dir.exists():
+                import shutil
+                shutil.rmtree(char_dir)
+        except Exception as e:
+            logger.warning("delete_character: directory of %s not removable: %s",
+                           character_name, e)
 
-    logger.info("Character '%s' geloescht (DB + Storage)", character_name)
-    return True
+        logger.info("Character '%s' geloescht (DB + Storage)", character_name)
+        return True
 
 
 def get_character_personality(character_name: str) -> str:
@@ -1031,7 +1064,7 @@ def get_character_personality(character_name: str) -> str:
 
 
 def _get_character_defaults() -> Dict[str, Any]:
-    """Character-Default-Config. LLM-Wahl erfolgt zentral ueber den Router."""
+    """Character default config. LLM selection is handled centrally by the router."""
     return {
         "tts_enabled": True,
         "tts_auto": False,
@@ -1208,11 +1241,10 @@ def get_character_current_location(character_name: str = "",
 
 
 def get_known_locations(character_name: str) -> List[str]:
-    """Liefert die known_locations-Liste eines Characters (immer eine Liste).
+    """Return the character's known_locations list (always a list).
 
-    Strict membership in ``location_visible_to_character`` — leere Liste
-    bedeutet "kennt nichts", Auto-Discovery beim Betreten und der Discover-
-    Regel-Mechanismus erweitern die Liste schrittweise.
+    Strict membership in location_visible_to_character: an empty list means
+    no known places. Entry discovery and Discover rules extend it gradually.
     """
     if not character_name:
         return []
@@ -1224,11 +1256,10 @@ def get_known_locations(character_name: str) -> List[str]:
 
 
 def get_gallery_viewers(character_name: str) -> List[str]:
-    """Liefert die Freigabeliste fuer die Galerie eines Characters.
+    """Return the character gallery access list.
 
-    ``gallery_allowed_viewers`` ist eine Liste von Avatar-/Character-Namen, die
-    die Galerie dieses Characters im Player-UI durchstoebern duerfen. Leere
-    Liste = nur der Character selbst (Besitzer) sieht seine Galerie.
+    gallery_allowed_viewers lists avatars/characters allowed to browse this
+    gallery in the player UI. An empty list permits only the owner.
     """
     if not character_name:
         return []
@@ -1295,26 +1326,14 @@ def set_known_locations(character_name: str, location_ids: List[str]) -> List[st
 
 
 def _schedule_background_variant(character_name: str) -> None:
-    """Triggers an expression variant for the current mood/pose/equipped state
-    in the background — so the next character switch already finds a fresh
-    image in the cache. Never raises.
-    """
+    """Warm the worn outfit's set-local expression without activity variants."""
     if not character_name:
         return
     try:
-        from app.core.expression_regen import trigger_expression_generation
-        from app.models.inventory import get_equipped_pieces, get_equipped_items
+        from app.core.expression_regen import trigger_expression_generation, expression_snapshot
         profile = get_character_profile(character_name) or {}
         mood = profile.get("current_feeling", "") or ""
-        # The image cache is keyed by CATALOG KEYS — the display text
-        # (get_effective_activity) never reaches it.
-        pose_key = get_effective_pose_key(character_name)
-        eq_p = get_equipped_pieces(character_name)
-        eq_i = get_equipped_items(character_name)
-        trigger_expression_generation(
-            character_name, mood, pose_key,
-            equipped_pieces=eq_p, equipped_items=eq_i,
-            ignore_cooldown=False)  # respect the cooldown
+        trigger_expression_generation(expression_snapshot(character_name, mood))
     except Exception as _e:
         logger.debug("Background variant trigger for %s failed: %s",
                      character_name, _e)
@@ -2612,7 +2631,7 @@ def _update_outfit_intent(character_name: str, **changes) -> Dict[str, Any]:
 
 
 def add_forbidden_slot(character_name: str, slot: str) -> None:
-    """Markiert einen Slot als "absichtlich leer"."""
+    """Mark a slot intentionally empty."""
     if not (character_name and slot):
         return
     intent = get_outfit_intent(character_name)
@@ -2948,7 +2967,7 @@ def _save_outfits_file(character_name: str, outfits: List[Dict]):
 
 
 def _get_outfit_sidecar_path(character_name: str, image_filename: str) -> Path:
-    """Pfad zur Sidecar-JSON eines Outfit-Bildes (gleicher Basename, .json)."""
+    """Path of an outfit image sidecar (same stem, .json extension)."""
     stem = Path(image_filename).stem
     return get_character_outfits_dir(character_name) / f"{stem}.json"
 
@@ -3951,7 +3970,7 @@ def _normalize_schedule_slots(raw_slots: Any) -> List[Dict[str, Any]]:
             continue
         if hour < 0 or hour > 23:
             continue
-        # Sleep-Erkennung: explizites Flag oder Legacy-Sentinel.
+        # Detect sleep through the explicit flag or the legacy sentinel.
         legacy_loc = (s.get("location") or "").strip()
         legacy_act = (s.get("activity") or "").strip()
         is_sleep = bool(s.get("sleep")) or legacy_loc == "__sleep__" or legacy_act == "__sleep__"
@@ -4306,7 +4325,7 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
     return changes
 
 
-# === State-Flag-Setter (Schritt 6, May 2026) =============================
+# === State-flag setters (step 6, May 2026) =============================
 # Plan: development_instructions/plan-outfit-system-rethink.md §1.4
 # Drei orthogonale Flags ersetzen Activity-Effekte:
 #   is_sleeping  → Compliance skip + AgentLoop-Skip + off-map

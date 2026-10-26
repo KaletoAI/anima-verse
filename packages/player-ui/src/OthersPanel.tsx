@@ -28,6 +28,7 @@ interface CharState {
   bar_meta: Record<string, BarMeta>
   conditions: BoostCondition[]
   profile_image: string
+  expression_version?: string
   /** The place held (plan-posen-plaetze.md § 7) as a finished phrase —
    *  "on the sofa". The SERVER composes it (`places.place_phrase`), because
    *  the preposition belongs to the place type and that table may only exist
@@ -66,7 +67,7 @@ const AVATAR_W = thumbWidth(44)
 function portraitUrl(c: CharState): string {
   return c.profile_image
     ? transparentPortraitUrl(`/characters/${encodeURIComponent(c.name)}/images/${encodeURIComponent(c.profile_image)}`)
-    : `/characters/${encodeURIComponent(c.name)}/outfit-expression?fallback=default`
+    : `/characters/${encodeURIComponent(c.name)}/outfit-expression?fallback=default&v=${encodeURIComponent(c.expression_version || '')}`
 }
 
 /** One line "type · strength". The sentiment is NOT printed — only its sign

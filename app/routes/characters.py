@@ -541,7 +541,7 @@ def get_outfit_rules_route() -> Dict[str, Any]:
 
 
 @router.post("/{character_name}/clear-expression-cache")
-def clear_expression_cache_route(character_name: str) -> Dict[str, Any]:
+def clear_expression_cache_route(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Deletes every cached expression image of this character. They are
     re-rendered on demand; the key space is bounded by the pose/expression
     catalogs. The world-wide variant lives in ``poses.py``."""
@@ -631,258 +631,140 @@ def _set_decency_exempt_route_sync(character_name: str,
             "exempt": bool(get_state_flags(character_name).get("decency_exempt"))}
 
 
-# --- Expression Image (mood + pose variants) ---
+# --- Outfit-bound expression images ---
+
+def _expression_request(character_name, mood="", pieces="", items="", override=False):
+    from app.core.expression_regen import expression_snapshot
+    from app.core.pose_catalog_edit import CatalogEditError
+    explicit = bool(override or pieces or items)
+    if not isinstance(pieces, (str, dict)) or not isinstance(items, (str, list, tuple)):
+        raise HTTPException(400, "Invalid expression outfit override")
+    eqp = dict(pieces) if isinstance(pieces, dict) else {
+        pair.split(":", 1)[0].strip(): pair.split(":", 1)[1].strip()
+        for pair in pieces.split(",") if ":" in pair}
+    eqi = list(items) if isinstance(items, (list, tuple)) else [i.strip() for i in items.split(",") if i.strip()]
+    if any(not isinstance(k, str) or not isinstance(v, str) for k, v in eqp.items()) or any(not isinstance(i, str) for i in eqi):
+        raise HTTPException(400, "Expression outfit ids must be strings")
+    if not explicit and not mood:
+        mood = get_character_current_feeling(character_name) or ""
+    try:
+        return expression_snapshot(character_name, str(mood), equipped_pieces=eqp if explicit else None,
+                                   equipped_items=eqi if explicit else None)
+    except CatalogEditError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+
+
+def _expression_owner(request, character_name):
+    from app.core.auth_dependency import get_current_user, filter_characters
+    user = get_current_user(request)
+    if user.get("role") != "admin" and character_name not in filter_characters(request, [character_name]):
+        raise HTTPException(403, "Character access required")
+    return user
+
+
+@router.get("/{character_name}/expression-options")
+def expression_options(character_name: str, request: Request):
+    from app.core.expression_sets import catalog_snapshot, set_for_character, ExpressionSetError
+    _expression_owner(request, character_name)
+    profile = get_character_profile(character_name)
+    if not profile:
+        raise HTTPException(404, "Character not found")
+    cat = catalog_snapshot()
+    automatic = set_for_character(character_name, profile={**profile, "expression_set": ""}, catalog=cat).id
+    selected = str(profile.get("expression_set") or "")
+    error = ""
+    try:
+        set_for_character(character_name, profile=profile, catalog=cat)
+    except ExpressionSetError as exc:
+        error = str(exc)
+    return {"options": [{"value": sid, "label": spec.label} for sid, spec in cat.sets.items()],
+            "automatic_set": automatic, "selected_set": selected, "error": error}
+
+
+@router.post("/{character_name}/expression-generation")
+async def expression_generation(character_name: str, request: Request):
+    import asyncio
+    from dataclasses import asdict
+    from fastapi.responses import JSONResponse
+    from app.core.expression_regen import start_expression_attempt
+    _expression_owner(request, character_name)
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Expression generation expects an object")
+    snap = await asyncio.to_thread(_expression_request, character_name, body.get("mood", ""),
+                                   body.get("pieces", ""), body.get("items", ""), bool(body.get("override")))
+    attempt = await asyncio.to_thread(start_expression_attempt, snap, force=bool(body.get("force")),
+                                     ignore_feature_gate=True)
+    status = 202 if attempt.state in ("pending", "running") else 200 if attempt.state == "ready" else 409
+    return JSONResponse({**asdict(attempt), **({"detail": attempt.error} if attempt.error else {})},
+                        status_code=status, headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/{character_name}/expression-status")
+def expression_status_route(character_name: str, request: Request, attempt_id: str = "",
+                            mood: str = "", pieces: str = "", items: str = "", override: int = 0):
+    from dataclasses import asdict
+    from app.core.expression_regen import get_expression_attempt, expression_status
+    _expression_owner(request, character_name)
+    if attempt_id:
+        if any(key in request.query_params for key in ("mood", "pieces", "items", "override")):
+            raise HTTPException(400, "Attempt status cannot include a new expression selection")
+        attempt = get_expression_attempt(character_name, attempt_id)
+        if attempt is None:
+            raise HTTPException(404, "Unknown expression attempt; the server may have restarted")
+        return asdict(attempt)
+    return expression_status(_expression_request(character_name, mood, pieces, items, bool(override)))
+
+
+@router.get("/{character_name}/expression-cleanup")
+def expression_cleanup_preview(character_name: str, _: Dict[str, Any] = Depends(require_admin)):
+    from app.core.expression_cleanup import preview_cleanup, CleanupError
+    try:
+        return preview_cleanup(character_name)
+    except CleanupError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+
+
+@router.post("/{character_name}/expression-cleanup")
+async def expression_cleanup_apply(character_name: str, request: Request,
+                                    _: Dict[str, Any] = Depends(require_admin)):
+    import asyncio
+    from app.core.expression_cleanup import apply_cleanup, CleanupError
+    body = await request.json()
+    if not isinstance(body, dict) or not isinstance(body.get("revision"), str):
+        raise HTTPException(400, "Cleanup requires a preview revision")
+    try:
+        return await asyncio.to_thread(apply_cleanup, character_name, str(body.get("revision") or ""))
+    except CleanupError as exc:
+        raise HTTPException(exc.status, {"message": str(exc), "completed": exc.completed}) from exc
 
 @router.get("/{character_name}/outfit-expression")
-def get_outfit_expression(character_name: str, mood: str = "", pose_key: str = "",
-                          pieces: str = "", items: str = "",
-                          override: int = 0, trigger: int = 0, force: int = 0,
-                          fallback: str = ""):
-    """Returns the expression/pose variant for current mood + pose + equipped.
-
-    Variant = character appearance + worn items (pieces + equipped items) +
-    pose (from the pose CATALOG KEY, default when empty) + expression (from
-    the mood, resolved to its catalog key). The cache key does not depend on
-    an outfit object — there is no base outfit image any more.
-
-    Query params:
-        pose_key: Optional pose catalog key (see /poses). Empty = the
-                character's effective pose key; an unknown key falls back to
-                the catalog default.
-        pieces: Optional "slot1:itemId1,slot2:itemId2" — overrides the
-                really equipped piece state (e.g. a wardrobe preview of a set
-                that is not worn yet).
-        items: Optional "id1,id2" — overrides equipped_items.
-        override: 1 forces the use of pieces/items even when empty
-                  (= "empty equipped state"); without override, empty
-                  pieces/items mean "not supplied" and the real state is
-                  loaded from the profile.
-        fallback: "default" — when no variant is cached (but a generation is
-                  running), a placeholder image is returned (200 instead of
-                  202) so the frontend shows something sensible until the real
-                  variant is ready.
-
-    Responses: 200 with the image, 202 while a generation runs, 404 on
-    failure / when no generator is available.
-    """
-    from app.core.expression_regen import (
-        get_cached_expression, trigger_expression_generation, is_generating, has_failed)
-
-    # Mood/pose: when not passed explicitly, take the character state as the
-    # default — so the frontend finds the variant cache that matches
-    # chat/scheduler. Override mode allows empty params (a set preview is
-    # generic).
-    _is_override = bool(override or pieces or items)
-    if not _is_override:
-        if not mood:
-            try:
-                from app.models.character import get_character_current_feeling
-                mood = get_character_current_feeling(character_name) or ""
-            except Exception:
-                mood = ""
-        if not pose_key:
-            try:
-                # Effective pose key (B1): mirrors the is_sleeping flag → a
-                # sleeping character gets the sleeping pose/expression, in
-                # step with _expr_version in /play/scene.
-                from app.models.character import get_effective_pose_key
-                pose_key = get_effective_pose_key(character_name) or ""
-            except Exception:
-                pose_key = ""
-
-    # Equipped state: override params win, otherwise the real state from the
-    # profile. Override mode is read-only — it only looks into the cache and
-    # triggers no generation, so preview flows (e.g. flipping through sets in
-    # the wardrobe) do not kick off generations en masse.
-    _eq_pieces: Optional[Dict[str, str]] = None
-    _eq_items: Optional[List[str]] = None
-    if _is_override:
-        _eq_pieces = {}
-        for pair in pieces.split(","):
-            pair = pair.strip()
-            if not pair or ":" not in pair:
-                continue
-            slot, iid = pair.split(":", 1)
-            slot, iid = slot.strip(), iid.strip()
-            if slot and iid:
-                _eq_pieces[slot] = iid
-        _eq_items = [s.strip() for s in items.split(",") if s.strip()]
-    else:
-        try:
-            from app.models.inventory import get_equipped_pieces, get_equipped_items
-            _eq_pieces = get_equipped_pieces(character_name)
-            _eq_items = get_equipped_items(character_name)
-        except Exception:
-            _eq_pieces, _eq_items = None, None
-
-    # Check cache
-    cached = get_cached_expression(character_name, mood, pose_key,
-                                    equipped_pieces=_eq_pieces, equipped_items=_eq_items)
-    if cached and force:
-        # Force regenerate: delete the cached PNG + sidecar so the trigger
-        # path below renders the variant anew.
-        try:
-            cached.unlink()
-            _sidecar = cached.with_suffix(".json")
-            if _sidecar.exists():
-                _sidecar.unlink()
-            logger.info("Force regenerate expression: %s", cached.name)
-        except OSError as e:
-            logger.warning("Force regenerate could not delete the cache: %s", e)
-        cached = None
-    if cached:
-        media_type = mimetypes.guess_type(str(cached))[0] or "image/png"
-        return FileResponse(
-            path=str(cached),
-            media_type=media_type,
-            headers={"Cache-Control": "public, max-age=3600"})
-
-    # Helper: fallback image while the requested variant is not ready yet.
-    # The profile image is NEVER an option — that is the roster avatar, not a
-    # scene. Order:
-    #   1) The variant with the MOST SIMILAR outfit combination (equal
-    #      expression key as tie-break) — covers the default variant of the
-    #      same outfit as well.
-    #   2) The default variant (mood="" + pose_key="", i.e. the catalog
-    #      defaults) with the current equipped state — only bites when
-    #      sidecars record no outfit.
-    #   3) The newest expression variant of the character, whatever it shows.
-    # If all of that is missing: None → the caller answers 202 (generation
-    # running) and the frontend keeps polling until the real variant lands.
-    def _serve_fallback():
-        from app.core.expression_regen import (_get_expressions_dir, _safe_name,
-                                               find_nearest_expression)
-
-        def _serve_file(path, status):
-            media_type = mimetypes.guess_type(str(path))[0] or "image/png"
-            return FileResponse(
-                path=str(path),
-                media_type=media_type,
-                headers={
-                    "Cache-Control": "no-cache",
-                    "X-Variant-Status": status,
-                })
-
-        # 1) Nearest outfit variant (app/core/outfit_match.py)
-        try:
-            nearest = find_nearest_expression(character_name, mood,
-                                              _eq_pieces, _eq_items)
-        except Exception:
-            nearest = None
-        if nearest is not None:
-            return _serve_file(nearest, "fallback-nearest")
-
-        # 2) Default variant: same equipped state, mood + pose key empty
-        try:
-            default_cached = get_cached_expression(
-                character_name, "", "",
-                equipped_pieces=_eq_pieces, equipped_items=_eq_items,
-            )
-        except Exception:
-            default_cached = None
-        if default_cached and default_cached.exists():
-            return _serve_file(default_cached, "fallback-default")
-
-        # 3) Newest expression variant of the character, whatever it is
-        try:
-            expr_dir = _get_expressions_dir(character_name)
-            prefix = _safe_name(character_name)
-            candidates = []
-            if expr_dir.exists():
-                for ext in ("*.png", "*.jpg", "*.webp"):
-                    candidates.extend(expr_dir.glob(f"{prefix}_{ext}"))
-            if candidates:
-                newest = max(candidates, key=lambda p: p.stat().st_mtime)
-                return _serve_file(newest, "fallback-variant-any")
-        except Exception:
-            pass
-
-        # NO profile-image fallback — better nothing than the wrong image.
-        return None
-
-    _want_fallback = (fallback or "").strip().lower() == "default"
-
-    # Override mode: read the cache only, by default. With trigger=1 the
-    # generation for exactly this equipped combination is started explicitly
-    # (e.g. the wardrobe preview button, which precomputes the variant for the
-    # selected set without putting it on first).
-    if _is_override and not trigger:
-        if is_generating(character_name, mood, pose_key,
-                         equipped_pieces=_eq_pieces, equipped_items=_eq_items):
-            if _want_fallback:
-                fb = _serve_fallback()
-                if fb is not None:
-                    return fb
-            from fastapi.responses import JSONResponse
-            return JSONResponse(
-                status_code=202,
-                content={"status": "generating", "mood": mood, "pose_key": pose_key})
-        raise HTTPException(status_code=404, detail="No variant in the cache")
-
-    if has_failed(character_name, mood, pose_key,
-                  equipped_pieces=_eq_pieces, equipped_items=_eq_items):
-        if force or trigger:
-            # Force/trigger: clear the failed marker so a retry is possible
-            from app.core.expression_regen import clear_failed_marker
-            clear_failed_marker(character_name, mood, pose_key,
-                                equipped_pieces=_eq_pieces, equipped_items=_eq_items)
-        else:
-            raise HTTPException(status_code=404, detail="Variant generation failed")
-
-    if is_generating(character_name, mood, pose_key,
-                     equipped_pieces=_eq_pieces, equipped_items=_eq_items):
-        if _want_fallback:
-            fb = _serve_fallback()
-            if fb is not None:
-                return fb
-        from fastapi.responses import JSONResponse
-        return JSONResponse(
-            status_code=202,
-            content={"status": "generating", "mood": mood, "pose_key": pose_key})
-
-    # The cooldown is bypassed when no cache entry exists (otherwise the scene
-    # would never show a variant image), or when trigger=1 asks explicitly.
-    # Explicit trigger (trigger=1, wardrobe preview button): no debounce, the
-    # user expects an immediate generation. Auto paths (cache miss while
-    # rendering) coalesce so one chat turn does not produce 3 variants.
-    started = trigger_expression_generation(character_name, mood, pose_key,
-                                             equipped_pieces=_eq_pieces, equipped_items=_eq_items,
-                                             ignore_cooldown=True,
-                                             ignore_feature_gate=bool(trigger),
-                                             coalesce=not bool(trigger))
-    if started:
-        if _want_fallback:
-            fb = _serve_fallback()
-            if fb is not None:
-                return fb
-        from fastapi.responses import JSONResponse
-        return JSONResponse(
-            status_code=202,
-            content={"status": "generating", "mood": mood, "pose_key": pose_key})
-    # Competing request: another one has just started it → 202 instead of 404
-    if is_generating(character_name, mood, pose_key,
-                     equipped_pieces=_eq_pieces, equipped_items=_eq_items):
-        if _want_fallback:
-            fb = _serve_fallback()
-            if fb is not None:
-                return fb
-        from fastapi.responses import JSONResponse
-        return JSONResponse(
-            status_code=202,
-            content={"status": "generating", "mood": mood, "pose_key": pose_key})
-    # No generation running and none started — a character whose template has
-    # expression_variants_enabled off never gets one. The fallback ladder is
-    # for exactly this, so it is served here too; without it such a character
-    # shows no image at all although a variant sits on disk.
-    if _want_fallback:
-        fb = _serve_fallback()
-        if fb is not None:
-            return fb
-    raise HTTPException(status_code=404, detail="No variant available")
+def get_outfit_expression(character_name: str, request: Request, mood: str = "",
+                          pieces: str = "", items: str = "", override: int = 0,
+                          fallback: str = "", v: str = ""):
+    """Serve a set-local outfit image; only an ordinary miss may warm the cache."""
+    from app.core import expression_regen as er
+    from app.core.http_files import snapshot_response
+    from app.core.keyed_lock import keyed_lock
+    snap = _expression_request(character_name, mood, pieces, items, bool(override))
+    exact = er.get_cached_expression(snap)
+    if exact is None and not (override or pieces or items):
+        er.trigger_expression_generation(snap, ignore_cooldown=True)
+    with keyed_lock("pose_catalog", "expression"):
+        response = snapshot_response(None, request, media_type=lambda p: mimetypes.guess_type(str(p))[0] or "image/png",
+            lock=er.publication_lock(character_name), resolve=lambda: er.find_compatible_expression(snap)
+                if fallback == "default" else er.get_cached_expression(snap))
+    if response.status_code != 404:
+        return response
+    from fastapi.responses import JSONResponse
+    status = er.expression_status(snap)
+    if status["state"] in ("pending", "running"):
+        return JSONResponse(status, status_code=202, headers={"Cache-Control": "no-cache"})
+    raise HTTPException(404, "No compatible expression image available")
 
 
 @router.get("/{character_name}/expressions")
-def list_expressions_route(character_name: str) -> Dict[str, Any]:
+def list_expressions_route(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Lists all cached expression variants of a character with their
     parameters (mood, activity, equipped, model, seed, backend, workflow, …).
     """
@@ -892,7 +774,7 @@ def list_expressions_route(character_name: str) -> Dict[str, Any]:
 
 
 @router.get("/{character_name}/expressions/{filename}")
-def serve_expression_route(character_name: str, filename: str):
+def serve_expression_route(character_name: str, filename: str, _: Dict[str, Any] = Depends(require_admin)):
     """Serves a single expression variant image by filename."""
     from app.core.expression_regen import _get_expressions_dir
     expr_dir = _get_expressions_dir(character_name)
@@ -906,11 +788,11 @@ def serve_expression_route(character_name: str, filename: str):
         raise HTTPException(status_code=404, detail="Not found")
     media_type = mimetypes.guess_type(str(path))[0] or "image/png"
     return FileResponse(path=str(path), media_type=media_type,
-                        headers={"Cache-Control": "public, max-age=3600"})
+                        headers={"Cache-Control": "no-cache"})
 
 
 @router.delete("/{character_name}/expressions/{filename}")
-def delete_expression_route(character_name: str, filename: str) -> Dict[str, Any]:
+def delete_expression_route(character_name: str, filename: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Deletes a single expression variant image + its JSON sidecar."""
     from app.core.expression_regen import delete_expression
     ok = delete_expression(character_name, filename)
@@ -1023,8 +905,9 @@ def _resolve_tokens_route_sync(character_name: str,
 
 @router.get("/{character_name}/belongings")
 def get_belongings_route(character_name: str) -> Dict[str, Any]:
-    """Inventar + Outfit (Paper-Doll) eines Characters — gleiche Form wie
-    /play/belongings, for the Game-Admin wardrobe tab."""
+    """Character inventory and paper-doll outfit, matching /play/belongings
+    for the Game-Admin wardrobe tab.
+    """
     from app.routes.play import build_belongings
     return build_belongings(character_name)
 
@@ -1084,7 +967,7 @@ def _update_config_route_sync(character_name: str,
 
 @router.post("/{character_name}/images")
 async def upload_character_image(character_name: str, request: Request) -> Dict[str, Any]:
-    """Laedt ein Bild hoch"""
+    """Upload an image."""
     try:
         guard_content_length(request, what="Gallery file")
         form = await request.form()
@@ -1137,7 +1020,7 @@ def get_character_images_list(character_name: str) -> Dict[str, Any]:
         prompts = get_character_image_prompts(character_name)
         metadata = get_character_image_metadata(character_name)
 
-        # Pruefen welche Bilder ein zugehoeriges Video haben ({stem}.mp4)
+        # Find images with an accompanying video ({stem}.mp4).
         images_dir = get_character_images_dir(character_name)
         image_videos = {}
         for img_name in images:
@@ -2559,7 +2442,7 @@ def _update_character_skill_config_route_sync(character_name: str,
 
 @router.post("/{character_name}/images/{image_name}/detect-characters")
 async def detect_image_characters(character_name: str, image_name: str, request: Request) -> Dict[str, Any]:
-    """Erkennt im Bild verwendete Characters aus reference_images Metadaten."""
+    """Detect depicted characters from reference_images metadata."""
     return await character_ops.detect_characters_core(character_name, image_name, request)
 
 

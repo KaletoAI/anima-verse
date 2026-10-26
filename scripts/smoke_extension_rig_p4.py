@@ -40,6 +40,12 @@ def main():
         paths.init_instance(root / 'instance')
         os.environ['ANIMATION_CLIPS_DIR'] = str(root / 'clips')
         os.environ['ANIMATION_RIG_FILE'] = str(root / 'rig.fbx')
+        # This motion/reference smoke does not exercise asynchronous delivery builds.
+        instance = root / 'instance'
+        instance.mkdir(parents=True, exist_ok=True)
+        (instance / 'config.json').write_text(json.dumps({
+            'image_generation': {'blender_meshopt_delivery': False, 'backends': []},
+        }))
         from app.core import db, config, prompt_filters, extension_rig, model_refs
         db.init_schema()
         config.load(paths.get_config_path(), instance_path=root / 'instance/config.json')
@@ -269,7 +275,7 @@ def main():
                 path.write_bytes(b'fixture')
                 return path
             with (
-                patch('app.core.expression_regen.generate_expression_image', side_effect=generate),
+                patch('app.core.expression_regen.render_character_image', side_effect=generate),
                 patch.object(model_refs, 'enabled_tpose_views', return_value=('back', 'left', 'right')),
                 patch.object(model_refs, 'is_humanoid', return_value=True),
             ):
@@ -289,13 +295,13 @@ def main():
                     change(active_conditions=[{'name': 'first'}])
                     check(prompt_filters.apply_image_modifiers('sample', 'plain') == 'plain', 'pose prompt uses pinned neutral snapshot')
                 return generate(*args, **kwargs)
-            with patch('app.core.expression_regen.generate_expression_image', side_effect=transition), patch.object(model_refs, 'enabled_tpose_views', return_value=()), patch.object(model_refs, 'is_humanoid', return_value=True):
+            with patch('app.core.expression_regen.render_character_image', side_effect=transition), patch.object(model_refs, 'enabled_tpose_views', return_value=()), patch.object(model_refs, 'is_humanoid', return_value=True):
                 for explicit in ({}, {'pieces': {}, 'items': [], 'signature': neutral}):
                     change(active_conditions=[{'name': 'first'}])
                     model_refs.generate_model_ref_images('sample', kinds=('tpose', 'pose'), force=True, **explicit)
             calls.clear()
             with (
-                patch('app.core.expression_regen.generate_expression_image', side_effect=generate),
+                patch('app.core.expression_regen.render_character_image', side_effect=generate),
                 patch.object(model_refs, 'enabled_tpose_views', return_value=()),
                 patch.object(model_refs, 'is_humanoid', return_value=True),
             ):
@@ -307,11 +313,11 @@ def main():
                   'explicit ordinary pose retains state identity and modifier')
             calls.clear()
             with (
-                patch('app.core.expression_regen.generate_expression_image', side_effect=generate),
+                patch('app.core.expression_regen.render_character_image', side_effect=generate),
                 patch.object(model_refs, 'is_humanoid', return_value=False),
             ):
                 model_refs.generate_model_ref_images('sample', kinds=('tpose',), force=True)
-            # Tier-animationen P1: main + front/back/right = four neutral renders.
+            # Animal views P1: main + front/back/right = four neutral renders.
             check(len(calls) == 4 and calls[0]['image_use_case'] == 'tpose_animal'
                   and not calls[0]['apply_state_modifiers'] and str(calls[0]['output_stem']).endswith(neutral), 'animal mesh input neutral')
             from app.core import model3d, outfit_batch, outfit_cache_gc as gc

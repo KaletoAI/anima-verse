@@ -31,36 +31,16 @@ _SHELL = Path("static/client3d/index.html")
 
 
 def _expr_version(name: str) -> str:
-    """Cache-buster token for the expression image: changes on a mood, pose or
-    outfit change AND when a new variant finished generating (mtime of the
-    cached variant). The frontend appends it to the outfit-expression URL, so
-    the image only reloads on a real change (event-driven, no blind polling)."""
+    """Version of requested expression identity and the actually served bytes."""
     import hashlib
-    import os
-    from app.models.character import (get_character_current_feeling,
-                                      get_effective_pose_key)
-    from app.models.inventory import get_equipped_pieces, get_equipped_items
-    mood = pose_key = ""
-    eqp: dict = {}
-    eqi: list = []
+    from app.core.expression_regen import expression_snapshot, expression_status
+    from app.models.character import get_character_current_feeling
     try:
-        mood = get_character_current_feeling(name) or ""
-        pose_key = get_effective_pose_key(name) or ""
-        eqp = get_equipped_pieces(name) or {}
-        eqi = get_equipped_items(name) or []
-    except Exception:
-        pass
-    mtime = ""
-    try:
-        from app.core.expression_regen import peek_cached_expression
-        p = peek_cached_expression(name, mood, pose_key,
-                                   equipped_pieces=eqp, equipped_items=eqi)
-        if p:
-            mtime = str(int(os.path.getmtime(p)))
-    except Exception:
-        pass
-    eq_sig = ",".join(f"{k}:{v}" for k, v in sorted(eqp.items())) + "|" + ",".join(sorted(eqi))
-    return hashlib.md5(f"{mood}|{pose_key}|{eq_sig}|{mtime}".encode("utf-8")).hexdigest()[:10]
+        request = expression_snapshot(name, get_character_current_feeling(name) or "")
+        status = expression_status(request)
+        return hashlib.sha256(f"{request.stem}:{status['content_version']}:{status['fallback_version']}".encode()).hexdigest()[:16]
+    except (ValueError, OSError):
+        return ""
 
 
 def _renderable_speakers(scene: List[Dict[str, Any]]) -> List[str]:
@@ -2371,6 +2351,7 @@ def play_self(user=Depends(get_current_user)):
     out["mood"] = get_character_current_feeling(avatar) or ""
     out["activity"] = get_effective_activity(avatar) or ""
     out["profile_image"] = get_character_profile_image(avatar) or ""
+    out["expression_version"] = _expr_version(avatar)
     try:
         from app.routes.characters import get_status_effects_route
         s = get_status_effects_route(avatar)
@@ -2430,6 +2411,7 @@ def _state_block(name: str, lang: str = "en") -> dict:
            "stat_boosts": {}, "bar_meta": {}, "conditions": [], "profile_image": "",
            "place_label": "", "place_group": "", "place_phrase": "",
            "interaction": None}
+    blk["expression_version"] = _expr_version(name)
     try:
         blk["mood"] = get_character_current_feeling(name) or ""
     except Exception:
@@ -3276,7 +3258,7 @@ def _build_gallery_payload(character: str) -> dict:
 
 @router.get("/play/gallery")
 def play_gallery(user=Depends(get_current_user)):
-    """Bilder-Galerie des eigenen Avatars (Tier 2, read-only). Avatar serverseitig."""
+    """Read-only gallery of the user's own server-resolved avatar (tier 2)."""
     from app.models.account import get_active_character
     avatar = (get_active_character() or "").strip()
     out = _build_gallery_payload(avatar)
@@ -3305,7 +3287,7 @@ def play_galleries(user=Depends(get_current_user)):
             "is_self": name == avatar,
             "profile_url": (f"/characters/{name}/images/{prof}" if prof else ""),
         })
-    # Eigene Galerie immer zuerst.
+    # Own gallery comes first.
     out["galleries"].sort(key=lambda g: (not g["is_self"], g["character"].lower()))
     return out
 
@@ -3811,7 +3793,7 @@ def _require_avatar() -> str:
 
 @router.post("/play/self/mood")
 async def play_set_mood(request: Request, user=Depends(get_current_user)):
-    """Avatar setzt seine eigene Stimmung."""
+    """Set the avatar's own mood."""
     import asyncio
     body = await request.json()
     return await asyncio.to_thread(_play_set_mood_sync, user, body)
