@@ -359,14 +359,17 @@ Against the spike's numbers (`development_instructions/bericht-native-spike.md`,
 5.70 M / 4.04 M triangles) at the SAME size — `--size=3816x1030` (or fullscreen on that monitor):
 
 ```bash
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench --quit-after-bench --size=3816x1030 --msaa=0
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench --quit-after-bench --size=3816x1030 --msaa=0 --no-scatter --no-water
 ./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench --quit-after-bench --size=3816x1030
 ./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench --quit-after-bench --size=3816x1030 --no-scatter --no-water
-./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench --quit-after-bench --size=3816x1030 --msaa=0
 ./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --fly=2000
 ./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --fly=2000 --no-scatter
 ```
 
-Pass: median and P95 not worse than the spike's run with the same switches; draws, triangles and `msaa` reported;
+The spike ran WITHOUT MSAA (it came with Task 21) and with the HUD, so the `--msaa=0` runs are the comparison; the
+default runs (MSAA 4×) say what the anti-aliasing costs. Pass: median and P95 of the `--msaa=0` runs not worse than the
+spike's run with the same scatter/water switches (the result's `size` must read 3816x1030); draws, triangles and `msaa` reported;
 the fly drive's `max while streaming` below 33 ms with scatter on (the bench drive stays inside the boot ring, so
 its `streamMaxFrameMs` is normally null — the fly drive is the streaming probe). Every result also goes to the
 server's `logs/bench.jsonl`.
