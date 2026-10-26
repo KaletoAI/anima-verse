@@ -65,6 +65,14 @@ void main() {{
 }}
 ";
 
+    /// <summary>
+    /// How the kernel reaches the colour buffer, from that buffer's usage bits: a storage image is fogged in place; a buffer
+    /// without the storage bit (Godot's MSAA resolve target) but with both copy bits is fogged through a storage copy that is
+    /// copied back; anything else cannot be fogged by the kernel (the screen pass takes over).
+    /// </summary>
+    public static FogRoute RouteFor(bool storage, bool copyFrom, bool copyTo)
+        => storage ? FogRoute.InPlace : copyFrom && copyTo ? FogRoute.Copy : FogRoute.Unusable;
+
     /// <summary>Work groups for a buffer of <paramref name="width"/> × <paramref name="height"/> pixels.</summary>
     public static (int X, int Y) Groups(int width, int height)
         => (Math.Max(0, (width + Group - 1) / Group), Math.Max(0, (height + Group - 1) / Group));
@@ -97,3 +105,6 @@ void main() {{
         return (Mix(color.R, fogSrgb.R), Mix(color.G, fogSrgb.G), Mix(color.B, fogSrgb.B));
     }
 }
+
+/// <summary>See <see cref="FogCompute.RouteFor"/>.</summary>
+public enum FogRoute { InPlace, Copy, Unusable }

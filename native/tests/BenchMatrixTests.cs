@@ -157,6 +157,21 @@ public class BenchMatrixTests
         Assert.Equal(145.0, shown.B * 255, 6);
     }
 
+    /// <summary>
+    /// The MSAA crash of 2026-10-26: with MSAA on, binding the resolved colour as an image failed with "needs the
+    /// TEXTURE_USAGE_STORAGE_BIT usage flag" and the client died. The kernel takes the in-place road only with the storage bit,
+    /// the copy road with both copy bits instead, and gives up (screen pass) when a copy bit is missing too.
+    /// </summary>
+    [Fact]
+    public void FogComputeRoutesAroundAColourBufferWithoutStorage()
+    {
+        Assert.Equal(FogRoute.InPlace, FogCompute.RouteFor(storage: true, copyFrom: true, copyTo: true));
+        Assert.Equal(FogRoute.InPlace, FogCompute.RouteFor(storage: true, copyFrom: false, copyTo: false));
+        Assert.Equal(FogRoute.Copy, FogCompute.RouteFor(storage: false, copyFrom: true, copyTo: true));
+        Assert.Equal(FogRoute.Unusable, FogCompute.RouteFor(storage: false, copyFrom: true, copyTo: false));
+        Assert.Equal(FogRoute.Unusable, FogCompute.RouteFor(storage: false, copyFrom: false, copyTo: true));
+    }
+
     /// <summary>The push block: size, near, far, fog rgb, pad — 8 little-endian floats; 3816 × 1030 → 477 × 129 groups.</summary>
     [Fact]
     public void PushAndGroups()

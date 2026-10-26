@@ -23,8 +23,15 @@ public partial class FogComputeEffect : CompositorEffect
     private Rid _shader, _pipeline, _sampler;
     private volatile Params _params = new(FogPost.CameraNear, FogPost.CameraFar, FogPost.FogSrgb(StageLight.BootSky));
     private volatile bool _ready;
+    private Rid _routeFor;
+    private FogRoute _route;
+    private RenderingDevice.DataFormat _colourFormat;
+    private static readonly StringName ScratchContext = "anima_fog", ScratchName = "scratch";
+    private const RenderingDevice.TextureUsageBits ScratchUsage = RenderingDevice.TextureUsageBits.StorageBit
+        | RenderingDevice.TextureUsageBits.CanCopyFromBit | RenderingDevice.TextureUsageBits.CanCopyToBit;
 
-    /// <summary>The kernel compiled (on a GPU). False on the dummy renderer or after a compile error (logged once).</summary>
+    /// <summary>The kernel compiled (on a GPU) and the colour buffer can be fogged. False on the dummy renderer, after a compile
+    /// error or once the colour buffer turned out unusable (logged once; the screen pass takes over).</summary>
     public bool Available => _ready;
     /// <summary>The compile error, if the kernel did not compile ("" otherwise).</summary>
     public string Error { get; private set; } = "";
@@ -89,26 +96,75 @@ public partial class FogComputeEffect : CompositorEffect
         if (renderData.GetRenderSceneBuffers() is not RenderSceneBuffersRD buffers) return;
         var size = buffers.GetInternalSize();
         if (size.X <= 0 || size.Y <= 0) return;
+        var colour = buffers.GetColorTexture();
+        var route = RouteOf(colour);
+        if (route == FogRoute.Unusable) return;
         var p = _params;
         var push = FogCompute.Push(size.X, size.Y, p.Near, p.Far, p.FogSrgb);
         var (gx, gy) = FogCompute.Groups(size.X, size.Y);
         uint views = buffers.GetViewCount();
+        if (route == FogRoute.Copy && !buffers.HasTexture(ScratchContext, ScratchName))
+            buffers.CreateTexture(ScratchContext, ScratchName, _colourFormat, (uint)ScratchUsage,
+                RenderingDevice.TextureSamples.Samples1, size, views, 1, true);
+        var extent = new Vector3(size.X, size.Y, 1);
         for (uint v = 0; v < views; v++)
         {
+            // MSAA: the resolved colour is no storage image — fog a storage copy and copy it back.
+            Rid target = route == FogRoute.InPlace
+                ? buffers.GetColorLayer(v)
+                : buffers.GetTextureSlice(ScratchContext, ScratchName, v, 0, 1, 1);
+            if (route == FogRoute.Copy)
+                _rd.TextureCopy(colour, buffers.GetTexture(ScratchContext, ScratchName), Vector3.Zero, Vector3.Zero, extent, 0, 0, v, v);
             var image = new RDUniform { UniformType = RenderingDevice.UniformType.Image, Binding = 0 };
-            image.AddId(buffers.GetColorLayer(v));
+            image.AddId(target);
             var depth = new RDUniform { UniformType = RenderingDevice.UniformType.SamplerWithTexture, Binding = 1 };
             depth.AddId(_sampler);
             depth.AddId(buffers.GetDepthLayer(v));
             var set = UniformSetCacheRD.GetCache(_shader, 0, new Godot.Collections.Array<RDUniform> { image, depth });
+            if (!set.IsValid)
+            {
+                Fail("the uniform set was refused");
+                return;
+            }
             long list = _rd.ComputeListBegin();
             _rd.ComputeListBindComputePipeline(list, _pipeline);
             _rd.ComputeListBindUniformSet(list, set, 0);
             _rd.ComputeListSetPushConstant(list, push, (uint)push.Length);
             _rd.ComputeListDispatch(list, (uint)gx, (uint)gy, 1);
             _rd.ComputeListEnd();
+            if (route == FogRoute.Copy)
+                _rd.TextureCopy(buffers.GetTexture(ScratchContext, ScratchName), colour, Vector3.Zero, Vector3.Zero, extent, 0, 0, v, v);
         }
         Dispatches++;
+    }
+
+    /// <summary>
+    /// How the colour buffer can be fogged. Without MSAA Godot's resolved colour carries the storage bit and the kernel writes it
+    /// in place; with MSAA (the Graphics tab's 2x default since Task 26d) the resolve target has no storage bit — binding it as an
+    /// image killed the client on the first frame — so the kernel fogs a storage copy that is copied back. A buffer that can be
+    /// neither written nor copied switches the compute pass off for good (<see cref="Available"/> false → the screen pass).
+    /// Cached per colour texture: Godot recreates it (and drops the scratch copy) on a resize or an MSAA change.
+    /// </summary>
+    private FogRoute RouteOf(Rid colour)
+    {
+        if (colour == _routeFor) return _route;
+        var format = _rd!.TextureGetFormat(colour);
+        var bits = format.UsageBits;
+        var route = FogCompute.RouteFor((bits & RenderingDevice.TextureUsageBits.StorageBit) != 0,
+            (bits & RenderingDevice.TextureUsageBits.CanCopyFromBit) != 0, (bits & RenderingDevice.TextureUsageBits.CanCopyToBit) != 0);
+        _routeFor = colour;
+        _route = route;
+        _colourFormat = format.Format;
+        GD.Print($"[native] fog compute: colour {format.Width}x{format.Height} {format.Format} samples {format.Samples} → {route}");
+        if (route == FogRoute.Unusable) Fail($"the colour buffer is neither a storage image nor copyable (usage {bits})");
+        return route;
+    }
+
+    private void Fail(string why)
+    {
+        _ready = false;
+        Error = why;
+        GD.PrintErr("[native] fog compute: switched off — " + why);
     }
 
     public override void _Notification(int what)
