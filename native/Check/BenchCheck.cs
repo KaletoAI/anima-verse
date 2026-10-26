@@ -75,8 +75,8 @@ public static class BenchCheck
                 world.AddChild(scatter);
                 ulong t0 = Time.GetTicksMsec();
                 do await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
-                while (scatter.Field.Busy && Time.GetTicksMsec() - t0 < 60000);
-                Expect("scatter settled", !scatter.Field.Busy, "loads still running after 60 s");
+                while (scatter.Busy && Time.GetTicksMsec() - t0 < 60000);
+                Expect("scatter settled", !scatter.Busy, "loads still running after 60 s");
                 Log("scatter settled: " + scatter.Summary());
             }
             var settings = BenchRunner.SettingsFor(builder.FirstMap!.Value, builder, gotoQuery, options.Vsync,

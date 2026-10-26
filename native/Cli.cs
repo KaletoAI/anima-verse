@@ -45,6 +45,8 @@ namespace AnimaNative;
 ///   --check backdrop | --check=backdrop only the backdrop section (payload, strips, heights, tint, Task 22)
 ///   --check terrain | --check=terrain   only the CDLOD terrain section (field, selection, instances, shader twin, Task 23)
 ///   --check stream | --check=stream     only the terrain streaming section (fake server: batches, LRU, masks, signatures, Task 24)
+///   --check water | --check=water       only the water section (shore, falls, ghosts, prop water, Task 25)
+///   --check scatter | --check=scatter   only the scatter section (S3 reference + the worker rebuild, Task 26)
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
 public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
@@ -94,7 +96,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             var arg = raw.Trim();
             if (arg == "--check") check = true;
             else if (TryValue(arg, "--check", out var only)) { check = true; checkOnly = CheckSection(only); }
-            else if (check && checkOnly is null && arg is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream") checkOnly = arg;
+            else if (check && checkOnly is null && IsSection(arg)) checkOnly = arg;
             else if (arg == "--verify") verify = true;
             else if (arg == "--bench") bench = true;
             else if (arg == "--check-bench") checkBench = true;
@@ -158,8 +160,13 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         return (d, heading);
     }
 
-    private static string CheckSection(string v) => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
-        ? v : throw new ArgumentException($"--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', 'terrain', 'stream' and 'water', got '{v}'");
+    private static bool IsSection(string v)
+        => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
+             or "scatter";
+
+    private static string CheckSection(string v) => IsSection(v)
+        ? v : throw new ArgumentException("--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', "
+                                          + $"'terrain', 'stream', 'water' and 'scatter', got '{v}'");
 
     public static Viewport.Msaa ParseMsaa(string v) => v switch
     {

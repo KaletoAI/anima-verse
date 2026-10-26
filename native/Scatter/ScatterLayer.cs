@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AnimaNative.Api;
@@ -41,8 +42,8 @@ public partial class ScatterLayer : Node3D
         Name = "ScatterLayer";
         _anchor = anchor;
         _log = log;
-        Field = new ScatterField(source, height.GroundAt, log);
-        Undergrowth = new UndergrowthField(height.GroundAt);
+        Field = new ScatterField(source, height, log);
+        Undergrowth = new UndergrowthField(height);
         AddChild(Field);
         AddChild(Undergrowth);
     }
@@ -59,11 +60,12 @@ public partial class ScatterLayer : Node3D
         var locFp = TerrainPayload.LocationFootprints(worldmap);
         var a = anchor();
         layer.Field.SetAnchor(a.X, a.Z);
-        layer.Field.SetTerrain(terrain, locFp);
+        // The boot's window is sampled right here (before the first picture); every later rebuild goes to a worker.
+        layer.Field.SetTerrain(terrain, locFp, inline: true);
         var all = new List<IReadOnlyList<P2>>(locFp);
         all.AddRange(terrain.PropFootprints());
         layer.Undergrowth.SetAreas(UndergrowthField.AreasOf(terrain), all);
-        layer.Undergrowth.SetAnchor(a.X, a.Z);
+        layer.Undergrowth.SetAnchor(a.X, a.Z, inline: true);
         log($"scatter: terrain {terrain.Areas.Count} areas, {terrain.Types.Count} types, {terrain.PropBoxes.Count} prop boxes, "
             + $"{locFp.Count} location footprints; window {layer.Field.Cells.Count} cells");
         return layer;
@@ -139,11 +141,52 @@ public partial class ScatterLayer : Node3D
         LodPasses++;
     }
 
+    /// <summary>
+    /// A fingerprint of everything both layers placed: every authored prop's (row, variant, base count, instance
+    /// transforms) in area order, then every undergrowth layer's (cell, area, base count, transforms + colours) in cell
+    /// order. Two runs that placed the same instances print the same 16 hex digits — the before/after proof of the
+    /// worker build (Task 26).
+    /// </summary>
+    public string Digest()
+    {
+        using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        void Ints(params int[] v)
+        {
+            foreach (var i in v) sha.AppendData(BitConverter.GetBytes(i));
+        }
+        void Floats(float[] f, int count) => sha.AppendData(System.Runtime.InteropServices.MemoryMarshal.AsBytes(f.AsSpan(0, count)));
+        int props = 0, layers = 0;
+        foreach (var p in Field.Props)
+        {
+            Ints(p.Row, p.VariantPos, p.BaseCount);
+            Floats(p.Src, p.BaseCount * 12);
+            props++;
+        }
+        foreach (var l in Undergrowth.Layers.OrderBy(l => l.Cell.Cx).ThenBy(l => l.Cell.Cz))
+        {
+            Ints(l.Cell.Cx, l.Cell.Cz, l.BaseCount);
+            sha.AppendData(System.Text.Encoding.UTF8.GetBytes(l.AreaId));
+            Floats(l.Src, l.BaseCount * 16);
+            layers++;
+        }
+        var ledger = ScatterField.MeasuredUrls();
+        string ledgerHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(string.Join("\n", ledger))))[..8].ToLowerInvariant();
+        return $"digest={Convert.ToHexString(sha.GetHashAndReset())[..16].ToLowerInvariant()} props={props} ug_layers={layers} "
+               + $"measured_urls={ledger.Count}/{ledgerHash}";
+    }
+
+    /// <summary>Loads in flight, a clearance re-sample armed, or either layer building on its worker.</summary>
+    public bool Busy => Field.Busy || Undergrowth.Building;
+
     public string Summary()
     {
         var s = Field.Counts();
         var u = Undergrowth.Counts();
         return $"scatter[{s}] undergrowth[{u}] triangles={s.Triangles + u.Triangles} rebuilds={Field.Rebuilds} redrapes={Field.Redrapes} "
-               + $"skipped_rows={Field.SkippedRows} lod_passes={LodPasses}";
+               + $"skipped_rows={Field.SkippedRows} lod_passes={LodPasses} "
+               + $"worker_ms={Field.LastBuildMs:0.#}/{Field.MaxBuildMs:0.#} mount_ms={Field.LastApplyMs:0.##}/{Field.MaxApplyMs:0.##} "
+               + $"ug_cells_built={Undergrowth.CellsBuilt} ug_worker_ms={Undergrowth.LastBuildMs:0.#}/{Undergrowth.MaxBuildMs:0.#} "
+               + $"ug_mount_ms={Undergrowth.LastApplyMs:0.##}/{Undergrowth.MaxApplyMs:0.##} discarded={Field.Discarded + Undergrowth.Discarded}";
     }
 }

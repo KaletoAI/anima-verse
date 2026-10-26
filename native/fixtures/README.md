@@ -384,6 +384,20 @@ Plus `instanceHash`, `undergrowthShade`, FNV-1a seed hashes and the sha256 of th
 - **Not in the fixture on purpose**: `along`/`edge`/`center` rows — the native
   client skips them (S3 report), and a fixture with one would make the browser's
   occupancy differ from the port's.
+- **The worker build (Task 26, `CheckWorker`)**: the window moves one cell east,
+  (64 + 64, 128) → cells x 0…4 (the column x = −1 leaves, x = 4 comes); the
+  undergrowth window round (128, 128) keeps **20** cells (the same 25 candidates
+  shifted by one column, the same five corners out). `SetAnchor` returns with the
+  old props standing (`Rebuilds` unchanged, none disposed) and a build on the
+  worker; the undergrowth has dropped its leaving column at once and misses the new
+  one until its worker build lands. The same terrain is set again while that build
+  runs → the build is thrown away (**discarded 1**), the old props draw until the
+  new terrain's build stands, then all of them are gone. Two moves in a row
+  ((192, 128) then back to (64, 128)) = **2** builds (the second coalesced behind
+  the first). Back at the anchor the worker's window is the reference again: every
+  row's points, the bins at the fixture camera (84 + 16 trees, 111 tufts) and the
+  undergrowth's 11 layers / 370 instances / 52 drawn — the same function the inline
+  boot build runs, so equality here is the before/after proof.
 
 ## Ground surfaces (Task S3b)
 

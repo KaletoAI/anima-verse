@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using AnimaNative.Api;
+using AnimaNative.Terrain;
+using AnimaNative.World;
 using Godot;
 
 namespace AnimaNative.Scatter;
@@ -29,6 +32,14 @@ public readonly record struct LayerCounts(int Meshes, int Instances, long Triang
 ///     to 0.25 at 120 m), <c>inViewCone</c>, the entry-wide sphere test first; buffers re-filled on every
 ///     pass, uploaded only when the set changed.
 ///
+/// THREADING (Task 26): a window that moved, a re-drape, a measured clearance or a new terrain asks for ONE rebuild
+/// (<see cref="Coalescer"/>: requests during a build fold into one follow-up). The sampling — every cell of every row,
+/// the occupancy grids, the ground height under each instance, the instance buffers and spheres — runs on a worker
+/// from frozen inputs (<see cref="WindowInputs"/>: the areas of this terrain, the footprints, the cells, the clearance
+/// ledger and a <see cref="WorldHeight.Snapshot"/>); only the MultiMesh nodes are made on the main thread, where the
+/// old props keep drawing until the new ones stand. The boot's first build (<see cref="SetTerrain"/> with
+/// <c>inline: true</c>) runs the very same <see cref="SampleWindow"/> inline — before the first picture.
+///
 /// NOT ported (each named in the S3 report with the side it favours): the impostor billboards beyond the
 /// cull line (<c>impostors.ts</c> — Godot draws LESS than the browser beyond 120 m); the along/edge/center
 /// rows (<c>strokeStations</c>, <c>scatterEdgeInstances</c>, <c>scatterCenterInstance</c> — skipped and
@@ -46,8 +57,15 @@ public partial class ScatterField : Node3D
     private static readonly Dictionary<string, double> PropSpread = new();
 
     private readonly IWorldSource _source;
-    private readonly Func<double, double, double> _heightAt;
+    private readonly WorldHeight _height;
     private readonly Action<string> _log;
+    private readonly Coalescer _build;
+    /// <summary>The newest rebuild asked for (<see cref="WhenBuiltAsync"/> waits for it).</summary>
+    private Task _lastRequest = Task.CompletedTask;
+    /// <summary>Counts every new set of areas (a terrain): a build sampled for an older set is thrown away.</summary>
+    private int _areasGen;
+    /// <summary>The props of the previous terrain, drawn until the first build of the new one stands.</summary>
+    private readonly List<Prop> _retiring = new();
     private TerrainPayload? _payload;
     private List<IReadOnlyList<P2>> _footprints = new();
     private ScatterLodCfg _cfg = ScatterLod.Defaults;
@@ -70,12 +88,21 @@ public partial class ScatterField : Node3D
     /// <summary>GAME clock of the worldmap (<c>game_time.total_seconds</c>) for reshuffling rows; NaN = none.</summary>
     public double GameSeconds { get; set; } = double.NaN;
     public int Rebuilds { get; private set; }
+    /// <summary>Worker builds that were thrown away because a newer terrain arrived while they ran.</summary>
+    public int Discarded { get; private set; }
+    /// <summary>The last / largest worker time and main-thread mount time of a rebuild (ms).</summary>
+    public double LastBuildMs { get; private set; }
+    public double MaxBuildMs { get; private set; }
+    public double LastApplyMs { get; private set; }
+    public double MaxApplyMs { get; private set; }
+    /// <summary>A rebuild is on the worker (or waiting for its follow-up).</summary>
+    public bool Building => _build.Busy;
     /// <summary>Re-samples because the ground changed under the window (<see cref="Redrape"/>), part of <see cref="Rebuilds"/>.</summary>
     public int Redrapes { get; private set; }
     public int SkippedRows { get; private set; }
     public int LoadFailures { get; private set; }
-    /// <summary>Loads in flight or a clearance re-sample armed.</summary>
-    public bool Busy => _pending > 0 || _spreadArmed;
+    /// <summary>Loads in flight, a clearance re-sample armed or a rebuild on the worker.</summary>
+    public bool Busy => _pending > 0 || _spreadArmed || _build.Busy;
     public IReadOnlyList<(int Cx, int Cz)> Cells => _cells;
 
     private sealed class AreaScatter
@@ -117,21 +144,28 @@ public partial class ScatterField : Node3D
 
     public IEnumerable<Prop> Props => _areas.SelectMany(a => a.Props);
 
-    public ScatterField(IWorldSource source, Func<double, double, double> heightAt, Action<string> log)
+    public ScatterField(IWorldSource source, WorldHeight height, Action<string> log)
     {
         Name = "Scatter";
         _source = source;
-        _heightAt = heightAt;
+        _height = height;
         _log = log;
+        _build = new Coalescer(BuildOnceAsync);
     }
 
-    /// <summary>Take over the terrain and the location footprints, then (re)build every area's scatter.</summary>
-    public void SetTerrain(TerrainPayload payload, IEnumerable<P2[]> locationFootprints)
+    /// <summary>
+    /// Take over the terrain and the location footprints, then (re)build every area's scatter — on the worker, the old
+    /// props drawing until the new ones stand; <paramref name="inline"/> = right here (the boot, before the first picture).
+    /// </summary>
+    public void SetTerrain(TerrainPayload payload, IEnumerable<P2[]> locationFootprints, bool inline = false)
     {
         _payload = payload;
         _footprints = locationFootprints.Cast<IReadOnlyList<P2>>().Concat(payload.PropFootprints()).ToList();
-        RebuildAreas();
+        RebuildAreas(inline);
     }
+
+    /// <summary>Completes when every rebuild asked for so far has stood (or failed — the failure is logged).</summary>
+    public Task WhenBuiltAsync() => _lastRequest;
 
     /// <summary><c>setHeightAnchor</c>'s scatter half: move the cell window, re-sample if it changed.</summary>
     public void SetAnchor(double x, double z)
@@ -152,13 +186,19 @@ public partial class ScatterField : Node3D
         return true;
     }
 
-    private void RebuildAreas()
+    private void RebuildAreas(bool inline)
     {
         MoveWindow(_anchorX, _anchorZ);
-        ClearAreas();
-        if (_payload is null) return;
+        // The old terrain's props keep drawing until the new terrain's first build stands (or go now, inline).
+        foreach (var a in _areas) _retiring.AddRange(a.Props);
+        _areas.Clear();
+        _areasGen++;
+        if (_payload is null)
+        {
+            DisposeProps(_retiring);
+            return;
+        }
         var rings = _payload.Areas.Select(a => ScatterMath.AreaRing(a.Polygon)).ToList();
-        var grids = new Dictionary<(int, int), OccupancyGrid>();
         SkippedRows = 0;
         for (int i = 0; i < _payload.Areas.Count; i++)
         {
@@ -167,11 +207,15 @@ public partial class ScatterField : Node3D
             var occluders = rings.Skip(i + 1).Where(r => r is not null).Cast<IReadOnlyList<P2>>().ToList();
             var a = new AreaScatter { Area = _payload.Areas[i], Ring = ring, Occluders = occluders };
             SkippedRows += a.Area.OtherRows;
-            a.Props = BuildScatter(a, grids);
             _areas.Add(a);
         }
-        Rebuilds++;
         if (SkippedRows > 0) _log($"scatter: {SkippedRows} along/edge/center rows not ported (skipped)");
+        if (inline)
+        {
+            var inputs = Inputs();
+            Apply(inputs, SampleWindow(inputs), null);
+        }
+        else RebuildScatter();
     }
 
     /// <summary>
@@ -197,22 +241,85 @@ public partial class ScatterField : Node3D
         return false;
     }
 
-    /// <summary><c>rebuildScatter</c>: the window moved (or a clearance was measured) — props only.</summary>
+    /// <summary>
+    /// <c>rebuildScatter</c>: the window moved (or a clearance was measured, the ground changed) — props only, on the
+    /// worker; the props standing now keep drawing until the new ones are mounted.
+    /// </summary>
     private void RebuildScatter()
     {
-        var grids = new Dictionary<(int, int), OccupancyGrid>();
-        foreach (var a in _areas)
-        {
-            DisposeProps(a.Props);
-            a.Props = BuildScatter(a, grids);
-        }
-        Rebuilds++;
+        var request = _build.RequestAsync();
+        _lastRequest = Logged(request);
     }
 
-    private void ClearAreas()
+    private async Task Logged(Task build)
     {
-        foreach (var a in _areas) DisposeProps(a.Props);
-        _areas.Clear();
+        try { await build; }
+        catch (Exception e) { _log($"scatter: rebuild failed, the props standing stay: {e.Message}"); }
+    }
+
+    /// <summary>
+    /// What one rebuild reads, frozen on the main thread: the areas of this terrain (immutable once made), the
+    /// footprints, the window's cells, the reshuffle clock, the clearance ledger and the ground.
+    /// </summary>
+    public sealed record WindowInputs(int AreasGen, IReadOnlyList<AreaScatterInput> Areas, TerrainPayload Payload,
+                                      IReadOnlyList<IReadOnlyList<P2>> Footprints, IReadOnlyList<(int Cx, int Cz)> Cells,
+                                      double GameSeconds, IReadOnlyDictionary<string, double> Spread, WorldHeight Ground);
+
+    /// <summary>One painted area as the sampler reads it.</summary>
+    public sealed record AreaScatterInput(TerrainAreaInfo Area, List<P2> Ring, List<IReadOnlyList<P2>> Occluders);
+
+    private WindowInputs Inputs()
+        => new(_areasGen, _areas.Select(a => new AreaScatterInput(a.Area, a.Ring, a.Occluders)).ToList(), _payload!,
+               _footprints, _cells.ToList(), GameSeconds, new Dictionary<string, double>(PropSpread), _height.Snapshot());
+
+    /// <summary>One rebuild: inputs frozen here, sampled on a worker, mounted back here unless a newer terrain came.</summary>
+    private async Task BuildOnceAsync()
+    {
+        if (_payload is null) return;
+        if (_areas.Count == 0)
+        {
+            DisposeProps(_retiring);   // a terrain without a single area: nothing to wait for
+            return;
+        }
+        var inputs = Inputs();
+        var clock = Stopwatch.StartNew();
+        var specs = await Task.Run(() => SampleWindow(inputs));
+        double workerMs = clock.Elapsed.TotalMilliseconds;
+        if (!IsInstanceValid(this) || inputs.AreasGen != _areasGen)
+        {
+            Discarded++;
+            return;   // a newer terrain is here; its own request is queued behind this one
+        }
+        Apply(inputs, specs, workerMs);
+    }
+
+    /// <summary>The main-thread half: the old props go, the new ones are mounted and binned against the last LOD camera.</summary>
+    /// <param name="workerMs">The worker's time; null = the inline boot build (its first shaders and materials are made
+    /// here, before the first picture — not counted into the runtime figures).</param>
+    private void Apply(WindowInputs inputs, List<List<PropSpec>> specs, double? workerMs)
+    {
+        var clock = Stopwatch.StartNew();
+        DisposeProps(_retiring);
+        for (int i = 0; i < _areas.Count; i++)
+        {
+            var a = _areas[i];
+            DisposeProps(a.Props);
+            var props = new List<Prop>(specs[i].Count);
+            foreach (var spec in specs[i])
+            {
+                var prop = MakeProp(spec);
+                if (_lodCam is { } cam) BinProp(prop, cam);
+                else FillAll(prop);
+                props.Add(prop);
+            }
+            a.Props = props;
+        }
+        Rebuilds++;
+        if (workerMs is not double ms) return;
+        LastBuildMs = ms;
+        MaxBuildMs = Math.Max(MaxBuildMs, ms);
+        LastApplyMs = clock.Elapsed.TotalMilliseconds;
+        MaxApplyMs = Math.Max(MaxApplyMs, LastApplyMs);
     }
 
     private void DisposeProps(List<Prop> props)
@@ -240,11 +347,11 @@ public partial class ScatterField : Node3D
         return (minX, minZ, maxX, maxZ);
     }
 
-    private static double? SpreadOf(IEnumerable<string> urls)
+    private static double? SpreadOf(IReadOnlyDictionary<string, double> ledger, IEnumerable<string> urls)
     {
         double? best = null;
         foreach (var u in urls)
-            if (u.Length > 0 && PropSpread.TryGetValue(u, out var s) && (best is null || s > best)) best = s;
+            if (u.Length > 0 && ledger.TryGetValue(u, out var s) && (best is null || s > best)) best = s;
         return best;
     }
 
@@ -286,20 +393,38 @@ public partial class ScatterField : Node3D
         }).ToList();
     }
 
-    private List<Prop> BuildScatter(AreaScatter a, Dictionary<(int, int), OccupancyGrid> grids)
+    /// <summary>One (row, variant) of the window, sampled and draped, ready to be mounted.</summary>
+    public sealed record PropSpec(int Row, int VariantPos, List<ScatterInstance> Points, double H, string Color, double Sway,
+                                  string LoUrl, string HiUrl, double TargetH, float[] Src, float[] Pos,
+                                  (double X, double Y, double Z) Centre, double Radius);
+
+    /// <summary>
+    /// <c>buildScatter</c> for every area of the window, bottom to top with ONE occupancy grid per cell over the whole
+    /// pass — pure: no Godot object, no field of this node (a worker runs it on <paramref name="inputs"/>).
+    /// </summary>
+    public static List<List<PropSpec>> SampleWindow(WindowInputs inputs)
     {
-        var outList = new List<Prop>();
-        var type = _payload!.TypeOf(a.Area.Kind);
+        var grids = new Dictionary<(int, int), OccupancyGrid>();
+        var outList = new List<List<PropSpec>>(inputs.Areas.Count);
+        foreach (var a in inputs.Areas) outList.Add(SampleArea(inputs, a, grids));
+        return outList;
+    }
+
+    private static List<PropSpec> SampleArea(WindowInputs inputs, AreaScatterInput a, Dictionary<(int, int), OccupancyGrid> grids)
+    {
+        var outList = new List<PropSpec>();
+        var payload = inputs.Payload;
+        var type = payload.TypeOf(a.Area.Kind);
         double sway = type?.SwayM ?? 0;
         var (rMinX, rMinZ, rMaxX, rMaxZ) = RingBounds(a.Ring);
-        var cells = _cells.Where(c =>
+        var cells = inputs.Cells.Where(c =>
         {
             double x0 = c.Cx * ScatterMath.CellM, z0 = c.Cz * ScatterMath.CellM;
             return rMaxX >= x0 && rMinX <= x0 + ScatterMath.CellM && rMaxZ >= z0 && rMinZ <= z0 + ScatterMath.CellM;
         }).ToList();
         if (cells.Count == 0) return outList;
         var occ = new CellOccupancy(grids);
-        string color = _payload.KindColor(a.Area.Kind);
+        string color = payload.KindColor(a.Area.Kind);
         for (int index = 0; index < a.Area.Scatter.Count; index++)
         {
             var entry = a.Area.Scatter[index];
@@ -307,11 +432,11 @@ public partial class ScatterField : Node3D
             // JS truthiness: an empty model string is the built-in tuft too.
             double h = !string.IsNullOrEmpty(entry.Model) ? ScatterLod.TargetH(entry.PropHeightM) : TuftHeightM;
             var kinds = KindsOf(entry);
-            var spread = SpreadOf(kinds.SelectMany(k => new[] { k.HiUrl, k.LoUrl }));
+            var spread = SpreadOf(inputs.Spread, kinds.SelectMany(k => new[] { k.HiUrl, k.LoUrl }));
             double clearM = ScatterMath.ClearM(h, spread is double s ? s * h : null);
             var buckets = kinds.Select(_ => new List<ScatterInstance>()).ToList();
-            foreach (var p in SampleRow(a.Area, index, entry, a.Ring, a.Occluders, _footprints, cells, occ,
-                                        kinds.Count, clearM, GameSeconds))
+            foreach (var p in SampleRow(a.Area, index, entry, a.Ring, a.Occluders, inputs.Footprints, cells, occ,
+                                        kinds.Count, clearM, inputs.GameSeconds))
             {
                 int v = p.Variant ?? 0;
                 (v >= 0 && v < buckets.Count ? buckets[v] : buckets[0]).Add(p);
@@ -321,18 +446,16 @@ public partial class ScatterField : Node3D
             for (int v = 0; v < kinds.Count; v++)
             {
                 if (buckets[v].Count == 0) continue;
-                var prop = MakeProp(index, v, buckets[v], h, color, entrySway, sink, kinds[v].LoUrl, kinds[v].HiUrl,
-                                    ScatterLod.TargetH(entry.PropHeightM));
-                if (_lodCam is { } cam) BinProp(prop, cam);
-                else FillAll(prop);
-                outList.Add(prop);
+                outList.Add(Drape(inputs.Ground, index, v, buckets[v], h, color, entrySway, sink, kinds[v].LoUrl,
+                                  kinds[v].HiUrl, ScatterLod.TargetH(entry.PropHeightM)));
             }
         }
         return outList;
     }
 
-    private Prop MakeProp(int row, int variantPos, List<ScatterInstance> points, double h, string color, double sway,
-                          double sink, string loUrl, string hiUrl, double targetH)
+    /// <summary>The instance buffers of one (row, variant): Godot's 3×4 rows on the ground plus the sink, and the sphere.</summary>
+    private static PropSpec Drape(WorldHeight ground, int row, int variantPos, List<ScatterInstance> points, double h,
+                                  string color, double sway, double sink, string loUrl, string hiUrl, double targetH)
     {
         int n = points.Count;
         var src = new float[n * 12];
@@ -340,7 +463,7 @@ public partial class ScatterField : Node3D
         for (int i = 0; i < n; i++)
         {
             var p = points[i];
-            double y = _heightAt(p.X, p.Z) + sink;
+            double y = ground.GroundAt(p.X, p.Z) + sink;
             float c = (float)Math.Cos(p.Yaw), s = (float)Math.Sin(p.Yaw);
             int o = i * 12;
             src[o] = c; src[o + 1] = 0; src[o + 2] = s; src[o + 3] = (float)p.X;
@@ -351,6 +474,16 @@ public partial class ScatterField : Node3D
             pos[i * 3 + 2] = (float)p.Z;
         }
         var (centre, radius) = InstanceSphere(pos, h + SwayMaxM);
+        return new PropSpec(row, variantPos, points, h, color, sway, loUrl, hiUrl, targetH, src, pos, centre, radius);
+    }
+
+    /// <summary>Main thread: the cone stand-in, its buffer and node for one sampled (row, variant).</summary>
+    private Prop MakeProp(PropSpec spec)
+    {
+        var (row, variantPos, points, h, color, sway) = (spec.Row, spec.VariantPos, spec.Points, spec.H, spec.Color, spec.Sway);
+        var (src, pos, centre, radius) = (spec.Src, spec.Pos, spec.Centre, spec.Radius);
+        var (loUrl, hiUrl, targetH) = (spec.LoUrl, spec.HiUrl, spec.TargetH);
+        int n = points.Count;
         var box = SphereBox(centre, radius);
         if (!_cones.TryGetValue(h, out var cone)) _cones[h] = cone = PropMesh.Cone(TuftRadiusM, h);
         string tuftKey = $"tuft|{color}|{sway:0.00}|{h}";
@@ -630,6 +763,9 @@ public partial class ScatterField : Node3D
 
     /// <summary>The measured spread of a URL, if any (for the check).</summary>
     public static double? MeasuredSpread(string url) => PropSpread.TryGetValue(url, out var s) ? s : null;
+
+    /// <summary>The clearance ledger's URLs, sorted (the digest's context: the window depends on what was measured).</summary>
+    public static IReadOnlyList<string> MeasuredUrls() => PropSpread.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
 
     public LayerCounts Counts()
     {

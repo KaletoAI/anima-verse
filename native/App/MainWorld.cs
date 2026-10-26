@@ -199,7 +199,7 @@ public partial class Main : Node3D
                         await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
                 }
                 Log("offline world " + stats.Summary());
-                if (_scatter is not null) Log("offline scatter " + _scatter.Summary());
+                if (_scatter is not null) Log("offline scatter " + _scatter.Summary() + " " + _scatter.Digest());
                 Log("offline figures " + FigureLine());
                 if (_streamer is not null) Log("offline " + _streamer.Summary());
                 foreach (var line in ShaderSafety.Lines) Log("offline " + line);
@@ -264,6 +264,11 @@ public partial class Main : Node3D
             + $"over {st.Probe.StreamFrames} frames; ground under the target {height.GroundAt(end.X, end.Z):0.###} m "
             + $"(fine tile {(height.HasTile(height.TileKeyAt(end.X, end.Z)) ? "held" : "MISSING")})");
         Log("fly " + st.Summary());
+        if (_scatter is not null)
+        {
+            await ScatterSettled(_scatter);
+            Log("fly scatter " + _scatter.Summary() + " " + _scatter.Digest());
+        }
         if (_builder.Terrain is { } terrain) Log("fly " + terrain.Summary());
         if (_builder.Ground is { } g) Log("fly " + g.Stats.Summary());
     }
@@ -376,7 +381,7 @@ public partial class Main : Node3D
         do
         {
             await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
-        } while (layer.Field.Busy && Time.GetTicksMsec() - start < 60000);
+        } while (layer.Busy && Time.GetTicksMsec() - start < 60000);
         Log($"scatter settled after {(Time.GetTicksMsec() - start) / 1000.0:0.0} s: {layer.Summary()}");
     }
 

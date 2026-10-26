@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Threading.Tasks;
+using AnimaNative.Terrain;
+using AnimaNative.World;
 using Godot;
 
 namespace AnimaNative.Scatter;
@@ -21,10 +25,23 @@ public sealed record UndergrowthArea(string Id, string Kind, List<P2> Ring, (dou
 /// the <c>/play/terrain-layers</c> tiles) names this area's kind as the top layer. The spike does not load
 /// the layer tiles; the occluders already drop every point an area painted later covers, so the kept set is
 /// "this area is the topmost painted shape here" — the mask's statement up to its raster at the borders.
+///
+/// THREADING (Task 26): the cells a moved anchor, a re-drape or new areas ask for are sampled on a worker (one
+/// <see cref="Coalescer"/> build at a time, from frozen areas, footprints and a <see cref="WorldHeight.Snapshot"/>);
+/// only the MultiMesh nodes are made on the main thread. A cell whose ground or areas changed keeps drawing its old
+/// layers until the new ones stand. The boot's first window (<see cref="SetAnchor"/> with <c>inline: true</c>) runs
+/// the same <see cref="SampleCells"/> inline.
 /// </summary>
 public partial class UndergrowthField : Node3D
 {
-    private readonly Func<double, double, double> _heightAt;
+    private readonly WorldHeight _height;
+    private readonly Coalescer _build;
+    private Task _lastRequest = Task.CompletedTask;
+    /// <summary>Counts every new set of areas: a build sampled for an older set is thrown away.</summary>
+    private int _areasGen;
+    /// <summary>Cells whose layers are outdated (new ground or areas) → the serial of that marking; they draw until rebuilt.</summary>
+    private readonly Dictionary<(int, int), int> _staleAt = new();
+    private int _serial;
     private List<UndergrowthArea> _areas = new();
     private List<(IReadOnlyList<P2> Fp, (double, double, double, double) Bounds)> _footprints = new();
     private readonly Dictionary<(int, int), List<CellLayer>> _cells = new();
@@ -55,11 +72,25 @@ public partial class UndergrowthField : Node3D
 
     public const int TrisPerTuft = 12;
 
-    public UndergrowthField(Func<double, double, double> heightAt)
+    /// <summary>Cells built (mounted), worker builds thrown away for newer areas, last / largest worker and mount ms.</summary>
+    public int CellsBuilt { get; private set; }
+    public int Discarded { get; private set; }
+    public double LastBuildMs { get; private set; }
+    public double MaxBuildMs { get; private set; }
+    public double LastApplyMs { get; private set; }
+    public double MaxApplyMs { get; private set; }
+    /// <summary>A cell build is on the worker (or waiting for its follow-up).</summary>
+    public bool Building => _build.Busy;
+
+    public UndergrowthField(WorldHeight height)
     {
         Name = "Undergrowth";
-        _heightAt = heightAt;
+        _height = height;
+        _build = new Coalescer(BuildOnceAsync);
     }
+
+    /// <summary>Completes when every cell build asked for so far has stood (or failed — the failure is logged).</summary>
+    public Task WhenBuiltAsync() => _lastRequest;
 
     public IEnumerable<CellLayer> Layers => _cells.Values.SelectMany(l => l);
     public IReadOnlyCollection<(int, int)> CellKeys => _cells.Keys;
@@ -97,13 +128,15 @@ public partial class UndergrowthField : Node3D
         return (minX, minZ, maxX, maxZ);
     }
 
+    /// <summary>New painted shapes: every standing cell is outdated (drawn until its new layers stand).</summary>
     public void SetAreas(List<UndergrowthArea> areas, IEnumerable<IReadOnlyList<P2>> footprints)
     {
         _areas = areas;
         _footprints = footprints.Select(f => (f, FootprintBox(f))).ToList();
-        foreach (var key in _cells.Keys.ToList()) DropCell(key);
+        _areasGen++;
+        foreach (var key in _cells.Keys) _staleAt[key] = ++_serial;
         _materials.Clear();
-        if (_hasAnchor) RefreshCells();
+        if (_hasAnchor) RefreshCells(false);
     }
 
     /// <summary>
@@ -113,32 +146,113 @@ public partial class UndergrowthField : Node3D
     /// <param name="tiles">The changed tile squares (null = every cell); only the cells touching one are grown again.</param>
     public void Redrape(IReadOnlyCollection<(int Tx, int Tz)>? tiles = null, double tileM = 0)
     {
-        foreach (var key in _cells.Keys.ToList())
-            if (tiles is null || ScatterField.TileTouchesCell(tiles, tileM, key.Item1, key.Item2, ScatterLod.UgCellM)) DropCell(key);
-        if (_hasAnchor) RefreshCells();
+        foreach (var key in _cells.Keys)
+            if (tiles is null || ScatterField.TileTouchesCell(tiles, tileM, key.Item1, key.Item2, ScatterLod.UgCellM))
+                _staleAt[key] = ++_serial;
+        if (_hasAnchor) RefreshCells(false);
     }
 
-    public void SetAnchor(double x, double z)
+    /// <summary>
+    /// The window follows the anchor: cells that left it go at once, the new ones are sampled on the worker
+    /// (<paramref name="inline"/> = right here, the boot's first window).
+    /// </summary>
+    public void SetAnchor(double x, double z, bool inline = false)
     {
         if (!double.IsFinite(x) || !double.IsFinite(z)) return;
         _anchorX = x;
         _anchorZ = z;
         _hasAnchor = true;
-        RefreshCells();
+        RefreshCells(inline);
     }
 
-    private void RefreshCells()
+    /// <summary>Drops the cells outside the window; returns the wanted cells that are missing or outdated, in window order.</summary>
+    private List<(int Cx, int Cz)> Needed()
     {
         var want = UndergrowthMath.WantedCells(_anchorX, _anchorZ);
         var keep = want.ToHashSet();
         foreach (var key in _cells.Keys.ToList())
             if (!keep.Contains(key)) DropCell(key);
-        foreach (var key in want)
-            if (!_cells.ContainsKey(key)) _cells[key] = BuildCell(key);
+        return want.Where(k => !_cells.ContainsKey(k) || _staleAt.ContainsKey(k)).ToList();
+    }
+
+    private void RefreshCells(bool inline)
+    {
+        var need = Needed();
+        if (need.Count == 0) return;
+        if (inline)
+        {
+            var inputs = Inputs(need);
+            Apply(inputs, SampleCells(inputs), null);
+            return;
+        }
+        _lastRequest = Logged(_build.RequestAsync());
+    }
+
+    private static async Task Logged(Task build)
+    {
+        try { await build; }
+        catch (Exception e) { GD.PushWarning($"[native] undergrowth: cell build failed, the cells standing stay: {e.Message}"); }
+    }
+
+    /// <summary>What one cell build reads, frozen on the main thread.</summary>
+    public sealed record CellInputs(int AreasGen, int Serial, IReadOnlyList<(int Cx, int Cz)> Keys, IReadOnlyList<UndergrowthArea> Areas,
+                                    IReadOnlyList<(IReadOnlyList<P2> Fp, (double, double, double, double) Bounds)> Footprints,
+                                    WorldHeight Ground);
+
+    /// <summary>One (area, cell) layer, sampled and draped, ready to be mounted.</summary>
+    public sealed record LayerSpec(int AreaIndex, List<ScatterInstance> Points, float[] Src, float[] Pos,
+                                   (double X, double Y, double Z) Centre, double Radius);
+
+    private CellInputs Inputs(List<(int Cx, int Cz)> keys)
+        => new(_areasGen, _serial, keys, _areas, _footprints, _height.Snapshot());
+
+    /// <summary>One build: the cells needed NOW, sampled on a worker, mounted here unless newer areas came.</summary>
+    private async Task BuildOnceAsync()
+    {
+        var need = Needed();
+        if (need.Count == 0) return;
+        var inputs = Inputs(need);
+        var clock = Stopwatch.StartNew();
+        var specs = await Task.Run(() => SampleCells(inputs));
+        double workerMs = clock.Elapsed.TotalMilliseconds;
+        if (!IsInstanceValid(this) || inputs.AreasGen != _areasGen)
+        {
+            Discarded++;
+            return;   // newer areas are here; their own request is queued behind this one
+        }
+        Apply(inputs, specs, workerMs);
+    }
+
+    /// <summary>
+    /// The main-thread half: a built cell replaces what stands there — unless it left the window meanwhile, or it was
+    /// marked outdated AFTER the inputs were frozen (that marking queued its own build).
+    /// </summary>
+    /// <param name="workerMs">The worker's time; null = the inline boot build (not counted into the runtime figures).</param>
+    private void Apply(CellInputs inputs, List<List<LayerSpec>> specs, double? workerMs)
+    {
+        var clock = Stopwatch.StartNew();
+        var want = UndergrowthMath.WantedCells(_anchorX, _anchorZ).ToHashSet();
+        for (int i = 0; i < inputs.Keys.Count; i++)
+        {
+            var key = inputs.Keys[i];
+            if (!want.Contains(key)) continue;
+            bool stale = _staleAt.TryGetValue(key, out int at);
+            if (_cells.ContainsKey(key) && !stale) continue;
+            if (stale && at > inputs.Serial) continue;
+            DropCell(key);
+            _cells[key] = specs[i].Select(spec => MakeLayer(_areas[spec.AreaIndex], key, spec)).ToList();
+            CellsBuilt++;
+        }
+        if (workerMs is not double ms) return;
+        LastBuildMs = ms;
+        MaxBuildMs = Math.Max(MaxBuildMs, ms);
+        LastApplyMs = clock.Elapsed.TotalMilliseconds;
+        MaxApplyMs = Math.Max(MaxApplyMs, LastApplyMs);
     }
 
     private void DropCell((int, int) key)
     {
+        _staleAt.Remove(key);
         if (!_cells.TryGetValue(key, out var layers)) return;
         foreach (var l in layers) l.Node.QueueFree();
         _cells.Remove(key);
@@ -169,29 +283,38 @@ public partial class UndergrowthField : Node3D
         return points.FindAll(p => ScatterMath.PointInRing(p.X, p.Z, area.Ring));
     }
 
-    private List<CellLayer> BuildCell((int Cx, int Cz) key)
+    /// <summary>Every (area, cell) layer of the cells in <paramref name="inputs"/> — pure (a worker runs it).</summary>
+    public static List<List<LayerSpec>> SampleCells(CellInputs inputs)
+    {
+        var outList = new List<List<LayerSpec>>(inputs.Keys.Count);
+        foreach (var key in inputs.Keys) outList.Add(SampleCellLayers(inputs, key));
+        return outList;
+    }
+
+    private static List<LayerSpec> SampleCellLayers(CellInputs inputs, (int Cx, int Cz) key)
     {
         var (cx, cz) = key;
         double cell = ScatterLod.UgCellM;
         double x0 = cx * cell, z0 = cz * cell, x1 = x0 + cell, z1 = z0 + cell;
         bool Meets((double MinX, double MinZ, double MaxX, double MaxZ) b) => b.MaxX >= x0 && b.MinX <= x1 && b.MaxZ >= z0 && b.MinZ <= z1;
-        var near = _footprints.Where(f => Meets(f.Bounds)).Select(f => f.Fp).ToList();
-        var outList = new List<CellLayer>();
-        for (int index = 0; index < _areas.Count; index++)
+        var near = inputs.Footprints.Where(f => Meets(f.Bounds)).Select(f => f.Fp).ToList();
+        var areas = inputs.Areas;
+        var outList = new List<LayerSpec>();
+        for (int index = 0; index < areas.Count; index++)
         {
-            var area = _areas[index];
+            var area = areas[index];
             if (ScatterLod.UgCellCount(area.Value) < 1) continue;
             if (!Meets(area.Bounds)) continue;
-            var kept = SampleCell(_areas, index, cx, cz, near);
+            var kept = SampleCell(areas, index, cx, cz, near);
             if (kept.Count == 0) continue;
-            outList.Add(MakeLayer(area, key, kept));
+            outList.Add(Drape(inputs.Ground, index, kept));
         }
         return outList;
     }
 
-    private CellLayer MakeLayer(UndergrowthArea area, (int, int) key, List<ScatterInstance> kept)
+    /// <summary>One layer's buffers: Godot's 3×4 rows scaled by the tuft height on the ground, the tint, the sphere.</summary>
+    private static LayerSpec Drape(WorldHeight ground, int areaIndex, List<ScatterInstance> kept)
     {
-        _mesh ??= TuftMesh();
         int n = kept.Count;
         var src = new float[n * 16];
         var pos = new float[n * 3];
@@ -199,7 +322,7 @@ public partial class UndergrowthField : Node3D
         {
             var p = kept[i];
             double scale = ScatterLod.UgHeight(p.Yaw) / UndergrowthMath.HRefM;
-            double y = _heightAt(p.X, p.Z);
+            double y = ground.GroundAt(p.X, p.Z);
             float c = (float)(Math.Cos(p.Yaw) * scale), s = (float)(Math.Sin(p.Yaw) * scale), k = (float)scale;
             int o = i * 16;
             src[o] = c; src[o + 1] = 0; src[o + 2] = s; src[o + 3] = (float)p.X;
@@ -212,6 +335,15 @@ public partial class UndergrowthField : Node3D
             pos[i * 3 + 2] = (float)p.Z;
         }
         var (centre, radius) = ScatterField.InstanceSphere(pos, UndergrowthMath.ReachM);
+        return new LayerSpec(areaIndex, kept, src, pos, centre, radius);
+    }
+
+    /// <summary>Main thread: the MultiMesh and node of one sampled layer.</summary>
+    private CellLayer MakeLayer(UndergrowthArea area, (int, int) key, LayerSpec spec)
+    {
+        _mesh ??= TuftMesh();
+        var (kept, src, pos, centre, radius) = (spec.Points, spec.Src, spec.Pos, spec.Centre, spec.Radius);
+        int n = kept.Count;
         var mm = new MultiMesh
         {
             TransformFormat = MultiMesh.TransformFormatEnum.Transform3D,

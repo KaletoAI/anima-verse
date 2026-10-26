@@ -258,6 +258,7 @@ Arguments after `--` (no .env; all optional):
 | `--check props` | only the props section (`fixtures/props/`, `Check/PropsCheck.cs`: slots, mirrors, prop lights, doors, ambience), then exit 0/1 |
 | `--check terrain` | only the CDLOD terrain section (`Check/TerrainCheck.cs`), then exit 0/1 |
 | `--check water` | only the water section (`Check/WaterCheck.cs`, `fixtures/water/`: shaders, shore gradient and foam band, waterfalls, underwater ghost, prop water sheets), then exit 0/1 |
+| `--check scatter` | only the scatter section (`Check/ScatterCheck.cs` on the fixture world: the S3 reference vectors, the runtime layers, and the Task 26 worker build — a moved window returns before it is rebuilt, a stale build is thrown away, the way back equals the reference), then exit 0/1 |
 | `--check stream` | only the terrain streaming section (`Check/StreamCheck.cs`: a fake server answering height, statistics and mask batches for a ten-tile strip — batches, LRU, windows, `height_sig`/`terrain_sig` reloads, re-datum, re-index), then exit 0/1 |
 | `--fly=M[,DEG]` | after the boot, fly the camera target M metres in a straight line (heading DEG: 0 = +x, 90 = +z) at 50 m/s, let the stream settle and log `fly done …` (tiles taken/evicted, the longest frame, the longest frame while streaming); with `--offline` it then quits |
 | `--check light` | only the light section (`Check/LightCheck.cs`: the game-hour stage at 6/7/9/12/18/22 h, hemisphere, shadow fit, material policy, MSAA option), then exit 0/1 |
@@ -687,7 +688,8 @@ $GODOT --headless --path native -- --offline=/path/to/dump --goto=LOCATION
 ```
 
 The offline run builds the same world as online (`Check/FixtureSource.cs` serves
-the dump) and prints `offline world …`, `offline scatter …`, `offline figures …`
+the dump) and prints `offline world …`, `offline scatter …` (with a `digest=` of every placed instance — two runs
+that placed the same scatter print the same digest), `offline figures …`
 and the shader lines, then quits; with `--verify` it also prints every location's verify table. The dump tool
 refuses every non-loopback connection and stubs the image service (a copy's config never makes it probe a gateway).
 
@@ -723,6 +725,15 @@ browser's ground does not read it either (§ A9: the row carries the prop facts)
 - **Cadence** (`Scatter/ScatterLayer.cs`): the browser's 1 Hz tick (LOD pass,
   then the window/cells follow the camera target) plus its movement driver
   (another pass after ≥ 100 ms when the camera moved > 8 m or turned > 10°).
+- **Off the main thread** (Task 26): a moved window, a re-drape, a measured
+  clearance or a new terrain asks for ONE rebuild (`Coalescer`); the sampling,
+  the ground heights and the instance buffers are made on a worker from frozen
+  inputs (`ScatterField.SampleWindow`, `UndergrowthField.SampleCells`, a
+  `WorldHeight.Snapshot`), only the MultiMesh nodes on the main thread; the old
+  props draw until the new ones stand. The boot's first window runs the same
+  functions inline. The summary line carries `worker_ms= mount_ms= ug_worker_ms=
+  ug_mount_ms= discarded=` (last/largest). On the real world: worker 85–145 ms,
+  mount ≤ 3 ms per 64 m step (was 100–160 ms of one frame).
 
 Not drawn (this favours Godot): the impostor billboards beyond 120 m
 (`impostors.ts`), the `along`/`edge`/`center` rows (counted, logged as
@@ -829,6 +840,6 @@ works the same way.
 | `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); the water numbers are `Core/Water/` (the tile field `Core/Ground/WaterTileField.cs`), the water's fields ride on the terrain's near lattice (`Core/Terrain/TerrainField.cs`) |
 | `Scatter/` | (payload, sampler and LOD/undergrowth maths are in `Core/Scatter/`) prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
 | `Bench/` | the bench driver and its output (camera path `loadPath`/`samplePath` and statistics `summarize`/`percentile` are in `Core/Bench/`) |
-| `Check/` | `--check`: fixture source and expectations, the S3c world (`S3cCheck.cs`: view rules, models, world props, water, shaders), § B5a (`VerifyCheck.cs`), the crossfade and occlusion (`PickCheck.cs` G), bench maths, scatter (`ScatterCheck.cs`), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
+| `Check/` | `--check`: fixture source and expectations, the S3c world (`S3cCheck.cs`: view rules, models, world props, water, shaders), § B5a (`VerifyCheck.cs`), the crossfade and occlusion (`PickCheck.cs` G), bench maths, scatter (`ScatterCheck.cs`, incl. the Task 26 worker build), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
 | `fixtures/` | offline payloads (incl. `terrain.json`, the scatter reference vectors, the cut-down layer bake + surface library + the ground reference values) + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
 | `third_party/meshoptimizer/` | meshoptimizer v1.3 sources (MIT, `src/*.cpp`, `meshoptimizer.h`, LICENSE) |

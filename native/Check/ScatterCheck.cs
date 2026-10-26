@@ -254,36 +254,14 @@ public static class ScatterCheck
         Expect("undergrowth cells", cellsGot.Select(c => UndergrowthMath.CellKey(c.Cx, c.Cz)).SequenceEqual(cellsWant),
                string.Join(";", cellsGot));
         Eq("undergrowth cells (hand)", cellsGot.Count, ExpUndergrowthCells);
-        Eq("undergrowth cells built", ug.CellKeys.Count, ExpUndergrowthCells);
-        ug.Tick(cp[0].GetDouble(), cp[1].GetDouble(), cp[2].GetDouble());
-        int ugLayers = 0, ugInst = 0, ugVisible = 0;
-        foreach (var c in wantUg.EnumerateArray())
-        {
-            var key = c.GetProperty("key").GetString()!;
-            var parts = key.Split(',');
-            var cell = (int.Parse(parts[0]), int.Parse(parts[1]));
-            var got = ug.Layers.Where(l => l.Cell == cell).ToList();
-            var want = c.GetProperty("layers");
-            Eq($"undergrowth layers in {key}", got.Count, want.GetArrayLength());
-            int i = 0;
-            foreach (var w in want.EnumerateArray())
-            {
-                var l = got[i++];
-                Expect($"undergrowth {key} area", l.AreaId == w.GetProperty("area").GetString(), l.AreaId);
-                ComparePoints($"undergrowth {key}", l.Points, w.GetProperty("points"));
-                Eq($"undergrowth {key} visible at the camera", l.N, w.GetProperty("visible").GetInt32());
-                Eq($"undergrowth {key} multimesh count", l.Mm.VisibleInstanceCount, l.N);
-                Expect($"undergrowth {key} shade", UndergrowthMath.Shade(l.Points[0].X, l.Points[0].Z) == w.GetProperty("shade0").GetDouble(), "differs");
-                Expect($"undergrowth {key} height", Math.Abs(ScatterLod.UgHeight(l.Points[0].Yaw) - w.GetProperty("height0").GetDouble()) < 1e-12, "differs");
-                Expect($"undergrowth {key} per-cell ceiling", l.BaseCount <= ExpUndergrowthPerCell, $"{l.BaseCount}");
-                ugLayers++;
-                ugInst += l.BaseCount;
-                ugVisible += l.N;
-            }
-        }
-        var uc = ug.Counts();
-        Expect("undergrowth counts", uc.Instances == ugVisible && uc.Triangles == (long)ugVisible * ExpTuftTris && uc.BaseInstances == ugInst,
-               $"{uc}");
+        var (ugLayers, ugInst, ugVisible, uc) = CheckUndergrowth("", ug, wantUg, cp);
+
+        // 3. Task 26 — the worker build. A moved window must not be sampled in the frame that moved it: SetAnchor returns
+        // with the old props still standing and a build on the worker. Then a coalesced follow-up, a build thrown away
+        // for a newer terrain (the same terrain set again) and the way back: the window the WORKER built at the anchor
+        // must be the reference again, instance for instance, bin for bin (the inline boot build above is the same
+        // function, so this is the before/after proof of the move off the main thread).
+        var worker = await CheckWorker(fx, field, ug, terrain, mapDoc.RootElement, ax, az, cp, cf, vfov, aspect, wantUg);
 
         // A camera 2 km away: every entry fails its sphere test, nothing is drawn (hand).
         field.Tick(2000, 50, 2000, 1, 0, vfov, aspect);
@@ -297,7 +275,101 @@ public static class ScatterCheck
         layer.QueueFree();
         return $"scatter_rows={field.Props.Count()} scatter_base={sc.BaseInstances} scatter_drawn={sc.Instances} "
                + $"(low {lowN}, full {highN}) scatter_tris={sc.Triangles} | undergrowth_cells={ug.CellKeys.Count} "
-               + $"layers={ugLayers} base={ugInst} drawn={ugVisible} tris={uc.Triangles}";
+               + $"layers={ugLayers} base={ugInst} drawn={ugVisible} tris={uc.Triangles} | {worker}";
+    }
+
+    /// <summary>The undergrowth against the reference at the fixture camera: layers, points, bins, counts.</summary>
+    private static (int Layers, int Base, int Visible, LayerCounts Counts) CheckUndergrowth(string phase, UndergrowthField ug,
+                                                                                           JsonElement wantUg, JsonElement cp)
+    {
+        Eq($"{phase}undergrowth cells built", ug.CellKeys.Count, ExpUndergrowthCells);
+        ug.Tick(cp[0].GetDouble(), cp[1].GetDouble(), cp[2].GetDouble());
+        int ugLayers = 0, ugInst = 0, ugVisible = 0;
+        foreach (var c in wantUg.EnumerateArray())
+        {
+            var key = c.GetProperty("key").GetString()!;
+            var parts = key.Split(',');
+            var cell = (int.Parse(parts[0]), int.Parse(parts[1]));
+            var got = ug.Layers.Where(l => l.Cell == cell).ToList();
+            var want = c.GetProperty("layers");
+            Eq($"{phase}undergrowth layers in {key}", got.Count, want.GetArrayLength());
+            int i = 0;
+            foreach (var w in want.EnumerateArray())
+            {
+                var l = got[i++];
+                Expect($"{phase}undergrowth {key} area", l.AreaId == w.GetProperty("area").GetString(), l.AreaId);
+                ComparePoints($"{phase}undergrowth {key}", l.Points, w.GetProperty("points"));
+                Eq($"{phase}undergrowth {key} visible at the camera", l.N, w.GetProperty("visible").GetInt32());
+                Eq($"{phase}undergrowth {key} multimesh count", l.Mm.VisibleInstanceCount, l.N);
+                Expect($"{phase}undergrowth {key} shade", UndergrowthMath.Shade(l.Points[0].X, l.Points[0].Z) == w.GetProperty("shade0").GetDouble(), "differs");
+                Expect($"{phase}undergrowth {key} height", Math.Abs(ScatterLod.UgHeight(l.Points[0].Yaw) - w.GetProperty("height0").GetDouble()) < 1e-12, "differs");
+                Expect($"{phase}undergrowth {key} per-cell ceiling", l.BaseCount <= ExpUndergrowthPerCell, $"{l.BaseCount}");
+                ugLayers++;
+                ugInst += l.BaseCount;
+                ugVisible += l.N;
+            }
+        }
+        var uc = ug.Counts();
+        Expect($"{phase}undergrowth counts", uc.Instances == ugVisible && uc.Triangles == (long)ugVisible * ExpTuftTris && uc.BaseInstances == ugInst,
+               $"{uc}");
+        return (ugLayers, ugInst, ugVisible, uc);
+    }
+
+    /// <summary>
+    /// Task 26: the window moves one cell east (+64 m) and back, through the worker; in between the same terrain is set
+    /// again while a build runs (that build is thrown away, the follow-up builds the new set). Hand facts: the window
+    /// is 5 × 5 cells (k = 2), so +64 m swaps one column of 5; the undergrowth window (radius 128 m round the anchor)
+    /// keeps 20 cells and its east/west edge columns trade places.
+    /// </summary>
+    private static async Task<string> CheckWorker(JsonElement fx, ScatterField field, UndergrowthField ug, TerrainPayload terrain,
+                                                  JsonElement map, double ax, double az, JsonElement cp, JsonElement cf,
+                                                  double vfov, double aspect, JsonElement wantUg)
+    {
+        Expect("worker: idle before the move", !field.Building && !ug.Building, "a build is already running");
+        var before = field.Props.ToList();
+        var cellsBefore = ug.CellKeys.ToHashSet();
+        int rebuilds0 = field.Rebuilds, built0 = ug.CellsBuilt, discarded0 = field.Discarded;
+        field.SetAnchor(ax + ScatterMath.CellM, az);
+        ug.SetAnchor(ax + ScatterMath.CellM, az);
+        // Nothing sampled in this frame: the old props stand, the build is on the worker; the undergrowth dropped the
+        // column that left (west) and waits for the new one (east).
+        Expect("worker: the move returns before the window is rebuilt",
+               field.Building && field.Rebuilds == rebuilds0 && field.Props.SequenceEqual(before) && before.All(p => !p.Disposed),
+               $"building={field.Building} rebuilds {field.Rebuilds} vs {rebuilds0}");
+        Expect("worker: undergrowth east column still missing", ug.Building && ug.CellKeys.Count < ExpUndergrowthCells
+                                                               && ug.CellKeys.All(cellsBefore.Contains),
+               $"{ug.CellKeys.Count} cells");
+        // The same terrain again while the first build runs: that build is thrown away (Discarded), the old props draw on.
+        field.SetTerrain(terrain, TerrainPayload.LocationFootprints(map));
+        Expect("worker: the old props draw until the new terrain's build stands", before.All(p => !p.Disposed), "disposed early");
+        await field.WhenBuiltAsync();
+        await ug.WhenBuiltAsync();
+        Expect("worker: the in-flight build of the old terrain was thrown away", field.Discarded == discarded0 + 1,
+               $"discarded {field.Discarded - discarded0}");
+        Expect("worker: the old props went when the new ones stood", before.All(p => p.Disposed), "an old prop survived");
+        Eq("worker: undergrowth cells after the move", ug.CellKeys.Count, ExpUndergrowthCells);
+        Expect("worker: the window moved one column east", field.Cells.SequenceEqual(ScatterMath.WantedCells(ax + ScatterMath.CellM, az, field.Lod.CullM))
+                                                          && field.Cells.Min(c => c.Cx) == ScatterMath.WantedCells(ax, az, field.Lod.CullM).Min(c => c.Cx) + 1,
+               string.Join(";", field.Cells));
+
+        // Two moves in a row: the second folds into ONE follow-up behind the first.
+        int rebuilds1 = field.Rebuilds;
+        field.SetAnchor(ax + 2 * ScatterMath.CellM, az);
+        field.SetAnchor(ax, az);
+        ug.SetAnchor(ax, az);
+        await field.WhenBuiltAsync();
+        await ug.WhenBuiltAsync();
+        Eq("worker: two moves = two builds (the second coalesced behind the first)", field.Rebuilds - rebuilds1, 2);
+
+        // Back at the anchor: the worker's window is the reference, instance for instance.
+        CompareRows("worker", field, fx.GetProperty("measured"));
+        field.Tick(cp[0].GetDouble(), cp[1].GetDouble(), cp[2].GetDouble(), cf[0].GetDouble(), cf[2].GetDouble(), vfov, aspect);
+        int lowN = 0, highN = 0;
+        CompareBins(field, fx.GetProperty("measured"), ref lowN, ref highN);
+        var (layers, baseN, visible, _) = CheckUndergrowth("worker: ", ug, wantUg, cp);
+        return $"worker[rebuilds={field.Rebuilds - rebuilds0} discarded={field.Discarded - discarded0} drawn={lowN + highN} "
+               + $"ug_cells_built={ug.CellsBuilt - built0} ug_layers={layers} ug_base={baseN} ug_drawn={visible} "
+               + $"build_ms={field.MaxBuildMs:0.#} mount_ms={field.MaxApplyMs:0.##}]";
     }
 
     private static void CompareRows(string phase, ScatterField field, JsonElement areas)

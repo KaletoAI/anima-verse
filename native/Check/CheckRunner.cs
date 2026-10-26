@@ -123,6 +123,20 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "scatter")
+            {
+                // The fixture world (heights) and the scatter section alone — the S3 reference plus the Task 26 worker.
+                var src = new FixtureSource(dir);
+                var w = new Node3D { Name = "CheckWorld" };
+                host.AddChild(w);
+                var b = new WorldBuilder(src, line => GD.Print("[check] " + line), strict: true);
+                await b.BuildAsync(w, Goto, new SyncCheck.BuildProbe().Hooks(src));
+                var alone = await ScatterCheck.RunAsync(w, src, b.Height!, dir);
+                b.Models?.FreeAll();
+                w.QueueFree();
+                GD.Print($"CHECK ok scatter {alone}");
+                return 0;
+            }
             var meshopt = CheckMeshopt(dir);
 
             var source = new FixtureSource(dir);
