@@ -23,8 +23,54 @@ namespace AnimaNative.Tests;
 /// </summary>
 internal static class E3VectorAdapters
 {
-    /// <summary>The labels of <paramref name="file"/> whose fn the table knows — for a file whose remaining fns are
-    /// pinned by <see cref="AssertPending"/> (never a silent skip).</summary>
+    /// <summary>Every fn of the file is in the table (a missing one would also fail its cases; this names them all).</summary>
+    public static void AssertAllDispatched(VectorFile file, IReadOnlyDictionary<string, Func<JsonArray, JsonNode?>> dispatch)
+        => Assert.Empty(file.MissingFunctions(dispatch));
+
+    /// <summary>
+    /// <c>e3Constants()</c>: the exported numeric constants of the E3 modules under their TS names, read from the C#
+    /// constants (only the keys a case expects are compared).
+    /// </summary>
+    public static JsonObject Constants()
+    {
+        var c = new Dictionary<string, double>
+        {
+            ["LC_EDGE_NOISE_M"] = LayerCut.EdgeNoiseM, ["LC_EDGE_WAVE_M"] = LayerCut.EdgeWaveM,
+            ["NG_DETAIL_SCALE"] = NaturalGround.DetailScale, ["NG_DETAIL_OFFSET"] = NaturalGround.DetailOffset,
+            ["NG_MIX_M"] = NaturalGround.MixM, ["NG_MIX_MAX"] = NaturalGround.MixMax,
+            ["NG_TINT_M"] = NaturalGround.TintM, ["NG_TINT_AMP"] = NaturalGround.TintAmp,
+            ["NG_AO_RING_M"] = NaturalGround.AoRingM, ["NG_AO_SPAN_M"] = NaturalGround.AoSpanM,
+            ["NG_AO_DOWN"] = NaturalGround.AoDown, ["NG_AO_UP"] = NaturalGround.AoUp,
+            ["FOG_CELL_M"] = Sky.FogVeil.CellM, ["FOG_PAD_CELLS"] = Sky.FogVeil.PadCells, ["FOG_BLEND_M"] = Sky.FogVeil.BlendM,
+            ["FOG_CLEAR_H_M"] = Sky.FogVeil.ClearHM, ["FOG_FULL_H_M"] = Sky.FogVeil.FullHM,
+            ["FOG_ALPHA_MAX"] = Sky.FogVeil.AlphaMax, ["FOG_FADE_S"] = Sky.FogVeil.FadeS, ["FOG_TEX_MAX"] = Sky.FogVeil.TexMax,
+            ["FOG_NEAR_M"] = Sky.Fog.NearM, ["FOG_FAR_M"] = Sky.Fog.FarM,
+            ["SHADOW_HALF_M"] = Sky.ShadowSnap.HalfM, ["SHADOW_MAP_PX"] = Sky.ShadowSnap.MapPx,
+            ["BACKDROP_DIST_M"] = Sky.Backdrop.DistM, ["BACKDROP_LAYER_GAP_M"] = Sky.Backdrop.LayerGapM,
+            ["BACKDROP_LAYER_HEIGHT_K"] = Sky.Backdrop.LayerHeightK, ["BACKDROP_LAYERS"] = Sky.Backdrop.Layers,
+            ["BACKDROP_SEGMENTS"] = Sky.Backdrop.Segments, ["RIDGE_MIN_SHARE"] = Sky.Backdrop.RidgeMinShare,
+            ["RIDGE_TAPER_DEG"] = Sky.Backdrop.RidgeTaperDeg, ["BACKDROP_HEIGHT_MIN_M"] = Sky.Backdrop.HeightMinM,
+            ["BACKDROP_HEIGHT_MAX_M"] = Sky.Backdrop.HeightMaxM, ["BACKDROP_HEIGHT_DEFAULT_M"] = Sky.Backdrop.HeightDefaultM,
+            ["HEIGHT_TILE_RADIUS_M"] = Terrain.HeightTiles.RadiusM, ["HEIGHT_TILE_CACHE_MAX"] = Terrain.HeightTiles.CacheMax,
+            ["HEIGHT_TILE_BATCH_MAX"] = Terrain.HeightTiles.BatchMax,
+            ["PATCH_N"] = Terrain.TerrainLod.PatchN, ["MAX_LOD_LEVELS"] = Terrain.TerrainLod.MaxLodLevels,
+            ["MIN_LOD_DISTANCE_M"] = Terrain.TerrainLod.MinLodDistanceM, ["MORPH_START"] = Terrain.TerrainLod.MorphStart,
+            ["MAX_PIXEL_ERROR"] = Terrain.TerrainLod.MaxPixelError, ["MAX_RANGE_WIDENING"] = Terrain.TerrainLod.MaxRangeWidening,
+            ["MAX_NODES"] = Terrain.TerrainLod.MaxNodes, ["LOD_CAP_NONE"] = Terrain.TerrainLod.LodCapNone,
+            ["WATER_SD_DRY"] = WaterTileField.SdDry, ["WATER_SD_BAND_M"] = Water.WaterShade.SdBandM,
+            ["WATER_EDGE_FADE_M"] = Water.WaterShade.EdgeFadeM, ["WATER_FOAM_BAND_M"] = Water.WaterShade.FoamBandM,
+            ["WATER_FOAM_STRENGTH"] = Water.WaterShade.FoamStrength, ["WATER_FOAM_MIN_COVER"] = Water.WaterShade.FoamMinCover,
+            ["WATER_SHALLOW_SURFACE_MIN"] = Water.WaterShade.ShallowSurfaceMin,
+            ["WATER_MIN_SEE_DEPTH_M"] = Water.WaterShade.MinSeeDepthM, ["WATER_LOOK_TEXELS"] = 3,
+            ["WATER_FLOW_SPEED_DEFAULT_M_S"] = Water.WaterShade.FlowSpeedDefault,
+            ["WATERFALL_MIN_DROP_M"] = Water.Waterfalls.MinDropM, ["WATERFALL_MIN_SLOPE"] = Water.Waterfalls.MinSlope,
+        };
+        var o = new JsonObject();
+        foreach (var (k, v) in c) o[k] = v;
+        return o;
+    }
+
+    /// <summary>The labels of <paramref name="file"/> whose fn the table knows — for a second consumer of some fns.</summary>
     public static TheoryData<string> DispatchedLabels(string file, IReadOnlyDictionary<string, Func<JsonArray, JsonNode?>> dispatch)
     {
         var data = new TheoryData<string>();
@@ -32,11 +78,6 @@ internal static class E3VectorAdapters
             if (dispatch.ContainsKey(c.Fn)) data.Add(c.Label);
         return data;
     }
-
-    /// <summary>The fns of the file the table does not know must be exactly <paramref name="pending"/>, in file order.</summary>
-    public static void AssertPending(VectorFile file, IReadOnlyDictionary<string, Func<JsonArray, JsonNode?>> dispatch,
-                                     params string[] pending)
-        => Assert.Equal(pending, file.MissingFunctions(dispatch));
 
     /// <summary>Add <c>fooValue([fooArgs], path)</c> for every <c>foo</c> of the table.</summary>
     public static Dictionary<string, Func<JsonArray, JsonNode?>> WithValues(Dictionary<string, Func<JsonArray, JsonNode?>> d)
@@ -128,6 +169,30 @@ internal static class E3VectorAdapters
         if (Key(node, "$layerWindow") is not JsonArray a) throw new ArgumentException($"expected a $layerWindow, got {VectorCompare.Show(node)}");
         var batch = LayerBatchOf(a[0], a[1]);
         return LayerCut.Pack(batch.Tiles, batch.Format);
+    }
+
+    /// <summary>The wire water block on a height lattice of its own size (rows = level rows, cols = first row).</summary>
+    public static WaterTileField? WaterTile(double originX, double originZ, double step, JsonNode? wire)
+    {
+        int rows = Key(wire, "level") is JsonArray lv ? lv.Count : 0;
+        int cols = rows > 0 && Key(wire, "level") is JsonArray l0 && l0[0] is JsonArray r0 ? r0.Count : 0;
+        var grid = new HeightGrid(originX, originZ, step, rows, cols, new float[rows * cols]);
+        return WaterTileField.Parse(Element(new JsonObject { ["water"] = wire?.DeepClone() }), grid);
+    }
+
+    /// <summary><c>{"$raster": {"tileM", "tiles": [[key, [originX, originZ, step, wire]], …]}}</c> → <see cref="Water.WaterRaster"/>.</summary>
+    public static Water.WaterRaster Raster(JsonNode? node)
+    {
+        if (Key(node, "$raster") is not JsonObject r) throw new ArgumentException($"expected a $raster, got {VectorCompare.Show(node)}");
+        var tiles = new Dictionary<string, WaterTileField>(StringComparer.Ordinal);
+        foreach (var t in (JsonArray)r["tiles"]!)
+        {
+            var pair = (JsonArray)t!;
+            var args = (JsonArray)pair[1]!;
+            tiles[Str(pair[0])] = WaterTile(Num(args[0]), Num(args[1]), Num(args[2]), args[3])
+                                  ?? throw new ArgumentException("a $raster tile without water");
+        }
+        return new Water.WaterRaster(Num(r["tileM"]), tiles);
     }
 
     public static JsonArray Bytes(IEnumerable<byte> b) => new(b.Select(x => (JsonNode?)(double)x).ToArray());

@@ -25,11 +25,12 @@ namespace AnimaNative.Tests;
 ///   layerSdBlockAt   LayerCut.SdBlockAt          $layerWindow → LayerCut.Pack
 ///   topLayerAt       LayerCut.TopLayerAt
 ///   lcPushedSd       LayerCut.PushedSd
+///   ngDetailUv       NaturalGround.DetailUv      (u, v) ↔ [u, v]
 ///   ngTintFactors    NaturalGround.TintFactors   (b, s) ↔ {brightness, saturation}
 ///   ngAoShade        NaturalGround.AoShade
 ///   ngAoTaps         NaturalGround.AoTaps        [(dx, dz)] ↔ [[dx, dz]]
 ///   ngFieldUv        NaturalGround.FieldUv       {origin_x, origin_z, step_m, cols, rows} → HeightGrid
-///   e3Constants      the C# constants under their TS names
+///   e3Constants      E3VectorAdapters.Constants  the C# constants under their TS names
 /// </code>
 /// </summary>
 public class LayerGroundVectorTests
@@ -41,16 +42,6 @@ public class LayerGroundVectorTests
         ["originX"] = w.OriginX, ["originZ"] = w.OriginZ, ["idStep"] = w.IdStep, ["sdStep"] = w.SdStep,
         ["idSize"] = w.IdSize, ["sdSize"] = w.SdSize, ["id"] = Bytes(w.Id), ["sd"] = Bytes(w.Sd),
         ["sdZero"] = w.SdZero, ["sdCodesPerM"] = w.SdCodesPerM, ["sdBandM"] = w.SdBandM,
-    };
-
-    internal static readonly Dictionary<string, double> Constants = new()
-    {
-        ["LC_EDGE_NOISE_M"] = LayerCut.EdgeNoiseM, ["LC_EDGE_WAVE_M"] = LayerCut.EdgeWaveM,
-        ["NG_DETAIL_SCALE"] = NaturalGround.DetailScale, ["NG_DETAIL_OFFSET"] = NaturalGround.DetailOffset,
-        ["NG_MIX_M"] = NaturalGround.MixM, ["NG_MIX_MAX"] = NaturalGround.MixMax,
-        ["NG_TINT_M"] = NaturalGround.TintM, ["NG_TINT_AMP"] = NaturalGround.TintAmp,
-        ["NG_AO_RING_M"] = NaturalGround.AoRingM, ["NG_AO_SPAN_M"] = NaturalGround.AoSpanM,
-        ["NG_AO_DOWN"] = NaturalGround.AoDown, ["NG_AO_UP"] = NaturalGround.AoUp,
     };
 
     private static readonly Dictionary<string, Func<JsonArray, JsonNode?>> Dispatch = new()
@@ -85,21 +76,24 @@ public class LayerGroundVectorTests
             var (u, v, inside) = NaturalGround.FieldUv(Num(a[0]), Num(a[1]), grid);
             return new JsonObject { ["u"] = u, ["v"] = v, ["inside"] = inside };
         },
+        ["ngDetailUv"] = a =>
+        {
+            var (u, v) = NaturalGround.DetailUv(Num(Arity(a, 2, 2)[0]), Num(a[1]));
+            return new JsonArray(u, v);
+        },
         ["e3Constants"] = a =>
         {
             Arity(a, 0, 0);
-            var o = new JsonObject();
-            foreach (var (k, v) in Constants) o[k] = v;
-            return o;
+            return Constants();
         },
     };
 
-    public static TheoryData<string> Cases => DispatchedLabels("layer_ground", Dispatch);
+    public static TheoryData<string> Cases => VectorFile.Labels("layer_ground");
 
     [Theory, MemberData(nameof(Cases))]
     public void Case(string label) => File.Value.AssertCase(label, Dispatch);
 
-    /// <summary>The fns native has not ported yet — the next commit ports them; nothing is skipped silently.</summary>
+    /// <summary>Every fn of the file has a C# port in the table.</summary>
     [Fact]
-    public void PendingFunctions() => AssertPending(File.Value, Dispatch, "ngDetailUv");
+    public void EveryFunctionDispatched() => AssertAllDispatched(File.Value, Dispatch);
 }

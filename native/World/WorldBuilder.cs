@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Ground;
 using AnimaNative.Scene;
+using AnimaNative.Terrain;
 using Godot;
 
 namespace AnimaNative.World;
@@ -184,7 +185,7 @@ public sealed class PlacedModel
 public sealed partial class WorldBuilder
 {
     /// <summary><c>HEIGHT_TILE_RADIUS_M</c> = <c>FOG_FAR_M</c> + 40 (client3d/src/scene/heightTiles.ts).</summary>
-    public const double TileRadiusM = LayerCut.TileRadiusM;
+    public const double TileRadiusM = HeightTiles.RadiusM;
     private const int SceneConcurrency = 4;
     /// <summary>Keyframe 0 of the bench path, relative to the anchor: where the static tiers are measured from.</summary>
     public static readonly Vector3 StartCameraOffset = new(0, 24, 40);
@@ -303,9 +304,8 @@ public sealed partial class WorldBuilder
 
         var height = Height = new WorldHeight(overview);
         var keys = height.IndexedTilesNear(stats.Anchor.Position().X, stats.Anchor.Position().Z, TileRadiusM);
-        for (int i = 0; i < keys.Count; i += AnimaApi.HeightTileBatchMax)
+        foreach (var batch in HeightTiles.TileBatches(keys))
         {
-            var batch = keys.Skip(i).Take(AnimaApi.HeightTileBatchMax).ToList();
             using var tileDoc = await _source.GetHeightTilesAsync(batch);
             height.AddTiles(HeightTile.ParseBatch(tileDoc.RootElement));
         }

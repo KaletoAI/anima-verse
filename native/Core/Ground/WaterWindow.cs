@@ -51,8 +51,11 @@ public sealed class WaterWindow
                 w.Sd[g] = f.Sd[k];
                 int idx = f.KindIdx[k];
                 w.KindRow[g] = idx >= 0 && idx < rows.Length ? rows[idx] : 0;
-                w.Flow[2 * g] = f.FlowX?[k] ?? 0;
-                w.Flow[2 * g + 1] = f.FlowZ?[k] ?? 0;
+                // rasterFlowAt at a lattice point: a texel without flow (NaN) is still water, (0, 0).
+                float vx = f.FlowX?[k] ?? 0, vz = f.FlowZ?[k] ?? 0;
+                bool finite = float.IsFinite(vx) && float.IsFinite(vz);
+                w.Flow[2 * g] = finite ? vx : 0;
+                w.Flow[2 * g + 1] = finite ? vz : 0;
             }
             w.WetTexels += f.Wet;
         }

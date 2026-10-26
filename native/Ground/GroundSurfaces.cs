@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Scatter;
 using AnimaNative.World;
+using AnimaNative.Terrain;
 using AnimaNative.Water;
 using Godot;
 using Json = AnimaNative.World.Json;
@@ -116,7 +117,7 @@ public sealed class GroundSurfaces
         Layers = Index.Layers.Take(LayerCut.MaxLayers).ToList();
 
         // The mask tiles the anchor wants (refreshLayerTiles): batches of 16; a failed batch keeps what stands.
-        Wanted = LayerCut.WantedTiles(Index.TileKeys.ToHashSet(), Format.TileM, anchorX, anchorZ);
+        Wanted = HeightTiles.WantedTiles(Index.TileKeys.ToHashSet(), Format.TileM, anchorX, anchorZ);
         for (int i = 0; i < Wanted.Count; i += LayerCut.BatchMax)
         {
             var keys = Wanted.Skip(i).Take(LayerCut.BatchMax).ToList();

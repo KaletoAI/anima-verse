@@ -43,8 +43,8 @@ public readonly record struct LayerSample(int A, int B, double Sd, double SdPush
 /// Exact port of the layer cut of the ground (<c>packages/scene-render/src/layerCut.ts</c>, contract § A16.7):
 /// the payload, the window packing (<c>packLayerWindow</c>), the CPU twins of the shader lookups
 /// (<c>layerPairAt</c>, <c>layerSdAt</c>, <c>layerSdBlockAt</c>, <c>topLayerAt</c>), the edge noise
-/// (<c>lcNoise</c>, <c>lcPushedSd</c>) and the cut (<c>layerWeight</c>); plus <c>wantedTiles</c> of
-/// <c>client3d/src/scene/heightTiles.ts</c>, the want set the browser fetches the mask tiles by.
+/// (<c>lcNoise</c>, <c>lcPushedSd</c>) and the cut (<c>layerWeight</c>). The mask tiles are fetched by the height
+/// tiles' want set (<see cref="Terrain.HeightTiles.WantedTiles"/>).
 /// Same double arithmetic in the same order; <c>Check/GroundCheck.cs</c> compares it with values the TS
 /// functions wrote (<c>fixtures/ground_reference.mjs</c>).
 /// </summary>
@@ -58,9 +58,6 @@ public static class LayerCut
     public const int SlicePx = 512;
     /// <summary><c>LAYER_BATCH_MAX</c> (ground.ts) = the server's <c>terrain_layers.BATCH_MAX</c>.</summary>
     public const int BatchMax = 16;
-    /// <summary><c>HEIGHT_TILE_RADIUS_M</c> = <c>FOG_FAR_M</c> (520) + 40 — the mask tiles' want radius.</summary>
-    public const double TileRadiusM = 520 + 40;
-    private const int MaxTilesPerAxis = 64;
 
     // ── Payload ────────────────────────────────────────────────────────────
 
@@ -134,46 +131,6 @@ public static class LayerCut
         if (s.Length == 0) return 0;  // Number('') = 0
         return double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : double.NaN;
     }
-
-    // ── The want set (heightTiles.ts wantedTiles) ──────────────────────────
-
-    /// <summary>
-    /// Every INDEXED tile whose square comes within <paramref name="radiusM"/> of (x, z), nearest first, ties in
-    /// ordinal key order — <c>wantedTiles</c> line for line (the key comes from <c>tileKeyAt</c> at the square's
-    /// centre).
-    /// </summary>
-    public static List<string> WantedTiles(IReadOnlySet<string> index, double tileM, double x, double z,
-                                           double radiusM = TileRadiusM)
-    {
-        var none = new List<string>();
-        if (!(tileM > 0) || !(radiusM >= 0) || index.Count == 0) return none;
-        if (!double.IsFinite(x) || !double.IsFinite(z)) return none;
-        double firstX = Math.Floor((x - radiusM) / tileM), lastX = Math.Floor((x + radiusM) / tileM);
-        double firstZ = Math.Floor((z - radiusM) / tileM), lastZ = Math.Floor((z + radiusM) / tileM);
-        if (lastX - firstX > MaxTilesPerAxis || lastZ - firstZ > MaxTilesPerAxis) return none;
-        double reach = radiusM * radiusM;
-        var hits = new List<(string Key, double D2)>();
-        for (double tz = firstZ; tz <= lastZ; tz += 1)
-        {
-            double dz = Math.Max(Math.Max(tz * tileM - z, 0), z - (tz + 1) * tileM);
-            for (double tx = firstX; tx <= lastX; tx += 1)
-            {
-                double dx = Math.Max(Math.Max(tx * tileM - x, 0), x - (tx + 1) * tileM);
-                double d2 = dx * dx + dz * dz;
-                if (d2 > reach) continue;
-                var key = TileKeyAt(tileM, (tx + 0.5) * tileM, (tz + 0.5) * tileM);
-                if (!index.Contains(key)) continue;
-                hits.Add((key, d2));
-            }
-        }
-        hits.Sort((a, b) => a.D2 != b.D2 ? a.D2.CompareTo(b.D2) : string.CompareOrdinal(a.Key, b.Key));
-        return hits.Select(h => h.Key).ToList();
-    }
-
-    /// <summary><c>tileKeyAt</c> (scene-render worldHeight.ts).</summary>
-    public static string TileKeyAt(double tileM, double x, double z)
-        // + 0.0 turns −0 into 0: JS prints Math.floor(−0) as "0", .NET as "-0".
-        => !(tileM > 0) ? "" : string.Create(CultureInfo.InvariantCulture, $"{Math.Floor(x / tileM) + 0.0},{Math.Floor(z / tileM) + 0.0}");
 
     // ── Edge look ──────────────────────────────────────────────────────────
 
@@ -389,6 +346,9 @@ public static class NaturalGround
     public const double DetailScale = 0.23, DetailOffset = 0.5, MixM = 7, MixMax = 0.5;
     public const double TintM = 25, TintAmp = 0.08;
     public const double AoRingM = 3, AoSpanM = 2, AoDown = 0.12, AoUp = 0.06;
+
+    /// <summary><c>ngDetailUv</c>: the broad anti-tile sample's coordinate, <c>uv · 0.23 + 0.5</c>.</summary>
+    public static (double U, double V) DetailUv(double u, double v) => (u * DetailScale + DetailOffset, v * DetailScale + DetailOffset);
 
     /// <summary><c>ngTintFactors</c>.</summary>
     public static (double Brightness, double Saturation) TintFactors(double nBright, double nSat)

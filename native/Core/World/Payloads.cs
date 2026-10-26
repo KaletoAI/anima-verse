@@ -99,16 +99,23 @@ public sealed class HeightGrid
     /// (packages/scene-render/src/worldHeight.ts) and the server's
     /// <c>heightfield.sample_height</c> (§ A16.5). Fewer than 2×2 points = 0.
     /// </summary>
-    public double Sample(double x, double z)
+    public double Sample(double x, double z) => LatticeSample((i, j) => At(i, j), Cols, Rows, OriginX, OriginZ, Step, x, z);
+
+    /// <summary>
+    /// <c>latticeSample</c>: the bilinear, border-clamped read of any lattice <paramref name="at"/>(i, j) — the one
+    /// implementation behind <see cref="Sample"/> and the terrain pyramids (<c>pyramidHeight</c>).
+    /// </summary>
+    public static double LatticeSample(Func<int, int, double> at, int cols, int rows, double originX, double originZ,
+                                       double step, double x, double z)
     {
-        if (!(Cols >= 2) || !(Rows >= 2) || !(Step > 0)) return 0;
-        double fx = Math.Clamp((x - OriginX) / Step, 0, Cols - 1);
-        double fz = Math.Clamp((z - OriginZ) / Step, 0, Rows - 1);
-        int i = Math.Min((int)Math.Floor(fx), Cols - 2);
-        int j = Math.Min((int)Math.Floor(fz), Rows - 2);
+        if (!(cols >= 2) || !(rows >= 2) || !(step > 0)) return 0;
+        double fx = Math.Clamp((x - originX) / step, 0, cols - 1);
+        double fz = Math.Clamp((z - originZ) / step, 0, rows - 1);
+        int i = Math.Min((int)Math.Floor(fx), cols - 2);
+        int j = Math.Min((int)Math.Floor(fz), rows - 2);
         double tx = fx - i, tz = fz - j;
-        double north = At(i, j) * (1 - tx) + At(i + 1, j) * tx;
-        double south = At(i, j + 1) * (1 - tx) + At(i + 1, j + 1) * tx;
+        double north = at(i, j) * (1 - tx) + at(i + 1, j) * tx;
+        double south = at(i, j + 1) * (1 - tx) + at(i + 1, j + 1) * tx;
         return north * (1 - tz) + south * tz;
     }
 }

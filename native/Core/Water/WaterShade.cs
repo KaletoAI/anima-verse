@@ -48,6 +48,61 @@ public static class WaterShade
         return g > 0 && w > h ? h + (w - h) * g : h;
     }
 
+    /// <summary><c>liftedDepth(h, w, sd)</c>: how far the gate lifts the ground (the varying <c>vTlodWet</c>); 0 where dry.</summary>
+    public static double LiftedDepth(double h, double w, double sd)
+    {
+        double g = Inside(sd);
+        return g > 0 && w > h ? (w - h) * g : 0;
+    }
+
+    private static double Smoothstep01(double t)
+    {
+        double c = t <= 0 ? 0 : t >= 1 ? 1 : t;
+        return c * c * (3 - 2 * c);
+    }
+
+    /// <summary><c>waterShoreAlpha(depth, opaque)</c>: smoothstep of depth / opaque depth; no depth = 0.</summary>
+    public static double ShoreAlpha(double depthM, double opaqueDepthM)
+        => !double.IsFinite(depthM) || depthM <= 0 ? 0 : Smoothstep01(depthM / opaqueDepthM);
+
+    /// <summary><c>waterFoam(depth)</c>: 1 − smoothstep(depth / 0.6 m); no depth = full foam.</summary>
+    public static double Foam(double depthM)
+        => !double.IsFinite(depthM) || depthM <= 0 ? 1 : 1 - Smoothstep01(depthM / FoamBandM);
+
+    /// <summary><c>waterEdgeFade(depth, edge)</c>: the rim ramp over max(edge, 5 cm); no depth = 0.</summary>
+    public static double EdgeFade(double depthM, double edgeM)
+    {
+        double e = Math.Max(edgeM, EdgeFadeM);
+        if (!double.IsFinite(depthM) || depthM <= 0) return 0;
+        double t = depthM / e;
+        return t >= 1 ? 1 : t;
+    }
+
+    /// <summary><c>waterAbsorb(depth, opaque, edge)</c>: how much of the bed the water hides (the tint share).</summary>
+    public static double Absorb(double depthM, double opaqueDepthM, double edgeM)
+        => !(depthM > 0) ? 0 : ShoreAlpha(depthM, Math.Max(opaqueDepthM, 1e-3)) * EdgeFade(depthM, edgeM);
+
+    /// <summary><c>waterShallowRamp(depth, opaque)</c>: the surface share ramp, 0.35 at the shore to 1 at the opaque depth.</summary>
+    public static double ShallowRamp(double depthM, double opaqueDepthM)
+        => ShallowSurfaceMin + (1 - ShallowSurfaceMin) * ShoreAlpha(depthM, Math.Max(opaqueDepthM, 1e-3));
+
+    /// <summary><c>waterSurface(depth, edge, inside, opaque)</c>: the share of the water's own surface (ripple, sky).</summary>
+    public static double Surface(double depthM, double edgeM, double inside, double opaqueDepthM)
+    {
+        if (!(depthM > 0)) return 0;
+        double g = !double.IsFinite(inside) ? 0 : inside <= 0 ? 0 : inside >= 1 ? 1 : inside;
+        return EdgeFade(depthM, edgeM) * g * ShallowRamp(depthM, opaqueDepthM);
+    }
+
+    /// <summary><c>waterFoamAt(depth, opaque, edge)</c>: the shore foam, covered by the shore share plus 15 % of itself.</summary>
+    public static double FoamAt(double depthM, double opaqueDepthM, double edgeM)
+    {
+        if (!(depthM > 0)) return 0;
+        double foam = Foam(depthM);
+        double cover = Math.Min(ShoreAlpha(depthM, Math.Max(opaqueDepthM, 1e-3)) + foam * FoamMinCover, 1);
+        return foam * cover * EdgeFade(depthM, edgeM);
+    }
+
     /// <summary><c>waterOpaqueDepthM</c>: ¾ of the bed depth (default 2 m), at least 1 m.</summary>
     public static double OpaqueDepthM(double? depthM)
     {

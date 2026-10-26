@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
 using AnimaNative.Ground;
+using AnimaNative.Terrain;
 using AnimaNative.Tests.Vectors;
 using AnimaNative.World;
 using Xunit;
@@ -19,10 +20,11 @@ namespace AnimaNative.Tests;
 ///
 /// <code>
 ///   TS fn              C#                                  shape translation
-///   wantedTiles        LayerCut.WantedTiles                $set → set of keys
+///   wantedTiles        HeightTiles.WantedTiles             $set → set of keys (also via WorldHeight.IndexedTilesNear)
+///   tileBatches        HeightTiles.TileBatches
 ///   sampleWorldHeight  HeightGrid.Parse + Sample           the field through the payload parser; null = no grid
 ///   heightAt           WorldHeight.GroundAt                {tileM, overview, tiles: $map} → HeightfieldOverview + HeightTiles
-///   tileKeyAt          LayerCut.TileKeyAt
+///   tileKeyAt          HeightTiles.TileKeyAt
 ///   latticeSample      HeightGrid.Sample                   row matrix (missing = 0) → the grid's row-major store
 ///   waterTileFrom      WaterTileField.Parse                (originX, originZ, step, wire) → {water: wire} on that lattice
 /// </code>
@@ -48,23 +50,14 @@ public class HeightTilesVectorTests
         };
     }
 
-    /// <summary>The wire water block on a height lattice of its own size (rows = level rows, cols = first row).</summary>
-    internal static WaterTileField? WaterTile(double originX, double originZ, double step, JsonNode? wire)
-    {
-        int rows = Key(wire, "level") is JsonArray lv ? lv.Count : 0;
-        int cols = rows > 0 && Key(wire, "level") is JsonArray l0 && l0[0] is JsonArray r0 ? r0.Count : 0;
-        var grid = new HeightGrid(originX, originZ, step, rows, cols, new float[rows * cols]);
-        return WaterTileField.Parse(Element(new JsonObject { ["water"] = wire?.DeepClone() }), grid);
-    }
-
     private static readonly Dictionary<string, Func<JsonArray, JsonNode?>> Dispatch = WithValues(new()
     {
         ["wantedTiles"] = a =>
         {
             Arity(a, 4, 5);
             var keys = Arg(a, 4) is { } r
-                ? LayerCut.WantedTiles(Set(a[0]), Num(a[1]), Num(a[2]), Num(a[3]), Num(r))
-                : LayerCut.WantedTiles(Set(a[0]), Num(a[1]), Num(a[2]), Num(a[3]));
+                ? HeightTiles.WantedTiles(Set(a[0]), Num(a[1]), Num(a[2]), Num(a[3]), Num(r))
+                : HeightTiles.WantedTiles(Set(a[0]), Num(a[1]), Num(a[2]), Num(a[3]));
             return Keys(keys);
         },
         ["sampleWorldHeight"] = a => Grid(Arity(a, 3, 3)[0]).Sample(Num(a[1]), Num(a[2])),
@@ -80,7 +73,7 @@ public class HeightTilesVectorTests
                     : throw new ArgumentException($"bad tile key {kv.Key}")));
             return world.GroundAt(Num(a[1]), Num(a[2]));
         },
-        ["tileKeyAt"] = a => LayerCut.TileKeyAt(Num(Arity(a, 3, 3)[0]), Num(a[1]), Num(a[2])),
+        ["tileKeyAt"] = a => HeightTiles.TileKeyAt(Num(Arity(a, 3, 3)[0]), Num(a[1]), Num(a[2])),
         ["latticeSample"] = a =>
         {
             Arity(a, 8, 8);
@@ -93,6 +86,13 @@ public class HeightTilesVectorTests
             return new HeightGrid(Num(a[3]), Num(a[4]), Num(a[5]), rows, cols, h).Sample(Num(a[6]), Num(a[7]));
         },
         ["waterTileFrom"] = a => FieldJson(WaterTile(Num(Arity(a, 4, 4)[0]), Num(a[1]), Num(a[2]), a[3])),
+        ["tileBatches"] = a =>
+        {
+            Arity(a, 1, 2);
+            var keys = ((JsonArray)a[0]!).Select(Str).ToList();
+            var batches = Arg(a, 1) is { } m ? HeightTiles.TileBatches(keys, Num(m)) : HeightTiles.TileBatches(keys);
+            return new JsonArray(batches.Select(b => (JsonNode?)Keys(b)).ToArray());
+        },
     });
 
     /// <summary>
@@ -116,12 +116,12 @@ public class HeightTilesVectorTests
     [Theory, MemberData(nameof(BootRingCases))]
     public void BootRingCase(string label) => File.Value.AssertCase(label, BootRing);
 
-    public static TheoryData<string> Cases => DispatchedLabels("height_tiles", Dispatch);
+    public static TheoryData<string> Cases => VectorFile.Labels("height_tiles");
 
     [Theory, MemberData(nameof(Cases))]
     public void Case(string label) => File.Value.AssertCase(label, Dispatch);
 
-    /// <summary>The fns native has not ported yet — the next commit ports them; nothing is skipped silently.</summary>
+    /// <summary>Every fn of the file has a C# port in the table.</summary>
     [Fact]
-    public void PendingFunctions() => AssertPending(File.Value, Dispatch, "tileBatchesValue");
+    public void EveryFunctionDispatched() => AssertAllDispatched(File.Value, Dispatch);
 }

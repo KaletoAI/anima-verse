@@ -74,7 +74,7 @@ public interface IWorldSource
 public sealed class AnimaApi : IWorldSource, IDisposable
 {
     /// <summary>Server cap of <c>/play/heightfield/tiles</c> (§ A16.5, BATCH_MAX).</summary>
-    public const int HeightTileBatchMax = 64;
+    public const int HeightTileBatchMax = Terrain.HeightTiles.BatchMax;
 
     /// <summary>Name of the session cookie (app/core/sessions.py <c>SESSION_COOKIE_NAME</c>).</summary>
     public const string SessionCookieName = "av_session";

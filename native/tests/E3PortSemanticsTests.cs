@@ -12,7 +12,7 @@ public class E3PortSemanticsTests
 {
     /// <summary><c>tileKeyAt(256, -0, -0)</c>: <c>Math.floor(-0 / 256)</c> is −0, and a template literal prints −0 as "0".</summary>
     [Fact]
-    public void TileKeyOfNegativeZeroIsZero() => Assert.Equal("0,0", LayerCut.TileKeyAt(256, -0.0, -0.0));
+    public void TileKeyOfNegativeZeroIsZero() => Assert.Equal("0,0", Terrain.HeightTiles.TileKeyAt(256, -0.0, -0.0));
 
     /// <summary><c>waterTintRgb('# 12345')</c>: the regex wants six hex digits right after '#', so the default #3f7fb8.</summary>
     [Fact]

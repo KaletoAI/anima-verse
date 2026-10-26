@@ -9,7 +9,8 @@ namespace AnimaNative.Ground;
 /// <summary>
 /// One height tile's water field (Wasser v2 K-A, client3d/src/scene/waterRaster.ts <c>WaterTileField</c>) on
 /// the tile's own lattice: <c>level</c> (NaN = dry), <c>sd</c> (the signed distance to the authored outline,
-/// <see cref="SdDry"/> where dry), the tile's kind palette + per-texel index, and the flow (null = still).
+/// <see cref="SdDry"/> where dry), the tile's kind palette + per-texel index, and the flow (null = still; NaN where
+/// a texel carries none).
 /// </summary>
 public sealed record WaterTileField(double OriginX, double OriginZ, double Step, int Rows, int Cols,
                                     float[] Level, float[] Sd, string[] Kinds, int[] KindIdx,
@@ -54,8 +55,10 @@ public sealed record WaterTileField(double OriginX, double OriginZ, double Step,
         var level = Field("level", float.NaN, out _);
         var sd = Field("sd", (float)SdDry, out _);
         var kindF = Field("kind_idx", 0, out _);
-        var fx = Field("flow_x", 0, out bool hasFx);
-        var fz = Field("flow_z", 0, out bool hasFz);
+        // A flow texel the wire does not carry is NaN like the level (waterRaster.ts cell()): the masked readers
+        // skip it at weight 0 and answer (0, 0) where it contributes.
+        var fx = Field("flow_x", float.NaN, out bool hasFx);
+        var fz = Field("flow_z", float.NaN, out bool hasFz);
         // waterTileFrom: the tile's own palette, a non-string entry as ''; a wire without one (a bake older than
         // HEIGHT_BAKE_VERSION 10) is ONE entry of the empty name, which resolves to the primary water.
         var kinds = w.TryGetProperty("kinds", out var ks) && ks.ValueKind == JsonValueKind.Array && ks.GetArrayLength() > 0

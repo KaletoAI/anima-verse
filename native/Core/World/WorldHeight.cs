@@ -52,13 +52,13 @@ public sealed class WorldHeight
     /// <summary>
     /// Index tiles whose 256 m square comes within <paramref name="radius"/> of (x, z) — the nearest point of the
     /// square, not its centre — nearest first, ties in key order: the browser's <c>wantedTiles</c>
-    /// (<see cref="Ground.LayerCut.WantedTiles"/>, the one port of it), so the boot ring fetches what the browser would.
+    /// (<see cref="Terrain.HeightTiles.WantedTiles"/>, the one port of it), so the boot ring fetches what the browser would.
     /// </summary>
     public List<(int Tx, int Tz)> IndexedTilesNear(double x, double z, double radius)
     {
         var index = Overview.TileIndex.Select(k => $"{k.Tx},{k.Tz}").ToHashSet(StringComparer.Ordinal);
         var keys = new List<(int Tx, int Tz)>();
-        foreach (var key in Ground.LayerCut.WantedTiles(index, Overview.TileM, x, z, radius))
+        foreach (var key in Terrain.HeightTiles.WantedTiles(index, Overview.TileM, x, z, radius))
             if (HeightfieldOverview.TryTileKey(key, out var k)) keys.Add(k);
         return keys;
     }
