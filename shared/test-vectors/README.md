@@ -422,3 +422,38 @@ an explicit parameter name ends in `_deg`):
 
 The adapter is `client3d/scripts/secondaryVectorDispatch.mjs`; unknown functions
 fail through the common runner. No production TypeScript changed for Task 33.
+
+## Animals and clip-less rigs (Task 34, TypeScript side)
+
+Run `timeout 300 node client3d/scripts/smoke_animal_vectors.mjs`.
+Both files have the single source `client3d/scripts/smoke_animal_vectors.mjs`,
+whose opening docstring derives every expected number. No assets or config are read.
+
+| JSON | Cases | Functions |
+|---|---:|---|
+| `animal_legs.json` | 19 | `findLegChains` |
+| `animal_gait.json` | 15 | `proceduralGaitAmplitudes`, `proceduralIdleAmplitudes`, `advanceProceduralPhase` |
+
+Production functions live in `packages/scene-render/src/proceduralGait.ts` and
+are exported from the package. `animalVectorDispatch.mjs` bundles that pure module
+without converting arguments or outputs. Native-facing signatures:
+
+- `findLegChains(bones, box) -> [{bone, foot, axis, phaseWalk, phaseRun}]`:
+  bones are ordered `{name, parent, position:{x,y,z}}` records in traversal order;
+  `parent` is an index or null for an immediate non-bone parent. Supply a valid
+  acyclic skeleton. Names need not be unique. Positions and box `min`/`max`
+  `{x,y,z}` share world space. Output `bone` and `foot` are top/leaf indices;
+  `axis` is a world-space `[x,y,z]` unit vector. The browser keeps quaternion
+  conversion into the bone parent's frame. Sorts are stable, including ties.
+- `proceduralGaitAmplitudes(phase, legPhase, height) -> {swing,bob}`:
+  phases and swing are radians, bob uses height's units.
+- `proceduralIdleAmplitudes(phase) -> {bob,scale}`: bob is metres; scale is a
+  multiplier applied to the figure's base scale.
+- `advanceProceduralPhase(phase, dt, gait) -> number`: dt is seconds; gait is
+  `"walk"`, `"run"` or null for idle. Phases stay unwrapped; no delta clamping.
+
+Gait selection reuses `proceduralGait` in the unchanged `figure_clips.json`;
+run `timeout 300 node client3d/scripts/smoke_figure_clips.mjs` for those cases.
+The new smoke additionally exercises the real Figure's bind restoration,
+parent-frame axis, walk/run phase update, bob/scale and no-leg idle fallback.
+Unknown dispatch functions fail through the common vector runner.

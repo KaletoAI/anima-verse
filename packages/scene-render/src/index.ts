@@ -169,3 +169,6 @@ export type { ScenePropWater } from './types'
 
 export { mapHipsTrack } from './hipsTrack'
 export type { HipsTrackOptions } from './hipsTrack'
+
+export { findLegChains, advanceProceduralPhase, proceduralGaitAmplitudes, proceduralIdleAmplitudes } from './proceduralGait'
+export type { GaitBone, GaitBox, GaitChain } from './proceduralGait'

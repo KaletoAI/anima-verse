@@ -1,0 +1,1211 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_animal_vectors.mjs",
+  "fixtures": {
+    "BOX": {
+      "min": {
+        "x": -1,
+        "y": 0,
+        "z": -2
+      },
+      "max": {
+        "x": 1,
+        "y": 4,
+        "z": 2
+      }
+    },
+    "PAIR": [
+      {
+        "name": "duplicate",
+        "parent": null,
+        "position": {
+          "x": 0,
+          "y": 2,
+          "z": 0
+        }
+      },
+      {
+        "name": "duplicate",
+        "parent": 0,
+        "position": {
+          "x": -1,
+          "y": 0,
+          "z": 0
+        }
+      }
+    ],
+    "FOUR": [
+      {
+        "name": "body",
+        "parent": null,
+        "position": {
+          "x": 0,
+          "y": 3,
+          "z": 0
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": -1,
+          "y": 2,
+          "z": -1
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 1,
+        "position": {
+          "x": -1,
+          "y": 0,
+          "z": -1
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": 1,
+          "y": 2,
+          "z": -1
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 3,
+        "position": {
+          "x": 1,
+          "y": 0,
+          "z": -1
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": -1,
+          "y": 2,
+          "z": 1
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 5,
+        "position": {
+          "x": -1,
+          "y": 0,
+          "z": 1
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": 1,
+          "y": 2,
+          "z": 1
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 7,
+        "position": {
+          "x": 1,
+          "y": 0,
+          "z": 1
+        }
+      }
+    ],
+    "FIVE": [
+      {
+        "name": "body",
+        "parent": null,
+        "position": {
+          "x": 0,
+          "y": 3,
+          "z": 0
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": 0,
+          "y": 2,
+          "z": 0
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 1,
+        "position": {
+          "x": 0,
+          "y": 0.8,
+          "z": 0
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": 0,
+          "y": 2,
+          "z": 0
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 3,
+        "position": {
+          "x": 0,
+          "y": 0.6,
+          "z": 0
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": 0,
+          "y": 2,
+          "z": 0
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 5,
+        "position": {
+          "x": 0,
+          "y": 0.4,
+          "z": 0
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": 0,
+          "y": 2,
+          "z": 0
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 7,
+        "position": {
+          "x": 0,
+          "y": 0.2,
+          "z": 0
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": 0,
+          "y": 2,
+          "z": 0
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 9,
+        "position": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        }
+      }
+    ],
+    "FOUR_X": [
+      {
+        "name": "body",
+        "parent": null,
+        "position": {
+          "x": 0,
+          "y": 3,
+          "z": 0
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": -1,
+          "y": 2,
+          "z": -1
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 1,
+        "position": {
+          "x": -1,
+          "y": 0,
+          "z": -1
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": -1,
+          "y": 2,
+          "z": 1
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 3,
+        "position": {
+          "x": -1,
+          "y": 0,
+          "z": 1
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": 1,
+          "y": 2,
+          "z": -1
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 5,
+        "position": {
+          "x": 1,
+          "y": 0,
+          "z": -1
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": 1,
+          "y": 2,
+          "z": 1
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 7,
+        "position": {
+          "x": 1,
+          "y": 0,
+          "z": 1
+        }
+      }
+    ],
+    "TWO": [
+      {
+        "name": "body",
+        "parent": null,
+        "position": {
+          "x": 0,
+          "y": 3,
+          "z": 0
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": -1,
+          "y": 2,
+          "z": 0
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 1,
+        "position": {
+          "x": -1,
+          "y": 0,
+          "z": 0
+        }
+      },
+      {
+        "name": "hip",
+        "parent": 0,
+        "position": {
+          "x": 1,
+          "y": 2,
+          "z": 0
+        }
+      },
+      {
+        "name": "foot",
+        "parent": 3,
+        "position": {
+          "x": 1,
+          "y": 0,
+          "z": 0
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "label": "[1a] empty",
+      "fn": "findLegChains",
+      "args": [
+        [],
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[1b] singleton",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "foot",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ],
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[1c] horizontal tail",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "tail",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "name": "end",
+            "parent": 0,
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 1
+            }
+          }
+        ],
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[2a] negative side duplicate names",
+      "fn": "findLegChains",
+      "args": [
+        {
+          "$fixture": "PAIR"
+        },
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": [
+        {
+          "bone": 0,
+          "foot": 1,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 3.141592653589793,
+          "phaseRun": 3.141592653589793
+        }
+      ]
+    },
+    {
+      "label": "[2b] centre belongs to positive side",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "hip",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 2,
+              "z": 0
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 0,
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ],
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": [
+        {
+          "bone": 0,
+          "foot": 1,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        }
+      ]
+    },
+    {
+      "label": "[3a] inclusive ground and rise",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "hip",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 1.48,
+              "z": 0
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 0,
+            "position": {
+              "x": 0,
+              "y": 1,
+              "z": 0
+            }
+          }
+        ],
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": [
+        {
+          "bone": 0,
+          "foot": 1,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        }
+      ]
+    },
+    {
+      "label": "[3b] above ground cutoff",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "hip",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 2,
+              "z": 0
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 0,
+            "position": {
+              "x": 0,
+              "y": 1.0001,
+              "z": 0
+            }
+          }
+        ],
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[3c] below rise cutoff",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "hip",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 1.4799,
+              "z": 0
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 0,
+            "position": {
+              "x": 0,
+              "y": 1,
+              "z": 0
+            }
+          }
+        ],
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[4a] quadruped Z long",
+      "fn": "findLegChains",
+      "args": [
+        {
+          "$fixture": "FOUR"
+        },
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": [
+        {
+          "bone": 1,
+          "foot": 2,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        },
+        {
+          "bone": 3,
+          "foot": 4,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 3.141592653589793,
+          "phaseRun": 3.141592653589793
+        },
+        {
+          "bone": 5,
+          "foot": 6,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 1.5707963267948966,
+          "phaseRun": 3.141592653589793
+        },
+        {
+          "bone": 7,
+          "foot": 8,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 4.71238898038469,
+          "phaseRun": 0
+        }
+      ]
+    },
+    {
+      "label": "[4b] quadruped X long",
+      "fn": "findLegChains",
+      "args": [
+        {
+          "$fixture": "FOUR_X"
+        },
+        {
+          "min": {
+            "x": -2,
+            "y": 0,
+            "z": -1
+          },
+          "max": {
+            "x": 2,
+            "y": 4,
+            "z": 1
+          }
+        }
+      ],
+      "expect": [
+        {
+          "bone": 1,
+          "foot": 2,
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        },
+        {
+          "bone": 3,
+          "foot": 4,
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "phaseWalk": 3.141592653589793,
+          "phaseRun": 3.141592653589793
+        },
+        {
+          "bone": 5,
+          "foot": 6,
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "phaseWalk": 1.5707963267948966,
+          "phaseRun": 3.141592653589793
+        },
+        {
+          "bone": 7,
+          "foot": 8,
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "phaseWalk": 4.71238898038469,
+          "phaseRun": 0
+        }
+      ]
+    },
+    {
+      "label": "[4c] square selects Z",
+      "fn": "findLegChains",
+      "args": [
+        {
+          "$fixture": "FOUR"
+        },
+        {
+          "min": {
+            "x": -2,
+            "y": 0,
+            "z": -2
+          },
+          "max": {
+            "x": 2,
+            "y": 4,
+            "z": 2
+          }
+        }
+      ],
+      "expect": [
+        {
+          "bone": 1,
+          "foot": 2,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        },
+        {
+          "bone": 3,
+          "foot": 4,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 3.141592653589793,
+          "phaseRun": 3.141592653589793
+        },
+        {
+          "bone": 5,
+          "foot": 6,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 1.5707963267948966,
+          "phaseRun": 3.141592653589793
+        },
+        {
+          "bone": 7,
+          "foot": 8,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 4.71238898038469,
+          "phaseRun": 0
+        }
+      ]
+    },
+    {
+      "label": "[5] lowest four stable ties",
+      "fn": "findLegChains",
+      "args": [
+        {
+          "$fixture": "FIVE"
+        },
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": [
+        {
+          "bone": 9,
+          "foot": 10,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        },
+        {
+          "bone": 7,
+          "foot": 8,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 3.141592653589793,
+          "phaseRun": 3.141592653589793
+        },
+        {
+          "bone": 5,
+          "foot": 6,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 1.5707963267948966,
+          "phaseRun": 3.141592653589793
+        },
+        {
+          "bone": 3,
+          "foot": 4,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 4.71238898038469,
+          "phaseRun": 0
+        }
+      ]
+    },
+    {
+      "label": "[6a] flat minimum rise",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "hip",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 0.00012,
+              "z": 0
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 0,
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ],
+        {
+          "min": {
+            "x": -1,
+            "y": 0,
+            "z": -2
+          },
+          "max": {
+            "x": 1,
+            "y": 0,
+            "z": 2
+          }
+        }
+      ],
+      "expect": [
+        {
+          "bone": 0,
+          "foot": 1,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        }
+      ]
+    },
+    {
+      "label": "[6b] flat too short",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "hip",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 0.000119,
+              "z": 0
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 0,
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ],
+        {
+          "min": {
+            "x": -1,
+            "y": 0,
+            "z": -2
+          },
+          "max": {
+            "x": 1,
+            "y": 0,
+            "z": 2
+          }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[7a] branching singles",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "hip",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 2,
+              "z": 0
+            }
+          },
+          {
+            "name": "a",
+            "parent": 0,
+            "position": {
+              "x": -1,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "name": "b",
+            "parent": 0,
+            "position": {
+              "x": 1,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ],
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[7b] three-link ascent",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "hip",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 2,
+              "z": 0
+            }
+          },
+          {
+            "name": "knee",
+            "parent": 0,
+            "position": {
+              "x": 0,
+              "y": 1,
+              "z": 0
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 1,
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ],
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": [
+        {
+          "bone": 0,
+          "foot": 2,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        }
+      ]
+    },
+    {
+      "label": "[2c] two legs antiphase",
+      "fn": "findLegChains",
+      "args": [
+        {
+          "$fixture": "TWO"
+        },
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": [
+        {
+          "bone": 1,
+          "foot": 2,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 3.141592653589793,
+          "phaseRun": 3.141592653589793
+        },
+        {
+          "bone": 3,
+          "foot": 4,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        }
+      ]
+    },
+    {
+      "label": "[2d] three legs antiphase",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "body",
+            "parent": null,
+            "position": {
+              "x": 0,
+              "y": 3,
+              "z": 0
+            }
+          },
+          {
+            "name": "hip",
+            "parent": 0,
+            "position": {
+              "x": -1,
+              "y": 2,
+              "z": 0
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 1,
+            "position": {
+              "x": -1,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "name": "hip",
+            "parent": 0,
+            "position": {
+              "x": 1,
+              "y": 2,
+              "z": 0
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 3,
+            "position": {
+              "x": 1,
+              "y": 0,
+              "z": 0
+            }
+          },
+          {
+            "name": "hip",
+            "parent": 0,
+            "position": {
+              "x": 0,
+              "y": 2,
+              "z": 1
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 5,
+            "position": {
+              "x": 0,
+              "y": 0,
+              "z": 1
+            }
+          }
+        ],
+        {
+          "$fixture": "BOX"
+        }
+      ],
+      "expect": [
+        {
+          "bone": 1,
+          "foot": 2,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 3.141592653589793,
+          "phaseRun": 3.141592653589793
+        },
+        {
+          "bone": 3,
+          "foot": 4,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        },
+        {
+          "bone": 5,
+          "foot": 6,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 0,
+          "phaseRun": 0
+        }
+      ]
+    },
+    {
+      "label": "[2e] translated centre",
+      "fn": "findLegChains",
+      "args": [
+        [
+          {
+            "name": "hip",
+            "parent": null,
+            "position": {
+              "x": 10,
+              "y": 2,
+              "z": 0
+            }
+          },
+          {
+            "name": "foot",
+            "parent": 0,
+            "position": {
+              "x": 9,
+              "y": 0,
+              "z": 0
+            }
+          }
+        ],
+        {
+          "min": {
+            "x": 9,
+            "y": 0,
+            "z": -2
+          },
+          "max": {
+            "x": 11,
+            "y": 4,
+            "z": 2
+          }
+        }
+      ],
+      "expect": [
+        {
+          "bone": 0,
+          "foot": 1,
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "phaseWalk": 3.141592653589793,
+          "phaseRun": 3.141592653589793
+        }
+      ]
+    }
+  ]
+}

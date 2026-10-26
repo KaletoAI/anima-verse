@@ -1,0 +1,177 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_animal_vectors.mjs",
+  "fixtures": {},
+  "cases": [
+    {
+      "label": "[8a] zero",
+      "fn": "proceduralGaitAmplitudes",
+      "args": [
+        0,
+        0,
+        2
+      ],
+      "expect": {
+        "swing": 0,
+        "bob": 0
+      }
+    },
+    {
+      "label": "[8b] positive peak",
+      "fn": "proceduralGaitAmplitudes",
+      "args": [
+        1.5707963267948966,
+        0,
+        2
+      ],
+      "expect": {
+        "swing": 0.45,
+        "bob": 0.04
+      }
+    },
+    {
+      "label": "[8c] opposite leg",
+      "fn": "proceduralGaitAmplitudes",
+      "args": [
+        1.5707963267948966,
+        3.141592653589793,
+        2
+      ],
+      "expect": {
+        "swing": -0.45,
+        "bob": 0.04
+      }
+    },
+    {
+      "label": "[8d] negative phase",
+      "fn": "proceduralGaitAmplitudes",
+      "args": [
+        -1.5707963267948966,
+        0,
+        3
+      ],
+      "expect": {
+        "swing": -0.45,
+        "bob": 0.06
+      }
+    },
+    {
+      "label": "[8e] phase offset",
+      "fn": "proceduralGaitAmplitudes",
+      "args": [
+        3.141592653589793,
+        1.5707963267948966,
+        2
+      ],
+      "expect": {
+        "swing": -0.45,
+        "bob": 0
+      }
+    },
+    {
+      "label": "[9a] idle zero",
+      "fn": "proceduralIdleAmplitudes",
+      "args": [
+        0
+      ],
+      "expect": {
+        "bob": 0,
+        "scale": 1
+      }
+    },
+    {
+      "label": "[9b] idle pi",
+      "fn": "proceduralIdleAmplitudes",
+      "args": [
+        3.141592653589793
+      ],
+      "expect": {
+        "bob": 0,
+        "scale": 1.006
+      }
+    },
+    {
+      "label": "[9c] idle negative pi",
+      "fn": "proceduralIdleAmplitudes",
+      "args": [
+        -3.141592653589793
+      ],
+      "expect": {
+        "bob": 0,
+        "scale": 0.994
+      }
+    },
+    {
+      "label": "[9d] full cycle",
+      "fn": "proceduralIdleAmplitudes",
+      "args": [
+        6.283185307179586
+      ],
+      "expect": {
+        "bob": 0,
+        "scale": 1
+      }
+    },
+    {
+      "label": "[9e] idle peak",
+      "fn": "proceduralIdleAmplitudes",
+      "args": [
+        1.5707963267948966
+      ],
+      "expect": {
+        "bob": 0.012,
+        "scale": 1.0042426406871192
+      }
+    },
+    {
+      "label": "[10a] walking",
+      "fn": "advanceProceduralPhase",
+      "args": [
+        1,
+        0.5,
+        "walk"
+      ],
+      "expect": 4.5
+    },
+    {
+      "label": "[10b] running",
+      "fn": "advanceProceduralPhase",
+      "args": [
+        1,
+        0.5,
+        "run"
+      ],
+      "expect": 6.5
+    },
+    {
+      "label": "[10c] idle",
+      "fn": "advanceProceduralPhase",
+      "args": [
+        1,
+        0.5,
+        null
+      ],
+      "expect": 1.8
+    },
+    {
+      "label": "[10d] zero delta",
+      "fn": "advanceProceduralPhase",
+      "args": [
+        2,
+        0,
+        "run"
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[10e] negative delta",
+      "fn": "advanceProceduralPhase",
+      "args": [
+        1,
+        -0.5,
+        "walk"
+      ],
+      "expect": -2.5
+    }
+  ]
+}

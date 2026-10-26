@@ -14,6 +14,7 @@ import {
 } from './clipCoverage';
 import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
+  findLegChains as findLegChainsData, advanceProceduralPhase, proceduralGaitAmplitudes, proceduralIdleAmplitudes,
   createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
   rigHipsHeight, standingHipsRef,
 } from '@anima/scene-render';
@@ -1704,69 +1705,24 @@ interface LegChain {
 function findLegChains(inst: THREE.Object3D, box: THREE.Box3): LegChain[] {
   const bones: THREE.Bone[] = [];
   inst.traverse((o) => { if ((o as THREE.Bone).isBone) bones.push(o as THREE.Bone); });
-  if (!bones.length) return [];
-
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-  const height = Math.max(size.y, 1e-3);
-  const boneKids = (b: THREE.Object3D) => b.children.filter((c) => (c as THREE.Bone).isBone);
-
-  const found: { bone: THREE.Bone; foot: THREE.Vector3 }[] = [];
-  for (const leaf of bones) {
-    if (boneKids(leaf).length) continue;                       // chain ends only
-    const foot = new THREE.Vector3().setFromMatrixPosition(leaf.matrixWorld);
-    if (foot.y > box.min.y + height * 0.25) continue;          // does not end at the ground
-    // upwards to the first branching (where spine/pelvis begin)
-    let top: THREE.Bone = leaf;
-    while ((top.parent as THREE.Bone)?.isBone && boneKids(top.parent!).length === 1) {
-      top = top.parent as THREE.Bone;
-    }
-    if (top === leaf) continue;                                // a single bone is no leg
-    const hip = new THREE.Vector3().setFromMatrixPosition(top.matrixWorld);
-    if (hip.y - foot.y < height * 0.12) continue;              // the chain does not lead upwards (e.g. a tail)
-    if (!found.some((f) => f.bone === top)) found.push({ bone: top, foot });
-  }
-  // more than 4 candidates: the ones nearest the ground are the legs
-  found.sort((a, b) => a.foot.y - b.foot.y);
-  const legs = found.slice(0, 4);
-
-  // body's long axis = the longer side of the footprint; swing axis across it
-  const long: 'x' | 'z' = size.x > size.z ? 'x' : 'z';
-  const cross: 'x' | 'z' = long === 'x' ? 'z' : 'x';
-  const axisWorld = long === 'x' ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);
+  const indices = new Map(bones.map((bone, i) => [bone, i]));
+  const data = bones.map(bone => ({
+    name: bone.name,
+    parent: indices.get(bone.parent as THREE.Bone) ?? null,
+    position: new THREE.Vector3().setFromMatrixPosition(bone.matrixWorld),
+  }));
   const q = new THREE.Quaternion();
-  const chains = legs.map(({ bone, foot }) => {
+  return findLegChainsData(data, box).map(chain => {
+    const bone = bones[chain.bone];
     bone.parent!.getWorldQuaternion(q);
     return {
-      bone, foot,
+      bone,
       bindQuat: bone.quaternion.clone(),
-      axis: axisWorld.clone().applyQuaternion(q.invert()).normalize(),
-      phaseWalk: 0,
-      phaseRun: 0,
+      axis: new THREE.Vector3(...chain.axis).applyQuaternion(q.invert()).normalize(),
+      phaseWalk: chain.phaseWalk,
+      phaseRun: chain.phaseRun,
     };
   });
-
-  // Gait phases: assign the leg pairs by sorting (front/back × left/right) —
-  // signs relative to the box centre are unreliable (a tail shifts it).
-  if (chains.length === 4) {
-    const byLong = [...chains].sort((a, b) => a.foot[long] - b.foot[long]);
-    const [aL, aR] = byLong.slice(0, 2).sort((a, b) => a.foot[cross] - b.foot[cross]);
-    const [bL, bR] = byLong.slice(2).sort((a, b) => a.foot[cross] - b.foot[cross]);
-    // Walking: a four-beat step in lateral sequence (like a cat/dog:
-    // back-left -> front-left -> back-right -> front-right)
-    aL.phaseWalk = 0; bL.phaseWalk = Math.PI / 2;
-    aR.phaseWalk = Math.PI; bR.phaseWalk = Math.PI * 1.5;
-    // Running: a trot — diagonal pairs together
-    aL.phaseRun = 0; bR.phaseRun = 0;
-    aR.phaseRun = Math.PI; bL.phaseRun = Math.PI;
-  } else {
-    // 1-3 legs detected: left/right in antiphase as the best remaining case
-    for (const c of chains) {
-      const p = c.foot[cross] >= center[cross] ? 0 : Math.PI;
-      c.phaseWalk = p; c.phaseRun = p;
-    }
-  }
-  return chains;
 }
 
 export class Figure {
@@ -2615,21 +2571,22 @@ export class Figure {
       const gait = proceduralGait(this.currentKind);
       if (gait && this.legs.length) {
         const running = gait === 'run';
-        this.walkPhase += dt * (running ? 11 : 7);
+        this.walkPhase = advanceProceduralPhase(this.walkPhase, dt, gait);
         for (const leg of this.legs) {
-          const swing = Math.sin(this.walkPhase + (running ? leg.phaseRun : leg.phaseWalk)) * 0.45;
+          const { swing } = proceduralGaitAmplitudes(this.walkPhase, running ? leg.phaseRun : leg.phaseWalk, this.height);
           leg.bone.quaternion.setFromAxisAngle(leg.axis, swing).multiply(leg.bindQuat);
         }
         if (inst) {
-          inst.position.y = this.groundY + Math.abs(Math.sin(this.walkPhase)) * this.height * 0.02;
+          inst.position.y = this.groundY + proceduralGaitAmplitudes(this.walkPhase, 0, this.height).bob;
           inst.scale.setScalar(this.baseScale);
         }
       } else {
         for (const leg of this.legs) leg.bone.quaternion.copy(leg.bindQuat);   // rest pose
-        this.idlePhase += dt * 1.6;
+        this.idlePhase = advanceProceduralPhase(this.idlePhase, dt, null);
         if (inst) {
-          inst.position.y = this.groundY + Math.sin(this.idlePhase) * 0.012;
-          inst.scale.setScalar(this.baseScale * (1 + Math.sin(this.idlePhase * 0.5) * 0.006));
+          const idle = proceduralIdleAmplitudes(this.idlePhase);
+          inst.position.y = this.groundY + idle.bob;
+          inst.scale.setScalar(this.baseScale * idle.scale);
         }
       }
     }
