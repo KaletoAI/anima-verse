@@ -1,7 +1,7 @@
 /**
  * Smoke: the decidable rules of the HUD chat window — `hud/chatPanel.ts`.
  *
- * Usage: direct node call, self-bundling via esbuild (run from anywhere):
+ * Usage: direct node call, transpiling the import-free module with TypeScript:
  *     node scripts/smoke_chat_portraits.mjs
  *
  * WHY THIS CHECK EXISTS. Three rules of the chat window are decisions, not
@@ -123,7 +123,6 @@
  * the whole history); else the row in the middle. So the mouse beats "middle",
  * and scrolling back to the end returns to the resting state on its own.
  */
-import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
@@ -132,26 +131,11 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 async function main() {
-  if (!process.env.SMOKE_BUNDLED) {
-    const bundlePath = '/tmp/smoke_chat_portraits_bundled.mjs'
-    const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild',
-                 'node_modules/.bin/esbuild']
-      .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
-    if (!bin) {
-      console.error('esbuild not found (npm install) — nothing was checked')
-      process.exit(1)
-    }
-    const built = spawnSync(bin, [
-      __filename, '--bundle', '--platform=node', '--format=esm',
-      `--outfile=${bundlePath}`,
-    ], { cwd: root, stdio: 'inherit' })
-    if (built.status !== 0) process.exit(built.status ?? 1)
-    const run = spawnSync('node', [bundlePath], {
-      stdio: 'inherit', env: { ...process.env, SMOKE_BUNDLED: '1' },
-    })
-    process.exit(run.status ?? 1)
-  }
+  const ts = await import('typescript')
+  const source = fs.readFileSync(path.join(__dirname, '../client3d/src/hud/chatPanel.ts'), 'utf8')
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+  }).outputText
 
   const {
     pickPortraitSpeakers, portraitSlots, NARRATOR_SLOT,
@@ -159,7 +143,7 @@ async function main() {
     readChatAlpha, readPortraitCount, chatFocusId, rowAtCenter,
     CHAT_MIN_W, CHAT_MAX_W, CHAT_MIN_H, CHAT_MAX_H, CHAT_COL_W,
     CHAT_ALPHA_MIN, CHAT_ALPHA_MAX, PORTRAITS_MIN, PORTRAITS_MAX,
-  } = await import('../client3d/src/hud/chatPanel.ts')
+  } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`)
 
   const failures = []
   const check = (label, actual, expected) => {

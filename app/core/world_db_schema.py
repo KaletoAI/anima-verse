@@ -12,7 +12,20 @@ Conventions:
 - Foreign keys enabled, ON DELETE CASCADE where appropriate
 """
 
-SCHEMA_VERSION = 8  # 8: seamless world — metre positions, terrain tables
+SCHEMA_VERSION = 9  # 9: set-scoped expression candidates
+
+POSE_CANDIDATES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS pose_candidates (
+        axis TEXT NOT NULL CHECK(axis IN ('pose','expression')),
+        set_id TEXT NOT NULL DEFAULT '',
+        raw_text TEXT NOT NULL,
+        nearest_key TEXT NOT NULL DEFAULT '',
+        distance REAL,
+        count INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','dismissed')),
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        PRIMARY KEY (axis, set_id, raw_text)
+    )"""
 
 
 # Room ids are unique PER LOCATION, not globally — that is the documented
@@ -680,17 +693,7 @@ SCHEMA_STATEMENTS = [
     # Free text that could NOT be mapped onto a catalog entry is logged here
     # instead of silently becoming a render key. The admin reviews the list
     # and either extends the catalog or dismisses the entry.
-    """CREATE TABLE IF NOT EXISTS pose_candidates (
-        axis        TEXT NOT NULL CHECK(axis IN ('pose','expression')),
-        raw_text    TEXT NOT NULL,
-        nearest_key TEXT NOT NULL DEFAULT '',
-        distance    REAL,
-        count       INTEGER NOT NULL DEFAULT 1,
-        status      TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','dismissed')),
-        first_seen  TEXT NOT NULL,
-        last_seen   TEXT NOT NULL,
-        PRIMARY KEY (axis, raw_text)
-    )""",
+    POSE_CANDIDATES_TABLE_SQL,
 
     # ── Pose/Expression catalog, the WORLD layer (2026-09-08) ───────────
     # The shared catalog file (shared/templates/<axis>/<axis>_catalog.json)

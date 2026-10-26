@@ -15,13 +15,14 @@
  * Candidates: GET /poses/candidates · POST /poses/candidates/approve|dismiss|dismiss_all
  * Images:     POST /poses/expression-images/clear
  *
- * The image cache is keyed by the catalog KEY, not by the prompt text, so
- * editing an entry's prompt does NOT invalidate the images already rendered
- * under it — that is what the clear button next to the editor is for.
+ * Expressions use outfit-bound sets and a fixed image pose. Editing their
+ * render prompts changes the contract; old images remain historical until
+ * explicitly previewed cleanup. Pose/animation editing is independent.
  */
 import { ConfirmDialog } from '@anima/player-ui'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PoseAnimationDialog } from './PoseAnimationDialog'
+import { ExpressionSetsEditor } from './ExpressionSetsEditor'
 import type { PoseAnimationRequest } from './PoseAnimationDialog'
 import { PoseAnimationChoice } from './PoseAnimationChoice'
 import type { AnimationCandidate } from './PoseAnimationChoice'
@@ -137,6 +138,7 @@ interface Entry {
   store?: Store
   movement?: boolean
   deletable?: boolean
+  resettable?: boolean
   /** false for the keys the server code names literally (pose axis) */
   renamable?: boolean
 }
@@ -190,8 +192,11 @@ export function PosesTab() {
   const { t } = useI18n()
   const { toast } = useToast()
   const [axis, setAxis] = useState<Axis>('pose')
+  const [expressionSet, setExpressionSet] = useState('humanoid')
+  const [pendingSet, setPendingSet] = useState<string | null>(null)
   const [view, setView] = useState<View>('entries')
   const [data, setData] = useState<CatalogData>({ entries: [], kinds: [], problems: [] })
+  const loadCounter = useRef(0)
   // The installed clips — the Library view lives off this, and the entry
   // editor reads the set coverage of the selected kind from it.
   const [clipList, setClipList] = useState<ClipListing>({ clips: [], kinds: [] })
@@ -229,18 +234,22 @@ export function PosesTab() {
   const isPose = axis === 'pose'
 
   const load = useCallback(async () => {
+    const version = ++loadCounter.current
     try {
-      setData(await apiGet<CatalogData>(`/poses?axis=${axis}`))
+      const catalog = await apiGet<CatalogData>(`/poses?axis=${axis}&set_id=${axis === 'expression' ? encodeURIComponent(expressionSet) : ''}`)
+      if (version !== loadCounter.current) return
+      setData(catalog)
     } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      if (version === loadCounter.current) toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
     try {
-      const r = await apiGet<{ candidates: Candidate[] }>(`/poses/candidates?axis=${axis}`)
+      const r = await apiGet<{ candidates: Candidate[] }>(`/poses/candidates?axis=${axis}&set_id=${axis === 'expression' ? encodeURIComponent(expressionSet) : ''}`)
+      if (version !== loadCounter.current) return
       setCandidates(r.candidates || [])
     } catch {
-      setCandidates([])
+      if (version === loadCounter.current) setCandidates([])
     }
-  }, [axis, t, toast])
+  }, [axis, expressionSet, t, toast])
 
   /** The clip listing does not depend on the axis — it is the file state of
    *  the shared libraries, reloaded after every rename/move/delete. */
@@ -427,7 +436,7 @@ export function PosesTab() {
     setConfirmDismiss(null)
     setConfirmDismissAll(false)
     setGroupFilter('')
-  }, [axis])
+  }, [axis, expressionSet])
 
   // The server is the truth for the place types: every (re)load restarts the
   // editable copy from what was just fetched.
@@ -530,10 +539,12 @@ export function PosesTab() {
     try {
       const body = {
         axis,
+        set_id: isPose ? '' : expressionSet,
         key,
         prompt: draft.prompt,
         synonyms: draft.synonyms,
-        ...(isPose ? { label: draft.label || '', label_de: draft.label_de || '' } : {}),
+        label: draft.label || key,
+        ...(isPose ? { label_de: draft.label_de || '' } : {}),
         store: draft.store || 'shared',
         ...(isPose
           ? {
@@ -565,13 +576,13 @@ export function PosesTab() {
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [approveOf, axis, draft, isNew, isPose, load, t, toast])
+  }, [approveOf, axis, expressionSet, draft, isNew, isPose, load, t, toast])
 
   const remove = useCallback(async () => {
-    if (!draft || isNew || draft.deletable === false) return
+    if (!draft || isNew || (draft.deletable === false && !draft.resettable)) return
     try {
-      await apiDelete(`/poses/${encodeURIComponent(draft.key)}?axis=${axis}`)
-      toast(t('Deleted'))
+      await apiDelete(`/poses/${encodeURIComponent(draft.key)}?axis=${axis}&set_id=${axis === 'expression' ? encodeURIComponent(expressionSet) : ''}`)
+      toast(draft.resettable ? t('Override reset') : t('Deleted'))
       setDeleteOpen(false)
       await loadClips()
       setDraft(null)
@@ -580,7 +591,7 @@ export function PosesTab() {
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [axis, draft, isNew, load, loadClips, t, toast])
+  }, [axis, expressionSet, draft, isNew, load, loadClips, t, toast])
 
   /** Renames the selected pose's KEY. The server rewrites every stored
    *  reference of this world (character poses, pair interactions, invites,
@@ -595,7 +606,7 @@ export function PosesTab() {
       try {
         const r = await apiPost<{ key: string; references: { failed: string[] } }>(
           `/poses/${encodeURIComponent(oldKey)}/rename?axis=${axis}`,
-          { new_key: newKey },
+          { new_key: newKey, set_id: isPose ? '' : expressionSet },
         )
         toast(t('Key renamed') + `: ${oldKey} → ${r.key}`)
         if (r.references?.failed?.length) {
@@ -610,7 +621,7 @@ export function PosesTab() {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     },
-    [axis, draft, isNew, load, loadClips, t, toast],
+    [axis, expressionSet, isPose, draft, isNew, load, loadClips, t, toast],
   )
 
   const asSynonym = useCallback(
@@ -620,6 +631,7 @@ export function PosesTab() {
       try {
         await apiPost('/poses/candidates/approve', {
           axis,
+          set_id: isPose ? '' : expressionSet,
           raw_text: c.raw_text,
           as_synonym_of: target,
         })
@@ -631,7 +643,7 @@ export function PosesTab() {
         setBusy(false)
       }
     },
-    [axis, busy, load, t, toast],
+    [axis, expressionSet, isPose, busy, load, t, toast],
   )
 
   const dismiss = useCallback(
@@ -639,7 +651,7 @@ export function PosesTab() {
       if (busy) return
       setBusy(true)
       try {
-        await apiPost('/poses/candidates/dismiss', { axis, raw_text: c.raw_text })
+        await apiPost('/poses/candidates/dismiss', { axis, set_id: isPose ? '' : expressionSet, raw_text: c.raw_text })
         setCandidates((prev) => prev.filter((x) => x.raw_text !== c.raw_text))
         setConfirmDismiss(null)
       } catch (e) {
@@ -648,14 +660,14 @@ export function PosesTab() {
         setBusy(false)
       }
     },
-    [axis, busy, t, toast],
+    [axis, expressionSet, isPose, busy, t, toast],
   )
 
   const dismissAll = useCallback(async () => {
     if (busy) return
     setBusy(true)
     try {
-      const r = await apiPost<{ dismissed: number }>('/poses/candidates/dismiss_all', { axis })
+      const r = await apiPost<{ dismissed: number }>('/poses/candidates/dismiss_all', { axis, set_id: isPose ? '' : expressionSet })
       setCandidates([])
       setConfirmDismissAll(false)
       toast(t('Dismissed {n} candidates').replace('{n}', String(r.dismissed)))
@@ -664,7 +676,7 @@ export function PosesTab() {
     } finally {
       setBusy(false)
     }
-  }, [axis, busy, t, toast])
+  }, [axis, expressionSet, isPose, busy, t, toast])
 
   const clearExpressionImages = useCallback(async () => {
     if (busy) return
@@ -813,6 +825,15 @@ export function PosesTab() {
     // collapsing the pane must not take the way back to Library/Import with it.
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {viewSwitch}
+      {!isPose && <ExpressionSetsEditor selected={expressionSet}
+        reloadKey={data.entries.map(e => e.key).join(',')} onSaved={load}
+        labels={Object.fromEntries(data.entries.map(e => [e.key, e.label || e.key]))}
+        worldOnlyMembers={data.entries.filter(e => e.store === 'world' && !e.resettable).map(e => e.key)}
+        onSelect={id => {
+          const original = data.entries.find(e => e.key === selected)
+          if (draft && (isNew || JSON.stringify(draft) !== JSON.stringify(original))) setPendingSet(id)
+          else setExpressionSet(id)
+        }} />}
       <div className="ga-twocol">
         <ListPane id="poses" label={t('Catalog')}>
             <ListHeader
@@ -841,7 +862,7 @@ export function PosesTab() {
                 <button
                   type="button"
                   className="ga-btn ga-btn-sm ga-btn-danger"
-                  title={t('Deletes every rendered expression image of every character. The image cache is keyed by the catalog key, not by the prompt text — use this after editing a prompt, otherwise the old images stay.')}
+                  title={t('Deletes all expression images. To remove only incompatible history, use the per-character cleanup preview.')}
                   onClick={() => setConfirmClear(true)}
                 >
                   {t('Clear rendered expression images')}
@@ -1094,7 +1115,7 @@ export function PosesTab() {
                   onClick={() => select(p.key)}
                 >
                   <span className="ga-list-row-main">
-                    <code>{p.key}</code>
+                    {isPose ? <code>{p.key}</code> : <span title={p.key}>{p.label || p.key}</span>}
                     {isPose ? (
                       <span
                         className="ga-list-row-sub"
@@ -1280,8 +1301,10 @@ export function PosesTab() {
                       : draft.key
                 }
                 onSave={save}
-                onDelete={isNew || draft.deletable === false ? undefined : () => setDeleteOpen(true)}
+                onDelete={isNew || draft.deletable === false || draft.resettable ? undefined : () => setDeleteOpen(true)}
               />
+              {!isNew && draft.resettable && <button type="button" className="ga-btn ga-btn-sm"
+                onClick={() => setDeleteOpen(true)}>{t('Reset World override')}</button>}
               {/* Two columns: the catalog text on the left, the 3D animation
                   with its preview on the right — the preview needs the room. */}
               <div className="ga-form" style={{ display: 'grid',
@@ -1299,7 +1322,7 @@ export function PosesTab() {
                         disabled={!isNew}
                         onChange={(e) => upd('key', e.target.value)}
                       />
-                      {isPose && !isNew && draft.renamable !== false ? (
+                      {!isNew && draft.renamable !== false ? (
                         <button className="ga-btn ga-btn-sm" style={{ whiteSpace: 'nowrap' }}
                           onClick={() => setRenameOpen(true)}>
                           {t('Rename key')}
@@ -1334,6 +1357,10 @@ export function PosesTab() {
                   />
                 </Field>
 
+                {!isPose && <Field label={t('Expression label')}>
+                  <input className="ga-input" maxLength={80} value={draft.label || ''}
+                    onChange={e => upd('label', e.target.value)} />
+                </Field>}
                 {isPose && <>
                   <Field label={t('Label (en)')}
                     hint={t('Gerund phrase, e.g. “dancing”. Empty = the key.')}>
@@ -1566,14 +1593,20 @@ export function PosesTab() {
           )}
         </section>
       </div>
-      <ConfirmDialog open={deleteOpen} title={t('Delete')} confirmLabel={t('Delete')} danger
+      <ConfirmDialog open={pendingSet !== null} title={t('Discard unsaved changes?')}
+        message={t('Switching expression sets discards the open entry draft.')}
+        confirmLabel={t('Discard')}
+        onConfirm={() => { if (pendingSet !== null) setExpressionSet(pendingSet); setPendingSet(null) }}
+        onClose={() => setPendingSet(null)} />
+      <ConfirmDialog open={deleteOpen} title={draft?.resettable ? t('Reset override') : t('Delete')}
+        confirmLabel={draft?.resettable ? t('Reset override') : t('Delete')} danger
         message={[draft?.key || '', transitionCount
           ? t('Also removes {n} transition rule(s).').replace('{n}', String(transitionCount)) : '']
           .filter(Boolean).join(' · ')}
         onConfirm={() => { void remove() }} onClose={() => setDeleteOpen(false)} />
       <PromptDialog
         open={renameOpen}
-        title={t('Rename pose key')}
+        title={isPose ? t('Rename pose key') : t('Rename expression key')}
         label={t('New key')}
         message={t('Every stored reference in this world follows the new key. Other worlds keep the old key and fall back to the default pose there.')}
         initialValue={draft?.key || ''}

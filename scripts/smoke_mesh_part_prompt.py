@@ -30,31 +30,6 @@ with tempfile.TemporaryDirectory() as tmp:
         assert bs.exposed_slot_loras('', profile=profile, mesh_input=True) == []
         assert bs.prompt_fragments('', profile=profile)['exposed'] == ['visible large part']
         assert len(bs.exposed_slot_loras('', profile=profile)) == 1
-        # Exercise the occasion handoff without image backends or real profiles.
-        from app.core import expression_regen as expr, prompt_builder as pb
-        from types import SimpleNamespace
-        seen = []
-        def detect(builder, *_args, **_kwargs):
-            seen.append((builder.mesh_input, builder.body_profile))
-            return []
-        with patch('app.models.character.get_character_profile', return_value=profile), patch(
-                'app.models.character.get_character_appearance', return_value='fixture'), patch.object(
-                pb.PromptBuilder, 'detect_persons', detect), patch(
-                'app.imagegen.service.get_image_service', return_value=SimpleNamespace(enabled=False)), patch.object(
-                expr, '_cache_key', return_value='fixture'), patch(
-                'app.models.character_template.is_feature_enabled', return_value=True), patch(
-                'app.core.outfit_renderer.render_outfit', return_value={}) as outfit:
-            for occasion in ('tpose', 'tpose_view', 'expression', 'outfit'):
-                expr.generate_expression_image('fixture', '', '', occasion=occasion,
-                    equipped_pieces={'cover': 'item'}, equipped_items=[],
-                    expression_prompt_override='', pose_prompt_override='', apply_state_modifiers=False)
-                assert seen[-1][0] == (occasion in ('tpose', 'tpose_view'))
-                if occasion in ('tpose', 'tpose_view'):
-                    assert outfit.call_args.kwargs['mesh_input'] == seen[-1][0]
-                if seen[-1][0]:
-                    assert seen[-1][1]['equipped_pieces'] == {'cover': 'item'}
-                else:
-                    assert seen[-1][1] is None
         group = er.rig_groups_for('', profile)[0]
         assert group['op'] == 'attached_part' and group['params'] == {'radius': .02, 'size_factor': 1.5}
         profile['body_slots']['slot']['switch'] = 'off'

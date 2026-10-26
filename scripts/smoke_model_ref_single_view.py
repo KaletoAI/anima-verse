@@ -43,7 +43,7 @@ def main():
 
         with (patch.object(mr, "is_humanoid", return_value=True),
               patch.object(mr, "enabled_tpose_views", return_value=("back", "left", "right")),
-              patch.object(expression_regen, "generate_expression_image", side_effect=render)):
+              patch.object(expression_regen, "render_character_image", side_effect=render)):
             for selected in ("back", "left", "right", "main"):
                 for view, file in files.items():
                     file.write_bytes(f"old-{view}".encode())

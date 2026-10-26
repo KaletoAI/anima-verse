@@ -17,7 +17,7 @@ import { ImageOverrides } from './ImageOverrides'
 import { GalleryTab } from './GalleryTab'
 import { ExpressionsTab } from './ExpressionsTab'
 import { type TmplSection } from '@anima/player-ui'
-import { TemplateTab } from '@anima/player-ui'
+import { TemplateTab, useExpressionSets } from '@anima/player-ui'
 import { BodyEditor } from '@anima/player-ui'
 import { DefaultExpressionField } from './DefaultExpressionField'
 import { StatsPanel } from './StatsPanel'
@@ -744,6 +744,8 @@ export function CharactersTab() {
     [animationSets, derivedSet, t],
   )
 
+  const expressionSets = useExpressionSets(selected, savedSignal)
+
   // Dynamic option sources for the template selects.
   const dynamicData: DynamicData = useMemo(
     () => ({
@@ -751,9 +753,10 @@ export function CharactersTab() {
       tts_speakers: ttsSpeakers,
       characters: sortedCharacters.map((c) => ({ value: c.name, label: c.display_name || c.name })),
       animation_sets: animationSetOptions,
+      expression_sets: expressionSets.options,
       seasons,
     }),
-    [ttsVoices, ttsSpeakers, sortedCharacters, animationSetOptions, seasons],
+    [ttsVoices, ttsSpeakers, sortedCharacters, animationSetOptions, seasons, expressionSets.options],
   )
 
   // Editable "current state" placement — rendered as a special slot
@@ -785,6 +788,10 @@ export function CharactersTab() {
         }}
       />
       <section className="ga-twocol-right">
+        {expressionSets.error && <div role="alert" className="ga-form">
+          {expressionSets.error}
+          <button type="button" className="ga-btn ga-btn-sm" onClick={expressionSets.refresh}>{t('Refresh expression sets')}</button>
+        </div>}
         {!selected ? (
           <div className="ga-placeholder">{t('Pick a character to edit their settings.')}</div>
         ) : !current || !draft ? (

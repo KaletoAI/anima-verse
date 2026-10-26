@@ -22,6 +22,7 @@ import { ApiError, apiGet, apiPost } from './api'
 import { TemplateTab } from './character/TemplateTab'
 import { BodyEditor } from './character/BodyEditor'
 import { type DynamicData } from './character/TemplateField'
+import { useExpressionSets } from './character/useExpressionSets'
 import { type TmplSection } from './character/TemplateSectionForm'
 import { SoulEditor } from './character/SoulEditor'
 
@@ -261,6 +262,7 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
   const [loaded, setLoaded] = useState(false)
   const [sub, setSub] = useState<Sub>('look')
   const [seasons, setSeasons] = useState<Array<{ value: string; label: string; days: number }>>([])
+  const expressionSets = useExpressionSets(avatar)
 
   useEffect(() => {
     let alive = true
@@ -314,14 +316,10 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
     }
   }, [lang])
 
-  // The appearance selects use no dynamic sources; TTS voices/speakers cannot be
-  // loaded by a player → the current value stays, the choice is limited.
-  // The world calendar is the exception: `season_day` fields (the identity
-  // column carries one) are an empty dropdown without it, so the same list the
-  // game clock ships is loaded here too.
+  // Player-readable option sources; the generic field preserves stale values.
   const dynamicData: DynamicData = useMemo(
-    () => ({ tts_voices: [], tts_speakers: [], characters: [], seasons }),
-    [seasons],
+    () => ({ tts_voices: [], tts_speakers: [], characters: [], seasons, expression_sets: expressionSets.options }),
+    [seasons, expressionSets.options],
   )
 
   if (!avatar) return <div className="ga-placeholder">{t('No active avatar')}</div>
@@ -349,6 +347,10 @@ export function AvatarSettingsPanel({ avatar }: { avatar: string }) {
         ))}
       </nav>
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingTop: 8 }}>
+        {expressionSets.error && <div role="alert">
+          {expressionSets.error}
+          <button type="button" className="ga-btn ga-btn-sm" onClick={expressionSets.refresh}>{t('Refresh expression sets')}</button>
+        </div>}
         {sub === 'look' && (
           <div className="avatar-aussehen-tab">
             <TemplateTab

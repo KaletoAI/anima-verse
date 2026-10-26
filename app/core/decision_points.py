@@ -194,7 +194,7 @@ def _group_option(label: str, examples, budget: int) -> str:
     return label
 
 
-def catalog_questions(axis: str) -> Tuple[Dict[str, Choice], Optional[Callable]]:
+def catalog_questions(axis: str, *, set_id: str = "") -> Tuple[Dict[str, Choice], Optional[Callable]]:
     """Questions for mapping a text onto the catalog of ``axis``. With place
     groups (pose): step 1 asks the group, ``then`` asks the entries of THAT
     group (openjev scores every option on its own, so fewer options = faster).
@@ -203,7 +203,14 @@ def catalog_questions(axis: str) -> Tuple[Dict[str, Choice], Optional[Callable]]
     described by its poses, an entry by its ``prompt`` + synonyms in a small
     question (≤ _PROMPT_MAX_OPTIONS options), by its synonyms alone otherwise."""
     from app.core.pose_catalog import activity_catalog, get_groups, poses_in_group
-    entries = activity_catalog(axis)
+    if axis == "expression":
+        from app.core.expression_sets import catalog_snapshot, ExpressionSetError
+        cat = catalog_snapshot()
+        if set_id not in cat.sets:
+            raise ExpressionSetError("A valid expression set is required")
+        entries = {key: cat.entries[key] for key in cat.sets[set_id].members}
+    else:
+        entries = activity_catalog(axis)
     grouped: Dict[str, Dict[str, Any]] = {}
     for k, e in entries.items():
         grouped.setdefault(e.get("group") or "", {})[k] = e

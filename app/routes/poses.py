@@ -45,6 +45,36 @@ DEFAULT_ANIMATION_VARIANTS = 3
 _TASK_ID_PATTERN = r"^task_[0-9a-f]+$"
 
 
+@router.get("/expression-sets")
+def list_expression_sets(_: Dict[str, Any] = Depends(require_admin)):
+    from app.core.expression_sets import sets_payload
+    return {"sets": sets_payload()}
+
+
+@router.put("/expression-sets/{set_id}")
+async def put_expression_set(set_id: str, request: Request,
+                             _: Dict[str, Any] = Depends(require_admin)):
+    import asyncio
+    from app.core.expression_sets import replace_set
+    body = await request.json()
+    try:
+        await asyncio.to_thread(replace_set, set_id, body, store=body.get("store", "world"))
+    except CatalogEditError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+    return {"status": "success", "set_id": set_id}
+
+
+@router.delete("/expression-sets/{set_id}")
+def remove_expression_set(set_id: str, store: str = "world",
+                          _: Dict[str, Any] = Depends(require_admin)):
+    from app.core.expression_sets import delete_set
+    try:
+        delete_set(set_id, store=store)
+    except CatalogEditError as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+    return {"status": "success", "set_id": set_id}
+
+
 def _axis(axis: str) -> str:
     """Validated axis. An unknown value is a client error, never a 500 — the
     catalog helpers raise KeyError on anything but the two known axes."""
@@ -224,14 +254,28 @@ def _entry_labels(body: Dict[str, Any]) -> Dict[str, str]:
 
 @router.get("")
 def list_entries(axis: str = Query("pose"),
-                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+                 _: Dict[str, Any] = Depends(require_admin), set_id: str = "") -> Dict[str, Any]:
     """All catalog entries of an axis + the animation kinds that have clips
     (pose only) + the integrity problems of the catalog."""
     from app.core.movement import MOVEMENT_POSES
     from app.core.pose_rename import CODE_NAMED_POSE_KEYS
     axis = _axis(axis)
     out: List[Dict[str, Any]] = []
+    expression_groups = {}
+    selected_members = None
+    expression_shared_keys = set()
+    if axis == "expression":
+        from app.core.expression_sets import catalog_snapshot, sets_payload
+        snapshot = catalog_snapshot()
+        expression_groups = sets_payload(snapshot)
+        expression_shared_keys = set(read_store("expression", "shared")["entries"])
+        if set_id:
+            if set_id not in snapshot.sets:
+                raise HTTPException(400, "Unknown expression set")
+            selected_members = snapshot.sets[set_id].members
     for key, entry in pose_catalog.get_catalog(axis).items():
+        if selected_members is not None and key not in selected_members:
+            continue
         row = {
             "key": key,
             "prompt": entry.get("prompt", ""),
@@ -244,6 +288,11 @@ def list_entries(axis: str = Query("pose"),
             # it came from, and the list can show what would be committed.
             "store": entry.get("_store", "shared"),
         }
+        if axis == "expression":
+            row["label"] = entry.get("label") or key.replace("_", " ").title()
+            row["is_default"] = any(g["default"] == key for g in expression_groups.values())
+            row["renamable"] = True
+            row["resettable"] = row["store"] == "world" and key in expression_shared_keys
         row["movement"] = axis == "pose" and key in MOVEMENT_POSES
         row["deletable"] = not row["is_default"] and not (row["movement"] and row["store"] == "shared")
         if axis == "pose":
@@ -283,7 +332,7 @@ def list_entries(axis: str = Query("pose"),
         # a two-person one and has to carry solo: false.
         "pair_kinds": _pairs,
         "pair_spans": _spans,
-        "groups": pose_catalog.get_groups() if axis == "pose" else {},
+        "groups": pose_catalog.get_groups() if axis == "pose" else expression_groups,
         "problems": pose_catalog.validate_catalog(axis),
     }
 
@@ -301,6 +350,10 @@ def _create_entry_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     """The blocking body of ``create_entry`` — runs in the threadpool."""
     try:
         axis = _axis(body.get("axis") or "pose")
+        if axis == "expression":
+            from app.core.expression_sets import edit_entry
+            key = edit_entry("create", str(body.get("key") or ""), body, set_id=str(body.get("set_id") or ""))
+            return {"status": "success", "key": key, "axis": axis}
         key = validate_key(body.get("key"))
         prompt = str(body.get("prompt") or "").strip()
         if not prompt:
@@ -472,6 +525,10 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
     from app.core.movement import MOVEMENT_POSES
     try:
         axis = _axis(axis)
+        if axis == "expression":
+            from app.core.expression_sets import edit_entry
+            edit_entry("update", key, body, set_id=str(body.get("set_id") or ""))
+            return {"status": "success", "key": key, "axis": axis}
         key = key.strip().lower()
         labels = _entry_labels(body) if axis == "pose" else {}
         with catalog_txn(axis):
@@ -537,11 +594,15 @@ def _update_entry_sync(key: str, axis: str, _: Dict[str, Any],
 
 @router.delete("/{key}")
 def delete_entry(key: str, axis: str = Query("pose"),
-                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+                 _: Dict[str, Any] = Depends(require_admin), set_id: str = "") -> Dict[str, Any]:
     """Deletes a catalog entry. The ``_default`` entry is not deletable — it
     is the target every unresolvable free text falls back to."""
     try:
         axis = _axis(axis)
+        if axis == "expression":
+            from app.core.expression_sets import edit_entry
+            edit_entry("delete", key, {}, set_id=set_id)
+            return {"status": "success", "key": key, "axis": axis}
         key = key.strip().lower()
         with catalog_txn(axis):
             store = store_of(axis, key)
@@ -605,6 +666,10 @@ def _rename_entry_sync(key: str, axis: str, body: Any) -> Dict[str, Any]:
     try:
         from app.core import pose_rename
         axis = _axis(axis)
+        if axis == "expression":
+            from app.core.expression_sets import edit_entry
+            new = edit_entry("rename", key, body, set_id=str(body.get("set_id") or ""))
+            return {"status": "success", "old_key": key, "key": new, "axis": axis}
         if axis != "pose":
             raise HTTPException(status_code=400, detail="only pose keys can be renamed")
         old = key.strip().lower()
@@ -663,7 +728,7 @@ def _rename_entry_sync(key: str, axis: str, body: Any) -> Dict[str, Any]:
 
 @router.get("/candidates")
 def list_candidates(axis: str = Query("pose"), status: str = Query("open"),
-                    _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+                    _: Dict[str, Any] = Depends(require_admin), set_id: str = "") -> Dict[str, Any]:
     """Open candidates of an axis, MOST OFTEN SEEN FIRST, most recent as the
     tie-break (user ruling 2026-09-08 — the order ``list_candidates`` already
     returns).
@@ -673,7 +738,7 @@ def list_candidates(axis: str = Query("pose"), status: str = Query("open"),
     as a hit count; on the pose axis every miss counts.
     """
     axis = _axis(axis)
-    rows = pose_catalog.list_candidates(axis, status=status)
+    rows = pose_catalog.list_candidates(axis, status=status, set_id=set_id)
     return {"candidates": rows, "axis": axis}
 
 
@@ -696,6 +761,9 @@ def _approve_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     """The blocking body of ``approve_candidate`` — runs in the threadpool."""
     try:
         axis = _axis(body.get("axis") or "pose")
+        if axis == "expression":
+            from app.core.expression_sets import approve_candidate
+            return approve_candidate(body)
         raw_text = str(body.get("raw_text") or "").strip().lower()
         if not raw_text:
             raise HTTPException(status_code=400, detail="raw_text missing")
@@ -782,7 +850,7 @@ def _dismiss_candidate_sync(_: Dict[str, Any], body: Any) -> Dict[str, Any]:
     raw_text = str(body.get("raw_text") or "").strip().lower()
     if not raw_text:
         raise HTTPException(status_code=400, detail="raw_text missing")
-    found = pose_catalog.set_candidate_status(axis, raw_text, "dismissed")
+    found = pose_catalog.set_candidate_status(axis, raw_text, "dismissed", set_id=str(body.get("set_id") or ""))
     if not found:
         raise HTTPException(status_code=404, detail="Candidate not found")
     return {"status": "success", "axis": axis}
@@ -796,7 +864,7 @@ async def dismiss_all_candidates(request: Request,
     import asyncio
     body = await request.json()
     axis = _axis(body.get("axis") or "pose")
-    n = await asyncio.to_thread(pose_catalog.dismiss_all_candidates, axis)
+    n = await asyncio.to_thread(pose_catalog.dismiss_all_candidates, axis, set_id=str(body.get("set_id") or ""))
     return {"status": "success", "axis": axis, "dismissed": n}
 
 

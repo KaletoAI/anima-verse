@@ -55,27 +55,9 @@ criterion of spec-npc-heimat-zeitfenster § E0:
       `<sig>.glb` under that name in `<char>/model3d/` empties that entry; a
       mesh stored beside it under a DIFFERENT signature does not count.
 
-      THE VARIANT FILE NAME, by hand. `expression_regen._cache_key` builds
-      `f"{expression_key}:{pose}:{eq}"` (`app/core/expression_regen.py:178`),
-      md5's it, takes 12 hex and — with a character name — prefixes
-      `f"{_safe_name(character_name)}_"`. For the default variant:
-        * `expression_key = resolve_expression_key("")`, and
-          `pose_catalog.resolve_to_catalog("", …)` answers the catalog
-          default for empty text → "neutral";
-        * `pose = _canonical_pose_key("")` → `get_default_key("pose")` →
-          "standing";
-        * `eq = outfit_signature_raw({}, [], name)` — the SAME raw string
-          `model_refs.outfit_signature` hashes, so a piece-less NPC folds in
-          its free text: "wearing: a grey linen apron";
-        * `state_fp` is "" — no `image_modifier` directive is active.
-      So the raw string is
-        "neutral:standing:wearing: a grey linen apron"
-      whose md5 is a8021c6b637b06982bcc4483fb5cabe7, i.e. "a8021c6b637b" at
-      12 hex, and the file the job writes is
-        <char>/outfits/Torvin_a8021c6b637b.png
-      Dropping that file (plus its sidecar) empties the missing list; the
-      same file under a name derived from a DIFFERENT outfit text does not
-      count, because the outfit text is part of the key.
+      The default expression is produced through the real snapshot/publication
+      path with a local PNG boundary. Changing the worn free-text outfit makes
+      the old image incompatible; restoring it reuses the previous image.
 
   [2] The gate is CONFIGURED and TEMPLATE-BOUND. `npc.require_assets` false =
       the old behaviour (never held back), true = hold an unfinished NPC back.
@@ -482,30 +464,31 @@ def give_outfit(name: str, text: str = "a grey linen apron") -> None:
 
 
 def default_variant_key(name: str) -> str:
-    """The cache key of the DEFAULT expression variant — mood "", pose "",
-    the currently worn state. The same call `npc_assets` makes."""
-    pieces, items, _sig = model_refs.current_outfit_state(name)
-    return expression_regen._cache_key("", "", name, pieces, items)
+    """Selected set's default identity for the currently worn outfit."""
+    return expression_regen.expression_snapshot(name).stem
+
+
+def _fixture_expression_image(output_stem, equipped_pieces=None, equipped_items=None, **kwargs):
+    from PIL import Image
+    path = output_stem.with_suffix(".png")
+    Image.new("RGB", (8, 8), (40, 80, 120)).save(path)
+    path.with_suffix(".json").write_text(json.dumps({"equipped_pieces": equipped_pieces or {},
+        "equipped_items": equipped_items or [], "prompt": kwargs.get("expression_prompt", "")}))
+    return path
 
 
 def give_expression(name: str) -> Path:
-    """Drop the default variant on disk, image plus sidecar — what the real
-    generator leaves behind (`expression_regen.py:1133/1176`)."""
-    expr_dir = get_character_outfits_dir(name)
-    expr_dir.mkdir(parents=True, exist_ok=True)
-    path = expr_dir / f"{default_variant_key(name)}.png"
-    path.write_bytes(b"\x89PNG fake")
-    path.with_suffix(".json").write_text(
-        json.dumps({"mood": "", "pose_key": "", "expression_key": "neutral"}),
-        encoding="utf-8")
-    return path
+    """Seed an actual published default image with a deterministic render boundary."""
+    from unittest.mock import patch
+    with patch.object(expression_regen, "render_character_image",
+                      lambda _name, **kwargs: _fixture_expression_image(**kwargs)):
+        return expression_regen.generate_expression_image(expression_regen.expression_snapshot(name))
 
 
 # ── the producer stubs ──────────────────────────────────────────────────────
 
 CALLS = {"image": 0, "tpose": 0, "mesh": 0, "expression": 0, "send": 0}
 SENT = []
-EXPR_ARGS = []
 
 
 class FakeImageService:
@@ -547,15 +530,11 @@ def install_stubs(*, image_ok=True, mesh_ok=True, expression_ok=True):
         give_mesh(name)
         return {"ok": True}
 
-    def fake_expression(name, mood, pose_key, equipped_pieces=None,
-                        equipped_items=None, **kwargs):
+    def fake_expression(name, *, output_stem, **kwargs):
         CALLS["expression"] += 1
-        EXPR_ARGS.append({"name": name, "mood": mood, "pose_key": pose_key,
-                          "equipped_pieces": equipped_pieces,
-                          "equipped_items": equipped_items})
         if not expression_ok:
             return None
-        return give_expression(name)
+        return _fixture_expression_image(output_stem, **kwargs)
 
     def fake_send(name, target_id):
         CALLS["send"] += 1
@@ -564,12 +543,11 @@ def install_stubs(*, image_ok=True, mesh_ok=True, expression_ok=True):
 
     model_refs.generate_model_ref_images = fake_tpose
     model3d.generate_for_current_outfit = fake_mesh
-    expression_regen.generate_expression_image = fake_expression
+    expression_regen.render_character_image = fake_expression
     npc_spawn._send_wanderer = fake_send
     for k in CALLS:
         CALLS[k] = 0
     SENT.clear()
-    EXPR_ARGS.clear()
 
 
 # ── [1] the gate matrix, against real files ─────────────────────────────────
@@ -598,19 +576,15 @@ check("the mesh of the WORN signature does",
 
 # The default variant's file name, against the hand-derived key of the
 # docstring — the route's fallback looks the file up under exactly this name.
-check("the default variant is keyed by name + md5('neutral:standing:<outfit>')",
-      default_variant_key(A), "Torvin_a8021c6b637b")
 _variant = give_expression(A)
 check("and the file the job drops there empties the list",
       na.npc_assets_complete(A), [])
-check("it really is that file", _variant.name, "Torvin_a8021c6b637b.png")
 # The outfit text is PART of the key: re-dress the NPC and the variant that
 # was rendered for the old text no longer answers for the new one.
 give_outfit(A, "a patched brown cloak")
 check("a new outfit text orphans the old variant",
       na.npc_assets_complete(A), ["model3d", "expression"])
-check("and asks for a new key", default_variant_key(A),
-      "Torvin_351e41d4e754")
+check("the changed outfit asks for a different image identity", default_variant_key(A) != _variant.stem, True)
 give_outfit(A)
 check("dressing it back restores both — nothing was re-rendered",
       na.npc_assets_complete(A), [])
@@ -733,9 +707,6 @@ check("ok", res.get("ok"), True)
 check("image once, tpose once, mesh once, expression once",
       (CALLS["image"], CALLS["tpose"], CALLS["mesh"], CALLS["expression"]),
       (1, 1, 1, 1))
-check("the expression stub was asked for the DEFAULT coordinates",
-      EXPR_ARGS, [{"name": F, "mood": "", "pose_key": "",
-                   "equipped_pieces": {}, "equipped_items": []}])
 check("and the variant it wrote is the one the route's fallback looks for",
       (get_character_outfits_dir(F) / f"{default_variant_key(F)}.png").exists(),
       True)

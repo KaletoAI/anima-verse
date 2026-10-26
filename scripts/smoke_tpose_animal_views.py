@@ -58,7 +58,7 @@ def main():
         with (patch.object(mr, "is_humanoid", side_effect=lambda name: name == "humanoid"),
               patch.object(character, "get_character_profile", side_effect=lambda name: copy.deepcopy(profiles[name])),
               patch.object(character, "save_character_profile", side_effect=save),
-              patch.object(expression_regen, "generate_expression_image", side_effect=render)):
+              patch.object(expression_regen, "render_character_image", side_effect=render)):
             check("body-form views", mr.TPOSE_VIEWS_BY_BODY == {
                 "humanoid": ("back", "left", "right"),
                 "animal": ("front", "back", "right")})

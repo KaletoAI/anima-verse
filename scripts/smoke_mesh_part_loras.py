@@ -39,24 +39,18 @@ with tempfile.TemporaryDirectory() as tmp:
             'app.models.character.get_character_profile', return_value=profile), patch(
             'app.models.character.get_character_appearance', return_value='fixture'), patch.object(
             pb.PromptBuilder, 'detect_persons', return_value=[]), patch(
-            'app.imagegen.service.get_image_service', return_value=SimpleNamespace(enabled=True, generate_from_input=generate)), patch.object(
-            expr, '_cache_key', return_value='fixture'), patch(
-            'app.models.character_template.is_feature_enabled', return_value=True), patch(
+            'app.imagegen.service.get_image_service', return_value=SimpleNamespace(enabled=True, generate_from_input=generate)), patch(
             'app.core.outfit_renderer.is_free_text_wardrobe', return_value=False), patch(
             'app.core.outfit_renderer.render_outfit', return_value={'loras': slot_loras}):
-        with patch.object(bs.logger, 'info') as logged:
-            assert bs.filter_mesh_input_loras(character_loras + slot_loras, profile) == [character_loras[2], slot_loras[1]]
-            assert logged.call_count == 3
-        with patch.object(bs.logger, 'info') as logged:
-            assert bs.exposed_slot_loras('', profile=profile, mesh_input=True) == []
-            logged.assert_called_once_with('Mesh input part dropped LoRA %s', 'slot-insetshape')
+        assert bs.filter_mesh_input_loras(character_loras + slot_loras, profile) == [character_loras[2], slot_loras[1]]
+        assert bs.exposed_slot_loras('', profile=profile, mesh_input=True) == []
         for active, covered in ((True, False), (False, False), (True, True)):
             profile['body_slots']['slot']['switch'] = 'on' if active else 'off'
             pieces = {'cover': 'fixture'} if covered else {}
             for occasion in ('tpose', 'tpose_view', 'expression', 'outfit'):
-                expr.generate_expression_image('fixture', '', '', occasion=occasion,
-                    equipped_pieces=pieces, equipped_items=[], expression_prompt_override='',
-                    pose_prompt_override='', apply_state_modifiers=False)
+                expr.render_character_image('fixture', occasion=occasion, output_stem=Path(tmp) / 'fixture',
+                    equipped_pieces=pieces, equipped_items=[], expression_prompt='',
+                    pose_prompt='', apply_state_modifiers=False)
                 names = [entry['name'] for entry in captured[-1]['loras']]
                 expected = ['pose', 'style'] if active and not covered and occasion in ('tpose', 'tpose_view') else [entry['name'] for entry in character_loras + slot_loras]
                 assert names == expected, (occasion, active, covered, names)

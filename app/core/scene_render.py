@@ -213,82 +213,17 @@ def _fill_template(tpl: str, **vars_: str) -> str:
 
 
 def _person_image_path(name: str) -> Optional[Path]:
-    """Reference image of a person for multi_ref — the CURRENT expression/
-    variant image (renders proved better than the profile portrait; user
-    decision 2026-07-07). Preference:
-
-    1. Variant for the exact current state (mood + effective pose key +
-       equipped — same key as /outfit-expression); on a miss the missing
-       variant is triggered in the background (coalesced/cooldowned).
-    2. Variant with the SAME pose key but any mood (sidecar match) — the
-       exact key misses on every mood shift.
-    3. Newest cached variant. 4. Profile image.
-    """
-    mood = pose_key = ""
+    """Use only current-contract images from the same set and exact outfit."""
+    from app.core.expression_regen import expression_snapshot, find_compatible_expression, trigger_expression_generation
+    from app.models.character import get_character_current_feeling
     try:
-        from app.models.character import (get_character_current_feeling,
-                                          get_effective_pose_key)
-        mood = get_character_current_feeling(name) or ""
-        pose_key = get_effective_pose_key(name) or ""
-    except Exception as e:
-        logger.debug("scene: state lookup failed for %s: %s", name, e)
-    try:
-        from app.core.expression_regen import (get_cached_expression,
-                                               trigger_expression_generation)
-        from app.models.inventory import get_equipped_items, get_equipped_pieces
-        cached = get_cached_expression(
-            name, mood, pose_key,
-            equipped_pieces=get_equipped_pieces(name),
-            equipped_items=get_equipped_items(name))
-        if cached and Path(cached).exists():
-            return Path(cached)
-        # Exact variant missing — generate it for the NEXT render (fire and
-        # forget; coalesce + cooldown keep this from spamming the queue).
-        trigger_expression_generation(name, mood, pose_key)
-    except Exception as e:
-        logger.debug("scene: expression lookup failed for %s: %s", name, e)
-    try:
-        from app.core.expression_regen import _get_expressions_dir
-        expr_dir = _get_expressions_dir(name)
-        # The sidecar records the pose key the image was rendered under.
-        want = pose_key.strip().lower()
-        pose_match = None
-        newest = None
-        if expr_dir.exists():
-            for p in expr_dir.iterdir():
-                if p.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp"):
-                    continue
-                if p.name.startswith(".tmp_"):
-                    continue
-                if newest is None or p.stat().st_mtime > newest.stat().st_mtime:
-                    newest = p
-                if want:
-                    try:
-                        meta = json.loads(p.with_suffix(".json").read_text(encoding="utf-8"))
-                    except Exception:
-                        continue
-                    if str(meta.get("activity") or "").strip().lower() != want:
-                        continue
-                    if (pose_match is None
-                            or p.stat().st_mtime > pose_match.stat().st_mtime):
-                        pose_match = p
-        if pose_match:
-            return pose_match
-        if newest:
-            return newest
-    except Exception as e:
-        logger.debug("scene: variant fallback failed for %s: %s", name, e)
-    try:
-        from app.models.character import (get_character_images_dir,
-                                          get_character_profile_image)
-        profile = get_character_profile_image(name)
-        if profile:
-            p = get_character_images_dir(name) / profile
-            if p.exists():
-                return p
-    except Exception as e:
-        logger.debug("scene: profile image lookup failed for %s: %s", name, e)
-    return None
+        request = expression_snapshot(name, get_character_current_feeling(name) or "")
+        image = find_compatible_expression(request)
+        trigger_expression_generation(request)
+        return image
+    except (ValueError, OSError) as exc:
+        logger.debug("Scene expression lookup failed for %s: %s", name, exc)
+        return None
 
 
 def _pose_hint(name: str, skip_activity: bool = False) -> str:

@@ -160,7 +160,6 @@ try:
     d_demo, d_b = outfits("demo"), outfits("demo_b")
     check(outfit_signature_raw({}, [], "demo") == "", "demo outfit signature not empty")
     v1_old = "demo_" + md5_12("neutral:reading:")
-    v1_new = "demo_" + md5_12("neutral:lesen:")
     variant(d_demo, v1_old, "reading")
     variant(d_demo, "demo_000000000000", "reading")
     v3 = "demo_" + md5_12("neutral:sitting:")
@@ -195,12 +194,10 @@ try:
     check(cat.read_bytes() == before, "a refused rename wrote the catalog")
 
     # ── the rename ───────────────────────────────────────────────────────
+    history_before = {path: path.read_bytes() for directory in (d_demo, d_b)
+                      for path in directory.iterdir() if path.is_file()}
     res = R._rename_entry_sync("reading", "pose", {"new_key": " Lesen "})
     check(res["key"] == "lesen" and res["stores"] == ["shared"], f"response {res}")
-    check(res["references"] == {"profiles": 2, "invites": 1, "candidates": 1,
-                                "candidates_closed": 1, "variants_moved": 1,
-                                "variants_kept": 3, "failed": []},
-          f"references {res['references']}")
     cached = pc.get_catalog("pose")
     check("lesen" in cached and "reading" not in cached, "cache not dropped after rename")
     check(pc.get_groups()["seat"]["default"] == "lesen", "cached seat default")
@@ -222,21 +219,8 @@ try:
         "SELECT axis, raw_text, nearest_key FROM pose_candidates").fetchall()}
     check(cand == {("pose", "buch schmoekern"): "lesen", ("pose", "leselampe"): "sitting",
                    ("expression", "stirnrunzeln"): "reading"}, f"candidates {cand}")
-    check((d_demo / f"{v1_new}.png").exists() and (d_demo / f"{v1_new}.json").exists()
-          and not (d_demo / f"{v1_old}.png").exists()
-          and not (d_demo / f"{v1_old}.json").exists(), "V1 not moved")
-    v1_meta = json.loads((d_demo / f"{v1_new}.json").read_text())
-    check(v1_meta["pose_key"] == "lesen" and v1_meta["activity"] == "lesen", "V1 sidecar")
-    v2 = json.loads((d_demo / "demo_000000000000.json").read_text())
-    check((d_demo / "demo_000000000000.png").exists()
-          and v2["pose_key"] == "lesen" and v2["activity"] == "lesen", "V2 not kept+rewritten")
-    check((d_demo / f"{v3}.json").read_bytes() == v3_bytes, "V3 touched")
-    v4m = json.loads((d_b / f"{v4}.json").read_text())
-    check((d_b / f"{v4}.png").exists() and v4m["pose_key"] == "lesen", "V4 not kept+rewritten")
-    v5m = json.loads((d_demo / f"{v5_old}.json").read_text())
-    check((d_demo / f"{v5_old}.png").exists() and v5m["pose_key"] == "lesen"
-          and (d_demo / f"{v5_new}.png").read_bytes() == b"squatter"
-          and not (d_demo / f"{v5_new}.json").exists(), "V5 clash not kept")
+    check(all(path.is_file() and path.read_bytes() == data for path, data in history_before.items()),
+          "activity-pose rename changed retained expression history")
 
     # ── key in both layers ───────────────────────────────────────────────
     res = R._rename_entry_sync("cooking", "pose", {"new_key": "am herd kochen"})

@@ -357,19 +357,6 @@ def _sub_relationship_decay():
         logger.debug("relationship_decay sub error: %s", e)
 
 
-def _sub_variant_prune():
-    """LRU-evict stale expression variants per character.
-
-    ``server.variants_max_per_character`` caps the count (default 30).
-    Variants with the most recent ``last_used_at`` survive.
-    """
-    try:
-        from app.core.expression_regen import prune_variants_all
-        removed = prune_variants_all()
-        if removed:
-            logger.info("variant_prune: %d alte Variants entfernt", removed)
-    except Exception as e:
-        logger.debug("variant_prune sub error: %s", e)
 
 
 def _sub_chat_retention():
@@ -380,7 +367,7 @@ def _sub_chat_retention():
     on the game clock moving. It is still gated by the freeze like everything
     else, because the freeze gate of this tick is GLOBAL (``_is_paused()``
     wraps the whole sub-task loop) and no hygiene job bypasses it today:
-    ``variant_prune``, ``reap_orphaned_avatars`` and ``lora_library_sync`` all
+    ``reap_orphaned_avatars`` and ``lora_library_sync`` both
     simply wait. A per-job exception would be a new gate, and deferring a
     disk-space rule until the world runs again costs nothing.
 
@@ -589,7 +576,6 @@ _SUB_TASKS: List[tuple] = [
     # 3600s — GAME-clock decay: the handler gates per pair on one game day,
     # so the hourly trigger only decides how fast a clock jump is noticed.
     (_sub_relationship_decay,        3600,                  "relationship_decay"),
-    (_sub_variant_prune,             3600,                  "variant_prune"),
     # 86400s — the horizon counts whole SYSTEM days; a finer interval would
     # only re-scan the same rows for nothing.
     (_sub_door_models,               86400,                 "door_models"),

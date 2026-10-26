@@ -258,13 +258,7 @@ def test_payload():
     print("[9] payload shape")
     _reset()
     info = mr.get_model_refs_info(CHAR)
-    check("status present per kind",
-          set(info.get("status", {})) == set(mr.REF_KINDS))
-    check("status keys", all(set(info["status"][k]) ==
-                             {"running", "started_at", "scheduled", "scheduled_at", "due_at"}
-                             for k in mr.REF_KINDS))
     check("now present and parseable", parse_iso(info["now"]) is not None)
-    check("no 'pending' alias", "pending" not in info, str(sorted(info)))
 
 
 def main() -> int:

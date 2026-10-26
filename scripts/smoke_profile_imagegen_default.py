@@ -231,8 +231,8 @@ REF_DIR = Path(tempfile.mkdtemp(prefix="profileimg-refs-"))
 
 def variant_payload(use_case: str, occasion: str = "") -> dict:
     SERVICE.inputs.clear()
-    expression_regen.generate_expression_image(
-        LORA_CHAR, mood="", pose_key="", equipped_pieces={}, equipped_items=[],
+    expression_regen.render_character_image(
+        LORA_CHAR, equipped_pieces={}, equipped_items=[], pose_prompt="", expression_prompt="",
         image_use_case=use_case, occasion=occasion,
         output_stem=REF_DIR / f"{use_case}_{occasion or 'none'}")
     p = SERVICE.inputs[-1]

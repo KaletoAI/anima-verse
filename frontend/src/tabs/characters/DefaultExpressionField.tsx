@@ -1,167 +1,48 @@
-/**
- * DefaultExpressionField — the ONE default expression of a temporary NPC,
- * shown as a template `special` slot (`default_expression`) on the
- * Appearance tab, next to the Body section, with a button that renders it
- * again. A display with a re-render button, NOT an input: there is no
- * profile field behind it — the default expression is the mood ""/pose ""
- * coordinate of the expression cache (`npc_assets._render_default_expression`),
- * and its prompt default comes from the pose catalog.
- *
- * Image:     GET /characters/{name}/outfit-expression?override=1
- * Re-render: GET /characters/{name}/outfit-expression?override=1&trigger=1&force=1
- *
- * WHY `override=1`: without it the route fills an empty `mood` from the
- * character's current feeling and an empty `pose_key` from its effective pose
- * key, i.e. it asks for the variant of the current MOMENT. A temporary NPC has
- * exactly one variant — mood "" and pose "" — and asking for any other one
- * would answer 404 forever, because its template's
- * `expression_variants_enabled` gate refuses to generate. `override=1` pins
- * both axes to empty; the equipped state it implies (no pieces, no items) is
- * this NPC's real one, since its template has no outfit system, so the key
- * resolves to the very file the finishing job wrote.
- *
- * WHY NO `fallback=default`: it would make this view LIE. While a render runs,
- * the route answers the fallback chain instead of 202, and step 1 of that
- * chain is `find_nearest_expression` — which scores sidecars by outfit
- * similarity, and "empty vs empty is 1.0". A temporary NPC has an EMPTY
- * equipped state in every sidecar it ever wrote, so every leftover variant
- * ties at the top and the newest one is served with 200. That is exactly the
- * picture of the OLD outfit, orphaned by the very edit that queued this render
- * and still on disk until `outfit_cache_gc` reaps it — and a 200 fires
- * `onLoad`, which stops the polling and presents it as the result. Without
- * the parameter a cache miss is 202 or 404, both of which keep the
- * "Rendering…" overlay up and the poll running until the real file lands.
- *
- * The button adds `trigger=1&force=1`: `force` deletes the cached file, and
- * `trigger` is what makes the route pass `ignore_feature_gate=True` — the one
- * documented way past the closed variant gate, the same one the finishing job
- * takes. The answer is 202 ("generating"), so the image is polled afterwards.
- *
- * ONE URL, TWO PICTURES: the dressed and the undressed NPC (`outfit_worn`) are
- * two cache entries on the server, but this view asks for both with the same
- * query — the server reads the dressed state from the profile. The route
- * answers `max-age=3600`, and a Save remounts this field, so a counter that
- * restarts at 1 would hand the browser the very URL it cached for the OTHER
- * state. The nonce therefore starts at the clock. And because that Save queues
- * the missing render by itself (`npc_assets.on_outfit_description_changed`), a
- * missing picture keeps being asked for instead of being declared absent.
- */
+/** The default image is displayed independently of an explicit render attempt. */
 import { useEffect, useState } from 'react'
+import { useExpressionAttempt } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
-import { useToast } from '../../lib/Toast'
 import { openLightbox } from '../../components/Lightbox'
-
-/** How long the re-render is polled for before the view gives up (4 s steps). */
-const POLL_LIMIT = 45
-
-/** …and how long a MISSING picture is waited for. Longer: the job a Save
- *  queued renders the mesh first and this picture last. */
-const WAIT_LIMIT = 225
-
-/** Floor for the picture in a column that has little height to give. */
-const MIN_H = 320
 
 export function DefaultExpressionField({ character }: { character: string }) {
   const { t } = useI18n()
-  const { toast } = useToast()
-  const [nonce, setNonce] = useState(() => Date.now())
-  const [polls, setPolls] = useState(0)
-  const [rendering, setRendering] = useState(false)
+  const generation = useExpressionAttempt(character)
   const [ready, setReady] = useState<boolean | null>(null)
-
-  const base = `/characters/${encodeURIComponent(character)}/outfit-expression`
-  const src = `${base}?override=1&_=${nonce}`
-
+  const [version, setVersion] = useState(() => String(Date.now()))
+  const enc = encodeURIComponent(character)
+  const src = `/characters/${enc}/outfit-expression?override=1&v=${encodeURIComponent(generation.contentVersion || version)}`
+  useEffect(() => { setReady(null); setVersion(String(Date.now())) }, [character])
+  // A queued NPC finishing job may publish later; observe it without triggering.
   useEffect(() => {
-    setRendering(false)
-    setPolls(0)
-    setReady(null)
-    setNonce((n) => n + 1)
-  }, [character])
-
-  // Poll while a render is running — the generator is a background thread, so
-  // nothing tells this view when the file lands.
-  // The same poll waits for a picture that is simply not there yet.
-  const waiting = !rendering && ready === false
-  useEffect(() => {
-    if (!rendering && !waiting) return
-    if (polls >= (rendering ? POLL_LIMIT : WAIT_LIMIT)) {
-      setRendering(false)
-      return
+    if (ready !== false || generation.busy || generation.error) return
+    let alive = true
+    let timer: ReturnType<typeof setTimeout>
+    let polls = 0
+    const poll = async () => {
+      try {
+        const status = await apiGet<{ state: string; content_version: string }>(`/characters/${enc}/expression-status?override=1`)
+        if (!alive) return
+        if (status.content_version) { setVersion(status.content_version); return }
+      } catch { /* A deleted character or interrupted server leaves the empty state. */ }
+      if (alive && ++polls < 225) timer = setTimeout(() => { void poll() }, 4000)
     }
-    const id = window.setTimeout(() => {
-      setPolls((p) => p + 1)
-      setNonce((n) => n + 1)
-    }, 4000)
-    return () => window.clearTimeout(id)
-  }, [rendering, waiting, polls])
-
-  const rerender = async () => {
-    if (rendering) return
-    setRendering(true)
-    setPolls(0)
-    try {
-      await apiGet(`${base}?override=1&trigger=1&force=1`)
-      toast(t('Rendering the default expression — this takes a moment.'))
-      setReady(null)
-      setNonce((n) => n + 1)
-    } catch (e) {
-      setRendering(false)
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-  }
-
-  // The section declares `grow` in the template, so this column hands its
-  // leftover height down to here: hint and button keep their natural size, the
-  // picture takes the rest. MIN_H is the floor for a short column — below it
-  // the picture stops shrinking and the column simply grows instead.
-  return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', gap: 8,
-      alignItems: 'stretch', height: '100%', minHeight: 0,
-    }}>
-      <div style={{ fontSize: '0.78em', opacity: 0.7 }}>
-        {t('This character kind has no mood or pose variants — it is shown by this one default expression.')}
-      </div>
-      {/* The image stays MOUNTED even while it 404s: the poll works by
-          changing its src, and an unmounted img would never re-fetch. */}
-      <div style={{
-        position: 'relative', flex: '1 1 auto', minHeight: MIN_H, width: '100%',
-        borderRadius: 8,
-        overflow: 'hidden', border: '1px solid var(--border, #30363d)',
-        background: 'var(--bg, #0d1117)',
-      }}>
-        <img src={src} alt={t('Default expression')}
-          onLoad={() => { setReady(true); setRendering(false) }}
-          onError={() => setReady(false)}
-          onClick={() => { if (ready === true) openLightbox({ src, alt: t('Default expression') }) }}
-          style={{
-            position: 'absolute', inset: 0,
-            width: '100%', height: '100%', objectFit: 'contain',
-            display: ready === true ? 'block' : 'none', cursor: 'zoom-in',
-          }} />
-        {ready !== true && (
-          <div style={{
-            position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
-            justifyContent: 'center', padding: 8, textAlign: 'center',
-            fontSize: '0.76em', opacity: 0.6,
-          }}>
-            {/* `null` = the first load has not answered yet: say nothing
-                rather than claim there is no picture. */}
-            {rendering ? t('Rendering…') : ready === false ? t('No default expression yet') : ''}
-          </div>
-        )}
-      </div>
-      <button type="button" className="ga-btn ga-btn-sm" style={{ alignSelf: 'flex-start' }}
-        disabled={rendering} onClick={rerender}>
-        {rendering ? t('Rendering…') : t('Re-render default expression')}
-      </button>
-      {rendering && (
-        <span style={{ fontSize: '0.74em', opacity: 0.6 }}>
-          {t('The picture appears here as soon as the backend delivers it.')}
-        </span>
-      )}
+    timer = setTimeout(() => { void poll() }, 4000)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [ready, generation.busy, generation.error, enc])
+  return <div style={{ display: 'flex', flexDirection: 'column', gap: 8, height: '100%', minHeight: 0 }}>
+    <p className="ga-field-hint">{t('The default expression follows the selected set and outfit, not the current activity.')}</p>
+    <div style={{ position: 'relative', flex: 1, minHeight: 320, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+      <img src={src} alt={t('Default expression')} onLoad={() => setReady(true)} onError={() => setReady(false)}
+        onClick={() => { if (ready) openLightbox({ src, alt: t('Default expression') }) }}
+        style={{ width: '100%', height: '100%', objectFit: 'contain', display: ready ? 'block' : 'none', cursor: 'zoom-in' }} />
+      {generation.busy && <span role="status" className="ga-tag" style={{ position: 'absolute', top: 8, left: 8 }}>{t('Rendering…')}</span>}
+      {ready === false && <p className="ga-placeholder">{t('No default expression yet')}</p>}
     </div>
-  )
+    {generation.error && <p role="alert" style={{ color: 'var(--error)' }}>{generation.error}</p>}
+    <button type="button" className="ga-btn ga-btn-sm" disabled={generation.busy}
+      onClick={() => void generation.start({ override: true, pieces: {}, items: [], force: true })}>
+      {generation.busy ? t('Rendering…') : t('Re-render default expression')}
+    </button>
+  </div>
 }

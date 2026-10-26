@@ -1,12 +1,12 @@
-"""Zentrale SQLite-DB-Zugriffsschicht fuer die Welt-Daten.
+"""Central SQLite access for world data.
 
-Eine DB pro Welt: `{storage_dir}/world.db`
-WAL-Mode, JSON1-Extension, Foreign Keys aktiviert.
+One database per world: {storage_dir}/world.db.
+WAL mode, JSON1 and foreign keys are enabled.
 
-Alle Welt-Daten (Runtime + Content) liegen hier drin. Ausnahmen:
-- Shared-Templates bleiben JSON unter `shared/`
-- Image-Dateien + ihre Sidecar-JSONs bleiben auf Disk (Debugging)
-- Task-Queue hat eigene `task_queue.db` (Legacy, bleibt getrennt)
+Runtime and content data live here, with these exceptions:
+- Shared templates remain JSON under shared/.
+- Image files and diagnostic JSON sidecars remain on disk.
+- The task queue keeps its separate task_queue.db.
 """
 import sqlite3
 import threading
@@ -36,7 +36,7 @@ def _configure(conn: sqlite3.Connection) -> None:
 
 
 def get_connection() -> sqlite3.Connection:
-    """Thread-lokale Connection (SQLite benoetigt pro Thread eine eigene)."""
+    """Thread-local connection: SQLite needs one connection per thread."""
     tid = threading.get_ident()
     conn = _connections.get(tid)
     if conn is None:
@@ -53,7 +53,7 @@ def get_connection() -> sqlite3.Connection:
 
 @contextmanager
 def transaction() -> Iterator[sqlite3.Connection]:
-    """Kontextmanager fuer atomare Writes."""
+    """Context manager for atomic writes."""
     conn = get_connection()
     try:
         yield conn
@@ -66,7 +66,7 @@ def transaction() -> Iterator[sqlite3.Connection]:
 
 
 def init_schema() -> None:
-    """Fuehrt alle Schema-Create-Statements aus (idempotent)."""
+    """Execute all schema creation statements idempotently."""
     import sqlite3
     from app.core.world_db_schema import (
         ALTER_MIGRATIONS, POST_MIGRATION_STATEMENTS,
@@ -86,19 +86,22 @@ def init_schema() -> None:
     for stmt in SCHEMA_STATEMENTS:
         conn.execute(stmt)
 
+    from app.core.expression_sets_migration import migrate_candidates
+    migrate_candidates(conn)
+
     for table, column, typedef in ALTER_MIGRATIONS:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typedef}")
         except sqlite3.OperationalError:
             pass
 
-    # Indizes auf migrierte Spalten erst nach ALTERs anlegen.
+    # Create indexes on migrated columns only after the ALTER statements.
     for stmt in POST_MIGRATION_STATEMENTS:
         conn.execute(stmt)
 
-    # One-shot Daten-Cleanup: Items mit rarity="generic" auf "common"
-    # migrieren (das alte "Generic = einfaerbbar"-Feature wurde entfernt).
-    # Idempotent: laeuft nur solange noch generic-Items existieren.
+    # One-time data cleanup: migrate item rarity="generic" to "common".
+    # The old colourable Generic feature has been removed.
+    # Idempotent: runs only while generic items remain.
     try:
         import json as _json
         rows = conn.execute("SELECT id, meta FROM items").fetchall()
@@ -119,10 +122,9 @@ def init_schema() -> None:
     except Exception as e:
         logger.warning("items rarity-Migration fehlgeschlagen: %s", e)
 
-    # One-shot Daten-Cleanup: Lebensdauer-Feature (auto_expire_minutes/TTL)
-    # wurde entfernt. Ueberbleibsel ``expires_at`` aus inventory_items.meta
-    # rauspulen, sonst bleibt es ewig als toter String drin. Idempotent —
-    # via schema_meta-Flag gegated, laeuft genau einmal pro Welt.
+    # One-time data cleanup: auto_expire_minutes/TTL was removed.
+    # Remove the leftover expires_at fields from inventory_items.meta.
+    # A schema_meta marker ensures this cleanup runs once per world.
     flag = conn.execute(
         "SELECT value FROM schema_meta WHERE key='inventory_expires_at_purged'"
     ).fetchone()
@@ -156,16 +158,16 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("inventory_items expires_at-Cleanup fehlgeschlagen: %s", e)
 
-    # One-shot Migration: summaries.UNIQUE-Constraint von 3 auf 4 Spalten
-    # umstellen (zusaetzlich `partner`). SQLite kann Constraints nicht inline
-    # aendern — Tabelle muss rebuilt werden. Idempotent via schema_meta-Flag.
+    # One-time migration: expand summaries uniqueness from 3 to 4 columns
+    # Include partner in the uniqueness key. SQLite cannot alter this constraint
+    # in place; rebuild the table once, guarded by schema_meta.
     flag = conn.execute(
         "SELECT value FROM schema_meta WHERE key='summaries_partner_unique_v2'"
     ).fetchone()
     if not flag:
         try:
-            # Pruefen ob die alte UNIQUE noch aktiv ist: SQLite legt sie als
-            # sqlite_autoindex_summaries_* an. Wenn der hoechste Index nur 3
+            # Detect the old UNIQUE constraint through SQLite's automatically created
+            # sqlite_autoindex_summaries_* indexes. If the largest index has only 3
             # Spalten hat → migrieren.
             old_idx = conn.execute(
                 "SELECT name FROM sqlite_master "
@@ -285,13 +287,13 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("rooms composite-PK-Migration fehlgeschlagen: %s", e)
 
-    # One-shot Backfill: known_locations-Feld auf jedem Character verpflichtend
-    # machen. Frueher bedeutete "Feld fehlt" → unrestricted (Legacy-Bypass);
-    # der Bypass ist raus und Read-Pfade liefern jetzt immer eine Liste.
-    # Damit Bestands-Charaktere nach dem Bypass-Removal nicht ganz festsitzen,
-    # seeden wir die Liste mit der aktuellen Location (falls real) — von dort
-    # erweitert sich die Liste durch Auto-Discovery beim Betreten und durch
-    # Discover-Regeln. Idempotent via schema_meta-Flag.
+    # One-time backfill: every character must have known_locations.
+    # A missing field previously meant unrestricted visibility (legacy bypass).
+    # The bypass is gone; read paths now always return a list.
+    # Keep existing characters reachable after removing the visibility bypass:
+    # Seed with the current location when it is real. From there,
+    # entry discovery and rules extend the list.
+    # The schema_meta marker makes the backfill idempotent.
     flag = conn.execute(
         "SELECT value FROM schema_meta WHERE key='known_locations_backfill_v1'"
     ).fetchone()
@@ -340,10 +342,10 @@ def init_schema() -> None:
 
     # One-shot Migration: outfit_locked + runtime_outfit_skip → outfit_intent.
     # Plan: development_instructions/plan-outfit-system-rethink.md §3
-    # Vereint die beiden alten Felder in einen Intent-Container in
-    # character_state.meta. Alte Felder bleiben fuers Erste stehen (werden
-    # in Schritt 8 Cleanup entfernt) — die Reader/Writer ignorieren sie
-    # bereits. Idempotent via schema_meta-Flag.
+    # Merge the two old fields into one intent container in
+    # character_state.meta. Old fields temporarily remain for the step-8 cleanup;
+    # readers and writers already ignore them.
+    # The schema_meta marker makes this idempotent.
     flag = conn.execute(
         "SELECT value FROM schema_meta WHERE key='outfit_intent_migrated_v1'"
     ).fetchone()
@@ -377,7 +379,7 @@ def init_schema() -> None:
                     existing_intent.get("forbidden_slots") or
                     existing_intent.get("forced_pieces")
                 ):
-                    # Schon migriert oder bereits aktiv genutzt — nicht ueberschreiben
+                    # Already migrated or actively used: do not overwrite.
                     continue
                 if not old_locked and not old_forbidden:
                     continue
@@ -388,7 +390,7 @@ def init_schema() -> None:
                     "locked": old_locked,
                 }
                 state_meta["outfit_intent"] = intent
-                # state-Row muss existieren — UPSERT
+                # Ensure the state row exists via UPSERT.
                 conn.execute(
                     "INSERT INTO character_state (character_name, meta) "
                     "VALUES (?, ?) "
@@ -455,12 +457,12 @@ def init_schema() -> None:
         except Exception as e:
             logger.warning("map icon column migration failed: %s", e)
 
-    # One-shot Migration: Legacy-Keys aus character_state.meta entfernen.
-    # Plan §8 (Schritt 8 Cleanup, May 2026):
-    #   - runtime_outfit_skip → outfit_intent.forbidden_slots (Schritt 2)
-    #   - equipped_pieces_meta → Items sind eindeutig (Schritt 3)
-    # Beide Keys waren parallel zur neuen Welt noch im Profile-Lesen drin —
-    # jetzt aktiv aus state.meta entfernen.
+    # One-time migration: remove legacy keys from character_state.meta.
+    # Plan section 8 (step-8 cleanup, May 2026):
+    #   - runtime_outfit_skip -> outfit_intent.forbidden_slots (step 2)
+    #   - equipped_pieces_meta -> unambiguous item identities (step 3)
+    # Both keys coexisted with the new state in profile readers;
+    # now remove them from state.meta.
     flag = conn.execute(
         "SELECT value FROM schema_meta WHERE key='state_meta_legacy_purged_v1'"
     ).fetchone()
@@ -512,11 +514,9 @@ def init_schema() -> None:
             SCHEMA_VERSION, current_version
         )
 
-    # Default-Rules seeden — Sleep + Wake. Idempotent: nur fehlende werden
-    # angelegt (Match by id), User-Aenderungen bleiben. Frueher waren
-    # diese Pfade hardcoded im AgentLoop / hourly_tick — durch das Seed
-    # sind frische Welten direkt funktional, bestehende Welten bekommen
-    # die Defaults beim naechsten Restart nachgereicht.
+    # Seed Sleep/Wake defaults idempotently: add only missing rules.
+    # Match by id and preserve user edits. These paths used to be hardcoded
+    # in AgentLoop/hourly_tick; existing worlds receive defaults on restart.
     try:
         from app.models.rules import ensure_default_rules
         ensure_default_rules()

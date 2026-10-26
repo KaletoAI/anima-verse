@@ -16,9 +16,8 @@ nothing, the file behind it does):
   lookup: that one falls back to other outfits and would call a foreign mesh
   "done");
 * ``outfit_description`` — the free text that IS this character's wardrobe;
-* ``expression`` — the DEFAULT expression variant (mood "", pose "") for the
-  worn outfit is in the variant cache. That single image is what the 2D
-  client shows for this NPC: its template sets
+* ``expression`` — the selected set's DEFAULT image for the worn outfit.
+  That single reusable image is what the player displays for this NPC:
   ``expression_variants_enabled: false``, so no other trigger will ever
   render one, and the profile image is deliberately not a fallback.
 
@@ -98,13 +97,9 @@ def npc_assets_complete(name: str) -> List[str]:
         missing.append("outfit_description")
 
     try:
-        from app.core.expression_regen import peek_cached_expression
-        from app.core.model_refs import current_outfit_state
-        pieces, items, _sig = current_outfit_state(name)
-        # PEEK, not get: a gate check must not forge the variant's LRU
-        # bookkeeping (``get_cached_expression`` bumps last_used_at).
-        if peek_cached_expression(name, "", "", equipped_pieces=pieces,
-                                  equipped_items=items) is None:
+        from app.core.expression_regen import expression_snapshot, get_cached_expression
+        request = expression_snapshot(name)
+        if get_cached_expression(request) is None:
             missing.append("expression")
     except Exception as e:  # noqa: BLE001 — an unreadable cache is "not done"
         logger.debug("npc_assets_complete(%s): variant lookup failed: %s",
@@ -193,7 +188,7 @@ def on_outfit_description_changed(name: str, old: str, new: str) -> Optional[str
     system), and every asset the gate demands is keyed by it: the portrait
     prompt, the T-pose render, the mesh signature
     (``model_refs.outfit_signature``) and the default expression variant
-    (``expression_regen._cache_key``). So an edit orphans all of them at once
+    (``expression_regen.expression_snapshot``). So an edit orphans all of them at once
     and the NPC has to be finished again — otherwise it keeps wearing the old
     clothes in every picture until somebody pools and revives it.
 
@@ -389,31 +384,13 @@ def _render_mesh(name: str) -> str:
 
 
 def _render_default_expression(name: str) -> str:
-    """Render the ONE expression variant this NPC is shown by. Blocking.
+    """Render the template's one default image through common publication.
 
-    Returns what went WRONG ("" = the variant exists), same contract as the
-    other producers — ``generate_expression_image`` swallows every failure
-    and answers None, so the complaint has to be worded here.
-
-    The BLOCKING call, never ``trigger_expression_generation``: that one runs
-    a daemon thread (this is already a queue worker, so the job would report
-    success while nothing had been rendered) and, more importantly, it asks
-    the ``expression_variants_enabled`` feature gate — which this NPC's
-    template switches off. Going through the generator directly is what keeps
-    the gate closed for every OTHER trigger: no mood, no pose, no grid, one
-    picture.
-
-    Mood "" and pose "" are the DEFAULT coordinates: they resolve to the
-    catalog defaults for both axes and produce exactly the file the route's
-    default-variant fallback looks for
-    (``routes/characters.py`` → ``get_cached_expression(name, "", "", …)``).
+    This blocking producer deliberately bypasses the automatic variant gate;
+    it still shares snapshot identity, render locking and completed-cache reuse.
     """
-    from app.core.expression_regen import generate_expression_image
-    from app.core.model_refs import current_outfit_state
-
-    pieces, items, _sig = current_outfit_state(name)
-    path = generate_expression_image(name, "", "", equipped_pieces=pieces,
-                                     equipped_items=items)
+    from app.core.expression_regen import generate_expression_image, expression_snapshot
+    path = generate_expression_image(expression_snapshot(name))
     if path is not None:
         logger.debug("npc_assets(%s): default variant at %s", name, path)
         return ""

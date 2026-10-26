@@ -148,10 +148,10 @@ def render_payload(name: str, *, worn: bool) -> dict:
         "outfit_worn": worn,
     }, create_new=True)
     SERVICE.payloads.clear()
-    expression_regen.generate_expression_image(
-        name, mood="", pose_key="", equipped_pieces={}, equipped_items=[],
-        prompt_prefix="T-pose", pose_prompt_override="",
-        expression_prompt_override="", image_use_case="tpose",
+    expression_regen.render_character_image(
+        name, equipped_pieces={}, equipped_items=[],
+        prompt_prefix="T-pose", pose_prompt="",
+        expression_prompt="", image_use_case="tpose",
         output_stem=STORAGE / f"ref_{name}", apply_state_modifiers=False)
     assert SERVICE.payloads, f"the render of {name} handed the service nothing"
     return SERVICE.payloads[-1]

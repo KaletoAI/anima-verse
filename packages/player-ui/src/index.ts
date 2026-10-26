@@ -47,6 +47,8 @@ export * from './character/TemplateTab';
 export * from './character/TemplateField';
 export * from './character/TemplateSectionForm';
 export * from './character/FieldImage';
+export * from './character/useExpressionSets';
+export * from './character/useExpressionAttempt';
 export * from './character/SoulEditor';
 export * from './character/BodyEditor';
 export * from './character/PromptPreview';

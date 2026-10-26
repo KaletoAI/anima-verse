@@ -1,13 +1,9 @@
 /**
  * FieldImage — image + "Generate" button under an appearance prompt field.
  * Template-driven via the field flag `image_preview`:
- *   - "appearance" → appearance image without outfit (default pose/expression):
- *     GET /outfit-expression?override=1&pieces=&items= (empty equipped state).
- *   - "outfit"     → wardrobe preview WITH the actually worn outfit:
- *     GET /outfit-expression?trigger=1 (no override -> real state from the profile).
- *   - "profile"    → profile image: POST /generate-profile-image.
- * No new backend — uses the existing endpoints. The preview opens in the
- * shared Lightbox on click.
+ * Appearance/outfit images use the set-local expression endpoint; explicit
+ * generation is a POST followed by attempt-specific read-only status polling.
+ * Profile image generation retains its existing independent dialog and route.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18n } from '../I18nProvider'
@@ -15,6 +11,7 @@ import { apiGet, apiPost } from '../api'
 import { useToast } from '../Toast'
 import { useCharacterFormHost, type FieldImageSubmit } from './CharacterFormHost'
 import { useEnlarge } from '../ZoomButton'
+import { useExpressionAttempt } from './useExpressionAttempt'
 
 export function FieldImage({ character, kind }: { character: string; kind: string }) {
   const host = useCharacterFormHost()
@@ -23,7 +20,9 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
   const enlarge = useEnlarge()
   const enc = encodeURIComponent(character)
   const [bust, setBust] = useState(1)
-  const [busy, setBusy] = useState(false)
+  const [localBusy, setBusy] = useState(false)
+  const expression = useExpressionAttempt(character)
+  const busy = localBusy || expression.busy
   const [profileFile, setProfileFile] = useState<string>('')
   const [genOpen, setGenOpen] = useState(false)  // Profile image: ImageGenDialog
   const [genPrompt, setGenPrompt] = useState('')  // Preloaded appearance (default prompt)
@@ -52,8 +51,8 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
         ? `/characters/${enc}/images/${encodeURIComponent(profileFile)}?v=${bust}`
         : ''
       : kind === 'outfit'
-        ? `/characters/${enc}/outfit-expression?fallback=default&v=${bust}`
-        : `/characters/${enc}/outfit-expression?override=1&pieces=&items=&fallback=default&v=${bust}`
+        ? `/characters/${enc}/outfit-expression?fallback=default&v=${expression.contentVersion || bust}`
+        : `/characters/${enc}/outfit-expression?override=1&pieces=&items=&fallback=default&v=${expression.contentVersion || bust}`
 
   // Poll briefly after triggering the asynchronous queued generation, refreshing
   // the image URL with a cache buster until the real image becomes available.
@@ -95,24 +94,13 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
     }
   }, [busy, enc, loadProfile, t, toast])
 
-  // Appearance image (kind !== 'profile'): direct trigger (empty outfit, default pose).
+  // Explicit expressions follow a frozen attempt even if the outfit changes.
   const generate = useCallback(async () => {
     if (busy) return
-    setBusy(true)
-    try {
-      const q = kind === 'outfit'
-        ? 'trigger=1&force=1'                       // real equipped state
-        : 'override=1&trigger=1&force=1&pieces=&items='  // empty outfit
-      await fetch(`/characters/${enc}/outfit-expression?${q}`, {
-        credentials: 'same-origin',
-      })
-      toast(t('Generating…'))
-      startPoll()
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-      setBusy(false)
-    }
-  }, [busy, enc, kind, t, toast, startPoll])
+    await expression.start(kind === 'outfit'
+      ? { force: true }
+      : { override: true, pieces: {}, items: [], force: true })
+  }, [busy, expression, kind])
 
   // Profile image: comes from the ImageGenDialog (backend/LoRAs selectable)
   // -> /generate-profile-image with the dialog params. Empty prompt =
@@ -158,6 +146,7 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
           src={src}
           alt=""
           {...enlarge({ src, alt: t('Preview') })}
+          onLoad={e => { e.currentTarget.style.visibility = 'visible' }}
           onError={(e) => {
             ;(e.target as HTMLImageElement).style.visibility = 'hidden'
           }}
@@ -165,6 +154,7 @@ export function FieldImage({ character, kind }: { character: string; kind: strin
       ) : (
         <div className="tpl-field-image-empty">{t('No image yet')}</div>
       )}
+      {expression.error && <div role="alert" className="ga-form-hint">{expression.error}</div>}
       <div style={{ display: 'flex', gap: 6 }}>
         {host.renderImageDialog ? <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
           onClick={kind === 'profile' ? openProfileDialog : generate}>

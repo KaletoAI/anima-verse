@@ -632,17 +632,10 @@ def _apply_removed_pieces(character_name: str,
         # Regenerate the expression variant when something changed
         if unequipped:
             try:
-                from app.core.expression_regen import trigger_expression_generation
-                from app.models.inventory import get_equipped_pieces, get_equipped_items
-                from app.models.character import (
-                    get_character_current_feeling, get_effective_pose_key)
+                from app.core.expression_regen import trigger_expression_generation, expression_snapshot
+                from app.models.character import get_character_current_feeling
                 _mood = get_character_current_feeling(character_name) or ""
-                _pose_key = get_effective_pose_key(character_name) or ""
-                _eqp = get_equipped_pieces(character_name)
-                _eqi = get_equipped_items(character_name)
-                trigger_expression_generation(character_name, _mood, _pose_key,
-                    equipped_pieces=_eqp, equipped_items=_eqi,
-                    ignore_cooldown=True)
+                trigger_expression_generation(expression_snapshot(character_name, _mood), ignore_cooldown=True)
             except Exception as _te:
                 logger.debug("Expression trigger after extraction failed: %s", _te)
         return unequipped

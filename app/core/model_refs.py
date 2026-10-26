@@ -10,7 +10,7 @@ Debounce: getting fully dressed equips several pieces in quick succession —
 each mutation resets a timer per (character, kind) (trailing edge, latest
 state wins), so one render per kind fires at the end instead of one per
 piece. The window and the on/off switch are admin config (image_generation.*),
-read fresh on every call. Rendering itself reuses generate_expression_image()
+read fresh on every call. Rendering itself uses render_character_image()
 (appearance + current outfit composer, profile-image identity reference,
 image queue with per-backend serialization).
 
@@ -434,10 +434,9 @@ def state_fingerprint(character_name: str) -> str:
     """8-hex fingerprint of the triggered image-modifier state, "" when no
     ``image_modifier`` directive is active.
 
-    Used by ordinary pose references and expressions so a render taken while a
-    state rewrites the appearance ("neat hair -> messy tousled hair") never
-    claims the neutral cache entry — and the neutral render survives the
-    state. Directives are sorted, so trigger order does not matter."""
+    Used by ordinary pose references, not neutral mesh inputs or expressions.
+    Sorting directives makes their fingerprint independent of trigger order.
+    """
     import hashlib
     try:
         from app.core.prompt_filters import collect_image_modifiers
@@ -457,7 +456,7 @@ def neutral_signature(signature: str) -> str:
 
 def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
                          equipped_items: Optional[list],
-                         character_name: str = "") -> str:
+                         character_name: str = "", *, profile: Optional[Dict[str, Any]] = None) -> str:
     """The RAW string that identifies one worn outfit — what
     :func:`outfit_signature` hashes, and the ONE description of "the same
     outfit combination" in this codebase.
@@ -476,16 +475,15 @@ def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
     therefore has a signature of its own — it renders a different picture
     than the dressed one and must not share its cache entry.
 
-    Public because the expression-variant cache keys on the same rule
-    (``expression_regen._cache_key``) — it hashes this string TOGETHER with
-    its own two catalog axes, so it needs the string and not a hash of it.
+    Expression snapshots use this same raw outfit identity together with their
+    selected set/member and fixed render contract.
     """
     from app.core.expression_regen import _equipped_signature
     raw = _equipped_signature(equipped_pieces, equipped_items)
     if not raw and character_name:
         try:
             from app.core.outfit_renderer import render_outfit
-            raw = render_outfit(character_name=character_name,
+            raw = render_outfit(profile=profile, character_name=character_name if profile is None else "",
                                 equipped_pieces={},
                                 equipped_items=[]).get("full", "") or ""
         except Exception:  # noqa: BLE001 — an unreadable profile must not
@@ -776,7 +774,7 @@ def generate_model_ref_images(character_name: str,
     ``tpose_view`` selects main or one body-form view for a manual render.
     An extra view reuses the cached main even with ``force=True``; it never
     regenerates another view. Without a cached main it raises ValueError."""
-    from app.core.expression_regen import generate_expression_image
+    from app.core.expression_regen import render_character_image
     from app.core.expression_pose_maps import default_pose_prompt
 
     if tpose_view is not None and tpose_view not in ("main", *tpose_views_for_character(character_name)):
@@ -880,12 +878,12 @@ def generate_model_ref_images(character_name: str,
                 None if force and tpose_view in (None, "main")
                 else find_ref_image(character_name, kind, signature))
             if path is None:
-                path = generate_expression_image(
-                    character_name, mood="", pose_key="",
+                path = render_character_image(
+                    character_name,
                     equipped_pieces=pieces, equipped_items=items,
                     prompt_prefix=prompts[kind] if _tpose else "",
-                    pose_prompt_override="" if _tpose else prompts[kind],
-                    expression_prompt_override=REF_EXPRESSION_PROMPT,
+                    pose_prompt="" if _tpose else prompts[kind],
+                    expression_prompt=REF_EXPRESSION_PROMPT,
                     # The mesh-input render has its own style (flat shadowless
                     # light, full-body framing) — humanoid vs animal framing
                     # differ; the default-pose ref shares "outfit".
@@ -917,16 +915,16 @@ def generate_model_ref_images(character_name: str,
                                                     signature):
                         continue
                     try:
-                        view_path = generate_expression_image(
-                            character_name, mood="", pose_key="",
+                        view_path = render_character_image(
+                            character_name,
                             equipped_pieces=pieces, equipped_items=items,
                             prompt_prefix=(get_tpose_view_prompt(view) if humanoid
                                            else get_animal_view_prompt(view)),
-                            pose_prompt_override="",
+                            pose_prompt="",
                             # No face is visible from behind — an expression
                             # layer there only tempts the model to turn the
                             # character around or paint a face on the back.
-                            expression_prompt_override=(
+                            expression_prompt=(
                                 "" if view == "back" else REF_EXPRESSION_PROMPT),
                             image_use_case=(TPOSE_VIEW_USE_CASES[view] if humanoid
                                             else "tpose_animal_view"),
@@ -1212,7 +1210,7 @@ def generate_face_view(character_name: str, force: bool = False,
     explicit pick (no fallback), ``loras`` / ``negative_prompt`` go to the
     service as picked. Absent = the automatic render (routing, no LoRAs)."""
     import hashlib
-    from app.core.expression_regen import generate_expression_image
+    from app.core.expression_regen import render_character_image
     from app.core.face_retexture import read_meta
     from app.core.timeutils import utc_now
     key = (character_name, "face_view")
@@ -1229,8 +1227,8 @@ def generate_face_view(character_name: str, force: bool = False,
             _running[key] = utc_now()
         render = render or {}
         try:
-            return generate_expression_image(
-                character_name, mood="", pose_key="", equipped_pieces={}, equipped_items=[],
+            return render_character_image(
+                character_name, equipped_pieces={}, equipped_items=[], pose_prompt="", expression_prompt="",
                 bare_prompt=str(render.get("prompt") or "").strip() or get_face_view_prompt(),
                 image_use_case="face_view", occasion="tpose_view",
                 override_width=1024, override_height=1024,

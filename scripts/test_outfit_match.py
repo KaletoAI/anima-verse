@@ -123,10 +123,6 @@ add_mesh("bbbbbbbbbbbb", {"top": "t_new", "bottom": "b1"})
 path, match = model3d.find_model3d_serving(CHAR)
 check("exact hit", path is not None and path.stem == "aaaaaaaaaaaa" and match == "exact")
 
-# State-suffixed signature falls back to the neutral entry of the outfit.
-set_worn({"top": "t_new"}, [], "aaaaaaaaaaaa-sdeadbeef")
-path, match = model3d.find_model3d_serving(CHAR)
-check("neutral fallback", path is not None and path.stem == "aaaaaaaaaaaa" and match == "neutral")
 
 # Unknown combination -> nearest by manifest (slot-aware score).
 set_worn({"top": "t_other", "bottom": "b1"}, [], "cccccccccccc")
@@ -157,45 +153,6 @@ check("tie -> newest", path is not None and path.stem == "eeeeeeeeeeee",
 # combination has no model to delete/rename.
 check("find_model3d stays exact", model3d.find_model3d(CHAR) is None)
 
-# --------------------------------------------------- find_nearest_expression
-print("find_nearest_expression:")
-import app.core.expression_regen as expr  # noqa: E402
-
-outfits_dir = char_dir / "outfits"
-outfits_dir.mkdir(parents=True)
-character_mod.get_character_outfits_dir = lambda name: STORAGE / "characters" / name / "outfits"
-
-
-def add_variant(key, pieces, mood, mtime_off=0.0):
-    """A variant sidecar as generate_expression_image writes it: the free-text
-    mood for display, the EXPRESSION CATALOG KEY for machine comparison
-    ("happy" -> `positive`, "sad" -> `sad`; both are listed synonyms, so no
-    embedding is involved)."""
-    from app.core.expression_pose_maps import resolve_expression_key
-    img = outfits_dir / f"{CHAR}_{key}.png"
-    img.write_bytes(b"png")
-    (outfits_dir / f"{CHAR}_{key}.json").write_text(json.dumps({
-        "mood": mood, "expression_key": resolve_expression_key(mood),
-        "activity": "", "pose_key": "", "equipped_pieces": pieces,
-        "equipped_items": []}), encoding="utf-8")
-    t = time.time() + mtime_off
-    os.utime(img, (t, t))
-
-
-worn_p = {"top": "t_new", "bottom": "b1"}
-check("empty cache -> None",
-      expr.find_nearest_expression(CHAR, "happy", worn_p, []) is None)
-
-add_variant("far", {"underwear_bottom": "u9"}, "happy")
-add_variant("near_sad", {"top": "t_old", "bottom": "b1"}, "sad")
-p = expr.find_nearest_expression(CHAR, "happy", worn_p, [])
-check("outfit similarity dominates mood",
-      p is not None and p.stem == f"{CHAR}_near_sad", f"got {p and p.stem}")
-
-add_variant("near_happy", {"top": "t_old", "bottom": "b1"}, "happy", mtime_off=-500)
-p = expr.find_nearest_expression(CHAR, "happy", worn_p, [])
-check("expression key breaks outfit tie",
-      p is not None and p.stem == f"{CHAR}_near_happy", f"got {p and p.stem}")
 
 print()
 if FAILURES:

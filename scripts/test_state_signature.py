@@ -1,11 +1,10 @@
-"""Standalone check: neutral mesh inputs and stateful ordinary image cache keys.
+"""Standalone check: neutral mesh/expression identity and stateful pose references.
 
 Run: ./.venv/bin/python scripts/test_state_signature.py
-No server — throwaway world in a temp dir, image modifiers stubbed.
+No server — throwaway world, image modifiers supplied deterministically.
 
-Contract P4/E3: states never change mesh/T-pose outfit signatures. Ordinary
-pose references and expression keys retain state identity. Existing mesh forks
-are unreachable, even when they are the only cached model.
+States change ordinary pose-reference signatures, not mesh or expression keys.
+Existing mesh forks remain unreachable even when they are the only cached model.
 """
 import sys
 import tempfile
@@ -26,8 +25,11 @@ def main() -> None:
     tmp = tempfile.mkdtemp(prefix="anima_state_sig_check_")
     from app.core import paths
     paths.init(tmp)
+    paths.init_instance(Path(tmp) / "instance")
     from app.core import db
     db.init_schema()
+    from app.models.character import save_character_profile
+    assert save_character_profile(CHAR, {"template": "human-default", "character_appearance": "neat hair"}, create_new=True)
 
     from app.core import prompt_filters
     from app.core import model_refs
@@ -91,24 +93,14 @@ def main() -> None:
         check("mesh ignores rendered state fork",
               find_model3d(CHAR).name == f"{neutral}.glb")
 
-        # -- expression variant cache ---------------------------------------
-        from app.core.expression_regen import _cache_key
-
+        # Expressions are neutral, unlike the pose-reference images above.
+        from app.core.expression_regen import expression_snapshot
         stub_modifiers(([], []))
-        key_neutral = _cache_key("happy", "reading", CHAR, {}, [])
-        check("expr: neutral live key == explicit neutral key",
-              key_neutral == _cache_key("happy", "reading", CHAR, {}, [], state_fp=""))
-
+        key_neutral = expression_snapshot(CHAR, "happy").stem
         stub_modifiers(([("neat hair", "messy tousled hair")], []))
-        key_state = _cache_key("happy", "reading", CHAR, {}, [])
-        check("expr: active state forks the key", key_state != key_neutral)
-        check("expr: explicit neutral overrides live state",
-              _cache_key("happy", "reading", CHAR, {}, [], state_fp="") == key_neutral)
-
+        check("expression ignores replacement state", expression_snapshot(CHAR, "happy").stem == key_neutral)
         stub_modifiers(([], ["sweaty skin"]))
-        key_state2 = _cache_key("happy", "reading", CHAR, {}, [])
-        check("expr: different state, different key",
-              key_state2 not in (key_neutral, key_state))
+        check("expression ignores additive state", expression_snapshot(CHAR, "happy").stem == key_neutral)
 
         # -- cache GC --------------------------------------------------------
         check("GC: reachable base drops retired state variant",

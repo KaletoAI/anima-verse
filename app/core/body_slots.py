@@ -321,7 +321,8 @@ def prompt_fragments(character_name: str,
                      face_only: bool = False,
                      profile: Optional[Dict[str, Any]] = None,
                      back_view: bool = False,
-                     mesh_input: bool = False) -> Dict[str, List[str]]:
+                     mesh_input: bool = False,
+                     neutral_state: bool = False) -> Dict[str, List[str]]:
     """Prompt fragments for all applicable slots.
 
     Returns ``{"general": [...], "exposed": [...]}`` — general carries
@@ -382,7 +383,7 @@ def prompt_fragments(character_name: str,
                     from app.core.height import height_phrase
                     merged[ph] = height_phrase(profile, character_name)
                     continue
-                v = profile.get(ph)
+                v = "" if neutral_state else profile.get(ph)
                 merged[ph] = v.strip() if isinstance(v, str) else ""
         try:
             out = tpl.format(**merged)
@@ -601,7 +602,8 @@ def appearance_suffix(character_name: str, face_only: bool = False,
                       profile: Optional[Dict[str, Any]] = None,
                       back_view: bool = False,
                       mesh_input: bool = False,
-                      include_exposed: bool = True) -> str:
+                      include_exposed: bool = True,
+                      neutral_state: bool = False) -> str:
     """Combined fragment text appended to the character's appearance
     (PromptBuilder; face_only for portrait/expression prompts; ``profile``
     overrides the stored profile for dry-run previews). Empty without
@@ -612,7 +614,8 @@ def appearance_suffix(character_name: str, face_only: bool = False,
     leaves the exposed fragments out for a caller that names them on their
     own (the "uncovered:" part of what a character sees of the others)."""
     frags = prompt_fragments(character_name, face_only=face_only,
-                             profile=profile, back_view=back_view, mesh_input=mesh_input)
+                             profile=profile, back_view=back_view, mesh_input=mesh_input,
+                             neutral_state=neutral_state)
     parts = frags["general"] + (frags["exposed"] if include_exposed else [])
     return ", ".join(parts)
 

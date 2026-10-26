@@ -14,11 +14,20 @@ import { apiGet, apiPost, apiDelete } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { openLightbox } from '../../components/Lightbox'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
+import { ExpressionCleanupPreview } from './ExpressionCleanupPreview'
 
 interface Expression {
   file: string
   mood: string
   activity: string
+  expression_set: string
+  expression_key: string
+  expression_label?: string
+  outfit_raw: string
+  contract: string
+  status: 'current' | 'historical' | 'unverified'
+  reason: string
+  version: string
   equipped_pieces: Record<string, string>
   equipped_items: string[]
   model: string
@@ -104,6 +113,8 @@ export function ExpressionsTab({ character }: { character: string }) {
         }}>
           <span style={{ fontSize: '0.85em', opacity: 0.7 }}>
             {files.length} {files.length === 1 ? t('expression') : t('expressions')}
+            {' · '}{files.filter(e => e.status === 'current').length} {t('Current')}
+            {' · '}{files.filter(e => e.status !== 'current').length} {t('Historical or unverified')}
           </span>
           {confirmClear ? (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -120,6 +131,7 @@ export function ExpressionsTab({ character }: { character: string }) {
             </button>
           )}
         </div>
+        <ExpressionCleanupPreview character={character} onChanged={load} />
 
         {files.length === 0 ? (
           <div className="ga-placeholder">{t('No cached expressions yet')}</div>
@@ -129,7 +141,8 @@ export function ExpressionsTab({ character }: { character: string }) {
               const confirming = confirmDel === e.file
               const pieces = piecesText(e.equipped_pieces)
               const tip = [
-                `mood: ${e.mood || '—'}`, `activity: ${e.activity || '—'}`,
+                `expression: ${e.expression_key || '—'}`, `set: ${e.expression_set || '—'}`, `mood: ${e.mood || '—'}`,
+                `status: ${e.status}`, `reason: ${e.reason}`, `outfit identity: ${e.outfit_raw}`,
                 pieces && `outfit: ${pieces}`,
                 e.service && `backend: ${e.service}`, e.model && `model: ${e.model}`,
                 e.seed != null && `seed: ${e.seed}`, e.created_at && `created: ${fmtDate(e.created_at)}`,
@@ -171,12 +184,12 @@ export function ExpressionsTab({ character }: { character: string }) {
                   {/* Parameter caption */}
                   <div style={{ padding: '6px 8px', display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <div style={{ fontSize: '0.82em', fontWeight: 600 }} title={e.mood}>
-                      😊 {e.mood || <span style={{ opacity: 0.5 }}>{t('neutral')}</span>}
+                      {e.expression_label || e.expression_key || t('Unverified')}
                     </div>
-                    <div style={{ fontSize: '0.78em', opacity: 0.85 }} title={e.activity}>
-                      {e.activity ? `🚶 ${e.activity}` : <span style={{ opacity: 0.5 }}>🚶 —</span>}
+                    <div style={{ fontSize: '0.78em', opacity: 0.85 }}>
+                      {e.expression_set || t('Legacy')} · {e.status === 'current' ? t('Current') : e.status === 'historical' ? t('Historical') : t('Unverified')}
                     </div>
-                    {pieces && <div style={{ fontSize: '0.72em', opacity: 0.6 }} title={pieces}>👕 {pieces}</div>}
+                    <div style={{ fontSize: '0.72em', opacity: 0.6 }} title={e.outfit_raw}>{pieces || e.outfit_raw || t('No equipped pieces')}</div>
                     {e.service && (
                       <div style={{ fontSize: '0.7em', opacity: 0.55 }} title={e.service}>
                         ⚙ {e.service}
@@ -222,8 +235,8 @@ export function ExpressionsTab({ character }: { character: string }) {
               }}>
               <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 }}>
                 <strong style={{ fontSize: '0.9em' }}>
-                  {t('Final prompt')} — 😊 {promptOf.mood || t('neutral')}
-                  {promptOf.activity ? ` · 🚶 ${promptOf.activity}` : ''}
+                  {t('Final prompt')} — {promptOf.expression_label || promptOf.expression_key || t('Unverified')}
+                  {promptOf.expression_set ? ` · ${promptOf.expression_set}` : ''}
                 </strong>
                 <button type="button" className="ga-btn ga-btn-sm" onClick={() => setPromptOf(null)}>{t('Close')}</button>
               </div>
