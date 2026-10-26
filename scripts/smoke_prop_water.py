@@ -11,6 +11,7 @@ Usage: ./.venv/bin/python scripts/smoke_prop_water.py
 import copy
 import asyncio
 import json
+import math
 import sys
 import tempfile
 from pathlib import Path
@@ -18,6 +19,37 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import paths
 from smoke_model_water import fixture
+
+
+def resolve_args(value, fixtures):
+    if isinstance(value, list):
+        return [resolve_args(item, fixtures) for item in value]
+    if isinstance(value, dict):
+        if '$fixture' in value:
+            result = copy.deepcopy(fixtures[value['$fixture']])
+            if '$with' in value:
+                result.update(copy.deepcopy(value['$with']))
+            return result
+        return {key: resolve_args(item, fixtures) for key, item in value.items()}
+    return value
+
+
+def near(expect, actual, eps):
+    if expect is None:
+        return actual is None
+    if isinstance(expect, bool):
+        return type(actual) is bool and expect == actual
+    if isinstance(expect, (int, float)):
+        return (type(actual) in (int, float) and math.isfinite(actual)
+                and abs(expect - actual) <= eps)
+    if isinstance(expect, list):
+        return (isinstance(actual, list) and len(expect) == len(actual)
+                and all(near(e, a, eps) for e, a in zip(expect, actual)))
+    if isinstance(expect, dict):
+        return (isinstance(actual, dict) and all(
+            key in actual and near(value, actual[key], eps)
+            for key, value in expect.items()))
+    return type(expect) is type(actual) and expect == actual
 
 
 def main():
@@ -28,9 +60,12 @@ def main():
         from app.models import world_props
         vectors = json.loads(Path('shared/test-vectors/prop_water.json').read_text())
         for case in vectors['cases']:
-            assert w.water_region_at(vectors['regions_specs'], case['x'], case['z']) == case['expect']
-        lifted = w.water_region_at(vectors['regions_specs'], .5, .5, lambda spec: 3)
-        assert lifted == {'y':4.5,'bed_y':3,'swim_from_m':1}
+            if case['fn'] != 'waterRegionAt':
+                continue
+            specs, x, z, *lift_arg = resolve_args(case['args'], vectors['fixtures'])
+            lift = lift_arg[0] if lift_arg else 0
+            actual = w.water_region_at(specs, x, z, lambda spec: lift)
+            assert near(case['expect'], actual, case.get('eps', 1e-9)), case['label']
         assert scene.SCENE_RECIPE_VERSION == 18
         db.init_schema()
         pid = props.create_prop(name='Water fixture')['id']
@@ -71,7 +106,7 @@ def main():
         loc['rooms'][0]['layout']['props'][0]['variant'] = 0
         assert 'water' not in next(m for m in scene.compose_scene(loc, plan_width_m=10)['models'] if m['id'] == pid)
         # The gate sees water even when there is no walkable-tagged lattice.
-        gate_spec = copy.deepcopy(vectors['regions_specs'][0])
+        gate_spec = copy.deepcopy(vectors['fixtures']['SPECS'][0])
         gate_spec.update(anchor=[0,0], level=0)
         location = {'id':'gate','pos_x':0,'pos_z':0}
         with patch('app.core.relief.ground_at', return_value=0), \

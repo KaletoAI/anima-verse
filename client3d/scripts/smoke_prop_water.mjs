@@ -1,14 +1,40 @@
 #!/usr/bin/env node
 /** Prop water, spec §§8–9. Usage: node client3d/scripts/smoke_prop_water.mjs
- * Hand-derived: a 1.5 m pool swims, a 0.5 m tub wades, exactly 1 m swims.
- * Carry is max(bed, mirror). Lift +3 adds to both heights, never depth.
- * Triangle (0,0),(2,0),(0,3) maps to XZ at identical coordinates with +Y
- * normals; its area is 3 m². A 4x4 square with a 1x1 hole has area 15 m².
+ * Hand derivations (all vector expectations written by hand):
+ * [1] SPECS: pool outline [0..4]², hole [1..2]², y=1.5, bed=0,
+ * threshold 1; tub [3..5]², y=2, bed=1.5, threshold 1.
+ * (0.5,0.5) is pool only; (1.5,1.5) is in the hole -> null;
+ * (3.5,3.5) overlaps and 2>1.5 selects tub; (6,6) is outside -> null.
+ * (0,0) belongs to outline -> pool; (1,1.5) belongs to hole ring -> null.
+ * Hits retain y, bed_y and swim_from_m from the winning region.
+ * [2] Lift 3: pool y=1.5+3=4.5, bed=0+3=3; tub y=2+3=5,
+ * bed=1.5+3=4.5. Depth remains 1.5 or 0.5 and threshold stays 1.
+ * The original five points still give pool, null, tub, null, pool.
+ * [3] Pool point containment: (0.5,0.5) true; hole (1.5,1.5)
+ * false; outside (6,6) false, independent of heights.
+ * [4] DRY is the built-scope word: walk_run, sinks {move:0,idle:0},
+ * water null, written out because groundWaterLevel(10,'built')=null.
+ * Prop water starts with swim, sinks {move:0.35,idle:1.3}, water=y.
+ * wadeGate compares y-groundY >= threshold: with groundY=0,
+ * 1.5-0=1.5>=1 swims (water 1.5); 0.5-0=0.5<1 wades
+ * (walk_run, sinks 0/0, water null); 1-0=1>=1 swims (water 1).
+ * Null region leaves DRY unchanged: no mirror means no gate.
+ * Region groundY=0 overrides argument 0.01: depth 1-0=1>=1,
+ * hence swim, sinks 0.35/1.3, water 1 (not depth 0.99).
+ * [5] Built suppresses level 10 -> null; wilderness (a walk.ts scope)
+ * retains 10; absent level null stays null in wilderness.
+ * [6] Carry max(bed,mirror): max(0,1.5)=1.5; max(2,1.5)=2;
+ * no region leaves bed 0.7 unchanged.
+ * JSON adapter: waterRegionAt(specs,x,z,lift=0) wraps numeric lift
+ * as () => lift; the C# consumer mirrors this adapter.
+ * Local geometry: triangle (0,0),(2,0),(0,3) maps identically to XZ
+ * with +Y normals, area 2*3/2=3 m²; pool area 4*4-1*1=15 m².
  */
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { build, transform } from 'esbuild';
 import * as THREE from 'three';
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 
 async function load(path) {
   const result = await build({ entryPoints: [path], bundle: true, write: false,
@@ -18,27 +44,15 @@ async function load(path) {
 const math = await load('client3d/src/scene/propWaterMath.ts');
 const walk = await load('client3d/src/game/walk.ts');
 const { buildPropWater } = await load('packages/scene-render/src/propWater.ts');
-const vectors = JSON.parse(await readFile('shared/test-vectors/prop_water.json', 'utf8'));
-for (const c of vectors.cases) {
-  assert.deepEqual(math.waterRegionAt(vectors.regions_specs, c.x, c.z), c.expect);
-  const lifted = math.waterRegionAt(vectors.regions_specs, c.x, c.z, () => 3);
-  assert.deepEqual(lifted, c.expect && { ...c.expect, y: c.expect.y + 3, bed_y: c.expect.bed_y + 3 });
-}
-assert.equal(math.waterRegionAt(vectors.regions_specs, 1, 1.5), null, 'hole boundary excluded');
-const dry = { movement: 'walk_run', sink: { move: 0, idle: 0 }, water: null };
-for (const c of vectors.wade_swim_cases) {
-  // A built floor first silences painted water, then prop water overrides it.
-  const word = { ...dry, water: walk.groundWaterLevel(10, 'built') };
-  const result = walk.propWaterWord(word, c.bed_y, 1, c);
-  assert.equal(result.movement, c.expect_movement);
-  assert.equal(result.water, c.expect_movement === 'swim' ? c.y : null);
-  assert.deepEqual(result.sink, c.expect_movement === 'swim' ? { move: .35, idle: 1.3 } : dry.sink);
-}
-assert.deepEqual(walk.propWaterWord(dry, 0, 1, null), dry);
-// Standing clearance is visual, never part of the >=1 m depth decision.
-assert.equal(walk.propWaterWord(dry, .01, 1,
-  {y: 1, swim_from_m: 1, groundY: 0}).movement, 'swim');
-for (const c of vectors.carry_height_cases) assert.equal(walk.propWaterCarry(c.bed_y, c), c.expect);
+const vectors = loadVectors('prop_water');
+const { failed } = runVectors(vectors, {
+  waterRegionAt: (specs, x, z, lift = 0) => math.waterRegionAt(specs, x, z, () => lift),
+  pointInRegion: math.pointInRegion,
+  propWaterWord: walk.propWaterWord,
+  propWaterCarry: walk.propWaterCarry,
+  groundWaterLevel: walk.groundWaterLevel,
+});
+assert.equal(failed, 0, 'shared prop water vectors');
 // Canvas pixels are the browser boundary; geometry and materials remain real Three.js.
 globalThis.document = { createElement: () => ({ getContext: () => ({
   fillRect() {}, createImageData: (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
@@ -63,7 +77,7 @@ mesh.material.addEventListener('dispose', () => { disposed = true; });
 mesh.geometry.dispose();
 assert.equal(disposed, false, 'mount geometry disposal preserves cached material');
 twin.geometry.dispose();
-const [holed] = buildPropWater(THREE, {regions: [{...region, ...vectors.regions_specs[0].water.regions[0]}]}, 0);
+const [holed] = buildPropWater(THREE, {regions: [{...region, ...vectors.fixtures.POOL}]}, 0);
 const p = holed.geometry.getAttribute('position');
 const idx = holed.geometry.index;
 let area = 0;
