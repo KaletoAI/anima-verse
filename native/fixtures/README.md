@@ -83,22 +83,18 @@ codec is lossless and keeps every view index).
 
 ## Terrain
 
-**Overview** (`heightfield.json`): origin (−256, −256), step 256 m, 3 × 3
-points → **9 vertices**. Its 4 cells: cell (i=1, j=1) spans x 0…256, z 0…256 =
-exactly tile (0, 0); that tile is loaded (below), so the cell is left out →
-3 cells → **6 triangles**.
-
-Heights `[[0,0,0],[0,4,8],[0,8,16]]` (`heights[j][i]`).
+**Overview** (`heightfield.json`): origin (−256, −256), step 256 m, 3 × 3 points, heights `[[0,0,0],[0,4,8],[0,8,16]]`
+(`heights[j][i]`, i.e. h = 4·i·j at the lattice). `tile_step_m` 2, `mip_levels_m` [4, 8, 16, 32, 64], `tile_stats` {}.
 
 **Tile index** `["0,0", "5,5"]`. Tiles within 384 m of the anchor (64, 128):
 (0, 0) contains the point (distance 0); (5, 5) covers 1280…1536 — its nearest
 corner (1280, 1280) is ≈ 1675 m away → not requested. So exactly ONE request
 key `0,0` → **tiles = 1**. Tile (0, 0) in `tiles.json` is 5 × 5 at the batch
 `step_m` 64 (the code reads dims and step from the payload; the real server
-sends 129 × 129 at 2 m) → **25 vertices** (32 triangles). Heights
-`h[j][i] = 2·i + j`.
+sends 129 × 129 at 2 m), heights `h[j][i] = 2·i + j` (= x/32 + z/64), stats min 0, max 12, err all 0.
 
-terrain_vertices = 9 + 25 = **34**.
+The terrain drawn over it is the CDLOD of Task 23 — derivations in "CDLOD terrain" below: the build's first frame
+(the bench start camera) is **41 pieces, 1 draw, 64 000 triangles**.
 
 ## Anchor (`--goto=harbour`)
 
@@ -442,11 +438,17 @@ path `"Path_Blend "` (trimmed + lower-cased → `path_blend`), meadow `meadow_te
   **30**; #7a9a50 → **(50, 82, 20)**. The grass slice is the PNG's one colour everywhere: **(60, 140, 50)**.
 - **Shader parameters**: `lc_near` (64, 96, 1, 128), `lc_near_sd_geom` (64, 96, 0.5, 256), `lc_sd_code`
   (128, 15.875), `lc_band_m` 8, `lc_far` (32, 64, 8, 0), `lc_far_size` (24, 24), `ng_field` (−256, −256, 256, 0),
-  `ng_field_size` (3, 3), `ng_strength` 1 (the field is not flat: 0…16), `tl_normal_span` = `tile_step_m` 2,
-  `tl_far_geom` (−256, −256, 256, 1), `tl_far_level` (3, 3, 256, 0); the near height window = the loaded tile
-  (0, 0) = 0…256 grown by max(16, 2 · 256) = 512 → **−512…768 at 2 m = 641 × 641**, rect (−512, −512, 768, 768).
-  27 uniform declarations (25 + the basement hole's `hole_rect` / `hole_on`, Task 16, off at the build); Godot's
-  dummy renderer runs the shader-language front end, so a shader that does not parse reports none.
+  `ng_field_size` (3, 3), `ng_strength` 1 (the field is not flat: 0…16); bound by the terrain node (Task 23):
+  `tl_normal_span` = `tl_base_step` = `tile_step_m` 2, `tl_far_geom` (−256, −256, 256, **2** levels),
+  `tl_far_levels[0]` (3, 3, 256, 0); the near height window = the loaded tile (0, 0) = 0…256 grown by
+  max(16, 2 · 256) = 512 → **−512…768 at 2 m = 641 × 641**, `tl_near_geom` (−512, −512, 2, **6** levels),
+  `tl_near_levels[0]` (641, 641, 2, 0), rect (−512, −512, 768, 768).
+  **33** uniform declarations: 11 layer cut + 4 natural ground + 14 CDLOD stage (`tl_near`, `tl_far`, both geometries,
+  both level arrays, the near rect, the frame, the rings, base step, normal span, the cap texture, its geometry and
+  fit) + roughness/metallic + the basement hole's `hole_rect` / `hole_on` (Task 16, off at the build); the water
+  variant adds 7 `tw_*` + 4 lift uniforms (`tl_water`, `tl_water_sd`, `tl_water_geom`, `tl_water_levels`) = **44**; the
+  plain terrain is the 14 + its colour = **15**. Godot's dummy renderer runs the shader-language front end, so a
+  shader that does not parse reports none.
 - **AO** on the overview h = 4·i·j (bilinear, exact everywhere inside): at the anchor (64, 128) the four taps of a
   bilinear field average to the centre → **0**. At (−255, 128): u = (−255 + 256)/256 = 0.00390625, v = 1.5 → own
   4uv = 0.0234375; tap x + 3 → u 0.015625 → 0.09375; tap x − 3 → u < 0 → CLAMPED to the border texel → 0; the two
@@ -595,7 +597,7 @@ Cross-checks: V1 the house's merged interior wall mesh measured on its own (4 nu
 `h(i, j) = 2i + j` on the 5 × 5 lattice (step 64). Five lattice points carry a level of 6 m;
 `liftedHeight = h + (w − h)·smoothstep(0, 0.5, sd)` where w > h:
 
-| (i, j) | h | sd | gate | lifted | lift (UV2.x) |
+| (i, j) | h | sd | gate | lifted | lift (`v_wet`) |
 |---|---|---|---|---|---|
 | (0, 0) | 0 | 1.0 | 1 | **6** | **6** |
 | (1, 0) | 2 | 0.25 | 0.5 | **4** | **2** |
@@ -607,12 +609,14 @@ Cross-checks: V1 the house's merged interior wall mesh measured on its own (4 nu
 → **1 wet tile, 5 wet texels**, window 5 × 5 at (0, 0) step 64 (sd at (1, 0) = 0.25, a dry texel −10 000);
 the layer table's only water layer `lake` → **1 look row**, its surface `water` has no library entry and no
 painted area carries a profile → the default look, opaque depth ¾ · 2 = **1.5 m**, water areas **0**. With
-`--no-water`: no lift (vertex (0, 0) stays at **0**), no tag, no variant, `water[off: --no-water]`.
+`--no-water`: no lift, no wet program, no variant, `water[off: --no-water]`. The lift is drawn by the wet program's
+vertex stage (Task 23); the table's points inside the s3c frame (z ≥ 36) are checked through the shader twin in
+"CDLOD terrain" T5.
 
 ### Shaders
 
 Every spatial shader goes through the headless front end once and logs one line; the check requires
-`ground`, `ground-water`, `recipe[opaque]`, `recipe[translucent]` and `recipe[opaque,both-sides]` to be
+`ground`, `ground-water`, `terrain-plain` (Task 23), `recipe[opaque]`, `recipe[translucent]` and `recipe[opaque,both-sides]` to be
 `compiled (N uniforms)` with N = the shader's own uniform count, and the plan hull's cut shader
 `cut[std+cutouts]` with **18**: the generator's 14 uniforms of a glTF material without emission/normal/AO/alpha
 (albedo, texture_albedo, albedo_texture_size, point_size, roughness, texture_metallic, metallic_texture_channel,
@@ -870,3 +874,98 @@ b+3); the front normal −(v1 − v0)×(v2 − v0) of the first triangle at 0° 
 front by day lerp(5f6d84, 9fc7e8, 0.30) = linear (0.184116, 0.278386, 0.403604) → (0.466243, 0.564235, 0.667881); back by
 day (0.48) → (0.547455, 0.662256, 0.773704); at night (sky 1a2340) front 0.85 → (0.175381, 0.212774, 0.309809), back
 1.03 → capped 0.92 → (0.168005, 0.203566, 0.301058).
+
+## CDLOD terrain (Task 23, `Check/TerrainCheck.cs`, `--check terrain`)
+
+Sources: terrainLod.ts (`createTerrainLod`: `setField`, `buildFar`, `buildNear`, `buildWater`, `buildSd`, `update`,
+`patchGeometry`, the GLSL generators), ground.ts (`plateExtent`, `BASE_MARGIN_M` 60). The selection maths
+(`selectLodNodes`, `selectLodFitted`, `lodRanges`, `lodLambda`, `nodeBounds`, the cap functions, `lodVertex`) is
+`Core/Terrain/TerrainLod.cs`, vector-checked in `dotnet test` (terrain_lod.json); `nodeHasWater` has no shared vector
+yet — its hand cases (smoke_terrain_lod.mjs § (c)) run in `TerrainFieldTests`.
+
+**T0 shaders.** ground **33**, ground-water **44**, terrain-plain **15** uniforms (counts under "Ground surfaces"). The
+text prints `TL_PATCH_N = 32.0`, `TL_MORPH_START = 0.5`, `TL_CAP_NONE = 6.0`, six rings, the descent j = 5 … 1, the
+outline band `sd / 0.5` and `TL_SD_DRY = -10000.0` — the twin (`Core/Terrain/TerrainShaderTwin.cs`) reads the same
+numbers from C#. Only the wet program has `tl_lift`.
+
+**T1 the main fixture's field.** Base step = `tile_step_m` 2 → leaf 32 · 2 = 64 m, root 64 · 2⁵ = 2048 m.
+- Near pyramid: the near window (−512 … 768 at 2 m, "Ground surfaces") → 641; each next level (c − 1)/2 + 1 →
+  321, 161, 81, 41, 21 (6 levels); first rows 0, 641, 962, 1123, 1204, 1245; texture 641 × **1266**.
+- Far pyramid: the overview 3 × 3 at 256 m, round-to-nearest at its own lattice = the heights; next (3 − 1)/2 + 1 = 2
+  → 2 × 2 at 512 m = the corners (0, 0, 0, 16); next would be 1 → stop: **2 levels**, texture 3 × 5 (the level-1 rows
+  padded with 0): data 0,0,0, 0,4,8, 0,8,16, 0,0,0, 0,16,0.
+- Frame: `world_bounds` (−104, −203) … (300, 134) ± 60 → **(−164, −263) … (360, 194)**.
+- Range: from (0, 0) over both level-0 lattices: the far corner 16, the near window clamps the overview there too →
+  **(0, 16)**. Stats: tile 0,0 (min 0, max 12, err 0) → every level error 0 → the rings are the geometric ladder
+  **128, 256, 512, 1024, 2048, 4096** at any pixel scale.
+- Node bounds: a square over tile 0,0 (and ≤ 64 tiles) = (0, 12) (0,0 seen; the other covered tiles unseen → min/max
+  with 0); a square that covers no known tile = the range (0, 16).
+
+**T2 far camera (98, 10000, −34.5).** Roots: x ⌊−164/2048⌋ = −1 … ⌊(360 − ε)/2048⌋ = 0, z −1 … 0 → 4 roots, each
+overlaps the frame. Box distance ≈ 9984 > every ring → no split; λ = 6 (the last ring starts at 2048 + ½·2048 = 3072
+and ends at 4096) → morph 6 − 5 = **1**. **4 pieces** (−2048, −2048), (0, −2048), (−2048, 0), (0, 0), size 2048,
+level 5, 32 cells → 4 · 2048 = **8192 triangles**, 1 draw.
+
+**T3 the bench start camera (64, 31.5, 168)** (anchor + (0, 24, 40)). A node at level L splits while its box distance
+d < ring[L − 1]; each child that is still inside ring[L − 1] is visited at L − 1, else emitted as a parent QUADRANT
+(child size, level L, 16 cells); a child outside the frame is skipped (x ≥ 360, z ≥ 194, x + size ≤ −164,
+z + size ≤ −263). dy = 31.5 − 12 = 19.5 over tile 0,0, 31.5 − 16 = 15.5 elsewhere. Roots in z-then-x order:
+- Root (−1, −1): d = √(64² + 168² + 15.5²) = 180.44 → down the only overlapping children (−1024, −1024) → (−512, −512)
+  → level 3 children (−256, −512) d √(64² + 424² + 15.5²) = 429.08 < 512 → level 2, ≥ 256 → **whole L2**;
+  (−256, −256) d 180.44 → level 2 splits: (−256, −256) d √(192² + 296² + …) = 353.16 ≥ 256 → **quadrant L2**,
+  (−128, −256) d 303.24 → **quadrant L2**, (−256, −128) d 255.59 < 256 → level 1, ≥ 128 → **whole L1**,
+  (−128, −128) 180.44 → **whole L1**. 5 pieces.
+- Root (0, −1): d = √(168² + 15.5²) = 168.71 → (0, −1024) → (0, −512) → level 3 children: (0, −512) d 424.28 →
+  **whole L2**; (256, −512) d 465.70 → **whole L2**; (0, −256) d 168.71 → splits: (0, −256) 296.41 **quadrant L2**,
+  (128, −256) 303.24 **quadrant L2**, (0, −128) 168.71 **whole L1**, (128, −128) 180.44 **whole L1**; (256, −256)
+  d 255.59 < 256 → splits: (256, −256) 353.16 **quadrant L2**, (384, ·) outside, (256, −128) 255.59 **whole L1**.
+  8 pieces.
+- Root (−1, 0): d = √(64² + 15.5²) = 65.85 → (−1024, 0) → (−512, 0) → (−256, 0) at level 2 splits: (−256, 0)
+  196.73 **whole L1**; (−128, 0) 77.05 → level 1 splits into 64 m children: (−128, 0) dx 128, dz 104 → 165.6 ≥ 128
+  **quadrant L1**, (−64, 0) √(64² + 104² + 15.5²) = 123.09 **leaf**, (−128, 64) 134.99 **quadrant L1**, (−64, 64)
+  77.05 **leaf**; (−256, 128) 192.62 **whole L1**; (−128, 128) 65.85 splits: (−128, 128) 128.94 **quadrant**,
+  (−64, 128) 65.85 **leaf**, (−128, 192) √(128² + 24² + …) **quadrant**, (−64, 192) 70.08 **leaf**. 10 pieces.
+- Root (0, 0): d = 19.5 → (0, 0) → (0, 0) → level 3 children (0, 0) d 19.5 and (256, 0) d 192.62. (0, 0) at level 2
+  splits into four 128 m nodes (d 44.5, 77.95, 19.5, 66.91 — all < 128), each into four 64 m children; a child's dx
+  is 0, 0, 64, 128 for x₀ = 0, 64, 128, 192 and dz 104, 40, 0, 24 for z₀ = 0, 64, 128, 192; with dy 19.5 every
+  child with x₀ ≤ 128 stays < 128 (worst √(64² + 104² + 19.5²) = 123.66) → **12 leaves**, the x₀ = 192 column
+  ≥ √(128² + 19.5²) = 129.48 → **4 quadrants L1**. (256, 0) at level 2 splits: (256, 0) 196.73 and (256, 128)
+  192.62 → **whole L1** each. 18 pieces.
+
+**41 pieces**: 16 leaves, 13 quadrants, 12 whole nodes above level 0 → triangles (16 + 12) · 32² · 2 + 13 · 16² · 2 =
+57 344 + 6 656 = **64 000**, one draw (no water). The dry instance buffer carries exactly these 41 rows in this order
+(identity transform, custom = (x, z, size, level)); the wet one is empty. In T2, T3 and T5 the pieces cover the frame
+exactly: they are disjoint quadtree squares and Σ area(piece ∩ frame) = the frame's area (`TerrainField.Coverage` = 1) —
+no hole, and the clamp of every vertex to the frame closes the world edge.
+
+**T4 the twin.** For 11 patch vertices of every piece (corners, edges, (1, 1), (7, 3), (16, 16), (17, 9), (31, 30),
+(16, 32), (5, 16)) the twin run on the uniforms and textures READ BACK from the ground material equals
+`TerrainLod.LodVertex` (x, z to 1e-9, y to 1e-6). A vertex closer than 63 m to the eye has λ = 0 (the first ring starts
+at ½ · 128 = 64 m; a block owner of j ≥ 1 would need λ ≥ 1, i.e. ≥ 128 m, but lies within 2^j · 2 · √2 m) → it is drawn
+at level 0 = `heightAt` (to 1e-4; the near lattice samples the tile, and h is linear in the tile).
+
+**T5 the s3c world** (tile 0,0 wet, see "Water (tile 0, 0)"; `world_bounds` (−44, 96) … (2004, 2004) → frame
+(−104, 36) … (2064, 2064)).
+- Water cap of tile 0,0. The water pyramid lives on the near lattice; the level there is the masked bilinear of the
+  64 m tile: all four corners of the cell [0, 64]² carry 6 m, so the whole cell is 6 m; the next cells have a dry
+  corner (wet only on shared edges). Lifted solid = w > h (h ≤ 3 there) and sd > 0, with sd over the cell
+  = 1 − 0.75·u·(1 + v) (u = x/64, v = z/64; corners 1, 0.25, 1, −0.5) — negative at the far corner (64, 64). A
+  (2⁵ + 1)² = 33 × 33 block (64 m) would need the whole cell → no; a 17 × 17 block round (16, 16) has u, v ≤ 0.5 →
+  sd ≥ 0.4375 → yes → **cap 4**. The grid: the tile plus a two-tile ring, 4 × 4 corners from (−256, −256) at 256 m,
+  each the minimum of its 4 tiles → **4** at the corners (0, 0), (256, 0), (0, 256), (256, 256), 6 elsewhere.
+- Far camera (1000, 10000, 1000): roots x −1 … 1, z 0 … 1 (6). λ = 6 everywhere. The cap over a square (corners in a
+  one-corner ring, `lodCapOverSquare`) is 4 for the roots (0, 0) and (−1, 0), none for the rest. Level 5 > 4 forces
+  the split: in root (0, 0) the child (0, 0) has cap 4 → visited at level 4 → not above its cap, d > 1024 → **whole L4
+  (morph min(6, 4) − 4 = 0)**; (1024, 0), (0, 1024), (1024, 1024) have no cap → **quadrants L5** (morph 1). Root
+  (−1, 0): (−2048, ·) outside, (−1024, 0) cap 4 → **whole L4**, (−1024, 1024) **quadrant L5**. Roots (1, 0), (−1, 1),
+  (0, 1), (1, 1) → **whole L5**. 10 pieces; wet = a closed rectangle over tile 0,0: the two L4 nodes (x −1024 … 0
+  reaches tile 0 at x = 0) → **2 wet, 8 dry**; triangles 6 · 2048 + 4 · 512 = **14 336**, two draws.
+- Close camera (32, 10, 32): the lattice points of "Water (tile 0, 0)" inside the frame — (0, 64) **6 / 5**, (64, 64)
+  **3 / 0**, (0, 128) **2.625 / 0.625** (lifted height / depth `v_wet`) — are drawn at exactly these numbers by EVERY
+  piece that has a vertex there (all levels of both pyramids agree on these points: 512 + x and 512 + z are
+  multiples of 64), and only by wet pieces (a piece touching tile 0,0's border is wet by the closed rectangle). With
+  `--no-water`: no cap, the far camera draws the 6 roots dry, and (0, 64) is drawn on its bed, h = 1.
+
+**T6.** Pixel scale = viewport height / (2 · tan 22.5°) = 1080 / (2 · (√2 − 1)) = **1303.6753236814712**; 0 without a
+viewport or lens. The frame without bounds is the 200 m square (−100 … 100); a point bound (5, 7) keeps (−55, −53) …
+(65, 67).

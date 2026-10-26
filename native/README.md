@@ -15,16 +15,17 @@ on a payload dump of a real world (see "Scene content" and "Offline").
 
 What it draws after login:
 
-- **terrain** — the `/play/heightfield` overview as one mesh, plus the 2 m tiles
-  (`/play/heightfield/tiles`) within 560 m of the anchor (`HEIGHT_TILE_RADIUS_M` =
-  `FOG_FAR_M` 520 + 40, the browser's rule) as separate meshes, no LOD; dressed in
+- **terrain** — the browser's CDLOD terrain (Task 23, see "CDLOD terrain"): one instanced 33 × 33 patch on a
+  6-level quadtree over the whole world frame (`world_bounds` ± 60 m), heights out of two R32F pyramids — the
+  `/play/heightfield` overview (far) and the 2 m tiles (`/play/heightfield/tiles`) loaded within 560 m of the
+  anchor (`HEIGHT_TILE_RADIUS_M` = `FOG_FAR_M` 520 + 40, the browser's rule; near) — morphed per vertex; dressed in
   the browser's ground material — the painted layers cut per texel from the
   server's masks, the surface textures, colour patches, height AO and the
   per-fragment shading normal (see "Ground surfaces"); the plain one-colour
   material when that fails or with `--plain-ground`;
-- **water** — the browser's Wasser v2 terrain water: a wet tile's vertices lifted
-  onto the mirror, shaded by the water variant of the ground shader (see "Scene
-  content"); off with `--no-water`;
+- **water** — the browser's Wasser v2 terrain water: the pieces over a wet tile run the second program, whose
+  vertex stage lifts each tap onto the mirror inside the outline, shaded by the water variant of the ground shader
+  (see "Scene content"); off with `--no-water`;
 - **locations** — per placed location in reach, what the browser's overview shows
   of its scene recipe (`/play/locations/{id}/scene`): the `role: building` model
   (loaded from its variant URL, Meshopt-decoded client-side —
@@ -329,9 +330,33 @@ reason) when the plain one was — compare only runs where it says `layers` —
 and `water` (Task S3c): `water[areas=… tiles=… kinds=… wet_texels=…]` when the
 water variant was drawn, `water[off: --no-water]` / `water[none…]` otherwise.
 
+## CDLOD terrain (Task 23)
+
+Port of `client3d/src/scene/terrainLod.ts` (`createTerrainLod`), contract § A16.6:
+
+- `Core/Terrain/TerrainLod.cs` — the selection maths (rings from the tile stats' error bounds and the pixel scale,
+  `lodLambda`, `selectLodNodes` with parent quadrants, `selectLodFitted` under 4096 pieces, pyramids, the water mip
+  cap, the CPU vertex twins), vector-checked against `shared/test-vectors/terrain_lod.json`;
+- `Core/Terrain/TerrainField.cs` — `setField` / `update`: the far pyramid from the overview, the near pyramid over the
+  loaded tiles' window (`nearWindow`, filled through the tile-first height), the water level pyramid + outline
+  distance on the near lattice, the cap grid, the range, the level errors (overview `tile_stats` + every tile's own
+  `stats`), the frame, and per frame the pieces split into the dry and the wet program (`nodeHasWater`);
+- `Core/Terrain/TerrainLodGlsl.cs` — the vertex stage (and the shared sampler + shading normal) as Godot shading
+  language, printed from the C# constants; `Core/Terrain/TerrainShaderTwin.cs` — its statement-for-statement CPU twin;
+- `World/TerrainLodNode.cs` — ONE patch mesh in two `MultiMesh`es (dry, wet) with `INSTANCE_CUSTOM` = (x, z, size,
+  level), the pyramids as R32F textures, the uniforms on the ground material + its water variant (or the plain
+  terrain shader). It selects in `_Process` at priority 2000 (after the camera and the bench driver), from the
+  camera's position and the real viewport height (pixel scale = height / (2·tan 22.5°), logged when it changes);
+  the instance buffers are rewritten only when the piece list changes. No frustum culling (the browser's decision):
+  world-sized AABBs. The terrain casts no shadow.
+
+Not yet: tile streaming, the stats fill for worlds over 64 tiles and the `height_sig`/`terrain_sig` reload chains
+(Task 24) — the near pyramid is the boot ring's. The world log line and the bench result carry
+`terrain[pieces= wet= draws= triangles= … cover=]` (`cover` = the share of the frame the pieces cover, 1 = no hole).
+
 ## Ground surfaces (Task S3b)
 
-The terrain meshes of S1a wear ONE Godot spatial shader (`Ground/GroundShader.cs`)
+The terrain wears ONE Godot spatial shader (`Ground/GroundShader.cs`)
 that is the browser's open-world ground material (`client3d/src/scene/ground.ts`
 `rebuildBase`), fed from the same requests (`Ground/GroundSurfaces.cs`):
 
@@ -356,7 +381,7 @@ distance rebuilt from the four sd texels of the own id texel, edge-noise push,
 `textureGrad` samples per layer = narrow + broad anti-tile), then the natural
 ground's colour patches and height AO (`naturalGround.ts`, overview field in an
 R16F texture), then the shading normal from the height field (`tlodNormalAt`:
-4 × 4 `texelFetch` of the near window at `tile_step_m`, else the overview),
+4 × 4 `texelFetch` of the near pyramid's level 0 at `tile_step_m`, else the overview's),
 lit as three's `MeshStandardMaterial` (roughness 0.85, metalness 0.02, Lambert).
 `Core/Ground/LayerCut.cs` and `Core/Ground/TerrainNormal.cs` are the CPU twins `--check`
 compares with the TS functions (`fixtures/ground_reference.mjs`).
@@ -413,10 +438,11 @@ nothing here is a native choice:
   colours and opacities from `style`; matte 0.85 / 0.02 unless the kind's
   `material` says otherwise. One mesh per material per location (the browser draws
   one per primitive — fewer draw calls, favours Godot).
-- **Water** (`Ground/Water.cs`, the water branch of `Ground/GroundShader.cs`):
-  Wasser v2 K-A has no water mesh. A wet height tile (`water` block of
-  `/play/heightfield/tiles`) is lifted onto `liftedHeight(h, level, sd)` (the
-  vertex stage's `tlodLift`, done once on the CPU) with the lift in `UV2.x`; the
+- **Water** (`Core/Water/WaterShade.cs`, the water branch of `Ground/GroundShader.cs`):
+  Wasser v2 K-A has no water mesh. A CDLOD piece over a wet height tile (`water` block of
+  `/play/heightfield/tiles`) runs the wet program, whose vertex stage lifts each tap of the morph pair onto
+  `liftedHeight(h, level, sd)` (`tlodLift`, the water level pyramid on the near lattice) and hands the depth to the
+  fragment (`v_wet`, the browser's `vTlodWet`); the
   water variant samples the signed distance, the kind row and the flow per pixel
   (one window over the loaded wet tiles) and runs `tlodWaterSurface` /
   `tlodWaterNormal` / `tlodWaterOut` (absorption, surface share, foam, the
@@ -731,10 +757,10 @@ works the same way.
 | `Main.cs`, `Main.tscn` | entry scene: login → world build → camera → (`--bench`) the drive; `--check`/`--check-bench` dispatch |
 | `App/Main*.cs` | the rest of the entry scene's class, by concern: `MainSession` (login, session, back to the title), `MainWorld` (world build, boot stages, bench/offline), `MainSync` (poll, push stream, show all), `MainHud` (HUD game actions, picking, info panel) |
 | `Cli.cs` | command-line parameters |
-| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Ui/SessionFlow.cs` (login / character switch / back to title / lost session as one decision), `Ui/HudStorage.cs` (the kept HUD settings: file model, 256 KB cap, the handoff's seed script), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke), `Sync/` (Task 10: `PollScheduler` = pollCore.ts, `SyncStream` = syncHub.ts + `HttpEventSource`/`SseParser` for `/events/sync`, `BootTracker` + `BootRetry` = game/boot.ts + `retryBoot`, `LocationsCache`/`LocationsSync` = the ETag'd `/world/locations?view=3d`, `ConnectionState`, the frame-pumped `TimerQueue`) |
+| `Core/` | the Godot-free library `AnimaNative.Core` (same namespaces `AnimaNative.*`, same subfolders): `Api/AnimaApi.cs` (HttpClient + cookie session, the server getters, `IWorldSource`), `World/` (payloads, `WorldHeight` + bench `Anchor`, `LocationView`), `Ground/` (`LayerCut`, `TerrainNormal`, `WaterTileField`), `Terrain/` (`TerrainLod`, `TerrainField`, `TerrainLodGlsl`, `TerrainShaderTwin`, `HeightTiles`), `Scatter/` (terrain payload, sampler, LOD and undergrowth maths), `Hud/HudProtocol.cs`, `Ui/LauncherSettings.cs` (the launcher file's rules: parse, serialise, merge with the flags, server-address normalising), `Ui/SessionFlow.cs` (login / character switch / back to title / lost session as one decision), `Ui/HudStorage.cs` (the kept HUD settings: file model, 256 KB cap, the handoff's seed script), `Bench/` (path + statistics, the embedded `camera_path_v1.json`), `Figures/CharacterRows.cs`, `Gltf/` (Meshopt decoder + its P/Invoke), `Sync/` (Task 10: `PollScheduler` = pollCore.ts, `SyncStream` = syncHub.ts + `HttpEventSource`/`SseParser` for `/events/sync`, `BootTracker` + `BootRetry` = game/boot.ts + `retryBoot`, `LocationsCache`/`LocationsSync` = the ETag'd `/world/locations?view=3d`, `ConnectionState`, the frame-pumped `TimerQueue`) |
 | `tests/` | xUnit project on Core (`dotnet test tests`) |
 | `test.sh` | `dotnet test` + build + headless `--check` |
-| `World/` | the Godot side of the world (payloads, height + anchor and the view rules are in `Core/World/`): terrain, `place()`, recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
+| `World/` | the Godot side of the world (payloads, height + anchor and the view rules are in `Core/World/`): the CDLOD terrain node (`TerrainLodNode.cs`), `place()`, recipe meshes + materials, model cache + placements (`SceneModels.cs`), surface library, shader safety, the builder |
 | `tools/dump_payloads.py` | Task S3c: dumps the client's HTTP answers from a COPY of a world for `--offline` |
 | `Gltf/` | runtime GLB import (the Meshopt decode is in `Core/Gltf/`) |
 | `Figures/` | world-map characters: placement rule, figures (fed by Main's poll), clip library (import, pick, retarget), rest-pose correction |

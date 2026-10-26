@@ -174,10 +174,10 @@ public static class GroundCheck
         var mat = g.Material;
         Expect("material shader", mat.Shader == GroundShader.Get(), "");
         // Godot's dummy renderer runs the shader-language front end too (material_storage.cpp shader_set_code):
-        // a shader that does not parse reports NO uniforms. 27 = the hand count of the declarations (25 + the basement
-        // hole's hole_rect / hole_on, Task 16).
+        // a shader that does not parse reports NO uniforms. 33 = the hand count of the declarations (15 layer cut +
+        // natural ground, 14 of the CDLOD stage, roughness/metallic, the basement hole's hole_rect / hole_on).
         int uniforms = mat.Shader.GetShaderUniformList().Count;
-        Expect("ground shader compiles (front end) with its 27 uniforms", uniforms == 27, $"{uniforms}");
+        Expect("ground shader compiles (front end) with its 33 uniforms", uniforms == 33, $"{uniforms}");
         Expect("ground hole off at the build", (float)mat.GetShaderParameter("hole_on") == 0f, "");
         Param(mat, "lc_near", new Vector4(64, 96, 1, 128));
         Param(mat, "lc_near_sd_geom", new Vector4(64, 96, 0.5f, 256));
@@ -188,30 +188,34 @@ public static class GroundCheck
         Param(mat, "ng_strength", 1f);
         Param(mat, "ng_field", new Vector4(-256, -256, 256, 0));
         Param(mat, "ng_field_size", new Vector2(3, 3));
+        // The CDLOD half, bound by the terrain node: geometry w = the pyramid's level count (6 near, 2 far).
         Param(mat, "tl_normal_span", 2f);
-        Param(mat, "tl_near_geom", new Vector4(-512, -512, 2, 1));
-        Param(mat, "tl_near_level", new Vector4(641, 641, 2, 0));
+        Param(mat, "tl_base_step", 2f);
+        Param(mat, "tl_near_geom", new Vector4(-512, -512, 2, 6));
         Param(mat, "tl_near_rect", new Vector4(-512, -512, 768, 768));
-        Param(mat, "tl_far_geom", new Vector4(-256, -256, 256, 1));
-        Param(mat, "tl_far_level", new Vector4(3, 3, 256, 0));
+        Param(mat, "tl_far_geom", new Vector4(-256, -256, 256, 2));
+        Expect("tl_near_levels[0] = (641, 641, 2, 0)", mat.GetShaderParameter("tl_near_levels").AsVector4Array()[0] == new Vector4(641, 641, 2, 0), "");
+        Expect("tl_far_levels[0] = (3, 3, 256, 0)", mat.GetShaderParameter("tl_far_levels").AsVector4Array()[0] == new Vector4(3, 3, 256, 0), "");
         var arr = mat.GetShaderParameter("lc_surf").As<Texture2DArray>();
         Expect("surface array bound", arr is not null, "lc_surf unset");
         Expect("layer array bound", mat.GetShaderParameter("lc_layer").AsVector4Array().Length == LayerCut.MaxLayers, "");
         foreach (var name in new[] { "lc_near_id", "lc_near_sd", "lc_far_id", "ng_height", "tl_near", "tl_far" })
             Expect($"{name} bound", mat.GetShaderParameter(name).As<Texture2D>() is not null, "unset");
         var terrainMeshes = world.GetNode("Terrain").GetChildren().OfType<GeometryInstance3D>().ToList();
-        Expect("material on every terrain mesh", terrainMeshes.Count == 2 && terrainMeshes.All(m => m.MaterialOverride == mat),
-               $"{terrainMeshes.Count}");
+        Expect("material on both terrain programs (no water: the wet one wears the dry material)",
+               terrainMeshes.Count == 2 && terrainMeshes.All(m => m.MaterialOverride == mat), $"{terrainMeshes.Count}");
         Expect("shader literals survive two decimals", GroundShader.Code().Contains("0.23") && GroundShader.Code().Contains("25.00"), "");
 
-        // ---- shading normal + near height window (hand: README) ----
-        Expect("near heights (hand)", g.NearHeights is { OriginX: -512, OriginZ: -512, Step: 2, Cols: 641, Rows: 641 }
-                                      && g.NearRect!.SequenceEqual(new double[] { -512, -512, 768, 768 }), "");
-        NearN("normal at the anchor (fine tile)", TerrainNormal.NormalAt(g.NearHeights, g.NearRect, g.FarHeights, 2, 64, 128), -0.125, 4, -0.0625);
+        // ---- shading normal on the terrain's level-0 lattices (hand: README) ----
+        var (nearLat, farLat) = builder.Terrain!.Field.NormalLattices();
+        var rect = builder.Terrain.Field.NearRect;
+        Expect("near heights (hand)", nearLat is { OriginX: -512, OriginZ: -512, Step: 2, Cols: 641, Rows: 641 }
+                                      && rect!.SequenceEqual(new double[] { -512, -512, 768, 768 }), "");
+        NearN("normal at the anchor (fine tile)", TerrainNormal.NormalAt(nearLat, rect, farLat, 2, 64, 128), -0.125, 4, -0.0625);
         NearN("normal in the margin (overview through the near window)",
-              TerrainNormal.NormalAt(g.NearHeights, g.NearRect, g.FarHeights, 2, -200, -100), -0.0380859375, 4, -0.013671875);
+              TerrainNormal.NormalAt(nearLat, rect, farLat, 2, -200, -100), -0.0380859375, 4, -0.013671875);
         NearN("normal beyond the window (far lattice, clamped)",
-              TerrainNormal.NormalAt(g.NearHeights, g.NearRect, g.FarHeights, 2, 800, 0), 0, 4, -0.125);
+              TerrainNormal.NormalAt(nearLat, rect, farLat, 2, 800, 0), 0, 4, -0.125);
 
         // ---- fallbacks ----
         var fallback = await CheckFallbacks(source, builder.Height!, dir);

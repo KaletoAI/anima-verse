@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using AnimaNative.Terrain;
-using AnimaNative.World;
 
 namespace AnimaNative.Ground;
 
@@ -21,41 +20,25 @@ public sealed class HeightLattice
 ///
 ///   n(x, z) = normalize(−(h(x+s, z) − h(x−s, z)), 2s, −(h(x, z+s) − h(x, z−s)))
 ///
-/// with s = the base lattice step (<c>tile_step_m</c>) and h the FINEST level: the near window (the loaded
-/// tiles plus a margin, filled through the tile-first height — <c>buildNear</c>) inside its rectangle, the
-/// overview lattice (<c>buildFar</c>) outside, both read with four <c>texelFetch</c> and the bilinear of
-/// <c>tlodGrid</c>. The S1a meshes carry vertex normals; this replaces them in the fragment, like the browser
-/// (whose CDLOD patches carry no normal at all). This class is the CPU twin the check compares with.
+/// with s = the base lattice step (<c>tile_step_m</c>) and h the FINEST level: level 0 of the near pyramid (the
+/// loaded tiles plus a margin, filled through the tile-first height — <see cref="TerrainField"/>) inside its
+/// rectangle, the overview's far pyramid outside, both read with four <c>texelFetch</c> and the bilinear of
+/// <c>tlodGrid</c>. The CDLOD patches carry no normal of their own (it is straight up); this replaces it in the
+/// fragment, like the browser. This class is the CPU twin the check compares with.
 /// </summary>
 public static class TerrainNormal
 {
-    /// <summary><c>buildFar</c> level 0: the overview heights at their own lattice.</summary>
-    public static HeightLattice? BuildFar(HeightGrid ov)
-    {
-        if (ov.Rows < 2 || ov.Cols < 2 || !(ov.Step > 0)) return null;
-        return new HeightLattice { OriginX = ov.OriginX, OriginZ = ov.OriginZ, Step = ov.Step, Cols = ov.Cols, Rows = ov.Rows,
-                                   H = (float[])ov.Heights.Clone() };
-    }
-
     /// <summary>
-    /// <c>buildNear</c>: the loaded tiles' bounding box grown by max(16 m, 2 overview steps), snapped onto the fine
-    /// lattice, capped at 1025 texels per axis (then centred on the anchor), filled through the tile-first height.
-    /// Rect = (x0, z0, x1, z1) of the lattice's outer support points.
+    /// Level 0 of a terrain pyramid (<see cref="TerrainField"/>) as the lattice the normal reads: the first
+    /// <c>rows</c> texture rows of <c>texW</c> = cols texels each. Null for no pyramid.
     /// </summary>
-    public static (HeightLattice Lattice, double[] Rect)? BuildNear(WorldHeight height, double step, double anchorX, double anchorZ)
+    public static HeightLattice? Level0(HeightPyramid? pyr)
     {
-        double tileM = height.Overview.TileM;
-        var keys = new List<(double, double)>();
-        foreach (var t in height.Tiles) keys.Add((t.Key.Tx, t.Key.Tz));
-        // buildNear passes overview?.step_m; native always holds an overview.
-        if (TerrainLod.NearWindow(keys, tileM, step, height.Overview.Grid.Step, anchorX, anchorZ) is not { } win) return null;
-        var (x0, z0, cols, rows) = (win.X0, win.Z0, win.Cols, win.Rows);
-        var h = new float[cols * rows];
-        for (int j = 0; j < rows; j++)
-        for (int i = 0; i < cols; i++)
-            h[j * cols + i] = (float)height.GroundAt(x0 + i * step, z0 + j * step);
-        var lat = new HeightLattice { OriginX = x0, OriginZ = z0, Step = step, Cols = cols, Rows = rows, H = h };
-        return (lat, new[] { x0, z0, x0 + (cols - 1) * step, z0 + (rows - 1) * step });
+        if (pyr is null || pyr.Levels.Count == 0) return null;
+        var lv = pyr.Levels[0];
+        var h = new float[lv.Cols * lv.Rows];
+        for (int j = 0; j < lv.Rows; j++) Array.Copy(pyr.Data, (lv.Row0 + j) * pyr.TexW, h, j * lv.Cols, lv.Cols);
+        return new HeightLattice { OriginX = pyr.OriginX, OriginZ = pyr.OriginZ, Step = lv.Step, Cols = lv.Cols, Rows = lv.Rows, H = h };
     }
 
     /// <summary><c>tlodGrid</c> on level 0.</summary>

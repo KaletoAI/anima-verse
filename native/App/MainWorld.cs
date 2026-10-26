@@ -263,6 +263,7 @@ public partial class Main : Node3D
                                                _options!.Goto, _options.Vsync, scatter: _scatter is not null,
                                                water: _waterDrawn);
         Log($"bench starts ({settings.Path.Keyframes.Length} keyframes)");
+        builder.Terrain?.ResetPeak();
         AddChild(new BenchRunner(_camera!, settings, result =>
         {
             if (_scatter is not null)
@@ -275,6 +276,8 @@ public partial class Main : Node3D
             result["ground"] = _groundSummary;
             // Extra key (Task S3c): what the world showed — water, recipe primitives, models.
             result["water"] = _waterSummary;
+            // Extra key (Task 23): the CDLOD terrain over the drive — the last frame, the largest one, the viewport.
+            result["terrain"] = builder.Terrain?.Summary() ?? "terrain[none]";
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(this, result, file);
             _ = ReportBench(BenchOutput.Line(result));

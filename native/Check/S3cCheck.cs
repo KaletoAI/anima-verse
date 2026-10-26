@@ -21,7 +21,8 @@ namespace AnimaNative.Check;
 ///     beyond the haze is not mounted (no scene request);
 ///   • model specs: props, a <c>measure: "fit"</c> door model, a placeholder box, a missing diorama, the § A16.9
 ///     terrain lift, the static tiers (ring + camera distance), world props with their variant, bottom and cull;
-///   • water: the wet tile lifted onto its mirror by the shore gate, the water variant compiled and worn.
+///   • water: the wet tile's lattice lifted onto its mirror by the shore gate (CPU rule), the wet program and the water
+///     variant compiled and worn (the drawn lift: <see cref="TerrainCheck"/> T5).
 /// </summary>
 public static class S3cCheck
 {
@@ -181,11 +182,13 @@ public static class S3cCheck
                 Near($"s3c lift ({i},{j})", lifted, y);
                 Near($"s3c wet ({i},{j})", lifted - h, wet);
             }
-            var tileNode = world.GetNode<MeshInstance3D>("Terrain/TerrainTile_0_0");
-            Expect("s3c tile tagged wet", tileNode.HasMeta("wet"), "");
-            CheckTileVertices(tileNode);
-            Expect("s3c water material", builder.Ground?.WaterMaterial is not null && tileNode.MaterialOverride == builder.Ground.WaterMaterial,
-                   "the wet tile does not wear the water variant");
+            // The lift itself is the wet program's vertex stage now (TerrainCheck T5 draws the table above through the
+            // shader twin); here: the wet program exists for the wet tile and wears the water variant.
+            var terrain = builder.Terrain ?? throw new InvalidOperationException("s3c: no terrain");
+            Expect("s3c wet program for tile 0,0", terrain.Field.WaterTileKeys?.SetEquals(new[] { "0,0" }) == true
+                   && terrain.WetInstance.HasMeta("wet"), "");
+            Expect("s3c water material", builder.Ground?.WaterMaterial is not null && terrain.WetInstance.MaterialOverride == builder.Ground.WaterMaterial,
+                   "the wet program does not wear the water variant");
             Expect("s3c water mode", stats.WaterMode == "drawn" && stats.WaterTiles == 1 && stats.WaterKinds == 1 && stats.WaterTexels == 5
                    && stats.WaterAreas == 0,
                    stats.WaterSummary());
@@ -328,21 +331,6 @@ public static class S3cCheck
         _ => RecipeMaterials.ShaderFor(false, true).GetShaderUniformList().Count,
     };
 
-    /// <summary>The tile mesh itself: vertex y = the lifted height, UV2.x = the lift (when the renderer keeps arrays).</summary>
-    private static void CheckTileVertices(MeshInstance3D node)
-    {
-        if (node.Mesh is not ArrayMesh mesh || mesh.GetSurfaceCount() == 0) throw new InvalidOperationException("s3c: tile has no mesh");
-        var arrays = mesh.SurfaceGetArrays(0);
-        var verts = arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array();
-        var uv2 = arrays[(int)Mesh.ArrayType.TexUV2].AsVector2Array();
-        Expect("s3c tile arrays", verts.Length == 25 && uv2.Length == 25, $"{verts.Length} vertices, {uv2.Length} uv2");
-        foreach (var (i, j, y, wet) in ExpLift)
-        {
-            Near($"s3c tile vertex ({i},{j}) y", verts[j * 5 + i].Y, y);
-            Near($"s3c tile vertex ({i},{j}) uv2", uv2[j * 5 + i].X, wet);
-        }
-    }
-
     private static async Task<string> NoWaterRun(Node3D host, string dir, string fixtures)
     {
         var source = new FixtureSource(dir, fixtures);
@@ -352,11 +340,10 @@ public static class S3cCheck
         try
         {
             var stats = await builder.BuildAsync(world, "Glass");
-            var tileNode = world.GetNode<MeshInstance3D>("Terrain/TerrainTile_0_0");
+            var terrain = builder.Terrain!;
             Expect("s3c --no-water mode", stats.WaterMode == "off: --no-water", stats.WaterMode);
-            Expect("s3c --no-water untagged", !tileNode.HasMeta("wet") && builder.Ground?.WaterMaterial is null, "");
-            var verts = ((ArrayMesh)tileNode.Mesh).SurfaceGetArrays(0)[(int)Mesh.ArrayType.Vertex].AsVector3Array();
-            Near("s3c --no-water bed (0,0)", verts[0].Y, 0f);
+            Expect("s3c --no-water: no wet program, no variant", terrain.Field.WaterTileKeys is null && terrain.Field.Water is null
+                   && builder.Ground?.WaterMaterial is null, "");
             return stats.WaterSummary();
         }
         finally

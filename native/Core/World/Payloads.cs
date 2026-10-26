@@ -120,7 +120,25 @@ public sealed class HeightGrid
     }
 }
 
-/// <summary><c>GET /play/heightfield</c>: the overview grid plus the tile index.</summary>
+/// <summary>
+/// One tile's quadtree statistics (§ A16.5, E1 addendum § G2): its height span and the exact vertical error bound
+/// per server mip level (<c>err[k]</c> belongs to <c>mip_levels_m[k]</c>). Read the browser's way
+/// (<c>ground.ts</c>): <c>Number(min) || 0</c>, <c>Number(max) || 0</c>, <c>(err ?? []).map(Number)</c>.
+/// </summary>
+public sealed record TileStat(double Min, double Max, double[] Err)
+{
+    public static TileStat Parse(JsonElement s)
+    {
+        double Field(string name) => s.ValueKind == JsonValueKind.Object && s.TryGetProperty(name, out var v)
+            ? Scene.Js.Or(Scene.Js.Number(v), 0) : 0;
+        var err = s.ValueKind == JsonValueKind.Object && s.TryGetProperty("err", out var e) && e.ValueKind == JsonValueKind.Array
+            ? e.EnumerateArray().Select(v => Scene.Js.Number(v)).ToArray()
+            : Array.Empty<double>();
+        return new TileStat(Field("min"), Field("max"), err);
+    }
+}
+
+/// <summary><c>GET /play/heightfield</c>: the overview grid, the tile index and the quadtree half (mip levels, tile stats).</summary>
 public sealed class HeightfieldOverview
 {
     public HeightGrid Grid { get; }
@@ -128,6 +146,10 @@ public sealed class HeightfieldOverview
     public double TileStepM { get; }
     public HashSet<(int Tx, int Tz)> TileIndex { get; }
     public string Sig { get; }
+    /// <summary><c>mip_levels_m</c> (<c>Array.isArray ? map(Number) : []</c>): the metre steps the stats' <c>err</c> lists follow.</summary>
+    public double[] MipLevelsM { get; init; } = Array.Empty<double>();
+    /// <summary><c>tile_stats</c> by key <c>"tx,tz"</c> (capped by the server at 64; the rest rides in with the tiles).</summary>
+    public Dictionary<string, TileStat> TileStats { get; init; } = new(StringComparer.Ordinal);
 
     private HeightfieldOverview(HeightGrid grid, double tileM, double tileStepM,
                                 HashSet<(int, int)> index, string sig)
@@ -141,8 +163,18 @@ public sealed class HeightfieldOverview
         var index = new HashSet<(int, int)>();
         foreach (var key in Json.Arr(root, "tiles"))
             if (key.ValueKind == JsonValueKind.String && TryTileKey(key.GetString(), out var k)) index.Add(k);
+        var mips = root.TryGetProperty("mip_levels_m", out var m) && m.ValueKind == JsonValueKind.Array
+            ? m.EnumerateArray().Select(v => Scene.Js.Number(v)).ToArray()
+            : Array.Empty<double>();
+        var stats = new Dictionary<string, TileStat>(StringComparer.Ordinal);
+        if (root.TryGetProperty("tile_stats", out var ts) && ts.ValueKind == JsonValueKind.Object)
+            foreach (var p in ts.EnumerateObject()) stats[p.Name] = TileStat.Parse(p.Value);
         return new HeightfieldOverview(grid, Json.Num(root, "tile_m", 256.0), Json.Num(root, "tile_step_m", 2.0),
-                                       index, Json.Str(root, "sig"));
+                                       index, Json.Str(root, "sig"))
+        {
+            MipLevelsM = mips,
+            TileStats = stats,
+        };
     }
 
     /// <summary>Payload spelling of a tile key: <c>"tx,tz"</c>.</summary>
@@ -506,6 +538,8 @@ public sealed record HeightTile((int Tx, int Tz) Key, HeightGrid Grid)
 {
     /// <summary>The tile's water field (Wasser v2 K-A, § A16.5 point 3), null on a dry tile.</summary>
     public Ground.WaterTileField? Water { get; init; }
+    /// <summary>The tile's own quadtree statistics (<c>grid.stats</c>), null when the wire carries none.</summary>
+    public TileStat? Stats { get; init; }
 
     public static List<HeightTile> ParseBatch(JsonElement root)
     {
@@ -516,7 +550,9 @@ public sealed record HeightTile((int Tx, int Tz) Key, HeightGrid Grid)
             if (HeightfieldOverview.TryTileKey(p.Name, out var key))
             {
                 var grid = HeightGrid.Parse(p.Value, step);
-                list.Add(new HeightTile(key, grid) { Water = Ground.WaterTileField.Parse(p.Value, grid) });
+                var stats = p.Value.TryGetProperty("stats", out var st) && st.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined)
+                    ? TileStat.Parse(st) : null;
+                list.Add(new HeightTile(key, grid) { Water = Ground.WaterTileField.Parse(p.Value, grid), Stats = stats });
             }
         return list;
     }

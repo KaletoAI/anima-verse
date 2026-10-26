@@ -19,10 +19,23 @@ public sealed class WorldHeight
 {
     public HeightfieldOverview Overview { get; }
     private readonly Dictionary<(int, int), HeightTile> _tiles = new();
+    private readonly Dictionary<string, TileStat> _stats;
 
-    public WorldHeight(HeightfieldOverview overview) => Overview = overview;
+    public WorldHeight(HeightfieldOverview overview)
+    {
+        Overview = overview;
+        // applyHeight: the overview's capped `tile_stats` first; every tile that lands brings its own copy.
+        _stats = new Dictionary<string, TileStat>(overview.TileStats, StringComparer.Ordinal);
+    }
 
     public IReadOnlyCollection<HeightTile> Tiles => _tiles.Values;
+
+    /// <summary>
+    /// <c>relief.stats</c>: every tile statistic known — the overview's (at most 64) plus each loaded tile's own
+    /// (<c>takeTiles</c> overwrites, the same arithmetic on the same raster). The terrain quadtree's node bounds and
+    /// level errors read it.
+    /// </summary>
+    public IReadOnlyDictionary<string, TileStat> Stats => _stats;
 
     public void AddTiles(IEnumerable<HeightTile> tiles)
     {
@@ -30,9 +43,22 @@ public sealed class WorldHeight
         foreach (var t in tiles)
         {
             _tiles[t.Key] = t;
+            if (t.Stats is { } st) _stats[Terrain.HeightTiles.Key(t.Key.Tx, t.Key.Tz)] = st;
             any = true;
         }
         if (any) Revision++;
+    }
+
+    /// <summary>
+    /// The water raster of the loaded tiles (<c>waterRaster.tiles</c>: a tile with a water block files it under its
+    /// key, a dry tile files nothing), on the overview's tile size; null when no loaded tile carries water.
+    /// </summary>
+    public Water.WaterRaster? WaterRaster()
+    {
+        var wet = new Dictionary<string, Ground.WaterTileField>(StringComparer.Ordinal);
+        foreach (var t in _tiles.Values)
+            if (t.Water is { } w) wet[Terrain.HeightTiles.Key(t.Key.Tx, t.Key.Tz)] = w;
+        return wet.Count == 0 ? null : new Water.WaterRaster(Overview.TileM, wet);
     }
 
     /// <summary>

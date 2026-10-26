@@ -16,8 +16,14 @@ namespace AnimaNative.World;
 public sealed class WorldStats
 {
     public AnchorInfo Anchor = AnchorInfo.Origin;
-    public int OverviewVertices, OverviewTriangles;
-    public int Tiles, TileVertices, TileTriangles;
+    /// <summary>The fine height tiles loaded at the boot (the browser's 560 m ring round the anchor).</summary>
+    public int Tiles;
+    /// <summary>
+    /// The CDLOD terrain's first frame (the start camera <see cref="WorldBuilder.StartCameraOffset"/> over the anchor, at
+    /// <see cref="WorldBuilder.StatsViewportPx"/>): pieces, wet pieces, draws, triangles (Σ cells² · 2); the field line.
+    /// </summary>
+    public int TerrainPieces, TerrainWet, TerrainDraws, TerrainTriangles;
+    public string TerrainField = "";
     public int Locations, Scenes, Buildings, BuildingsCompressed, BuildingVertices, BuildingIndices;
     /// <summary>Placed locations the browser does not mount at all from this view (ring <c>gone</c>).</summary>
     public int LocationsGone;
@@ -44,7 +50,6 @@ public sealed class WorldStats
     /// <summary>§ B5a over every mounted location: locations reported, numbers checked, deviation rows.</summary>
     public int VerifyLocations, VerifyChecked, VerifyRows;
 
-    public int TerrainVertices => OverviewVertices + TileVertices;
     public int Primitives => Recipe.Primitives;
     public int Skipped => Recipe.Skipped;
 
@@ -53,14 +58,16 @@ public sealed class WorldStats
         : $"water[{WaterMode}]";
 
     public string Summary() =>
-        $"terrain_vertices={TerrainVertices} overview_vertices={OverviewVertices} overview_triangles={OverviewTriangles} "
-        + $"tiles={Tiles} tile_vertices={TileVertices} locations={Locations} gone={LocationsGone} scenes={Scenes} "
+        $"{TerrainSummary()} tiles={Tiles} locations={Locations} gone={LocationsGone} scenes={Scenes} "
         + $"open={(OpenLocation.Length > 0 ? OpenLocation : "-")} buildings={Buildings} "
         + $"buildings_meshopt={BuildingsCompressed} building_vertices={BuildingVertices} building_indices={BuildingIndices} "
         + $"primitives={Primitives} skipped={Skipped} ({Recipe.SkipSummary()}) shell_copies={Recipe.ShellCopies} "
         + $"culled_walls={Recipe.CulledWalls} interior_mounted={Recipe.InteriorMounted} {Models.Summary()} world_props={WorldPropRows} {CutSummary()} "
         + $"failures={Failures} anchor=({Anchor.Position().X:0.###},{Anchor.Position().Y:0.###},{Anchor.Position().Z:0.###}) "
         + $"{WaterSummary()} {Ground.Summary()} {VerifySummary()}";
+
+    public string TerrainSummary() =>
+        $"terrain[pieces={TerrainPieces} wet={TerrainWet} draws={TerrainDraws} triangles={TerrainTriangles} {TerrainField}]";
 
     public string CutSummary() => $"cuts[placements={CutPlacements} surfaces={CutSurfaces} fallbacks={CutFallbacks}]";
 
@@ -172,8 +179,9 @@ public sealed class PlacedModel
 ///   1. <c>/play/heightfield</c> overview, <c>/play/worldmap</c> (placement) and <c>/world/locations?view=3d</c>
 ///   2. the anchor (<see cref="Anchor.FromWorld"/> — the browser bench rule)
 ///   3. the indexed 2 m tiles within <see cref="TileRadiusM"/> of the anchor (<c>HEIGHT_TILE_RADIUS_M</c>)
-///   4. terrain meshes (overview with the tiled cells left out, one mesh per tile; a wet tile lifted onto its
-///      water mirror), dressed in the browser's ground material + its water variant (<see cref="GroundSurfaces"/>)
+///   4. the ground material + its water variant (<see cref="GroundSurfaces"/>), then the CDLOD terrain wearing them
+///      (<see cref="TerrainLodNode"/> on <see cref="TerrainField"/>: far pyramid from the overview, near pyramid over the
+///      loaded tiles, the world frame = <c>world_bounds</c> ± 60 m, the water lifted in the wet program's vertex stage)
 ///   5. per placed location in reach (<see cref="LocationView"/>): a group at (pos_x, ground, pos_z) turned by
 ///      +yaw_deg (§ A1.1); its scene recipe mounted ONCE as the browser mounts it — building model(s), outdoor
 ///      model specs, the outdoor rooms' primitives, the far-view shell of a place without a model, and its
@@ -208,7 +216,11 @@ public sealed partial class WorldBuilder
     public JsonElement? FirstMap { get; private set; }
     /// <summary>The ground surfaces of the build (null = plain material).</summary>
     public GroundSurfaces? Ground { get; private set; }
-    /// <summary><c>--plain-ground</c>: keep the S1a vertex-colour terrain (no layer requests at all).</summary>
+    /// <summary>The CDLOD terrain of the build (null before <see cref="BuildAsync"/> reached it).</summary>
+    public TerrainLodNode? Terrain { get; private set; }
+    /// <summary>The viewport height the build's terrain stats are selected at (the live rings follow the real one).</summary>
+    public const int StatsViewportPx = 1080;
+    /// <summary><c>--plain-ground</c>: the plain one-colour terrain (no layer requests at all).</summary>
     public bool PlainGround { get; init; }
     /// <summary><c>--no-water</c>: no lift, no water variant (the browser bench's <c>&amp;water=0</c>).</summary>
     public bool NoWater { get; init; }
@@ -310,27 +322,26 @@ public sealed partial class WorldBuilder
             height.AddTiles(HeightTile.ParseBatch(tileDoc.RootElement));
         }
 
-        var terrain = new Node3D { Name = "Terrain" };
+        // The ground surfaces first (the material and its water variant), then the CDLOD terrain that wears them: the
+        // water lift, the wet program and the water mip cap exist only when the variant does (else every piece is the
+        // dry program on its bed — the old "wet tile back to its bed").
+        stats.Ground = await DressGround(null, height, stats.Anchor);
+        stats.Tiles = height.Tiles.Count;
+        var water = !NoWater && !PlainGround && Ground?.WaterMaterial is not null ? height.WaterRaster() : null;
+        var field = TerrainField.Build(height, stats.Anchor.X, stats.Anchor.Z, water,
+                                       TerrainField.ExtentOf(Overview.OverviewControl.WorldBoundsOf(mapRoot)));
+        var terrain = Terrain = new TerrainLodNode(field, _log);
         root.AddChild(terrain);
-        var (ov, ovStats) = TerrainBuilder.BuildOverview(overview.Grid, overview.TileM, height.HasTile);
-        terrain.AddChild(ov);
-        stats.OverviewVertices = ovStats.Vertices;
-        stats.OverviewTriangles = ovStats.Triangles;
-        bool liftWater = !NoWater && !PlainGround;
-        var tileNodes = new Dictionary<MeshInstance3D, HeightTile>();
-        foreach (var tile in height.Tiles.OrderBy(t => t.Key.Tx).ThenBy(t => t.Key.Tz))
-        {
-            var (node, ts) = TerrainBuilder.BuildTile(tile, liftWater);
-            terrain.AddChild(node);
-            tileNodes[node] = tile;
-            stats.Tiles++;
-            stats.TileVertices += ts.Vertices;
-            stats.TileTriangles += ts.Triangles;
-        }
-        _log($"terrain: overview {stats.OverviewVertices} v / {stats.OverviewTriangles} t, "
-             + $"{stats.Tiles} tiles {stats.TileVertices} v / {stats.TileTriangles} t");
-        stats.Ground = await DressGround(terrain, height, stats.Anchor);
-        ApplyWaterOutcome(stats, tileNodes);
+        terrain.SetMaterials(Ground?.Material, Ground?.WaterMaterial);
+        var startEye = stats.Anchor.Position() + StartCameraOffset;
+        var first = field.Select(startEye.X, startEye.Y, startEye.Z, TerrainField.PixelScale(StatsViewportPx, Ui.OverviewCamera.FovDeg));
+        stats.TerrainPieces = first.Nodes;
+        stats.TerrainWet = first.Wet.Count;
+        stats.TerrainDraws = first.Draws;
+        stats.TerrainTriangles = first.Triangles;
+        stats.TerrainField = $"{field.Summary()} cover={field.Coverage(first):0.######}";
+        _log($"terrain: {stats.Tiles} tiles loaded; {stats.TerrainSummary()} (start camera, {StatsViewportPx} px)");
+        ApplyWaterOutcome(stats, height);
 
         _library = await SurfaceLibrary.LoadAsync(_source, _log);
         _models = new ModelCache(_source, _log);
@@ -432,26 +443,27 @@ public sealed partial class WorldBuilder
     }
 
     /// <summary>
-    /// The ground surfaces on every terrain mesh. Never fatal: any failure keeps the plain material and is
-    /// logged (and reported in <see cref="GroundStats.Reason"/>), online and in <c>--check</c> alike.
+    /// The ground surfaces. Never fatal: any failure keeps the plain material and is logged (and reported in
+    /// <see cref="GroundStats.Reason"/>), online and in <c>--check</c> alike.
     /// </summary>
-    private async Task<GroundStats> DressGround(Node3D terrain, WorldHeight height, AnchorInfo anchor)
+    private async Task<GroundStats> DressGround(Node3D? terrain, WorldHeight height, AnchorInfo anchor)
     {
         var (stats, ground) = await DressGroundAsync(_source, terrain, height, anchor, _log, PlainGround, !NoWater);
         Ground = ground;
         return stats;
     }
 
-    /// <summary>The one ground step (also driven directly by the check's fallback cases).</summary>
+    /// <summary>The one ground step (also driven directly by the check's fallback cases, which hand a <paramref name="terrain"/>
+    /// whose geometry children get the material; the CDLOD terrain takes it through <see cref="TerrainLodNode.SetMaterials"/>).</summary>
     public static async Task<(GroundStats Stats, GroundSurfaces? Ground)> DressGroundAsync(
-        IWorldSource source, Node3D terrain, WorldHeight height, AnchorInfo anchor, Action<string> log, bool plain,
+        IWorldSource source, Node3D? terrain, WorldHeight height, AnchorInfo anchor, Action<string> log, bool plain,
         bool water = true)
     {
         if (plain) return (new GroundStats { Reason = "--plain-ground" }, null);
         try
         {
             var ground = await GroundSurfaces.LoadAsync(source, height, anchor.X, anchor.Z, log, water);
-            ground.ApplyTo(terrain.GetChildren().OfType<GeometryInstance3D>());
+            if (terrain is not null) ground.ApplyTo(terrain.GetChildren().OfType<GeometryInstance3D>());
             return (ground.Stats, ground);
         }
         catch (Exception e)
@@ -461,30 +473,16 @@ public sealed partial class WorldBuilder
         }
     }
 
-    /// <summary>A wet tile that ends up without the water variant goes back to its bed (no lifted plain ground).</summary>
-    private void ApplyWaterOutcome(WorldStats stats, Dictionary<MeshInstance3D, HeightTile> tiles)
+    /// <summary>What became of the water: drawn by the wet program, or why not.</summary>
+    private void ApplyWaterOutcome(WorldStats stats, WorldHeight height)
     {
-        var wet = tiles.Keys.Where(n => n.HasMeta("wet")).ToList();
+        int wetTiles = height.Tiles.Count(t => t.Water is { } w && w.Wet > 0);
         if (NoWater) { stats.WaterMode = "off: --no-water"; return; }
-        if (wet.Count == 0)
-        {
-            stats.WaterMode = tiles.Values.Any(t => t.Water is { } w && w.Wet > 0) ? "none: plain ground" : "none";
-            return;
-        }
-        if (Ground?.WaterMaterial is null)
-        {
-            foreach (var n in wet)
-            {
-                var (dry, _) = TerrainBuilder.BuildTile(tiles[n], false);
-                n.Mesh = dry.Mesh;
-                n.RemoveMeta("wet");
-                dry.Free();
-            }
-            stats.WaterMode = "none: water variant unavailable";
-            return;
-        }
+        if (wetTiles == 0) { stats.WaterMode = "none"; return; }
+        if (PlainGround) { stats.WaterMode = "none: plain ground"; return; }
+        if (Ground?.WaterMaterial is null) { stats.WaterMode = "none: water variant unavailable"; return; }
         stats.WaterMode = "drawn";
-        stats.WaterTiles = wet.Count;
+        stats.WaterTiles = wetTiles;
         stats.WaterKinds = Ground.Stats.WaterKinds;
         stats.WaterTexels = Ground.Stats.WaterTexels;
         stats.WaterAreas = Ground.Stats.WaterAreas;

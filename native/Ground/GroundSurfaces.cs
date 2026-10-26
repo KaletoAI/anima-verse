@@ -25,23 +25,21 @@ public sealed class GroundStats
     public int WantedTiles, MaskTiles, WindowIdSize, WindowSdSize, FarCols, FarRows;
     public int WaterTiles, WaterKinds, WaterTexels, WaterAreas;
     public float AoStrength;
-    public int NearHeightCols, NearHeightRows;
-    public double NormalSpan;
 
     public string Summary() => Mode != "layers"
         ? $"ground[plain{(Reason is null ? "" : ": " + Reason)}]"
         : $"ground[layers={Layers} slices={Slices} textures={TexturesLoaded} texture_failures={TextureFailures} "
           + $"colour_slices={ColourSlices} mask_tiles={MaskTiles}/{WantedTiles} window={WindowIdSize}/{WindowSdSize} "
-          + $"far={FarCols}x{FarRows} ao={AoStrength:0} near_heights={NearHeightCols}x{NearHeightRows} "
-          + $"normal_span={NormalSpan:0.###}]";
+          + $"far={FarCols}x{FarRows} ao={AoStrength:0}]";
 }
 
 /// <summary>
 /// The browser's ground SURFACES on the S1a terrain meshes (Task S3b) — port of what
 /// <c>client3d/src/scene/ground.ts</c> (<c>applyLayers</c>, <c>refreshLayerTiles</c>, <c>rebuildBase</c>),
 /// <c>layerGround.ts</c> (<c>setLayerTable</c>, <c>setLayerOverview</c>, <c>setLayerTiles</c>),
-/// <c>naturalGround.ts</c> (<c>setNaturalGroundField</c>) and <c>terrainLod.ts</c> (<c>setField</c>: near/far
-/// height window, normal span) feed into the one ground material, from the same requests:
+/// <c>naturalGround.ts</c> (<c>setNaturalGroundField</c>) feed into the one ground material, from the same requests
+/// (the CDLOD half of the material — pyramids, rings, the shading normal's lattices — is bound by
+/// <see cref="World.TerrainLodNode"/>):
 ///
 ///   1. <c>GET /play/terrain</c> — the type catalog: a kind's colour (<c>kindColor</c>, fallback #888888) and
 ///      its library surface (<c>surfaceOf</c>: the type's <c>surface</c>, else the kind itself when the library
@@ -80,9 +78,6 @@ public sealed class GroundSurfaces
     public Vector4[] LayerParams { get; } = new Vector4[LayerCut.MaxLayers];
     /// <summary>Library id → decoded source size (before the 512² resample), for every image that loaded.</summary>
     public Dictionary<string, Vector2I> SourceSizes { get; } = new();
-    public HeightLattice? NearHeights { get; private set; }
-    public double[]? NearRect { get; private set; }
-    public HeightLattice? FarHeights { get; private set; }
     public HeightGrid? AoField { get; private set; }
     public ShaderMaterial Material { get; private set; } = null!;
     public GroundStats Stats { get; } = new() { Mode = "layers" };
@@ -142,7 +137,7 @@ public sealed class GroundSurfaces
 
         await LoadSurfaceImages(source, log);
         BuildSlices();
-        BuildHeights(height, anchorX, anchorZ);
+        BuildAo(height);
         BuildMaterial();
 
         Stats.Layers = Layers.Count;
@@ -321,9 +316,9 @@ public sealed class GroundSurfaces
     public static double SrgbToLinear(double c)
         => c < 0.04045 ? c * 0.0773993808 : Math.Pow(c * 0.9478672986 + 0.0521327014, 2.4);
 
-    // ── Heights: AO field + the normal's near/far lattices ──────────────────
+    // ── Heights: the AO field ─────────────────────────────────────────────
 
-    private void BuildHeights(WorldHeight height, double anchorX, double anchorZ)
+    private void BuildAo(WorldHeight height)
     {
         var ov = height.Overview.Grid;
         // setNaturalGroundField: a field too small, or flat, switches the AO off exactly.
@@ -331,17 +326,6 @@ public sealed class GroundSurfaces
         {
             AoField = ov;
             Stats.AoStrength = 1;
-        }
-        // terrainLod.setField: base step = tile_step_m (else 2 m), the normal span = that step.
-        double step = height.Overview.TileStepM > 0 ? height.Overview.TileStepM : 2;
-        Stats.NormalSpan = step;
-        FarHeights = TerrainNormal.BuildFar(ov);
-        if (TerrainNormal.BuildNear(height, step, anchorX, anchorZ) is { } near)
-        {
-            NearHeights = near.Lattice;
-            NearRect = near.Rect;
-            Stats.NearHeightCols = near.Lattice.Cols;
-            Stats.NearHeightRows = near.Lattice.Rows;
         }
     }
 
@@ -357,13 +341,6 @@ public sealed class GroundSurfaces
         var img = Image.CreateFromData(n, n, false, Image.Format.Rgba8, WaterShade.WaveNormalBytes(n));
         img.GenerateMipmaps();
         return img;
-    }
-
-    private static ImageTexture FloatTex(HeightLattice lat)
-    {
-        var bytes = new byte[lat.H.Length * 4];
-        Buffer.BlockCopy(lat.H, 0, bytes, 0, bytes.Length);
-        return Tex(lat.Cols, lat.Rows, Image.Format.Rf, bytes);
     }
 
     private void BuildMaterial()
@@ -409,27 +386,9 @@ public sealed class GroundSurfaces
         }
         mat.SetShaderParameter("ng_strength", Stats.AoStrength);
 
-        if (NearHeights is { } n && NearRect is { } r)
-        {
-            mat.SetShaderParameter("tl_near", FloatTex(n));
-            mat.SetShaderParameter("tl_near_geom", new Vector4((float)n.OriginX, (float)n.OriginZ, (float)n.Step, 1));
-            mat.SetShaderParameter("tl_near_level", new Vector4(n.Cols, n.Rows, (float)n.Step, 0));
-            mat.SetShaderParameter("tl_near_rect", new Vector4((float)r[0], (float)r[1], (float)r[2], (float)r[3]));
-        }
-        if (FarHeights is { } fh)
-        {
-            mat.SetShaderParameter("tl_far", FloatTex(fh));
-            mat.SetShaderParameter("tl_far_geom", new Vector4((float)fh.OriginX, (float)fh.OriginZ, (float)fh.Step, 1));
-            mat.SetShaderParameter("tl_far_level", new Vector4(fh.Cols, fh.Rows, (float)fh.Step, 0));
-        }
-        mat.SetShaderParameter("tl_normal_span", (float)Stats.NormalSpan);
         Material = mat;
     }
 
-    /// <summary>
-    /// Put the ground material on every terrain mesh (overview + tiles), over the S1a vertex colour; a tile built
-    /// with the water lift (meta <c>wet</c>) wears the water variant (the browser's second CDLOD program).
-    /// </summary>
     /// <summary>The basement hole the materials cut right now (null = none).</summary>
     public double[]? Hole { get; private set; }
 
@@ -450,6 +409,11 @@ public sealed class GroundSurfaces
         }
     }
 
+    /// <summary>
+    /// Put the ground material on terrain geometry; one tagged <c>wet</c> (the wet program's instance) wears the water
+    /// variant when there is one. The CDLOD terrain itself takes its materials through
+    /// <see cref="World.TerrainLodNode.SetMaterials"/>, which also binds the terrain uniforms.
+    /// </summary>
     public void ApplyTo(IEnumerable<GeometryInstance3D> nodes)
     {
         foreach (var n in nodes)

@@ -91,6 +91,7 @@ public static class BenchCheck
             camera.JumpTo(anchor.Position() + new Vector3(0, 1.5f, 0), 33);
             var before = (camera.Target, camera.Distance);
             var done = new TaskCompletionSource<JsonObject>(TaskCreationOptions.RunContinuationsAsynchronously);
+            builder.Terrain!.ResetPeak();
             var runner = new BenchRunner(camera, settings, r => done.TrySetResult(r));
             host.AddChild(runner);
             var finished = await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(60)));
@@ -100,13 +101,14 @@ public static class BenchCheck
             if (scatter is not null) result["scatterLayers"] = scatter.Summary();
             result["ground"] = stats.Ground.Summary();
             result["water"] = stats.WaterSummary();
+            result["terrain"] = builder.Terrain!.Summary();
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(host, result, file);
             Expect("panel", host.GetNodeOrNull("BenchResult") is not null, "no result panel");
             Expect("printed line unescaped", BenchOutput.Line(result).Contains("\"backend\":\"godot-forward+\""),
                    BenchOutput.Line(result));
 
-            Expect("keys", result.Select(kv => kv.Key).SequenceEqual((scatter is null ? Keys : Keys.Append("scatterLayers")).Append("ground").Append("water")),
+            Expect("keys", result.Select(kv => kv.Key).SequenceEqual((scatter is null ? Keys : Keys.Append("scatterLayers")).Append("ground").Append("water").Append("terrain")),
                    string.Join(",", result.Select(kv => kv.Key)));
             Expect("backend", (string?)result["backend"] == "godot-forward+", $"{result["backend"]}");
             Expect("path", (string?)result["path"] == "shared/bench/camera_path_v1.json", $"{result["path"]}");

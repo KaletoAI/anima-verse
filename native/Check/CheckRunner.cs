@@ -24,8 +24,8 @@ public static class CheckRunner
     // ---- Expected values, derived in native/fixtures/README.md ----
     private const string Goto = "harbour";                         // → loc-house by name substring
     private static readonly Vector3 ExpectedAnchor = new(64f, 7.5f, 128f);
-    private const int ExpOverviewVertices = 9, ExpOverviewTriangles = 6;
-    private const int ExpTiles = 1, ExpTileVertices = 25;
+    // Task 23: the CDLOD terrain's first frame at the bench start camera (64, 31.5, 168) — README "CDLOD terrain".
+    private const int ExpTiles = 1, ExpTerrainPieces = 41, ExpTerrainTriangles = 64000;
     private const int ExpLocations = 3, ExpScenes = 2;
     private const int ExpBuildings = 1, ExpBuildingsMeshopt = 1;
     private const int ExpBuildingVertices = 2220, ExpBuildingIndices = 3330;
@@ -93,6 +93,12 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "terrain")
+            {
+                var alone = await TerrainCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "backdrop")
             {
                 var alone = BackdropCheck.Run(host);
@@ -118,10 +124,11 @@ public static class CheckRunner
             Expect("anchor location", stats.Anchor.LocationId == "loc-house", stats.Anchor.LocationId ?? "null");
             Expect("anchor height source", stats.Anchor.Source == Anchor.OverviewSource, stats.Anchor.Source);
             CheckAnchorRule(dir);
-            Eq("overview_vertices", stats.OverviewVertices, ExpOverviewVertices);
-            Eq("overview_triangles", stats.OverviewTriangles, ExpOverviewTriangles);
             Eq("tiles", stats.Tiles, ExpTiles);
-            Eq("tile_vertices", stats.TileVertices, ExpTileVertices);
+            Eq("terrain pieces", stats.TerrainPieces, ExpTerrainPieces);
+            Eq("terrain wet pieces", stats.TerrainWet, 0);
+            Eq("terrain draws", stats.TerrainDraws, 1);
+            Eq("terrain triangles", stats.TerrainTriangles, ExpTerrainTriangles);
             Expect("tile requests", source.TileRequests.SequenceEqual(new[] { "0,0" }), string.Join(";", source.TileRequests));
             Eq("locations", stats.Locations, ExpLocations);
             Eq("scenes", stats.Scenes, ExpScenes);
@@ -181,10 +188,11 @@ public static class CheckRunner
             var light = LightCheck.Run(host, dir);
             var fogLine = FogCheck.Run(host, dir);
             var backdrop = BackdropCheck.Run(host);
+            var terrainLine = await TerrainCheck.RunAsync(host, dir);
 
-            GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
+            GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {fidelity} | {props} | {light} | {fogLine} | {backdrop}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

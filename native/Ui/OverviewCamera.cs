@@ -58,9 +58,12 @@ public partial class OverviewCamera : Camera3D
     private double _viewDx, _viewDy;
     private (double Dx, double Dy, float W, float H)? _viewApplied;
 
+    /// <summary>The lens of engine.ts (<c>PerspectiveCamera(45, …)</c>, vertical field of view in degrees).</summary>
+    public const float FovDeg = 45f;
+
     public OverviewCamera()
     {
-        Fov = 45f;
+        Fov = FovDeg;
         Near = 0.2f;
         Far = 800f;
     }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using AnimaNative.Terrain;
 using AnimaNative.Water;
 using Godot;
 
@@ -16,6 +17,9 @@ namespace AnimaNative.Ground;
 ///      one), mixed by noise; albedo = that × the material colour (white).
 ///   2. <c>applyNaturalGround</c> (<c>scene/naturalGround.ts</c>) stages (2) colour patches and (3) height AO
 ///      on the composited albedo, then the clamp. Stage (1) is <c>USE_MAP</c>-guarded and the terrain has no map.
+///   0. the CDLOD vertex stage of <c>patchTerrainLod</c> (<see cref="TerrainLodGlsl"/>: one instanced 33 × 33 patch per
+///      piece, <c>INSTANCE_CUSTOM</c> = (x, z, size, level), heights out of the R32F pyramids, the block-descent morph;
+///      the water variant lifts each tap onto the mirror and hands its depth to the fragment as <c>v_wet</c>).
 ///   3. the shading normal of <c>patchTerrainLod</c> (<c>tlodNormalAt</c>, see <see cref="TerrainNormal"/>).
 ///   4. three's <c>MeshStandardMaterial</c> lighting with <c>surfaceMaterial</c>'s matte defaults:
 ///      roughness 0.85, metalness 0.02, Lambert diffuse + GGX specular (Godot <c>diffuse_lambert</c>).
@@ -34,11 +38,42 @@ namespace AnimaNative.Ground;
 /// </summary>
 public static class GroundShader
 {
-    private static Shader? _shader, _waterShader;
+    private static Shader? _shader, _waterShader, _plainShader;
 
-    /// <summary>The dry ground, or (<paramref name="water"/>) the water variant every wet tile wears (Task S3c).</summary>
+    /// <summary>The dry ground, or (<paramref name="water"/>) the water variant every wet piece wears (Task S3c / 23).</summary>
     public static Shader Get(bool water = false)
         => water ? _waterShader ??= new Shader { Code = Code(true) } : _shader ??= new Shader { Code = Code() };
+
+    /// <summary>The plain terrain (<c>--plain-ground</c>, or the ground surfaces failed): the CDLOD stage under one matte colour.</summary>
+    public static Shader Plain() => _plainShader ??= new Shader { Code = PlainCode() };
+
+    /// <summary>The plain terrain's colour (sRGB, the S1a tile colour) and roughness.</summary>
+    public static readonly Color PlainColor = new(0.50f, 0.58f, 0.40f);
+    public const double PlainRoughness = 0.95;
+
+    /// <summary>
+    /// The plain terrain: the same vertex stage (dry, no lift) and the same shading normal, one matte colour, Lambert —
+    /// what the S1a vertex-colour material was on the fixed meshes. 15 uniforms: the 14 of the stage + the colour.
+    /// </summary>
+    public static string PlainCode() => $@"shader_type spatial;
+render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_lambert, specular_schlick_ggx;
+
+uniform vec3 plain_albedo : source_color = vec3({PlainColor.R.ToString("0.00", CultureInfo.InvariantCulture)}, {PlainColor.G.ToString("0.00", CultureInfo.InvariantCulture)}, {PlainColor.B.ToString("0.00", CultureInfo.InvariantCulture)});
+{TerrainLodGlsl.Chunk(false)}
+varying vec2 v_world;
+
+void vertex() {{
+{TerrainLodGlsl.VertexBody}
+	v_world = tl_world.xz;
+}}
+
+void fragment() {{
+	ALBEDO = plain_albedo;
+	ROUGHNESS = {L(PlainRoughness)};
+	METALLIC = 0.0;
+	NORMAL = normalize((VIEW_MATRIX * vec4(tl_normal_at(v_world), 0.0)).xyz);
+}}
+";
 
     /// <summary>A GLSL literal with two decimals — and, like the browser's <c>ngLit</c>, refused when the number does
     /// not survive them (the shader would spend a different number than the maths).</summary>
@@ -77,27 +112,18 @@ uniform vec4 ng_field = vec4(0.0, 0.0, 1.0, 0.0);
 uniform vec2 ng_field_size = vec2(1.0);
 uniform float ng_strength = 0.0;
 
-// ---- shading normal (terrainLod.ts tlodNormalAt on level 0) ----
-uniform sampler2D tl_near : filter_nearest, repeat_disable;
-uniform sampler2D tl_far : filter_nearest, repeat_disable;
-uniform vec4 tl_near_geom = vec4(0.0);    // originX, originZ, step, present (> 0)
-uniform vec4 tl_near_level = vec4(0.0);   // cols, rows, step, 0
-uniform vec4 tl_near_rect = vec4(0.0);    // x0, z0, x1, z1
-uniform vec4 tl_far_geom = vec4(0.0);
-uniform vec4 tl_far_level = vec4(0.0);
-uniform float tl_normal_span = 2.0;
-
 uniform float ground_roughness = 0.85;
 uniform float ground_metallic = 0.02;
 
 // ---- basement hole (ground.ts patchHole) ----
 uniform vec4 hole_rect = vec4(0.0);   // minX, minZ, maxX, maxZ (world)
 uniform float hole_on = 0.0;
-{(water ? WaterUniforms : "")}
+{(water ? WaterUniforms : "")}{TerrainLodGlsl.Chunk(water)}
 varying vec2 v_world;
 
 void vertex() {{
-	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz;{(water ? "\n\tv_wet = UV2.x;" : "")}
+{TerrainLodGlsl.VertexBody}
+	v_world = tl_world.xz;{(water ? "\n\tv_wet = tl_wet;" : "")}
 }}
 
 float lc_hash(vec2 p) {{
@@ -184,41 +210,6 @@ float ng_height_at(vec2 p) {{
 	return texture(ng_height, ng_field_uv_of(p)).r;
 }}
 
-float tl_grid(sampler2D tex, vec2 origin, vec4 lv, vec2 p) {{
-	float cols = lv.x;
-	float rows = lv.y;
-	float stp = lv.z;
-	if (cols < 2.0 || rows < 2.0 || stp <= 0.0) return 0.0;
-	float fx = clamp((p.x - origin.x) / stp, 0.0, cols - 1.0);
-	float fz = clamp((p.y - origin.y) / stp, 0.0, rows - 1.0);
-	float fi = min(floor(fx), cols - 2.0);
-	float fj = min(floor(fz), rows - 2.0);
-	float tx = fx - fi;
-	float tz = fz - fj;
-	int i = int(fi);
-	int j = int(fj);
-	float h00 = texelFetch(tex, ivec2(i, j), 0).r;
-	float h10 = texelFetch(tex, ivec2(i + 1, j), 0).r;
-	float h01 = texelFetch(tex, ivec2(i, j + 1), 0).r;
-	float h11 = texelFetch(tex, ivec2(i + 1, j + 1), 0).r;
-	float north = h00 * (1.0 - tx) + h10 * tx;
-	float south = h01 * (1.0 - tx) + h11 * tx;
-	return north * (1.0 - tz) + south * tz;
-}}
-float tl_height(vec2 p) {{
-	if (tl_near_geom.w > 0.0 && p.x >= tl_near_rect.x && p.x <= tl_near_rect.z
-	    && p.y >= tl_near_rect.y && p.y <= tl_near_rect.w) {{
-		return tl_grid(tl_near, tl_near_geom.xy, tl_near_level, p);
-	}}
-	return tl_grid(tl_far, tl_far_geom.xy, tl_far_level, p);
-}}
-vec3 tl_normal_at(vec2 p) {{
-	float s = max(tl_normal_span, 1e-3);
-	float hx = tl_height(vec2(p.x + s, p.y)) - tl_height(vec2(p.x - s, p.y));
-	float hz = tl_height(vec2(p.x, p.y + s)) - tl_height(vec2(p.x, p.y - s));
-	return normalize(vec3(-hx, 2.0 * s, -hz));
-}}
-
 {(water ? WaterFunctions() : "")}
 void fragment() {{
 	vec2 p = v_world;
@@ -257,9 +248,9 @@ void fragment() {{
 	NORMAL = normalize((VIEW_MATRIX * vec4(tl_normal_at(p), 0.0)).xyz);";
 
     // ── The water variant (Wasser v2 K-A: client3d/src/scene/waterShade.ts terrainWaterFragmentGlsl) ──────────
-    // The tile's vertices arrive LIFTED onto the mirror (WaterShade.Lifted, the vertex stage's tlodLift done once on
-    // the CPU) with the lift in UV2.x (vTlodWet). Every water field is sampled HERE at the pixel's own xz: the
-    // signed distance (shore gate), the kind row (look table) and the flow (ripple drift).
+    // The wet pieces' vertices are LIFTED onto the mirror by the vertex stage (TerrainLodGlsl tl_lift, per tap of the
+    // morph pair) and hand the depth over the drawn bed out as v_wet (vTlodWet). Every water field is sampled HERE at
+    // the pixel's own xz: the signed distance (shore gate), the kind row (look table) and the flow (ripple drift).
 
     private const string WaterUniforms = @"
 // ---- water variant (waterShade.ts) ----

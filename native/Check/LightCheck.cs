@@ -119,9 +119,14 @@ public static class LightCheck
             var scatter = Scatter.ScatterShaders.Code(0.2, true, false, true, false);
             Expect("L5 scatter Lambert, no received shadow", scatter.Contains("diffuse_lambert") && scatter.Contains("shadows_disabled")
                    && !scatter.Contains("diffuse_burley"), "");
-            var (terrain, _) = TerrainBuilder.BuildTile(new HeightTile((0, 0), new HeightGrid(0, 0, 64, 5, 5, Enumerable.Repeat(10f, 25).ToArray())));
-            Expect("L5 the terrain casts no shadow", terrain.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off, "");
-            terrain.Free();
+            using (var hf = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixtures, "heightfield.json"))))
+            {
+                var height = new WorldHeight(HeightfieldOverview.Parse(hf.RootElement));
+                var terrain = new TerrainLodNode(Terrain.TerrainField.Build(height, 0, 0, null, Terrain.TerrainField.ExtentOf(null)), _ => { });
+                Expect("L5 the terrain casts no shadow", terrain.DryInstance.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off
+                       && terrain.WetInstance.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off, "");
+                terrain.Free();
+            }
             Expect("L5 MSAA default 4×, --msaa=0 off", CliOptions.Parse(Array.Empty<string>()).Msaa == Viewport.Msaa.Msaa4X
                    && CliOptions.Parse(new[] { "--msaa=0" }).Msaa == Viewport.Msaa.Disabled
                    && CliOptions.Parse(new[] { "--msaa=2" }).Msaa == Viewport.Msaa.Msaa2X, "");
