@@ -22,7 +22,11 @@ public partial class Main
         var figures = _figures!;
         if (figures.LatestMap is not { } real) return;
         bool auto = figures.AutoTick;
+        var fit = figures.ClipFit;
         figures.AutoTick = false;
+        // The probe steps its frames synchronously, so a lazy fit (Task 35b) could never finish inside it: clips are fitted
+        // at once while it runs.
+        figures.ClipFit = ClipFitMode.OnDemandSync;
         try
         {
             var rows = JsonNode.Parse(real.GetRawText())!["characters"]!.AsArray()
@@ -103,6 +107,7 @@ public partial class Main
             figures.Apply(real);
             figures.TickPlacement();
             figures.AutoTick = auto;
+            figures.ClipFit = fit;
         }
     }
 

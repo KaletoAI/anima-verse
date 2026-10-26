@@ -162,6 +162,12 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "clips")
+            {
+                var alone = await ClipFitCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "secondary")
             {
                 var alone = await SecondaryCheck.RunAsync(host, dir);
@@ -291,6 +297,7 @@ public static class CheckRunner
             var walk = await WalkCheck.RunAsync(host, dir);
             var bridges = await BridgeCheck.RunAsync(host, dir);
             var pairs = await PairCheck.RunAsync(host, dir);
+            var clipFit = await ClipFitCheck.RunAsync(host, dir);
             var secondary = await SecondaryCheck.RunAsync(host, dir);
             var animals = await AnimalCheck.RunAsync(host, dir);
             var fidelity = await FidelityCheck.RunAsync(host, dir);
@@ -307,7 +314,7 @@ public static class CheckRunner
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {bridges} | {pairs} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;
@@ -426,6 +433,7 @@ public static class CheckRunner
         var height = builder.Height!;
         var mgr = new FigureManager(source, height, line => GD.Print("[check] " + line), strict: true)
         {
+            ClipFit = ClipFitMode.OnDemandSync,
             Slots = () => builder.Slots,
             AutoTick = false,
             FocusTarget = () => new Vector3(263, 0, -100),   // Cleo's journey point: the model queue serves her first
@@ -506,6 +514,8 @@ public static class CheckRunner
         // Ada's actions: the four kinds of her chain + the idle alias (CLIP_SYNONYMS: 'stand' ⊂ stand-relaxed).
         Expect("Ada actions", ada.ClipKinds.SequenceEqual(ExpActions), string.Join(",", ada.ClipKinds));
         var player = ada.Player!;
+        // The library is fitted lazily (Task 35b): the clips read below are fitted now (the play would do it).
+        foreach (var action in new[] { "waiting", "reading", "idle" }) ada.EnsureClip(action);
         Expect("waiting from the female set", ada.ClipSets.GetValueOrDefault("waiting") == "female", $"{ada.ClipSets.GetValueOrDefault("waiting")}");
         Expect("waiting loops (female file)", player.GetAnimation("waiting").LoopMode == Animation.LoopModeEnum.Linear, "not looping");
         Expect("reading one-shot", player.GetAnimation("reading").LoopMode == Animation.LoopModeEnum.None, "loops");

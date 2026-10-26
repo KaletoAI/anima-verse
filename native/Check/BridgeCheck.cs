@@ -64,6 +64,7 @@ public static class BridgeCheck
             await builder.BuildAsync(world, "Hall");
             mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-bridges] " + line), strict: true)
             {
+                ClipFit = ClipFitMode.OnDemandSync,
                 AutoTick = false, Slots = () => builder.Slots,
                 GroundMoveAt = builder.FigureGroundMove, GroundYAt = builder.FigureGroundY,
             };
@@ -230,10 +231,11 @@ public static class BridgeCheck
 
     // ---- measurement (the check's own code: rendered bones, own contact detection) ----------------------------------
 
+    /// <summary>The fit's extras of a clip (fitted now if the lazy fit has not done it yet, Task 35b).</summary>
     private static ClipExtras? Extras(Figure f, string kind)
-        => f.Player is { } p && p.HasAnimation(kind) && f.Extras.TryGetValue(p.GetAnimation(kind), out var x) ? x : null;
+        => f.EnsureClip(kind) && f.Player is { } p && f.Extras.TryGetValue(p.GetAnimation(kind), out var x) ? x : null;
 
-    private static double AnimLength(Figure f, string kind) => f.Player!.GetAnimation(kind).Length;
+    private static double AnimLength(Figure f, string kind) => f.EnsureClip(kind) ? f.Player!.GetAnimation(kind).Length : double.NaN;
 
     private static double Deg(double rad) => rad * 180 / Math.PI;
 

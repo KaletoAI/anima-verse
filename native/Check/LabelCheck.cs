@@ -58,7 +58,7 @@ public static class LabelCheck
         var cam = new OverviewCamera { Name = "LabelCheckCamera" };
         vp.AddChild(cam);
         var source = new FixtureSource(fixtures);
-        var mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-labels] " + line), strict: true) { AutoTick = false, Slots = () => builder.Slots };
+        var mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-labels] " + line), strict: true) { ClipFit = ClipFitMode.OnDemandSync, AutoTick = false, Slots = () => builder.Slots };
         world.AddChild(mgr);
         try
         {

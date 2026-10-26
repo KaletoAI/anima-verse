@@ -61,6 +61,7 @@ public static class PlacementCheck
 
             mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-placement] " + line), strict: true)
             {
+                ClipFit = ClipFitMode.OnDemandSync,
                 AutoTick = false, Slots = () => builder.Slots,
             };
             world.AddChild(mgr);

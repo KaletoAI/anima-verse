@@ -86,6 +86,44 @@ public class BridgeCoreTests
         Assert.Equal(0.3, up.GroundOffset, 5);
         Assert.Equal(0, down.GroundOffset);
         Assert.Equal(0, mid.GroundOffset);
+
+        // Task 35b: the rest pose's lowest point measured once (BindMinY = 0, the mesh's own lowest point at rest) and the
+        // clips measured one at a time against it, in the opposite order: the same offsets bit for bit; no skin → +∞.
+        Assert.Equal(0, ClipGround.BindMinY(rig, new[] { skin }));
+        Assert.Equal(double.PositiveInfinity, ClipGround.BindMinY(rig, Array.Empty<ProbeSkin>()));
+        double bindMinY = ClipGround.BindMinY(rig, new[] { skin });
+        foreach (var (clip, want) in new[] { (Hold(1.3), up.GroundOffset), (Hold(0.8), down.GroundOffset), (mid, mid.GroundOffset) }.Reverse())
+        {
+            clip.GroundOffset = -1;
+            ClipGround.Measure(new[] { clip }, rig, new[] { skin }, bindMinY);
+            Assert.Equal(BitConverter.DoubleToInt64Bits(want), BitConverter.DoubleToInt64Bits(clip.GroundOffset));
+            clip.GroundOffset = -1;
+            ClipGround.MeasureSampled(new[] { clip }, rig, ClipGround.SampledSkins(new[] { skin }), bindMinY);
+            Assert.Equal(BitConverter.DoubleToInt64Bits(want), BitConverter.DoubleToInt64Bits(clip.GroundOffset));
+        }
+    }
+
+    /// <summary>
+    /// <see cref="ClipGround.SampledSkins"/>: 2 500 + 1 000 vertices → stride ⌈3 500 / 1 024⌉ = 4 over both surfaces, each
+    /// from its own first vertex: ⌈2 500 / 4⌉ = 625 and 250 vertices, vertex i of the first being the original 4i (its
+    /// position, bone and weight slots); the bind table is the original's.
+    /// </summary>
+    [Fact]
+    public void SampledSkinsKeepTheStridedVertices()
+    {
+        ProbeSkin Skin(int n) => new()
+        {
+            Rest = Enumerable.Range(0, n * 3).Select(i => (float)i).ToArray(), Bones = Enumerable.Range(0, n * 2).ToArray(),
+            Weights = Enumerable.Range(0, n * 2).Select(i => i * 0.5f).ToArray(), Slots = 2,
+            BindNodes = new[] { 0 }, BindPoses = new[] { Affine.Identity }, Frame = Affine.Identity,
+        };
+        var a = Skin(2500);
+        var s = ClipGround.SampledSkins(new[] { a, Skin(1000) });
+        Assert.Equal(new[] { 625, 250 }, s.Select(x => x.VertexCount).ToArray());
+        Assert.Equal(new[] { 4 * 3f * 7, 4 * 3f * 7 + 1, 4 * 3f * 7 + 2 }, s[0].Rest.Skip(7 * 3).Take(3).ToArray());
+        Assert.Equal(new[] { 4 * 2 * 7, 4 * 2 * 7 + 1 }, s[0].Bones.Skip(7 * 2).Take(2).ToArray());
+        Assert.Equal(new[] { 4 * 2 * 7 * 0.5f, (4 * 2 * 7 + 1) * 0.5f }, s[0].Weights.Skip(7 * 2).Take(2).ToArray());
+        Assert.Same(a.BindPoses, s[0].BindPoses);
     }
 
     // ---- the probe sampler ----

@@ -35,7 +35,19 @@ public sealed record ClipSource
     /// <summary><c>hipsTrackMedian</c> of the file (its hips position keys, or the constant default Godot kept), null without hips.</summary>
     public double? HipsMedian { get; init; }
     public int RotationTrackCount => RotationTracks.Count;
+    /// <summary><see cref="Anim"/>'s length as Godot keeps it.</summary>
+    public required double Length { get; init; }
+    /// <summary>
+    /// The keys of <see cref="RotationTracks"/> / <see cref="PositionTracks"/> read out of <see cref="Anim"/> ONCE at import
+    /// (Task 35b): the retarget's key math then runs on a worker thread without touching the engine
+    /// (<see cref="ClipLibrary.Compute"/>). The very values the engine returns — times as doubles, values as floats.
+    /// </summary>
+    public required Dictionary<string, SourceTrack> RotationKeys { get; init; }
+    public required Dictionary<string, SourceTrack> PositionKeys { get; init; }
 }
+
+/// <summary>One source track's keys as plain arrays (rotations or positions, never both).</summary>
+public sealed record SourceTrack(Animation.InterpolationType Interp, double[] Times, Quaternion[]? Rotations, Vector3[]? Positions);
 
 /// <summary>What one clip produced on one skeleton: the bound animation (null under <see cref="ClipLibrary.MinTracks"/>),
 /// its track and key counts, the root path of a root-motion clip (re-locked per rig at fit time, carried by the bridges)
@@ -375,7 +387,9 @@ public sealed class ClipLibrary
             {
                 Kind = entry.Kind, Set = entry.Set, Url = entry.Url, Loop = entry.Loops, RootMotion = entry.RootMotion,
                 Anim = anim, Bones = bones, RestRotations = rots, RestPositions = poss,
-                RotationTracks = rot, PositionTracks = pos, HipsMedian = median,
+                RotationTracks = rot, PositionTracks = pos, HipsMedian = median, Length = anim.Length,
+                RotationKeys = rot.ToDictionary(kv => kv.Key, kv => KeysOf(anim, kv.Value, rotation: true)),
+                PositionKeys = pos.ToDictionary(kv => kv.Key, kv => KeysOf(anim, kv.Value, rotation: false)),
             };
         }
         finally
@@ -384,8 +398,25 @@ public sealed class ClipLibrary
         }
     }
 
+    /// <summary>One track's keys read out of the engine (main thread), exactly as <c>track_get_key_*</c> return them.</summary>
+    private static SourceTrack KeysOf(Animation anim, int track, bool rotation)
+    {
+        int n = anim.TrackGetKeyCount(track);
+        var times = new double[n];
+        var rots = rotation ? new Quaternion[n] : null;
+        var poss = rotation ? null : new Vector3[n];
+        for (int k = 0; k < n; k++)
+        {
+            times[k] = anim.TrackGetKeyTime(track, k);
+            var v = anim.TrackGetKeyValue(track, k);
+            if (rots is not null) rots[k] = v.AsQuaternion();
+            else poss![k] = v.AsVector3();
+        }
+        return new SourceTrack(anim.TrackGetInterpolationType(track), times, rots, poss);
+    }
+
     /// <summary>Column-major 16 numbers of a Godot transform (three's <c>Matrix4.elements</c>).</summary>
-    private static double[] ColumnMajor(Transform3D t) => new double[]
+    internal static double[] ColumnMajor(Transform3D t) => new double[]
     {
         t.Basis.Column0.X, t.Basis.Column0.Y, t.Basis.Column0.Z, 0,
         t.Basis.Column1.X, t.Basis.Column1.Y, t.Basis.Column1.Z, 0,
@@ -407,30 +438,36 @@ public sealed class ClipLibrary
 
     /// <summary>
     /// Build <paramref name="clip"/> for the skeleton under <paramref name="modelRoot"/> (track paths relative to it —
-    /// the AnimationPlayer's root node), client3d <c>adaptExternalClips</c> for ONE clip:
-    /// rotations <c>K_p⁻¹·c·K_b</c> where <paramref name="corrections"/> has the bone, verbatim where not, and with NO
-    /// corrections at all the hips get <c>hipsRotFix</c> (the inverse world rotation of the hips' parent); the hips
-    /// position through <see cref="HipsTrack.Map"/> against <paramref name="sourceRest"/> (skipped when it is not
-    /// usable), root path only for a root-motion clip and <paramref name="rigKnown"/>.
+    /// the AnimationPlayer's root node), client3d <c>adaptExternalClips</c> for ONE clip: <see cref="Compute"/> then
+    /// <see cref="Write"/> on the calling (main) thread. The lazy fit (Task 35b, <see cref="TemplateClips"/>) runs the two
+    /// halves apart — the key math on a worker thread, the write on the main thread — with the same result bit for bit.
     /// </summary>
     public static BoundClip Retarget(ClipSource clip, Node3D modelRoot, Skeleton3D skel,
                                      IReadOnlyDictionary<string, RestFix>? corrections, double sourceRest, bool rigKnown)
     {
-        var (hipsIdx, parentXf) = HipsParentFrame(modelRoot, skel);
-        bool noCorrections = corrections is null || corrections.Count == 0;
-        var hipsRotFix = parentXf.Basis.GetRotationQuaternion().Inverse();
-        var target = new Dictionary<string, int>();
-        for (int i = 0; i < skel.GetBoneCount(); i++) target.TryAdd(NormBone(skel.GetBoneName(i)), i);
-        var skelPath = modelRoot.GetPathTo(skel).ToString();
+        var rig = RetargetRig.Of(modelRoot, skel);
+        return Write(Compute(clip, rig, corrections, sourceRest, rigKnown), rig);
+    }
 
-        var anim = new Animation
-        {
-            Length = clip.Anim.Length,
-            LoopMode = clip.Loop ? Animation.LoopModeEnum.Linear : Animation.LoopModeEnum.None,
-        };
-        var digest = new ContentDigest();
-        digest.Add(anim.Length);
-        digest.Add((int)anim.LoopMode);
+    /// <summary>
+    /// The retarget's key math, engine-free (Godot's math structs are plain managed code; the source keys were read at
+    /// import, <see cref="ClipSource.RotationKeys"/>), so it runs on any thread: rotations <c>K_p⁻¹·c·K_b</c> where
+    /// <paramref name="corrections"/> has the bone, verbatim where not, and with NO corrections at all the hips get
+    /// <c>hipsRotFix</c> (the inverse world rotation of the hips' parent); the hips position through
+    /// <see cref="HipsTrack.Map"/> against <paramref name="sourceRest"/> (skipped when it is not usable), root path only
+    /// for a root-motion clip and <paramref name="rigKnown"/>. <paramref name="countOnly"/>: only the track and key
+    /// counts (what the template's plan needs to know whether the clip binds), no values, no digest.
+    /// </summary>
+    public static RetargetKeys Compute(ClipSource clip, RetargetRig rig, IReadOnlyDictionary<string, RestFix>? corrections,
+                                       double sourceRest, bool rigKnown, bool countOnly = false)
+    {
+        bool noCorrections = corrections is null || corrections.Count == 0;
+        var hipsRotFix = rig.HipsRotFix;
+        var loop = clip.Loop ? Animation.LoopModeEnum.Linear : Animation.LoopModeEnum.None;
+        var digest = countOnly ? null : new ContentDigest();
+        digest?.Add(clip.Length);
+        digest?.Add((int)loop);
+        var list = new List<RetargetTrack>();
         int tracks = 0;
         long keys = 0;
         RootPath? rootPath = null;
@@ -438,91 +475,112 @@ public sealed class ClipLibrary
         {
             var name = clip.Bones[b];
             var key = NormBone(name);
-            if (!target.TryGetValue(key, out int ti)) continue;
-            var path = new NodePath($"{skelPath}:{skel.GetBoneName(ti)}");
-            bool isHips = ti == hipsIdx;
+            if (!rig.ByKey.TryGetValue(key, out int ti)) continue;
+            var path = rig.BonePaths[ti];
+            bool isHips = ti == rig.Hips;
 
             Func<Quaternion, Quaternion> fix = q => q;
             if (isHips && noCorrections) fix = q => hipsRotFix * q;
             else if (corrections is not null && corrections.TryGetValue(key, out var rf)) fix = q => RestAdapter.Apply(rf, q);
-            int rt = anim.AddTrack(Animation.TrackType.Rotation3D);
-            anim.TrackSetPath(rt, path);
-            digest.Add(path.ToString());
-            digest.Add((int)Animation.TrackType.Rotation3D);
-            if (clip.RotationTracks.TryGetValue(name, out int st))
+            digest?.Add(path);
+            digest?.Add((int)Animation.TrackType.Rotation3D);
+            if (clip.RotationKeys.TryGetValue(name, out var st))
             {
-                var interp = clip.Anim.TrackGetInterpolationType(st);
-                anim.TrackSetInterpolationType(rt, interp);
-                digest.Add((int)interp);
-                int n = clip.Anim.TrackGetKeyCount(st);
-                var rotTimes = new double[n];
-                var rots = new Quaternion[n];
-                for (int k = 0; k < n; k++)
+                digest?.Add((int)st.Interp);
+                int n = st.Times.Length;
+                if (!countOnly)
                 {
-                    rotTimes[k] = clip.Anim.TrackGetKeyTime(st, k);
-                    rots[k] = fix(clip.Anim.TrackGetKeyValue(st, k).AsQuaternion()).Normalized();
-                    digest.Add(rotTimes[k], rots[k]);
+                    var rots = new Quaternion[n];
+                    for (int k = 0; k < n; k++)
+                    {
+                        rots[k] = fix(st.Rotations![k]).Normalized();
+                        digest!.Add(st.Times[k], rots[k]);
+                    }
+                    list.Add(new RetargetTrack(ti, Animation.TrackType.Rotation3D, st.Interp, st.Times, rots, null));
                 }
-                KeyWriter.Rotations(anim, rt, rotTimes, rots);
                 keys += n;
             }
             else
             {
-                var q = fix(clip.RestRotations[b]).Normalized();
-                KeyWriter.Rotations(anim, rt, new[] { 0.0 }, new[] { q });
-                digest.Add(-1);
-                digest.Add(0.0, q);
+                if (!countOnly)
+                {
+                    var q = fix(clip.RestRotations[b]).Normalized();
+                    list.Add(new RetargetTrack(ti, Animation.TrackType.Rotation3D, null, new[] { 0.0 }, new[] { q }, null));
+                    digest!.Add(-1);
+                    digest.Add(0.0, q);
+                }
                 keys++;
             }
             tracks++;
 
             if (!isHips || !(sourceRest > 1e-6)) continue;
             // The hips position: bounce against the standing reference, in the parent's space + the rest.
-            var restLocal = skel.GetBoneRest(ti).Origin;
-            double restWorldY = (parentXf * restLocal).Y;
-            var raw = new List<double>();
-            var times = new List<double>();
-            int pt = anim.AddTrack(Animation.TrackType.Position3D);
-            anim.TrackSetPath(pt, path);
-            digest.Add(path.ToString());
-            digest.Add((int)Animation.TrackType.Position3D);
-            if (clip.PositionTracks.TryGetValue(name, out int sp))
+            digest?.Add(path);
+            digest?.Add((int)Animation.TrackType.Position3D);
+            clip.PositionKeys.TryGetValue(name, out var sp);
+            int count = sp?.Times.Length ?? 1;
+            keys += count;
+            tracks++;
+            if (countOnly) continue;
+            var restLocal = rig.RestOrigins[ti];
+            double restWorldY = (rig.ParentXf * restLocal).Y;
+            var raw = new List<double>(count * 3);
+            double[] times;
+            if (sp is not null)
             {
-                var interp = clip.Anim.TrackGetInterpolationType(sp);
-                anim.TrackSetInterpolationType(pt, interp);
-                digest.Add((int)interp);
-                for (int k = 0; k < clip.Anim.TrackGetKeyCount(sp); k++)
+                digest!.Add((int)sp.Interp);
+                times = sp.Times;
+                foreach (var v in sp.Positions!)
                 {
-                    var v = clip.Anim.TrackGetKeyValue(sp, k).AsVector3();
                     raw.Add(v.X); raw.Add(v.Y); raw.Add(v.Z);
-                    times.Add(clip.Anim.TrackGetKeyTime(sp, k));
                 }
             }
             else
             {
                 var v = clip.RestPositions[b];
                 raw.Add(v.X); raw.Add(v.Y); raw.Add(v.Z);
-                times.Add(0);
-                digest.Add(-1);
+                times = new[] { 0.0 };
+                digest!.Add(-1);
             }
             var (values, rp) = HipsTrack.Map(raw, times, new HipsTrackOptions(
                 sourceRest, clip.HipsMedian ?? 0, restWorldY > 1e-6 ? restWorldY : 1,
-                ColumnMajor(parentXf.AffineInverse()), new V3(restLocal.X, restLocal.Y, restLocal.Z),
+                rig.ParentInverse, new V3(restLocal.X, restLocal.Y, restLocal.Z),
                 clip.RootMotion, rigKnown));
-            var poss = new Vector3[times.Count];
-            for (int k = 0; k < times.Count; k++)
+            var poss = new Vector3[times.Length];
+            for (int k = 0; k < times.Length; k++)
             {
                 poss[k] = new Vector3(values[k * 3], values[k * 3 + 1], values[k * 3 + 2]);
-                digest.Add(times[k], poss[k]);
+                digest!.Add(times[k], poss[k]);
             }
-            KeyWriter.Positions(anim, pt, times.ToArray(), poss);
-            keys += times.Count;
+            list.Add(new RetargetTrack(ti, Animation.TrackType.Position3D, sp?.Interp, times, null, poss));
             rootPath = rp;
-            tracks++;
         }
-        if (tracks >= MinTracks) return new BoundClip(clip.Kind, anim, tracks, keys, rootPath, digest.Finish());
-        anim.Dispose();
-        return new BoundClip(clip.Kind, null, tracks, 0, null);
+        return new RetargetKeys
+        {
+            Kind = clip.Kind, Length = clip.Length, Loop = loop, Tracks = list, TrackCount = tracks, Keys = keys,
+            RootPath = rootPath, Digest = digest?.Finish(),
+        };
+    }
+
+    /// <summary>
+    /// The engine half of the retarget (main thread): the Animation of <paramref name="keys"/> — one track after the
+    /// other in the computed order, each with its path, the source interpolation where the file had a track, the keys
+    /// written in one call where that stores them exactly (<see cref="KeyWriter"/>). Fewer than <see cref="MinTracks"/>
+    /// tracks → nothing bound.
+    /// </summary>
+    public static BoundClip Write(RetargetKeys keys, RetargetRig rig)
+    {
+        if (keys.TrackCount < MinTracks) return new BoundClip(keys.Kind, null, keys.TrackCount, 0, null);
+        var anim = new Animation { Length = keys.Length, LoopMode = keys.Loop };
+        foreach (var t in keys.Tracks)
+        {
+            int at = anim.AddTrack(t.Type);
+            anim.TrackSetPath(at, rig.NodePaths[t.Bone]);
+            if (t.Interp is { } interp) anim.TrackSetInterpolationType(at, interp);
+            if (t.Type == Animation.TrackType.Rotation3D) KeyWriter.Rotations(anim, at, t.Times, t.Rotations!);
+            else KeyWriter.Positions(anim, at, t.Times, t.Positions!);
+        }
+        return new BoundClip(keys.Kind, anim, keys.TrackCount, keys.Keys, keys.RootPath, keys.Digest);
     }
 
     /// <summary>The browser's <c>normBoneName</c>, plus a namespace strip and Godot's <c>_</c> spelling (<see cref="BoneNames.Norm"/>).</summary>
@@ -544,6 +602,68 @@ public sealed class ClipLibrary
             if (Find<T>(child) is { } hit) return hit;
         return null;
     }
+}
+
+/// <summary>
+/// The target skeleton of a retarget as plain data, read once per template on the main thread (Task 35b): bone key →
+/// first bone (<see cref="ClipLibrary.NormBone"/>), every bone's track path (the engine's spelling, as the digest hashes
+/// it) and rest origin, the hips and the rest frame of their parent — everything <see cref="ClipLibrary.Compute"/> needs
+/// from the engine, so the key math can run on a worker thread.
+/// </summary>
+public sealed class RetargetRig
+{
+    public required Dictionary<string, int> ByKey { get; init; }
+    public required string[] BonePaths { get; init; }
+    public required NodePath[] NodePaths { get; init; }
+    public required Vector3[] RestOrigins { get; init; }
+    public required int Hips { get; init; }
+    public required Transform3D ParentXf { get; init; }
+    /// <summary><c>hipsRotFix</c>: the inverse world rotation of the hips' parent.</summary>
+    public required Quaternion HipsRotFix { get; init; }
+    /// <summary>The parent frame's inverse, column-major (<see cref="HipsTrackOptions.ParentInverse"/>).</summary>
+    public required double[] ParentInverse { get; init; }
+
+    public static RetargetRig Of(Node3D modelRoot, Skeleton3D skel)
+    {
+        var (hips, parentXf) = ClipLibrary.HipsParentFrame(modelRoot, skel);
+        int n = skel.GetBoneCount();
+        var byKey = new Dictionary<string, int>();
+        var paths = new string[n];
+        var nodePaths = new NodePath[n];
+        var rests = new Vector3[n];
+        var skelPath = modelRoot.GetPathTo(skel).ToString();
+        for (int i = 0; i < n; i++)
+        {
+            byKey.TryAdd(ClipLibrary.NormBone(skel.GetBoneName(i)), i);
+            nodePaths[i] = new NodePath($"{skelPath}:{skel.GetBoneName(i)}");
+            paths[i] = nodePaths[i].ToString();
+            rests[i] = skel.GetBoneRest(i).Origin;
+        }
+        return new RetargetRig
+        {
+            ByKey = byKey, BonePaths = paths, NodePaths = nodePaths, RestOrigins = rests, Hips = hips, ParentXf = parentXf,
+            HipsRotFix = parentXf.Basis.GetRotationQuaternion().Inverse(),
+            ParentInverse = ClipLibrary.ColumnMajor(parentXf.AffineInverse()),
+        };
+    }
+}
+
+/// <summary>One retargeted track: the target bone, its type, the source interpolation (null = Godot's default), its keys.</summary>
+public sealed record RetargetTrack(int Bone, Animation.TrackType Type, Animation.InterpolationType? Interp, double[] Times,
+                                   Quaternion[]? Rotations, Vector3[]? Positions);
+
+/// <summary>What <see cref="ClipLibrary.Compute"/> made of one clip on one rig: the tracks in write order, the counts, the root path and the digest.</summary>
+public sealed class RetargetKeys
+{
+    public required string Kind { get; init; }
+    public required double Length { get; init; }
+    public required Animation.LoopModeEnum Loop { get; init; }
+    public required List<RetargetTrack> Tracks { get; init; }
+    public required int TrackCount { get; init; }
+    public required long Keys { get; init; }
+    public RootPath? RootPath { get; init; }
+    public string? Digest { get; init; }
+    public bool Binds => TrackCount >= ClipLibrary.MinTracks;
 }
 
 /// <summary>

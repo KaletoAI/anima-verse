@@ -21,16 +21,33 @@ public static class GlbLoader
     /// </summary>
     public static (Node3D Root, GlbCounts Counts) Import(byte[] plainGlb, string label)
     {
+        var (doc, state, counts) = Parse(plainGlb, label);
+        return (Generate(doc, state, label), counts);
+    }
+
+    /// <summary>
+    /// The first half of <see cref="Import"/>: parse the GLB into a glTF state (buffers, meshes, materials, images),
+    /// counted and given the browser look. It builds resources only, no node — the figures run it on a worker thread
+    /// (Task 35b; Godot: resources may be created off the main thread), the scene is then <see cref="Generate"/>d on it.
+    /// </summary>
+    public static (GltfDocument Doc, GltfState State, GlbCounts Counts) Parse(byte[] plainGlb, string label)
+    {
         var doc = new GltfDocument();
         var state = new GltfState();
         var err = doc.AppendFromBuffer(plainGlb, "", state);
         if (err != Error.Ok) throw new InvalidOperationException($"GLTF import of {label} failed: {err}");
         var counts = Count(state);
         BrowserLook(state);
+        return (doc, state, counts);
+    }
+
+    /// <summary>The second half of <see cref="Import"/>: the scene of a parsed state (main thread: it creates nodes).</summary>
+    public static Node3D Generate(GltfDocument doc, GltfState state, string label)
+    {
         var node = doc.GenerateScene(state) as Node3D
                    ?? throw new InvalidOperationException($"GLTF scene of {label} is empty");
         node.Name = "Glb";
-        return (node, counts);
+        return node;
     }
 
     /// <summary>

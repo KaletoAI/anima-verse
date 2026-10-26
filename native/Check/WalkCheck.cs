@@ -47,6 +47,7 @@ public static class WalkCheck
 
             mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-walk] " + line), strict: true)
             {
+                ClipFit = ClipFitMode.OnDemandSync,
                 AutoTick = false, Slots = () => builder.Slots,
                 GroundMoveAt = builder.FigureGroundMove, GroundYAt = builder.FigureGroundY,
             };

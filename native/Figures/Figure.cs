@@ -47,9 +47,17 @@ public partial class Figure : Node3D
     public string? LoadedUrl { get; set; }
     /// <summary>Library kind → the set its file came from (the set chain's choice), for the check and the log.</summary>
     public IReadOnlyDictionary<string, string> ClipSets { get; set; } = new Dictionary<string, string>();
-    /// <summary>Keys of the retargeted clips this figure's template carries, and their estimated memory (keys × <see cref="FigureManager.KeyBytes"/>).</summary>
+    /// <summary>Keys of the library clips this figure's template binds (the plan), and the estimated memory of the ones it
+    /// holds itself so far (fitted, not shared: keys × <see cref="FigureManager.KeyBytes"/>).</summary>
     public long ClipKeys { get; set; }
-    public long ClipBytes { get; set; }
+    public long ClipBytes => ClipBytesOf?.Invoke() ?? 0;
+    public Func<long>? ClipBytesOf { get; set; }
+
+    /// <summary>
+    /// Asks the template for a planned action that is not fitted yet (Task 35b, <see cref="TemplateClips.Request"/>): true
+    /// when it is in the player's library now; null = every action is there already (own takes, no library).
+    /// </summary>
+    public Func<string, bool>? FitClip { get; set; }
     /// <summary>Clip tracks bound on this figure's skeleton (every kind of its library).</summary>
     public int BoundTracks { get; set; }
     /// <summary>Library kinds this humanoid figure could not bind (<c>missingClipKinds</c>) — it plays a stand-in.</summary>
@@ -336,6 +344,13 @@ public partial class Figure : Node3D
     private bool _terrainClip;
     private double _sink;
 
+    /// <summary>
+    /// The last <see cref="Play(string, bool, double)"/> asked for a bridge whose clip is still being fitted (lazy, Task
+    /// 35b): the rule's accel (≤ 0 = a holding bridge); null = none waits. The owner keeps a holding bridge's height until
+    /// it opens, so the lift it hands over is the whole one, as on the frame the eager fit would have opened it.
+    /// </summary>
+    public double? PendingBridgeAccel { get; private set; }
+
     // ---- bridges (figures.ts Figure, Task 31) ------------------------------------------------------------------------
 
     /// <summary>The server's <c>transition_clips</c> (the clip library's table): which bridge opens between two kinds.</summary>
@@ -406,7 +421,23 @@ public partial class Figure : Node3D
     /// <summary><c>clipGroundOffset(clip)</c> of a bound kind in world metres (× <see cref="BaseScale"/>), 0 when unmeasured.</summary>
     public double GroundOffsetM(string kind) => (ExtrasOf(kind)?.GroundOffset ?? 0) * BaseScale;
 
-    private bool HasAction(string kind) => _clipKinds.Contains(kind) && Player is { } p && p.HasAnimation(kind);
+    /// <summary>The rig HAS the action (the plan) — whether or not it is fitted yet; the choice of clips and bridges reads this.</summary>
+    private bool HasAction(string kind) => Player is not null && _clipKinds.Contains(kind);
+
+    /// <summary>
+    /// The action is in the player's library — fitted now if it was not yet and the mode fits at once; false while a lazy
+    /// fit runs (the caller keeps what plays and asks again next frame) or when the rig does not have it.
+    /// </summary>
+    public bool EnsureClip(string action)
+    {
+        if (Player is not { } p) return false;
+        if (p.HasAnimation(action)) return true;
+        if (!_clipKinds.Contains(action) || FitClip is not { } fit) return false;
+        return fit(action) && p.HasAnimation(action);
+    }
+
+    /// <summary>The rig has the action but it is still being fitted (lazy).</summary>
+    public bool ClipPending(string action) => HasAction(action) && !EnsureClip(action);
 
     private bool OwnsBody(BridgeRun? run) => run is not null && _transition == run && _currentRun == run;
 
@@ -426,19 +457,27 @@ public partial class Figure : Node3D
         var kind = (rawKind.Length > 0 ? rawKind : FigureClips.PoseKind(FigureClips.Standing, Poses)).ToLowerInvariant();
         // A bridge is running: let it finish; the frame after it asks again.
         if (Bridging) return;
+        PendingBridgeAccel = null;
         var rule = FigureClips.Transition(CurrentKind, kind, Transitions);
         var via = rule?.Kind ?? "";
         if (rule is not null && via.Length > 0 && via != kind && HasAction(via))
         {
+            // Lazy (Task 35b): the bridge clip is being fitted — nothing changes this frame; paceLimitFor already holds
+            // the figure, as the bridge would (and the owner keeps its height, PendingBridgeAccel).
+            if (!EnsureClip(via))
+            {
+                PendingBridgeAccel = rule.Accel;
+                return;
+            }
             StartBridge(via, rule.Accel);
             return;
         }
         double sinkM = terrainClip && double.IsFinite(sink) && sink > 0 ? sink : 0;
         if (kind == CurrentKind && terrainClip == _terrainClip && sinkM == _sink) return;
-        _terrainClip = terrainClip;
-        _sink = sinkM;
         if (Player is null)
         {
+            _terrainClip = terrainClip;
+            _sink = sinkM;
             // No actions: `resolved` is undefined in the browser, so the drop is 0 (a static rig's height is its bob's).
             SetClipDrop(0);
             CurrentKind = kind;
@@ -446,6 +485,10 @@ public partial class Figure : Node3D
         }
         var chosen = FigureClips.ResolveClipKind(kind, _clipKinds, Poses);
         var resolved = chosen.Length > 0 ? chosen : _clipKinds.FirstOrDefault() ?? "";
+        // Lazy (Task 35b): the clip is being fitted — keep what plays (kind, drop, pace) and ask again next frame.
+        if (resolved.Length > 0 && !EnsureClip(resolved)) return;
+        _terrainClip = terrainClip;
+        _sink = sinkM;
         // The drop belongs to the clip that ACTUALLY plays; the ground's sink comes on top, in world metres.
         SetClipDrop(terrainClip && resolved.Length > 0 ? GroundOffsetM(resolved) + sinkM : terrainClip ? sinkM : 0);
         double pace = ClipLibraryRules.StandInPace(kind, chosen);

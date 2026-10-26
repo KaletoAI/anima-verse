@@ -70,6 +70,14 @@ public partial class FigureManager : Node3D
     public double RetryDelayS { get; set; } = 30;
     /// <summary>false in <c>--check</c>: time only moves through <see cref="Tick"/>, tiers only through <see cref="TickTiers"/>.</summary>
     public bool AutoTick { get; set; } = true;
+    /// <summary>
+    /// How the library clips are fitted (Task 35b, ruling P3-R15): <see cref="ClipFitMode.Lazy"/> in the client, the checks
+    /// <see cref="ClipFitMode.OnDemandSync"/> (the same lazy plan, a needed clip fitted inside the call that asks for it).
+    /// Set before the first template is built.
+    /// </summary>
+    public ClipFitMode ClipFit { get; set; } = ClipFitMode.Lazy;
+    /// <summary>Strict (the checks): a failure is thrown, not logged.</summary>
+    public bool Strict => _strict;
 
     /// <summary>Where the camera is (tiers measure from it, npcs.ts <c>tickFigureTiers(camera.position)</c>); null = no tiers.</summary>
     public Func<Vector3?>? CameraPosition { get; set; }
@@ -124,30 +132,37 @@ public partial class FigureManager : Node3D
         /// <summary>The bind box (three's <c>Box3.setFromObject</c>, skinned rest pose, the Z-up fix included); null = no mesh.</summary>
         public (V3 Min, V3 Max)? BindBox { get; init; }
         public AnimationLibrary? Library { get; init; }
-        /// <summary>The action kinds in <see cref="Library"/>, in action order (the figure's fallback is the first).</summary>
+        /// <summary>The action kinds of the library (planned: own takes, then the library actions), in action order (the figure's fallback is the first).</summary>
         public IReadOnlyList<string> Kinds { get; init; } = Array.Empty<string>();
         /// <summary>Library kind → the set its file came from (the set chain's decision).</summary>
         public IReadOnlyDictionary<string, string> ClipSets { get; init; } = new Dictionary<string, string>();
+        /// <summary>Tracks and keys of every library clip that binds on this rig (the plan — what an eager fit holds).</summary>
         public int BoundTracks { get; init; }
         public int Unbound { get; init; }
         /// <summary>Bones with a rest correction; −1 = no rig (verbatim copy).</summary>
         public int Corrected { get; init; }
         public long Keys { get; init; }
-        /// <summary>Keys of the clips this template created itself (<see cref="Keys"/> minus the ones it shares).</summary>
-        public long OwnKeys { get; init; }
-        /// <summary>Bound clips taken over from an earlier template because their content is identical (<see cref="ShareIdentical"/>).</summary>
-        public int SharedClips { get; init; }
-        /// <summary>The estimated memory of this template's OWN clip keys (<see cref="OwnKeys"/> × <see cref="KeyBytes"/>).</summary>
-        public long ClipBytes { get; init; }
-        /// <summary>Every bound library clip of this template and its key count (shared ones included).</summary>
-        public IReadOnlyDictionary<Animation, long> AnimKeys { get; init; } = new Dictionary<Animation, long>();
+        /// <summary>The library clips, fitted lazily (Task 35b); null for a template without the library (own takes only).</summary>
+        public TemplateClips? Lazy { get; init; }
+        /// <summary>Keys of the FITTED clips this template created itself (the ones it shares are another template's).</summary>
+        public long OwnKeys => Lazy?.OwnKeys ?? 0;
+        /// <summary>Fitted clips taken over from an earlier template because their content is identical (<see cref="ShareIdentical"/>).</summary>
+        public int SharedClips => Lazy?.SharedClips ?? 0;
+        /// <summary>The estimated memory of this template's OWN fitted clip keys (<see cref="OwnKeys"/> × <see cref="KeyBytes"/>).</summary>
+        public long ClipBytes => OwnKeys * KeyBytes;
+        /// <summary>Every FITTED library clip of this template and its key count (shared ones included).</summary>
+        public IReadOnlyDictionary<Animation, long> AnimKeys => Lazy?.AnimKeys ?? (IReadOnlyDictionary<Animation, long>)EmptyKeys;
         /// <summary>The set chain the library was fitted along (for <see cref="ProbeClipMemory"/>).</summary>
         public IReadOnlyList<string> Sets { get; init; } = Array.Empty<string>();
+        /// <summary>Wall time of the build's own fit (plan + the clips fitted at build).</summary>
         public double FitMs { get; init; }
         /// <summary><c>fit.fits</c>: at least one library clip adapted to this rig (the random pool takes only those).</summary>
         public bool LibraryFits { get; init; }
-        /// <summary>Per bound Animation: its bridge travel / turn / lift and ground offset (empty without a fit).</summary>
-        public IReadOnlyDictionary<Animation, ClipExtras> Extras { get; init; } = new Dictionary<Animation, ClipExtras>();
+        /// <summary>Per fitted Animation: its bridge travel / turn / lift and ground offset (empty without a fit).</summary>
+        public IReadOnlyDictionary<Animation, ClipExtras> Extras => Lazy?.Extras ?? (IReadOnlyDictionary<Animation, ClipExtras>)EmptyExtras;
+
+        private static readonly Dictionary<Animation, long> EmptyKeys = new();
+        private static readonly Dictionary<Animation, ClipExtras> EmptyExtras = new();
     }
 
     private sealed record ModelInfo(string Url, string? LowUrl, string Format, string Rig, bool Normalized, string? ModelRev)
@@ -404,6 +419,8 @@ public partial class FigureManager : Node3D
         if (!fresh) return;
         fig.Waypoints.Clear();
         fig.Ride = null;
+        // The half is asked for now (Task 35b): its fit runs while the poll's other work goes on.
+        if (fig.Pair is { } pair) fig.EnsureClip(pair.Clip);
     }
 
     /// <summary>
@@ -562,6 +579,13 @@ public partial class FigureManager : Node3D
         if (fig.Player is null || fig.Portrait is not null) return false;
         double phase = it.Advance(dt);
         if (Clips.PairRootAt(it.Clip, phase) is not { } root) return false;
+        if (fig.ClipPending(it.Clip))
+        {
+            // Lazy (Task 35b): the half is being fitted — the figure holds where it stands, playing what it played.
+            fig.SecondaryFrozen = WorldFrozen;
+            fig.UpdateFigure(dt);
+            return true;
+        }
         if (!fig.PlayPair(it.Clip, phase, it.Rate <= 0, it.Loop)) return false;
         if (fig.HoldsTravel) fig.TakeTravel();
         var room = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.RoomId : "";
@@ -601,6 +625,10 @@ public partial class FigureManager : Node3D
         fig.Play(kind, terrainClip, sink);
         if (!wasBridging && fig.Bridging && fig.BeginBridgeLift(rootYBefore - goalY))
             fig.Position = new Vector3(fig.Position.X, (float)goalY, fig.Position.Z);
+        // Lazy (Task 35b): the HOLDING bridge this frame asked for waits for its clip — the root keeps the height it had,
+        // so the bridge takes the whole difference over once it opens (the eager fit opened it this frame, from there).
+        else if (fig.PendingBridgeAccel is <= 0)
+            fig.Position = new Vector3(fig.Position.X, (float)rootYBefore, fig.Position.Z);
     }
 
     /// <summary>npcs.ts <c>applyBridgeTravel</c>: the root takes the figure's held travel over; false when none was held.</summary>
@@ -666,8 +694,16 @@ public partial class FigureManager : Node3D
         }
         if (_templates.TryGetValue(TemplateKey(url, fig.Sets, fig.HeightM), out var cached) && cached.IsCompletedSuccessfully)
         {
-            Instantiate(fig, cached.Result, info, want);
-            return Task.CompletedTask;
+            // A cached tier swaps at once — once the clips the figure plays are fitted on it (Task 35b); until then the
+            // body on screen stays.
+            var prepared = PrepareAsync(fig, cached.Result);
+            if (prepared.IsCompletedSuccessfully)
+            {
+                Instantiate(fig, cached.Result, info, want);
+                return Task.CompletedTask;
+            }
+            fig.Loading = true;
+            return SwapWhenFitted(fig, cached.Result, info, want, prepared);
         }
         fig.Loading = true;
         return _models.Push(Job(fig, async () =>
@@ -675,6 +711,7 @@ public partial class FigureManager : Node3D
             try
             {
                 var template = await GetTemplate(url, info, fig.Sets, fig.HeightM);
+                if (Alive(fig)) await PrepareAsync(fig, template);
                 if (Alive(fig) && fig.LoadedSig == fig.WantedSig) Instantiate(fig, template, info, want);
             }
             catch (Exception e) when (!_strict)
@@ -684,6 +721,17 @@ public partial class FigureManager : Node3D
             finally { fig.Loading = false; }
             if (Alive(fig) && fig.WantedTier != fig.LoadedTier && fig.LoadedUrl != UrlFor(info, fig.WantedTier)) await SyncTier(fig);
         }));
+    }
+
+    /// <summary>The cached tier's swap once its clips are fitted (<see cref="SyncTier"/>); the wish may have moved on meanwhile.</summary>
+    private async Task SwapWhenFitted(Figure fig, ModelTemplate t, ModelInfo info, FigureTier want, Task prepared)
+    {
+        try { await prepared; }
+        catch (Exception e) when (!_strict) { _log($"figure {fig.CharacterName}: {want} tier clips could not be fitted: {e.Message}"); }
+        finally { fig.Loading = false; }
+        if (!Alive(fig)) return;
+        if (fig.WantedTier == want && fig.LoadedSig == fig.WantedSig) Instantiate(fig, t, info, want);
+        if (fig.WantedTier != fig.LoadedTier) await SyncTier(fig);
     }
 
     /// <summary>The URL of a tier: <c>low</c> → <c>low_url ?? url</c> (buildModel).</summary>
@@ -731,6 +779,9 @@ public partial class FigureManager : Node3D
     {
         // Never while a template is being built: it may already bind a clip of a template this pass would free.
         if (_figures.Values.Any(f => f.Loading) || _templates.Values.Any(t => !t.IsCompleted) || PoolState == "loading") return 0;
+        // Nor while a clip is being fitted (Task 35b): it may be about to share a clip of a template this pass would free.
+        if (_templates.Values.Any(t => t.IsCompletedSuccessfully && t.Result.Lazy is { Busy: true })
+            || _pool.Any(p => p.Template.Lazy is { Busy: true })) return 0;
         var live = new HashSet<string>(StringComparer.Ordinal);
         foreach (var info in _infos.Values)
         {
@@ -758,6 +809,7 @@ public partial class FigureManager : Node3D
             var anims = t.Library is { } lib ? LibraryAnims(lib).Where(a => !kept.Contains(a)).Distinct().ToList() : new List<Animation>();
             foreach (var digest in _sharedClips.Where(kv => anims.Contains(kv.Value)).Select(kv => kv.Key).ToList())
                 _sharedClips.Remove(digest);
+            t.Lazy?.Kill();
             if (IsInstanceValid(t.Root)) t.Root.Free();
             t.Library?.Dispose();
             foreach (var a in anims) a.Dispose();
@@ -776,6 +828,7 @@ public partial class FigureManager : Node3D
         {
             if (!task.IsCompletedSuccessfully) continue;
             var t = task.Result;
+            t.Lazy?.Kill();
             if (IsInstanceValid(t.Root)) t.Root.Free();
             t.Library?.Dispose();
         }
@@ -817,6 +870,9 @@ public partial class FigureManager : Node3D
                 {
                     var tier = fig.WantedTier;
                     var template = await GetTemplate(UrlFor(info, tier), info, fig.Sets, fig.HeightM);
+                    if (!Alive(fig)) return;
+                    // Its first frame plays what it should: the clips it needs are fitted before the body is shown.
+                    await PrepareAsync(fig, template);
                     if (!Alive(fig)) return;
                     // fetchCharacterModel: the model3d motion stands in while the worldmap has sent none.
                     if (!_motionState.TryGetValue(fig.CharacterName, out var known) || known is null)
@@ -932,14 +988,17 @@ public partial class FigureManager : Node3D
     /// separate texture (<see cref="DressInTexture"/>), metalness 0, Z-up fix, raw height; the file's own
     /// takes (every rig but <c>none</c>) with the server's loop flags; on a mixamo rig the library along
     /// <paramref name="sets"/> fitted (<c>fitLibraryAsync</c>) — an embedded take wins its kind, the library fills the
-    /// rest — then, per rig, the bridges re-locked, pinned, lifted and turned (<see cref="FootLockMeasure"/>, baked into
-    /// the bound Animation) and every library clip's ground offset measured (<see cref="ClipGround"/>), in slices of at
-    /// most <see cref="FitSliceMs"/> ms between frames. <paramref name="heightM"/> is the figure's height: the scale the
+    /// rest. Since Task 35b only PLANNED here (<see cref="TemplateClips"/>: which clips bind, under which actions) and
+    /// the movement poses fitted; every other clip is fitted — retargeted, its bridge re-locked, pinned, lifted and turned
+    /// (<see cref="FootLockMeasure"/>, baked into the bound Animation), its ground offset measured (<see cref="ClipGround"/>)
+    /// — when a figure on the template first needs it. <paramref name="heightM"/> is the figure's height: the scale the
     /// bridges are re-locked at is <c>normalized ? 1 : height / raw</c> (the figure's <c>baseScale</c>).
     /// </summary>
     private async Task<ModelTemplate> BuildTemplate(string url, ModelInfo info, IReadOnlyList<string> sets, double heightM)
     {
         var bytes = await _source.GetBytesAsync(url);
+        // The main-thread parts of the build, timed for the log (Task 35b): the import, the bind box, the rest correction, the plan.
+        var importWatch = System.Diagnostics.Stopwatch.StartNew();
         Node3D root;
         if (IsFbx(info.Format, url))
         {
@@ -949,20 +1008,32 @@ public partial class FigureManager : Node3D
         }
         else
         {
-            var plain = await Task.Run(() => GlbLoader.Prepare(bytes));
-            (root, _) = GlbLoader.Import(plain, url);
+            // Decoded and PARSED off the main thread (Task 35b: the parse — buffers, meshes, images — was most of a model's
+            // 35–40 ms main-thread import); only the scene (nodes) is generated here.
+            var (doc, state, _) = await Task.Run(() => GlbLoader.Parse(GlbLoader.Prepare(bytes), url));
+            importWatch.Restart();
+            root = GlbLoader.Generate(doc, state, url);
         }
+        double importMs = importWatch.Elapsed.TotalMilliseconds;
+        await NextFrame();   // the build's main-thread parts each in a frame of their own (Task 35b)
+        importWatch.Restart();
         root.Name = "Model";
         int metals = Dielectric(root);
         // three's Box3.setFromObject: a skinned mesh counts in its SKINNED rest pose (BridgeFit.BindBox), not by its
         // mesh-space AABB — a rig whose bind poses carry the armature's scale or turn (Xbot, Test3_mia) is 100× off
-        // and lying down by the plain AABB.
-        var box = BridgeFit.BindBox(root);
+        // and lying down by the plain AABB. The engine data is read here, the skinning runs on a worker.
+        var gathered = BridgeFit.GatherBindBox(root);
+        double boxMs = importWatch.Elapsed.TotalMilliseconds;
+        var box = await Task.Run(() => BridgeFit.ComputeBindBox(gathered));
         if (box.Size.Z > box.Size.Y * 1.5f)   // stand a Z-up export upright (buildModel)
         {
+            importWatch.Restart();
             root.Rotation = new Vector3(-Mathf.Pi / 2f, 0, 0);
-            box = BridgeFit.BindBox(root);
+            gathered = BridgeFit.GatherBindBox(root);
+            boxMs += importWatch.Elapsed.TotalMilliseconds;
+            box = await Task.Run(() => BridgeFit.ComputeBindBox(gathered));
         }
+        importWatch.Restart();
         var size = box.Size;
         double raw = Math.Max(size.Y, 0.01);
         // The Figure constructor's anchoring box (`!box.isEmpty()`: a model without a mesh is not anchored).
@@ -973,6 +1044,7 @@ public partial class FigureManager : Node3D
         // per kind with the server's loop flag of the exact take name — for server models and the pool alike.
         var own = TakeOwnClips(root, info.ClipLoops, IsFbx(info.Format, url));
         if (info.Rig == "none") own.Clear();
+        boxMs += importWatch.Elapsed.TotalMilliseconds;
         if (info.Rig != "mixamo" || skel is null || skel.GetBoneCount() == 0)
         {
             // Generic rigs keep their own takes (animals: idle, walk, run, sit …); a rig left without any action walks
@@ -994,6 +1066,8 @@ public partial class FigureManager : Node3D
         }
 
         await Clips.WaitClipsAsync();
+        GD.Print($"[DBGMEM] before plan {url}: live {GC.GetTotalMemory(true) / 1048576.0:0} MiB");
+        await NextFrame();
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var candidates = Clips.ClipsFor(sets);
         // The browser's rest-pose correction against the reference rig (restCorrections, once per model).
@@ -1002,125 +1076,138 @@ public partial class FigureManager : Node3D
         var (standRef, standSource) = Clips.StandingReference(candidates);
         bool rigKnown = standSource == "rig";
         var lib = new AnimationLibrary();
-        var bound = new List<BoundClip>();
-        var setOf = new Dictionary<string, string>();
-        int tracks = 0, sharedClips = 0;
-        long keys = 0, ownKeys = 0;
-        var slice = System.Diagnostics.Stopwatch.StartNew();
-        foreach (var clip in candidates)
-        {
-            if (slice.Elapsed.TotalMilliseconds > FitSliceMs)
-            {
-                await NextFrame();
-                slice.Restart();
-            }
-            var b = ClipLibrary.Retarget(clip, root, skel, fixes, standRef ?? 0, rigKnown);
-            if (b.Anim is null) continue;
-            b = ShareIdentical(b, ref sharedClips, ref ownKeys);
-            bound.Add(b);
-            setOf[clip.Kind] = clip.Set;
-            tracks += b.Tracks;
-            keys += b.Keys;
-        }
-        // One action per clip name lower-cased + the synonym aliases (Figure constructor); AddAnimation refuses
-        // '/', ':', ',' and '[' (Godot's animation-name rule) — such a kind stays unbound.
-        var byName = bound.GroupBy(b => b.Kind.ToLowerInvariant()).ToDictionary(g => g.Key, g => g.Last().Anim!);
         var kinds = new List<string>();
         // A file's own take wins its kind (embedded first in the action order: [...model.clips, ...fit.extra]).
         foreach (var (kind, anim) in own)
             if (lib.AddAnimation(kind, anim) == Error.Ok) kinds.Add(kind);
         var ownKinds = own.Select(o => o.Kind).ToHashSet();
-        foreach (var (kind, clipName) in ClipLibraryRules.BindActions(bound.Where(b => !ownKinds.Contains(b.Kind.ToLowerInvariant()))
-                                                                           .Select(b => b.Kind).ToList()))
-        {
-            if (lib.HasAnimation(kind)) continue;
-            if (lib.AddAnimation(kind, byName[clipName.ToLowerInvariant()]) == Error.Ok) kinds.Add(kind);
-            else _log($"model {url}: action '{kind}' refused by Godot's animation-name rule");
-        }
-        var missing = FigureClips.MissingClipKinds(candidates.Select(c => c.Kind), kinds);
-        // The per-rig bridge fit and the ground offsets, on the library clips this rig keeps (`fit.extra`).
-        var extra = bound.Where(b => !ownKinds.Contains(b.Kind.ToLowerInvariant())).ToList();
         double scale = info.Normalized ? 1 : heightM / raw;
-        var extras = await FitBridgesAndGround(url, root, skel, extra, scale);
-        // Clip memory of this template's OWN clips: keys × the measured bytes per key (KeyBytes) — the static-memory
-        // monitor cannot attribute it here (three templates fit at once and the GC frees mesh arrays meanwhile).
-        long clipBytes = ownKeys * KeyBytes;
+        await NextFrame();
+        var planWatch = System.Diagnostics.Stopwatch.StartNew();
+        // The PLAN (Task 35b): which library clips bind on this rig and under which actions — no key is written yet.
+        var lazy = new TemplateClips(this, _log, url, root, skel, fixes, standRef ?? 0, rigKnown, scale, lib);
+        double planMs = planWatch.Elapsed.TotalMilliseconds;
+        await lazy.PlanAsync(candidates, ownKinds);
+        kinds.AddRange(lazy.Actions);
+        var missing = FigureClips.MissingClipKinds(candidates.Select(c => c.Kind), kinds);
+        // The fit at build: the movement poses (the figure that asked adds its own clips before it is shown, PrepareAsync);
+        // everything in the eager reference mode.
+        var movement = MovementActions(kinds);
+        if (ClipFit == ClipFitMode.Eager) await lazy.EnsureAllAsync();
+        else await lazy.EnsureAsync(movement);
+        lazy.Built = true;
+        GD.Print($"[DBGMEM] after fit {url}: live {GC.GetTotalMemory(true) / 1048576.0:0} MiB");
         double fitMs = sw.Elapsed.TotalMilliseconds;
         if (missing.Count > 0)
             _log($"model {url}: {missing.Count} of {candidates.Count} library clip kinds NOT bound — {string.Join(", ", missing)}");
         _log($"model {url}: {skel.GetBoneCount()} bones, raw height {raw:0.###} m, {metals} materials metallic→0, "
-             + $"{bound.Count} clips → {kinds.Count} actions (sets [{string.Join(",", sets)}]), {tracks} tracks, {keys} keys, "
-             + $"{sharedClips} clips shared with an earlier template, own clip memory ≈{clipBytes / 1048576.0:0.0} MiB, "
-             + $"fit {fitMs:0} ms (rest + soles {restMs:0} ms), "
+             + $"{lazy.PlannedClips} clips → {kinds.Count} actions (sets [{string.Join(",", sets)}]), {lazy.PlannedTracks} tracks, {lazy.PlannedKeys} keys planned; "
+             + $"fitted at build {lazy.FittedClips} of {lazy.FittableClips} clips ({ClipFit}; movement [{string.Join(",", movement)}]), {lazy.SharedClips} shared with an earlier template, "
+             + $"own clip memory ≈{lazy.OwnKeys * KeyBytes / 1048576.0:0.00} MiB, fit {fitMs:0} ms (main thread: import {importMs:0} ms, "
+             + $"bind box + takes {boxMs:0} ms, rest + soles {restMs:0} ms, rig + skins {planMs:0} ms), "
              + (fixes is not null ? $"{fixes.Count} bones rest-corrected" : "no rig: verbatim copy") + $", stand ref {standSource}");
         return new ModelTemplate
         {
-            Root = root, RawHeight = raw, Url = url, BindBox = bind, Library = lib, Kinds = kinds, ClipSets = setOf, BoundTracks = tracks,
-            Unbound = missing.Count, Corrected = fixes?.Count ?? -1, Keys = keys, OwnKeys = ownKeys, SharedClips = sharedClips,
-            ClipBytes = clipBytes, FitMs = fitMs, Sets = sets.ToArray(),
-            AnimKeys = bound.GroupBy(b => b.Anim!).ToDictionary(g => g.Key, g => g.First().Keys),
-            LibraryFits = bound.Count > 0, Extras = extras,
+            Root = root, RawHeight = raw, Url = url, BindBox = bind, Library = lib, Kinds = kinds, ClipSets = lazy.ClipSets,
+            BoundTracks = lazy.PlannedTracks, Unbound = missing.Count, Corrected = fixes?.Count ?? -1, Keys = lazy.PlannedKeys,
+            FitMs = fitMs, Sets = sets.ToArray(), LibraryFits = lazy.PlannedClips > 0, Lazy = lazy,
         };
     }
 
     /// <summary>
-    /// The per-rig part of <c>fitLibraryAsync</c> after the adaptation: <c>relockRootPaths</c> over the clips that carry a
-    /// travel (re-lock, leg pin, lift, turn — the rewritten tracks baked into their Animations), BEFORE
-    /// <c>measureGroundOffsets</c> over all of them (the pin rewrites the leg tracks the offsets are measured from). One
-    /// summary line per model; a fallback because the rig has no foot bones is a warning like the browser's.
+    /// <c>Figure.play</c>'s resolution of a raw kind on a template's actions: lower-cased (empty = the standing pose),
+    /// <see cref="FigureClips.ResolveClipKind"/>, else the first action ("" = none).
     /// </summary>
-    private async Task<Dictionary<Animation, ClipExtras>> FitBridgesAndGround(string url, Node3D root, Skeleton3D skel,
-                                                                             List<BoundClip> extra, double scale)
+    private string ResolveAction(string raw, IReadOnlyList<string> kinds)
     {
-        var extras = new Dictionary<Animation, ClipExtras>();
-        if (extra.Count == 0 || !(scale > 0)) return extras;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        var rig = BridgeFit.RigOf(root, skel);
-        var skelPath = root.GetPathTo(skel).ToString();
-        var lockLines = new List<string>();
-        bool missingFeet = false;
-        var slice = System.Diagnostics.Stopwatch.StartNew();
-        foreach (var b in extra.Where(b => b.RootPath is not null))
-        {
-            if (slice.Elapsed.TotalMilliseconds > FitSliceMs)
-            {
-                await NextFrame();
-                slice.Restart();
-            }
-            var clip = BridgeFit.RelockClipOf(b.Kind, b.Anim!, b.RootPath!);
-            var reports = FootLockMeasure.Relock(new[] { clip }, rig, 1 / (100 * scale),
-                                                 line => lockLines.Add(line["foot lock per rig — ".Length..]));
-            missingFeet |= reports.Any(r => r.Reason == "no foot bones");
-            BridgeFit.WriteBack(clip, b.Anim!, skelPath);
-            extras[b.Anim!] = new ClipExtras
-            {
-                Path = clip.Path, Turn = clip.Turn, Lift = clip.Lift,
-                PivotFrame = clip.Turn is { } turn ? RigMath.Apply(rig.Root, turn.Pivot) : null,
-            };
-        }
-        double relockMs = sw.Elapsed.TotalMilliseconds;
-        if (lockLines.Count > 0)
-            _log($"{(missingFeet ? "WARN " : "")}model {url}: foot lock per rig — {string.Join(", ", lockLines)} ({relockMs:0} ms)");
-        var skins = BridgeFit.SkinsOf(root, skel);
-        if (skins.Count == 0) return extras;
-        var floats = new List<string>();
-        foreach (var b in extra)
-        {
-            if (slice.Elapsed.TotalMilliseconds > FitSliceMs)
-            {
-                await NextFrame();
-                slice.Restart();
-            }
-            var clip = BridgeFit.GroundClipOf(b.Kind, b.Anim!);
-            ClipGround.Measure(new[] { clip }, rig, skins);
-            if (!extras.TryGetValue(b.Anim!, out var x)) extras[b.Anim!] = x = new ClipExtras();
-            x.GroundOffset = clip.GroundOffset;
-            if (clip.GroundOffset * scale > 0.05) floats.Add($"{b.Kind} +{clip.GroundOffset * scale:0.00} m");
-        }
-        if (floats.Count > 0) _log($"model {url}: clips authored off the floor — {string.Join(", ", floats)} (dropped while walking that ground)");
-        _log($"model {url}: bridge fit {relockMs:0} ms, ground offsets {sw.Elapsed.TotalMilliseconds - relockMs:0} ms ({extra.Count} clips)");
-        return extras;
+        var kind = (raw.Length > 0 ? raw : FigureClips.PoseKind(FigureClips.Standing, Clips.Poses)).ToLowerInvariant();
+        var chosen = FigureClips.ResolveClipKind(kind, kinds, Clips.Poses);
+        return chosen.Length > 0 ? chosen : kinds.FirstOrDefault() ?? "";
     }
+
+    /// <summary>
+    /// The movement poses on a template — what every figure plays standing, walking, running, swimming, treading water,
+    /// crawling and resting from a crawl — fitted at build so that no figure waits for them (ruling P3-R15).
+    /// </summary>
+    private List<string> MovementActions(IReadOnlyList<string> kinds)
+    {
+        var poses = Clips.Poses;
+        var actions = new List<string> { ResolveAction("", kinds) };   // "" = the standing pose
+        foreach (var m in new[] { FigureClips.WalkRun, FigureClips.Walk, FigureClips.Swim, FigureClips.Crawl })
+            foreach (var raw in new[] { FigureClips.MoveClip(m, false, poses), FigureClips.MoveClip(m, true, poses), FigureClips.IdleClip(m, poses) })
+                if (raw.Length > 0) actions.Add(ResolveAction(raw, kinds));
+        return actions.Where(a => a.Length > 0).Distinct().ToList();
+    }
+
+    /// <summary>
+    /// The actions <paramref name="fig"/> needs on its first frame on a template: the standing pose, its activity, what
+    /// it asked for last and what plays on its current body (a tier swap), its pair half.
+    /// </summary>
+    private List<string> NeededActions(Figure fig, IReadOnlyList<string> kinds)
+    {
+        var list = new List<string> { ResolveAction("", kinds) };
+        foreach (var raw in new[] { fig.Activity, fig.WantedClip.Kind, fig.CurrentKind })
+            if (raw.Length > 0) list.Add(ResolveAction(raw, kinds));
+        if (fig.CurrentClip.Length > 0 && kinds.Contains(fig.CurrentClip)) list.Add(fig.CurrentClip);
+        if (fig.Pair is { } pair && kinds.Contains(pair.Clip)) list.Add(pair.Clip);
+        return list.Where(a => a.Length > 0).Distinct().ToList();
+    }
+
+    /// <summary>
+    /// Fit what <paramref name="fig"/> needs on <paramref name="t"/> BEFORE the body is shown (<see cref="NeededActions"/>),
+    /// so its first frame plays what it should; completed at once when all of it is in (or in the synchronous modes).
+    /// </summary>
+    private Task PrepareAsync(Figure fig, ModelTemplate t)
+        => t.Lazy is { } lazy ? lazy.EnsureAsync(NeededActions(fig, t.Kinds)) : Task.CompletedTask;
+
+    // ---- the main-thread budget of the lazy clip fit (Task 35b) ------------------------------------------------------
+
+    /// <summary>Main-thread milliseconds the lazy clip fits may take per frame together; a turn that would start beyond it waits a frame.</summary>
+    public const double ClipBudgetMs = 4;
+    private ulong _budgetFrame = ulong.MaxValue;
+    private double _budgetUsedMs;
+
+    /// <summary>
+    /// Wait for a main-thread turn of the lazy clip fit: at once while this frame's budget (<see cref="ClipBudgetMs"/>) is
+    /// not used up, else from the next frame on. False when the manager is gone (the fit stops).
+    /// </summary>
+    internal async Task<bool> MainTurn()
+    {
+        while (true)
+        {
+            if (!IsInstanceValid(this)) return false;
+            if (!IsInsideTree()) return true;   // no frames to wait for (a manager outside the tree fits at once)
+            ulong frame = Engine.GetProcessFrames();
+            if (frame != _budgetFrame)
+            {
+                _budgetFrame = frame;
+                _budgetUsedMs = 0;
+            }
+            if (_budgetUsedMs < ClipBudgetMs) return true;
+            await NextFrame();
+        }
+    }
+
+    /// <summary>A main-thread turn of the lazy clip fit took <paramref name="ms"/>.</summary>
+    internal void ChargeMain(double ms, string what)
+    {
+        _budgetUsedMs += ms;
+        if (ms <= LongestClipTurnMs) return;
+        LongestClipTurnMs = ms;
+        LongestClipTurn = what;
+    }
+
+    /// <summary>The longest body swap (template duplicated, player and body set up) so far, ms — main thread.</summary>
+    public double LongestInstantiateMs { get; private set; }
+
+    /// <summary>Which step the longest main-thread turn was (write, relock sampling / write-back, ground sampling, add to library).</summary>
+    public string LongestClipTurn { get; private set; } = "";
+
+    /// <summary>Every clip fit so far (build and on demand), and the longest main-thread turn of a lazy fit (ms).</summary>
+    public List<ClipFitTime> ClipFits { get; } = new();
+    public double LongestClipTurnMs { get; private set; }
+
+    internal void RecordFit(ClipFitTime t) => ClipFits.Add(t);
 
     /// <summary>
     /// A model file's own non-empty takes, lower-cased, taken out of the import's AnimationPlayer (which is freed: the
@@ -1212,6 +1299,12 @@ public partial class FigureManager : Node3D
     public long UniqueClipKeys => _templates.Values.Where(t => t.IsCompletedSuccessfully).Select(t => t.Result)
                                             .Concat(_pool.Select(p => p.Template))
                                             .SelectMany(t => t.AnimKeys).DistinctBy(kv => kv.Key).Sum(kv => kv.Value);
+    /// <summary>Planned library clips (behind an action) of all templates, the ones fitted so far and their keys (Task 35b).</summary>
+    public int PlannedClipCount => LiveLazies().Sum(l => l.FittableClips);
+    public int FittedClipCount => LiveLazies().Sum(l => l.FittedClips);
+    public long FittedClipKeys => LiveLazies().Sum(l => l.AnimKeys.Values.Sum());
+    private IEnumerable<TemplateClips> LiveLazies()
+        => _templates.Values.Where(t => t.IsCompletedSuccessfully && t.Result.Lazy is not null).Select(t => t.Result.Lazy!);
     /// <summary>Bound clips that templates took over from earlier ones instead of keeping a copy.</summary>
     public int SharedClipCount => _templates.Values.Where(t => t.IsCompletedSuccessfully).Sum(t => t.Result.SharedClips);
     /// <summary>The estimated clip memory of all templates in MiB (<see cref="UniqueClipKeys"/> × <see cref="KeyBytes"/>).</summary>
@@ -1254,25 +1347,26 @@ public partial class FigureManager : Node3D
     /// <summary>
     /// The clip-memory reduction of ruling P3-R11 (Task 35): a freshly retargeted clip whose digest an earlier template
     /// already holds is dropped and that template's <see cref="Animation"/> is bound instead — the same keys bit for bit,
-    /// so nothing that plays changes. Returns the clip to bind; counts shared clips and the keys this template keeps.
+    /// so nothing that plays changes. Returns the clip to bind; <paramref name="shared"/> says whether it was taken over.
     /// </summary>
-    private BoundClip ShareIdentical(BoundClip b, ref int shared, ref long ownKeys)
+    internal BoundClip ShareIdentical(BoundClip b, ref bool shared)
     {
-        if (b.RootPath is not null || b.Digest is not { } digest || b.Anim is null)
-        {
-            ownKeys += b.Keys;
-            return b;
-        }
+        shared = false;
+        if (b.RootPath is not null || b.Digest is not { } digest || b.Anim is null) return b;
         if (_sharedClips.TryGetValue(digest, out var held) && IsInstanceValid(held))
         {
             b.Anim.Dispose();
-            shared++;
+            shared = true;
             return b with { Anim = held };
         }
         _sharedClips[digest] = b.Anim;
-        ownKeys += b.Keys;
         return b;
     }
+
+    /// <summary>Check helper (Task 35b, <c>--check clips</c>): the lazy clip fitter of the template <paramref name="name"/>'s body shows.</summary>
+    public TemplateClips? ClipsOf(string name)
+        => _figures.TryGetValue(name, out var f) && f.LoadedUrl is { } url
+           && _templates.TryGetValue(TemplateKey(url, f.Sets, f.HeightM), out var t) && t.IsCompletedSuccessfully ? t.Result.Lazy : null;
 
     /// <summary>
     /// Check helper (Task 35, <c>--check pairs</c> Q9): <paramref name="name"/>'s model fitted once more at
@@ -1286,6 +1380,10 @@ public partial class FigureManager : Node3D
         var info = _infos[name];
         var a = await GetTemplate(info.Url, info, fig.Sets, fig.HeightM);
         var b = await GetTemplate(info.Url, info, fig.Sets, heightM);
+        // Both libraries whole (Task 35b: a template holds only what was played): the first before the second, as the
+        // eager fit built them.
+        await (a.Lazy?.EnsureAllAsync() ?? Task.CompletedTask);
+        await (b.Lazy?.EnsureAllAsync() ?? Task.CompletedTask);
         int same = 0, rootOwn = 0, otherOwn = 0;
         foreach (var kind in b.Kinds)
         {
@@ -1411,8 +1509,6 @@ public partial class FigureManager : Node3D
         return ((long)after - (long)before, (long)after - (long)freed, keys, made.Count);
     }
 
-    /// <summary>The browser's fit slice budget (<c>FIT_SLICE_MS</c>): a frame is yielded once a slice ran this long.</summary>
-    public const double FitSliceMs = 12;
 
     /// <summary>
     /// Characters are DIELECTRICS (figures.ts <c>buildModel</c>, AV3D-14): metalness 0 on every material of the model —
@@ -1510,6 +1606,7 @@ public partial class FigureManager : Node3D
     private void Instantiate(Figure fig, ModelTemplate t, ModelInfo info, FigureTier tier, double? poolHeight = null)
     {
         if (!IsInstanceValid(t.Root)) return;   // retired meanwhile (RetireStaleTemplates): the next poll loads the new model
+        var dupWatch = System.Diagnostics.Stopwatch.StartNew();
         var inst = (Node3D)t.Root.Duplicate();
         double scale = poolHeight is { } ph ? ph / t.RawHeight : info.Normalized ? 1.0 : fig.HeightM / t.RawHeight;
         var body = new Node3D { Name = "Body", Scale = Vector3.One * (float)scale };
@@ -1527,7 +1624,9 @@ public partial class FigureManager : Node3D
         fig.UnboundClips = t.Unbound;
         fig.ClipSets = t.ClipSets;
         fig.ClipKeys = t.Keys;
-        fig.ClipBytes = t.ClipBytes;
+        fig.ClipBytesOf = () => t.ClipBytes;
+        // A clip of the plan that is not fitted yet is asked for here (Task 35b) — set before SetBody plays the first one.
+        fig.FitClip = t.Lazy is { } lazy ? lazy.Request : null;
         fig.Poses = Clips.Poses;
         fig.Transitions = Clips.Transitions;
         fig.Extras = t.Extras;
@@ -1541,6 +1640,7 @@ public partial class FigureManager : Node3D
         GaitBox? box = t.BindBox is { } b2 ? new GaitBox(b2.Min * scale, b2.Max * scale) : null;
         fig.SetBody(body, true, ClipLibrary.Find<Skeleton3D>(inst), player, t.Library is null ? null : t.Kinds, bind,
                     box, t.RawHeight * scale);
+        LongestInstantiateMs = Math.Max(LongestInstantiateMs, dupWatch.Elapsed.TotalMilliseconds);
     }
 
     // ---- the fallback pool and the portrait (Task 29, ruling P3-R10) -------------------------------------------------
@@ -1585,6 +1685,7 @@ public partial class FigureManager : Node3D
             return;
         }
         if (fig.PoolModel == model.Name && fig.Body is not null) return;
+        _ = PrepareAsync(fig, model.Template);   // the pool body is shown now; its activity follows once fitted (Task 35b)
         Instantiate(fig, model.Template, model.Info, FigureTier.Full, model.Height);
         fig.MarkPool(model.Name, model.Height);
         UpdateStats();

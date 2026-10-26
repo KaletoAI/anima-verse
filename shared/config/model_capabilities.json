@@ -14734,6 +14734,1022 @@
           }
         ]
       }
+    },
+    "evo-x2::qwen3.8-27b-dominatrix-abliterated-q4-k-m": {
+      "tested_date": "2026-10-18",
+      "tested_score": "22/22",
+      "tested_tool_score": "7/7",
+      "tested_helper_score": "15/15",
+      "tested_hallucinations": 0,
+      "tested_verdict": {
+        "tool": true,
+        "helper": true
+      },
+      "tested_speed": {
+        "avg_latency_s": 46.2,
+        "tok_per_s": 2.1,
+        "total_s": 1522.7,
+        "tokens": 3181
+      },
+      "tested_suitability": {
+        "model": "Evo-X2::qwen3.8-27b-dominatrix-abliterated-q4-k-m",
+        "tool": "7/7",
+        "helper": "15/15",
+        "verdict": {
+          "tool": true,
+          "helper": true
+        },
+        "speed": {
+          "avg_latency_s": 46.2,
+          "tok_per_s": 2.1,
+          "total_s": 1522.7,
+          "tokens": 3181
+        },
+        "checks": [
+          {
+            "id": "thought_1",
+            "label": "thought #1 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['TalkTo']",
+            "duration_s": 88.82,
+            "tok_s": 0.9
+          },
+          {
+            "id": "thought_2",
+            "label": "thought #2 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['TalkTo', 'TalkTo']",
+            "duration_s": 83.5,
+            "tok_s": 3.1
+          },
+          {
+            "id": "thought_3",
+            "label": "thought #3 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['SendMessage', 'SetActivity']",
+            "duration_s": 39.84,
+            "tok_s": 2.9
+          },
+          {
+            "id": "intent_1",
+            "label": "intent #1 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['UseItem']",
+            "duration_s": 26.8,
+            "tok_s": 0.6
+          },
+          {
+            "id": "intent_2",
+            "label": "intent #2 (text)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — plain text, 4 chars",
+            "duration_s": 3.77,
+            "tok_s": 0.5
+          },
+          {
+            "id": "intent_3",
+            "label": "intent #3 (text)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — plain text, 4 chars",
+            "duration_s": 3.76,
+            "tok_s": 0.5
+          },
+          {
+            "id": "intent_4",
+            "label": "intent #4 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['UseItem']",
+            "duration_s": 6.65,
+            "tok_s": 3.6
+          },
+          {
+            "id": "extraction_1",
+            "label": "extraction #1 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 257.91,
+            "tok_s": 0.4
+          },
+          {
+            "id": "extraction_2",
+            "label": "extraction #2 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 80.07,
+            "tok_s": 1.5
+          },
+          {
+            "id": "extraction_3",
+            "label": "extraction #3 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 51.66,
+            "tok_s": 4.1
+          },
+          {
+            "id": "extraction_4",
+            "label": "extraction #4 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 26.23,
+            "tok_s": 8.1
+          },
+          {
+            "id": "relationship_summary_1",
+            "label": "relationship_summary #1 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 47.55,
+            "tok_s": 0.9
+          },
+          {
+            "id": "relationship_summary_2",
+            "label": "relationship_summary #2 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 21.47,
+            "tok_s": 1.9
+          },
+          {
+            "id": "relationship_summary_3",
+            "label": "relationship_summary #3 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 8.41,
+            "tok_s": 4.9
+          },
+          {
+            "id": "image_prompt_1",
+            "label": "image_prompt #1 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 520 chars",
+            "duration_s": 46.69,
+            "tok_s": 2.2
+          },
+          {
+            "id": "image_prompt_2",
+            "label": "image_prompt #2 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 556 chars",
+            "duration_s": 47.44,
+            "tok_s": 2.4
+          },
+          {
+            "id": "image_prompt_3",
+            "label": "image_prompt #3 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 453 chars",
+            "duration_s": 14.23,
+            "tok_s": 6.4
+          },
+          {
+            "id": "consolidation_1",
+            "label": "consolidation #1 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 202 chars",
+            "duration_s": 8.61,
+            "tok_s": 5.9
+          },
+          {
+            "id": "consolidation_2",
+            "label": "consolidation #2 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 280 chars",
+            "duration_s": 14.54,
+            "tok_s": 5.0
+          },
+          {
+            "id": "consolidation_3",
+            "label": "consolidation #3 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 314 chars",
+            "duration_s": 62.92,
+            "tok_s": 1.3
+          },
+          {
+            "id": "image_analysis_1",
+            "label": "image_analysis #1 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 1531 chars",
+            "duration_s": 57.31,
+            "tok_s": 5.4
+          },
+          {
+            "id": "image_analysis_2",
+            "label": "image_analysis #2 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 428 chars",
+            "duration_s": 18.27,
+            "tok_s": 4.8
+          }
+        ]
+      }
+    },
+    "dx10-02::lfm2.5-24b-a2b-q8-0": {
+      "tested_date": "2026-10-21",
+      "tested_score": "0/22",
+      "tested_tool_score": "0/7",
+      "tested_helper_score": "0/15",
+      "tested_hallucinations": 2,
+      "tested_verdict": {
+        "tool": false,
+        "helper": false
+      },
+      "tested_speed": {
+        "avg_latency_s": 11.78,
+        "tok_per_s": 72.7,
+        "total_s": 437.6,
+        "tokens": 31835
+      },
+      "tested_suitability": {
+        "model": "DX10-02::lfm2.5-24b-a2b-q8-0",
+        "tool": "0/7",
+        "helper": "0/15",
+        "verdict": {
+          "tool": false,
+          "helper": false
+        },
+        "speed": {
+          "avg_latency_s": 11.78,
+          "tok_per_s": 72.7,
+          "total_s": 437.6,
+          "tokens": 31835
+        },
+        "checks": [
+          {
+            "id": "thought_1",
+            "label": "thought #1 (tool)",
+            "category": "tool",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "0/3 runs ok — no tool call emitted",
+            "duration_s": 13.37,
+            "tok_s": 67.3
+          },
+          {
+            "id": "thought_2",
+            "label": "thought #2 (tool)",
+            "category": "tool",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "0/3 runs ok — no tool call emitted",
+            "duration_s": 12.93,
+            "tok_s": 69.6
+          },
+          {
+            "id": "thought_3",
+            "label": "thought #3 (tool)",
+            "category": "tool",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "0/3 runs ok — no tool call emitted",
+            "duration_s": 13.0,
+            "tok_s": 69.2
+          },
+          {
+            "id": "intent_1",
+            "label": "intent #1 (tool)",
+            "category": "tool",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "0/3 runs ok — no tool call emitted",
+            "duration_s": 12.52,
+            "tok_s": 71.9
+          },
+          {
+            "id": "intent_2",
+            "label": "intent #2 (text)",
+            "category": "tool",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "0/3 runs ok — empty",
+            "duration_s": 12.47,
+            "tok_s": 72.2
+          },
+          {
+            "id": "intent_3",
+            "label": "intent #3 (text)",
+            "category": "tool",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "0/3 runs ok — empty",
+            "duration_s": 12.49,
+            "tok_s": 72.1
+          },
+          {
+            "id": "intent_4",
+            "label": "intent #4 (tool)",
+            "category": "tool",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "0/3 runs ok — no tool call emitted",
+            "duration_s": 12.5,
+            "tok_s": 72.0
+          },
+          {
+            "id": "extraction_1",
+            "label": "extraction #1 (json)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "no parseable JSON object",
+            "duration_s": 12.17,
+            "tok_s": 73.9
+          },
+          {
+            "id": "extraction_2",
+            "label": "extraction #2 (json)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "no parseable JSON object",
+            "duration_s": 12.06,
+            "tok_s": 74.6
+          },
+          {
+            "id": "extraction_3",
+            "label": "extraction #3 (json)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "no parseable JSON object",
+            "duration_s": 12.19,
+            "tok_s": 73.9
+          },
+          {
+            "id": "extraction_4",
+            "label": "extraction #4 (json)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "no parseable JSON object",
+            "duration_s": 12.0,
+            "tok_s": 75.0
+          },
+          {
+            "id": "relationship_summary_1",
+            "label": "relationship_summary #1 (json)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "no parseable JSON object",
+            "duration_s": 11.52,
+            "tok_s": 78.1
+          },
+          {
+            "id": "relationship_summary_2",
+            "label": "relationship_summary #2 (json)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "no parseable JSON object",
+            "duration_s": 11.5,
+            "tok_s": 78.3
+          },
+          {
+            "id": "relationship_summary_3",
+            "label": "relationship_summary #3 (json)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "no parseable JSON object",
+            "duration_s": 11.47,
+            "tok_s": 78.5
+          },
+          {
+            "id": "image_prompt_1",
+            "label": "image_prompt #1 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "empty",
+            "duration_s": 11.88,
+            "tok_s": 75.8
+          },
+          {
+            "id": "image_prompt_2",
+            "label": "image_prompt #2 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "empty",
+            "duration_s": 11.86,
+            "tok_s": 75.9
+          },
+          {
+            "id": "image_prompt_3",
+            "label": "image_prompt #3 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "empty",
+            "duration_s": 11.87,
+            "tok_s": 75.8
+          },
+          {
+            "id": "consolidation_1",
+            "label": "consolidation #1 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "empty",
+            "duration_s": 11.69,
+            "tok_s": 77.0
+          },
+          {
+            "id": "consolidation_2",
+            "label": "consolidation #2 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "empty",
+            "duration_s": 12.05,
+            "tok_s": 74.7
+          },
+          {
+            "id": "consolidation_3",
+            "label": "consolidation #3 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "empty",
+            "duration_s": 11.69,
+            "tok_s": 77.0
+          },
+          {
+            "id": "image_analysis_1",
+            "label": "image_analysis #1 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": true,
+            "detail": "refusal/meta text",
+            "duration_s": 7.59,
+            "tok_s": 77.9
+          },
+          {
+            "id": "image_analysis_2",
+            "label": "image_analysis #2 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": true,
+            "detail": "refusal/meta text",
+            "duration_s": 8.27,
+            "tok_s": 77.9
+          }
+        ]
+      }
+    },
+    "llm-gateway::nano-gpt/qwen/qwen3.8-27b": {
+      "tested_date": "2026-10-24",
+      "tested_score": "19/22",
+      "tested_tool_score": "6/7",
+      "tested_helper_score": "13/15",
+      "tested_hallucinations": 2,
+      "tested_verdict": {
+        "tool": true,
+        "helper": true
+      },
+      "tested_speed": {
+        "avg_latency_s": 2.85,
+        "tok_per_s": 24.9,
+        "total_s": 95.3,
+        "tokens": 2372
+      },
+      "tested_suitability": {
+        "model": "LLM-Gateway::nano-gpt/qwen/qwen3.8-27b",
+        "tool": "6/7",
+        "helper": "13/15",
+        "verdict": {
+          "tool": true,
+          "helper": true
+        },
+        "speed": {
+          "avg_latency_s": 2.85,
+          "tok_per_s": 24.9,
+          "total_s": 95.3,
+          "tokens": 2372
+        },
+        "checks": [
+          {
+            "id": "thought_1",
+            "label": "thought #1 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['TalkTo']",
+            "duration_s": 2.62,
+            "tok_s": 24.1
+          },
+          {
+            "id": "thought_2",
+            "label": "thought #2 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['TalkTo', 'TalkTo']",
+            "duration_s": 5.32,
+            "tok_s": 38.1
+          },
+          {
+            "id": "thought_3",
+            "label": "thought #3 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['SendMessage', 'SetActivity']",
+            "duration_s": 3.14,
+            "tok_s": 29.2
+          },
+          {
+            "id": "intent_1",
+            "label": "intent #1 (tool)",
+            "category": "tool",
+            "ok": false,
+            "hallucinated": false,
+            "detail": "0/3 runs ok — no tool call emitted",
+            "duration_s": 1.22,
+            "tok_s": 1.6
+          },
+          {
+            "id": "intent_2",
+            "label": "intent #2 (text)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — plain text, 4 chars",
+            "duration_s": 1.42,
+            "tok_s": 1.4
+          },
+          {
+            "id": "intent_3",
+            "label": "intent #3 (text)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — plain text, 18 chars",
+            "duration_s": 1.19,
+            "tok_s": 3.9
+          },
+          {
+            "id": "intent_4",
+            "label": "intent #4 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['UseItem']",
+            "duration_s": 1.46,
+            "tok_s": 9.6
+          },
+          {
+            "id": "extraction_1",
+            "label": "extraction #1 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 5.2,
+            "tok_s": 51.9
+          },
+          {
+            "id": "extraction_2",
+            "label": "extraction #2 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 0.95,
+            "tok_s": 12.6
+          },
+          {
+            "id": "extraction_3",
+            "label": "extraction #3 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 1.02,
+            "tok_s": 11.8
+          },
+          {
+            "id": "extraction_4",
+            "label": "extraction #4 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 5.12,
+            "tok_s": 45.7
+          },
+          {
+            "id": "relationship_summary_1",
+            "label": "relationship_summary #1 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 1.58,
+            "tok_s": 24.1
+          },
+          {
+            "id": "relationship_summary_2",
+            "label": "relationship_summary #2 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 1.98,
+            "tok_s": 20.7
+          },
+          {
+            "id": "relationship_summary_3",
+            "label": "relationship_summary #3 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 1.51,
+            "tok_s": 25.2
+          },
+          {
+            "id": "image_prompt_1",
+            "label": "image_prompt #1 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 486 chars",
+            "duration_s": 11.96,
+            "tok_s": 7.9
+          },
+          {
+            "id": "image_prompt_2",
+            "label": "image_prompt #2 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 543 chars",
+            "duration_s": 2.62,
+            "tok_s": 42.0
+          },
+          {
+            "id": "image_prompt_3",
+            "label": "image_prompt #3 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 605 chars",
+            "duration_s": 4.54,
+            "tok_s": 25.8
+          },
+          {
+            "id": "consolidation_1",
+            "label": "consolidation #1 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 133 chars",
+            "duration_s": 1.91,
+            "tok_s": 17.3
+          },
+          {
+            "id": "consolidation_2",
+            "label": "consolidation #2 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 280 chars",
+            "duration_s": 1.97,
+            "tok_s": 34.5
+          },
+          {
+            "id": "consolidation_3",
+            "label": "consolidation #3 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 409 chars",
+            "duration_s": 2.86,
+            "tok_s": 36.7
+          },
+          {
+            "id": "image_analysis_1",
+            "label": "image_analysis #1 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": true,
+            "detail": "refusal/meta text",
+            "duration_s": 2.13,
+            "tok_s": 21.1
+          },
+          {
+            "id": "image_analysis_2",
+            "label": "image_analysis #2 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": true,
+            "detail": "refusal/meta text",
+            "duration_s": 0.92,
+            "tok_s": 16.2
+          }
+        ]
+      }
+    },
+    "llm-gateway::together/qwen/qwen3.5-9b": {
+      "tested_date": "2026-10-24",
+      "tested_score": "21/22",
+      "tested_tool_score": "7/7",
+      "tested_helper_score": "14/15",
+      "tested_hallucinations": 1,
+      "tested_verdict": {
+        "tool": true,
+        "helper": true
+      },
+      "tested_speed": {
+        "avg_latency_s": 1.42,
+        "tok_per_s": 50.2,
+        "total_s": 51.9,
+        "tokens": 2605
+      },
+      "tested_suitability": {
+        "model": "LLM-Gateway::together/Qwen/Qwen3.5-9B",
+        "tool": "7/7",
+        "helper": "14/15",
+        "verdict": {
+          "tool": true,
+          "helper": true
+        },
+        "speed": {
+          "avg_latency_s": 1.42,
+          "tok_per_s": 50.2,
+          "total_s": 51.9,
+          "tokens": 2605
+        },
+        "checks": [
+          {
+            "id": "thought_1",
+            "label": "thought #1 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['TalkTo']",
+            "duration_s": 1.42,
+            "tok_s": 42.9
+          },
+          {
+            "id": "thought_2",
+            "label": "thought #2 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['TalkTo']",
+            "duration_s": 1.94,
+            "tok_s": 69.4
+          },
+          {
+            "id": "thought_3",
+            "label": "thought #3 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['SendMessage', 'SetActivity']",
+            "duration_s": 1.5,
+            "tok_s": 61.3
+          },
+          {
+            "id": "intent_1",
+            "label": "intent #1 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "2/3 runs ok — tool call buried in 572 chars of narrative prose",
+            "duration_s": 1.86,
+            "tok_s": 46.2
+          },
+          {
+            "id": "intent_2",
+            "label": "intent #2 (text)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — plain text, 48 chars",
+            "duration_s": 1.16,
+            "tok_s": 35.8
+          },
+          {
+            "id": "intent_3",
+            "label": "intent #3 (text)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — plain text, 4 chars",
+            "duration_s": 1.17,
+            "tok_s": 24.2
+          },
+          {
+            "id": "intent_4",
+            "label": "intent #4 (tool)",
+            "category": "tool",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "3/3 runs ok — clean tool call(s): ['UseItem']",
+            "duration_s": 1.25,
+            "tok_s": 56.2
+          },
+          {
+            "id": "extraction_1",
+            "label": "extraction #1 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 2.63,
+            "tok_s": 74.6
+          },
+          {
+            "id": "extraction_2",
+            "label": "extraction #2 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 0.44,
+            "tok_s": 27.2
+          },
+          {
+            "id": "extraction_3",
+            "label": "extraction #3 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 0.61,
+            "tok_s": 29.3
+          },
+          {
+            "id": "extraction_4",
+            "label": "extraction #4 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 3.44,
+            "tok_s": 47.1
+          },
+          {
+            "id": "relationship_summary_1",
+            "label": "relationship_summary #1 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 0.64,
+            "tok_s": 63.0
+          },
+          {
+            "id": "relationship_summary_2",
+            "label": "relationship_summary #2 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 0.66,
+            "tok_s": 59.1
+          },
+          {
+            "id": "relationship_summary_3",
+            "label": "relationship_summary #3 (json)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "valid JSON with expected keys",
+            "duration_s": 1.78,
+            "tok_s": 22.0
+          },
+          {
+            "id": "image_prompt_1",
+            "label": "image_prompt #1 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 417 chars",
+            "duration_s": 1.91,
+            "tok_s": 44.6
+          },
+          {
+            "id": "image_prompt_2",
+            "label": "image_prompt #2 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 466 chars",
+            "duration_s": 2.49,
+            "tok_s": 40.2
+          },
+          {
+            "id": "image_prompt_3",
+            "label": "image_prompt #3 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 328 chars",
+            "duration_s": 1.52,
+            "tok_s": 46.2
+          },
+          {
+            "id": "consolidation_1",
+            "label": "consolidation #1 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 140 chars",
+            "duration_s": 0.55,
+            "tok_s": 67.1
+          },
+          {
+            "id": "consolidation_2",
+            "label": "consolidation #2 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 295 chars",
+            "duration_s": 1.25,
+            "tok_s": 56.0
+          },
+          {
+            "id": "consolidation_3",
+            "label": "consolidation #3 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 393 chars",
+            "duration_s": 1.21,
+            "tok_s": 74.5
+          },
+          {
+            "id": "image_analysis_1",
+            "label": "image_analysis #1 (text)",
+            "category": "helper",
+            "ok": true,
+            "hallucinated": false,
+            "detail": "plain text, 318 chars",
+            "duration_s": 1.15,
+            "tok_s": 54.8
+          },
+          {
+            "id": "image_analysis_2",
+            "label": "image_analysis #2 (text)",
+            "category": "helper",
+            "ok": false,
+            "hallucinated": true,
+            "detail": "refusal/meta text",
+            "duration_s": 0.71,
+            "tok_s": 62.9
+          }
+        ]
+      }
     }
   }
 }

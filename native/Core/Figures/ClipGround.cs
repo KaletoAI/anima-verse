@@ -23,6 +23,26 @@ public sealed class ProbeSkin
     /// <summary>The engine object the surface came from (opaque to the core).</summary>
     public object? Owner { get; init; }
     public int VertexCount => Rest.Length / 3;
+
+    /// <summary>Every <paramref name="stride"/>-th vertex of this surface from the first on (bind table and frame unchanged).</summary>
+    public ProbeSkin Strided(int stride)
+    {
+        int n = (VertexCount + stride - 1) / stride;
+        var rest = new float[n * 3];
+        var bones = new int[n * Slots];
+        var weights = new float[n * Slots];
+        for (int i = 0, v = 0; v < VertexCount; i++, v += stride)
+        {
+            Array.Copy(Rest, v * 3, rest, i * 3, 3);
+            Array.Copy(Bones, v * Slots, bones, i * Slots, Slots);
+            Array.Copy(Weights, v * Slots, weights, i * Slots, Slots);
+        }
+        return new ProbeSkin
+        {
+            Rest = rest, Bones = bones, Weights = weights, Slots = Slots, BindNodes = BindNodes, BindPoses = BindPoses,
+            Frame = Frame, Owner = Owner,
+        };
+    }
 }
 
 /// <summary>
@@ -99,9 +119,64 @@ public static class ClipGround
     public static void Measure(IReadOnlyList<ProbeClip> clips, ProbeRig rig, IReadOnlyList<ProbeSkin> skins)
     {
         if (clips.Count == 0 || skins.Count == 0) return;
+        Measure(clips, rig, skins, BindMinY(rig, skins));
+    }
+
+    /// <summary>
+    /// The rest pose's lowest point over ALL vertices (stride 1) — <c>bindMinY</c> of <see cref="Measure(IReadOnlyList{ProbeClip}, ProbeRig, IReadOnlyList{ProbeSkin})"/>.
+    /// It depends on the rig and its skins only, so a caller that measures one clip at a time (the native lazy fit,
+    /// Task 35b) computes it ONCE per rig and hands it to <see cref="Measure(IReadOnlyList{ProbeClip}, ProbeRig, IReadOnlyList{ProbeSkin}, double)"/>.
+    /// +∞ without a skinned surface. Pure: safe on any thread while nobody mutates the rig or the skins.
+    /// </summary>
+    public static double BindMinY(ProbeRig rig, IReadOnlyList<ProbeSkin> skins)
+        => skins.Count == 0 ? double.PositiveInfinity : MinY(new RigPose(rig), skins, 1, RigMath.Inverse(rig.Root));
+
+    /// <summary>
+    /// The vertices <see cref="Measure(IReadOnlyList{ProbeClip}, ProbeRig, IReadOnlyList{ProbeSkin})"/> samples, kept
+    /// alone: per surface every stride-th vertex, the stride taken over ALL surfaces' vertices as the measurement takes it
+    /// (≤ <see cref="SampleVertices"/> + one per surface). A caller that measures clip after clip long after the build
+    /// (the native lazy fit, Task 35b) holds these ~1 000 vertices instead of the whole mesh;
+    /// <see cref="MeasureSampled"/> visits exactly them, in the same order.
+    /// </summary>
+    public static List<ProbeSkin> SampledSkins(IReadOnlyList<ProbeSkin> skins)
+    {
+        int total = skins.Sum(s => s.VertexCount);
+        int stride = Math.Max(1, (total + SampleVertices - 1) / SampleVertices);
+        return skins.Select(s => s.Strided(stride)).ToList();
+    }
+
+    /// <summary>
+    /// <see cref="Measure(IReadOnlyList{ProbeClip}, ProbeRig, IReadOnlyList{ProbeSkin}, double)"/> on the
+    /// <see cref="SampledSkins"/> of the rig's surfaces (stride 1 over them: the very vertices the full measurement
+    /// visits) against the full surfaces' <see cref="BindMinY"/> — the same offsets bit for bit.
+    /// </summary>
+    public static void MeasureSampled(IReadOnlyList<ProbeClip> clips, ProbeRig rig, IReadOnlyList<ProbeSkin> sampled, double bindMinY)
+    {
+        if (clips.Count == 0 || sampled.Count == 0) return;
         var pose = new RigPose(rig);
         var rootInv = RigMath.Inverse(rig.Root);
-        double bindMinY = MinY(pose, skins, 1, rootInv);
+        foreach (var clip in clips)
+        {
+            double minY = double.PositiveInfinity;
+            foreach (double t in SampleTimes(clip.Duration))
+            {
+                pose.Pose(clip, t);
+                minY = Math.Min(minY, MinY(pose, sampled, 1, rootInv));
+            }
+            clip.GroundOffset = GroundOffsetOf(minY, bindMinY);
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Measure(IReadOnlyList{ProbeClip}, ProbeRig, IReadOnlyList{ProbeSkin})"/> against a <paramref name="bindMinY"/>
+    /// measured before (<see cref="BindMinY"/>): the same offsets bit for bit — the rest pose is a fresh
+    /// <see cref="RigPose"/>'s in both, and every clip is posed from its own tracks.
+    /// </summary>
+    public static void Measure(IReadOnlyList<ProbeClip> clips, ProbeRig rig, IReadOnlyList<ProbeSkin> skins, double bindMinY)
+    {
+        if (clips.Count == 0 || skins.Count == 0) return;
+        var pose = new RigPose(rig);
+        var rootInv = RigMath.Inverse(rig.Root);
         int total = skins.Sum(s => s.VertexCount);
         int stride = Math.Max(1, (total + SampleVertices - 1) / SampleVertices);
         foreach (var clip in clips)

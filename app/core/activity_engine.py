@@ -514,7 +514,10 @@ def _check_present(character_name: str, target_name: str,
         room = room_id or get_character_current_room(character_name)
         from app.core.room_entry import characters_in_room
         present = characters_in_room(loc, room)
-        if target_name in present:
+        # Die Condition kommt kleingeschrieben an (_evaluate_single_condition),
+        # Character-Namen sind es nicht — Vergleich ohne Gross-/Kleinschreibung.
+        wanted = target_name.lower()
+        if any((n or "").lower() == wanted for n in present):
             return True, ""
         return False, f"{target_name} nicht im selben Raum"
     except Exception as e:

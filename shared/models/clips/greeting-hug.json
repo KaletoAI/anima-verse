@@ -1,63 +1,63 @@
 {
- "kind": "greeting-hug",
- "pair": true,
- "roles": [
-  "a",
-  "b"
- ],
- "fps": 30,
- "source_fps": 30.0,
- "frames": 121,
- "duration_s": 4.033,
- "loop": false,
- "speed": 1.0,
- "geometry": {
-  "anchor_frame": 54,
-  "anchor_s": 1.8,
-  "root_distance_m": 0.424,
-  "floor_shift_cm": -0.01,
-  "roles": {
-   "a": {
-    "start_xz_m": [
-     -0.212,
-     0.0
-    ],
-    "anchor_xz_m": [
-     -0.212,
-     0.0
-    ]
-   },
-   "b": {
-    "start_xz_m": [
-     0.212,
-     -0.0
-    ],
-    "anchor_xz_m": [
-     0.212,
-     -0.0
-    ]
-   }
-  },
-  "hips_scale": [
-   1.0,
-   1.0
+  "kind": "greeting-hug",
+  "pair": true,
+  "roles": [
+    "a",
+    "b"
   ],
-  "contact": {
-   "hands": [
-    "RightHand",
-    "LeftArm"
-   ],
-   "actor_distance_m": 0.132,
-   "rig_distance_m": 0.132,
-   "shift_m": 0.0
+  "fps": 30,
+  "source_fps": 30.0,
+  "frames": 121,
+  "duration_s": 4.033,
+  "loop": true,
+  "speed": 1.0,
+  "geometry": {
+    "anchor_frame": 54,
+    "anchor_s": 1.8,
+    "root_distance_m": 0.424,
+    "floor_shift_cm": -0.01,
+    "roles": {
+      "a": {
+        "start_xz_m": [
+          -0.212,
+          0.0
+        ],
+        "anchor_xz_m": [
+          -0.212,
+          0.0
+        ]
+      },
+      "b": {
+        "start_xz_m": [
+          0.212,
+          -0.0
+        ],
+        "anchor_xz_m": [
+          0.212,
+          -0.0
+        ]
+      }
+    },
+    "hips_scale": [
+      1.0,
+      1.0
+    ],
+    "contact": {
+      "hands": [
+        "RightHand",
+        "LeftArm"
+      ],
+      "actor_distance_m": 0.132,
+      "rig_distance_m": 0.132,
+      "shift_m": 0.0
+    },
+    "rig_floor_shift_cm": -0.0,
+    "rig_floor_min_cm": -0.0
   },
-  "rig_floor_shift_cm": -0.0,
-  "rig_floor_min_cm": -0.0
- },
- "source": {
-  "format": "procedural",
-  "author": "animation-studio",
-  "spec": "animation-studio/anims/greeting-hug.py",
-  "spec_sha": "e9f8c313d11caaf09db17aa98d1317a0463ca9b04a61541301acf0a862b39784"
- }
+  "source": {
+    "format": "procedural",
+    "author": "animation-studio",
+    "spec": "animation-studio/anims/greeting-hug.py",
+    "spec_sha": "e9f8c313d11caaf09db17aa98d1317a0463ca9b04a61541301acf0a862b39784"
+  }
 }

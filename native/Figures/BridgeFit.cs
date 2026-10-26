@@ -212,22 +212,51 @@ public static class BridgeFit
     /// <summary>
     /// three's <c>Box3.setFromObject(template)</c> in the frame of the model root's PARENT (its own transform included):
     /// a skinned mesh by its vertices skinned in the rest pose (<c>SkinnedMesh.computeBoundingBox</c>), any other mesh
-    /// by its AABB through the node chain.
+    /// by its AABB through the node chain. <see cref="GatherBindBox"/> (main thread) + <see cref="ComputeBindBox"/> (any
+    /// thread), in the same order point by point.
     /// </summary>
-    public static Aabb BindBox(Node3D modelRoot)
+    public static Aabb BindBox(Node3D modelRoot) => ComputeBindBox(GatherBindBox(modelRoot));
+
+    /// <summary>One mesh of the bind box in walk order: skinned (its rig and its surfaces) or plain (its AABB through the chain).</summary>
+    public sealed record BindBoxMesh(ProbeRig? Rig, List<ProbeSkin> Skins, Transform3D Frame, Aabb Aabb);
+
+    /// <summary>
+    /// What <see cref="ComputeBindBox"/> needs, read from the engine (Task 35b): per mesh in walk order its rig and skinned
+    /// surfaces, or its frame and AABB (a skinned mesh whose surfaces are unusable falls back to its AABB, as before). One
+    /// rig and one surface read per skeleton, however many meshes it skins.
+    /// </summary>
+    public static List<BindBoxMesh> GatherBindBox(Node3D modelRoot)
     {
-        Aabb? box = null;
-        void Add(Vector3 p) => box = box is { } b ? b.Expand(p) : new Aabb(p, Vector3.Zero);
+        var list = new List<BindBoxMesh>();
+        var rigs = new Dictionary<Skeleton3D, (ProbeRig Rig, List<ProbeSkin> Skins)>();
         foreach (var mi in Walk(modelRoot).OfType<MeshInstance3D>())
         {
             if (mi.Mesh is null) continue;
+            var frame = FrameOf(modelRoot, mi);
+            var aabb = mi.Mesh.GetAabb();
             if (mi.Skin is not null && mi.GetNodeOrNull<Skeleton3D>(mi.Skeleton) is { } skel)
             {
-                var rig = RigOf(modelRoot, skel);
+                if (!rigs.TryGetValue(skel, out var r)) rigs[skel] = r = (RigOf(modelRoot, skel), SkinsOf(modelRoot, skel));
+                list.Add(new BindBoxMesh(r.Rig, r.Skins.Where(s => ReferenceEquals(s.Owner, mi)).ToList(), frame, aabb));
+            }
+            else list.Add(new BindBoxMesh(null, new List<ProbeSkin>(), frame, aabb));
+        }
+        return list;
+    }
+
+    /// <summary>The bind box of <see cref="GatherBindBox"/>'s meshes — pure arithmetic, any thread.</summary>
+    public static Aabb ComputeBindBox(IReadOnlyList<BindBoxMesh> meshes)
+    {
+        Aabb? box = null;
+        void Add(Vector3 p) => box = box is { } b ? b.Expand(p) : new Aabb(p, Vector3.Zero);
+        foreach (var m in meshes)
+        {
+            if (m.Rig is { } rig)
+            {
                 var pose = new RigPose(rig);
                 var rootInv = RigMath.Inverse(rig.Root);
                 bool any = false;
-                foreach (var sk in SkinsOf(modelRoot, skel).Where(s => ReferenceEquals(s.Owner, mi)))
+                foreach (var sk in m.Skins)
                 {
                     var mats = sk.BindNodes.Select((n, b) => rootInv.Times(pose.World(n)).Times(sk.BindPoses[b])).ToArray();
                     for (int v = 0; v < sk.VertexCount; v++)
@@ -248,9 +277,7 @@ public static class BridgeFit
                 }
                 if (any) continue;
             }
-            var xf = FrameOf(modelRoot, mi);
-            var a = mi.Mesh.GetAabb();
-            for (int c = 0; c < 8; c++) Add(xf * a.GetEndpoint(c));
+            for (int c = 0; c < 8; c++) Add(m.Frame * m.Aabb.GetEndpoint(c));
         }
         return box ?? new Aabb();
     }

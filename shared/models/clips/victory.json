@@ -1,51 +1,51 @@
 {
- "kind": "victory",
- "pair": false,
- "roles": [],
- "fps": 30,
- "source_fps": 120.0,
- "frames": 205,
- "duration_s": 6.833,
- "loop": false,
- "speed": 1.0,
- "geometry": {
-  "floor_shift_cm": -6.62,
-  "hips_scale": [
-   1.1042
-  ],
-  "rig_floor_shift_cm": 1.26,
-  "rig_floor_min_cm": -1.97,
-  "root_motion": {
-   "mode": "strip",
-   "travel_m": [
-    0.0,
-    0.0
-   ]
-  }
- },
- "source": {
-  "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
-  "takes": [
-   "79_69"
-  ],
-  "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217.",
-  "roll_repair_reason": "CMU/ASF gives the radius no twist dof, so the source folds all pronation into the humerus (forearm roll exactly 0); the balanced split hands it back",
-  "roll_repaired": true,
-  "roll_repaired_at": "2026-09-03",
-  "roll_repaired_files": [
-   "victory.fbx"
-  ],
-  "roll_moved_deg": {
-   "victory.fbx": {
-    "L": -23.25,
-    "R": 31.75
-   }
+  "kind": "victory",
+  "pair": false,
+  "roles": [],
+  "fps": 30,
+  "source_fps": 120.0,
+  "frames": 205,
+  "duration_s": 6.833,
+  "loop": true,
+  "speed": 1.0,
+  "geometry": {
+    "floor_shift_cm": -6.62,
+    "hips_scale": [
+      1.1042
+    ],
+    "rig_floor_shift_cm": 1.26,
+    "rig_floor_min_cm": -1.97,
+    "root_motion": {
+      "mode": "strip",
+      "travel_m": [
+        0.0,
+        0.0
+      ]
+    }
   },
-  "roll_target_deg": {
-   "victory.fbx": {
-    "L": 23.25,
-    "R": -31.75
-   }
+  "source": {
+    "database": "CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu)",
+    "takes": [
+      "79_69"
+    ],
+    "credit": "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217.",
+    "roll_repair_reason": "CMU/ASF gives the radius no twist dof, so the source folds all pronation into the humerus (forearm roll exactly 0); the balanced split hands it back",
+    "roll_repaired": true,
+    "roll_repaired_at": "2026-09-03",
+    "roll_repaired_files": [
+      "victory.fbx"
+    ],
+    "roll_moved_deg": {
+      "victory.fbx": {
+        "L": -23.25,
+        "R": 31.75
+      }
+    },
+    "roll_target_deg": {
+      "victory.fbx": {
+        "L": 23.25,
+        "R": -31.75
+      }
+    }
   }
- }
 }

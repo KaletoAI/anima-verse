@@ -53,7 +53,7 @@ public static class AnimalCheck
             Expect("N0 a .glb under /fbx/ is glTF", !FigureManager.IsFbx("glb", "/fbx/model.glb"), "url");
             using var hf = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(fixtures, "heightfield.json")));
             var height = new WorldHeight(HeightfieldOverview.Parse(hf.RootElement));
-            var mgr = new FigureManager(source, height, line => GD.Print("[check-animals] " + line), strict: true) { AutoTick = false };
+            var mgr = new FigureManager(source, height, line => GD.Print("[check-animals] " + line), strict: true) { ClipFit = ClipFitMode.OnDemandSync, AutoTick = false };
             world.AddChild(mgr);
             await mgr.InitAsync();
             await Apply(mgr, dir, "worldmap.json");

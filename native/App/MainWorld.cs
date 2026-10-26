@@ -466,9 +466,10 @@ public partial class Main : Node3D
         var fits = f.FitTimes.OrderBy(x => x).ToList();
         string fit = fits.Count == 0 ? "none" : $"{fits[0]:0}/{fits[fits.Count / 2]:0}/{fits[^1]:0} ms min/median/max";
         string line = $"figures memory: {f.Figures.Count} figures ({f.FiguresAnimated} animated), {f.TemplateCount} templates "
-                      + $"(fit {fit}), {f.TemplateKeys} keys bound, {f.UniqueClipKeys} held ({f.SharedClipCount} clips shared) "
+                      + $"(build fit {fit}), {f.TemplateKeys} keys planned, {f.FittedClipKeys} fitted in {f.FittedClipCount} of {f.PlannedClipCount} clips ({f.ClipFit}), "
+                      + $"{f.UniqueClipKeys} held ({f.SharedClipCount} clips shared) "
                       + $"≈{f.ClipMemMiB:0.0} MiB at {FigureManager.KeyBytes} B/key, library {f.Clips.SourceKeys} source keys, "
-                      + $"tracks written in one call {KeyWriter.BulkTracks}, key by key {KeyWriter.InsertedTracks}";
+                      + $"tracks written in one call {KeyWriter.BulkTracks}, key by key {KeyWriter.InsertedTracks}; {ClipFitLine(f)}";
         double staticMiB = Performance.GetMonitor(Performance.Monitor.MemoryStatic) / 1048576.0;
         if (probe && staticMiB > 0 && f.ProbeClipMemory() is { } p)
             line += $"; probe: {p.Clips} clips {p.Keys} keys allocated {p.Allocated / 1048576.0:0.00} MiB, freed {p.Freed / 1048576.0:0.00} MiB "
@@ -476,8 +477,24 @@ public partial class Main : Node3D
         var gc = GC.GetGCMemoryInfo();
         line += $"; static {staticMiB:0} MiB, objects {Performance.GetMonitor(Performance.Monitor.ObjectCount):0}, "
                 + $"resources {Performance.GetMonitor(Performance.Monitor.ObjectResourceCount):0}; managed heap {gc.HeapSizeBytes / 1048576.0:0} MiB "
-                + $"(GC total {GC.GetTotalMemory(false) / 1048576.0:0} MiB, collections {GC.CollectionCount(0)}/{GC.CollectionCount(1)}/{GC.CollectionCount(2)})";
+                + $"(GC total {GC.GetTotalMemory(false) / 1048576.0:0} MiB, collections {GC.CollectionCount(0)}/{GC.CollectionCount(1)}/{GC.CollectionCount(2)}"
+                + (probe ? $"; live after a full collection {GC.GetTotalMemory(true) / 1048576.0:0} MiB)" : ")");
         return line;
+    }
+
+    /// <summary>The clip fits so far (Task 35b): per clip wall time and main-thread time at build and on first use, the longest main-thread turn.</summary>
+    private static string ClipFitLine(FigureManager f)
+    {
+        static string Stats(System.Collections.Generic.IEnumerable<double> xs)
+        {
+            var v = xs.OrderBy(x => x).ToList();
+            return v.Count == 0 ? "none" : $"{v[0]:0.0}/{v[v.Count / 2]:0.0}/{v[^1]:0.0}";
+        }
+        var build = f.ClipFits.Where(c => !c.OnDemand).ToList();
+        var demand = f.ClipFits.Where(c => c.OnDemand).ToList();
+        return $"clip fits: {build.Count} at build (wall {Stats(build.Select(c => c.WallMs))} ms min/median/max, main {Stats(build.Select(c => c.MainMs))} ms), "
+               + $"{demand.Count} on first use (wall {Stats(demand.Select(c => c.WallMs))} ms, main {Stats(demand.Select(c => c.MainMs))} ms, "
+               + $"worker {Stats(demand.Select(c => c.WorkerMs))} ms), longest main-thread turn {f.LongestClipTurnMs:0.0} ms ({f.LongestClipTurn}); longest body swap {f.LongestInstantiateMs:0.0} ms";
     }
 
     private string FigureLine()

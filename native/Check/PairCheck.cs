@@ -64,6 +64,7 @@ public static class PairCheck
             NearD("Q0 bench1 slot height (README \"Placement world\": 4.096875)", bench[0].Y, 4.096875, 1e-6);
             var mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-pairs] " + line), strict: true)
             {
+                ClipFit = ClipFitMode.OnDemandSync,
                 AutoTick = false, Slots = () => builder.Slots,
                 GroundMoveAt = builder.FigureGroundMove, GroundYAt = builder.FigureGroundY,
                 SeatYAt = builder.PairSeatY, RoomStandAt = builder.PairRoomStandY,
@@ -189,6 +190,8 @@ public static class PairCheck
 
             // ---- Q8 the loop flag is per figure (Task 35): Ann and Hal share Test3_mia's greeting-hug__a (listed: cycle) ----
             const string hug = "greeting-hug__a";
+            ann.EnsureClip(hug);   // fitted lazily (Task 35b): the play below would; the check reads it first
+            hal.EnsureClip(hug);
             var sharedHug = ann.Player.GetAnimation(hug);
             Expect("Q8 Ann and Hal play the same shared Animation", sharedHug.GetInstanceId() == hal.Player!.GetAnimation(hug).GetInstanceId(),
                    "two objects");

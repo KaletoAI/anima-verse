@@ -29,6 +29,12 @@
       "to": "standing",
       "kind": "get-up-bed",
       "accel": 0.0
+    },
+    {
+      "from": "standing",
+      "to": "walking",
+      "kind": "walk",
+      "accel": 1.0
     }
   ]
 }

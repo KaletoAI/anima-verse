@@ -1071,6 +1071,21 @@
       "solo": true,
       "group": "stand"
     },
+    "face-washing": {
+      "prompt": "washing the face with both hands",
+      "synonyms": [
+        "das gesicht waschen",
+        "face washing",
+        "gesicht reinigen",
+        "gesicht säubern",
+        "face scrubbing",
+        "gesicht pflegen",
+        "face care"
+      ],
+      "animation": "face-washing",
+      "solo": true,
+      "group": "stand"
+    },
     "hugging": {
       "prompt": "two people hugging in greeting, arms wrapped around each other, one arm over the shoulder and one around the waist, heads side by side, warm smiles",
       "synonyms": [

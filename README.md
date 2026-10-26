@@ -437,6 +437,13 @@ source .venv/bin/activate.fish
 pip install -e .
 ```
 
+Security upgrades keep Pillow, background removal and embeddings compatible: the current
+minimums are Pillow 13.0.0, rembg 2.0.86 and fastembed 0.9.1. Upgrade them together through
+`pyproject.toml`; forcing Pillow alone with `--no-deps` can leave incompatible older consumers.
+TLS/network security minimums are declared there as well. JavaScript dependencies are installed
+from the repository root; keep the workspace manifests, security overrides and `package-lock.json`
+together when updating Vite or its transitive dependencies.
+
 ### 5. Download models
 The large model binaries are not committed to the repo. Fetch them **after** installing
 dependencies:

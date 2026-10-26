@@ -93,7 +93,7 @@ public static class PickCheck
 
         // ---- B: figures (own manager, own source: fresh counters) ----
         var source = new FixtureSource(fixtures);
-        var mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-pick] " + line), strict: true) { AutoTick = false, Slots = () => builder.Slots };
+        var mgr = new FigureManager(source, builder.Height!, line => GD.Print("[check-pick] " + line), strict: true) { ClipFit = ClipFitMode.OnDemandSync, AutoTick = false, Slots = () => builder.Slots };
         world.AddChild(mgr);
         string figureInfo;
         try

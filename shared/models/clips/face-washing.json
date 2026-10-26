@@ -1,0 +1,76 @@
+{
+  "kind": "face-washing",
+  "pair": false,
+  "roles": [],
+  "fps": 30,
+  "source_fps": 30.0,
+  "frames": 360,
+  "duration_s": 12.0,
+  "loop": true,
+  "speed": 1.0,
+  "geometry": {
+    "floor_shift_cm": -117.95,
+    "hips_scale": [
+      1.0
+    ],
+    "foot_plant": {
+      "LeftFoot": {
+        "frames": 360,
+        "max_cm": 1.29
+      },
+      "RightFoot": {
+        "frames": 360,
+        "max_cm": 1.29
+      }
+    },
+    "rig_floor_shift_cm": -1.29,
+    "rig_floor_min_cm": -0.0,
+    "root_motion": {
+      "mode": "strip",
+      "travel_m": [
+        -0.0,
+        0.0
+      ],
+      "ref_height_m": 2.011,
+      "contact_s": [
+        [
+          0.0,
+          11.967
+        ]
+      ],
+      "max_drift_cm": 6.61
+    }
+  },
+  "source": {
+    "format": "fbx",
+    "bone_map": "mixamo-noprefix",
+    "files": [
+      "motion.fbx"
+    ],
+    "takes": [
+      0
+    ],
+    "fingers": true,
+    "rotation_mode": "rest-delta",
+    "offset_b_m": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "rest_file": "rest.fbx",
+    "generator": "kimodo",
+    "generated_for_pose": "face-washing",
+    "captions": [
+      "A person raises both hands to its face, then rubs its cheeks and forehead in small circular motions.",
+      "A person continues rubbing its face with both hands, moving from the cheeks to the chin and back up to the forehead.",
+      "A person lowers both hands from its face to its sides, ending the motion."
+    ],
+    "seed": 757135518,
+    "hub_job": "4d8796f9a8134821b72b5209ea913b44",
+    "backend": "motion-kimodo",
+    "model_revision": "Kimodo-SOMA-RP-v1",
+    "variant_index": 0
+  },
+  "license": "NVIDIA-Open-Model-License",
+  "credit": "NVIDIA Kimodo (SOMA-RP)"
+}

@@ -67,12 +67,16 @@ public sealed class ProbeRig
     /// <summary>First node (traverse order) whose name is exactly <paramref name="name"/> (three's PropertyBinding), or −1.</summary>
     public int FindByName(string name)
     {
-        if (_byName is null)
+        // Built into a local and published whole: two worker threads probing the same rig (Task 35b) never see a
+        // half-filled table.
+        var byName = _byName;
+        if (byName is null)
         {
-            _byName = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (int i in PreOrder) _byName.TryAdd(Nodes[i].Name, i);
+            byName = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (int i in PreOrder) byName.TryAdd(Nodes[i].Name, i);
+            _byName = byName;
         }
-        return _byName.TryGetValue(name, out int at) ? at : -1;
+        return byName.TryGetValue(name, out int at) ? at : -1;
     }
 
     /// <summary>Key (<see cref="BoneNames.Norm"/>) → the FIRST bone in traverse order with it (footLockMeasure.ts <c>byKey</c>).</summary>
