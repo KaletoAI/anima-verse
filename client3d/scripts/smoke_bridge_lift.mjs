@@ -222,6 +222,7 @@
  *          half — `play` is not blocked. Before: the pair half on every frame.
  * INFO: per rig the measured endLift (world cm) and firstContactS.
  */
+import { runBridgeVectors } from './bridgeVectorDispatch.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -362,32 +363,8 @@ async function main() {
       JSON.stringify(library.transition_clips) === JSON.stringify(payload.transition_clips));
   } finally { globalThis.fetch = originalFetch; }
 
-  // ------------------------------------------------------------------ [L]
-  console.log('[L] liftAt — hand cases');
-  const L = C.liftAt;
-  for (const [t, ex] of [[0, 0.46], [1.8, 0.46], [2.1, 0.409], [2.4, 0.358], [4, 0.358]]) {
-    near(`[L1] t=${t} → ${ex}`, L(t, 0.46, 0.358, 2.4), ex, 1e-9);
-  }
-  near('[L1] LIFT_RAMP_S = 0.6', C.LIFT_RAMP_S, 0.6, 0);
-  near('[L2] BRIDGE_FADE_IN_S = 0.25', C.BRIDGE_FADE_IN_S, 0.25, 0);
-  for (const [t, ex] of [[0, 0.042], [0.0625, 0.0354375], [0.125, 0.021], [0.03, 0.040330752], [0.25, 0], [1, 0]]) {
-    near(`[L2] chair, firstContactS 0.03: t=${t} → ${ex}`, L(t, 0.042, 0, 0.03), ex, 1e-9);
-  }
-  for (const [fc, from, to] of [[0.03, 0, 0.25], [2.4, 1.8, 2.4], [0.4, 0, 0.4]]) {
-    const r = C.liftRamp(fc);
-    check(`[L2] liftRamp(${fc}) = {${from}, ${to}}`, Math.abs(r.from - from) < 1e-9 && Math.abs(r.to - to) < 1e-9,
-      `{${r.from}, ${r.to}}`);
-  }
-  for (const t of [0, 1.9, 2.1, 2.4, 9]) near(`[L3] start == end: t=${t} → 0.2`, L(t, 0.2, 0.2, 2.4), 0.2, 1e-12);
-  near('[L4] t NaN → startLift', L(NaN, 0.46, 0.358, 2.4), 0.46, 0);
-  near('[L4] endLift Infinity → startLift', L(3, 0.46, Infinity, 2.4), 0.46, 0);
-  near('[L4] firstContactS NaN → startLift', L(3, 0.46, 0.358, NaN), 0.46, 0);
-  near('[L4] startLift NaN → counts as 0 (before the ramp)', L(0, NaN, 0.358, 2.4), 0, 0);
-  check('[L4] startLift NaN → never NaN inside the ramp', Number.isFinite(L(2.1, NaN, 0.358, 2.4)),
-    String(L(2.1, NaN, 0.358, 2.4)));
-  for (const [e, ex] of [[0, 0.1], [0.15, 0.084375], [0.3, 0.05], [0.6, 0], [2, 0], [NaN, 0]]) {
-    near(`[L5] fadeCarry(0.1, ${e}) → ${ex}`, C.fadeCarry(0.1, e), ex, 1e-12);
-  }
+  const vectors = await runBridgeVectors('bridge_lift');
+  passed += vectors.passed; failed += vectors.failed;
 
   // ------------------------------------------------------------------ [V]
   const fbx = new FBXLoader();

@@ -367,7 +367,13 @@
  *       pin the hand-over around it): the travel waits for the bridge's end
  *       (still held then), and within 1 s after the bridge it is handed over
  *       and the route pulls the root >= 5 cm.
+ *
+ * Task 31 additional bridge_travel.json cases: rootPathAt is absolute, so
+ * moved path midpoint t=.5 is (.1, .1+(.3-.1)/2)=(.1,.2).
+ * An empty absolute/relative path returns (0,0). NaN time selects frame 0;
+ * subtracting that same origin in travelAt gives (0,0).
  */
+import { runBridgeVectors } from './bridgeVectorDispatch.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -537,28 +543,8 @@ async function main() {
   };
 
   // ------------------------------------------------------------------ [A]
-  console.log('[1] travelAt — relative to frame 0, clamped (hand cases)');
-  const toy = { times: new Float32Array([0, 1, 2]), xz: new Float32Array([0, 0, 0, 0.2, 0, 0.4]) };
-  const moved = { times: new Float32Array([0, 1, 2]), xz: new Float32Array([0.1, 0.1, 0.1, 0.3, 0.1, 0.5]) };
-  for (const [name, path] of [['origin path', toy], ['path from (0.1,0.1)', moved]]) {
-    for (const [t, ex, ez] of [[0, 0, 0], [0.5, 0, 0.1], [2, 0, 0.4], [5, 0, 0.4], [-1, 0, 0]]) {
-      const p = travelAt(path, t);
-      check(`${name}: t=${t} → (${ex}, ${ez})`,
-        Math.abs(p.x - ex) < 1e-6 && Math.abs(p.z - ez) < 1e-6,
-        `(${p.x.toFixed(6)}, ${p.z.toFixed(6)})`);
-    }
-  }
-
-  console.log('\n[2] toWorld — the rotation of npcs.tickInteraction (hand cases)');
-  for (const [lx, lz, yaw, ex, ez, what] of [
-    [0, 0.4, 0, 0, 0.4, 'yaw 0'], [0, 0.4, Math.PI / 2, 0.4, 0, 'yaw π/2'],
-    [0, 0.4, Math.PI, 0, -0.4, 'yaw π'], [0.1, 0, Math.PI / 2, 0, -0.1, 'left at 90° is −z'],
-  ]) {
-    const p = toWorld({ x: lx, z: lz }, yaw);
-    check(`toWorld((${lx}, ${lz}), ${what}) → (${ex}, ${ez})`,
-      Math.abs(p.x - ex) < 1e-9 && Math.abs(p.z - ez) < 1e-9,
-      `(${p.x.toFixed(9)}, ${p.z.toFixed(9)})`);
-  }
+  const vectors = await runBridgeVectors('bridge_travel');
+  passed += vectors.passed; failed += vectors.failed;
 
   console.log('\n[3]–[5] the Figure with a synthetic root-motion bridge (Soldier)');
   // Soldier and not Test3_mia: the hand derivation needs the rig's rest hips

@@ -239,3 +239,79 @@ remain. The new walking smoke also executes all 25 cases of the unchanged
 expectations are neither copied nor re-derived here. Stair rides keep the
 existing `stairs.rideStep` browser implementation; a native port can use waypoint
 Y easing until E7, as allowed by the Task 30 brief.
+
+## E5 bridge root motion (Task 31, TypeScript side)
+
+Run `timeout 300 node client3d/scripts/smoke_bridge_vectors.mjs` for all Task 31
+vectors without real models or live configuration. Each canonical source smoke
+also runs its own JSON; its opening docstring holds the hand derivations.
+The original real-rig, consumer, mutation and bake-invariance checks stay local.
+
+| File | Canonical source smoke | Cases | Functions |
+|---|---|---:|---|
+| `foot_lock.json` | `client3d/scripts/smoke_foot_lock_math.mjs` | 20 | `ramp`, `footLockPath`, `constant`, `footLockValue` (ground → weights → path / drift) |
+| `leg_pin.json` | `client3d/scripts/smoke_leg_pin.mjs` | 19 | `pinRuns`, `soleDown`, `rotationBetween`, `qrot`, `ikValue`, `legPinConstants`, `constant` |
+| `bridge_lift.json` | `client3d/scripts/smoke_bridge_lift.mjs` | 32 | `liftRamp`, `liftAt`, `fadeCarry`, `finiteLiftAt`, `constant` |
+| `bridge_travel.json` | `client3d/scripts/smoke_bridge_root.mjs` | 18 | `rootPathAt`, `travelAt`, `toWorld` |
+| `bridge_heading.json` | `client3d/scripts/smoke_bridge_heading.mjs` | 10 | `headingTrack`, `turnAt`, `constant` |
+| `stand_settle.json` | `client3d/scripts/smoke_stand_settle.mjs` | 8 | `settleOffset`, `constant` |
+| `foot_lock_measure.json` | `client3d/scripts/smoke_foot_lock_measure.mjs` | 58 | `relockValue`, `groundValue`, `hasGroundLiftTolerance` |
+| `stairs.json` | `client3d/scripts/smoke_walk_math.mjs` | 86 | `stairChain`, `stairsAt`, `stairY`, `stairLegTo`, `stairChainValue`, `stairLegToValue`, `stairLegsValue`, `rideSequenceValue`, `nearestRoomAt`, `rideArrivalClearsRun`, `constant` |
+
+The native consumer should mirror `client3d/scripts/bridgeVectorDispatch.mjs`.
+These are test adapters; no browser production functions were added or changed:
+
+- JSON positions and paths use the production field names. Root paths are
+  `{times, xz}` (interleaved X/Z); turns are `{times, yaw, pivot}`. Plain arrays
+  are accepted by the interpolation functions. `headingTrack` outputs an
+  ordinary array instead of its production Float32Array.
+- Foot-lock and leg-pin values use centimetres; bridge lift and stairs use
+  metres; times use seconds; angles use radians. `qrot` and `rotationBetween`
+  use **(w,x,y,z)** quaternions. Explicit skeleton quaternion inputs use
+  Three's **(x,y,z,w)** order.
+- `{"$number":"NaN" | "Infinity" | "-Infinity"}` is a non-finite **input**,
+  decoded recursively by the adapter. Expectations are always finite JSON.
+- `constant(name)` reads the named exported constant; unknown names throw.
+  `legPinConstants()` returns `{PIN_MIN_S, PIN_FADE_S}`.
+- `footLockValue({tracks,rest,fps}, field)` runs `groundHeights`,
+  `contactWeights`, `footLockPath`, then returns `path`, `drift_path`, or
+  `drift_zero_path`. The latter uses an all-zero path of the same length.
+  The smoke additionally compares all wrapped hand inputs/expectations against
+  `scripts/fixtures/root_motion_cases.json`, preserving the Python contract.
+- `ikValue([hip,knee,ankle,target,pole], fields)` calls `twoBoneIk`, then applies
+  its quaternion deltas using the original smoke's independent rotation matrix.
+  Selectable results: `knee`, `ankle`, `kneeX`, `upperLength`, `lowerLength`,
+  `finite` (all quaternion/point components finite).
+- `finiteLiftAt(t,start,end,contact)` returns `Number.isFinite(liftAt(...))`.
+- `relockValue(data, fields)` constructs a fresh skeleton and clips exclusively
+  from `data`: `bones: [{name,parent,position,quaternion?}]`, `unitsPerCm`,
+  `clips: [{name,duration,tracks:[{name,times,values}],path?:{times,xz}}]`,
+  optional `options` passed unchanged to `relockRootPaths`. A null parent means
+  the identity root Group; tracks ending in `.quaternion` use quaternion
+  interpolation, other tracks are vector tracks. Missing path means an
+  ordinary non-travelling clip. Results are `{reports,paths,logs,samePaths,
+  reportNames,untouched,emptyAndSilent,finite}`. Each path is null or
+  `{times,x,z}`. `samePaths` checks path object identity; `untouched` checks all
+  input bones' local positions/quaternions before/after; `finite` checks each
+  report's drift, imported drift and travel components. `emptyAndSilent` means
+  no report and no log. Each case starts afresh, including identity checks.
+- `groundValue(tracks,rest,fields)` selects from `groundHeights`.
+  `hasGroundLiftTolerance()` tests whether the removed `GROUND_LIFT_TOL_CM`
+  export is present (expected false).
+- A `fields` argument is a property path (string keys / integer indices),
+  selected after the production call; an empty path returns the whole result.
+  `stairLegToValue(stairs,dest,fields)` and
+  `stairLegsValue(stairs,chain,fields)` follow this convention.
+  `stairChainValue(stairs,from,to,fields)` additionally exposes
+  `["landingHeights"]` as `[chain[1].y,chain[2].y]`.
+- `rideSequenceValue(initialRide, points, fields)` copies the initial ride,
+  calls `rideStep(ride,x,y,z)` for each `[x,y,z]`, and writes back `leg` and
+  `armed` between steps exactly as the NPC does. It selects from the last
+  result, also exposing `state: {leg,armed,done}`.
+  `rideArrivalClearsRun()` checks `RIDE_ARRIVE_M < 0.5` (pad half + gap).
+
+No Task 31 vector reads `shared/config/clip_transitions.json` or any other
+live server table. Real-clip source selection through `bridgeSources.mjs`
+stays in the integration sections of the root/lift smokes. The known three
+`smoke_bridge_root` [B14] hand-over failures keep their original bounds and
+production implementation; they are not converted into passing vectors.

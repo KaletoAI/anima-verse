@@ -1,0 +1,294 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_bridge_root.mjs",
+  "fixtures": {
+    "toy": {
+      "times": [0, 1, 2],
+      "xz": [0, 0, 0, 0.2, 0, 0.4]
+    },
+    "moved": {
+      "times": [0, 1, 2],
+      "xz": [0.1, 0.1, 0.1, 0.3, 0.1, 0.5]
+    }
+  },
+  "cases": [
+    {
+      "label": "[1] toy t=0",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "toy"
+        },
+        0
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] toy t=0.5",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "toy"
+        },
+        0.5
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0.1
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] toy t=2",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "toy"
+        },
+        2
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0.4
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] toy t=5",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "toy"
+        },
+        5
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0.4
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] toy t=-1",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "toy"
+        },
+        -1
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] moved t=0",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "moved"
+        },
+        0
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] moved t=0.5",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "moved"
+        },
+        0.5
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0.1
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] moved t=2",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "moved"
+        },
+        2
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0.4
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] moved t=5",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "moved"
+        },
+        5
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0.4
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] moved t=-1",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "moved"
+        },
+        -1
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[2] rotation 0",
+      "fn": "toWorld",
+      "args": [
+        {
+          "x": 0,
+          "z": 0.4
+        },
+        0
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0.4
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] rotation 1",
+      "fn": "toWorld",
+      "args": [
+        {
+          "x": 0,
+          "z": 0.4
+        },
+        1.5707963267948966
+      ],
+      "expect": {
+        "x": 0.4,
+        "z": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] rotation 2",
+      "fn": "toWorld",
+      "args": [
+        {
+          "x": 0,
+          "z": 0.4
+        },
+        3.141592653589793
+      ],
+      "expect": {
+        "x": 0,
+        "z": -0.4
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] rotation 3",
+      "fn": "toWorld",
+      "args": [
+        {
+          "x": 0.1,
+          "z": 0
+        },
+        1.5707963267948966
+      ],
+      "expect": {
+        "x": 0,
+        "z": -0.1
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] absolute moved midpoint",
+      "fn": "rootPathAt",
+      "args": [
+        {
+          "$fixture": "moved"
+        },
+        0.5
+      ],
+      "expect": {
+        "x": 0.1,
+        "z": 0.2
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[1] empty absolute",
+      "fn": "rootPathAt",
+      "args": [
+        {
+          "times": [],
+          "xz": []
+        },
+        4
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] empty relative",
+      "fn": "travelAt",
+      "args": [
+        {
+          "times": [],
+          "xz": []
+        },
+        4
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] nonfinite relative time",
+      "fn": "travelAt",
+      "args": [
+        {
+          "$fixture": "moved"
+        },
+        {
+          "$number": "NaN"
+        }
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0
+      },
+      "eps": 1e-09
+    }
+  ]
+}

@@ -1,0 +1,167 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_stand_settle.mjs",
+  "cases": [
+    {
+      "label": "[P1] P1",
+      "fn": "settleOffset",
+      "args": [
+        {
+          "x": 2.12,
+          "z": 3
+        },
+        {
+          "x": 2,
+          "z": 3
+        },
+        {
+          "x": 2,
+          "z": 3
+        }
+      ],
+      "expect": {
+        "x": 0.12,
+        "z": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[P2] P2",
+      "fn": "settleOffset",
+      "args": [
+        {
+          "x": 2.4,
+          "z": 3
+        },
+        {
+          "x": 2,
+          "z": 3
+        },
+        {
+          "x": 2,
+          "z": 3
+        }
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[P3] P3",
+      "fn": "settleOffset",
+      "args": [
+        {
+          "x": 2.09,
+          "z": 2.88
+        },
+        {
+          "x": 2,
+          "z": 3
+        },
+        {
+          "x": 2,
+          "z": 3
+        }
+      ],
+      "expect": {
+        "x": 0.09,
+        "z": -0.12
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[P4] P4 inclusive",
+      "fn": "settleOffset",
+      "args": [
+        {
+          "x": 2,
+          "z": 3.25
+        },
+        {
+          "x": 2,
+          "z": 3
+        },
+        {
+          "x": 2,
+          "z": 3
+        }
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0.25
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[P4] P4 outside",
+      "fn": "settleOffset",
+      "args": [
+        {
+          "x": 2,
+          "z": 3.2501
+        },
+        {
+          "x": 2,
+          "z": 3
+        },
+        {
+          "x": 2,
+          "z": 3
+        }
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[P5] P5 moved",
+      "fn": "settleOffset",
+      "args": [
+        {
+          "x": 2.12,
+          "z": 3
+        },
+        {
+          "x": 2.01,
+          "z": 3
+        },
+        {
+          "x": 2,
+          "z": 3
+        }
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[P5] P5 noise",
+      "fn": "settleOffset",
+      "args": [
+        {
+          "x": 2.12,
+          "z": 3
+        },
+        {
+          "x": 2.0004,
+          "z": 3
+        },
+        {
+          "x": 2,
+          "z": 3
+        }
+      ],
+      "expect": {
+        "x": 0.1196,
+        "z": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[P6] P6 raster step",
+      "fn": "constant",
+      "args": [
+        "STAND_ADOPT_M"
+      ],
+      "expect": 0.25,
+      "eps": 0
+    }
+  ]
+}

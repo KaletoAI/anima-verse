@@ -75,6 +75,7 @@
  *      'no hip bones', and the log line says `turn: none (no hip bones)`.
  *      The figure then keeps its yaw — `Figure` reads no turn.
  */
+import { runBridgeVectors } from './bridgeVectorDispatch.mjs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -116,53 +117,12 @@ async function loadClient() {
   }
 }
 
-/** Left and right UpLeg for an absolute heading h (degrees), right at the
- *  origin's side (−10, 100, 0) — docstring [H2]. */
-const legsAt = (hDeg) => {
-  const h = hDeg * D;
-  const right = [-10, 100, 0];
-  return { left: [right[0] + 20 * Math.cos(h), 100, right[2] - 20 * Math.sin(h)], right };
-};
-const ROLLED = { left: [-9.9, 101, 0], right: [-10, 100, 0] };   // L = (0.1, 1, 0)
-
 async function main() {
   const THREE = await import('three');
   const c = await loadClient();
 
-  console.log('[H1] heading from the hips cross vector');
-  check('HEADING_MIN_HORIZONTAL = 0.5', c.HEADING_MIN_HORIZONTAL === 0.5);
-  {
-    const got = c.headingTrack([[10, 100, 0], [0, 100, 10]], [[-10, 100, 0], [0, 100, -10]]);
-    check('[straight, turned right 90°] → [0, −π/2]', close(got, [0, -Math.PI / 2], 1e-6), fmt(got));
-  }
-
-  console.log('\n[H2] unwrapped, relative to frame 0');
-  {
-    const takes = [-170, 175, 160].map(legsAt);
-    const got = c.headingTrack(takes.map((t) => t.left), takes.map((t) => t.right));
-    check('−170°, 175°, 160° → 0, −15°, −30°', close(got, [0, -15 * D, -30 * D], 1e-6), fmt(got));
-  }
-
-  console.log('\n[H3] a rolled pelvis keeps the last valid heading');
-  {
-    const takes = [legsAt(0), legsAt(-20), ROLLED, legsAt(-40)];
-    const got = c.headingTrack(takes.map((t) => t.left), takes.map((t) => t.right));
-    check('0°, −20°, rolled, −40° → 0, −20°, −20°, −40°',
-      close(got, [0, -20 * D, -20 * D, -40 * D], 1e-6), fmt(got));
-    const lead = [ROLLED, ROLLED, legsAt(30), legsAt(10)];
-    const got2 = c.headingTrack(lead.map((t) => t.left), lead.map((t) => t.right));
-    check('rolled, rolled, 30°, 10° → 0, 0, 0, −20°', close(got2, [0, 0, 0, -20 * D], 1e-6), fmt(got2));
-  }
-
-  console.log('\n[H5] turnAt — linear, clamped');
-  {
-    const turn = { times: new Float32Array([0, 1, 2]), yaw: new Float32Array([0, -0.5, -1.9]),
-      pivot: [0, 0, 0] };
-    for (const [t, want] of [[0.5, -0.25], [5, -1.9], [-1, 0], [NaN, 0], [1, -0.5]]) {
-      const got = c.turnAt(turn, t);
-      check(`t = ${t} → ${want}`, Math.abs(got - want) <= 1e-6, got.toFixed(6));
-    }
-  }
+  const vectors = await runBridgeVectors('bridge_heading');
+  passed += vectors.passed; failed += vectors.failed;
 
   // ------------------------------------------------ the synthetic rig
   const bone = (name, x, y, z, parent) => {

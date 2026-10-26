@@ -1008,7 +1008,173 @@
  * a STORED corridor and no entry. The pure rule is unchanged — an absent
  * corridor is the `floorIdOf: () => ''` case already checked below, and both
  * probes ("locked corridor", "no hallway -> ground") cover it.
+ *
+ * Task 31 stairs.json hand derivations (moved from the former inline checks):
+ * [S1] chains; [S2] offers; [S3] height; [S4] leg selection;
+ * [S5] ride sequence and radius; [S6] nearest room.
+ * --- stairs: the chain routes per storey (stairs task 4) -----------------
+ * A staircase spans exactly ONE storey (`foot.level + 1 === head.level`), so
+ * a storey change over stairs is a CHAIN: one flight per step of the storey
+ * difference, and each flight contributes its NEAR end first, then its FAR
+ * end. Missing a single link means there is no stair route at all — the
+ * caller falls back to the lift, which is why the answer is `null` and not a
+ * short chain that ends in mid-air.
+ *
+ * The two flights below are the § 0 hand calculation of the spec, house
+ * storey 3.0, `dir_deg` 90 (climb along +X), and their endpoints are the
+ * PAD TOP FACES + the 1 cm walk clearance that `tile.stairs` carries:
+ *
+ * A: at = [2, −2], from_level 0 → base = 0.0, target = 1·3.0 + 0.08 = 3.08
+ * foot pad centre [2 − (0.9/2 + 0.05), −0.025, −2] = [1.5, −0.025, −2]
+ * → top face −0.025 + 0.05/2 = 0.0, walk Y = 0.0 + 0.01 = 0.01
+ * run = 15 · 0.26 = 3.9, head pad centre [2 + 3.9 + 0.5, 3.055, −2]
+ * = [6.4, 3.055, −2] → top 3.055 + 0.025 = 3.08, walk Y = 3.09
+ * B: at = [2, +2], from_level 1 → base = 3.08, target = 2·3.0 + 0.08 = 6.08
+ * foot [1.5, 3.09, 2] (top 3.08), head [6.4, 6.09, 2] (top 6.08)
+ * (a) one flight, upwards: the foot is where you get on, the head where
+ * you get off.
+ * (b) the same flight downwards is the same two points, mirrored.
+ * (c) two flights, 0 → 1 → 2: four points, and the middle pair is the
+ * landing — head of A at [6.4, 3.09, −2], foot of B at [1.5, 3.09, 2],
+ * both on the storey-1 floor 3.08 + 0.01.
+ * The list is UNORDERED — the payload order must not decide the route.
+ * Two flights between the SAME storeys: the FIRST match wins, always.
+ * (d) a gap: only 0 → 1 exists, so 0 → 2 has no stair route at all.
+ * (e) no storey change = no waypoints, and that is NOT "no route".
+ * A basement counts like any other storey.
+ * --- stairs: the avatar's trigger and its target room (stairs task 5) -----
+ * The player's way onto a flight is the same shape as the lift's
+ * (`elevatorAt`): standing within reach of a landing OF ONE'S OWN STOREY
+ * offers the ride, and the reach is FIGURE metres — `STAIR_RANGE * scale`,
+ * because indoors a world metre is not a figure metre (at scale 0.3 the
+ * 1.5 m reach is 0.45 world metres, and unscaled the offer would cover half
+ * the room). The comparison is `dist < range`, exactly as `elevatorAt` has
+ * it, so a figure standing ON the range circle is not yet at the stairs.
+ *
+ * The flight below is the § 0 hand calculation again (house storey 3.0,
+ * `at = [2, −2]`, `dir_deg` 90): foot landing [1.5, 0.01, −2] on storey 0,
+ * head landing [6.4, 3.09, −2] on storey 1.
+ * The offer CARRIES the distance it was measured at (bug round 2026-08-30):
+ * the F key answers the nearest of the four standing offers, and the reaches
+ * differ in size (2.5 m to talk against 1.5 m here). The `dist` in every
+ * expectation below is the plain distance to the landing STOOD AT, in world
+ * metres — never to `dest`.
+ * (a) 1.0 m from the foot landing, scale 1 → reach 1.5, and 1.0 < 1.5.
+ * Standing at a FOOT means going UP, and the destination is the other
+ * end of that flight — the head.
+ * (b) 3.1 − 1.5 = 1.6 m away, still scale 1: 1.6 ≥ 1.5, no offer.
+ * (c) scale 0.3 → reach 1.5 · 0.3 = 0.45 world metres. 2.0 − 1.5 = 0.5 m
+ * is outside it, 1.9 − 1.5 = 0.4 m inside — the same half metre that
+ * would be well within reach at scale 1.
+ * (d) standing ON the head landing, on storey 1: the same flight read from
+ * the other end — the way DOWN, destination the foot.
+ * Only landings of ONE'S OWN storey count: standing on the foot landing
+ * while the server has the avatar upstairs is not a stair offer (the head
+ * is 4.9 m away, far outside the reach).
+ * Several flights: the NEAREST landing wins. D's foot sits at x = 3.5, so
+ * from x = 2.6 it is 0.9 m away and A's foot 1.1 m — both in reach, D is
+ * closer, and its head is the destination.
+ * A tie (x = 2.5 is 1.0 m from either foot) falls to the FIRST listed —
+ * the payload order is arbitrary, but the pick must not flicker.
+ * --- stairY: the height ON the run (plan-treppen-v2 task 3) --------------
+ * The climb is no longer a blend towards the far landing but a RAMP along
+ * the run: `y = foot.y + t · (head.y − foot.y)` with `t` the clamped
+ * projection of the figure onto the run axis. The flight is the § 0 hand
+ * calculation again, now with the run the payload ships (§ B1 `stairs`):
+ *
+ * at = [2, −2], dir = +x, run = 15 · 0.26 = 3.9, width = 1.2
+ * foot = [1.5, 0.01, −2] on storey 0, head = [6.4, 3.09, −2] on storey 1
+ * climb = 3.09 − 0.01 = 3.08
+ *
+ * so `t` is `(x − 2) / 3.9` and the height is `0.01 + t · 3.08`:
+ * x = 2     → t = 0            → 0.01
+ * x = 3.3   → t = 1.3/3.9 = ⅓  → 0.01 + 1.026666… = 1.036666…
+ * x = 3.95  → t = 1.95/3.9 = ½ → 0.01 + 1.54 = 1.55
+ * x = 5.9   → t = 3.9/3.9 = 1  → 3.09
+ * x = 6.4   → t clamped to 1   → 3.09  (the head LANDING, 0.5 m past the run)
+ * x = 1.0   → t clamped to 0   → 0.01  (a metre in front of the first tread)
+ * ACROSS the axis the gate is half a step width, 1.2/2 = 0.6: the axis is
+ * z = −2, so `across = z + 2` and −2.6 … −1.4 is on the flight, ±0.61 off it.
+ * The gate across is `|across| > width/2`. The EDGE itself, `across` =
+ * 0.6, is deliberately not pinned: `−1.4 + 2` is 0.6000000000000001 in
+ * doubles, so which side of the gate the exact rim falls on is a float
+ * coin-flip and no rule anybody could rely on. Half a tread inside and a
+ * quarter of one outside are the statement.
+ * Flight B of the § 0 calculation, but turned: `at` [2, 2] climbing along
+ * +z from storey 1 to 2 — the projection has to work on either axis.
+ * Its climb is 6.09 − 3.09 = 3.0, so half way up is 3.09 + 1.5 = 4.59.
+ * The direction is normalised inside, so a payload vector of any length
+ * answers the same — and a degenerate flight answers nothing.
+ * --- the RIDE: which flight, and from when on (review round 1) -----------
+ * A stairwell may stack two flights over the SAME footprint — same `at`,
+ * same direction, one storey apart — and the server builds exactly that.
+ * Then xz alone says nothing at all: the two head landings are the same
+ * point but for their height, and the walk from the first head landing back
+ * to the second flight's foot runs the WHOLE length of the second run. So
+ * the ride is a sequence of legs, and a leg only answers once its own start
+ * landing has been reached.
+ *
+ * The stack below is the § 0 flight and a copy of it one storey up:
+ * S0: foot [1.5, 0.01, −2] level 0 → head [6.4, 3.09, −2] level 1
+ * S1: foot [1.5, 3.09, −2] level 1 → head [6.4, 6.09, −2] level 2
+ * Same run [at 2/−2, +x, 3.9 × 1.2] for both. S0.head and S1.head are the
+ * same xz and 3.0 m apart in height; S0's climb is 3.08, S1's 3.0.
+ * (a) The avatar's climb: the offer names the landing it ends on.
+ * (b) THE STACK: S1.head has the same xz as S0.head and differs only in
+ * storey and height — matching on xz alone would ride the wrong ramp.
+ * (c) Going DOWN the flight is the same one, read from the other end.
+ * (d) The NPC chain: `stairChain` lays the flights end to end, `stairLegs`
+ * names the flight of each PAIR. Over the stack the second pair is
+ * [S1.foot, S1.head] and must be S1 — the bug this replaces matched on
+ * xz and got S0 twice.
+ * (e) Downwards the pairs arrive head-first — the match has to take a
+ * pair in EITHER order, or a descent has no legs at all.
+ * (f) A pair no flight owns is skipped, never guessed at.
+ * --- rideStep: arm at the start landing, hand over at the end ------------
+ * The arrival radius is 0.4 m, and that number is not free: the server puts
+ * a landing `STAIR_PAD_M/2 + STAIR_PAD_GAP_M` = 0.9/2 + 0.05 = 0.5 m from
+ * the end of the run (which is why the § 0 foot landing is at x = 1.5 and
+ * the run starts at x = 2). A radius under 0.5 m therefore cannot reach into
+ * the run itself: a figure "at the landing" is never on a tread.
+ * The NPC chain of the stack, as the routing hands it over: unarmed,
+ * because the figure is still a room away from the first flight.
+ * (a) In the room, 1.5 m short of the foot landing: nothing armed, the
+ * floor answers. hypot(1.5, 0, 0) = 1.5 > 0.4.
+ * (b) ON the foot landing: armed, and the ramp answers the landing height
+ * itself (t clamped to 0).
+ * (c) Half way up the first flight.
+ * (d) ON the head landing: the leg is done, the NEXT one takes over —
+ * unarmed, because its foot is 4.9 m back at x = 1.5.
+ * (e) THE WALK BACK, the case that killed the nearest-height rule: the
+ * figure crosses the whole footprint of the second flight on the
+ * storey-1 floor. Its ramp would say 1.55 + 3.08 = 4.59 here; unarmed
+ * it says nothing and the floor keeps the figure at 3.09.
+ * (f) On the second foot landing the second leg arms — same xz as the
+ * first one, 3.08 m higher, which only the 3D radius tells apart.
+ * (g) The last landing ends the ride altogether.
+ * (h) The AVATAR's ride starts armed: it accepted the offer standing at
+ * the landing, so there is no walk up to the flight to wait for.
+ * …and a figure standing a metre beside the run is on no flight at all,
+ * armed or not: across = −1.0 + 2 = 1.0 > 0.6.
+ * --- nearestRoomAt: where the climb ends up ------------------------------
+ * The ride needs a ROOM to ask the server for, and stepping off a flight
+ * puts you in the room the landing lies in — or, failing a hit, the nearest
+ * one on that storey. The rule is `elevatorTargetRoom`'s, only measured from
+ * the landing instead of a lift stop: smallest centre distance on the
+ * storey, ties to the LOWER id so a symmetric floor cannot flicker.
+ * The head landing of the § 0 flight, [6.4, −2]: on storey 1 that is
+ * hypot(1.4, 2) = 2.44… to `landing` and hypot(11.4, 2) = 11.57… to
+ * `bedroom`.
+ * The same point judged on storey 0: hypot(6.4, 2) = 6.70… to `hall`,
+ * hypot(0.4, 2) = 2.03… to `kitchen`.
+ * (e) The tie: x = 3 is 3 m from `hall` (0) and 3 m from `kitchen` (6).
+ * 'hall' < 'kitchen', so the lower id wins — in EITHER list order.
+ * [S6] Corridor companion: on level -1, k1 at (-2.5,-2.5) is exactly
+ * at the query; floor corridor __floor__-1 at (3,-3) is sqrt(30.5) away.
+ * A floor corridor on the requested level wins before the distance rule,
+ * so __floor__-1 wins despite k1's zero distance. Room eg is on level 0.
  */
+import { runBridgeVectors } from './bridgeVectorDispatch.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -2161,7 +2327,7 @@ async function main() {
     // and even from k1's own centre (where the corridor is 5.52 m off) the
     // corridor wins, because a storey's corridor beats every distance.
     // Migrated to npc_ground.json: [30] lift -> corridor
-    check('corridor wins regardless of distance', nearestRoomAt(-1, { x: -2.5, z: -2.5 }, rooms), '__floor__-1');
+    // Migrated to stairs.json: [S6] corridor beats distance
     // Migrated to npc_ground.json: [30] storey without corridor -> nearest room
     // Migrated to npc_ground.json: [30] levels served count the corridor
   }
@@ -2644,391 +2810,8 @@ async function main() {
       chainGuarded.arrivedAt?.y, 3, 0.2);
   }
 
-  // --- stairs: the chain routes per storey (stairs task 4) -----------------
-  // A staircase spans exactly ONE storey (`foot.level + 1 === head.level`), so
-  // a storey change over stairs is a CHAIN: one flight per step of the storey
-  // difference, and each flight contributes its NEAR end first, then its FAR
-  // end. Missing a single link means there is no stair route at all — the
-  // caller falls back to the lift, which is why the answer is `null` and not a
-  // short chain that ends in mid-air.
-  //
-  // The two flights below are the § 0 hand calculation of the spec, house
-  // storey 3.0, `dir_deg` 90 (climb along +X), and their endpoints are the
-  // PAD TOP FACES + the 1 cm walk clearance that `tile.stairs` carries:
-  //
-  //   A: at = [2, −2], from_level 0 → base = 0.0, target = 1·3.0 + 0.08 = 3.08
-  //      foot pad centre [2 − (0.9/2 + 0.05), −0.025, −2] = [1.5, −0.025, −2]
-  //        → top face −0.025 + 0.05/2 = 0.0, walk Y = 0.0 + 0.01 = 0.01
-  //      run = 15 · 0.26 = 3.9, head pad centre [2 + 3.9 + 0.5, 3.055, −2]
-  //        = [6.4, 3.055, −2] → top 3.055 + 0.025 = 3.08, walk Y = 3.09
-  //   B: at = [2, +2], from_level 1 → base = 3.08, target = 2·3.0 + 0.08 = 6.08
-  //      foot [1.5, 3.09, 2] (top 3.08), head [6.4, 6.09, 2] (top 6.08)
-  console.log('stairChain — one flight per storey step, near end then far end');
-  {
-    const A = {
-      foot: { level: 0, x: 1.5, y: 0.01, z: -2 },
-      head: { level: 1, x: 6.4, y: 3.09, z: -2 },
-    };
-    const B = {
-      foot: { level: 1, x: 1.5, y: 3.09, z: 2 },
-      head: { level: 2, x: 6.4, y: 6.09, z: 2 },
-    };
-
-    // (a) one flight, upwards: the foot is where you get on, the head where
-    //     you get off.
-    check('0 → 1 walks foot then head', stairChain([A], 0, 1), [A.foot, A.head]);
-    // (b) the same flight downwards is the same two points, mirrored.
-    check('1 → 0 walks head then foot', stairChain([A], 1, 0), [A.head, A.foot]);
-    // (c) two flights, 0 → 1 → 2: four points, and the middle pair is the
-    //     landing — head of A at [6.4, 3.09, −2], foot of B at [1.5, 3.09, 2],
-    //     both on the storey-1 floor 3.08 + 0.01.
-    const up2 = stairChain([A, B], 0, 2);
-    check('0 → 2 chains both flights', up2, [A.foot, A.head, B.foot, B.head]);
-    check('...the landing pair sits on the storey-1 floor',
-      [up2[1].y, up2[2].y], [3.09, 3.09]);
-    check('2 → 0 chains them in reverse', stairChain([A, B], 2, 0),
-      [B.head, B.foot, A.head, A.foot]);
-    // The list is UNORDERED — the payload order must not decide the route.
-    check('an unordered list routes the same', stairChain([B, A], 0, 2),
-      [A.foot, A.head, B.foot, B.head]);
-    // Two flights between the SAME storeys: the FIRST match wins, always.
-    const A2 = {
-      foot: { level: 0, x: -1.5, y: 0.01, z: 4 },
-      head: { level: 1, x: -6.4, y: 3.09, z: 4 },
-    };
-    check('two flights between the same storeys: the first one wins',
-      stairChain([A, A2], 0, 1), [A.foot, A.head]);
-    check('...and "first" is the list order, not the geometry',
-      stairChain([A2, A], 0, 1), [A2.foot, A2.head]);
-    // (d) a gap: only 0 → 1 exists, so 0 → 2 has no stair route at all.
-    check('a missing link gives no chain at all', stairChain([A], 0, 2), null);
-    check('...downwards just the same', stairChain([B], 2, 0), null);
-    check('no stairs at all', stairChain([], 0, 1), null);
-    // (e) no storey change = no waypoints, and that is NOT "no route".
-    const same = stairChain([A], 1, 1);
-    check('same storey walks nowhere', Array.isArray(same) && same.length === 0, true);
-    check('...even without any stairs',
-      Array.isArray(stairChain([], 0, 0)) && stairChain([], 0, 0).length === 0, true);
-    // A basement counts like any other storey.
-    const C = {
-      foot: { level: -1, x: 1.5, y: -2.91, z: 0 },
-      head: { level: 0, x: 6.4, y: 0.01, z: 0 },
-    };
-    check('the basement is a storey like any other', stairChain([C, A], -1, 1),
-      [C.foot, C.head, A.foot, A.head]);
-  }
-
-  // --- stairs: the avatar's trigger and its target room (stairs task 5) -----
-  // The player's way onto a flight is the same shape as the lift's
-  // (`elevatorAt`): standing within reach of a landing OF ONE'S OWN STOREY
-  // offers the ride, and the reach is FIGURE metres — `STAIR_RANGE * scale`,
-  // because indoors a world metre is not a figure metre (at scale 0.3 the
-  // 1.5 m reach is 0.45 world metres, and unscaled the offer would cover half
-  // the room). The comparison is `dist < range`, exactly as `elevatorAt` has
-  // it, so a figure standing ON the range circle is not yet at the stairs.
-  //
-  // The flight below is the § 0 hand calculation again (house storey 3.0,
-  // `at = [2, −2]`, `dir_deg` 90): foot landing [1.5, 0.01, −2] on storey 0,
-  // head landing [6.4, 3.09, −2] on storey 1.
-  // The offer CARRIES the distance it was measured at (bug round 2026-08-30):
-  // the F key answers the nearest of the four standing offers, and the reaches
-  // differ in size (2.5 m to talk against 1.5 m here). The `dist` in every
-  // expectation below is the plain distance to the landing STOOD AT, in world
-  // metres — never to `dest`.
-  console.log('stairsAt — the nearest landing of one\'s own storey, in reach');
-  {
-    check('the reach is the lift\'s, in figure metres', STAIR_RANGE, 1.5);
-    const A = {
-      foot: { level: 0, x: 1.5, y: 0.01, z: -2 },
-      head: { level: 1, x: 6.4, y: 3.09, z: -2 },
-    };
-
-    // (a) 1.0 m from the foot landing, scale 1 → reach 1.5, and 1.0 < 1.5.
-    //     Standing at a FOOT means going UP, and the destination is the other
-    //     end of that flight — the head.
-    check('1.0 m from the foot offers the way up',
-      stairsAt({ x: 2.5, z: -2 }, 0, [A], 1), { dir: 'up', dest: A.head, dist: 1 });
-    // (b) 3.1 − 1.5 = 1.6 m away, still scale 1: 1.6 ≥ 1.5, no offer.
-    check('1.6 m away is out of reach',
-      stairsAt({ x: 3.1, z: -2 }, 0, [A], 1), null);
-    // (c) scale 0.3 → reach 1.5 · 0.3 = 0.45 world metres. 2.0 − 1.5 = 0.5 m
-    //     is outside it, 1.9 − 1.5 = 0.4 m inside — the same half metre that
-    //     would be well within reach at scale 1.
-    check('at scale 0.3 half a metre is already too far',
-      stairsAt({ x: 2.0, z: -2 }, 0, [A], 0.3), null);
-    check('...while 0.4 m is inside the 0.45 m reach',
-      stairsAt({ x: 1.9, z: -2 }, 0, [A], 0.3), { dir: 'up', dest: A.head, dist: 0.4 });
-    // (d) standing ON the head landing, on storey 1: the same flight read from
-    //     the other end — the way DOWN, destination the foot.
-    check('at the head landing the offer goes down',
-      stairsAt({ x: 6.4, z: -2 }, 1, [A], 1), { dir: 'down', dest: A.foot, dist: 0 });
-    // Only landings of ONE'S OWN storey count: standing on the foot landing
-    // while the server has the avatar upstairs is not a stair offer (the head
-    // is 4.9 m away, far outside the reach).
-    check('a landing of another storey is not in reach at all',
-      stairsAt({ x: 1.5, z: -2 }, 1, [A], 1), null);
-    check('no stairs at all, no offer', stairsAt({ x: 1.5, z: -2 }, 0, [], 1), null);
-
-    // Several flights: the NEAREST landing wins. D's foot sits at x = 3.5, so
-    // from x = 2.6 it is 0.9 m away and A's foot 1.1 m — both in reach, D is
-    // closer, and its head is the destination.
-    const D = {
-      foot: { level: 0, x: 3.5, y: 0.01, z: -2 },
-      head: { level: 1, x: 8.4, y: 3.09, z: -2 },
-    };
-    check('the nearest of two landings wins',
-      stairsAt({ x: 2.6, z: -2 }, 0, [A, D], 1), { dir: 'up', dest: D.head, dist: 0.9 });
-    check('...and that does not depend on the list order',
-      stairsAt({ x: 2.6, z: -2 }, 0, [D, A], 1), { dir: 'up', dest: D.head, dist: 0.9 });
-    // A tie (x = 2.5 is 1.0 m from either foot) falls to the FIRST listed —
-    // the payload order is arbitrary, but the pick must not flicker.
-    check('a tie falls to the first flight listed',
-      stairsAt({ x: 2.5, z: -2 }, 0, [A, D], 1), { dir: 'up', dest: A.head, dist: 1 });
-    check('...literally the first, not the geometric one',
-      stairsAt({ x: 2.5, z: -2 }, 0, [D, A], 1), { dir: 'up', dest: D.head, dist: 1 });
-  }
-
-  // --- stairY: the height ON the run (plan-treppen-v2 task 3) --------------
-  // The climb is no longer a blend towards the far landing but a RAMP along
-  // the run: `y = foot.y + t · (head.y − foot.y)` with `t` the clamped
-  // projection of the figure onto the run axis. The flight is the § 0 hand
-  // calculation again, now with the run the payload ships (§ B1 `stairs`):
-  //
-  //   at = [2, −2], dir = +x, run = 15 · 0.26 = 3.9, width = 1.2
-  //   foot = [1.5, 0.01, −2] on storey 0, head = [6.4, 3.09, −2] on storey 1
-  //   climb = 3.09 − 0.01 = 3.08
-  //
-  // so `t` is `(x − 2) / 3.9` and the height is `0.01 + t · 3.08`:
-  //   x = 2     → t = 0            → 0.01
-  //   x = 3.3   → t = 1.3/3.9 = ⅓  → 0.01 + 1.026666… = 1.036666…
-  //   x = 3.95  → t = 1.95/3.9 = ½ → 0.01 + 1.54 = 1.55
-  //   x = 5.9   → t = 3.9/3.9 = 1  → 3.09
-  //   x = 6.4   → t clamped to 1   → 3.09  (the head LANDING, 0.5 m past the run)
-  //   x = 1.0   → t clamped to 0   → 0.01  (a metre in front of the first tread)
-  // ACROSS the axis the gate is half a step width, 1.2/2 = 0.6: the axis is
-  // z = −2, so `across = z + 2` and −2.6 … −1.4 is on the flight, ±0.61 off it.
-  const RUN_A = { at: { x: 2, z: -2 }, dir: { x: 1, z: 0 }, runM: 3.9, widthM: 1.2 };
-  /** the § 0 flight, storey 0 → 1 */
-  const FLIGHT_A = {
-    foot: { level: 0, x: 1.5, y: 0.01, z: -2 },
-    head: { level: 1, x: 6.4, y: 3.09, z: -2 },
-    run: RUN_A,
-  };
-  console.log('stairY — the ramp along the run, not a blend towards the landing');
-  {
-    const A = FLIGHT_A;
-    check('at the first tread the figure stands at the foot', stairY(A, 2, -2), 0.01);
-    check('a third of the way up', stairY(A, 3.3, -2), 1.0366666666666666, 1e-12);
-    check('half way up is half the climb', stairY(A, 3.95, -2), 1.55, 1e-12);
-    check('the end of the run is the head', stairY(A, 5.9, -2), 3.09, 1e-12);
-    check('the head landing past the run is clamped to it', stairY(A, 6.4, -2), 3.09);
-    check('...and the foot landing in front of it just the same',
-      stairY(A, 1.0, -2), 0.01);
-    // The gate across is `|across| > width/2`. The EDGE itself, `across` =
-    // 0.6, is deliberately not pinned: `−1.4 + 2` is 0.6000000000000001 in
-    // doubles, so which side of the gate the exact rim falls on is a float
-    // coin-flip and no rule anybody could rely on. Half a tread inside and a
-    // quarter of one outside are the statement.
-    check('half a step width inside is on the flight',
-      stairY(A, 3.95, -1.5), 1.55, 1e-12);
-    check('...on the other side just the same', stairY(A, 3.95, -2.5), 1.55, 1e-12);
-    check('a quarter width past the rim is not on the flight',
-      stairY(A, 3.95, -1.25), null);
-    check('two metres beside the flight is no flight at all', stairY(A, 3.95, 0), null);
-    // Flight B of the § 0 calculation, but turned: `at` [2, 2] climbing along
-    // +z from storey 1 to 2 — the projection has to work on either axis.
-    // Its climb is 6.09 − 3.09 = 3.0, so half way up is 3.09 + 1.5 = 4.59.
-    const B = {
-      foot: { level: 1, x: 2, y: 3.09, z: 1.5 },
-      head: { level: 2, x: 2, y: 6.09, z: 6.4 },
-      run: { at: { x: 2, z: 2 }, dir: { x: 0, z: 1 }, runM: 3.9, widthM: 1.2 },
-    };
-    check('a flight along +z climbs the same way', stairY(B, 2, 3.95), 4.59, 1e-12);
-    check('...and gates across x instead of z', stairY(B, 2.61, 3.95), null);
-    // The direction is normalised inside, so a payload vector of any length
-    // answers the same — and a degenerate flight answers nothing.
-    check('the direction need not be unit length',
-      stairY({ ...A, run: { ...RUN_A, dir: { x: 2, z: 0 } } }, 3.95, -2), 1.55, 1e-12);
-    check('a run of zero length is no run',
-      stairY({ ...A, run: { ...RUN_A, runM: 0 } }, 3.95, -2), null);
-    check('a direction of zero length neither',
-      stairY({ ...A, run: { ...RUN_A, dir: { x: 0, z: 0 } } }, 3.95, -2), null);
-  }
-
-  // --- the RIDE: which flight, and from when on (review round 1) -----------
-  // A stairwell may stack two flights over the SAME footprint — same `at`,
-  // same direction, one storey apart — and the server builds exactly that.
-  // Then xz alone says nothing at all: the two head landings are the same
-  // point but for their height, and the walk from the first head landing back
-  // to the second flight's foot runs the WHOLE length of the second run. So
-  // the ride is a sequence of legs, and a leg only answers once its own start
-  // landing has been reached.
-  //
-  // The stack below is the § 0 flight and a copy of it one storey up:
-  //   S0: foot [1.5, 0.01, −2] level 0 → head [6.4, 3.09, −2] level 1
-  //   S1: foot [1.5, 3.09, −2] level 1 → head [6.4, 6.09, −2] level 2
-  // Same run [at 2/−2, +x, 3.9 × 1.2] for both. S0.head and S1.head are the
-  // same xz and 3.0 m apart in height; S0's climb is 3.08, S1's 3.0.
-  const S0 = FLIGHT_A;
-  const S1 = {
-    foot: { level: 1, x: 1.5, y: 3.09, z: -2 },
-    head: { level: 2, x: 6.4, y: 6.09, z: -2 },
-    run: RUN_A,
-  };
-  console.log('stairLegTo / stairLegs — the flight is picked by LANDING, not by height');
-  {
-    // (a) The avatar's climb: the offer names the landing it ends on.
-    const up = stairLegTo([S0, S1], S0.head);
-    check('the flight that has the head landing is the one climbed',
-      up && up.flight.foot.y, 0.01);
-    check('...walked from its own foot', up && up.start.y, 0.01);
-    check('...and ending where the offer said', up && up.end.y, 3.09);
-    // (b) THE STACK: S1.head has the same xz as S0.head and differs only in
-    //     storey and height — matching on xz alone would ride the wrong ramp.
-    const upper = stairLegTo([S0, S1], S1.head);
-    check('the landing over a landing picks the upper flight',
-      upper && upper.flight.foot.y, 3.09);
-    check('...and is walked from the upper foot', upper && upper.start.y, 3.09);
-    // (c) Going DOWN the flight is the same one, read from the other end.
-    const down = stairLegTo([S0, S1], S0.foot);
-    check('a descent ends on the foot landing', down && down.end.y, 0.01);
-    check('...and starts at the head', down && down.start.y, 3.09);
-    check('...on the flight that has it', down && down.flight.head.y, 3.09);
-    check('a landing no flight carries has no leg',
-      stairLegTo([S0, S1], { level: 0, x: 99, y: 0, z: 0 }), null);
-
-    // (d) The NPC chain: `stairChain` lays the flights end to end, `stairLegs`
-    //     names the flight of each PAIR. Over the stack the second pair is
-    //     [S1.foot, S1.head] and must be S1 — the bug this replaces matched on
-    //     xz and got S0 twice.
-    const chain = stairChain([S0, S1], 0, 2);
-    check('the chain over two storeys has four landings', chain.length, 4);
-    const legs = stairLegs([S0, S1], chain);
-    check('...and two legs', legs.length, 2);
-    check('the first leg is the lower flight', legs[0].flight.head.y, 3.09);
-    check('the second leg is the UPPER flight, not the lower one again',
-      legs[1].flight.head.y, 6.09);
-    check('...and it is walked from the upper foot', legs[1].start.y, 3.09);
-    // (e) Downwards the pairs arrive head-first — the match has to take a
-    //     pair in EITHER order, or a descent has no legs at all.
-    const downLegs = stairLegs([S0, S1], stairChain([S0, S1], 2, 0));
-    check('a descending chain has two legs as well', downLegs.length, 2);
-    check('...the upper flight first', downLegs[0].flight.head.y, 6.09);
-    check('...walked from its head down to its foot', downLegs[0].end.y, 3.09);
-    check('...and the lower flight second', downLegs[1].end.y, 0.01);
-    // (f) A pair no flight owns is skipped, never guessed at.
-    check('a chain of the wrong landings has no legs',
-      stairLegs([S0], [S1.foot, S1.head]).length, 0);
-  }
-
-  // --- rideStep: arm at the start landing, hand over at the end ------------
-  // The arrival radius is 0.4 m, and that number is not free: the server puts
-  // a landing `STAIR_PAD_M/2 + STAIR_PAD_GAP_M` = 0.9/2 + 0.05 = 0.5 m from
-  // the end of the run (which is why the § 0 foot landing is at x = 1.5 and
-  // the run starts at x = 2). A radius under 0.5 m therefore cannot reach into
-  // the run itself: a figure "at the landing" is never on a tread.
-  console.log('rideStep — a leg answers only between its own two landings');
-  {
-    check('the arrival radius is the pinned 0.4 m', RIDE_ARRIVE_M, 0.4);
-    check('...and stays clear of the run (< 0.9/2 + 0.05)',
-      RIDE_ARRIVE_M < 0.5, true);
-
-    // The NPC chain of the stack, as the routing hands it over: unarmed,
-    // because the figure is still a room away from the first flight.
-    const chain = stairChain([S0, S1], 0, 2);
-    const ride = { legs: stairLegs([S0, S1], chain), leg: 0, armed: false };
-    /** walk the ride to a point, writing the answer back like `npcs.tick()` */
-    const at = (x, y, z) => {
-      const step = rideStep(ride, x, y, z);
-      ride.leg = step.leg;
-      ride.armed = step.armed;
-      return step;
-    };
-    // (a) In the room, 1.5 m short of the foot landing: nothing armed, the
-    //     floor answers. hypot(1.5, 0, 0) = 1.5 > 0.4.
-    const room = at(0, 0.01, -2);
-    check('short of the flight the ride answers nothing', room.y, null);
-    check('...and is still on its first leg, unarmed',
-      { leg: room.leg, armed: room.armed, done: room.done },
-      { leg: 0, armed: false, done: false });
-    // (b) ON the foot landing: armed, and the ramp answers the landing height
-    //     itself (t clamped to 0).
-    const foot = at(1.5, 0.01, -2);
-    check('standing on the foot landing arms the leg', foot.armed, true);
-    check('...and the ramp starts at the landing height', foot.y, 0.01);
-    // (c) Half way up the first flight.
-    check('half way up the lower flight', at(3.95, 1.55, -2).y, 1.55, 1e-12);
-    // (d) ON the head landing: the leg is done, the NEXT one takes over —
-    //     unarmed, because its foot is 4.9 m back at x = 1.5.
-    const mid = at(6.4, 3.09, -2);
-    check('the head landing hands the ride to the second leg',
-      { leg: mid.leg, armed: mid.armed, done: mid.done },
-      { leg: 1, armed: false, done: false });
-    check('...and answers nothing until that leg starts', mid.y, null);
-    // (e) THE WALK BACK, the case that killed the nearest-height rule: the
-    //     figure crosses the whole footprint of the second flight on the
-    //     storey-1 floor. Its ramp would say 1.55 + 3.08 = 4.59 here; unarmed
-    //     it says nothing and the floor keeps the figure at 3.09.
-    check('crossing the upper run on the way to its foot lifts nobody',
-      at(3.95, 3.09, -2).y, null);
-    // (f) On the second foot landing the second leg arms — same xz as the
-    //     first one, 3.08 m higher, which only the 3D radius tells apart.
-    const foot2 = at(1.5, 3.09, -2);
-    check('the second foot landing arms the second leg', foot2.armed, true);
-    check('...at its own height', foot2.y, 3.09);
-    check('half way up the UPPER flight is the upper ramp',
-      at(3.95, 4.59, -2).y, 4.59, 1e-12);
-    // (g) The last landing ends the ride altogether.
-    const end = at(6.4, 6.09, -2);
-    check('the last landing ends the ride', end.done, true);
-    check('...and hands the height back to the floor', end.y, null);
-
-    // (h) The AVATAR's ride starts armed: it accepted the offer standing at
-    //     the landing, so there is no walk up to the flight to wait for.
-    const solo = { legs: [stairLegTo([S0, S1], S0.head)], leg: 0, armed: true };
-    check('an armed ride answers from the first frame',
-      rideStep(solo, 3.95, 1.55, -2).y, 1.55, 1e-12);
-    // …and a figure standing a metre beside the run is on no flight at all,
-    // armed or not: across = −1.0 + 2 = 1.0 > 0.6.
-    check('...but only where the flight is', rideStep(solo, 3.95, 1.55, -1.0).y, null);
-    const descent = { legs: [stairLegTo([S0, S1], S0.foot)], leg: 0, armed: true };
-    check('a descent rides the same ramp downwards',
-      rideStep(descent, 3.95, 1.55, -2).y, 1.55, 1e-12);
-    check('...and ends on the foot landing', rideStep(descent, 1.5, 0.01, -2).done, true);
-  }
-
-  // --- nearestRoomAt: where the climb ends up ------------------------------
-  // The ride needs a ROOM to ask the server for, and stepping off a flight
-  // puts you in the room the landing lies in — or, failing a hit, the nearest
-  // one on that storey. The rule is `elevatorTargetRoom`'s, only measured from
-  // the landing instead of a lift stop: smallest centre distance on the
-  // storey, ties to the LOWER id so a symmetric floor cannot flicker.
-  console.log('nearestRoomAt — nearest room centre of that storey, tie to the lower id');
-  {
-    const rooms = [
-      { id: 'hall',    level: 0, center: { x: 0, z: 0 } },
-      { id: 'kitchen', level: 0, center: { x: 6, z: 0 } },
-      { id: 'landing', level: 1, center: { x: 5, z: 0 } },
-      { id: 'bedroom', level: 1, center: { x: -5, z: 0 } },
-    ];
-    // The head landing of the § 0 flight, [6.4, −2]: on storey 1 that is
-    // hypot(1.4, 2) = 2.44… to `landing` and hypot(11.4, 2) = 11.57… to
-    // `bedroom`.
-    check('the head landing ends on the landing', nearestRoomAt(1, { x: 6.4, z: -2 }, rooms),
-      'landing');
-    // The same point judged on storey 0: hypot(6.4, 2) = 6.70… to `hall`,
-    // hypot(0.4, 2) = 2.03… to `kitchen`.
-    check('...and the same point on storey 0 is the kitchen',
-      nearestRoomAt(0, { x: 6.4, z: -2 }, rooms), 'kitchen');
-    check('a storey without rooms has no target', nearestRoomAt(2, { x: 0, z: 0 }, rooms),
-      null);
-    check('no rooms at all, no target', nearestRoomAt(0, { x: 0, z: 0 }, []), null);
-    // (e) The tie: x = 3 is 3 m from `hall` (0) and 3 m from `kitchen` (6).
-    //     'hall' < 'kitchen', so the lower id wins — in EITHER list order.
-    check('a tie falls to the lower id', nearestRoomAt(0, { x: 3, z: 0 }, rooms), 'hall');
-    check('...regardless of the list order',
-      nearestRoomAt(0, { x: 3, z: 0 }, [...rooms].reverse()), 'hall');
-  }
+  const stairVectors = await runBridgeVectors('stairs');
+  passed += stairVectors.passed; failed += stairVectors.failed;
 
   // --- walking indoors: the floor, not the shell (E3 acceptance) -----------
   // Finding "Zur Rosinante: you walk on the ROOF". The walk goal took its

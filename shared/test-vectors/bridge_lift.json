@@ -1,0 +1,283 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_bridge_lift.mjs",
+  "cases": [
+    {
+      "label": "[L1] L1 t=0",
+      "fn": "liftAt",
+      "args": [0, 0.46, 0.358, 2.4],
+      "expect": 0.46,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L1] L1 t=1.8",
+      "fn": "liftAt",
+      "args": [1.8, 0.46, 0.358, 2.4],
+      "expect": 0.46,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L1] L1 t=2.1",
+      "fn": "liftAt",
+      "args": [2.1, 0.46, 0.358, 2.4],
+      "expect": 0.409,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L1] L1 t=2.4",
+      "fn": "liftAt",
+      "args": [2.4, 0.46, 0.358, 2.4],
+      "expect": 0.358,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L1] L1 t=4",
+      "fn": "liftAt",
+      "args": [4, 0.46, 0.358, 2.4],
+      "expect": 0.358,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L1] LIFT_RAMP_S",
+      "fn": "constant",
+      "args": [
+        "LIFT_RAMP_S"
+      ],
+      "expect": 0.6,
+      "eps": 0
+    },
+    {
+      "label": "[L2] BRIDGE_FADE_IN_S",
+      "fn": "constant",
+      "args": [
+        "BRIDGE_FADE_IN_S"
+      ],
+      "expect": 0.25,
+      "eps": 0
+    },
+    {
+      "label": "[L2] L2 t=0",
+      "fn": "liftAt",
+      "args": [0, 0.042, 0, 0.03],
+      "expect": 0.042,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L2] L2 t=0.0625",
+      "fn": "liftAt",
+      "args": [0.0625, 0.042, 0, 0.03],
+      "expect": 0.0354375,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L2] L2 t=0.125",
+      "fn": "liftAt",
+      "args": [0.125, 0.042, 0, 0.03],
+      "expect": 0.021,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L2] L2 t=0.03",
+      "fn": "liftAt",
+      "args": [0.03, 0.042, 0, 0.03],
+      "expect": 0.040330752,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L2] L2 t=0.25",
+      "fn": "liftAt",
+      "args": [0.25, 0.042, 0, 0.03],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L2] L2 t=1",
+      "fn": "liftAt",
+      "args": [1, 0.042, 0, 0.03],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[L2] L2 ramp 0.03",
+      "fn": "liftRamp",
+      "args": [0.03],
+      "expect": {
+        "from": 0,
+        "to": 0.25
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[L2] L2 ramp 2.4",
+      "fn": "liftRamp",
+      "args": [2.4],
+      "expect": {
+        "from": 1.8,
+        "to": 2.4
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[L2] L2 ramp 0.4",
+      "fn": "liftRamp",
+      "args": [0.4],
+      "expect": {
+        "from": 0,
+        "to": 0.4
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[L3] L3 t=0",
+      "fn": "liftAt",
+      "args": [0, 0.2, 0.2, 2.4],
+      "expect": 0.2,
+      "eps": 1e-12
+    },
+    {
+      "label": "[L3] L3 t=1.9",
+      "fn": "liftAt",
+      "args": [1.9, 0.2, 0.2, 2.4],
+      "expect": 0.2,
+      "eps": 1e-12
+    },
+    {
+      "label": "[L3] L3 t=2.1",
+      "fn": "liftAt",
+      "args": [2.1, 0.2, 0.2, 2.4],
+      "expect": 0.2,
+      "eps": 1e-12
+    },
+    {
+      "label": "[L3] L3 t=2.4",
+      "fn": "liftAt",
+      "args": [2.4, 0.2, 0.2, 2.4],
+      "expect": 0.2,
+      "eps": 1e-12
+    },
+    {
+      "label": "[L3] L3 t=9",
+      "fn": "liftAt",
+      "args": [9, 0.2, 0.2, 2.4],
+      "expect": 0.2,
+      "eps": 1e-12
+    },
+    {
+      "label": "[L4] L4 nonfinite time",
+      "fn": "liftAt",
+      "args": [
+        {
+          "$number": "NaN"
+        },
+        0.46,
+        0.358,
+        2.4
+      ],
+      "expect": 0.46,
+      "eps": 0
+    },
+    {
+      "label": "[L4] L4 nonfinite end",
+      "fn": "liftAt",
+      "args": [
+        3,
+        0.46,
+        {
+          "$number": "Infinity"
+        },
+        2.4
+      ],
+      "expect": 0.46,
+      "eps": 0
+    },
+    {
+      "label": "[L4] L4 nonfinite contact",
+      "fn": "liftAt",
+      "args": [
+        3,
+        0.46,
+        0.358,
+        {
+          "$number": "NaN"
+        }
+      ],
+      "expect": 0.46,
+      "eps": 0
+    },
+    {
+      "label": "[L4] L4 nonfinite start",
+      "fn": "liftAt",
+      "args": [
+        0,
+        {
+          "$number": "NaN"
+        },
+        0.358,
+        2.4
+      ],
+      "expect": 0,
+      "eps": 0
+    },
+    {
+      "label": "[L4] L4 finite inside ramp",
+      "fn": "finiteLiftAt",
+      "args": [
+        2.1,
+        {
+          "$number": "NaN"
+        },
+        0.358,
+        2.4
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[L5] L5 carry 0",
+      "fn": "fadeCarry",
+      "args": [0.1, 0],
+      "expect": 0.1,
+      "eps": 1e-12
+    },
+    {
+      "label": "[L5] L5 carry 1",
+      "fn": "fadeCarry",
+      "args": [0.1, 0.15],
+      "expect": 0.084375,
+      "eps": 1e-12
+    },
+    {
+      "label": "[L5] L5 carry 2",
+      "fn": "fadeCarry",
+      "args": [0.1, 0.3],
+      "expect": 0.05,
+      "eps": 1e-12
+    },
+    {
+      "label": "[L5] L5 carry 3",
+      "fn": "fadeCarry",
+      "args": [0.1, 0.6],
+      "expect": 0,
+      "eps": 1e-12
+    },
+    {
+      "label": "[L5] L5 carry 4",
+      "fn": "fadeCarry",
+      "args": [0.1, 2],
+      "expect": 0,
+      "eps": 1e-12
+    },
+    {
+      "label": "[L5] L5 carry 5",
+      "fn": "fadeCarry",
+      "args": [
+        0.1,
+        {
+          "$number": "NaN"
+        }
+      ],
+      "expect": 0,
+      "eps": 1e-12
+    }
+  ]
+}

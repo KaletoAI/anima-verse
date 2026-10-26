@@ -1,0 +1,1795 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_foot_lock_measure.mjs",
+  "fixtures": {
+    "a": {
+      "bones": [
+        {
+          "name": "mixamorigHips",
+          "parent": null,
+          "position": [0, 100, 0]
+        },
+        {
+          "name": "Legs",
+          "parent": "mixamorigHips",
+          "position": [0, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftUpLeg",
+          "parent": "Legs",
+          "position": [10, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftLeg",
+          "parent": "mixamorigLeftUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftFoot",
+          "parent": "mixamorigLeftLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftToeBase",
+          "parent": "mixamorigLeftFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigLeftToe_End",
+          "parent": "mixamorigLeftToeBase",
+          "position": [0, -3, 6]
+        },
+        {
+          "name": "mixamorigRightUpLeg",
+          "parent": "Legs",
+          "position": [-10, 0, 0]
+        },
+        {
+          "name": "mixamorigRightLeg",
+          "parent": "mixamorigRightUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightFoot",
+          "parent": "mixamorigRightLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightToeBase",
+          "parent": "mixamorigRightFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigRightToe_End",
+          "parent": "mixamorigRightToeBase",
+          "position": [0, -3, 6]
+        }
+      ],
+      "unitsPerCm": 1,
+      "clips": [
+        {
+          "name": "bridge-a",
+          "duration": 0.3333333333333333,
+          "tracks": [
+            {
+              "name": "Legs.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 0, 0, 0, 0, -2, 0, 0, -4, 0, 0, -6, 0, 0, -8, 0, 0, -10, 0, 0, -12, 0, 0, -14, 0, 0, -16, 0, 0, -18, 0, 0, -20]
+            },
+            {
+              "name": "mixamorigHips.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0]
+            }
+          ],
+          "path": {
+            "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+            "xz": [0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8, 0, 9, 0, 10]
+          }
+        }
+      ]
+    },
+    "bare": {
+      "bones": [
+        {
+          "name": "mixamorigHips",
+          "parent": null,
+          "position": [0, 100, 0]
+        },
+        {
+          "name": "Legs",
+          "parent": "mixamorigHips",
+          "position": [0, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftUpLeg",
+          "parent": "Legs",
+          "position": [10, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftLeg",
+          "parent": "mixamorigLeftUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftFoot",
+          "parent": "mixamorigLeftLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftToeBase",
+          "parent": "mixamorigLeftFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigLeftToe_End",
+          "parent": "mixamorigLeftToeBase",
+          "position": [0, -3, 6]
+        },
+        {
+          "name": "mixamorigRightUpLeg",
+          "parent": "Legs",
+          "position": [-10, 0, 0]
+        },
+        {
+          "name": "mixamorigRightLeg",
+          "parent": "mixamorigRightUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightFoot",
+          "parent": "mixamorigRightLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightToeBase",
+          "parent": "mixamorigRightFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigRightToe_End",
+          "parent": "mixamorigRightToeBase",
+          "position": [0, -3, 6]
+        }
+      ],
+      "unitsPerCm": 1,
+      "clips": [
+        {
+          "name": "bridge-a2",
+          "duration": 0.3333333333333333,
+          "tracks": [
+            {
+              "name": "Legs.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 0, 0, 0, 0, -2, 0, 0, -4, 0, 0, -6, 0, 0, -8, 0, 0, -10, 0, 0, -12, 0, 0, -14, 0, 0, -16, 0, 0, -18, 0, 0, -20]
+            }
+          ],
+          "path": {
+            "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+            "xz": [0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8, 0, 9, 0, 10]
+          }
+        }
+      ]
+    },
+    "c": {
+      "bones": [
+        {
+          "name": "mixamorigHips",
+          "parent": null,
+          "position": [0, 100, 0]
+        },
+        {
+          "name": "Legs",
+          "parent": "mixamorigHips",
+          "position": [0, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftUpLeg",
+          "parent": "Legs",
+          "position": [10, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftLeg",
+          "parent": "mixamorigLeftUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftFoot",
+          "parent": "mixamorigLeftLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftToeBase",
+          "parent": "mixamorigLeftFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigLeftToe_End",
+          "parent": "mixamorigLeftToeBase",
+          "position": [0, -3, 6]
+        },
+        {
+          "name": "mixamorigRightUpLeg",
+          "parent": "Legs",
+          "position": [-10, 0, 0]
+        },
+        {
+          "name": "mixamorigRightLeg",
+          "parent": "mixamorigRightUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightFoot",
+          "parent": "mixamorigRightLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightToeBase",
+          "parent": "mixamorigRightFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigRightToe_End",
+          "parent": "mixamorigRightToeBase",
+          "position": [0, -3, 6]
+        }
+      ],
+      "unitsPerCm": 1,
+      "clips": [
+        {
+          "name": "bridge-c",
+          "duration": 0.3333333333333333,
+          "tracks": [
+            {
+              "name": "Legs.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 30, 0, 0, 30, -2, 0, 30, -4, 0, 30, -6, 0, 30, -8, 0, 30, -10, 0, 30, -12, 0, 30, -14, 0, 30, -16, 0, 30, -18, 0, 30, -20]
+            },
+            {
+              "name": "mixamorigHips.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0]
+            }
+          ],
+          "path": {
+            "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+            "xz": [0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8, 0, 9, 0, 10]
+          }
+        }
+      ]
+    },
+    "d": {
+      "bones": [
+        {
+          "name": "mixamorigHips",
+          "parent": null,
+          "position": [0, 100, 0]
+        },
+        {
+          "name": "Legs",
+          "parent": "mixamorigHips",
+          "position": [0, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftUpLeg",
+          "parent": "Legs",
+          "position": [10, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftLeg",
+          "parent": "mixamorigLeftUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftFoot",
+          "parent": "mixamorigLeftLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightUpLeg",
+          "parent": "Legs",
+          "position": [-10, 0, 0]
+        },
+        {
+          "name": "mixamorigRightLeg",
+          "parent": "mixamorigRightUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightFoot",
+          "parent": "mixamorigRightLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightToeBase",
+          "parent": "mixamorigRightFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigRightToe_End",
+          "parent": "mixamorigRightToeBase",
+          "position": [0, -3, 6]
+        }
+      ],
+      "unitsPerCm": 1,
+      "clips": [
+        {
+          "name": "bridge-d",
+          "duration": 0.3333333333333333,
+          "tracks": [
+            {
+              "name": "Legs.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 0, 0, 0, 0, -2, 0, 0, -4, 0, 0, -6, 0, 0, -8, 0, 0, -10, 0, 0, -12, 0, 0, -14, 0, 0, -16, 0, 0, -18, 0, 0, -20]
+            },
+            {
+              "name": "mixamorigHips.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0]
+            }
+          ],
+          "path": {
+            "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+            "xz": [0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8, 0, 9, 0, 10]
+          }
+        }
+      ]
+    },
+    "e": {
+      "bones": [
+        {
+          "name": "mixamorigHips",
+          "parent": null,
+          "position": [0.0, 1.0, 0.0]
+        },
+        {
+          "name": "Legs",
+          "parent": "mixamorigHips",
+          "position": [0.0, 0.0, 0.0]
+        },
+        {
+          "name": "mixamorigLeftUpLeg",
+          "parent": "Legs",
+          "position": [0.1, 0.0, 0.0]
+        },
+        {
+          "name": "mixamorigLeftLeg",
+          "parent": "mixamorigLeftUpLeg",
+          "position": [0.0, -0.46, 0.0]
+        },
+        {
+          "name": "mixamorigLeftFoot",
+          "parent": "mixamorigLeftLeg",
+          "position": [0.0, -0.46, 0.0]
+        },
+        {
+          "name": "mixamorigLeftToeBase",
+          "parent": "mixamorigLeftFoot",
+          "position": [0.0, -0.05, 0.12]
+        },
+        {
+          "name": "mixamorigLeftToe_End",
+          "parent": "mixamorigLeftToeBase",
+          "position": [0.0, -0.03, 0.06]
+        },
+        {
+          "name": "mixamorigRightUpLeg",
+          "parent": "Legs",
+          "position": [-0.1, 0.0, 0.0]
+        },
+        {
+          "name": "mixamorigRightLeg",
+          "parent": "mixamorigRightUpLeg",
+          "position": [0.0, -0.46, 0.0]
+        },
+        {
+          "name": "mixamorigRightFoot",
+          "parent": "mixamorigRightLeg",
+          "position": [0.0, -0.46, 0.0]
+        },
+        {
+          "name": "mixamorigRightToeBase",
+          "parent": "mixamorigRightFoot",
+          "position": [0.0, -0.05, 0.12]
+        },
+        {
+          "name": "mixamorigRightToe_End",
+          "parent": "mixamorigRightToeBase",
+          "position": [0.0, -0.03, 0.06]
+        }
+      ],
+      "unitsPerCm": 0.01,
+      "clips": [
+        {
+          "name": "bridge-e",
+          "duration": 0.3333333333333333,
+          "tracks": [
+            {
+              "name": "Legs.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 0.0, 0.0, 0, 0.0, -0.02, 0, 0.0, -0.04, 0, 0.0, -0.06, 0, 0.0, -0.08, 0, 0.0, -0.1, 0, 0.0, -0.12, 0, 0.0, -0.14, 0, 0.0, -0.16, 0, 0.0, -0.18, 0, 0.0, -0.2]
+            },
+            {
+              "name": "mixamorigHips.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 1.0, 0, 0, 1.0, 0, 0, 1.0, 0, 0, 1.0, 0, 0, 1.0, 0, 0, 1.0, 0, 0, 1.0, 0, 0, 1.0, 0, 0, 1.0, 0, 0, 1.0, 0, 0, 1.0, 0]
+            }
+          ],
+          "path": {
+            "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+            "xz": [0, 0.0, 0, 0.01, 0, 0.02, 0, 0.03, 0, 0.04, 0, 0.05, 0, 0.06, 0, 0.07, 0, 0.08, 0, 0.09, 0, 0.1]
+          }
+        }
+      ]
+    },
+    "g": {
+      "bones": [
+        {
+          "name": "mixamorigHips",
+          "parent": null,
+          "position": [0, 100, 0]
+        },
+        {
+          "name": "Legs",
+          "parent": "mixamorigHips",
+          "position": [0, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftUpLeg",
+          "parent": "Legs",
+          "position": [10, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftLeg",
+          "parent": "mixamorigLeftUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftFoot",
+          "parent": "mixamorigLeftLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftToeBase",
+          "parent": "mixamorigLeftFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigLeftToe_End",
+          "parent": "mixamorigLeftToeBase",
+          "position": [0, -3, 6]
+        },
+        {
+          "name": "mixamorigRightUpLeg",
+          "parent": "Legs",
+          "position": [-10, 0, 0]
+        },
+        {
+          "name": "mixamorigRightLeg",
+          "parent": "mixamorigRightUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightFoot",
+          "parent": "mixamorigRightLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightToeBase",
+          "parent": "mixamorigRightFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigRightToe_End",
+          "parent": "mixamorigRightToeBase",
+          "position": [0, -3, 6]
+        }
+      ],
+      "unitsPerCm": 1,
+      "clips": [
+        {
+          "name": "bridge-g",
+          "duration": 0.3333333333333333,
+          "tracks": [
+            {
+              "name": "Legs.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 0, 0, 0, 0, -2, 0, 0, -4, 0, 0, -6, 0, 0, -8, 0, 0, -10, 0, 0, -12, 0, 0, -14, 0, 0, -16, 0, 0, -18, 0, 0, -20]
+            },
+            {
+              "name": "mixamorigHips.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0]
+            }
+          ],
+          "path": {
+            "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+            "xz": [0, 0, 0, 2, 0, 4, 0, 6, 0, 8, 0, 10, 0, 12, 0, 14, 0, 16, 0, 18, 0, 20]
+          }
+        }
+      ]
+    },
+    "h": {
+      "bones": [
+        {
+          "name": "mixamorigHips",
+          "parent": null,
+          "position": [0, 100, 0]
+        },
+        {
+          "name": "Legs",
+          "parent": "mixamorigHips",
+          "position": [0, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftUpLeg",
+          "parent": "Legs",
+          "position": [10, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftLeg",
+          "parent": "mixamorigLeftUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftFoot",
+          "parent": "mixamorigLeftLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftToeBase",
+          "parent": "mixamorigLeftFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigLeftToe_End",
+          "parent": "mixamorigLeftToeBase",
+          "position": [0, -3, 6]
+        },
+        {
+          "name": "mixamorigRightUpLeg",
+          "parent": "Legs",
+          "position": [-10, 0, 0]
+        },
+        {
+          "name": "mixamorigRightLeg",
+          "parent": "mixamorigRightUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightFoot",
+          "parent": "mixamorigRightLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightToeBase",
+          "parent": "mixamorigRightFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigRightToe_End",
+          "parent": "mixamorigRightToeBase",
+          "position": [0, -3, 6]
+        }
+      ],
+      "unitsPerCm": 1,
+      "clips": [
+        {
+          "name": "bridge-h",
+          "duration": 0.3333333333333333,
+          "tracks": [
+            {
+              "name": "Legs.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 2.5, 0, 0, 2.5, -2, 0, 2.5, -4, 0, 2.5, -6, 0, 2.5, -8, 0, 2.5, -10, 0, 2.5, -12, 0, 2.5, -14, 0, 2.5, -16, 0, 2.5, -18, 0, 2.5, -20]
+            },
+            {
+              "name": "mixamorigHips.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0]
+            }
+          ],
+          "path": {
+            "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+            "xz": [0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8, 0, 9, 0, 10]
+          }
+        }
+      ]
+    },
+    "f": {
+      "bones": [
+        {
+          "name": "mixamorigHips",
+          "parent": null,
+          "position": [0, 100, 0]
+        },
+        {
+          "name": "Legs",
+          "parent": "mixamorigHips",
+          "position": [0, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftUpLeg",
+          "parent": "Legs",
+          "position": [10, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftLeg",
+          "parent": "mixamorigLeftUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftFoot",
+          "parent": "mixamorigLeftLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftToeBase",
+          "parent": "mixamorigLeftFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigLeftToe_End",
+          "parent": "mixamorigLeftToeBase",
+          "position": [0, -3, 6]
+        },
+        {
+          "name": "mixamorigRightUpLeg",
+          "parent": "Legs",
+          "position": [-10, 0, 0]
+        },
+        {
+          "name": "mixamorigRightLeg",
+          "parent": "mixamorigRightUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightFoot",
+          "parent": "mixamorigRightLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightToeBase",
+          "parent": "mixamorigRightFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigRightToe_End",
+          "parent": "mixamorigRightToeBase",
+          "position": [0, -3, 6]
+        }
+      ],
+      "unitsPerCm": 1,
+      "clips": [
+        {
+          "name": "idle-like",
+          "duration": 0.3333333333333333,
+          "tracks": [
+            {
+              "name": "Legs.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 0, 0, 0, 0, -2, 0, 0, -4, 0, 0, -6, 0, 0, -8, 0, 0, -10, 0, 0, -12, 0, 0, -14, 0, 0, -16, 0, 0, -18, 0, 0, -20]
+            },
+            {
+              "name": "mixamorigHips.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0]
+            }
+          ]
+        },
+        {
+          "name": "bridge-f",
+          "duration": 0.3333333333333333,
+          "tracks": [
+            {
+              "name": "Legs.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 0, 0, 0, 0, -2, 0, 0, -4, 0, 0, -6, 0, 0, -8, 0, 0, -10, 0, 0, -12, 0, 0, -14, 0, 0, -16, 0, 0, -18, 0, 0, -20]
+            },
+            {
+              "name": "mixamorigHips.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0]
+            }
+          ],
+          "path": {
+            "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+            "xz": [0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8, 0, 9, 0, 10]
+          }
+        }
+      ]
+    },
+    "plain": {
+      "bones": [
+        {
+          "name": "mixamorigHips",
+          "parent": null,
+          "position": [0, 100, 0]
+        },
+        {
+          "name": "Legs",
+          "parent": "mixamorigHips",
+          "position": [0, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftUpLeg",
+          "parent": "Legs",
+          "position": [10, 0, 0]
+        },
+        {
+          "name": "mixamorigLeftLeg",
+          "parent": "mixamorigLeftUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftFoot",
+          "parent": "mixamorigLeftLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigLeftToeBase",
+          "parent": "mixamorigLeftFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigLeftToe_End",
+          "parent": "mixamorigLeftToeBase",
+          "position": [0, -3, 6]
+        },
+        {
+          "name": "mixamorigRightUpLeg",
+          "parent": "Legs",
+          "position": [-10, 0, 0]
+        },
+        {
+          "name": "mixamorigRightLeg",
+          "parent": "mixamorigRightUpLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightFoot",
+          "parent": "mixamorigRightLeg",
+          "position": [0, -46, 0]
+        },
+        {
+          "name": "mixamorigRightToeBase",
+          "parent": "mixamorigRightFoot",
+          "position": [0, -5, 12]
+        },
+        {
+          "name": "mixamorigRightToe_End",
+          "parent": "mixamorigRightToeBase",
+          "position": [0, -3, 6]
+        }
+      ],
+      "unitsPerCm": 1,
+      "clips": [
+        {
+          "name": "idle-only",
+          "duration": 0.3333333333333333,
+          "tracks": [
+            {
+              "name": "Legs.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 0, 0, 0, 0, -2, 0, 0, -4, 0, 0, -6, 0, 0, -8, 0, 0, -10, 0, 0, -12, 0, 0, -14, 0, 0, -16, 0, 0, -18, 0, 0, -20]
+            },
+            {
+              "name": "mixamorigHips.position",
+              "times": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+              "values": [0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0, 0, 100, 0]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "label": "[C1] C1 one report",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "reports",
+          "length"
+        ]
+      ],
+      "expect": 1,
+      "eps": 0
+    },
+    {
+      "label": "[C1] C1 used rig",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "reports",
+          0,
+          "used"
+        ]
+      ],
+      "expect": "rig",
+      "eps": 0
+    },
+    {
+      "label": "[C1] C1 z",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "paths",
+          0,
+          "z"
+        ]
+      ],
+      "expect": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20],
+      "eps": 0.0001
+    },
+    {
+      "label": "[C1] C1 x",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "paths",
+          0,
+          "x"
+        ]
+      ],
+      "expect": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "eps": 0.0001
+    },
+    {
+      "label": "[C1] C1 times",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "paths",
+          0,
+          "times"
+        ]
+      ],
+      "expect": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+      "eps": 1e-06
+    },
+    {
+      "label": "[C1] C1 driftCm",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "reports",
+          0,
+          "driftCm"
+        ]
+      ],
+      "expect": 0,
+      "eps": 0.001
+    },
+    {
+      "label": "[C1] C1 importedDriftCm",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "reports",
+          0,
+          "importedDriftCm"
+        ]
+      ],
+      "expect": 10,
+      "eps": 0.001
+    },
+    {
+      "label": "[C1] C1 travel 0",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "reports",
+          0,
+          "travel",
+          0
+        ]
+      ],
+      "expect": 0,
+      "eps": 0.0001
+    },
+    {
+      "label": "[C1] C1 travel 1",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "reports",
+          0,
+          "travel",
+          1
+        ]
+      ],
+      "expect": 20,
+      "eps": 0.0001
+    },
+    {
+      "label": "[C1] C1 one log",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "logs",
+          "length"
+        ]
+      ],
+      "expect": 1,
+      "eps": 0
+    },
+    {
+      "label": "[C1] C1 log",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "logs",
+          0
+        ]
+      ],
+      "expect": "foot lock per rig — bridge-a 0.0 cm (imported 10.0)",
+      "eps": 0
+    },
+    {
+      "label": "[C1] C1 bare used",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "bare"
+        },
+        [
+          "reports",
+          0,
+          "used"
+        ]
+      ],
+      "expect": "rig",
+      "eps": 0
+    },
+    {
+      "label": "[C1] C1 bare z",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "bare"
+        },
+        [
+          "paths",
+          0,
+          "z"
+        ]
+      ],
+      "expect": [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20],
+      "eps": 0.0001
+    },
+    {
+      "label": "[C1] C1 bare times",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "bare"
+        },
+        [
+          "paths",
+          0,
+          "times"
+        ]
+      ],
+      "expect": [0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333, 0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3, 0.3333333333333333],
+      "eps": 1e-06
+    },
+    {
+      "label": "[C3] c used",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "c"
+        },
+        [
+          "reports",
+          0,
+          "used"
+        ]
+      ],
+      "expect": "imported",
+      "eps": 0
+    },
+    {
+      "label": "[C3] c reason",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "c"
+        },
+        [
+          "reports",
+          0,
+          "reason"
+        ]
+      ],
+      "expect": "no full contact",
+      "eps": 0
+    },
+    {
+      "label": "[C3] c preset z",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "c"
+        },
+        [
+          "paths",
+          0,
+          "z"
+        ]
+      ],
+      "expect": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      "eps": 1e-06
+    },
+    {
+      "label": "[C3] C3 drift",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "c"
+        },
+        [
+          "reports",
+          0,
+          "driftCm"
+        ]
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[C3] C3 import drift",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "c"
+        },
+        [
+          "reports",
+          0,
+          "importedDriftCm"
+        ]
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[C3] C3 travel",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "c"
+        },
+        [
+          "reports",
+          0,
+          "travel",
+          1
+        ]
+      ],
+      "expect": 10,
+      "eps": 0.0001
+    },
+    {
+      "label": "[C3] C3 log",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "c"
+        },
+        [
+          "logs"
+        ]
+      ],
+      "expect": [
+        "foot lock per rig — bridge-c imported (no full contact)"
+      ],
+      "eps": 0
+    },
+    {
+      "label": "[C4] d used",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "d"
+        },
+        [
+          "reports",
+          0,
+          "used"
+        ]
+      ],
+      "expect": "imported",
+      "eps": 0
+    },
+    {
+      "label": "[C4] d reason",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "d"
+        },
+        [
+          "reports",
+          0,
+          "reason"
+        ]
+      ],
+      "expect": "no foot bones",
+      "eps": 0
+    },
+    {
+      "label": "[C4] d preset z",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "d"
+        },
+        [
+          "paths",
+          0,
+          "z"
+        ]
+      ],
+      "expect": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      "eps": 1e-06
+    },
+    {
+      "label": "[C4] C4 finite",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "d"
+        },
+        [
+          "finite"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C5] C5 used",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "e"
+        },
+        [
+          "reports",
+          0,
+          "used"
+        ]
+      ],
+      "expect": "rig",
+      "eps": 0
+    },
+    {
+      "label": "[C5] C5 z",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "e"
+        },
+        [
+          "paths",
+          0,
+          "z"
+        ]
+      ],
+      "expect": [0.0, 0.02, 0.04, 0.06, 0.08, 0.1, 0.12, 0.14, 0.16, 0.18, 0.2],
+      "eps": 1e-06
+    },
+    {
+      "label": "[C5] C5 driftCm",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "e"
+        },
+        [
+          "reports",
+          0,
+          "driftCm"
+        ]
+      ],
+      "expect": 0,
+      "eps": 0.001
+    },
+    {
+      "label": "[C5] C5 importedDriftCm",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "e"
+        },
+        [
+          "reports",
+          0,
+          "importedDriftCm"
+        ]
+      ],
+      "expect": 10,
+      "eps": 0.001
+    },
+    {
+      "label": "[C5] C5 travel",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "e"
+        },
+        [
+          "reports",
+          0,
+          "travel",
+          1
+        ]
+      ],
+      "expect": 20,
+      "eps": 0.001
+    },
+    {
+      "label": "[C6] C6 one named report",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "f"
+        },
+        [
+          "reportNames"
+        ]
+      ],
+      "expect": [
+        "bridge-f"
+      ],
+      "eps": 0
+    },
+    {
+      "label": "[C6] C6 plain no path",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "f"
+        },
+        [
+          "paths",
+          0
+        ]
+      ],
+      "expect": null,
+      "eps": 0
+    },
+    {
+      "label": "[C6] C6 only plain",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "plain"
+        },
+        [
+          "emptyAndSilent"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C7] C7 used",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "g"
+        },
+        [
+          "reports",
+          0,
+          "used"
+        ]
+      ],
+      "expect": "imported",
+      "eps": 0
+    },
+    {
+      "label": "[C7] C7 reason",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "g"
+        },
+        [
+          "reports",
+          0,
+          "reason"
+        ]
+      ],
+      "expect": "imported holds better",
+      "eps": 0
+    },
+    {
+      "label": "[C7] C7 object kept",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "g"
+        },
+        [
+          "samePaths",
+          0
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C7] C7 driftCm",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "g"
+        },
+        [
+          "reports",
+          0,
+          "driftCm"
+        ]
+      ],
+      "expect": 0,
+      "eps": 0.001
+    },
+    {
+      "label": "[C7] C7 importedDriftCm",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "g"
+        },
+        [
+          "reports",
+          0,
+          "importedDriftCm"
+        ]
+      ],
+      "expect": 0,
+      "eps": 0.001
+    },
+    {
+      "label": "[C7] C7 travel",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "g"
+        },
+        [
+          "reports",
+          0,
+          "travel",
+          1
+        ]
+      ],
+      "expect": 20,
+      "eps": 0.0001
+    },
+    {
+      "label": "[C7] C7 log",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "g"
+        },
+        [
+          "logs"
+        ]
+      ],
+      "expect": [
+        "foot lock per rig — bridge-g imported 0.0 cm (rig 0.0)"
+      ],
+      "eps": 0
+    },
+    {
+      "label": "[C8] C8 no lift tolerance",
+      "fn": "hasGroundLiftTolerance",
+      "args": [],
+      "expect": false,
+      "eps": 0
+    },
+    {
+      "label": "[C8] C8 ground LeftFoot",
+      "fn": "groundValue",
+      "args": [
+        {
+          "LeftFoot": [
+            [10, 10, 0],
+            [10, 10, -2],
+            [10, 10, -4],
+            [10, 10, -6],
+            [10, 10, -8],
+            [10, 10, -10],
+            [10, 10, -12],
+            [10, 10, -14],
+            [10, 10, -16],
+            [10, 10, -18],
+            [10, 10, -20]
+          ],
+          "RightFoot": [
+            [10, 10, 0],
+            [10, 10, -2],
+            [10, 10, -4],
+            [10, 10, -6],
+            [10, 10, -8],
+            [10, 10, -10],
+            [10, 10, -12],
+            [10, 10, -14],
+            [10, 10, -16],
+            [10, 10, -18],
+            [10, 10, -20]
+          ],
+          "LeftToeBase": [
+            [10, 5, 0],
+            [10, 5, -2],
+            [10, 5, -4],
+            [10, 5, -6],
+            [10, 5, -8],
+            [10, 5, -10],
+            [10, 5, -12],
+            [10, 5, -14],
+            [10, 5, -16],
+            [10, 5, -18],
+            [10, 5, -20]
+          ],
+          "RightToeBase": [
+            [10, 5, 0],
+            [10, 5, -2],
+            [10, 5, -4],
+            [10, 5, -6],
+            [10, 5, -8],
+            [10, 5, -10],
+            [10, 5, -12],
+            [10, 5, -14],
+            [10, 5, -16],
+            [10, 5, -18],
+            [10, 5, -20]
+          ]
+        },
+        {
+          "LeftFoot": 8,
+          "RightFoot": 8,
+          "LeftToeBase": 3,
+          "RightToeBase": 3
+        },
+        [
+          "LeftFoot"
+        ]
+      ],
+      "expect": 8,
+      "eps": 0
+    },
+    {
+      "label": "[C8] C8 ground RightToeBase",
+      "fn": "groundValue",
+      "args": [
+        {
+          "LeftFoot": [
+            [10, 10, 0],
+            [10, 10, -2],
+            [10, 10, -4],
+            [10, 10, -6],
+            [10, 10, -8],
+            [10, 10, -10],
+            [10, 10, -12],
+            [10, 10, -14],
+            [10, 10, -16],
+            [10, 10, -18],
+            [10, 10, -20]
+          ],
+          "RightFoot": [
+            [10, 10, 0],
+            [10, 10, -2],
+            [10, 10, -4],
+            [10, 10, -6],
+            [10, 10, -8],
+            [10, 10, -10],
+            [10, 10, -12],
+            [10, 10, -14],
+            [10, 10, -16],
+            [10, 10, -18],
+            [10, 10, -20]
+          ],
+          "LeftToeBase": [
+            [10, 5, 0],
+            [10, 5, -2],
+            [10, 5, -4],
+            [10, 5, -6],
+            [10, 5, -8],
+            [10, 5, -10],
+            [10, 5, -12],
+            [10, 5, -14],
+            [10, 5, -16],
+            [10, 5, -18],
+            [10, 5, -20]
+          ],
+          "RightToeBase": [
+            [10, 5, 0],
+            [10, 5, -2],
+            [10, 5, -4],
+            [10, 5, -6],
+            [10, 5, -8],
+            [10, 5, -10],
+            [10, 5, -12],
+            [10, 5, -14],
+            [10, 5, -16],
+            [10, 5, -18],
+            [10, 5, -20]
+          ]
+        },
+        {
+          "LeftFoot": 8,
+          "RightFoot": 8,
+          "LeftToeBase": 3,
+          "RightToeBase": 3
+        },
+        [
+          "RightToeBase"
+        ]
+      ],
+      "expect": 3,
+      "eps": 0
+    },
+    {
+      "label": "[C8] C8 used",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "h"
+        },
+        [
+          "reports",
+          0,
+          "used"
+        ]
+      ],
+      "expect": "imported",
+      "eps": 0
+    },
+    {
+      "label": "[C8] C8 reason",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "h"
+        },
+        [
+          "reports",
+          0,
+          "reason"
+        ]
+      ],
+      "expect": "no full contact",
+      "eps": 0
+    },
+    {
+      "label": "[C8] C8 preset object",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "h"
+        },
+        [
+          "samePaths",
+          0
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C8] C8 driftCm",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "h"
+        },
+        [
+          "reports",
+          0,
+          "driftCm"
+        ]
+      ],
+      "expect": 0,
+      "eps": 0.001
+    },
+    {
+      "label": "[C8] C8 importedDriftCm",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "h"
+        },
+        [
+          "reports",
+          0,
+          "importedDriftCm"
+        ]
+      ],
+      "expect": 0,
+      "eps": 0.001
+    },
+    {
+      "label": "[C8] C8 travel",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "h"
+        },
+        [
+          "reports",
+          0,
+          "travel",
+          1
+        ]
+      ],
+      "expect": 10,
+      "eps": 0.0001
+    },
+    {
+      "label": "[C2] C2 untouched",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "a"
+        },
+        [
+          "untouched"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C2] C2 untouched bare",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "bare"
+        },
+        [
+          "untouched"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C2] C2 untouched c",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "c"
+        },
+        [
+          "untouched"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C2] C2 untouched d",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "d"
+        },
+        [
+          "untouched"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C2] C2 untouched e",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "e"
+        },
+        [
+          "untouched"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C2] C2 untouched g",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "g"
+        },
+        [
+          "untouched"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C2] C2 untouched h",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "h"
+        },
+        [
+          "untouched"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C2] C2 untouched f",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "f"
+        },
+        [
+          "untouched"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[C2] C2 untouched plain",
+      "fn": "relockValue",
+      "args": [
+        {
+          "$fixture": "plain"
+        },
+        [
+          "untouched"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    }
+  ]
+}

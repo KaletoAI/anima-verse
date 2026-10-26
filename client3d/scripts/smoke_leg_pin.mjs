@@ -167,7 +167,12 @@
  *        f 13 … 16: the ankle stays at 9 (±1e-4) — not moved at all;
  *        f 11: lowered by down 0.25 × lift 0.25 = 0.0625 → 8.1875 (±1e-4);
  *        f 5: 8 (lift 0, ±1e-4).
+ *
+ * [P9] Task 31 additional leg_pin.json cases: shortest rotation from +X to +Y
+ * is +90 degrees around +Z, quaternion (w,x,y,z)=(sqrt(1/2),0,0,sqrt(1/2)).
+ * Applying that quaternion to (1,0,0) gives (cos 90,sin 90,0)=(0,1,0).
  */
+import { runBridgeVectors } from './bridgeVectorDispatch.mjs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -209,13 +214,6 @@ async function loadClient() {
   }
 }
 
-// (w, x, y, z) quaternion maths of the smoke's own, as in smoke_foot_plant_math.py
-function qmat([w, x, y, z]) {
-  return [[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-    [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-    [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]];
-}
-const rot = (q, v) => qmat(q).map((r) => r[0] * v[0] + r[1] * v[1] + r[2] * v[2]);
 const sub = (a, b) => a.map((x, i) => x - b[i]);
 const add = (a, b) => a.map((x, i) => x + b[i]);
 const dist = (a, b) => Math.hypot(...sub(a, b));
@@ -224,62 +222,8 @@ async function main() {
   const THREE = await import('three');
   const lp = await loadClient();
 
-  console.log('[P2] twoBoneIk: a reachable pull-down');
-  {
-    const hip = [0, 100, 0]; const knee = [0, 50, 15]; const ankle = [0, 0, 0]; const target = [0, -2, 0];
-    const { upper, lower } = lp.twoBoneIk(hip, knee, ankle, target, knee);
-    const k2 = add(hip, rot(upper, sub(knee, hip)));
-    const a2 = add(k2, rot(lower, rot(upper, sub(ankle, knee))));
-    check('ankle reaches the target', close(a2, target), fmt(a2));
-    check('knee at (0, 49, 11.1355)', close(k2, [0, 49, Math.sqrt(124)]), fmt(k2));
-    check('knee in the plane x = 0', Math.abs(k2[0]) <= TOL, fmt(k2));
-    const l = Math.sqrt(2725);
-    check('|hip − knee| = 52.2015', Math.abs(dist(hip, k2) - l) <= TOL, String(dist(hip, k2)));
-    check('|knee − ankle| = 52.2015', Math.abs(dist(k2, a2) - l) <= TOL, String(dist(k2, a2)));
-  }
-
-  console.log('\n[P3] twoBoneIk: out of reach → stretched along hip→target');
-  {
-    const hip = [0, 100, 0]; const knee = [0, 50, 5]; const ankle = [0, 0, 0]; const target = [0, -5, 0];
-    const { upper, lower } = lp.twoBoneIk(hip, knee, ankle, target, knee);
-    const k2 = add(hip, rot(upper, sub(knee, hip)));
-    const a2 = add(k2, rot(lower, rot(upper, sub(ankle, knee))));
-    const l = Math.sqrt(2525);
-    check('every number finite', [...upper, ...lower, ...k2, ...a2].every(Number.isFinite));
-    check('ankle at (0, −0.4988, 0)', close(a2, [0, 100 - 2 * l, 0]), fmt(a2));
-    check('knee at (0, 49.7506, 0)', close(k2, [0, 100 - l, 0]), fmt(k2));
-  }
-
-  console.log('\n[P1] pinRuns: run rule and fade');
-  {
-    check('constants PIN_MIN_S 0.2, PIN_FADE_S 0.1', lp.PIN_MIN_S === 0.2 && lp.PIN_FADE_S === 0.1);
-    const cases = [
-      ['[P1] no fade-in at the take\'s start', [...Array(9).fill(1), ...Array(14).fill(0)],
-        [1, 1, 1, 1, 1, 1, 0.75, 0.5, 0.25, ...Array(14).fill(0)]],
-      ['[P1b] a run inside the take fades on both sides', [...Array(4).fill(0), ...Array(7).fill(1), ...Array(4).fill(0)],
-        [0, 0, 0, 0, 0.25, 0.5, 0.75, 1, 0.75, 0.5, 0.25, 0, 0, 0, 0]],
-      ['[P1c] 5 full frames (0.167 s) are a step, not a stand', [0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0],
-        Array(11).fill(0)],
-      ['[P1d] the ramps alone never count as full', Array(20).fill(0.9), Array(20).fill(0)],
-      ['[P1e] a run touching the last frame keeps its end', [...Array(4).fill(0), ...Array(8).fill(1)],
-        [0, 0, 0, 0, 0.25, 0.5, 0.75, 1, 1, 1, 1, 1]],
-    ];
-    for (const [label, w, want] of cases) {
-      const got = lp.pinRuns(w, FPS);
-      check(label, close(got, want), fmt(got));
-    }
-  }
-
-  console.log('\n[P8] soleDown: only a foot on its sole pins');
-  {
-    check('constant SOLE_MIN_FRACTION 0.5', lp.SOLE_MIN_FRACTION === 0.5);
-    const got = lp.soleDown([5, 1, 4.5, 4], [0, 0.6, 3, 12], 4);
-    check('upright / side / instep / heel (rest rise 4)',
-      JSON.stringify(got) === JSON.stringify([true, false, false, false]), JSON.stringify(got));
-    const flat = lp.soleDown([5, 4], [0, 12], -1);
-    check('rest rise ≤ 0 → threshold 0: upright true, heel false',
-      JSON.stringify(flat) === JSON.stringify([true, false]), JSON.stringify(flat));
-  }
+  const vectors = await runBridgeVectors('leg_pin');
+  passed += vectors.passed; failed += vectors.failed;
 
   // ------------------------------------------------------------ the rig
   const { relockRootPaths, clipRootPath, setClipRootPath } = lp;

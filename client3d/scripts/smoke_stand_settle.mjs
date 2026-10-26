@@ -87,6 +87,7 @@
  * [S6] a SNAP (`st.snap`, a view change) with the same P puts the root on the
  *      settled spot (2.12, 3.00), not back on P.
  */
+import { runBridgeVectors } from './bridgeVectorDispatch.mjs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -132,35 +133,8 @@ async function main() {
   const THREE = await import('three');
   const src = join(ROOT, 'client3d/src');
 
-  // ------------------------------------------------------------------ [P]
-  console.log('[P] settleOffset — the pure decision (hand cases)');
-  let pure = null;
-  try {
-    pure = await bundle(`export { settleOffset, STAND_ADOPT_M } from '${src}/scene/standSettle';`);
-  } catch (e) {
-    check('[P] standSettle.ts bundles', false, String(e.message ?? e).split('\n')[0]);
-  }
-  if (pure) {
-    const { settleOffset, STAND_ADOPT_M } = pure;
-    const P = { x: 2.0, z: 3.0 };
-    const same = (o, x, z) => !!o && Math.abs(o.x - x) < 1e-9 && Math.abs(o.z - z) < 1e-9;
-    const show = (o) => (o ? `(${o.x.toFixed(4)}, ${o.z.toFixed(4)})` : 'null');
-    let o = settleOffset({ x: 2.12, z: 3.0 }, P, P);
-    check('[P1] 0.12 m off → (0.12, 0)', same(o, 0.12, 0), show(o));
-    o = settleOffset({ x: 2.40, z: 3.0 }, P, P);
-    check('[P2] 0.40 m off → null', o === null, show(o));
-    o = settleOffset({ x: 2.09, z: 2.88 }, P, P);
-    check('[P3] diagonal 0.15 m off → (0.09, −0.12)', same(o, 0.09, -0.12), show(o));
-    o = settleOffset({ x: 2.0, z: 3.25 }, P, P);
-    check('[P4] exactly 0.25 m off → kept (inclusive bound)', same(o, 0, 0.25), show(o));
-    o = settleOffset({ x: 2.0, z: 3.2501 }, P, P);
-    check('[P4] 0.2501 m off → null', o === null, show(o));
-    o = settleOffset({ x: 2.12, z: 3.0 }, { x: 2.01, z: 3.0 }, P);
-    check('[P5] the server moved 1 cm → null', o === null, show(o));
-    o = settleOffset({ x: 2.12, z: 3.0 }, { x: 2.0004, z: 3.0 }, P);
-    check('[P5] 0.4 mm float noise → the offset from the new point (0.1196, 0)', same(o, 0.1196, 0), show(o));
-    check('[P6] STAND_ADOPT_M = the pick_stand raster step 0.25', STAND_ADOPT_M === 0.25, String(STAND_ADOPT_M));
-  }
+  const vectors = await runBridgeVectors('stand_settle');
+  passed += vectors.passed; failed += vectors.failed;
 
   // ------------------------------------------------------------------ [S]
   console.log('\n[S] the manager: hand-over in tick, goal in update (stub figure)');
@@ -176,6 +150,7 @@ async function main() {
       return { x: travel.x, z: travel.z };
     },
     play() {}, update() {}, faceTowards() {}, setSubmerged() {}, setLean() {},
+    setFirstPerson() {}, resetSecondaryMotion() {}, hasHead: true,
     beginBridgeLift: () => false, shiftBridgeLift: () => false, dispose() {},
   });
   const SEAT = new THREE.Vector3(1.6, 0, 3.0);

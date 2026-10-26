@@ -1,0 +1,2645 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_walk_math.mjs",
+  "fixtures": {
+    "flights_1": [
+      {
+        "foot": {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        "head": {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "run": {
+          "at": {
+            "x": 2,
+            "z": -2
+          },
+          "dir": {
+            "x": 1,
+            "z": 0
+          },
+          "runM": 3.9,
+          "widthM": 1.2
+        }
+      }
+    ],
+    "flights_2": [
+      {
+        "foot": {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        "head": {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "run": {
+          "at": {
+            "x": 2,
+            "z": -2
+          },
+          "dir": {
+            "x": 1,
+            "z": 0
+          },
+          "runM": 3.9,
+          "widthM": 1.2
+        }
+      },
+      {
+        "foot": {
+          "level": 1,
+          "x": 1.5,
+          "y": 3.09,
+          "z": 2
+        },
+        "head": {
+          "level": 2,
+          "x": 6.4,
+          "y": 6.09,
+          "z": 2
+        }
+      }
+    ],
+    "flights_3": [
+      {
+        "foot": {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        "head": {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "run": {
+          "at": {
+            "x": 2,
+            "z": -2
+          },
+          "dir": {
+            "x": 1,
+            "z": 0
+          },
+          "runM": 3.9,
+          "widthM": 1.2
+        }
+      },
+      {
+        "foot": {
+          "level": 0,
+          "x": 3.5,
+          "y": 0.01,
+          "z": -2
+        },
+        "head": {
+          "level": 1,
+          "x": 8.4,
+          "y": 3.09,
+          "z": -2
+        }
+      }
+    ],
+    "flights_4": [
+      {
+        "foot": {
+          "level": 0,
+          "x": 3.5,
+          "y": 0.01,
+          "z": -2
+        },
+        "head": {
+          "level": 1,
+          "x": 8.4,
+          "y": 3.09,
+          "z": -2
+        }
+      },
+      {
+        "foot": {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        "head": {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "run": {
+          "at": {
+            "x": 2,
+            "z": -2
+          },
+          "dir": {
+            "x": 1,
+            "z": 0
+          },
+          "runM": 3.9,
+          "widthM": 1.2
+        }
+      }
+    ],
+    "flight_5": {
+      "foot": {
+        "level": 0,
+        "x": 1.5,
+        "y": 0.01,
+        "z": -2
+      },
+      "head": {
+        "level": 1,
+        "x": 6.4,
+        "y": 3.09,
+        "z": -2
+      },
+      "run": {
+        "at": {
+          "x": 2,
+          "z": -2
+        },
+        "dir": {
+          "x": 1,
+          "z": 0
+        },
+        "runM": 3.9,
+        "widthM": 1.2
+      }
+    },
+    "flight_6": {
+      "foot": {
+        "level": 1,
+        "x": 2,
+        "y": 3.09,
+        "z": 1.5
+      },
+      "head": {
+        "level": 2,
+        "x": 2,
+        "y": 6.09,
+        "z": 6.4
+      },
+      "run": {
+        "at": {
+          "x": 2,
+          "z": 2
+        },
+        "dir": {
+          "x": 0,
+          "z": 1
+        },
+        "runM": 3.9,
+        "widthM": 1.2
+      }
+    },
+    "flights_7": [
+      {
+        "foot": {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        "head": {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "run": {
+          "at": {
+            "x": 2,
+            "z": -2
+          },
+          "dir": {
+            "x": 1,
+            "z": 0
+          },
+          "runM": 3.9,
+          "widthM": 1.2
+        }
+      },
+      {
+        "foot": {
+          "level": 1,
+          "x": 1.5,
+          "y": 3.09,
+          "z": -2
+        },
+        "head": {
+          "level": 2,
+          "x": 6.4,
+          "y": 6.09,
+          "z": -2
+        },
+        "run": {
+          "at": {
+            "x": 2,
+            "z": -2
+          },
+          "dir": {
+            "x": 1,
+            "z": 0
+          },
+          "runM": 3.9,
+          "widthM": 1.2
+        }
+      }
+    ],
+    "landings_8": [
+      {
+        "level": 0,
+        "x": 1.5,
+        "y": 0.01,
+        "z": -2
+      },
+      {
+        "level": 1,
+        "x": 6.4,
+        "y": 3.09,
+        "z": -2
+      },
+      {
+        "level": 1,
+        "x": 1.5,
+        "y": 3.09,
+        "z": -2
+      },
+      {
+        "level": 2,
+        "x": 6.4,
+        "y": 6.09,
+        "z": -2
+      }
+    ],
+    "landings_9": [
+      {
+        "level": 2,
+        "x": 6.4,
+        "y": 6.09,
+        "z": -2
+      },
+      {
+        "level": 1,
+        "x": 1.5,
+        "y": 3.09,
+        "z": -2
+      },
+      {
+        "level": 1,
+        "x": 6.4,
+        "y": 3.09,
+        "z": -2
+      },
+      {
+        "level": 0,
+        "x": 1.5,
+        "y": 0.01,
+        "z": -2
+      }
+    ],
+    "ride_10": {
+      "legs": [
+        {
+          "flight": {
+            "foot": {
+              "level": 0,
+              "x": 1.5,
+              "y": 0.01,
+              "z": -2
+            },
+            "head": {
+              "level": 1,
+              "x": 6.4,
+              "y": 3.09,
+              "z": -2
+            },
+            "run": {
+              "at": {
+                "x": 2,
+                "z": -2
+              },
+              "dir": {
+                "x": 1,
+                "z": 0
+              },
+              "runM": 3.9,
+              "widthM": 1.2
+            }
+          },
+          "start": {
+            "level": 0,
+            "x": 1.5,
+            "y": 0.01,
+            "z": -2
+          },
+          "end": {
+            "level": 1,
+            "x": 6.4,
+            "y": 3.09,
+            "z": -2
+          }
+        },
+        {
+          "flight": {
+            "foot": {
+              "level": 1,
+              "x": 1.5,
+              "y": 3.09,
+              "z": -2
+            },
+            "head": {
+              "level": 2,
+              "x": 6.4,
+              "y": 6.09,
+              "z": -2
+            },
+            "run": {
+              "at": {
+                "x": 2,
+                "z": -2
+              },
+              "dir": {
+                "x": 1,
+                "z": 0
+              },
+              "runM": 3.9,
+              "widthM": 1.2
+            }
+          },
+          "start": {
+            "level": 1,
+            "x": 1.5,
+            "y": 3.09,
+            "z": -2
+          },
+          "end": {
+            "level": 2,
+            "x": 6.4,
+            "y": 6.09,
+            "z": -2
+          }
+        }
+      ],
+      "leg": 0,
+      "armed": false
+    },
+    "points_11": [
+      [
+        0,
+        0.01,
+        -2
+      ],
+      [
+        1.5,
+        0.01,
+        -2
+      ],
+      [
+        3.95,
+        1.55,
+        -2
+      ],
+      [
+        6.4,
+        3.09,
+        -2
+      ],
+      [
+        3.95,
+        3.09,
+        -2
+      ],
+      [
+        1.5,
+        3.09,
+        -2
+      ]
+    ],
+    "points_12": [
+      [
+        0,
+        0.01,
+        -2
+      ],
+      [
+        1.5,
+        0.01,
+        -2
+      ],
+      [
+        3.95,
+        1.55,
+        -2
+      ],
+      [
+        6.4,
+        3.09,
+        -2
+      ],
+      [
+        3.95,
+        3.09,
+        -2
+      ],
+      [
+        1.5,
+        3.09,
+        -2
+      ],
+      [
+        3.95,
+        4.59,
+        -2
+      ],
+      [
+        6.4,
+        6.09,
+        -2
+      ]
+    ],
+    "ride_13": {
+      "legs": [
+        {
+          "flight": {
+            "foot": {
+              "level": 0,
+              "x": 1.5,
+              "y": 0.01,
+              "z": -2
+            },
+            "head": {
+              "level": 1,
+              "x": 6.4,
+              "y": 3.09,
+              "z": -2
+            },
+            "run": {
+              "at": {
+                "x": 2,
+                "z": -2
+              },
+              "dir": {
+                "x": 1,
+                "z": 0
+              },
+              "runM": 3.9,
+              "widthM": 1.2
+            }
+          },
+          "start": {
+            "level": 0,
+            "x": 1.5,
+            "y": 0.01,
+            "z": -2
+          },
+          "end": {
+            "level": 1,
+            "x": 6.4,
+            "y": 3.09,
+            "z": -2
+          }
+        }
+      ],
+      "leg": 0,
+      "armed": true
+    },
+    "ride_14": {
+      "legs": [
+        {
+          "flight": {
+            "foot": {
+              "level": 0,
+              "x": 1.5,
+              "y": 0.01,
+              "z": -2
+            },
+            "head": {
+              "level": 1,
+              "x": 6.4,
+              "y": 3.09,
+              "z": -2
+            },
+            "run": {
+              "at": {
+                "x": 2,
+                "z": -2
+              },
+              "dir": {
+                "x": 1,
+                "z": 0
+              },
+              "runM": 3.9,
+              "widthM": 1.2
+            }
+          },
+          "start": {
+            "level": 1,
+            "x": 6.4,
+            "y": 3.09,
+            "z": -2
+          },
+          "end": {
+            "level": 0,
+            "x": 1.5,
+            "y": 0.01,
+            "z": -2
+          }
+        }
+      ],
+      "leg": 0,
+      "armed": true
+    },
+    "landings_15": [
+      {
+        "id": "hall",
+        "level": 0,
+        "center": {
+          "x": 0,
+          "z": 0
+        }
+      },
+      {
+        "id": "kitchen",
+        "level": 0,
+        "center": {
+          "x": 6,
+          "z": 0
+        }
+      },
+      {
+        "id": "landing",
+        "level": 1,
+        "center": {
+          "x": 5,
+          "z": 0
+        }
+      },
+      {
+        "id": "bedroom",
+        "level": 1,
+        "center": {
+          "x": -5,
+          "z": 0
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "label": "[S1] chain up",
+      "fn": "stairChain",
+      "args": [
+        {
+          "$fixture": "flights_1"
+        },
+        0,
+        1
+      ],
+      "expect": [
+        {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain down",
+      "fn": "stairChain",
+      "args": [
+        {
+          "$fixture": "flights_1"
+        },
+        1,
+        0
+      ],
+      "expect": [
+        {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain two up",
+      "fn": "stairChain",
+      "args": [
+        {
+          "$fixture": "flights_2"
+        },
+        0,
+        2
+      ],
+      "expect": [
+        {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        {
+          "level": 1,
+          "x": 1.5,
+          "y": 3.09,
+          "z": 2
+        },
+        {
+          "level": 2,
+          "x": 6.4,
+          "y": 6.09,
+          "z": 2
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain two down",
+      "fn": "stairChain",
+      "args": [
+        {
+          "$fixture": "flights_2"
+        },
+        2,
+        0
+      ],
+      "expect": [
+        {
+          "level": 2,
+          "x": 6.4,
+          "y": 6.09,
+          "z": 2
+        },
+        {
+          "level": 1,
+          "x": 1.5,
+          "y": 3.09,
+          "z": 2
+        },
+        {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain unordered",
+      "fn": "stairChain",
+      "args": [
+        [
+          {
+            "foot": {
+              "level": 1,
+              "x": 1.5,
+              "y": 3.09,
+              "z": 2
+            },
+            "head": {
+              "level": 2,
+              "x": 6.4,
+              "y": 6.09,
+              "z": 2
+            }
+          },
+          {
+            "foot": {
+              "level": 0,
+              "x": 1.5,
+              "y": 0.01,
+              "z": -2
+            },
+            "head": {
+              "level": 1,
+              "x": 6.4,
+              "y": 3.09,
+              "z": -2
+            },
+            "run": {
+              "at": {
+                "x": 2,
+                "z": -2
+              },
+              "dir": {
+                "x": 1,
+                "z": 0
+              },
+              "runM": 3.9,
+              "widthM": 1.2
+            }
+          }
+        ],
+        0,
+        2
+      ],
+      "expect": [
+        {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        {
+          "level": 1,
+          "x": 1.5,
+          "y": 3.09,
+          "z": 2
+        },
+        {
+          "level": 2,
+          "x": 6.4,
+          "y": 6.09,
+          "z": 2
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain first",
+      "fn": "stairChain",
+      "args": [
+        [
+          {
+            "foot": {
+              "level": 0,
+              "x": 1.5,
+              "y": 0.01,
+              "z": -2
+            },
+            "head": {
+              "level": 1,
+              "x": 6.4,
+              "y": 3.09,
+              "z": -2
+            },
+            "run": {
+              "at": {
+                "x": 2,
+                "z": -2
+              },
+              "dir": {
+                "x": 1,
+                "z": 0
+              },
+              "runM": 3.9,
+              "widthM": 1.2
+            }
+          },
+          {
+            "foot": {
+              "level": 0,
+              "x": -1.5,
+              "y": 0.01,
+              "z": 4
+            },
+            "head": {
+              "level": 1,
+              "x": -6.4,
+              "y": 3.09,
+              "z": 4
+            }
+          }
+        ],
+        0,
+        1
+      ],
+      "expect": [
+        {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain reversed first",
+      "fn": "stairChain",
+      "args": [
+        [
+          {
+            "foot": {
+              "level": 0,
+              "x": -1.5,
+              "y": 0.01,
+              "z": 4
+            },
+            "head": {
+              "level": 1,
+              "x": -6.4,
+              "y": 3.09,
+              "z": 4
+            }
+          },
+          {
+            "foot": {
+              "level": 0,
+              "x": 1.5,
+              "y": 0.01,
+              "z": -2
+            },
+            "head": {
+              "level": 1,
+              "x": 6.4,
+              "y": 3.09,
+              "z": -2
+            },
+            "run": {
+              "at": {
+                "x": 2,
+                "z": -2
+              },
+              "dir": {
+                "x": 1,
+                "z": 0
+              },
+              "runM": 3.9,
+              "widthM": 1.2
+            }
+          }
+        ],
+        0,
+        1
+      ],
+      "expect": [
+        {
+          "level": 0,
+          "x": -1.5,
+          "y": 0.01,
+          "z": 4
+        },
+        {
+          "level": 1,
+          "x": -6.4,
+          "y": 3.09,
+          "z": 4
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain gap up",
+      "fn": "stairChain",
+      "args": [
+        {
+          "$fixture": "flights_1"
+        },
+        0,
+        2
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain gap down",
+      "fn": "stairChain",
+      "args": [
+        [
+          {
+            "foot": {
+              "level": 1,
+              "x": 1.5,
+              "y": 3.09,
+              "z": 2
+            },
+            "head": {
+              "level": 2,
+              "x": 6.4,
+              "y": 6.09,
+              "z": 2
+            }
+          }
+        ],
+        2,
+        0
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain empty",
+      "fn": "stairChain",
+      "args": [
+        [],
+        0,
+        1
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain same",
+      "fn": "stairChain",
+      "args": [
+        {
+          "$fixture": "flights_1"
+        },
+        1,
+        1
+      ],
+      "expect": [],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain same empty",
+      "fn": "stairChain",
+      "args": [
+        [],
+        0,
+        0
+      ],
+      "expect": [],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain basement",
+      "fn": "stairChain",
+      "args": [
+        [
+          {
+            "foot": {
+              "level": -1,
+              "x": 1.5,
+              "y": -2.91,
+              "z": 0
+            },
+            "head": {
+              "level": 0,
+              "x": 6.4,
+              "y": 0.01,
+              "z": 0
+            }
+          },
+          {
+            "foot": {
+              "level": 0,
+              "x": 1.5,
+              "y": 0.01,
+              "z": -2
+            },
+            "head": {
+              "level": 1,
+              "x": 6.4,
+              "y": 3.09,
+              "z": -2
+            },
+            "run": {
+              "at": {
+                "x": 2,
+                "z": -2
+              },
+              "dir": {
+                "x": 1,
+                "z": 0
+              },
+              "runM": 3.9,
+              "widthM": 1.2
+            }
+          }
+        ],
+        -1,
+        1
+      ],
+      "expect": [
+        {
+          "level": -1,
+          "x": 1.5,
+          "y": -2.91,
+          "z": 0
+        },
+        {
+          "level": 0,
+          "x": 6.4,
+          "y": 0.01,
+          "z": 0
+        },
+        {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        }
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S1] chain landing heights",
+      "fn": "stairChainValue",
+      "args": [
+        {
+          "$fixture": "flights_2"
+        },
+        0,
+        2,
+        [
+          "landingHeights"
+        ]
+      ],
+      "expect": [
+        3.09,
+        3.09
+      ],
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] STAIR_RANGE",
+      "fn": "constant",
+      "args": [
+        "STAIR_RANGE"
+      ],
+      "expect": 1.5,
+      "eps": 0
+    },
+    {
+      "label": "[S2] offer one metre",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 2.5,
+          "z": -2
+        },
+        0,
+        {
+          "$fixture": "flights_1"
+        },
+        1
+      ],
+      "expect": {
+        "dir": "up",
+        "dest": {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "dist": 1
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] offer too far",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 3.1,
+          "z": -2
+        },
+        0,
+        {
+          "$fixture": "flights_1"
+        },
+        1
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] offer small scale outside",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 2,
+          "z": -2
+        },
+        0,
+        {
+          "$fixture": "flights_1"
+        },
+        0.3
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] offer small scale inside",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 1.9,
+          "z": -2
+        },
+        0,
+        {
+          "$fixture": "flights_1"
+        },
+        0.3
+      ],
+      "expect": {
+        "dir": "up",
+        "dest": {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "dist": 0.4
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] offer head",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 6.4,
+          "z": -2
+        },
+        1,
+        {
+          "$fixture": "flights_1"
+        },
+        1
+      ],
+      "expect": {
+        "dir": "down",
+        "dest": {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        "dist": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] offer wrong floor",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 1.5,
+          "z": -2
+        },
+        1,
+        {
+          "$fixture": "flights_1"
+        },
+        1
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] offer empty",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 1.5,
+          "z": -2
+        },
+        0,
+        [],
+        1
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] offer nearest",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 2.6,
+          "z": -2
+        },
+        0,
+        {
+          "$fixture": "flights_3"
+        },
+        1
+      ],
+      "expect": {
+        "dir": "up",
+        "dest": {
+          "level": 1,
+          "x": 8.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "dist": 0.9
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] offer nearest reversed",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 2.6,
+          "z": -2
+        },
+        0,
+        {
+          "$fixture": "flights_4"
+        },
+        1
+      ],
+      "expect": {
+        "dir": "up",
+        "dest": {
+          "level": 1,
+          "x": 8.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "dist": 0.9
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] offer tie",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 2.5,
+          "z": -2
+        },
+        0,
+        {
+          "$fixture": "flights_3"
+        },
+        1
+      ],
+      "expect": {
+        "dir": "up",
+        "dest": {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "dist": 1
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S2] offer tie reversed",
+      "fn": "stairsAt",
+      "args": [
+        {
+          "x": 2.5,
+          "z": -2
+        },
+        0,
+        {
+          "$fixture": "flights_4"
+        },
+        1
+      ],
+      "expect": {
+        "dir": "up",
+        "dest": {
+          "level": 1,
+          "x": 8.4,
+          "y": 3.09,
+          "z": -2
+        },
+        "dist": 1
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S3] height start",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_5"
+        },
+        2,
+        -2
+      ],
+      "expect": 0.01,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height third",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_5"
+        },
+        3.3,
+        -2
+      ],
+      "expect": 1.0366666666666666,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height half",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_5"
+        },
+        3.95,
+        -2
+      ],
+      "expect": 1.55,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height end",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_5"
+        },
+        5.9,
+        -2
+      ],
+      "expect": 3.09,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height past end",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_5"
+        },
+        6.4,
+        -2
+      ],
+      "expect": 3.09,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height before start",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_5"
+        },
+        1,
+        -2
+      ],
+      "expect": 0.01,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height inside left",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_5"
+        },
+        3.95,
+        -1.5
+      ],
+      "expect": 1.55,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height inside right",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_5"
+        },
+        3.95,
+        -2.5
+      ],
+      "expect": 1.55,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height past rim",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_5"
+        },
+        3.95,
+        -1.25
+      ],
+      "expect": null,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height outside",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_5"
+        },
+        3.95,
+        0
+      ],
+      "expect": null,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height Z half",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_6"
+        },
+        2,
+        3.95
+      ],
+      "expect": 4.59,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height Z outside",
+      "fn": "stairY",
+      "args": [
+        {
+          "$fixture": "flight_6"
+        },
+        2.61,
+        3.95
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S3] height unnormalized",
+      "fn": "stairY",
+      "args": [
+        {
+          "foot": {
+            "level": 0,
+            "x": 1.5,
+            "y": 0.01,
+            "z": -2
+          },
+          "head": {
+            "level": 1,
+            "x": 6.4,
+            "y": 3.09,
+            "z": -2
+          },
+          "run": {
+            "at": {
+              "x": 2,
+              "z": -2
+            },
+            "dir": {
+              "x": 2,
+              "z": 0
+            },
+            "runM": 3.9,
+            "widthM": 1.2
+          }
+        },
+        3.95,
+        -2
+      ],
+      "expect": 1.55,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height zero run",
+      "fn": "stairY",
+      "args": [
+        {
+          "foot": {
+            "level": 0,
+            "x": 1.5,
+            "y": 0.01,
+            "z": -2
+          },
+          "head": {
+            "level": 1,
+            "x": 6.4,
+            "y": 3.09,
+            "z": -2
+          },
+          "run": {
+            "at": {
+              "x": 2,
+              "z": -2
+            },
+            "dir": {
+              "x": 1,
+              "z": 0
+            },
+            "runM": 0,
+            "widthM": 1.2
+          }
+        },
+        3.95,
+        -2
+      ],
+      "expect": null,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S3] height zero dir",
+      "fn": "stairY",
+      "args": [
+        {
+          "foot": {
+            "level": 0,
+            "x": 1.5,
+            "y": 0.01,
+            "z": -2
+          },
+          "head": {
+            "level": 1,
+            "x": 6.4,
+            "y": 3.09,
+            "z": -2
+          },
+          "run": {
+            "at": {
+              "x": 2,
+              "z": -2
+            },
+            "dir": {
+              "x": 0,
+              "z": 0
+            },
+            "runM": 3.9,
+            "widthM": 1.2
+          }
+        },
+        3.95,
+        -2
+      ],
+      "expect": null,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S4] leg up flight",
+      "fn": "stairLegToValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        [
+          "flight",
+          "foot",
+          "y"
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] leg up start",
+      "fn": "stairLegToValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        [
+          "start",
+          "y"
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] leg up end",
+      "fn": "stairLegToValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "level": 1,
+          "x": 6.4,
+          "y": 3.09,
+          "z": -2
+        },
+        [
+          "end",
+          "y"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] leg upper flight",
+      "fn": "stairLegToValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "level": 2,
+          "x": 6.4,
+          "y": 6.09,
+          "z": -2
+        },
+        [
+          "flight",
+          "foot",
+          "y"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] leg upper start",
+      "fn": "stairLegToValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "level": 2,
+          "x": 6.4,
+          "y": 6.09,
+          "z": -2
+        },
+        [
+          "start",
+          "y"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] leg down end",
+      "fn": "stairLegToValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        [
+          "end",
+          "y"
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] leg down start",
+      "fn": "stairLegToValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        [
+          "start",
+          "y"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] leg down flight",
+      "fn": "stairLegToValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "level": 0,
+          "x": 1.5,
+          "y": 0.01,
+          "z": -2
+        },
+        [
+          "flight",
+          "head",
+          "y"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] leg unknown",
+      "fn": "stairLegTo",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "level": 0,
+          "x": 99,
+          "y": 0,
+          "z": 0
+        }
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] stack four landings",
+      "fn": "stairChainValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        0,
+        2,
+        [
+          "length"
+        ]
+      ],
+      "expect": 4,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] legs up count",
+      "fn": "stairLegsValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "$fixture": "landings_8"
+        },
+        [
+          "length"
+        ]
+      ],
+      "expect": 2,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] legs lower head",
+      "fn": "stairLegsValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "$fixture": "landings_8"
+        },
+        [
+          0,
+          "flight",
+          "head",
+          "y"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] legs upper head",
+      "fn": "stairLegsValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "$fixture": "landings_8"
+        },
+        [
+          1,
+          "flight",
+          "head",
+          "y"
+        ]
+      ],
+      "expect": 6.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] legs upper start",
+      "fn": "stairLegsValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "$fixture": "landings_8"
+        },
+        [
+          1,
+          "start",
+          "y"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] legs down count",
+      "fn": "stairLegsValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "$fixture": "landings_9"
+        },
+        [
+          "length"
+        ]
+      ],
+      "expect": 2,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] legs down upper",
+      "fn": "stairLegsValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "$fixture": "landings_9"
+        },
+        [
+          0,
+          "flight",
+          "head",
+          "y"
+        ]
+      ],
+      "expect": 6.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] legs down upper end",
+      "fn": "stairLegsValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "$fixture": "landings_9"
+        },
+        [
+          0,
+          "end",
+          "y"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] legs down lower end",
+      "fn": "stairLegsValue",
+      "args": [
+        {
+          "$fixture": "flights_7"
+        },
+        {
+          "$fixture": "landings_9"
+        },
+        [
+          1,
+          "end",
+          "y"
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S4] legs wrong chain",
+      "fn": "stairLegsValue",
+      "args": [
+        {
+          "$fixture": "flights_1"
+        },
+        [
+          {
+            "level": 1,
+            "x": 1.5,
+            "y": 3.09,
+            "z": -2
+          },
+          {
+            "level": 2,
+            "x": 6.4,
+            "y": 6.09,
+            "z": -2
+          }
+        ],
+        [
+          "length"
+        ]
+      ],
+      "expect": 0,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S5] RIDE_ARRIVE_M",
+      "fn": "constant",
+      "args": [
+        "RIDE_ARRIVE_M"
+      ],
+      "expect": 0.4,
+      "eps": 0
+    },
+    {
+      "label": "[S5] arrival clears run",
+      "fn": "rideArrivalClearsRun",
+      "args": [],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[S5] ride room height",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            0,
+            0.01,
+            -2
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S5] ride room state",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            0,
+            0.01,
+            -2
+          ]
+        ],
+        [
+          "state"
+        ]
+      ],
+      "expect": {
+        "leg": 0,
+        "armed": false,
+        "done": false
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S5] ride foot armed",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            0,
+            0.01,
+            -2
+          ],
+          [
+            1.5,
+            0.01,
+            -2
+          ]
+        ],
+        [
+          "armed"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[S5] ride foot height",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            0,
+            0.01,
+            -2
+          ],
+          [
+            1.5,
+            0.01,
+            -2
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": 0.01,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S5] ride lower halfway",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            0,
+            0.01,
+            -2
+          ],
+          [
+            1.5,
+            0.01,
+            -2
+          ],
+          [
+            3.95,
+            1.55,
+            -2
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": 1.55,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S5] ride handover state",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            0,
+            0.01,
+            -2
+          ],
+          [
+            1.5,
+            0.01,
+            -2
+          ],
+          [
+            3.95,
+            1.55,
+            -2
+          ],
+          [
+            6.4,
+            3.09,
+            -2
+          ]
+        ],
+        [
+          "state"
+        ]
+      ],
+      "expect": {
+        "leg": 1,
+        "armed": false,
+        "done": false
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[S5] ride handover height",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            0,
+            0.01,
+            -2
+          ],
+          [
+            1.5,
+            0.01,
+            -2
+          ],
+          [
+            3.95,
+            1.55,
+            -2
+          ],
+          [
+            6.4,
+            3.09,
+            -2
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S5] ride crossing unarmed",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            0,
+            0.01,
+            -2
+          ],
+          [
+            1.5,
+            0.01,
+            -2
+          ],
+          [
+            3.95,
+            1.55,
+            -2
+          ],
+          [
+            6.4,
+            3.09,
+            -2
+          ],
+          [
+            3.95,
+            3.09,
+            -2
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S5] ride upper armed",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        {
+          "$fixture": "points_11"
+        },
+        [
+          "armed"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[S5] ride upper foot",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        {
+          "$fixture": "points_11"
+        },
+        [
+          "y"
+        ]
+      ],
+      "expect": 3.09,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S5] ride upper halfway",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        [
+          [
+            0,
+            0.01,
+            -2
+          ],
+          [
+            1.5,
+            0.01,
+            -2
+          ],
+          [
+            3.95,
+            1.55,
+            -2
+          ],
+          [
+            6.4,
+            3.09,
+            -2
+          ],
+          [
+            3.95,
+            3.09,
+            -2
+          ],
+          [
+            1.5,
+            3.09,
+            -2
+          ],
+          [
+            3.95,
+            4.59,
+            -2
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": 4.59,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S5] ride done",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        {
+          "$fixture": "points_12"
+        },
+        [
+          "done"
+        ]
+      ],
+      "expect": true,
+      "eps": 0
+    },
+    {
+      "label": "[S5] ride done height",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_10"
+        },
+        {
+          "$fixture": "points_12"
+        },
+        [
+          "y"
+        ]
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S5] ride armed",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_13"
+        },
+        [
+          [
+            3.95,
+            1.55,
+            -2
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": 1.55,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S5] ride outside",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_13"
+        },
+        [
+          [
+            3.95,
+            1.55,
+            -1
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": null,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S5] ride descending",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_14"
+        },
+        [
+          [
+            3.95,
+            1.55,
+            -2
+          ]
+        ],
+        [
+          "y"
+        ]
+      ],
+      "expect": 1.55,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S5] ride descending done",
+      "fn": "rideSequenceValue",
+      "args": [
+        {
+          "$fixture": "ride_14"
+        },
+        [
+          [
+            1.5,
+            0.01,
+            -2
+          ]
+        ],
+        [
+          "done"
+        ]
+      ],
+      "expect": true,
+      "eps": 1e-12
+    },
+    {
+      "label": "[S6] room head",
+      "fn": "nearestRoomAt",
+      "args": [
+        1,
+        {
+          "x": 6.4,
+          "z": -2
+        },
+        {
+          "$fixture": "landings_15"
+        }
+      ],
+      "expect": "landing",
+      "eps": 1e-09
+    },
+    {
+      "label": "[S6] room ground",
+      "fn": "nearestRoomAt",
+      "args": [
+        0,
+        {
+          "x": 6.4,
+          "z": -2
+        },
+        {
+          "$fixture": "landings_15"
+        }
+      ],
+      "expect": "kitchen",
+      "eps": 1e-09
+    },
+    {
+      "label": "[S6] room missing floor",
+      "fn": "nearestRoomAt",
+      "args": [
+        2,
+        {
+          "x": 0,
+          "z": 0
+        },
+        {
+          "$fixture": "landings_15"
+        }
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S6] room empty",
+      "fn": "nearestRoomAt",
+      "args": [
+        0,
+        {
+          "x": 0,
+          "z": 0
+        },
+        []
+      ],
+      "expect": null,
+      "eps": 1e-09
+    },
+    {
+      "label": "[S6] room tie",
+      "fn": "nearestRoomAt",
+      "args": [
+        0,
+        {
+          "x": 3,
+          "z": 0
+        },
+        {
+          "$fixture": "landings_15"
+        }
+      ],
+      "expect": "hall",
+      "eps": 1e-09
+    },
+    {
+      "label": "[S6] room tie reversed",
+      "fn": "nearestRoomAt",
+      "args": [
+        0,
+        {
+          "x": 3,
+          "z": 0
+        },
+        [
+          {
+            "id": "bedroom",
+            "level": 1,
+            "center": {
+              "x": -5,
+              "z": 0
+            }
+          },
+          {
+            "id": "landing",
+            "level": 1,
+            "center": {
+              "x": 5,
+              "z": 0
+            }
+          },
+          {
+            "id": "kitchen",
+            "level": 0,
+            "center": {
+              "x": 6,
+              "z": 0
+            }
+          },
+          {
+            "id": "hall",
+            "level": 0,
+            "center": {
+              "x": 0,
+              "z": 0
+            }
+          }
+        ]
+      ],
+      "expect": "hall",
+      "eps": 1e-09
+    },
+    {
+      "label": "[S6] corridor beats distance",
+      "fn": "nearestRoomAt",
+      "args": [
+        -1,
+        {
+          "x": -2.5,
+          "z": -2.5
+        },
+        [
+          {
+            "id": "k1",
+            "level": -1,
+            "center": {
+              "x": -2.5,
+              "z": -2.5
+            }
+          },
+          {
+            "id": "__floor__-1",
+            "level": -1,
+            "center": {
+              "x": 3,
+              "z": -3
+            },
+            "floor": true
+          },
+          {
+            "id": "eg",
+            "level": 0,
+            "center": {
+              "x": -2,
+              "z": -2.5
+            }
+          }
+        ]
+      ],
+      "expect": "__floor__-1",
+      "eps": 0
+    }
+  ]
+}
