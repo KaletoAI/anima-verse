@@ -375,6 +375,51 @@ the fly drive's `max while streaming` below 33 ms with scatter on (the bench dri
 its `streamMaxFrameMs` is normally null — the fly drive is the streaming probe). Every result also goes to the
 server's `logs/bench.jsonl`.
 
+### Bench matrix (Task 26b)
+
+`--bench-matrix` runs the drive of `--bench` once per variant, in ONE process, on the SAME world and anchor, with the
+same warm-up and duration — each pass with exactly ONE feature switched off at runtime (`Bench/BenchSwitches.cs`: a node
+hidden, a uniform zeroed, a light flag, a renderer setting; nothing is rebuilt) and put back after it. It implies
+`--bench` (window size, start, `--quit-after-bench`); `--bench-matrix=A,B,…` runs only those variants (the baseline is
+always added). 14 passes × 23 s ≈ 5.5 min:
+
+```bash
+./anima-native.x86_64 -- --server=http://192.168.8.244:8000 --goto=Mondscheinsee --bench-matrix --quit-after-bench --size=3816x1030 --msaa=0
+```
+
+| variant | what is switched (and restored) |
+|---|---|
+| `baseline` | nothing |
+| `no-shadow` | the sun's `ShadowEnabled` off: no shadow pass, no shadow sampling |
+| `no-hemi-extra-lights` | ambient only: the two hemisphere pair lights hidden AND the terrain's hemisphere shader term (`av_hemi`) zeroed |
+| `no-fog-pass` | the distance fog off (`DistanceFog.Off`): no screen/depth copy, no full-screen pass |
+| `no-veil` | `fv_alpha` 0 on every ground material (`VeilUniforms.Off`) — its uniform branch reads no texture |
+| `no-backdrop` | the mountain backdrop rings hidden |
+| `no-water-extras` | the terrain water's ripple (`tw_ripple_on` 0), every underwater ghost (`SubmergedGhost.Off`), the waterfalls and the prop water sheets |
+| `no-mirrors` | no mirror reflection pass is granted (`MirrorPanes.Suspended`; the panes keep their picture) |
+| `no-prop-lights` | the prop light pool hidden: six lamps and every halo |
+| `no-cut-shader` | every cut surface wears its plain source material instead of the cut shader port (`CutMaterials.Plain`; holes and clips are gone meanwhile) |
+| `terrain-lod-coarse` | the CDLOD selection with the pixel scale × 0.5 (`TerrainLodNode.PixelScaleFactor`) = allowed screen error 2 → 4 px |
+| `shadow-atlas-2048` | `RenderingServer.DirectionalShadowAtlasSetSize(2048)` instead of 4096 |
+| `fog-compute` | the candidate (not a feature off): the distance fog as the compute pass instead of the screen pass (see `--fog`) |
+| `baseline-end` | nothing — the drift control (a laptop iGPU warms up over five minutes; compare it with `baseline`) |
+
+Every pass prints its `[bench] result {json}` line with the extra keys `variant`, `switch` (what it did, with counts),
+`applied` (false = there was nothing to switch, e.g. no mirror in reach or no GPU for `fog-compute` — the pass still
+runs), `matrixId`, `matrixPass`, `matrixPasses`; appends it to ONE file `user://bench-matrix-<yyyyMMdd-HHmmss>.jsonl`
+(path printed) and posts it to `/play/bench-result` (→ the server's `logs/bench.jsonl`). After the last pass the summary
+table (fps, frame median/P95, GPU median, ΔGPU against `baseline`, draws, triangles) is printed as `[bench-matrix] …`
+lines and shown in a panel. `--check matrix` switches every variant on the props fixture and proves each restore puts
+back exactly what was there.
+
+**`--fog=pass|compute`** — the distance fog as the screen pass (default) or as ONE compute pass on the colour buffer
+(`World/FogComputeEffect.cs`, a `CompositorEffect` at post-transparent on the overview camera; kernel and its CPU twin in
+`Core/Sky/FogCompute.cs`). The numbers are the screen pass's (opaque pixels: identical, unit-tested), the road is cheaper:
+no copy of the colour buffer with its full mip chain and no depth copy every frame (with MSAA also no extra pre-transparent
+resolves). Needs a GPU; without one, or when the kernel does not compile (logged), the screen pass stays. Differences: a
+transparent surface beyond 220 m is fogged by the opaque depth behind it; mirror reflections are not fogged (they show a
+room at ≤ 12 m).
+
 ## CDLOD terrain (Task 23)
 
 Port of `client3d/src/scene/terrainLod.ts` (`createTerrainLod`), contract § A16.6:

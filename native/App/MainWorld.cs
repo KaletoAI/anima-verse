@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using AnimaNative.Api;
 using AnimaNative.Bench;
@@ -215,7 +216,8 @@ public partial class Main : Node3D
             if (_options.Bench)
             {
                 if (_scatter is not null) await ScatterSettled(_scatter);
-                StartBench(builder);
+                if (_options.BenchMatrix is not null) await RunBenchMatrixAsync(builder);
+                else StartBench(builder);
             }
         }
         catch (Exception e)
@@ -332,28 +334,34 @@ public partial class Main : Node3D
         _streamer?.Probe.Reset();
         AddChild(new BenchRunner(_camera!, settings, result =>
         {
-            if (_scatter is not null)
-            {
-                // Extra key after the browser's: what both scatter layers drew at the end of the drive.
-                result["scatterLayers"] = _scatter.Summary();
-                Log("bench scatter " + _scatter.Summary());
-            }
-            // Extra key (Task S3b): which ground material the run drew — "layers" (the browser's) or "plain".
-            result["ground"] = _groundSummary;
-            // Extra key (Task S3c): what the world showed — water, recipe primitives, models.
-            result["water"] = _waterSummary;
-            // Extra key (Task 23): the CDLOD terrain over the drive — the last frame, the largest one, the viewport.
-            result["terrain"] = builder.Terrain?.Summary() ?? "terrain[none]";
-            // Extra keys (Task 24): the streaming probe over the drive (the longest frame while the terrain streamed).
-            if (_streamer is { } st)
-            {
-                st.AddBenchKeys(result);
-                Log($"bench stream: max frame while streaming {st.Probe.StreamMaxMs:0.##} ms over {st.Probe.StreamFrames} frames; {st.Summary()}");
-            }
+            AddBenchExtras(result, builder);
             var file = BenchOutput.Emit(result);
             BenchOutput.ShowPanel(this, result, file);
             _ = ReportBench(BenchOutput.Line(result));
         }));
+    }
+
+    /// <summary>The native extra keys after the browser's, in this order (every bench result, single run or matrix pass).</summary>
+    private void AddBenchExtras(JsonObject result, WorldBuilder builder)
+    {
+        if (_scatter is not null)
+        {
+            // Extra key after the browser's: what both scatter layers drew at the end of the drive.
+            result["scatterLayers"] = _scatter.Summary();
+            Log("bench scatter " + _scatter.Summary());
+        }
+        // Extra key (Task S3b): which ground material the run drew — "layers" (the browser's) or "plain".
+        result["ground"] = _groundSummary;
+        // Extra key (Task S3c): what the world showed — water, recipe primitives, models.
+        result["water"] = _waterSummary;
+        // Extra key (Task 23): the CDLOD terrain over the drive — the last frame, the largest one, the viewport.
+        result["terrain"] = builder.Terrain?.Summary() ?? "terrain[none]";
+        // Extra keys (Task 24): the streaming probe over the drive (the longest frame while the terrain streamed).
+        if (_streamer is { } st)
+        {
+            st.AddBenchKeys(result);
+            Log($"bench stream: max frame while streaming {st.Probe.StreamMaxMs:0.##} ms over {st.Probe.StreamFrames} frames; {st.Summary()}");
+        }
     }
 
     /// <summary>Sends the result to the server's bench log, then honours <c>--quit-after-bench</c>.</summary>

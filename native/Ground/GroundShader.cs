@@ -326,6 +326,7 @@ uniform sampler2D tw_kind : filter_nearest, repeat_disable;
 uniform sampler2D tw_flow : filter_nearest, repeat_disable;
 uniform sampler2D tw_look : filter_nearest, repeat_disable;
 uniform vec3 tw_sky = vec3(0.62, 0.78, 0.91);
+uniform float tw_ripple_on = 1.0;                     // the bench switch no-water-extras (Task 26b): 0 = flat water
 varying float v_wet;
 ";
 
@@ -439,7 +440,7 @@ vec3 tw_ripple(vec2 p, vec2 gx, vec2 gy, float wave_m, float speed, float flow_s
 			float raw_foam = 1.0 - tw_smooth(d / {L(WaterShade.FoamBandM)});
 			tw_foam = raw_foam * min(shore + raw_foam * {L(WaterShade.FoamMinCover)}, 1.0) * rim;
 			tw_skymix = look0.w;
-			tw_n = tw_ripple(p, dpdx, dpdy, max(look1.x, 0.05), look1.y, look1.z, mod(TIME, 3600.0));
+			if (tw_ripple_on > 0.5) tw_n = tw_ripple(p, dpdx, dpdy, max(look1.x, 0.05), look1.y, look1.z, mod(TIME, 3600.0));
 			alb = mix(alb, look0.rgb, tw_a);
 			rough = mix(rough, look2.x, tw_s);
 			metal = mix(metal, look2.y, tw_s);

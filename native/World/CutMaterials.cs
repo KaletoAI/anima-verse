@@ -15,7 +15,8 @@ namespace AnimaNative.World;
 /// </summary>
 public sealed class CutHandle
 {
-    public sealed record Entry(MeshInstance3D Mesh, int Surface, ShaderMaterial Material, CutUniforms Uniforms);
+    /// <param name="Source">The surface override the cut replaced (null = the mesh's own material showed).</param>
+    public sealed record Entry(MeshInstance3D Mesh, int Surface, ShaderMaterial Material, CutUniforms Uniforms, Material? Source = null);
 
     public List<Entry> Entries { get; } = new();
     /// <summary>Surfaces left uncut: their material uses a feature the shader port lacks (<see cref="CutMaterials.SpecOf"/>).</summary>
@@ -97,11 +98,49 @@ public static class CutMaterials
                           ?? new StandardMaterial3D { DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert, DisableReceiveShadows = true };
                 if (!converted.TryGetValue((src, padding), out var mat)) converted[(src, padding)] = mat = Convert(src, u);
                 if (mat is null) { handle.Fallbacks++; TotalFallbacks++; continue; }
-                mi.SetSurfaceOverrideMaterial(s, mat);
-                handle.Entries.Add(new CutHandle.Entry(mi, s, mat, u));
+                var before = mi.GetSurfaceOverrideMaterial(s);
+                mi.SetSurfaceOverrideMaterial(s, Plain ? before : mat);
+                handle.Entries.Add(new CutHandle.Entry(mi, s, mat, u, before));
             }
         }
+        lock (Live) Live.Add(new WeakReference<CutHandle>(handle));
         return handle;
+    }
+
+    private static readonly List<WeakReference<CutHandle>> Live = new();
+    private static bool _plain;
+
+    /// <summary>
+    /// The bench switch <c>no-cut-shader</c> (Task 26b): every cut surface of every live placement wears the material it
+    /// had before the cut (the plain source — the imported StandardMaterial3D, a slot fill, or the mesh's own) instead of
+    /// the cut shader port; a placement cut while it is on is cut plain too. Off puts the cut materials back. Measuring
+    /// only: the holes, clips and depth cuts are gone while it is on.
+    /// </summary>
+    public static bool Plain
+    {
+        get => _plain;
+        set
+        {
+            if (_plain == value) return;
+            _plain = value;
+            foreach (var h in LiveHandles())
+                foreach (var e in h.Entries)
+                    if (GodotObject.IsInstanceValid(e.Mesh) && e.Surface < e.Mesh.GetSurfaceOverrideMaterialCount())
+                        e.Mesh.SetSurfaceOverrideMaterial(e.Surface, value ? e.Source : e.Material);
+        }
+    }
+
+    /// <summary>The cut handles whose placement is still alive (dead ones are dropped on the way).</summary>
+    public static List<CutHandle> LiveHandles()
+    {
+        var live = new List<CutHandle>();
+        lock (Live)
+        {
+            Live.RemoveAll(w => !w.TryGetTarget(out var h) || h.Entries.All(e => !GodotObject.IsInstanceValid(e.Mesh)));
+            foreach (var w in Live)
+                if (w.TryGetTarget(out var h)) live.Add(h);
+        }
+        return live;
     }
 
     /// <summary>

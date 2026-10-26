@@ -208,7 +208,9 @@ public partial class Main : Node3D
         _camera.Current = true;
         _camera.JumpTo(Vector3.Zero, OverviewControl.InitialDist);
         // engine.ts `scene.fog`: the distance fog as one screen pass under the camera, its colour the stage's sky.
-        _stage.Fog = DistanceFog.Attach(_camera);
+        // Task 26b: the compute twin rides on the camera too (disabled unless --fog=compute or the matrix's fog-compute).
+        _stage.Fog = DistanceFog.Attach(_camera, compute: true);
+        _stage.Fog.UseCompute = _options.FogCompute;
         // The click chain (engine.ts pointerup): figure → [seat/glyph/stair: E2/E7] → location → nothing.
         _camera.Clicked += at =>
         {

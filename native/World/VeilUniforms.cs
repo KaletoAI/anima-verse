@@ -37,6 +37,25 @@ public static class VeilUniforms
     /// <summary>The haze colour bound now (the clock's sky, linear).</summary>
     public static Vector3 SkyColor => _color;
 
+    /// <summary>
+    /// The bench switch <c>no-veil</c> (Task 26b): every bound material gets <c>fv_alpha</c> 0 — the shader's uniform
+    /// branch then reads no texture — whatever the state says. Switching it back writes the state's alpha again.
+    /// </summary>
+    public static bool Off
+    {
+        get => _off;
+        set
+        {
+            if (_off == value) return;
+            _off = value;
+            _pushedAlpha = double.NaN;
+            Push();
+        }
+    }
+    private static bool _off;
+
+    private static float AlphaNow => _off ? 0f : (float)State.Alpha;
+
     /// <summary>How many cell textures were made (one per changed memory).</summary>
     public static int Uploads { get; private set; }
 
@@ -70,7 +89,7 @@ public static class VeilUniforms
         if (!Materials().Contains(material)) Bound.Add(new WeakReference<ShaderMaterial>(material));
         WriteTextures(material);
         material.SetShaderParameter("fv_mix", (float)State.Mix);
-        material.SetShaderParameter("fv_alpha", (float)State.Alpha);
+        material.SetShaderParameter("fv_alpha", AlphaNow);
         material.SetShaderParameter("fv_color", _color);
     }
 
@@ -94,7 +113,7 @@ public static class VeilUniforms
         {
             if (textures) WriteTextures(m);
             if (mix) m.SetShaderParameter("fv_mix", (float)s.Mix);
-            if (alpha) m.SetShaderParameter("fv_alpha", (float)s.Alpha);
+            if (alpha) m.SetShaderParameter("fv_alpha", AlphaNow);
         }
         _pushedVersion = s.Version;
         _pushedAlpha = s.Alpha;
@@ -145,6 +164,7 @@ public static class VeilUniforms
         _color = DefaultSky;
         _pushedAlpha = _pushedMix = double.NaN;
         _pushedVersion = -1;
+        _off = false;
     }
 
     public static string Summary()

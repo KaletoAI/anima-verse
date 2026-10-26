@@ -78,6 +78,8 @@ void fragment() {
     public double MaxDistanceM { get; init; } = MirrorMath.ClientMaxDistanceM;
     public int TextureSize { get; init; } = MirrorMath.ClientTextureSize;
     public IReadOnlyList<Pane> Panes => _panes;
+    /// <summary>The bench switch <c>no-mirrors</c> (Task 26b): no reflection pass is granted; the panes keep their last picture.</summary>
+    public bool Suspended { get; set; }
     /// <summary>Passes granted in the last <see cref="Tick"/>.</summary>
     public int LastGrants { get; private set; }
 
@@ -170,6 +172,11 @@ void fragment() {
     public int Tick(Camera3D camera)
     {
         int grants = 0;
+        if (Suspended)
+        {
+            LastGrants = 0;
+            return 0;
+        }
         var eye = camera.GlobalPosition;
         var planes = camera.GetFrustum();
         foreach (var pane in _panes.ToList())

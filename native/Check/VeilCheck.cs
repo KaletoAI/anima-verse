@@ -14,7 +14,7 @@ namespace AnimaNative.Check;
 /// the REAL ground shaders and the shared uniforms (<see cref="VeilUniforms"/>), against the hand numbers of
 /// native/fixtures/README.md "Veil":
 ///
-///   V0 shaders: ground / ground-water / terrain-plain compile with 41 / 50 / 23 uniforms (+7 each; Task 26b +1 each); the text pins the
+///   V0 shaders: ground / ground-water / terrain-plain compile with 41 / 51 / 23 uniforms (+7 each; Task 26b +1 / +2 / +1); the text pins the
 ///      cell size, the zero-alpha branch, the linear + clamped + black-default samplers and the three output mixes;
 ///   V1 cells: <c>fixtures/explored.json</c> through <see cref="ExploredSync"/> and the fixture source → a 5 × 4 R8
 ///      texture on all three materials, the geometry, explored texels 6 and 13; an unchanged signature asks nothing;
@@ -47,8 +47,8 @@ public static class VeilCheck
         foreach (var (s, name) in new[] { (dry, "ground"), (wet, "ground-water"), (plain, "terrain-plain") })
             Expect($"V0 {name} compiles", ShaderSafety.Ok(s, name), string.Join(" | ", ShaderSafety.Lines));
         int nDry = dry.GetShaderUniformList().Count, nWet = wet.GetShaderUniformList().Count, nPlain = plain.GetShaderUniformList().Count;
-        Expect("V0 uniforms 41 / 50 / 23 (33 / 42 / 15 + the veil's 7 + av_hemi — Task 26b)",
-               nDry == 41 && nWet == 50 && nPlain == 23,
+        Expect("V0 uniforms 41 / 51 / 23 (33 / 42 / 15 + the veil's 7 + av_hemi, + tw_ripple_on wet — Task 26b)",
+               nDry == 41 && nWet == 51 && nPlain == 23,
                $"{nDry} / {nWet} / {nPlain}");
         foreach (var (code, name) in new[] { (GroundShader.Code(), "dry"), (GroundShader.Code(true), "wet"), (GroundShader.PlainCode(), "plain") })
         {
@@ -144,7 +144,7 @@ public static class VeilCheck
         Expect("V4 no avatar: the empty memory, the neutral texel", Tex(mats[1], "fv_cells_b") == VeilUniforms.Neutral
                                                                  && Tex(mats[1], "fv_cells_a") == VeilUniforms.Neutral
                                                                  && source.ExploredRequests == 1, "");
-        return $"veil[V0 41/50/23, V1 cells 2 grid 5x4, V2 edge 1/0.5/0.25/0, V3 fade 0.6 s, V4 0.36; {VeilUniforms.Summary()}]";
+        return $"veil[V0 41/51/23, V1 cells 2 grid 5x4, V2 edge 1/0.5/0.25/0, V3 fade 0.6 s, V4 0.36; {VeilUniforms.Summary()}]";
     }
 
     /// <summary>

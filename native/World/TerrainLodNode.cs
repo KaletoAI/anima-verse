@@ -83,6 +83,22 @@ public partial class TerrainLodNode : Node3D
     /// <summary>false = only explicit <see cref="UpdateFor"/> calls select (the check drives the camera itself).</summary>
     public bool AutoUpdate { get; set; } = true;
 
+    /// <summary>
+    /// The bench switch <c>terrain-lod-coarse</c> (Task 26b): the pixel scale the selection runs with is multiplied by this
+    /// (1 = the browser's; 0.5 = the allowed screen error doubled, 2 → 4 px). A change re-selects on the next frame.
+    /// </summary>
+    public double PixelScaleFactor
+    {
+        get => _pixelScaleFactor;
+        set
+        {
+            if (_pixelScaleFactor == value) return;
+            _pixelScaleFactor = value;
+            _lastEye = null;
+        }
+    }
+    private double _pixelScaleFactor = 1;
+
     public MultiMeshInstance3D DryInstance => _dry;
     public MultiMeshInstance3D WetInstance => _wet;
     public ShaderMaterial PlainMaterial => _plain;
@@ -325,7 +341,7 @@ public partial class TerrainLodNode : Node3D
         var cam = vp?.GetCamera3D();
         if (vp is null || cam is null) return;
         int px = (int)vp.GetVisibleRect().Size.Y;
-        double ps = TerrainField.PixelScale(px, cam.Fov);
+        double ps = TerrainField.PixelScale(px, cam.Fov) * _pixelScaleFactor;
         var p = cam.GlobalPosition;
         var frame = UpdateFor(p.X, p.Y, p.Z, ps);
         PixelScale = ps;

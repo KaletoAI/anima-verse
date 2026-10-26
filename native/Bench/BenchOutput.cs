@@ -42,6 +42,10 @@ public static class BenchOutput
 
     /// <summary>The result on screen: read-only, selectable text plus Copy / Close.</summary>
     public static void ShowPanel(Node host, JsonObject result, string filePath)
+        => ShowText(host, $"Bench result — {filePath}", result.ToJsonString(Pretty), Line(result));
+
+    /// <summary>A titled text on screen (the matrix's summary table): read-only, selectable, Copy / Close.</summary>
+    public static void ShowText(Node host, string title, string text, string? copy = null)
     {
         var layer = new CanvasLayer { Name = "BenchResult", Layer = 20 };
         host.AddChild(layer);
@@ -55,19 +59,19 @@ public static class BenchOutput
         layer.AddChild(panel);
         var box = new VBoxContainer();
         panel.AddChild(box);
-        box.AddChild(new Label { Text = $"Bench result — {filePath}" });
-        var text = new TextEdit
+        box.AddChild(new Label { Text = title });
+        var edit = new TextEdit
         {
-            Text = result.ToJsonString(Pretty),
+            Text = text,
             Editable = false,
             CustomMinimumSize = new Vector2(660, 480),
         };
-        box.AddChild(text);
+        box.AddChild(edit);
         var buttons = new HBoxContainer();
         box.AddChild(buttons);
-        var copy = new Button { Text = "Copy JSON" };
-        copy.Pressed += () => DisplayServer.ClipboardSet(Line(result));
-        buttons.AddChild(copy);
+        var copyButton = new Button { Text = copy is null ? "Copy" : "Copy JSON" };
+        copyButton.Pressed += () => DisplayServer.ClipboardSet(copy ?? text);
+        buttons.AddChild(copyButton);
         var close = new Button { Text = "Close" };
         close.Pressed += () => layer.QueueFree();
         buttons.AddChild(close);
