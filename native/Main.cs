@@ -194,7 +194,8 @@ public partial class Main : Node3D
 
     /// <summary>
     /// The browser engine's stage (StageAmbience: sky background, hemisphere ambient, sun + fill, driven by the world
-    /// clock and the room ambience), the 3D anti-aliasing (<see cref="CliOptions.Msaa"/>) and the overview camera.
+    /// clock and the room ambience), the 3D anti-aliasing (<see cref="CliOptions.Msaa"/>), the overview camera and the
+    /// distance fog under it (<see cref="DistanceFog"/>).
     /// </summary>
     private void BuildStage()
     {
@@ -204,6 +205,8 @@ public partial class Main : Node3D
         AddChild(_camera);
         _camera.Current = true;
         _camera.JumpTo(Vector3.Zero, OverviewControl.InitialDist);
+        // engine.ts `scene.fog`: the distance fog as one screen pass under the camera, its colour the stage's sky.
+        _stage.Fog = DistanceFog.Attach(_camera);
         // The click chain (engine.ts pointerup): figure → [seat/glyph/stair: E2/E7] → location → nothing.
         _camera.Clicked += at =>
         {

@@ -38,6 +38,8 @@ namespace AnimaNative;
 ///   --check fidelity | --check=fidelity only the model-fidelity section (fixtures/fidelity: cuts, tiers, re-datum, sweep, Task 17)
 ///   --check props | --check=props     only the props section (fixtures/props: slots, mirrors, lights, doors, ambience, Task 18)
 ///   --check light | --check=light     only the light section (game-hour stage, hemisphere, shadow fit, MSAA, Task 21)
+///   --check fog | --check=fog         only the distance-fog section (the screen pass, factor, colour, Task 22)
+///   --check backdrop | --check=backdrop only the backdrop section (payload, strips, heights, tint, Task 22)
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
 public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
@@ -84,7 +86,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             var arg = raw.Trim();
             if (arg == "--check") check = true;
             else if (TryValue(arg, "--check", out var only)) { check = true; checkOnly = CheckSection(only); }
-            else if (check && checkOnly is null && arg is "verify" or "storeys" or "fidelity" or "props" or "light") checkOnly = arg;
+            else if (check && checkOnly is null && arg is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop") checkOnly = arg;
             else if (arg == "--verify") verify = true;
             else if (arg == "--bench") bench = true;
             else if (arg == "--check-bench") checkBench = true;
@@ -132,8 +134,8 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         };
     }
 
-    private static string CheckSection(string v) => v is "verify" or "storeys" or "fidelity" or "props" or "light"
-        ? v : throw new ArgumentException($"--check= knows only 'verify', 'storeys', 'fidelity', 'props' and 'light', got '{v}'");
+    private static string CheckSection(string v) => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop"
+        ? v : throw new ArgumentException($"--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog' and 'backdrop', got '{v}'");
 
     public static Viewport.Msaa ParseMsaa(string v) => v switch
     {

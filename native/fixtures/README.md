@@ -826,3 +826,47 @@ Fill from (−30, 20, −25) to the origin: /√1925 → (−0.683763, 0.455842,
 **Materials** `building_original.glb`: all 8 materials Lambert + `DisableReceiveShadows` after `GlbLoader.BrowserLook`;
 the scatter shader `diffuse_lambert, shadows_disabled`; a terrain tile `CastShadow = Off`; `--msaa` default 4×, `0` off.
 
+
+## Fog (Task 22, `Check/FogCheck.cs`, no fixture world)
+
+Sources: three r185 `fog_vertex` / `fog_fragment` / `meshphysical.glsl.js` (fog AFTER `colorspace_fragment`),
+`WebGLMaterials.refreshFogUniforms` + `getUnlitUniformColorSpace` (fog colour in the output space when the canvas is the
+target), engine.ts (`THREE.Fog(sky, 220, 520)`, `setGameHour` copies the sky into it), fogConstants.ts; Godot 4.7.2
+`scene_forward_clustered.glsl` (`fog_process`: `length(vertex)`, linear-space mix), `resolve.glsl` (MSAA depth = mean).
+
+**One path.** Godot's Environment fog is off and no material fogs itself; one screen pass (`Sky/FogPost.cs`, a 2 × 2
+quad under the camera, material priority 127) fogs the finished picture.
+
+**Factor.** Overview camera near n = 0.2, far f = 800. Godot's reverse-Z depth d = n(f − z)/((f − n)z), the pass gets
+the view depth back as z = nf/(d(f − n) + n) (z = 370 → d = 0.2·430/(799.8·370) = 2.906132e-4). t = (z − 220)/300,
+fog = t²(3 − 2t): 0.2 m and 220 m → 0, 295 → ¼ → 0.15625, 370 → ½ → 0.5, 445 → ¾ → 0.84375, 520 and 799 → 1. Depth 0
+(nothing drawn) is the sky and stays.
+
+**Colour.** three shows mix(sRGB(colour), sRGB(sky), f). A wall pixel of bytes (60, 62, 58) at 370 m: noon sky 9fc7e8 →
+((60 + 159)/2, (62 + 199)/2, (58 + 232)/2) = (109.5, 130.5, 145.0); 22:00 sky 1a2340 → (43, 48.5, 61). (A linear-space
+mix — Godot's own fog — would show (122.4, 151.0, 174.3) at noon.) The pass's `fog_srgb` is three's LinearToSRGB of the
+clock sky: boot 9fc7e8 → (159, 199, 232)/255, 07:00 → (0.771432, 0.707033, 0.732679), 22:00 → (26, 35, 64)/255; the
+room ambience does not change it.
+
+## Backdrop (Task 22, `Check/BackdropCheck.cs`, no fixture world)
+
+Sources: backdrop.ts (`ridgeGeometry`, `applyTint`, `sync` key), backdropProfile.ts (vector-checked in
+`BackdropVectorTests`), main.ts (`takeBackdrop` on every poll, the frame hook `position.set(target.x, 0, target.z)`).
+
+**Strips.** 96 segments = 3.75°. Arc [90, 135]: start (90°, 0), nodes i = 25 … 35 (11), end (135°, 0) → 13 points →
+12 quads → 48 vertices, 72 indices per ring. Full ring [0, 360]: 96 nodes + the closing one = 97 points → 96 quads → 384
+/ 576. Two arcs [0, 45] + [45, 90]: 13 + 13 points, the join pair (45°, 0) → (45°, 0) skipped → 24 quads.
+
+**Heights** (every draw ½, height 120): front node = 120·(0.45 + 0.55·½) = 87, back 150·0.725 = 108.75; node 30
+(112.5°) is the peak vertex 25 at (380 sin 112.5°, 87, 380 cos 112.5°) = (351.0742224, 87, −145.4197043); node 25
+(93.75°) is 3.75° into the arc → taper t = 0.3125 → t²(3 − 2t) = 0.2319336 → 20.17822266. Seeded:
+backdrop.json "[20] ridge seeded north" (seed 7, [157.5, 202.5], 100 m, 8 segments) puts 66.38405470992438 at 180° →
+quad 0's vertex 3 at (0, 66.384, −380).
+
+**Winding.** Godot's front faces wind clockwise: three's (b, b+1, b+3)/(b, b+3, b+2) is emitted as (b, b+3, b+1)/(b, b+2,
+b+3); the front normal −(v1 − v0)×(v2 − v0) of the first triangle at 0° is ∝ (−0.81h, 0, −24.85h) — towards the centre.
+
+**Tint** mix = min(0.92, 0.30 + 0.55·night + 0.18·layer), linear lerp of the base rock to the sky, sent as Godot channels:
+front by day lerp(5f6d84, 9fc7e8, 0.30) = linear (0.184116, 0.278386, 0.403604) → (0.466243, 0.564235, 0.667881); back by
+day (0.48) → (0.547455, 0.662256, 0.773704); at night (sky 1a2340) front 0.85 → (0.175381, 0.212774, 0.309809), back
+1.03 → capped 0.92 → (0.168005, 0.203566, 0.301058).

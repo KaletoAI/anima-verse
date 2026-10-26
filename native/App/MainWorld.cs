@@ -78,6 +78,8 @@ public partial class Main : Node3D
             world.AddChild(_pins);
             _pins.Update(builder.FirstMap!.Value, PlaceOf);
             _world = world;
+            // main.ts takeBackdrop(firstMap): the mountain rings of § A17, then every poll below.
+            TakeBackdrop(world, builder.FirstMap!.Value);
             // The CSS2D label layer: location names now, name tags once the figures are there. Under the HUD (layer 5).
             _placeLabels = new LocationLabels();
             SyncPlaceLabels();
@@ -141,6 +143,7 @@ public partial class Main : Node3D
                 _avatarRoom = AvatarRoomOf(polled);
                 tags.Apply(polled);
                 SyncPlaceLabels();
+                TakeBackdrop(world, polled);
             };
             await _figures.InitAsync();
             // The boot's own map places the first figures (main.ts npcs.update(firstMap)); the poll takes over.

@@ -87,6 +87,18 @@ public static class CheckRunner
                 GD.Print($"CHECK ok {alone}");
                 return 0;
             }
+            if (only == "fog")
+            {
+                var alone = FogCheck.Run(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
+            if (only == "backdrop")
+            {
+                var alone = BackdropCheck.Run(host);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "storeys")
             {
                 var alone = await StoreysCheck.RunAsync(host, dir);
@@ -167,10 +179,12 @@ public static class CheckRunner
             var fidelity = await FidelityCheck.RunAsync(host, dir);
             var props = await PropsCheck.RunAsync(host, dir);
             var light = LightCheck.Run(host, dir);
+            var fogLine = FogCheck.Run(host, dir);
+            var backdrop = BackdropCheck.Run(host);
 
             GD.Print($"CHECK ok terrain_vertices={stats.TerrainVertices} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {fidelity} | {props} | {light}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {fidelity} | {props} | {light} | {fogLine} | {backdrop}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

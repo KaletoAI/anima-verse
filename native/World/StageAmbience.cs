@@ -12,6 +12,8 @@ namespace AnimaNative.World;
 ///   - <see cref="SetHour"/> = <c>setGameHour</c>: the clock base (sun colour and intensities, the sky background, the
 ///     night factor); <see cref="Apply"/> = <c>applyAmbience</c>: base × the eased room ambience; <see cref="Track"/> =
 ///     the frame's sun placement on the texel-snapped camera target plus the shadow fit to the camera distance.
+///   - The sky is also the colour of the distance fog (<see cref="Fog"/>); Godot's own Environment fog stays OFF — the
+///     fog is one screen pass (<see cref="DistanceFog"/>, Sky/FogPost.cs) because Godot's fog mixes in linear space.
 ///   - The hemisphere is an ambient colour plus <see cref="HemiUp"/> / <see cref="HemiDown"/> (see
 ///     <see cref="StageLight"/>); no sky reflection on any material (<c>ReflectedLightSource.Disabled</c>: three adds no
 ///     environment specular without an envMap), no tone mapping beyond the linear clamp (three's NoToneMapping).
@@ -30,6 +32,21 @@ public sealed class StageAmbience
     private AmbienceState _ambience = AmbienceState.Neutral;
     private bool _dirty = true;
     private ShaderMaterial? _water;
+    private DistanceFog? _fog;
+
+    /// <summary>
+    /// The distance fog pass (<c>scene.fog</c>): its colour is the clock's sky, written with the background
+    /// (<c>setGameHour</c> copies the sky into both). Setting it hands it the current sky at once.
+    /// </summary>
+    public DistanceFog? Fog
+    {
+        get => _fog;
+        set
+        {
+            _fog = value;
+            _fog?.SetSky(Frame.Background.Linear);
+        }
+    }
 
     /// <summary>The frame last written (for the check and the log).</summary>
     public StageFrame Frame { get; private set; }
@@ -150,6 +167,8 @@ public sealed class StageAmbience
             hemi.LightEnergy = (float)f.HemiPair.Energy;
         }
         Env.BackgroundColor = C(f.Background);
+        // The fog colour follows the sky (engine.ts: `scene.fog.color.copy(sky)`); the ambience does not touch it.
+        if (_fog is not null && GodotObject.IsInstanceValid(_fog)) _fog.SetSky(f.Background.Linear);
         _water = Water?.Invoke();
         if (f.WaterSky is { } w && _water is not null)
             _water.SetShaderParameter("tw_sky", new Vector3((float)w.R, (float)w.G, (float)w.B));
