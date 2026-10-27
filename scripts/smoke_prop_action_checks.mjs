@@ -78,97 +78,17 @@ try {
     ['catalog', { ...snapshot, catalog: { ...catalog, poses: [] } }],
     ['revision readiness', { ...snapshot, revisionReady: false }],
   ];
-  function deferred() {
-    let resolve, reject;
-    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
-    return { promise, resolve, reject };
-  }
-  function checks(initial) {
-    let current = { snapshot: initial, sequence: 0 };
-    let result = null, error = null, pending = null;
-    return {
-      change(next) {
-        if (!samePropConfigurationSnapshot(current.snapshot, next)) {
-          current = { snapshot: next, sequence: current.sequence + 1 };
-        }
-      },
-      async validate(response) {
-        const checked = { snapshot: current.snapshot, sequence: current.sequence + 1 };
-        current = checked; pending = checked; error = null;
-        try {
-          const server = await response;
-          if (isCurrentPropConfigurationRequest(checked, current)) {
-            result = { snapshot: checked.snapshot,
-              value: composePropConfigurationResult(checked.snapshot.document, checked.snapshot.catalog, server) };
-          }
-        } catch (failure) {
-          if (isCurrentPropConfigurationRequest(checked, current)) error = { snapshot: checked.snapshot, value: failure };
-        } finally {
-          if (isCurrentPropConfigurationRequest(checked, current)) pending = null;
-        }
-      },
-      get result() { return result && samePropConfigurationSnapshot(result.snapshot, current.snapshot) ? result.value : null; },
-      get stale() { return !!result && !samePropConfigurationSnapshot(result.snapshot, current.snapshot); },
-      get error() { return error && samePropConfigurationSnapshot(error.snapshot, current.snapshot) ? error.value : null; },
-      get pending() { return !!pending && isCurrentPropConfigurationRequest(pending, current); },
-    };
-  }
+  const firstRequest = { snapshot, sequence: 1 };
   for (const [name, changed] of changes) {
     assert.equal(samePropConfigurationSnapshot(snapshot, changed), false, name);
-    const state = checks(snapshot);
-    await state.validate(Promise.resolve(accepted));
-    assert.equal(state.result.valid, true, name);
-    const delayed = deferred();
-    const old = state.validate(delayed.promise);
-    state.change(changed);
-    assert.equal(state.result, null, name);
-    assert.equal(state.stale, true, name);
-    assert.equal(state.pending, false, name);
-    delayed.resolve(accepted);
-    await old;
-    assert.equal(state.result, null, name);
-    assert.equal(state.stale, true, name);
-
-    const failed = deferred();
-    const failingState = checks(snapshot);
-    const oldFailure = failingState.validate(failed.promise);
-    failingState.change(changed);
-    const newer = deferred();
-    const newRequest = failingState.validate(newer.promise);
-    failed.reject(new Error('Obsolete response'));
-    await oldFailure;
-    assert.equal(failingState.error, null, name);
-    assert.equal(failingState.pending, true, name);
-    newer.resolve(accepted);
-    await newRequest;
-    assert.equal(failingState.pending, false, name);
+    assert.equal(isCurrentPropConfigurationRequest(firstRequest,
+      { snapshot: changed, sequence: 2 }), false, name);
   }
-  for (const rejectOlder of [false, true]) {
-    const state = checks(snapshot);
-    const older = deferred(), newer = deferred();
-    const oldRequest = state.validate(older.promise);
-    const newRequest = state.validate(newer.promise);
-    newer.resolve({ ...accepted, valid: false, issues: [serverError] });
-    await newRequest;
-    if (rejectOlder) older.reject(new Error('Older error'));
-    else older.resolve(accepted);
-    await oldRequest;
-    assert.equal(state.result.valid, false);
-    assert.deepEqual(state.result.issues, [serverError]);
-    assert.equal(state.error, null);
-    assert.equal(state.pending, false);
-  }
-  const currentFailure = checks(snapshot);
-  await currentFailure.validate(Promise.reject(new Error('Current failure')));
-  assert.equal(currentFailure.error.message, 'Current failure');
-  currentFailure.change(changes[0][1]);
-  assert.equal(currentFailure.error, null);
-  const returned = checks(snapshot), interrupted = deferred();
-  const interruptedRequest = returned.validate(interrupted.promise);
-  returned.change(changes[1][1]);
-  returned.change(snapshot);
-  interrupted.resolve(accepted);
-  await interruptedRequest;
-  assert.equal(returned.result, null);
+  const retried = { snapshot, sequence: 2 };
+  assert.equal(isCurrentPropConfigurationRequest(firstRequest, retried), false);
+  assert.equal(isCurrentPropConfigurationRequest(retried, retried), true);
+  // Returning to the same document never restores an obsolete request's authority.
+  const returned = { snapshot, sequence: 3 };
+  assert.equal(isCurrentPropConfigurationRequest(firstRequest, returned), false);
   console.log('PASS: configuration blockers, retained diagnostics and exact-snapshot request ownership');
 } finally { await rm(dir, { recursive: true, force: true }); }

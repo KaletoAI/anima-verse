@@ -99,7 +99,7 @@ export function PropActionChecks({ workspace, onIssue }: {
     if (!revisionReady) return
     const checked = { snapshot, sequence: configurationRequest.current.sequence + 1 }
     configurationRequest.current = checked
-    setValidation(checked); setConfigurationError(null)
+    setValidation(checked); setConfiguration(null); setConfigurationError(null)
     try {
       const result = await apiPost<PropConfigurationResult>(`${path}/validate`, { document: checked.snapshot.document })
       if (isCurrentPropConfigurationRequest(checked, configurationRequest.current)) {
