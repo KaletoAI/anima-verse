@@ -50,10 +50,24 @@ def emit(event: str, **kwargs: Any) -> int:
 # the core falls back to a neutral default.
 
 _providers: Dict[str, Callable] = {}
+_provider_owners: Dict[str, str] = {}
 
 
-def register_provider(capability: str, fn: Callable) -> None:
+def register_provider(capability: str, fn: Callable, *, owner: str | None = None) -> None:
+    """Replace a capability, optionally binding its lifetime to a package."""
     _providers[capability] = fn
+    if owner is None:
+        _provider_owners.pop(capability, None)
+    else:
+        _provider_owners[capability] = owner
+
+
+def unregister_owned_providers(owner: str) -> None:
+    """Remove only capabilities still owned by this package."""
+    for capability, registered_owner in list(_provider_owners.items()):
+        if registered_owner == owner:
+            _providers.pop(capability, None)
+            _provider_owners.pop(capability, None)
 
 
 def get_provider(capability: str) -> Optional[Callable]:

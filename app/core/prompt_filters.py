@@ -32,19 +32,23 @@ logger = get_logger("prompt_filters")
 _SHARED_FILE = Path(__file__).resolve().parent.parent.parent / "shared" / "prompt_filters" / "filters.json"
 
 
-def _load_shared() -> List[Dict[str, Any]]:
+def _load_shared(*, strict: bool = False) -> List[Dict[str, Any]]:
     """Read baseline filters from the shared JSON file. Empty on miss/parse-fail."""
     try:
-        if not _SHARED_FILE.exists():
+        if not strict and not _SHARED_FILE.exists():
             return []
         data = json.loads(_SHARED_FILE.read_text(encoding="utf-8"))
         return list(data.get("filters") or [])
+    except FileNotFoundError:
+        return []
     except Exception as e:
+        if strict:
+            raise
         logger.warning("shared prompt_filters load failed: %s", e)
         return []
 
 
-def _load_world() -> List[Dict[str, Any]]:
+def _load_world(*, strict: bool = False) -> List[Dict[str, Any]]:
     """Read per-world filters from the prompt_filters table."""
     try:
         from app.core.db import get_connection
@@ -59,14 +63,20 @@ def _load_world() -> List[Dict[str, Any]]:
             try:
                 drops = json.loads(r[3] or "[]")
             except Exception:
+                if strict:
+                    raise
                 drops = []
             try:
                 meta = json.loads(r[6] or "{}")
             except Exception:
+                if strict:
+                    raise
                 meta = {}
             try:
                 bone_pose = json.loads(r[9] or "{}")
             except (TypeError, ValueError):
+                if strict:
+                    raise
                 bone_pose = {}
             out.append({
                 "id": r[0] or "",
@@ -83,6 +93,8 @@ def _load_world() -> List[Dict[str, Any]]:
             })
         return out
     except Exception as e:
+        if strict:
+            raise
         logger.debug("world prompt_filters load failed: %s", e)
         return []
 
@@ -90,6 +102,7 @@ def _load_world() -> List[Dict[str, Any]]:
 _snapshot_lock = RLock()
 _snapshot_key = None
 _snapshot = None
+_snapshot_strict = False
 _render_modifiers = ContextVar("render_modifiers", default=None)
 
 
@@ -111,24 +124,31 @@ def image_modifier_snapshot(character_name):
         _render_modifiers.reset(token)
 
 
-def load_filters() -> List[Dict[str, Any]]:
-    """Merge shared + world filters. World entries override shared by id."""
-    global _snapshot_key, _snapshot
+def load_filters(*, strict: bool = False) -> List[Dict[str, Any]]:
+    """Merge shared + world filters; strict reads never cache a failed overlay."""
+    global _snapshot_key, _snapshot, _snapshot_strict
     from app.core import paths
     from copy import deepcopy
     with _snapshot_lock:
-        stat = _SHARED_FILE.stat() if _SHARED_FILE.exists() else None
+        if strict:
+            try:
+                stat = _SHARED_FILE.stat()
+            except FileNotFoundError:
+                stat = None
+        else:
+            stat = _SHARED_FILE.stat() if _SHARED_FILE.exists() else None
         key = (str(paths.get_storage_dir()), str(_SHARED_FILE),
                (stat.st_mtime_ns, stat.st_size) if stat else None)
-        if key != _snapshot_key:
+        if key != _snapshot_key or (strict and not _snapshot_strict):
             by_id = {}
-            for entry in (*_load_shared(), *_load_world()):
+            for entry in (*_load_shared(strict=strict), *_load_world(strict=strict)):
                 fid = (entry.get("id") or "").strip()
                 if fid:
                     entry.setdefault("stat_boosts", {})
                     by_id[fid] = entry
             _snapshot = list(by_id.values())
             _snapshot_key = key
+            _snapshot_strict = strict
         return deepcopy(_snapshot)
 
 

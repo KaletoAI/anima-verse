@@ -447,7 +447,7 @@ class AgentLoop:
                      obligatory: bool = True, hint: str = "",
                      winding_down: bool = False,
                      on_demand: bool = False, request_id: str = "",
-                     cascade: bool = True) -> bool:
+                     cascade: bool = True, utterance_id: Optional[int] = None) -> bool:
         """Phase 3: character should react to a room utterance of the speaker.
 
         Unlike ``bump`` (thoughts/perception) this triggers a VISIBLE chat
@@ -480,7 +480,7 @@ class AgentLoop:
             "speaker": speaker, "content": content,
             "volume": volume, "obligatory": obligatory,
             "hint": hint, "winding_down": winding_down, "on_demand": on_demand,
-            "request_id": request_id, "cascade": cascade,
+            "request_id": request_id, "cascade": cascade, "utterance_id": utterance_id,
         }
         # Mandatory answers go to the FRONT (the lane pops FIFO) so they
         # never starve behind chime opportunities — otherwise the scene can
@@ -683,7 +683,8 @@ class AgentLoop:
                                 addressees: Optional[List[str]] = None,
                                 is_avatar: bool = False,
                                 hints: Optional[Dict[str, str]] = None,
-                                exclude: Optional[List[str]] = None) -> Dict[str, List[str]]:
+                                exclude: Optional[List[str]] = None,
+                                utterance_id: Optional[int] = None) -> Dict[str, List[str]]:
         """Phase 3b: distributes reactions to a room utterance across the loop.
 
         - Addressed characters present → mandatory answer (obligatory).
@@ -794,7 +795,7 @@ class AgentLoop:
                         closer = present[0]
                         if self.bump_respond(closer, speaker=speaker, content=content,
                                              volume=volume, obligatory=False,
-                                             winding_down=True):
+                                             winding_down=True, utterance_id=utterance_id):
                             logger.info("room %s: Backstop (%d) → visible exit by %s",
                                         key, effective_backstop, closer)
                             return {"obligatory": [], "chime": [], "winddown": [closer]}
@@ -813,7 +814,7 @@ class AgentLoop:
         for c in present:
             if c in addr and self.bump_respond(
                     c, speaker=speaker, content=content, volume=volume,
-                    obligatory=True, hint=_hints.get(c, "")):
+                    obligatory=True, hint=_hints.get(c, ""), utterance_id=utterance_id):
                 out["obligatory"].append(c)
                 _halt_addressed_wanderer(c)
 
@@ -875,7 +876,7 @@ class AgentLoop:
                                    always_someone=always_someone)
             if chosen and self.bump_respond(chosen, speaker=speaker,
                                             content=content, volume=volume,
-                                            obligatory=False):
+                                            obligatory=False, utterance_id=utterance_id):
                 out["chime"].append(chosen)
                 logger.info("room %s: chime → %s (chattiness %.2f, "
                             "%d candidates)", key, chosen, chattiness,
@@ -1637,6 +1638,19 @@ class AgentLoop:
         # Token usage of the reply call, prompt-cache hits included — rides on
         # the utterance as meta.llm_usage (admins see it under the line).
         llm_usage: Dict[str, Any] = {}
+        from app.core.stat_sources import ReplyReceipt, source_from_utterance
+        reply_receipt = ReplyReceipt(None)
+        _reply_vol = (respond.get("volume") or "normal").strip() or "normal"
+
+        def publish_reply(text: str) -> ReplyReceipt:
+            nonlocal reply_receipt
+            from app.core.perception import record_utterance
+            uid = record_utterance(
+                speaker=character_name, content=text, volume=_reply_vol,
+                addressees=[speaker] if speaker else [], source="loop",
+                perception_meta={"llm_usage": llm_usage} if llm_usage else None)
+            reply_receipt = ReplyReceipt(source_from_utterance(uid) if uid is not None else None)
+            return reply_receipt
         try:
             from app.core import perception_shadow
             from app.core.chat_engine import run_chat_turn
@@ -1648,27 +1662,14 @@ class AgentLoop:
                     respond_opportunity=respond_opportunity,
                     hint=hint, winding_down=winding_down,
                     usage_out=llm_usage,
-                    synthetic_input=bool(respond.get("on_demand")))
+                    synthetic_input=bool(respond.get("on_demand")),
+                    incoming_utterance_id=respond.get("utterance_id"),
+                    publish_reply=publish_reply)
         except Exception as e:
             logger.error("respond-turn %s: run_chat_turn failed: %s", character_name, e)
-        if reply and reply.strip():
-            # MIRROR the volume: if the NPC was addressed in a whisper/shout,
-            # they answer at the same volume (normal otherwise). This gives NPCs
-            # whispering/shouting without having to "choose" it explicitly — a
-            # whispered exchange stays private (only the addressee hears the
-            # content), a shouted exchange stays loud.
-            _reply_vol = (respond.get("volume") or "normal").strip() or "normal"
-            try:
-                from app.core.perception import record_utterance
-                record_utterance(speaker=character_name, content=reply,
-                                 volume=_reply_vol,
-                                 addressees=[speaker] if speaker else [],
-                                 source="loop",
-                                 perception_meta=({"llm_usage": llm_usage}
-                                                  if llm_usage else None))
-            except Exception as e:
-                logger.error("respond-turn %s: record_utterance failed: %s",
-                             character_name, e)
+        if reply and reply.strip() and reply_receipt.source is not None:
+            _loc = reply_receipt.source.location_id
+            _room = reply_receipt.source.room_id
             if not respond.get("cascade", True):
                 clipped = reply[:300] + "…" if len(reply) > 300 else reply
                 self.add_hint(
@@ -1685,16 +1686,16 @@ class AgentLoop:
                     self.dispatch_room_reactions(
                         speaker=character_name, content=reply, volume=_reply_vol,
                         location_id=_loc, room_id=_room,
-                        addressees=[speaker] if speaker else [], is_avatar=False)
+                        addressees=[speaker] if speaker else [], is_avatar=False,
+                        utterance_id=int(reply_receipt.source.event_id.removeprefix("room:")))
                 except Exception as e:
                     logger.debug("respond-turn %s: cascade dispatch failed: %s",
                                  character_name, e)
         elif obligatory:
             # The mandatory answer came back EMPTY (LLM SKIP/refusal) → make it
             # visible; otherwise it looks like "ignored" (no-answer bug).
-            logger.warning("respond-turn %s: MANDATORY answer to %s came back "
-                           "EMPTY — no utterance recorded",
-                           character_name, speaker or "?")
+            logger.warning("respond-turn %s: mandatory reply to %s was empty "
+                           "or could not be published", character_name, speaker or "?")
         return {"preview": (reply or "(no reply)")[:80], "tools": [], "intents": [],
                 # Full reply for the multi-line preview; the tool phase runs
                 # inside run_chat_turn and is not surfaced here.
@@ -1817,6 +1818,7 @@ class AgentLoop:
                                      "a foreign pair", character_name, sp)
                         return None
                 return {"speaker": sp, "content": content, "volume": "normal",
+                        "utterance_id": row.get("utterance_id"),
                         "obligatory": False, "hint": "", "winding_down": False}
             return None
         except Exception as e:

@@ -59,3 +59,10 @@ def save_message(message: Dict[str, str], character_name: str = "",
     msg_obj = Message.from_dict(message.copy())
     return UnifiedChatManager.save_message(msg_obj, character_name,
                                            partner_name=partner_name)
+
+
+def save_direct_message(sender: str, recipient: str, content: str, *,
+                        channel: str = "web", metadata: Optional[Dict] = None) -> Optional[str]:
+    """Store a phone exchange atomically, preserving attachments and game time."""
+    return UnifiedChatManager.save_direct_message(
+        sender, recipient, content, channel=channel, metadata=metadata)

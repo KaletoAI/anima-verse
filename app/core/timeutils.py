@@ -156,7 +156,7 @@ _KEY_ANCHORS_FROZEN = "game_time.anchors_frozen"
 _game_cache: Dict[str, Any] = {}
 
 
-def _load_game_anchors() -> Dict[str, Any]:
+def _load_game_anchors(*, strict: bool = False) -> Dict[str, Any]:
     """Anchors + factor + frozen from world_kv (cached).
 
     ``anchor_game`` is persisted as a CANONICAL GameTime string. A stored
@@ -171,7 +171,7 @@ def _load_game_anchors() -> Dict[str, Any]:
     before this marker existed).
     """
     global _game_cache
-    if _game_cache.get("loaded"):
+    if _game_cache.get("loaded") and (not strict or _game_cache.get("strict", False)):
         return _game_cache
     anchor_real = utc_now()
     anchor_game = EPOCH
@@ -180,17 +180,21 @@ def _load_game_anchors() -> Dict[str, Any]:
     anchors_frozen = None
     try:
         from app.models.world import get_world_setting, is_world_frozen
-        raw_real = get_world_setting(_KEY_ANCHOR_REAL, "")
-        raw_game = get_world_setting(_KEY_ANCHOR_GAME, "")
-        raw_factor = get_world_setting(_KEY_FACTOR, "")
-        raw_anchors_frozen = get_world_setting(_KEY_ANCHORS_FROZEN, "")
+        read_options = {"strict": True} if strict else {}
+        raw_real = get_world_setting(_KEY_ANCHOR_REAL, "", **read_options)
+        raw_game = get_world_setting(_KEY_ANCHOR_GAME, "", **read_options)
+        raw_factor = get_world_setting(_KEY_FACTOR, "", **read_options)
+        raw_anchors_frozen = get_world_setting(_KEY_ANCHORS_FROZEN, "", **read_options)
         if raw_anchors_frozen:
             anchors_frozen = raw_anchors_frozen == "1"
         if raw_factor:
             factor = max(0.0, float(raw_factor))
-        frozen = is_world_frozen()
+        frozen = is_world_frozen(**read_options)
+        source = (raw_real, raw_game, raw_factor, raw_anchors_frozen, frozen)
         if raw_game:
             if not GameTime.is_canonical(raw_game):
+                if strict:
+                    raise ValueError(f"Game clock anchor is not canonical: {raw_game!r}")
                 logger.error(
                     "game clock anchor %r is not a canonical GameTime string "
                     "— the boot migration has not converted it; falling back "
@@ -204,14 +208,21 @@ def _load_game_anchors() -> Dict[str, Any]:
             if raw_real:
                 anchor_real = parse_iso(raw_real)
     except Exception:
+        if strict:
+            raise
         # DB not ready (early boot) — start at the epoch, do not cache so the
         # next call retries.
         return {"anchor_real": anchor_real, "anchor_game": anchor_game,
                 "factor": factor, "frozen": frozen,
                 "anchors_frozen": anchors_frozen, "loaded": False}
+    if strict and _game_cache.get("loaded") and _game_cache.get("source") == source:
+        # Validating an unchanged default clock must not restart its elapsed time.
+        _game_cache["strict"] = True
+        return _game_cache
     _game_cache = {"anchor_real": anchor_real, "anchor_game": anchor_game,
                    "factor": factor, "frozen": frozen,
-                   "anchors_frozen": anchors_frozen, "loaded": True}
+                   "anchors_frozen": anchors_frozen, "loaded": True,
+                   "strict": strict, "source": source}
     return _game_cache
 
 
@@ -233,13 +244,13 @@ def _game_elapsed_exact(a) -> float:
     return (utc_now() - a["anchor_real"]).total_seconds() * a["factor"]
 
 
-def game_time_exact() -> Tuple[GameTime, float]:
+def game_time_exact(*, strict: bool = False) -> Tuple[GameTime, float]:
     """Rounded game time and the exact remainder in [-0.5, 0.5] seconds.
 
     Frozen or factor 0 returns remainder 0.0 without division. This technical
     payload helper describes the clock-read instant; game logic uses game_time.
     """
-    a = _load_game_anchors()
+    a = _load_game_anchors(strict=True) if strict else _load_game_anchors()
     elapsed = _game_elapsed_exact(a)
     seconds = int(round(elapsed))
     base: GameTime = a["anchor_game"]
@@ -249,9 +260,9 @@ def game_time_exact() -> Tuple[GameTime, float]:
     return gt, exact - gt.total_seconds
 
 
-def game_time() -> GameTime:
-    """Current GAME time, rounded to whole seconds; frozen at the anchor."""
-    return game_time_exact()[0]
+def game_time(*, strict: bool = False) -> GameTime:
+    """Current GAME time; strict reads reject failed/malformed clock storage."""
+    return (game_time_exact(strict=True) if strict else game_time_exact())[0]
 
 
 def game_speed_factor() -> float:

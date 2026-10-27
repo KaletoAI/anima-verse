@@ -59,8 +59,9 @@ gets redirected to a login form instead), and non-admins get `403` on the admin 
 two React shells, `/static`, `/i18n`, the login round trip and `/health` are reachable anonymously.
 **World-level data is admin-only:** every `POST`/`PUT`/`PATCH`/`DELETE` under `/world`, `/rules`,
 `/intents`, `/events`, `/templates`, `/inventory/items` and `/inventory/rooms` needs the admin role,
-as do the global queue controls. A player still reads all of it, and keeps every write that belongs
-to playing — chat, movement, own inventory and outfit, gifts, scene photos, cancelling own tasks.
+as do the global queue controls. Players can read ordinary world data, but **Influence rule definitions
+and private rule/event provenance are admin-only**. Players keep every write that belongs to playing —
+chat, movement, own inventory and outfit, gifts, scene photos, cancelling own tasks.
 
 **Two browser interfaces, plus server-rendered administration:**
 
@@ -191,6 +192,17 @@ stops acting autonomously).
   Threshold bands turn a value into behaviour text in the prompt, band states (tired, alert,
   scared, …) into image cues and icons, and declared needs into the thought turn's decision order.
   World tuning lives in Game-Admin → States → **Values**.
+- **Personal or general RP influence:** Game-Admin → Rules → **Influence** scales LLM-recognized
+  chat stat changes, with optional actor/recipient bindings, conditions on each person and exact-pair
+  relationship or directed-attraction prerequisites. Kai's encouragement can strengthen courage without
+  romance; attraction-dependent effects use the recipient's existing interests through the optional
+  attraction package. Stats come from templates, not a fixed list. Matching factors multiply, with a
+  final range of 0.1–5, before rounding, the existing chat-hour budget and the 0–100 clamp.
+  Only actually delivered room speech/direct messages and private self-reactions are evaluated;
+  there is no passive aura, new listener turn or multiplication of hourly rates, item rewards or
+  skill costs. One shared extraction handles the turn's eligible sources, including tool-only
+  speech when it reaches an avatar. Mind history shows the calculation and private rule snapshots
+  to admins; the player's stat history shows the actor and numbers without revealing rule details.
 - **Building hulls from floor plans** — five textured styles including Modern, non-enterable facade storeys with blind windows, editable seed/overrides and world style JSON in Game-Admin; deterministic full/low models with interior cutouts and explicit stale rebuilds ([details](docs/llm-blender-models.md#building-hull)).
 - **Automatic NPCs:** slots on locations and painted areas, home areas, time windows and a pool of
   reusable profiles spawn short-lived NPCs that talk to each other and disappear again.
@@ -829,6 +841,8 @@ docstring, each running without the server and mostly without a world DB:
 ./.venv/bin/python scripts/test_llm_tools.py       # LLM tool-calling
 ./.venv/bin/python scripts/smoke_journey_v2.py     # journey math on the metre map
 ./.venv/bin/python scripts/smoke_scene_recipe.py   # scene geometry against the payload spec
+./.venv/bin/python scripts/smoke_influence_chat.py # trusted sources, modifiers and real commits
+./.venv/bin/python scripts/smoke_influence_privacy.py # player/admin history, export and phone attachment
 ls scripts/smoke_*.py                              # the rest (200+)
 ```
 

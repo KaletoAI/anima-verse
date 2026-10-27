@@ -21,7 +21,8 @@ logger = get_logger("room_entry")
 GREETING_COOLDOWN_MIN = 30
 
 
-def characters_in_room(location_id: str, room_id: str, exclude: str = "") -> List[str]:
+def characters_in_room(location_id: str, room_id: str, exclude: str = "", *,
+                       strict: bool = False, profiles: dict[str, dict] | None = None) -> List[str]:
     """Characters in the same room — or, with an empty ``room_id``, everyone in
     the location (the deliberate "the whole location" query, e.g. for a shout).
 
@@ -29,17 +30,24 @@ def characters_in_room(location_id: str, room_id: str, exclude: str = "") -> Lis
     against both. It is never empty any more: since the ground migration
     everybody standing in a location stands in one of its rooms, and an empty
     value means "no data", not "everywhere".
+
+    Strict membership propagates storage failures and reuses held profiles.
     """
     from app.models.character import (
-        list_available_characters,
+        list_available_characters, get_character_profile,
         get_character_current_location,
         get_character_current_room)
-    from app.models.world import get_location, get_room_by_id
+    from app.models.world import get_location, get_location_by_id, get_room_by_id
 
     target_id = ""
     target_name = ""
+    loc = None
+    if strict:
+        loc = get_location_by_id(location_id, strict=True)
+        if loc is None:
+            raise LookupError(f"Location not found: {location_id}")
     if room_id and location_id:
-        loc = get_location(location_id)
+        loc = loc if strict else get_location(location_id)
         if loc:
             r = get_room_by_id(loc, room_id)
             if r:
@@ -52,16 +60,28 @@ def characters_in_room(location_id: str, room_id: str, exclude: str = "") -> Lis
                         target_name = room_id
                         break
                 else:
+                    if strict:
+                        raise LookupError(f"Room not found: {location_id}/{room_id}")
                     target_id = room_id
                     target_name = room_id
 
     out: List[str] = []
-    for c in list_available_characters():
+    names = list_available_characters(strict=True) if strict else list_available_characters()
+    for c in names:
         if c == exclude:
             continue
-        if get_character_current_location(c) != location_id:
+        if strict:
+            profile = (profiles or {}).get(c)
+            if profile is None:
+                profile = get_character_profile(c, strict=True)
+            char_location = get_character_current_location(c, profile=profile)
+        else:
+            char_location = get_character_current_location(c)
+        if char_location != location_id:
             continue
-        char_room = (get_character_current_room(c) or "").strip()
+        char_room = (get_character_current_room(c, profile=profile) if strict
+                     else get_character_current_room(c)) or ""
+        char_room = char_room.strip()
         if room_id and char_room not in (target_id, target_name):
             continue
         out.append(c)
@@ -69,13 +89,12 @@ def characters_in_room(location_id: str, room_id: str, exclude: str = "") -> Lis
 
 
 def _is_interruptible(char_name: str) -> bool:
-    """Pose-Modell: es gibt keine ``interruptible``-Flags mehr (Activity-Library
-    entfernt). Eine freie Pose ist immer unterbrechbar."""
+    """Free poses are always interruptible; the activity-library flags are gone."""
     return True
 
 
 def _is_in_cooldown(reactor: str, avatar: str) -> bool:
-    """True wenn der reactor den avatar in den letzten N Min schon begruesst hat."""
+    """Return whether the reactor greeted this avatar within the cooldown."""
     try:
         from app.models.memory import load_memories
         cutoff = utc_now() - timedelta(minutes=GREETING_COOLDOWN_MIN)
@@ -94,12 +113,11 @@ def _is_in_cooldown(reactor: str, avatar: str) -> bool:
 
 
 def _reaction_chance(reactor: str, avatar: str) -> float:
-    """Reaktionswahrscheinlichkeit (0..1) als Mittel aus
+    """Return reaction probability (0..1) from two character settings.
 
-    - reactor.social_dialog_probability (wie gespraechig ist der Character)
-    - avatar.popularity (wie sehr zieht der Avatar Aufmerksamkeit auf sich)
-
-    Beide Werte sind 0-100 in der character_config (Default jeweils 50).
+    Average reactor.social_dialog_probability (talkativeness) and
+    avatar.popularity (attention drawn). Both range from 0 to 100 and
+    default to 50.
     """
     try:
         from app.models.character import get_character_config
@@ -114,13 +132,11 @@ def _reaction_chance(reactor: str, avatar: str) -> float:
 
 
 def pick_reactor(avatar: str, candidates: List[str]):
-    """Waehlt EINEN Character der den Avatar begruesst — oder None.
+    """Pick one character to greet the avatar, or None.
 
-    Returns: (reactor_or_None, silent_noticers_list)
-      - reactor: Character der das Greeting ausloest (oder None)
-      - silent_noticers: Characters die im Raum waren, den Cooldown-Filter
-        bestanden haben aber den Reaktions-Wuerfel verloren — fuer UI-Hinweis
-        "X hat Dich bemerkt, sagt aber nichts".
+    Return (reactor_or_None, silent_noticers_list). Silent noticers were
+    present and outside cooldown but lost the reaction roll; the UI can
+    explain that they noticed the avatar without speaking.
     """
     if not candidates:
         return None, []
@@ -166,7 +182,7 @@ def pick_reactor(avatar: str, candidates: List[str]):
 
 
 def _record_greeting(reactor: str, avatar: str, room_label: str) -> None:
-    """Schreibt eine Memory mit Cooldown-Tag — der naechste Lookup blockt N Min."""
+    """Record a tagged greeting memory for the next cooldown lookup."""
     try:
         from app.models.memory import add_memory
         add_memory(

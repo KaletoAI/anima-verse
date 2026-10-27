@@ -717,35 +717,13 @@ def _drive_extraction_chat_state(agent: str, avatar: str) -> PreviewResult:
         piece_list = "\n".join(f"- {n}" for n in _names)
     except Exception:
         piece_list = ""
-    # Stat list as in the extractor (read dynamically from the template)
-    stats_enabled = False
-    stat_list = ""
-    try:
-        from app.models.character_template import is_feature_enabled, get_template
-        from app.models.character import get_character_profile
-        if is_feature_enabled(agent, "status_effects_enabled"):
-            _prof = get_character_profile(agent) or {}
-            _cur = _prof.get("status_effects", {}) or {}
-            _tmpl = get_template(_prof.get("template", "")) if _prof.get("template") else None
-            if _tmpl and _cur:
-                _lines: List[str] = []
-                for _section in _tmpl.get("sections", []):
-                    for _fld in _section.get("fields", []):
-                        if _fld.get("store") != "status_effects":
-                            continue
-                        _k = _fld.get("key")
-                        if not _k or _k not in _cur:
-                            continue
-                        _hint = (_fld.get("hint") or "").strip()
-                        _line = f"- {_k}, currently {_cur.get(_k)}/100"
-                        if _hint:
-                            _line += f" — {_hint}"
-                        _lines.append(_line)
-                if _lines:
-                    stat_list = "\n".join(_lines)
-                    stats_enabled = True
-    except Exception:
-        pass
+    # Preview a private self effect only; historical text is never replayed
+    # as a newly delivered counterpart event.
+    from app.core.stat_sources import extraction_context
+    from app.core.chat_stat_effects import build_stat_targets
+    stat_context = extraction_context(agent, (), narrative=asst_msg)
+    stat_targets = build_stat_targets(stat_context)
+    stats_enabled = bool(stat_targets["required_stat_pairs"])
     from app.core.npc_actions import _solo_pose_keys
     from app.core.streaming import current_pose_text
     sys, user = render_task("extraction_chat_state",
@@ -759,7 +737,9 @@ def _drive_extraction_chat_state(agent: str, avatar: str) -> PreviewResult:
         outfit_locked=False,
         is_avatar=False,
         stats_enabled=stats_enabled,
-        stat_list=stat_list)
+        stat_sources=stat_targets["stat_sources"],
+        stat_targets=stat_targets["stat_targets"],
+        required_stat_pairs=stat_targets["required_stat_pairs"])
     return {"ok": True, "output": _format("extraction_chat_state", sys, user),
             "note": ("Production kwargs reproduced (extraction is async/per-request "
                      "in routes/chat._extract_context_from_last_chat). Latest "

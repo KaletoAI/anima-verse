@@ -648,17 +648,16 @@ def _apply_removed_pieces(character_name: str,
 def _extract_context_from_last_chat(agent_name: str,
     chat_history: List[Dict[str, str]],
     agent_config: Optional[Dict[str, Any]] = None,
-    detach: bool = False) -> None:
+    detach: bool = False, *, stat_context=None) -> None:
     """Extract pose/activity and outfit changes from the latest chat messages.
 
-    Overwrites the stored pose and takes off pieces the narrative removes
-    (unequip-only, never an auto-equip). The SOURCE is the newest reply only
-    — the replies before it were judged on their own turns, and read again
-    they re-applied an older pose over a newer one; they ride along as
-    context. ``detach``: see ``chat_engine.run_follow_up``.
+    Pose and clothing use only the newest reply; earlier turns are context.
+    Stat changes use explicit persisted sources and authorized targets, never
+    names inferred from that context. ``detach`` follows ``run_follow_up``.
     """
-    if not chat_history:
+    if not chat_history and not (stat_context and stat_context.sources):
         return
+    chat_history = chat_history or []
 
     # Collect the latest assistant messages (at most 3: the newest is the
     # source, the others are context)
@@ -670,7 +669,7 @@ def _extract_context_from_last_chat(agent_name: str,
                 last_assistant_msgs.append(content)
                 if len(last_assistant_msgs) >= 3:
                     break
-    if not last_assistant_msgs:
+    if not last_assistant_msgs and not (stat_context and stat_context.sources):
         return
 
     # The latest user message too, for context
@@ -710,7 +709,8 @@ def _extract_context_from_last_chat(agent_name: str,
     # Only the NEWEST reply is extracted from (pose, outfit, stats of THIS
     # beat); the earlier ones were extracted on their own turns and only help
     # to read it, so they go into the character call's context block.
-    character_source = f"Character: {_strip_tool_markers(last_assistant_msgs[0])}"
+    character_source = (f"Character: {_strip_tool_markers(last_assistant_msgs[0])}"
+                        if last_assistant_msgs else "")
     earlier_replies = "\n".join(
         f"Character (earlier): {_strip_tool_markers(m)}"
         for m in reversed(last_assistant_msgs[1:]))
@@ -734,7 +734,8 @@ def _extract_context_from_last_chat(agent_name: str,
         Runs under target_name's tool-LLM config — logs and LLM choice are
         attributed to the respective character.
         """
-        if not source_text.strip():
+        source_available = bool(source_text.strip())
+        if not source_available and (is_avatar or not (stat_context and stat_context.sources)):
             return
         from app.models.character import is_outfit_locked
         from app.core.llm_queue import get_llm_queue, Priority
@@ -744,7 +745,7 @@ def _extract_context_from_last_chat(agent_name: str,
         # outfit → skipped entirely. The agent call still extracts the pose
         # (a different purpose); only the outfit part leaves the prompt and
         # is ignored afterwards.
-        outfit_locked = is_outfit_locked(target_name)
+        outfit_locked = is_outfit_locked(target_name) or not source_available
         if outfit_locked and is_avatar:
             logger.debug("Chat-Kontext [%s]: Outfit-Lock aktiv, Avatar-Extraktion uebersprungen",
                          target_name)
@@ -782,41 +783,53 @@ def _extract_context_from_last_chat(agent_name: str,
         context_text = (("\n".join(p for p in (earlier_replies, avatar_source) if p))
                         if not is_avatar else character_source)
 
-        # Stat evaluation (C): character calls only, and only with the
-        # feature on. The available stats are read from the character
-        # template (store=status_effects) — nothing hardcoded.
+        # One existing character extraction covers every authorized stat pair.
+        # The separate avatar-input call remains clothing-only.
         stats_enabled = False
-        stat_list = ""
+        stat_targets = {}
+        active_stat_context = stat_context
         if not is_avatar:
             try:
-                # Single source for the value list (also used by package
-                # end-of-activity hooks and the activity tick).
-                from app.core.stat_effects import build_stat_list
-                stats_enabled, stat_list = build_stat_list(target_name)
-            except Exception as _se:
-                logger.debug("Stat-Liste fuer Extraktor [%s] fehlgeschlagen: %s", target_name, _se)
+                from app.core.chat_stat_effects import build_stat_targets
+                from app.core.stat_sources import extraction_context
+                if active_stat_context is None:
+                    active_stat_context = extraction_context(target_name, (), narrative=source_text)
+                stat_targets = build_stat_targets(active_stat_context)
+                stats_enabled = bool(stat_targets["required_stat_pairs"])
+            except Exception:
+                logger.exception("RP stat source preparation failed for %s; no stat changes", target_name)
+        if not source_available and not stats_enabled:
+            return
 
         from app.core.npc_actions import _solo_pose_keys
         from app.core.streaming import current_pose_text
-        pose_keys = _solo_pose_keys() if not is_avatar else []
+        pose_keys = _solo_pose_keys() if not is_avatar and source_available else []
         # The pose this call would overwrite — the prompt keeps it unless
         # the body clearly changes shape.
-        current_pose = current_pose_text(target_name) if not is_avatar else ""
+        current_pose = current_pose_text(target_name) if not is_avatar and source_available else ""
 
         from app.core.prompt_templates import render_task
-        sys_prompt, user_prompt = render_task(
-            "extraction_chat_state",
-            target_name=target_name,
-            pose_keys=pose_keys,
-            current_pose=current_pose,
-            piece_list=piece_list,
-            source_label=source_label,
-            source_text=source_text,
-            context_text=context_text,
-            outfit_locked=outfit_locked,
-            is_avatar=is_avatar,
-            stats_enabled=stats_enabled,
-            stat_list=stat_list)
+        try:
+            sys_prompt, user_prompt = render_task(
+                "extraction_chat_state",
+                target_name=target_name,
+                pose_keys=pose_keys,
+                current_pose=current_pose,
+                piece_list=piece_list,
+                source_label=source_label,
+                source_text=source_text,
+                context_text=context_text,
+                outfit_locked=outfit_locked,
+                is_avatar=is_avatar,
+                stats_enabled=stats_enabled,
+                stat_sources=stat_targets.get("stat_sources", ()),
+                stat_targets=stat_targets.get("stat_targets", ()),
+                required_stat_pairs=stat_targets.get("required_stat_pairs", ()))
+        except Exception as error:
+            logger.exception(
+                "Chat-state template contract failed for %s: %s; inspect /admin/templates "
+                "(extraction_chat_state). No stat changes recorded.", target_name, error)
+            return
 
         try:
             from app.core.llm_router import llm_call as _llm_call
@@ -858,7 +871,7 @@ def _extract_context_from_last_chat(agent_name: str,
         # the avatar and filled its activity/detail from the LLM answer (e.g.
         # "Talking" + "sleeps"). The is_player_controlled check stops that.
         from app.models.account import is_player_controlled as _is_pc
-        if not is_avatar and not _is_pc(target_name):
+        if not is_avatar and not _is_pc(target_name) and source_available:
             # Key + detail (plan-pose-key-detail.md): a key from the shown
             # menu is written exactly; an empty or unknown key keeps the
             # current pose and only refreshes the display detail — a gesture
@@ -880,20 +893,18 @@ def _extract_context_from_last_chat(agent_name: str,
                                 "is a two-person pose", target_name,
                                 extracted_pose[:80], e)
 
-            # Stats: apply this scene's malus/bonus to status_effects.
-            stats_raw = data.get("stats")
-            if isinstance(stats_raw, dict) and stats_raw:
-                try:
-                    from app.models.character import adjust_status_effects
-                    from app.core.stat_rules import cap_chat_deltas
-                    capped = cap_chat_deltas(target_name, stats_raw)
-                    applied = adjust_status_effects(target_name, capped, source="chat")
-                    if applied:
-                        logger.info("Chat-Kontext [%s]: Stats %s", target_name,
-                                     ", ".join(f"{k} {v['old']}->{v['new']}"
-                                               for k, v in applied.items()))
-                except Exception as _ste:
-                    logger.debug("Stat-Apply [%s] fehlgeschlagen: %s", target_name, _ste)
+        if not is_avatar and stats_enabled:
+            try:
+                from app.core.chat_stat_effects import parse_stat_results, apply_chat_stat_results
+                parsed = parse_stat_results(data, stat_targets)
+                outcomes = apply_chat_stat_results(active_stat_context, parsed)
+                for outcome in outcomes:
+                    if outcome.get("status") == "failed":
+                        logger.error("RP stat application failed for %s", target_name)
+            except Exception:
+                logger.exception(
+                    "Chat-state stat contract failed for %s; inspect /admin/templates "
+                    "(extraction_chat_state). No invalid stat results applied.", target_name)
 
         # Take off the pieces named in the removed list. New pieces cannot
         # come out of free text — that takes the outfit-creation skill.
@@ -902,16 +913,22 @@ def _extract_context_from_last_chat(agent_name: str,
 
     def _do_extraction():
         # Call 1: character reply → agent outfit + pose (under the agent config)
-        _extract_for_character(
-            agent_name, agent_config,
-            source_text=character_source, is_avatar=False)
+        try:
+            _extract_for_character(
+                agent_name, agent_config,
+                source_text=character_source, is_avatar=False)
+        except Exception:
+            logger.exception("Character extraction failed for %s", agent_name)
         # Call 2: user input → avatar outfit (under the avatar config)
         if avatar_name and avatar_source:
             from app.models.character import get_character_config
             avatar_config = get_character_config(avatar_name)
-            _extract_for_character(
-                avatar_name, avatar_config,
-                source_text=avatar_source, is_avatar=True)
+            try:
+                _extract_for_character(
+                    avatar_name, avatar_config,
+                    source_text=avatar_source, is_avatar=True)
+            except Exception:
+                logger.exception("Avatar outfit extraction failed for %s", avatar_name)
 
     # The loop's executor, inline on run_chat_turn's follow-up thread, or a
     # daemon thread for a detached caller — the turn trace rides along in

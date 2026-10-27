@@ -36,22 +36,23 @@ _tick_pending: set[str] = set()
 _tick_lock = threading.Lock()
 
 
-def build_stat_list(character_name: str) -> Tuple[bool, str]:
+def build_stat_list(character_name: str, *, profile: dict | None = None,
+                    config: dict | None = None) -> Tuple[bool, str]:
     """Bullet list of the character's status values (+hint, current value)
     from the character template — the single source for every evaluator.
     Returns (enabled, list); disabled feature or no values -> (False, '')."""
     try:
         from app.models.character_template import is_feature_enabled, get_template
         from app.models.character import get_character_profile
-        if not is_feature_enabled(character_name, "status_effects_enabled"):
+        prof = profile if profile is not None else (get_character_profile(character_name) or {})
+        if not is_feature_enabled(character_name, "status_effects_enabled", profile=prof, config=config):
             return False, ""
-        prof = get_character_profile(character_name) or {}
         cur = prof.get("status_effects", {}) or {}
         tmpl = get_template(prof.get("template", "")) if prof.get("template") else None
         if not tmpl or not cur:
             return False, ""
         from app.core.stat_rules import rules_for_character
-        rules = rules_for_character(character_name, profile=prof)
+        rules = rules_for_character(character_name, profile=prof, config=config)
         lines = []
         for section in tmpl.get("sections", []):
             for fld in section.get("fields", []):

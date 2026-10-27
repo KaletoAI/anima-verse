@@ -18,6 +18,14 @@ import { EmptyState } from './EmptyState'
 import { useEnlarge } from './ZoomButton'
 import { transparentPortraitUrl } from './thumbs'
 
+/** Public per-stat provenance; private rule/event details are never needed here. */
+export interface StatCause {
+  actor: string | null
+  base_delta: number
+  modified_delta: number
+  capped_delta: number
+  factor: number
+}
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 interface SelfData {
   avatar: string
@@ -60,7 +68,7 @@ export function SelfPanel() {
       if (change) {
         const [key, value] = change
         const delta = value.new - value.old
-        toast(`${name(key)} ${delta < 0 ? '−' : '+'}${Math.abs(delta)}: ${row.label}`, 'info')
+        toast(`${name(key)} ${delta < 0 ? '−' : '+'}${Math.abs(delta)}: ${t(row.label)}`, 'info')
         return
       }
     }

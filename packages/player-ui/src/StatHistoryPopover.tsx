@@ -1,12 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from './I18nProvider'
+import type { StatCause } from './SelfPanel'
 
 export interface StatChange {
   id: number
   game_ts: string
   label: string
   changes: Record<string, { old: number; new: number }>
+  cause?: Record<string, StatCause>
 }
 
 export function StatHistoryPopover({ stat, name, rows, anchor, onClose }: {
@@ -41,11 +43,20 @@ export function StatHistoryPopover({ stat, name, rows, anchor, onClose }: {
         <strong>{name}: {t('History')}</strong>
         <button type="button" onClick={onClose} aria-label={t('Close')}>×</button>
       </div>
-      {history.length === 0 ? <p>{t('No recent changes')}</p> : history.map(row => (
-        <div key={row.id} style={{ marginTop: 8 }}>
-          <div>{row.label}: {row.changes[stat].old}→{row.changes[stat].new}</div>
+      {history.length === 0 ? <p>{t('No recent changes')}</p> : history.map(row => {
+        const cause = row.cause?.[stat]
+        const change = row.changes[stat]
+        return <div key={row.id} style={{ marginTop: 8 }}>
+          <div>{t(row.label)}: {change.old}→{change.new}</div>
+          {cause ? <div style={{ fontSize: '0.85em', overflowWrap: 'anywhere' }}>
+            {cause.actor ? <div>{t('Actor')}: {cause.actor}</div> : null}
+            <div>{t('Base delta')}: {cause.base_delta} × {cause.factor} = {cause.modified_delta}</div>
+            <div>{t('After chat cap')}: {cause.capped_delta}</div>
+            <div>{t('Actual change')}: {change.new - change.old}</div>
+            {cause.capped_delta !== change.new - change.old ? <div>{t('Limited by the stat range.')}</div> : null}
+          </div> : null}
           <small style={{ opacity: 0.7 }}>{row.game_ts}</small>
         </div>
-      ))}
+      })}
     </div>, document.body)
 }

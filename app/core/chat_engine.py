@@ -8,13 +8,17 @@ Provides:
 import asyncio
 import json
 import re
-from typing import Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
 
 from app.core.log import get_logger
 from app.core.perception import CONTENTLESS_KINDS, STORYTELLER_SPEAKER
+from app.core.stat_sources import (
+    ReplyReceipt, bind_stat_sources, extraction_context, get_stat_source_collector,
+    source_from_utterance, source_only_context, stat_source_turn,
+)
 
 logger = get_logger("chat_engine")
 
@@ -705,31 +709,55 @@ def execute_tool_matches(ctx: Dict[str, Any], responder: str,
         # build); the skills enqueue into the task queue themselves.
         _tools_dict = ctx["tools_dict"]
         _speaker = ctx.get("speaker") or ""
+        _stat_collector = get_stat_source_collector()
+        from app.core.streaming import _speech_tool_names
+        _speech_names = _speech_tool_names()
+        _source_completions = [
+            _stat_collector.start_source_work()
+            if _stat_collector is not None and name in _speech_names else None
+            for name, _ in _deferred_matches
+        ]
+
+        def _finish_source_work(completion):
+            if completion is not None:
+                _stat_collector.finish_source_work(completion)
 
         def _run_deferred(matches=_deferred_matches, rp=rp_text,
                           ui=incoming_message, who=responder, spk=_speaker):
-            from app.core.streaming import report_deferred_failure
-            for _dname, _dinp in matches:
-                try:
-                    _res = _tools_dict[_dname](_inject_rp_context(_dinp, rp, ui))
-                except Exception as _de:
-                    logger.error("run_chat_turn[%s]: deferred tool %s raised: %s",
-                                 who, _dname, _de)
-                    _res = f"Error: {_de}"
-                # A failure is an ANSWER here (the tools do not raise), so the
-                # result is read instead of discarded: warning + narrator line
-                # + notification to the avatar, see report_deferred_failure.
-                if not report_deferred_failure(who, _dname, _res, speaker=spk):
-                    logger.info("run_chat_turn[%s]: deferred tool ran → %s: %s",
-                                who, _dname, str(_res)[:100])
+            try:
+                from app.core.streaming import report_deferred_failure
+                for (_dname, _dinp), completion in zip(matches, _source_completions):
+                    try:
+                        try:
+                            with bind_stat_sources(_stat_collector):
+                                _res = _tools_dict[_dname](_inject_rp_context(_dinp, rp, ui))
+                        except Exception as _de:
+                            logger.error("run_chat_turn[%s]: deferred tool %s raised: %s",
+                                         who, _dname, _de)
+                            _res = f"Error: {_de}"
+                        # Feedback is still visible, but only declared speech
+                        # calls participate in the extraction completion barrier.
+                        if not report_deferred_failure(who, _dname, _res, speaker=spk):
+                            logger.info("run_chat_turn[%s]: deferred tool ran → %s: %s",
+                                        who, _dname, str(_res)[:100])
+                    finally:
+                        _finish_source_work(completion)
+            finally:
+                # Also release calls not reached after an unexpected worker failure.
+                for completion in _source_completions:
+                    _finish_source_work(completion)
 
         import threading
-        # bind_trace instead of copying the whole context: the
-        # deferred tools deliberately run WITHOUT the caller's
-        # perception shadow, they only need the turn's trace id.
+        # Only the trace and collector cross this boundary, not the caller's
+        # perception shadow. Register completion before Thread.start can race.
         from app.core.turn_trace import bind_trace
-        threading.Thread(target=bind_trace(_run_deferred),
-                         daemon=True).start()
+        try:
+            threading.Thread(target=bind_trace(_run_deferred),
+                             daemon=True).start()
+        except Exception:
+            for completion in _source_completions:
+                _finish_source_work(completion)
+            logger.exception("run_chat_turn[%s]: deferred worker could not start", responder)
 
 
 # A signature shorter than this is a stock line ("Ja.", "Okay, gern.") that
@@ -771,6 +799,7 @@ def _repeats_own_last_line(responder: str, reply: str) -> bool:
         return False
 
 
+@stat_source_turn
 def run_chat_turn(
     owner_id: str,
     responder: str,
@@ -785,7 +814,9 @@ def run_chat_turn(
     winding_down: bool = False,
     addressed_to: Optional[List[str]] = None,
     usage_out: Optional[Dict[str, Any]] = None,
-    synthetic_input: bool = False) -> str:
+    synthetic_input: bool = False,
+    incoming_utterance_id: Optional[int] = None,
+    publish_reply: Optional[Callable[[str], ReplyReceipt]] = None) -> str:
     """Lets responder generate ONE reply to incoming_message from speaker.
 
     Synchronous. Used by the talk_to / send_message skills. Uses the existing
@@ -972,6 +1003,33 @@ def run_chat_turn(
                         responder, ", ".join(n for n, _ in _inline_matches))
             execute_tool_matches(ctx, responder, _inline_matches, rp_text="",
                                  incoming_message=incoming_message)
+            if post_process:
+                # The published tool message is the communication turn. Silence
+                # is neither a reply source nor a relationship/memory exchange.
+                _stat_collector = get_stat_source_collector()
+
+                def _bg_source_only():
+                    try:
+                        stat_context = source_only_context(responder, _stat_collector)
+                        if stat_context is None:
+                            return
+                        post_process_response(
+                            owner_id=owner_id, character_name=responder,
+                            user_input="", full_response="", agent_config=ctx["agent_config"],
+                            llm=ctx["llm"], user_display_name="", full_chat_history=[],
+                            old_history=[], extraction_context={
+                                "source": "user_chat", "stat_only": True,
+                                "stat_context": stat_context,
+                            })
+                    except Exception:
+                        logger.exception("run_chat_turn[%s]: source-only extraction failed", responder)
+
+                import threading
+                from app.core.turn_trace import bind_trace
+                try:
+                    threading.Thread(target=bind_trace(_bg_source_only), daemon=True).start()
+                except Exception:
+                    logger.exception("run_chat_turn[%s]: source-only follow-up could not start", responder)
             return ""
         logger.warning("run_chat_turn: leere Antwort von %s", responder)
         return ""
@@ -993,6 +1051,19 @@ def run_chat_turn(
             logger.info("run_chat_turn: %s repeats its own last line — dropped",
                         responder)
             return ""
+    collector = get_stat_source_collector()
+    if incoming_utterance_id is not None and not synthetic_input:
+        incoming_source = source_from_utterance(incoming_utterance_id)
+        if (incoming_source is not None and incoming_source.actor == speaker
+                and responder in incoming_source.allowed_targets and collector is not None):
+            collector.add(incoming_source)
+    if publish_reply is not None:
+        try:
+            receipt = publish_reply(clean)
+            if receipt.source is not None and collector is not None:
+                collector.add(receipt.source)
+        except Exception:
+            logger.exception("Reply publication failed for %s", responder)
 
     # rp_first tool phase (feature parity): a second tool-LLM call spots the
     # narrative actions in the RP text ("puts on shorts", "off to the forest
@@ -1112,9 +1183,11 @@ def run_chat_turn(
             # the trace id so its follow-up LLM calls group with the answer.
             _caller_ctx = contextvars.copy_context()
 
+            _stat_collector = get_stat_source_collector()
             def _bg_after_reply():
-                _markers = (_caller_ctx.run(_run_tool_phase)
-                            if _needs_tool_phase else "")
+                with bind_stat_sources(_stat_collector):
+                    _markers = (_caller_ctx.run(_run_tool_phase)
+                                if _needs_tool_phase else "")
                 if _needs_inline_tools:
                     # Single mode: the fallback markers (**I do …**) sit
                     # in the chat text itself, so they are read from the
@@ -1129,6 +1202,10 @@ def run_chat_turn(
                         logger.debug("marker extraction failed: %s", _xe)
                 if not post_process:
                     return
+                # Wait only for declared speech-producing defers, after the
+                # normal answer was published and without holding any locks.
+                if _stat_collector is not None:
+                    _stat_collector.wait_for_source_work()
                 # The character's OWN [INTENT…] markers: `clean` has them
                 # stripped (clean_response), so without this pass a task the
                 # player gave in chat never reached the intent parser — only
@@ -1156,7 +1233,15 @@ def run_chat_turn(
                         user_display_name=(speaker or ctx["user_display_name"]),
                         full_chat_history=ctx["full_chat_history"],
                         old_history=ctx.get("old_history"),
-                        extraction_context={"source": "user_chat"},
+                        extraction_context={
+                            "source": "user_chat",
+                            "stat_context": extraction_context(
+                                responder, _stat_collector.snapshot() if _stat_collector else (),
+                                narrative=clean,
+                                self_event_id=_stat_collector.self_event_id if _stat_collector else None,
+                                started_at=_stat_collector.started_at if _stat_collector else None,
+                                game_ts=_stat_collector.game_ts if _stat_collector else None),
+                        },
                         synthetic_input=synthetic_input)
                 except Exception as _pe:
                     logger.error("run_chat_turn post_process(%s) failed: %s",
@@ -1323,8 +1408,25 @@ def post_process_response(
     from app.routes.chat import _extract_context_from_last_chat
 
     result = {"mood": None, "location": None, "activity": None}
-
+    stat_context = (extraction_context or {}).get("stat_context")
     cleaned = clean_response(full_response)
+    has_private_prose = bool(cleaned and cleaned.strip().upper() != "SKIP")
+    stat_only = bool((extraction_context or {}).get("stat_only"))
+
+    def _run_state_extraction():
+        """One shared inference phase; raw markers/SKIP never become RP prose."""
+        try:
+            updated_history = []
+            if has_private_prose and not stat_only:
+                updated_history = list(full_chat_history)
+                if (extraction_context or {}).get("source") != "thought":
+                    updated_history.append({"role": "user", "content": user_input})
+                updated_history.append({"role": "assistant", "content": cleaned})
+            _extract_context_from_last_chat(
+                character_name, updated_history, agent_config,
+                detach=detach_background, stat_context=stat_context)
+        except Exception as e:
+            logger.error("[%s] Context extraction error: %s", character_name, e)
 
     # Mood extraction
     try:
@@ -1369,9 +1471,21 @@ def post_process_response(
     except Exception as e:
         logger.error("Intent marker extraction error: %s", e)
 
+    # Explicit markers are deterministic work, not inferred narrative effects.
+    # Apply them above exactly once even when this turn has no private prose.
+    # The state helper sees empty history here; no eligible sources means the
+    # existing route does nothing, while delivered sources share one stat round.
+    if stat_only or not has_private_prose:
+        _run_state_extraction()
+        return result
+
     # Background extraction: memory + categories + relationships
     # Skip short or empty responses
     if len(cleaned) < 20:
+        if stat_context is not None and stat_context.sources:
+            # Brief published replies retain their one shared state phase;
+            # the length threshold applies only to background prose work.
+            _run_state_extraction()
         logger.debug("[%s] Antwort zu kurz (%d Zeichen) — Background-Extraktion uebersprungen",
                       character_name, len(cleaned))
         return result
@@ -1549,22 +1663,8 @@ def post_process_response(
     except Exception as e:
         logger.error("[%s] Instagram extraction error: %s", character_name, e)
 
-    # Chat context extraction (activity + outfit from response).
-    # Omit synthetic thought instructions from avatar outfit extraction;
-    # extraction from the character response remains active.
-    try:
-        is_thought = bool(extraction_context and extraction_context.get("source") == "thought")
-        updated_history = list(full_chat_history)
-        if not is_thought:
-            updated_history.append({"role": "user", "content": user_input})
-        # The CLEANED reply: the pose/outfit extraction judges the prose,
-        # never the character's own **I do …** / **I feel …** markers or
-        # tool lines (those are applied above, from full_response).
-        updated_history.append({"role": "assistant", "content": cleaned})
-        _extract_context_from_last_chat(character_name, updated_history, agent_config,
-                                        detach=detach_background)
-    except Exception as e:
-        logger.error("[%s] Context extraction error: %s", character_name, e)
+    # The normal narrative and all canonical sources use the same shared phase.
+    _run_state_extraction()
 
     # History summary update (only if there are old messages)
     try:

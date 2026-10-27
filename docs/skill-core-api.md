@@ -89,6 +89,12 @@ Stat-Namen.
 | Aktivitäts-Tick (automatisch) | Der Agent-Loop bewertet die LAUFENDE Freitext-Aktivität gegen alle Stats — kein Library-Lookup; für jedes Paket nutzbar (Workout ⇒ Stamina-Deklaration + Hints genügen) |
 | `app.models.character.adjust_status_effects(character_name, deltas, source='')` | Direkte Deltas ohne LLM-Runde (clamped 0–100) |
 
+RP chat uses a separate, event-addressed contract: `stat_results`, documented
+in [LLM templates](llm-templates.md#chat-state-extraction-contract). The generic
+`stat_effects` task still returns flat `{"stats": {"<key>": delta}}` for
+activity/nonchat situations. Hourly drift, activity ticks, item effects, rewards
+and skill costs do not acquire Influence multipliers or the chat budget.
+
 ## Stat rules — `app.core.stat_rules` ⚠
 
 Rules resolve template seeds, whole-entry world overrides and character config.
@@ -126,8 +132,23 @@ Condition expressions also accept `at_home`, `offmap`, `travelling`,
 character's own current location/position, even during target access checks.
 
 A state never fires on a stat the character does not have (inside
-`activity_engine.missing_stats_fail()` a missing stat is "not met"); rule
+`app.core.activity_engine.missing_stats_fail()` a missing stat is "not met"); rule
 conditions keep "missing counts as 100".
+
+## Strict conditions and held snapshots — `app.core.activity_engine`
+
+| Function / value | Semantics |
+|---|---|
+| `validate_condition_expression(condition) -> list[ConditionIssue]` | Validate the existing OR/AND/NOT grammar without world reads; each immutable issue has `code` and `message` |
+| `evaluate_condition_strict(condition, character_name, location_id="", room_id="", *, profile=None) -> ConditionResult` | Immutable `available`, `passed`, `reason`; reuse a held profile instead of loading it again |
+
+Strict evaluation distinguishes available/true, available/false and unavailable.
+It checks the whole expression: an unknown stat/reference, failed storage read,
+missing required context or cyclic state is unavailable, including beneath NOT
+or in another OR branch. Negation cannot turn a read failure into permission,
+and a true OR branch cannot hide it. An empty expression is available/true.
+This opt-in path does not change ordinary `evaluate_condition` or the legacy
+missing-value defaults described above.
 
 ## Skill gate — `app.core.skill_gate` ⚠
 
@@ -156,6 +177,87 @@ Core quantities: `travel_speed`, `discovery`, `spell_success`, `thought_frequenc
 | `factor(name, qid, *, profile=None, rules=None) -> float` | Product of matching rules (1.0 without); a missing stat never fires; cached 30 s, cleared on every rule change |
 | `modify_rules() -> list` | Load once when asking about many characters |
 
+## RP Influence — `app.core.stat_influence`
+
+Influence is a subtype of the existing Rules library, not a modifier quantity
+or a separate store. Its persisted discriminator is `type: "influence"`:
+
+```json
+{
+  "id": "encouragement",
+  "name": "Trusted encouragement",
+  "type": "influence",
+  "condition": "",
+  "actor_condition": "",
+  "pair_conditions": [
+    {"kind": "relationship", "op": ">", "value": 40},
+    {"kind": "attraction", "observer": "recipient"}
+  ],
+  "influence": {
+    "actor": "",
+    "recipient": "",
+    "stat": "<template-declared stat key>",
+    "direction": "increase",
+    "factor": 2
+  }
+}
+```
+
+`actor` and `recipient` are exact names or empty strings for any eligible actor
+or recipient; both fields are present. `condition` binds only the recipient,
+`actor_condition` only the actor, using strict evaluation. Pair conditions are
+ANDed: `relationship` compares the exact actor/recipient pair's strength with
+`>`, `<` or `=` and a number from 0 to 100 (a successful no-row read means 0);
+`attraction` asks whether its selected observer is attracted to the other role.
+These are structured pair tests, not legacy "any partner" condition searches.
+Unavailable references/providers leave a stored rule intact but inactive.
+
+`direction` is `increase`, `decrease` or `both`, selected from the original
+base delta's sign. Factors are finite numbers from 0.1 to 5, not booleans.
+Each matching rule ID contributes once, matching factors multiply, and only
+the final product is clamped to 0.1..5. Traces are sorted by ID. Self/unattributed
+effects, zero deltas and missing/undeclared recipient stats have factor 1.
+Stat names and authoring choices come from character templates, never core lists.
+
+| Function | Semantics |
+|---|---|
+| `validate_influence_rule(rule) -> list[dict]` | Shape/syntax errors as `{path, code, message}`; missing current-world references are diagnostics, not destructive rewrites |
+| `influence_rule_status(rule) -> dict` | `{available, reasons}` for current references/capabilities; a valid but false condition is not an availability error |
+| `influence_options() -> dict` | Template stats, pair-condition availability, directions and factor bounds |
+| `influence_factor(actor, recipient, stat, base_delta, *, rules, profiles) -> dict` | Local `{factor, rules: [{id, name, factor}]}` from held profiles and rules; no write, model call or network request |
+| `project_stat_metadata(metadata, *, include_rule_details=False) -> dict` | Copy metadata; default removes root `event_id` and private per-stat rule traces while retaining valid numeric cause fields, observed actor and unrelated root metadata |
+
+`app.models.rules.load_rules(*, strict=False)` keeps ordinary permissive loading;
+`strict=True` raises `RuleWriteError` for a failed/malformed layer instead of
+exposing a partial shared/world ruleset. Authoring uses the existing admin Rules
+surface. `GET /rules/influence-options` supplies choices;
+`POST /rules/influence-validate` with `{"rule": ...}` returns
+`{errors, warnings, available}`. Definition reads/exports are admin-only for
+Influence. Shared baselines and whole-entry world overrides retain their existing
+Rules semantics; cross-layer Influence import overwrite is refused rather than
+silently moving a private rule.
+
+The shared RP application owns this order: validate all source/target results,
+snapshot profiles/config/rules and the current apply clock, compute local
+factors, multiply each base delta, round half away from zero, reserve the
+recipient/stat/current-game-hour budget, then clamp stored values to 0..100.
+Both signs consume the same absolute hourly budget; `chat_cap_per_hour = 0`
+disables it. Turning points are classified by the ORIGINAL `abs(base_delta) >= 30`
+and bypass the ordinary budget even when reduced by a factor; amplifying a
+small base delta never creates that exemption. The budget is current-hour RAM
+state, not a persistent historical cap or a source-publication-hour budget.
+
+Each canonical `(event_id, recipient)` commits status, actual-change history
+and a durable receipt atomically. Empty, zero and fully clamped valid results
+also commit receipts; failed/duplicate commits spend no budget. A receipt
+survives history trimming, so re-reading context cannot reapply an old event.
+Independent pairs apply in canonical source order and can fail independently.
+History `cause[stat]` captures `actor`, `base_delta`, `modified_delta`,
+`capped_delta`, `factor` and matched `rules`; `changes` records actual old/new
+values after clamping. Admin Mind history shows event/rule snapshots. Player
+history, debug and ZIP exports retain only their own permitted numeric effects
+and observed actor, never private rule names/IDs or canonical event IDs.
+
 ## Rewards — `app.core.stat_rewards`
 
 | Function | Semantics |
@@ -167,14 +269,22 @@ Core quantities: `travel_speed`, `discovery`, `spell_success`, `thought_frequenc
 | Funktion | Semantik |
 |---|---|
 | `slots_for_character(character_name, profile=None)` | Anwendbare Slot-Deklarationen (Spezies-Template + `applies_to`) |
-| `slot_values(character_name)` / `set_slot_value(character_name, slot_id, attr, value)` | Gespeicherte Attribut-Werte (Profil, Stammdaten) |
-| `prompt_fragments(character_name, face_only=False, profile=None, back_view=False, mesh_input=False)` | `{general, exposed}` — general = always+covered (Personenbeschreibung, F1), exposed nur unbedeckt; `face_only` filtert auf `face: true`-Slots, `back_view` auf die Rückansicht, `mesh_input` nimmt für aktive Mesh-Teile den T-Pose-Text |
-| `appearance_suffix(character_name, face_only=False, profile=None, back_view=False, mesh_input=False, include_exposed=True) -> str` | Kombinierter Text; hängt der PromptBuilder automatisch an die Appearance an. `include_exposed=False` lässt die exposed-Fragmente weg — für Aufrufer, die sie selbst nennen (`uncovered: …` in der Anwesenheit) |
+| `slot_values(character_name, *, profile=None)` / `set_slot_value(character_name, slot_id, attr, value)` | Stored attribute values; a held `profile` avoids a second character read |
+| `prompt_fragments(character_name, face_only=False, profile=None, back_view=False, mesh_input=False, neutral_state=False)` | `{general, exposed}` fragments; `face_only` selects face slots, `back_view` selects rear-view text, `mesh_input` uses T-pose text, and `neutral_state` ignores state-driven modifiers |
+| `appearance_suffix(character_name, face_only=False, profile=None, back_view=False, mesh_input=False, include_exposed=True, neutral_state=False) -> str` | Combined appearance text from the same fragment policy; `include_exposed=False` leaves exposed fragments to a caller that already renders them, and `neutral_state` ignores state-driven modifiers |
 | `is_slot_exposed(spec, profile) -> bool` | Unbedeckt? Piece-Garderobe: kein Piece in `covered_by`; Freitext-Garderobe: `outfit_worn` aus |
 | `attribute_default(decl, profile) -> Optional[str]` | Template-gebundener Fallback eines Attributs (`default`), `None` = keiner |
 | `piece_slots_for_character(character_name) -> Tuple[str, ...]` | Kleidungs-Slot-Topologie der Spezies (Fallback `inventory.VALID_PIECE_SLOTS`). Konsumenten: Paper-Doll/Belongings, `inventory.equip_piece`-Validierung, `CreateOutfit`-Slot-Liste, Decency-required-Slots |
 | `declared_piece_slots(character_name)` | `(slots, labels)` NUR wenn eine Spezies deklariert, sonst `None` — Aufrufer behalten dann ihren Core-Default |
 | `silhouette_for_character(character_name)` | Silhouetten-Deklaration des Spezies-Pakets (UI) |
+| `interest_alias_tables(character_name, *, profile=None)` | Declarative body-slot `interest_aliases` tables from the held subject profile |
+| `slot_attr_values(character_name, *, profile=None, config=None) -> Dict[str, str]` | Flat lowercased `slot.attr` values; held profile/config preserve the subject snapshot and humanoid feature policy |
+
+`app.core.height.height_word(profile, character_name="", *, config=None)`
+uses the same held config for humanoid resolution and returns the existing
+height descriptor (empty when unavailable/non-humanoid). Directed matching must
+pass its strict profile/config snapshots through these public helpers; it must
+not perform permissive hidden rereads or import private core helpers.
 
 Deklaration ausschließlich über das Manifest (`body_slots`/`piece_slots`/
 `silhouette` + `apply_to`) — siehe `docs/plugins.md`. UI-Endpunkte:
@@ -196,7 +306,7 @@ liefert `slot_order`/`slot_labels`/`slot_anchors`/`silhouette_url` spezies-getri
 
 | Funktion | Semantik |
 |---|---|
-| `get_relationship(char_a, char_b) -> Optional[Dict]` | Beziehungsdaten zweier Charaktere (u.a. `strength`) |
+| `get_relationship(char_a, char_b, *, strict=False) -> Optional[Dict]` | Exact pair data; strict storage/decoding failures propagate, while a successful absent row remains `None` |
 | `record_interaction(char_a, char_b, …)` | Eine Interaktion verbuchen (Sentiment/Stärke) |
 | `get_address(speaker, addressee) -> str` | Anrede-Freitext DIESER Richtung des Paares (`""` wenn nichts gesetzt) |
 | `address_line(speaker, addressee) -> str` | Dieselbe Angabe als fertige Prompt-Zeile `Form of address: …` (`""` wenn nichts gesetzt) |
@@ -209,8 +319,8 @@ attraction-Paket (Provider `romantic_interests_help`, siehe „Hooks").
 
 ## Inventar — `app.models.inventory` ✅ (consume_item) / ⚠ (Rest)
 
-Vom **consume_item-Paket** genutzt und stabil: `resolve_item_id(token)` (Token→Item-ID),
-`get_item(item_id)`, `has_item(character_name, item_id)`,
+Used by the **consume_item package** and stable: `resolve_item_id(token, *, strict=False)` (token to item ID),
+`get_item(item_id, *, strict=False)`, `has_item(character_name, item_id, *, strict=False)`,
 `consume_item(character_name, item_id)` (Konsum-Pipeline: qty-Decrement + effects +
 apply_condition; liefert `{success, changes, condition_applied}`). `consume_item` ist
 Core-Vokabular — Routen rufen sie direkt, ohne Skill-Bezug.
@@ -321,7 +431,7 @@ separate task.
 
 | Funktion | Semantik |
 |---|---|
-| `list_locations()` / `get_location(identifier)` / `get_location_by_id(location_id)` | Alle Orte bzw. einer |
+| `list_locations(*, strict=False)` / `get_location(identifier)` / `get_location_by_id(location_id, *, strict=False)` | All locations or one location; strict readers propagate actual storage/decoding failures |
 | `list_locations_for_character(character_name)` | Nur die Orte, die dieser Charakter KENNT — dieselbe Quelle wie der Prompt-Block. Ein Verb, das einen Ortsnamen annimmt, prüft hiergegen und lehrt nie neues Wissen |
 | `get_location_rooms(location)` / `get_room_by_name(location, room_name)` / `get_room_name(...)` | Räume eines Ortes |
 | `get_entry_room_id(location)` / `get_arrival_room_id(location)` | Betret- bzw. Ankunftsraum |
@@ -343,7 +453,7 @@ placement; destination-bound shared trips always use timed cross-location travel
 | `start_journey(character_name, target_id, target_room="", target_pose="", journey_id="", execution_ref="") -> (journey \| None, reason)` | Start a timed journey to a named location. `target_room` / `target_pose` apply on arrival, subject to access checks. Optional `journey_id` / `execution_ref` link it to the owning execution. `reason`: `''` = started · `unknown_target` (missing or unknown to this character) · `unplaced_target` (not on the map) · `no_route` |
 | `start_journey_to_point(character_name, x, z) -> (journey \| None, reason)` | Reise zu einem freien Punkt. Setzt **kein** `movement_target`, nur die `journey` — Ankunfts-/Abbruchlogik muss beides abfragen |
 | `get_journey(character_name, profile=None)` | Die laufende Reise vom Profil (oder `None`) |
-| `journey_state(waypoints, started_at_game, now_game) -> Dict` | Reine Funktion: Position aus Polylinie + Startzeit + **Spieluhr**. Kein Zustand, kein Tick — deshalb sehen alle Clients dieselbe Position |
+| `journey_state(waypoints, started_at_game, now_game, offset_s=0.0) -> Dict` | Pure polyline position from start and game clock with an optional elapsed-time offset in seconds; no state/tick, so all clients derive the same position |
 | `cancel_journey(character_name, *, journey_id=None, execution_ref=None)` | Cancel travel; supplied ownership selectors must match the current journey |
 | `get_travel_speed_m_s() -> float` | Welt-Tempo (`game.travel_speed_m_s`, Default 1.4 m/s, geklemmt 0.1…20); beim Start auf die Reise geschrieben |
 | `app.models.character.list_active_journeys() -> List[Dict]` | EINE Query über alle reisenden Charaktere (`{name, journey, movement_target, current_location}`) — nie über alle Profile iterieren |
@@ -360,14 +470,15 @@ placement; destination-bound shared trips always use timed cross-location travel
 
 | Funktion | Semantik |
 |---|---|
-| `get_character_profile(character_name) -> Dict` | Profil inkl. Runtime-State (`character_state`) und Meta-Keys |
+| `get_character_profile(character_name, *, strict=False) -> Dict` | Profile with runtime state and metadata; strict storage/decoding failures propagate and missing required profile/state rows raise `LookupError` |
+| `get_character_config(character_name, *, profile=None, strict=False) -> Dict` | Reuse a held profile; strict mode never repairs/writes failed config reads. Valid empty config gets defaults in memory; malformed/null/non-object JSON or missing rows fail |
 | `save_character_profile(character_name, profile, create_new=False) -> bool` | Schreibt den GANZEN Blob. **Wirft nie** — `False` heißt: nichts gespeichert (reservierter/unbekannter Name oder fehlgeschlagener Write). Rückgabe prüfen. Bei Neuanlage `create_new=True` Pflicht — der Name muss dann die Namensregel erfüllen, sonst `False`. Nur unter `keyed_lock("character_profile", name)` (siehe „Sperren") |
 | `app.core.character_name.validate_character_name(name) -> str` | Die EINE Namensregel für NEUE Charaktere: Buchstaben jeder Schrift, Ziffern, einfache Leerzeichen, `-`, `'`, `.`, `_` (nicht am Anfang), 1–60 Zeichen. Gibt den NFC-normalisierten Namen zurück oder wirft `CharacterNameError` (Feld `code`). Gilt nur beim Anlegen/Import — bestehende Namen werden nie geprüft, nie umbenannt |
 | `save_character_current_location(character_name='', location='', …)` | ZENTRALE Bewegung — löst Entry-Room, Compliance, Party-Drag, Flag-Location-Resets, Discovery aus. Nie umgehen |
 | `get_character_current_location(character_name='', profile=None) -> str` / `get_character_current_room(character_name, profile=None) -> str` | Aufenthaltsort/-raum. Bei laufender Reise ist das die NÄCHSTE Position, nicht das Reiseziel; unterwegs im freien Gelände ist `current_location` leer |
 | `is_character_sleeping(character_name, profile=None) -> bool` | Schläft der Charakter? (nicht erreichbar) |
 | `is_temporary_npc(character_name) -> bool` | Temporärer NPC — hat keine Thought-Turns, `bump` lehnt ihn ab |
-| `list_available_characters(include_pooled=False) -> List[str]` | Alle bespielbaren Charakternamen (Ziel-Auflösung) |
+| `list_available_characters(include_pooled=False, *, strict=False) -> List[str]` | Available character names; strict mode propagates roster read failures |
 | `get_character_language(character_name) -> str` | Sprache des Charakters (für Texte, die er selbst schreibt) |
 | `get_character_dir(character_name, *, create=False) -> Path` | Per-Charakter-Storage-Verzeichnis — für Pakete mit eigenen Dateien (markdown_writer schreibt nach `<dir>/documents/<folder>/`) |
 | `get_character_skill_config(character_name, skill_name) -> Dict` / `save_character_skill_config(character_name, skill_name, config)` | Per-Charakter-Skill-Config. Normalerweise nicht direkt rufen — `BaseSkill._get_effective_config` liefert Defaults + Overrides typisiert |
@@ -381,6 +492,29 @@ und spart den zweiten DB-Zugriff: `get_character_current_location`,
 `get_character_profile_image`, `travel_engine.get_journey`,
 `interaction_engine.get_interaction`, `body_slots.slots_for_character`.
 
+### Optional strict reader leaves
+
+All strict flags below are keyword-only and default to `False`. Existing
+permissive callers, normal defaults and successful empty/absent data semantics
+remain unchanged; strict mode propagates actual read/decoding failures.
+
+| Module | Public calls |
+|---|---|
+| `app.models.character` | `app.models.character.get_character_pos(character_name="", *, strict=False)`, `app.models.character.get_character_daily_schedule(character_name, *, strict=False)` |
+| `app.models.secrets` | `app.models.secrets.list_secrets(character_name, *, strict=False)` |
+| `app.models.inventory` | `app.models.inventory.get_item(item_id, *, strict=False)`, `app.models.inventory.get_shared_item(item_id, *, strict=False)`, `app.models.inventory.resolve_item_id(token, *, strict=False)`, `app.models.inventory.has_item(character_name, item_id, *, strict=False)`, `app.models.inventory.get_room_items(location_id, room_id, *, strict=False)` |
+| `app.models.world` | `app.models.world.get_location_by_id(location_id, *, strict=False)`, `app.models.world.list_locations(*, strict=False)`, `app.models.world.get_world_setting(key, default="", *, strict=False)`, `app.models.world.is_world_frozen(*, strict=False)` |
+| `app.core.prompt_filters` | `app.core.prompt_filters.load_filters(*, strict=False)` |
+| `app.core.stat_boosts` | `app.core.stat_boosts.effective_stat(profile, key, *, strict=False)`, `app.core.stat_boosts.active_boosts(profile, *, now=None, strict=False)` |
+| `app.core.motion_item_cache` | `app.core.motion_item_cache.item_snapshot(*, strict=False)`, `app.core.motion_item_cache.passive_bonus_snapshot(*, strict=False)` |
+| `app.core.timeutils` | `app.core.timeutils.game_time(*, strict=False)`, `app.core.timeutils.game_time_exact(*, strict=False)` |
+
+A legitimate null map position is still absent, not a failed state query.
+Strict room inventory distinguishes an existing empty room from a missing
+location/room. Strict state/item/clock snapshots do not trust a cached
+permissive fallback as a successful read. Boost arithmetic and game-clock
+arithmetic are unchanged.
+
 **Beim Löschen eines Charakters** löst `delete_character` selbst: Party verlassen +
 Einladungen räumen, laufende Reise abbrechen, laufende Paar-Interaktion beenden +
 deren Einladungen räumen. Ein Paket, das eigenen Zustand an einem Charakternamen
@@ -393,7 +527,7 @@ hängt, räumt ihn über denselben Weg auf (Check:
 |---|---|
 | `app.core.perception.record_utterance(*, speaker, content, volume='normal', addressees=None, location_id=None, room_id=None, source='', …) -> Optional[int]` | Erzähler-/Sprechakt-Zeile in den Raum-Stream |
 | `app.core.perception.nearby_in_the_open(character_name, pos=None) -> List[str]` | Wer im Freien in Hörweite ist (Raum-Roster ∪ Radius) |
-| `app.core.room_entry.characters_in_room(location_id, room_id, exclude='') -> List[str]` | Wer gerade im selben Raum steht (Raum-ID ODER Raum-Name wird gematcht); leeres `room_id` heißt bewusst „die ganze Location", `exclude` lässt einen Namen weg |
+| `app.core.room_entry.characters_in_room(location_id, room_id, exclude="", *, strict=False, profiles=None) -> List[str]` | The existing room-ID/name membership algorithm; empty room means the whole location. Strict mode validates context and reuses a held name-to-profile mapping |
 | `app.core.agent_loop.get_agent_loop().bump(character_name, hint='', perception_template='', perception_vars=None, tool_whitelist=None) -> bool` ✅ | Charakter für einen zeitnahen Thought-Turn vormerken. `hint` ist die Zeile, die er dabei liest; `tool_whitelist` schränkt die angebotenen Verben ein. Liefert `False`, wenn er keinen Turn bekommen kann (z.B. temporärer NPC) |
 | `app.core.agent_loop.get_agent_loop().bump_respond(character_name, speaker, content, volume='normal', obligatory=True, hint='', winding_down=False, on_demand=False, request_id='') -> bool` | Queue a visible direct chat/tool answer independently of autonomous thoughts and HOT-chat gating. Explicit `on_demand=True` requests may answer during freeze, but not queue pause or world sleep. Optional opaque `request_id` correlates a `respond_finished` event when the turn completes, is cancelled, superseded or dropped; callers may request another unanswered question on their next regular check. Ordinary room reactions leave `on_demand=False`. |
 | `app.models.memory.add_memory(character_name, content, memory_type='semantic', importance=3, tags=None, context='', related_character='', …)` | Erinnerung anlegen |
@@ -406,6 +540,8 @@ hängt, räumt ihn über denselben Weg auf (Check:
 | `app.models.chat.save_message(message, character_name='', partner_name='') -> bool` | Eine Zeile in die Chat-History schreiben (Inbox-Modell: Sender als `assistant`, Empfänger als `user`). **Wirft nie** — `False` heißt: nicht gespeichert. Rückgabe prüfen, sonst verschwindet eine Nachricht lautlos |
 | `app.models.chat.get_chat_history(character_name='', partner_name='', limit=None, medium=None) -> List[Dict]` | History; `medium` filters the communication channel **before** deduplication and the last-N limit. Phone readers use `"messaging"`; omitted means all channels. |
 | `app.models.chat.get_messaging_partners(character_name, limit=10) -> List[str]` | Partners of the character's phone threads (`medium="messaging"`), most recently active first. Read each thread with `get_chat_history(..., medium="messaging")`. |
+| `app.models.chat.save_direct_message(sender, recipient, content, *, channel="web", metadata=None) -> str \| None` | Atomically save both phone-history mirrors and return their canonical `dm:<uuid>` ID; `None` means no delivered pair. Preserve metadata including image/game_ts, generate a missing game stamp and snapshot recipient avatar ownership |
+| `app.models.unified_chat.UnifiedChatManager.get_direct_message_event(event_id) -> dict \| None` | Resolve only two matching sender/recipient mirrors with the shared ID, content, channel, timestamp and metadata; never infer provenance from old history |
 | `app.core.pending_reports.add_report(reporter, initiator, initiator_type, target, trigger_type='talk_to_response', trigger_message_id='', ttl_hours=24) -> str` | Chain-of-Command-Follow-up anlegen |
 | `app.core.pending_reports.list_open(character_name)` / `mark_resolved(reporter, report_id) -> bool` | Offene Rückmeldungen lesen / schließen |
 | `app.models.notifications.create_notification(character, content, notification_type='message', metadata=None) -> str` | User-Notification anlegen |
@@ -413,6 +549,64 @@ hängt, räumt ihn über denselben Weg auf (Check:
 The phone and agent inbox consume only `medium="messaging"`. `talk_to` stores
 `"in_person"` and reaches room perception, never the phone. `notify_user`
 creates only a system notification; delivering a DM requires `send_message`.
+
+## Authoritative RP sources — `app.core.stat_sources`
+
+Normal room speech, TalkTo and DM integrations collect canonical sources
+automatically. Do not construct an attributed source from model prose, a model
+name, a tool argument naming someone, old history or a synthetic notification.
+An utterance source uses `room:<utterance_id>` and only persisted content-bearing
+perceptions, excluding contentless overhearing kinds. TalkTo uses that same
+room event, not another history-shadow event. A DM source requires its complete
+atomic mirror pair; old messages without a shared canonical ID are not replayed.
+
+`StatSource` is immutable: `event_id`, `actor`, `content`, `medium`, `order`,
+`game_ts`, `allowed_targets`, required `avatar_audience`, `avatar_targets`,
+`location_id`, `room_id`. `avatar_audience` freezes **every content-bearing
+avatar listener**, including unaddressed listeners; `avatar_targets` is only
+the directly addressed subset eligible for the sender's stat round.
+Changing the active avatar later never turns an old avatar-listener event
+into NPC-owned input. Room sources without a complete, valid persisted role
+snapshot are unavailable; the resolver does not reconstruct live roles.
+A DM's complete single-recipient role snapshot supplies both avatar sets.
+An originally non-avatar recipient evaluates new input in its own turn.
+The sender's shared round owns addressed avatar effects, not passive listeners.
+A private self source has no actor and may affect only its owning character; transmitted
+consequences must not be counted again as self effects.
+
+| Function / object | Semantics |
+|---|---|
+| `StatSourceCollector()` | Thread-safe event-ID deduplication, stable `self_event_id`, start/system and game stamps |
+| `app.core.stat_sources.StatSourceCollector.add(source)` / `app.core.stat_sources.StatSourceCollector.snapshot()` | Add a canonical source; snapshot is canonically ordered |
+| `bind_stat_sources(collector)` | Context manager binding a collector outside JSON tool arguments; restore the previous binding on exit |
+| `get_stat_source_collector() -> StatSourceCollector \| None` | Capture the current turn collector before starting deferred work |
+| `collect_stat_source(source)` | Add to the currently bound collector; `None` or an unbound collector is a no-op |
+| `source_from_utterance(utterance_id) -> StatSource \| None` | Read canonical utterance and delivered perceptions |
+| `source_from_dm(event_id) -> StatSource \| None` | Resolve the canonical mirrored DM |
+| `self_source(character, content, event_id, *, started_at=None, game_ts=None) -> StatSource` | Unattributed owner-only narrative source |
+| `extraction_context(character, sources, *, narrative, self_event_id=None, started_at=None, game_ts=None) -> StatExtractionContext` | Freeze delivered sources plus an optional new private narrative; `StatExtractionContext` has `sources`, `self_event_id`, `character` |
+| `source_only_context(character, collector) -> StatExtractionContext \| None` | Pending eligible outgoing avatar communication only; no private self source or unread-input-only trigger |
+| `stat_source_turn(function)` | Scope a collector to a synchronous or asynchronous turn |
+
+A speech-producing deferred worker must capture the collector, call
+`app.core.stat_sources.StatSourceCollector.start_source_work()` BEFORE spawning,
+explicitly rebind it with `bind_stat_sources`, and call
+`app.core.stat_sources.StatSourceCollector.finish_source_work(completion)` on success,
+failure or worker-start failure.
+`app.core.stat_sources.StatSourceCollector.wait_for_source_work()` runs outside
+collector/profile locks before extraction input is frozen. Do not inherit
+unrelated request context or serialize collectors into model/tool JSON.
+`ReplyReceipt(source)` carries the canonical publication result (possibly
+`None`) for reply/cascade handling.
+
+Supporting public reads are
+`app.models.perception_store.get_utterance_delivery(utterance_id)` and
+`app.core.agent_inbox.load_unread_stat_sources(character_name)`.
+The latter resolves genuine newly unread incoming DMs, not historic/context
+lines. Merely finding unread input, passive presence, an aura or a SKIP does
+not start another extraction round. A successful tool-only/silent turn may
+finish the ONE existing extraction phase for eligible delivered outgoing avatar
+sources; the old separate avatar wardrobe-only call is not a stat round.
 
 ## Party — `app.core.party_engine` ✅ (party-Paket)
 
@@ -466,7 +660,7 @@ by this invitation identity before the intent's start receipt is written.
 | `get_character_pose_key(character_name, profile=None)` / `get_character_pose_flavor(character_name)` | Gespeicherter Katalog-Key bzw. bereinigter Freitext |
 | `get_effective_pose_key(character_name, profile=None)` / `get_effective_activity(character_name, profile=None)` | Render-Key bzw. Anzeigetext, beide inkl. Schlaf-Override |
 | `app.core.pose_catalog.split_key_detail(text, axis='pose') -> (key, detail)` | Zerlegt eine `key: detail`-Eingabe |
-| `app.core.pose_catalog.resolve_to_catalog(text, axis, _embed=None) -> (key, detail)` | Freitext auf den Katalog abbilden (Embedding-Match mit Alias-Fallback) |
+| `app.core.pose_catalog.resolve_to_catalog(text, axis, _embed=None, *, set_id="") -> (key, detail)` | Map free text to the catalog (embedding match with alias fallback). `set_id` selects an expression set for `axis="expression"`; a nonempty set for pose matching raises `ValueError` |
 | `app.core.pose_catalog.pose_label(key, lang="en") -> str` | Returns the localized pose label (`label_<lang>`, then `label`), falling back to the stripped key. Lookup ignores key case; unknown keys and catalog failures never raise. |
 | `app.core.pose_catalog.PairPoseWithoutPartner` | Exception: eine Paar-Pose ohne Partner — das Verb muss sie abfangen und den Nutzer/Charakter auf das Einladungs-Verb verweisen |
 
@@ -586,7 +780,7 @@ autonomous thoughts or write character configuration.
 
 ## Act-Engine — `app.core.act_engine` ✅
 
-`perform_act(actor, text, scope) -> Dict` (async) = die komplette
+`perform_act(actor, text, scope, *, overflow=False) -> Dict` (async) = die komplette
 Storyteller-Pipeline (Szenen-Kontext, Storyteller-LLM, Event-Verdikt, Erzähler-Zeile
 in den Stream, Memories/Diary/Bumps). Konsumenten: das Act-VERB (`plugins/act`) und
 der Storyteller-Fallback in `routes/play.py`. Die Storyteller-Whitelist
@@ -658,11 +852,16 @@ Queue; das Verb antwortet dem LLM sofort, was es angestoßen hat.
 |---|---|
 | `register(event, fn, tag='')` | Paket abonniert ein Core-Event (idempotent pro `(event, tag)` — Reload-sicher). Typisch im `on_load`-Modul oder im Skill-`__init__` |
 | `emit(event, **kwargs) -> int` | Core feuert generisch; Fehler in Callbacks erreichen den Core-Pfad nie |
-| `register_provider(capability, fn)` | Ein Paket stellt die EINE Implementierung einer benannten Fähigkeit; der Core nennt nur den Capability-String (R1) |
-| `get_provider(capability) -> Optional[Callable]` | Core holt den Provider; `None` ⇒ neutraler Default |
+| `register_provider(capability, fn, *, owner=None)` | Replace the one named capability implementation; `owner` binds its lifetime to a package |
+| `unregister_owned_providers(owner) -> None` | Remove only providers still owned by this package; a replacement owned by someone else is retained |
+| `get_provider(capability) -> Optional[Callable]` | Look up the implementation; absence handling belongs to each capability contract |
 
-Es gibt **kein** `unregister` — der Weg zurück ist ein Reload (Registrierung
-idempotent halten).
+Event subscriptions have no `unregister`; keep their `(event, tag)`
+registration idempotent. Capability providers do support owner-bound removal.
+Register package providers with their package ID as owner; discovery/registry
+cleanup removes disappeared/disabled owners without clearing unrelated imported
+package runtime state. Pending configuration changes retain the existing
+activation/restart policy, not a new hot-toggle contract.
 
 Events, die der Core heute feuert:
 
@@ -692,6 +891,7 @@ Capabilities, die der Core heute abfragt:
 | `pair_verb_name` | `routes/play.py`, `plugins/set_pose` | `/play/interact/options` bietet nichts an, die Player-UI schlägt keine Paare vor |
 | `shared_activity_options`, `shared_activity_validate`, `shared_activity_request`, `shared_activity_status`, `shared_activity_cancel` | Structured intent continuation and exact pair ownership | No pair continuation; available options are empty. The action is only `{type:"pair", pose_key:"<exact available key>"}`. Request/status return `pending`, `approaching`, `running`, `declined` or `blocked` with `invite_id` and optional `interaction_id`/`reason`; status never starts anything. Initial unsubmitted requests alone may return `not_found`; missing questions without exact live pair provenance and accepted-but-not-live requests block, never replay. Exact provenance reports a running pair even before `accepted` or start hooks persist. Cancel's optional `interaction_id` restricts actual receipt/provenance ownership; it never grants ownership or ends another pair |
 | `romantic_compatibility` | `models/relationship.are_romantically_compatible` | immer kompatibel |
+| `romantic_attraction` | `stat_influence` invokes the registered callback with observer and subject names, returning a bool for that exact directed pair | Unavailable: attraction-dependent Influence rules do not match. This is NOT symmetric compatibility and does not inherit its default `True`. Only the observer's preferences/block list determine direction; subject profile/config supplies appearance |
 | `romantic_interests_help` | `/admin/settings` | der Hilfe-Button fehlt |
 | `intent_action_types`, `intent_action_validate`, `intent_action_change_validate`, `intent_action_managed`, `intent_completion_allowed` | Intent API, progress and completion | No executable action descriptors; ordinary intents remain available |
 | `npc_action_available`, `npc_action_context`, `npc_action_execute` | NPC background selection, prompt and typed action | Ordinary NPC behavior |
@@ -748,7 +948,7 @@ Block-Beitrag (`admin_settings._prompt_filter_block_keys`).
 | `app.core.llm_router.fallback_parent(task) -> Optional[str]` | Wohin ein nicht zugewiesener Task fällt — die EINE Stelle dieser Regel, nie nachbauen |
 | `app.core.prompt_templates.render_task(task, **vars) -> (system, user)` / `render(template_path, **vars) -> str` | Jinja-Templates; die Paket-Templates liegen im Suchpfad (`StrictUndefined` — ein fehlender Platzhalter kracht laut) |
 | `app.core.tool_formats.format_example(format_name, tool_name, example_input) -> str` | Tool-Nutzungs-Beispiel im aktiven Tool-Format |
-| `app.core.timeutils.game_time() -> GameTime` | Die **Spielzeit**. Alles, was die Spielwelt sieht, rechnet damit — nie `datetime.now()` in Spiel-Logik (`scripts/smoke_game_time_lint.py` erzwingt das) |
+| `app.core.timeutils.game_time(*, strict=False) -> GameTime` | GAME time for world logic, never `datetime.now()`; strict mode propagates persisted clock-read failures |
 | `app.core.timeutils.utc_now()` / `utc_now_iso()` / `parse_iso(s)` | SYSTEM-Zeit — nur technische Stempel (Persistenz, Reihenfolge, Cooldowns, Logs) |
 | `app.core.i18n.t(en, lang=None) -> str` | Übersetzbare Zeichenkette; die Quelle bleibt Englisch |
 | `PluginContext`: `ctx.get_config(path, default)`, `ctx.http`, `ctx.logger` | Welt-Config per Dot-Pfad (Beispiel `skills.markdown_writer.max_size_kb` seedet die Per-Character-`_defaults`), HTTP, Logging |
@@ -990,12 +1190,12 @@ so clients can use `me`. Existing diary read authorization remains in force.
 
 ## Effective stats (`app.core.stat_boosts`)
 
-- `active_boosts(profile, *, now=None)`
+- `active_boosts(profile, *, now=None, strict=False)`
   returns each stat's active condition contributions with `condition`, `label`,
   integer `amount`, and `remaining_hours`. Only enabled definitions attached to
   `active_conditions` contribute. Expression triggers never contribute boosts.
   Conditions expire strictly after their duration; an unreadable start remains active.
-- `effective_stat(profile, key)` returns the base plus
+- `effective_stat(profile, key, *, strict=False)` returns the base plus
   active boosts, floored at zero with no upper cap; missing stats return `None`.
 - `effective_stats(profile)` returns every base stat with
   `base`, summed `boost`, effective `value`, and the contribution list `boosts`.
@@ -1006,7 +1206,7 @@ stat writers and LLM stat adjustments continue to use the base values (0–100).
 
 ## Secrets — `app.models.secrets` ✅
 
-- `list_secrets(character_name)` → all stored secrets owned by a character.
+- `list_secrets(character_name, *, strict=False)` → all stored secrets owned by a character.
 - `get_secret(character_name, secret_id)` → secret dict or `None`.
 - `add_secret(character_name, content, category="personal", severity=2, related_characters=None, related_location=None, consequences_if_revealed="", source="manual", known_by=None, source_ref="")` → created secret dict.
 - `add_known_by(character_name, secret_id, knower_name, discovered=False)` → whether the secret exists; adds the knower and stamps first learning with `game_time().canonical()` in `known_at`. Repeated learning preserves that stamp.

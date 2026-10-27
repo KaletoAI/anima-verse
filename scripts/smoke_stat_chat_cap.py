@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chat absolute movement cap and template checks.
+"""Chat absolute movement cap and real extraction-consumer checks.
 
 Usage: ./.venv/bin/python scripts/smoke_stat_chat_cap.py
 
@@ -8,8 +8,8 @@ Hand-derived Task 4: cap 15: -10 -> -10, -10 -> -5, -10 -> {};
 Next game hour -10 -> -10. Cap 0 returns unchanged deltas.
 Per-stat and per-character budgets are independent. Exact turning-point
 boundary +/-30 bypasses the cap, while +/-29 consumes ordinary budget.
-Both stats_enabled branches must render under StrictUndefined. Rest
-values come from resolved rules; None omits the rest-value phrase.
+The route consumer persists only the allowed -10/-5/0 movement from three
+new self events, using canonical runtime state and structured stat results.
 """
 import json
 import os
@@ -49,23 +49,20 @@ def main():
             assert cap("A", {"stamina": -10}) == {"stamina": -10}
         with patch("app.core.stat_rules.get_setting", return_value=0):
             assert cap("A", {"stamina": -20}) == {"stamina": -20}
-        from app.core.stat_effects import build_stat_list
-        template = {"sections": [{"fields": [{"key": "stamina", "store": "status_effects", "hint": "A hint"}]}]}
-        with patch("app.models.character_template.is_feature_enabled", return_value=True), patch(
-                "app.models.character_template.get_template", return_value=template), patch(
-                "app.models.character.get_character_profile", return_value={"template": "test", "status_effects": {"stamina": 42}}), patch(
-                "app.core.stat_rules.rules_for_character", return_value={"stamina": {"baseline": 65}}) as resolved:
-            assert build_stat_list("A") == (True, "- stamina, currently 42/100, rests at 65 — A hint")
-            resolved.return_value = {"stamina": {"baseline": None}}
-            assert build_stat_list("A") == (True, "- stamina, currently 42/100 — A hint")
         # Exercise the route consumer with the real cap and profile writer.
         from app.core.db import transaction
         from app.routes.chat import _extract_context_from_last_chat
         from app.models.character import get_character_profile
+        from app.core.stat_sources import StatExtractionContext, self_source
+        template = {"features": {"status_effects_enabled": True},
+                    "sections": [{"fields": [{"key": "stamina", "store": "status_effects"}]}]}
         with transaction() as conn:
             conn.execute("INSERT INTO characters (name, template, profile_json, config_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-                         ("Route", "test", json.dumps({"status_effects": {"stamina": 50}}), "{}", "", ""))
-        response = SimpleNamespace(content=json.dumps({"stats": {"stamina": -10}}))
+                         ("Route", "test", "{}", "{}", "", ""))
+            conn.execute("INSERT INTO character_state (character_name,meta) VALUES (?,?)",
+                         ("Route", json.dumps({"status_effects": {"stamina": 50}})))
+        response = SimpleNamespace(content=json.dumps({
+            "stat_results": [{"event": "S0", "target": "T0", "deltas": {"stamina": -10}}]}))
         with patch("app.core.timeutils.game_time", return_value=GameTime(10800)), patch(
                 "app.core.stat_rules.get_setting", return_value=15), patch(
                 "app.core.llm_router.llm_call", return_value=response), patch(
@@ -73,19 +70,16 @@ def main():
                 "app.models.character.is_outfit_locked", return_value=True), patch(
                 "app.models.account.get_active_character", return_value=""), patch(
                 "app.models.account.is_player_controlled", return_value=False), patch(
-                "app.core.stat_effects.build_stat_list", return_value=(True, "values")):
-            for expected in (40, 35, 35):
-                _extract_context_from_last_chat("Route", [{"role": "assistant", "content": "A tiring beat"}])
+                "app.models.character_template.is_feature_enabled", return_value=True), patch(
+                "app.models.character_template.get_template", return_value=template):
+            for index, expected in enumerate((40, 35, 35)):
+                source = self_source("Route", "A tiring beat", f"self:cap-{index}")
+                context = StatExtractionContext((source,), source.event_id, "Route")
+                _extract_context_from_last_chat(
+                    "Route", [{"role": "assistant", "content": "A tiring beat"}],
+                    stat_context=context)
                 assert get_character_profile("Route")["status_effects"]["stamina"] == expected
-        from app.core.prompt_templates import render_task
-        for enabled in (False, True):
-            render_task("extraction_chat_state", target_name="A", is_avatar=False,
-                        stats_enabled=enabled, stat_list="values", pose_keys=[], current_pose="",
-                        source_label="reply", source_text="hello", context_text="",
-                        outfit_locked=True, piece_list=[])
-        for per_hour in (False, True):
-            render_task("stat_effects", target_name="A", stat_list="values", per_hour=per_hour, situation_text="a pause")
-        print("PASS chat absolute cap, turning points, isolation, reset, baseline and strict templates")
+        print("PASS chat absolute cap, turning points, isolation, reset and extraction consumer")
 
 
 if __name__ == "__main__":

@@ -196,13 +196,14 @@ def llm_slot_block(template_name: str) -> str:
 # Values (per character, in the profile — master data, not runtime state)
 # ---------------------------------------------------------------------------
 
-def slot_values(character_name: str) -> Dict[str, Dict[str, Any]]:
+def slot_values(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
     """Stored attribute values: ``{slot_id: {attr: value}}``."""
-    try:
-        from app.models.character import get_character_profile
-        profile = get_character_profile(character_name) or {}
-    except Exception:
-        return {}
+    if profile is None:
+        try:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+        except Exception:
+            return {}
     vals = profile.get("body_slots")
     return dict(vals) if isinstance(vals, dict) else {}
 
@@ -492,7 +493,7 @@ def exposed_slot_loras(character_name: str,
     return out
 
 
-def interest_alias_tables(character_name: str) -> List[Any]:
+def interest_alias_tables(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[Any]:
     """Attraction alias tables from the character's slot declarations.
 
     Each slot attribute may declare ``interest_aliases``
@@ -503,7 +504,7 @@ def interest_alias_tables(character_name: str) -> List[Any]:
     basics live in the human package, explicit slang in the NSFW pack —
     no alias table is hardcoded in core (R1)."""
     out: List[Any] = []
-    for spec in slots_for_character(character_name):
+    for spec in slots_for_character(character_name, profile=profile):
         for attr, decl in spec.attributes.items():
             aliases = decl.get("interest_aliases")
             if not isinstance(aliases, dict):
@@ -528,12 +529,16 @@ def interest_alias_tables(character_name: str) -> List[Any]:
     return out
 
 
-def slot_attr_values(character_name: str) -> Dict[str, str]:
+def slot_attr_values(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                     config: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     """Flat {"slot.attr": value} map of the character's stored slot values
     (lowercased) — the attraction engine's attribute source."""
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
     out: Dict[str, str] = {}
-    vals = slot_values(character_name)
-    for spec in slots_for_character(character_name):
+    vals = slot_values(character_name, profile=profile)
+    for spec in slots_for_character(character_name, profile=profile):
         for attr, decl in spec.attributes.items():
             if str(decl.get("type", "")) == "lora_select":
                 continue  # technical, never an attraction attribute
@@ -544,8 +549,8 @@ def slot_attr_values(character_name: str) -> Dict[str, str]:
     # build.height aliases match against) from the cm field. "" for a
     # non-humanoid or an unset height — no build.height entry, no match.
     from app.core.height import height_word
-    from app.models.character import get_character_profile
-    word = height_word(get_character_profile(character_name) or {}, character_name)
+    word = (height_word(profile, character_name, config=config) if config is not None
+            else height_word(profile, character_name))
     if word:
         out["build.height"] = word
     return out

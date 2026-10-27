@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
+import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { loadCharacters, loadLocations, type CharacterRef, type LocationRef } from '../../lib/refs'
 import { Field } from '@anima/player-ui'
@@ -10,8 +10,9 @@ import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
 import { ExportButton, ImportButton, PublishButton } from '../../components/ImportExport'
 import { roomLabel } from '../world/worldTypes'
+import { InfluenceRuleFields, type Influence, type PairCondition, type InfluenceValidation } from './InfluenceRuleFields'
 
-type RuleType = 'block' | 'force' | 'discover' | 'modify'
+type RuleType = 'block' | 'force' | 'discover' | 'modify' | 'influence'
 type TargetScope = 'location' | 'any_room' | 'danger_level' | 'skill'
 
 interface Quantity {
@@ -43,6 +44,9 @@ interface Rule {
   character?: string
   target?: RuleTarget
   modify?: { quantity: string; factor: number }
+  influence?: Influence
+  actor_condition?: string
+  pair_conditions?: PairCondition[]
   force_action?: ForceAction
   /** The field the server reads (`rules.check_discover_rules`), top-level. */
   probability?: number
@@ -73,6 +77,10 @@ interface DraftRule {
   modify_factor: number
   discover_probability: number
   condition: string
+  influence: Influence
+  actor_condition: string
+  pair_conditions: PairCondition[]
+  localized: Record<string, string>
   message: string
   origin: string
   isNew: boolean
@@ -96,6 +104,10 @@ const EMPTY_DRAFT: DraftRule = {
   modify_factor: 1,
   discover_probability: 0.05,
   condition: '',
+  influence: { actor: '', recipient: '', stat: '', direction: 'both', factor: 1 },
+  actor_condition: '',
+  pair_conditions: [],
+  localized: {},
   message: '',
   origin: '',
   isNew: true,
@@ -127,6 +139,11 @@ function ruleToDraft(r: Rule): DraftRule {
     // shape at runtime, and `draftToRule` writes the flat field back.
     discover_probability: r.probability ?? r.discover?.probability ?? 0.05,
     condition: r.condition || '',
+    influence: { ...(r.influence || EMPTY_DRAFT.influence) },
+    actor_condition: r.actor_condition || '',
+    pair_conditions: (r.pair_conditions || []).map(pair => ({ ...pair })),
+    localized: Object.fromEntries(Object.entries(r).filter(([key, value]) =>
+      /^(name|message)_[a-z]+$/.test(key) && typeof value === 'string')),
     message: r.message || '',
     origin: r._origin || 'world',
     isNew: false,
@@ -135,13 +152,14 @@ function ruleToDraft(r: Rule): DraftRule {
 
 function draftToRule(d: DraftRule): Rule {
   const r: Rule = {
+    ...d.localized,
     id: d.id || undefined,
     name: d.name.trim(),
     type: d.type,
     condition: d.condition.trim(),
     message: d.message.trim(),
   }
-  if (d.character.trim()) r.character = d.character.trim()
+  if (d.type !== 'influence' && d.character.trim()) r.character = d.character.trim()
 
   if (d.type === 'block') {
     const target: RuleTarget = { scope: d.target_scope, action: d.target_action }
@@ -168,6 +186,10 @@ function draftToRule(d: DraftRule): Rule {
     // too). The rule object is rebuilt from scratch here, so saving also
     // drops the dead nested `discover` key.
     r.probability = d.discover_probability
+  } else if (d.type === 'influence') {
+    r.influence = { ...d.influence }
+    r.actor_condition = d.actor_condition.trim()
+    r.pair_conditions = d.pair_conditions.map(pair => ({ ...pair }))
   }
   return r
 }
@@ -181,6 +203,7 @@ export function RulesTab() {
   const [skills, setSkills] = useState<{ id: string; name: string }[]>([])
   const [quantities, setQuantities] = useState<Quantity[]>([])
   const [characters, setCharacters] = useState<CharacterRef[]>([])
+  const [operationError, setOperationError] = useState('')
 
   const reload = useCallback(async () => {
     try {
@@ -208,10 +231,12 @@ export function RulesTab() {
   }, [rules])
 
   const newRule = useCallback(() => {
-    setDraft({ ...EMPTY_DRAFT })
+    setOperationError('')
+    setDraft({ ...EMPTY_DRAFT, influence: { ...EMPTY_DRAFT.influence }, pair_conditions: [], localized: {} })
   }, [])
 
   const editRule = useCallback((r: Rule) => {
+    setOperationError('')
     setDraft(ruleToDraft(r))
   }, [])
 
@@ -226,14 +251,27 @@ export function RulesTab() {
   }, [])
 
   const save = useCallback(async () => {
+    setOperationError('')
     if (!draft) return
     if (!draft.name.trim() || !draft.type) {
       toast(t('Name and type are required'), 'error')
       return
     }
+    if (draft.type === 'influence' && (!Number.isFinite(draft.influence.factor) || draft.influence.factor < 0.1 || draft.influence.factor > 5)) {
+      const message = t('Influence factor must be a finite number from 0.1 to 5.')
+      setOperationError(message)
+      toast(message, 'error')
+      return
+    }
     const ruleBody = draftToRule(draft)
     const target = draft.target_storage
     try {
+      if (draft.type === 'influence') {
+        const diagnostics = await apiPost<InfluenceValidation>('/rules/influence-validate', { rule: ruleBody })
+        if (diagnostics.errors.length) {
+          throw new Error(diagnostics.errors.map(issue => `${issue.path}: ${t(issue.message)}`).join('; '))
+        }
+      }
       let saved: Rule | undefined
       if (draft.isNew || !draft.id) {
         const r = await apiPost<{ rule?: Rule }>('/rules', { rule: ruleBody, target })
@@ -252,7 +290,9 @@ export function RulesTab() {
       // bouncing back to the empty placeholder.
       if (saved) setDraft(ruleToDraft(saved))
     } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      const message = e instanceof ApiError && typeof e.detail !== 'string' ? JSON.stringify(e.detail) || e.message : (e as Error).message
+      setOperationError(message)
+      toast(t('Error') + ': ' + message, 'error')
     }
   }, [draft, reload, t, toast])
 
@@ -296,24 +336,37 @@ export function RulesTab() {
   const move = useCallback(
     async (target: 'world' | 'shared') => {
       if (!draft || draft.isNew) return
-      const oldTarget = draft.target_storage
+      setOperationError('')
+      if (draft.type === 'influence' && (!Number.isFinite(draft.influence.factor) || draft.influence.factor < 0.1 || draft.influence.factor > 5)) {
+        setOperationError(t('Influence factor must be a finite number from 0.1 to 5.'))
+        return
+      }
+      const oldTarget = draft.origin === 'shared' ? 'shared' : 'world'
       const ruleBody = draftToRule({ ...draft, target_storage: target })
+      let destinationSaved = false
       try {
-        // Write to the new storage first…
-        await apiPut(`/rules/${encodeURIComponent(draft.id)}`, { rule: ruleBody, target })
+        // Upsert the complete rule under the same ID before removing its source.
+        await apiPost('/rules', { rule: ruleBody, target })
+        destinationSaved = true
         // …then drop the old-storage entry so the move is exclusive. If the
         // old entry was a world override of a shared rule, deleting the
         // world copy lets the shared baseline take over (move-to-shared
         // case); going world→shared then deletes the world override; going
         // shared→world keeps shared as baseline + adds the world override.
         if (target === 'shared' && oldTarget !== 'shared') {
-          await apiDelete(`/rules/${encodeURIComponent(draft.id)}?target=world`).catch(() => {})
+          await apiDelete(`/rules/${encodeURIComponent(draft.id)}?target=world`)
         }
         toast(target === 'shared' ? t('Moved to shared') : t('Moved to world'))
         await reload()
         setDraft(null)
       } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
+        const detail = e instanceof ApiError && typeof e.detail !== 'string' ? JSON.stringify(e.detail) || e.message : (e as Error).message
+        const message = destinationSaved
+          ? `${t('Target layer saved, but the source layer could not be removed. Both layers are retained.')}: ${detail}`
+          : detail
+        setOperationError(message)
+        await reload()
+        toast(t('Error') + ': ' + message, 'error')
       }
     },
     [draft, reload, t, toast],
@@ -403,6 +456,7 @@ export function RulesTab() {
                 )
               }
             />
+            {operationError ? <p className="ga-hint" role="alert">{operationError}</p> : null}
             <RuleForm
               draft={draft}
               quantities={quantities}
@@ -449,6 +503,7 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
   const { t } = useI18n()
   const selectedLocation = locations.find((l) => l.id === draft.target_location)
   const rooms = selectedLocation?.rooms || []
+  const influenceRule = useMemo(() => draftToRule(draft), [draft])
 
   return (
     <div className="ga-form">
@@ -464,6 +519,8 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
       <Field label={t('Name')}>
         <input
           className="ga-input"
+          name="rule-name"
+          aria-label={t('Name')}
           value={draft.name}
           placeholder={t('Rule name')}
           onChange={(e) => onUpdate('name', e.target.value)}
@@ -474,6 +531,8 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
         <Field label={t('Type')}>
           <select
             className="ga-input"
+            name="rule-type"
+            aria-label={t('Type')}
             value={draft.type}
             onChange={(e) => onUpdate('type', e.target.value as RuleType)}
           >
@@ -481,9 +540,10 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
             <option value="force">{t('Force')}</option>
             <option value="discover">{t('Discover')}</option>
             <option value="modify">{t('Modify')}</option>
+            <option value="influence">{t('Influence')}</option>
           </select>
         </Field>
-        <Field
+        {draft.type !== 'influence' ? <Field
           label={t('Character')}
           hint={t('Empty applies the rule to all characters.')}
         >
@@ -499,7 +559,7 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
               </option>
             ))}
           </select>
-        </Field>
+        </Field> : null}
       </div>
 
       <Field
@@ -508,6 +568,8 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
       >
         <select
           className="ga-input"
+          name="rule-storage"
+          aria-label={t('Storage')}
           value={draft.target_storage}
           onChange={(e) => onUpdate('target_storage', e.target.value as 'world' | 'shared')}
         >
@@ -515,6 +577,16 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
           <option value="shared">{t('Shared (all worlds)')}</option>
         </select>
       </Field>
+      {draft.type === 'influence' ? <InfluenceRuleFields
+        influence={draft.influence}
+        actorCondition={draft.actor_condition}
+        pairConditions={draft.pair_conditions}
+        characters={characters}
+        rule={influenceRule}
+        onInfluence={value => onUpdate('influence', value)}
+        onActorCondition={value => onUpdate('actor_condition', value)}
+        onPairConditions={value => onUpdate('pair_conditions', value)}
+      /> : null}
 
       {draft.type === 'modify' ? (
         <div className="ga-form-row">
@@ -674,9 +746,9 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
       ) : null}
 
       <Field
-        label={t('Condition')}
+        label={draft.type === 'influence' ? t('Recipient condition') : t('Condition')}
         help="condition"
-        hint={
+        hint={draft.type === 'influence' ? t('Evaluated against the recipient. Empty means always; all role and pair conditions must match.') :
           <>
             <strong>{t('Always')}</strong> always (hard block) · {' '}
             <strong>{t('Status')}</strong> stamina&gt;N, courage&lt;N, stress&gt;N, lust&gt;N · {' '}
@@ -694,6 +766,10 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
       >
         <input
           className="ga-input"
+          name="recipient-condition"
+          aria-label={draft.type === 'influence' ? t('Recipient condition') : t('Condition')}
+          autoComplete="off"
+          spellCheck={false}
           value={draft.condition}
           onChange={(e) => onUpdate('condition', e.target.value)}
           placeholder={t('e.g. has_item:item_a1b2c3d4 OR courage>50')}
@@ -703,6 +779,8 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
       <Field label={t('Message')}>
         <input
           className="ga-input"
+          name="rule-message"
+          aria-label={t('Message')}
           value={draft.message}
           onChange={(e) => onUpdate('message', e.target.value)}
           placeholder={t('e.g. You collapse from exhaustion')}

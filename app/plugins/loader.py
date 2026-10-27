@@ -546,6 +546,8 @@ def discover_packages(plugin_dir: Optional[Path] = None,
     registry.clear_registry()
     for pkg in _collect_packages(base, enabled_ids=_activation_enabled_ids):
         registry.register_package(pkg)
+    # Registration is renewed below; imported modules keep their live state.
+    # A skill/settings reload is not a new process or a hot source reload.
     for pkg in registry.packages():
         task_specs = pkg.manifest.get("llm_tasks") or {}
         if isinstance(task_specs, dict):
@@ -580,6 +582,8 @@ def discover_packages(plugin_dir: Optional[Path] = None,
         try:
             _run_on_load(pkg, rel)
         except Exception as e:
+            from app.core.hooks import unregister_owned_providers
+            unregister_owned_providers(pkg.id)
             logger.error("Package '%s' on_load '%s' failed: %s", pkg.id, rel, e)
 
     return registry.packages()

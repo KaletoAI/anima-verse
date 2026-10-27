@@ -206,12 +206,15 @@ def _apply(location_id: str, room_id: str, names: List[str],
     # ONE stamp for the whole exchange: the store orders by ts, then id, so
     # the ids keep the answer order and no line is dated into the future.
     stamp = utc_now_iso()
+    last_published = None
     for speaker, line in lines:
         others = [n for n in names if n != speaker]
-        record_utterance(speaker=speaker, content=line, volume="normal",
-                         addressees=others if len(names) == 2 else [],
-                         location_id=location_id, room_id=room_id,
-                         source="npc_scene", ts=stamp)
+        uid = record_utterance(speaker=speaker, content=line, volume="normal",
+                               addressees=others if len(names) == 2 else [],
+                               location_id=location_id, room_id=room_id,
+                               source="npc_scene", ts=stamp)
+        if uid is not None:
+            last_published = (speaker, line, uid)
     written = 0
     acts = answer.get("activities")
     if isinstance(acts, dict):
@@ -239,13 +242,16 @@ def _apply(location_id: str, room_id: str, names: List[str],
                             location_id, room_id, a, b, e)
     try:
         from app.core.agent_loop import get_agent_loop
-        last_speaker, last_line = lines[-1]
+        if last_published is None:
+            return {"lines": 0, "activities": written, "pair": paired}
+        last_speaker, last_line, last_uid = last_published
         loop = get_agent_loop()
         loop.reset_room_energy(location_id, room_id, last_speaker)
         loop.dispatch_room_reactions(speaker=last_speaker, content=last_line,
                                      volume="normal", location_id=location_id,
                                      room_id=room_id, addressees=[],
-                                     is_avatar=False, exclude=list(names))
+                                     is_avatar=False, exclude=list(names),
+                                     utterance_id=last_uid)
     except Exception as e:  # noqa: BLE001
         logger.warning("npc_scene(%s/%s): cascade failed: %s", location_id, room_id, e)
     logger.info("npc_scene(%s/%s): %d line(s) by %s", location_id, room_id,

@@ -454,6 +454,16 @@ def export_rule_to_zip(rule_id: str) -> bytes:
     rule = get_rule(rule_id)
     if not rule:
         raise ValueError(f"rule not found: {rule_id!r}")
+    return export_rule_snapshot_to_zip(rule)
+
+
+def export_rule_snapshot_to_zip(rule: Dict[str, Any]) -> bytes:
+    """Serialize exactly the server-resolved snapshot authorized by the caller.
+
+    No by-ID reload may occur between authorization and serialization. The
+    snapshot is a core argument, never an accepted HTTP request payload.
+    """
+    rule_id = rule["id"]
     if rule.get("_origin") == "shared":
         raise ValueError(
             f"rule {rule_id!r} is part of the shared baseline — shared rules "
@@ -490,53 +500,54 @@ def import_rule_from_zip(
     target: str = "auto",
     overwrite: bool = False,
 ) -> Dict[str, Any]:
-    """Import a single rule. `target` ∈ {'auto', 'world', 'shared'}."""
-    from app.models.rules import add_rule, delete_rule
+    """Import a validated rule, preserving old rows until the replacement commits.
+
+    Influence cannot overwrite an ID owned only by the other layer: that is a
+    deliberate layer move, not an atomic single-layer import.
+    """
+    from app.models.rules import (
+        add_rule, delete_rule, validate_rule_write, _load_shared_rules, _load_world_rules,
+    )
 
     try:
-        zf = zipfile.ZipFile(io.BytesIO(content))
-    except zipfile.BadZipFile as e:
-        raise ValueError(f"invalid ZIP: {e}")
-
-    manifest = _read_manifest(zf, "rule")
-    rows = json.loads(zf.read("db/rules.json"))
-    if not isinstance(rows, list) or len(rows) != 1:
-        raise ValueError("db/rules.json must contain exactly one rule")
-    rule = rows[0]
-    original_id = rule.get("id") or manifest.get("rule_id") or ""
-    if not original_id:
-        raise ValueError("rule id missing")
-
-    rule.pop("_origin", None)
-    rule.pop("_storage", None)
-
-    effective_target = target
-    if effective_target == "auto":
-        effective_target = manifest.get("scope") or "world"
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            manifest = _read_manifest(zf, "rule")
+            rows = json.loads(zf.read("db/rules.json"))
+    except (zipfile.BadZipFile, KeyError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError) as e:
+        raise ValueError(f"Invalid rule ZIP: {e}") from e
+    if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        raise ValueError("db/rules.json must contain exactly one rule object")
+    rule = {k: v for k, v in rows[0].items() if not k.startswith("_")}
+    if "id" not in rule:
+        rule["id"] = manifest.get("rule_id")
+    validate_rule_write(rule)
+    original_id = rule.get("id")
+    if not isinstance(original_id, str) or not original_id.strip():
+        raise ValueError("Rule ID must be a nonempty string")
+    effective_target = target if target != "auto" else manifest.get("scope", "world")
     if effective_target not in ("world", "shared"):
         effective_target = "world"
 
-    if original_id in _existing_rule_ids():
-        if not overwrite:
-            raise FileExistsError(
-                f"Rule '{original_id}' already exists. "
-                f"Re-import with overwrite=true to replace."
-            )
-        # add_rule does upsert-by-id within the same scope; for cross-scope
-        # overwrite we delete the existing entry first.
-        delete_rule(original_id, target_dir="")
-    zf.close()
+    layers = {"world": _load_world_rules(strict=True), "shared": _load_shared_rules(strict=True)}
+    entries = {layer: next((r for r in values if r.get("id") == original_id), None)
+               for layer, values in layers.items()}
+    exists = any(entry is not None for entry in entries.values())
+    other = "shared" if effective_target == "world" else "world"
+    cross_layer = entries[effective_target] is None and entries[other] is not None
+    if exists and not overwrite:
+        raise FileExistsError(
+            f"Rule '{original_id}' already exists. Re-import with overwrite=true to replace.")
+    if cross_layer and (rule.get("type") == "influence" or entries[other].get("type") == "influence"):
+        raise FileExistsError(
+            f"Rule '{original_id}' exists in the {other} layer. "
+            "Use the Rules editor layer move instead of cross-layer import overwrite.")
+    # Same-layer writes are a single transactional upsert, with no pre-delete.
     created = add_rule(rule, target_dir=effective_target)
-    logger.info(
-        "Rule import: %s (%s, overwrite=%s)",
-        original_id, effective_target, overwrite,
-    )
-    return {
-        "status": "success",
-        "rule_id": created.get("id"),
-        "scope": effective_target,
-        "overwritten": overwrite,
-    }
+    if cross_layer:
+        delete_rule(original_id, target_dir=other)
+    logger.info("Rule import: %s (%s, overwrite=%s)", original_id, effective_target, overwrite)
+    return {"status": "success", "rule_id": created["id"],
+            "scope": effective_target, "overwritten": exists and overwrite}
 
 
 # ---------------------------------------------------------------------------

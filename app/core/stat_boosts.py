@@ -3,11 +3,11 @@ from app.core.game_time import GameTime
 from app.core.timeutils import game_time
 
 
-def _item_boosts(profile: dict) -> dict[str, list[dict]]:
+def _item_boosts(profile: dict, *, strict: bool = False) -> dict[str, list[dict]]:
     """Use profile equipment and cached definitions; only carried mode reads inventory."""
     from app.core.motion_item_cache import passive_bonus_snapshot
     from app.models.inventory import get_carried_item_ids
-    definitions, carried_ids = passive_bonus_snapshot()
+    definitions, carried_ids = passive_bonus_snapshot(strict=strict)
     equipped = set(profile.get('equipped_items') or [])
     equipped.update((profile.get('equipped_pieces') or {}).values())
     eligible = {iid for iid in equipped if
@@ -27,20 +27,22 @@ def _item_boosts(profile: dict) -> dict[str, list[dict]]:
     return result
 
 
-def active_boosts(profile: dict, *, now: GameTime | None = None) -> dict[str, list[dict]]:
+def active_boosts(profile: dict, *, now: GameTime | None = None,
+                  strict: bool = False) -> dict[str, list[dict]]:
     """Collect passive item boosts and enabled, unexpired active conditions.
 
     Expiry matches condition cleanup: strictly beyond the duration expires;
     an unreadable start remains active. No expression-triggered state boosts.
     """
-    result = _item_boosts(profile)
+    result = _item_boosts(profile, strict=strict)
     conditions = profile.get('active_conditions') or []
     if not conditions:
         return result
     from app.core.prompt_filters import load_filters
-    definitions = {f['id'].strip().lower(): f for f in load_filters()
+    definitions = {f['id'].strip().lower(): f for f in load_filters(strict=strict)
                    if f.get('enabled', True)}
-    now = now if now is not None else game_time()
+    if now is None:
+        now = game_time(strict=True) if strict else game_time()
     for entry in conditions:
         if not isinstance(entry, dict):
             continue
@@ -67,12 +69,12 @@ def active_boosts(profile: dict, *, now: GameTime | None = None) -> dict[str, li
     return result
 
 
-def effective_stat(profile: dict, key: str) -> int | None:
+def effective_stat(profile: dict, key: str, *, strict: bool = False) -> int | None:
     """Return a stat's base plus active boosts, floored at zero, or None."""
     status = profile.get('status_effects') or {}
     if key not in status:
         return None
-    boosts = active_boosts(profile).get(key, [])
+    boosts = active_boosts(profile, strict=strict).get(key, [])
     return max(0, int(status[key]) + sum(b['amount'] for b in boosts))
 
 

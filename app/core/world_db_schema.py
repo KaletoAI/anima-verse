@@ -198,6 +198,13 @@ SCHEMA_STATEMENTS = [
     )""",
 
     # ── Chat history ──────────────────────────────────────────────────
+    """CREATE TABLE IF NOT EXISTS chat_stat_evaluations (
+        event_id     TEXT NOT NULL,
+        recipient    TEXT NOT NULL,
+        evaluated_at TEXT NOT NULL,
+        PRIMARY KEY(event_id, recipient)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_chat_stat_evaluations_recipient ON chat_stat_evaluations (recipient)",
     """CREATE TABLE IF NOT EXISTS chat_messages (
         id             INTEGER PRIMARY KEY AUTOINCREMENT,
         character_name TEXT NOT NULL,

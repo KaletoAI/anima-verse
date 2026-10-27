@@ -176,23 +176,24 @@ class TalkToSkill(PluginSkill):
         # synchronous reply.
         from app.models.chat import save_message
         ts = utc_now_iso()
-        # Volume travels in the message metadata; the perception shadow reads
-        # it so a whispered line stays private (content only for the addressee)
-        # and a shouted one carries location-wide.
+        # Store both history perspectives without shadowing the same speech
+        # act. Its explicit publication below supplies canonical delivery.
         _meta = {"volume": volume} if volume else {}
         try:
-            stored = [
-                save_message({
-                    "role": "user", "content": message, "timestamp": ts,
-                    "speaker": sender_name, "medium": "in_person",
-                    "metadata": _meta,
-                }, character_name=target_name, partner_name=sender_name),
-                save_message({
-                    "role": "assistant", "content": message, "timestamp": ts,
-                    "speaker": sender_name, "medium": "in_person",
-                    "metadata": _meta,
-                }, character_name=sender_name, partner_name=target_name),
-            ]
+            from app.core import perception_shadow
+            with perception_shadow.suppressed():
+                stored = [
+                    save_message({
+                        "role": "user", "content": message, "timestamp": ts,
+                        "speaker": sender_name, "medium": "in_person",
+                        "metadata": _meta,
+                    }, character_name=target_name, partner_name=sender_name),
+                    save_message({
+                        "role": "assistant", "content": message, "timestamp": ts,
+                        "speaker": sender_name, "medium": "in_person",
+                        "metadata": _meta,
+                    }, character_name=sender_name, partner_name=target_name),
+                ]
         except Exception as e:
             self.ctx.logger.error("TalkTo: chat-history save failed: %s", e)
             return f"Error saving message to {target_name}."
@@ -205,6 +206,12 @@ class TalkToSkill(PluginSkill):
                 "— the message was not delivered",
                 sender_name, target_name, stored.count(False))
             return f"Error saving message to {target_name}."
+        from app.core.perception import record_utterance
+        utterance_id = record_utterance(
+            speaker=sender_name, content=message, volume=volume or "normal",
+            addressees=[target_name], source="talk_to", ts=ts)
+        if utterance_id is None:
+            return f"Error publishing message to {target_name}."
 
         # The addressee OWES an answer: queue it into the respond lane, the
         # same path a room utterance with an addressee takes. A thought bump
@@ -214,7 +221,8 @@ class TalkToSkill(PluginSkill):
             from app.core.agent_loop import get_agent_loop
             if not get_agent_loop().bump_respond(
                     target_name, speaker=sender_name, content=message,
-                    volume=volume or "normal", obligatory=True, cascade=False):
+                    volume=volume or "normal", obligatory=True, cascade=False,
+                    utterance_id=utterance_id):
                 self.ctx.logger.info(
                     "TalkTo: %s cannot answer on its own (player-controlled)",
                     target_name)

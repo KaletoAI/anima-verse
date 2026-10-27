@@ -21,6 +21,7 @@ Public API:
         -> dict[sender_name, list[Message]]
 """
 from datetime import datetime
+import json
 
 from app.core.timeutils import utc_now_iso
 from typing import Dict, List
@@ -115,7 +116,7 @@ def load_unread_messages(character_name: str,
         for sender in senders:
             # Pull recent messages with this partner — both directions.
             rows = conn.execute("""
-                SELECT ts, role, content FROM chat_messages
+                SELECT id,ts,role,content,channel_message_id,metadata FROM chat_messages
                 WHERE character_name=? AND partner=?
                   AND CASE WHEN json_valid(metadata) THEN
                       json_extract(metadata, '$.medium') END='messaging'
@@ -124,11 +125,17 @@ def load_unread_messages(character_name: str,
             """, (character_name, sender, max_per_sender + context_messages + 4)).fetchall()
             # Reverse to oldest-first for natural reading order.
             msgs = []
-            for ts, role, content in reversed(rows):
+            for row_id, ts, role, content, channel_message_id, metadata_json in reversed(rows):
+                metadata = json.loads(metadata_json or "{}")
                 msgs.append({
                     "ts": ts,
                     "role": role,
                     "content": content,
+                    "id": row_id,
+                    "channel_message_id": channel_message_id,
+                    "speaker": metadata.get("speaker") or (sender if role == "user" else character_name),
+                    "medium": metadata.get("medium") or "",
+                    "metadata": metadata.get("metadata") or {},
                     "unread": bool(role == "user" and (not cutoff or ts > cutoff)),
                 })
             # Trim: take last (context_messages + max_per_sender) entries.
@@ -140,3 +147,20 @@ def load_unread_messages(character_name: str,
     except Exception as e:
         logger.error("load_unread_messages(%s) failed: %s", character_name, e)
         return {}
+
+
+def load_unread_stat_sources(character_name: str) -> tuple:
+    """Only newly identified incoming DMs may become influence sources."""
+    from app.core.stat_sources import source_from_dm
+
+    sources = {}
+    for sender, messages in load_unread_messages(character_name).items():
+        for message in messages:
+            message_id = message.get("channel_message_id")
+            if not message.get("unread") or message.get("role") != "user" or not message_id:
+                continue
+            source = source_from_dm(f"dm:{message_id}")
+            if (source is not None and source.actor == sender
+                    and character_name in source.allowed_targets):
+                sources.setdefault(source.event_id, source)
+    return tuple(sorted(sources.values(), key=lambda source: source.order))

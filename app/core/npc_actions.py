@@ -442,7 +442,7 @@ def _apply_talk(name: str, answer: Dict[str, Any],
             loop.dispatch_room_reactions(speaker=name, content=line,
                                          volume="normal", location_id=loc,
                                          room_id=room, addressees=[to],
-                                         is_avatar=False)
+                                         is_avatar=False, utterance_id=uid)
         except Exception as e:  # noqa: BLE001 — the line is recorded either way
             logger.warning("npc_action(%s): cascade failed: %s", name, e)
         logger.info("npc_action(%s): opens a conversation with %s", name, to)

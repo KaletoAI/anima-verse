@@ -1,9 +1,7 @@
-"""Character Secrets - Geheimnisse pro Character.
+"""Character secrets, stored in the selected world's world.db secrets table.
 
-Speichert Geheimnisse die ein Character hat oder ueber andere kennt.
-Werden in den System-Prompt injiziert (eigene Geheimnisse + bekanntes Wissen).
-
-Storage: world.db Tabelle `secrets` (pro Welt).
+Track a character's own secrets and what it knows about others.
+Prompt construction includes both owned secrets and known information.
 """
 import json
 import uuid
@@ -37,21 +35,23 @@ def is_record(secret: dict) -> bool:
     return secret.get("source") == "record"
 
 
-def _row_to_secret(row) -> Dict[str, Any]:
-    """Konvertiert eine DB-Zeile in ein Secret-Dict.
+def _row_to_secret(row, *, strict: bool = False) -> Dict[str, Any]:
+    """Convert a database row into a secret dictionary.
     Schema: (id INTEGER, character_name, content, visibility, meta)
     """
     meta = {}
     try:
         meta = json.loads(row[4] or "{}")
     except Exception:
+        if strict:
+            raise
         pass
     if not isinstance(meta, dict):
+        if strict:
+            raise ValueError("Secret metadata is not an object")
         meta = {}
-    # meta haelt normalerweise das komplette originale Secret-Dict. Bei
-    # importierten / aelteren Rows kann es Pflichtfelder fehlen — content und id
-    # leben dann nur in den Spalten. Immer aus den Spalten auffuellen, sonst
-    # liefert die API ein Secret ohne `content` (Frontend-Crash) bzw. ohne `id`.
+    # Metadata normally holds the complete original secret. Imported or older
+    # rows may keep required fields only in their columns, so fill them here.
     if not meta.get("content"):
         meta["content"] = row[2] or ""
     meta.setdefault("id", f"sec_{row[0]}")
@@ -62,7 +62,11 @@ def _row_to_secret(row) -> Dict[str, Any]:
         try:
             vis = json.loads(row[3] or "{}")
         except Exception:
+            if strict:
+                raise
             pass
+        if strict and not isinstance(vis, dict):
+            raise ValueError("Secret visibility is not an object")
         meta.setdefault("known_by", vis.get("known_by", []) if isinstance(vis, dict) else [])
         meta.setdefault("discovered_by", vis.get("discovered_by", []) if isinstance(vis, dict) else [])
     meta.setdefault("source_ref", "")
@@ -70,8 +74,8 @@ def _row_to_secret(row) -> Dict[str, Any]:
     return meta
 
 
-def _load_secrets(character_name: str) -> List[Dict[str, Any]]:
-    """Laedt alle Geheimnisse eines Characters aus der DB."""
+def _load_secrets(character_name: str, *, strict: bool = False) -> List[Dict[str, Any]]:
+    """Load a character's secrets; strict reads propagate storage/JSON errors."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -79,17 +83,19 @@ def _load_secrets(character_name: str) -> List[Dict[str, Any]]:
             "FROM secrets WHERE character_name=? ORDER BY id ASC",
             (character_name,),
         ).fetchall()
-        return [_row_to_secret(r) for r in rows]
+        return [_row_to_secret(r, strict=strict) for r in rows]
     except Exception as e:
+        if strict:
+            raise
         logger.error("_load_secrets DB-Fehler fuer %s: %s", character_name, e)
         return []
 
 
 def _save_secrets(character_name: str, secrets: List[Dict[str, Any]]):
-    """Speichert alle Geheimnisse eines Characters in die DB."""
+    """Save all of a character's secrets to the DB."""
     try:
         with transaction() as conn:
-            # Vorhandene Zeilen laden: db_id -> str_id
+            # Load existing rows as DB ID -> string ID.
             existing_rows = conn.execute(
                 "SELECT id, meta FROM secrets WHERE character_name=?",
                 (character_name,),
@@ -139,9 +145,9 @@ def _save_secrets(character_name: str, secrets: List[Dict[str, Any]]):
         logger.error("_save_secrets DB-Fehler fuer %s: %s", character_name, e)
 
 
-def list_secrets(character_name: str) -> List[Dict[str, Any]]:
-    """Listet alle Geheimnisse eines Characters."""
-    return _load_secrets(character_name)
+def list_secrets(character_name: str, *, strict: bool = False) -> List[Dict[str, Any]]:
+    """List a character's secrets, optionally propagating read errors."""
+    return _load_secrets(character_name, strict=strict)
 
 
 def get_secret(character_name: str, secret_id: str) -> Optional[Dict[str, Any]]:
@@ -279,14 +285,10 @@ def delete_secrets_by_ref(character_name: str, source_ref: str) -> int:
         return count
 
 
-# --- Secrets fuer andere Characters (was dieser Character ueber andere weiss) ---
+# Secrets about other characters that this observer knows.
 
 def get_known_secrets_about(observer_name: str) -> List[Dict[str, Any]]:
-    """Gibt alle Geheimnisse zurueck die observer_name ueber ANDERE Characters kennt.
-
-    Sucht in den Secrets aller Characters nach Eintraegen wo observer_name
-    in known_by steht.
-    """
+    """Return secrets about others whose known_by list contains this observer."""
     from app.models.character import list_available_characters
 
     known = []

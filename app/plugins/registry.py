@@ -370,6 +370,9 @@ def generation() -> int:
 
 def clear_registry() -> None:
     global _generation
+    from app.core.hooks import unregister_owned_providers
+    for package_id in _packages:
+        unregister_owned_providers(package_id)
     _packages.clear()
     _generation += 1
 
@@ -397,6 +400,8 @@ def register_package(pkg: Package) -> None:
 
 def unregister_package(package_id: str) -> None:
     global _generation
+    from app.core.hooks import unregister_owned_providers
+    unregister_owned_providers(package_id)
     _packages.pop(package_id, None)
     _generation += 1
 

@@ -213,35 +213,14 @@ class SendMessageSkill(PluginSkill):
         # reply — that is DM semantics (messaging, not a call). Waiting
         # synchronously would blow the outer thought timeout on nested
         # LLM-queue calls.
-        ts = utc_now_iso()
-
         try:
-            from app.models.chat import save_message
-            # Recipient history: sender as originator (role=user)
-            _stored = [
-                save_message({
-                    "role": "user", "content": message, "timestamp": ts,
-                    "speaker": sender_name, "medium": "messaging",
-                    "metadata": _msg_meta,
-                }, character_name=target_name, partner_name=sender_name),
-                # Sender history: sender as author (role=assistant)
-                save_message({
-                    "role": "assistant", "content": message, "timestamp": ts,
-                    "speaker": sender_name, "medium": "messaging",
-                    "metadata": _msg_meta,
-                }, character_name=sender_name, partner_name=target_name),
-            ]
+            from app.models.chat import save_direct_message
+            event_id = save_direct_message(
+                sender_name, target_name, message, metadata=_msg_meta)
         except Exception as e:
             self.ctx.logger.error("SendMessage: saving chat history failed: %s", e)
-            _stored = [False, False]
-        # The recipient's inbox IS the delivery — a lost write means the DM
-        # was never sent, so the tool result says so instead of promising a
-        # reply that can never come (DATA-13).
-        if not all(_stored):
-            self.ctx.logger.error(
-                "SendMessage: chat-history save for %s -> %s failed "
-                "(%d of 2 writes) — the message was not delivered",
-                sender_name, target_name, _stored.count(False))
+            event_id = None
+        if event_id is None:
             return (f"Error: the message to {target_name} could not be "
                     f"stored and was NOT delivered.")
 

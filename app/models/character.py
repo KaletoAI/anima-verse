@@ -97,6 +97,36 @@ def get_character_dir(character_name: str, *, create: bool = False) -> Path:
     return character_dir
 
 
+def insert_state_history_row(conn, character_name: str, change_type: str,
+                             value: str, *, ts: str, game_ts: str,
+                             metadata: dict | None = None) -> None:
+    """Insert one history row without committing, trimming or publishing."""
+    state_entry = {"timestamp": ts, "type": change_type, "value": value}
+    if metadata:
+        state_entry["metadata"] = metadata
+    conn.execute("""
+        INSERT INTO state_history (character_name, ts, game_ts, state_json)
+        VALUES (?, ?, ?, ?)
+    """, (character_name, ts, game_ts,
+          json.dumps(state_entry, ensure_ascii=False)))
+
+
+def trim_state_history_rows(conn, character_name: str) -> None:
+    """Keep the latest 200 history rows; the caller owns the transaction."""
+    total = conn.execute(
+        "SELECT COUNT(*) FROM state_history WHERE character_name=?",
+        (character_name,),
+    ).fetchone()[0]
+    if total > 200:
+        conn.execute("""
+            DELETE FROM state_history WHERE id IN (
+                SELECT id FROM state_history
+                WHERE character_name=?
+                ORDER BY ts ASC, id ASC LIMIT ?
+            )
+        """, (character_name, total - 200))
+
+
 def record_state_change(character_name: str, change_type: str, value: str,
                         metadata: dict = None) -> bool:
     """Append a state change (location/activity) to state_history DB table.
@@ -118,20 +148,12 @@ def record_state_change(character_name: str, change_type: str, value: str,
     """
     ts = utc_now_iso()
     game_ts = game_time().canonical()
-    state_entry = {
-        "timestamp": ts,
-        "type": change_type,
-        "value": value,
-    }
-    if metadata:
-        state_entry["metadata"] = metadata
+    # Share only the non-committing row leaf with atomic event evaluations.
     try:
         with transaction() as conn:
-            conn.execute("""
-                INSERT INTO state_history (character_name, ts, game_ts, state_json)
-                VALUES (?, ?, ?, ?)
-            """, (character_name, ts, game_ts,
-                  json.dumps(state_entry, ensure_ascii=False)))
+            insert_state_history_row(
+                conn, character_name, change_type, value, ts=ts,
+                game_ts=game_ts, metadata=metadata)
     except Exception as e:
         logger.error("record_state_change DB error for %s (%s): %s",
                      character_name, change_type, e, exc_info=True)
@@ -143,21 +165,8 @@ def record_state_change(character_name: str, change_type: str, value: str,
     # Trim: max 200 entries per character. Housekeeping only — a failure here
     # leaves the entry written, so it must not turn into a False.
     try:
-        conn = get_connection()
-        total = conn.execute(
-            "SELECT COUNT(*) FROM state_history WHERE character_name=?",
-            (character_name,),
-        ).fetchone()[0]
-        if total > 200:
-            excess = total - 200
-            conn.execute("""
-                DELETE FROM state_history WHERE id IN (
-                    SELECT id FROM state_history
-                    WHERE character_name=?
-                    ORDER BY ts ASC LIMIT ?
-                )
-            """, (character_name, excess))
-            conn.commit()
+        with transaction() as conn:
+            trim_state_history_rows(conn, character_name)
     except Exception as e:
         logger.warning("record_state_change trim failed for %s: %s",
                        character_name, e)
@@ -314,7 +323,7 @@ def _read_scheduler_job_ids(conn, character_name: str) -> List[str]:
         (character_name,)).fetchall()]
 
 
-def _load_character_state(character_name: str) -> Dict[str, Any]:
+def _load_character_state(character_name: str, *, strict: bool = False) -> Dict[str, Any]:
     """Load character_state columns (current_*, *_changed_at, pose_*, is_*) and meta keys."""
     result: Dict[str, Any] = {k: "" for k in _STATE_COLS}
     for k in _STATE_META_KEYS:
@@ -329,6 +338,8 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
             "FROM character_state WHERE character_name=?",
             (character_name,),
         ).fetchone()
+        if strict and row is None:
+            raise LookupError(f"Character state not found: {character_name}")
         if row:
             result.update({
                 "current_location": row[0] or "",
@@ -346,18 +357,24 @@ def _load_character_state(character_name: str) -> Dict[str, Any]:
             })
             try:
                 meta = json.loads(row[6] or "{}")
+                if strict and not isinstance(meta, dict):
+                    raise ValueError(f"Character state metadata is not an object: {character_name}")
             except Exception:
+                if strict:
+                    raise
                 meta = {}
             for k in _STATE_META_KEYS:
                 if k in meta:
                     result[k] = meta[k]
     except Exception:
+        if strict:
+            raise
         pass
     # Remove None placeholders so profile.get(k) reports missing keys.
     return {k: v for k, v in result.items() if v is not None}
 
 
-def get_character_profile(character_name: str) -> Dict[str, Any]:
+def get_character_profile(character_name: str, *, strict: bool = False) -> Dict[str, Any]:
     """Load a character profile from the DB.
 
     Runtime state (current_location/room/activity/feeling + *_changed_at)
@@ -371,6 +388,9 @@ def get_character_profile(character_name: str) -> Dict[str, Any]:
     turned a DB error into "a character without a personality" instead of a
     visible failure. A DB error is logged at ERROR with its traceback; an
     unknown character yields the empty default profile the callers expect.
+
+    ``strict=True`` propagates storage/decoding errors and missing rows instead
+    of returning a replacement profile. Existing callers retain their defaults.
     """
     try:
         conn = get_connection()
@@ -380,15 +400,21 @@ def get_character_profile(character_name: str) -> Dict[str, Any]:
         ).fetchone()
         if row:
             profile = json.loads(row[0] or "{}")
+            if strict and not isinstance(profile, dict):
+                raise ValueError(f"Character profile is not an object: {character_name}")
             profile.setdefault("character_name", character_name)
-            profile.update(_load_character_state(character_name))
+            profile.update(_load_character_state(character_name, strict=strict))
             # Inject per-character configuration from config_json for consumers.
             try:
                 cfg = json.loads(row[1] or "{}")
+                if strict and not isinstance(cfg, dict):
+                    raise ValueError(f"Character config is not an object: {character_name}")
                 for k in _CONFIG_KEYS_IN_PROFILE:
                     if k in cfg and k not in profile:
                         profile[k] = cfg[k]
             except Exception:
+                if strict:
+                    raise
                 pass
             # Inject the template name from its column: is_feature_enabled()
             # reads profile["template"] to resolve feature defaults. Without
@@ -396,12 +422,16 @@ def get_character_profile(character_name: str) -> Dict[str, Any]:
             tmpl_name = (row[2] or "").strip()
             if tmpl_name and "template" not in profile:
                 profile["template"] = tmpl_name
-            _inject_soul_md_values(character_name, profile)
+            _inject_soul_md_values(character_name, profile, strict=strict)
             return profile
     except Exception as e:
+        if strict:
+            raise
         logger.error("get_character_profile DB error for %s: %s",
                      character_name, e, exc_info=True)
 
+    if strict:
+        raise LookupError(f"Character not found: {character_name}")
     return {
         "character_name": character_name,
         "character_personality": "",
@@ -410,7 +440,8 @@ def get_character_profile(character_name: str) -> Dict[str, Any]:
     }
 
 
-def _inject_soul_md_values(character_name: str, profile: Dict[str, Any]) -> None:
+def _inject_soul_md_values(character_name: str, profile: Dict[str, Any], *,
+                           strict: bool = False) -> None:
     """Inject the values of the soul/*.md files into the profile dict.
 
     ``source_file`` fields are stripped from profile_json on save (the MD file
@@ -446,6 +477,8 @@ def _inject_soul_md_values(character_name: str, profile: Dict[str, Any]) -> None
                 # were a personality.
                 profile[key] = load_source_file(character_name, source_file)
     except Exception as e:
+        if strict:
+            raise
         logger.debug("_inject_soul_md_values fuer %s: %s", character_name, e)
 
 
@@ -1003,6 +1036,8 @@ def delete_character(character_name: str) -> bool:
                     conn.execute("DELETE FROM llm_call_stats WHERE agent_name=?", (character_name,))
                 if conn.execute("SELECT 1 FROM sqlite_master WHERE name='chat_messages'").fetchone():
                     conn.execute("DELETE FROM chat_messages WHERE partner=?", (character_name,))
+                if conn.execute("SELECT 1 FROM sqlite_master WHERE name='chat_stat_evaluations'").fetchone():
+                    conn.execute("DELETE FROM chat_stat_evaluations WHERE recipient=?", (character_name,))
                 # Tables that reference a character through OTHER columns than
                 # character_name — column names read off world_db_schema.py:
                 # parties(party_id, leader, members), party_invites(inviter,
@@ -1077,7 +1112,8 @@ def _get_character_defaults() -> Dict[str, Any]:
     }
 
 
-def get_character_config(character_name: str, *, profile=None) -> Dict[str, Any]:
+def get_character_config(character_name: str, *, profile=None,
+                         strict: bool = False) -> Dict[str, Any]:
     """Return per-character configuration (LLM, Vision, TTS, etc.).
 
     The profile's 'language' field is injected as 'tts_language' so the
@@ -1087,6 +1123,8 @@ def get_character_config(character_name: str, *, profile=None) -> Dict[str, Any]
     written ``character_config.json`` since the migration — the reader only
     masked DB errors, which then looked like "this character has no config"
     and silently produced the defaults.
+
+    Strict reads propagate storage/decoding failures and never auto-create config.
     """
     if not character_name:
         return {}
@@ -1105,7 +1143,16 @@ def get_character_config(character_name: str, *, profile=None) -> Dict[str, Any]
         row = _read_config_json_row(get_connection(), character_name)
         if row and row[0] and row[0] != "{}":
             config = json.loads(row[0])
+        if strict:
+            if row is None:
+                raise LookupError(f"Character config not found: {character_name}")
+            if row[0] and row[0] != "{}" and not isinstance(config, dict):
+                raise ValueError(f"Character config is not an object: {character_name}")
+            if config is None:
+                config = _get_character_defaults()
     except Exception as e:
+        if strict:
+            raise
         logger.error("get_character_config DB error for %s: %s",
                      character_name, e, exc_info=True)
 
@@ -1145,8 +1192,15 @@ def get_character_config(character_name: str, *, profile=None) -> Dict[str, Any]
     # this function sits on hot loops — the travel ticker asks it per
     # character per tick through ``get_known_locations``.
     try:
-        _prof = profile if profile is not None else (get_character_profile(character_name) or {})
+        if profile is not None:
+            _prof = profile
+        elif strict:
+            _prof = get_character_profile(character_name, strict=True)
+        else:
+            _prof = get_character_profile(character_name) or {}
     except Exception:
+        if strict:
+            raise
         _prof = {}
 
     # Inject the profile language as tts_language (profile takes precedence).
@@ -1741,7 +1795,7 @@ def save_character_current_location(character_name: str = "", location: str = ""
         _drag_party_followers_to_location(character_name, location)
 
 
-def get_character_pos(character_name: str = "") -> Optional[Dict[str, float]]:
+def get_character_pos(character_name: str = "", *, strict: bool = False) -> Optional[Dict[str, float]]:
     """Free metre position of a character — ``{"x": ..., "z": ...}`` or None.
 
     None means the character has no point on the map: never positioned, or
@@ -1755,8 +1809,12 @@ def get_character_pos(character_name: str = "") -> Optional[Dict[str, float]]:
             "SELECT pos_x, pos_z FROM character_state WHERE character_name=?",
             (character_name,)).fetchone()
     except Exception as e:
+        if strict:
+            raise
         logger.error("get_character_pos DB error for %s: %s", character_name, e)
         return None
+    if strict and row is None:
+        raise LookupError(f"Character state not found: {character_name}")
     if not row or row[0] is None or row[1] is None:
         return None
     return {"x": float(row[0]), "z": float(row[1])}
@@ -3328,7 +3386,7 @@ def character_exists(name: str) -> bool:
         return False
 
 
-def list_available_characters(include_pooled: bool = False) -> List[str]:
+def list_available_characters(include_pooled: bool = False, *, strict: bool = False) -> List[str]:
     """List available characters from the DB.
 
     Filtering:
@@ -3355,6 +3413,8 @@ def list_available_characters(include_pooled: bool = False) -> List[str]:
             "SELECT name, COALESCE(status,'') FROM characters ORDER BY name ASC"
         ).fetchall()
     except Exception as e:
+        if strict:
+            raise
         logger.error("list_available_characters DB error: %s", e, exc_info=True)
         return []
     return [r[0] for r in rows if _is_real_character(r[0])
@@ -3974,7 +4034,7 @@ def _normalize_schedule_slots(raw_slots: Any) -> List[Dict[str, Any]]:
     return out
 
 
-def get_character_daily_schedule(character_name: str) -> Dict[str, Any]:
+def get_character_daily_schedule(character_name: str, *, strict: bool = False) -> Dict[str, Any]:
     """Load a character's daily schedule from the DB."""
     schedule: Dict[str, Any] = {"enabled": False, "slots": []}
     try:
@@ -3987,15 +4047,25 @@ def get_character_daily_schedule(character_name: str) -> Dict[str, Any]:
             meta = {}
             try:
                 meta = json.loads(row[2] or "{}")
+                if strict and not isinstance(meta, dict):
+                    raise ValueError(f"Schedule metadata is not an object: {character_name}")
             except Exception:
+                if strict:
+                    raise
                 pass
             schedule = meta if isinstance(meta, dict) and "slots" in meta else {"character": character_name}
             schedule["enabled"] = bool(row[0])
             try:
                 schedule["slots"] = json.loads(row[1] or "[]")
+                if strict and not isinstance(schedule["slots"], list):
+                    raise ValueError(f"Schedule slots are not a list: {character_name}")
             except Exception:
+                if strict:
+                    raise
                 schedule["slots"] = []
     except Exception as e:
+        if strict:
+            raise
         get_logger("character").warning("get_character_daily_schedule DB-Fehler fuer %s: %s", character_name, e)
         # Fallback: JSON file predating the DB migration.
         path = get_character_scheduler_dir(character_name) / "daily_schedule.json"

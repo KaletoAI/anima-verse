@@ -4,6 +4,8 @@ Conditions use the activity expression syntax. Rules are stored in world.db
 with a shared baseline from shared/rules/rules.json."""
 import json
 import uuid
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,6 +15,56 @@ from app.core.i18n import localized
 
 logger = get_logger("rules")
 
+
+class RuleValidationError(ValueError):
+    """A rule write failed full-record validation before changing its layer."""
+
+    def __init__(self, errors: list[dict]):
+        self.errors = errors
+        super().__init__("; ".join(f"{e['path']}: {e['message']}" for e in errors))
+
+
+class RuleWriteError(RuntimeError):
+    """The requested rule layer could not be persisted."""
+
+
+def validate_rule_write(rule: dict) -> None:
+    """Enforce Influence shape without changing existing ordinary rule shapes."""
+    from app.core.stat_influence import validate_influence_rule
+    if not isinstance(rule, dict):
+        raise RuleValidationError([{"path": "rule", "code": "shape", "message": "Rule must be an object."}])
+    if rule.get("type") == "influence":
+        errors = validate_influence_rule(rule)
+    else:
+        errors = [{"path": key, "code": "conflicting_field",
+                   "message": f"{key} is only allowed on influence rules."}
+                  for key in ("influence", "actor_condition", "pair_conditions") if key in rule]
+    if errors:
+        raise RuleValidationError(errors)
+
+
+def _validate_layer(rules: List[Dict[str, Any]]) -> None:
+    """Validate every incoming row before any replacement can remove old rows."""
+    for rule in rules:
+        validate_rule_write(rule)
+
+
+def _merge_rule(rule: dict, updates: dict) -> dict:
+    """Remove inherited subtype fields, but reject newly supplied mixed shapes."""
+    result = dict(rule)
+    if updates.get("type", rule.get("type")) != rule.get("type"):
+        obsolete = set()
+        if rule.get("type") == "influence":
+            obsolete.update(("influence", "actor_condition", "pair_conditions"))
+        if updates.get("type") == "influence":
+            obsolete.update(("character", "target", "modify", "force_action", "action"))
+        for key in obsolete - updates.keys():
+            result.pop(key, None)
+    result.update({k: v for k, v in updates.items() if k != "id" and not k.startswith("_")})
+    if rule.get("type") == result.get("type") == "influence" and isinstance(updates.get("influence"), dict):
+        result["influence"] = {**rule.get("influence", {}), **updates["influence"]}
+    validate_rule_write(result)
+    return result
 
 def _user_lang() -> str:
     """Active user's UI language for rule-message localization.
@@ -32,36 +84,51 @@ def _get_shared_rules_path() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "shared" / "rules" / "rules.json"
 
 
-def _load_shared_rules() -> List[Dict[str, Any]]:
-    """Read shared rules, returning an empty list for missing or invalid data."""
+def _load_shared_rules(*, strict: bool = False) -> List[Dict[str, Any]]:
+    """Read shared rules; writers must not treat read failure as an empty layer."""
     path = _get_shared_rules_path()
     if not path.exists():
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
+        if strict and (not isinstance(data, dict) or not isinstance(data.get("rules"), list)):
+            raise ValueError("Shared rules must contain a rules array.")
         rules = data.get("rules", []) if isinstance(data, dict) else []
         # Origin marker lets the UI distinguish shared and world entries.
         for r in rules:
+            if strict and (not isinstance(r, dict) or not isinstance(r.get("id"), str) or not r["id"].strip()):
+                raise ValueError("Shared rule must be an object with a nonempty string ID.")
             r["_origin"] = "shared"
         return rules
     except Exception as e:
         logger.warning("shared/rules/rules.json laden fehlgeschlagen: %s", e)
+        if strict:
+            raise RuleWriteError("Could not read shared rules.") from e
         return []
 
 
 def _save_shared_rules(rules: List[Dict[str, Any]]):
-    """Write the shared baseline without origin markers."""
-    old_rules = _load_shared_rules()
+    """Atomically write the validated shared baseline without origin markers."""
+    _validate_layer(rules)
+    old_rules = _load_shared_rules(strict=True)
     path = _get_shared_rules_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     clean = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rules]
-    path.write_text(json.dumps({"rules": clean}, ensure_ascii=False, indent=2),
-                    encoding="utf-8")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                         dir=path.parent, delete=False) as handle:
+            temporary = handle.name
+            json.dump({"rules": clean}, handle, ensure_ascii=False, indent=2)
+        os.replace(temporary, path)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
     _rules_changed(old_rules, clean)
 
 
-def _load_world_rules() -> List[Dict[str, Any]]:
-    """Read world-specific rules from the database."""
+def _load_world_rules(*, strict: bool = False) -> List[Dict[str, Any]]:
+    """Read world rules; writers must not treat read failure as an empty layer."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -73,8 +140,13 @@ def _load_world_rules() -> List[Dict[str, Any]]:
             try:
                 meta = json.loads(r[3] or "{}")
             except Exception:
-                pass
+                if strict:
+                    raise
+            if strict and not isinstance(meta, dict):
+                raise ValueError(f"Rule metadata is not an object: {r[0]}")
             meta.setdefault("id", r[0])
+            if strict and (not isinstance(meta["id"], str) or not meta["id"].strip()):
+                raise ValueError(f"Rule ID must be a nonempty string: {r[0]}")
             if r[1] and not (meta.get("name") or meta.get("message")):
                 meta["message"] = r[1]
             if r[2] and not meta.get("type"):
@@ -84,6 +156,8 @@ def _load_world_rules() -> List[Dict[str, Any]]:
         return rules
     except Exception as e:
         logger.warning("_load_world_rules DB-Fehler: %s", e)
+        if strict:
+            raise RuleWriteError("Could not read world rules.") from e
         return []
 
 
@@ -98,12 +172,14 @@ def _normalize_modifiers(rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rules
 
 
-def load_rules() -> List[Dict[str, Any]]:
+def load_rules(*, strict: bool = False) -> List[Dict[str, Any]]:
     """Merge the shared baseline with the world overlay by ID.
 
-    Each entry carries an _origin: shared, world, or world override."""
-    shared = _load_shared_rules()
-    world = _load_world_rules()
+    Each entry carries an _origin: shared, world, or world override. Strict
+    snapshots propagate either layer's read/shape errors instead of falling back
+    to a potentially stronger rule from the other layer."""
+    shared = _load_shared_rules(strict=True) if strict else _load_shared_rules()
+    world = _load_world_rules(strict=True) if strict else _load_world_rules()
     if not world:
         return _normalize_modifiers(shared)
     if not shared:
@@ -131,13 +207,15 @@ def save_rules(rules: List[Dict[str, Any]], target_dir: str = "world"):
     ``target_dir="world"`` replaces the world layer, deleting absent IDs.
     ``target_dir="shared"`` replaces shared/rules/rules.json for all worlds.
     """
+    _validate_layer(rules)
     rules = _normalize_modifiers(rules)
     if target_dir == "shared":
         try:
             _save_shared_rules(rules)
             logger.info("Shared-Rules gespeichert: %d Eintraege", len(rules))
         except Exception as e:
-            logger.error("save_rules shared-Fehler: %s", e)
+            logger.error("save_rules shared error: %s", e)
+            raise RuleWriteError("Could not save shared rules.") from e
         return
 
     # Upsert world rules and remove absent IDs.
@@ -179,8 +257,8 @@ def save_rules(rules: List[Dict[str, Any]], target_dir: str = "world"):
                         meta=excluded.meta
                 """, (rid, text, category, meta_str))
     except Exception as e:
-        logger.error("save_rules DB-Fehler: %s", e)
-        return
+        logger.error("save_rules database error: %s", e)
+        raise RuleWriteError("Could not save world rules.") from e
     _rules_changed(old_rules, rules)
 
 
@@ -229,18 +307,19 @@ def add_rule(rule: Dict[str, Any], target_dir: str = "world") -> Dict[str, Any]:
     """Upsert a rule by ID into the world or shared layer.
 
     Moving a rule requires deleting its old layer and posting to the new one."""
+    validate_rule_write(rule)
     _normalize_modifiers([rule])
     if not rule.get("id"):
         rule["id"] = f"rule_{uuid.uuid4().hex[:8]}"
     rule_id = rule["id"]
     clean = {k: v for k, v in rule.items() if not k.startswith("_")}
     if target_dir == "shared":
-        existing = _load_shared_rules()
+        existing = _load_shared_rules(strict=True)
         existing = [r for r in existing if r.get("id") != rule_id]
         existing.append(clean)
         save_rules(existing, target_dir="shared")
     else:
-        world_only = _load_world_rules()
+        world_only = _load_world_rules(strict=True)
         world_only = [r for r in world_only if r.get("id") != rule_id]
         world_only.append(clean)
         save_rules(world_only, target_dir="world")
@@ -255,32 +334,31 @@ def update_rule(rule_id: str, updates: Dict[str, Any],
 
     A world update creates an override if the ID exists only in shared data."""
     if target_dir == "shared":
-        rules = _load_shared_rules()
+        rules = _load_shared_rules(strict=True)
         for r in rules:
             if r.get("id") == rule_id:
-                r.update({k: v for k, v in updates.items()
-                         if k != "id" and not k.startswith("_")})
+                r = _merge_rule(r, updates)
+                rules = [r if item.get("id") == rule_id else item for item in rules]
                 save_rules(rules, target_dir="shared")
                 logger.info("Shared-Rule aktualisiert: %s", rule_id)
                 return r
         return None
 
     # Update an existing world entry or create an override.
-    world_rules = _load_world_rules()
+    world_rules = _load_world_rules(strict=True)
     for r in world_rules:
         if r.get("id") == rule_id:
-            r.update({k: v for k, v in updates.items()
-                     if k != "id" and not k.startswith("_")})
+            r = _merge_rule(r, updates)
+            world_rules = [r if item.get("id") == rule_id else item for item in world_rules]
             save_rules(world_rules, target_dir="world")
             logger.info("Rule aktualisiert: %s", rule_id)
             return r
     # Copy the shared entry and apply updates as a world override.
-    shared = _load_shared_rules()
+    shared = _load_shared_rules(strict=True)
     for r in shared:
         if r.get("id") == rule_id:
             override = {k: v for k, v in r.items() if not k.startswith("_")}
-            override.update({k: v for k, v in updates.items()
-                            if k != "id" and not k.startswith("_")})
+            override = _merge_rule(override, updates)
             world_rules.append(override)
             save_rules(world_rules, target_dir="world")
             logger.info("Rule aus Shared in Welt ueberschrieben: %s", rule_id)
@@ -294,7 +372,7 @@ def delete_rule(rule_id: str, target_dir: str = "") -> bool:
     An empty target chooses a world override first, then shared. Deleting only
     a world override reveals the shared entry again."""
     if target_dir == "world":
-        world_rules = _load_world_rules()
+        world_rules = _load_world_rules(strict=True)
         new = [r for r in world_rules if r.get("id") != rule_id]
         if len(new) < len(world_rules):
             save_rules(new, target_dir="world")
@@ -302,7 +380,7 @@ def delete_rule(rule_id: str, target_dir: str = "") -> bool:
             return True
         return False
     if target_dir == "shared":
-        shared = _load_shared_rules()
+        shared = _load_shared_rules(strict=True)
         new = [r for r in shared if r.get("id") != rule_id]
         if len(new) < len(shared):
             save_rules(new, target_dir="shared")
@@ -354,7 +432,7 @@ def delete_rules_by_event(event_id: str) -> int:
     if not event_id:
         return 0
     deleted = 0
-    world_rules = _load_world_rules()
+    world_rules = _load_world_rules(strict=True)
     keep = [r for r in world_rules if r.get("event_id") != event_id]
     if len(keep) != len(world_rules):
         deleted = len(world_rules) - len(keep)
@@ -727,9 +805,9 @@ def resolve_force_destination(character_name: str,
             return home_loc, home_room
         return _find_nearest_sleep(character_name)
 
-    # "stay" wurde oben behandelt, alles andere ist eine direkte Location-ID
+    # "stay" was handled above; other values directly identify a location.
 
-    # Direkte Location-ID
+    # Direct location ID.
     return go_to, ""
 
 
@@ -874,7 +952,7 @@ def _get_target_danger_level(location_id: str, room_id: str = "") -> int:
         if not location:
             return 0
 
-        # Raum-spezifischer danger_level
+        # A room-specific danger level overrides the location value.
         if room_id:
             for room in location.get("rooms", []):
                 if room.get("id") == room_id:
@@ -924,7 +1002,7 @@ def _rules_changed(old_rules, new_rules) -> None:
             if before.get(rid) == after.get(rid):
                 continue
             for rule in (before.get(rid), after.get(rid)):
-                if rule is None:
+                if rule is None or rule.get("type") == "influence":
                     continue
                 target = rule.get("target") or {}
                 location, _ = _rule_location_rooms(target)

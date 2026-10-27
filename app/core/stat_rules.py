@@ -1,4 +1,5 @@
 """Template stat dynamics and shared settings with whole-entry world overrides."""
+from contextlib import contextmanager
 from copy import deepcopy
 import json
 import math
@@ -204,34 +205,88 @@ _chat_cap_lock = RLock()
 _chat_movement: dict[tuple[str, str], tuple[int, int]] = {}
 
 
-def cap_chat_deltas(name: str, deltas: dict[str, int]) -> dict[str, int]:
-    """Limit absolute ordinary chat movement per stat and game hour.
+def _plan_chat_deltas(name: str, deltas: dict[str, int], *,
+                      turning_points: set[str] | None, game_hour: int,
+                      limit: int) -> tuple[dict[str, int], dict]:
+    """Calculate one pair's deltas and unpublished budget, under its lock."""
+    if limit == 0:
+        return dict(deltas), {}
+    result = {}
+    planned = {}
+    for key, raw in deltas.items():
+        try:
+            delta = round_half_away(float(raw))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        turning_point = (key in turning_points if turning_points is not None
+                         else abs(delta) >= 30)
+        if turning_point:
+            result[key] = delta
+            continue
+        previous_hour, used = _chat_movement.get((name, key), (game_hour, 0))
+        if previous_hour != game_hour:
+            used = 0
+        allowed = min(abs(delta), max(0, limit - used))
+        if allowed:
+            result[key] = allowed if delta > 0 else -allowed
+        planned[(name, key)] = (game_hour, used + allowed)
+    return result, planned
 
-    Turning points (magnitude at least 30) bypass and do not consume the
-    budget. Only the current hour is retained for each character/stat.
+
+class _ChatDeltaReservation:
+    """One event/recipient's budget, publishable only inside its context."""
+
+    def __init__(self, deltas: dict[str, int], planned: dict):
+        self.deltas = deltas
+        self._planned = planned
+        self._active = True
+
+    def commit(self) -> None:
+        """Publish usage after this pair's database commit has succeeded."""
+        if not self._active:
+            raise RuntimeError("Chat budget reservation is no longer active")
+        _chat_movement.update(self._planned)
+
+
+@contextmanager
+def reserve_chat_deltas(name: str, deltas: dict[str, int], *,
+                        turning_points: set[str], game_hour: int):
+    """Hold the cap lock for exactly one event/recipient database commit.
+
+    Deltas are already multiplied and rounded. ``turning_points`` names stats
+    whose ORIGINAL deltas had magnitude at least 30; amplified ordinary
+    deltas must not bypass the cap. Take the recipient's profile lock inside
+    this context, recheck its receipt there, and call ``commit()`` only after
+    an applied/unchanged database result. Leaving without it spends nothing.
+    Do not reserve a batch spanning multiple independent database commits.
+    """
+    with _chat_cap_lock:
+        capped, planned = _plan_chat_deltas(
+            name, deltas, turning_points=turning_points, game_hour=game_hour,
+            limit=get_setting("chat_cap_per_hour"))
+        reservation = _ChatDeltaReservation(capped, planned)
+        try:
+            yield reservation
+        finally:
+            reservation._active = False
+
+
+def cap_chat_deltas(name: str, deltas: dict[str, int]) -> dict[str, int]:
+    """Immediately spend the legacy caller's absolute per-stat/hour budget.
+
+    Turning points are classified from these unscaled input deltas. New
+    event consumers use ``reserve_chat_deltas`` so a failed write spends
+    nothing. The current-hour-only RAM lifetime remains the same for both.
     """
     from app.core.timeutils import game_time
     limit = get_setting("chat_cap_per_hour")
     if limit == 0:
         return dict(deltas)
     hour = game_time().total_seconds // 3600
-    result = {}
     with _chat_cap_lock:
-        for key, raw in deltas.items():
-            try:
-                delta = round_half_away(float(raw))
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if abs(delta) >= 30:
-                result[key] = delta
-                continue
-            previous_hour, used = _chat_movement.get((name, key), (hour, 0))
-            if previous_hour != hour:
-                used = 0
-            allowed = min(abs(delta), max(0, limit - used))
-            if allowed:
-                result[key] = allowed if delta > 0 else -allowed
-            _chat_movement[(name, key)] = (hour, used + allowed)
+        result, planned = _plan_chat_deltas(
+            name, deltas, turning_points=None, game_hour=hour, limit=limit)
+        _chat_movement.update(planned)
     return result
 
 

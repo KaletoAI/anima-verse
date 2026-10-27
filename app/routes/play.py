@@ -2288,7 +2288,7 @@ async def play_say(request: Request, user=Depends(get_current_user)):
         reactions = get_agent_loop().dispatch_room_reactions(
             speaker=avatar, content=_react_content, volume=volume,
             location_id=loc, room_id=room, addressees=addressees,
-            is_avatar=True, hints=hints)
+            is_avatar=True, hints=hints, utterance_id=uid)
     except Exception as e:  # noqa: BLE001
         logger.warning("play_say dispatch_room_reactions failed: %s", e)
 
@@ -2364,7 +2364,7 @@ def play_self(user=Depends(get_current_user)):
         from app.core.character_ops import build_stat_history
         from app.core.stat_hints import stat_bands
         out["stat_changes"] = [
-            {key: row[key] for key in ("id", "game_ts", "label", "changes")}
+            {key: row[key] for key in ("id", "game_ts", "label", "changes", "cause") if key in row}
             for row in build_stat_history(avatar, limit=10)["rows"]
         ]
         out["stat_bands"] = {band["key"]: band["label"] for band in stat_bands(avatar)}
@@ -4176,7 +4176,7 @@ async def play_messages_send(request: Request, user=Depends(get_current_user)):
 def _play_messages_send_sync(user, body: Any):
     """The blocking body of ``play_messages_send`` — runs in the threadpool."""
     from app.models.account import get_active_character
-    from app.models.chat import save_message
+    from app.models.chat import save_direct_message
     from app.core.timeutils import utc_now_iso
     avatar = (get_active_character() or "").strip()
     if not avatar:
@@ -4188,15 +4188,8 @@ def _play_messages_send_sync(user, body: Any):
     if partner == avatar:
         raise HTTPException(status_code=400, detail="Cannot message yourself")
     ts = utc_now_iso()
-    # Incoming in the recipient's inbox.
-    _stored_out = save_message({"role": "user", "content": content, "timestamp": ts,
-                  "speaker": avatar, "medium": "messaging"},
-                 character_name=partner, partner_name=avatar)
-    # Outgoing in the avatar's history.
-    _stored_in = save_message({"role": "assistant", "content": content, "timestamp": ts,
-                  "speaker": avatar, "medium": "messaging"},
-                 character_name=avatar, partner_name=partner)
-    if not (_stored_out and _stored_in):
+    event_id = save_direct_message(avatar, partner, content)
+    if event_id is None:
         # A message that did not reach the DB must not be marked read, must not
         # bump the recipient and must not be reported as sent.
         raise HTTPException(status_code=500, detail="message not stored")

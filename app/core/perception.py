@@ -724,6 +724,14 @@ def record_utterance(*, speaker: str, content: str,
             _umeta["source"] = source
         if perception_meta:
             _umeta.update(perception_meta)
+        from app.models.account import is_player_controlled
+        # Freeze ALL content-bearing avatar roles, not only direct targets:
+        # release/switch must not retroactively turn a listener into an NPC
+        # evaluation owner. Direct avatar targets are the narrower sender set.
+        content_targets = {target.perceiver for target in targets if target.gets_content}
+        avatar_audience = {name for name in content_targets if is_player_controlled(name)}
+        _umeta["stat_avatar_audience"] = sorted(avatar_audience)
+        _umeta["stat_avatar_targets"] = sorted(set(addr) & avatar_audience)
         # The STORED point stays a wilderness column (see insert_utterance):
         # inside a location the location/room pair already says where the line
         # was spoken. The circle above needs the point regardless — the two
@@ -764,6 +772,11 @@ def record_utterance(*, speaker: str, content: str,
                 "meta": pmeta,
             })
         perception_store.insert_perceptions(uid, rows)
+        from app.core.stat_sources import (
+            collect_stat_source, get_stat_source_collector, source_from_utterance,
+        )
+        if get_stat_source_collector() is not None:
+            collect_stat_source(source_from_utterance(uid))
         from app.core import sync_topics
         # Movement narration retains legacy behavior on a failed parent save,
         # but its sync hook must share the parent writer's success gate.

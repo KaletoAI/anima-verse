@@ -67,7 +67,7 @@ INVENTORY = {
 # B-T2b inventory includes the lowest committed writers and inherited edges.
 INVENTORY.update({
     "app/models/notifications.py": ["create_notification", "_mutate_notification", "mark_all_read"],
-    "app/models/unified_chat.py": ["save_message"],
+    "app/models/unified_chat.py": ["save_message", "save_direct_message"],
     "app/routes/play.py": ["_phone_set_read"],
     "app/models/instagram.py": ["save_feed", "delete_post"],
     "app/models/rules.py": ["_rules_changed"],
@@ -86,6 +86,7 @@ INVENTORY.update({
     "app/models/diary.py": ["_save_stored"],
     "app/models/relationship.py": ["_save_relationship"],
 })
+INVENTORY["app/models/chat_stat_evaluations.py"] = ["commit_evaluation"]
 INVENTORY["app/models/character.py"] += ["record_state_change", "adjust_status_effects", "set_state_flag"]
 
 
@@ -568,8 +569,17 @@ def commit_failures():
     ]
     for module, write in writers:
         with patch.object(module, "transaction", rejected):
-            write()
+            if module is rules:
+                try:
+                    write()
+                except rules.RuleWriteError:
+                    pass
+                else:
+                    raise AssertionError("Rejected rule commit must report a storage error")
+            else:
+                write()
         expect(conns)
+    assert db.get_connection().execute("SELECT 1 FROM rules WHERE id='demo'").fetchone() is None
     with patch("app.models.unified_chat.transaction", rejected):
         assert not UnifiedChatManager.save_message(Message(role="assistant", content="demo", medium="messaging"), "npc", "a")
     with patch.object(db, "transaction", rejected):

@@ -81,13 +81,16 @@ def height_cm(profile: Dict[str, Any]) -> Optional[int]:
     return parse_cm((profile or {}).get("height"))
 
 
-def _is_humanoid(profile: Dict[str, Any], character_name: str = "") -> bool:
+def _is_humanoid(profile: Dict[str, Any], character_name: str = "", *,
+                 config: Dict[str, Any] | None = None) -> bool:
     """Humanoid check for the height buckets: the template feature when a name
     is known, otherwise inferred from the profile's template (an animal template
     is the only non-humanoid case)."""
     if character_name:
         try:
             from app.core.model_refs import is_humanoid
+            if config is not None:
+                return bool(is_humanoid(character_name, profile=profile, config=config))
             return bool(is_humanoid(character_name))
         except Exception:
             return True
@@ -105,12 +108,13 @@ def height_phrase(profile: Dict[str, Any], character_name: str = "") -> str:
     return describe(cm, gender, _is_humanoid(profile, character_name))
 
 
-def height_word(profile: Dict[str, Any], character_name: str = "") -> str:
+def height_word(profile: Dict[str, Any], character_name: str = "", *,
+                config: Dict[str, Any] | None = None) -> str:
     """The height BUCKET word (petite/short/average height/tall/giant) for
     attraction matching, or "" when unset or non-humanoid (a non-humanoid
     reports centimetres, which is not one of the attraction buckets)."""
     cm = height_cm(profile)
-    if cm is None or not _is_humanoid(profile, character_name):
+    if cm is None or not _is_humanoid(profile, character_name, config=config):
         return ""
     gender = str((profile or {}).get("gender") or "").strip().lower()
     return describe(cm, gender, True)

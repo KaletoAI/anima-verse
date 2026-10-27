@@ -384,7 +384,7 @@ def game_label(game_ts: Any, lang: str = "en") -> str:
         return ""
 
 
-def build_debug_activity(character_name: str) -> Dict[str, Any]:
+def build_debug_activity(character_name: str, *, include_rule_details: bool = False) -> Dict[str, Any]:
     """Game-Admin debug: why is a (non-avatar) character behaving this way?
 
     Aggregates read-only: current feeling + source, most recent mood/state/
@@ -396,6 +396,7 @@ def build_debug_activity(character_name: str) -> Dict[str, Any]:
     from app.models.character import (get_character_profile,
                                       get_character_current_feeling, get_state_flags)
     import json as _json
+    from app.core.stat_influence import project_stat_metadata
 
     profile = get_character_profile(character_name) or {}
     feeling = (get_character_current_feeling(character_name) or "").strip()
@@ -471,7 +472,8 @@ def build_debug_activity(character_name: str) -> Dict[str, Any]:
             _stype = s.get("type", "")
             ev = {"ts": s.get("timestamp", ts), "type": _stype,
                   "value": _resolve_state_value(_stype, s.get("value", "")),
-                  "metadata": s.get("metadata", {})}
+                  "metadata": project_stat_metadata(
+                      s.get("metadata", {}), include_rule_details=include_rule_details)}
             state_recent.append(ev)
             if last_warning is None and ev["type"] in ("access_denied", "forced_action"):
                 last_warning = ev
@@ -3182,11 +3184,13 @@ def wipe_character_memory(character_name: str) -> Dict[str, Any]:
     return reset_character(character_name, scope=SCOPE_MEMORY)
 
 
-def build_stat_history(character_name: str, limit: int = 50) -> dict:
+def build_stat_history(character_name: str, limit: int = 50, *,
+                       include_rule_details: bool = False) -> dict:
     """Return the newest effects rows with recorded causes, game stamps and labels."""
     import json
     from app.core.db import get_connection
     from app.core.stat_rules import describe_source
+    from app.core.stat_influence import project_stat_metadata
     rows = get_connection().execute(
         "SELECT id, ts, game_ts, state_json FROM state_history "
         "WHERE character_name=? AND json_valid(state_json) "
@@ -3195,7 +3199,8 @@ def build_stat_history(character_name: str, limit: int = 50) -> dict:
     result = []
     for row in rows:
         state = json.loads(row['state_json'])
-        metadata = state.get('metadata') or {}
+        metadata = project_stat_metadata(
+            state.get('metadata') or {}, include_rule_details=include_rule_details)
         source = metadata.get('source') or state.get('value') or ''
         entry = {'id': row['id'], 'ts': row['ts'], 'game_ts': row['game_ts'],
                  'game_label': game_label(row['game_ts'] or ''),
@@ -3203,5 +3208,9 @@ def build_stat_history(character_name: str, limit: int = 50) -> dict:
                  'changes': metadata.get('changes') or {}}
         if 'parts' in metadata:
             entry['parts'] = metadata['parts']
+        if 'cause' in metadata:
+            entry['cause'] = metadata['cause']
+        if include_rule_details and 'event_id' in metadata:
+            entry['event_id'] = metadata['event_id']
         result.append(entry)
     return {'rows': result}

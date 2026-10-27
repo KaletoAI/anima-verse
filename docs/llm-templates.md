@@ -34,7 +34,7 @@ can add a template, not override one. That is where
 | Template | Task | Caller | Purpose |
 |---|---|---|---|
 | `extraction_memory.md` | `extraction` | `memory_service.extract_memories_from_exchange` | After each chat turn: extract semantic facts + commitments |
-| `extraction_chat_state.md` | `extraction_chat_state` | `routes/chat._extract_context_from_last_chat` (preview: `template_preview`) | Pull removed outfit pieces, the pose key from the shown menu + free detail, and stat deltas out of a chat reply |
+| `extraction_chat_state.md` | `extraction_chat_state` | `routes/chat._extract_context_from_last_chat` (preview: `template_preview`) | Removed outfit pieces and pose/detail from new prose, plus one shared `stat_results` round over canonical event/target pairs |
 | `consolidation_daily.md` | `consolidation` | `memory_service._consolidate_episodics_to_daily` | Compress one day's episodic memories into a 3-5 sentence summary |
 | `consolidation_weekly.md` | `consolidation` | `memory_service._consolidate_daily_to_weekly` | Compress a week's daily summaries (5-8 sentences) |
 | `consolidation_monthly.md` | `consolidation` | `memory_service._consolidate_weekly_to_monthly` | Compress a month's weekly summaries (5-10 sentences) |
@@ -46,7 +46,7 @@ can add a template, not override one. That is where
 | `extraction_thought.md` | `extraction` | `memory_service.extract_memories_from_exchange` (the monologue branch) | Same extraction as `extraction_memory.md`, but for a turn without a partner |
 | `consolidation_scene.md` | `consolidation` | `scene_manager` (scene summary) | Summarize one finished room scene from its transcript |
 | `intro_memory.md` | `intro_memory` | `routes/content_packs.py` | First memories for a character that arrives through a content pack |
-| `stat_effects.md` | `extraction_chat_state` | `stat_effects.evaluate` | Derive stat deltas for a situation from the character's stat list |
+| `stat_effects.md` | `extraction_chat_state` | `stat_effects.evaluate` | Generic activity/nonchat effects; retains flat `{"stats": {"<key>": delta}}`, not the chat event/target schema |
 | `speech_retry.md` | the tool decision's own task | `streaming.StreamingAgent._render_speech_retry` | B-lite: the RP contained spoken lines but no speech verb — a targeted retry that offers only the speech tools |
 | `storyteller_react.md` | `storyteller` | `act_engine` | The storyteller narrates what happens around an action |
 | `translate_text.md` | `translation` | `routes/assist.py` (`POST /assist/translate`) | Admin-UI translation helper |
@@ -172,6 +172,79 @@ Rules for editing them:
 `scripts/smoke_chat_prompt_order.py` pins the split: changing per-turn fields
 must preserve both rendered system prompts, the scene state follows the
 history, and the block order is checked against the cache contract.
+
+### Chat-state extraction contract
+
+`tasks/extraction_chat_state.md` is a separate utility call after delivery,
+not part of `chat/reply_base.md`, the stable system prompt or its scene-state
+moment. Influence multipliers never enter the main RP prompt. The utility
+model judges BASE deltas only; local code resolves exact actors, targets,
+conditions, directed capabilities, rule factors, rounding and the hourly cap.
+All sources/recipients/rules share the existing character extraction phase:
+there is no model task or call per rule, source or target.
+
+The existing outfit/pose arguments remain `target_name`, `piece_list`,
+`source_label`, `source_text`, `context_text`, `outfit_locked`, `is_avatar`,
+`pose_keys` and `current_pose`. `source_text` alone owns pose/clothing changes;
+older/counterpart `context_text` only disambiguates. A source-only turn has no
+new body/outfit prose to apply. `is_avatar=True` is the old independent
+wardrobe-only call (no pose/stats), not a second stat round.
+
+| Stat argument | Contract |
+|---|---|
+| `stats_enabled` | Whether any eligible canonical pairs remain |
+| `stat_sources` | `[{id, actor, text, medium}]`; opaque source IDs such as `S0`, authoritative delivered actor/content and medium |
+| `stat_targets` | `[{id, name, stat_list}]`; opaque target IDs such as `T0`, with template-declared, enabled and actually stored stats |
+| `required_stat_pairs` | `[{event, target}]`; every listed token pair must appear once, even if unaffected |
+
+Example stat response fragment (alongside the ordinary pose/detail/removed
+fields appropriate to this call):
+
+```json
+{
+  "stat_results": [
+    {"event": "S0", "target": "T0", "deltas": {"<declared stat key>": 3}},
+    {"event": "S1", "target": "T0", "deltas": {}}
+  ]
+}
+```
+
+Each result has exactly `event`, `target`, `deltas`. Deltas are integers from
+-100 to 100, not booleans/floats; only that target's eligible keys are allowed.
+The parser rejects missing/duplicate/unknown pairs, injected actor/factor
+fields and the legacy flat chat `stats` format before any stat write.
+`stat_results` has no legacy alias. In contrast, `tasks/stat_effects.md`
+continues to return flat `stats` for generic nonchat evaluations, including
+the existing per-hour activity scaling.
+
+Canonical room/TalkTo sources come from committed utterances and their
+content-bearing perceptions; canonical DMs require the two atomically mirrored
+rows sharing `dm:<uuid>`. Historical/context lines, notifications and
+contentless overhearing never manufacture new source authority. The source
+collector and token-to-canonical pair map stay in Python, outside model/tool
+JSON. Avatar audience/ownership is captured at publication, not inferred from
+whichever avatar is active when extraction runs. Private self effects belong
+only to the speaking character and cannot double-count incoming/outgoing
+communication.
+
+Successful tool-only/silent outgoing communication can complete this same ONE
+phase when it has pending eligible avatar recipients; unread input alone,
+passive presence, aura or SKIP alone cannot trigger it. Preview uses a private
+self sample, never replays historic delivery. Durable event/recipient receipts
+prevent repeated context from applying old changes.
+
+World overrides are preserved, never silently overwritten on a schema change.
+An old `extraction_chat_state` override may fail rendering (including a concrete
+missing-variable error) or return an invalid stat contract. The application logs
+an actionable warning pointing to `/admin/templates` and records no invalid
+stat effects. Open that template in the existing editor, inspect the world
+override/diff and stale-base warning, then adapt it to these arguments and
+`stat_results`, or Delete override to restore the shipped version. Rendering
+success alone does not validate an obsolete output schema. The independent
+avatar wardrobe call can still proceed when the character utility call fails.
+
+For rule shape, local factor/cap/receipt order, strict availability and history
+privacy, see [the public Influence contract](skill-core-api.md#rp-influence--appcorestat_influence).
 
 ### The other `chat/` templates
 

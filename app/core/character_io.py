@@ -124,6 +124,7 @@ def export_character_to_zip(
     *,
     include_chats: bool = False,
     include_stories: bool = False,
+    include_rule_details: bool = False,
 ) -> bytes:
     """Bundles all character data (DB rows + char dir files) into a ZIP."""
     if not character_name or "/" in character_name or ".." in character_name:
@@ -146,6 +147,18 @@ def export_character_to_zip(
 
     for table in _OWNED_TABLES:
         rows = _dump_table(conn, table, "character_name=?", (character_name,))
+        if table == "state_history" and not include_rule_details:
+            from app.core.stat_influence import project_stat_metadata
+            for row in rows:
+                try:
+                    state = json.loads(row.get("state_json") or "{}")
+                except (TypeError, ValueError) as error:
+                    raise ValueError("Cannot safely export unreadable state history") from error
+                if not isinstance(state, dict):
+                    raise ValueError("Cannot safely export invalid state history")
+                if "metadata" in state:
+                    state["metadata"] = project_stat_metadata(state["metadata"])
+                row["state_json"] = json.dumps(state, ensure_ascii=False)
         if rows:
             db_dump[table] = rows
 

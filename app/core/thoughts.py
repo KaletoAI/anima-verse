@@ -12,6 +12,9 @@ from app.core.timeutils import game_time, utc_now
 from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
+from app.core.stat_sources import (
+    bind_stat_sources, extraction_context, get_stat_source_collector, source_only_context, stat_source_turn,
+)
 logger = get_logger("thought")
 
 #: How many open plans the rp_first tool prompt of a thought turn lists (by
@@ -243,6 +246,7 @@ class ThoughtRunner:
         text = re.sub(r'\n{3,}', '\n\n', text)
 
         return text.strip()
+    @stat_source_turn
     async def run_thought_turn(self, character_name: str,
                                 context_hint: str = "", fast: bool = False,
                                 tool_whitelist=None,
@@ -274,6 +278,11 @@ class ThoughtRunner:
 
         profile = get_character_profile(character_name)
         config = get_character_config(character_name)
+        from app.core.agent_inbox import load_unread_stat_sources
+        stat_collector = get_stat_source_collector()
+        if stat_collector is not None:
+            for stat_source in load_unread_stat_sources(character_name):
+                stat_collector.add(stat_source)
         from app.models.account import get_active_character
         # Use the active avatar identity, or empty: no pseudo-character sentinel.
         user_name = (get_active_character() or "").strip()
@@ -370,7 +379,8 @@ class ThoughtRunner:
                         except Exception:
                             pass
                     from app.core.skill_gate import run_tool
-                    return run_tool(_agent, _tool, lambda: fn(json.dumps(ctx)))
+                    with bind_stat_sources(stat_collector):
+                        return run_tool(_agent, _tool, lambda: fn(json.dumps(ctx)))
                 return wrapper
             tools_dict[t.name] = _make_ctx_wrapper(_orig_func)
 
@@ -787,31 +797,47 @@ class ThoughtRunner:
                 full_response = (full_response + "\n"
                                  + "\n".join(_new_marker_lines)).strip()
 
-        # Extract the state markers (location, activity, mood, intents) —
-        # the same logic as in the regular chat, so a place change, an outfit
-        # reset and an activity update also work in thought mode.
-        if full_response and full_response.strip().upper() != "SKIP":
-            try:
-                from app.core.chat_engine import post_process_response
-                # Off the event loop (it reads and writes the world: mood,
-                # place, pose, intents). asyncio.to_thread copies the context,
-                # so the turn trace stays on its follow-up LLM calls.
-                # detach_background: the LLM extractions it starts keep
-                # running in the background instead of holding this turn —
-                # on the loop they went to its executor, in the worker
-                # thread they would otherwise run inline.
+        # Tool speech remains a completed communication turn even when the
+        # private thought is empty/SKIP. Explicit deterministic output must
+        # also reach the existing postprocessor independently of prose/stat
+        # eligibility; the thought runner does not parse or apply markers.
+        try:
+            from app.core.chat_engine import clean_response, post_process_response
+            private_prose = clean_response(full_response)
+            has_private_prose = bool(private_prose and private_prose.strip().upper() != "SKIP")
+            has_postprocess_output = bool(full_response and full_response.strip().upper() != "SKIP")
+            if has_private_prose:
+                if stat_collector is not None:
+                    await asyncio.to_thread(stat_collector.wait_for_source_work)
+                stat_context = extraction_context(
+                    character_name, stat_collector.snapshot() if stat_collector else (),
+                    narrative=private_prose,
+                    self_event_id=stat_collector.self_event_id if stat_collector else None,
+                    started_at=stat_collector.started_at if stat_collector else None,
+                    game_ts=stat_collector.game_ts if stat_collector else None)
+            else:
+                stat_context = await asyncio.to_thread(
+                    source_only_context, character_name, stat_collector)
+            if has_postprocess_output or stat_context is not None:
+                # Off the event loop: the follow-up reads/writes world state.
+                # Detached extractions keep their normal background lifetime;
+                # normal prose and all delivered sources still share ONE phase.
                 _pp_result = await asyncio.to_thread(
                     post_process_response,
                     owner_id="",
                     character_name=character_name,
-                    user_input=user_input,
+                    user_input=user_input if has_private_prose else "",
                     full_response=full_response,
                     agent_config=config,
                     llm=llm,
-                    user_display_name=user_name,
-                    full_chat_history=recent_history,
-                    old_history=[],  # thoughts: no summary update needed
-                    extraction_context={"source": "thought", "is_background": True},
+                    user_display_name=user_name if has_private_prose else "",
+                    full_chat_history=recent_history if has_private_prose else [],
+                    old_history=[],
+                    extraction_context={
+                        "source": "thought", "is_background": True,
+                        "stat_only": not has_private_prose,
+                        "stat_context": stat_context,
+                    },
                     detach_background=True,
                 )
                 if _pp_result.get("location"):
@@ -820,8 +846,8 @@ class ThoughtRunner:
                     logger.info("%s thought: activity -> %s", character_name, _pp_result["activity"])
                 if _pp_result.get("mood"):
                     logger.info("%s thought: mood -> %s", character_name, _pp_result["mood"])
-            except Exception as pp_err:
-                logger.error("%s: post_process_response failed: %s", character_name, pp_err)
+        except Exception as pp_err:
+            logger.error("%s: post_process_response failed: %s", character_name, pp_err)
 
         # Count tool executions as progress for unified intents.
         try:

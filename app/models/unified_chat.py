@@ -294,3 +294,78 @@ class UnifiedChatManager:
         except Exception:
             pass
         return True
+
+    @staticmethod
+    def save_direct_message(sender: str, recipient: str, content: str, *,
+                            channel: str = "web", metadata: Optional[dict] = None) -> Optional[str]:
+        """Commit both phone-history perspectives with one canonical event ID."""
+        from uuid import uuid4
+        from app.core.timeutils import game_time
+        from app.models.account import is_player_controlled
+
+        if not sender or not recipient or sender == recipient or not content.strip():
+            return None
+        event_uuid = uuid4().hex
+        stamp = utc_now_iso()
+        message_meta = dict(metadata or {})
+        if not message_meta.get("game_ts"):
+            message_meta["game_ts"] = game_time().canonical()
+        message_meta["stat_avatar_targets"] = [recipient] if is_player_controlled(recipient) else []
+        stored_meta = json.dumps({
+            "speaker": sender, "medium": "messaging", "metadata": message_meta,
+        }, ensure_ascii=False)
+        try:
+            with transaction() as conn:
+                conn.executemany(
+                    "INSERT INTO chat_messages "
+                    "(character_name,partner,ts,role,content,channel,channel_message_id,metadata) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    ((recipient, sender, stamp, "user", content, channel, event_uuid, stored_meta),
+                     (sender, recipient, stamp, "assistant", content, channel, event_uuid, stored_meta)),
+                )
+        except Exception:
+            logger.exception("Direct message could not be committed: %s -> %s", sender, recipient)
+            return None
+        event_id = f"dm:{event_uuid}"
+        from app.core import sync_topics
+        sync_topics.avatars([sender, recipient], "notices")
+        from app.core.stat_sources import (
+            collect_stat_source, get_stat_source_collector, source_from_dm,
+        )
+        if get_stat_source_collector() is not None:
+            collect_stat_source(source_from_dm(event_id))
+        return event_id
+
+    @staticmethod
+    def get_direct_message_event(event_id: str) -> Optional[dict]:
+        """Resolve only a complete matching pair, never an inferred DM author."""
+        if not event_id.startswith("dm:") or not event_id[3:]:
+            return None
+        rows = get_connection().execute(
+            "SELECT id,character_name,partner,ts,role,content,channel,metadata "
+            "FROM chat_messages WHERE channel_message_id=? ORDER BY id",
+            (event_id[3:],),
+        ).fetchall()
+        if len(rows) != 2:
+            return None
+        by_role = {row["role"]: row for row in rows}
+        incoming, outgoing = by_role.get("user"), by_role.get("assistant")
+        if incoming is None or outgoing is None:
+            return None
+        sender, recipient = outgoing["character_name"], incoming["character_name"]
+        if (incoming["partner"] != sender or outgoing["partner"] != recipient
+                or incoming["content"] != outgoing["content"]
+                or incoming["ts"] != outgoing["ts"] or incoming["channel"] != outgoing["channel"]):
+            return None
+        try:
+            first_meta, second_meta = (json.loads(row["metadata"] or "{}") for row in rows)
+        except (TypeError, ValueError):
+            return None
+        if (first_meta != second_meta or not isinstance(first_meta, dict)
+                or first_meta.get("speaker") != sender or first_meta.get("medium") != "messaging"):
+            return None
+        return {
+            "sender": sender, "recipient": recipient, "content": incoming["content"],
+            "ts": incoming["ts"], "row_id": min(row["id"] for row in rows),
+            "metadata": first_meta.get("metadata") or {},
+        }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
+import type { StatCause } from '@anima/player-ui'
 
 export interface StatHistoryRow {
   id: number
@@ -10,6 +11,8 @@ export interface StatHistoryRow {
   game_label?: string
   label: string
   changes: Record<string, { old: number; new: number }>
+  cause?: Record<string, StatCause & { rules?: { id: string; name: string; factor: number }[] }>
+  event_id?: string
 }
 
 interface BarMeta {

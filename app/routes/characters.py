@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
-from app.core.auth_dependency import require_admin
+from app.core.auth_dependency import get_current_user_from_ctx, require_admin
 from app.core.explicit_backend import require_explicit_backend
 from app.core.http_files import etag_file_response, etag_matches
 from app.core.portrait_images import (
@@ -57,6 +57,11 @@ from app.core import character_ops
 from app.core.timeutils import utc_now, utc_now_iso
 
 router = APIRouter(prefix="/characters", tags=["characters"])
+
+
+def _can_view_rule_details() -> bool:
+    user = get_current_user_from_ctx()
+    return bool(user and user.get("role") == "admin")
 
 
 class OutfitLockBody(BaseModel):
@@ -2341,10 +2346,7 @@ def get_soul_file(character_name: str, section_id: str) -> Dict[str, Any]:
 
 @router.post("/{character_name}/soul/file/{section_id}")
 async def save_soul_file(character_name: str, section_id: str, request: Request) -> Dict[str, Any]:
-    """Schreibt komplette Soul-MD-Datei.
-
-    Body: {"user_id": "...", "content": "...full MD text..."}
-    """
+    """Write an entire soul Markdown file from the request's content field."""
     return await character_ops.write_soul_file(character_name, section_id, request)
 
 
@@ -2561,6 +2563,7 @@ def export_character(
             character_name,
             include_chats=include_chats,
             include_stories=include_stories,
+            include_rule_details=_can_view_rule_details(),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -2644,7 +2647,8 @@ def debug_activity(character_name: str) -> Dict[str, Any]:
     Aggregate current feeling and source, recent mood/state/thought activity,
     and active block/force rules. Read-only; the path supplies the character.
     """
-    return character_ops.build_debug_activity(character_name)
+    return character_ops.build_debug_activity(
+        character_name, include_rule_details=_can_view_rule_details())
 
 
 @router.get("/{character_name}/memory/locations")
@@ -2801,4 +2805,5 @@ def memory_history(character_name: str,
 
 @router.get('/{character_name}/stat-history')
 def get_stat_history(character_name: str, limit: int = Query(50, ge=1, le=200)):
-    return character_ops.build_stat_history(character_name, limit)
+    return character_ops.build_stat_history(
+        character_name, limit, include_rule_details=_can_view_rule_details())

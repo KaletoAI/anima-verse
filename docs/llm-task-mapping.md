@@ -236,7 +236,7 @@ has no UI today — it is kept for a later reuse.
 | Task id | Label | Category | Gate | Caller | Purpose |
 |---|---|---|---|---|---|
 | `extraction` | Memory Extraction | helper | — | `core/memory_service.py`, `plugins/knowledge/extract_utils.py` | Structured knowledge out of a chat exchange (facts, commitments). JSON. |
-| `extraction_chat_state` | Chat State Extract (Outfit/Pose/Stats) | tool | — | `routes/chat.py`, `core/stat_effects.py` | Removed outfit pieces, the pose key + free detail and stat deltas out of the last reply. Falls back to `extraction`. |
+| `extraction_chat_state` | Chat State Extract (Outfit/Pose/Stats) | tool | — | `routes/chat.py`, `core/stat_effects.py` | Utility extraction: outfit/pose plus one shared canonical event/target `stat_results` round. Generic nonchat `stat_effects` retains flat `stats`. Falls back to `extraction`. |
 | `random_event` | Random Event | tool | `random_events.enabled` | `core/random_events.py` | Generation, escalation, validation and RP text of location events. |
 | `secret_generation` | Secret Generation | tool | — | `core/secret_engine.py` | Secrets for characters that have none. Background job. |
 | `outfit_generation` | Outfit Generation | tool | `image_generation.enabled` | `skills/outfit_creation_skill.py` | A coherent outfit as a list of pieces. |
@@ -244,6 +244,24 @@ has no UI today — it is kept for a later reuse.
 | `intent` | Intent / tool calls | tool | — | `core/chat_engine.py`, `core/thoughts.py`, `core/act_engine.py` | The Tool-LLM: it turns prose into skill calls for chat AND thought turns. Also the fallback parent for the tool-class tasks below. |
 | `spell_detect` | Spell Cast Detection | tool | — | `core/spell_engine.py` | Whether the avatar's message casts one of the spells in their inventory. |
 | `pose_embedding` | Pose Embedding | embedding | — | `core/embedding.py` | The similarity vector for the pose catalog match. Runs over `/v1/embeddings`, not the chat queue. Only reached when `embedding.backend` is `external`, or `auto` and this task is routed; `internal` uses the built-in fastembed model on CPU. |
+
+RP Influence does not add a routing task, per-rule model, or per-target call.
+`extraction_chat_state` evaluates all eligible sources and recipients in the
+existing character extraction phase, using template-declared stats and opaque
+event/target tokens. The LLM supplies base deltas only; server-local rules own
+directional factors, strict conditions, receipts, rounding, current-hour caps
+and clamping. API actor counts describe attribution data, not model-call
+telemetry.
+
+This utility call is separate from the main `chat_stream` stable system/moment
+cache contract: no Influence multiplier is injected into the RP system prompt.
+Successful tool-only/silent turns with eligible delivered outgoing avatar
+sources may use that same single phase; passive presence, aura, unread input
+or SKIP alone do not add calls. The old separate avatar wardrobe-only
+extraction remains independent and does not evaluate stats.
+See [the exact utility input/output contract](llm-templates.md#chat-state-extraction-contract)
+for `stat_results`, the unchanged flat nonchat schema and repairing obsolete
+world overrides through `/admin/templates`.
 
 ### World building: room furnishing / props
 

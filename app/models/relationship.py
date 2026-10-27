@@ -82,19 +82,25 @@ def _sort_pair(a: str, b: str) -> Tuple[str, str]:
     return (a, b) if a.lower() <= b.lower() else (b, a)
 
 
-def _row_to_rel(row) -> Dict[str, Any]:
+def _row_to_rel(row, *, strict: bool = False) -> Dict[str, Any]:
     """Convert a DB row into the dict format the callers use."""
     d = dict(row)
     meta = {}
     try:
         meta = json.loads(d.get("meta") or "{}")
     except Exception:
+        if strict:
+            raise
         pass
     content = {}
     try:
         content = json.loads(d.get("content") or "{}")
     except Exception:
+        if strict:
+            raise
         pass
+    if strict and (not isinstance(meta, dict) or not isinstance(content, dict)):
+        raise ValueError("Relationship metadata and content must be objects")
     # Merge content + meta into rel dict
     rel = {**content, **meta}
     # Ensure canonical fields
@@ -102,11 +108,14 @@ def _row_to_rel(row) -> Dict[str, Any]:
     rel["character_a"] = d.get("from_char", "")
     rel["character_b"] = d.get("to_char", "")
     rel.setdefault("type", "neutral")
-    rel.setdefault("strength", 10)
-    rel.setdefault("sentiment_a_to_b", 0.0)
-    rel.setdefault("sentiment_b_to_a", 0.0)
-    rel.setdefault("romantic_tension", 0.0)
-    rel.setdefault("interaction_count", 0)
+    # Strict consumers need to distinguish absent measurements from real zeroes.
+    # Preserve the historical defaults only for ordinary, nonstrict readers.
+    if not strict:
+        rel.setdefault("strength", 10)
+        rel.setdefault("sentiment_a_to_b", 0.0)
+        rel.setdefault("sentiment_b_to_a", 0.0)
+        rel.setdefault("romantic_tension", 0.0)
+        rel.setdefault("interaction_count", 0)
     rel.setdefault("last_interaction", d.get("ts", _now_iso()))
     # ``last_interaction_game`` deliberately gets NO default here: its absence
     # is what marks a pair written before the game stamps existed, and the
@@ -202,11 +211,11 @@ def classify_type(
 # ---------------------------------------------------------------------------
 
 def load_relationships() -> List[Dict[str, Any]]:
-    """Laedt alle Beziehungen aus der DB."""
+    """Load all relationships from the DB."""
     try:
         conn = get_connection()
-        # Jede (from_char, to_char) Kombination ist eine Beziehungszeile
-        # Gruppen nach (from_char, to_char) — neueste Row pro Paar
+        # Each directed pair has a relationship row.
+        # Group by pair and select its newest row.
         rows = conn.execute("""
             SELECT DISTINCT from_char, to_char,
                 MAX(id) as latest_id
@@ -222,7 +231,7 @@ def load_relationships() -> List[Dict[str, Any]]:
             if pair_key in seen_pairs:
                 continue
             seen_pairs.add(pair_key)
-            # Hole den neuesten Eintrag fuer das kanonische Paar
+            # Load the newest entry for the canonical pair.
             row = conn.execute("""
                 SELECT * FROM relationships
                 WHERE (from_char=? AND to_char=?) OR (from_char=? AND to_char=?)
@@ -237,7 +246,7 @@ def load_relationships() -> List[Dict[str, Any]]:
 
 
 def save_relationships(rels: List[Dict[str, Any]]):
-    """Speichert alle Beziehungen in die DB (Upsert per Paar)."""
+    """Upsert all relationships by pair."""
     for rel in rels:
         _save_relationship(rel)
 
@@ -327,9 +336,8 @@ def _save_relationship(rel: Dict[str, Any]):
             logger.debug("relationship sync failed: %s", e)
 
 
-def get_relationship(char_a: str, char_b: str
-) -> Optional[Dict[str, Any]]:
-    """Return the relationship between two characters (order-independent)."""
+def get_relationship(char_a: str, char_b: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
+    """Return the pair row, or None for no row; strict reads propagate DB/JSON failures."""
     a, b = _sort_pair(char_a, char_b)
     try:
         conn = get_connection()
@@ -339,8 +347,10 @@ def get_relationship(char_a: str, char_b: str
             ORDER BY id DESC LIMIT 1
         """, (a, b, b, a)).fetchone()
         if row:
-            return _row_to_rel(row)
+            return _row_to_rel(row, strict=strict)
     except Exception as e:
+        if strict:
+            raise
         logger.error("get_relationship DB-Fehler fuer %s/%s: %s", char_a, char_b, e)
     return None
 
@@ -355,7 +365,7 @@ def get_character_relationships(character_name: str
             WHERE from_char=? OR to_char=?
             ORDER BY ts DESC
         """, (character_name, character_name)).fetchall()
-        # Deduplizieren nach Paar
+        # Deduplicate by pair.
         seen = set()
         result = []
         for row in rows:
@@ -666,9 +676,9 @@ def build_relationship_prompt_section(character_name: str
         if not rels:
             return ""
 
-    # Dangling-Filter: Beziehungen zu nicht (mehr) in der Welt existierenden
-    # Characters nicht in den Prompt ziehen (Daten bleiben in der DB erhalten und
-    # tauchen wieder auf, sobald der referenzierte Character importiert wird).
+    # Omit relationships to characters no longer present in this world.
+    # Keep the rows in the DB so they become visible again if the character
+    # is imported later.
     try:
         from app.models.character import character_exists
         def _other_name(r: Dict[str, Any]) -> str:

@@ -1,14 +1,9 @@
-"""Welt-Daten: Orte, Raeume und Aktivitaeten (User-Level)
+"""World data: locations, rooms, visibility and gallery ownership.
 
-Orte und ihre Raeume werden pro User gespeichert in:
-  storage/users/{username}/world.json
-
-Jeder Ort hat eine persistente ID (8-Zeichen Hex), damit Umbenennungen
-keine Referenzen in Character-Profilen, Schedulern etc. zerstoeren.
-
-Jeder Ort hat Raeume (rooms) mit Name, Beschreibung und Aktivitaeten.
-Aktivitaeten sind als Objekte {name, description} in den Raeumen eingebettet.
-Galerie-Bilder werden Raeumen zugeordnet (statt direkt Aktivitaeten).
+Structured location and room data live in the selected world's world.db.
+Persistent eight-character hexadecimal IDs keep character, scheduler and
+gallery references stable across display-name changes. Gallery images are
+assigned to rooms; activity itself is free text rather than a room library.
 """
 import json
 import math
@@ -37,9 +32,9 @@ def _get_world_file() -> Path:
 
 
 def _migrate_room_image_prompts(data: Dict[str, Any]) -> bool:
-    """Migriert Room image_prompt -> image_prompt_day (einmalig beim Laden).
+    """Migrate room image_prompt to image_prompt_day once during load.
 
-    Returns True wenn Daten geaendert wurden.
+    Return True when data changed.
     """
     changed = False
     for loc in data.get("locations", []):
@@ -72,7 +67,7 @@ _world_cache_lock = threading.Lock()
 BOOT_EPOCH: str = uuid.uuid4().hex
 _world_generation = 0
 _world_cache: Dict[str, Any] = {"key": None, "gen": None,
-                                "texts": None, "by_id": None}
+                                "texts": None, "by_id": None, "strict": False}
 
 
 def world_generation() -> int:
@@ -89,6 +84,7 @@ def _bump_world_generation() -> None:
         _world_cache["gen"] = None
         _world_cache["texts"] = None
         _world_cache["by_id"] = None
+        _world_cache["strict"] = False
 
 
 def _world_cache_key() -> str:
@@ -99,19 +95,21 @@ def _world_cache_key() -> str:
         return ""
 
 
-def _cached_texts() -> Optional[List[str]]:
+def _cached_texts(*, strict: bool = False) -> Optional[List[str]]:
     """The active world's locations as JSON texts, or None when the cache is
     cold/stale. Never returns objects — the caller parses its own."""
     key = _world_cache_key()
     with _world_cache_lock:
         if (_world_cache["texts"] is not None
                 and _world_cache["key"] == key
-                and _world_cache["gen"] == _world_generation):
+                and _world_cache["gen"] == _world_generation
+                and (not strict or _world_cache.get("strict", False))):
             return _world_cache["texts"]
     return None
 
 
-def _fill_world_cache(locations: List[Dict[str, Any]], gen_at_read: int) -> None:
+def _fill_world_cache(locations: List[Dict[str, Any]], gen_at_read: int, *,
+                      strict: bool = False) -> None:
     """Store the parse — unless a write landed while we were reading it."""
     key = _world_cache_key()
     try:
@@ -126,30 +124,32 @@ def _fill_world_cache(locations: List[Dict[str, Any]], gen_at_read: int) -> None
     with _world_cache_lock:
         if _world_generation != gen_at_read:
             return
-        _world_cache.update(key=key, gen=gen_at_read, texts=texts, by_id=by_id)
+        _world_cache.update(key=key, gen=gen_at_read, texts=texts, by_id=by_id, strict=strict)
 
 
-def _load_world_data() -> Dict[str, Any]:
+def _load_world_data(*, strict: bool = False) -> Dict[str, Any]:
     """The world data (locations plus their rooms) — cached, copies only.
 
     Same answer as a fresh read: every call returns freshly parsed dicts that
     the caller may mutate without touching the cache or another caller.
     """
-    texts = _cached_texts()
+    texts = _cached_texts(strict=strict)
     if texts is not None:
         try:
             return {"locations": [json.loads(t) for t in texts]}
         except (TypeError, ValueError):
+            if strict:
+                raise
             pass   # fall through to a fresh read
     gen_at_read = _world_generation
-    data = _read_world_data_uncached()
+    data = _read_world_data_uncached(strict=strict)
     locations = data.get("locations", [])
     if isinstance(locations, list):
-        _fill_world_cache(locations, gen_at_read)
+        _fill_world_cache(locations, gen_at_read, strict=strict)
     return data
 
 
-def _read_world_data_uncached() -> Dict[str, Any]:
+def _read_world_data_uncached(*, strict: bool = False) -> Dict[str, Any]:
     """Loads the world data from the DB (locations plus their rooms).
 
     A location comes out of the ``meta`` blob as a complete dict whenever the
@@ -158,6 +158,8 @@ def _read_world_data_uncached() -> Dict[str, Any]:
     are embedded in ``locations.meta.rooms``.
 
     Falls back to the legacy ``world.json`` when the DB is empty or unreadable.
+    Strict reads use only the DB, propagate decoding/query errors, and do not
+    publish a legacy fallback into the trusted read cache.
     """
     try:
         conn = get_connection()
@@ -174,7 +176,11 @@ def _read_world_data_uncached() -> Dict[str, Any]:
                 meta = {}
                 try:
                     meta = json.loads(r[11] or "{}")
+                    if strict and not isinstance(meta, dict):
+                        raise ValueError(f"Location metadata is not an object: {r[0]}")
                 except Exception:
+                    if strict:
+                        raise
                     pass
                 if meta and "id" in meta:
                     # A complete location dict straight out of meta
@@ -200,14 +206,20 @@ def _read_world_data_uncached() -> Dict[str, Any]:
                     try:
                         loc["visible_when"] = json.loads(r[8] or "[]")
                     except Exception:
+                        if strict:
+                            raise
                         loc["visible_when"] = []
                     try:
                         loc["accessible_when"] = json.loads(r[9] or "[]")
                     except Exception:
+                        if strict:
+                            raise
                         loc["accessible_when"] = []
                     try:
                         loc["background_images"] = json.loads(r[10] or "[]")
                     except Exception:
+                        if strict:
+                            raise
                         loc["background_images"] = []
                     loc.update(meta)
 
@@ -224,7 +236,11 @@ def _read_world_data_uncached() -> Dict[str, Any]:
                         rmeta = {}
                         try:
                             rmeta = json.loads(rr[3] or "{}")
+                            if strict and not isinstance(rmeta, dict):
+                                raise ValueError(f"Room metadata is not an object: {rr[0]}")
                         except Exception:
+                            if strict:
+                                raise
                             pass
                         if rmeta and "id" in rmeta:
                             room_dict = rmeta
@@ -285,8 +301,12 @@ def _read_world_data_uncached() -> Dict[str, Any]:
             _migrate_room_image_prompts(data)
             return data
     except Exception as e:
+        if strict:
+            raise
         logger.warning("_load_world_data DB error: %s", e)
 
+    if strict:
+        return {"locations": []}
     # Fallback: the legacy JSON file
     path = _get_world_file()
     if path.exists():
@@ -569,7 +589,7 @@ def _save_world_data(data: Dict[str, Any]) -> None:
 
 # === Welt-Settings (world_kv) ===
 
-def get_world_setting(key: str, default: str = "") -> str:
+def get_world_setting(key: str, default: str = "", *, strict: bool = False) -> str:
     """Read a world setting value from world_kv.
 
     Convention: keys are ``<area>.<field>``, e.g. ``news.style`` or
@@ -583,6 +603,8 @@ def get_world_setting(key: str, default: str = "") -> str:
         ).fetchone()
         return (row[0] or default) if row else default
     except Exception as e:
+        if strict:
+            raise
         logger.debug("get_world_setting(%s) Fehler: %s", key, e)
         return default
 
@@ -601,16 +623,18 @@ def set_world_setting(key: str, value: str) -> None:
 
 
 # --- World Freeze ---------------------------------------------------------
-# Persistenter Schalter, der die AUTONOME Welt-Simulation einfriert (AgentLoop,
-# hourly Ticks, Scheduler-Jobs), damit man die Welt in Ruhe
-# aufbauen kann. TaskQueue (Bildgenerierung) und LLM-Tools bleiben bewusst
-# aktiv — daher NICHT die queue_paused-Pause wiederverwenden.
-# Siehe development_instructions/plan-world-freeze.md.
+# Persistent switch freezing autonomous simulation (AgentLoop, hourly ticks
+# and scheduler jobs) while the world is being edited. TaskQueue media jobs
+# and on-demand LLM tools deliberately remain active; do not reuse the
+# queue_paused switch.
+# See development_instructions/plan-world-freeze.md.
 WORLD_FROZEN_KEY = "world_frozen"
 
 
-def is_world_frozen() -> bool:
-    """True wenn die Welt eingefroren ist (autonome Simulation angehalten)."""
+def is_world_frozen(*, strict: bool = False) -> bool:
+    """Whether autonomous simulation is frozen."""
+    if strict:
+        return get_world_setting(WORLD_FROZEN_KEY, "0", strict=True) == "1"
     return get_world_setting(WORLD_FROZEN_KEY, "0") == "1"
 
 
@@ -641,20 +665,19 @@ def set_world_frozen(frozen: bool) -> None:
 
 
 # --- World Sleep -----------------------------------------------------------
-# Persistenter Schalter: alle NPCs schlafen (echtes is_sleeping, siehe
-# world_ops.sleep_world/wake_world). Waehrend des Schlafmodus loesen NPCs
-# keine LLM-Chat-Calls aus (AgentLoop-Turns/Reaktionen/Bumps,
-# direkter Chat) — Memory-Konsolidierung, periodische Ticks, Scheduler,
-# TaskQueue und LLM-Tools laufen bewusst weiter. Die GAME-Uhr laeuft weiter
-# (anders als Freeze). Siehe development_instructions/plan-game-time.md.
+# Persistent sleep switch: all NPCs enter real is_sleeping state
+# (world_ops.sleep_world/wake_world). NPC chat calls, reactions and bumps stop;
+# memory consolidation, periodic ticks, scheduler jobs, TaskQueue and LLM
+# tools deliberately remain active. Unlike a world freeze, sleep does not
+# stop the game clock. See development_instructions/plan-game-time.md.
 WORLD_SLEEPING_KEY = "world_sleeping"
-# JSON-Liste der Characters, die schon VOR dem Sleep-Button schliefen —
-# wake_world laesst diese schlafen (natuerlicher Schlaf bleibt unangetastet).
+# Characters already asleep before the sleep button was pressed.
+# wake_world leaves them asleep rather than interrupting natural sleep.
 WORLD_SLEEP_PRIOR_KEY = "world_sleep_prior"
 
 
 def is_world_sleeping() -> bool:
-    """True wenn der Welt-Schlafmodus aktiv ist (alle NPCs schlafen)."""
+    """Return whether world sleep mode is active."""
     return get_world_setting(WORLD_SLEEPING_KEY, "0") == "1"
 
 
@@ -670,12 +693,12 @@ def set_world_sleeping(sleeping: bool) -> None:
 # === Orte ===
 
 def _generate_location_id() -> str:
-    """Generiert eine eindeutige 8-Zeichen Hex-ID fuer einen Ort."""
+    """Generate an eight-character hexadecimal location ID."""
     return uuid.uuid4().hex[:8]
 
 
 def _generate_room_id() -> str:
-    """Generiert eine eindeutige 8-Zeichen Hex-ID fuer einen Raum."""
+    """Generate an eight-character hexadecimal room ID."""
     return uuid.uuid4().hex[:8]
 
 
@@ -725,10 +748,10 @@ def is_floor_room(room_id: str) -> bool:
     return floor_room_level(room_id) is not None
 
 
-# === Raum-Hilfsfunktionen ===
+# === Room helpers ===
 
 def get_location_rooms(location: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Gibt die Raeume eines Orts zurueck."""
+    """Return a location's rooms."""
     return location.get("rooms", [])
 
 
@@ -768,7 +791,7 @@ def find_location_by_room(room_id: str) -> Optional[Dict[str, Any]]:
 
 
 def get_room_by_name(location: Dict[str, Any], room_name: str) -> Optional[Dict[str, Any]]:
-    """Findet einen Raum per Name (exakt oder fuzzy) in einem Ort."""
+    """Find a room by exact or fuzzy name within a location."""
     if not room_name:
         return None
     rooms = location.get("rooms", [])
@@ -782,15 +805,15 @@ def get_room_by_name(location: Dict[str, Any], room_name: str) -> Optional[Dict[
         rn = room.get("name", "").lower()
         if rn and (rn in name_lower or name_lower in rn):
             return room
-    # Wort-basierter Match: alle Wörter des kürzeren im längeren enthalten
-    # z.B. "Private Büro" matched "Privates Büro" (büro in beiden, privat* in beiden)
+    # Word match: every word in the shorter name occurs in the longer one.
+    # For example, "Private office" matches "Private offices" by word prefix.
     query_words = name_lower.split()
     for room in rooms:
         rn = room.get("name", "").lower()
         if not rn:
             continue
         room_words = rn.split()
-        # Prüfe ob jedes Query-Wort als Prefix eines Raum-Worts vorkommt (oder umgekehrt)
+        # Every query word must prefix a room word, or vice versa.
         if query_words and room_words and all(
             any(qw.startswith(rw) or rw.startswith(qw) for rw in room_words)
             for qw in query_words
@@ -800,9 +823,9 @@ def get_room_by_name(location: Dict[str, Any], room_name: str) -> Optional[Dict[
 
 
 def get_room_activity_hint(location_id: str, room_id: str = "") -> str:
-    """Freitext-Richtung „was man hier typischerweise tut" aus dem Raum
-    (Fallback: Location). Ersetzt die fruehere Activity-Namen-Liste — der
-    Raum gibt nur die Richtung vor, das LLM entscheidet frei.
+    """Return the room's free-text activity direction, falling back to its location.
+
+    The room suggests what is typical here; the LLM chooses the activity.
     """
     if not location_id:
         return ""
@@ -822,10 +845,9 @@ def get_room_activity_hint(location_id: str, room_id: str = "") -> str:
 
 
 def _validate_room_description(text: str) -> str:
-    """Letzte Sicherheitspruefung bevor eine Raum-Beschreibung gespeichert wird.
+    """Reject obvious non-description payloads before saving a room description.
 
-    Lehnt Texte ab die offensichtlich keine Raum-Beschreibungen sind
-    (eingebettete JSON-Objekte, Tool-Call-Tags, Appearance-Daten).
+    Embedded JSON objects, tool-call tags and appearance data are not room prose.
     """
     if not text or not text.strip():
         return text
@@ -839,7 +861,7 @@ def _validate_room_description(text: str) -> str:
                 return ""
         except Exception:
             pass
-        # JSON-Praefix gefolgt von anderem Text
+        # JSON prefix followed by other text.
         if '}\n' in stripped or '}<' in stripped:
             logger.warning("Raum-Beschreibung enthaelt JSON-Praefix — abgelehnt")
             return ""
@@ -1050,16 +1072,13 @@ def clear_location_prompt_changed(location_id: str) -> bool:
         return False
 
 
-def list_locations() -> List[Dict[str, Any]]:
+def list_locations(*, strict: bool = False) -> List[Dict[str, Any]]:
     """All locations of the world, exactly as stored — no merge of any kind."""
-    return _load_world_data().get("locations", [])
+    return _load_world_data(strict=strict).get("locations", [])
 
 
 def resolve_location(identifier: str) -> Optional[Dict[str, Any]]:
-    """Findet einen Ort per ID, Name oder Teilstring (Backwards-Compatibility).
-
-    Sucht: 1) exakte ID, 2) exakter Name, 3) Teilstring-Match (bidirektional).
-    """
+    """Find a location by ID, exact name, then bidirectional substring match."""
     if not identifier:
         return None
     locations = list_locations()
@@ -1081,17 +1100,16 @@ def resolve_location(identifier: str) -> Optional[Dict[str, Any]]:
 
 
 def get_location(identifier: str) -> Optional[Dict[str, Any]]:
-    """Gibt einen Ort anhand von ID oder Name zurueck (Backwards-Compatible)."""
+    """Return a location identified by ID or name."""
     return resolve_location(identifier)
 
 
 # ============================================================
 # KNOWLEDGE-ITEM VISIBILITY
-# Ein Ort oder Raum kann ein Item verlangen, das der Character besitzen
-# muss um diesen Ort/Raum zu "kennen" (im Picker/Chat/Scheduler sichtbar).
-# Vererbung: ist das Item auf Location-Ebene gesetzt, gilt es automatisch
-# auch fuer alle Raeume darunter — der Character muss es dann erst haben,
-# bevor er ueberhaupt die Location sieht.
+# A location or room may require an inventory item before it is known and
+# visible in pickers, chat and scheduler context. A location-level item gate
+# is inherited by all its rooms, so the character needs it before seeing
+# the location itself.
 # ============================================================
 
 def _character_item_ids(character_name: str) -> Set[str]:
@@ -1221,9 +1239,8 @@ def room_visible_to_character(character_name: str,
 
 
 def list_locations_for_character(character_name: str) -> List[Dict[str, Any]]:
-    """Liefert alle Locations die der Character dank Wissens-Items sehen darf.
-    Raeume werden pro Location ebenfalls gefiltert — nur sichtbare bleiben im
-    zurueckgelieferten 'rooms'-Array.
+    """Return locations visible through the character's knowledge-item gates.
+    Each returned rooms array is filtered by the same visibility requirements.
 
     The character's known list and inventory are fetched ONCE
     (``visibility_context``) and passed down. Without it a 30-location world
@@ -1241,27 +1258,30 @@ def list_locations_for_character(character_name: str) -> List[Dict[str, Any]]:
     return visible
 
 
-def get_location_by_id(location_id: str) -> Optional[Dict[str, Any]]:
-    """Gibt einen Ort per exakter ID-Suche zurueck.
+def get_location_by_id(location_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
+    """Return a location by exact ID, optionally propagating DB/JSON read errors.
 
     Served from the read cache's id index when it is warm — one parse instead
     of one per location of the world.
     """
     if not location_id:
         return None
-    if _cached_texts() is None:
-        _load_world_data()          # warm the cache, then use the index
+    if _cached_texts(strict=strict) is None:
+        _load_world_data(strict=strict)  # warm a cache with the requested trust level
     with _world_cache_lock:
         by_id = _world_cache["by_id"] if (
             _world_cache["key"] == _world_cache_key()
-            and _world_cache["gen"] == _world_generation) else None
+            and _world_cache["gen"] == _world_generation
+            and (not strict or _world_cache.get("strict", False))) else None
         text = by_id.get(location_id) if by_id else None
     if text is not None:
         try:
             return json.loads(text)
         except (TypeError, ValueError):
+            if strict:
+                raise
             pass
-    for location in list_locations():
+    for location in list_locations(strict=strict):
         if location.get("id") == location_id:
             return location
     return None
@@ -1979,16 +1999,15 @@ def migrate_clear_entry_rooms_once() -> Dict[str, int]:
 
 
 def get_location_name(location_id: str) -> str:
-    """Gibt den Namen eines Ortes anhand seiner ID zurueck.
+    """Resolve an ID to its location name.
 
-    Wenn die ID aufgeloest werden kann: Name zurueck.
-    Wenn es wie eine Hex-ID aussieht aber nicht gefunden wird: "" (stale Referenz).
-    Sonst (temporaerer Ortsname wie "Café"): Wert direkt zurueck.
+    Return an empty string for a stale hexadecimal ID. Other unmatched values
+    remain temporary display names.
     """
     loc = resolve_location(location_id)
     if loc:
         return loc.get("name", location_id)
-    # Hex-ID die nicht aufgeloest werden konnte = geloeschter Ort
+    # An unresolved hexadecimal ID refers to a deleted location.
     if re.match(r'^[0-9a-f]{8}$', location_id):
         return ""
     # Temporaerer Ortsname (z.B. "Café") — direkt zurueckgeben
@@ -1996,10 +2015,7 @@ def get_location_name(location_id: str) -> str:
 
 
 def get_location_id(identifier: str) -> str:
-    """Gibt die ID eines Ortes zurueck (per ID oder Name gesucht).
-
-    Nuetzlich um von Name auf ID zu konvertieren.
-    """
+    """Resolve a location name or ID to its persistent ID."""
     loc = resolve_location(identifier)
     if loc:
         return loc.get("id", "")
@@ -2414,23 +2430,15 @@ def cleanup_orphan_backgrounds() -> Dict[str, int]:
 
 
 def move_orphan_gallery_files() -> Dict[str, int]:
-    """Verschiebt Bilder, die NIRGENDS mehr referenziert sind, in einen
-    Backup-Ordner.
+    """Move unreferenced gallery images to a backup directory, never delete them.
 
-    "Orphan" heisst: PNG/JPG/WEBP-Datei liegt in ``world_gallery/<owner>/``,
-    aber ist weder in der ``background_images``-Liste einer Location noch in
-    ``gallery_meta.json`` (image_types / image_rooms / image_metas) noch in
-    ``prompts.json``.
+    Orphans are PNG/JPG/WebP files under world_gallery/<owner>/ that are not
+    referenced by location backgrounds, gallery metadata or saved prompts.
+    Move them to world_gallery_backup/<owner>/<filename>, adding a timestamp
+    suffix on collision.
 
-    Loescht die Datei NICHT. Verschiebt sie nach
-    ``world_gallery_backup/<owner>/<filename>``. Bei Konflikt mit
-    existierender Backup-Datei wird ein Timestamp-Suffix angehaengt.
-
-    Sollte NACH ``cleanup_orphan_backgrounds`` laufen — sonst werden
-    Files verschoben, deren DB-Eintrag erst danach gepruned wuerde, mit
-    falsch wirkender Reihenfolge.
-
-    Returns Stats.
+    Run after cleanup_orphan_backgrounds so obsolete DB references are
+    pruned before deciding which files are unreferenced. Return statistics.
     """
     import json as _json
     import shutil as _shutil
@@ -2463,7 +2471,7 @@ def move_orphan_gallery_files() -> Dict[str, int]:
             continue
         owner_id = owner_dir.name
 
-        # Referenzierte Files aus DB + Meta einsammeln.
+        # Collect referenced files from the DB and gallery metadata.
         refs: set = set(referenced.get(owner_id, set()))
 
         meta_path = owner_dir / "gallery_meta.json"
@@ -2486,8 +2494,8 @@ def move_orphan_gallery_files() -> Dict[str, int]:
             except Exception:
                 pass
 
-        # Orphans = Dateien im Dir, die nicht referenziert sind.
-        # JSON-Sidecars (gallery_meta.json, prompts.json, etc.) ueberspringen.
+        # Orphans are directory entries absent from the reference set.
+        # Skip JSON sidecars such as gallery_meta.json and prompts.json.
         moved_this = 0
         for fp in owner_dir.iterdir():
             if not fp.is_file():
@@ -2501,8 +2509,8 @@ def move_orphan_gallery_files() -> Dict[str, int]:
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest = dest_dir / fp.name
             if dest.exists():
-                # Kollision (z.B. wenn cleanup mehrfach laeuft): Suffix
-                # mit Zeitstempel anhaengen.
+                # Repeated cleanup can collide with a prior backup.
+                # Append a timestamp to preserve both files.
                 stem = fp.stem
                 ts = _dt.now().strftime("%Y%m%d-%H%M%S")
                 dest = dest_dir / f"{stem}__{ts}{fp.suffix}"
@@ -2934,12 +2942,11 @@ def get_background_path(location_identifier: str, room: str = "",
 
 
 def get_background_file_path(location_identifier: str, file: str) -> Optional[Path]:
-    """Pfad zu einem KONKRETEN Hintergrundbild (per Dateiname/bg_id), validiert
-    gegen die als Hintergrund markierten Bilder der Location. None, wenn der
-    Name nicht zu einem bekannten Hintergrund gehoert oder die Datei fehlt.
+    """Resolve one named background image, verifying membership and existence.
 
-    Wird vom /play-Pin verwendet: Frontend kennt den gewaehlten Dateinamen und
-    fordert exakt dieses Bild an, damit Figuren-Positionen daran haften."""
+    The /play pin requests its selected filename exactly so figure positions
+    stay attached to that image. Return None for unknown or missing files.
+    """
     if not (location_identifier and file):
         return None
     loc = resolve_location(location_identifier)
@@ -2960,7 +2967,7 @@ def get_background_file_path(location_identifier: str, file: str) -> Optional[Pa
 
 
 def get_background_images(location_id: str) -> List[str]:
-    """Gibt die Liste der als Hintergrund markierten Bilder zurueck."""
+    """Return the images marked as backgrounds."""
     loc = get_location_by_id(location_id)
     if not loc:
         return []
@@ -3041,7 +3048,7 @@ def get_gallery_dir(location_identifier: str) -> Path:
 
 
 def list_gallery_images(location_name: str) -> List[str]:
-    """Gibt alle Galerie-Bilder eines Ortes zurueck (Dateinamen, neueste zuerst)."""
+    """Return a location's gallery filenames, newest first."""
     gallery_dir = get_gallery_dir(location_name)
     if not gallery_dir.exists():
         return []
@@ -3068,7 +3075,7 @@ def save_gallery_prompt(location_name: str, image_name: str, prompt: str):
 
 
 def get_all_gallery_prompts(location_name: str) -> Dict[str, str]:
-    """Gibt alle gespeicherten Prompts eines Ortes zurueck."""
+    """Return a location's saved prompts."""
     gallery_dir = get_gallery_dir(location_name)
     prompts_file = gallery_dir / "prompts.json"
     if prompts_file.exists():
@@ -3101,7 +3108,7 @@ def _save_gallery_meta(location_name: str, meta: dict):
 
 
 def set_gallery_image_room(location_name: str, image_name: str, room_id: str):
-    """Setzt den Raum eines Galerie-Bildes."""
+    """Assign a room to a gallery image."""
     meta = _load_gallery_meta(location_name)
     rooms = meta.get("rooms", {})
     if room_id:
@@ -3113,12 +3120,10 @@ def set_gallery_image_room(location_name: str, image_name: str, room_id: str):
 
 
 def find_room_by_gallery_image(image_name: str) -> tuple:
-    """Sucht einen Raum/Ort anhand eines Galerie-Bildnamens.
+    """Find a location and room by gallery filename.
 
-    Iteriert ueber alle world_gallery-Ordner und prueft ob die Datei dort liegt
-    und ggf. einem Raum zugeordnet ist.
-
-    Returns: (location_id, room_id) — beides leer wenn nicht gefunden.
+    Search world_gallery directories and read any room assignment.
+    Return (location_id, room_id), both empty when no image is found.
     """
     base = get_storage_dir() / "world_gallery"
     if not base.exists() or not image_name:
@@ -3128,7 +3133,7 @@ def find_room_by_gallery_image(image_name: str) -> tuple:
             continue
         if not (loc_dir / image_name).exists():
             continue
-        # Bild gefunden — Raum-Zuordnung aus gallery_meta.json lesen
+        # Image found; read its room assignment from gallery_meta.json.
         meta_file = loc_dir / "gallery_meta.json"
         room_id = ""
         if meta_file.exists():
@@ -3142,13 +3147,13 @@ def find_room_by_gallery_image(image_name: str) -> tuple:
 
 
 def get_gallery_image_rooms(location_name: str) -> Dict[str, str]:
-    """Gibt alle Bild-Raum-Zuordnungen zurueck."""
+    """Return all image-to-room assignments."""
     meta = _load_gallery_meta(location_name)
     return meta.get("rooms", {})
 
 
 def remove_gallery_image_room(location_name: str, image_name: str):
-    """Entfernt die Raum-Zuordnung eines geloeschten Bildes."""
+    """Remove a deleted image's room assignment."""
     meta = _load_gallery_meta(location_name)
     rooms = meta.get("rooms", {})
     if image_name in rooms:
@@ -3320,7 +3325,7 @@ def migrate_map_images_once() -> Dict[str, int]:
 
 
 def set_gallery_image_meta(location_name: str, image_name: str, meta_info: dict):
-    """Speichert Erzeugungs-Metadaten (Backend, Model etc.) fuer ein Galerie-Bild."""
+    """Save a gallery image's generation metadata, including backend and model."""
     meta = _load_gallery_meta(location_name)
     image_metas = meta.get("image_metas", {})
     image_metas[image_name] = meta_info
@@ -3329,18 +3334,17 @@ def set_gallery_image_meta(location_name: str, image_name: str, meta_info: dict)
 
 
 def get_gallery_image_metas(location_name: str) -> Dict[str, dict]:
-    """Gibt alle Bild-Metadaten zurueck: {image_name: {backend: ..., model: ...}}."""
+    """Return image metadata as {image_name: {backend: ..., model: ...}}."""
     meta = _load_gallery_meta(location_name)
     return meta.get("image_metas", {})
 
 
 def move_gallery_image(src_location: str, target_location: str, image_name: str) -> Optional[str]:
-    """Verschiebt ein Galerie-Bild von einer Location in eine andere.
+    """Move a gallery image and its metadata to another location's gallery.
 
-    Die Datei wandert in die Ziel-Galerie (Owner-aufgeloest); Prompt, Typ und
-    Erzeugungs-Metadaten werden uebertragen. Raum-Zuordnung + Hintergrund-Flag
-    der Quelle werden geloescht (gelten nur dort). Rueckgabe: der (ggf.
-    kollisionssicher umbenannte) Ziel-Dateiname, sonst None.
+    Resolve destination ownership and transfer the prompt, type and generation
+    metadata. Clear source-only room and background assignments. Return the
+    destination filename, renamed on collision, or None on failure.
     """
     import shutil
     if not image_name or "/" in image_name or ".." in image_name:
@@ -3357,12 +3361,12 @@ def move_gallery_image(src_location: str, target_location: str, image_name: str)
     if not src_file.exists():
         return None
 
-    # Metadaten der Quelle einsammeln (vor dem Verschieben).
+    # Capture source metadata before moving the file.
     prompt = get_all_gallery_prompts(src_id).get(image_name, "")
     itype = get_gallery_image_types(src_id).get(image_name, "")
     imeta = get_gallery_image_metas(src_id).get(image_name, {})
 
-    # Quell-spezifische Zuordnungen loesen (gelten nur in der Quell-Location).
+    # Clear assignments that apply only to the source location.
     remove_background_image(src_id, image_name)
     remove_gallery_image_room(src_id, image_name)
 
@@ -3370,7 +3374,7 @@ def move_gallery_image(src_location: str, target_location: str, image_name: str)
     if src_dir.resolve() == target_dir.resolve():
         return image_name
 
-    # Datei kollisionssicher verschieben.
+    # Move the file without overwriting an existing destination.
     target_dir.mkdir(parents=True, exist_ok=True)
     new_name = image_name
     if (target_dir / new_name).exists():
@@ -3378,7 +3382,7 @@ def move_gallery_image(src_location: str, target_location: str, image_name: str)
         new_name = f"{Path(image_name).stem}_{int(_t.time())}{Path(image_name).suffix or '.png'}"
     shutil.move(str(src_file), str(target_dir / new_name))
 
-    # Metadaten in die Ziel-Galerie uebertragen.
+    # Transfer metadata to the destination gallery.
     if prompt:
         save_gallery_prompt(target_id, new_name, prompt)
     if itype:
@@ -3411,15 +3415,11 @@ def move_gallery_image(src_location: str, target_location: str, image_name: str)
 # === Location-ID Migration ===
 
 def migrate_location_ids():
-    """Fuegt persistente IDs zu bestehenden Locations hinzu und migriert Referenzen.
+    """Assign persistent IDs to legacy locations and migrate their references.
 
-    Wird beim Server-Start aufgerufen. Idempotent: ueberspringt bereits migrierte User.
-
-    Schritte:
-    1. Fuer jeden User world.json laden
-    2. Locations ohne 'id' bekommen eine neue ID
-    3. Filesystem-Pfade umbenennen (backgrounds, gallery)
-    4. Alle Referenzen in Character-Profilen, Configs, Scheduler etc. umschreiben
+    Called at startup and idempotent for locations that already have IDs.
+    Assign missing IDs, rename legacy filesystem paths and update character,
+    configuration and scheduler references.
     """
     sd = get_storage_dir()
     if not sd.exists():
@@ -3442,7 +3442,7 @@ def migrate_location_ids():
 
     changed = False
 
-    # Phase 1: IDs zuweisen (falls noetig)
+    # Phase 1: assign missing IDs.
     name_to_id = {}
     needs_ids = any(not loc.get("id") for loc in locations)
     if needs_ids:
@@ -3452,12 +3452,12 @@ def migrate_location_ids():
             name_to_id[loc["name"]] = loc["id"]
         changed = True
 
-    # Phase 2: Filesystem bereinigen + backgrounds migrieren (IMMER)
+    # Phase 2: always clean filesystem paths and migrate backgrounds.
     fs_changed = _migrate_filesystem_and_backgrounds(user_dir, locations)
     if fs_changed:
         changed = True
 
-    # world.json speichern wenn geaendert
+    # Persist the updated locations when any ID changed.
     if changed:
         world_data["locations"] = locations
         world_file.write_text(
@@ -3465,22 +3465,18 @@ def migrate_location_ids():
             encoding="utf-8"
         )
 
-    # Referenzen migrieren (nur bei neuer ID-Zuweisung)
+    # Migrate references only after assigning new IDs.
     if needs_ids:
         _migrate_references_to_ids(user_dir, name_to_id)
         logger.info("Location-IDs migriert")
 
 
 def _migrate_filesystem_and_backgrounds(user_dir: Path, locations: List[Dict]) -> bool:
-    """Migriert backgrounds/ nach gallery/ und setzt background_image Referenzen.
+    """Migrate legacy backgrounds into galleries and set background references.
 
-    Laeuft bei JEDEM Server-Start fuer ALLE User:
-    - Gallery-Ordner: safe_name/ -> id/ umbenennen (falls noch noetig)
-    - backgrounds/{id_or_name}.png -> gallery/{id}/ verschieben
-    - background_image Referenz in Location setzen
-    - Leeres backgrounds/ Verzeichnis aufraemen
-
-    Returns True wenn world.json-Aenderungen vorgenommen wurden.
+    At startup, rename name-based gallery directories to persistent IDs when
+    needed, move backgrounds into their galleries, assign background images
+    and remove empty legacy directories. Return whether location data changed.
     """
     import shutil
 
@@ -3520,7 +3516,7 @@ def _migrate_filesystem_and_backgrounds(user_dir: Path, locations: List[Dict]) -
             loc.pop("background_image")
             changed = True
 
-        # Ungueltige Eintraege in background_images bereinigen
+        # Prune invalid background_images entries.
         if loc.get("background_images"):
             loc_gallery = gallery_dir / loc_id if gallery_dir.exists() else None
             if loc_gallery:
@@ -3531,7 +3527,7 @@ def _migrate_filesystem_and_backgrounds(user_dir: Path, locations: List[Dict]) -
             if loc["background_images"]:
                 continue
 
-        # backgrounds/{id}.png oder {safe_name}.png -> gallery/{id}/ verschieben
+        # Move backgrounds/{id}.png or {safe_name}.png into gallery/{id}/.
         if bg_dir.exists():
             bg_file = None
             for candidate in [bg_dir / f"{loc_id}.png", bg_dir / f"{safe_name}.png"]:
@@ -3556,7 +3552,7 @@ def _migrate_filesystem_and_backgrounds(user_dir: Path, locations: List[Dict]) -
                 loc["background_images"] = bg_list
                 changed = True
 
-        # Keine background_images gesetzt -> neuestes Gallery-Bild nehmen
+        # Without a background assignment, use the newest gallery image.
         if not loc.get("background_images"):
             loc_gallery = gallery_dir / loc_id if gallery_dir.exists() else None
             if loc_gallery and loc_gallery.exists():
@@ -3570,7 +3566,7 @@ def _migrate_filesystem_and_backgrounds(user_dir: Path, locations: List[Dict]) -
                     changed = True
                     logger.info("Background-Referenz gesetzt: %s -> %s", loc_name, images[0])
 
-    # backgrounds/ Ordner aufraemen wenn leer
+    # Remove the legacy backgrounds directory when empty.
     if bg_dir.exists():
         remaining = [f for f in bg_dir.iterdir()]
         if not remaining:
@@ -3581,14 +3577,10 @@ def _migrate_filesystem_and_backgrounds(user_dir: Path, locations: List[Dict]) -
 
 
 def _migrate_references_to_ids(user_dir: Path, name_to_id: Dict[str, str]):
-    """Migriert alle Location-Name-Referenzen zu IDs in Character-Daten.
+    """Migrate legacy location-name references in character data to IDs.
 
-    Migriert:
-    - character_profile.json: current_location, outfits[].location
-    - character_config.json: allowed_locations
-    - scheduler/jobs.json: action.location
-    - scheduler/daily_schedule.json: slots[].location
-    - User-Profile: current_location
+    Covers current_location, outfit locations, allowed locations, scheduler
+    actions, daily schedule slots and account-profile locations.
     """
     username = user_dir.name
 

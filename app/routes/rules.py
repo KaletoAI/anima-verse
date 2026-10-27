@@ -1,10 +1,14 @@
 """HTTP routes for world rules."""
 import io
 from typing import Any, Dict
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 
-from app.models.rules import load_rules, add_rule, update_rule, delete_rule, get_rule
+from app.core.auth_dependency import get_current_user_from_ctx, require_admin
+from app.models.rules import (
+    load_rules, add_rule, update_rule, delete_rule, get_rule,
+    RuleValidationError, RuleWriteError,
+)
 
 router = APIRouter(prefix="/rules", tags=["rules"])
 
@@ -19,10 +23,27 @@ def _normalize_target(value: Any) -> str:
     return "shared" if v == "shared" else "world"
 
 
+def _visible(rule: dict) -> bool:
+    user = get_current_user_from_ctx()
+    return rule.get("type") != "influence" or bool(user and user.get("role") == "admin")
+
+
+def _body_rule(data: Any) -> dict:
+    if not isinstance(data, dict) or not isinstance(data.get("rule"), dict):
+        raise HTTPException(status_code=400, detail="Body must contain a rule object.")
+    return data["rule"]
+
+
+def _write_error(error: Exception) -> HTTPException:
+    if isinstance(error, RuleValidationError):
+        return HTTPException(status_code=400, detail=error.errors)
+    return HTTPException(status_code=500, detail=str(error))
+
+
 @router.get("")
 def list_rules_route() -> Dict[str, Any]:
     """List the merged shared baseline and world overlay with origin markers."""
-    return {"rules": load_rules()}
+    return {"rules": [rule for rule in load_rules() if _visible(rule)]}
 
 
 @router.get("/skill-options")
@@ -40,12 +61,33 @@ def quantities_route() -> list[dict]:
     return quantities()
 
 
+@router.get("/influence-options", dependencies=[Depends(require_admin)])
+def influence_options_route() -> dict:
+    """Dynamic Influence authoring choices, restricted to administrators."""
+    from app.core.stat_influence import influence_options
+    return influence_options()
+
+
+@router.post("/influence-validate", dependencies=[Depends(require_admin)])
+async def influence_validate_route(request: Request) -> dict:
+    """Diagnose a draft without persisting it; invalid drafts still return 200."""
+    import asyncio
+    from app.core.stat_influence import validate_influence_rule, influence_rule_status
+    data = await request.json()
+    rule = data.get("rule") if isinstance(data, dict) else None
+    def diagnose():
+        errors = validate_influence_rule(rule)
+        status = influence_rule_status(rule) if not errors else {"available": False, "reasons": []}
+        return {"errors": errors, "warnings": status["reasons"], "available": status["available"]}
+    return await asyncio.to_thread(diagnose)
+
+
 @router.get("/{rule_id}")
 def get_rule_route(rule_id: str) -> Dict[str, Any]:
     """Return one rule by ID."""
     rule = get_rule(rule_id)
-    if not rule:
-        raise HTTPException(status_code=404, detail="Regel nicht gefunden")
+    if not rule or not _visible(rule):
+        raise HTTPException(status_code=404, detail="Rule not found")
     return {"rule": rule}
 
 
@@ -59,11 +101,14 @@ async def create_rule_route(request: Request) -> Dict[str, Any]:
 
 def _create_rule_route_sync(data: Any) -> Dict[str, Any]:
     """The blocking body of ``create_rule_route`` — runs in the threadpool."""
-    rule = data.get("rule", {})
+    rule = _body_rule(data)
     target = _normalize_target(data.get("target", "world"))
     if not rule.get("name") or not rule.get("type"):
-        raise HTTPException(status_code=400, detail="name und type sind Pflichtfelder")
-    created = add_rule(rule, target_dir=target)
+        raise HTTPException(status_code=400, detail="name and type are required")
+    try:
+        created = add_rule(rule, target_dir=target)
+    except (RuleValidationError, RuleWriteError) as error:
+        raise _write_error(error) from error
     return {"ok": True, "rule": created, "target": target}
 
 
@@ -77,11 +122,14 @@ async def update_rule_route(rule_id: str, request: Request) -> Dict[str, Any]:
 
 def _update_rule_route_sync(rule_id: str, data: Any) -> Dict[str, Any]:
     """The blocking body of ``update_rule_route`` — runs in the threadpool."""
-    updates = data.get("rule", {})
+    updates = _body_rule(data)
     target = _normalize_target(data.get("target", "world"))
-    updated = update_rule(rule_id, updates, target_dir=target)
+    try:
+        updated = update_rule(rule_id, updates, target_dir=target)
+    except (RuleValidationError, RuleWriteError) as error:
+        raise _write_error(error) from error
     if not updated:
-        raise HTTPException(status_code=404, detail="Regel nicht gefunden")
+        raise HTTPException(status_code=404, detail="Rule not found")
     return {"ok": True, "rule": updated, "target": target}
 
 
@@ -90,10 +138,13 @@ def delete_rule_route(rule_id: str, target: str = "") -> Dict[str, Any]:
     """Delete from world, shared, or automatically choose a world override first."""
     target_norm = (target or "").strip().lower()
     if target_norm not in ("", "world", "shared"):
-        raise HTTPException(status_code=400, detail="target muss world|shared|leer sein")
-    if delete_rule(rule_id, target_dir=target_norm):
-        return {"ok": True, "target": target_norm or "auto"}
-    raise HTTPException(status_code=404, detail="Regel nicht gefunden")
+        raise HTTPException(status_code=400, detail="target must be world, shared or empty")
+    try:
+        if delete_rule(rule_id, target_dir=target_norm):
+            return {"ok": True, "target": target_norm or "auto"}
+    except (RuleValidationError, RuleWriteError) as error:
+        raise _write_error(error) from error
+    raise HTTPException(status_code=404, detail="Rule not found")
 
 
 # ── Rule Import / Export ──
@@ -101,9 +152,12 @@ def delete_rule_route(rule_id: str, target: str = "") -> Dict[str, Any]:
 @router.get("/{rule_id}/export")
 def export_rule_route(rule_id: str) -> StreamingResponse:
     """Streams a single-rule ZIP."""
-    from app.core.content_io import export_rule_to_zip
+    from app.core.content_io import export_rule_snapshot_to_zip
+    rule = get_rule(rule_id)
+    if not rule or not _visible(rule):
+        raise HTTPException(status_code=404, detail="Rule not found")
     try:
-        zip_bytes = export_rule_to_zip(rule_id)
+        zip_bytes = export_rule_snapshot_to_zip(rule)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return StreamingResponse(
@@ -134,5 +188,7 @@ async def import_rule_route(
         return import_rule_from_zip(content, target=target, overwrite=overwrite)
     except FileExistsError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except (RuleValidationError, RuleWriteError) as error:
+        raise _write_error(error) from error
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

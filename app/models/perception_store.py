@@ -98,6 +98,19 @@ def _row_to_dict(row) -> Dict[str, Any]:
     return d
 
 
+def get_utterance_delivery(utterance_id: int) -> Optional[Tuple[Dict[str, Any], List[Dict[str, Any]]]]:
+    """Read a canonical speech act together with its persisted perceptions."""
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM utterances WHERE id=?", (utterance_id,)).fetchone()
+    if row is None:
+        return None
+    perceptions = conn.execute(
+        "SELECT perceiver, kind, content FROM perceptions WHERE utterance_id=? ORDER BY id",
+        (utterance_id,),
+    ).fetchall()
+    return _row_to_dict(row), [dict(perception) for perception in perceptions]
+
+
 def get_room_utterances(location_id: str, room_id: str = "",
                         limit: int = 100) -> List[Dict[str, Any]]:
     """Objective room view (god view): raw speech acts, oldest first.

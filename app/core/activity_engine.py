@@ -10,6 +10,7 @@ on the game clock, never on system time.
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 
 from app.core.game_time import GameTime
 from app.core.npc_windows import is_night
@@ -24,6 +25,229 @@ logger = get_logger("activity_engine")
 # ============================================================
 # 1. CONDITION PARSER & EVALUATOR
 # ============================================================
+
+@dataclass(frozen=True)
+class ConditionIssue:
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ConditionResult:
+    available: bool
+    passed: bool
+    reason: str
+
+
+class _ConditionUnavailable(ValueError):
+    """A strict atom has no trustworthy value."""
+
+
+_STRICT_CONTEXT: ContextVar[tuple[str, dict] | None] = ContextVar(
+    "strict_condition_context", default=None)
+_STRICT_STATES: ContextVar[frozenset[tuple[str, str]]] = ContextVar(
+    "strict_condition_states", default=frozenset())
+
+# Both validation and evaluation use these atom families. Legacy matching
+# retains its historical prefix matches; strict matching consumes the atom.
+_ATOM_PATTERNS = {
+    "time": r"(night|day)(?:([+-])(\d+))?$",
+    "present": r"present:(.+)",
+    "mood": r"mood:(.+)",
+    "relationship": r"relationship:([^><=]+)([><=])(\d+)",
+    "romantic": r"romantic:([^><=]+)([><=])(\d+)",
+    "danger": r"location_danger([><=])(\d+)$",
+    "state": r"state:(.+)",
+    "stat": r"([a-z_]+)([><=])(\d+)$",
+    "activity": r"current_activity:(.+)",
+    "schedule": r"schedule:(.+)",
+    "condition": r"condition:(.+)",
+    "item": r"has_item:(.+)",
+    "room_item": r"room_has_item:(.+)",
+    "event": r"event_active:(.+)",
+    "field": r"([a-z_][a-z0-9_]*)\s*(!=|=)\s*(.+)$",
+}
+_RESERVED_STATS = {
+    "mood", "relationship", "romantic", "has_item", "condition",
+    "event_active", "has_secret", "alone", "night", "day", "npc_present",
+    "current_activity", "location_danger",
+}
+
+
+def _condition_groups(condition: str) -> list[list[str]]:
+    return [[part.strip() for part in re.split(r"\s+AND\s+", group, flags=re.IGNORECASE)]
+            for group in re.split(r"\s+OR\s+", condition, flags=re.IGNORECASE)]
+
+
+def _condition_atom(part: str) -> tuple[bool, str]:
+    negated = part.upper().startswith("NOT ")
+    return negated, part[4:].strip() if negated else part.strip()
+
+
+def _atom_match(family: str, atom: str, *, strict: bool | None = None):
+    if strict is None:
+        strict = _STRICT_CONTEXT.get() is not None
+    pattern = _ATOM_PATTERNS[family]
+    if not strict and family in ("relationship", "romantic"):
+        pattern = pattern.replace("[^><=]+", r"\w+")
+    match = re.fullmatch if strict else re.match
+    return match(pattern, atom, flags=re.IGNORECASE)
+
+
+def _declared_condition_flags() -> set[str]:
+    from app.plugins.registry import flag_specs
+    return {"is_sleeping"} | {spec.flag for spec in flag_specs()}
+
+
+def _classify_condition_atom(atom: str) -> str:
+    lower = atom.lower()
+    if lower in {"always", "true", "alone", "at_home", "offmap", "travelling",
+                 "has_secret", "npc_present", "is_male", "is_female"}:
+        return lower
+    if lower in _declared_condition_flags():
+        return "flag"
+    for family in _ATOM_PATTERNS:
+        match = _atom_match(family, atom, strict=True)
+        if match:
+            if family not in ("time", "danger", "stat", "field") and not match[1].strip():
+                continue
+            if family == "stat" and match[1].lower() in _RESERVED_STATS:
+                continue
+            return family
+    return "unknown"
+
+
+def validate_condition_expression(condition: str) -> list[ConditionIssue]:
+    """Validate the shared OR/AND/NOT grammar, without reading world values."""
+    if not condition or not condition.strip():
+        return []
+    issues = []
+    for group in _condition_groups(condition):
+        for part in group:
+            _, atom = _condition_atom(part)
+            if not atom or atom.upper().startswith("NOT "):
+                issues.append(ConditionIssue("syntax", f"Invalid condition atom: {part!r}"))
+                continue
+            family = _classify_condition_atom(atom)
+            if family == "unknown":
+                issues.append(ConditionIssue("unknown_atom", f"Unknown condition atom: {atom}"))
+            elif family in ("npc_present", "event"):
+                issues.append(ConditionIssue("placeholder", f"Condition is not implemented: {atom}"))
+    return issues
+
+
+def _condition_profile(character_name: str) -> dict:
+    context = _STRICT_CONTEXT.get()
+    if context is not None and context[0] == character_name:
+        return context[1]
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name, strict=context is not None)
+    if context is not None and not profile:
+        raise _ConditionUnavailable(f"Character profile unavailable: {character_name}")
+    return profile or {}
+
+
+def _strict_references(groups: list[list[str]], location_id: str, room_id: str) -> None:
+    """Resolve every reference before any branch can pass."""
+    from app.models.character import list_available_characters
+    characters = None
+    for group in groups:
+        for part in group:
+            _, atom = _condition_atom(part)
+            family = _classify_condition_atom(atom)
+            if family in ("present", "relationship", "romantic"):
+                name = _atom_match(family, atom, strict=True)[1].strip()
+                if family != "present" and name.lower() == "any":
+                    continue
+                if characters is None:
+                    characters = set(list_available_characters(strict=True))
+                if name not in characters:
+                    raise _ConditionUnavailable(f"Unknown character reference: {name}")
+            elif family in ("item", "room_item"):
+                from app.models.inventory import resolve_item_id, get_item
+                token = _atom_match(family, atom, strict=True)[1].strip()
+                if not get_item(resolve_item_id(token, strict=True) or token, strict=True):
+                    raise _ConditionUnavailable(f"Unknown item reference: {token}")
+                if family == "room_item":
+                    from app.models.world import get_location_by_id, get_room_by_id
+                    location = get_location_by_id(location_id, strict=True)
+                    if location is None or get_room_by_id(location, room_id) is None:
+                        raise _ConditionUnavailable(f"Room reference unavailable: {location_id}/{room_id}")
+            elif family == "state":
+                from app.core.prompt_filters import load_filters
+                state_id = _atom_match("state", atom, strict=True)[1].strip().lower()
+                if not any(str(state.get("id") or "").strip().lower() == state_id
+                           for state in load_filters(strict=True)):
+                    raise _ConditionUnavailable(f"Unknown state reference: {state_id}")
+
+
+def _check_strict_state(character_name: str, state_id: str,
+                        location_id: str, room_id: str) -> tuple[bool, str]:
+    from app.core.prompt_filters import load_filters
+    state_id = state_id.strip().lower()
+    key = (character_name, state_id)
+    active = _STRICT_STATES.get()
+    if key in active:
+        raise _ConditionUnavailable(f"Cyclic state reference: {state_id}")
+    token = _STRICT_STATES.set(active | {key})
+    try:
+        states = [state for state in load_filters(strict=True)
+                  if str(state.get("id") or "").strip().lower() == state_id]
+        if not states:
+            raise _ConditionUnavailable(f"Unknown state reference: {state_id}")
+        matched = False
+        for state in states:
+            if not state.get("enabled", True):
+                continue
+            tagged, _ = _evaluate_single_condition_inner(
+                f"condition:{state_id}", character_name, location_id, room_id)
+            expression = (state.get("condition") or "").strip()
+            expression_passed = False
+            if expression:
+                result = evaluate_condition_strict(
+                    expression, character_name, location_id, room_id,
+                    profile=_condition_profile(character_name))
+                if not result.available:
+                    raise _ConditionUnavailable(result.reason)
+                expression_passed = result.passed
+            matched |= tagged or expression_passed
+        return matched, "" if matched else "State is not active"
+    finally:
+        _STRICT_STATES.reset(token)
+
+
+def evaluate_condition_strict(
+    condition: str, character_name: str, location_id: str = "", room_id: str = "",
+    *, profile: dict | None = None,
+) -> ConditionResult:
+    """Evaluate all atoms; unavailable values survive negation and OR."""
+    try:
+        issues = validate_condition_expression(condition)
+        if issues:
+            return ConditionResult(False, False, "; ".join(issue.message for issue in issues))
+        if not condition or not condition.strip():
+            return ConditionResult(True, True, "")
+        groups = _condition_groups(condition)
+        _strict_references(groups, location_id, room_id)
+        if profile is None:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name, strict=True)
+        if not profile:
+            raise _ConditionUnavailable(f"Character profile unavailable: {character_name}")
+        token = _STRICT_CONTEXT.set((character_name, profile))
+        try:
+            results = [[_evaluate_single_condition(part, character_name, location_id, room_id)
+                        for part in group] for group in groups]
+        finally:
+            _STRICT_CONTEXT.reset(token)
+        if any(all(passed for passed, _ in group) for group in results):
+            return ConditionResult(True, True, "")
+        reason = next((reason for group in results for passed, reason in group if not passed),
+                      "Condition not met")
+        return ConditionResult(True, False, reason)
+    except Exception as exc:
+        return ConditionResult(False, False, f"Condition unavailable: {exc}")
+
 
 def evaluate_condition(
     condition: str, character_name: str,
@@ -41,12 +265,8 @@ def evaluate_condition(
         return True, ""
 
     # Split OR groups first, then AND conditions within each group.
-    or_groups = [g.strip() for g in re.split(r"\s+OR\s+", condition, flags=re.IGNORECASE)]
-
     last_reason = ""
-    for group in or_groups:
-        # AND conditions within one group
-        and_parts = [p.strip() for p in re.split(r"\s+AND\s+", group, flags=re.IGNORECASE)]
+    for and_parts in _condition_groups(condition):
         group_passed = True
         group_reason = ""
         for part in and_parts:
@@ -69,15 +289,14 @@ def _evaluate_single_condition(
     condition: str, character_name: str,
     location_id: str, room_id: str = "") -> Tuple[bool, str]:
     """Evaluate a single condition."""
-    cond = condition.strip()
-
-    # --- NOT prefix ---
-    negated = False
-    if cond.upper().startswith("NOT "):
-        negated = True
-        cond = cond[4:].strip()
-
-    cond = cond.lower()
+    negated, cond = _condition_atom(condition)
+    if _STRICT_CONTEXT.get() is None:
+        cond = cond.lower()
+    elif ":" in cond:
+        predicate, payload = cond.split(":", 1)
+        cond = f"{predicate.lower()}:{payload}"
+    else:
+        cond = cond.lower()
 
     passed, reason = _evaluate_single_condition_inner(cond, character_name, location_id, room_id)
     if negated:
@@ -119,7 +338,7 @@ def _evaluate_single_condition_inner(
     #   day+30      — 06:30 until sunset
     # The offset shifts only the START — the end stays sunrise resp. sunset.
     # Negative (-) = preparation window, positive (+) = delay.
-    td_match = re.match(r"^(night|day)(?:([+-])(\d+))?$", cond)
+    td_match = _atom_match("time", cond)
     if td_match:
         base = td_match.group(1)
         sign = td_match.group(2) or ""
@@ -128,7 +347,7 @@ def _evaluate_single_condition_inner(
             shift = offset_min        # start later
         else:
             shift = -offset_min       # start earlier (default for "-")
-        now = game_time()  # night/day rules follow the game clock
+        now = game_time(strict=True) if _STRICT_CONTEXT.get() is not None else game_time()
         now_min = now.minutes_of_day
         sunrise_min = now.sunrise_min
         sunset_min = now.sunset_min
@@ -173,30 +392,30 @@ def _evaluate_single_condition_inner(
             return False, f"Nur tagsueber verfuegbar (day{lbl_offset})"
 
     # --- present:Name --- (target character in the same room/location)
-    present_match = re.match(r"present:(.+)", cond)
+    present_match = _atom_match("present", cond)
     if present_match:
         return _check_present(character_name, present_match.group(1).strip(),
                               location_id, room_id)
 
     # --- mood:X ---
-    mood_match = re.match(r"mood:(.+)", cond)
+    mood_match = _atom_match("mood", cond)
     if mood_match:
         target_mood = mood_match.group(1).strip()
         return _check_mood(character_name, target_mood)
 
     # --- relationship:Name>N or relationship:any>N ---
-    rel_match = re.match(r"relationship:(\w+)([><=])(\d+)", cond)
+    rel_match = _atom_match("relationship", cond)
     if rel_match:
-        target_char = rel_match.group(1)
+        target_char = rel_match.group(1).strip()
         operator = rel_match.group(2)
         threshold = int(rel_match.group(3))
         return _check_relationship(character_name, location_id,
                                    target_char, operator, threshold, field="strength")
 
     # --- romantic:Name>N or romantic:any>N ---
-    rom_match = re.match(r"romantic:(\w+)([><=])(\d+)", cond)
+    rom_match = _atom_match("romantic", cond)
     if rom_match:
-        target_char = rom_match.group(1)
+        target_char = rom_match.group(1).strip()
         operator = rom_match.group(2)
         threshold = int(rom_match.group(3))
         return _check_relationship(character_name, location_id,
@@ -208,46 +427,70 @@ def _evaluate_single_condition_inner(
             OFFMAP_SLEEP_SENTINEL, get_character_config,
             get_character_current_location, get_character_pos,
         )
-        current = get_character_current_location(character_name)
-        if cond == "offmap":
-            passed = not current and get_character_pos(character_name) is None
+        if _STRICT_CONTEXT.get() is not None:
+            current = get_character_current_location(
+                character_name, profile=_condition_profile(character_name))
         else:
-            home = (get_character_config(character_name) or {}).get("home_location") or ""
+            current = get_character_current_location(character_name)
+        if cond == "offmap":
+            passed = not current and get_character_pos(
+                character_name, strict=_STRICT_CONTEXT.get() is not None) is None
+        else:
+            if _STRICT_CONTEXT.get() is not None:
+                actor_config = get_character_config(
+                    character_name, profile=_condition_profile(character_name), strict=True)
+            else:
+                actor_config = get_character_config(character_name)
+            home = (actor_config or {}).get("home_location") or ""
+            if _STRICT_CONTEXT.get() is not None and not home:
+                raise _ConditionUnavailable("Home location is not configured")
             if home == OFFMAP_SLEEP_SENTINEL:
-                passed = not current and get_character_pos(character_name) is None
+                passed = not current and get_character_pos(
+                    character_name, strict=_STRICT_CONTEXT.get() is not None) is None
             else:
                 passed = bool(home) and home == current
         return bool(passed), "" if passed else f"Condition '{cond}' not met"
 
     if cond == "travelling":
         from app.core.travel_engine import get_journey
-        passed = get_journey(character_name) is not None
+        if _STRICT_CONTEXT.get() is not None:
+            passed = get_journey(character_name, profile=_condition_profile(character_name)) is not None
+        else:
+            passed = get_journey(character_name) is not None
         return passed, "" if passed else "No journey in progress"
 
-    danger_match = re.fullmatch(r"location_danger([><=])(\d+)", cond)
+    danger_match = _atom_match("danger", cond)
     if danger_match:
         from app.models.character import get_character_current_location
         from app.models.world import get_location_by_id
         from app.core.danger_system import get_danger_level
-        current = get_character_current_location(character_name)
-        location = get_location_by_id(current) if current else None
+        if _STRICT_CONTEXT.get() is not None:
+            current = get_character_current_location(
+                character_name, profile=_condition_profile(character_name))
+        else:
+            current = get_character_current_location(character_name)
+        location = get_location_by_id(
+            current, strict=_STRICT_CONTEXT.get() is not None) if current else None
+        if _STRICT_CONTEXT.get() is not None and location is None:
+            raise _ConditionUnavailable("Current location is unavailable")
         level = get_danger_level(location) if location else 0
         passed = _compare(level, danger_match[1], int(danger_match[2]))
         return passed, "" if passed else "Location danger condition not met"
 
     if cond.startswith("state:"):
+        state_id = cond.split(":", 1)[1].strip()
+        if _STRICT_CONTEXT.get() is not None:
+            return _check_strict_state(character_name, state_id, location_id, room_id)
         from app.core.prompt_filters import is_state_active
-        passed = is_state_active(character_name, cond.split(":", 1)[1].strip())
+        passed = is_state_active(character_name, state_id)
         return passed, "" if passed else "State is not active"
 
     # Generic comparisons for template-defined status fields follow specific atoms.
-    stat_match = re.match(r"([a-z_]+)([><=])(\d+)$", cond)
+    stat_match = _atom_match("stat", cond)
     if stat_match:
         stat_name = stat_match.group(1)
         # Exclude reserved names with dedicated handlers.
-        if stat_name not in ("mood", "relationship", "romantic", "has_item", "condition",
-                             "event_active", "has_secret", "alone", "night", "day", "npc_present",
-                             "current_activity", "location_danger"):
+        if stat_name not in _RESERVED_STATS:
             operator = stat_match.group(2)
             threshold = int(stat_match.group(3))
             return _check_status_effect(character_name, stat_name, operator, threshold)
@@ -257,18 +500,25 @@ def _evaluate_single_condition_inner(
     # package (registry) — no flag names hardcoded here (R1).
     _declared_flags = {"is_sleeping"}
     try:
-        from app.plugins.registry import flag_specs
-        _declared_flags.update(s.flag for s in flag_specs())
+        _declared_flags = _declared_condition_flags()
     except Exception:
+        if _STRICT_CONTEXT.get() is not None:
+            raise
         pass
     if cond in _declared_flags:
         fname = cond
         try:
-            from app.models.character import get_state_flags
-            if bool(get_state_flags(character_name).get(fname)):
+            if _STRICT_CONTEXT.get() is not None:
+                active = bool(_condition_profile(character_name).get(fname))
+            else:
+                from app.models.character import get_state_flags
+                active = bool(get_state_flags(character_name).get(fname))
+            if active:
                 return True, ""
-            return False, f"{fname} ist nicht gesetzt"
+            return False, f"{fname} is not set"
         except Exception as e:
+            if _STRICT_CONTEXT.get() is not None:
+                raise
             logger.debug("state-flag-Check fehlgeschlagen: %s", e)
             return False, f"{fname}-Check fehlgeschlagen"
 
@@ -276,35 +526,49 @@ def _evaluate_single_condition_inner(
     # Activity library removed: match against get_effective_activity (pose
     # flavor/catalog key resp. "Sleeping" via the is_sleeping flag), by
     # substring in both directions.
-    cact_match = re.match(r"current_activity:(.+)", cond)
+    cact_match = _atom_match("activity", cond)
     if cact_match:
         target = cact_match.group(1).strip().lower()
         try:
             from app.models.character import get_effective_activity
-            current = (get_effective_activity(character_name) or "").lower()
+            if _STRICT_CONTEXT.get() is not None:
+                current = (get_effective_activity(
+                    character_name, profile=_condition_profile(character_name)) or "").lower()
+            else:
+                current = (get_effective_activity(character_name) or "").lower()
             if not current:
+                if _STRICT_CONTEXT.get() is not None:
+                    raise _ConditionUnavailable("Current activity is unavailable")
                 return False, f"Pose muss '{target}' sein (keine aktiv)"
             if target in current or current in target:
                 return True, ""
             return False, f"Pose muss '{target}' sein (ist: '{current}')"
         except Exception as e:
+            if _STRICT_CONTEXT.get() is not None:
+                raise
             logger.debug("current_activity-Check fehlgeschlagen: %s", e)
             return False, f"Pose muss '{target}' sein"
 
     # schedule:X matches the current daily schedule slot.
     # sleeping matches sleep slots; awake matches their negation.
-    sched_match = re.match(r"schedule:(.+)", cond)
+    sched_match = _atom_match("schedule", cond)
     if sched_match:
         target = sched_match.group(1).strip().lower()
         try:
             from app.models.character import get_character_daily_schedule
-            schedule = get_character_daily_schedule(character_name) or {}
+            schedule = get_character_daily_schedule(
+                character_name, strict=_STRICT_CONTEXT.get() is not None) or {}
             if not schedule.get("enabled", False):
+                if _STRICT_CONTEXT.get() is not None:
+                    raise _ConditionUnavailable("Daily schedule is not enabled")
                 # Without a schedule, neither sleeping nor awake matches.
                 return False, "Tagesablauf nicht aktiv"
-            current_hour = game_time().hour  # daily schedule = in-game hours
+            now = game_time(strict=True) if _STRICT_CONTEXT.get() is not None else game_time()
+            current_hour = now.hour
             slot = next((s for s in schedule.get("slots", [])
                          if s.get("hour") == current_hour), None)
+            if _STRICT_CONTEXT.get() is not None and slot is None:
+                raise _ConditionUnavailable("Current daily schedule slot is unavailable")
             if target in ("sleeping", "sleep"):
                 is_sleep = bool(slot and (slot.get("sleep")
                                           or slot.get("activity") == "__sleep__"
@@ -325,25 +589,28 @@ def _evaluate_single_condition_inner(
                 return True, ""
             return False, f"Schedule sagt nicht '{target}' (ist: '{slot_act}')"
         except Exception as e:
+            if _STRICT_CONTEXT.get() is not None:
+                raise
             logger.debug("schedule-condition Fehler: %s", e)
             return False, f"Schedule-Bedingung nicht auswertbar: {target}"
 
     # --- condition:X (profile active_conditions) ---
-    cond_match = re.match(r"condition:(.+)", cond)
+    cond_match = _atom_match("condition", cond)
     if cond_match:
         cond_name = cond_match.group(1).strip().lower()
         try:
-            from app.models.character import get_character_profile
-            profile = get_character_profile(character_name) or {}
+            profile = _condition_profile(character_name)
             active = profile.get("active_conditions", []) or []
             if any((c.get("name") or "").lower() == cond_name for c in active):
                 return True, ""
             return False, f"Zustand nicht aktiv: {cond_name}"
         except Exception:
+            if _STRICT_CONTEXT.get() is not None:
+                raise
             return False, f"Zustand nicht aktiv: {cond_name}"
 
     # --- has_item:<id|name> --- (character inventory)
-    item_match = re.match(r"has_item:(.+)", cond)
+    item_match = _atom_match("item", cond)
     if item_match:
         token = item_match.group(1).strip()
         try:
@@ -351,49 +618,61 @@ def _evaluate_single_condition_inner(
                 has_item as _has_item,
                 resolve_item_id as _resolve_item_id,
                 get_item as _get_item)
-            resolved_id = _resolve_item_id(token) or token
-            if _has_item(character_name, resolved_id):
+            strict_read = _STRICT_CONTEXT.get() is not None
+            resolved_id = _resolve_item_id(token, strict=strict_read) or token
+            if _has_item(character_name, resolved_id, strict=strict_read):
                 return True, ""
             item_name = token
             try:
-                _it = _get_item(resolved_id)
+                _it = _get_item(resolved_id, strict=strict_read)
                 if _it:
                     item_name = _it.get("name", token)
             except Exception:
+                if _STRICT_CONTEXT.get() is not None:
+                    raise
                 pass
             return False, f"Benoetigt Item: {item_name}"
         except Exception:
+            if _STRICT_CONTEXT.get() is not None:
+                raise
             return True, ""
 
     # --- room_has_item:<id|name> --- (target room contains item)
-    room_item_match = re.match(r"room_has_item:(.+)", cond)
+    room_item_match = _atom_match("room_item", cond)
     if room_item_match:
         token = room_item_match.group(1).strip()
         if not room_id:
+            if _STRICT_CONTEXT.get() is not None:
+                raise _ConditionUnavailable("Room context is unavailable")
             return False, "Kein Raum-Kontext"
         try:
             from app.models.inventory import (
                 resolve_item_id as _resolve_item_id,
                 get_item as _get_item,
                 get_room_items as _get_room_items)
-            resolved_id = _resolve_item_id(token) or token
-            room_items = _get_room_items(location_id, room_id) or []
+            strict_read = _STRICT_CONTEXT.get() is not None
+            resolved_id = _resolve_item_id(token, strict=strict_read) or token
+            room_items = _get_room_items(location_id, room_id, strict=strict_read) or []
             for ri in room_items:
                 if ri.get("item_id") == resolved_id:
                     return True, ""
                 # Name-match fallback
-                it = _get_item(ri.get("item_id", ""))
+                it = _get_item(ri.get("item_id", ""), strict=strict_read)
                 if it and (it.get("name") or "").strip().lower() == token.lower():
                     return True, ""
             item_name = token
             try:
-                _it = _get_item(resolved_id)
+                _it = _get_item(resolved_id, strict=strict_read)
                 if _it:
                     item_name = _it.get("name", token)
             except Exception:
+                if _STRICT_CONTEXT.get() is not None:
+                    raise
                 pass
             return False, f"Raum enthaelt kein Item: {item_name}"
         except Exception:
+            if _STRICT_CONTEXT.get() is not None:
+                raise
             return True, ""
 
     # --- has_secret ---
@@ -406,7 +685,7 @@ def _evaluate_single_condition_inner(
         return True, ""
 
     # --- event_active:category ---
-    event_match = re.match(r"event_active:(.+)", cond)
+    event_match = _atom_match("event", cond)
     if event_match:
         # Placeholder for event categories
         return True, ""
@@ -414,13 +693,17 @@ def _evaluate_single_condition_inner(
     # --- is_male / is_female — shorthand for gender=male / gender=female ---
     if cond in ("is_male", "is_female"):
         try:
-            from app.models.character import get_character_profile
-            g = str((get_character_profile(character_name) or {}).get("gender", "") or "").strip().lower()
+            profile = _condition_profile(character_name)
+            if _STRICT_CONTEXT.get() is not None and not profile.get("gender"):
+                raise _ConditionUnavailable("Gender is unavailable")
+            g = str(profile.get("gender", "") or "").strip().lower()
             want = cond[3:]
             if g == want:
                 return True, ""
             return False, f"gender ist '{g or '—'}' (braucht '{want}')"
         except Exception:
+            if _STRICT_CONTEXT.get() is not None:
+                raise
             return False, f"Bedingung nicht auswertbar: {cond}"
 
     # --- state flags: is_sleeping / is_wet / is_intimate / decency_exempt
@@ -429,21 +712,23 @@ def _evaluate_single_condition_inner(
     # them; they live as top-level booleans in the profile (set by activity
     # skills, the decency toggle and set_flags rules).
     known_flags = set()
-    try:
-        from app.models.character import get_state_flags
-        known_flags = set(get_state_flags(character_name))
-    except Exception:
-        pass
-    try:
-        from app.plugins.registry import flag_specs
-        known_flags |= {s.flag for s in flag_specs()}
-    except Exception:
-        pass
+    if _STRICT_CONTEXT.get() is None:
+        try:
+            from app.models.character import get_state_flags
+            known_flags = set(get_state_flags(character_name))
+        except Exception:
+            pass
+        try:
+            from app.plugins.registry import flag_specs
+            known_flags |= {s.flag for s in flag_specs()}
+        except Exception:
+            pass
     if cond in known_flags:
         try:
-            from app.models.character import get_character_profile
-            active = bool((get_character_profile(character_name) or {}).get(cond))
+            active = bool(_condition_profile(character_name).get(cond))
         except Exception:
+            if _STRICT_CONTEXT.get() is not None:
+                raise
             return False, f"Bedingung nicht auswertbar: {cond}"
         if active:
             return True, ""
@@ -454,14 +739,17 @@ def _evaluate_single_condition_inner(
     # template=human-roleplay). Evaluated LAST so it never shadows the
     # specific handlers above; numeric stat comparisons stay with the
     # status_effects matcher.
-    field_match = re.match(r"([a-z_][a-z0-9_]*)\s*(!=|=)\s*(.+)$", cond)
+    field_match = _atom_match("field", cond)
     if field_match:
         fname = field_match.group(1)
         op = field_match.group(2)
         expected = field_match.group(3).strip().lower()
         try:
-            from app.models.character import get_character_profile
-            profile = get_character_profile(character_name) or {}
+            profile = _condition_profile(character_name)
+            if _STRICT_CONTEXT.get() is not None and (
+                    fname not in profile or profile[fname] is None
+                    or (isinstance(profile[fname], str) and not profile[fname].strip())):
+                raise _ConditionUnavailable(f"Profile field unavailable: {fname}")
             actual = str(profile.get(fname, "") or "").strip().lower()
             matches = (actual == expected)
             if op == "=":
@@ -472,10 +760,14 @@ def _evaluate_single_condition_inner(
                 return False, f"{fname} ist '{actual}' (darf nicht sein)"
             return True, ""
         except Exception as e:
+            if _STRICT_CONTEXT.get() is not None:
+                raise
             logger.debug("profile-field condition '%s' failed: %s", cond, e)
             return False, f"Bedingung nicht auswertbar: {cond}"
 
     # Unknown condition: pass with a warning
+    if _STRICT_CONTEXT.get() is not None:
+        raise _ConditionUnavailable(f"Unknown condition: {cond}")
     logger.warning("Unbekannte Condition: '%s'", cond)
     return True, ""
 
@@ -483,18 +775,23 @@ def _evaluate_single_condition_inner(
 def _check_alone(character_name: str, location_id: str) -> Tuple[bool, str]:
     """Check whether the character is alone at the location."""
     if not location_id:
+        if _STRICT_CONTEXT.get() is not None:
+            raise _ConditionUnavailable("Location context is unavailable")
         return True, ""
     try:
         from app.models.character import list_available_characters, get_character_current_location
-        all_chars = list_available_characters()
+        all_chars = list_available_characters(strict=_STRICT_CONTEXT.get() is not None)
         others_at_loc = [
             c for c in all_chars
-            if c != character_name and get_character_current_location(c) == location_id
+            if c != character_name and get_character_current_location(
+                c, profile=_condition_profile(c)) == location_id
         ]
         if others_at_loc:
             return False, f"Nicht allein (auch hier: {', '.join(others_at_loc)})"
         return True, ""
     except Exception as e:
+        if _STRICT_CONTEXT.get() is not None:
+            raise
         logger.warning("alone-Check fehlgeschlagen: %s", e)
         return True, ""
 
@@ -508,19 +805,34 @@ def _check_present(character_name: str, target_name: str,
     try:
         from app.models.character import (get_character_current_location,
                                           get_character_current_room)
-        loc = location_id or get_character_current_location(character_name)
+        if _STRICT_CONTEXT.get() is not None:
+            profile = _condition_profile(character_name)
+            loc = location_id or get_character_current_location(character_name, profile=profile)
+        else:
+            loc = location_id or get_character_current_location(character_name)
         if not loc:
+            if _STRICT_CONTEXT.get() is not None:
+                raise _ConditionUnavailable("Current location is unavailable")
             return False, f"{target_name} nicht hier (kein Ort)"
-        room = room_id or get_character_current_room(character_name)
+        if _STRICT_CONTEXT.get() is not None:
+            room = room_id or get_character_current_room(character_name, profile=profile)
+        else:
+            room = room_id or get_character_current_room(character_name)
         from app.core.room_entry import characters_in_room
-        present = characters_in_room(loc, room)
-        # Die Condition kommt kleingeschrieben an (_evaluate_single_condition),
-        # Character-Namen sind es nicht — Vergleich ohne Gross-/Kleinschreibung.
+        if _STRICT_CONTEXT.get() is not None:
+            present = characters_in_room(
+                loc, room, strict=True, profiles={character_name: profile})
+        else:
+            present = characters_in_room(loc, room)
+        # Legacy atoms lowercase names; strict atoms preserve their spelling.
+        # Presence comparison remains case-insensitive in both modes.
         wanted = target_name.lower()
         if any((n or "").lower() == wanted for n in present):
             return True, ""
         return False, f"{target_name} nicht im selben Raum"
     except Exception as e:
+        if _STRICT_CONTEXT.get() is not None:
+            raise
         logger.warning("present-Check fehlgeschlagen: %s", e)
         return False, "present-Check Fehler"
 
@@ -529,11 +841,19 @@ def _check_mood(character_name: str, target_mood: str) -> Tuple[bool, str]:
     """Check whether the current mood matches the target."""
     try:
         from app.models.character import get_character_current_feeling
-        current = (get_character_current_feeling(character_name) or "").lower()
+        if _STRICT_CONTEXT.get() is not None:
+            current = (get_character_current_feeling(
+                character_name, profile=_condition_profile(character_name)) or "").lower()
+        else:
+            current = (get_character_current_feeling(character_name) or "").lower()
+        if _STRICT_CONTEXT.get() is not None and not current:
+            raise _ConditionUnavailable("Current mood is unavailable")
         if target_mood.lower() in current or current in target_mood.lower():
             return True, ""
         return False, f"Mood-Voraussetzung: {target_mood} (aktuell: {current or 'unbekannt'})"
     except Exception:
+        if _STRICT_CONTEXT.get() is not None:
+            raise
         return True, ""
 
 
@@ -547,6 +867,8 @@ def _check_relationship(character_name: str, location_id: str,
     """
     global _last_matched_partner
     try:
+        if _STRICT_CONTEXT.get() is not None and not location_id:
+            raise _ConditionUnavailable("Location context is unavailable")
         from app.models.character import list_available_characters, get_character_current_location
         from app.models.relationship import get_relationship
 
@@ -554,37 +876,53 @@ def _check_relationship(character_name: str, location_id: str,
 
         # Select candidates
         if target_char.lower() == "any":
-            all_chars = list_available_characters()
+            all_chars = list_available_characters(strict=_STRICT_CONTEXT.get() is not None)
             candidates = [
                 c for c in all_chars
                 if c != character_name
-                and get_character_current_location(c) == location_id
+                and get_character_current_location(c, profile=_condition_profile(c)) == location_id
             ]
             if not candidates:
                 return False, f"Kein anderer Character am gleichen Ort"
         else:
             # A named target must be at the same location.
-            char_loc = get_character_current_location(target_char)
+            char_loc = get_character_current_location(target_char, profile=_condition_profile(target_char))
             if char_loc != location_id:
                 return False, f"{target_char} ist nicht am gleichen Ort"
             candidates = [target_char]
 
+        matched = False
         for cand in candidates:
-            rel = get_relationship(character_name, cand)
-            if not rel:
+            strict_read = _STRICT_CONTEXT.get() is not None
+            rel = get_relationship(character_name, cand, strict=strict_read)
+            if rel is None:
+                if strict_read:
+                    # A successful no-row read is the neutral numeric baseline,
+                    # not a technical failure or a missing character reference.
+                    matched |= _compare(0, operator, threshold)
                 continue
+            value_key = "romantic_tension" if field == "romantic" else "strength"
+            if _STRICT_CONTEXT.get() is not None and rel.get(value_key) is None:
+                raise _ConditionUnavailable(f"Relationship value unavailable: {cand}.{value_key}")
             if field == "romantic":
                 value = int((rel.get("romantic_tension", 0)) * 100)
             else:
                 value = int(rel.get("strength", 0))
             if _compare(value, operator, threshold):
-                _last_matched_partner = cand
-                return True, ""
+                if _STRICT_CONTEXT.get() is None:
+                    _last_matched_partner = cand
+                    return True, ""
+                matched = True
+
+        if matched:
+            return True, ""
 
         if target_char.lower() == "any":
             return False, f"Kein Character am Ort mit {label} {operator}{threshold}"
         return False, f"{label} zu {target_char}: Bedingung {operator}{threshold} nicht erfuellt"
     except Exception as e:
+        if _STRICT_CONTEXT.get() is not None:
+            raise
         logger.debug("Relationship check failed: %s", e)
         return True, ""
 
@@ -623,11 +961,12 @@ def _check_status_effect(character_name: str,
     """Compare an effective stat; missing stats count as 100, or as not met
     inside ``missing_stats_fail()``."""
     try:
-        from app.models.character import get_character_profile
-        profile = get_character_profile(character_name)
+        profile = _condition_profile(character_name)
         from app.core.stat_boosts import effective_stat
-        value = effective_stat(profile, stat_name)
+        value = effective_stat(profile, stat_name, strict=_STRICT_CONTEXT.get() is not None)
         if value is None:
+            if _STRICT_CONTEXT.get() is not None:
+                raise _ConditionUnavailable(f"Stat unavailable: {stat_name}")
             if _MISSING_STAT_FAILS.get():
                 return False, f"{stat_name}: not a value of this character"
             value = 100
@@ -639,6 +978,8 @@ def _check_status_effect(character_name: str,
             return True, ""
         return False, f"{stat_name}: {int(value)} (requires {operator}{threshold})"
     except Exception:
+        if _STRICT_CONTEXT.get() is not None:
+            raise
         return True, ""
 
 
@@ -646,11 +987,13 @@ def _check_has_secret(character_name: str) -> Tuple[bool, str]:
     """Check whether the character has any non-record secrets."""
     try:
         from app.models.secrets import list_secrets, is_record
-        secrets = list_secrets(character_name)
+        secrets = list_secrets(character_name, strict=_STRICT_CONTEXT.get() is not None)
         if any(not is_record(s) for s in secrets):
             return True, ""
         return False, "Keine Geheimnisse vorhanden"
     except Exception:
+        if _STRICT_CONTEXT.get() is not None:
+            raise
         return True, ""
 
 
@@ -667,33 +1010,26 @@ def validate_condition_references(condition: str) -> List[str]:
     warns: List[str] = []
     if not condition:
         return warns
-    # Same splitting as evaluate_condition: OR -> AND -> optional NOT.
-    for group in re.split(r"\s+OR\s+", condition, flags=re.IGNORECASE):
-        for part in re.split(r"\s+AND\s+", group, flags=re.IGNORECASE):
-            atom = part.strip()
-            if atom.upper().startswith("NOT "):
-                atom = atom[4:].strip()
-            if not atom:
-                continue
-            m = re.match(r"has_item:(.+)", atom)
-            if m:
-                token = m.group(1).strip()
+    for group in _condition_groups(condition):
+        for part in group:
+            _, atom = _condition_atom(part)
+            family = _classify_condition_atom(atom)
+            if family in ("item", "room_item"):
+                token = _atom_match(family, atom, strict=True)[1].strip()
                 try:
                     from app.models.inventory import resolve_item_id, get_item
                     if not get_item(resolve_item_id(token) or token):
-                        warns.append(f"Item '{token}' existiert nicht")
+                        warns.append(f"Item '{token}' does not exist")
                 except Exception:
                     pass
-                continue
-            cm = re.match(r"(present|relationship|romantic):([A-Za-z0-9_]+)", atom)
-            if cm:
-                pred, name = cm.group(1), cm.group(2)
-                if name.lower() == "any" and pred in ("relationship", "romantic"):
+            elif family in ("present", "relationship", "romantic"):
+                name = _atom_match(family, atom, strict=True)[1].strip()
+                if name.lower() == "any" and family != "present":
                     continue
                 try:
                     from app.models.character import list_available_characters
                     if name not in (list_available_characters() or []):
-                        warns.append(f"Character '{name}' existiert nicht ({pred}:)")
+                        warns.append(f"Character '{name}' does not exist ({family}:)")
                 except Exception:
                     pass
     return warns

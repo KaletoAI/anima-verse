@@ -110,14 +110,18 @@ def _get_shared_item_dir(item_id: str, *, create: bool = False) -> Path:
     return d
 
 
-def _load_shared_items() -> List[Dict[str, Any]]:
+def _load_shared_items(*, strict: bool = False) -> List[Dict[str, Any]]:
     path = _get_shared_items_file()
-    if not path.exists():
+    if not strict and not path.exists():
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data.get("items", [])
+    except FileNotFoundError:
+        return []
     except Exception:
+        if strict:
+            raise
         logger.warning("Shared-Items konnten nicht geladen werden")
         return []
 
@@ -136,8 +140,8 @@ def list_shared_items() -> List[Dict[str, Any]]:
     return _load_shared_items()
 
 
-def get_shared_item(item_id: str) -> Optional[Dict[str, Any]]:
-    for it in _load_shared_items():
+def get_shared_item(item_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
+    for it in _load_shared_items(strict=strict):
         if it.get("id") == item_id:
             return it
     return None
@@ -163,7 +167,7 @@ def get_item_image_path(item_id: str) -> str:
     return str(candidate) if candidate.exists() else ""
 
 
-def _load_items() -> List[Dict[str, Any]]:
+def _load_items(*, strict: bool = False) -> List[Dict[str, Any]]:
     """Load all item definitions from the database."""
     try:
         conn = get_connection()
@@ -177,6 +181,8 @@ def _load_items() -> List[Dict[str, Any]]:
             try:
                 meta = json.loads(r[6] or "{}")
             except Exception:
+                if strict:
+                    raise
                 pass
             item = {
                 "id": r[0],
@@ -191,16 +197,22 @@ def _load_items() -> List[Dict[str, Any]]:
                 if pieces:
                     item["outfit_piece"] = pieces
             except Exception:
+                if strict:
+                    raise
                 pass
             try:
                 slots = json.loads(r[5] or "[]")
                 if slots:
                     item["slots"] = slots
             except Exception:
+                if strict:
+                    raise
                 pass
             items.append(item)
         return items
     except Exception as e:
+        if strict:
+            raise
         logger.warning("Fehler beim Laden der Items aus DB: %s", e)
         # Fallback: JSON file.
         path = _get_items_file()
@@ -265,7 +277,7 @@ def list_items() -> List[Dict[str, Any]]:
     return _load_items()
 
 
-def get_item(item_id: str) -> Optional[Dict[str, Any]]:
+def get_item(item_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
     """Return an item, looking in world items before the global shared library."""
     try:
         conn = get_connection()
@@ -279,6 +291,8 @@ def get_item(item_id: str) -> Optional[Dict[str, Any]]:
             try:
                 meta = json.loads(row[6] or "{}")
             except Exception:
+                if strict:
+                    raise
                 pass
             item = {
                 "id": row[0],
@@ -293,23 +307,28 @@ def get_item(item_id: str) -> Optional[Dict[str, Any]]:
                 if pieces:
                     item["outfit_piece"] = pieces
             except Exception:
+                if strict:
+                    raise
                 pass
             return item
     except Exception as e:
+        if strict:
+            raise
         logger.debug("get_item DB-Fehler fuer %s: %s", item_id, e)
 
     # Fallback: in-memory list
-    for item in _load_items():
-        if item.get("id") == item_id:
-            return item
+    if not strict:
+        for item in _load_items():
+            if item.get("id") == item_id:
+                return item
 
-    shared = get_shared_item(item_id)
+    shared = get_shared_item(item_id, strict=strict)
     if shared:
         return {**shared, "_shared": True}
     return None
 
 
-def resolve_item_id(token: str) -> Optional[str]:
+def resolve_item_id(token: str, *, strict: bool = False) -> Optional[str]:
     """Resolve an ID, name or item_<name> token to an actual item ID.
 
     Try exact ID, case-insensitive exact name, then the name without item_.
@@ -318,7 +337,7 @@ def resolve_item_id(token: str) -> Optional[str]:
     if not token:
         return None
     token = token.strip()
-    items = _load_items()
+    items = _load_items(strict=strict)
 
     for item in items:
         if item.get("id") == token:
@@ -908,14 +927,18 @@ def set_item_image_meta(item_id: str, meta: Dict[str, Any]) -> bool:
 # 2. ROOM ITEMS (embedded in world.json)
 # ============================================================
 
-def get_room_items(location_id: str, room_id: str) -> List[Dict[str, Any]]:
-    """Return the items in a room."""
+def get_room_items(location_id: str, room_id: str, *, strict: bool = False) -> List[Dict[str, Any]]:
+    """Return room items; strict reads distinguish missing context from an empty room."""
     from app.models.world import get_location_by_id, get_room_by_id
-    location = get_location_by_id(location_id)
+    location = get_location_by_id(location_id, strict=strict)
     if not location:
+        if strict:
+            raise LookupError(f"Location not found: {location_id}")
         return []
     room = get_room_by_id(location, room_id)
     if not room:
+        if strict:
+            raise LookupError(f"Room not found: {location_id}/{room_id}")
         return []
     return room.get("items", [])
 
@@ -1521,7 +1544,7 @@ def find_inventory_piece_by_name_slot(character_name: str,
     return None
 
 
-def has_item(character_name: str, item_id: str) -> bool:
+def has_item(character_name: str, item_id: str, *, strict: bool = False) -> bool:
     """Check whether a character owns an item."""
     try:
         conn = get_connection()
@@ -1531,8 +1554,12 @@ def has_item(character_name: str, item_id: str) -> bool:
         ).fetchone()
         if row is not None:
             return True
+        if strict:
+            return False
         # Fallback: JSON
     except Exception:
+        if strict:
+            raise
         pass
     data = _load_inventory(character_name)
     return any(e.get("item_id") == item_id for e in data.get("inventory", []))
