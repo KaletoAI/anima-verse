@@ -82,7 +82,7 @@ export function PropActionEffects({ action, catalog, path, onChange }: {
   const { t } = useI18n()
   const moods = useMoods()
   const update = (id: string, next: ActionEffect) => onChange(action.effects.map(row => row.id === id ? next : row))
-  const newEffect = (type: ActionEffect['type'], id = actionId(), target: ActionTarget = 'actor', previousWhen?: ActionEffect['when']): ActionEffect => {
+  const newEffect = (type: ActionEffect['type'], id: string = actionId(), target: ActionTarget = 'actor', previousWhen?: ActionEffect['when']): ActionEffect => {
     const allowed = effectTimings(action, type)
     const when = previousWhen && allowed.includes(previousWhen) ? previousWhen : allowed.includes('success') ? 'success' : type === 'stat_delta' && allowed.includes('active') ? 'active' : 'start'
     const base = { id, target, when }
