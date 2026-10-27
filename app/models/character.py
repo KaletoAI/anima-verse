@@ -829,15 +829,40 @@ def get_character_status(character_name: str) -> str:
         return ""
 
 
+def _interrupt_prop_action(character_name: str, reason: str) -> None:
+    """Only an explicitly loaded internal executor participates before cutover.
+
+    Call before profile/place locks: owner callbacks acquire their own run
+    locks and may remove the exact owned journey/partner interaction.
+    """
+    import sys
+    engine = sys.modules.get("app.core.prop_action_engine")
+    if engine is not None:
+        engine.interrupt_after_locks(character_name, reason)
+
+
+def _notify_prop_presence(location_id: str, room_id: str) -> None:
+    import sys
+    engine = sys.modules.get("app.core.prop_action_engine")
+    if engine is not None and location_id and room_id:
+        from app.core.keyed_lock import _after_locks
+        _after_locks(lambda: engine.presence_changed(location_id, room_id))
+
+
 def set_character_status(character_name: str, status: str) -> bool:
     """Set the row's lifecycle status. '' puts a character back in the world."""
     if not character_name:
         return False
+    if status:
+        _interrupt_prop_action(character_name, "pooled")
+    old_presence = (get_character_current_location(character_name), get_character_current_room(character_name))
     try:
         with transaction() as conn:
             cur = conn.execute(
                 "UPDATE characters SET status=?, updated_at=? WHERE name=?",
                 ((status or "").strip(), utc_now_iso(), character_name))
+        if cur.rowcount:
+            _notify_prop_presence(*old_presence)
         return bool(cur.rowcount)
     except Exception as e:
         logger.error("set_character_status(%s, %r): %s", character_name, status, e)
@@ -932,9 +957,11 @@ def delete_character(character_name: str) -> bool:
     """
     if not character_name or character_name.lower() in _RESERVED_NAMES:
         return False
+    _interrupt_prop_action(character_name, "deleted")
 
     from app.core import sync_topics
     old_loc = get_character_current_location(character_name) or ""
+    old_room = get_character_current_room(character_name) or ""
     old_party = sync_topics.party_of(character_name).names
 
     # 0) Foreign traces — only for temporary NPCs (template-gated)
@@ -1029,6 +1056,7 @@ def delete_character(character_name: str) -> bool:
 
         from app.core import sync_topics
         if stored_tx_1:
+            _notify_prop_presence(old_loc, old_room)
             sync_topics.moved(character_name, old_loc, "")
         if stored_tx_1:
             sync_topics.avatars(old_party, ("presence", "notices"))
@@ -1525,6 +1553,7 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # The decision needs the current location only, which is one cheap
     # read of its own.
     if location and location != (get_character_current_location(character_name) or ""):
+        _interrupt_prop_action(character_name, "location")
         from app.core.interaction_engine import end_interaction
         end_interaction(character_name, reason="location")
     # Read AND write under the per-character profile lock (DATA-3): the save
@@ -1590,6 +1619,9 @@ def save_character_current_location(character_name: str = "", location: str = ""
             # Delivery waits for this AND every caller-held lock to release.
             _after_locks(lambda: emit("character.entered_room", character=character_name,
                                       location_id=location, room_id=entered_room))
+    if stored and location_changed:
+        _notify_prop_presence(old_location, old_room)
+        _notify_prop_presence(location, entered_room)
     # Seamless world (Aug 2026): the metre position is the truth for WHERE a
     # character stands, so a REAL location change drags it along — the
     # character lands at the centre of the target location. A target location
@@ -1931,6 +1963,7 @@ def _cancel_journey_for_manual_write(character_name: str) -> None:
     """
     if not character_name:
         return
+    _interrupt_prop_action(character_name, "position")
     # Same rule for a pair interaction: its anchor holds the figure, so a
     # manual move has to release it (and the partner).
     from app.core.interaction_engine import end_interaction
@@ -2124,6 +2157,7 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
                  and (profile.get("pose_flavor") or "") == flavor)
     if unchanged and not prefer:
         return
+    _interrupt_prop_action(character_name, "pose")
     old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
     old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
     inter = profile.get("interaction")
@@ -2253,6 +2287,7 @@ def clear_pose_intent(character_name: str) -> None:
     """
     if not character_name:
         return
+    _interrupt_prop_action(character_name, "pose")
     from app.core.keyed_lock import keyed_lock
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the whole profile_json blob out. ``stand_up`` stays OUTSIDE — it
@@ -2387,6 +2422,7 @@ def save_character_current_room(character_name: str, room_id: str,
     # afterwards, so the room is written into a copy that already has whatever
     # the interaction end stored.
     if room_id != (get_character_current_room(character_name) or ""):
+        _interrupt_prop_action(character_name, "room")
         from app.core.interaction_engine import end_interaction
         end_interaction(character_name, reason="room")
     # Read AND write under the per-character profile lock (DATA-3): the save
@@ -2410,6 +2446,9 @@ def save_character_current_room(character_name: str, room_id: str,
             # Queue once with the write; callbacks run after all lock exits.
             _after_locks(lambda: emit("character.entered_room", character=character_name,
                                       location_id=cur_loc, room_id=room_id))
+    if stored and room_id != old_room:
+        _notify_prop_presence(cur_loc, old_room)
+        _notify_prop_presence(cur_loc, room_id)
 
     # WHERE IN THE ROOM the character now stands is the server's word (T4):
     # the free point nearest the one it arrived on — the doorstep of a walk,
@@ -4332,7 +4371,7 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
 #   is_wet       → swim-Exemption bei swim_allowed Raum
 #   is_intimate  → decency override to nude_ok
 
-def set_is_sleeping(character_name: str, value: bool) -> None:
+def set_is_sleeping(character_name: str, value: bool, *, _prop_execution: str = "") -> None:
     """Set the is_sleeping flag. True may send the character off-map — that
     is the caller's job (the sleep skill calls go_offmap).
 
@@ -4353,6 +4392,8 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     """
     if not character_name:
         return
+    if not _prop_execution:
+        _interrupt_prop_action(character_name, "sleep" if value else "awake")
     from app.core.keyed_lock import keyed_lock
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the whole profile_json blob. The span ends at the save —
@@ -4397,6 +4438,8 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     # be overwritten by our own write. A failure here must not keep anyone
     # awake — the flag is already stored, the place is bookkeeping.
     if value and not was:
+        owned_bed = bool(_prop_execution and
+                         (get_character_profile(character_name).get("place") or {}).get("execution_id") == _prop_execution)
         try:
             # A pair clip holds two figures at one anchor and cannot survive
             # one of them lying down elsewhere — the partner would keep
@@ -4408,7 +4451,8 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
                            "not be ended: %s", character_name, e)
         try:
             from app.core import places
-            places.assign(character_name, "sleeping")
+            if not owned_bed:
+                places.assign(character_name, "sleeping")
         except Exception as e:
             logger.warning("%s fell asleep, but the place could not be "
                            "reassigned: %s", character_name, e)

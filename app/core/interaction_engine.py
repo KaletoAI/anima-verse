@@ -303,8 +303,30 @@ def assign_roles(actor: str, partner: str, actor_gender: str,
     return (partner, actor) if swap else (actor, partner)
 
 
+def start_interaction_at(actor: str, partner: str, pose_key: str, *,
+                         execution_id: str, plans: dict) -> Dict[str, Any]:
+    """Real shared pair entry at an executor's exact jointly claimed marker.
+
+    No invitation/automatic seat search: the prop run already owns consent,
+    both approaches and measured entry. Re-read its durable authority here.
+    """
+    from app.core import prop_action_store as runs
+    run = runs.get(execution_id)
+    if (not run or run["status"] != "approaching" or run["phase"] != "entry"
+            or run["actor"] != actor or run["partner"] != partner
+            or run["definition"]["pose_key"] != pose_key
+            or run["data"]["plans"] != plans or not run["data"].get("consented")):
+        raise ValueError("pair_execution_mismatch")
+    for role, name in (("actor", actor), ("partner", partner)):
+        anchor = plans[role]["entry_anchor"]
+        if (runs.held(runs.person_key(name)) != execution_id or
+                runs.held(runs.slot_key(run["target"], anchor["marker_id"], anchor["slot"])) != execution_id):
+            raise ValueError("pair_claim_lost")
+    return start_interaction(actor, partner, pose_key, _reserved=run)
+
+
 def start_interaction(actor: str, partner: str, pose_key: str, *,
-                      invite_id: str = "") -> Dict[str, Any]:
+                      invite_id: str = "", _reserved: Optional[dict] = None) -> Dict[str, Any]:
     """Binds ``actor`` (the initiator) and ``partner`` to the pair clip the
     pose names. Who plays which half follows the clip's gender assignment
     (``assign_roles``); without one the actor plays A. Raises ``ValueError``
@@ -353,7 +375,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     if not pa or not pb:
         raise ValueError("both characters need a map position")
     dist = math.dist((pa["x"], pa["z"]), (pb["x"], pb["z"]))
-    if dist > MAX_START_DISTANCE_M:
+    if not _reserved and dist > MAX_START_DISTANCE_M:
         raise TooFarApart(f"{partner} is too far away ({dist:.1f} m)")
 
     # Anchor: a free place of the pose's group when the room has one — its
@@ -362,11 +384,22 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     # partner. A degenerate zero distance keeps the actor's facing
     # irrelevant — any yaw will do.
     from app.core import places
-    try:
-        seated = places.assign_pair(actor, partner, pose_key)
-    except places.PlaceUnavailable as e:
-        raise ValueError(str(e))
-    if seated:
+    if _reserved:
+        a = _reserved["data"]["plans"]["actor"]["entry_anchor"]
+        b = _reserved["data"]["plans"]["partner"]["entry_anchor"]
+        if a["place_id"] != b["place_id"] or a["slot"] == b["slot"]:
+            raise ValueError("pair_marker_mismatch")
+        place = next((p for p in places._compose(loc_a).get(a["room_id"], [])
+                      if p["id"] == a["place_id"] and p.get("variant_uid") == a["variant_uid"]), None)
+        if place is None:
+            raise ValueError("pair_marker_lost")
+        seated = (place, places.pair_yaw(place, pose_key))
+    else:
+        try:
+            seated = places.assign_pair(actor, partner, pose_key)
+        except places.PlaceUnavailable as e:
+            raise ValueError(str(e))
+    if seated and not _reserved:
         place, yaw = seated
         ax, az = places.centre_of(place)
         # The "together" rule runs against the ANCHOR here: a place out of
@@ -383,6 +416,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
                     f"{who} is too far from the {place['label']} ({far:.1f} m)")
             seated = None
     if seated:
+        place, yaw = seated
+        ax, az = places.centre_of(place)
         anchor = {"x": round(ax, 3), "z": round(az, 3), "yaw": round(yaw, 4),
                   "place_id": place["id"]}
     else:
@@ -391,6 +426,22 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
         anchor = {"x": round((pa["x"] + pb["x"]) / 2, 3),
                   "z": round((pa["z"] + pb["z"]) / 2, 3), "yaw": round(yaw, 4),
                   "place_id": None}
+    if _reserved:
+        roles_geometry = (meta.get("geometry") or {}).get("roles") or {}
+        for name, role in ((who_a, "a"), (who_b, "b")):
+            semantic_role = "actor" if name == actor else "partner"
+            plan = _reserved["data"]["plans"][semantic_role]
+            point = plan["entry_anchor"]
+            off = (roles_geometry.get(role) or {}).get("anchor_xz_m")
+            if not off:
+                raise ValueError("pair_geometry_missing")
+            dx, dz = _rotate(float(off[0]), float(off[1]), yaw)
+            if math.dist((ax + dx, az + dz), (point["x"], point["z"])) > .05:
+                raise ValueError("pair_geometry_marker_mismatch")
+            current = get_character_pos(name)
+            access = plan["access"]
+            if not current or math.dist((current["x"], current["z"]), (access["x"], access["z"])) > .05:
+                raise ValueError("pair_access_lost")
     inter_id = uuid.uuid4().hex[:12]
     started = game_time().canonical()
     roles = (meta.get("geometry") or {}).get("roles") or {}
@@ -412,6 +463,15 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
             }
             if invite_id:
                 prof["interaction"]["invite_id"] = invite_id
+            if _reserved:
+                semantic_role = "actor" if name == actor else "partner"
+                point = _reserved["data"]["plans"][semantic_role]["entry_anchor"]
+                prof["interaction"]["execution_ref"] = _reserved["execution_id"]
+                prof["interaction"]["execution_kind"] = "prop_action"
+                prof["place"] = dict(id=point["place_id"], slot=point["slot"],
+                                     room_id=point["room_id"], execution_id=_reserved["execution_id"])
+                prof["pose_key"], prof["pose_flavor"] = pose_key, ""
+                prof.pop("prop_action_entry", None)
             if not save_character_profile(name, prof):
                 stored = False
     # OUTSIDE the locks: both of these write the profile themselves and reach
@@ -431,7 +491,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
             px, pz = anchor["x"] + dx, anchor["z"] + dz
             if not anchor.get("place_id") or places.inside(loc_a, px, pz):
                 set_character_pos(name, px, pz, preserve_movement_target=True)
-        set_pose_intent(name, pose_key)
+        if not _reserved:
+            set_pose_intent(name, pose_key)
     publish("interaction_started", actor, partner=partner, kind=kind,
             interaction_id=inter_id, clip_duration_s=clip_duration)
     from app.core import sync_topics
@@ -445,6 +506,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     logger.info("interaction %s: %s (a) + %s (b) play '%s' (%.1fs %s)",
                 inter_id, who_a, who_b, kind, clip_duration,
                 "cycle" if loop else "one-shot")
+    if not stored:
+        raise ValueError("pair_profile_write_failed")
     return profiles[actor]["interaction"]
 
 
@@ -513,6 +576,9 @@ def end_interaction(character_name: str, reason: str = "ended", *,
             clear_pose_intent(name)
         else:
             stand_up(name)
+    if inter.get("execution_kind") == "prop_action":
+        from app.core.prop_action_engine import interrupt
+        interrupt(character_name, "interaction_" + reason, execution_id=inter["execution_ref"])
     publish("interaction_ended", character_name, partner=partner,
             kind=inter["kind"], interaction_id=inter["id"], reason=reason)
     from app.core import sync_topics

@@ -7723,7 +7723,9 @@ The guard must check the exact run/journey/actor and serialize its execution.
 Callbacks run outside profile locks, possibly inside the owner's guard; owner
 locking must therefore support that re-entry. Identical registration is
 idempotent; replacing an owner or registering reserved `party_intent` fails.
-Task4 must register the real `prop_action` owner; none is installed here.
+`prop_action_engine.register_owner()` installs the real internal `prop_action`
+owner; request/advance invoke it explicitly. Importing travel, places or the
+periodic scheduler does not register it or activate user-world actions.
 
 `party_intent` dispatch dynamically uses the existing party single-providers,
 without replacing them. A persisted `execution_ref` without a kind is normalized
@@ -7732,6 +7734,103 @@ unknown typed owner is visibly cancelled (`last_journey_result`, state event,
 log). `cancel_journey` accepts exact `journey_id`, `execution_kind` and
 `execution_ref` selectors; all supplied selectors must match. Runtime prop
 actions remain inactive until the complete executor/cutover is installed.
+
+### Durable prop executions (internal, pre-HTTP cutover)
+
+`app.core.prop_action_engine.request(actor, target, action_id, revision,
+partner='', request_id='')`, `respond(actor, execution_id, accept)`,
+`cancel(actor, execution_id)` and `advance(now: GameTime)` are real Core
+operations. A target has exactly `location_id`, `room_id`, `placement_id`,
+`variant_uid`; the separate action/revision arguments pin the complete author
+snapshot. Results are `{execution_id,status,reason}`; refusals have an empty
+execution ID and `status: refused`. Same actor/request ID with identical
+parameters returns its original execution, while changed parameters return
+`request_id_conflict`. No HTTP route or UI activation is installed here.
+
+World schema 10 stores `prop_action_runs`, `prop_action_claims` and
+`prop_action_effect_receipts`. Runs retain the complete accepted definition
+(including every effect), exact target, participants, phase, game-time
+progress and terminal reason. Person and exact location/room/placement/
+variant/marker/slot claim keys are unique. `prop_action_store.transaction()`
+provides a dedicated SQLite connection under `BEGIN IMMEDIATE`; guards are
+rechecked and all person/slot claims acquired together. No profile writer or
+owner callback runs in that transaction. Existing place allocation sees these
+reservations through occupancy; acquisition respects the existing
+location-place-before-profile lock order. Consent questions have no claims,
+bind the exact execution/invitee and expire after 300 online game seconds.
+
+The typed journey owner uses reentrant per-execution locks. Both participants
+must arrive at their own exact floor access; `last_journey_result` is checked
+by journey ID/kind/ref and actual persisted position after a crash between
+Core arrival and its callback. Missing/replaced journeys never become arrival
+proof. The approach deadline is the longest actual timed way (including its
+departure delay) plus 60 game seconds. Every terminal path releases only its
+own claims and matching journeys; durable pending cleanup is replayable without
+reopening the terminal state or touching a replacement journey.
+
+Entry requires a discovered real transition asset plus duration and measured,
+height-scaled root travel matching access to the selected anchor within 5 cm.
+Its segment is checked against the room, doors and unrelated furniture; only
+the actual entered placement can be exempted. Missing/mismatched/blocked
+representation yields `missing_entry_transition`, `entry_transition_mismatch`
+or `entry_transition_blocked`, not an invented clip or a position fallback.
+During entry the persisted figure stays at floor access and its
+`prop_action_entry` contains execution ID, clip kind, game duration, pose,
+access and anchor for the later client cutover. Only after this entry interval
+does the Core bind the exact slot and authoritative body position.
+
+`interaction_engine.start_interaction_at(actor,partner,pose_key,
+execution_id=...,plans=...)` is the bounded exact-target pair seam. It
+revalidates the durable consent, person/slot claims and exact access, then
+shares the existing pair clip/role/geometry/profile persistence implementation
+instead of auto-selecting furniture. Both ordinary `end_interaction` and prop
+cancellation correlate the shared interaction ID and execution reference.
+Generic interaction/NPC-invitation cutover remains separate work.
+
+Combined actions advance their named phases (coffee `prepare` then `drink`)
+only while valid and active; only the final phase produces semantic success.
+Open poses/pairs have normal explicit end and no completion bonus. Bed sleep
+uses the canonical awake-to-asleep flag/lifecycle with the already owned lying
+slot, never another-bed search or off-map sleep. The sleeping execution keeps
+that exact bed through restart until real wake, which completes ownership.
+Pose/manual position/room/location/journey/deletion/pooling/sleep mutations
+interrupt before their own profile locks; an outer caller-held lock defers the
+callback until all keyed/world locks have exited. Optional presence policy is
+also checked on actual room/location/roster mutations, so a transient third
+arrival is not hidden between ticks. Internal terminal cleanup is context-scoped
+so it cannot recursively cancel another invitation or an unrelated new way.
+
+Offline policy: a process identity and last game stamp are persisted. The
+first tick in a new process reanchors live execution and owned journey clocks,
+credits zero offline duration, and preserves only previously persisted active
+progress. Freeze pauses the game clock/deadline.
+Clock stamps and newly accrued active progress are committed together; an
+interrupted journey reanchor carries its own durable stamp to avoid shifting
+the same offline interval twice if another crash precedes the run write.
+Existing sleep regeneration remains owned by the sleep mechanic; this executor
+invents no bed rate.
+
+**Intermediate effect boundary:** until Task5 installs the real transactional
+effect adapter, *every* effectful request is explicitly refused with
+`effect_application_unavailable`. There are no stub effect methods, fabricated
+receipts or successful effectful completions. Task5 must remove the temporary
+guards in `request` and `_validate` as a clean cutover and use the store
+transaction for character-effect writes plus `(execution_id,effect_id,phase)`
+receipt/result and progress writes. That adapter must write using the supplied
+connection, not call a separately committing thread-local profile writer
+inside the dedicated claims transaction.
+No receipt is inserted for an effect-free execution. `state_for`, HTTP and
+client projection/entry rendering belong to their later cutover tasks.
+
+Controller verification: `scripts/smoke_prop_action_runs.py` reuses the Task3
+real DB/profile/published-variant/scene/way fixture, copies complete shipped
+catalogs into private storage for authoring, and forbids external processing.
+`--scenario-dir NEW_DIRECTORY` runs separate actual Core processes, stops after
+the durable arrival write before its owner callback, stops again mid-prepare,
+then recovers receipts/progress, checks terminal restart and removed-variant
+claim release. Its `execution.json` contains actual stored states, not mock
+arrival echoes. These fixtures do not claim playable FBX/3D-client verification.
+
 
 
 

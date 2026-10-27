@@ -1,0 +1,595 @@
+#!/usr/bin/env python3
+"""Real temporary world/profile/indoor journey execution regressions.
+
+Reuses Task3's canonical published-variant fixture and external-work tripwire.
+Controller: ./.venv/bin/python scripts/smoke_prop_action_runs.py
+"""
+import json
+import argparse
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+import unittest
+from unittest.mock import patch
+
+OPTIONS = argparse.ArgumentParser(add_help=False)
+OPTIONS.add_argument("--scenario-dir", type=Path)
+OPTIONS.add_argument("--scenario-stage", choices=("arrive-crash", "resume-entry", "resume", "terminal", "missing-target", "missing-resume"))
+OPTIONS_ARGS, REMAINDER = OPTIONS.parse_known_args()
+sys.argv = [sys.argv[0], *REMAINDER]
+if OPTIONS_ARGS.scenario_dir:
+    root = OPTIONS_ARGS.scenario_dir.resolve()
+    root.mkdir(parents=True, exist_ok=False)
+    (root / ".prop-action-scenario").write_text("Task4 private Core scenario\\n")
+    environment = dict(os.environ, PROP_ACTION_SMOKE_RESUME_ROOT=str(root))
+    for stage in ("arrive-crash", "resume-entry", "resume", "terminal", "missing-target", "missing-resume"):
+        subprocess.run([sys.executable, __file__, "--scenario-stage", stage], env=environment, check=True)
+    print(f"Real stopped/restarted Core execution: {root / 'execution.json'}")
+    raise SystemExit(0)
+
+import smoke_prop_action_paths as F
+# Keep complete shipped catalogs, but all authored test entries/templates are
+# private. In particular no save_template call can touch repository/shared.
+SHARED = F.ROOT / "shared"
+ORIGINAL_SHARED = F.paths.get_shared_dir()
+for folder in ("templates", "config"):
+    destination = SHARED / folder
+    if not destination.exists():
+        shutil.copytree(ORIGINAL_SHARED / folder, destination)
+F.paths.get_shared_dir = lambda: SHARED
+from app.models import character_template
+character_template.clear_template_cache()
+template = character_template.get_template("npc-temporary")
+template["sections"].append(dict(id="run-status", fields=[
+    dict(key="run_energy", type="bar", store="status_effects", label="Run energy")]))
+character_template.save_template("run-person", template)
+from app.core import prop_action_engine as A, prop_action_store as R
+from app.core import animation_clips as clips
+from app.core import pose_catalog
+from app.core.game_time import GameDuration
+
+
+def measured_entry(pose="sitting"):
+    """Real asset discovery/sidecar/transition paths; never patched success."""
+    directory = F.ROOT / "clips"
+    directory.mkdir(exist_ok=True)
+    (directory / "run-enter.fbx").write_bytes(b"private deterministic asset fixture")
+    (directory / "run-enter.json").write_text(json.dumps(dict(
+        kind="run-enter", duration_s=2, loop=False,
+        geometry=dict(root_motion=dict(mode="foot_lock", travel_m=[0, 2], ref_height_m=1.7)))))
+    clips._clear_entries_cache()
+    clips._write_world_transitions([{"from": "walking", "to": pose, "kind": "run-enter", "accel": 0}])
+
+
+def authored_pair():
+    name, target, pid = setup_run()
+    partner = F.actor(target["location_id"], at=(2, 5))
+    entries = pose_catalog.world_entries("pose")
+    entries["run-pair"] = dict(solo=False, animation="run-pair", group="seat", places=2,
+                               yaw_offset=90, prompt="Two people sharing a seat")
+    pose_catalog.replace_world_entries("pose", entries)
+    pose_catalog.reload_catalogs()
+    directory = F.ROOT / "clips"
+    directory.mkdir(exist_ok=True)
+    for role in ("a", "b"):
+        (directory / f"run-pair__{role}.fbx").write_bytes(b"private pair fixture")
+    (directory / "run-pair.json").write_text(json.dumps(dict(
+        kind="run-pair", pair=True, duration_s=2, loop=True,
+        geometry=dict(roles=dict(a=dict(anchor_xz_m=[-.3, 0]), b=dict(anchor_xz_m=[.3, 0]))))))
+    doc = F.props.read_sidecar(pid)
+    doc["actions"][0].update(ability="pair", participants=2, pose_key="run-pair")
+    variant = doc["model_variants"][0]
+    variant["markers"][0].update(capacity=2, spacing_m=.6)
+    variant["action_bindings"][0]["access_points"] = dict(
+        actor=dict(x=-.3, z=2, yaw=180), partner=dict(x=.3, z=2, yaw=180))
+    F.props._write_sidecar(pid, doc)
+    target["definition_revision"] = F.props.get_prop(pid)["revision"]
+    measured_entry("run-pair")
+    return name, partner, target, pid
+
+
+def setup_run(ability="pose"):
+    clips._write_world_transitions([])
+    name, target, pid = F.fixture()
+    doc = F.props.read_sidecar(pid)
+    definition = doc["actions"][0]
+    definition["ability"] = ability
+    if ability == "combined":
+        definition["phases"] = [dict(id=p, label=p, duration_game_s=5, pose_key="sitting")
+                                for p in ("prepare", "drink")]
+    F.props._write_sidecar(pid, doc)
+    target["definition_revision"] = F.props.get_prop(pid)["revision"]
+
+    profile = F.C.get_character_profile(name)
+    profile["height"] = 170
+    profile["template"] = "run-person"
+    profile["status_effects"] = {"run_energy": 50}
+    F.C.save_character_profile(name, profile)
+    return name, target, pid
+
+
+def request(name, target, **kw):
+    return A.request(name, {k: target[k] for k in ("location_id", "room_id", "placement_id", "variant_uid")},
+                     target["action_id"], target["definition_revision"], **kw)
+
+
+def tick(seconds=1):
+    F.set_game_time(F.game_time() + GameDuration.of(seconds=seconds))
+    F.E.advance_all_journeys()
+    A.advance(F.game_time())
+
+
+class Runs(unittest.TestCase):
+    def tearDown(self):
+        F.W.set_world_frozen(False)
+        F.set_game_factor(0)
+        for run in R.live_runs():
+            A.cancel(run["actor"], run["execution_id"])
+        F.assert_no_external_work()
+
+    def test_exact_request_id_and_conflict_do_not_change_pose(self):
+        name, target, _ = setup_run()
+        one = request(name, target, request_id="retry")
+        self.assertEqual(one["status"], "approaching", one)
+        self.assertEqual(request(name, target, request_id="retry"), one)
+        changed = request(name, target, request_id="retry", partner="other")
+        self.assertEqual(changed["reason"], "request_id_conflict")
+        self.assertFalse(F.C.get_character_profile(name).get("place"))
+
+    def test_concurrent_slot_claim_and_person_claim(self):
+        name, target, _ = setup_run()
+        other = F.actor(target["location_id"], at=(2, 5))
+        barrier = Barrier(2)
+        def start(n):
+            barrier.wait()
+            return request(n, target)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            answers = list(pool.map(start, (name, other)))
+        self.assertEqual(sum(a["status"] == "approaching" for a in answers), 1, answers)
+        winner = next(n for n, a in zip((name, other), answers) if a["status"] == "approaching")
+        self.assertEqual(request(winner, target)["reason"], "participant_claimed")
+        self.assertEqual(len(R.claims()), 2)
+
+    def test_stale_revision_and_deleted_variant_have_no_side_effect(self):
+        name, target, pid = setup_run()
+        before = F.C.get_character_profile(name)
+        self.assertEqual(request(name, {**target, "definition_revision": "stale"})["reason"], "stale_definition")
+        doc = F.props.read_sidecar(pid)
+        doc["model_variants"][0]["uid"] = "22222222-2222-4222-8222-222222222222"
+        F.props._write_sidecar(pid, doc)
+        self.assertEqual(request(name, target)["status"], "refused")
+        self.assertEqual(F.C.get_character_profile(name), before)
+        self.assertFalse(R.claims())
+
+    def test_cancel_old_execution_preserves_foreign_journey(self):
+        name, target, _ = setup_run()
+        result = request(name, target)
+        F.E.cancel_journey(name)
+        journey, reason = F.E.start_journey_to_point(name, 2, 3)
+        self.assertTrue(journey, reason)
+        A.cancel(name, result["execution_id"])
+        self.assertEqual(F.E.get_journey(name)["journey_id"], journey["journey_id"])
+        self.assertFalse(R.claims())
+
+    def test_reentrant_cancellation_under_guard_releases_claims(self):
+        name, target, _ = setup_run()
+        result = request(name, target)
+        journey = F.E.get_journey(name)
+        with A.owner_guard(name, journey) as allowed:
+            self.assertTrue(allowed)
+            F.E.cancel_journey(name, journey_id=journey["journey_id"], execution_kind="prop_action",
+                               execution_ref=result["execution_id"])
+        self.assertEqual(R.get(result["execution_id"])["status"], "cancelled")
+        self.assertFalse(R.claims())
+
+    def test_actual_arrival_receipt_recovers_callback_loss(self):
+        name, target, _ = setup_run()
+        result = request(name, target)
+        # Crash window: the actual core arrival persists its receipt, but its
+        # registered callback raises before the executor records that arrival.
+        with patch.object(A, "_arrived", side_effect=RuntimeError("process stopped")):
+            tick(30)
+        A.advance(F.game_time())
+        row = R.get(result["execution_id"])
+        self.assertNotEqual(row["status"], "approaching", row)
+        self.assertEqual(F.C.get_character_profile(name)["last_journey_result"]["status"], "arrived")
+        self.assertIn(name, row["data"]["arrived"])
+
+    def test_deleted_target_during_approach_releases_only_own_claims(self):
+        name, target, pid = setup_run()
+        result = request(name, target)
+        doc = F.props.read_sidecar(pid)
+        doc["actions"] = []
+        doc["model_variants"][0]["action_bindings"] = []
+        F.props._write_sidecar(pid, doc)
+        tick()
+        self.assertEqual(R.get(result["execution_id"])["status"], "failed")
+        self.assertFalse(R.claims())
+        self.assertIsNone(F.E.get_journey(name))
+
+    def test_missing_entry_transition_is_visible_without_body_jump(self):
+        name, target, _ = setup_run()
+        result = request(name, target)
+        # A genuinely absent measured asset is not replaced by an invented clip.
+        tick(30)
+        row = R.get(result["execution_id"])
+        self.assertEqual(row["reason"], "missing_entry_transition", row)
+        self.assertEqual(F.C.get_character_pos(name), {"x": 8.0, "z": 7.0})
+        self.assertFalse(F.C.get_character_profile(name).get("place"))
+        self.assertFalse(R.claims())
+
+    def test_real_entry_waits_then_coffee_prepare_and_drink(self):
+        name, target, _ = setup_run("combined")
+        measured_entry()
+        result = request(name, target)
+        tick(30)
+        self.assertEqual(R.get(result["execution_id"])["phase"], "entry")
+        self.assertEqual(F.C.get_character_pos(name)["z"], 7)
+        self.assertFalse(F.C.get_character_profile(name).get("place"))
+        tick(2)
+        self.assertEqual(R.get(result["execution_id"])["phase"], "prepare")
+        self.assertEqual(F.C.get_character_profile(name)["place"]["slot"], 0)
+        tick(5)
+        self.assertEqual(R.get(result["execution_id"])["phase"], "drink")
+        tick(5)
+        self.assertEqual(R.get(result["execution_id"])["status"], "completed")
+        self.assertFalse(R.claims())
+        tick(3600)
+        self.assertEqual(R.get(result["execution_id"])["reason"], "phases_completed")
+
+    def test_open_pose_normal_end_and_manual_position_abort(self):
+        for manual in (False, True):
+            name, target, _ = setup_run()
+            measured_entry()
+            result = request(name, target)
+            tick(30)
+            tick(2)
+            self.assertEqual(R.get(result["execution_id"])["status"], "active")
+            if manual:
+                F.C.set_character_pos(name, 2, 2)
+            else:
+                A.cancel(name, result["execution_id"])
+            self.assertEqual(R.get(result["execution_id"])["status"], "cancelled" if manual else "completed")
+            self.assertFalse(R.claims())
+
+    def test_sleep_owns_exact_bed_until_real_wake_and_never_goes_offmap(self):
+        name, target, pid = setup_run("sleep")
+        doc = F.props.read_sidecar(pid)
+        doc["actions"][0]["pose_key"] = "sleeping"
+        doc["model_variants"][0]["markers"][0]["group"] = "lie"
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        measured_entry("sleeping")
+        result = request(name, target)
+        tick(30)
+        self.assertFalse(F.C.is_character_sleeping(name))
+        tick(2)
+        self.assertTrue(F.C.is_character_sleeping(name))
+        self.assertEqual(R.get(result["execution_id"])["status"], "sleeping")
+        self.assertEqual(F.C.get_character_profile(name)["place"]["id"], "device/body")
+        self.assertEqual(F.C.get_character_current_location(name), target["location_id"])
+        self.assertEqual(len(R.claims()), 2)
+        with patch.object(A, "_PROCESS", "new-process"):
+            tick(36000)
+            self.assertEqual(R.get(result["execution_id"])["status"], "sleeping")
+            self.assertEqual(len(R.claims()), 2)
+            F.C.set_is_sleeping(name, False)
+        self.assertEqual(R.get(result["execution_id"])["status"], "completed")
+        self.assertFalse(R.claims())
+
+    def test_consent_has_no_claims_exact_invitee_and_both_arrivals_required(self):
+        name, partner, target, _ = authored_pair()
+        result = request(name, target, partner=partner)
+        self.assertEqual(result["status"], "awaiting_consent", result)
+        self.assertFalse(R.claims())
+        self.assertEqual(A.respond(name, result["execution_id"], True)["reason"], "not_invitee")
+        accepted = A.respond(partner, result["execution_id"], True)
+        self.assertEqual(accepted["status"], "approaching", accepted)
+        self.assertEqual(len(R.claims()), 4)
+        first = F.E.get_journey(name)
+        F.set_game_time(F.game_time() + GameDuration.of(seconds=30))
+        # Real single-journey core step, while the partner is still on its path.
+        with A.owner_guard(name, first) as allowed:
+            self.assertTrue(allowed)
+            F.E._advance_approach(name, first, F.game_time())
+        self.assertFalse(F.C.get_character_profile(name).get("interaction"))
+        self.assertEqual(R.get(result["execution_id"])["data"]["arrived"], [name])
+        F.E.advance_all_journeys()
+        A.advance(F.game_time())
+        tick(2)
+        row = R.get(result["execution_id"])
+        self.assertEqual(row["status"], "active", row)
+        a, b = (F.C.get_character_profile(n) for n in (name, partner))
+        self.assertEqual(a["interaction"]["id"], b["interaction"]["id"])
+        self.assertEqual(a["interaction"]["execution_ref"], result["execution_id"])
+        self.assertEqual((a["place"]["slot"], b["place"]["slot"]), (0, 1))
+        self.assertEqual((a["place"]["id"], b["place"]["id"]), ("device/body", "device/body"))
+        from app.core.interaction_engine import end_interaction
+        end_interaction(partner, reason="manual", interaction_id=b["interaction"]["id"])
+        self.assertEqual(R.get(result["execution_id"])["status"], "cancelled")
+        self.assertFalse(R.claims())
+
+    def test_freeze_deadline_and_process_restart_have_no_offline_phase_bonus(self):
+        name, target, _ = setup_run("combined")
+        measured_entry()
+        result = request(name, target)
+        F.W.set_world_frozen(True)
+        A.advance(F.game_time())
+        self.assertEqual(R.get(result["execution_id"])["data"]["elapsed"], 0)
+        F.W.set_world_frozen(False)
+        tick(30)
+        tick(2)
+        tick(3)
+        self.assertEqual(R.get(result["execution_id"])["data"]["phase_elapsed"], 3)
+        with patch.object(A, "_PROCESS", "restarted"):
+            tick(36000)
+            row = R.get(result["execution_id"])
+            self.assertEqual(row["phase"], "prepare", row)
+            self.assertEqual(row["data"]["phase_elapsed"], 3)
+            tick(2)
+            self.assertEqual(R.get(result["execution_id"])["phase"], "drink")
+
+    def test_requirement_presence_pooling_and_timeout_release_claims(self):
+        name, target, pid = setup_run()
+        doc = F.props.read_sidecar(pid)
+        doc["actions"][0]["presence"] = "alone"
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        other = F.actor(target["location_id"])
+        self.assertEqual(request(name, target)["reason"], "presence_not_met")
+        F.C.set_character_status(other, "pooled")
+        result = request(name, target)
+        self.assertEqual(result["status"], "approaching", result)
+        A.advance(F.game_time() + GameDuration.of(seconds=120))
+        self.assertEqual(R.get(result["execution_id"])["reason"], "approach_timeout")
+        self.assertFalse(R.claims())
+        result = request(name, target)
+        F.C.set_character_status(name, "pooled")
+        self.assertEqual(R.get(result["execution_id"])["status"], "cancelled")
+        self.assertFalse(R.claims())
+
+    def test_effective_requirement_is_rechecked_during_approach(self):
+        name, target, pid = setup_run()
+        from app.core import prompt_filters
+        with F.db.transaction() as conn:
+            conn.execute("INSERT OR REPLACE INTO prompt_filters "
+                "(id,condition,label,drop_blocks,prompt_modifier,enabled,meta,icon,image_modifier,bone_pose) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)", ("run-boost", "condition:run-boost", "Boost", "[]", "", 1,
+                    json.dumps({"stat_boosts": {"run_energy": 20}}), "", "", "{}"))
+        prompt_filters.invalidate_filter_snapshot()
+        profile = F.C.get_character_profile(name)
+        profile["status_effects"]["run_energy"] = 30
+        profile["active_conditions"] = [dict(name="run-boost", started_at=F.game_time().canonical(), duration_hours=1)]
+        F.C.save_character_profile(name, profile)
+        doc = F.props.read_sidecar(pid)
+        doc["actions"][0]["requirements"] = [dict(id="energy", target="actor", type="stat",
+                                                   stat="run_energy", op="ge", value=40)]
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        result = request(name, target)
+        self.assertEqual(result["status"], "approaching", result)
+        profile = F.C.get_character_profile(name)
+        profile["status_effects"]["run_energy"] = 10
+        F.C.save_character_profile(name, profile)
+        tick(1)
+        self.assertEqual(R.get(result["execution_id"])["reason"], "requirement_not_met")
+        self.assertFalse(R.claims())
+
+    def test_missing_stat_unknown_reference_and_expired_condition_fail_closed(self):
+        from app.core import prompt_filters
+        name, target, pid = setup_run()
+        with F.db.transaction() as conn:
+            conn.execute("INSERT OR REPLACE INTO prompt_filters "
+                "(id,condition,label,drop_blocks,prompt_modifier,enabled,meta,icon,image_modifier,bone_pose) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)", ("run-rested", "condition:run-rested", "Rested", "[]", "", 1,
+                    json.dumps({"stat_boosts": {"run_energy": 20}}), "", "", "{}"))
+        prompt_filters.invalidate_filter_snapshot()
+        doc = F.props.read_sidecar(pid)
+        requirement = dict(id="rested", target="actor", type="condition", condition_id="run-rested", present=True)
+        doc["actions"][0]["requirements"] = [requirement]
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        profile = F.C.get_character_profile(name)
+        profile["active_conditions"] = [dict(name="run-rested", duration_hours=1,
+            started_at=(F.game_time() - GameDuration.of(hours=2)).canonical())]
+        F.C.save_character_profile(name, profile)
+        self.assertEqual(request(name, target)["reason"], "requirement_not_met")
+        requirement = dict(id="energy", target="actor", type="stat", stat="run_energy", op="ge", value=40)
+        doc["actions"][0]["requirements"] = [requirement]
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        profile["status_effects"] = {}
+        F.C.save_character_profile(name, profile)
+        self.assertEqual(request(name, target)["reason"], "missing_character_stat")
+        requirement["stat"] = "not-a-real-stat"
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        self.assertEqual(request(name, target)["reason"], "unknown_requirement_reference")
+        self.assertFalse(R.claims())
+
+    def test_terminal_cleanup_recovery_does_not_reopen_or_cancel_a_new_way(self):
+        name, target, _ = setup_run()
+        result = request(name, target)
+        # Simulate a crash AFTER the real terminal/claim commit but BEFORE its
+        # separate physical cleanup. No journey receipt is fabricated.
+        with patch.object(A, "_cleanup", side_effect=RuntimeError("crash before cleanup")):
+            with self.assertRaises(RuntimeError):
+                A.cancel(name, result["execution_id"])
+        self.assertFalse(R.claims())
+        A.advance(F.game_time())
+        self.assertIsNone(F.E.get_journey(name))
+        self.assertFalse(R.get(result["execution_id"])["data"]["cleanup_pending"])
+        self.assertEqual(R.get(result["execution_id"])["status"], "cancelled")
+
+    def test_competing_pair_consent_cannot_claim_shared_participant_twice(self):
+        name, partner, target, _ = authored_pair()
+        third = F.actor(target["location_id"], at=(3, 5))
+        first = request(name, target, partner=partner)
+        second = request(third, target, partner=partner)
+        self.assertFalse(R.claims())
+        self.assertEqual(A.respond(partner, first["execution_id"], True)["status"], "approaching")
+        refused = A.respond(partner, second["execution_id"], True)
+        self.assertEqual(refused["reason"], "participant_claimed")
+        self.assertEqual(len(R.claims()), 4)
+        self.assertEqual({c["execution_id"] for c in R.claims()}, {first["execution_id"]})
+
+    def test_sleeping_partner_and_different_room_refuse_without_actor_side_effect(self):
+        for asleep in (False, True):
+            name, partner, target, _ = authored_pair()
+            if asleep:
+                F.C.set_is_sleeping(partner, True)
+            else:
+                F.C.save_character_current_room(partner, "adjacent")
+            before = F.C.get_character_profile(name)
+            answer = request(name, target, partner=partner)
+            self.assertEqual(answer["reason"], "participant_asleep" if asleep else "target_not_in_actor_room")
+            self.assertEqual(F.C.get_character_profile(name), before)
+            self.assertFalse(R.claims())
+
+    def test_real_world_freeze_pauses_run_deadline_across_five_hours(self):
+        name, target, _ = setup_run()
+        clock = [F.datetime(2040, 1, 1, tzinfo=F.timezone.utc)]
+        with patch("app.core.timeutils.utc_now", side_effect=lambda: clock[0]):
+            F.set_game_factor(1)
+            F.set_game_time(F.GameTime.parse("Y0001-D010T12:00:00"))
+            result = request(name, target)
+            before = F.C.get_character_pos(name)
+            F.W.set_world_frozen(True)
+            clock[0] += F.timedelta(hours=5)
+            F.E.advance_all_journeys()
+            A.advance(F.game_time())
+            self.assertEqual(R.get(result["execution_id"])["data"]["elapsed"], 0)
+            self.assertEqual(F.C.get_character_pos(name), before)
+            F.W.set_world_frozen(False)
+            clock[0] += F.timedelta(seconds=1)
+            F.E.advance_all_journeys()
+            A.advance(F.game_time())
+            self.assertEqual(R.get(result["execution_id"])["status"], "approaching")
+            self.assertEqual(R.get(result["execution_id"])["data"]["elapsed"], 1)
+            F.set_game_factor(0)
+
+
+    def test_presence_entry_wakes_only_when_explicit_policy_requires_it(self):
+        for interrupt in (False, True):
+            name, target, pid = setup_run("sleep")
+            doc = F.props.read_sidecar(pid)
+            doc["actions"][0].update(pose_key="sleeping", presence="alone",
+                                      interrupt_on_presence_change=interrupt)
+            doc["model_variants"][0]["markers"][0]["group"] = "lie"
+            F.props._write_sidecar(pid, doc)
+            target["definition_revision"] = F.props.get_prop(pid)["revision"]
+            measured_entry("sleeping")
+            result = request(name, target)
+            tick(30)
+            tick(2)
+            self.assertTrue(F.C.is_character_sleeping(name))
+            F.actor(target["location_id"], at=(2, 3))
+            self.assertEqual(F.C.is_character_sleeping(name), not interrupt)
+            self.assertEqual(R.get(result["execution_id"])["status"], "cancelled" if interrupt else "sleeping")
+            A.cancel(name, result["execution_id"])
+
+    def test_outer_profile_lock_defers_owner_callback_until_release(self):
+        from app.core.keyed_lock import keyed_lock
+        name, target, _ = setup_run()
+        result = request(name, target)
+        with keyed_lock("character_profile", name):
+            F.C.save_character_current_room(name, "adjacent")
+            self.assertEqual(R.get(result["execution_id"])["status"], "approaching")
+        self.assertEqual(R.get(result["execution_id"])["status"], "cancelled")
+        self.assertFalse(R.claims())
+
+
+def execution_scenario(stage):
+    """Real process stops/restarts, actual arrival receipts and partial phases."""
+    path = F.ROOT / "execution.json"
+    if stage == "missing-target":
+        name, target, pid = setup_run()
+        result = request(name, target)
+        if result["status"] != "approaching":
+            raise RuntimeError(result)
+        doc = F.props.read_sidecar(pid)
+        doc["model_variants"][0]["uid"] = "22222222-2222-4222-8222-222222222222"
+        F.props._write_sidecar(pid, doc)
+        data = json.loads(path.read_text())
+        data["missing_run"] = result["execution_id"]
+        path.write_text(json.dumps(data, indent=2))
+        F.assert_no_external_work()
+        return
+    if stage == "missing-resume":
+        data = json.loads(path.read_text())
+        A.advance(F.game_time())
+        run = R.get(data["missing_run"])
+        if run["status"] != "failed" or R.claims(run["execution_id"]):
+            raise RuntimeError(run)
+        data["missing_target_recovery"] = run
+        path.write_text(json.dumps(data, indent=2))
+        F.assert_no_external_work()
+        return
+    if stage == "arrive-crash":
+        name, target, _ = setup_run("combined")
+        measured_entry()
+        result = request(name, target)
+        if result["status"] != "approaching":
+            raise RuntimeError(result)
+        path.write_text(json.dumps(dict(actor=name, target=target, execution_id=result["execution_id"],
+                                        snapshots=[R.get(result["execution_id"])]), indent=2))
+        # The real travel engine commits position + last_journey_result before
+        # invoking this boundary. No receipt is authored by this scenario.
+        def crash_after_actual_receipt(*args):
+            F.assert_no_external_work()
+            os._exit(0)
+        A._arrived = crash_after_actual_receipt
+        tick(30)
+        raise RuntimeError("real arrival never reached its callback")
+    data = json.loads(path.read_text())
+    run = R.get(data["execution_id"])
+    A.register_owner()
+    if stage == "terminal":
+        if run["status"] != "completed" or R.claims(run["execution_id"]):
+            raise RuntimeError("terminal execution reopened after process restart")
+        A.advance(F.game_time() + GameDuration.of(hours=12))
+        data["terminal_restart"] = R.get(run["execution_id"])
+    else:
+        profile = F.C.get_character_profile(data["actor"])
+        receipt = profile.get("last_journey_result") or {}
+        if receipt.get("execution_ref") != run["execution_id"] or receipt.get("status") != "arrived":
+            raise RuntimeError("missing real persisted Core arrival receipt")
+        # World time was stopped by process termination; an explicit large
+        # game-clock jump models server downtime and must earn no active time.
+        F.set_game_time(F.game_time() + GameDuration.of(hours=12))
+        A.advance(F.game_time())
+        data["snapshots"].append(R.get(run["execution_id"]))
+        if stage == "resume-entry":
+            tick(2)
+            tick(3)
+            active = R.get(run["execution_id"])
+            if active["phase"] != "prepare" or active["data"]["phase_elapsed"] != 3:
+                raise RuntimeError(active)
+            data["snapshots"].append(active)
+            data["active_before_stop"] = active["data"]["phase_elapsed"]
+            path.write_text(json.dumps(data, indent=2))
+            F.assert_no_external_work()
+            os._exit(0)
+        if R.get(run["execution_id"])["data"]["phase_elapsed"] != data["active_before_stop"]:
+            raise RuntimeError("restart applied an offline phase bonus")
+        tick(2)
+        tick(5)
+        tick(5)
+        data["snapshots"].append(R.get(run["execution_id"]))
+        if data["snapshots"][-1]["status"] != "completed" or R.claims(run["execution_id"]):
+            raise RuntimeError(data["snapshots"][-1])
+        data["actual_receipt"] = receipt
+        data["actual_position"] = F.C.get_character_pos(data["actor"])
+    F.assert_no_external_work()
+    path.write_text(json.dumps(data, indent=2))
+
+
+if __name__ == "__main__":
+    if OPTIONS_ARGS.scenario_stage:
+        execution_scenario(OPTIONS_ARGS.scenario_stage)
+    else:
+        unittest.main(argv=[sys.argv[0], *F.REST])

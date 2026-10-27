@@ -266,6 +266,19 @@ def occupancy(location_id: str, room_id: str, exclude: str = "") -> Dict[str, Li
         slot = _held_slot(pl, place, room_id) if place else None
         if slot is not None:
             out.setdefault(place["id"], []).append((name, slot))
+    # Pending owned approaches reserve the same slots ordinary pose allocation
+    # sees. Runtime is opt-in until the complete action cutover; never import/
+    # register an executor merely by composing a room.
+    import sys
+    if "app.core.prop_action_engine" in sys.modules:
+        from app.core import prop_action_store as runs
+        import json
+        for claim in runs.claims():
+            if claim["kind"] != "slot":
+                continue
+            anchor = json.loads(claim["subject"])
+            if anchor["location_id"] == location_id and anchor["room_id"] == room_id:
+                out.setdefault(anchor["place_id"], []).append(("@prop:" + claim["execution_id"], anchor["slot"]))
     return out
 
 

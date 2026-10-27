@@ -867,6 +867,8 @@ def start_journey(character_name: str, target_id: str,
         journey["exit_clip"] = exit_clip
         journey["exit_s"] = round(exit_s, 3)
     # Walking away ends a running pair interaction for BOTH participants.
+    from app.models.character import _interrupt_prop_action
+    _interrupt_prop_action(character_name, "journey")
     from app.core.interaction_engine import end_interaction
     end_interaction(character_name, reason="journey")
     # Read AND write under the per-character profile lock (DATA-3): the save
@@ -969,6 +971,8 @@ def start_journey_to_point(character_name: str, x: float,
         journey["exit_clip"] = exit_clip
         journey["exit_s"] = round(exit_s, 3)
     # Walking away ends a running pair interaction for BOTH participants.
+    from app.models.character import _interrupt_prop_action
+    _interrupt_prop_action(character_name, "journey")
     from app.core.interaction_engine import end_interaction
     end_interaction(character_name, reason="journey")
     # Same lock as ``start_journey`` — read and write of the profile blob

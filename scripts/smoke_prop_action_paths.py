@@ -23,10 +23,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 PARSER = argparse.ArgumentParser()
 PARSER.add_argument("--observe-dir", type=Path)
 ARGS, REST = PARSER.parse_known_args()
-TEMP = None if ARGS.observe_dir else tempfile.TemporaryDirectory(prefix="prop-paths-")
-ROOT = ARGS.observe_dir.resolve() if ARGS.observe_dir else Path(TEMP.name)
-if ARGS.observe_dir:
-    ROOT.mkdir(parents=True, exist_ok=False)
+RESUME_ROOT = os.environ.get("PROP_ACTION_SMOKE_RESUME_ROOT", "")
+if RESUME_ROOT:
+    ROOT = Path(RESUME_ROOT).resolve()
+    if not (ROOT / ".prop-action-scenario").is_file():
+        raise ValueError("resume root is not an explicitly created private action scenario")
+    TEMP = None
+else:
+    TEMP = None if ARGS.observe_dir else tempfile.TemporaryDirectory(prefix="prop-paths-")
+    ROOT = ARGS.observe_dir.resolve() if ARGS.observe_dir else Path(TEMP.name)
+    if ARGS.observe_dir:
+        ROOT.mkdir(parents=True, exist_ok=False)
 os.environ.update(STORAGE_DIR=str(ROOT / "world"), INSTANCE_DIR=str(ROOT / "instance"),
                   ANIMATION_CLIPS_DIR=str(ROOT / "clips"), ANIMATION_RIG_FILE=str(ROOT / "rig.fbx"),
                   EVENT_ENTRY_ROLL_ENABLED="0")
