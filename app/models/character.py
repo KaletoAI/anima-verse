@@ -3254,37 +3254,23 @@ def _delete_outfit_files(character_name: str, image_filename: str) -> None:
             logger.warning("Outfit-Datei loeschen fehlgeschlagen %s: %s", p.name, _de)
 
 
-def delete_character_outfit(character_name: str,
-                            outfit_id: str = "", location: str = "",
-                            activity: str = "") -> bool:
-    """Delete an outfit by ID or legacy location/activity match.
+def delete_character_outfit(character_name: str, outfit_id: str) -> bool:
+    """Delete one owned preset, never its pieces, inventory or worn outfit.
 
-    Also delete its PNG and JSON sidecar from outfits/."""
-    outfits = get_character_outfits(character_name)
-
-    if outfit_id:
-        to_delete = [o for o in outfits if o.get("id") == outfit_id]
-        new_outfits = [o for o in outfits if o.get("id") != outfit_id]
-    else:
-        # Legacy location/activity match for existing callers.
-        to_delete = [
-            o for o in outfits
-            if (o.get("locations") == [location] and
-                o.get("activities") == ([activity] if activity else []))
-        ]
-        new_outfits = [
-            o for o in outfits
-            if not (o.get("locations") == [location] and
-                    o.get("activities") == ([activity] if activity else []))
-        ]
-
-    if len(new_outfits) < len(outfits):
-        save_character_outfits(character_name, new_outfits)
-        # Delete the PNG and sidecar too.
-        for o in to_delete:
-            _delete_outfit_files(character_name, o.get("image", ""))
-        return True
-    return False
+    Delete the row directly: saving a filtered snapshot would rewrite other
+    presets and could report success after a swallowed database error.
+    """
+    from app.core.keyed_lock import keyed_lock
+    with keyed_lock("character_profile", character_name):
+        with transaction() as conn:
+            deleted = conn.execute(
+                "DELETE FROM outfits_sets WHERE character_name=? AND id=? RETURNING image",
+                (character_name, outfit_id),
+            ).fetchone()
+        if deleted is None:
+            return False
+        _delete_outfit_files(character_name, deleted["image"] or "")
+    return True
 
 
 def resolve_outfit_placeholders(outfit_text: str, character_name: str) -> str:

@@ -3072,6 +3072,14 @@
     "— pick a kind —": "— Art wählen —",
     "— pick a place type —": "— Platztyp wählen —",
     "“{tab}” settings move here next.": "Die Einstellungen von „{tab}“ werden als Nächstes hierher verschoben.",
-    "Saving this set to Shared also publishes these World-only members:": "Beim Speichern dieses Sets im gemeinsamen Katalog werden auch diese bisher ausschließlich weltlokalen Mitglieder veröffentlicht:"
+    "Saving this set to Shared also publishes these World-only members:": "Beim Speichern dieses Sets im gemeinsamen Katalog werden auch diese bisher ausschließlich weltlokalen Mitglieder veröffentlicht:",
+    "Saved outfits": "Gespeicherte Outfits",
+    "Select an outfit…": "Outfit auswählen…",
+    "Preview only. Clothes change when you click Apply.": "Nur Vorschau. Die Kleidung ändert sich erst mit Übernehmen.",
+    "Delete saved outfit": "Gespeichertes Outfit löschen",
+    "Delete saved outfit “{name}”? Its clothing pieces and currently worn clothes are kept.": "Gespeichertes Outfit „{name}“ löschen? Die einzelnen Kleidungsstücke und die aktuell getragene Kleidung bleiben erhalten.",
+    "Saved outfit deleted": "Gespeichertes Outfit gelöscht",
+    "Missing piece: {id}": "Fehlendes Kleidungsstück: {id}",
+    "Clears slots: {slots}": "Leert Kleidungsplätze: {slots}"
   }
 }

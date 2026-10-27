@@ -998,7 +998,7 @@ export function CharactersTab() {
             ) : subTab === 'skills' ? (
               <SkillsTab character={selected} />
             ) : subTab === 'wardrobe' ? (
-              <WardrobeTab character={selected} />
+              <WardrobeTab key={selected} character={selected} />
             ) : subTab === 'secrets' ? (
               <SecretsEditor character={selected} />
             ) : (

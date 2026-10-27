@@ -68,6 +68,10 @@ to playing — chat, movement, own inventory and outfit, gifts, scene photos, ca
   `static/game_admin/`) for world building in 20 tabs (characters, locations/rooms,
   map, terrain, props, items, rules, states, events, scheduler, improvements, marketplace,
   poses, world-dev, observer, mind …).
+  In **Characters → Wardrobe**, selecting a saved outfit previews its pieces without
+  changing the character's clothes. **Apply** equips it; **Delete** asks for confirmation
+  and removes only the saved preset, keeping its pieces, inventory and current clothing.
+  Admin-only preview/delete: `GET` / `DELETE /inventory/characters/{name}/outfit-sets/{id}`.
 - **Server-rendered admin pages** (Python) — `/admin/settings`, `/admin/users`, `/admin/models`,
   `/admin/agent-loop`, `/admin/templates`, `/admin/llm-stats`, `/logs/llm`,
   `/logs/image-prompts`, `/dashboard`. These are server-rendered administration pages: `/admin/settings` edits instance settings,

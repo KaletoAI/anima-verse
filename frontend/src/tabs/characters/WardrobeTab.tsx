@@ -9,9 +9,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiDelete } from '../../lib/api'
+import { useToast } from '../../lib/Toast'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
-import { PromptPreview } from '@anima/player-ui'
+import { ConfirmDialog, PromptPreview } from '@anima/player-ui'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
 
 // Anchor positions (x%, y%) in the image coordinate system (silhouette.svg).
@@ -61,6 +62,14 @@ interface Belongings {
 const EMPTY: Belongings = {
   avatar: '', slot_order: [], slot_labels: {}, equipped: {}, items: [],
   outfit_sets: [], max_slots: 0,
+}
+
+interface OutfitPreview {
+  id: string
+  name: string
+  outfit: string
+  pieces: Array<{ item_id: string; name: string; image: boolean; missing: boolean }>
+  remove_slots: string[]
 }
 
 
@@ -117,6 +126,7 @@ function OutfitLockSwitch({ character }: { character: string }) {
 
 export function WardrobeTab({ character }: { character: string }) {
   const { t } = useI18n()
+  const { toast } = useToast()
   const enc = encodeURIComponent(character)
   const [data, setData] = useState<Belongings>(EMPTY)
   const [slotFilter, setSlotFilter] = useState('')
@@ -131,6 +141,26 @@ export function WardrobeTab({ character }: { character: string }) {
       .catch(() => setOutfitTypes([]))
   }, [])
   const [busy, setBusy] = useState(false)
+  const [selectedOutfitId, setSelectedOutfitId] = useState('')
+  const [outfitPreview, setOutfitPreview] = useState<OutfitPreview | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState('')
+  const [confirmOutfitDelete, setConfirmOutfitDelete] = useState(false)
+  const selectedOutfit = data.outfit_sets.find((o) => o.id === selectedOutfitId)
+
+  useEffect(() => {
+    let active = true
+    setOutfitPreview(null)
+    setPreviewError('')
+    setPreviewLoading(!!selectedOutfitId)
+    if (selectedOutfitId) {
+      apiGet<OutfitPreview>(`/inventory/characters/${enc}/outfit-sets/${encodeURIComponent(selectedOutfitId)}`)
+        .then((preview) => { if (active) setOutfitPreview(preview) })
+        .catch((error: Error) => { if (active) setPreviewError(error.message) })
+        .finally(() => { if (active) setPreviewLoading(false) })
+    }
+    return () => { active = false }
+  }, [enc, selectedOutfitId])
   // Granting items to the character: available item defs + the pick.
   const [allItems, setAllItems] = useState<Array<{ item_id: string; name: string; category?: string }>>([])
   const [pickId, setPickId] = useState('')
@@ -184,6 +214,36 @@ export function WardrobeTab({ character }: { character: string }) {
       await load()
     } catch { /* ignore */ } finally { setBusy(false) }
   }, [busy, enc, load])
+
+  const applyOutfit = async () => {
+    if (busy || !selectedOutfit || outfitPreview?.id !== selectedOutfit.id) return
+    setBusy(true)
+    try {
+      await apiPost(`/inventory/characters/${enc}/apply-outfit-set`, { outfit_id: selectedOutfit.id })
+      await load()
+    } catch (error) {
+      toast((error as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const deleteOutfit = async () => {
+    if (busy || !selectedOutfit) return
+    setConfirmOutfitDelete(false)
+    setBusy(true)
+    try {
+      await apiDelete(`/inventory/characters/${enc}/outfit-sets/${encodeURIComponent(selectedOutfit.id)}`)
+      setSelectedOutfitId('')
+      setOutfitPreview(null)
+      await load()
+      toast(t('Saved outfit deleted'), 'success')
+    } catch (error) {
+      toast((error as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   // The wardrobe shows ONLY outfit pieces (no consumables, spells or other
   // items). Both filters combine with AND; an UNTAGGED piece passes every
@@ -290,11 +350,50 @@ export function WardrobeTab({ character }: { character: string }) {
           })}
         </div>
         {data.outfit_sets.length > 0 && (
-          <select className="ga-input" value="" disabled={busy} style={{ width: '100%' }}
-            onChange={(e) => e.target.value && act(`/inventory/characters/${enc}/apply-outfit-set`, { outfit_id: e.target.value })}>
-            <option value="">{t('Wear a saved outfit…')}</option>
-            {data.outfit_sets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label className="ga-form-hint" htmlFor="wardrobe-saved-outfit">{t('Saved outfits')}</label>
+            <select id="wardrobe-saved-outfit" className="ga-input" value={selectedOutfitId}
+              disabled={busy} style={{ width: '100%' }}
+              onChange={(e) => { setSelectedOutfitId(e.target.value); setConfirmOutfitDelete(false) }}>
+              <option value="">{t('Select an outfit…')}</option>
+              {data.outfit_sets.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+            {selectedOutfit && (
+              <>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="ga-btn ga-btn-sm ga-btn-primary"
+                    disabled={busy || previewLoading || outfitPreview?.id !== selectedOutfit.id}
+                    onClick={() => { void applyOutfit() }}>{t('Apply')}</button>
+                  <button className="ga-btn ga-btn-sm ga-btn-danger" disabled={busy}
+                    onClick={() => setConfirmOutfitDelete(true)}>{t('Delete')}</button>
+                </div>
+                <span className="ga-form-hint">
+                  {t('Preview only. Clothes change when you click Apply.')}
+                </span>
+                {previewLoading && <span className="ga-form-hint">{t('Loading…')}</span>}
+                {previewError && <span role="alert">{previewError}</span>}
+                {outfitPreview?.id === selectedOutfit.id && (
+                  <div style={{ maxHeight: 160, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {outfitPreview.pieces.map((piece) => (
+                      <div key={piece.item_id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <ItemIcon itemId={piece.item_id} hasImage={piece.image} emoji="👕" size={24} />
+                        <span>{piece.missing
+                          ? t('Missing piece: {id}').replace('{id}', piece.item_id)
+                          : piece.name || piece.item_id}</span>
+                      </div>
+                    ))}
+                    {outfitPreview.outfit && <span className="ga-form-hint">{outfitPreview.outfit}</span>}
+                    {outfitPreview.remove_slots.length > 0 && (
+                      <span className="ga-form-hint">
+                        {t('Clears slots: {slots}').replace('{slots}', outfitPreview.remove_slots
+                          .map((slot) => t(data.slot_labels[slot] || slot)).join(', '))}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         )}
       </div>
 
@@ -353,6 +452,16 @@ export function WardrobeTab({ character }: { character: string }) {
             refreshKey={JSON.stringify(data.equipped)} />
         </div>
       </div>
+      <ConfirmDialog
+        open={!!selectedOutfit && confirmOutfitDelete}
+        title={t('Delete saved outfit')}
+        message={t('Delete saved outfit “{name}”? Its clothing pieces and currently worn clothes are kept.')
+          .replace('{name}', selectedOutfit?.name || '')}
+        confirmLabel={t('Delete')}
+        danger
+        onConfirm={() => { void deleteOutfit() }}
+        onClose={() => setConfirmOutfitDelete(false)}
+      />
     </div>
   )
 }

@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request, HTTPException, Query, UploadFile, File, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 from typing import Dict, Any, List
-from app.core.auth_dependency import get_current_user
+from app.core.auth_dependency import get_current_user, require_admin
 from app.core import users
 from app.core.log import get_logger
 from app.core.paths import get_storage_dir
@@ -1070,6 +1070,43 @@ def _apply_equipped_route_sync(character_name: str,
         "skipped": result["skipped"],
         "cleared": result["cleared"],
     }
+
+
+@router.get("/characters/{character_name}/outfit-sets/{outfit_id}")
+def preview_outfit_set_route(character_name: str, outfit_id: str,
+                             _admin=Depends(require_admin)) -> Dict[str, Any]:
+    """Preview a saved outfit without equipping or granting any pieces."""
+    from app.models.character import get_character_outfits
+    target = next((o for o in get_character_outfits(character_name)
+                   if o.get("id") == outfit_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="outfit not found")
+    pieces = []
+    for item_id in target.get("pieces") or []:
+        item = get_item(item_id)
+        pieces.append({
+            "item_id": item_id,
+            "name": (item or {}).get("name", ""),
+            "image": bool((item or {}).get("image")),
+            "missing": item is None,
+        })
+    return {
+        "id": target["id"],
+        "name": target.get("name", ""),
+        "outfit": target.get("outfit", ""),
+        "pieces": pieces,
+        "remove_slots": list(target.get("remove_slots") or []),
+    }
+
+
+@router.delete("/characters/{character_name}/outfit-sets/{outfit_id}")
+def delete_outfit_set_route(character_name: str, outfit_id: str,
+                            _admin=Depends(require_admin)) -> Dict[str, Any]:
+    """Remove the preset only; leave inventory and equipped pieces intact."""
+    from app.models.character import delete_character_outfit
+    if not delete_character_outfit(character_name, outfit_id):
+        raise HTTPException(status_code=404, detail="outfit not found")
+    return {"status": "ok", "outfit_id": outfit_id}
 
 
 @router.post("/characters/{character_name}/apply-outfit-set")
