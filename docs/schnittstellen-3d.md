@@ -7767,6 +7767,8 @@ owner callback runs in that transaction. Existing place allocation sees these
 reservations through occupancy; acquisition respects the existing
 location-place-before-profile lock order. Consent questions have no claims,
 bind the exact execution/invitee and expire after 300 online game seconds.
+The accept path accrues that clock and checks expiry under its acquisition
+guard before taking any person/slot claim, even if the periodic tick is late.
 
 The typed journey owner uses reentrant per-execution locks. Both participants
 must arrive at their own exact floor access; `last_journey_result` is checked
@@ -7776,6 +7778,13 @@ proof. The approach deadline is the longest actual timed way (including its
 departure delay) plus 60 game seconds. Every terminal path releases only its
 own claims and matching journeys; durable pending cleanup is replayable without
 reopening the terminal state or touching a replacement journey.
+`character.release_prop_action_state(name, execution_id)` compares ownership
+under location-place/profile write authority and a final SQL identity guard.
+Removal of its own place/pose/entry, canonical awake flag bookkeeping and the
+derived stand position share one transaction. No later unconditional pose,
+position or wake setter can erase a replacement execution. Owned pair end
+defers both this cleanup and its exact-execution interruption until **all**
+caller-held keyed/world locks have exited.
 
 Entry requires a discovered real transition asset plus duration and measured,
 height-scaled root travel matching access to the selected anchor within 5 cm.
@@ -7795,6 +7804,16 @@ shares the existing pair clip/role/geometry/profile persistence implementation
 instead of auto-selecting furniture. Both ordinary `end_interaction` and prop
 cancellation correlate the shared interaction ID and execution reference.
 Generic interaction/NPC-invitation cutover remains separate work.
+`interaction_engine.plan_interaction_at(actor,partner,pose_key,place)` shares
+the existing gender-aware clip-role and marker geometry primitives. Before
+claims/approaches it resolves and persists `data.clip_roles` (`a`/`b`→person)
+and `data.access_roles` (semantic actor/partner→binding access key). Binding
+access `actor` represents clip A and `partner` clip B; the corresponding exact
+slots come from the clip's measured anchor geometry, not participant order.
+Semantic `run.actor`/`run.partner` remain initiator/invitee for effects and
+consent. A changed role allocation invalidates the pending consent rather than
+silently switching roles. Journeys use the resolved physical access role;
+exact-target pair entry verifies the persisted allocation again.
 
 Combined actions advance their named phases (coffee `prepare` then `drink`)
 only while valid and active; only the final phase produces semantic success.
@@ -7802,6 +7821,10 @@ Open poses/pairs have normal explicit end and no completion bonus. Bed sleep
 uses the canonical awake-to-asleep flag/lifecycle with the already owned lying
 slot, never another-bed search or off-map sleep. The sleeping execution keeps
 that exact bed through restart until real wake, which completes ownership.
+The pre-flag window is durably `active/sleep_pending`: recovery revalidates
+ownership and performs the real canonical awake→asleep transition if the flag
+is still false, or records the already committed real transition if true.
+It cannot remain an awake generic active sleep execution indefinitely.
 Pose/manual position/room/location/journey/deletion/pooling/sleep mutations
 interrupt before their own profile locks; an outer caller-held lock defers the
 callback until all keyed/world locks have exited. Optional presence policy is
@@ -7816,6 +7839,11 @@ progress. Freeze pauses the game clock/deadline.
 Clock stamps and newly accrued active progress are committed together; an
 interrupted journey reanchor carries its own durable stamp to avoid shifting
 the same offline interval twice if another crash precedes the run write.
+Every indoor movement commit persists `journey.position_checkpoint_game`
+atomically with its actual position (or exact arrival receipt/removal).
+Restart reanchoring uses that **journey** checkpoint and its reanchor stamp,
+not the slower run scheduler stamp; already committed walking cannot rewind
+when TravelTicker advanced independently before process death.
 Existing sleep regeneration remains owned by the sleep mechanic; this executor
 invents no bed rate.
 
@@ -7839,6 +7867,10 @@ the durable arrival write before its owner callback, stops again mid-prepare,
 then recovers receipts/progress, checks terminal restart and removed-variant
 claim release. Its `execution.json` contains actual stored states, not mock
 arrival echoes. These fixtures do not claim playable FBX/3D-client verification.
+The scenario also stops before a pending canonical sleep transition and after
+atomic wake/bed removal, then restarts to recover sleep and prove old cleanup
+preserves a new independent sleep generation. Private fixtures include the
+complete public terrain catalog, including `grass`, as well as pose/templates.
 
 
 

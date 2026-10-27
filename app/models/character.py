@@ -4371,6 +4371,109 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
 #   is_wet       → swim-Exemption bei swim_allowed Raum
 #   is_intimate  → decency override to nude_ok
 
+def _set_sleep_flag(profile: dict, value: bool) -> bool:
+    """Canonical flag/pose bookkeeping, shared by normal sleep and owned exit."""
+    was = bool(profile.get("is_sleeping"))
+    profile["is_sleeping"] = bool(value)
+    if value != was:
+        profile["current_activity"] = "sleeping" if value else ""
+    since = dict(profile.get("state_flag_since") or {})
+    if value:
+        since["is_sleeping"] = game_time().canonical()
+    else:
+        since.pop("is_sleeping", None)
+    profile["state_flag_since"] = since
+    if was and not value:
+        profile["pose_key"] = ""
+        profile["pose_flavor"] = ""
+        profile["place"] = None
+    return was
+
+
+def _note_sleep_transition(character_name: str, value: bool) -> None:
+    try:
+        from app.core import day_consolidation as dc
+        (dc.note_sleep_start if value else dc.note_wake)(character_name)
+    except Exception:
+        pass
+
+
+def release_prop_action_state(character_name: str, execution_id: str) -> bool:
+    """Compare/remove only this execution, atomically waking and standing.
+
+    There is no unlocked ownership decision followed by a generic setter.
+    Place/pose/flag/position commit together before releasing write authority;
+    replay cannot wake or move a replacement run after the old marker is gone.
+    """
+    from app.core import places
+    from app.core.keyed_lock import keyed_lock, _after_locks
+    from app.core.room_stand import bridge_stand_point, free_stand_point
+    initial = get_character_profile(character_name)
+    location, room = places.where(character_name, profile=initial)
+    with keyed_lock("places", location), keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        field = profile.get("place") or {}
+        own_place = field.get("execution_id") == execution_id
+        own_entry = (profile.get("prop_action_entry") or {}).get("execution_id") == execution_id
+        if not own_place and not own_entry:
+            return False
+        old_pose = get_effective_pose_key(character_name, profile=profile)
+        old_place = dict(field) if own_place else None
+        point = None
+        if own_place and places.where(character_name, profile=profile) == (location, room):
+            pos = get_character_pos(character_name)
+            seat = places.resolve_place(character_name, field, profile=profile)
+            if pos and seat:
+                here = (pos["x"], pos["z"])
+                near = bridge_stand_point(character_name, seat, old_pose, profile=profile, at=here) or here
+                candidate = free_stand_point(location, room, near, exclude=character_name)
+                if candidate is not None and places.inside(location, *candidate):
+                    point = candidate
+        woke = False
+        # A bounded state transition, not a whole-profile save: JSON operations
+        # preserve unrelated concurrent fields, with a final DB ownership CAS.
+        with transaction() as conn:
+            if own_place:
+                expression = ("CASE WHEN json_extract(profile_json,'$.prop_action_entry.execution_id')=? "
+                              "THEN json_remove(profile_json,'$.place','$.prop_action_entry') "
+                              "ELSE json_remove(profile_json,'$.place') END")
+                changed = conn.execute(
+                    "UPDATE characters SET profile_json=" + expression + ",updated_at=? WHERE name=? "
+                    "AND json_extract(profile_json,'$.place.execution_id')=?",
+                    (execution_id, utc_now_iso(), character_name, execution_id)).rowcount
+                if not changed:
+                    return False
+                state = conn.execute("SELECT meta,is_sleeping,current_activity FROM character_state WHERE character_name=?",
+                                     (character_name,)).fetchone()
+                meta = json.loads(state[0] or "{}")
+                profile["is_sleeping"] = bool(state[1])
+                profile["current_activity"] = state[2]
+                profile["state_flag_since"] = dict(meta.get("state_flag_since") or {})
+                woke = _set_sleep_flag(profile, False)
+                meta["state_flag_since"] = profile["state_flag_since"]
+                sql = "UPDATE character_state SET pose_key='',pose_flavor='',is_sleeping=?,current_activity=?,meta=?"
+                args = [int(profile["is_sleeping"]), profile["current_activity"], json.dumps(meta)]
+                if point is not None:
+                    sql += ",pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL"
+                    args.extend((round(point[0], 2), round(point[1], 2)))
+                conn.execute(sql + " WHERE character_name=?", (*args, character_name))
+            else:
+                changed = conn.execute(
+                    "UPDATE characters SET profile_json=json_remove(profile_json,'$.prop_action_entry') "
+                    "WHERE name=? AND json_extract(profile_json,'$.prop_action_entry.execution_id')=?",
+                    (character_name, execution_id)).rowcount
+                if not changed:
+                    return False
+        if woke:
+            # Existing canonical lifecycle is DB-only; finish it before another
+            # sleeper can replace this generation's sleep_start bookkeeping.
+            _note_sleep_transition(character_name, False)
+        if own_place:
+            _after_locks(lambda: _publish_activity_changed(character_name, "", old_pose, "",
+                                                           None, old_place, stored=True))
+    return True
+
+
 def set_is_sleeping(character_name: str, value: bool, *, _prop_execution: str = "") -> None:
     """Set the is_sleeping flag. True may send the character off-map — that
     is the caller's job (the sleep skill calls go_offmap).
@@ -4402,32 +4505,7 @@ def set_is_sleeping(character_name: str, value: bool, *, _prop_execution: str = 
     # run below it and must not be reached while this lock is held.
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
-        was = bool(profile.get("is_sleeping"))
-        profile["is_sleeping"] = bool(value)
-        if value != was:
-            # "sleeping" is the canonical preset key (the synonyms schlafen /
-            # schlafend / pennen point at it), so everything downstream matches.
-            profile["current_activity"] = "sleeping" if value else ""
-        # Change stamp for the flag lifecycle (same bookkeeping as set_state_flag).
-        _since = dict(profile.get("state_flag_since") or {})
-        if value:
-            # in-world duration stamp -> canonical GAME time
-            _since["is_sleeping"] = game_time().canonical()
-        else:
-            _since.pop("is_sleeping", None)
-        profile["state_flag_since"] = _since
-        # Waking up (True->False): drop the sleep/old pose, otherwise the
-        # expression image stays stuck on "sleeping". (wake_from_offmap does
-        # the same, but only applies to off-map sleepers.)
-        if was and not value:
-            profile["pose_key"] = ""
-            profile["pose_flavor"] = ""
-            # The bed goes with the sleep. Falling asleep took a lying place
-            # (below); keeping it awake would leave the figure standing on the
-            # mattress with no pose, and every renderer draws it there because
-            # the place, not the pose, says where a body is. Same rule as
-            # ``clear_pose_intent``: whoever gives up the pose stands up.
-            profile["place"] = None
+        was = _set_sleep_flag(profile, value)
         stored = save_character_profile(character_name, profile)
     if value != was:
         from app.core import sync_topics
@@ -4461,11 +4539,7 @@ def set_is_sleeping(character_name: str, value: bool, *, _prop_execution: str = 
     # time, waking up checks whether it was the main sleep (>= threshold)
     # -> daily entry.
     if value != was:
-        try:
-            from app.core import day_consolidation as _dc
-            (_dc.note_sleep_start if value else _dc.note_wake)(character_name)
-        except Exception:
-            pass
+        _note_sleep_transition(character_name, value)
 
 
 def set_state_flag(character_name: str, flag: str, value) -> None:

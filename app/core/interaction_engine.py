@@ -303,6 +303,42 @@ def assign_roles(actor: str, partner: str, actor_gender: str,
     return (partner, actor) if swap else (actor, partner)
 
 
+def plan_interaction_at(actor: str, partner: str, pose_key: str, place: dict) -> dict:
+    """Shared clip-role allocation BEFORE a prop owner claims access/slots.
+
+    Binding access `actor` is clip A, `partner` is clip B. Semantic actor and
+    partner identities remain initiator/invitee, including effect targets.
+    """
+    from app.core.animation_clips import clip_meta, clip_role_gender
+    from app.core import places
+    from app.models.character import get_character_profile
+    kind = pair_kind_for_pose(pose_key)
+    meta = clip_meta(kind) or {}
+    a, b = assign_roles(actor, partner,
+        str(get_character_profile(actor).get("gender") or ""),
+        str(get_character_profile(partner).get("gender") or ""), clip_role_gender(meta))
+    clip_roles = {"a": a, "b": b}
+    yaw = places.pair_yaw(place, pose_key)
+    cx, cz = places.centre_of(place)
+    geometry = (meta.get("geometry") or {}).get("roles") or {}
+    slots, access_roles = {}, {}
+    for clip_role, name in clip_roles.items():
+        offset = (geometry.get(clip_role) or {}).get("anchor_xz_m")
+        if not offset:
+            raise ValueError("pair_geometry_missing")
+        dx, dz = _rotate(float(offset[0]), float(offset[1]), yaw)
+        matches = [i for i, p in enumerate(place["slots"])
+                   if math.dist(p, (cx + dx, cz + dz)) <= .05]
+        if len(matches) != 1:
+            raise ValueError("pair_geometry_marker_mismatch")
+        semantic = "actor" if name == actor else "partner"
+        slots[semantic] = matches[0]
+        access_roles[semantic] = "actor" if clip_role == "a" else "partner"
+    if len(set(slots.values())) != 2:
+        raise ValueError("pair_geometry_marker_mismatch")
+    return dict(clip_roles=clip_roles, access_roles=access_roles, slots=slots)
+
+
 def start_interaction_at(actor: str, partner: str, pose_key: str, *,
                          execution_id: str, plans: dict) -> Dict[str, Any]:
     """Real shared pair entry at an executor's exact jointly claimed marker.
@@ -369,6 +405,11 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
                                 str(profiles[actor].get("gender") or ""),
                                 str(profiles[partner].get("gender") or ""),
                                 clip_role_gender(meta))
+    if _reserved:
+        allocated = _reserved["data"]["clip_roles"]
+        if allocated != {"a": who_a, "b": who_b}:
+            raise ValueError("pair_roles_changed")
+        who_a, who_b = allocated["a"], allocated["b"]
     loc_a = get_character_current_location(actor) or ""
     pa = get_character_pos(actor)
     pb = get_character_pos(partner)
@@ -571,14 +612,21 @@ def end_interaction(character_name: str, reason: str = "ended", *,
             else:
                 cleared = False
             stand.append((name, same_pose))
-    for name, same_pose in stand:
-        if same_pose:
-            clear_pose_intent(name)
-        else:
-            stand_up(name)
     if inter.get("execution_kind") == "prop_action":
-        from app.core.prop_action_engine import interrupt
-        interrupt(character_name, "interaction_" + reason, execution_id=inter["execution_ref"])
+        from app.core.keyed_lock import _after_locks
+        def owned_ended():
+            from app.models.character import release_prop_action_state
+            for name, _same_pose in stand:
+                release_prop_action_state(name, inter["execution_ref"])
+            from app.core.prop_action_engine import interrupt_after_locks
+            interrupt_after_locks(character_name, "interaction_" + reason, execution_id=inter["execution_ref"])
+        _after_locks(owned_ended)
+    else:
+        for name, same_pose in stand:
+            if same_pose:
+                clear_pose_intent(name)
+            else:
+                stand_up(name)
     publish("interaction_ended", character_name, partner=partner,
             kind=inter["kind"], interaction_id=inter["id"], reason=reason)
     from app.core import sync_topics

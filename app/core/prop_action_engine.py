@@ -176,7 +176,9 @@ def _validate(run, *, conn=None, require_claims=False, presence=True):
         profile = profiles[name] = C.get_character_profile(name)
         if places.where(name, profile=profile) != (run["target"]["location_id"], run["target"]["room_id"]):
             return "target_not_in_actor_room"
-        if profile.get("is_sleeping") and run["status"] != "sleeping":
+        owned_sleep_transition = (run["status"] == "active" and definition["ability"] == "sleep"
+                                  and (profile.get("place") or {}).get("execution_id") == run["execution_id"])
+        if profile.get("is_sleeping") and run["status"] != "sleeping" and not owned_sleep_transition:
             return "participant_asleep"
         journey = profile.get("journey")
         if journey and not _own_journey(run, name, journey):
@@ -212,7 +214,7 @@ def _validate(run, *, conn=None, require_claims=False, presence=True):
                             if b["action_id"] == run["action_id"]), None)
             if not binding or not binding.get("supported") or binding.get("validation") != "local_valid":
                 return "binding_not_supported"
-            current_access = binding.get("access_points", {}).get(role)
+            current_access = binding.get("access_points", {}).get(run["data"]["access_roles"][role])
             if current_access != plan["access"] or list(place["slots"][anchor["slot"]]) != [anchor["x"], anchor["z"]] or place["y_world"] != anchor["y"]:
                 return "approach_target_changed"
             if run["status"] == "approaching" and (run["phase"] == "entry" or run[role] in run["data"]["arrived"]):
@@ -250,9 +252,22 @@ def _plan(run, *, conn):
                 if not store.held(store.slot_key(target, place["marker_id"], s), conn=conn)]
         if len(free) < len(_members(run)):
             continue
+        if definition["ability"] == "pair":
+            from app.core.interaction_engine import plan_interaction_at
+            try:
+                allocation = plan_interaction_at(run["actor"], run["partner"], definition["pose_key"], place)
+            except ValueError as exc:
+                last_reason = str(exc)
+                continue
+            if any(s not in free for s in allocation["slots"].values()):
+                continue
+        else:
+            allocation = dict(clip_roles={}, access_roles={"actor": "actor"}, slots={"actor": free[0]})
         plans = {}
-        for (role, name), slot in zip(_members(run), free):
-            plan = plan_approach(name, dict(target, marker_id=place["marker_id"], slot=slot), role)
+        for role, name in _members(run):
+            slot = allocation["slots"][role]
+            plan = plan_approach(name, dict(target, marker_id=place["marker_id"], slot=slot),
+                                 allocation["access_roles"][role])
             if plan["status"] != "ok":
                 last_reason = plan["reason"]
                 break
@@ -263,8 +278,12 @@ def _plan(run, *, conn):
             plans[role] = plan
         if len(plans) == len(_members(run)):
             distance = sum(sum(math.dist(a, b) for a, b in zip(p["waypoints"], p["waypoints"][1:])) for p in plans.values())
-            choices.append((distance, place["id"], plans))
-    return (min(choices, key=lambda p: p[:2])[2], "") if choices else ({}, last_reason)
+            choices.append((distance, place["id"], plans, allocation))
+    if not choices:
+        return {}, last_reason
+    _, _, plans, allocation = min(choices, key=lambda p: p[:2])
+    run["data"].update(clip_roles=allocation["clip_roles"], access_roles=allocation["access_roles"])
+    return plans, ""
 
 
 def request(actor: str, target: dict, action_id: str, revision: str, partner: str = "", request_id: str = "") -> dict:
@@ -329,9 +348,23 @@ def respond(actor: str, execution_id: str, accept: bool) -> dict:
             run = store.get(execution_id, conn=conn)
             if run["status"] != "awaiting_consent":
                 return _result(run)
+            now = game_time()
+            data = run["data"]
+            if data["process"] == _PROCESS:
+                data["consent_elapsed"] += max(0, (now - GameTime.parse(data["last_game"])).total_seconds)
+            data.update(last_game=now.canonical(), process=_PROCESS)
+            if data["consent_elapsed"] >= 300:
+                run.update(status="cancelled", reason="consent_expired")
+                store.save(conn, run)
+                return _result(run)
             reason = _validate(run, conn=conn)
+            agreed_roles = dict(data["clip_roles"])
+            agreed_access = dict(data["access_roles"])
             plans, plan_reason = _plan(run, conn=conn) if not reason else ({}, "")
             reason = reason or plan_reason
+            if not reason and data["clip_roles"] != agreed_roles:
+                data.update(clip_roles=agreed_roles, access_roles=agreed_access)
+                reason = "pair_roles_changed"
             if reason:
                 run.update(status="failed", reason=reason)
                 store.save(conn, run)
@@ -362,7 +395,7 @@ def _start(run):
         anchor = run["data"]["plans"][role]["entry_anchor"]
         target = dict(run["target"], action_id=run["action_id"], definition_revision=run["definition_revision"],
                       marker_id=anchor["marker_id"], slot=anchor["slot"])
-        journey, reason = travel.start_approach_journey(name, target, role, execution_kind="prop_action",
+        journey, reason = travel.start_approach_journey(name, target, run["data"]["access_roles"][role], execution_kind="prop_action",
                             execution_ref=run["execution_id"], journey_id=run["data"]["journey_ids"][name])
         if not journey:
             _finish(run, "failed", reason)
@@ -374,8 +407,17 @@ def _start(run):
 
 
 def _own_journey(run, name, journey):
-    return (journey.get("execution_kind") == "prop_action" and journey.get("execution_ref") == run["execution_id"]
-            and journey.get("journey_id") == run["data"]["journey_ids"].get(name))
+    matches = (journey.get("execution_kind") == "prop_action" and journey.get("execution_ref") == run["execution_id"]
+               and journey.get("journey_id") == run["data"]["journey_ids"].get(name))
+    if not matches or "approach_target" not in journey:
+        return matches  # A durable receipt has identity, not an approach body.
+    semantic_role = "actor" if name == run["actor"] else "partner"
+    plan = run["data"]["plans"][semantic_role]
+    target = journey["approach_target"]
+    return (journey.get("approach_role") == run["data"]["access_roles"][semantic_role]
+            and journey.get("entry_anchor") == plan["entry_anchor"]
+            and target.get("marker_id") == plan["entry_anchor"]["marker_id"]
+            and target.get("slot") == plan["entry_anchor"]["slot"])
 
 
 @_internal_mutation()
@@ -408,17 +450,7 @@ def _cleanup(run):
         if inter.get("execution_ref") == run["execution_id"]:
             from app.core.interaction_engine import end_interaction
             end_interaction(name, reason=reason, interaction_id=inter["id"])
-        profile = C.get_character_profile(name)
-        if (profile.get("place") or {}).get("execution_id") == run["execution_id"]:
-            sleeping = bool(profile.get("is_sleeping"))
-            C.clear_pose_intent(name)
-            if sleeping:
-                C.set_is_sleeping(name, False, _prop_execution=run["execution_id"])
-        with keyed_lock("character_profile", name):
-            profile = C.get_character_profile(name)
-            if (profile.get("prop_action_entry") or {}).get("execution_id") == run["execution_id"]:
-                profile.pop("prop_action_entry", None)
-                C.save_character_profile(name, profile)
+        C.release_prop_action_state(name, run["execution_id"])
     store.cleanup_finished(run["execution_id"])
 
 
@@ -435,11 +467,11 @@ def cancel(actor: str, execution_id: str) -> dict:
         return _finish(run, "completed" if normal else "cancelled", "ended" if normal else "cancelled")
 
 
-def interrupt_after_locks(actor, reason):
+def interrupt_after_locks(actor, reason, *, execution_id=""):
     if _INTERNAL_MUTATION.get():
         return
     from app.core.keyed_lock import _after_locks
-    _after_locks(lambda: interrupt(actor, reason))
+    _after_locks(lambda: interrupt(actor, reason, execution_id=execution_id))
 
 
 def presence_changed(location_id, room_id):
@@ -485,8 +517,9 @@ def _clock(run, now):
                 profile = C.get_character_profile(name)
                 journey = profile.get("journey")
                 if journey and _own_journey(run, name, journey):
-                    anchored = GameTime.parse(journey.get("prop_action_reanchored_at", data["last_game"]))
-                    shift = max(0, (now - max(previous, anchored)).total_seconds)
+                    checkpoint = GameTime.parse(journey.get("position_checkpoint_game", data["last_game"]))
+                    anchored = GameTime.parse(journey.get("prop_action_reanchored_at", checkpoint.canonical()))
+                    shift = max(0, (now - max(checkpoint, anchored)).total_seconds)
                     journey["started_at_game"] = (GameTime.parse(journey["started_at_game"]) + GameDuration.of(seconds=shift)).canonical()
                     journey["prop_action_reanchored_at"] = now.canonical()
                     C.save_character_profile(name, profile)
@@ -650,16 +683,31 @@ def _activate(run):
         C._publish_activity_changed(name, pose, "", pose, profile["place"], None)
     run["status"] = "active"
     run["phase"] = run["definition"]["phases"][0]["id"] if ability == "combined" else "active"
+    if ability == "sleep":
+        run["phase"] = "sleep_pending"
     run["data"].update(phase_elapsed=0.0, active_game_s=0.0, last_game=game_time().canonical())
     _save(run)
     if ability == "sleep":
-        # Canonical sleeping flag/lifecycle, no off-map skill and no bed search.
+        _resume_sleep(run)
+
+
+@_internal_mutation()
+def _resume_sleep(run):
+    """Reconcile either crash window around the actual canonical flag write."""
+    reason = _validate(run, require_claims=True, presence=(
+        not C.is_character_sleeping(run["actor"]) or run["definition"]["interrupt_on_presence_change"]))
+    if reason:
+        _finish(run, "failed", reason)
+        return
+    run["phase"] = "sleep_pending"
+    _save(run)
+    if not C.is_character_sleeping(run["actor"]):
         C.set_is_sleeping(run["actor"], True, _prop_execution=run["execution_id"])
-        if not C.is_character_sleeping(run["actor"]):
-            _finish(run, "failed", "sleep_transition_failed")
-            return
-        run["status"], run["phase"] = "sleeping", "sleeping"
-        _save(run)
+    if not C.is_character_sleeping(run["actor"]):
+        _finish(run, "failed", "sleep_transition_failed")
+        return
+    run["status"], run["phase"] = "sleeping", "sleeping"
+    _save(run)
 
 
 def advance(now: GameTime) -> int:
@@ -681,13 +729,10 @@ def advance(now: GameTime) -> int:
                     and store.db.get_connection().execute("SELECT 1 FROM characters WHERE name=?", (run["actor"],)).fetchone()):
                 _finish(run, "completed", "awake")
                 continue
-            if (run["status"] == "active" and run["definition"]["ability"] == "sleep"
-                    and C.is_character_sleeping(run["actor"])
-                    and (C.get_character_profile(run["actor"]).get("place") or {}).get("execution_id") == run["execution_id"]):
-                # Real flag + exact owned bed recover the awake->asleep write
-                # if the process died before recording its callback/state.
-                run["status"], run["phase"] = "sleeping", "sleeping"
-                _save(run)
+            if run["status"] == "active" and run["definition"]["ability"] == "sleep":
+                _resume_sleep(run)
+                advanced += 1
+                continue
             reason = _validate(run, require_claims=run["status"] != "awaiting_consent",
                                presence=run["status"] in ("awaiting_consent", "approaching") or run["definition"]["interrupt_on_presence_change"])
             if reason:

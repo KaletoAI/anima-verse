@@ -1052,7 +1052,8 @@ def start_approach_journey(character_name: str, target: dict, role: str, *,
                    journey_id=journey_id or uuid.uuid4().hex,
                    execution_kind=execution_kind, execution_ref=execution_ref,
                    floor_y=plan["access"]["y"], departure_seat=plan.get("departure_seat"),
-                   departure_point=points[0], departure_placement_id=plan["departure_placement_id"])
+                   departure_point=points[0], departure_placement_id=plan["departure_placement_id"],
+                   position_checkpoint_game=game_time().canonical())
     if exit_clip:
         journey.update(exit_clip=exit_clip, exit_s=round(exit_s, 3))
     origin = plan.get("departure_seat") or points[0]
@@ -1078,7 +1079,8 @@ def start_approach_journey(character_name: str, target: dict, role: str, *,
     return journey, ""
 
 
-def _commit_approach_position(name: str, journey: dict, pos: Point, *, arrived: bool = False) -> bool:
+def _commit_approach_position(name: str, journey: dict, pos: Point, *, arrived: bool = False,
+                              now: GameTime | None = None) -> bool:
     """Compare-and-write one indoor step under the cancellation write lock.
 
     The entire stored snapshot (including journey_id/kind/ref) must still
@@ -1088,7 +1090,10 @@ def _commit_approach_position(name: str, journey: dict, pos: Point, *, arrived: 
     """
     from app.core import places
     from app.core.keyed_lock import keyed_lock
-    from app.models.character import get_character_profile, save_character_profile, _write_character_pos
+    from app.models.character import get_character_profile
+    from app.core import db
+    from app.core.timeutils import utc_now_iso
+    import json
     failure_reason = ""
     with keyed_lock("character_profile", name):
         profile = get_character_profile(name) or {}
@@ -1100,15 +1105,27 @@ def _commit_approach_position(name: str, journey: dict, pos: Point, *, arrived: 
         elif not places.inside(target["location_id"], *pos):
             failure_reason = "approach_location_boundary_changed"
         else:
-            _write_character_pos(name, round(pos[0], 2), round(pos[1], 2))
-            if arrived:
-                profile.pop("journey", None)
-                profile["movement_target"] = ""
-                profile["last_journey_result"] = dict(
-                    journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-                    execution_ref=journey["execution_ref"], status="arrived", reason="")
-                if not save_character_profile(name, profile):
+            # Position and its journey checkpoint/arrival receipt are ONE
+            # durable transition. A run's slower scheduler stamp is not proof
+            # of the most recent movement the independent ticker committed.
+            with db.transaction() as conn:
+                row = conn.execute("SELECT profile_json FROM characters WHERE name=?", (name,)).fetchone()
+                raw = json.loads(row[0] or "{}")
+                if raw.get("journey") != journey:
                     return False
+                if arrived:
+                    raw.pop("journey", None)
+                    raw["last_journey_result"] = dict(
+                        journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
+                        execution_ref=journey["execution_ref"], status="arrived", reason="")
+                else:
+                    raw["journey"] = dict(journey, position_checkpoint_game=(now or game_time()).canonical())
+                conn.execute("UPDATE characters SET profile_json=?,updated_at=? WHERE name=?",
+                             (json.dumps(raw), utc_now_iso(), name))
+                sql = "UPDATE character_state SET pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL"
+                if arrived:
+                    sql += ",meta=json_set(meta,'$.movement_target','')"
+                conn.execute(sql + " WHERE character_name=?", (round(pos[0], 2), round(pos[1], 2), name))
     if failure_reason:
         # The snapshot was current but its location boundary is no longer
         # usable. Cancel AFTER releasing the write lock so the owner's callback
@@ -1168,7 +1185,7 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
                        execution_ref=journey["execution_ref"], reason="approach_target_changed")
         return
     if not st["arrived"]:
-        _commit_approach_position(name, journey, st["pos"])
+        _commit_approach_position(name, journey, st["pos"], now=now)
         return
     allowed, reason = _validate_owned_arrival(name, journey, target["room_id"])
     if not allowed:
@@ -1177,7 +1194,7 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
         return
     # The endpoint is the authored ACCESS, never the body anchor. No generic
     # room arrival/stand-up cascade is allowed to replace it with another point.
-    if not _commit_approach_position(name, journey, st["pos"], arrived=True):
+    if not _commit_approach_position(name, journey, st["pos"], arrived=True, now=now):
         return
     _owner_arrived(name, journey)
     sync_topics.travel_changed(name)
