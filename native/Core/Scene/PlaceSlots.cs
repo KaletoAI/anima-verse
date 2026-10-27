@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using AnimaNative.Overview;
 
 namespace AnimaNative.Scene;
@@ -28,13 +27,6 @@ public readonly record struct GlyphParams(int Colour, double InnerRadius, double
 public static class PlaceSlots
 {
     public const int ColourSeat = 0xf2cd6e, ColourLie = 0x8fb3ff, ColourGround = 0x9fd48a, ColourStand = 0xd9d0bd;
-
-    /// <summary>Geometry-only join. Only Core's exact placement provenance selects semantic offers.</summary>
-    public static List<JsonElement> PropActionsFor(PlaceEntry entry, IEnumerable<JsonElement> offers)
-        => entry.Fixed ? offers.Where(o => o.TryGetProperty("target", out var target)
-            && World.Json.Str(target, "room_id") == entry.RoomId
-            && World.Json.Str(target, "placement_id") == entry.PlacementId
-            && World.Json.Str(target, "variant_uid") == entry.VariantUid).ToList() : new();
     private const int ColourUnknown = 0x9a9a9a;
     private const double RingInnerM = 0.25, RingOuterM = 0.32, RingLiftM = 0.03;
     private const int RingRenderOrder = 20;

@@ -93,24 +93,6 @@ public partial class FigureManager : Node3D
     private readonly Dictionary<string, ModelInfo> _infos = new();
     private readonly FocusQueue _models = new(ModelQueueWidth);
     private double _tierClock;
-    private readonly Dictionary<string, PublicMotionState> _publicRoutes = new();
-    private readonly Dictionary<string, (PublicPropEntry Entry, double Received)> _publicEntries = new();
-    private readonly Dictionary<string, PublicPropEntry> _finishedEntries = new();
-    private readonly HashSet<(string Name, string Kind)> _entryWarnings = new();
-    private readonly Dictionary<string, PublicPropEntry> _cancelledEntries = new();
-    private readonly Dictionary<string, PublicPropEntry> _failedEntries = new();
-    public event Action<string>? MotionUnavailable;
-    public bool HasSemanticMotion { get; private set; }
-    public string? ControlledName { get; set; }
-    public void CancelOwnedMotion()
-    {
-        if (_publicRoutes.TryGetValue(AvatarName, out var route)) route.CancelOwned();
-        if (_publicEntries.TryGetValue(AvatarName, out var entry)) _cancelledEntries[AvatarName] = entry.Entry;
-        _publicEntries.Remove(AvatarName);
-        _finishedEntries.Remove(AvatarName);
-        _failedEntries.Remove(AvatarName);
-        if (_figures.TryGetValue(AvatarName, out var fig)) { fig.EndPublicEntry(); fig.Pair = null; }
-    }
 
     /// <summary>
     /// What the GROUND says at a world point (npcs.ts <c>groundMoveAt</c>, main.ts <c>setTerrainMove</c>:
@@ -286,37 +268,10 @@ public partial class FigureManager : Node3D
     public Task Apply(JsonElement root)
     {
         Stats.Polls++;
-        var avatar = Json.Str(root, "avatar");
-        if (avatar != AvatarName)
-        {
-            _publicRoutes.Clear();
-            _publicEntries.Clear();
-            _finishedEntries.Clear();
-            _failedEntries.Clear();
-            _cancelledEntries.Clear();
-            ControlledName = null;
-        }
-        AvatarName = avatar;
+        AvatarName = Json.Str(root, "avatar");
         WorldFrozen = root.TryGetProperty("game_rate", out var rate) && rate.ValueKind == JsonValueKind.Number && rate.GetDouble() == 0;
         _rows = CharacterRow.ParseList(root);
         _rowByName = _rows.GroupBy(r => r.Name).ToDictionary(g => g.Key, g => g.Last());
-        HasSemanticMotion = _rows.Any(row => row.PropEntry is not null || row.LocalApproach is not null);
-        var avatarRoom = _rowByName.GetValueOrDefault(AvatarName)?.RoomId ?? "";
-        foreach (var row in _rows)
-        {
-            if (!_publicRoutes.TryGetValue(row.Name, out var motion)) _publicRoutes[row.Name] = motion = new PublicMotionState();
-            motion.Adopt(row.RouteFor(AvatarName, avatarRoom), _clock);
-            if (row.PropEntry is { } entry && (!_cancelledEntries.TryGetValue(row.Name, out var cancelled) || !cancelled.SameClip(entry)))
-                _publicEntries[row.Name] = (entry, _clock);
-            else _publicEntries.Remove(row.Name);
-        }
-        foreach (var gone in _publicRoutes.Keys.Where(name => !_rowByName.ContainsKey(name)).ToArray())
-        {
-            _publicRoutes.Remove(gone);
-            _publicEntries.Remove(gone);
-            _finishedEntries.Remove(gone);
-            _failedEntries.Remove(gone);
-        }
         _mapPlaces = MapPlace.ParsePlaced(root);
         var plans = Place();
         var loads = new List<Task>();
@@ -411,48 +366,6 @@ public partial class FigureManager : Node3D
     {
         fig.Rule = plan.Rule;
         AdoptInteraction(fig);
-        if (fig.CharacterName == ControlledName) return;
-        if (!_publicEntries.ContainsKey(fig.CharacterName) && _failedEntries.TryGetValue(fig.CharacterName, out var failed))
-        {
-            var failedRow = _rowByName.GetValueOrDefault(fig.CharacterName);
-            if (failedRow?.Place is not null || failedRow?.Interaction is not null)
-            {
-                // Core completed but this renderer never had a valid measured entry: hide, never invent a teleport.
-                fig.SnapTo(new Vector3((float)failed.Access.X, (float)failed.Access.Y, (float)failed.Access.Z));
-                fig.SetHidden(true);
-                return;
-            }
-            _failedEntries.Remove(fig.CharacterName); // actual cancellation/stop, not a successful furniture arrival
-        }
-        _publicRoutes.TryGetValue(fig.CharacterName, out var motion);
-        if (_publicEntries.ContainsKey(fig.CharacterName) || motion is not null && motion.TryAt(_clock, out _))
-        {
-            fig.SetHidden(plan.Hidden);
-            if (plan.Hidden)
-            {
-                _publicEntries.Remove(fig.CharacterName);
-                motion?.Adopt(null, _clock);
-                fig.EndPublicEntry();
-            }
-            return;
-        }
-        if (_finishedEntries.Remove(fig.CharacterName, out var finished))
-        {
-            var finishedRow = _rowByName.GetValueOrDefault(fig.CharacterName);
-            bool committed = finishedRow?.Place is not null || finishedRow?.Interaction is not null;
-            if (committed && !fig.PlayPublicEntry(finished, 1))
-            {
-                _failedEntries[fig.CharacterName] = finished;
-                fig.SetHidden(true);
-                MotionUnavailable?.Invoke($"prop entry {fig.CharacterName}: final measured clip/support data unavailable");
-                return;
-            }
-            fig.EndPublicEntry();
-            var at = committed ? new Vec3(finished.Anchor.X, finished.Anchor.Y, finished.Anchor.Z) : plan.Pos;
-            fig.SnapTo(new Vector3((float)at.X, (float)at.Y, (float)at.Z));
-            fig.SetYaw(committed ? finished.Anchor.Yaw * Math.PI / 180 : fig.Yaw);
-            fig.PlayDirect(fig.Activity);
-        }
         // THE GOAL: the server's point — or, after a stand-up, the spot the bridge left the figure on, for as long as the
         // server sends the SAME point (settleOffset against the kept server point); a different one voids the spot.
         if (fig.Settle is { } kept)
@@ -580,9 +493,6 @@ public partial class FigureManager : Node3D
 
     private void StepFigure(Figure fig, double dt, Vec3? neighbour, double camDist)
     {
-        if (fig.CharacterName == ControlledName) return;
-        if (_failedEntries.ContainsKey(fig.CharacterName) && !_publicEntries.ContainsKey(fig.CharacterName)) return;
-        if (TickPublicMotion(fig, dt)) return;
         // A running pair interaction places the figure and plays its half (npcs.ts: `tickInteraction` before anything).
         if (fig.Pair is not null && TickPair(fig, dt)) return;
         // BRIDGE TRAVEL WITHOUT A ROUTE (rule 4, figures.ts travelBase): the bridge has ended and its body stands where
@@ -656,52 +566,6 @@ public partial class FigureManager : Node3D
         fig.SecondaryFrozen = WorldFrozen;
         fig.UpdateFigure(dt);
         fig.Portrait?.Tick(dt, camDist, plan.Moving);
-    }
-
-    private bool TickPublicMotion(Figure fig, double dt)
-    {
-        var name = fig.CharacterName;
-        if (_publicEntries.TryGetValue(name, out var pending))
-        {
-            var e = pending.Entry;
-            double phase = e.PhaseAt(_clock - pending.Received);
-            if (!fig.PlayPublicEntry(e, phase))
-            {
-                _failedEntries[name] = e;
-                fig.Position = new Vector3((float)e.Access.X, (float)e.Access.Y, (float)e.Access.Z);
-                if (_entryWarnings.Add((name, e.Kind)))
-                {
-                    string message = $"prop entry {name}: measured clip/support data for '{e.Kind}' unavailable; holding authoritative access";
-                    _log(message);
-                    MotionUnavailable?.Invoke(message);
-                }
-                fig.SecondaryFrozen = true;
-                fig.UpdateFigure(0);
-            }
-            else
-            {
-                _failedEntries.Remove(name);
-                _finishedEntries[name] = e;
-            }
-            return true;
-        }
-        if (_publicRoutes.TryGetValue(name, out var route) && route.TryAt(_clock, out var point))
-        {
-            var before = fig.Position;
-            var room = _rowByName.GetValueOrDefault(name)?.RoomId ?? "";
-            double y = RoomStandAt?.Invoke(room, point.X, point.Z)
-                ?? GroundYAt?.Invoke(point.X, point.Z) ?? _height.GroundAt(point.X, point.Z);
-            fig.Position = new Vector3((float)point.X, (float)y, (float)point.Z);
-            var delta = fig.Position - before;
-            bool moving = !WorldFrozen && delta.LengthSquared() > 1e-10;
-            if (moving) fig.FaceTowards(delta);
-            fig.SetMotion(moving, false, "walk");
-            fig.Play(moving ? FigureClips.MoveClip("walk", false, fig.Poses) : FigureClips.IdleClip("walk", fig.Poses));
-            fig.SecondaryFrozen = WorldFrozen;
-            fig.UpdateFigure(dt);
-            return true;
-        }
-        return false;
     }
 
     /// <summary>

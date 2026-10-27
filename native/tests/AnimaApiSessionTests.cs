@@ -1,11 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AnimaNative.Api;
@@ -29,7 +26,6 @@ public class AnimaApiSessionTests
         public bool SessionAlive { get; private set; }
         public int LogoutStatus { get; set; } = 200;
         public List<string> Requests { get; } = new();
-        public List<JsonElement> PositionReports { get; } = new();
 
         public FakeAuthServer()
         {
@@ -72,13 +68,6 @@ public class AnimaApiSessionTests
                     if (LogoutStatus == 200)
                         ctx.Response.AddHeader("Set-Cookie", "av_session=\"\"; expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0; Path=/; SameSite=lax");
                     body = LogoutStatus == 200 ? "{\"status\":\"success\"}" : "{\"detail\":\"boom\"}";
-                }
-                else if (path == "/play/pos")
-                {
-                    using var input = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding);
-                    using var report = JsonDocument.Parse(await input.ReadToEndAsync());
-                    PositionReports.Add(report.RootElement.Clone());
-                    body = "{\"ok\":true}";
                 }
                 else
                 {
@@ -151,39 +140,5 @@ public class AnimaApiSessionTests
         Assert.Equal(500, e.Status);
         Assert.Null(api.SessionToken());
         Assert.False(await api.IsAuthenticatedAsync());
-    }
-
-    [Fact]
-    public async Task PositionConsumerSendsCanonicalStampAndRotatesOnlyOnNewControlOwnership()
-    {
-        using var server = new FakeAuthServer();
-        using var api = new AnimaApi(server.Url);
-        using (await api.LoginAsync("demo", "pw")) { }
-        api.BeginPositionControlSession();
-        using (await api.ReportPositionAsync(1.25, -2.5, 1234)) { }
-        using (await api.ReportPositionAsync(2.25, -3.5, 1484)) { }
-        api.BeginPositionControlSession();
-        using (await api.ReportPositionAsync(3.25, -4.5, 1734)) { }
-
-        Assert.Equal(3, server.PositionReports.Count);
-        var first = server.PositionReports[0];
-        var second = server.PositionReports[1];
-        var nextControl = server.PositionReports[2];
-        foreach (var report in server.PositionReports)
-        {
-            Assert.Equal(new[] { "seq", "session", "t_ms", "x", "z" },
-                report.EnumerateObject().Select(p => p.Name).OrderBy(name => name, StringComparer.Ordinal));
-            Assert.Matches("^[A-Za-z0-9_-]{8,64}$", report.GetProperty("session").GetString()!);
-            Assert.InRange(report.GetProperty("seq").GetInt32(), 1, int.MaxValue);
-        }
-        Assert.Equal(1.25, first.GetProperty("x").GetDouble());
-        Assert.Equal(-2.5, first.GetProperty("z").GetDouble());
-        Assert.Equal(1234, first.GetProperty("t_ms").GetDouble());
-        Assert.Equal(1, first.GetProperty("seq").GetInt32());
-        Assert.Equal(2, second.GetProperty("seq").GetInt32());
-        Assert.Equal(first.GetProperty("session").GetString(), second.GetProperty("session").GetString());
-        Assert.NotEqual(first.GetProperty("session").GetString(), nextControl.GetProperty("session").GetString());
-        Assert.Equal(1, nextControl.GetProperty("seq").GetInt32());
-        Assert.Equal("POST /play/pos cookie=tok", server.Requests[^1]);
     }
 }

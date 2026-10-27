@@ -99,8 +99,6 @@ public sealed class AnimaApi : IWorldSource, IDisposable
     /// </summary>
     private readonly HttpClient _streams;
     private readonly CookieContainer _cookies = new();
-    private string _positionSession = "";
-    private int _positionSequence;
     public Uri BaseUri { get; }
 
     /// <summary>
@@ -223,38 +221,6 @@ public sealed class AnimaApi : IWorldSource, IDisposable
     /// server answers 403 for anybody else, so callers pass it only for role <c>admin</c>.
     /// </summary>
     public Task<JsonDocument> GetWorldMapAsync(bool all) => GetJson(all ? "/play/worldmap?all=1" : "/play/worldmap");
-
-    public Task<JsonDocument> GetPropActionsAsync() => GetJson("/play/prop-actions");
-    public Task<JsonDocument> GetPropActionStateAsync() => GetJson("/play/prop-actions/state");
-    public Task<JsonDocument> GetPlacesAsync() => GetJson("/play/places");
-    public Task<JsonDocument> RequestPropActionAsync(string actionId, JsonElement target, string revision, string? partner)
-        => PostJson("/play/prop-actions/request", new { action_id = actionId, target, revision, partner = partner ?? "" });
-    public Task<JsonDocument> RespondPropActionAsync(string executionId, bool accept)
-        => PostJson("/play/prop-actions/respond", new { execution_id = executionId, accept });
-    public Task<JsonDocument> CancelPropActionAsync(string executionId)
-        => PostJson("/play/prop-actions/cancel", new { execution_id = executionId });
-    public Task<JsonDocument> SetRoomPoseAsync(string placeId, string pose)
-        => placeId.Length == 0 ? PostJson("/play/self/activity", new { activity = pose })
-            : PostJson("/play/self/activity", new { place_id = placeId, pose });
-    public Task<JsonDocument> WakeAsync() => PostJson("/play/self/activity", new { activity = "" });
-    public void BeginPositionControlSession()
-    {
-        _positionSession = Guid.NewGuid().ToString("N");
-        _positionSequence = 0;
-    }
-
-    public Task<JsonDocument> ReportPositionAsync(double x, double z, double timeMs)
-    {
-        if (_positionSession.Length == 0) BeginPositionControlSession();
-        return PostJson("/play/pos", new { x, z, seq = ++_positionSequence, t_ms = timeMs, session = _positionSession });
-    }
-
-    private async Task<JsonDocument> PostJson(string path, object body)
-    {
-        using var content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
-        using var res = await _http.PostAsync(Relative(path), content);
-        return await ReadJson(res, path);
-    }
     public Task<JsonDocument> GetHeightfieldAsync() => GetJson("/play/heightfield");
     public Task<JsonDocument> GetLocations3dAsync() => GetJson("/world/locations?view=3d");
 

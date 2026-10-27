@@ -138,31 +138,31 @@ public static class HudCheck
         Rejects("{\"kind\":\"hud\",\"patch\":{}}", "a missing v");
         Rejects("{\"v\":1,\"kind\":\"hud\",\"patch\":{}}", "v = 1 (the old protocol; bridge.ts drops it too)");
         Rejects("{\"v\":1,\"kind\":\"action\",\"name\":\"zoomTo\",\"args\":[\"Kira\"]}", "a v1 action");
-        Rejects("{\"v\":2,\"kind\":\"hud\",\"patch\":{}}", "v = 2 (pre-cutover)");
-        Rejects("{\"v\":\"3\",\"kind\":\"hud\",\"patch\":{}}", "v = \"3\" (bridge.ts compares with ===)");
-        Rejects("{\"v\":3,\"patch\":{}}", "a missing kind");
-        Rejects("{\"v\":3,\"kind\":\"nope\"}", "an unknown kind");
-        Rejects("{\"v\":3,\"kind\":\"hud\",\"patch\":[1]}", "a non-object patch");
-        Rejects("{\"v\":3,\"kind\":\"action\",\"name\":\"nope\",\"args\":[]}", "an undeclared action");
-        Rejects("{\"v\":3,\"kind\":\"action\",\"name\":\"toString\",\"args\":[]}", "an inherited property name");
-        Rejects("{\"v\":3,\"kind\":\"action\",\"name\":\"zoomTo\",\"args\":\"Kira\"}", "args that are not an array");
-        Rejects("{\"v\":3,\"kind\":\"ui\",\"name\":\"openChat\",\"args\":[]}", "a scene → HUD kind sent by the HUD");
+        Rejects("{\"v\":3,\"kind\":\"hud\",\"patch\":{}}", "v = 3");
+        Rejects("{\"v\":\"2\",\"kind\":\"hud\",\"patch\":{}}", "v = \"2\" (bridge.ts compares with ===)");
+        Rejects("{\"v\":2,\"patch\":{}}", "a missing kind");
+        Rejects("{\"v\":2,\"kind\":\"nope\"}", "an unknown kind");
+        Rejects("{\"v\":2,\"kind\":\"hud\",\"patch\":[1]}", "a non-object patch");
+        Rejects("{\"v\":2,\"kind\":\"action\",\"name\":\"nope\",\"args\":[]}", "an undeclared action");
+        Rejects("{\"v\":2,\"kind\":\"action\",\"name\":\"toString\",\"args\":[]}", "an inherited property name");
+        Rejects("{\"v\":2,\"kind\":\"action\",\"name\":\"zoomTo\",\"args\":\"Kira\"}", "args that are not an array");
+        Rejects("{\"v\":2,\"kind\":\"ui\",\"name\":\"openChat\",\"args\":[]}", "a scene → HUD kind sent by the HUD");
 
-        // Accepted: v as 3.0 is still === 3 in JS.
-        var action = HudProtocol.Parse("{\"v\":3.0,\"kind\":\"action\",\"name\":\"zoomTo\",\"args\":[\"Kira\"]}", out _);
+        // Accepted: v as 2.0 is still === 2 in JS.
+        var action = HudProtocol.Parse("{\"v\":2.0,\"kind\":\"action\",\"name\":\"zoomTo\",\"args\":[\"Kira\"]}", out _);
         n++;
         Expect("zoomTo accepted", action is { Kind: "action", Name: "zoomTo" } && action.Args!.Count == 1
                                   && action.Args[0]!.GetValue<string>() == "Kira", "rejected");
 
-        // The Graphics tab's action retains its exact arguments after semantic cutover.
-        var gfx = HudProtocol.Parse("{\"v\":3,\"kind\":\"action\",\"name\":\"applyGraphicsPrefs\","
+        // v2 (Task 26d): the Graphics tab's action, the exact wire string smoke_hud_gdcef.mjs pins.
+        var gfx = HudProtocol.Parse("{\"v\":2,\"kind\":\"action\",\"name\":\"applyGraphicsPrefs\","
                                     + "\"args\":[{\"antiAliasing\":\"off\",\"shadows\":true}]}", out _);
         n++;
         Expect("applyGraphicsPrefs accepted", gfx is { Kind: "action", Name: "applyGraphicsPrefs" } && gfx.Args!.Count == 1
                                               && gfx.Args[0] is JsonObject, "rejected");
 
         // The HUD patch updates the routing state (hand: one rect, typing on, menu untouched).
-        var hud = HudProtocol.Parse("{\"v\":3,\"kind\":\"hud\",\"patch\":{\"typing\":true,\"overlayOpen\":false,"
+        var hud = HudProtocol.Parse("{\"v\":2,\"kind\":\"hud\",\"patch\":{\"typing\":true,\"overlayOpen\":false,"
                                     + "\"hitRects\":[{\"x\":10,\"y\":20,\"w\":300,\"h\":200},{\"x\":\"bad\"}]}}", out _);
         var ui = new HudUi();
         ui.Apply(hud!.Patch!);
@@ -174,7 +174,7 @@ public static class HudCheck
         Expect("shallow merge, wrong types ignored", ui.MenuOpen && ui.Typing && ui.HitRects.Count == 1, "merge broke");
 
         // receiveState(patch, HUD_OWNED_FIELDS): a mixed patch keeps the owned key, drops the rest.
-        var state = HudProtocol.Parse("{\"v\":3,\"kind\":\"state\",\"patch\":{\"movementLocked\":true,\"mode\":\"embodied\"}}", out _);
+        var state = HudProtocol.Parse("{\"v\":2,\"kind\":\"state\",\"patch\":{\"movementLocked\":true,\"mode\":\"embodied\"}}", out _);
         var (accepted, dropped) = HudProtocol.SplitOwned(state!.Patch!);
         n++;
         Expect("owned field kept, scene field dropped",
@@ -183,10 +183,10 @@ public static class HudCheck
 
         // Outgoing wire strings, written out by hand.
         n += 3;
-        Expect("ui openChat", HudProtocol.Ui("openChat") == "{\"v\":3,\"kind\":\"ui\",\"name\":\"openChat\",\"args\":[]}",
+        Expect("ui openChat", HudProtocol.Ui("openChat") == "{\"v\":2,\"kind\":\"ui\",\"name\":\"openChat\",\"args\":[]}",
                HudProtocol.Ui("openChat"));
         Expect("ui toast", HudProtocol.Ui("toast", JsonValue.Create("Hi"), JsonValue.Create(false))
-                           == "{\"v\":3,\"kind\":\"ui\",\"name\":\"toast\",\"args\":[\"Hi\",false]}", "toast differs");
+                           == "{\"v\":2,\"kind\":\"ui\",\"name\":\"toast\",\"args\":[\"Hi\",false]}", "toast differs");
         bool threw = false;
         try { HudProtocol.Ui("zoomTo"); } catch (ArgumentException) { threw = true; }
         Expect("ui refuses a game action name", threw, "sent");
@@ -210,7 +210,7 @@ public static class HudCheck
 
         n++;
         Expect("state message", HudProtocol.State(JsonNode.Parse("{\"mode\":\"overview\"}")!.AsObject())
-                                == "{\"v\":3,\"kind\":\"state\",\"patch\":{\"mode\":\"overview\"}}", "differs");
+                                == "{\"v\":2,\"kind\":\"state\",\"patch\":{\"mode\":\"overview\"}}", "differs");
         var boot = HudProtocol.BootReady();
         n++;
         Expect("boot ready: 100 %, 6 stages incl. visible",

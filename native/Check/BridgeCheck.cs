@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using AnimaNative.Figures;
 using AnimaNative.World;
@@ -219,54 +218,7 @@ public static class BridgeCheck
                 Expect("B8 past start + length + 0.5 s the gate opens", !rae.Bridging && rae.PaceLimit == 1, $"pace {rae.PaceLimit}");
                 rae.Clock = () => mgr.Clock;
             }
-            // ---- B9 semantic public entry: actual fitted clip, authoritative phase, no inferred second bridge ----
-            var entry = new PublicPropEntry("get-up-chair", "idle",
-                new EntryPoint(10, 0, 20, 90), new EntryPoint(11, 0.4, 21, 180),
-                8, 4, 0, 170, "", 1234);
-            Expect("B9 missing entry clip is explicit, never a fabricated pose",
-                !mia.PlayPublicEntry(entry with { Kind = "missing-semantic-entry-clip" }, 0.5), "missing clip accepted");
-            Expect("B9 real entry plays at access", mia.PlayPublicEntry(entry, 0), "entry clip not ready");
-            NearD("B9 access x", mia.Position.X, entry.Access.X, 1e-6);
-            NearD("B9 access z", mia.Position.Z, entry.Access.Z, 1e-6);
-            mia.PlayPublicEntry(entry, entry.PhaseAt(100));
-            double entryTime = mia.ClipTime;
-            var entryRoot = mia.Position;
-            mia.UpdateFigure(1);
-            mia.PlayPublicEntry(entry, entry.PhaseAt(101));
-            NearD("B9 frozen entry keeps measured clip time", mia.ClipTime, entryTime, 1e-5);
-            NearD("B9 repeated signal does not restart or move root", (mia.Position - entryRoot).Length(), 0, 1e-5);
-            mia.PlayPublicEntry(entry, 1);
-            NearD("B9 measured entry root stays at access x", mia.Position.X, entry.Access.X, 1e-6);
-            NearD("B9 measured entry root stays at access y", mia.Position.Y, entry.Access.Y, 1e-6);
-            NearD("B9 measured entry root stays at access z", mia.Position.Z, entry.Access.Z, 1e-6);
-            NearD("B9 measured support curve reaches final body-root", mia.Lift, entry.Anchor.Y - entry.Access.Y, 1e-6);
-            mia.EndPublicEntry();
-            mia.SnapTo(new Vector3((float)entry.Anchor.X, (float)entry.Anchor.Y, (float)entry.Anchor.Z));
-            mia.PlayDirect("idle");
-            Expect("B9 final pose does not schedule another bridge", !mia.Bridging && mia.CurrentKind == "idle", mia.CurrentKind);
-            // ---- B10 the real manager must not turn an unavailable entry into a final-seat teleport ----
-            var failedMap = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "worldmap.json")))!.AsObject();
-            var failedRow = failedMap["characters"]!.AsArray().First(c => c!["name"]!.GetValue<string>() == "Mia Chair")!.DeepClone().AsObject();
-            failedMap["characters"] = new JsonArray(failedRow);
-            failedRow["prop_action_entry"] = new JsonObject
-            {
-                ["kind"] = "missing-semantic-entry-clip", ["pose_key"] = "idle",
-                ["access"] = new JsonObject { ["x"] = 10, ["y"] = 0, ["z"] = 20, ["yaw"] = 90 },
-                ["anchor"] = new JsonObject { ["x"] = 11, ["y"] = 0.4, ["z"] = 21, ["yaw"] = 180 },
-                ["duration_game_s"] = 8, ["elapsed_game_s"] = 4,
-                ["game_seconds_per_real_second"] = 0, ["height_cm"] = 170,
-                ["role"] = null, ["root_offset"] = 0, ["started_game_s"] = 4567,
-            };
-            using (var publicEntry = JsonDocument.Parse(failedMap.ToJsonString())) await mgr.Apply(publicEntry.RootElement);
-            mgr.Tick(0);
-            NearD("B10 missing entry holds actual access", mia.Position.X, 10, 1e-6);
-            failedRow["prop_action_entry"] = null;
-            failedRow["place"] = new JsonObject { ["id"] = "unavailable-seat", ["slot"] = 0 };
-            using (var committed = JsonDocument.Parse(failedMap.ToJsonString())) await mgr.Apply(committed.RootElement);
-            mgr.Tick(1);
-            Expect("B10 failed measured entry is explicitly hidden after Core commits", mia.Hidden, "fabricated final pose visible");
-            NearD("B10 failed measured entry never teleports to final anchor", mia.Position.X, 10, 1e-6);
-            var report = $"bridges B1..B10 ok (chair ψ {chairPsi:0.0}° drift {chairDrift:0.00} cm, bed ψ {bedPsi:0.0}° drift {bedDrift:0.00} cm, "
+            var report = $"bridges B1..B8 ok (chair ψ {chairPsi:0.0}° drift {chairDrift:0.00} cm, bed ψ {bedPsi:0.0}° drift {bedDrift:0.00} cm, "
                          + $"end feet {left:0.00}/{right:0.00} cm, spot {off * 100:0.0} cm, ramp 10 frames)";
             GD.Print($"[check-bridges] {report}");
             return report;

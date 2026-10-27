@@ -436,88 +436,6 @@ public partial class Figure : Node3D
         return fit(action) && p.HasAnimation(action);
     }
 
-    private PublicPropEntry? _publicEntry;
-    private string _publicEntryClip = "";
-    private double _publicEntryScale;
-    private string? _directPose;
-    private int _entryHipsTrack = -1;
-    private double _entryFirstY, _entryLastY;
-
-    /// <summary>Explicit authoritative clip control; bypasses pose-inferred bridges after the entry has already played.</summary>
-    public void PlayDirect(string kind)
-    {
-        ResetBridges();
-        WantedClip = (kind, false, 0);
-        _directPose = kind;
-        if (!EnsureClip(kind) || Player is not { } player) return;
-        CurrentClip = "";
-        PlayPair(kind, 0, false, true);
-        _directPose = null;
-    }
-
-    public void EndPublicEntry()
-    {
-        if (_publicEntry is null) return;
-        _publicEntry = null;
-        _publicEntryClip = "";
-        ResetBridges();
-        ApplyBody();
-    }
-
-    /// <summary>Exact measured entry at access. Original bone Y and fitted root travel/turn own the body; no endpoint lerp.</summary>
-    public bool PlayPublicEntry(PublicPropEntry entry, double phase)
-    {
-        string clip;
-        if (_publicEntry is not null && _publicEntry.SameClip(entry)) clip = _publicEntryClip;
-        else
-        {
-            clip = entry.Role.Length > 0 && HasAction(entry.Kind + "__" + entry.Role)
-                ? entry.Kind + "__" + entry.Role : entry.Kind;
-            if (!EnsureClip(clip) || ExtrasOf(clip)?.Path is null || !(entry.HeightCm > 0)) return false;
-            var candidate = Player!.GetAnimation(clip);
-            _entryHipsTrack = -1;
-            _entryFirstY = _entryLastY = 0;
-            for (int i = 0; i < candidate.GetTrackCount(); i++)
-                if (candidate.TrackGetType(i) == Animation.TrackType.Position3D && candidate.TrackGetKeyCount(i) > 0
-                    && BoneNames.Norm(candidate.TrackGetPath(i).GetConcatenatedSubNames()) == "hips")
-                { _entryHipsTrack = i; break; }
-            if (_entryHipsTrack >= 0)
-            {
-                _entryFirstY = candidate.TrackGetKeyValue(_entryHipsTrack, 0).AsVector3().Y;
-                _entryLastY = candidate.TrackGetKeyValue(_entryHipsTrack, candidate.TrackGetKeyCount(_entryHipsTrack) - 1).AsVector3().Y;
-            }
-            if (Math.Abs(entry.Anchor.Y - entry.Access.Y) > 1e-6
-                && (_entryHipsTrack < 0 || PublicPropEntry.SupportPhase(_entryFirstY, _entryLastY, _entryFirstY) is null))
-                return false;
-            EndPublicEntry();
-            ResetBridges();
-            _directPose = null;
-            Yaw = TargetYaw = entry.Access.Yaw * Math.PI / 180;
-            StartBridge(clip, 0);
-            _bridgeUntil = double.PositiveInfinity;
-            _publicEntry = entry;
-            _publicEntryClip = clip;
-            _publicEntryScale = BaseScale * entry.HeightCm / (HeightM * 100);
-        }
-        if (!EnsureClip(clip) || Player is not { } player || _transition is not { } run) return false;
-        var animation = player.GetAnimation(clip);
-        double time = Math.Clamp(phase, 0, 1) * animation.Length;
-        run.Time = time;
-        player.SpeedScale = 0;
-        player.Seek(Math.Min(time, Math.Max(0, animation.Length - 1e-5)), true);
-        SetClipDrop(0);
-        Position = new Vector3((float)entry.Access.X, (float)entry.Access.Y, (float)entry.Access.Z);
-        double hipsY = phase >= 1 ? _entryLastY : _entryHipsTrack >= 0
-            ? animation.PositionTrackInterpolate(_entryHipsTrack, time).Y : _entryFirstY;
-        var lift = PublicPropEntry.SupportLift(_entryFirstY, _entryLastY, hipsY,
-            entry.Anchor.Y + entry.RootOffset, entry.RootOffset, entry.Access.Y);
-        if (lift is null) return false;
-        _lift = lift.Value;
-        SecondaryFrozen = true;
-        UpdateFigure(0);
-        return true;
-    }
-
     /// <summary>The rig has the action but it is still being fitted (lazy).</summary>
     public bool ClipPending(string action) => HasAction(action) && !EnsureClip(action);
 
@@ -536,8 +454,6 @@ public partial class Figure : Node3D
     public void Play(string rawKind, bool terrainClip = false, double sink = 0)
     {
         WantedClip = (rawKind, terrainClip, sink);
-        if (_directPose == rawKind) { PlayDirect(rawKind); return; }
-        _directPose = null;
         var kind = (rawKind.Length > 0 ? rawKind : FigureClips.PoseKind(FigureClips.Standing, Poses)).ToLowerInvariant();
         // A bridge is running: let it finish; the frame after it asks again.
         if (Bridging) return;
@@ -1034,7 +950,6 @@ public partial class Figure : Node3D
     /// </summary>
     public void UpdateFigure(double dt)
     {
-        if (_publicEntry is not null) dt = 0;
         TickProcedural(dt);
         if (_pendingYaw is { } py && !HoldsFacing)
         {
@@ -1045,7 +960,7 @@ public partial class Figure : Node3D
         _animTime += dt;
         Player?.Advance(dt);
         foreach (var run in _runs) run.Time = Math.Min(run.Length, run.Time + dt);
-        if (_publicEntry is null && _transition is { } tr && tr.Time >= tr.Length) ReleaseBridge();
+        if (_transition is { } tr && tr.Time >= tr.Length) ReleaseBridge();   // the mixer's "finished"
         bool turning = _turn is not null && _turnAction is not null;
         if (turning)
         {
@@ -1063,8 +978,7 @@ public partial class Figure : Node3D
         if (travelling)
         {
             var (tx, tz) = BridgeTravel.TravelAt(_travelPath!, _travelAction!.Time);
-            double scale = _publicEntry is not null ? _publicEntryScale : BaseScale;
-            _heldTravel = new P2(_travelOrigin.X + tx * scale, _travelOrigin.Z + tz * scale);
+            _heldTravel = new P2(_travelOrigin.X + tx * BaseScale, _travelOrigin.Z + tz * BaseScale);
             _holding = true;
             if (!OwnsBody(_travelAction))
             {

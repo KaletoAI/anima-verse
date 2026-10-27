@@ -48,12 +48,6 @@ public sealed record CharacterRow(
     /// <summary><c>interaction</c>: the running pair interaction (§ A8a); null = none (or a block without an anchor).</summary>
     public PairInteraction? Interaction { get; init; }
 
-    public PublicMotionRoute? OwnRoute { get; init; }
-    public PublicMotionRoute? LocalApproach { get; init; }
-    public PublicPropEntry? PropEntry { get; init; }
-    public PublicMotionRoute? RouteFor(string avatar, string avatarRoom)
-        => Name == avatar ? OwnRoute : RoomId == avatarRoom && LocalApproach?.RoomId == avatarRoom ? LocalApproach : null;
-
     /// <summary>
     /// <c>motion</c> (§ A11a: the resolved secondary-motion payload, <c>{rev, groups}</c>) and whether the row carries
     /// the field at all — <c>refreshIfChanged(…, c.motion)</c> keeps the known payload when it is absent.
@@ -109,9 +103,6 @@ public sealed record CharacterRow(
             AvatarUrl = Json.Str(c, "avatar_url"),
             Travelling = OverviewLabels.TagTravelling(TagTravel.FromJson(c)),
             Interaction = ParseInteraction(c),
-            OwnRoute = c.TryGetProperty("travel", out var own) ? PublicMotionRoute.Parse(own) : null,
-            LocalApproach = c.TryGetProperty("local_approach", out var local) ? PublicMotionRoute.Parse(local) : null,
-            PropEntry = PublicPropEntry.Parse(c),
             HasMotion = c.TryGetProperty("motion", out var mo),
             Motion = c.TryGetProperty("motion", out mo) ? MotionPayload.Parse(mo) : null,
         };

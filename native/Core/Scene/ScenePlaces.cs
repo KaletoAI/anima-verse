@@ -42,8 +42,6 @@ public sealed class PlaceEntry
     public P2 LiftAt { get; init; }
     /// <summary>A prop marker's placement anchor as the payload states it (tile-local); null for a room marker.</summary>
     public P2? Anchor { get; init; }
-    public string PlacementId { get; init; } = "";
-    public string VariantUid { get; init; } = "";
 
     /// <summary>What the glyph rule reads of this entry (<see cref="PlaceSlots.GlyphRows"/>).</summary>
     public PlaceEntryView View() => new(Slots, RoomId, Fixed, Anchor is not null, Diorama);
@@ -224,7 +222,6 @@ public sealed class PlaceInventory
                 Slots = m.Slots.Select(s => SceneView.TileToWorld(frame, s.X, s.Z, m.YWorld - drop + markerLift)).ToArray(),
                 Rotation = m.Facing, Tilt = m.Tilt, Roll = m.Roll, Drop = drop, OffsetY = offsetY, Fixed = isFixed,
                 Diorama = m.Diorama, Level = level, Lift = markerLift, LiftAt = new P2(liftAt.X, liftAt.Z), Anchor = m.Anchor,
-                PlacementId = m.PlacementId, VariantUid = m.VariantUid,
             };
         }
         return inv;

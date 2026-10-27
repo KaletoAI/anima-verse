@@ -20,9 +20,8 @@ public partial class Main : Node3D
         _hud = HudOverlay.Ensure(GetTree(), Log);
         if (_hud is null) return;
         var hud = _hud;
-        _camera!.KeysBlocked = () => _embodied || IsInstanceValid(hud) && hud.KeysToHud;
+        _camera!.KeysBlocked = () => IsInstanceValid(hud) && hud.KeysToHud;
         hud.Handlers.Clear();
-        AttachPropActions();
         hud.Handlers["zoomTo"] = args => ZoomTo(args.Count > 0 ? args[0]?.GetValue<string>() : null);
         // The chat panel's box (HUD CSS px) → the camera's view shift (viewport px).
         hud.Handlers["setChatBox"] = args => _camera?.SetChatBox(hud.ChatBoxInWindow(args));
@@ -188,9 +187,6 @@ public partial class Main : Node3D
         if (_figures is null || _camera is null) return;
         var (o, d) = _camera.RayAt(click);
         var figure = _figures.CharacterAt(o, d);
-        if (figure is null && PickPropMenu(click,
-            new Vector3((float)o.X, (float)o.Y, (float)o.Z),
-            new Vector3((float)d.X, (float)d.Y, (float)d.Z))) return;
         // Asked only when no figure took the click, as engine.ts does.
         var location = figure is null ? _picking?.Pick(o, d) : null;
         var outcome = PickChain.Resolve(figure?.Name, location?.Id);

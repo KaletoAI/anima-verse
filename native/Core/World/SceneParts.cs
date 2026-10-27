@@ -40,8 +40,6 @@ public sealed record SceneMarker(
     /// <summary>The prop anchor a prop marker lifts with (<c>markerLiftPoint</c>); null for a room marker.</summary>
     public P2? Anchor { get; init; }
     public bool Diorama { get; init; }
-    public string PlacementId { get; init; } = "";
-    public string VariantUid { get; init; } = "";
 }
 
 /// <summary>§ B1 <c>doorways[]</c>: one threshold (door or passage) between rooms or to the outside.</summary>
@@ -171,7 +169,6 @@ public static class SceneJson
         RootOffset = Json.NumOrNull(m, "root_offset"), Facing = Json.NumOrNull(m, "facing"),
         Tilt = Json.NumOrNull(m, "tilt"), Roll = Json.NumOrNull(m, "roll"),
         Anchor = PtOrNull(m, "anchor"), Diorama = Json.Bool(m, "diorama"),
-        PlacementId = Json.Str(m, "placement_id"), VariantUid = Json.Str(m, "variant_uid"),
     };
 
     public static SceneDoorway Doorway(JsonElement d) => new(
