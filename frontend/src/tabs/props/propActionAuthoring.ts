@@ -28,18 +28,29 @@ export function presentations(catalog: ActionCatalog, ability: ActionDefinition[
 export function createActionPreset(preset: ActionPreset, catalog: ActionCatalog): ActionDefinition {
   const ability = preset === 'coffee' ? 'combined' : preset === 'sleep' ? 'sleep' : preset === 'pair' ? 'pair' : 'pose'
   const available = presentations(catalog, ability)
-  const preferred = available.find(p => p.group === (preset === 'lie' || preset === 'sleep' ? 'lie' : 'seat'))
-    || (preset === 'pair' || preset === 'coffee' ? available[0] : undefined)
+  const prepare = preset === 'coffee' ? available.find(pose => pose.animation === 'making-coffee')
+    || available.find(pose => pose.animation === 'cooking') : undefined
+  const drink = preset === 'coffee' ? available.find(pose => pose.animation === 'drinking') : undefined
+  const preferred = preset === 'coffee' ? prepare
+    : available.find(p => p.group === (preset === 'lie' || preset === 'sleep' ? 'lie' : 'seat'))
+      || (preset === 'pair' ? available[0] : undefined)
   const pose_key = preferred?.key || ''
   return {
     id: actionId(), name: ({ sit: 'Sitzen / entspannen', lie: 'Hinlegen (wach)', sleep: 'Schlafen gehen', coffee: 'Kaffee machen und trinken', pair: 'Gemeinsame Paarhandlung' })[preset],
     description: '', enabled: true, ability, pose_key, participants: ability === 'pair' ? 2 : 1,
     presence: 'any', interrupt_on_presence_change: false,
     phases: ability === 'combined' ? [
-      { id: actionId(), label: 'Zubereiten', duration_game_s: 120, pose_key },
-      { id: actionId(), label: 'Trinken', duration_game_s: 180, pose_key },
+      { id: actionId(), label: 'Zubereiten', duration_game_s: 120, pose_key: prepare?.key || '' },
+      { id: actionId(), label: 'Trinken', duration_game_s: 180, pose_key: drink?.key || '' },
     ] : [], requirements: [], effects: [],
   }
+}
+
+/** Combined entry uses its first phase; authoring can inspect any actual phase. */
+export function actionPreviewPose(action: ActionDefinition | undefined, phaseId?: string): string {
+  if (!action) return ''
+  if (action.ability !== 'combined') return action.pose_key
+  return (action.phases.find(phase => phase.id === phaseId) || action.phases[0])?.pose_key || ''
 }
 
 /** No copied binding: the destination geometry must be deliberately assigned. */

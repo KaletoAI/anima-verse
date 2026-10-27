@@ -1,17 +1,21 @@
 import { FIGURE_HEIGHT_M } from '@anima/scene-render'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { previewEntry } from '../world/placeTypes'
 import { saveScaleFigure } from './usePropWorkspace'
 import type { PropWorkspace } from './usePropWorkspace'
-import { orientedDims } from './dims'
-import type { AccessRole } from './spatialBindings'
+import { propMetresPerUnit, type AccessRole } from './spatialBindings'
+import { actionPreviewPose } from './propActionAuthoring'
 
 export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
   const { t, viewerRef, shownHasMesh, previewFile, enc, variant, reloadKey, prop, variantRotation, areaFrontal, setAreaView, areasOnView, areaOutlines, variantAreas, previewSlots, drawKind, onPolygonFaces, setShownBbox, light, waterController, markers, poseCatalog, previewPose, groups, shownDims, shownVariant, shownBbox, scaleFigure, placing, onPickPoint, variants, setScaleFigure } = workspace
   const { showStoredFile, navigate, saving } = workspace
   const action = workspace.actions.find(entry => entry.id === workspace.selectedActionId)
   const binding = shownVariant?.action_bindings?.find(entry => entry.action_id === action?.id)
+  const [previewPhaseId, setPreviewPhaseId] = useState('')
+  const previewPhase = action?.ability === 'combined'
+    ? action.phases.find(phase => phase.id === previewPhaseId) || action.phases[0] : undefined
+  const actionPoseKey = actionPreviewPose(action, previewPhase?.id)
   const spatialAuthoring = !previewFile && (workspace.area === 'places' || workspace.area === 'actions')
   const toolEnabled = !saving && !previewFile
   const accessPoints = useMemo(() => spatialAuthoring && binding ? (['actor', 'partner'] as AccessRole[]).flatMap(role => {
@@ -21,18 +25,24 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
         ? role === 'actor' ? t('Zugang A') : t('Zugang B') : t('Zugang handelnde Person') }] : []
   }) : [], [spatialAuthoring, binding, action?.participants, t])
   const markerOverlays = useMemo(() => markers.map(m => {
-    const selectedPose = spatialAuthoring && binding?.marker_ids.includes(m.id || '')
-      ? action?.pose_key : undefined
-    const entry = selectedPose ? poseCatalog.entries.find(pose => pose.key === selectedPose)
+    const boundToAction = spatialAuthoring && binding?.marker_ids.includes(m.id || '')
+    const entry = boundToAction ? poseCatalog.entries.find(pose => pose.key === actionPoseKey)
       : previewEntry(poseCatalog, m.group, m.id ? previewPose[m.id] : undefined)
     return { at: m.at, group: m.group, capacity: m.capacity, spacing_m: m.spacing_m,
       facing: m.facing, slot_axis: m.slot_axis, previewKind: entry?.animation,
       previewYawOffset: entry?.yaw_offset, rootDrop: groups[m.group]?.root_drop }
-  }), [markers, spatialAuthoring, binding?.marker_ids, action?.pose_key, poseCatalog, previewPose, groups])
+  }), [markers, spatialAuthoring, binding?.marker_ids, actionPoseKey, poseCatalog, previewPose, groups])
   return <div className="ga-form prop-area-content">
           <div className="ga-form-section-label" style={{ marginTop: 0 }}>
             {t('3D preview')}
           </div>
+    {spatialAuthoring && action?.ability === 'combined' && <label className="prop-action-field">
+      <span>{t('Vorschauphase (ohne Weltänderung)')}</span>
+      <select className="ga-input" value={previewPhase?.id || ''} onChange={event => setPreviewPhaseId(event.target.value)}>
+        {action.phases.map((phase, index) => <option key={phase.id} value={phase.id}>{phase.label || `${t('Phase')} ${index + 1}`}</option>)}
+      </select>
+      {!actionPoseKey && <span role="status">{t('Diese Phase hat keine Darstellung. In Aktionen eine passende Darstellung wählen.')}</span>}
+    </label>}
     {previewFile && <div className="prop-history-notice" role="status">
       <strong>{t('Historische / alternative Meshvorschau')}</strong>
       <span>{previewFile}</span>
@@ -106,10 +116,8 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
               figureHeight={(() => {
                 const bb = shownBbox ?? (shownVariant?.primary ? prop.bbox : null)
                 if (!bb) return 0
-                const maxExtent = Math.max(...orientedDims(bb, variantRotation))
-                const maxDim = Math.max(shownDims.width_m, shownDims.depth_m,
-                  shownDims.height_m) || 1
-                return FIGURE_HEIGHT_M * (maxExtent / maxDim)
+                const metresPerUnit = propMetresPerUnit(bb, shownDims, variantRotation)
+                return metresPerUnit > 0 ? FIGURE_HEIGHT_M / metresPerUnit : 0
               })()}
               scaleFigure={scaleFigure}
               picking={toolEnabled && (placing !== null || !!waterController.shape || !!workspace.accessPlacing)}

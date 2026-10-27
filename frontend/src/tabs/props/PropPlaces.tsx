@@ -3,14 +3,12 @@ import { groupLabel } from '../world/placeTypes'
 import { AT_AXES, AT_MAX } from './usePropWorkspace'
 import type { PropWorkspace } from './usePropWorkspace'
 import { PropSpatialBindings } from './PropSpatialBindings'
-import { orientedDims } from './dims'
+import { propMetresPerUnit } from './spatialBindings'
 
 export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
   const { t, markers, selIdx, setSelectedMarker, placing, setPlacing, groups, addMarker, firstGroup, shownHasMesh, previewFile, drawKind, armPlacing, selMarker, patchMarker, groupOptions, removeMarker, shownDims, setMarkerAt, selCapacity, selPoses, setPreview, selPoseIdx } = workspace
   const rawBbox = workspace.shownBbox ?? (workspace.shownVariant?.primary ? workspace.prop.bbox : null)
-  const oriented = rawBbox ? orientedDims(rawBbox, workspace.variantRotation) : null
-  const metresPerUnit = oriented ? Math.max(shownDims.width_m, shownDims.height_m, shownDims.depth_m)
-    / (Math.max(...oriented) || 1) : 0
+  const metresPerUnit = rawBbox ? propMetresPerUnit(rawBbox, shownDims, workspace.variantRotation) : 0
   return <div className="ga-form prop-area-content">
           <PropSpatialBindings workspace={workspace} />
           {previewFile && <p role="status" className="ga-hint">{t('Historische Meshvorschau: Körperanker und Zugänge sind gesperrt. Zum aktiven Modell zurückkehren, um zu bearbeiten.')}</p>}

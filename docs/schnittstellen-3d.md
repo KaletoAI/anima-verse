@@ -8026,6 +8026,11 @@ reward, and genuine sleep has no additional active regeneration. Effects and
 requirements select existing stat/condition references; unknown references stay
 visible and repairable rather than disappearing. Mood suggestions use the
 existing catalog, while the backend mood remains free text.
+Preparation independently selects an available `making-coffee` presentation,
+then `cooking`; drinking selects an available `drinking` presentation. Missing
+phase capabilities stay empty repair errors, never unrelated fallback poses.
+The isolated viewer explicitly selects an actual configured phase; it does not
+read the unused top-level pose for combined actions.
 
 Access-point coordinates are oriented local ground metres relative to the
 footprint centre, not normalized body-marker coordinates. Viewer access picking
@@ -8034,6 +8039,10 @@ body/access positions and headings, not a claimed room route. Historical model
 previews and concurrent surface/water/light/marker tools cannot edit access
 points. Referenced marker removal requires a deliberate replacement or removal
 of dependent bindings in the same draft.
+Metre conversion delegates to the renderer's canonical `placeTransform`
+measurement: 90-degree-snapped fix for scale, exact fix for orientation.
+Raw body-marker metre readbacks, access rendering/inverse picking, slot spacing
+and reference figures use that same scale, including non-right-angle fixes.
 
 The enabled `set_pose` package also loads the real `prop_action` capability/tool
 `PropAction`. Its request signature is

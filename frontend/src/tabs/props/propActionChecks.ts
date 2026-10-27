@@ -1,4 +1,5 @@
 import { GENERAL_TARGET, type PendingFields } from './pendingFields'
+import { actionEditorIssues, type ActionCatalog } from './propActionAuthoring'
 import type { ActionDefinition, PropActionIssue, PropDims, PropFull, PropVariant } from './propTypes'
 
 export interface PropCheckVariant extends PropDims {
@@ -11,6 +12,53 @@ export interface PropCheckVariant extends PropDims {
 }
 export interface PropCheckDocument extends Record<string, unknown> {
   actions: ActionDefinition[]; model_variants: PropCheckVariant[]
+}
+
+export interface PropConfigurationResult {
+  valid: boolean; placement: 'not_checked'; issues: PropActionIssue[]
+}
+export interface PropConfigurationSnapshot {
+  propId: string; revision: string; document: PropCheckDocument
+  catalog: ActionCatalog; revisionReady: boolean
+}
+export interface PropConfigurationRequest {
+  snapshot: PropConfigurationSnapshot; sequence: number
+}
+
+/** Catalog and document references identify the immutable authoring snapshots. */
+export function samePropConfigurationSnapshot(
+  checked: PropConfigurationSnapshot, current: PropConfigurationSnapshot,
+): boolean {
+  return checked.propId === current.propId && checked.revision === current.revision
+    && checked.document === current.document && checked.catalog === current.catalog
+    && checked.revisionReady === current.revisionReady
+}
+
+/** Also reject older requests for the same snapshot, including their error/finally paths. */
+export function isCurrentPropConfigurationRequest(
+  checked: PropConfigurationRequest, current: PropConfigurationRequest,
+): boolean {
+  return checked.sequence === current.sequence
+    && samePropConfigurationSnapshot(checked.snapshot, current.snapshot)
+}
+
+/** Combine existing editor blockers with server validation; neither engine is replaced. */
+export function composePropConfigurationResult(
+  document: PropCheckDocument, catalog: ActionCatalog, server: PropConfigurationResult,
+): PropConfigurationResult {
+  const issues: PropActionIssue[] = []
+  const positions = new Map<string, number>()
+  for (const issue of [...server.issues, ...actionEditorIssues(document.actions, catalog)]) {
+    const key = `${issue.path}\0${issue.code}`
+    const index = positions.get(key)
+    if (index === undefined) {
+      positions.set(key, issues.length)
+      issues.push(issue)
+    } else if (issues[index].severity !== 'error' && issue.severity === 'error') {
+      issues[index] = issue
+    }
+  }
+  return { ...server, issues, valid: server.valid && !issues.some(issue => issue.severity === 'error') }
 }
 
 /** Author-side shape, not the UID-keyed bulk patch or the renderer projection. */

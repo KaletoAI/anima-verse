@@ -141,12 +141,12 @@ export function PropActionsPanel({ workspace, onIssue }: { workspace: PropWorksp
     {createOpen && <PropWorkspaceDialog title={t('Ausführbare Vorlage wählen')} onCancel={() => setCreateOpen(false)}><div className="ga-modal-body prop-action-presets">
       {PRESETS.map(preset => {
         const ability = preset.id === 'coffee' ? 'combined' : preset.id === 'pair' ? 'pair' : preset.id === 'sleep' ? 'sleep' : 'pose'
-        const possible = presentations(catalog, ability).some(pose => preset.id === 'sit' ? pose.group === 'seat' : preset.id === 'lie' || preset.id === 'sleep' ? pose.group === 'lie' : true)
+        const possible = preset.id === 'coffee' || presentations(catalog, ability).some(pose => preset.id === 'sit' ? pose.group === 'seat' : preset.id === 'lie' || preset.id === 'sleep' ? pose.group === 'lie' : true)
         return <button type="button" key={preset.id} className="ga-btn" disabled={!possible} onClick={() => {
           const next = createActionPreset(preset.id, catalog)
           next.name = t(next.name)
           add(next); setCreateOpen(false)
-        }}><strong>{t(preset.label)}</strong><span>{t(preset.explanation)}</span>{!possible && <span>{t('Keine passende Fähigkeit mit verfügbaren Clips vorhanden.')}</span>}</button>
+        }}><strong>{t(preset.label)}</strong><span>{t(preset.explanation)}</span>{preset.id === 'coffee' && <span>{t('Fehlende passende Phasendarstellungen bleiben als Reparaturfehler sichtbar; keine Ersatzhandlung wird gewählt.')}</span>}{!possible && <span>{t('Keine passende Fähigkeit mit verfügbaren Clips vorhanden.')}</span>}</button>
       })}
     </div><div className="ga-modal-footer"><button type="button" className="ga-btn" onClick={() => setCreateOpen(false)}>{t('Cancel')}</button></div></PropWorkspaceDialog>}
     {copyOpen && <PropWorkspaceDialog title={t('Von anderem Prop kopieren')} onCancel={() => setCopyOpen(false)}><div className="ga-modal-body">

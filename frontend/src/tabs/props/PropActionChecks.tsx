@@ -4,13 +4,12 @@ import { ApiError, apiGet, apiPost } from '../../lib/api'
 import type { PropActionIssue } from './propTypes'
 import type { PropWorkspace } from './usePropWorkspace'
 import { PropWorkspaceDialog } from './PropWorkspaceDialog'
-import { propActionCheckDocument, propCheckReason, resolveCheckIssue,
-  type PropCheckDocument, type PropCheckTargets, type PropPlacementCheckRequest,
+import { composePropConfigurationResult, isCurrentPropConfigurationRequest,
+  propActionCheckDocument, propCheckReason, resolveCheckIssue, samePropConfigurationSnapshot,
+  type PropConfigurationResult, type PropConfigurationSnapshot, type PropConfigurationRequest,
+  type PropCheckTargets, type PropPlacementCheckRequest,
   type PropPlacementCheckResult, type PropExecutionResult } from './propActionChecks'
 
-interface ConfigurationResult {
-  valid: boolean; placement: 'not_checked'; issues: PropActionIssue[]
-}
 interface CheckError { message: string; status?: number }
 
 function checkError(error: unknown): CheckError {
@@ -32,13 +31,22 @@ function checkError(error: unknown): CheckError {
 export function PropActionChecks({ workspace, onIssue }: {
   workspace: PropWorkspace; onIssue: (issue: PropActionIssue) => void
 }) {
-  const { t, prop, variants, buf, selectedActionId, dirtyCount, saving, revisionReady } = workspace
+  const { t, prop, variants, buf, catalog, selectedActionId, dirtyCount, saving, revisionReady } = workspace
   const document = useMemo(() => propActionCheckDocument(prop, variants, buf), [prop, variants, buf])
+  const snapshot = useMemo<PropConfigurationSnapshot>(() => ({
+    propId: prop.id, revision: prop.revision, document, catalog, revisionReady,
+  }), [prop.id, prop.revision, document, catalog, revisionReady])
+  const configurationRequest = useRef<PropConfigurationRequest>({ snapshot, sequence: 0 })
+  if (!samePropConfigurationSnapshot(configurationRequest.current.snapshot, snapshot)) {
+    configurationRequest.current = { snapshot, sequence: configurationRequest.current.sequence + 1 }
+  }
   const [configuration, setConfiguration] = useState<{
-    document: PropCheckDocument; result: ConfigurationResult
+    snapshot: PropConfigurationSnapshot; result: PropConfigurationResult
   } | null>(null)
-  const [configurationError, setConfigurationError] = useState<CheckError | null>(null)
-  const [validating, setValidating] = useState(false)
+  const [configurationError, setConfigurationError] = useState<{
+    snapshot: PropConfigurationSnapshot; error: CheckError
+  } | null>(null)
+  const [validation, setValidation] = useState<PropConfigurationRequest | null>(null)
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([])
   const [locationsLoaded, setLocationsLoaded] = useState(false)
   const [locationId, setLocationId] = useState('')
@@ -73,7 +81,11 @@ export function PropActionChecks({ workspace, onIssue }: {
   const requestKey = request ? JSON.stringify(request) : ''
   const savedReady = !dirtyCount && !saving && revisionReady && targets?.revision === prop.revision
   const canCheck = !!request && savedReady && !loading && !busy
-  const currentConfiguration = configuration?.document === document ? configuration.result : null
+  const validating = !!validation && isCurrentPropConfigurationRequest(validation, configurationRequest.current)
+  const currentConfiguration = configuration && samePropConfigurationSnapshot(configuration.snapshot, snapshot)
+    ? configuration.result : null
+  const currentConfigurationError = configurationError && samePropConfigurationSnapshot(configurationError.snapshot, snapshot)
+    ? configurationError.error : null
 
   useEffect(() => {
     sourceRequest.current += 1
@@ -84,14 +96,23 @@ export function PropActionChecks({ workspace, onIssue }: {
   }, [prop.id])
 
   async function validateConfiguration() {
-    const checked = document, propId = prop.id
-    setValidating(true); setConfigurationError(null)
+    if (!revisionReady) return
+    const checked = { snapshot, sequence: configurationRequest.current.sequence + 1 }
+    configurationRequest.current = checked
+    setValidation(checked); setConfigurationError(null)
     try {
-      const result = await apiPost<ConfigurationResult>(`${path}/validate`, { document: checked })
-      if (activeProp.current === propId) setConfiguration({ document: checked, result })
+      const result = await apiPost<PropConfigurationResult>(`${path}/validate`, { document: checked.snapshot.document })
+      if (isCurrentPropConfigurationRequest(checked, configurationRequest.current)) {
+        setConfiguration({ snapshot: checked.snapshot,
+          result: composePropConfigurationResult(checked.snapshot.document, checked.snapshot.catalog, result) })
+      }
     } catch (error) {
-      if (activeProp.current === propId) setConfigurationError(checkError(error))
-    } finally { setValidating(false) }
+      if (isCurrentPropConfigurationRequest(checked, configurationRequest.current)) {
+        setConfigurationError({ snapshot: checked.snapshot, error: checkError(error) })
+      }
+    } finally {
+      if (isCurrentPropConfigurationRequest(checked, configurationRequest.current)) setValidation(null)
+    }
   }
 
   async function loadLocations() {
@@ -154,7 +175,7 @@ export function PropActionChecks({ workspace, onIssue }: {
     <p className="ga-hint">{t('Konfiguration prüfen liest den gesamten aktuellen Entwurf mit allen Varianten. Es wird nichts gespeichert und kein Weltwert verändert.')}</p>
     <button type="button" className="ga-btn ga-btn-sm" disabled={validating || !revisionReady}
       onClick={() => { void validateConfiguration() }}>{t(validating ? 'Konfiguration wird geprüft…' : 'Konfiguration prüfen')}</button>
-    {configurationError && <p role="alert">{configurationError.status ? `HTTP ${configurationError.status}: ` : ''}{t(configurationError.message)}</p>}
+    {currentConfigurationError && <p role="alert">{currentConfigurationError.status ? `HTTP ${currentConfigurationError.status}: ` : ''}{t(currentConfigurationError.message)}</p>}
     {!revisionReady && <p className="ga-hint">{t('Vollständige Varianten und konsistente Revision abwarten; Ladefehler im Arbeitsbereich beheben.')}</p>}
     {configuration && !currentConfiguration && <p role="status">{t('Der Entwurf wurde seit der Prüfung verändert. Bitte erneut prüfen.')}</p>}
     {currentConfiguration && <div role="status">

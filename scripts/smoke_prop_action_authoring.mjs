@@ -16,21 +16,36 @@ try {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
     }).outputText);
   }
-  const { createActionPreset, copyAction, actionEditorIssues, effectTimings, presentations } = require(join(dir, 'propActionAuthoring.js'));
+  const { createActionPreset, copyAction, actionEditorIssues, effectTimings, presentations, actionPreviewPose } = require(join(dir, 'propActionAuthoring.js'));
   const { propActionCheckDocument, resolveCheckIssue } = require(join(dir, 'propActionChecks.js'));
   const { emptyFields, queueFields, applyVariantDraft } = require(join(dir, 'pendingFields.js'));
   const catalog = { status: 'ready', stats: ['energy'], conditions: [{ name: 'alert', label: 'Alert' }],
-    poses: [{ key: 'sitting', group: 'seat', solo: true, animation: 'sit' },
+    poses: [{ key: 'driving', group: 'seat', solo: true, animation: 'driving' },
+      { key: 'sitting', group: 'seat', solo: true, animation: 'sit' },
       { key: 'lying', group: 'lie', solo: true, animation: 'lie' },
+      { key: 'preparing_food', group: 'stand', solo: true, animation: 'cooking' },
+      { key: 'having_a_drink', group: 'stand', solo: true, animation: 'drinking' },
+      { key: 'unavailable_coffee', group: 'stand', solo: true, animation: 'making-coffee' },
       { key: 'embracing', group: 'seat', solo: false, animation: 'embrace' },
       { key: 'fake_pair', group: 'seat', solo: false, animation: 'missing_pair' }],
-    kinds: ['sit', 'lie'], pairKinds: ['embrace'] };
+    kinds: ['driving', 'sit', 'lie', 'cooking', 'drinking'], pairKinds: ['embrace'], groups: {} };
   assert.deepEqual(presentations(catalog, 'pair').map(p => p.key), ['embracing']);
   const coffee = createActionPreset('coffee', catalog);
   assert.equal(coffee.ability, 'combined');
   assert.equal(coffee.phases.length, 2);
   assert.equal(new Set(coffee.phases.map(p => p.id)).size, 2);
-  assert(coffee.phases.every(p => p.duration_game_s > 0 && p.pose_key === 'sitting'));
+  assert(coffee.phases.every(p => p.duration_game_s > 0));
+  assert.deepEqual(coffee.phases.map(p => p.pose_key), ['preparing_food', 'having_a_drink']);
+  const specificCoffee = createActionPreset('coffee', { ...catalog, kinds: [...catalog.kinds, 'making-coffee'] });
+  assert.deepEqual(specificCoffee.phases.map(p => p.pose_key), ['unavailable_coffee', 'having_a_drink']);
+  const missingCoffee = createActionPreset('coffee', { ...catalog, kinds: ['driving', 'sit'] });
+  assert.deepEqual(missingCoffee.phases.map(p => p.pose_key), ['', '']);
+  assert(actionEditorIssues([missingCoffee], catalog).some(i => i.path === 'actions.0.phases.0.pose_key'));
+  assert.equal(actionPreviewPose(coffee), 'preparing_food');
+  assert.equal(actionPreviewPose(coffee, coffee.phases[1].id), 'having_a_drink');
+  const reconfigured = { ...coffee, pose_key: 'driving', phases: coffee.phases.map((p, index) => ({ ...p, pose_key: index ? '' : 'new_actual_phase' })) };
+  assert.equal(actionPreviewPose(reconfigured), 'new_actual_phase');
+  assert.equal(actionPreviewPose(reconfigured, reconfigured.phases[1].id), '');
   coffee.effects.push({ id: 'effect', type: 'stat_delta', target: 'actor', when: 'success', stat: 'energy', amount: 15 });
   coffee.requirements.push({ id: 'requirement', type: 'condition', target: 'actor', condition_id: 'alert', present: false });
   const copied = copyAction(coffee);
