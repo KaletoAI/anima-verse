@@ -143,7 +143,8 @@ logger = get_logger(__name__)
 #: 16 (2026-10-21): Blender window models with glass pane fallback.
 #: 17 (2026-10-24): Prop variant lights and room ambience.
 #: 18 (2026-10-25): Model-owned prop and room water regions.
-SCENE_RECIPE_VERSION = 18
+#: 19 (2026-10-27): Action binding provenance and floor-only access projection.
+SCENE_RECIPE_VERSION = 19
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):
@@ -3356,6 +3357,9 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
             "bottom_y": _r(floor_y + _num(placement.get("ground_offset_m"))
                            + _num(placement.get("offset_y"))),
         }
+        spec["placement_id"] = placement.get("id", "")
+        spec["variant_uid"] = placement.get("variant_uid", "")
+        spec["definition_revision"] = placement.get("definition_revision", "")
         from app.core.room_recipe import compose_prop_light
         light = compose_prop_light(
             entry.get("light"), bbox=prop.get("bbox"),
@@ -3964,6 +3968,15 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
             "anchor": [_r(_num(at[0])), _r(_num(at[1]))],
             "source": "prop",
         }
+        # Access is on the room floor, never the supporting prop's top. The
+        # body anchor above intentionally includes the complete support chain.
+        for key in ("placement_id", "prop_id", "variant_uid", "marker_id"):
+            entry[key] = marker.get(key, "")
+        entry["action_bindings"] = [
+            {**binding, "room_id": room_id,
+             "access_points": {role: {**point, "y": _r(floor_y + _plate_top(recipe))}
+                               for role, point in binding["access_points"].items()}}
+            for binding in marker.get("action_bindings", [])]
         if facing is not None:
             entry["facing"] = facing
         out.append(entry)

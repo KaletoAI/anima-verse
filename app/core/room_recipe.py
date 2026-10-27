@@ -901,6 +901,15 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         entry["dims"] = _placement_dims(prop, entry.get("variant"))
         entry["prop_name"] = str(prop.get("name") or pid)
         _carry_ground_offset(entry, prop, entry.get("variant"))
+        published = _variant_entry(prop, entry.get("variant")) or {}
+        entry["variant_uid"] = published.get("uid", "")
+        entry["definition_revision"] = prop.get("revision", "")
+        entry["support_reason"] = composed["reason"]
+        entry["action_dependency_invalid"] = bool(
+            placement.get("action_dependency_invalid")
+            or (placement.get("variant_uid") and placement["variant_uid"] != entry["variant_uid"])
+            or (placement.get("definition_revision")
+                and placement["definition_revision"] != entry["definition_revision"]))
         entry["has_model"] = bool(prop.get("has_model"))
         if prop.get("has_model"):
             # Which resolution tiers the prop has, plus the change key of its
@@ -936,6 +945,23 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
             composed["group"] = str(marker.get("group") or "")
             composed["capacity"] = int(marker.get("capacity") or 1)
             composed["spacing_m"] = float(marker.get("spacing_m") or 0.6)
+            from app.core.prop_action_migration import compose_binding
+            composed["placement_id"] = entry["id"]
+            composed["prop_id"] = pid
+            composed["variant_uid"] = entry["variant_uid"]
+            composed["marker_id"] = composed["id"]
+            composed["action_bindings"] = [
+                compose_binding(binding, placement=entry,
+                                revision=entry["definition_revision"])
+                for binding in published.get("action_bindings", [])
+                if marker.get("id") in binding.get("marker_ids", [])]
+            if entry["action_dependency_invalid"] or entry["support_reason"]:
+                for binding in composed["action_bindings"]:
+                    binding["supported"] = False
+                    binding["validation"] = "repair_required"
+                    binding["reason"] = ("incompatible_prop_dependency"
+                                         if entry["action_dependency_invalid"]
+                                         else "invalid_support_chain")
             # WHICH WAY THE ROW RUNS (2026-08-29). Object-local like the
             # facing it is measured against, so the placement yaw carries both
             # at once — the angle between them never changes when the prop is
@@ -944,6 +970,30 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                 composed["slot_axis"] = float(marker.get("slot_axis"))
             composed["placement"] = idx
             prop_markers.append(composed)
+    # A device-local proposal can be inside its supporting table. Keep that
+    # point visible, but block it; choosing a real room route is executor work.
+    from app.core.room_stand import BODY_R_M, _in_footprint
+    by_id = {entry["id"]: entry for entry in placements if entry["id"]}
+    for marker in prop_markers:
+        child = placements[marker["placement"]]
+        support = by_id.get(child.get("on"))
+        visited = {child["id"]}
+        while support is not None and support["id"] not in visited:
+            visited.add(support["id"])
+            dims = support.get("dims") or {}
+            box = dict(at=support["at"], yaw=support["yaw"],
+                       width_m=dims.get("width_m"), depth_m=dims.get("depth_m"))
+            for binding in marker["action_bindings"]:
+                if binding["supported"] and (
+                        not dims or any(_in_footprint(point["x"], point["z"], box, BODY_R_M)
+                                        for point in binding["access_points"].values())):
+                    binding.update(supported=False, validation="repair_required",
+                                   reason="support_access_blocked")
+            support = by_id.get(support.get("on"))
+        if support is not None:
+            for binding in marker["action_bindings"]:
+                binding.update(supported=False, validation="repair_required",
+                               reason="invalid_support_chain")
     return placements, prop_markers
 
 

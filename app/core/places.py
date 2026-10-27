@@ -97,6 +97,10 @@ def _compose(location_id: str) -> Dict[str, List[Place]]:
         wx, wz = local_to_world(float(pt[0]), float(pt[1]), cx, cz, yaw)
         return [round(wx, 2), round(wz, 2)]
 
+    def _world_access(point: dict) -> dict:
+        x, z = _world([point["x"], point["z"]])
+        return {**point, "x": x, "z": z, "yaw": (point["yaw"] + yaw) % 360}
+
     by_room: Dict[str, List[Place]] = {}
     for m in scene.get("markers") or []:
         if not m.get("id") or not m.get("group"):
@@ -106,6 +110,13 @@ def _compose(location_id: str) -> Dict[str, List[Place]]:
         if facing is not None and yaw:
             facing = round((float(facing) + yaw) % 360.0, 1)
         by_room.setdefault(room_id, []).append({
+            **{key: m[key] for key in
+               ("placement_id", "prop_id", "variant_uid", "marker_id") if key in m},
+            **({"action_bindings": [
+                {**binding, "location_id": location_id,
+                 "access_points": {role: _world_access(point)
+                                   for role, point in binding["access_points"].items()}}
+                for binding in m["action_bindings"]]} if "action_bindings" in m else {}),
             "id": m["id"], "group": m["group"], "label": m.get("label") or m["group"],
             "capacity": int(m.get("capacity") or 1),
             "slots": [_world(pt) for pt in (m.get("slots") or [m["at_world"]])],

@@ -184,9 +184,9 @@ Hand-derived expectations
   [7] The import path. A content pack authored before this rebuild carries
       retired groups, and the boot migration ran long ago.
       `content_io._sanitize_imported_location` renames a room's `bed` marker to
-      `lie` and says so in one warning; `prop_field_migration
-      .normalize_prop_sidecar` does the same for a prop directory the importer
-      just installed (`counter` -> `stand` on the variant).
+      `lie` and says so in one warning; `prop_action_migration.normalize_import`
+      does the same before installing a prop directory (`counter` -> `stand`
+      on the variant).
 
   [8] The trace an unknown place type leaves (E2). Nothing checked a marker's
       group against the catalog on the way in, and `scene_recipe` skipped an
@@ -213,6 +213,7 @@ Hand-derived expectations
 Usage:  ./.venv/bin/python scripts/smoke_platztypen.py
 """
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -220,9 +221,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="platztypen-smoke-"))
+os.environ["STORAGE_DIR"] = str(STORAGE)
+os.environ["INSTANCE_DIR"] = str(STORAGE / "instance")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
+paths.init_instance(STORAGE / "instance")
+from app.blender import runner as blender_runner
+blender_runner.is_available = lambda: False
 from app.core import db  # noqa: E402
 db.init_schema()
 
@@ -713,7 +719,7 @@ check("...and only NOW is the flag set", bool(get_world_setting(_FLAG)))
 # ── [7] the import path ─────────────────────────────────────────────────
 print("\n[7] a pack from before the rebuild is renamed on import")
 from app.core.content_io import _sanitize_imported_location  # noqa: E402
-from app.core.prop_field_migration import normalize_prop_sidecar  # noqa: E402
+from app.core.prop_action_migration import normalize_import  # noqa: E402
 
 _loc = {"id": "packed", "name": "Packed Inn",
         "rooms": [{"id": "r1", "name": "Cellar",
@@ -729,16 +735,19 @@ check("...and the import says so instead of swallowing it",
 
 PACK_PROP = "packed-stool"
 (paths.get_storage_dir() / "props" / PACK_PROP).mkdir(parents=True, exist_ok=True)
-prop_store._write_sidecar(PACK_PROP, {
-    "name": "Stool", "width_m": 0.4, "depth_m": 0.4, "height_m": 0.5,
+_packed = {
+    "id": PACK_PROP, "name": "Stool", "width_m": 0.4, "depth_m": 0.4, "height_m": 0.5,
     prop_store.VARIANTS_KEY: [
-        {prop_store.MARKERS_KEY: [{"id": "k", "group": "counter", "at": [0.5, 0.0, 0.5]}]}]})
-check("normalize_prop_sidecar reports the change", normalize_prop_sidecar(PACK_PROP) is True)
+        {"stem": "model", prop_store.MARKERS_KEY: [
+            {"id": "k", "group": "counter", "at": [0.5, 0.0, 0.5]}]}]}
+_normalized = normalize_import(_packed)
+check("canonical ingress reports a changed document", _normalized != _packed)
+prop_store._write_sidecar(PACK_PROP, _normalized)
 check("...and the installed prop's marker is a standing spot",
       [m["group"] for m in prop_store.read_sidecar(PACK_PROP)
        [prop_store.VARIANTS_KEY][0][prop_store.MARKERS_KEY]] == ["stand"])
 check("a second normalisation finds nothing left to do",
-      normalize_prop_sidecar(PACK_PROP) is False)
+      normalize_import(_normalized) == _normalized)
 
 
 # ── [8] an unknown place type leaves a trace ────────────────────────────

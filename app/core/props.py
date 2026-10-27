@@ -1339,7 +1339,7 @@ def sanitize_light(raw: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
+def sanitize_markers(raw: Any, *, known_groups: Any = None) -> List[Dict[str, Any]]:
     """Object-local place markers (A4, plan-posen-plaetze.md). Same vocabulary
     as ``layout.markers`` — ``group`` = a PLACE TYPE of the pose catalog
     (``pose_catalog.get_groups()``), ``id`` stable,
@@ -1368,7 +1368,7 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     if not isinstance(raw, list):
         return []
     from app.core.pose_catalog import get_groups
-    known = get_groups()
+    known = get_groups() if known_groups is None else known_groups
     out: List[Dict[str, Any]] = []
     for m in raw:
         if not isinstance(m, dict):
@@ -2921,6 +2921,8 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         "name": name,
         "category": (category or "").strip(),
         VARIANTS_KEY: [variant],
+        # Explicit empty means decorative, not legacy marker-derived actions.
+        "actions": [],
         # NEW props do not sway (user order 2026-08-20): the 1.0 default is
         # the VEGETATION-era reading of an ABSENT key, kept so existing
         # scatter plants keep waving — but furniture is the normal case now,

@@ -7587,6 +7587,76 @@ degrees, with no authored/support-mesh height. Author validation is the read-onl
 `app.core.prop_actions.validate_document(prop)` contract. This schema alone does
 not execute or expose runtime actions; deployment waits for the complete cutover.
 
+`app.core.prop_action_migration.normalize_import(document)` is the one-way
+pack ingress: it returns a deep-copied canonical document and raises structured
+authoring issues for missing state/stat/marker/action dependencies before any
+destructive prop replacement. Both standalone prop and bundled-location packs
+use it. Canonical exports retain their original sidecar bytes, IDs, bindings and
+state references; collections and marketplace dispatch reuse those same paths.
+An existing local prop is never replaced by a bundled dependency. Incompatible
+full author revisions (including changed marker geometry) are returned as `action_dependency_issues`, mirrored
+in the existing import `warnings` UI channel, and the affected placement carries
+`action_dependency_invalid: true`; its composed bindings are blocked.
+Imported `repair_required` bindings also appear in the existing `warnings`
+channel. Their points/anchors are preserved for repair, but support is disabled;
+the normalizer does not relocate unsafe authored access into a guessed spot.
+
+`migrate_actions(dry_run=True)` inventories raw sidecars without the UID-writing
+getter. Its report contains `props` (prop ID, changed flag, variant/action/offer
+counts, repair count, proposed document), `changed`, structured `issues`,
+`runtime_activated: false` and per-prop `route_checked: false`. Explicit
+`dry_run=False` persists valid documents under the existing per-prop author lock;
+repeating it writes nothing. Startup only logs the dry report, never activates
+or applies it. Intermediate schema/migration commits must not deploy alone.
+
+Dry inventory uses an isolated read-only catalog snapshot, not
+`db.get_connection()`: missing `world.db` means no world overrides, while
+unreadable existing databases/rows are `catalog_snapshot_unavailable` issues,
+never a fallback to shared data. Existing DB and WAL files are copied once into
+a private `TemporaryDirectory` (0700), source device/inode/size/mtime/ctime
+tokens are compared before/after copying, and the copy is queried with SQLite
+`mode=ro` using only SELECTs. A concurrent change aborts visibly without retry.
+The private copy and any SQLite SHM files are removed on success and failure.
+This costs O(DB + WAL size) I/O for an explicit dry inventory (including the
+startup pre-activation report), not for imports or ordinary author/offer reads.
+
+`validate_document(prop, *, catalogs=None)` and
+`normalize_import(document, *, catalogs=None)` accept the same optional
+snapshot: `stats` and `conditions` are existing catalog reference sets;
+`poses` and `groups` are normalized by the existing pose-catalog loaders with
+explicit world rows. The default still uses the live catalogs. The optional
+`known_groups` argument of the existing marker/field-move helpers only prevents
+a logging-only catalog lookup from creating a world DB during legacy dry
+normalization. No global DB replacement, mutable context override, second
+pose/state model or persistent compatibility reader is installed.
+
+Only legacy documents **without** `actions` derive group-compatible solo pose
+definitions, shared across variants with deterministic per-prop/pose IDs.
+`sleeping` remains `ability: pose`, not a sleep signal. Explicit `actions: []`
+means decorative; creation writes that empty list. Autofurnish creates disabled,
+unsupported `suggested` actions only when its solver explicitly supplies a
+marker. Missing/ambiguous facing or dimensions yields blocked `repair_required`
+bindings. `local_valid` means only a footprint-local approach proposal, never a
+proof of room accessibility or a route. The future executor must check the
+current room, supporters, obstacles and participants independently.
+
+Composed prop places retain `placement_id`, `prop_id`, `variant_uid`, `marker_id`
+and `action_bindings` with `definition_revision` and room/location provenance.
+The integer placement `variant` still indexes the **published** mesh list; it
+is not the persistent variant UUID or a store index. Stored UUID/revision
+provenance survives layout/building/ground sanitization; stale identity and
+invalid support chains block bindings rather than retargeting them. A locally
+valid device approach inside a supporting table's footprint is also blocked,
+not relocated. Scatter copies never acquire place markers or action targets.
+
+Body anchors include the entire `on` support transform and object trim/sink.
+Role access XZ/yaw composes through placement and room/location rotations, but
+access Y uses the room-floor datum (including storey/plate), never supporting
+furniture height. Like existing scene `y_world`, storey-zero scene access Y is
+terrain-relative; the concrete-world consumer samples the room ground, not the
+supporting table. No teleport, route fallback or action execution is introduced.
+
+
 
 ### Ein Prop, mehrere Modell-Varianten (§ B2)
 

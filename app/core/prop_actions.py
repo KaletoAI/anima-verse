@@ -20,18 +20,21 @@ _TYPE_FIELDS = {
 }
 
 
-def validate_document(prop: dict) -> list[Issue]:
-    """Return structured authoring issues against the existing world catalogs."""
+def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue]:
+    """Return issues; optional read-only catalog snapshot avoids world DB getters."""
     if not isinstance(prop, dict):
         return [dict(path='', code='invalid_type', message='Expected an object', severity='error')]
     from app.models.character_template import list_templates, get_template
     from app.core.stat_rules import template_rules
     from app.core.prompt_filters import load_filters
-    stats = ({key for entry in list_templates() for key in
-              template_rules(get_template(entry['name']) or {})}
-             if prop.get('actions') else set())
-    conditions = ({f.get('id') for f in load_filters() if f.get('enabled', True)}
-                  if prop.get('actions') else set())
+    if catalogs is None:
+        stats = ({key for entry in list_templates() for key in
+                  template_rules(get_template(entry['name']) or {})}
+                 if prop.get('actions') else set())
+        conditions = ({f.get('id') for f in load_filters() if f.get('enabled', True)}
+                      if prop.get('actions') else set())
+    else:
+        stats, conditions = catalogs['stats'], catalogs['conditions']
     issues = []
 
     def issue(path, code, message):

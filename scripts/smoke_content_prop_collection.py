@@ -173,10 +173,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="content-prop-smoke-"))
+os.environ["STORAGE_DIR"] = str(STORAGE)
+os.environ["INSTANCE_DIR"] = str(STORAGE / "instance")
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="content-prop-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
+paths.init_instance(STORAGE / "instance")
+from app.blender import runner as blender_runner
+blender_runner.is_available = lambda: False
 from app.core import db  # noqa: E402
 db.init_schema()
 
@@ -208,6 +213,17 @@ prop = create_prop(name="Oak Chair", category="seating",
                    width_m=0.5, depth_m=0.5, height_m=0.9)
 PID = prop["id"]
 PROP_DIR = _prop_dir(PID)
+from app.core import props as prop_store
+document = prop_store.read_sidecar(PID)
+document["actions"] = [{"id": "pack-sit", "name": "Sit", "description": "", "enabled": True,
+    "ability": "pose", "pose_key": "sitting", "participants": 1, "presence": "any",
+    "interrupt_on_presence_change": False, "phases": [], "requirements": [], "effects": []}]
+variant = document["model_variants"][0]
+variant["markers"] = [{"id": "seat", "group": "seat", "at": [.5, .5, .5], "facing": 0}]
+variant["action_bindings"] = [{"action_id": "pack-sit", "variant_uid": variant["uid"],
+    "supported": True, "marker_ids": ["seat"], "access_points": {"actor": {"x": 0, "z": .75, "yaw": 180}},
+    "validation": "local_valid"}]
+prop_store._write_sidecar(PID, document)
 SEED_FILES = {
     "model_1.glb": b"GLB-prop-mesh",
     "model_1.json": json.dumps({"created_at": "2026-08-10T00:00:00Z",
@@ -262,6 +278,9 @@ res = import_prop_from_zip(blob)
 check("status", res["status"], "success")
 check("prop_id kept", res["prop_id"], PID)
 check("directory identical", dir_snapshot(), EXPORTED)
+check("prop actions survive standalone ingress", prop_store.read_sidecar(PID)["actions"], document["actions"])
+check("stable variant binding survives standalone ingress",
+      prop_store.read_sidecar(PID)["model_variants"][0]["action_bindings"], variant["action_bindings"])
 back = get_prop(PID)
 check("name", (back or {}).get("name"), "Oak Chair")
 check("dims survive",

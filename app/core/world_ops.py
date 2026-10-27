@@ -1878,6 +1878,14 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
         label = str(p.get("label") or "").strip()[:60]
         if label:
             entry["label"] = label
+        # Placement provenance is distinct from the published-list selector.
+        # Exported dependencies retain it through room/building/ground saves.
+        for key in ("variant_uid", "definition_revision"):
+            value = p.get(key)
+            if isinstance(value, str) and value:
+                entry[key] = value
+        if p.get("action_dependency_invalid") is True:
+            entry["action_dependency_invalid"] = True
         # WHAT THIS PIECE STANDS ON (E1) — an id of this same list. Whether it
         # names one is decided after the whole list is read: ids are minted in
         # this very pass, so the reference can only be resolved against the

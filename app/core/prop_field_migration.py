@@ -45,15 +45,11 @@ was deleted in 2026-09 — it read a prop-level ``markers`` list against
 prop-level dims, a shape no world has carried since this very migration moved
 both onto the variants.
 
-The same per-prop transform is also the INGEST normaliser: a content pack
-authored before this change installs a whole ``props/<id>/`` directory, sidecar
-included, long after the boot migration ran. ``normalize_prop_sidecar`` puts
-one such sidecar into the current shape at import time — not a fallback reader,
-a write. It carries the SECOND one-way marker transform as well: the place-type
-rename of plan-platztypen.md E1 (``bed``/``floor`` → ``lie``, ``counter`` →
-``stand``), applied after the field move so it reaches the markers at their new
-address. The boot pass deliberately does not — that rename is its own
-migration with its own flag (``place_group_migration``).
+The pure field transform is reused by ``prop_action_migration.normalize_import``
+before pack installation. That canonical ingress also renames retired place
+groups and validates action dependencies before any destructive replacement.
+The boot pass deliberately only moves fields: place-group renaming retains
+its own migration flag (``place_group_migration``).
 """
 
 from typing import Any, Dict, List, Optional
@@ -89,7 +85,7 @@ def _prop_dims(meta: Dict[str, Any]) -> Dict[str, float]:
                            meta.get("rotation"))
 
 
-def move_fields_to_variants(meta: Dict[str, Any]) -> bool:
+def move_fields_to_variants(meta: Dict[str, Any], *, known_groups=None) -> bool:
     """Move the five prop-level fields onto the variant entries, IN PLACE.
 
     Returns True when the record changed — i.e. when something prop-level was
@@ -113,7 +109,7 @@ def move_fields_to_variants(meta: Dict[str, Any]) -> bool:
     estimated = bool(meta.get(DIMS_ESTIMATED_KEY))
     description = _coerce_description(meta.get(DESCRIPTION_KEY))
     offset = _coerce_ground_offset_m(meta.get(GROUND_OFFSET_KEY))
-    markers = sanitize_markers(meta.get(MARKERS_KEY))
+    markers = sanitize_markers(meta.get(MARKERS_KEY), known_groups=known_groups)
 
     raw = meta.get(VARIANTS_KEY)
     entries: List[Dict[str, Any]] = [e for e in raw if isinstance(e, dict)] \
@@ -140,7 +136,7 @@ def move_fields_to_variants(meta: Dict[str, Any]) -> bool:
         if offset is not None \
                 and _coerce_ground_offset_m(entry.get(GROUND_OFFSET_KEY)) is None:
             entry[GROUND_OFFSET_KEY] = offset
-        if markers and not sanitize_markers(entry.get(MARKERS_KEY)):
+        if markers and not sanitize_markers(entry.get(MARKERS_KEY), known_groups=known_groups):
             entry[MARKERS_KEY] = [dict(m) for m in markers]
 
     meta[VARIANTS_KEY] = entries
@@ -175,27 +171,6 @@ def _write_normalized(prop_id: str, meta: Dict[str, Any]) -> bool:
                        prop_id, e)
         return False
     return True
-
-
-def normalize_prop_sidecar(prop_id: str) -> bool:
-    """Read ONE prop's sidecar, move the fields, bring the marker place types
-    into the current vocabulary and write it back. True when the file changed.
-
-    The INGEST normaliser: the content-pack import installs whole prop
-    directories long after both boot migrations ran, so both one-way
-    transforms are applied here, in the same order boot applies them — the
-    field move puts the record-level markers onto the variants, the place-type
-    rename then reaches them at their new address.
-    """
-    from app.core.props import read_sidecar
-    meta = read_sidecar(prop_id)
-    if not meta:
-        return False
-    moved = move_fields_to_variants(meta)
-    renamed = _rename_sidecar_place_groups(meta)
-    if not moved and not renamed:
-        return False
-    return _write_normalized(prop_id, meta)
 
 
 def move_prop_fields() -> Dict[str, int]:

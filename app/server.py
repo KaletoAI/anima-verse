@@ -359,6 +359,20 @@ async def lifespan(app: FastAPI):
     except Exception as _pge:
         logger.warning("place group migration failed: %s", _pge)
 
+    # Pre-activation inventory ONLY. The author schema and executor cut over
+    # together; an intermediate server must not silently activate migrated data.
+    try:
+        from app.core.prop_action_migration import migrate_actions
+        action_report = migrate_actions(dry_run=True)
+        for row in action_report["props"]:
+            if row["changed"] or row["repair_required"]:
+                logger.info("Prop action pre-activation report: %s",
+                            {key: value for key, value in row.items() if key != "document"})
+        for issue in action_report["issues"]:
+            logger.warning("Prop action pre-activation issue: %s", issue)
+    except Exception as error:
+        logger.warning("Prop action inventory failed; no activation: %s", error)
+
     # Picture areas, the door-leaf box and the orientation fix belong to the
     # MODEL FILE now (spec-bild-props-v2.md E1, ruling V0, 2026-08-28): every
     # variant is its own generation with its own axes. The legacy prop-level
