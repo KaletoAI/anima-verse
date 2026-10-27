@@ -174,6 +174,8 @@ export interface PlacedPropRef {
   roomId: string;
   anchor: [number, number];
   object: THREE.Object3D | null;
+  placementId?: string;
+  variantUid?: string;
 }
 
 /**
@@ -208,7 +210,10 @@ export function pickableProps(props: PlacedPropRef[],
   if (!entries) return out;
   const free = new Map<string, number[]>();
   for (const offer of offers) {
-    if (offer.free > 0 && offer.free_slots.length) free.set(offer.id, offer.free_slots);
+    if (offer.prop_actions?.length) {
+      const entry = entries.get(offer.id);
+      if (entry) free.set(offer.id, entry.slots.map((_, i) => i));
+    } else if (offer.free > 0 && offer.free_slots.length) free.set(offer.id, offer.free_slots);
   }
   if (!free.size) return out;
   for (const prop of props) {
@@ -220,6 +225,7 @@ export function pickableProps(props: PlacedPropRef[],
         if (!entry.diorama) continue;
       } else {
         if (!entry.anchor) continue;
+        if (entry.placementId && (entry.placementId !== prop.placementId || entry.variantUid !== prop.variantUid)) continue;
         if (entry.anchor[0] !== prop.anchor[0] || entry.anchor[1] !== prop.anchor[1]) continue;
       }
       const slots = free.get(id);

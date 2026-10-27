@@ -15,29 +15,35 @@ import * as bus from './bus';
 import type { HudGameState, HudUiState, HudBoot, HudGameActions, HudUiActions, HudRect } from './bus';
 import type { MinimapState } from '../game/minimap';
 import type { PerfStats } from '../game/perfstats';
+import { onPropActionChanged, notifyPropActionChanged, setPropActionPreparation } from '@anima/player-ui/propActions';
 
 /** Protocol history — both hosts must speak the SAME number, a message with
  *  another `v` is dropped with a warning (no negotiation, no fallback reader):
  *  - v1: the first wire (native spike S4).
  *  - v2 (Task 26d): game action `applyGraphicsPrefs(prefs: GraphicsPrefs)`,
- *    the menu's Graphics tab. No other message changed shape. */
-export const HUD_BRIDGE_VERSION = 2;
+ *    the menu's Graphics tab. No other message changed shape.
+ *  - v3: exact semantic prop-action commands and mutation invalidation. */
+export const HUD_BRIDGE_VERSION = 3;
 type V = typeof HUD_BRIDGE_VERSION;
 export type ToHud =
   | { v: V; kind: 'state'; patch: Partial<HudGameState> }
   | { v: V; kind: 'minimap'; value: MinimapState | null }
   | { v: V; kind: 'perf'; value: PerfStats | null }
   | { v: V; kind: 'boot'; value: HudBoot }
+  | { v: V; kind: 'prop-actions-changed'; request_id?: string }
+  | { v: V; kind: 'prop-action-prepared'; request_id: string; error?: string }
   | { v: V; kind: 'ui'; name: keyof HudUiActions; args: unknown[] };
 export type FromHud =
   | { v: V; kind: 'state'; patch: Partial<HudGameState> }
   | { v: V; kind: 'action'; name: keyof HudGameActions; args: unknown[] }
+  | { v: V; kind: 'prop-actions-changed'; request_id?: string }
+  | { v: V; kind: 'prop-action-prepare'; request_id: string }
   | { v: V; kind: 'hud'; patch: Partial<HudUiState> };
 export interface BridgeTransport {
   send(msg: ToHud | FromHud): void;
   onMessage(fn: (msg: unknown) => void): () => void;
 }
-const gameNames = ['infoAction', 'closeInfo', 'closeOpenView', 'pickPlacePose', 'clearSelection', 'setVolumes', 'speak', 'stopSpeech', 'markResume', 'zoomTo', 'sayBubble',
+const gameNames = ['infoAction', 'closeInfo', 'closeOpenView', 'pickPropAction', 'pickRoomPose', 'closePlaceMenu', 'respondPropAction', 'cancelPropAction', 'clearSelection', 'setVolumes', 'speak', 'stopSpeech', 'markResume', 'zoomTo', 'sayBubble',
   'enterEmbodied', 'takeControl', 'exitEmbodied', 'rideElevator', 'rideStairs',
   'enterLocation', 'backToTitle', 'setShowAll', 'applyAudioPrefs', 'applyScatterPrefs',
   'applyGraphicsPrefs', 'setChatBox'] as const satisfies readonly (keyof HudGameActions)[];
@@ -102,6 +108,26 @@ function receiveState(patch: Partial<HudGameState>, fields: readonly (keyof HudG
 /** HUD endpoint: local writers publish independently of incoming scene state. */
 export function connectHudSide(t: BridgeTransport): () => void {
   const restore = senders(bus.gameActions, gameNames, (name, args) => t.send({ v: HUD_BRIDGE_VERSION, kind: 'action', name, args }));
+  const pendingPreparations = new Map<string, {
+    resolve: () => void; reject: (error: Error) => void; timer: number;
+  }>();
+  const offPreparation = setPropActionPreparation(request_id => new Promise<void>((resolve, rejectPreparation) => {
+    const timer = window.setTimeout(() => {
+      pendingPreparations.delete(request_id);
+      rejectPreparation(new Error('Prop action preparation timed out'));
+    }, 10_000);
+    pendingPreparations.set(request_id, { resolve, reject: rejectPreparation, timer });
+    try { t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-action-prepare', request_id }); }
+    catch (error) {
+      window.clearTimeout(timer);
+      pendingPreparations.delete(request_id);
+      rejectPreparation(error);
+    }
+  }));
+  let receivingPropActionChange = false;
+  const offPropActionChange = onPropActionChanged(request_id => {
+    if (!receivingPropActionChange) t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-actions-changed', ...(request_id === undefined ? {} : { request_id }) });
+  });
   const publishState = statePublisher(t, bus.HUD_OWNED_FIELDS);
   let previousUi = '';
   const publish = (force = false) => {
@@ -128,23 +154,70 @@ export function connectHudSide(t: BridgeTransport): () => void {
       case 'perf': bus.setPerfStats(msg.value); break;
       case 'boot': bus.setBoot(msg.value); break;
       case 'ui': if (!invoke(bus.uiActions, uiNames, msg.name, msg.args)) reject(msg); break;
+      case 'prop-action-prepared': {
+        if (typeof msg.request_id !== 'string' || (msg.error !== undefined && typeof msg.error !== 'string')) {
+          reject(msg); break;
+        }
+        const pending = pendingPreparations.get(msg.request_id);
+        if (!pending) break;
+        pendingPreparations.delete(msg.request_id);
+        window.clearTimeout(pending.timer);
+        if (msg.error !== undefined) pending.reject(new Error(msg.error));
+        else pending.resolve();
+        break;
+      }
+      case 'prop-actions-changed':
+        if (msg.request_id !== undefined && typeof msg.request_id !== 'string') { reject(msg); break; }
+        receivingPropActionChange = true;
+        try { notifyPropActionChanged(msg.request_id); } finally { receivingPropActionChange = false; }
+        break;
       default: reject(msg);
     }
   });
   const unsubscribe = bus.subscribeHudUiState(() => publish());
   const unsubscribeState = bus.subscribeGameState(() => publishState());
   publish(); publishState();
-  return () => { off(); unsubscribe(); unsubscribeState(); restore(); };
+  return () => {
+    off(); offPreparation(); offPropActionChange(); unsubscribe(); unsubscribeState(); restore();
+    for (const pending of pendingPreparations.values()) {
+      window.clearTimeout(pending.timer);
+      pending.reject(new Error('HUD bridge disconnected during prop action preparation'));
+    }
+    pendingPreparations.clear();
+  };
 }
 /** Scene endpoint: HUD patches update the local bus used by scene handlers. */
 export function connectSceneSide(t: BridgeTransport): () => void {
   const restore = senders(bus.uiActions, uiNames, (name, args) => t.send({ v: HUD_BRIDGE_VERSION, kind: 'ui', name, args }));
+  let receivingPropActionChange = false;
+  const offPropActionChange = onPropActionChanged(request_id => {
+    if (!receivingPropActionChange) t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-actions-changed', ...(request_id === undefined ? {} : { request_id }) });
+  });
   const off = t.onMessage(msg => {
     if (!valid(msg)) return reject(msg);
     switch (msg.kind) {
       case 'state': receiveState(msg.patch, bus.HUD_OWNED_FIELDS); break;
       case 'action': if (!invoke(bus.gameActions, gameNames, msg.name, msg.args)) reject(msg); break;
       case 'hud': bus.setHudUiState(msg.patch); break;
+      case 'prop-action-prepare':
+        if (typeof msg.request_id !== 'string') { reject(msg); break; }
+        void (async () => {
+          try {
+            const prepare = bus.gameActions.preparePropAction;
+            if (!prepare) throw new Error('Prop action preparation unavailable');
+            await prepare(msg.request_id);
+            t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-action-prepared', request_id: msg.request_id });
+          } catch (error) {
+            t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-action-prepared', request_id: msg.request_id,
+              error: error instanceof Error ? error.message : String(error) });
+          }
+        })();
+        break;
+      case 'prop-actions-changed':
+        if (msg.request_id !== undefined && typeof msg.request_id !== 'string') { reject(msg); break; }
+        receivingPropActionChange = true;
+        try { notifyPropActionChanged(msg.request_id); } finally { receivingPropActionChange = false; }
+        break;
       default: reject(msg);
     }
   });
@@ -156,7 +229,7 @@ export function connectSceneSide(t: BridgeTransport): () => void {
     [bus.subscribeBoot, () => t.send({ v: HUD_BRIDGE_VERSION, kind: 'boot', value: bus.getBoot() })],
   ] as const;
   const unsubscribes = stores.map(([subscribe, publish]) => { const unsubscribe = subscribe(publish); publish(); return unsubscribe; });
-  return () => { off(); unsubscribes.forEach(fn => fn()); restore(); };
+  return () => { off(); offPropActionChange(); unsubscribes.forEach(fn => fn()); restore(); };
 }
 /** Pin both origin and source; other same-origin frames are not this peer. */
 export function postMessageTransport(target: Window, origin: string): BridgeTransport {

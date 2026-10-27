@@ -159,6 +159,8 @@ public partial class Main : Node3D
                 Slots = () => builder.Slots,
                 CamDist = () => _camera is { } c && IsInstanceValid(c) ? c.Distance : FigureManager.DefaultCamDist,
             };
+            _figures.MotionUnavailable += message =>
+                _hud?.SendUi("toast", JsonValue.Create(message), JsonValue.Create(true));
             world.AddChild(_figures);
             var tags = _tags = new NameTags(_figures, () => Time.GetTicksMsec()) { CamDist = () => _camera?.Distance ?? 0 };
             _labelOverlay.Sources.Add(tags.Visible);
@@ -168,6 +170,7 @@ public partial class Main : Node3D
                 // applyWorldMap → updatePins(map), every poll; npcs.update → the tags' texts; the place labels follow.
                 if (_pins is not null && IsInstanceValid(_pins)) _pins.Update(polled, PlaceOf);
                 _avatarRoom = AvatarRoomOf(polled);
+                if (_menuPlaceId is not null) PublishPlaceMenu();
                 tags.Apply(polled);
                 SyncPlaceLabels();
                 TakeBackdrop(world, polled);
@@ -176,6 +179,7 @@ public partial class Main : Node3D
             // The boot's own map places the first figures (main.ts npcs.update(firstMap)); the poll takes over.
             _figures.ApplyPolled(builder.FirstMap!.Value);
             StartSync();
+            if (_api is not null) await FetchActionOffersAsync();
             // main.ts `setInterval(takeGameHour, 60_000)`: the clock is re-read from the latest polled map.
             var clock = new Godot.Timer { Name = "GameHour", WaitTime = GameHourIntervalS, Autostart = true };
             clock.Timeout += () => TakeGameHour(_figures?.LatestMap ?? builder.FirstMap!.Value);

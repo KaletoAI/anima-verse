@@ -28,6 +28,8 @@ import { ScenesRecap } from './ScenesRecap'
 import { useQueue } from './useQueue'
 import { useLightbox } from './Lightbox'
 import { useEnlarge } from './ZoomButton'
+import { PropActionsPanel } from './PropActionsPanel'
+import { onPropActionChanged } from './propActions'
 
 export type { SceneLine }
 
@@ -253,6 +255,7 @@ function resetDraft(avatar: string) {
 export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, onEnterRoom,
   photoDialog, highlightedId, onRowHover, transcriptAside }: ScenePanelProps) {
   const { t } = useI18n()
+  useEffect(() => onPropActionChanged(() => { void refreshScene() }), [refreshScene])
   // Different avatar than the cached draft (incl. the '' of a fresh host
   // mount) → drop the cache BEFORE the initializers below read it.
   if (draft.avatar !== avatar) resetDraft(avatar)
@@ -559,6 +562,8 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
             </div>
           )
           : transcript}
+
+        {data?.avatar ? <PropActionsPanel /> : null}
 
         {(data?.follow_suggestions?.length ?? 0) > 0 && (
           <div style={{

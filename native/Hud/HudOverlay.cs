@@ -100,6 +100,8 @@ public partial class HudOverlay : CanvasLayer
 
     /// <summary>The HUD page (<c>hud.html</c>) finished loading — the handoff's load or a reload (Main sets and clears it).</summary>
     public Action? PageLoaded { get; set; }
+    public Action<string?>? PropActionsChanged { get; set; }
+    public Action<string>? PropActionPrepare { get; set; }
 
     /// <summary>
     /// The overlay, created once per process; null when gdCEF is not linked
@@ -367,6 +369,10 @@ public partial class HudOverlay : CanvasLayer
     }
 
     public void SendUi(string name, params JsonNode?[] args) => Send(HudProtocol.Ui(name, args));
+    public void NotifyPropActionsChanged() => Send(HudProtocol.PropActionsChanged());
+    public void SendPropActionPrepared(string requestId, string? error = null) => Send(HudProtocol.PropActionPrepared(requestId, error));
+    public Vector2 WindowToCss(Vector2 point)
+        => (point - (_rect?.GlobalPosition ?? Vector2.Zero)) * (float)(_cef is not null && _rect is not null ? CssPerWindowPx : 1);
 
     /// <summary>The performance readout (<c>perf</c> message); only while the HUD's <c>perfOn</c> is set (the caller's rule).</summary>
     public void SendPerf(JsonObject? value) => Send(HudProtocol.Perf(value));
@@ -407,6 +413,12 @@ public partial class HudOverlay : CanvasLayer
         }
         switch (msg.Kind)
         {
+            case "prop-actions-changed":
+                PropActionsChanged?.Invoke(msg.RequestId);
+                break;
+            case "prop-action-prepare":
+                PropActionPrepare?.Invoke(msg.RequestId!);
+                break;
             case "hud":
                 Ui.Apply(msg.Patch!);
                 break;

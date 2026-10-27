@@ -2650,24 +2650,26 @@ Fog-Tore bereits durchgelassen haben (Befund Steinbank 2026-08-31: das Gate
 nahm jedem NPC in der Spielersicht den Platz, der Client fiel auf seine
 Sitz-Heuristik zurück). Das SSE-Ereignis `activity_changed` trägt dasselbe Profilfeld
 `place` (`{id, slot, room_id}` oder `null`) neben `activity`/`animation`; der
-Avatar setzt über `POST /play/self/activity` (`{"activity": ""}` = Pose und
-Platz löschen, `{"place_id", "pose"}` = angeklickter Platz — 400 Pose passt
-nicht zur Gruppe, 404 kein solcher Platz im Raum, 409 belegt). Was er anklicken
-kann, sagt `GET /play/places` (Task 13): die Plätze seines aktuellen Raums als
-`{room_id, places: [{id, label, group, capacity, free, free_slots, poses: [{key,
-label}]}]}` — `free_slots` indiziert die `slots[]` des Szenen-Payloads, der
-Avatar selbst zählt nicht als Belegung (sein eigener Platz bleibt mit einer
-anderen Pose der Gruppe wählbar), `poses` sind die SOLO-Posen der Gruppe,
-Default zuerst. Der 3D-Client macht daraus zwei Klickziele (Beschluss
-2026-08-28, `placeGlyphs.ts`): ein Platz AUF einem Prop wird am **Prop-Mesh**
-selbst angeklickt — es leuchtet unter dem Zeiger auf, der Cursor wird zum
-Zeigefinger, und der Treffpunkt entscheidet, welchen seiner Plätze das
-Posen-Menü anbietet (der mit dem nächsten freien Slot) —, während ein Platz
-OHNE Prop (`source: "room"`) weiterhin je freiem Slot einen flachen Ring in
-Gruppenfarbe bekommt. Reihenfolge des Klicks: Figur → Prop → Ring → Boden.
-Verbindung Prop-Mesh ↔ Marker ist der Platzierungs-Anker (`markers[].anchor`
-== `models[].anchor`); die Auswahl selbst ist rein
-(`placement.pickablePlaceFor`, `client3d/scripts/smoke_place_lift.mjs` [2]).
+Avatar setzt freie Körperposen und **raumgebundene Marker** über
+`POST /play/self/activity` (`{"activity": ""}` = Pose/Platz löschen und echt
+aufwachen; `{"place_id", "pose"}` = ausdrücklich gewählter Raum-Marker).
+Ein Prop-Marker wird hier mit `409 prop_action_required` abgelehnt.
+`GET /play/places` liefert weiterhin Raum-Marker als
+`{room_id, places: [{id,label,group,capacity,free,free_slots,poses:[{key,label}]}]}`.
+`free_slots` indiziert die Szenen-Slots; freie Körperposen bleiben unabhängig
+von Möbeln zulässig.
+Prop-Einträge können darin weiterhin Slot-Geometrie tragen, haben aber eine
+leere `poses`-Liste; dies ist kein alternatives Möbel-Aktionsangebot.
+
+**Möbel werden ausschließlich über semantische Angebote gewählt:**
+`GET /play/prop-actions` liefert die exakte Platzierungs-/Variantenidentität,
+Definitionsrevision, Aktion, Partnerauswahl und aktuelle Sperrgründe. Der
+Klick auf ein Prop-Mesh öffnet dieses Aktionsmenü, nicht eine aus der
+Markergruppe abgeleitete Posenliste. Gesperrte Angebote bleiben mit Grund
+sichtbar. `pickPropAction(actionId,target,revision,partner?)` fordert den
+normalen Core-Executor an; eine erfolgreiche Anfrage bedeutet gegebenenfalls
+eine offene Zustimmung oder Anlauf, **nicht** sofortige Platznahme.
+Raum-Marker verwenden getrennt `pickRoomPose(placeId,poseKey)`.
 
 **Renderer.** Figur-Root = `anchor + R_y(yaw)·clipRoot(t)` mit der three.js-
 Y-Drehung (`x' = x·cos + z·sin`, `z' = −x·sin + z·cos`); `clipRoot(t)` ist die
@@ -7812,10 +7814,11 @@ Its segment is checked against the room, doors and unrelated furniture; only
 the actual entered placement can be exempted. Missing/mismatched/blocked
 representation yields `missing_entry_transition`, `entry_transition_mismatch`
 or `entry_transition_blocked`, not an invented clip or a position fallback.
-During entry the persisted figure stays at floor access and its
-`prop_action_entry` contains execution ID, clip kind, game duration, pose,
-access and anchor for the later client cutover. Only after this entry interval
-does the Core bind the exact slot and authoritative body position.
+During entry the persisted figure stays at floor access. Its private profile
+`prop_action_entry` retains execution ownership, while the public worldmap
+projects only the sanitized visible motion described below. Only after this
+entry interval does Core bind the exact slot and authoritative body position;
+neither client derives semantic success from a clip ending.
 
 `interaction_engine.start_interaction_at(actor,partner,pose_key,
 execution_id=...,plans=...,commit_profiles=...)` is the bounded exact-target
@@ -7986,10 +7989,14 @@ Player routes require the authenticated user's current authorized avatar:
 - `POST /play/prop-actions/cancel`: `{execution_id}`, either real participant only.
 - `GET /play/prop-actions/state`: `{incoming,outgoing,current,recent_results}`.
   Rows contain `execution_id,action_id,definition_revision,label,target,actor,
-  partner,roles,status,phase,reason,can_respond,can_cancel`. Roles distinguish
+  partner,roles,status,phase,phase_label,reason,can_respond,can_cancel`. Roles distinguish
   semantic actor/partner from physical clip/access roles. Incoming is only for
   the exact recipient; outgoing is only the initiator's; current is participant
   only. Own terminal rows/effect results disappear after 30 **system** minutes.
+  `phase` remains the machine ID (which may be a UUID); `phase_label` comes
+  from the immutable admitted combined-action definition, or is empty outside
+  an authored phase. Clients display that label, never an inferred fixed
+  `prepare`/`drink` vocabulary or raw UUID.
   No foreign consent or overland destination is projected. Core equivalent:
   `prop_action_engine.state_for(actor)`. Sync invalidation targets only those
   participants' `self`/`scene` topics, not a public invitation payload.
@@ -8083,6 +8090,64 @@ optional departure `starts_in_s`. No target/execution/partner/foreign room is
 included. Every published segment is checked against the same current room
 geometry. Loss of room, sight, ownership or route returns null; clients must
 delete their cached local path. Existing foreign overland travel stays thinned.
+
+`worldmap.characters[].prop_action_entry` projects the actual measured entry
+while a visible same-room character, including self, still owns its live entry:
+
+```ts
+{
+  kind: string, pose_key: string,
+  access: {x: number, y: number, z: number, yaw: number},
+  anchor: {x: number, y: number, z: number, yaw: number},
+  duration_game_s: number, elapsed_game_s: number,
+  game_seconds_per_real_second: number, height_cm: number, root_offset: number,
+  role: "a" | "b" | null, started_game_s: number
+} | null
+```
+
+Positions are world metres, yaw is compass degrees. `access.y` is floor height;
+`anchor.y` is the final body-root height after the measured pose-root offset.
+`root_offset` is that actual measured offset; the support height is
+`anchor.y + root_offset`. Do not subtract it from `anchor.y` a second time.
+`height_cm` follows Core's actual bridge scaling, including reference-rig height
+when character height is unset. The stable game-time origin is not an execution
+identity. No target IDs, partner, invitation, consent or execution ID is public.
+Actual phase/profile/position/claim ownership and same-room visibility gate
+the projection; activation, cancellation or visibility loss removes it.
+Elapsed game time is projected against the actual clock, with a zero rate while
+frozen. Clients map that fraction onto the measured clip duration, play the
+entry once **at access**, and adopt Core's committed body anchor without a
+second entry transition. Missing clip readiness must be reported, not replaced
+with a fabricated intro or long position correction.
+
+The browser and native hosts use HUD bridge **v3** as a clean cutover.
+Old protocol versions are rejected; no furniture-pose alias remains.
+Besides `pickPropAction`, v3 carries `closePlaceMenu`,
+`pickRoomPose`, `respondPropAction(executionId,accept)` and
+`cancelPropAction(executionId)`. The bidirectional `prop-actions-changed`
+notification invalidates own action state and motion after a mutation attempt
+(success or refusal) without echoing across the iframe boundary. Own incoming/outgoing/
+current/recent state remains session-private; visible NPC motion is not consent.
+
+Before a shared panel sends semantic HTTP, the HUD sends
+`{v:3,kind:"prop-action-prepare",request_id}`. The world host pauses manual
+position publishing, drains its already-sent position write, then acknowledges
+`{v:3,kind:"prop-action-prepared",request_id,error?}`. HTTP waits for the exact
+acknowledgement; preparation errors/timeouts do not execute it. Finally
+`prop-actions-changed` carries the same optional correlation ID, even on refusal,
+so the host can refresh before releasing that barrier. Ordinary lifecycle
+invalidation carries no ID and must not release a different pending mutation.
+This transport correlation is neither a Core execution identity nor a server
+request nonce. Disconnection clears pending HUD waits; preparation has a
+10-second deadline and does not retry. A stale manual position write therefore
+cannot overtake the newly admitted action through either shared-panel client.
+
+Shared hand-derived motion vectors are in
+`shared/test-vectors/prop_action_motion.json`: two room bends, segment paces,
+delayed starts, trimmed polylines, freeze, measured entry phase and fitted hips-Y
+support-height cases (including nonzero marker root offsets). Runtime
+client acceptance is separate from these mathematical/protocol regressions;
+see the Task9 handoff for actual browser/native scenario requirements.
 
 Controller commands (private fixtures only):
 `./.venv/bin/python scripts/smoke_prop_action_api.py` and

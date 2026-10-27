@@ -262,8 +262,8 @@ Polling, push stream, boot stages (Task 10) — the browser's, ported to `Core/S
 - **Boot stages**: the login screen stays up as the loading screen (bar, stage in words, the retry/failed
   line) and fades at `visible`; the HUD gets the same `boot` messages. Native points: world (boot data in,
   retried 1, 2, 4, 8, 15 s), scenes (start-ring recipes fetched), tiles (start ring + world props built),
-  visible (next frame), figures (first map's figures + their models), arrival (immediately after; no
-  embodied take-over yet). `boot stages: world … ms, …` in the log.
+  visible (next frame), figures (first map's figures + their models), arrival (immediately after).
+  `boot stages: world … ms, …` in the log.
 
 Labels and the performance readout (Task 11) — the browser's CSS2D layer as a screen-space overlay
 (`Ui/LabelOverlay.cs`, canvas layer 1, under the HUD; never takes the mouse):
@@ -328,6 +328,43 @@ plaque, and the plaque's "Zoom to" flies to it (4.5 m, no follow); an open chat 
 out of its way (the browser's view shift, as a Godot frustum offset).
 The status line top left reports what was loaded; per-location
 failures are logged to the console (`[native] …`).
+
+### Semantic furniture actions and manual control
+
+The shared Self/Scene/Other-character panels and prop-mesh menu consume
+`/play/prop-actions` and the session-private `/play/prop-actions/state`.
+Enabled and blocked actions retain Core's exact target, revision and partner
+verdict. Requests can mean waiting for consent or approaching, never instant
+placement. Incoming consent, outgoing withdrawal, stop, phase labels, results,
+real sleep and wake use the same shared controls as the browser client.
+Room-marker/free-body poses remain separate; furniture has no pose-selection
+alias or group-based fallback.
+
+“Take control” / `enterEmbodied` selects the avatar and follows its body.
+In this mode W/A/S/D and arrows steer relative to the camera; ordinary overview
+keys retain their camera behavior outside it. The first actual steering input
+awaits cancellation of the exact owned semantic execution and the canonical
+body wake/clear endpoint before taking position ownership. `/play/pos` remains
+the server's movement validator; this is not a second C# rules engine.
+Typing, a movement lock, world freeze and a pending mutation preparation block
+manual steps.
+
+HUD bridge v3 includes a correlated prepare/acknowledge barrier before shared
+panels send semantic HTTP: pending manual position writes drain first. Only the
+matching mutation settlement, or a bounded expired preparation, can release the
+pause after fresh authoritative reads. Normal lifecycle notifications cannot
+release another pending mutation.
+
+Own journeys and visible same-room `local_approach` polylines use segment paces,
+not straight interpolation between poll points. Live
+`prop_action_entry` consumes real elapsed game time, measured root travel/turn,
+height, role and fitted hips-Y support progression at floor access. Its
+`root_offset` is already a world-metre marker offset; `anchor.y` is already
+body-root-corrected. Successful entry hands off once to Core's committed anchor.
+Missing clip/support measurements are reported as unavailable, not replaced by
+a teleport or a second inferred transition. Mathematical/bridge checks do not
+replace actual authenticated native visual/input acceptance.
+
 
 ## Bench
 

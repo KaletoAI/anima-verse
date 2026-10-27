@@ -49,7 +49,10 @@ async function parseJsonOrThrow(res: Response): Promise<unknown> {
   if (res.status === 401) redirectToLogin()
   if (!res.ok) {
     const detail = asRecord(body)?.detail ?? body
-    const msg = typeof detail === 'string' ? detail : `HTTP ${res.status}`
+    const value = asRecord(detail)
+    const msg = typeof detail === 'string' ? detail
+      : typeof value?.message === 'string' ? value.message
+      : typeof value?.reason === 'string' ? value.reason : `HTTP ${res.status}`
     throw new ApiError(res.status, detail, msg)
   }
   // HTML on an OK response is never a real answer — it is a dev server (or a

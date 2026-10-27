@@ -248,6 +248,11 @@ public partial class Main : Node3D
             _hud.Handlers.Clear();
             _hud.PageLoaded = null;
         }
+        if (_hud is not null && IsInstanceValid(_hud))
+        {
+            _hud.PropActionsChanged = null;
+            _hud.PropActionPrepare = null;
+        }
         _api?.Dispose();
     }
 
@@ -256,6 +261,8 @@ public partial class Main : Node3D
         // The sync layer's clock: due timers (trailing polls, stream deadlines and retries, the 120-s location
         // re-sync), then the poll core's 1-s tick.
         _timers.Pump();
+        TickNativeControl(delta);
+        TickPropActionRefresh();
         if (_poll is not null && Time.GetTicksMsec() >= _nextTickMs)
         {
             _nextTickMs += PollSchedule.TickMs;

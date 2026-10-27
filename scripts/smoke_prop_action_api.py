@@ -438,6 +438,38 @@ class ApiContracts(unittest.TestCase):
         with patch.object(A, 'utc_now', return_value=utc_now() + timedelta(minutes=31)):
             self.assertFalse(A.state_for(partner)['recent_results'])
 
+    def test_private_state_resolves_uuid_phases_from_immutable_authored_labels(self):
+        name, target, pid = S.setup_run('combined')
+        phase_ids = ('7dc8ebbc-cc6b-4a07-84b3-e65048dddf54', 'bb9e99c9-571b-4895-a163-9aef1b627d37')
+        phase_labels = ('Preparing tea', 'Enjoying tea')
+        document = F.props.read_sidecar(pid)
+        for phase, ident, label in zip(document['actions'][0]['phases'], phase_ids, phase_labels):
+            phase.update(id=ident, label=label)
+        F.props._write_sidecar(pid, document)
+        target['definition_revision'] = F.props.get_prop(pid)['revision']
+        owner = client(name)
+        requested = owner.post('/play/prop-actions/request', json=payload(target))
+        self.assertEqual(requested.status_code, 200, requested.text)
+        ref = requested.json()['execution_id']
+
+        def current():
+            response = owner.get('/play/prop-actions/state')
+            self.assertEqual(response.status_code, 200, response.text)
+            return next(row for row in response.json()['current'] if row['execution_id'] == ref)
+
+        self.assertEqual(current()['phase_label'], '')
+        S.tick(30)
+        self.assertEqual(current()['phase'], 'entry')
+        self.assertEqual(current()['phase_label'], '')
+        S.tick(2)
+        self.assertEqual((current()['phase'], current()['phase_label']), (phase_ids[0], phase_labels[0]))
+        S.tick(5)
+        self.assertEqual((current()['phase'], current()['phase_label']), (phase_ids[1], phase_labels[1]))
+        # State names the execution's admitted definition, not a later edit.
+        document['actions'][0]['phases'][1]['label'] = 'Changed after admission'
+        F.props._write_sidecar(pid, document)
+        self.assertEqual(current()['phase_label'], phase_labels[1])
+
     def test_admin_checks_are_read_only_and_execution_is_separate_confirmed(self):
         name, partner, target, pid = S.authored_pair()
         admin = client(name, 'admin')
@@ -642,6 +674,204 @@ class ApiContracts(unittest.TestCase):
             F.C.save_character_profile(name, profile)
             S.tick(1)
             self.assertEqual(R.get(next_run['execution_id'])['status'], 'failed')
+
+    def test_worldmap_entry_uses_live_clock_freeze_and_stable_origin_for_self_and_observer(self):
+        from app.core import timeutils
+        clock = [timeutils.utc_now()]
+        with patch.object(timeutils, 'utc_now', side_effect=lambda: clock[0]):
+            try:
+                F.set_game_factor(1)
+                name, target, _ = S.setup_run()
+                observer = F.actor(target['location_id'], at=(2, 5))
+                owner, viewer = client(name), client(observer)
+                requested = owner.post('/play/prop-actions/request', json=payload(target))
+                self.assertEqual(requested.status_code, 200, requested.text)
+                ref = requested.json()['execution_id']
+                clock[0] += timedelta(seconds=30)
+                F.E.advance_all_journeys()
+                A.advance(F.game_time())
+                self.assertEqual(R.get(ref)['phase'], 'entry')
+                origin = F.game_time().total_seconds
+
+                def row(session):
+                    response = session.get('/play/worldmap')
+                    self.assertEqual(response.status_code, 200, response.text)
+                    return next(person for person in response.json()['characters'] if person['name'] == name)
+
+                public = row(viewer)
+                entry = public['prop_action_entry']
+                self.assertEqual(entry, row(owner)['prop_action_entry'])
+                self.assertEqual(set(entry), {'kind', 'pose_key', 'access', 'anchor', 'root_offset',
+                    'duration_game_s', 'elapsed_game_s', 'game_seconds_per_real_second',
+                    'height_cm', 'role', 'started_game_s'})
+                self.assertEqual(entry['kind'], 'run-enter')
+                self.assertEqual(entry['pose_key'], 'sitting')
+                self.assertEqual(entry['access'], dict(x=8, y=0, z=7, yaw=180))
+                self.assertEqual(set(entry['anchor']), {'x', 'y', 'z', 'yaw'})
+                self.assertEqual((entry['anchor']['x'], entry['anchor']['z'], entry['anchor']['yaw']), (8, 5, 0))
+                # The real stool-style half-metre cushion uses the catalog's
+                # measured seat drop: root is .102 m, not floor or surface.
+                self.assertAlmostEqual(entry['root_offset'], .398)
+                self.assertAlmostEqual(entry['anchor']['y'], .102)
+                self.assertAlmostEqual(entry['anchor']['y'] + entry['root_offset'], .5)
+                self.assertEqual(entry['duration_game_s'], 2)
+                self.assertEqual(entry['elapsed_game_s'], 0)
+                self.assertEqual(entry['game_seconds_per_real_second'], 1)
+                self.assertEqual(entry['height_cm'], 170)
+                self.assertIsNone(entry['role'])
+                self.assertEqual(entry['started_game_s'], origin)
+                self.assertIsNone(public['place'])
+                self.assertIsNone(public['local_approach'])
+                self.assertTrue(all(not rows for rows in viewer.get('/play/prop-actions/state').json().values()))
+                self.assertNotIn(ref, json.dumps(entry))
+                for elapsed in (.25, .5):
+                    clock[0] += timedelta(seconds=.25)
+                    polled = row(viewer)['prop_action_entry']
+                    self.assertAlmostEqual(polled['elapsed_game_s'], elapsed)
+                    self.assertEqual(polled['started_game_s'], origin)
+                clock[0] += timedelta(seconds=.5)
+                A.advance(F.game_time())
+                F.W.set_world_frozen(True)
+                frozen = row(viewer)['prop_action_entry']
+                self.assertEqual(frozen['elapsed_game_s'], 1)
+                self.assertEqual(frozen['game_seconds_per_real_second'], 0)
+                clock[0] += timedelta(hours=2)
+                A.advance(F.game_time())
+                self.assertEqual(row(viewer)['prop_action_entry'], frozen)
+                F.W.set_world_frozen(False)
+                F.set_game_factor(3)
+                clock[0] += timedelta(seconds=.25)
+                faster = row(viewer)['prop_action_entry']
+                self.assertAlmostEqual(faster['elapsed_game_s'], 1.75)
+                self.assertEqual(faster['game_seconds_per_real_second'], 3)
+                self.assertEqual(faster['started_game_s'], origin)
+                clock[0] += timedelta(seconds=.25)
+                A.advance(F.game_time())
+                self.assertEqual(R.get(ref)['status'], 'active')
+                self.assertIsNone(row(viewer)['prop_action_entry'])
+                self.assertIsNone(row(owner)['prop_action_entry'])
+                self.assertIsNotNone(row(viewer)['place'])
+            finally:
+                F.W.set_world_frozen(False)
+                F.set_game_factor(0)
+
+    def test_worldmap_entry_withdraws_on_room_profile_claim_and_terminal_ownership_loss(self):
+        name, target, _ = S.setup_run()
+        observer = F.actor(target['location_id'], at=(2, 5))
+        viewer = client(observer)
+        requested = S.request(name, target)
+        ref = requested['execution_id']
+        S.tick(30)
+        saved = F.C.get_character_profile(name)['prop_action_entry']
+
+        def projection():
+            response = viewer.get('/play/worldmap')
+            self.assertEqual(response.status_code, 200, response.text)
+            return next(person for person in response.json()['characters'] if person['name'] == name)['prop_action_entry']
+
+        self.assertIsNotNone(projection())
+        F.C.save_character_current_room(observer, 'adjacent')
+        self.assertIsNone(projection())
+        F.C.save_character_current_room(observer, 'hall')
+        self.assertIsNotNone(projection())
+        run = R.get(ref)
+        run['phase'] = ''
+        with R.transaction() as conn:
+            R.save(conn, run)
+        self.assertIsNone(projection(), 'an entry profile alone is not live entry authority')
+        run['phase'] = 'entry'
+        with R.transaction() as conn:
+            R.save(conn, run)
+        for corrupt in (None, dict(saved, execution_id='not-the-owned-run'),
+                        dict(saved, access=dict(saved['access'], x=1000))):
+            profile = F.C.get_character_profile(name)
+            profile['prop_action_entry'] = corrupt
+            F.C.save_character_profile(name, profile)
+            self.assertIsNone(projection())
+        profile['prop_action_entry'] = saved
+        F.C.save_character_profile(name, profile)
+        self.assertIsNotNone(projection())
+        with R.transaction() as conn:
+            conn.execute('DELETE FROM prop_action_claims WHERE claim_key=?', (R.person_key(name),))
+        self.assertIsNone(projection())
+        A.cancel(name, ref)
+        # A durable stale profile cannot resurrect a cancelled entry.
+        profile = F.C.get_character_profile(name)
+        profile['prop_action_entry'] = saved
+        F.C.save_character_profile(name, profile)
+        self.assertIsNone(projection())
+
+    def test_worldmap_pair_entry_reveals_physical_role_but_no_invitation_or_target_identity(self):
+        name, partner, target, _ = S.authored_pair()
+        for who, gender in ((name, 'female'), (partner, 'male')):
+            profile = F.C.get_character_profile(who)
+            profile['gender'] = gender
+            F.C.save_character_profile(who, profile)
+        path = F.ROOT / 'clips/run-pair.json'
+        meta = json.loads(path.read_text())
+        meta['role_gender'] = {'a': 'male', 'b': 'female'}
+        path.write_text(json.dumps(meta))
+        observer = F.actor(target['location_id'], at=(3, 5))
+        viewer = client(observer)
+        requested = S.request(name, target, partner=partner)
+        ref = requested['execution_id']
+        before = viewer.get('/play/worldmap').json()['characters']
+        self.assertTrue(all(row['prop_action_entry'] is None for row in before))
+        accepted = client(partner).post('/play/prop-actions/respond', json=dict(execution_id=ref, accept=True))
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        S.tick(30)
+        response = viewer.get('/play/worldmap')
+        self.assertEqual(response.status_code, 200, response.text)
+        rows = {row['name']: row for row in response.json()['characters']}
+        self.assertEqual(rows[name]['prop_action_entry']['role'], 'b')
+        self.assertEqual(rows[partner]['prop_action_entry']['role'], 'a')
+        for who, x in ((name, 8.3), (partner, 7.7)):
+            entry = rows[who]['prop_action_entry']
+            self.assertEqual(entry['access']['x'], x)
+            self.assertEqual(entry['anchor']['x'], x)
+            self.assertEqual(entry['height_cm'], 170)
+            self.assertTrue(set(entry) <= {'kind', 'pose_key', 'access', 'anchor', 'root_offset',
+                'duration_game_s', 'elapsed_game_s', 'game_seconds_per_real_second',
+                'height_cm', 'role', 'started_game_s'})
+            self.assertEqual(set(entry['access']), {'x', 'y', 'z', 'yaw'})
+            self.assertEqual(set(entry['anchor']), {'x', 'y', 'z', 'yaw'})
+            serialized = json.dumps(entry)
+            for private in (ref, name, partner, target['location_id'], target['placement_id'], target['variant_uid']):
+                self.assertNotIn(private, serialized)
+        self.assertTrue(all(not rows for rows in viewer.get('/play/prop-actions/state').json().values()))
+        S.tick(2)
+        rows = {row['name']: row for row in viewer.get('/play/worldmap').json()['characters']}
+        self.assertIsNone(rows[name]['prop_action_entry'])
+        self.assertIsNone(rows[partner]['prop_action_entry'])
+
+    def test_worldmap_entry_origin_and_progress_survive_process_reanchor(self):
+        name, target, _ = S.setup_run()
+        observer = F.actor(target['location_id'], at=(2, 5))
+        viewer = client(observer)
+        ref = S.request(name, target)['execution_id']
+        S.tick(30)
+        S.tick(1)
+
+        def projection():
+            response = viewer.get('/play/worldmap')
+            self.assertEqual(response.status_code, 200, response.text)
+            return next(row for row in response.json()['characters'] if row['name'] == name)['prop_action_entry']
+
+        before = projection()
+        self.assertEqual(before['elapsed_game_s'], 1)
+        with patch.object(A, '_PROCESS', 'restarted-entry-owner'):
+            F.set_game_time(F.game_time() + S.GameDuration.of(hours=4))
+            paused = projection()
+            self.assertEqual(paused['started_game_s'], before['started_game_s'])
+            self.assertEqual(paused['elapsed_game_s'], 1)
+            self.assertEqual(paused['game_seconds_per_real_second'], 0)
+            A.advance(F.game_time())
+            resumed = projection()
+            self.assertEqual(resumed['started_game_s'], before['started_game_s'])
+            self.assertEqual(resumed['elapsed_game_s'], 1)
+            S.tick(1)
+            self.assertEqual(R.get(ref)['status'], 'active')
+            self.assertIsNone(projection())
 
     def test_local_motion_projection_withdraws_without_foreign_route_or_consent(self):
         from app.core.world_ops import _local_prop_approach

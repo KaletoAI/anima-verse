@@ -1,12 +1,8 @@
 /** HUD bridge: independent realms, both directions and protocol rejection. */
 import assert from 'node:assert/strict';
-import { build } from 'esbuild';
-async function realm(id) {
-  const result = await build({ stdin: { contents: "export * from './bus'; export * from './bridge';", resolveDir: 'client3d/src/hud' }, bundle: true, write: false, format: 'esm', platform: 'browser' });
-  return import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text + `\n// ${id}`).toString('base64'));
-}
-const scene = await realm('scene');
-const hud = await realm('hud');
+import { loadHudRealm } from './load_hud_realm.mjs';
+const scene = loadHudRealm();
+const hud = loadHudRealm();
 assert.notEqual(scene.gameActions, hud.gameActions);
 scene.setGameState({ talkTarget: { name: 'initial snapshot', dist: 1 } });
 hud.setGameState({ partyLeader: 'HUD initial' });
@@ -35,7 +31,7 @@ hudMessages.length = 0;
 hud.setGameState({ groundRoomId: 'g1' });
 assert.equal(hudMessages.filter(msg => msg.kind === 'state').length, 0);
 hud.setGameState({ groundRoomId: 'g2' });
-assert.deepEqual(hudMessages.filter(msg => msg.kind === 'state'), [{ v: 2, kind: 'state', patch: { groundRoomId: 'g2' } }]);
+assert.deepEqual(hudMessages.filter(msg => msg.kind === 'state'), [{ v: 3, kind: 'state', patch: { groundRoomId: 'g2' } }]);
 const info = { id: 'loc1', name: 'Home', description: '', rooms: [], present: [], events: [], view: { openable: true, open: false } };
 scene.setGameState({ info });
 assert.deepEqual(hud.getGameState().info, info);
@@ -49,13 +45,80 @@ hud.gameActions.clearSelection();
 assert.deepEqual(cleared, [[]]);
 hud.setHudUiState({ perfOn: true });
 assert.equal(scene.getHudUiState().perfOn, true);
-// Protocol v2 (Task 26d): the Graphics tab's action crosses with its prefs object intact.
-assert.equal(scene.HUD_BRIDGE_VERSION, 2);
+// Protocol v3 preserves unrelated graphics arguments across the clean cutover.
+assert.equal(scene.HUD_BRIDGE_VERSION, 3);
 const graphics = [];
 scene.gameActions.applyGraphicsPrefs = (...args) => graphics.push(args);
 hud.gameActions.applyGraphicsPrefs({ antiAliasing: '4x', shadows: false });
 assert.deepEqual(graphics, [[{ antiAliasing: '4x', shadows: false }]]);
-assert.deepEqual(hudMessages.at(-1), { v: 2, kind: 'action', name: 'applyGraphicsPrefs', args: [{ antiAliasing: '4x', shadows: false }] });
+assert.deepEqual(hudMessages.at(-1), { v: 3, kind: 'action', name: 'applyGraphicsPrefs', args: [{ antiAliasing: '4x', shadows: false }] });
+const exactTarget = { location_id: 'home', room_id: 'workshop', placement_id: 'coffee-2', variant_uid: 'ecfa003d-309a-4ce2-8c9b-29944ddae093' };
+const semanticCalls = [];
+for (const name of ['pickPropAction', 'respondPropAction', 'cancelPropAction', 'pickRoomPose', 'closePlaceMenu']) {
+  scene.gameActions[name] = (...args) => semanticCalls.push({ name, args });
+}
+hud.gameActions.pickPropAction('share-coffee', exactTarget, 'revision-2', 'Ben');
+hud.gameActions.respondPropAction('exact-question', false);
+hud.gameActions.cancelPropAction('exact-owned-run');
+hud.gameActions.pickRoomPose('room-marker', 'sitting');
+hud.gameActions.closePlaceMenu();
+assert.deepEqual(semanticCalls, [
+  { name: 'pickPropAction', args: ['share-coffee', exactTarget, 'revision-2', 'Ben'] },
+  { name: 'respondPropAction', args: ['exact-question', false] },
+  { name: 'cancelPropAction', args: ['exact-owned-run'] },
+  { name: 'pickRoomPose', args: ['room-marker', 'sitting'] },
+  { name: 'closePlaceMenu', args: [] },
+]);
+assert.equal(hud.gameActions.pickPlacePose, undefined, 'removed furniture pose alias is not installed');
+const sceneSemantic = scene.load('packages/player-ui/src/propActions.ts');
+const hudSemantic = hud.load('packages/player-ui/src/propActions.ts');
+let sceneInvalidations = 0;
+let hudInvalidations = 0;
+const offSceneInvalidation = sceneSemantic.onPropActionChanged(() => sceneInvalidations++);
+const offHudInvalidation = hudSemantic.onPropActionChanged(() => hudInvalidations++);
+hudSemantic.notifyPropActionChanged();
+sceneSemantic.notifyPropActionChanged();
+assert.equal(sceneInvalidations, 2, 'both local and remote mutations refresh the scene exactly once');
+assert.equal(hudInvalidations, 2, 'both local and remote mutations refresh the HUD exactly once');
+assert.equal(sceneMessages.filter(msg => msg.kind === 'prop-actions-changed').length, 1, 'scene notification does not echo');
+assert.equal(hudMessages.filter(msg => msg.kind === 'prop-actions-changed').length, 1, 'HUD notification does not echo');
+offSceneInvalidation();
+offHudInvalidation();
+// The shared panel's HTTP request must wait for the real host position drain.
+let drainRelease;
+let preparedId;
+const drain = new Promise(resolve => { drainRelease = resolve; });
+scene.gameActions.preparePropAction = async requestId => { preparedId = requestId; await drain; };
+const originalFetch = globalThis.fetch;
+const sentRequests = [];
+globalThis.fetch = async (path, init) => {
+  sentRequests.push({ path, body: JSON.parse(init.body) });
+  return new Response(JSON.stringify({ execution_id: 'pending-run', status: 'awaiting_consent', reason: '' }), { status: 200 });
+};
+const finishedIds = [];
+const offFinished = sceneSemantic.onPropActionChanged(id => finishedIds.push(id));
+try {
+  const mutation = hudSemantic.requestPropAction('share-coffee', exactTarget, 'revision-2', 'Ben');
+  await Promise.resolve();
+  assert.equal(typeof preparedId, 'string');
+  assert.equal(sentRequests.length, 0, 'HTTP cannot overtake the host position write');
+  sceneSemantic.notifyPropActionChanged();
+  assert.equal(sentRequests.length, 0, 'an uncorrelated lifecycle change cannot bypass preparation');
+  drainRelease();
+  await mutation;
+  assert.deepEqual(sentRequests, [{ path: '/play/prop-actions/request',
+    body: { action_id: 'share-coffee', target: exactTarget, revision: 'revision-2', partner: 'Ben' } }]);
+  assert.equal(finishedIds.at(-1), preparedId, 'settlement preserves the exact mutation barrier ID');
+  assert.equal(sceneMessages.find(msg => msg.kind === 'prop-action-prepared').request_id, preparedId);
+  scene.gameActions.preparePropAction = async () => { throw new Error('position write refused'); };
+  await assert.rejects(hudSemantic.requestPropAction('share-coffee', exactTarget, 'revision-2', 'Ben'), /position write refused/);
+  assert.equal(sentRequests.length, 1, 'failed host preparation never sends HTTP');
+  assert.equal(finishedIds.at(-1), hudMessages.filter(msg => msg.kind === 'prop-action-prepare').at(-1).request_id,
+    'failed preparation also releases only its correlated barrier');
+} finally {
+  offFinished();
+  globalThis.fetch = originalFetch;
+}
 let received = [];
 scene.gameActions.zoomTo = (...args) => received.push(args);
 hud.gameActions.zoomTo('Kira');
@@ -78,12 +141,12 @@ const warnings = [];
 const warn = console.warn;
 console.warn = (...args) => warnings.push(args);
 try {
-  b.send({ v: 1, kind: 'action', name: 'zoomTo', args: ['wrong'] });   // a v1 peer is refused
-  b.send({ v: 2, kind: 'action', name: 'nope', args: [] });
-  b.send({ v: 2, kind: 'action', name: 'toString', args: [] });
-  a.send({ v: 2, kind: 'unknown' });
-  a.send({ v: 2, kind: 'state', patch: { groundRoomId: 'x', partyLeader: 'wrong', movementLocked: true, elevatorOpen: true } });
-  b.send({ v: 2, kind: 'state', patch: { mode: 'overview', selected: null, lockedLoc: 'valid HUD field' } });
+  b.send({ v: 2, kind: 'action', name: 'zoomTo', args: ['wrong'] });   // the replaced v2 peer is refused
+  b.send({ v: 3, kind: 'action', name: 'nope', args: [] });
+  b.send({ v: 3, kind: 'action', name: 'toString', args: [] });
+  a.send({ v: 3, kind: 'unknown' });
+  a.send({ v: 3, kind: 'state', patch: { groundRoomId: 'x', partyLeader: 'wrong', movementLocked: true, elevatorOpen: true } });
+  b.send({ v: 3, kind: 'state', patch: { mode: 'overview', selected: null, lockedLoc: 'valid HUD field' } });
 } finally { console.warn = warn; }
 assert.equal(warnings.length, 6);
 assert.equal(hud.getGameState().groundRoomId, 'g2');
@@ -107,7 +170,7 @@ const target = { postMessage: (...args) => sent.push(args) };
 const transport = scene.postMessageTransport(target, 'https://hud.test');
 let deliveries = 0;
 const off = transport.onMessage(() => deliveries++);
-const message = { v: 2, kind: 'hud', patch: {} };
+const message = { v: 3, kind: 'hud', patch: {} };
 transport.send(message);
 assert.deepEqual(sent, [[message, 'https://hud.test']]);
 for (const fn of handlers) {
@@ -123,4 +186,4 @@ assert.equal(hud.gameActions.zoomTo, undefined);
 assert.equal(scene.uiActions.openChat, undefined);
 scene.setGameState({ mode: 'overview' });
 assert.equal(hud.getGameState().mode, 'embodied');
-console.log('hud bridge: PASS (independent realms, owned-field deltas, ownership rejection, clearSelection, perfOn, v2 applyGraphicsPrefs, UI message counts, transport, cleanup)');
+console.log('hud bridge: PASS (independent realms, owned-field deltas, exact semantic target/revision/partner, consent/stop, room markers, transport, cleanup)');

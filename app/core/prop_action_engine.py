@@ -788,7 +788,9 @@ def _begin_entry(run):
             return
         entries[name] = spec
     run["phase"] = "entry"
-    run["data"].update(entries=entries, entry_elapsed=0.0, last_game=game_time().canonical())
+    now = game_time()
+    run["data"].update(entries=entries, entry_elapsed=0.0, last_game=now.canonical(),
+                       entry_started_game_s=now.total_seconds)
     _save(run)
     # Display actual bridge at exact access; no place/body anchor until it ends.
     from app.core.keyed_lock import keyed_lock
@@ -1018,6 +1020,9 @@ def state_for(actor: str) -> dict:
         row = {k: run[k] for k in ("execution_id", "action_id", "definition_revision",
                                   "target", "actor", "partner", "status", "phase", "reason")}
         row.update(label=run["definition"]["name"],
+                   phase_label=(next((phase["label"] for phase in run["definition"]["phases"]
+                                      if phase["id"] == run["phase"]), "")
+                                if run["definition"]["ability"] == "combined" else ""),
                    roles={"actor": run["actor"], **({"partner": run["partner"]} if run["partner"] else {}),
                           "clip": run["data"].get("clip_roles", {}),
                           "access": run["data"].get("access_roles", {})},

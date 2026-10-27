@@ -56,7 +56,10 @@ public sealed class HudUi
 }
 
 /// <summary>A message from the HUD that passed validation.</summary>
-public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, JsonArray? Args);
+public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, JsonArray? Args)
+{
+    public string? RequestId { get; init; }
+}
 
 /// <summary>
 /// Protocol v2 of client3d/src/hud/bridge.ts (<c>HUD_BRIDGE_VERSION</c>), scene side, as pure functions:
@@ -73,12 +76,21 @@ public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, Js
 /// </summary>
 public static class HudProtocol
 {
-    public const int Version = 2;
+    public const int Version = 3;
 
+    public static string PropActionsChanged() => new JsonObject
+        { ["v"] = Version, ["kind"] = "prop-actions-changed" }.ToJsonString();
+    public static string PropActionPrepared(string requestId, string? error = null)
+    {
+        var message = new JsonObject { ["v"] = Version, ["kind"] = "prop-action-prepared", ["request_id"] = requestId };
+        if (error is not null) message["error"] = error;
+        return message.ToJsonString();
+    }
     /// <summary><c>gameNames</c> of bridge.ts — actions HUD → scene.</summary>
     public static readonly string[] GameActions =
     {
-        "infoAction", "closeInfo", "closeOpenView", "pickPlacePose", "clearSelection", "setVolumes", "speak", "stopSpeech",
+        "infoAction", "closeInfo", "closeOpenView", "pickPropAction", "pickRoomPose", "closePlaceMenu",
+        "respondPropAction", "cancelPropAction", "clearSelection", "setVolumes", "speak", "stopSpeech",
         "markResume", "zoomTo", "sayBubble", "enterEmbodied", "takeControl", "exitEmbodied", "rideElevator", "rideStairs",
         "enterLocation", "backToTitle", "setShowAll", "applyAudioPrefs", "applyScatterPrefs", "applyGraphicsPrefs", "setChatBox",
     };
@@ -121,6 +133,13 @@ public static class HudProtocol
         var kind = msg["kind"] is JsonValue k && k.GetValueKind() == JsonValueKind.String ? k.GetValue<string>() : "";
         switch (kind)
         {
+            case "prop-actions-changed":
+                return new HudInbound(kind, null, null, null)
+                    { RequestId = msg["request_id"] is JsonValue changed && changed.TryGetValue<string>(out var changedId) ? changedId : null };
+            case "prop-action-prepare":
+                if (msg["request_id"] is not JsonValue request || !request.TryGetValue<string>(out var requestId)
+                    || string.IsNullOrEmpty(requestId)) { reason = "prepare without request_id"; return null; }
+                return new HudInbound(kind, null, null, null) { RequestId = requestId };
             case "state":
             case "hud":
                 if (msg["patch"] is not JsonObject patch) { reason = $"{kind} without an object patch"; return null; }

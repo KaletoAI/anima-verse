@@ -1,8 +1,10 @@
 import { useLayoutEffect, useRef } from 'react';
 import { gameActions, type HudGameState } from './bus';
+import { PropActionOffers, useI18n } from '@anima/player-ui';
 
-/** One seat offer; the backdrop owns outside clicks and spends Escape. */
+/** Exact semantic offers or legitimate room-marker poses; no furniture pose bridge. */
 export function PlaceMenu({ menu }: { menu: NonNullable<HudGameState['placeMenu']> }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const fit = () => {
@@ -18,7 +20,7 @@ export function PlaceMenu({ menu }: { menu: NonNullable<HudGameState['placeMenu'
       if (event.key !== 'Escape') return;
       event.stopImmediatePropagation();
       event.preventDefault();
-      gameActions.pickPlacePose?.(null);
+      gameActions.closePlaceMenu?.();
     };
     fit();
     // A menu opened by the parent canvas must receive keys in the HUD realm.
@@ -31,13 +33,19 @@ export function PlaceMenu({ menu }: { menu: NonNullable<HudGameState['placeMenu'
     };
   }, [menu]);
   return <div className="ga-modal-backdrop place-menu-backdrop" onPointerDown={e => {
-    if (e.target === e.currentTarget) gameActions.pickPlacePose?.(null);
+    if (e.target === e.currentTarget) gameActions.closePlaceMenu?.();
   }}>
-    <div ref={ref} tabIndex={-1} className="place-menu" style={{ left: menu.x, top: menu.y }}>
+    <div ref={ref} tabIndex={-1} role="dialog" aria-label={menu.offer.label} className="place-menu" style={{ left: menu.x, top: menu.y }}>
       <div className="place-menu-title">{menu.offer.label}</div>
-      {menu.offer.poses.map((pose, i) => <button type="button" key={pose.key}
-        className={`place-menu-pose${i === 0 ? ' default' : ''}`}
-        onClick={() => gameActions.pickPlacePose?.(pose.key)}>{pose.label}</button>)}
+      {menu.offer.prop_actions !== undefined
+        ? menu.offer.prop_actions.length
+          ? <PropActionOffers offers={menu.offer.prop_actions} onPick={(offer, partner) => {
+            void gameActions.pickPropAction?.(offer.action_id, offer.target, offer.definition_revision, partner);
+          }} />
+          : <div role="note">{t('No furniture actions available.')}</div>
+        : menu.offer.poses.map((pose, i) => <button type="button" key={pose.key}
+          className={`place-menu-pose${i === 0 ? ' default' : ''}`}
+          onClick={() => { void gameActions.pickRoomPose?.(menu.offer.id, pose.key); }}>{pose.label}</button>)}
     </div>
   </div>;
 }

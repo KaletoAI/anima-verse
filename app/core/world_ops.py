@@ -424,6 +424,87 @@ def _local_prop_approach(name, observer, profile, observer_profile, journey, vis
                 starts_in_s=round(pending / factor, 3) if pending and factor > 0 else None)
 
 
+def _prop_action_entry(name, observer, profile, observer_profile, visible,
+                       now, fraction, factor, cm):
+    """Only the live owned entry's render geometry, never its private identity.
+
+    Both y values are body-root heights (access is the floor); yaw retains
+    Core's compass degrees. The persisted entry origin is a clock timestamp,
+    not an execution identifier or a poll-relative reconstruction.
+    """
+    entry = profile.get("prop_action_entry")
+    if (not observer or (name != observer and name not in visible)
+            or not isinstance(entry, dict)):
+        return None
+    from app.core import places, prop_action_engine as engine, prop_action_store as store
+    room = places.where(name, profile=profile)
+    if not all(room) or room != places.where(observer, profile=observer_profile):
+        return None
+    ref = entry.get("execution_id")
+    if not isinstance(ref, str) or not ref:
+        return None
+    try:
+        with engine._lock(ref):
+            run = store.get(ref)
+            if (not run or run["status"] != "approaching" or run["phase"] != "entry"
+                    or name not in (run["actor"], run["partner"])
+                    or room != (run["target"]["location_id"], run["target"]["room_id"])):
+                return None
+            data = run["data"]
+            semantic_role = "actor" if name == run["actor"] else "partner"
+            plan, spec = data["plans"][semantic_role], data["entries"][name]
+            access, anchor = plan["access"], plan["entry_anchor"]
+            if (name not in data["arrived"] or profile.get("journey")
+                    or profile.get("place") or profile.get("interaction") or profile.get("is_sleeping")
+                    or entry != dict(execution_id=ref, **spec, access=access, anchor=anchor)
+                    or store.held(store.person_key(name)) != ref
+                    or store.held(store.slot_key(run["target"], anchor["marker_id"], anchor["slot"])) != ref):
+                return None
+            pos = engine.C.get_character_pos(name)
+            if not pos or math.dist((pos["x"], pos["z"]), (access["x"], access["z"])) > .05:
+                return None
+            duration = float(spec["duration_game_s"])
+            elapsed = float(data["entry_elapsed"])
+            started = float(data["entry_started_game_s"])
+            rate = float(factor)
+            # Match the executor: downtime and frozen ticks earn no entry
+            # progress. A restart stays paused until its owner reanchors.
+            if data["process"] != engine._PROCESS:
+                rate = 0.0
+            elif not engine.is_world_frozen():
+                from app.core.game_time import GameTime
+                elapsed += max(0.0, (now - GameTime.parse(data["last_game"])).seconds + fraction)
+            else:
+                rate = 0.0
+            # An unspecified character height uses the measured rig at scale
+            # one in _entry_spec. Publish that same effective height.
+            if cm is None:
+                from app.core.animation_clips import clip_ref_height_m
+                reference = clip_ref_height_m(spec["kind"])
+                cm = reference * 100 if reference else None
+            public_access = {key: float(access[key]) for key in ("x", "y", "z", "yaw")}
+            public_anchor = {key: float(anchor[key]) for key in ("x", "y", "z")}
+            root_offset = float(anchor.get("root_offset", 0))
+            public_anchor["y"] -= root_offset
+            public_anchor["yaw"] = float(anchor.get("yaw") or 0)
+            if (not all(math.isfinite(value) for value in (
+                    duration, elapsed, started, rate, cm, root_offset,
+                    *public_access.values(), *public_anchor.values()))
+                    or duration <= 0 or elapsed < 0 or started < 0 or rate < 0 or cm <= 0):
+                return None
+            role = next((role for role, member in data.get("clip_roles", {}).items()
+                         if role in ("a", "b") and member == name), None)
+            if run["definition"]["ability"] == "pair" and role is None:
+                return None
+            return dict(kind=spec["kind"], pose_key=spec["pose_key"], access=public_access,
+                        anchor=public_anchor, root_offset=root_offset, duration_game_s=duration,
+                        elapsed_game_s=min(duration, elapsed), game_seconds_per_real_second=rate,
+                        height_cm=cm, role=role, started_game_s=started)
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        logger.debug("prop entry payload failed for %s: %s", name, exc)
+        return None
+
+
 def _visible_row(name, loc_id, pos, journey, ctx) -> bool:
     """The existing off-map, sight, location and explored-ground gates."""
     if not loc_id and pos is None:
@@ -928,6 +1009,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "local_approach": _local_prop_approach(
                 name, avatar, _prof, _observer_profile, _j, _local_visible,
                 _now_game, _frac, _factor),
+            "prop_action_entry": _prop_action_entry(
+                name, avatar, _prof, _observer_profile, _local_visible,
+                _now_game, _frac, _factor, cm),
             # Running pair interaction (§ A8a): kind/role/partner/anchor and
             # the GAME-clock start, so both figures play their halves in
             # lockstep at one anchor; null when the character has none.

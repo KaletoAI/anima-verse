@@ -13,13 +13,9 @@
  * the messages below — nothing is recorded from a previous run.
  */
 import assert from 'node:assert/strict';
-import { build } from 'esbuild';
-async function realm(id) {
-  const result = await build({ stdin: { contents: "export * from './bus'; export * from './bridge';", resolveDir: 'client3d/src/hud' }, bundle: true, write: false, format: 'esm', platform: 'browser' });
-  return import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text + `\n// ${id}`).toString('base64'));
-}
-const scene = await realm('scene');
-const hud = await realm('hud');
+import { loadHudRealm } from './load_hud_realm.mjs';
+const scene = loadHudRealm();
+const hud = loadHudRealm();
 
 // --- the fake gdCEF host ------------------------------------------------------
 const toGodot = [];          // raw arguments of godotMethods.hud_bridge
@@ -70,31 +66,37 @@ assert.deepEqual(zoomed, [['Kira']]);
 // HUD -> scene: a HUD-owned field
 hud.setGameState({ partyLeader: 'Ari "the bold" Ünal' });
 assert.equal(scene.getGameState().partyLeader, 'Ari "the bold" Ünal', 'quotes and non-ASCII survive the string wire');
-// The last HUD -> Godot payload is exactly the JSON of a protocol v2 message.
+// The last HUD -> Godot payload is exactly the JSON of a protocol v3 message.
 const last = JSON.parse(toGodot.at(-1));
-assert.deepEqual(last, { v: 2, kind: 'state', patch: { partyLeader: 'Ari "the bold" Ünal' } });
+assert.deepEqual(last, { v: 3, kind: 'state', patch: { partyLeader: 'Ari "the bold" Ünal' } });
 
-// Protocol v2 (Task 26d): the Graphics tab's action reaches Godot as this exact string —
-// the wire the native HudProtocol has to accept.
+// Unrelated graphics preferences survive the semantic action clean cutover.
+// This is the actual JSON string wire the native HudProtocol accepts.
 const graphics = [];
 scene.gameActions.applyGraphicsPrefs = (...args) => graphics.push(args);
 hud.gameActions.applyGraphicsPrefs({ antiAliasing: 'off', shadows: true });
-assert.equal(toGodot.at(-1), '{"v":2,"kind":"action","name":"applyGraphicsPrefs","args":[{"antiAliasing":"off","shadows":true}]}');
+assert.equal(toGodot.at(-1), '{"v":3,"kind":"action","name":"applyGraphicsPrefs","args":[{"antiAliasing":"off","shadows":true}]}');
 assert.deepEqual(graphics, [[{ antiAliasing: 'off', shadows: true }]]);
+const semantic = [];
+scene.gameActions.pickPropAction = (...args) => semantic.push(args);
+const target = { location_id: 'home', room_id: 'room-a', placement_id: 'bed-1', variant_uid: 'ecfa003d-309a-4ce2-8c9b-29944ddae093' };
+hud.gameActions.pickPropAction('paired-rest', target, 'saved-revision', 'Ari "the bold" Ünal');
+assert.deepEqual(JSON.parse(toGodot.at(-1)), { v: 3, kind: 'action', name: 'pickPropAction', args: ['paired-rest', target, 'saved-revision', 'Ari "the bold" Ünal'] });
+assert.deepEqual(semantic, [['paired-rest', target, 'saved-revision', 'Ari "the bold" Ünal']]);
 
-// Rejection on the HUD side: invalid JSON, wrong version (a v1 host), unknown kind — 3 warnings, no state change.
+// Invalid JSON, replaced v2 host and unknown kind each reject without changing state.
 const warnings = [];
 const warn = console.warn;
 console.warn = (...args) => warnings.push(args);
 try {
   host.godotEvents.emit('hud_bridge', '{not json');
-  host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 1, kind: 'state', patch: { clock: 'wrong' } }));
-  host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 2, kind: 'bogus' }));
+  host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 2, kind: 'state', patch: { clock: 'wrong' } }));
+  host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 3, kind: 'bogus' }));
 } finally { console.warn = warn; }
 assert.equal(warnings.length, 3);
 assert.equal(hud.getGameState().clock, 'Day 3, 14:05');
 // An already-parsed object (a host that emitted a Dictionary) is accepted as it is.
-host.godotEvents.emit('hud_bridge', { v: 2, kind: 'state', patch: { clock: 'Day 3, 14:06' } });
+host.godotEvents.emit('hud_bridge', { v: 3, kind: 'state', patch: { clock: 'Day 3, 14:06' } });
 assert.equal(hud.getGameState().clock, 'Day 3, 14:06');
 
 // Without the binding (page opened in a normal browser with ?bridge=gdcef): one warning, no throw.
@@ -102,8 +104,8 @@ const bare = hud.gdcefTransport({});
 const bareWarnings = [];
 console.warn = (...args) => bareWarnings.push(args);
 try {
-  bare.send({ v: 2, kind: 'hud', patch: {} });
-  bare.send({ v: 2, kind: 'hud', patch: {} });
+  bare.send({ v: 3, kind: 'hud', patch: {} });
+  bare.send({ v: 3, kind: 'hud', patch: {} });
   const off = bare.onMessage(() => {});
   off();
 } finally { console.warn = warn; }
@@ -121,14 +123,14 @@ const lateListeners = new Set();
 lateHost.godotEvents = { on: (event, fn) => { assert.equal(event, 'hud_bridge'); lateListeners.add(fn); } };
 await new Promise(resolve => setTimeout(resolve, 120));
 assert.equal(lateListeners.size, 1, 'late binding found by the retry');
-for (const fn of lateListeners) fn(JSON.stringify({ v: 2, kind: 'ui', name: 'toast', args: ['late'] }));
-assert.deepEqual(lateGot, [{ v: 2, kind: 'ui', name: 'toast', args: ['late'] }]);
+for (const fn of lateListeners) fn(JSON.stringify({ v: 3, kind: 'ui', name: 'toast', args: ['late'] }));
+assert.deepEqual(lateGot, [{ v: 3, kind: 'ui', name: 'toast', args: ['late'] }]);
 offLate();
 
 // Cleanup: after disconnect the HUD no longer reacts, even though gdCEF keeps its listener.
 stopHud();
 const before = hud.getGameState().clock;
-host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 2, kind: 'state', patch: { clock: 'after disconnect' } }));
+host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 3, kind: 'state', patch: { clock: 'after disconnect' } }));
 assert.equal(hud.getGameState().clock, before);
 assert.equal(hud.gameActions.zoomTo, undefined);
 stopScene();
@@ -138,8 +140,7 @@ stopScene();
 // on its own binding method `hud_storage` (not the bridge channel). A fake Storage class stands in:
 // methods on the PROTOTYPE like the real one, two instances (localStorage, sessionStorage), and a
 // quota of 8 characters per value so a refused write can be shown.
-const mirrorBuild = await build({ entryPoints: ['client3d/src/hud/storageMirror.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
-const mirror = await import('data:text/javascript;base64,' + Buffer.from(mirrorBuild.outputFiles[0].text).toString('base64'));
+const mirror = scene.load('client3d/src/hud/storageMirror.ts');
 class FakeStorage {
   constructor() { this.items = new Map(); }
   setItem(key, value) {

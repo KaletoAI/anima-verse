@@ -17,6 +17,7 @@ import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { EmptyState } from './EmptyState'
 import { useEnlarge } from './ZoomButton'
 import { transparentPortraitUrl } from './thumbs'
+import { PropActionsPanel } from './PropActionsPanel'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 interface SelfData {
@@ -211,6 +212,8 @@ export function SelfPanel() {
           name={(lang === 'de' ? data.bar_meta[history.stat]?.name_de || data.bar_meta[history.stat]?.name : data.bar_meta[history.stat]?.name) || history.stat}
           rows={data.stat_changes || []} anchor={history.anchor} onClose={closeHistory} />
       )}
+
+      <PropActionsPanel />
 
       {/* Mood */}
       <label style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
