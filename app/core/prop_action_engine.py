@@ -532,7 +532,11 @@ def _arrival_validate(actor, journey, room_id):
     if not run or run["status"] != "approaching" or not _own_journey(run, actor, journey):
         return False, "journey_owner_mismatch"
     reason = _validate(run, require_claims=True)
-    return not reason and room_id == run["target"]["room_id"], reason or "room_mismatch"
+    if reason:
+        return False, reason
+    if room_id != run["target"]["room_id"]:
+        return False, "room_mismatch"
+    return True, ""
 
 
 def _arrived(actor, journey):
