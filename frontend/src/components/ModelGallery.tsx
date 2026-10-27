@@ -102,7 +102,7 @@ export interface BlenderStatus {
  * Blender: an action that can only fail is worse than no action.
  */
 export function BuildDistanceMeshButton({
-  url, hasLow, blender, disabled = false, targetFaces = 0, onDone,
+  url, hasLow, blender, disabled = false, targetFaces = 0, onDone, beforeBuild,
 }: {
   /** POST endpoint of this subject's build (…/lod). */
   url: string
@@ -118,11 +118,14 @@ export function BuildDistanceMeshButton({
   targetFaces?: number
   /** Reload the gallery — the build added a file and moved the selection. */
   onDone: () => void | Promise<unknown>
+  /** Authoring workspaces can save dependent draft fields before this write. */
+  beforeBuild?: () => Promise<boolean>
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [busy, setBusy] = useState(false)
   const build = useCallback(async () => {
+    if (beforeBuild && !await beforeBuild()) return
     setBusy(true)
     try {
       const d = await apiPost<{ tris?: number; tris_before?: number }>(url, {})
@@ -144,7 +147,7 @@ export function BuildDistanceMeshButton({
     try {
       await onDone()
     } catch { /* the mesh is stored either way */ }
-  }, [url, onDone, t, toast])
+  }, [url, onDone, t, toast, beforeBuild])
   if (!blender?.usable) return null
   return (
     <button

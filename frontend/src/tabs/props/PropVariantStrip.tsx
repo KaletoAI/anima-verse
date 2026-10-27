@@ -56,7 +56,7 @@ const CHIP_W = 170
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   onChanged, onEditVariant, onDeleted, generating = [], worldSeasons = [],
-  currentSeason = '' }: {
+  currentSeason = '', beforeImmediate }: {
   propId: string
   /** Every variant, active or not, in order — the DRAFT list (PropDetail's
    *  load with the change buffer laid on top), so a field edit shows here and
@@ -91,6 +91,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   worldSeasons?: string[]
   /** The season the world is in right now, for the "renders now" hint. */
   currentSeason?: string
+  beforeImmediate: (label: string) => Promise<boolean>
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -108,6 +109,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   const capReached = activeCount >= max
 
   const run = useCallback(async (fn: () => Promise<unknown>, ok: string) => {
+    if (!await beforeImmediate(ok)) return
     setBusy(true)
     try {
       await fn()
@@ -118,7 +120,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
     } finally {
       setBusy(false)
     }
-  }, [onChanged, t, toast])
+  }, [onChanged, t, toast, beforeImmediate])
 
   // The new slot carries no mesh — it is filled by the next generation
   // targeted at it, so selecting it right away is what the admin wants to do
@@ -197,20 +199,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                 opacity: v.active ? 1 : 0.55,
               }}
             >
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                style={{
-                  border: 0, background: 'transparent', padding: '0 2px',
-                  textAlign: 'left', fontWeight: isSelected ? 600 : 400,
-                }}
-                onClick={() => onSelect(v.index)}
-                title={v.primary
-                  ? t('Primary variant — this is the mesh every consumer gets that does not ask for a variant. Click to show it in the preview and the gallery below.')
-                  : t('Show this variant in the preview and the mesh gallery below.')}
-              >
-                {v.primary ? '★ ' : ''}{t('Variant')} {v.index + 1}
-              </button>
+              <strong>{v.primary ? '★ ' : ''}{t('Variant')} {v.index + 1}</strong>
               <div style={{ display: 'flex', gap: 3, alignItems: 'center', flexWrap: 'wrap' }}>
                 {/* The spinner belongs on the chip the server names, and on no
                     other one — this is the whole point of the store index. */}
@@ -327,7 +316,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       {/* One short line — the details live in the field tooltips (user
           2026-08-24: the footer paragraph was long and half-translated). */}
       <span className="ga-hint">
-        {t('Variants of one object — scatter mixes them, ★ is the default, the selected chip drives the preview.')}
+        {t('Die Variantenauswahl oberhalb des Editors bestimmt die Geometrie. Aktivieren, Hinzufügen und Löschen werden sofort angewendet; Jahreszeiten gehören zum Entwurf.')}
         {worldSeasons.length ? ' ' + t('Season chips limit when a variant renders.') : null}
         {' '}
         {`${t('Active:')} ${activeCount}/${max}`}

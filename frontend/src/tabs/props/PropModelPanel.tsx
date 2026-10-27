@@ -44,7 +44,7 @@ interface PropModelInfo {
 
 export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
   onChanged, pending = false, faceTargets = {}, onEditFaceTarget,
-  backendFaces = 0, onGenerating }: {
+  backendFaces = 0, onGenerating, beforeImmediate }: {
   propId: string
   /** Index of the model variant this gallery belongs to (0 = the first one;
    *  the primary variant is the first ACTIVE one, which the strip marks). */
@@ -78,6 +78,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
   /** Start the container's pending poll — a low variant runs in the
    *  background like every mesh job. */
   onGenerating?: () => void
+  beforeImmediate: (label: string) => Promise<boolean>
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -111,6 +112,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
   }, [load, reloadKey])
 
   const select = useCallback(async (filename: string, tier: ModelTier) => {
+    if (!await beforeImmediate(t('Select model tier'))) return
     try {
       await apiPost(`${base}/models/select`, { file: filename, tier })
       await load()
@@ -119,9 +121,10 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [base, load, onChanged, t, toast])
+  }, [base, load, onChanged, t, toast, beforeImmediate])
 
   const remove = useCallback(async (filename: string) => {
+    if (!await beforeImmediate(t('Delete model file'))) return
     setArmedDel(null)
     try {
       await apiDelete(`${base}/models?file=${encodeURIComponent(filename)}`)
@@ -132,13 +135,14 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [base, preview, onPreview, load, onChanged, t, toast])
+  }, [base, preview, onPreview, load, onChanged, t, toast, beforeImmediate])
 
   // Upload a GLB as a NEW mesh of the chosen tier (validated server-side;
   // surface the 422 reasons instead of a bare status code). The variant route
   // takes the tier as a FORM field, not as a query parameter.
   const upload = useCallback(async (file: File) => {
     if (!file) return
+    if (!await beforeImmediate(t('Upload model'))) return
     try {
       const fd = new FormData()
       fd.append('file', file)
@@ -158,16 +162,17 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [base, uploadTier, onPreview, load, onChanged, t, toast])
+  }, [base, uploadTier, onPreview, load, onChanged, t, toast, beforeImmediate])
 
   // Stored mesh waiting in the low-variant dialog (mesh→mesh reduction of
   // THAT file — the prop's dims stay untouched, they belong to the full mesh).
   const [shrinkFile, setShrinkFile] = useState<string | null>(null)
   const shrinkBackends = info?.shrink_backends || []
-  const shrink = useCallback((backend: string, opts?: MeshGenerateOpts) => {
+  const shrink = useCallback(async (backend: string, opts?: MeshGenerateOpts) => {
     const file = shrinkFile
     setShrinkFile(null)
     if (!file) return
+    if (!await beforeImmediate(t('Create low variant'))) return
     void apiPost<{ status?: string }>(`${base}/models/shrink`,
       { file, backend,
         ...(opts?.face_num ? { face_num: opts.face_num } : {}),
@@ -179,7 +184,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
         onGenerating?.()
       })
       .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
-  }, [shrinkFile, base, onGenerating, t, toast])
+  }, [shrinkFile, base, onGenerating, t, toast, beforeImmediate])
 
   const models = info?.models || []
   const tiers = info?.tiers || []
@@ -211,6 +216,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
           after that question (2026-08-29) and no longer after the variant —
           the column it stands in is one variant's, said once at its top. */}
       <div className="ga-form-section-label">{t('Resolution tiers')}</div>
+      <p className="ga-hint">{t('Datei- und Detailstufenänderungen werden sofort angewendet. Die Budgets gehören zum Entwurf.')}</p>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {/* The heading already says what these tags are. */}
         <TierSummary tiers={info?.tiers} showLabel={false} />
@@ -223,6 +229,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
             blender={info?.blender}
             disabled={pending}
             targetFaces={faceTargets.low || 0}
+            beforeBuild={() => beforeImmediate(t('Build distance mesh'))}
             onDone={async () => { await load(); await onChanged() }}
           />
         ) : null}

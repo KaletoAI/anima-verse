@@ -209,3 +209,47 @@ export function applyVariantDraft<T extends VariantDraftFields>(
     return out
   })
 }
+
+/** A server snapshot uses the same stable targets as the draft. File/status
+ * metadata is deliberately absent: only author fields can overlap local edits. */
+export type AuthorFields = ReadonlyMap<string, FieldPatch>
+
+export interface FieldConflict {
+  target: string
+  field: string
+  previous: unknown
+  server: unknown
+  local: unknown
+  missing: boolean
+}
+
+/** Compare only locally edited fields. Arrays (especially actions/bindings)
+ * are indivisible: never merge two authors' lists by position or label. */
+export function fieldConflicts(buf: PendingFields, previous: AuthorFields,
+  next: AuthorFields): FieldConflict[] {
+  const conflicts: FieldConflict[] = []
+  for (const [target, patch] of buf) {
+    const before = previous.get(target)
+    const after = next.get(target)
+    for (const [field, local] of Object.entries(patch)) {
+      const oldValue = before?.[field]
+      const newValue = after?.[field]
+      if (!after || JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
+        conflicts.push({ target, field, previous: oldValue, server: newValue,
+          local, missing: !after })
+      }
+    }
+  }
+  return conflicts
+}
+
+/** Resolve one overlap in favour of the server without dropping other edits. */
+export function dropPendingField(buf: PendingFields, target: string,
+  field: string): PendingFields {
+  const next = new Map(buf)
+  const patch = { ...next.get(target) }
+  delete patch[field]
+  if (Object.keys(patch).length) next.set(target, patch)
+  else next.delete(target)
+  return next
+}

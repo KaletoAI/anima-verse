@@ -1982,13 +1982,17 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         disposers.push(() => cancelAnimationFrame(raf))
 
         const onResize = () => {
-          const w = mount.clientWidth || width
+          const w = mount.clientWidth
+          if (!w) return
           camera.aspect = w / height
           camera.updateProjectionMatrix()
           renderer.setSize(w, height)
         }
-        window.addEventListener('resize', onResize)
-        disposers.push(() => window.removeEventListener('resize', onResize))
+        // A workspace drawer or editor/preview toggle resizes the container
+        // without a window resize. Keep the camera, only resize its viewport.
+        const resizeObserver = new ResizeObserver(onResize)
+        resizeObserver.observe(mount)
+        disposers.push(() => resizeObserver.disconnect())
       } catch (e) {
         cleanup?.()  // dispose the context if the renderer was already created
         if (!disposed) {

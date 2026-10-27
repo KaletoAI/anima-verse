@@ -21,7 +21,8 @@ import { useToast } from '../../lib/Toast'
 import { PropCreateForm } from './PropCreateForm'
 import { PropDetail } from './PropDetail'
 import { PropImageDialog } from './PropImageDialog'
-import { CATEGORY_DATALIST_ID, MOUNT_KINDS, mountLabel } from './propTypes'
+import { PropWorkspaceDialog } from './PropWorkspaceDialog'
+import { CATEGORY_DATALIST_ID, MOUNT_KINDS, mountLabel, hasIncompleteActionBindings } from './propTypes'
 import type {
   ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage, PropView,
 } from './propTypes'
@@ -49,6 +50,27 @@ export function PropsTab() {
   const [armedDel, setArmedDel] = useState('')
   const [cacheBump, setCacheBump] = useState(0)
   const [creating, setCreating] = useState(false)
+  const [libraryOpen, setLibraryOpen] = useState(false)
+  const libraryButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!libraryOpen) return
+    const pane = document.querySelector<HTMLElement>('.props-admin .prop-library')
+    const focusable = () => Array.from(pane?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]') || [])
+    focusable()[0]?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation()
+        setLibraryOpen(false)
+      } else if (event.key === 'Tab') {
+        const nodes = focusable(), first = nodes[0], last = nodes[nodes.length - 1]
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+      }
+    }
+    pane?.addEventListener('keydown', onKey)
+    return () => { pane?.removeEventListener('keydown', onKey); libraryButton.current?.focus() }
+  }, [libraryOpen])
   // Prop id whose 🧊 regenerate waits in the backend dialog (every 3D
   // generate button goes through the dialog — face count / texture size
   // are per-run overrides). `variant` is the model variant a RE-MESH refines;
@@ -87,6 +109,9 @@ export function PropsTab() {
   // from, so a wrong one eats a room — this filter is where the admin finds
   // them (plan-furnish-v2.md § 2 B3).
   const [estimatedOnly, setEstimatedOnly] = useState(false)
+  const [missingModelOnly, setMissingModelOnly] = useState(false)
+  const [actionsOnly, setActionsOnly] = useState(false)
+  const [incompleteBindingsOnly, setIncompleteBindingsOnly] = useState(false)
   // Selection mode for the bulk publish: a click on a row ticks it instead of
   // opening it (plan-marketplace-props.md Teil E).
   const [pickMode, setPickMode] = useState(false)
@@ -106,6 +131,9 @@ export function PropsTab() {
   // running (the route is synchronous — it holds the LLM call).
   const [classifyOpen, setClassifyOpen] = useState(false)
   const [classifying, setClassifying] = useState(false)
+  const [classifyReport, setClassifyReport] = useState<{
+    classified: number; unresolved: string[]
+  } | null>(null)
   // How many unsaved FIELD edits the open detail holds (its change buffer,
   // `pendingFields`). A tab switch is asked about by the shell
   // (`lib/unsavedGuard`), but switching to another prop never leaves this tab —
@@ -117,6 +145,7 @@ export function PropsTab() {
     setLeaveTo(null)
     setCreating(creating)
     setSelected(id)
+    setLibraryOpen(false)
   }, [])
   /** Open another prop (or the create form) — asking first when the detail
    *  still holds a draft. Selecting the prop that is already open is not a
@@ -204,11 +233,14 @@ export function PropsTab() {
       if (mountFilter === 'none' ? !!p.mount
         : mountFilter && p.mount !== mountFilter) return false
       if (estimatedOnly && !p.dims_estimated) return false
+      if (missingModelOnly && p.has_model) return false
+      if (actionsOnly && !(p.actions || []).length) return false
+      if (incompleteBindingsOnly && !hasIncompleteActionBindings(p)) return false
       if (!q) return true
       return p.name.toLowerCase().includes(q)
         || p.tags.some((tag) => tag.toLowerCase().includes(q))
     })
-  }, [props, query, catFilter, mountFilter, estimatedOnly])
+  }, [props, query, catFilter, mountFilter, estimatedOnly, missingModelOnly, actionsOnly, incompleteBindingsOnly])
 
   /** How many props have no mount yet — what the classify run would work on,
    *  and the number its confirmation states. */
@@ -225,6 +257,7 @@ export function PropsTab() {
         .replace('{n}', String(d?.classified || 0))
         .replace('{m}', String((d?.unresolved || []).length)))
       await load()
+      setClassifyReport({ classified: d?.classified || 0, unresolved: d?.unresolved || [] })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -235,8 +268,17 @@ export function PropsTab() {
   const selectedProp = props.find((p) => p.id === selected) || null
 
   return (
-    <div className="ga-twocol">
-      <ListPane id="props" label={t('Props')}>
+    <div className={`ga-twocol props-admin${libraryOpen ? ' is-library-open' : ''}`}>
+      <button ref={libraryButton} type="button" className="ga-btn prop-library-toggle"
+        aria-expanded={libraryOpen} aria-controls="prop-library"
+        onClick={() => setLibraryOpen((open) => !open)}>{t('Bibliothek')}</button>
+      {libraryOpen && <button type="button" className="prop-library-backdrop"
+        aria-label={t('Bibliothek schließen')} onClick={() => setLibraryOpen(false)} />}
+      <ListPane id="props" label={t('Props')} className="ga-twocol-left prop-library"
+        expanded={libraryOpen || bulkRunning ? true : undefined}
+        collapseDisabled={bulkRunning}
+        onExpandedChange={libraryOpen ? () => setLibraryOpen(false) : undefined}>
+        <div id="prop-library" className="prop-library-content">
         <ListHeader
           title={t('Props')}
           onNew={() => navigate('', true)}
@@ -275,7 +317,7 @@ export function PropsTab() {
           </div>
         ) : null}
         <div className="ga-form-row" style={{ padding: '0 8px 8px' }}>
-          <input className="ga-input" value={query} placeholder={t('Search…')}
+          <input className="ga-input" value={query} placeholder={t('Search…')} aria-label={t('Props durchsuchen')}
             onChange={(e) => setQuery(e.target.value)} />
           <select className="ga-input" value={catFilter} style={{ maxWidth: 140 }}
             onChange={(e) => setCatFilter(e.target.value)}>
@@ -297,6 +339,11 @@ export function PropsTab() {
             onChange={(e) => setEstimatedOnly(e.target.checked)} />
           {t('Estimated size only')}
         </label>
+        <div className="prop-library-filters">
+          <label><input type="checkbox" checked={missingModelOnly} onChange={(event) => setMissingModelOnly(event.target.checked)} /> {t('Modell fehlt')}</label>
+          <label><input type="checkbox" checked={actionsOnly} onChange={(event) => setActionsOnly(event.target.checked)} /> {t('Aktionen vorhanden')}</label>
+          <label><input type="checkbox" checked={incompleteBindingsOnly} onChange={(event) => setIncompleteBindingsOnly(event.target.checked)} /> {t('Aktionsbindung unvollständig')}</label>
+        </div>
         <ul className="ga-list">
           {!loaded ? (
             <li className="ga-list-empty">{t('Loading…')}</li>
@@ -353,6 +400,10 @@ export function PropsTab() {
                           {t('suggested')}
                         </span>
                       ) : null}
+                      <span className="ga-list-row-sub">{hasIncompleteActionBindings(p)
+                        ? t('Aktionsbindung prüfen') : (p.actions || []).length
+                          ? t('Aktionen definiert; Raumweg nicht geprüft')
+                          : t('Dekorativ · keine Aktionen nötig')}</span>
                     </span>
                     {pending.includes(p.id) ? (
                       <span className="ga-source">{t('generating…')}</span>
@@ -400,10 +451,9 @@ export function PropsTab() {
             })
           )}
         </ul>
+        </div>
       </ListPane>
-      {/* The detail lays its three columns out as independent scroll panes;
-          the create form and the empty state keep the plain scrolling pane. */}
-      <section className={`ga-twocol-right${!creating && selectedProp ? ' ga-twocol-right--panes' : ''}`}>
+      <section className={`ga-twocol-right prop-workspace-container${!creating && selectedProp ? ' is-workspace' : ''}`}>
         {creating ? (
           <PropCreateForm
             imageBackends={imageBackends}
@@ -414,6 +464,7 @@ export function PropsTab() {
           />
         ) : selectedProp ? (
           <PropDetail
+            key={selectedProp.id}
             prop={selectedProp}
             pending={pending.includes(selectedProp.id)}
             generatingVariants={genVariants[selectedProp.id] || []}
@@ -555,40 +606,35 @@ export function PropsTab() {
             call per 40 props and writes a value into every one of them. Real
             UI, never a window.confirm. */}
         {classifyOpen ? (
-          <div className="ga-modal-backdrop" role="presentation">
-            <div className="ga-modal" role="dialog" aria-modal="true"
-              aria-label={t('Classify mount (LLM)')} style={{ maxWidth: 460 }}>
-              <div className="ga-modal-header">
-                <h3>{t('Classify mount (LLM)')}</h3>
-              </div>
-              <div className="ga-modal-body">
-                {unclassified
-                  ? t('{n} props have no mount yet. The LLM says for each of them whether it stands on the floor, hangs on a wall or on the ceiling, or sits on another prop — as a suggestion you confirm or change per prop.')
-                    .replace('{n}', String(unclassified))
-                  : t('Every prop already has a mount. There is nothing to classify.')}
-              </div>
-              <div className="ga-modal-footer">
-                <button className="ga-btn" onClick={() => setClassifyOpen(false)}>
-                  {t('Cancel')}
-                </button>
-                <button className="ga-btn ga-btn-primary" disabled={!unclassified}
-                  onClick={() => { void classifyMounts() }}>
-                  {t('Classify')}
-                </button>
-              </div>
+          <PropWorkspaceDialog title={t('Classify mount (LLM)')} onCancel={() => setClassifyOpen(false)}>
+            <div className="ga-modal-body">
+              <p>{t('Wird sofort angewendet. Dies startet kostenpflichtige LLM-Aufrufe gemäß deiner Backend-Konfiguration und speichert Befestigungsvorschläge sofort.')}</p>
+              <p>{unclassified
+                ? t('{n} unklassifizierte Props; bis zu {calls} LLM-Aufrufe (40 Props je Aufruf). Vorschläge werden anschließend je Prop im Entwurf bestätigt.')
+                  .replace('{n}', String(unclassified)).replace('{calls}', String(Math.ceil(unclassified / 40)))
+                : t('Every prop already has a mount. There is nothing to classify.')}</p>
+              <p>{t('Lokale Befestigungsänderungen bleiben erhalten; Überschneidungen erscheinen als Feldkonflikt.')}</p>
             </div>
-          </div>
+            <div className="ga-modal-footer">
+              <button type="button" className="ga-btn" onClick={() => setClassifyOpen(false)}>{t('Cancel')}</button>
+              <button type="button" className="ga-btn ga-btn-primary" disabled={!unclassified}
+                onClick={() => { void classifyMounts() }}>{t('LLM-Aufrufe starten & Vorschläge speichern')}</button>
+            </div>
+          </PropWorkspaceDialog>
         ) : null}
+        {classifyReport && <PropWorkspaceDialog title={t('Ergebnis der Befestigungsklassifizierung')} onCancel={() => setClassifyReport(null)}>
+          <div className="ga-modal-body">
+            <p>{classifyReport.classified} {t('Vorschläge sofort gespeichert')}; {classifyReport.unresolved.length} {t('ungeklärt')}.</p>
+            {classifyReport.unresolved.length > 0 && <ul>{classifyReport.unresolved.map((id) => <li key={id}>{props.find((item) => item.id === id)?.name || id}</li>)}</ul>}
+            <p>{t('Vorschläge in Übersicht prüfen und bestätigen. Lokale Entwürfe wurden nicht verworfen.')}</p>
+          </div>
+          <div className="ga-modal-footer"><button type="button" className="ga-btn" onClick={() => setClassifyReport(null)}>{t('Schließen')}</button></div>
+        </PropWorkspaceDialog>}
         {/* The prop-switch guard. The same question the shell asks before a
             tab switch, asked here because a prop switch stays inside the tab
             — and asked as UI, never as window.confirm. */}
         {leaveTo ? (
-          <div className="ga-modal-backdrop" role="presentation">
-            <div className="ga-modal" role="dialog" aria-modal="true"
-              aria-label={t('Unsaved changes')} style={{ maxWidth: 460 }}>
-              <div className="ga-modal-header">
-                <h3>{t('Unsaved changes')}</h3>
-              </div>
+          <PropWorkspaceDialog title={t('Unsaved changes')} onCancel={() => setLeaveTo(null)}>
               <div className="ga-modal-body">
                 {t('This prop holds {n} field changes that were never saved. Opening another prop discards them.')
                   .replace('{n}', String(dirty))}
@@ -602,8 +648,7 @@ export function PropsTab() {
                   {t('Leave and discard')}
                 </button>
               </div>
-            </div>
-          </div>
+          </PropWorkspaceDialog>
         ) : null}
       </section>
       {/* One shared category vocabulary for the create form and the detail —

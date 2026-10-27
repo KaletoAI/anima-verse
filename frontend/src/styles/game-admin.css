@@ -2956,3 +2956,163 @@ a.ga-btn {
 .ga-bone-pose td .ga-input { width: 72px; padding: 2px 6px; }
 .ga-bone-pose td [role="alert"] { display: block; max-width: 72px; font-size: 10px; }
 .ga-bone-pose-na { color: var(--text-muted, #8b949e); padding-left: 6px; }
+
+/* Props workshop: one geometry context, independent inspector and one stage. */
+.props-admin {
+  position: relative;
+  gap: 16px;
+  min-width: 0;
+}
+.props-admin > .prop-library {
+  flex: 0 0 230px;
+  box-sizing: border-box;
+  width: 230px;
+  min-width: 0;
+  margin: 0;
+}
+.props-admin > .prop-library.is-collapsed { flex-basis: 28px; width: 28px; }
+.prop-library-content { display: flex; flex-direction: column; min-height: 0; flex: 1; gap: 8px; }
+.prop-library-content .ga-twocol-header { align-items: flex-start; flex-wrap: wrap; }
+.prop-library-content .ga-twocol-header-actions { flex-wrap: wrap; }
+.prop-library-content > .ga-form-row { flex-wrap: wrap; }
+.prop-library-content .ga-input { min-width: 0; width: 100%; max-width: none !important; }
+.prop-library-content .ga-list-row { flex-wrap: wrap; align-items: flex-start; gap: 5px; }
+.prop-library-content .ga-list-row-main { flex-wrap: wrap; min-width: 0; width: 100%; overflow-wrap: anywhere; }
+.prop-library-content .ga-list-row-sub { white-space: normal; }
+.prop-library-content .ga-list-row-main > .ga-list-row-sub { flex-basis: 100%; }
+.prop-library-filters { display: flex; flex-direction: column; padding: 0 8px; gap: 6px; font-size: 12px; }
+.prop-library-toggle, .prop-library-backdrop { display: none; }
+.props-admin > .prop-workspace-container {
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+.props-admin > .prop-workspace-container.is-workspace { overflow: hidden; scrollbar-gutter: auto; }
+.prop-workspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  font-size: 14px;
+}
+.prop-workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+}
+.prop-workspace-title { min-width: 0; }
+.prop-workspace-title h2 { margin: 0 0 4px; font-size: 20px; line-height: 1.2; overflow-wrap: anywhere; }
+.prop-workspace-save { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.prop-workspace .ga-hint { font-size: 12px; line-height: 1.5; }
+.prop-workspace p { margin: 4px 0 10px; max-width: 76ch; }
+.prop-workspace h3 { font-size: 16px; line-height: 1.4; margin: 0 0 8px; }
+.prop-workspace .ga-form-section-label { font-size: 16px; line-height: 1.4; }
+.prop-workspace-tabs {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.prop-workspace-tab {
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 12px 10px;
+  font: inherit;
+  font-size: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.prop-workspace-tab.is-active { border-bottom-color: var(--accent, var(--primary)); color: var(--text); }
+.prop-workspace-context { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; }
+.prop-workspace-context .ga-input { width: auto; min-width: 150px; max-width: 100%; }
+.prop-workspace-body {
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) minmax(340px, 1.15fr);
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+.prop-workspace-editor, .prop-workspace-preview {
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  overscroll-behavior: contain;
+  padding: 12px;
+  background: var(--bg-container);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 6px);
+}
+.prop-workspace-preview { padding: 12px 10px; }
+.prop-editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.prop-area-content { width: 100%; min-width: 0; gap: 12px; }
+.prop-area-content > *, .prop-area-content .ga-form-row > * { min-width: 0; max-width: 100%; }
+.prop-area-content .ga-form-row { flex-wrap: wrap; }
+.prop-area-content .ga-input, .prop-area-content .ga-textarea { max-width: 100%; font-size: 14px; }
+.prop-area-content .ga-list-detail { flex-wrap: wrap; min-width: 0; }
+.prop-area-content .ga-marker-card { min-width: 0; flex: 1 1 240px; }
+.prop-area-content .ga-list-detail-side { flex: 1 1 120px; }
+.prop-inspector-group { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 4px; }
+.prop-inspector-group > summary { cursor: pointer; font-size: 16px; font-weight: 600; padding-bottom: 12px; }
+.prop-overview-status { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.prop-actions-summary { list-style: none; padding: 0; margin: 0; }
+.prop-actions-summary > li { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.prop-history-notice { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px; border-left: 3px solid var(--warning, var(--accent)); background: var(--bg-secondary); overflow-wrap: anywhere; }
+.prop-object-menu { position: relative; }
+.prop-object-menu > summary { list-style-position: inside; }
+.prop-object-menu-items { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 260px; max-width: 85vw; display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius, 6px); background: var(--bg-container); box-shadow: 0 8px 24px var(--bg); }
+.prop-object-menu-items fieldset { border: 0; padding: 0; margin: 0; }
+.prop-workspace-conflicts { max-height: 34vh; flex-shrink: 0; overflow: auto; padding: 12px; margin: 8px 0; border: 1px solid var(--danger); border-radius: var(--radius, 6px); }
+.prop-conflict { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
+.prop-conflict pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.prop-mobile-switch { display: none; }
+.prop-workspace-dialog { width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; }
+.props-admin :is(button, input, select, textarea, summary, [tabindex]):focus-visible { outline: 2px solid var(--accent, var(--primary)); outline-offset: 2px; }
+
+@media (max-width: 1099px) {
+  .props-admin { gap: 8px; flex-direction: column; }
+  .prop-library-toggle { display: inline-flex; align-self: flex-start; flex-shrink: 0; }
+  .props-admin > .prop-library { display: none; }
+  .props-admin.is-library-open > .prop-library {
+    display: flex;
+    position: absolute;
+    z-index: 31;
+    inset: 0 auto 0 0;
+    width: min(340px, calc(100vw - 48px));
+    padding: 12px 28px 12px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius, 6px);
+  }
+  .props-admin.is-library-open > .prop-library-backdrop { display: block; position: absolute; inset: 0; z-index: 30; background: var(--bg); opacity: 0.8; border: 0; }
+  .props-admin > .prop-workspace-container { width: 100%; flex: 1; }
+}
+@media (max-width: 799px) {
+  .prop-workspace-header { align-items: flex-start; flex-wrap: wrap; padding-top: 4px; gap: 8px; }
+  .prop-workspace-save { width: 100%; }
+  .prop-workspace-save > .ga-btn { min-height: 36px; white-space: normal; }
+  .prop-workspace-save > .ga-btn-primary { margin-left: auto; }
+  .prop-workspace-context { gap: 6px; padding: 8px 0; }
+  .prop-workspace-context .ga-hint { flex-basis: 100%; }
+  .prop-workspace-context .ga-input { flex: 1; }
+  .prop-workspace-body { display: flex; flex-direction: column; gap: 0; }
+  .prop-workspace-editor, .prop-workspace-preview { flex: 1; width: 100%; padding: 10px; }
+  .prop-workspace.is-editor .prop-workspace-preview,
+  .prop-workspace.is-preview .prop-workspace-editor { display: none; }
+  .prop-mobile-switch { display: flex; gap: 6px; padding-bottom: 8px; }
+  .prop-mobile-switch button { flex: 1; min-height: 36px; }
+  .prop-mobile-switch button[aria-pressed="true"] { border-color: var(--accent, var(--primary)); background: var(--bg-hover); }
+  .prop-workspace-tab { padding: 10px 8px; }
+  .prop-area-content .ga-marker-axis { flex-wrap: wrap; row-gap: 5px; }
+  .prop-area-content .ga-marker-axis input[type="range"] { min-width: 60px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .props-admin *, .props-admin *::before, .props-admin *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}

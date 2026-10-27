@@ -20,29 +20,40 @@ export function ListPane({
   label,
   className = 'ga-twocol-left',
   children,
+  expanded,
+  onExpandedChange,
+  collapseDisabled = false,
 }: {
   id: string
   /** Shown vertically in the collapsed strip so the pane stays identifiable. */
   label?: string
   className?: string
   children: ReactNode
+  expanded?: boolean
+  onExpandedChange?: (expanded: boolean) => void
+  collapseDisabled?: boolean
 }) {
   const { t } = useI18n()
   const [collapsed, setCollapsed] = usePersistentState<boolean>(`listpane.${id}.collapsed`, false)
-  const gripTitle = collapsed ? t('Expand list') : t('Collapse list')
+  const isCollapsed = expanded === undefined ? collapsed : !expanded
+  const gripTitle = isCollapsed ? t('Expand list') : t('Collapse list')
   return (
-    <aside className={`${className} ga-listpane${collapsed ? ' is-collapsed' : ''}`}>
-      {collapsed ? null : children}
+    <aside className={`${className} ga-listpane${isCollapsed ? ' is-collapsed' : ''}`} aria-label={label}>
+      {isCollapsed ? null : children}
       <button
         type="button"
         className="ga-listpane-grip"
-        aria-expanded={!collapsed}
+        aria-expanded={!isCollapsed}
         aria-label={gripTitle}
         title={gripTitle}
-        onClick={() => setCollapsed((c) => !c)}
+        disabled={collapseDisabled}
+        onClick={() => {
+          if (onExpandedChange) onExpandedChange(isCollapsed)
+          else setCollapsed((c) => !c)
+        }}
       >
-        <span className="ga-listpane-grip-icon" aria-hidden="true">{collapsed ? '›' : '‹'}</span>
-        {collapsed && label ? <span className="ga-listpane-grip-label">{label}</span> : null}
+        <span className="ga-listpane-grip-icon" aria-hidden="true">{isCollapsed ? '›' : '‹'}</span>
+        {isCollapsed && label ? <span className="ga-listpane-grip-label">{label}</span> : null}
       </button>
     </aside>
   )

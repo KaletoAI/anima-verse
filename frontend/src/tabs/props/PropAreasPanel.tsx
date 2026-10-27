@@ -86,7 +86,7 @@ function variantName(v: PropVariant, t: (s: string) => string): string {
 }
 
 export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
-  info, infoFailed, tools, onVariantsChanged }: {
+  info, infoFailed, tools, onVariantsChanged, beforeImmediate }: {
   prop: PropFull
   /** STORE index of the variant the detail has open — the mesh this panel
    *  reads, draws on and splits. Every route below takes it. */
@@ -113,6 +113,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   /** Reload the variant list (one was added, re-copied, or its pane
    *  defaults changed). */
   onVariantsChanged: () => void
+  beforeImmediate: (label: string) => Promise<boolean>
 }) {
   // Subscribe to the shared clock settings so the stamps above re-render
   // once the server-configured format and timezone arrive.
@@ -208,6 +209,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   }
 
   const submitVariant = async (values: PropSlotValues, label: string | undefined) => {
+    if (!await beforeImmediate(t('Save picture variant'))) return
     setBusy('variant')
     try {
       // R10: the label travels only when the admin typed one — an omitted key
@@ -231,6 +233,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   }
 
   const recopy = async (index: number) => {
+    if (!await beforeImmediate(t('Re-copy mesh'))) return
     setBusy('recopy')
     try {
       await apiPost(`/world/props/${enc}/variants/${index}/recopy`, {})
@@ -279,6 +282,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
         {t('Areas')}
         {shownVariant?.label ? ` · ${shownVariant.label}` : ''}
       </div>
+      <p className="ga-hint">{t('Flächen, Materialien und Bildvarianten werden sofort angewendet. Verwerfen setzt diese Änderungen nicht zurück.')}</p>
       <span className="ga-hint" style={{ display: 'block' }}>
         {t('The key surfaces of THIS variant’s mesh — the panel a picture hangs on, the pane of a door. Each one is a material of that model file; a picture is hung on it as a variant of this prop.')}
       </span>

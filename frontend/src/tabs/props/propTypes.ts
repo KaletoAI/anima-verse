@@ -181,6 +181,21 @@ export interface PropFull {
   mount_suggested?: boolean
 }
 
+/** Direct workspace navigation; semantic editors use the same draft and viewer. */
+export type PropWorkspaceArea = 'overview' | 'actions' | 'places' | 'assets' | 'appearance'
+
+/** A deliberate unsupported variant is not broken; decoration needs no action. */
+export function hasIncompleteActionBindings(prop: PropFull): boolean {
+  const active = (prop.actions || []).filter((action) => action.enabled)
+  if (!active.length) return false
+  const variants = prop.variant_tiers || []
+  return !variants.length || variants.some((variant) => active.some((action) => {
+    const binding = (variant.action_bindings || []).find((item) => item.action_id === action.id)
+    return !binding || (binding.supported
+      && (binding.validation === 'repair_required' || !binding.marker_ids.length))
+  }))
+}
+
 /** The four mount kinds, mirroring `props.MOUNT_KINDS`. `''` is not one of
  *  them — it is the ABSENCE of an answer, and every reader has to keep the
  *  two apart. */
