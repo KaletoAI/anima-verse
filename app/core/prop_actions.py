@@ -140,7 +140,7 @@ def validate_document(prop: dict) -> list[Issue]:
                 when = entry.get('when')
                 if when not in ('start', 'success', 'active'):
                     issue(q + '.when', 'invalid_effect', 'Unknown effect timing')
-                if when == 'success' and ability in ('pose', 'pair', 'sleep'):
+                if when == 'success' and ability in ('pose', 'pair'):
                     issue(q + '.when', 'unsupported_combination', 'This ability has no completion reward')
                 if when == 'active' and (typ != 'stat_delta' or ability == 'sleep'):
                     issue(q + '.when', 'unsupported_combination', 'Only awake stat deltas may have active rates')

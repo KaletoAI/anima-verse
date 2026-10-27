@@ -203,16 +203,21 @@ _author_lock = threading.RLock()
 _author_locks: Dict[str, Any] = {}
 
 
+def _author_mutex(prop_id: str):
+    pid = safe_prop_id(prop_id)
+    with _author_lock:
+        lock = _author_locks.get(pid)
+        if lock is None:
+            lock = _author_locks[pid] = threading.RLock()
+    return lock
+
+
 def _author_transaction(fn):
     """Serialize sidecar read/modify/write transactions, including nested reads."""
     @wraps(fn)
     def transaction(*args, **kwargs):
-        pid = safe_prop_id(str(args[0] if args else kwargs.get("prop_id", kwargs.get("pid", ""))))
-        with _author_lock:
-            lock = _author_locks.get(pid)
-            if lock is None:
-                lock = _author_locks[pid] = threading.RLock()
-        with lock:
+        pid = str(args[0] if args else kwargs.get("prop_id", kwargs.get("pid", "")))
+        with _author_mutex(pid):
             return fn(*args, **kwargs)
     return transaction
 
@@ -2173,7 +2178,24 @@ def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
     return target
 
 
+def _area_model_token(src: Path) -> str:
+    stat = src.stat()
+    return _document_revision({"metadata": read_model_sidecar(src),
+                               "mtime_ns": stat.st_mtime_ns, "size": stat.st_size})
+
+
 @_author_transaction
+def _areas_snapshot(pid: str, variant: Any) -> Dict[str, Any]:
+    meta = read_sidecar(pid) if pid else {}
+    index = _resolve_variant(pid, variant, meta) if meta else -1
+    gallery = model_gallery(pid, index) if index >= 0 else None
+    src = gallery.find(DEFAULT_TIER, fallback=False) if gallery else None
+    if not src or src.suffix.lower() != ".glb":
+        raise ValueError("this variant has no full-tier GLB to work on")
+    return {"index": index, "src": src, "uid": _variant_list(meta)[index]["uid"],
+            "revision": _document_revision(meta), "model_token": _area_model_token(src)}
+
+
 def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
                default_source: str, wait_s: float) -> List[Dict[str, Any]]:
     """ONE Blender run of ``scripts/picture_areas.py`` on a variant's full
@@ -2191,12 +2213,8 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
     if reason:
         raise BlenderUnavailable(reason)
     pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
-    index = _resolve_variant(pid, variant, meta) if meta else -1
-    g = model_gallery(pid, index) if index >= 0 else None
-    src = g.find(DEFAULT_TIER, fallback=False) if g else None
-    if not src or src.suffix.lower() != ".glb":
-        raise ValueError("this variant has no full-tier GLB to work on")
+    snapshot = _areas_snapshot(pid, variant)
+    src = snapshot["src"]
     if not refine.take_lod_slot(wait_s):
         raise BlenderUnavailable("blender is busy with another model — try "
                                  "again in a moment")
@@ -2212,13 +2230,35 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
     finally:
         refine.free_lod_slot()
 
-    previous = file_areas(src)
-    model_file = src
     if blob is not None:
         verdict = validate_static_glb(blob)
         if not verdict.get("ok"):
             raise RuntimeError("split model failed validation: "
                                + "; ".join(verdict.get("errors") or []))
+    return _land_areas_result(pid, snapshot, blob, data, params, default_source)
+
+
+@_author_transaction
+def _land_areas_result(pid: str, snapshot: Dict[str, Any], blob: Optional[bytes],
+                       data: Dict[str, Any], params: Dict[str, Any],
+                       default_source: str) -> List[Dict[str, Any]]:
+    """Land only onto the exact author document and mesh processed outside locks."""
+    meta = read_sidecar(pid)
+    index, src = snapshot["index"], snapshot["src"]
+    entries = _variant_list(meta)
+    gallery = model_gallery(pid, index)
+    try:
+        current_token = _area_model_token(src)
+    except OSError:
+        current_token = ""
+    if (not meta or _document_revision(meta) != snapshot["revision"]
+            or index >= len(entries) or entries[index]["uid"] != snapshot["uid"]
+            or not gallery or gallery.find(DEFAULT_TIER, fallback=False) != src
+            or current_token != snapshot["model_token"]):
+        raise PropRevisionConflict("prop or model changed during area processing; retry from the current document")
+    previous = file_areas(src)
+    model_file = src
+    if blob is not None:
         # A FRESH gallery for the landing. ``g`` was built before the Blender
         # run and memoizes the selection file it read then — minutes ago. A
         # distance-mesh thread that selected a ``low`` in the meantime would
@@ -2662,7 +2702,7 @@ def areas_info(prop_id: str, variant: Any = None) -> Dict[str, Any]:
 
 
 def _areas_after_landing(prop_id: str, variant: Any = None,
-                         wait_s: float = 10.0) -> None:
+                         wait_s: float = 10.0) -> bool:
     """The landing hook of the TWO paths a NEW mesh arrives on — the upload
     (``save_uploaded_glb`` → ``_store_bbox(landing=True)``) and the generation
     chain (``_generate``) — for EVERY variant (v2 E1: each is its own mesh):
@@ -2683,7 +2723,7 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
-        return
+        return False
     # E6 FIRST: a mesh whose modeller named its surfaces gets an area per
     # such material — on a file that has no reading yet, so a re-landed
     # split result is not adopted twice. The key-colour run that may follow
@@ -2691,15 +2731,20 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
     if _names_slot_materials(_variant_full_file(pid, variant)):
         try:
             detect_areas(pid, mode="adopt", variant=variant, wait_s=wait_s)
+        except PropRevisionConflict:
+            return False
         except Exception as e:                              # noqa: BLE001
             _landing_run_failed(pid, variant, e, "adoption of named materials")
     if not meta.get(KEY_AREAS_KEY) and not is_door_prop(meta):
         _reconcile_areas(pid, variant)
-        return
+        return True
     try:
         detect_areas(pid, mode="auto", variant=variant, wait_s=wait_s)
+    except PropRevisionConflict:
+        return False
     except Exception as e:                                  # noqa: BLE001
         _landing_run_failed(pid, variant, e, "picture-area detection")
+    return True
 
 
 def _names_slot_materials(mp: Optional[Path]) -> bool:
@@ -3032,6 +3077,7 @@ def set_suggested_mount(prop_id: str, mount: str) -> bool:
     return True
 
 
+@_author_transaction
 def set_rotation(prop_id: str, rotation: Any, variant: Any = None,
                  filename: str = "") -> Optional[Dict[str, Any]]:
     """Persist the orientation fix ``{x, y, z}`` (degrees, free values) on
@@ -3217,12 +3263,14 @@ def delete_surface_for(prop_id: str, variant: Any = None) -> bool:
         return False
     indices = ([variant] if variant is not None
                else list(_active_indices(_variant_list(meta))))
+    # Resolve model paths before taking the status lock. No _lock -> author
+    # acquisition is allowed; author transactions may consult generation state.
+    paths = [model_path(pid, variant=idx) for idx in indices]
     removed = False
     with _lock:
         if pid in _surface_building:
             raise SurfaceBakeRunning(pid)
-        for idx in indices:
-            mp = model_path(pid, variant=idx)
+        for mp in paths:
             if mp and delete_surface(mp):
                 removed = True
     if removed:
@@ -4344,7 +4392,7 @@ def bulk_update(prop_id: str, general: Any = None, variants: Any = None, *,
 
 
 @_author_transaction
-def delete_variant(prop_id: str, variant: int) -> bool:
+def _delete_variant_record(prop_id: str, variant: int) -> bool:
     """Remove one variant WITH its stored meshes, its selection entry and its
     SOURCE IMAGE. Refused for the last remaining variant — a prop always has
     one.
@@ -4386,7 +4434,13 @@ def delete_variant(prop_id: str, variant: int) -> bool:
     entries.pop(i)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
-    _store_bbox(pid)
+    return True
+
+
+def delete_variant(prop_id: str, variant: int) -> bool:
+    if not _delete_variant_record(prop_id, variant):
+        return False
+    _store_bbox(prop_id)
     return True
 
 
@@ -4777,9 +4831,10 @@ def select_model(prop_id: str, filename: str,
     filename deselects — on the default tier that persists the "render
     nothing" sentinel, on any other tier the tier ceases to exist. False when
     the prop, the variant or the file does not exist."""
-    g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
-    if not g or not g.select(filename, tier):
-        return False
+    with _author_mutex(prop_id):
+        g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
+        if not g or not g.select(filename, tier):
+            return False
     if (normalize_tier(tier) or DEFAULT_TIER) == DEFAULT_TIER:
         # The mesh the dims are derived from changed — re-measure it.
         _store_bbox(prop_id, variant)
@@ -4791,13 +4846,14 @@ def delete_model(prop_id: str, filename: str = "",
     """Remove ONE stored mesh (+ its sidecar) or ALL of a variant's. A
     selection pointing at a removed file moves to the newest remaining one
     (default tier) or is dropped (any other tier)."""
-    g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
-    if not g:
-        return False
-    doomed = [g.file(filename)] if filename else g.files()
-    if not g.delete(filename):
-        return False
-    _drop_areas_sidecars(doomed)
+    with _author_mutex(prop_id):
+        g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
+        if not g:
+            return False
+        doomed = [g.file(filename)] if filename else g.files()
+        if not g.delete(filename):
+            return False
+        _drop_areas_sidecars(doomed)
     _store_bbox(prop_id, variant)
     return True
 
@@ -5018,7 +5074,8 @@ def variant_images(prop_id: str, variant: Any = None) -> Dict[str, Dict[str, str
             if source_path(prop_id, variant, view=v)}
 
 
-def save_uploaded_glb(prop_id: str, contents: bytes,
+@_author_transaction
+def _save_uploaded_glb_record(prop_id: str, contents: bytes,
                       tier: str = DEFAULT_TIER, variant: Any = None) -> bool:
     """Store an uploaded GLB as a NEW mesh of one variant and make it the
     active one of its tier. The prop record must already exist (created
@@ -5053,6 +5110,14 @@ def save_uploaded_glb(prop_id: str, contents: bytes,
         _lod_failed.discard(_lod_key(safe_prop_id(prop_id), variant))
     logger.info("Prop %s: model uploaded (%d bytes) -> %s",
                 safe_prop_id(prop_id), len(contents), target.name)
+    return True
+
+
+def save_uploaded_glb(prop_id: str, contents: bytes,
+                      tier: str = DEFAULT_TIER, variant: Any = None) -> bool:
+    """Publish the uploaded file, then process it outside the author mutex."""
+    if not _save_uploaded_glb_record(prop_id, contents, tier, variant):
+        return False
     _store_bbox(prop_id, variant, landing=True)
     return True
 
@@ -5326,18 +5391,14 @@ def _reduce_to_low(pid: str, src: Path, ratio: float,
     # `_land_split` drops a stale low tier, but at that moment there is none to
     # drop, and the distance mesh of the file that was just replaced would then
     # become the low tier of its successor — the atlas where the picture is.
-    # So the selection is written and read back under `_lock`, and a low mesh
-    # that turns out to belong to the superseded file removes itself again
+    # Selection and the current-full check share the author transaction; a low
+    # mesh that belongs to the superseded file is removed instead
     # (`delete` takes the sidecar with it). The gallery is built FRESH here:
     # the instance above memoized the selection file before the reduction, and
     # writing that memo back would restore the superseded full tier.
-    with _lock:
-        fresh = model_gallery(pid, variant) or gallery
-        fresh.select(target.name, LOW_TIER)
-        if fresh.find(DEFAULT_TIER, fallback=False) != src:
-            fresh.delete(target.name)
-            out["error"] = "full mesh changed during the build"
-            return out
+    if not _select_low_if_current(pid, variant, src, target):
+        out["error"] = "full mesh changed during the build"
+        return out
     _lod_failed.discard(key)
     logger.info("Prop %s: distance mesh %s (%s -> %s tris)", pid,
                 target.name, res.get("tris_before"), res.get("tris"))
@@ -5345,6 +5406,18 @@ def _reduce_to_low(pid: str, src: Path, ratio: float,
                tris_before=res.get("tris_before"),
                size=target.stat().st_size, size_before=src.stat().st_size)
     return out
+
+
+@_author_transaction
+def _select_low_if_current(pid: str, variant: Any, src: Path, target: Path) -> bool:
+    """Serialize gallery landing with author writes, never while holding _lock."""
+    fresh = model_gallery(pid, variant)
+    if not fresh or fresh.find(DEFAULT_TIER, fallback=False) != src:
+        if fresh:
+            fresh.delete(target.name)
+        return False
+    fresh.select(target.name, LOW_TIER)
+    return True
 
 
 def build_low_tier(prop_id: str, ratio: float = 0.0, force: bool = False,
@@ -5495,7 +5568,6 @@ def _demand_low(prop_id: str, variant: Any, tiers: List[str]) -> None:
         request_low_tier(prop_id, variant)
 
 
-@_author_transaction
 def _store_bbox(prop_id: str, variant: Any = None, *,
                 landing: bool = False) -> None:
     """Everything that happens once a model has landed: re-encode its
@@ -5525,7 +5597,8 @@ def _store_bbox(prop_id: str, variant: Any = None, *,
     # from the split file and not from the one it replaces. Never fails the
     # landing. The generation chain has the same call of its own (`_generate`).
     if landing:
-        _areas_after_landing(prop_id, variant, wait_s=10.0)
+        if not _areas_after_landing(prop_id, variant, wait_s=10.0):
+            return
     else:
         _reconcile_areas(prop_id, variant)
     _auto_retexture(prop_id, variant)
@@ -5547,23 +5620,37 @@ def _store_bbox(prop_id: str, variant: Any = None, *,
     # read-modify-write, and it writes only when the result really changed.
     # The generation chain has the same call of its own (`_generate`).
     _autofill_slots(prop_id)
+    pid = safe_prop_id(prop_id)
+    try:
+        snapshot = _areas_snapshot(pid, None)
+    except ValueError:
+        return
     bbox = _extract_bbox(prop_id)
     if not bbox:
         return
-    pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
-    if not meta:
+    # External measurement never inherits the author mutex. The final merge
+    # rechecks both the author document and the exact model that was measured.
+    from app.blender.refine import attach_measurement
+    measured: Dict[str, Any] = {}
+    attach_measurement(measured, snapshot["src"])
+    _land_bbox_result(pid, snapshot, bbox, measured)
+
+
+@_author_transaction
+def _land_bbox_result(pid: str, snapshot: Dict[str, Any], bbox: List[float],
+                     measured: Dict[str, Any]) -> None:
+    meta = read_sidecar(pid)
+    if not meta or _document_revision(meta) != snapshot["revision"]:
+        return
+    try:
+        current = _areas_snapshot(pid, None)
+    except (OSError, ValueError):
+        return
+    if any(current[key] != snapshot[key] for key in ("uid", "src", "model_token")):
         return
     meta["bbox"] = bbox
-    _redistribute_dims(meta, file_areas(model_path(prop_id))[ROTATION_KEY])
-    # Same write, one more source: the header parser above yields the box, but
-    # not the triangle count, the UV sets or whether the colour sits in the
-    # vertices — and those are what decides whether a prop is cheap enough to
-    # place many times. Purely informational; nothing here derives dims from it.
-    mp = model_path(prop_id)
-    if mp:
-        from app.blender.refine import attach_measurement
-        attach_measurement(meta, mp)
+    meta.update(measured)
+    _redistribute_dims(meta, file_areas(snapshot["src"])[ROTATION_KEY])
     try:
         _write_sidecar(pid, meta)
     except (OSError, ValueError):

@@ -164,6 +164,24 @@ from app.core.model_store import (read_sidecar as read_model_sidecar,  # noqa: E
                                   write_sidecar)
 from app.core.scene_recipe import _prop_models  # noqa: E402
 
+# This probe tests bookkeeping, not Blender. Disable automatic external work
+# through its existing gates; fail any unplanned binary call.
+from app.blender import refine, runner
+refine.auto_retexture_enabled = lambda: False
+refine.auto_lod_enabled = lambda: False
+refine.auto_bake_vc_enabled = lambda: False
+runner.is_available = lambda: False
+# Measurement is also an external Blender boundary, not a persistence fixture.
+refine.measure_file = lambda path: None
+
+
+def forbidden_blender(*args, **kwargs):
+    FAILURES.append("unplanned external Blender processing")
+    raise AssertionError("variant smoke attempted real external Blender processing")
+
+
+runner.run = forbidden_blender
+
 FAILURES = []
 
 
@@ -1627,17 +1645,23 @@ def main() -> int:
     # the fern was created without dims, so both variants are the 1 m
     # placeholder cube and neither overrides it.
     cube = {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}
-    # …and (spec-bild-props-v2.md E1) what each variant's ACTIVE FILE
-    # carries: no areas, no leaf, the zero fix, no pane defaults, no note —
-    # plus (E5) the two face budgets, unstated on a prop nobody dialled.
-    plain = {"areas": [], "rotation": {"x": 0, "y": 0, "z": 0},
-             "area_defaults": {}, "areas_warning": "",
-             "target_faces_high": None, "target_faces_low": None}
+    fern_uid = store.list_variants(fern)[0]["uid"]
+    authored_binding = dict(action_id="rest", variant_uid=fern_uid, supported=False,
+                            marker_ids=[], access_points={}, validation="suggested")
+    store.bulk_update(fern, base_revision=store.get_prop(fern)["revision"],
+                      actions=[dict(id="rest", name="Rest", description="", enabled=True,
+                                    ability="pose", pose_key="", participants=1, presence="any",
+                                    interrupt_on_presence_change=False, phases=[],
+                                    requirements=[], effects=[])],
+                      variants={fern_uid: {"action_bindings": [authored_binding]}})
+    tiers = store.get_prop(fern)["variant_tiers"]
     check("the record lists tiers per active variant, with its store index",
-          (store.get_prop(fern) or {}).get("variant_tiers")
-          == [{"variant": 0, "tiers": ["full", "low"], "dims": cube, **plain},
-              {"variant": 1, "tiers": ["full"], "dims": cube, **plain}],
-          str((store.get_prop(fern) or {}).get("variant_tiers")))
+          [(v["variant"], v["tiers"], v["dims"]) for v in tiers]
+          == [(0, ["full", "low"], cube), (1, ["full"], cube)])
+    authored = store.list_variants(fern)
+    check("published variants retain stable identities and authored bindings",
+          [(v["uid"], v["action_bindings"]) for v in tiers]
+          == [(v["uid"], v["action_bindings"]) for v in authored])
     spec = spec_of(fern)
     check("model_variants has one map per active variant",
           len(spec.get("model_variants") or []) == 2,

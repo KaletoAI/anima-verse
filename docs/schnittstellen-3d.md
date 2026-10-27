@@ -7575,8 +7575,9 @@ and effects. Stat requirements use existing stat IDs, `lt/le/eq/ge/gt` and
 finite values; condition requirements use existing condition IDs and boolean
 `present`. Effects support stat deltas, mood text, condition add/remove, actor/
 partner/both targets and start/success/active timing. Solo actions cannot target
-a partner; only combined actions have completion rewards/phases; sleep has no
-custom active regeneration rate.
+a partner; only combined actions have named phases. Open pose/pair actions
+have no completion rewards; sleep permits a once-only success effect on the real
+awake-to-asleep transition, but no custom active regeneration rate.
 
 Bindings identify action and owning variant UID, supported state, alternative
 marker IDs, per-role `access_points` (`actor`, plus `partner` for pairs) and
