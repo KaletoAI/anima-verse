@@ -1,5 +1,6 @@
 import type { ModelWater } from '../props/propTypes'
 import { applyPreviewTilt, rateLimitPreviewTilt } from './motionFieldPreview'
+import { accessWorldPoint, accessLocalPoint } from '../props/spatialBindings'
 /**
  * Model3DViewer — interactive preview of a generated character mesh.
  *
@@ -260,11 +261,19 @@ export interface TilePlacement {
   figureHeightWorld?: number
 }
 
+export interface ActionAccessOverlay {
+  role: 'actor' | 'partner'
+  label: string
+  x: number
+  z: number
+  yaw: number
+}
+
 export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   placement, onBounds, markers, lightPoint, waterRegions, onPickModelPoint, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
-  picking = false, onPickPoint,
+  picking = false, onPickPoint, actionAccessPoints, spatialAuthoring = false, onPickGroundPoint,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox }:
@@ -345,6 +354,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  fractions — the floor-plan-style marker placement. */
     picking?: boolean
     onPickPoint?: (at: [number, number, number]) => void
+    /** Already oriented local metres, relative to the footprint centre. */
+    actionAccessPoints?: ActionAccessOverlay[]
+    /** Keep body/access/heading overlays visible independently of scale kit. */
+    spatialAuthoring?: boolean
+    /** Ground-plane pick: local x/z metres, allowed outside the mesh bounds. */
+    onPickGroundPoint?: (point: { x: number; z: number }) => void
     /** THE FRONT VIEW (spec-picture-props.md § 4, spec-bild-props-v2 § B1):
      *  the model straight on, centred, filling the frame — the authoring view
      *  of a flat panel, and the one the polygon tool is drawn on. It is a
@@ -478,6 +493,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   pickingRef.current = picking
   const onPickPointRef = useRef(onPickPoint)
   onPickPointRef.current = onPickPoint
+  const actionAccessRef = useRef(actionAccessPoints)
+  actionAccessRef.current = actionAccessPoints
+  const spatialAuthoringRef = useRef(spatialAuthoring)
+  spatialAuthoringRef.current = spatialAuthoring
+  const groundPickRef = useRef(onPickGroundPoint)
+  groundPickRef.current = onPickGroundPoint
   const overlayFnRef = useRef<(() => void) | null>(null)
   /** Re-frames the model-mode camera (model + scale kit). */
   const refitFnRef = useRef<(() => void) | null>(null)
@@ -645,7 +666,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   // Live overlay refresh (markers moved/added, dims typed, a sink dialled)
   // without reload — a typed number must show up while it is being typed.
   useEffect(() => { overlayFnRef.current?.() },
-    [markers, lightPoint, waterRegions, dimsOverlay, figureHeight, scaleFigure, groundOffsetM])
+    [markers, lightPoint, waterRegions, dimsOverlay, figureHeight, scaleFigure, groundOffsetM, actionAccessPoints, spatialAuthoring])
   useEffect(() => {
     const refresh = () => overlayFnRef.current?.()
     window.addEventListener('animation-clips-changed', refresh)
@@ -1310,6 +1331,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           pivot.add(markerGroup)
           const dimsGroup = new THREE.Group()
           scene.add(dimsGroup)
+          const accessGroup = new THREE.Group()
+          scene.add(accessGroup)
           // Preview figures anchor in WORLD space (they stand upright while
           // the marker point rides the object through the orientation fix).
           const figGroup = new THREE.Group()
@@ -1555,6 +1578,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             clearGroup(markerGroup)
             clearGroup(waterGroup)
             clearGroup(dimsGroup)
+            clearGroup(accessGroup)
             clearGroup(figGroup)
             clearGroup(refGroup)
             const figToken = ++figTokenRef.current
@@ -1562,6 +1586,36 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             // both the scale kit and the dims overlay below measure from it,
             // so the figure stands on the same lower edge the H label marks.
             const ob = new THREE.Box3().setFromObject(object)
+            const accessMetre = figureHeightRef.current / FIGURE_HEIGHT_M
+            if (accessMetre > 0 && spatialAuthoringRef.current) {
+              const centre = ob.getCenter(new THREE.Vector3())
+              const groundY = ob.min.y - (groundOffsetRef.current || 0) * accessMetre
+              // A ground tool still needs its real metre plane when the optional mannequin kit is off.
+              if (!scaleFigureRef.current) {
+                const reach = Math.max(ob.max.x - ob.min.x, ob.max.z - ob.min.z) + 4 * accessMetre
+                const cells = Math.max(2, Math.ceil(reach / accessMetre))
+                const grid = new THREE.GridHelper(cells * accessMetre, cells, 0x8b949e, 0x8b949e)
+                grid.position.set(centre.x, groundY, centre.z)
+                accessGroup.add(grid)
+              }
+              for (const point of actionAccessRef.current || []) {
+                const color = point.role === 'actor' ? 0x58a6ff : 0xd2a8ff
+                const position = new THREE.Vector3(...accessWorldPoint(point, {
+                  centreX: centre.x, centreZ: centre.z, groundY, unitsPerMetre: accessMetre }))
+                const ring = new THREE.Mesh(new THREE.RingGeometry(.12 * accessMetre, .16 * accessMetre, 28),
+                  new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, depthTest: false }))
+                ring.rotation.x = -Math.PI / 2
+                ring.position.copy(position); ring.renderOrder = 4
+                accessGroup.add(ring)
+                const yaw = point.yaw * Math.PI / 180
+                const heading = new THREE.ArrowHelper(new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)),
+                  position, .5 * accessMetre, color, .13 * accessMetre, .08 * accessMetre)
+                accessGroup.add(heading)
+                const label = textSprite(point.label, point.role === 'actor' ? '#58a6ff' : '#d2a8ff', .16 * accessMetre)
+                label.position.copy(position); label.position.y += .18 * accessMetre
+                accessGroup.add(label)
+              }
+            }
 
             // ── Scale kit: the 1.70 m reference beside the model ──
             // `figureHeight` IS the conversion: it is what 1.70 m measures in
@@ -1779,7 +1833,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             // and the posed preview figures with it — on a wall mirror they
             // sit right on the pane. `rebuildOverlay` re-runs on the toggle
             // (see its effect deps), so this is the whole switch.
-            if (scaleFigureRef.current) (markersRef.current || []).forEach((m, i) => {
+            if (scaleFigureRef.current || spatialAuthoringRef.current) (markersRef.current || []).forEach((m, i) => {
               const local = new THREE.Vector3(
                 rawBox.min.x + m.at[0] * rawSize.x,
                 rawBox.min.y + m.at[1] * rawSize.y,
@@ -1794,6 +1848,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               num.position.copy(local)
               num.position.y += r * 2.4
               markerGroup.add(num)
+              if (spatialAuthoringRef.current && typeof m.facing === 'number') {
+                const world = pivot.localToWorld(local.clone())
+                const yaw = m.facing * Math.PI / 180
+                const heading = new THREE.ArrowHelper(new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)),
+                  world, .4 * accessMetre, 0x3fb950)
+                figGroup.add(heading)
+              }
               // Posed preview figures (1.7 m at the caller's mesh scale) —
               // ONE PER SLOT: a seat is only judgeable with someone sitting on
               // it, and a bench only with everyone it seats.
@@ -1802,6 +1863,19 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               // `figH` IS the conversion: it is what 1.70 m measures in this
               // mesh's units, so one metre is figH / 1.70 of them.
               const perMetre = figH / FIGURE_HEIGHT_M
+              if (spatialAuthoringRef.current) {
+                const world = pivot.localToWorld(local.clone())
+                markerSlots([world.x, world.z], m.facing, m.capacity || 1,
+                  (m.spacing_m || .6) * perMetre, m.slot_axis).forEach(([x, z], slot) => {
+                  const dot = new THREE.Mesh(new THREE.SphereGeometry(.055 * perMetre, 8, 8),
+                    new THREE.MeshBasicMaterial({ color: 0xf0b35c, depthTest: false }))
+                  dot.position.set(x, world.y, z); dot.renderOrder = 4
+                  figGroup.add(dot)
+                  const label = textSprite(`Slot ${slot + 1}`, '#f0b35c', .12 * perMetre)
+                  label.position.set(x, world.y + .12 * perMetre, z)
+                  figGroup.add(label)
+                })
+              }
               const kind = m.previewKind || undefined
               void (async () => {
                 const idx = await clipIndex()
@@ -1840,6 +1914,11 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                   const pts = pairPoints([world.x, world.z], m.facing, yawOffset,
                                          { a: offset('a'), b: offset('b') })
                   for (const role of ['a', 'b'] as const) {
+                    if (spatialAuthoringRef.current) {
+                      const label = textSprite(`Clip ${role.toUpperCase()}`, '#3fb950', .16 * perMetre)
+                      label.position.set(pts[role][0], world.y + .22 * perMetre, pts[role][1])
+                      figGroup.add(label)
+                    }
                     await addMarkerFigure({
                       x: pts[role][0], y: rootY, z: pts[role][1],
                       kind, role, surfaceGroup: m.group, facingDeg: yawDeg, figH, token: figToken })
@@ -1906,6 +1985,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             clearGroup(markerGroup)
             clearGroup(waterGroup)
             clearGroup(dimsGroup)
+            clearGroup(accessGroup)
             clearGroup(figGroup)
             clearGroup(refGroup)
           })
@@ -1919,7 +1999,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           const onUp = (e: PointerEvent) => {
             const start = downAt
             downAt = null
-            if (!start || !pickingRef.current || (!onPickPointRef.current && !waterPickRef.current)) return
+            if (!start || !pickingRef.current || (!onPickPointRef.current && !waterPickRef.current && !groundPickRef.current)) return
             if (Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 5) return
             const rect = renderer.domElement.getBoundingClientRect()
             const ndc = new THREE.Vector2(
@@ -1927,6 +2007,17 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               -(((e.clientY - rect.top) / rect.height) * 2 - 1))
             const ray = new THREE.Raycaster()
             ray.setFromCamera(ndc, camera)
+            if (groundPickRef.current) {
+              const metre = figureHeightRef.current / FIGURE_HEIGHT_M
+              if (!(metre > 0)) return
+              const box = new THREE.Box3().setFromObject(object)
+              const centre = box.getCenter(new THREE.Vector3())
+              const groundY = box.min.y - (groundOffsetRef.current || 0) * metre
+              const point = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY), new THREE.Vector3())
+              if (point) groundPickRef.current(accessLocalPoint([point.x, point.y, point.z], {
+                centreX: centre.x, centreZ: centre.z, groundY, unitsPerMetre: metre }))
+              return
+            }
             const hit = ray.intersectObject(object, true)[0]
             if (!hit) return
             const local = pivot.worldToLocal(hit.point.clone())
@@ -1954,10 +2045,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
 
         setLoading(false)
 
-        let raf = 0
+        let raf: number | null = null
+        let renderVisible = false
+        let renderWidth = width
         let displayedTilt = { forward: 0, sideways: 0 }
         const animate = () => {
-          raf = requestAnimationFrame(animate)
+          raf = null
+          if (disposed || !renderVisible) return
           const realDelta = clock.getDelta()
           if (embeddedTakes && mixer) {
             const control = takeRef.current
@@ -1993,18 +2087,43 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           object.updateMatrixWorld(true)
           controls.update()
           renderer.render(scene, camera)
+          raf = requestAnimationFrame(animate)
         }
-        animate()
-        disposers.push(() => cancelAnimationFrame(raf))
 
+        disposers.push(() => {
+          renderVisible = false
+          clock.stop()
+          if (raf !== null) cancelAnimationFrame(raf)
+        })
         const onResize = () => {
-          const w = mount.clientWidth || width
-          camera.aspect = w / height
-          camera.updateProjectionMatrix()
-          renderer.setSize(w, height)
+          const w = mount.clientWidth
+          if (disposed || document.hidden || !w || !mount.clientHeight) {
+            renderVisible = false
+            clock.stop()
+            if (raf !== null) { cancelAnimationFrame(raf); raf = null }
+            return
+          }
+          if (w !== renderWidth) {
+            renderWidth = w
+            camera.aspect = w / height
+            camera.updateProjectionMatrix()
+            renderer.setSize(w, height)
+          }
+          if (!renderVisible) {
+            renderVisible = true
+            // Hidden time is not animation/physics time. Keep object and camera.
+            clock.start()
+            raf = requestAnimationFrame(animate)
+          }
         }
-        window.addEventListener('resize', onResize)
-        disposers.push(() => window.removeEventListener('resize', onResize))
+        // A hidden mobile editor keeps this viewer mounted, but no RAF or scene
+        // updates run until its stage has a visible size again.
+        const resizeObserver = new ResizeObserver(onResize)
+        resizeObserver.observe(mount)
+        disposers.push(() => resizeObserver.disconnect())
+        document.addEventListener('visibilitychange', onResize)
+        disposers.push(() => document.removeEventListener('visibilitychange', onResize))
+        onResize()
       } catch (e) {
         cleanup?.()  // dispose the context if the renderer was already created
         if (!disposed) {

@@ -197,10 +197,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="content-location-smoke-"))
+os.environ["STORAGE_DIR"] = str(STORAGE)
+os.environ["INSTANCE_DIR"] = str(STORAGE / "instance")
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="content-location-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
+paths.init_instance(STORAGE / "instance")
+from app.blender import runner as blender_runner
+blender_runner.is_available = lambda: False
 from app.core import db  # noqa: E402
 db.init_schema()
 
@@ -276,6 +281,17 @@ prop = create_prop(name="Chair", category="furniture", width_m=0.5,
                    depth_m=0.5, height_m=1.0)
 prop_id = prop["id"]
 (_prop_dir(prop_id, create=True) / "model_1.glb").write_bytes(b"GLB-prop")
+from app.core import props as prop_store
+action_document = prop_store.read_sidecar(prop_id)
+action_document["actions"] = [{"id": "location-sit", "name": "Sit", "description": "", "enabled": False,
+    "ability": "pose", "pose_key": "sitting", "participants": 1, "presence": "any",
+    "interrupt_on_presence_change": False, "phases": [], "requirements": [], "effects": []}]
+action_variant = action_document["model_variants"][0]
+action_variant["markers"] = [{"id": "seat", "group": "seat", "at": [.5, .5, .5], "facing": 0}]
+action_variant["action_bindings"] = [{"action_id": "location-sit", "variant_uid": action_variant["uid"],
+    "supported": True, "marker_ids": ["seat"], "access_points": {"actor": {"x": 0, "z": .75, "yaw": 180}},
+    "validation": "local_valid"}]
+prop_store._write_sidecar(prop_id, action_document)
 
 data = _load_world_data()
 for entry in data.get("locations", []):
@@ -555,8 +571,26 @@ OAK_VARIANTS = [{"stem": "model", "active": True, **OAK_DIMS},
                 {"stem": "model-v2", "active": True, **OAK_DIMS}]
 check("Selection wie erwartet",
       read_json(odir / "selection.json"), OAK_SELECTION)
-check("Variantenliste wie erwartet",
-      read_sidecar(OAK).get("model_variants"), OAK_VARIANTS)
+# Assert the semantic variant contract, not an incidental whole-dict shape.
+oak_document = read_sidecar(OAK)
+OAK_UIDS = [v["uid"] for v in oak_document["model_variants"]]
+from uuid import UUID
+check("Varianten-UUIDs kanonisch und verschieden",
+      [str(UUID(uid)) for uid in OAK_UIDS] == OAK_UIDS and len(set(OAK_UIDS)) == 2, True)
+OAK_ACTIONS = [{"id": "oakobserve", "name": "Observe", "description": "", "enabled": False,
+    "ability": "pose", "pose_key": "standing", "participants": 1, "presence": "any",
+    "interrupt_on_presence_change": False, "phases": [], "requirements": [], "effects": []}]
+oak_document["actions"] = OAK_ACTIONS
+for variant in oak_document["model_variants"]:
+    variant["markers"] = [{"id": "observe", "group": "stand", "at": [.5, .5, .5], "facing": 0}]
+    variant["action_bindings"] = [{"action_id": "oakobserve", "variant_uid": variant["uid"],
+        "supported": True, "marker_ids": ["observe"],
+        "access_points": {"actor": {"x": 0, "z": 1.5, "yaw": 180}}, "validation": "local_valid"}]
+OAK_BINDINGS = [v["action_bindings"] for v in oak_document["model_variants"]]
+prop_store._write_sidecar(OAK, oak_document)
+check("Varianten-Meshzuordnung und Dimensionen wie erwartet",
+      [{key: v[key] for key in ("stem", "active", *OAK_DIMS)}
+       for v in read_sidecar(OAK)["model_variants"]], OAK_VARIANTS)
 
 # --- the location -----------------------------------------------------------
 grove = add_location("Grove", "v6 fixture", rooms=[
@@ -743,8 +777,15 @@ check("Boden-Layout (§ A13a: nur Props + Marker)",
       imported[GROUND_ROOM_ID], GROUND_OUT)
 
 odir = _prop_dir(OAK)
-check("Variantenliste wiederhergestellt",
-      read_sidecar(OAK).get("model_variants"), OAK_VARIANTS)
+restored_oak = read_sidecar(OAK)
+check("Varianten-Meshzuordnung und Dimensionen wiederhergestellt",
+      [{key: v[key] for key in ("stem", "active", *OAK_DIMS)}
+       for v in restored_oak["model_variants"]], OAK_VARIANTS)
+check("stabile Varianten-UUIDs wiederhergestellt",
+      [v["uid"] for v in restored_oak["model_variants"]], OAK_UIDS)
+check("Handlungen wiederhergestellt", restored_oak["actions"], OAK_ACTIONS)
+check("Varianten-Bindings samt IDs und Zugang wiederhergestellt",
+      [v["action_bindings"] for v in restored_oak["model_variants"]], OAK_BINDINGS)
 check("Selection inkl. __none__-Sentinel wiederhergestellt",
       read_json(odir / "selection.json"), OAK_SELECTION)
 check("Variante 0 Mesh", read_bytes(odir / "model_1.glb"), b"GLB-oak-full")

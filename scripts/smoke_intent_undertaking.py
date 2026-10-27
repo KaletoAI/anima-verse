@@ -38,9 +38,24 @@ def undertaking(temporary=True):
     return a, b, intent
 
 
+def accept_activity(intent):
+    """Legacy temporary Together still starts immediately; normal NPCs answer."""
+    request_id = "iinv_intent_" + intent["id"]
+    row = IE.get_invite(request_id)
+    if F.C.is_temporary_npc(row["invitee"]):
+        assert row["status"] == "accepted"
+        interaction = IE.get_interaction(row["inviter"])
+        assert interaction and interaction["invite_id"] == request_id
+    else:
+        assert row["status"] == "pending"
+        assert IE.resolve_invite(request_id, True)["status"] == "started"
+
+
 def complete_after_real_end():
     a, b, intent = undertaking()
     assert F.P.resolve_pending_invite(F.invite_id(intent), True)["status"] == "accepted"
+    assert IE.get_interaction(a)["partner"] == b, "legacy temporary Together did not start"
+    accept_activity(intent)
     row = F.I.get_intent(intent["id"])
     assert row["status"] == "active", "arrival prematurely completed the undertaking"
     assert all(F.C.get_character_current_room(n) == "cellar" for n in (a, b))
@@ -60,6 +75,7 @@ def complete_after_real_end():
 def cancellation_stops_owned_pair():
     a, b, intent = undertaking()
     F.P.resolve_pending_invite(F.invite_id(intent), True)
+    accept_activity(intent)
     assert IE.get_interaction(a)
     assert F.I.cancel_intent(intent["id"])
     assert IE.get_interaction(a) is None and IE.get_interaction(b) is None
@@ -104,10 +120,12 @@ def submitted_receipt_cannot_replay():
 
 
 def interruption_is_not_success():
-    a, b, intent = undertaking()
-    F.P.resolve_pending_invite(F.invite_id(intent), True)
-    assert IE.end_interaction(a, reason="sleep")
-    assert F.I.get_intent(intent["id"])["status"] == "cancelled"
+    for reason in ("sleep", "pose", "position"):
+        a, b, intent = undertaking()
+        F.P.resolve_pending_invite(F.invite_id(intent), True)
+        accept_activity(intent)
+        assert IE.end_interaction(a, reason=reason)
+        assert F.I.get_intent(intent["id"])["status"] == "cancelled"
 
 
 def invalid_activity_is_rejected():
@@ -160,6 +178,7 @@ def pause_holds_activity_and_resume_starts_once():
     F.T.reconcile(intent["id"], request=False)
     assert IE.get_invite("iinv_intent_" + intent["id"]) is None, "lock-held reconciliation requested external consent"
     F.T.reconcile(intent["id"])
+    accept_activity(intent)
     inter = IE.get_interaction(a)
     assert inter
     F.T.reconcile(intent["id"])
@@ -180,6 +199,7 @@ def pre_submission_block_can_resume():
     assert not row["meta"]["travel"]["activity"].get("submitted"), "failed preflight fabricated submission"
     F.C.save_character_skill_config(b, "interact", {"enabled": True})
     F.T.reconcile(intent["id"])
+    accept_activity(intent)
     assert IE.get_interaction(a)
     IE.end_interaction(a)
 
@@ -233,7 +253,7 @@ def stale_request_result_cannot_regress_start():
 
 def end_before_start_receipt_is_not_lost():
     original = IE._emit_invite_started
-    for reason, expected in (("ended", "done"), ("sleep", "cancelled")):
+    for reason, expected in (("ended", "done"), ("sleep", "cancelled"), ("pose", "cancelled")):
         a, b, intent = undertaking(temporary=False)
         F.P.resolve_pending_invite(F.invite_id(intent), True)
 
@@ -278,6 +298,7 @@ def old_live_question_survives_housekeeping():
     from app.core.timeutils import utc_now
     a, b, intent = undertaking()
     F.P.resolve_pending_invite(F.invite_id(intent), True)
+    accept_activity(intent)
     request_id = "iinv_intent_" + intent["id"]
     with F.db.transaction() as conn:
         conn.execute("UPDATE interaction_invites SET created_at=? WHERE invite_id=?",
@@ -293,14 +314,28 @@ def old_live_question_survives_housekeeping():
 
 def temporary_failure_keeps_actual_cause():
     a, b, intent = undertaking()
-    with patch.object(IE, "start_interaction", side_effect=ValueError("The pair seat is occupied.")):
-        F.P.resolve_pending_invite(F.invite_id(intent), True)
-    row = F.I.get_intent(intent["id"])
-    assert row["status"] == "cancelled"
-    assert "The pair seat is occupied." in row["meta"]["travel"]["reason"]
-    assert IE.get_interaction(a) is None and IE.get_interaction(b) is None
-    F.T.reconcile(intent["id"])
-    assert F.I.get_intent(intent["id"])["status"] == "cancelled"
+    # Lose actual clip capability after preflight but before the existing
+    # temporary Together hook starts it. No successful engine result is faked.
+    clip = F.CLIPS / "hug__b.fbx"
+    contents = clip.read_bytes()
+    from app.core import animation_clips
+    real_create = IE.create_invite
+    def lose_clip_before_question(*args, **kwargs):
+        clip.unlink()
+        animation_clips._clear_entries_cache()
+        return real_create(*args, **kwargs)
+    try:
+        with patch.object(IE, "create_invite", lose_clip_before_question):
+            F.P.resolve_pending_invite(F.invite_id(intent), True)
+        row = F.I.get_intent(intent["id"])
+        assert row["status"] == "cancelled"
+        assert "no pair animation" in row["meta"]["travel"]["reason"]
+        assert IE.get_interaction(a) is None and IE.get_interaction(b) is None
+        F.T.reconcile(intent["id"])
+        assert F.I.get_intent(intent["id"])["status"] == "cancelled"
+    finally:
+        clip.write_bytes(contents)
+        animation_clips._clear_entries_cache()
 
 
 def deleted_trip_is_not_rendered():
@@ -391,6 +426,24 @@ def start_racing_cancellation_is_not_orphaned():
         "a start between ownership read and withdrawal escaped cancellation"
 
 
+def durable_real_end_recovers_lost_hook():
+    original = hooks.emit
+    for reason, expected in (("ended", "done"), ("pose", "cancelled")):
+        a, b, intent = undertaking()
+        F.P.resolve_pending_invite(F.invite_id(intent), True)
+        accept_activity(intent)
+        owned = IE.get_interaction(a)["id"]
+        def stop_delivery(event, **kwargs):
+            if event != "interaction.ended":
+                return original(event, **kwargs)
+        with patch.object(hooks, "emit", stop_delivery):
+            assert IE.end_interaction(a, reason=reason, interaction_id=owned)
+        assert F.C.get_character_profile(a)["last_interaction_result"]["interaction_id"] == owned
+        F.T.reconcile(intent["id"])
+        assert F.I.get_intent(intent["id"])["status"] == expected
+        assert IE.get_interaction(a) is None
+
+
 if __name__ == "__main__":
     try:
         for case in (complete_after_real_end, cancellation_stops_owned_pair, declined_trip_starts_nothing,
@@ -403,7 +456,7 @@ if __name__ == "__main__":
                      old_live_question_survives_housekeeping, temporary_failure_keeps_actual_cause,
                      deleted_trip_is_not_rendered, persisted_pair_provenance_recovers_missing_hook,
                      live_provenance_before_accepted_is_running, cancellation_before_accepted_stops_owned_pair,
-                     start_racing_cancellation_is_not_orphaned):
+                     start_racing_cancellation_is_not_orphaned, durable_real_end_recovers_lost_hook):
             case()
             print(f"PASS: {case.__name__}")
     finally:

@@ -62,6 +62,8 @@ export interface PlaceEntry {
    *  `models[]` spec carries the identical `anchor`. That is how a click on
    *  the prop finds the places on it. */
   anchor?: [number, number];
+  placementId?: string;
+  variantUid?: string;
 }
 
 /** The point a held place puts the figure on: a numbered slot is that slot

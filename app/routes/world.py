@@ -2376,44 +2376,40 @@ def _prop_update_sync(prop_id: str, data: Any) -> Dict[str, Any]:
 
 @router.post("/props/{prop_id}/bulk")
 async def prop_bulk_update(prop_id: str, request: Request) -> Dict[str, Any]:
-    """THE BATCH SAVE of the prop detail (body: ``{general?: {name?, category?,
-    tags?, sway_factor?, slots?, mount?}, variants?: {"<store index>": {dims?, description?,
-    ground_offset_m?, markers?, seasons?}}}``) — every field edit of one prop in
-    ONE request and ONE sidecar write.
+    """Compare-and-write fields/actions and UID-keyed bindings.
 
-    The detail panel collects its field edits in a local draft and writes them
-    with one explicit Save, exactly as the map editor does (`core/bulk_edit.py`,
-    plan-map-save-batch.md). The single-value routes stay: they are the readable
-    API — one path, one kind of value — and this is the batch of the very same
-    sanitizers, never a second, laxer way in.
-
-    NOT in the batch, deliberately: everything that moves a FILE. Image render
-    and upload, mesh generation, gallery selection, the orientation fix and the
-    variant verbs (add / on-off / delete) stay immediate operations, because
-    they change what the mesh signature, the store indices and the running jobs
-    address — a draft of those would be a promise about files that do not exist
-    yet.
-
-    Answers with the saved record plus its variants, so the client adopts what
-    was really stored instead of believing its own draft. An unknown field, a
-    field that belongs to the variants or an index this prop has no variant for
-    is a 400 and NOTHING is written."""
+    ``base_revision`` is mandatory. Stale drafts return 409; invalid author
+    documents return 422 with structured issues, without partial writes.
+    File operations remain immediate.
+    """
     data = await request.json()
     return await asyncio.to_thread(_prop_bulk_update_sync, prop_id, data)
 
 
 def _prop_bulk_update_sync(prop_id: str, data: Any) -> Dict[str, Any]:
     """The blocking body of ``prop_bulk_update`` — runs in the threadpool."""
-    from app.core.props import bulk_update, list_variants
+    from app.core.props import (bulk_update, list_variants,
+                                PropRevisionConflict, PropDocumentInvalid)
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="Body must be an object")
+    if not isinstance(data.get("base_revision"), str) or not data["base_revision"]:
+        raise HTTPException(status_code=422, detail={"issues": [{
+            "path": "base_revision", "code": "required", "severity": "error",
+            "message": "A base revision is required"}]})
     try:
-        prop = bulk_update(prop_id, data.get("general"), data.get("variants"))
+        prop = bulk_update(prop_id, data.get("general"), data.get("variants"),
+                           base_revision=data.get("base_revision"),
+                           **({"actions": data["actions"]} if "actions" in data else {}))
+    except PropRevisionConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except PropDocumentInvalid as e:
+        raise HTTPException(status_code=422, detail={"issues": e.issues})
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=422, detail={"issues": [{
+            "path": "", "code": "invalid_patch", "message": str(e), "severity": "error"}]})
     if not prop:
         raise HTTPException(status_code=404, detail="Prop not found")
-    return {"status": "ok", "prop": prop,
+    return {"status": "ok", "prop": prop, "revision": prop["revision"],
             "variants": list_variants(prop["id"])}
 
 

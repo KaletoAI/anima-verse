@@ -48,6 +48,8 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import type { PropVariant } from './propTypes'
+import type { PreparePropVariantOperation } from './propOperations'
+import { PropWorkspaceDialog } from './PropWorkspaceDialog'
 
 /** One chip's width in pixels — wide enough for the badge row, which is the
  *  widest thing in it since the inputs moved into the second column. Fixed on
@@ -56,7 +58,7 @@ const CHIP_W = 170
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   onChanged, onEditVariant, onDeleted, generating = [], worldSeasons = [],
-  currentSeason = '' }: {
+  currentSeason = '', prepareVariantOperation }: {
   propId: string
   /** Every variant, active or not, in order — the DRAFT list (PropDetail's
    *  load with the change buffer laid on top), so a field edit shows here and
@@ -91,6 +93,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   worldSeasons?: string[]
   /** The season the world is in right now, for the "renders now" hint. */
   currentSeason?: string
+  prepareVariantOperation: PreparePropVariantOperation
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -100,17 +103,20 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // window.confirm.
   const [armedDel, setArmedDel] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<PropVariant | null>(null)
   // Arming is bound to an INDEX, and a delete renumbers everything behind it —
   // so any change of the list disarms rather than pointing at another variant.
-  useEffect(() => { setArmedDel(null) }, [propId, variants.length])
+  useEffect(() => { setArmedDel(null); setDeleteTarget(null) }, [propId, variants.length])
 
   const activeCount = variants.filter((v) => v.active).length
   const capReached = activeCount >= max
 
-  const run = useCallback(async (fn: () => Promise<unknown>, ok: string) => {
+  const run = useCallback(async (uid: string, fn: (target: PropVariant) => Promise<unknown>, ok: string) => {
+    const target = await prepareVariantOperation(uid, ok)
+    if (!target) return
     setBusy(true)
     try {
-      await fn()
+      await fn(target)
       await onChanged()
       toast(ok)
     } catch (e) {
@@ -118,7 +124,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
     } finally {
       setBusy(false)
     }
-  }, [onChanged, t, toast])
+  }, [onChanged, t, toast, prepareVariantOperation])
 
   // The new slot carries no mesh — it is filled by the next generation
   // targeted at it, so selecting it right away is what the admin wants to do
@@ -126,16 +132,16 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // object is authored by editing the one beside it, not by re-typing size,
   // subject, sink and markers.
   const add = useCallback(() => {
-    void run(async () => {
+    void run(variants.find((entry) => entry.index === selected)?.uid || '', async (target) => {
       const d = await apiPost<{ index?: number }>(
-        `/world/props/${enc}/variants`, { from: selected })
+        `/world/props/${enc}/variants`, { from: target.index })
       if (typeof d?.index === 'number') onSelect(d.index)
     }, t('Variant added'))
-  }, [enc, onSelect, run, selected, t])
+  }, [enc, onSelect, run, selected, variants, t])
 
   const toggle = useCallback((v: PropVariant) => {
-    void run(
-      () => apiPost(`/world/props/${enc}/variants/${v.index}/active`, { active: !v.active }),
+    void run(v.uid,
+      (target) => apiPost(`/world/props/${enc}/variants/${target.index}/active`, { active: !v.active }),
       v.active ? t('Variant switched off') : t('Variant switched on'))
   }, [enc, run, t])
 
@@ -152,13 +158,25 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // Deleting a variant is IMMEDIATE (it takes its meshes and its source image
   // with it and renumbers everything behind it) — so the detail is told which
   // index went, and it renumbers its pending fields the same way.
-  const remove = useCallback((index: number) => {
+  const remove = useCallback(async (uid: string, acceptedBindings?: string[]) => {
     setArmedDel(null)
-    void run(async () => {
-      await apiDelete(`/world/props/${enc}/variants/${index}`)
-      onDeleted(index)
-    }, t('Variant deleted'))
-  }, [enc, onDeleted, run, t])
+    const target = await prepareVariantOperation(uid, t('Variante und ihre Bindungen löschen'))
+    if (!target) return
+    const references = (target.action_bindings || []).map(binding => binding.action_id)
+    if (references.length && (!acceptedBindings || references.some(id => !acceptedBindings.includes(id)))) {
+      setDeleteTarget(target)
+      return
+    }
+    setBusy(true)
+    try {
+      await apiDelete(`/world/props/${enc}/variants/${target.index}`)
+      setDeleteTarget(null)
+      onDeleted(target.index)
+      await onChanged()
+      toast(t('Variant deleted'))
+    } catch (error) { toast(t('Error') + ': ' + (error as Error).message, 'error') }
+    finally { setBusy(false) }
+  }, [enc, onDeleted, onChanged, prepareVariantOperation, t, toast])
 
   return (
     <>
@@ -181,7 +199,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
               (s) => s.toLowerCase() === currentSeason.toLowerCase())
           return (
             <div
-              key={v.index}
+              key={v.uid}
               style={{
                 // FIXED WIDTH, not content width: a chip whose width depended
                 // on its badges would re-flow the whole strip whenever a mesh
@@ -197,20 +215,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                 opacity: v.active ? 1 : 0.55,
               }}
             >
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                style={{
-                  border: 0, background: 'transparent', padding: '0 2px',
-                  textAlign: 'left', fontWeight: isSelected ? 600 : 400,
-                }}
-                onClick={() => onSelect(v.index)}
-                title={v.primary
-                  ? t('Primary variant — this is the mesh every consumer gets that does not ask for a variant. Click to show it in the preview and the gallery below.')
-                  : t('Show this variant in the preview and the mesh gallery below.')}
-              >
-                {v.primary ? '★ ' : ''}{t('Variant')} {v.index + 1}
-              </button>
+              <strong>{v.primary ? '★ ' : ''}{t('Variant')} {v.index + 1}</strong>
               <div style={{ display: 'flex', gap: 3, alignItems: 'center', flexWrap: 'wrap' }}>
                 {/* The spinner belongs on the chip the server names, and on no
                     other one — this is the whole point of the store index. */}
@@ -291,7 +296,8 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   className={`ga-btn ga-btn-sm${armedDel === v.index ? ' ga-btn-danger' : ''}`}
                   disabled={busy || isBusy || behindBusy || variants.length < 2}
                   onClick={() => {
-                    if (armedDel === v.index) remove(v.index)
+                    if (v.action_bindings?.length) setDeleteTarget(v)
+                    else if (armedDel === v.index) void remove(v.uid)
                     else setArmedDel(v.index)
                   }}
                   title={isBusy
@@ -327,11 +333,20 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
       {/* One short line — the details live in the field tooltips (user
           2026-08-24: the footer paragraph was long and half-translated). */}
       <span className="ga-hint">
-        {t('Variants of one object — scatter mixes them, ★ is the default, the selected chip drives the preview.')}
+        {t('Die Variantenauswahl oberhalb des Editors bestimmt die Geometrie. Aktivieren, Hinzufügen und Löschen werden sofort angewendet; Jahreszeiten gehören zum Entwurf.')}
         {worldSeasons.length ? ' ' + t('Season chips limit when a variant renders.') : null}
         {' '}
         {`${t('Active:')} ${activeCount}/${max}`}
       </span>
+      {deleteTarget && <PropWorkspaceDialog title={t('Variante mit Aktionsbindungen löschen')} onCancel={() => setDeleteTarget(null)}>
+        <p>{t('Wird sofort angewendet: Diese Variante, ihre Dateien und alle folgenden Bindungen werden gemeinsam entfernt. Aktionen bleiben am Prop bestehen; andere Varianten bleiben unverändert. Die UUID wird nach der Speicherschranke erneut aufgelöst.')}</p>
+        <ul>{(deleteTarget.action_bindings || []).map(binding => <li key={binding.action_id}>{binding.action_id}</li>)}</ul>
+        <div className="ga-form-row">
+          <button type="button" className="ga-btn ga-btn-danger" disabled={busy}
+            onClick={() => { void remove(deleteTarget.uid, (deleteTarget.action_bindings || []).map(binding => binding.action_id)) }}>{t('Variante und sämtliche abhängigen Bindungen löschen')}</button>
+          <button type="button" className="ga-btn" disabled={busy} onClick={() => setDeleteTarget(null)}>{t('Abbrechen')}</button>
+        </div>
+      </PropWorkspaceDialog>}
     </>
   )
 }

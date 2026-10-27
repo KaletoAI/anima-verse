@@ -12,7 +12,7 @@ Conventions:
 - Foreign keys enabled, ON DELETE CASCADE where appropriate
 """
 
-SCHEMA_VERSION = 9  # 9: set-scoped expression candidates
+SCHEMA_VERSION = 10  # 10: durable prop action executions and exclusive claims
 
 POSE_CANDIDATES_TABLE_SQL = """CREATE TABLE IF NOT EXISTS pose_candidates (
         axis TEXT NOT NULL CHECK(axis IN ('pose','expression')),
@@ -73,6 +73,41 @@ def rooms_rebuild_needed(table_info) -> bool:
 
 
 SCHEMA_STATEMENTS = [
+    """CREATE TABLE IF NOT EXISTS prop_action_runs (
+        execution_id TEXT PRIMARY KEY,
+        actor TEXT NOT NULL,
+        partner TEXT NOT NULL DEFAULT '',
+        request_id TEXT,
+        request_fingerprint TEXT NOT NULL,
+        action_id TEXT NOT NULL,
+        definition_revision TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN
+            ('awaiting_consent','approaching','active','sleeping','completed','cancelled','failed')),
+        phase TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        target TEXT NOT NULL CHECK(json_valid(target)),
+        definition TEXT NOT NULL CHECK(json_valid(definition)),
+        data TEXT NOT NULL CHECK(json_valid(data)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(actor, request_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS prop_action_claims (
+        claim_key TEXT PRIMARY KEY,
+        execution_id TEXT NOT NULL REFERENCES prop_action_runs(execution_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('person','slot')),
+        subject TEXT NOT NULL CHECK(json_valid(subject))
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_prop_action_claims_run
+        ON prop_action_claims(execution_id)""",
+    """CREATE TABLE IF NOT EXISTS prop_action_effect_receipts (
+        execution_id TEXT NOT NULL REFERENCES prop_action_runs(execution_id) ON DELETE CASCADE,
+        effect_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        result TEXT NOT NULL CHECK(json_valid(result)),
+        applied_at TEXT NOT NULL,
+        PRIMARY KEY(execution_id, effect_id, phase)
+    )""",
     """CREATE TABLE IF NOT EXISTS stat_overrides (
         scope TEXT NOT NULL,
         key TEXT NOT NULL,

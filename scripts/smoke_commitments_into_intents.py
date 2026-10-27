@@ -174,6 +174,7 @@ def main():
                 from jinja2 import Environment, meta
                 source = (Path(__file__).resolve().parents[1] / "shared/templates/llm" / template).read_text()
                 variables = {key: "" for key in meta.find_undeclared_variables(Environment().parse(source))}
+                variables["character_name"] = "demo"
                 rendered = render(template, **variables)
                 assert 'Open promises' not in rendered and 'open commitments' not in rendered.lower()
             assert 'Open commitments' not in memory.build_memory_prompt_section('demo')

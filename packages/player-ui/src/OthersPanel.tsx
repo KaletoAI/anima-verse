@@ -14,6 +14,8 @@ import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { EmptyState } from './EmptyState'
 import { useEnlarge } from './ZoomButton'
 import { thumbUrl, thumbWidth, transparentPortraitUrl } from './thumbs'
+import { PropActionsPanel } from './PropActionsPanel'
+import { onPropActionChanged } from './propActions'
 
 interface BarMeta { color?: string; label?: string; name?: string; name_de?: string }
 /** The avatar's relationship TO this character, as `/play/others` sends it.
@@ -209,6 +211,7 @@ export function OthersPanel() {
   const enlarge = useEnlarge()
   const { data, refresh } = usePoll<Others>(
     'play-others', () => apiGet<Others>('/play/others'), SYNC_ENDPOINTS.others)
+  useEffect(() => onPropActionChanged(() => { void refresh() }), [refresh])
   // The world's two-person actions — fetched once; the clip library does not
   // change while a scene is being played.
   const [pairPoses, setPairPoses] = useState<PairPose[] | null>(null)
@@ -297,6 +300,7 @@ export function OthersPanel() {
               </button>
             )}
           </div>
+          <PropActionsPanel partner={c.name} />
         </div>
       ))}
       {note && (

@@ -21,9 +21,11 @@ import { useToast } from '../../lib/Toast'
 import { PropCreateForm } from './PropCreateForm'
 import { PropDetail } from './PropDetail'
 import { PropImageDialog } from './PropImageDialog'
-import { CATEGORY_DATALIST_ID, MOUNT_KINDS, mountLabel } from './propTypes'
+import { PropWorkspaceDialog } from './PropWorkspaceDialog'
+import { CATEGORY_DATALIST_ID, MOUNT_KINDS, mountLabel, hasIncompleteActionBindings } from './propTypes'
+import { propGenerationTarget, resolveVariantAfterBarrier, type PropGenerationTarget } from './propOperations'
 import type {
-  ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage, PropView,
+  ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage, PropVariant, PropView,
 } from './propTypes'
 
 export type { ImageBackendInfo, MeshBackendInfo, PropFull, PropMarker } from './propTypes'
@@ -49,6 +51,27 @@ export function PropsTab() {
   const [armedDel, setArmedDel] = useState('')
   const [cacheBump, setCacheBump] = useState(0)
   const [creating, setCreating] = useState(false)
+  const [libraryOpen, setLibraryOpen] = useState(false)
+  const libraryButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!libraryOpen) return
+    const pane = document.querySelector<HTMLElement>('.props-admin .prop-library')
+    const focusable = () => Array.from(pane?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href]') || [])
+    focusable()[0]?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation()
+        setLibraryOpen(false)
+      } else if (event.key === 'Tab') {
+        const nodes = focusable(), first = nodes[0], last = nodes[nodes.length - 1]
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+      }
+    }
+    pane?.addEventListener('keydown', onKey)
+    return () => { pane?.removeEventListener('keydown', onKey); libraryButton.current?.focus() }
+  }, [libraryOpen])
   // Prop id whose 🧊 regenerate waits in the backend dialog (every 3D
   // generate button goes through the dialog — face count / texture size
   // are per-run overrides). `variant` is the model variant a RE-MESH refines;
@@ -57,8 +80,8 @@ export function PropsTab() {
   // offers exactly those to the multi-view alias, and the ones the admin
   // ticks travel with the mesh call.
   const [regen, setRegen] = useState<
-    { id: string; meshOnly: boolean; variant?: number
-      views?: PropView[] } | null>(null)
+    { id: string; meshOnly: boolean; variant?: number; uid?: string
+      plan?: PropGenerationTarget; views?: PropView[] } | null>(null)
   // Prop whose 🖼 image-only regenerate waits in the image dialog (backend +
   // final prompt; the mesh stays until re-meshed from the new image). The
   // VARIANT travels with it: the source image belongs to the variant, so the
@@ -73,8 +96,8 @@ export function PropsTab() {
   // this render may take as its appearance reference, which is how a new
   // version of the object is authored from the one before it.
   const [imgRegen, setImgRegen] = useState<
-    { prop: PropFull; variant: number; view: PropView; refVariants: number[]
-      image?: PropSourceImage; subject?: string } | null>(null)
+    { prop: PropFull; variant: number; uid: string; view: PropView; refs: PropVariant[]
+      image?: PropSourceImage; subject: string } | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
   // How the pieces are MOUNTED: '' = every prop, 'none' = the ones nobody has
@@ -87,6 +110,9 @@ export function PropsTab() {
   // from, so a wrong one eats a room — this filter is where the admin finds
   // them (plan-furnish-v2.md § 2 B3).
   const [estimatedOnly, setEstimatedOnly] = useState(false)
+  const [missingModelOnly, setMissingModelOnly] = useState(false)
+  const [actionsOnly, setActionsOnly] = useState(false)
+  const [incompleteBindingsOnly, setIncompleteBindingsOnly] = useState(false)
   // Selection mode for the bulk publish: a click on a row ticks it instead of
   // opening it (plan-marketplace-props.md Teil E).
   const [pickMode, setPickMode] = useState(false)
@@ -106,6 +132,9 @@ export function PropsTab() {
   // running (the route is synchronous — it holds the LLM call).
   const [classifyOpen, setClassifyOpen] = useState(false)
   const [classifying, setClassifying] = useState(false)
+  const [classifyReport, setClassifyReport] = useState<{
+    classified: number; unresolved: string[]
+  } | null>(null)
   // How many unsaved FIELD edits the open detail holds (its change buffer,
   // `pendingFields`). A tab switch is asked about by the shell
   // (`lib/unsavedGuard`), but switching to another prop never leaves this tab —
@@ -117,6 +146,7 @@ export function PropsTab() {
     setLeaveTo(null)
     setCreating(creating)
     setSelected(id)
+    setLibraryOpen(false)
   }, [])
   /** Open another prop (or the create form) — asking first when the detail
    *  still holds a draft. Selecting the prop that is already open is not a
@@ -204,11 +234,14 @@ export function PropsTab() {
       if (mountFilter === 'none' ? !!p.mount
         : mountFilter && p.mount !== mountFilter) return false
       if (estimatedOnly && !p.dims_estimated) return false
+      if (missingModelOnly && p.has_model) return false
+      if (actionsOnly && !(p.actions || []).length) return false
+      if (incompleteBindingsOnly && !hasIncompleteActionBindings(p)) return false
       if (!q) return true
       return p.name.toLowerCase().includes(q)
         || p.tags.some((tag) => tag.toLowerCase().includes(q))
     })
-  }, [props, query, catFilter, mountFilter, estimatedOnly])
+  }, [props, query, catFilter, mountFilter, estimatedOnly, missingModelOnly, actionsOnly, incompleteBindingsOnly])
 
   /** How many props have no mount yet — what the classify run would work on,
    *  and the number its confirmation states. */
@@ -225,6 +258,7 @@ export function PropsTab() {
         .replace('{n}', String(d?.classified || 0))
         .replace('{m}', String((d?.unresolved || []).length)))
       await load()
+      setClassifyReport({ classified: d?.classified || 0, unresolved: d?.unresolved || [] })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -235,8 +269,17 @@ export function PropsTab() {
   const selectedProp = props.find((p) => p.id === selected) || null
 
   return (
-    <div className="ga-twocol">
-      <ListPane id="props" label={t('Props')}>
+    <div className={`ga-twocol props-admin${libraryOpen ? ' is-library-open' : ''}`}>
+      <button ref={libraryButton} type="button" className="ga-btn prop-library-toggle"
+        aria-expanded={libraryOpen} aria-controls="prop-library"
+        onClick={() => setLibraryOpen((open) => !open)}>{t('Bibliothek')}</button>
+      {libraryOpen && <button type="button" className="prop-library-backdrop"
+        aria-label={t('Bibliothek schließen')} onClick={() => setLibraryOpen(false)} />}
+      <ListPane id="props" label={t('Props')} className="ga-twocol-left prop-library"
+        expanded={libraryOpen || bulkRunning ? true : undefined}
+        collapseDisabled={bulkRunning}
+        onExpandedChange={libraryOpen ? () => setLibraryOpen(false) : undefined}>
+        <div id="prop-library" className="prop-library-content">
         <ListHeader
           title={t('Props')}
           onNew={() => navigate('', true)}
@@ -275,7 +318,7 @@ export function PropsTab() {
           </div>
         ) : null}
         <div className="ga-form-row" style={{ padding: '0 8px 8px' }}>
-          <input className="ga-input" value={query} placeholder={t('Search…')}
+          <input className="ga-input" value={query} placeholder={t('Search…')} aria-label={t('Props durchsuchen')}
             onChange={(e) => setQuery(e.target.value)} />
           <select className="ga-input" value={catFilter} style={{ maxWidth: 140 }}
             onChange={(e) => setCatFilter(e.target.value)}>
@@ -297,6 +340,11 @@ export function PropsTab() {
             onChange={(e) => setEstimatedOnly(e.target.checked)} />
           {t('Estimated size only')}
         </label>
+        <div className="prop-library-filters">
+          <label><input type="checkbox" checked={missingModelOnly} onChange={(event) => setMissingModelOnly(event.target.checked)} /> {t('Modell fehlt')}</label>
+          <label><input type="checkbox" checked={actionsOnly} onChange={(event) => setActionsOnly(event.target.checked)} /> {t('Aktionen vorhanden')}</label>
+          <label><input type="checkbox" checked={incompleteBindingsOnly} onChange={(event) => setIncompleteBindingsOnly(event.target.checked)} /> {t('Aktionsbindung unvollständig')}</label>
+        </div>
         <ul className="ga-list">
           {!loaded ? (
             <li className="ga-list-empty">{t('Loading…')}</li>
@@ -353,6 +401,10 @@ export function PropsTab() {
                           {t('suggested')}
                         </span>
                       ) : null}
+                      <span className="ga-list-row-sub">{hasIncompleteActionBindings(p)
+                        ? t('Aktionsbindung prüfen') : (p.actions || []).length
+                          ? t('Aktionen definiert; Raumweg nicht geprüft')
+                          : t('Dekorativ · keine Aktionen nötig')}</span>
                     </span>
                     {pending.includes(p.id) ? (
                       <span className="ga-source">{t('generating…')}</span>
@@ -400,10 +452,9 @@ export function PropsTab() {
             })
           )}
         </ul>
+        </div>
       </ListPane>
-      {/* The detail lays its three columns out as independent scroll panes;
-          the create form and the empty state keep the plain scrolling pane. */}
-      <section className={`ga-twocol-right${!creating && selectedProp ? ' ga-twocol-right--panes' : ''}`}>
+      <section className={`ga-twocol-right prop-workspace-container${!creating && selectedProp ? ' is-workspace' : ''}`}>
         {creating ? (
           <PropCreateForm
             imageBackends={imageBackends}
@@ -414,6 +465,7 @@ export function PropsTab() {
           />
         ) : selectedProp ? (
           <PropDetail
+            key={selectedProp.id}
             prop={selectedProp}
             pending={pending.includes(selectedProp.id)}
             generatingVariants={genVariants[selectedProp.id] || []}
@@ -421,12 +473,13 @@ export function PropsTab() {
             onChanged={load}
             onDelete={() => remove(selectedProp.id)}
             armedDelete={armedDel === selectedProp.id}
-            onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
-            onRegenerateMesh={(variant, views) =>
-              setRegen({ id: selectedProp.id, meshOnly: true, variant, views })}
-            onRegenerateImage={(variant, view, image, subject, refVariants) =>
-              setImgRegen({ prop: selectedProp, variant, view,
-                refVariants: refVariants || [], image, subject })}
+            onRegenerate={(plan) => setRegen({ id: selectedProp.id, meshOnly: false, plan,
+              ...(plan.kind === 'existing' ? { variant: plan.index, uid: plan.uid } : {}) })}
+            onRegenerateMesh={(target, views) =>
+              setRegen({ id: selectedProp.id, meshOnly: true, variant: target.index, uid: target.uid, views })}
+            onRegenerateImage={(target, view, image, subject, refs, author) =>
+              setImgRegen({ prop: author, variant: target.index, uid: target.uid, view,
+                refs, image, subject })}
             onGenerating={startPoll}
             // The face count a run would really start on — the PLACEHOLDER
             // behind the variants' budget fields (v2 E5). The admin's
@@ -449,7 +502,13 @@ export function PropsTab() {
           open={regen !== null}
           title={regen?.meshOnly
             ? `${t('Re-mesh from the source image')} · ${t('Variant')} ${(regen.variant || 0) + 1}`
-            : t('Regenerate prop model — as another variant')}
+            : t('Prop-Modell generieren — Ziel und Ersetzung prüfen')}
+          hint={regen?.meshOnly ? t('Das Modell der gewählten Variante wird aus ihrem Quellbild neu erstellt.')
+            : regen?.plan?.kind === 'existing'
+              ? `${t('Ziel')}: ${t('Variant')} ${regen.plan.index + 1}. ${t(regen.plan.replaces
+                ? 'Aktive Obergrenze erreicht: Quellbild und aktives Modell dieser Variante werden durch die kostenpflichtige Generierung ersetzt. Frühere Meshes bleiben in der Galerie.'
+                : 'Diese bestehende Variante hat kein Mesh. Ihre Quellbilder werden neu erzeugt und ihr Modell wird gefüllt.')}`
+              : t('Eine neue Modellvariante wird angelegt. Die Generierung verursacht die konfigurierten Backendkosten.')}
           backends={meshBackends}
           defaultBackend={meshDefault
             || (meshBackends.length === 1 ? meshBackends[0].name : '')}
@@ -472,45 +531,46 @@ export function PropsTab() {
           views={regen?.meshOnly && regen.views?.length
             ? regen.views.map((view) => ({ view, options: [{ value: view, label: t('stored') }] }))
             : undefined}
-          onGenerate={(backend, opts) => {
-            const target = regen
+          onGenerate={async (backend, opts) => {
+            const request = regen
             setRegen(null)
-            if (!target) return
-            // A RE-MESH refines the variant the detail has open, so it goes to
-            // that variant's route; the plain regenerate stays unqualified,
-            // which is what makes it APPEND another variant.
-            const base = `/world/props/${encodeURIComponent(target.id)}`
-            void apiPost<{ status?: string }>(
-              target.meshOnly
-                ? `${base}/variants/${target.variant || 0}/generate`
-                : `${base}/generate`,
-              { mesh_backend: backend,
-                ...(target.meshOnly ? { mesh_only: true } : {}),
-                ...(opts.face_num ? { face_num: opts.face_num } : {}),
-                ...(opts.texture_size ? { texture_size: opts.texture_size } : {}),
-                // `[]` is a VALUE here, not "nothing" (ruling V9): it is how
-                // the dialog says its stage toggle is off, and the server must
-                // see it or it falls back to the variant's low budget.
-                ...(opts.lod_faces !== undefined
-                  ? { lod_faces: opts.lod_faces } : {}),
-                ...(opts.tier ? { tier: opts.tier } : {}),
-                // The views the dialog had ticked — `{}` (nothing picked)
-                // becomes `[]`, which is the front alone.
-                ...(opts.views ? { views: Object.keys(opts.views) } : {}) })
-              .then((d) => {
-                toast(d?.status === 'already_running'
-                  // The refusal is per (variant, backend) — a re-mesh names
-                  // its variant, the appending run has the target picked for
-                  // it, so the two say different things.
-                  ? (target.meshOnly
-                    ? t('This variant is already generating.')
-                    : t('This prop is already generating into that variant.'))
-                  : target.meshOnly
-                    ? t('Meshing the source image…')
-                    : t('Generating another model variant…'))
-                startPoll()
-              })
-              .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+            if (!request) return
+            const base = `/world/props/${encodeURIComponent(request.id)}`
+            try {
+              const current = await apiGet<{ variants: PropVariant[]; max: number }>(`${base}/variants`)
+              let index: number | undefined
+              if (request.meshOnly) {
+                const target = await resolveVariantAfterBarrier(request.uid || '', async () => true,
+                  async () => current.variants)
+                if (!target) return
+                index = target.index
+              } else {
+                const plan = propGenerationTarget(current.variants, current.max)
+                const shown = request.plan
+                const unchanged = plan.kind === 'append' ? shown?.kind === 'append'
+                  : shown?.kind === 'existing' && shown.uid === plan.uid && shown.index === plan.index
+                    && shown.replaces === plan.replaces
+                if (!unchanged) {
+                  setRegen({ ...request, plan,
+                    variant: plan.kind === 'existing' ? plan.index : undefined,
+                    uid: plan.kind === 'existing' ? plan.uid : undefined })
+                  toast(t('Das Generierungsziel wurde geändert. Neues Ziel und Ersetzung vor dem Start prüfen.'), 'error')
+                  return
+                }
+                if (plan.kind === 'existing') index = plan.index
+              }
+              const answer = await apiPost<{ status?: string }>(
+                index === undefined ? `${base}/generate` : `${base}/variants/${index}/generate`,
+                { mesh_backend: backend, ...(request.meshOnly ? { mesh_only: true } : {}),
+                  ...(opts.face_num ? { face_num: opts.face_num } : {}),
+                  ...(opts.texture_size ? { texture_size: opts.texture_size } : {}),
+                  ...(opts.lod_faces !== undefined ? { lod_faces: opts.lod_faces } : {}),
+                  ...(opts.tier ? { tier: opts.tier } : {}),
+                  ...(opts.views ? { views: Object.keys(opts.views) } : {}) })
+              toast(answer?.status === 'already_running' ? t('This variant is already generating.')
+                : t('Generierung für das bestätigte Ziel gestartet.'))
+              startPoll()
+            } catch (error) { toast(t('Error') + ': ' + (error as Error).message, 'error') }
           }}
           onClose={() => setRegen(null)}
         />
@@ -518,36 +578,36 @@ export function PropsTab() {
           prop={imgRegen?.prop || null}
           variant={imgRegen?.variant || 0}
           view={imgRegen?.view || 'front'}
-          refVariants={imgRegen?.refVariants || []}
+          refVariants={imgRegen?.refs.map((entry) => entry.index) || []}
           subject={imgRegen?.subject}
           image={imgRegen?.image}
           backends={imageBackends}
           cacheBump={cacheBump}
-          onGenerate={(imageBackend, prompt, negative, referenceVariant) => {
-            const target = imgRegen
+          onGenerate={async (imageBackend, prompt, negative, referenceVariant) => {
+            const request = imgRegen
             setImgRegen(null)
-            if (!target) return
-            // The variant-scoped route: the image belongs to the variant, so
-            // the render lands in ITS file and leaves every other one alone.
-            // `view` says which of its four pictures — an extra view never
-            // touches the front.
-            void apiPost<{ status?: string }>(
-              `/world/props/${encodeURIComponent(target.prop.id)}/variants/${target.variant}/generate`,
-              { image_only: true, image_backend: imageBackend,
-                prompt, negative, view: target.view,
-                // `front_reference` is the SWITCH, `reference_variant` says
-                // whose front image — the pair the two generate routes read
-                // (`_view_args`).
-                front_reference: referenceVariant !== null,
-                ...(referenceVariant !== null
-                  ? { reference_variant: referenceVariant } : {}) })
-              .then((d) => {
-                toast(d?.status === 'already_running'
-                  ? t('This variant is already generating.')
-                  : t('Rendering a new source image…'))
-                startPoll()
-              })
-              .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+            if (!request) return
+            try {
+              const base = `/world/props/${encodeURIComponent(request.prop.id)}`
+              const current = await apiGet<{ variants: PropVariant[] }>(`${base}/variants`)
+              const target = await resolveVariantAfterBarrier(request.uid, async () => true,
+                async () => current.variants)
+              if (!target) return
+              let referenceIndex: number | undefined
+              if (referenceVariant !== null) {
+                const uid = request.refs.find((entry) => entry.index === referenceVariant)?.uid || ''
+                const reference = await resolveVariantAfterBarrier(uid, async () => true,
+                  async () => current.variants)
+                if (!reference) return
+                referenceIndex = reference.index
+              }
+              const answer = await apiPost<{ status?: string }>(`${base}/variants/${target.index}/generate`,
+                { image_only: true, image_backend: imageBackend, prompt, negative, view: request.view,
+                  front_reference: referenceIndex !== undefined,
+                  ...(referenceIndex !== undefined ? { reference_variant: referenceIndex } : {}) })
+              toast(answer?.status === 'already_running' ? t('This variant is already generating.') : t('Rendering a new source image…'))
+              startPoll()
+            } catch (error) { toast(t('Error') + ': ' + (error as Error).message, 'error') }
           }}
           onClose={() => setImgRegen(null)}
         />
@@ -555,40 +615,35 @@ export function PropsTab() {
             call per 40 props and writes a value into every one of them. Real
             UI, never a window.confirm. */}
         {classifyOpen ? (
-          <div className="ga-modal-backdrop" role="presentation">
-            <div className="ga-modal" role="dialog" aria-modal="true"
-              aria-label={t('Classify mount (LLM)')} style={{ maxWidth: 460 }}>
-              <div className="ga-modal-header">
-                <h3>{t('Classify mount (LLM)')}</h3>
-              </div>
-              <div className="ga-modal-body">
-                {unclassified
-                  ? t('{n} props have no mount yet. The LLM says for each of them whether it stands on the floor, hangs on a wall or on the ceiling, or sits on another prop — as a suggestion you confirm or change per prop.')
-                    .replace('{n}', String(unclassified))
-                  : t('Every prop already has a mount. There is nothing to classify.')}
-              </div>
-              <div className="ga-modal-footer">
-                <button className="ga-btn" onClick={() => setClassifyOpen(false)}>
-                  {t('Cancel')}
-                </button>
-                <button className="ga-btn ga-btn-primary" disabled={!unclassified}
-                  onClick={() => { void classifyMounts() }}>
-                  {t('Classify')}
-                </button>
-              </div>
+          <PropWorkspaceDialog title={t('Classify mount (LLM)')} onCancel={() => setClassifyOpen(false)}>
+            <div className="ga-modal-body">
+              <p>{t('Wird sofort angewendet. Dies startet kostenpflichtige LLM-Aufrufe gemäß deiner Backend-Konfiguration und speichert Befestigungsvorschläge sofort.')}</p>
+              <p>{unclassified
+                ? t('{n} unklassifizierte Props; bis zu {calls} LLM-Aufrufe (40 Props je Aufruf). Vorschläge werden anschließend je Prop im Entwurf bestätigt.')
+                  .replace('{n}', String(unclassified)).replace('{calls}', String(Math.ceil(unclassified / 40)))
+                : t('Every prop already has a mount. There is nothing to classify.')}</p>
+              <p>{t('Lokale Befestigungsänderungen bleiben erhalten; Überschneidungen erscheinen als Feldkonflikt.')}</p>
             </div>
-          </div>
+            <div className="ga-modal-footer">
+              <button type="button" className="ga-btn" onClick={() => setClassifyOpen(false)}>{t('Cancel')}</button>
+              <button type="button" className="ga-btn ga-btn-primary" disabled={!unclassified}
+                onClick={() => { void classifyMounts() }}>{t('LLM-Aufrufe starten & Vorschläge speichern')}</button>
+            </div>
+          </PropWorkspaceDialog>
         ) : null}
+        {classifyReport && <PropWorkspaceDialog title={t('Ergebnis der Befestigungsklassifizierung')} onCancel={() => setClassifyReport(null)}>
+          <div className="ga-modal-body">
+            <p>{classifyReport.classified} {t('Vorschläge sofort gespeichert')}; {classifyReport.unresolved.length} {t('ungeklärt')}.</p>
+            {classifyReport.unresolved.length > 0 && <ul>{classifyReport.unresolved.map((id) => <li key={id}>{props.find((item) => item.id === id)?.name || id}</li>)}</ul>}
+            <p>{t('Vorschläge in Übersicht prüfen und bestätigen. Lokale Entwürfe wurden nicht verworfen.')}</p>
+          </div>
+          <div className="ga-modal-footer"><button type="button" className="ga-btn" onClick={() => setClassifyReport(null)}>{t('Schließen')}</button></div>
+        </PropWorkspaceDialog>}
         {/* The prop-switch guard. The same question the shell asks before a
             tab switch, asked here because a prop switch stays inside the tab
             — and asked as UI, never as window.confirm. */}
         {leaveTo ? (
-          <div className="ga-modal-backdrop" role="presentation">
-            <div className="ga-modal" role="dialog" aria-modal="true"
-              aria-label={t('Unsaved changes')} style={{ maxWidth: 460 }}>
-              <div className="ga-modal-header">
-                <h3>{t('Unsaved changes')}</h3>
-              </div>
+          <PropWorkspaceDialog title={t('Unsaved changes')} onCancel={() => setLeaveTo(null)}>
               <div className="ga-modal-body">
                 {t('This prop holds {n} field changes that were never saved. Opening another prop discards them.')
                   .replace('{n}', String(dirty))}
@@ -602,8 +657,7 @@ export function PropsTab() {
                   {t('Leave and discard')}
                 </button>
               </div>
-            </div>
-          </div>
+          </PropWorkspaceDialog>
         ) : null}
       </section>
       {/* One shared category vocabulary for the create form and the detail —

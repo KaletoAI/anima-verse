@@ -55,6 +55,7 @@ def near(expect, actual, eps):
 def main():
     with tempfile.TemporaryDirectory(prefix='prop-water-') as tmp:
         paths.init(Path(tmp))
+        paths.init_instance(Path(tmp) / 'instance')
         from app.core import model_water as w, model_surface as surf, props, scene_recipe as scene, db
         from app.core.model_store import write_sidecar
         from app.models import world_props
@@ -80,8 +81,8 @@ def main():
                 data = fixture(model)
                 data.update(target_m=2, measure='xyz')
                 w.water_path(model).write_text(json.dumps(data))
-        props.bulk_update(pid, variants={str(i):{'dims':{
-            'width_m':2,'depth_m':2,'height_m':2}} for i in (0,1)})
+        props.bulk_update(pid, variants={props.list_variants(pid)[int(key)]["uid"]: patch for key, patch in ({str(i):{'dims':{
+            'width_m':2,'depth_m':2,'height_m':2}} for i in (0,1)}).items()}, base_revision=props.get_prop(pid)["revision"])
         loc = {'id':'water-room','map3d':{'plan_width_m':10,
             'outline':[[-5,-5],[5,-5],[5,5],[-5,5]]},'rooms':[
             {'id':'r','layout':{'x':-2,'y':-2,'w':4,'d':4,

@@ -89,8 +89,10 @@ def _unplace(name: str) -> None:
     """
     from app.core.db import transaction
     try:
-        from app.models.character import get_character_current_location
+        from app.models.character import (get_character_current_location, get_character_current_room,
+                                          _notify_prop_presence)
         old_loc = get_character_current_location(name) or ""
+        old_room = get_character_current_room(name) or ""
         stored_tx_1 = False
         with transaction() as conn:
             conn.execute(
@@ -99,6 +101,7 @@ def _unplace(name: str) -> None:
             stored_tx_1 = True
         from app.core import sync_topics
         if stored_tx_1:
+            _notify_prop_presence(old_loc, old_room)
             sync_topics.moved(name, old_loc, "")
     except Exception as e:  # noqa: BLE001
         logger.warning("pool: could not unplace %s: %s", name, e)
@@ -115,6 +118,8 @@ def pool_npc(name: str, reason: str = "") -> bool:
                                       set_character_status)
     if not name or not is_temporary_npc(name):
         return False
+    from app.models.character import _interrupt_prop_action
+    _interrupt_prop_action(name, "pooled")
 
     # 1) Everything that must not survive the NPC.
     try:

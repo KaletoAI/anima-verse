@@ -1,3 +1,9 @@
+import type { PropActionOffer } from '@anima/player-ui';
+export type {
+  PropActionTarget, PropActionOffer, PropActionChoice, PropActionState,
+  PropActionExecution, PropActionResult,
+} from '@anima/player-ui';
+
 /** AV3D-2: placement of a room relative to the building footprint. The room
  *  markers (places) are NOT read from here — the client takes them from the
  *  scene payload's `markers[]`, finished in world metres (§ B). */
@@ -225,6 +231,34 @@ export interface MapTravel {
   starts_in_s?: number | null;
 }
 
+/** Visibility-filtered remaining motion, never another character's full journey. */
+export interface MapLocalApproach {
+  journey_id: string;
+  room_id: string;
+  waypoints: [number, number][];
+  progress_m: number;
+  walked_m: number;
+  remaining_m: number;
+  paces_m_s_real: (number | null)[] | null;
+  starts_in_s: number | null;
+}
+
+/** Public physical entry only; no execution, consent, or target identity. */
+export interface MapPropActionEntry {
+  kind: string;
+  pose_key: string;
+  access: { x: number; y: number; z: number; yaw: number };
+  anchor: { x: number; y: number; z: number; yaw: number };
+  /** Authoritative body-root offset in metres; anchor.y already subtracts it. */
+  root_offset: number;
+  duration_game_s: number;
+  elapsed_game_s: number;
+  game_seconds_per_real_second: number;
+  height_cm: number;
+  role: string | null;
+  started_game_s: number;
+}
+
 export interface MapCharacter {
   name: string;
   location_id: string;
@@ -248,6 +282,8 @@ export interface MapCharacter {
   movement_target_name?: string;
   /** running journey (§ A11); null/absent when the character is not travelling */
   travel?: MapTravel | null;
+  local_approach?: MapLocalApproach | null;
+  prop_action_entry?: MapPropActionEntry | null;
   /** running PAIR interaction (§ A8a); null/absent when there is none */
   interaction?: MapInteraction | null;
   /** The place the SERVER seated this character on (plan-posen-plaetze.md
@@ -824,10 +860,8 @@ export interface MotionPayload {
   }>;
 }
 
-/** One place of the avatar's room as `GET /play/places` offers it: how many
- *  slots are free and WHICH (`free_slots` index the scene payload's
- *  `slots[]`), and the solo poses of its group a click may pick — the
- *  group's default first. `label` of a pose is its key today. */
+/** Geometry/room-marker offer. Furniture behavior comes exclusively from
+ *  prop_actions; poses are legitimate room-marker poses, never furniture aliases. */
 export interface PlaceOffer {
   id: string;
   label: string;
@@ -836,4 +870,5 @@ export interface PlaceOffer {
   free: number;
   free_slots: number[];
   poses: { key: string; label: string }[];
+  prop_actions?: PropActionOffer[];
 }

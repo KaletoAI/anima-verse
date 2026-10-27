@@ -1,9 +1,9 @@
 ---
 name: SetActivity
-action_hint: Character changes what they're physically doing right now (pose key + short detail)
+action_hint: Explicitly changes a free body pose or room-owned marker; never claims furniture
 ---
-Sets the character's current pose: a pose key from the catalog plus a short detail of what they do in it.
+Sets a free body pose (or an existing room-owned marker), never allocates furniture or bypasses a prop action's rules. For furniture use PropAction with an offered action ID, current revision and exact target instead. An explicit call interrupts the character's own current semantic action.
 
-Pass JSON: {"pose": "<pose key>", "detail": "<what a bystander sees, 2-6 words, third person — never I/my/ich/mein>"}. The pose key MUST be one of the keys the prompt lists under "Places here" / "Anywhere here", copied exactly (e.g. "sitting", "standing", "reading"). "detail" is what a bystander would see — the object handled, the direction faced — in the character's own language, third person, no first-person pronouns; it carries no facial expression, no mood, no clothing. It may be left empty.
+Pass JSON: {"pose": "<solo pose key>", "detail": "<visible action, 2-6 words, third person>"}. Copy an offered free pose key exactly. Detail is display text, not consent, a prop target, sleep state or a rule override; it may be empty.
 
 Only for something the character does ALONE. A pose marked *(with partner)* is a two-person action — it is started together via InteractWith, never here.

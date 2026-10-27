@@ -9,3 +9,5 @@ It takes two. The other one is ASKED, and nothing happens until they agree — y
 * **You propose it** — call it with your idea. The other one now has your question.
 * **You accept** — someone asked YOU (you will be told so). Call it back with the same partner and the same action, and the action starts for both of you.
 * **You refuse** — call it back with the same partner and action plus `"answer": "no"`, and say in character why. Do not just stay silent: the other one is waiting for an answer.
+
+Furniture-bound actions use a separate exact question, not a general pose invitation. When offered an `execution_id`, answer this question with `{"execution_id": "<offered id>", "answer": "yes"}` or `"answer": "no"`. This binds only that action, revision, partner, object and role allocation. A different object or a same-named pose is a new proposal, never consent to the old question. Without an explicit answer the question stays open.

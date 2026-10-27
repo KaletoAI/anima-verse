@@ -862,15 +862,40 @@ def get_character_status(character_name: str) -> str:
         return ""
 
 
+def _interrupt_prop_action(character_name: str, reason: str) -> None:
+    """Only an explicitly loaded internal executor participates before cutover.
+
+    Call before profile/place locks: owner callbacks acquire their own run
+    locks and may remove the exact owned journey/partner interaction.
+    """
+    import sys
+    engine = sys.modules.get("app.core.prop_action_engine")
+    if engine is not None:
+        engine.interrupt_after_locks(character_name, reason)
+
+
+def _notify_prop_presence(location_id: str, room_id: str) -> None:
+    import sys
+    engine = sys.modules.get("app.core.prop_action_engine")
+    if engine is not None and location_id and room_id:
+        from app.core.keyed_lock import _after_locks
+        _after_locks(lambda: engine.presence_changed(location_id, room_id))
+
+
 def set_character_status(character_name: str, status: str) -> bool:
     """Set the row's lifecycle status. '' puts a character back in the world."""
     if not character_name:
         return False
+    if status:
+        _interrupt_prop_action(character_name, "pooled")
+    old_presence = (get_character_current_location(character_name), get_character_current_room(character_name))
     try:
         with transaction() as conn:
             cur = conn.execute(
                 "UPDATE characters SET status=?, updated_at=? WHERE name=?",
                 ((status or "").strip(), utc_now_iso(), character_name))
+        if cur.rowcount:
+            _notify_prop_presence(*old_presence)
         return bool(cur.rowcount)
     except Exception as e:
         logger.error("set_character_status(%s, %r): %s", character_name, status, e)
@@ -965,9 +990,11 @@ def delete_character(character_name: str) -> bool:
     """
     if not character_name or character_name.lower() in _RESERVED_NAMES:
         return False
+    _interrupt_prop_action(character_name, "deleted")
 
     from app.core import sync_topics
     old_loc = get_character_current_location(character_name) or ""
+    old_room = get_character_current_room(character_name) or ""
     old_party = sync_topics.party_of(character_name).names
 
     # 0) Foreign traces — only for temporary NPCs (template-gated)
@@ -1064,6 +1091,7 @@ def delete_character(character_name: str) -> bool:
 
         from app.core import sync_topics
         if stored_tx_1:
+            _notify_prop_presence(old_loc, old_room)
             sync_topics.moved(character_name, old_loc, "")
         if stored_tx_1:
             sync_topics.avatars(old_party, ("presence", "notices"))
@@ -1579,6 +1607,7 @@ def save_character_current_location(character_name: str = "", location: str = ""
     # The decision needs the current location only, which is one cheap
     # read of its own.
     if location and location != (get_character_current_location(character_name) or ""):
+        _interrupt_prop_action(character_name, "location")
         from app.core.interaction_engine import end_interaction
         end_interaction(character_name, reason="location")
     # Read AND write under the per-character profile lock (DATA-3): the save
@@ -1644,6 +1673,9 @@ def save_character_current_location(character_name: str = "", location: str = ""
             # Delivery waits for this AND every caller-held lock to release.
             _after_locks(lambda: emit("character.entered_room", character=character_name,
                                       location_id=location, room_id=entered_room))
+    if stored and location_changed:
+        _notify_prop_presence(old_location, old_room)
+        _notify_prop_presence(location, entered_room)
     # Seamless world (Aug 2026): the metre position is the truth for WHERE a
     # character stands, so a REAL location change drags it along — the
     # character lands at the centre of the target location. A target location
@@ -1989,6 +2021,7 @@ def _cancel_journey_for_manual_write(character_name: str) -> None:
     """
     if not character_name:
         return
+    _interrupt_prop_action(character_name, "position")
     # Same rule for a pair interaction: its anchor holds the figure, so a
     # manual move has to release it (and the partner).
     from app.core.interaction_engine import end_interaction
@@ -2163,6 +2196,12 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
         if flavor.lower() == key.lower():
             flavor = ""          # flavor that adds nothing is noise
     profile = get_character_profile(character_name) or {}
+    if prefer:
+        from app.core import places
+        loc, room = places.where(character_name, profile=profile)
+        target = next((p for p in places.room_places(loc, room) if p["id"] == prefer), None)
+        if target and target.get("source") == "prop":
+            raise places.PlaceUnavailable("prop_action_required")
     # A two-person pose belongs to a BOUND pair, never to a lone profile.
     # ``interaction_engine.start_interaction`` writes the interaction first
     # and only then calls this setter, so the running interaction naming the
@@ -2182,6 +2221,7 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
                  and (profile.get("pose_flavor") or "") == flavor)
     if unchanged and not prefer:
         return
+    _interrupt_prop_action(character_name, "pose")
     old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
     old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
     inter = profile.get("interaction")
@@ -2311,6 +2351,7 @@ def clear_pose_intent(character_name: str) -> None:
     """
     if not character_name:
         return
+    _interrupt_prop_action(character_name, "pose")
     from app.core.keyed_lock import keyed_lock
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the whole profile_json blob out. ``stand_up`` stays OUTSIDE — it
@@ -2445,6 +2486,7 @@ def save_character_current_room(character_name: str, room_id: str,
     # afterwards, so the room is written into a copy that already has whatever
     # the interaction end stored.
     if room_id != (get_character_current_room(character_name) or ""):
+        _interrupt_prop_action(character_name, "room")
         from app.core.interaction_engine import end_interaction
         end_interaction(character_name, reason="room")
     # Read AND write under the per-character profile lock (DATA-3): the save
@@ -2468,6 +2510,9 @@ def save_character_current_room(character_name: str, room_id: str,
             # Queue once with the write; callbacks run after all lock exits.
             _after_locks(lambda: emit("character.entered_room", character=character_name,
                                       location_id=cur_loc, room_id=room_id))
+    if stored and room_id != old_room:
+        _notify_prop_presence(cur_loc, old_room)
+        _notify_prop_presence(cur_loc, room_id)
 
     # WHERE IN THE ROOM the character now stands is the server's word (T4):
     # the free point nearest the one it arrived on — the doorstep of a walk,
@@ -4326,6 +4371,68 @@ def is_character_sleeping(character_name: str,
         return False
 
 
+def read_effect_profile(conn, character_name: str) -> dict:
+    """Read runtime effect inputs on the caller's connection, without I/O helpers.
+
+    Caller holds the profile lock before acquiring DB write authority. Soul,
+    config and catalog consumers are deliberately not part of this bounded read.
+    """
+    row = conn.execute("SELECT profile_json,template FROM characters WHERE name=?",
+                       (character_name,)).fetchone()
+    if row is None:
+        raise ValueError("participant_unavailable")
+    profile = json.loads(row[0] or "{}")
+    profile.update(character_name=character_name, template=row[1] or profile.get("template", ""))
+    state = conn.execute("SELECT * FROM character_state WHERE character_name=?",
+                         (character_name,)).fetchone()
+    if state is None:
+        raise ValueError("participant_state_missing")
+    profile.update({key: state[key] for key in _STATE_COLS})
+    profile.update({name: read_cast(state[name]) for name, _, read_cast, _ in _STATE_TYPED_COLS})
+    profile.update(json.loads(state["meta"] or "{}"))
+    return profile
+
+
+def write_effect_profile(conn, character_name: str, profile: dict, *, runtime: dict | None = None) -> None:
+    """Bounded same-connection write; never commits or publishes.
+
+    Only effects and explicitly supplied owned-runtime keys are changed. A raw
+    position writer or unrelated profile key is never overwritten by a snapshot.
+    """
+    row = conn.execute("SELECT meta FROM character_state WHERE character_name=?",
+                       (character_name,)).fetchone()
+    if row is None:
+        raise ValueError("participant_state_missing")
+    meta = json.loads(row[0] or "{}")
+    for key in ("status_effects", "active_conditions"):
+        if key in profile:
+            meta[key] = profile[key]
+    patch = dict(runtime or {})
+    for key in ("state_flag_since",):
+        if key in patch:
+            meta[key] = patch.pop(key)
+    columns = {"meta": json.dumps(meta, ensure_ascii=False),
+               "current_feeling": profile.get("current_feeling", "")}
+    for key in ("pose_key", "pose_flavor", "current_activity", "is_sleeping", "pos_x", "pos_z", "pos_session", "pos_seq"):
+        if key in patch:
+            columns[key] = patch.pop(key)
+    conn.execute("UPDATE character_state SET " + ",".join(key + "=?" for key in columns) +
+                 " WHERE character_name=?", (*columns.values(), character_name))
+    if patch:
+        # Owned entry/pair fields live in profile_json, not a second state store.
+        row = conn.execute("SELECT profile_json FROM characters WHERE name=?", (character_name,)).fetchone()
+        body = json.loads(row[0] or "{}")
+        for key, value in patch.items():
+            if key not in ("place", "interaction", "prop_action_entry"):
+                raise ValueError("unsupported_owned_runtime_patch")
+            if value is None:
+                body.pop(key, None)
+            else:
+                body[key] = value
+        conn.execute("UPDATE characters SET profile_json=?,updated_at=? WHERE name=?",
+                     (json.dumps(body, ensure_ascii=False), utc_now_iso(), character_name))
+
+
 def adjust_status_effects(character_name: str, deltas: Dict[str, int],
                           source: str = "") -> Dict[str, Any]:
     """Apply integer deltas to existing status_effects, clamped to 0-100.
@@ -4348,6 +4455,10 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
         except Exception:
             return {}
         status = profile.get("status_effects", {}) or {}
+        if source == "activity":
+            from app.core.stat_effects import declared_action_stats
+            excluded = declared_action_stats(character_name)
+            deltas = {key: delta for key, delta in deltas.items() if key not in excluded}
         if not status:
             return {}
         for key, delta in deltas.items():
@@ -4388,7 +4499,120 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
 #   is_wet       → swim-Exemption bei swim_allowed Raum
 #   is_intimate  → decency override to nude_ok
 
-def set_is_sleeping(character_name: str, value: bool) -> None:
+def _set_sleep_flag(profile: dict, value: bool) -> bool:
+    """Canonical flag/pose bookkeeping, shared by normal sleep and owned exit."""
+    was = bool(profile.get("is_sleeping"))
+    profile["is_sleeping"] = bool(value)
+    if value != was:
+        profile["current_activity"] = "sleeping" if value else ""
+    since = dict(profile.get("state_flag_since") or {})
+    if value:
+        since["is_sleeping"] = game_time().canonical()
+    else:
+        since.pop("is_sleeping", None)
+    profile["state_flag_since"] = since
+    if was and not value:
+        profile["pose_key"] = ""
+        profile["pose_flavor"] = ""
+        profile["place"] = None
+    return was
+
+
+def _note_sleep_transition(character_name: str, value: bool) -> None:
+    try:
+        from app.core import day_consolidation as dc
+        (dc.note_sleep_start if value else dc.note_wake)(character_name)
+    except Exception:
+        pass
+
+
+def release_prop_action_state(character_name: str, execution_id: str) -> bool:
+    """Compare/remove only this execution, atomically waking and standing.
+
+    There is no unlocked ownership decision followed by a generic setter.
+    Place/pose/flag and an unchanged position/origin commit together. A newer
+    manual position wins even while the old owned place is still present.
+    """
+    from app.core import places
+    from app.core.keyed_lock import keyed_lock, _after_locks
+    from app.core.room_stand import bridge_stand_point, free_stand_point
+    initial = get_character_profile(character_name)
+    location, room = places.where(character_name, profile=initial)
+    with keyed_lock("places", location), keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        field = profile.get("place") or {}
+        own_place = field.get("execution_id") == execution_id
+        own_entry = (profile.get("prop_action_entry") or {}).get("execution_id") == execution_id
+        if not own_place and not own_entry:
+            return False
+        old_pose = get_effective_pose_key(character_name, profile=profile)
+        old_place = dict(field) if own_place else None
+        point = None
+        position_authority = None
+        if own_place and places.where(character_name, profile=profile) == (location, room):
+            row = get_connection().execute(
+                "SELECT pos_x,pos_z,pos_session,pos_seq FROM character_state WHERE character_name=?",
+                (character_name,)).fetchone()
+            position_authority = tuple(row) if row is not None else None
+            seat = places.resolve_place(character_name, field, profile=profile)
+            if row is not None and row[0] is not None and row[1] is not None:
+                here = (float(row[0]), float(row[1]))
+                near = (bridge_stand_point(character_name, seat, old_pose, profile=profile, at=here)
+                        if seat else None) or here
+                candidate = free_stand_point(location, room, near, exclude=character_name)
+                if candidate is not None and places.inside(location, *candidate):
+                    point = candidate
+        woke = False
+        # A bounded state transition, not a whole-profile save: JSON operations
+        # preserve unrelated concurrent fields, with a final DB ownership CAS.
+        with transaction() as conn:
+            if own_place:
+                expression = ("CASE WHEN json_extract(profile_json,'$.prop_action_entry.execution_id')=? "
+                              "THEN json_remove(profile_json,'$.place','$.prop_action_entry') "
+                              "ELSE json_remove(profile_json,'$.place') END")
+                changed = conn.execute(
+                    "UPDATE characters SET profile_json=" + expression + ",updated_at=? WHERE name=? "
+                    "AND json_extract(profile_json,'$.place.execution_id')=?",
+                    (execution_id, utc_now_iso(), character_name, execution_id)).rowcount
+                if not changed:
+                    return False
+                state = conn.execute("SELECT meta,is_sleeping,current_activity,pos_x,pos_z,pos_session,pos_seq "
+                                     "FROM character_state WHERE character_name=?",
+                                     (character_name,)).fetchone()
+                meta = json.loads(state[0] or "{}")
+                profile["is_sleeping"] = bool(state[1])
+                profile["current_activity"] = state[2]
+                profile["state_flag_since"] = dict(meta.get("state_flag_since") or {})
+                woke = _set_sleep_flag(profile, False)
+                meta["state_flag_since"] = profile["state_flag_since"]
+                sql = "UPDATE character_state SET pose_key='',pose_flavor='',is_sleeping=?,current_activity=?,meta=?"
+                args = [int(profile["is_sleeping"]), profile["current_activity"], json.dumps(meta)]
+                # The first owned-state UPDATE holds SQLite write authority.
+                # A raw/manual writer may have won during stand calculation,
+                # without changing this solo place; preserve all four columns
+                # in that case (including same-XZ reports with a newer origin).
+                if point is not None and tuple(state)[3:] == position_authority:
+                    sql += ",pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL"
+                    args.extend((round(point[0], 2), round(point[1], 2)))
+                conn.execute(sql + " WHERE character_name=?", (*args, character_name))
+            else:
+                changed = conn.execute(
+                    "UPDATE characters SET profile_json=json_remove(profile_json,'$.prop_action_entry') "
+                    "WHERE name=? AND json_extract(profile_json,'$.prop_action_entry.execution_id')=?",
+                    (character_name, execution_id)).rowcount
+                if not changed:
+                    return False
+        if woke:
+            # Existing canonical lifecycle is DB-only; finish it before another
+            # sleeper can replace this generation's sleep_start bookkeeping.
+            _note_sleep_transition(character_name, False)
+        if own_place:
+            _after_locks(lambda: _publish_activity_changed(character_name, "", old_pose, "",
+                                                           None, old_place, stored=True))
+    return True
+
+
+def set_is_sleeping(character_name: str, value: bool, *, _prop_execution: str = "") -> None:
     """Set the is_sleeping flag. True may send the character off-map — that
     is the caller's job (the sleep skill calls go_offmap).
 
@@ -4409,6 +4633,8 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     """
     if not character_name:
         return
+    if not _prop_execution:
+        _interrupt_prop_action(character_name, "sleep" if value else "awake")
     from app.core.keyed_lock import keyed_lock
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the whole profile_json blob. The span ends at the save —
@@ -4417,32 +4643,7 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     # run below it and must not be reached while this lock is held.
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
-        was = bool(profile.get("is_sleeping"))
-        profile["is_sleeping"] = bool(value)
-        if value != was:
-            # "sleeping" is the canonical preset key (the synonyms schlafen /
-            # schlafend / pennen point at it), so everything downstream matches.
-            profile["current_activity"] = "sleeping" if value else ""
-        # Change stamp for the flag lifecycle (same bookkeeping as set_state_flag).
-        _since = dict(profile.get("state_flag_since") or {})
-        if value:
-            # in-world duration stamp -> canonical GAME time
-            _since["is_sleeping"] = game_time().canonical()
-        else:
-            _since.pop("is_sleeping", None)
-        profile["state_flag_since"] = _since
-        # Waking up (True->False): drop the sleep/old pose, otherwise the
-        # expression image stays stuck on "sleeping". (wake_from_offmap does
-        # the same, but only applies to off-map sleepers.)
-        if was and not value:
-            profile["pose_key"] = ""
-            profile["pose_flavor"] = ""
-            # The bed goes with the sleep. Falling asleep took a lying place
-            # (below); keeping it awake would leave the figure standing on the
-            # mattress with no pose, and every renderer draws it there because
-            # the place, not the pose, says where a body is. Same rule as
-            # ``clear_pose_intent``: whoever gives up the pose stands up.
-            profile["place"] = None
+        was = _set_sleep_flag(profile, value)
         stored = save_character_profile(character_name, profile)
     if value != was:
         from app.core import sync_topics
@@ -4453,6 +4654,8 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     # be overwritten by our own write. A failure here must not keep anyone
     # awake — the flag is already stored, the place is bookkeeping.
     if value and not was:
+        owned_bed = bool(_prop_execution and
+                         (get_character_profile(character_name).get("place") or {}).get("execution_id") == _prop_execution)
         try:
             # A pair clip holds two figures at one anchor and cannot survive
             # one of them lying down elsewhere — the partner would keep
@@ -4464,7 +4667,8 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
                            "not be ended: %s", character_name, e)
         try:
             from app.core import places
-            places.assign(character_name, "sleeping")
+            if not owned_bed:
+                places.assign(character_name, "sleeping")
         except Exception as e:
             logger.warning("%s fell asleep, but the place could not be "
                            "reassigned: %s", character_name, e)
@@ -4473,11 +4677,7 @@ def set_is_sleeping(character_name: str, value: bool) -> None:
     # time, waking up checks whether it was the main sleep (>= threshold)
     # -> daily entry.
     if value != was:
-        try:
-            from app.core import day_consolidation as _dc
-            (_dc.note_sleep_start if value else _dc.note_wake)(character_name)
-        except Exception:
-            pass
+        _note_sleep_transition(character_name, value)
 
 
 def set_state_flag(character_name: str, flag: str, value) -> None:

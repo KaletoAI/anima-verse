@@ -1,4 +1,6 @@
 export * from './api';
+export * from './propActions';
+export * from './PropActionsPanel';
 export * from './clockFormat';
 export * from './clockSettings';
 export * from './I18nProvider';

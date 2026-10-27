@@ -117,15 +117,9 @@ Hand-derived expectations:
       nothing; b1 is nobody's), and room_offer_short fed that room's map
       (occ=) gives the same string as the self-reading call.
       place_label("Ann") == "Seat"; place_label("Fay") == "".
-  [6b] The pair gate of _group_lines counts free slots PER PLACE, never the
-      row's sum: two prop-sourced "Chair" seats of capacity 1 collapse to
-      ONE row "2× Chair" (same label + group) with 2 free slots in total but
-      at most 1 on any one chair → "- 2× Chair (free): sitting, reading" —
-      the pair pose "cuddling" (places 2) is absent. One prop "Sofa" of
-      capacity 2 → "- Sofa (free): sitting, cuddling (with partner), reading"
-      (poses_in_group: the group default first, the rest alphabetical).
-      room_places is stubbed for a room "den" nobody is in, so the
-      occupancy is empty and the lines are pure inventory.
+  [6b] Prop-sourced chairs and sofas do not advertise unchecked raw poses,
+      regardless of group or free capacity. Semantic action offers are tested
+      against actual placements and executor preflights by smoke_prop_action_api.
       The setup restores the full layout (stage 3 dropped b1) and sets the
       room hint straight in the world data — there is no setter,
       activity_hint is a column of the rooms table.
@@ -228,11 +222,8 @@ Hand-derived expectations:
         Anywhere here: standing, st01, st02, st03, st04, st05, st06, st07,
         …and 2 more (any pose key works)
       Base catalog (one stand pose): "Anywhere here: standing", no suffix.
-  [12] Place lines are capped at 12: room_places stubbed (stage-6b pattern)
-      with 13 prop-sourced seats "Chair 1" … "Chair 13" (distinct labels →
-      13 rows) → header, 12 rows, "…and 1 more", "Anywhere here: standing"
-      = 15 lines (the den has no activity_hint); row 12 is
-      "- Chair 12 (free): sitting, reading", Chair 13 appears nowhere.
+  [12] Room-owned place lines remain capped at 12; the separate semantic
+      contract is not confused with raw marker rows.
   [13] place_phrase — the preposition per group: Ann sitting on s1 (seat)
       → "on the seat"; scene_render._pose_hint("Ann") = "p, on the seat"
       (catalog prompt "p", no flavor) and system_prompt_builder
@@ -674,7 +665,8 @@ EXPECTED_OFFER = "\n".join([
 for _i, (_want, _got) in enumerate(zip(EXPECTED_OFFER.split("\n"),
                                        offer.split("\n") + [""] * 6)):
     check(f"offer line {_i + 1}: {_want}", _got == _want, repr(_got))
-check("offer has exactly six lines", offer == EXPECTED_OFFER, repr(offer))
+check("room marker offer preserved before semantic contract",
+      offer.split("\n<prop_actions_contract>", 1)[0] == EXPECTED_OFFER, repr(offer))
 short = places.room_offer_short(HOUSE, "lounge")
 check("room_offer_short", short == "seat 0 free, lie 1 free", repr(short))
 loc_occ = places.location_occupancy(HOUSE)
@@ -705,11 +697,7 @@ try:
     den, _covered = places._group_lines(HOUSE, "den", "Fay")
 finally:
     places.room_places = _orig_room_places
-check("two rows (the two chairs collapsed, the sofa apart)", len(den) == 2, str(den))
-check("2× Chair: 2 free in total, 1 per chair → no pair pose",
-      den[0] == "- 2× Chair (free): sitting, reading", repr(den[0]))
-check("Sofa: 2 free on one place → cuddling (with partner)",
-      den[1] == "- Sofa (free): sitting, cuddling (with partner), reading", repr(den[1]))
+check("prop markers never advertise unchecked raw poses", den == [] and _covered == set(), str(den))
 
 # ── [7] a pair on one place ─────────────────────────────────────────────
 print("\n[7] a pair on one place")
@@ -982,13 +970,13 @@ check("one stand pose: no cap suffix", "Anywhere here: standing" in offer.split(
 # ── [12] the place lines are capped at 12 ───────────────────────────────
 print("\n[12] the place lines are capped at 12")
 places.room_places = lambda loc, room: (
-    [prop_place(f"c{i}/s", f"Chair {i}", 1) for i in range(1, 14)]
+    [{**prop_place(f"c{i}/s", f"Chair {i}", 1), "source": "room"} for i in range(1, 14)]
     if room == "den" else _orig_room_places(loc, room))
 try:
     offer = places.room_offer("Fay", HOUSE, "den")
 finally:
     places.room_places = _orig_room_places
-lines = offer.split("\n")
+lines = offer.split("\n<prop_actions_contract>", 1)[0].split("\n")
 check("header + 12 rows + '…and 1 more' + Anywhere", len(lines) == 15, str(len(lines)))
 check("row 12 is Chair 12", lines[12] == "- Chair 12 (free): sitting, reading", repr(lines[12]))
 check("then '…and 1 more'", lines[13] == "…and 1 more", repr(lines[13]))

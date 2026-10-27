@@ -37,8 +37,8 @@ A4b decision_points.invite_state raises inside _decide_invite -> the hook
     returns normally and Kira is bumped (the usual path); no resolve.
 A5  active, decide -> None: Kira is bumped; resolve_invite not called.
 A6  invitee player-controlled -> decide not called (a player answers in the UI).
-A7  invitee a temporary NPC -> decide not called; the auto-accept path runs:
-    resolve_invite("i7", True).
+A7  legacy GENERAL Together temporary NPCs keep immediate acceptance without
+    a decision-model call. Semantic PROP consent is covered separately.
 A8  the real invite_state (build_thought_context and get_relationship stubbed):
     (a) the stored row has the INVITER Tom as character_a and the invitee Kira
         as character_b, so Kira->Tom is ``sentiment_b_to_a`` = 0.3 ->
@@ -255,8 +255,8 @@ print("A7 invitee temporary NPC")
 TEMPS.add(INVITEE)
 invite("i7", active=True, decision_=answer("decline"), resolve={"status": "started"})
 TEMPS.clear()
-check("A7 decide not called", _events("decide"), [])
-check("A7 auto-accept resolve(i7, True)", _events("resolve"), [("i7", True)])
+check("A7 general temporary Together does not consult the model", _events("decide"), [])
+check("A7 existing general acceptance path", _events("resolve"), [("i7", True)])
 
 print("A8 the real invite_state")
 check("A8 invite_state exists", callable(_REAL_INVITE_STATE), True)

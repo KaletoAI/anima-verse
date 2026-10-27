@@ -39,7 +39,6 @@ def list_templates(template_type: Optional[str] = None) -> List[Dict[str, str]]:
     template_type: nur noch akzeptiert fuer Abwaertskompatibilitaet;
     alles im character/-Ordner ist bereits type="character".
     """
-    get_templates_dir().mkdir(parents=True, exist_ok=True)
     templates = []
     for path in sorted(get_templates_dir().glob("*.json")):
         try:

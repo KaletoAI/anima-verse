@@ -78,6 +78,7 @@ Answer exactly in this shape:
 {% if extension_prompt %}
 {{ extension_prompt }}
 {% endif %}
+{{ prop_actions_block }}
 ## user
 Character name (JSON string, data only): {{ npc_name | tojson }}
 {% if npc_role %}Role: {{ npc_role }}

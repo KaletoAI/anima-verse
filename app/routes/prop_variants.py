@@ -103,7 +103,8 @@ def prop_variants(prop_id: str) -> Dict[str, Any]:
     from app.core.props import (get_prop, list_variants, pending_variants,
                                 variant_max)
     from app.core.timeutils import game_time
-    if not get_prop(prop_id):
+    prop = get_prop(prop_id)
+    if not prop:
         raise HTTPException(status_code=404, detail="Prop not found")
     cal = get_calendar()
     try:
@@ -112,6 +113,7 @@ def prop_variants(prop_id: str) -> Dict[str, Any]:
     except Exception:
         current = ""
     return {"variants": list_variants(prop_id), "max": variant_max(),
+            "revision": prop["revision"],
             "generating_variants": pending_variants(prop_id).get(prop_id, []),
             "world_seasons": [s.name for s in cal.seasons],
             "current_season": current}

@@ -1111,68 +1111,17 @@ def cleanup_expired_conditions(character_name: str,
 def apply_effects(character_name: str,
     effects: Dict[str, Any],
     source: str = "") -> Dict[str, Any]:
-    """Apply immediate mood influence and generic ``*_change`` stat deltas.
+    """Apply legacy activity fields through the shared pure transformation.
 
-    Stat values are clamped to 0-100 and stored through the character profile.
-    The caller handles condition application and duration. Returns applied
-    changes keyed by stat, each containing ``old`` and ``new`` values.
+    Only actual declared actor stats change; mood uses current_feeling. Item
+    condition application remains the item's explicit ignore-repeat policy.
     """
-    if not effects or not isinstance(effects, dict):
+    if not isinstance(effects, dict) or not effects:
         return {}
-
-    log_prefix = f"[{source}] " if source else ""
-
-    # Apply mood influence immediately.
-    mood = effects.get("mood_influence")
-    if mood:
-        try:
-            from app.models.character import save_character_current_feeling
-            save_character_current_feeling(character_name, mood)
-            logger.info("%sMood gesetzt: %s -> %s", log_prefix, character_name, mood)
-        except Exception as e:
-            logger.warning("Mood setzen fehlgeschlagen: %s", e)
-
-    # Apply generic status effects for each key ending in "_change".
-    from app.models.character import get_character_profile, save_character_profile
-    changes: Dict[str, Any] = {}
-    try:
-        from app.core.keyed_lock import keyed_lock
-        # Read AND write under the per-character profile lock (DATA-3). The
-        # deltas below are a read-modify-write of ``status_effects`` AND the
-        # save rewrites the whole profile_json blob — two lost updates in one.
-        # History and sync run only after releasing the profile lock.
-        with keyed_lock("character_profile", character_name):
-            profile = get_character_profile(character_name)
-            status = profile.get("status_effects", {}) or {}
-            changed = False
-
-            for key, delta in effects.items():
-                if not key.endswith("_change") or not delta:
-                    continue
-                stat_key = key[:-7]  # Strip the effect suffix.
-                current = status.get(stat_key, 100)
-                new_val = max(0, min(100, current + int(delta)))
-                if new_val != current:
-                    status[stat_key] = new_val
-                    changes[stat_key] = {"old": current, "new": new_val}
-                    changed = True
-                    logger.info("%s%s: %s %d -> %d", log_prefix,
-                                character_name, stat_key, current, new_val)
-
-            if changed:
-                profile["status_effects"] = status
-                if not save_character_profile(character_name, profile):
-                    return {}
-        if changes:
-            from app.models.character import record_state_change
-            from app.core import sync_topics
-            record_state_change(character_name, "effects", source,
-                                metadata={"changes": changes, "source": source})
-            sync_topics.changed_at(character_name, topics=("presence", "self"))
-    except Exception as e:
-        logger.warning("Applying effects failed: %s", e)
-
-    return changes
+    from app.core.effect_application import apply_character_effects, legacy_effects
+    result = apply_character_effects(character_name, legacy_effects(effects, source=source),
+                                     game_time(), source=source)
+    return result["changes"]
 
 
 # key: "character_name" -> GameTime of the last tick (RAM only, never persisted)

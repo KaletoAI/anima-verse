@@ -195,6 +195,46 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from functools import wraps
+from uuid import UUID, uuid4
+
+
+_author_lock = threading.RLock()
+_author_locks: Dict[str, Any] = {}
+
+
+def _author_mutex(prop_id: str):
+    pid = safe_prop_id(prop_id)
+    with _author_lock:
+        lock = _author_locks.get(pid)
+        if lock is None:
+            lock = _author_locks[pid] = threading.RLock()
+    return lock
+
+
+def _author_transaction(fn):
+    """Serialize sidecar read/modify/write transactions, including nested reads."""
+    @wraps(fn)
+    def transaction(*args, **kwargs):
+        pid = str(args[0] if args else kwargs.get("prop_id", kwargs.get("pid", "")))
+        with _author_mutex(pid):
+            return fn(*args, **kwargs)
+    return transaction
+
+
+class PropRevisionConflict(ValueError):
+    """The draft no longer describes the stored document."""
+
+
+class PropDocumentInvalid(ValueError):
+    def __init__(self, issues):
+        self.issues = issues
+        super().__init__("Invalid prop action document")
+
+
+def _document_revision(meta):
+    return hashlib.sha256(json.dumps(meta, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode()).hexdigest()
 
 from app.core.game_time import (current_season_tokens, sanitize_season_tags,
                                 season_tags_active)
@@ -659,22 +699,30 @@ def _sidecar_path(prop_id: str) -> Optional[Path]:
     return (d / SIDECAR_NAME) if d else None
 
 
-def read_sidecar(prop_id: str) -> Dict[str, Any]:
+@_author_transaction
+def read_sidecar(prop_id: str, *, read_only: bool = False) -> Dict[str, Any]:
     sp = _sidecar_path(prop_id)
     if sp and sp.exists():
         try:
             meta = json.loads(sp.read_text(encoding="utf-8"))
             if isinstance(meta, dict):
+                entries = _variant_list(meta)
+                if meta.get(VARIANTS_KEY) != entries:
+                    meta[VARIANTS_KEY] = entries
+                    if not read_only:
+                        _write_sidecar(prop_id, meta)
                 return meta
         except (OSError, ValueError):
             pass
     return {}
 
 
+@_author_transaction
 def _write_sidecar(prop_id: str, meta: Dict[str, Any]) -> None:
     d = _prop_dir(prop_id, create=True)
     if not d:
         raise ValueError("bad prop id")
+    meta[VARIANTS_KEY] = _variant_list(meta)
     (d / SIDECAR_NAME).write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     # A prop's markers are part of the seat inventory of every room it
@@ -733,6 +781,7 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     raw = meta.get(VARIANTS_KEY) if isinstance(meta, dict) else None
     out: List[Dict[str, Any]] = []
     seen: set = set()
+    seen_uids = set()
     if isinstance(raw, list):
         for entry in raw[:VARIANT_MAX_CAP]:
             if not isinstance(entry, dict):
@@ -743,6 +792,15 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             seen.add(stem)
             rec: Dict[str, Any] = {"stem": stem,
                                    "active": bool(entry.get("active", True))}
+            try:
+                uid = str(UUID(entry.get("uid", "")))
+                if uid in seen_uids:
+                    raise ValueError("duplicate UID")
+            except (ValueError, TypeError, AttributeError):
+                uid = str(uuid4())
+            seen_uids.add(uid)
+            rec["uid"] = uid
+            rec["action_bindings"] = entry.get("action_bindings", [])
             img = entry.get("image")
             if isinstance(img, dict):
                 rec["image"] = {k: str(img.get(k) or "") for k in IMAGE_META_KEYS}
@@ -802,7 +860,7 @@ def _new_variant_entry(stem: str) -> Dict[str, Any]:
     This is what a record WITHOUT the variants key answers with — a prop whose
     sidecar was hand-emptied — and the seed :func:`add_variant` copies over.
     """
-    return {"stem": stem, "active": True,
+    return {"stem": stem, "uid": str(uuid4()), "action_bindings": [], "active": True,
             **{k: DEFAULT_DIM_M for k in DIM_KEYS},
             DIMS_ESTIMATED_KEY: True}
 
@@ -868,7 +926,7 @@ def _stem_of(prop_id: str, variant: Any = None,
     """File stem of ONE variant of a prop — ``None`` (or a negative index)
     means the PRIMARY variant, i.e. the first EFFECTIVELY active one. ``''``
     when the index names no variant this prop has."""
-    entries = _variant_list(read_sidecar(prop_id) if meta is None else meta)
+    entries = _variant_list(read_sidecar(prop_id, read_only=True) if meta is None else meta)
     if variant is None:
         return entries[_effective_indices(entries)[0]]["stem"]
     try:
@@ -1282,7 +1340,7 @@ def sanitize_light(raw: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
+def sanitize_markers(raw: Any, *, known_groups: Any = None) -> List[Dict[str, Any]]:
     """Object-local place markers (A4, plan-posen-plaetze.md). Same vocabulary
     as ``layout.markers`` — ``group`` = a PLACE TYPE of the pose catalog
     (``pose_catalog.get_groups()``), ``id`` stable,
@@ -1311,7 +1369,7 @@ def sanitize_markers(raw: Any) -> List[Dict[str, Any]]:
     if not isinstance(raw, list):
         return []
     from app.core.pose_catalog import get_groups
-    known = get_groups()
+    known = get_groups() if known_groups is None else known_groups
     out: List[Dict[str, Any]] = []
     for m in raw:
         if not isinstance(m, dict):
@@ -1742,6 +1800,7 @@ def default_variant_label(slot_values: Dict[str, Dict[str, str]]) -> str:
     return _coerce_variant_label(", ".join(p for p in parts if p))
 
 
+@_author_transaction
 def _autofill_slots(prop_id: str) -> None:
     """Re-read the texture slots off the PRIMARY variant's mesh.
 
@@ -1801,6 +1860,18 @@ def _autofill_slots(prop_id: str) -> None:
 class BlenderUnavailable(RuntimeError):
     """Blender cannot run right now — missing, disabled or every slot busy.
     A state of the host, not a defect of the mesh: the route answers 503."""
+
+    def __init__(self, message: str, snapshot: Optional[Dict[str, Any]] = None):
+        self.snapshot = snapshot
+        super().__init__(message)
+
+
+class AreaProcessingError(RuntimeError):
+    """An external area failure tied to the exact source that was processed."""
+
+    def __init__(self, snapshot: Dict[str, Any], cause: Exception):
+        self.snapshot = snapshot
+        super().__init__(str(cause) or type(cause).__name__)
 
 
 def areas_sidecar_path(model_path: Optional[Path]) -> Optional[Path]:
@@ -2120,6 +2191,24 @@ def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
     return target
 
 
+def _area_model_token(src: Path) -> str:
+    stat = src.stat()
+    return _document_revision({"metadata": read_model_sidecar(src),
+                               "mtime_ns": stat.st_mtime_ns, "size": stat.st_size})
+
+
+@_author_transaction
+def _areas_snapshot(pid: str, variant: Any) -> Dict[str, Any]:
+    meta = read_sidecar(pid) if pid else {}
+    index = _resolve_variant(pid, variant, meta) if meta else -1
+    gallery = model_gallery(pid, index) if index >= 0 else None
+    src = gallery.find(DEFAULT_TIER, fallback=False) if gallery else None
+    if not src or src.suffix.lower() != ".glb":
+        raise ValueError("this variant has no full-tier GLB to work on")
+    return {"index": index, "src": src, "uid": _variant_list(meta)[index]["uid"],
+            "revision": _document_revision(meta), "model_token": _area_model_token(src)}
+
+
 def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
                default_source: str, wait_s: float) -> List[Dict[str, Any]]:
     """ONE Blender run of ``scripts/picture_areas.py`` on a variant's full
@@ -2133,38 +2222,58 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
     variant without a full-tier GLB."""
     from app.blender import refine, runner
     from app.core.model_validate import validate_static_glb
+    pid = safe_prop_id(prop_id)
+    snapshot = _areas_snapshot(pid, variant)
+    src = snapshot["src"]
     reason = refine.unavailable_reason()
     if reason:
-        raise BlenderUnavailable(reason)
-    pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
-    index = _resolve_variant(pid, variant, meta) if meta else -1
-    g = model_gallery(pid, index) if index >= 0 else None
-    src = g.find(DEFAULT_TIER, fallback=False) if g else None
-    if not src or src.suffix.lower() != ".glb":
-        raise ValueError("this variant has no full-tier GLB to work on")
+        raise BlenderUnavailable(reason, snapshot)
     if not refine.take_lod_slot(wait_s):
         raise BlenderUnavailable("blender is busy with another model — try "
-                                 "again in a moment")
+                                 "again in a moment", snapshot)
     try:
-        with tempfile.TemporaryDirectory(prefix="av-areas-") as tmp:
-            res = runner.run("picture_areas", inputs={"model": src},
-                             params=params, out_dir=Path(tmp), timeout_s=600)
-            if not res.get("ok"):
-                raise RuntimeError(res.get("error") or "picture_areas failed")
-            data = res.get("data") or {}
-            produced = (res.get("outputs") or {}).get("model")
-            blob = Path(produced).read_bytes() if produced else None
-    finally:
-        refine.free_lod_slot()
+        try:
+            with tempfile.TemporaryDirectory(prefix="av-areas-") as tmp:
+                res = runner.run("picture_areas", inputs={"model": src},
+                                 params=params, out_dir=Path(tmp), timeout_s=600)
+                if not res.get("ok"):
+                    raise RuntimeError(res.get("error") or "picture_areas failed")
+                data = res.get("data") or {}
+                produced = (res.get("outputs") or {}).get("model")
+                blob = Path(produced).read_bytes() if produced else None
+        finally:
+            refine.free_lod_slot()
+        if blob is not None:
+            verdict = validate_static_glb(blob)
+            if not verdict.get("ok"):
+                raise RuntimeError("split model failed validation: "
+                                   + "; ".join(verdict.get("errors") or []))
+    except Exception as exc:
+        raise AreaProcessingError(snapshot, exc) from exc
+    return _land_areas_result(pid, snapshot, blob, data, params, default_source)
 
+
+@_author_transaction
+def _land_areas_result(pid: str, snapshot: Dict[str, Any], blob: Optional[bytes],
+                       data: Dict[str, Any], params: Dict[str, Any],
+                       default_source: str) -> List[Dict[str, Any]]:
+    """Land only onto the exact author document and mesh processed outside locks."""
+    meta = read_sidecar(pid)
+    index, src = snapshot["index"], snapshot["src"]
+    entries = _variant_list(meta)
+    gallery = model_gallery(pid, index)
+    try:
+        current_token = _area_model_token(src)
+    except OSError:
+        current_token = ""
+    if (not meta or _document_revision(meta) != snapshot["revision"]
+            or index >= len(entries) or entries[index]["uid"] != snapshot["uid"]
+            or not gallery or gallery.find(DEFAULT_TIER, fallback=False) != src
+            or current_token != snapshot["model_token"]):
+        raise PropRevisionConflict("prop or model changed during area processing; retry from the current document")
     previous = file_areas(src)
     model_file = src
     if blob is not None:
-        verdict = validate_static_glb(blob)
-        if not verdict.get("ok"):
-            raise RuntimeError("split model failed validation: "
-                               + "; ".join(verdict.get("errors") or []))
         # A FRESH gallery for the landing. ``g`` was built before the Blender
         # run and memoizes the selection file it read then — minutes ago. A
         # distance-mesh thread that selected a ``low`` in the meantime would
@@ -2489,6 +2598,7 @@ def _rewrite_glb_material_names(blob: bytes, mapping: Dict[str, str]) -> bytes:
     return struct.pack("<III", 0x46546C67, 2, 12 + len(out)) + out
 
 
+@_author_transaction
 def rename_area_kind(prop_id: str, area_id: str, kind: str,
                      variant: Any = None) -> List[Dict[str, Any]]:
     """Change what an area of ONE variant's mesh IS (picture <-> glass): the
@@ -2607,7 +2717,7 @@ def areas_info(prop_id: str, variant: Any = None) -> Dict[str, Any]:
 
 
 def _areas_after_landing(prop_id: str, variant: Any = None,
-                         wait_s: float = 10.0) -> None:
+                         wait_s: float = 10.0) -> bool:
     """The landing hook of the TWO paths a NEW mesh arrives on — the upload
     (``save_uploaded_glb`` → ``_store_bbox(landing=True)``) and the generation
     chain (``_generate``) — for EVERY variant (v2 E1: each is its own mesh):
@@ -2628,7 +2738,7 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
-        return
+        return False
     # E6 FIRST: a mesh whose modeller named its surfaces gets an area per
     # such material — on a file that has no reading yet, so a re-landed
     # split result is not adopted twice. The key-colour run that may follow
@@ -2636,15 +2746,22 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
     if _names_slot_materials(_variant_full_file(pid, variant)):
         try:
             detect_areas(pid, mode="adopt", variant=variant, wait_s=wait_s)
+        except PropRevisionConflict:
+            return False
         except Exception as e:                              # noqa: BLE001
-            _landing_run_failed(pid, variant, e, "adoption of named materials")
+            if not _landing_run_failed(pid, variant, e, "adoption of named materials"):
+                return False
     if not meta.get(KEY_AREAS_KEY) and not is_door_prop(meta):
         _reconcile_areas(pid, variant)
-        return
+        return True
     try:
         detect_areas(pid, mode="auto", variant=variant, wait_s=wait_s)
+    except PropRevisionConflict:
+        return False
     except Exception as e:                                  # noqa: BLE001
-        _landing_run_failed(pid, variant, e, "picture-area detection")
+        if not _landing_run_failed(pid, variant, e, "picture-area detection"):
+            return False
+    return True
 
 
 def _names_slot_materials(mp: Optional[Path]) -> bool:
@@ -2660,8 +2777,9 @@ def _names_slot_materials(mp: Optional[Path]) -> bool:
         return False
 
 
+@_author_transaction
 def _landing_run_failed(pid: str, variant: Any, e: BaseException,
-                        what: str) -> None:
+                        what: str) -> bool:
     """A landing run failed: log it and store it on the landed FILE.
 
     The fresh mesh is unsplit, so it names no area and carries no leaf node
@@ -2672,16 +2790,25 @@ def _landing_run_failed(pid: str, variant: Any, e: BaseException,
     halves stay until the next SUCCESSFUL run prunes them (R15)."""
     logger.warning("Prop %s: automatic %s failed (variant %s): %s", pid, what,
                    variant, e)
-    mp = _variant_full_file(pid, variant)
-    if not mp:
-        return
+    snapshot = e.snapshot if isinstance(e, (AreaProcessingError, BlenderUnavailable)) else None
+    if snapshot is None:
+        # Invalid input never started processing and names no diagnostic target.
+        return True
     try:
-        set_file_areas(mp, areas=[], leaf_bbox=None,
+        current = _areas_snapshot(pid, snapshot["index"])
+    except (OSError, ValueError):
+        return False
+    if current != snapshot:
+        return False
+    try:
+        set_file_areas(snapshot["src"], areas=[], leaf_bbox=None,
                        areas_error=str(e) or type(e).__name__)
     except (OSError, ValueError):
         pass
+    return True
 
 
+@_author_transaction
 def _reconcile_areas(pid: str, variant: Any = None) -> None:
     """Give ONE variant's ACTIVE full mesh its area reading when it has none
     yet, and let that variant's defaults follow it — after the admin
@@ -2795,6 +2922,8 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         "name": name,
         "category": (category or "").strip(),
         VARIANTS_KEY: [variant],
+        # Explicit empty means decorative, not legacy marker-derived actions.
+        "actions": [],
         # NEW props do not sway (user order 2026-08-20): the 1.0 default is
         # the VEGETATION-era reading of an ABSENT key, kept so existing
         # scatter plants keep waving — but furniture is the normal case now,
@@ -2812,7 +2941,7 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         meta[MOUNT_KEY] = mount_kind
     _write_sidecar(prop_id, meta)
     logger.info("Prop %s created (%s)", prop_id, name)
-    return {"id": prop_id, **meta}
+    return {"id": prop_id, **meta, "revision": _document_revision(meta), "actions": []}
 
 
 #: What the PROP record itself still carries — the fields the general section
@@ -2928,6 +3057,7 @@ def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
         meta.pop(MOUNT_SUGGESTED_KEY, None)
 
 
+@_author_transaction
 def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update the PROP's own fields (name / category / tags / sway_factor /
     slots / key_areas / mount). None when the prop does not exist.
@@ -2949,6 +3079,7 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
     return {"id": pid, **meta}
 
 
+@_author_transaction
 def set_suggested_mount(prop_id: str, mount: str) -> bool:
     """Store a CLASSIFIER's mount guess (``props_mount.classify_mounts``) —
     the value plus :data:`MOUNT_SUGGESTED_KEY`. False when the prop does not
@@ -2974,6 +3105,7 @@ def set_suggested_mount(prop_id: str, mount: str) -> bool:
     return True
 
 
+@_author_transaction
 def set_rotation(prop_id: str, rotation: Any, variant: Any = None,
                  filename: str = "") -> Optional[Dict[str, Any]]:
     """Persist the orientation fix ``{x, y, z}`` (degrees, free values) on
@@ -3159,12 +3291,14 @@ def delete_surface_for(prop_id: str, variant: Any = None) -> bool:
         return False
     indices = ([variant] if variant is not None
                else list(_active_indices(_variant_list(meta))))
+    # Resolve model paths before taking the status lock. No _lock -> author
+    # acquisition is allowed; author transactions may consult generation state.
+    paths = [model_path(pid, variant=idx) for idx in indices]
     removed = False
     with _lock:
         if pid in _surface_building:
             raise SurfaceBakeRunning(pid)
-        for idx in indices:
-            mp = model_path(pid, variant=idx)
+        for mp in paths:
             if mp and delete_surface(mp):
                 removed = True
     if removed:
@@ -3348,6 +3482,9 @@ def _published_entry(meta: Dict[str, Any], index: int,
     """
     entry: Dict[str, Any] = {"variant": index, "tiers": tiers,
                              "dims": variant_dims(meta, index)}
+    authored = _variant_entry(meta, index)
+    entry["uid"] = authored["uid"]
+    entry["action_bindings"] = authored.get("action_bindings", [])
     off = variant_ground_offset(meta, index)
     if off:
         entry[GROUND_OFFSET_KEY] = off
@@ -3519,6 +3656,8 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
         has_source = source_path(prop_id, i) is not None
         out.append({
             "index": i,
+            "uid": entry["uid"],
+            "action_bindings": entry.get("action_bindings", []),
             "stem": entry["stem"],
             "active": bool(entry["active"]),
             "seasons": list(entry.get(SEASONS_KEY) or []),
@@ -3575,6 +3714,7 @@ _COPIED_ON_ADD = (*DIM_KEYS, DIMS_ESTIMATED_KEY, DESCRIPTION_KEY,
                   TARGET_FACES_HIGH_KEY, TARGET_FACES_LOW_KEY)
 
 
+@_author_transaction
 def add_variant(prop_id: str, source: Any = None) -> int:
     """Append a variant slot and return its index; ``-1`` when the prop does
     not exist or the active cap is already reached.
@@ -3605,6 +3745,10 @@ def add_variant(prop_id: str, source: Any = None) -> int:
         return -1
     src = _variant_entry(meta, source)
     entry: Dict[str, Any] = {"stem": stem, "active": True}
+    entry["uid"] = str(uuid4())
+    entry["action_bindings"] = [
+        {**json.loads(json.dumps(binding)), "variant_uid": entry["uid"]}
+        for binding in src.get("action_bindings", [])]
     for key in _COPIED_ON_ADD:
         if key in src:
             entry[key] = json.loads(json.dumps(src[key]))
@@ -3614,6 +3758,7 @@ def add_variant(prop_id: str, source: Any = None) -> int:
     return len(entries) - 1
 
 
+@_author_transaction
 def set_variant_active(prop_id: str, variant: int, active: bool) -> bool:
     """Switch one variant on or off. Switching the LAST active one off is
     refused: a prop with no active variant would render nothing, and that
@@ -3643,6 +3788,7 @@ def set_variant_active(prop_id: str, variant: int, active: bool) -> bool:
     return True
 
 
+@_author_transaction
 def set_variant_seasons(prop_id: str, variant: int, seasons: Any) -> bool:
     """Tag one variant with the seasons it depicts, or clear the tag (E2c).
 
@@ -3829,6 +3975,7 @@ VARIANT_PATCH_APPLIERS = {
 VARIANT_PATCH_KEYS = tuple(VARIANT_PATCH_APPLIERS)
 
 
+@_author_transaction
 def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
     """Set this variant's real size (2026-08-24, variant-only since
     2026-08-25).
@@ -3856,6 +4003,7 @@ def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
     return True
 
 
+@_author_transaction
 def set_variant_ground_offset(prop_id: str, variant: int, offset: Any) -> bool:
     """How deep THIS variant stands in the ground, ± 5 m in centimetre steps
     (2026-08-25).
@@ -3875,6 +4023,7 @@ def set_variant_ground_offset(prop_id: str, variant: int, offset: Any) -> bool:
     return True
 
 
+@_author_transaction
 def set_variant_markers(prop_id: str, variant: int, markers: Any) -> bool:
     """Replace THIS variant's object-local marker list (2026-08-25).
 
@@ -3892,6 +4041,7 @@ def set_variant_markers(prop_id: str, variant: int, markers: Any) -> bool:
     return True
 
 
+@_author_transaction
 def set_variant_description(prop_id: str, variant: int, text: Any) -> bool:
     """Give ONE variant its own generation subject, or clear it (2026-08-24).
 
@@ -3912,6 +4062,7 @@ def set_variant_description(prop_id: str, variant: int, text: Any) -> bool:
     return True
 
 
+@_author_transaction
 def set_variant_slot_values(prop_id: str, variant: int, slot_values: Any,
                             label: Any = None) -> bool:
     """WHAT this variant shows in the prop's picture areas — the picture
@@ -3948,6 +4099,7 @@ def set_variant_slot_values(prop_id: str, variant: int, slot_values: Any,
     return True
 
 
+@_author_transaction
 def set_variant_area_defaults(prop_id: str, variant: int,
                               area_defaults: Any) -> Optional[Dict[str, Any]]:
     """What this variant shows in its PANES when nobody hung anything —
@@ -3979,6 +4131,7 @@ def set_variant_area_defaults(prop_id: str, variant: int,
 _KEEP = object()
 
 
+@_author_transaction
 def set_variant_face_targets(prop_id: str, variant: int,
                              high: Any = _KEEP,
                              low: Any = _KEEP) -> Optional[Dict[str, Any]]:
@@ -4023,6 +4176,7 @@ def variant_face_targets(prop_id: str,
             TARGET_FACES_LOW_KEY: entry.get(TARGET_FACES_LOW_KEY)}
 
 
+@_author_transaction
 def _copy_variant_mesh(prop_id: str, target: int, source: Any = None) -> Path:
     """Copy the SOURCE variant's active full mesh into the TARGET variant's
     stem and select it — the mechanic a picture variant runs on (ruling R4).
@@ -4203,6 +4357,7 @@ def recopy_variant_mesh(prop_id: str, variant: int) -> bool:
     return True
 
 
+@_author_transaction
 def _prune_variant_values(pid: str, index: int) -> None:
     """Drop what ONE variant's ``slot_values`` and ``area_defaults`` say
     about areas its FRESH COPY does not carry (R15, the re-copy event: the
@@ -4220,96 +4375,52 @@ def _prune_variant_values(pid: str, index: int) -> None:
         return
 
 
-def bulk_update(prop_id: str, general: Any = None,
-                variants: Any = None) -> Optional[Dict[str, Any]]:
-    """THE BATCH SAVE of the prop detail: the prop's own fields and any number
-    of variant field patches, in ONE sidecar write. ``None`` when the prop does
-    not exist.
-
-    The detail panel keeps a LOCAL DRAFT and writes it with one explicit Save
-    (the map editor's law, ``core/bulk_edit.py`` / ``tabs/props/pendingFields``).
-    Every field used to go out on its own route the moment it lost focus, so
-    authoring one variant — three metres, a subject, a sink, a season, a marker
-    — was seven requests and seven sidecar writes for one thought.
-
-    ``general`` is the prop patch :func:`update_prop` takes; ``variants`` maps a
-    STORE INDEX (as a string or an int, the way JSON object keys arrive) to a
-    patch of the five fields the variant owns
-    (:data:`VARIANT_PATCH_APPLIERS`)::
-
-        {"general": {"name": "Bench"},
-         "variants": {"0": {"dims": {"width_m": 2.0}, "markers": []},
-                      "2": {"seasons": ["Winter"]}}}
-
-    EVERYTHING IS CHECKED BEFORE ANYTHING IS WRITTEN (``plan_batch``'s law): an
-    unknown field, a moved field or an index this prop has no variant for raises
-    ``ValueError`` and the sidecar is left exactly as it was. A body that is
-    half junk must not leave a half-saved prop behind — the admin would have no
-    way of telling which half arrived.
-
-    Unknown keys are REFUSED rather than ignored, for the same reason the prop
-    patch refuses the moved ones: a green "Saved" over a value that reached
-    nothing is the worst of the three possible answers.
-
-    NO VERSION STAMP, unlike the map's batch (``bulk_edit.plan_batch``), and
-    that is a decision rather than an omission:
-
-    * The map's stamps are a column of a SQLite row and its other writers are
-      other EDITORS. A prop sidecar has no stamp, and its other writers are
-      BACKGROUND JOBS — a finished render stores the image provenance, a
-      finished mesh stores the bbox, a gallery selection writes too. A stamp
-      would be bumped by all of them, so the honest single-editor case ("type a
-      size while your own mesh bakes") would come back "changed on the server".
-    * This batch merges FIELD BY FIELD into the sidecar as it is right now
-      (read → apply the named fields → write), never a whole-record replace, so
-      whatever a job wrote into OTHER keys survives it.
-    * What is left is the write that lands between this read and this write —
-      a race the single-value routes have had since they existed, which a
-      stamp would report rather than prevent, and which needs one editor per
-      prop to even occur.
-
-    Nothing to do writes nothing — an empty body is a read.
-    """
+@_author_transaction
+def bulk_update(prop_id: str, general: Any = None, variants: Any = None, *,
+                base_revision: str, actions: Any = _KEEP) -> Optional[Dict[str, Any]]:
+    """Compare-and-write an author document; variant patches use stable UIDs."""
+    from app.core.prop_actions import validate_document
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
         return None
-    prop_patch = general if isinstance(general, dict) else {}
+    if not isinstance(base_revision, str) or base_revision != _document_revision(meta):
+        raise PropRevisionConflict("Prop changed on the server; reload before saving")
+    if general is not None and not isinstance(general, dict):
+        raise ValueError("general must be an object")
+    if variants is not None and not isinstance(variants, dict):
+        raise ValueError("variants must be an object keyed by variant UID")
+    prop_patch = general or {}
     _check_prop_patch(prop_patch, meta)
-
-    raw = variants if isinstance(variants, dict) else {}
     entries = _variant_list(meta)
-    plan: List[Tuple[int, Dict[str, Any]]] = []
-    for key, patch in raw.items():
-        try:
-            i = int(key)
-        except (TypeError, ValueError):
-            raise ValueError(f"variant key must be a store index: {key!r}")
-        if not 0 <= i < len(entries):
-            raise ValueError(f"this prop has no variant {i}")
+    by_uid = {entry["uid"]: entry for entry in entries}
+    for uid, patch in (variants or {}).items():
+        if uid not in by_uid:
+            raise ValueError(f"this prop has no variant UID {uid!r}")
         if not isinstance(patch, dict):
-            raise ValueError(f"variant {i}: patch must be an object")
-        unknown = [k for k in patch if k not in VARIANT_PATCH_APPLIERS]
+            raise ValueError("variant patch must be an object")
+        unknown = set(patch) - set(VARIANT_PATCH_APPLIERS) - {"action_bindings"}
         if unknown:
-            raise ValueError(
-                f"variant {i}: unknown field(s) "
-                + ", ".join(sorted(unknown))
-                + " (a variant owns: " + ", ".join(VARIANT_PATCH_KEYS) + ")")
-        plan.append((i, patch))
-
-    if not prop_patch and not plan:
-        return _prop_record(pid, meta, full=True)
-    _apply_prop_fields(meta, prop_patch)
-    for i, patch in plan:
+            raise ValueError("unknown variant fields: " + ", ".join(sorted(unknown)))
         for field, value in patch.items():
-            VARIANT_PATCH_APPLIERS[field](entries[i], value)
-    if plan:
-        meta[VARIANTS_KEY] = entries
-    _write_sidecar(pid, meta)
-    return _prop_record(pid, meta, full=True)
+            if field == "action_bindings":
+                by_uid[uid][field] = value
+            else:
+                VARIANT_PATCH_APPLIERS[field](by_uid[uid], value)
+    _apply_prop_fields(meta, prop_patch)
+    meta[VARIANTS_KEY] = entries
+    if actions is not _KEEP:
+        meta["actions"] = actions
+    issues = validate_document(meta)
+    if issues:
+        raise PropDocumentInvalid(issues)
+    if prop_patch or variants or actions is not _KEEP:
+        _write_sidecar(pid, meta)
+    return _prop_record(pid, meta, full=True, ensure_bbox=False)
 
 
-def delete_variant(prop_id: str, variant: int) -> bool:
+@_author_transaction
+def _delete_variant_record(prop_id: str, variant: int) -> bool:
     """Remove one variant WITH its stored meshes, its selection entry and its
     SOURCE IMAGE. Refused for the last remaining variant — a prop always has
     one.
@@ -4351,7 +4462,13 @@ def delete_variant(prop_id: str, variant: int) -> bool:
     entries.pop(i)
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
-    _store_bbox(pid)
+    return True
+
+
+def delete_variant(prop_id: str, variant: int) -> bool:
+    if not _delete_variant_record(prop_id, variant):
+        return False
+    _store_bbox(prop_id)
     return True
 
 
@@ -4742,9 +4859,10 @@ def select_model(prop_id: str, filename: str,
     filename deselects — on the default tier that persists the "render
     nothing" sentinel, on any other tier the tier ceases to exist. False when
     the prop, the variant or the file does not exist."""
-    g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
-    if not g or not g.select(filename, tier):
-        return False
+    with _author_mutex(prop_id):
+        g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
+        if not g or not g.select(filename, tier):
+            return False
     if (normalize_tier(tier) or DEFAULT_TIER) == DEFAULT_TIER:
         # The mesh the dims are derived from changed — re-measure it.
         _store_bbox(prop_id, variant)
@@ -4756,13 +4874,14 @@ def delete_model(prop_id: str, filename: str = "",
     """Remove ONE stored mesh (+ its sidecar) or ALL of a variant's. A
     selection pointing at a removed file moves to the newest remaining one
     (default tier) or is dropped (any other tier)."""
-    g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
-    if not g:
-        return False
-    doomed = [g.file(filename)] if filename else g.files()
-    if not g.delete(filename):
-        return False
-    _drop_areas_sidecars(doomed)
+    with _author_mutex(prop_id):
+        g = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
+        if not g:
+            return False
+        doomed = [g.file(filename)] if filename else g.files()
+        if not g.delete(filename):
+            return False
+        _drop_areas_sidecars(doomed)
     _store_bbox(prop_id, variant)
     return True
 
@@ -4911,6 +5030,7 @@ def _drop_image_meta(meta: Dict[str, Any], stem: str, view: str) -> None:
     meta[VARIANTS_KEY] = entries
 
 
+@_author_transaction
 def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
                       view: str = "front", backend: str = "", prompt: str = "",
                       negative: str = "",
@@ -4957,6 +5077,7 @@ def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
     return True
 
 
+@_author_transaction
 def delete_source_image(prop_id: str, variant: Any, view: str) -> bool:
     """Remove ONE extra view image of a variant (never the front — that is
     the variant's identity picture). False when nothing was there."""
@@ -4981,7 +5102,8 @@ def variant_images(prop_id: str, variant: Any = None) -> Dict[str, Dict[str, str
             if source_path(prop_id, variant, view=v)}
 
 
-def save_uploaded_glb(prop_id: str, contents: bytes,
+@_author_transaction
+def _save_uploaded_glb_record(prop_id: str, contents: bytes,
                       tier: str = DEFAULT_TIER, variant: Any = None) -> bool:
     """Store an uploaded GLB as a NEW mesh of one variant and make it the
     active one of its tier. The prop record must already exist (created
@@ -5016,6 +5138,14 @@ def save_uploaded_glb(prop_id: str, contents: bytes,
         _lod_failed.discard(_lod_key(safe_prop_id(prop_id), variant))
     logger.info("Prop %s: model uploaded (%d bytes) -> %s",
                 safe_prop_id(prop_id), len(contents), target.name)
+    return True
+
+
+def save_uploaded_glb(prop_id: str, contents: bytes,
+                      tier: str = DEFAULT_TIER, variant: Any = None) -> bool:
+    """Publish the uploaded file, then process it outside the author mutex."""
+    if not _save_uploaded_glb_record(prop_id, contents, tier, variant):
+        return False
     _store_bbox(prop_id, variant, landing=True)
     return True
 
@@ -5289,18 +5419,14 @@ def _reduce_to_low(pid: str, src: Path, ratio: float,
     # `_land_split` drops a stale low tier, but at that moment there is none to
     # drop, and the distance mesh of the file that was just replaced would then
     # become the low tier of its successor — the atlas where the picture is.
-    # So the selection is written and read back under `_lock`, and a low mesh
-    # that turns out to belong to the superseded file removes itself again
+    # Selection and the current-full check share the author transaction; a low
+    # mesh that belongs to the superseded file is removed instead
     # (`delete` takes the sidecar with it). The gallery is built FRESH here:
     # the instance above memoized the selection file before the reduction, and
     # writing that memo back would restore the superseded full tier.
-    with _lock:
-        fresh = model_gallery(pid, variant) or gallery
-        fresh.select(target.name, LOW_TIER)
-        if fresh.find(DEFAULT_TIER, fallback=False) != src:
-            fresh.delete(target.name)
-            out["error"] = "full mesh changed during the build"
-            return out
+    if not _select_low_if_current(pid, variant, src, target):
+        out["error"] = "full mesh changed during the build"
+        return out
     _lod_failed.discard(key)
     logger.info("Prop %s: distance mesh %s (%s -> %s tris)", pid,
                 target.name, res.get("tris_before"), res.get("tris"))
@@ -5308,6 +5434,18 @@ def _reduce_to_low(pid: str, src: Path, ratio: float,
                tris_before=res.get("tris_before"),
                size=target.stat().st_size, size_before=src.stat().st_size)
     return out
+
+
+@_author_transaction
+def _select_low_if_current(pid: str, variant: Any, src: Path, target: Path) -> bool:
+    """Serialize gallery landing with author writes, never while holding _lock."""
+    fresh = model_gallery(pid, variant)
+    if not fresh or fresh.find(DEFAULT_TIER, fallback=False) != src:
+        if fresh:
+            fresh.delete(target.name)
+        return False
+    fresh.select(target.name, LOW_TIER)
+    return True
 
 
 def build_low_tier(prop_id: str, ratio: float = 0.0, force: bool = False,
@@ -5458,6 +5596,18 @@ def _demand_low(prop_id: str, variant: Any, tiers: List[str]) -> None:
         request_low_tier(prop_id, variant)
 
 
+@_author_transaction
+def _bbox_snapshot(pid: str) -> Dict[str, Any]:
+    """Snapshot the same fallback-capable source used by _extract_bbox."""
+    meta = read_sidecar(pid)
+    index = _resolve_variant(pid, None, meta) if meta else -1
+    src = model_path(pid) if index >= 0 else None
+    if not src:
+        raise ValueError("this prop has no model to measure")
+    return {"index": index, "src": src, "uid": _variant_list(meta)[index]["uid"],
+            "revision": _document_revision(meta), "model_token": _area_model_token(src)}
+
+
 def _store_bbox(prop_id: str, variant: Any = None, *,
                 landing: bool = False) -> None:
     """Everything that happens once a model has landed: re-encode its
@@ -5487,7 +5637,8 @@ def _store_bbox(prop_id: str, variant: Any = None, *,
     # from the split file and not from the one it replaces. Never fails the
     # landing. The generation chain has the same call of its own (`_generate`).
     if landing:
-        _areas_after_landing(prop_id, variant, wait_s=10.0)
+        if not _areas_after_landing(prop_id, variant, wait_s=10.0):
+            return
     else:
         _reconcile_areas(prop_id, variant)
     _auto_retexture(prop_id, variant)
@@ -5509,23 +5660,37 @@ def _store_bbox(prop_id: str, variant: Any = None, *,
     # read-modify-write, and it writes only when the result really changed.
     # The generation chain has the same call of its own (`_generate`).
     _autofill_slots(prop_id)
+    pid = safe_prop_id(prop_id)
+    try:
+        snapshot = _bbox_snapshot(pid)
+    except ValueError:
+        return
     bbox = _extract_bbox(prop_id)
     if not bbox:
         return
-    pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
-    if not meta:
+    # External measurement never inherits the author mutex. The final merge
+    # rechecks both the author document and the exact model that was measured.
+    from app.blender.refine import attach_measurement
+    measured: Dict[str, Any] = {}
+    attach_measurement(measured, snapshot["src"])
+    _land_bbox_result(pid, snapshot, bbox, measured)
+
+
+@_author_transaction
+def _land_bbox_result(pid: str, snapshot: Dict[str, Any], bbox: List[float],
+                     measured: Dict[str, Any]) -> None:
+    meta = read_sidecar(pid)
+    if not meta or _document_revision(meta) != snapshot["revision"]:
+        return
+    try:
+        current = _bbox_snapshot(pid)
+    except (OSError, ValueError):
+        return
+    if any(current[key] != snapshot[key] for key in ("uid", "src", "model_token")):
         return
     meta["bbox"] = bbox
-    _redistribute_dims(meta, file_areas(model_path(prop_id))[ROTATION_KEY])
-    # Same write, one more source: the header parser above yields the box, but
-    # not the triangle count, the UV sets or whether the colour sits in the
-    # vertices — and those are what decides whether a prop is cheap enough to
-    # place many times. Purely informational; nothing here derives dims from it.
-    mp = model_path(prop_id)
-    if mp:
-        from app.blender.refine import attach_measurement
-        attach_measurement(meta, mp)
+    meta.update(measured)
+    _redistribute_dims(meta, file_areas(snapshot["src"])[ROTATION_KEY])
     try:
         _write_sidecar(pid, meta)
     except (OSError, ValueError):
@@ -5623,8 +5788,10 @@ def _picture_signature_part(entries: List[Dict[str, Any]],
                              "rotation": fixes}, sort_keys=True)
 
 
-def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
-    meta = _ensure_bbox(prop_id, meta)
+def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
+                 ensure_bbox: bool = True, read_only: bool = False) -> Dict[str, Any]:
+    if ensure_bbox and not read_only:
+        meta = _ensure_bbox(prop_id, meta)
     entries = _variant_list(meta)
     # EFFECTIVELY active (E2c): manually active AND in season. The record is a
     # RENDER payload — the client prop library and every room recipe read
@@ -5644,8 +5811,9 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
     # The record IS a client payload (the prop library the 3D client reads),
     # so this is one of the two places a missing distance mesh is noticed —
     # for every variant, not just the primary one.
-    for i, vt in zip(active_idx, tier_lists):
-        _demand_low(prop_id, i, vt)
+    if not read_only:
+        for i, vt in zip(active_idx, tier_lists):
+            _demand_low(prop_id, i, vt)
     gallery = galleries[0]
     tiers = tier_lists[0]
     # …plus everything the VARIANT owns (2026-08-25): the three real metres it
@@ -5806,6 +5974,8 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         })
         if meta.get("bbox"):
             rec["bbox"] = meta["bbox"]
+    rec["revision"] = _document_revision(meta)
+    rec["actions"] = meta.get("actions", [])
     return rec
 
 
@@ -5825,13 +5995,14 @@ def list_props(*, full: bool = False) -> List[Dict[str, Any]]:
     return out
 
 
-def get_prop(prop_id: str) -> Optional[Dict[str, Any]]:
-    """Full detail of ONE prop, or None."""
+@_author_transaction
+def get_prop(prop_id: str, *, read_only: bool = False) -> Optional[Dict[str, Any]]:
+    """Full detail; read_only retains published geometry without lazy writes/jobs."""
     pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
+    meta = read_sidecar(pid, read_only=read_only) if pid else {}
     if not meta:
         return None
-    return _prop_record(pid, meta, full=True)
+    return _prop_record(pid, meta, full=True, read_only=read_only)
 
 
 # ── Generation state (populated by the generation chain, A2) ─────────────
@@ -6407,6 +6578,20 @@ def _generate(prop_id: str, prompt: str, negative: str,
                 pass
 
 
+@_author_transaction
+def _land_generated_metadata(prop_id: str, variant: Any, path: Path) -> bool:
+    meta = read_sidecar(prop_id)
+    meta["source"] = "generated"
+    primary = _stem_of(prop_id, variant) == _stem_of(prop_id)
+    if primary:
+        bbox = _extract_bbox(prop_id)
+        if bbox:
+            meta["bbox"] = bbox
+            _redistribute_dims(meta, file_areas(path)[ROTATION_KEY])
+    _write_sidecar(prop_id, meta)
+    return primary
+
+
 def _mesh_stages(op) -> Dict[str, Any]:
     """Stage ``mesh`` → publish of one prop record — shared by the fresh run
     and the resume. Reads only the record, never the variant's current files."""
@@ -6490,17 +6675,7 @@ def _mesh_stages(op) -> Dict[str, Any]:
         logger.info("Prop %s: LOD stage %s selected as low variant",
                     prop_id, low)
 
-    meta = read_sidecar(prop_id)
-    meta["source"] = "generated"
-    # Only the PRIMARY variant informs the object's proportions — a second
-    # chair mesh must not redistribute the dims the admin sees.
-    primary = _stem_of(prop_id, variant) == _stem_of(prop_id)
-    if primary:
-        bbox = _extract_bbox(prop_id)
-        if bbox:
-            meta["bbox"] = bbox
-            _redistribute_dims(meta, file_areas(path)[ROTATION_KEY])
-    _write_sidecar(prop_id, meta)
+    primary = _land_generated_metadata(prop_id, variant, path)
     # The picture-area split of the mesh that just landed (when the prop
     # asked for key colours) — for EVERY variant (v2 E1: each is its own
     # mesh), same law as the slots below: this chain does not go through

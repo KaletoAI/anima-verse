@@ -2,9 +2,10 @@ import * as THREE from 'three';
 import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { transparentPortraitUrl } from '@anima/player-ui';
 import type { SyncCounters } from '../game/perfstats';
-import type { MapCharacter, MapInteraction } from '../types';
+import type { MapCharacter, MapInteraction, MapPropActionEntry } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
+import { entryIdentity, entryPhase, localApproachPoint } from '../game/propActionMotion';
 import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, sinkForState, standingClipFor,
   terrainPace, propWaterWord,
@@ -171,6 +172,9 @@ interface Npc {
   reckon: { pos: MetrePoint; atS: number; stamp: number; rateMS: number | null } | null;
   /** running pair interaction (§ A8a) — placement AND clip come from it */
   interaction: PairPlay | null;
+  entry: { spec: MapPropActionEntry; key: string; stamp: number; receivedAt: number; failed: boolean; played: boolean } | null;
+  propCommitKey: string;
+  entryBlocked: boolean;
   activity: string;
   travelLine: THREE.Line | null;
   travelKey: string;
@@ -187,6 +191,8 @@ export interface IncomingRoute {
   parsedAt: number;
   journeyId: string | null;
   stamp: number;
+  exact?: boolean;
+  startsInS?: number;
 }
 
 /** What the NpcManager keeps walking between payloads. */
@@ -198,6 +204,10 @@ export interface TravelRoute {
   targetM: number;
   shownM: number;
   stamp: number;
+  exact?: boolean;
+  serverM?: number;
+  receivedAt?: number;
+  startsInS?: number;
 }
 
 /** A pair interaction as the renderer runs it (§ A8a): the anchor the two
@@ -264,9 +274,12 @@ export interface NpcState {
   interaction?: MapInteraction | null;
   /** which worldmap poll this state came from (reconciliation of `elapsed`) */
   stamp?: number;
+  entryAt?: number;
+  committedPropKey?: string;
 }
 
 export class NpcManager {
+  onPropEntryError: ((message: string) => void) | null = null;
   group = new THREE.Group();
   private npcs = new Map<string, Npc>();
   private avatarName = '';
@@ -821,6 +834,25 @@ export class NpcManager {
       // foot has no server journey to draw, and drawing one from `st.pos`
       // would start it where the figure is not.
       this.adoptInteraction(npc, st);
+      if (!(st.char.name === this.playerDriven && opts.playerStale)) this.adoptPropEntry(npc, st);
+      if (npc.entryBlocked) {
+        if (st.char.place || st.char.interaction) {
+          npc.root.visible = false;
+          continue;
+        }
+        npc.entryBlocked = false;
+      }
+      if (!(st.char.name === this.playerDriven && opts.playerStale)) {
+        const key = st.committedPropKey ?? '';
+        if (key && key !== npc.propCommitKey && !npc.entry && st.char.activity_animation) {
+          npc.figure?.finishPropEntry(st.char.activity_animation);
+        }
+        npc.propCommitKey = key;
+      }
+      if (npc.entry) {
+        npc.root.visible = !st.hidden;
+        continue;
+      }
       if (st.char.name === this.playerDriven) {
         // …and it applies only while the poll is NEWER than the avatar's own
         // last seat change (`opts.playerStale`, plan-aufstehen.md): a payload
@@ -859,18 +891,23 @@ export class NpcManager {
         const inc = st.route;
         const key = `${inc.journeyId ?? ''}|${routeKey(inc.points)}`;
         const age = inc.ageAtParsedS + (performance.now() - inc.parsedAt) / 1000;
-        const target = advanceAlongPaces(inc.points, inc.paces, inc.serverM, age);
+        const target = advanceAlongPaces(inc.points, inc.paces, inc.serverM, Math.max(0, age - (inc.startsInS ?? 0)));
         if (!npc.route || npc.route.key !== key) {
           npc.route = {
             key, points: inc.points.map((p) => [p[0], p[1]] as MetrePoint),
             totalM: inc.totalM, paces: inc.paces, targetM: target, shownM: target,
-            stamp: inc.stamp,
+            stamp: inc.stamp, exact: inc.exact, serverM: inc.serverM,
+            receivedAt: performance.now() - age * 1000, startsInS: inc.startsInS,
           };
         } else {
           npc.route.paces = inc.paces;
+          npc.route.exact = inc.exact;
           if (npc.route.stamp !== inc.stamp) {
             npc.route.targetM = target;
             npc.route.stamp = inc.stamp;
+            npc.route.serverM = inc.serverM;
+            npc.route.receivedAt = performance.now() - age * 1000;
+            npc.route.startsInS = inc.startsInS;
             const a = adoptTarget(npc.route.shownM, target, rateAt(npc.route.points, inc.paces, target));
             npc.route.shownM = a.shownM;
             if (a.snap === 'back') {
@@ -1069,7 +1106,7 @@ export class NpcManager {
       labelName: nameEl, labelActivity: actEl,
       labelBubble: bubbleEl, bubbleUntil: 0,
       target: st.pos.clone(), settle: null, pace: 1, face: st.face ?? null, waypoints: [], route: null,
-      travelling: false, reckon: null, interaction: null, activity: st.char.activity || '',
+      travelling: false, reckon: null, interaction: null, entry: null, propCommitKey: '', entryBlocked: false, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
       surfaceGroup: st.surfaceGroup,
       travelLine: null, travelKey: '',
@@ -1265,6 +1302,94 @@ export class NpcManager {
     return { raw, bedY, gm };
   }
 
+  propEntryUnavailable(name: string): boolean {
+    const npc = this.npcs.get(name);
+    return !!npc && (npc.entryBlocked || (!!npc.entry && (!npc.entry.played || npc.entry.failed)));
+  }
+
+  clearPropEntry(name: string): void {
+    const npc = this.npcs.get(name);
+    if (!npc) return;
+    npc.entryBlocked = false;
+    npc.root.visible = true;
+    if (!npc.entry) return;
+    npc.figure?.finishPropEntry(poseClip('standing'));
+    npc.entry = null;
+    npc.route = null;
+    npc.waypoints = [];
+    npc.target.copy(npc.root.position);
+  }
+
+  private adoptPropEntry(npc: Npc, st: NpcState): void {
+    const spec = !st.hidden ? st.char.prop_action_entry : null;
+    if (!spec) {
+      if (!npc.entry) return;
+      const previous = npc.entry.spec;
+      if (st.char.place || st.char.interaction) {
+        const played = npc.entry.played && npc.figure?.playPropEntry(previous.kind, 1, previous.height_cm,
+          THREE.MathUtils.degToRad(previous.access.yaw), previous.access.y, previous.anchor.y,
+          previous.root_offset, previous.game_seconds_per_real_second <= 0);
+        if (!played) {
+          if (!npc.entry.failed) this.onPropEntryError?.(`${npc.name}: entry ${previous.kind} was not rendered; representation unavailable`);
+          // Missing readiness never becomes an access-to-anchor teleport.
+          // Keep this representation unavailable for the held action.
+          npc.entryBlocked = true;
+          npc.root.visible = false;
+          npc.entry = null;
+          npc.route = null;
+          return;
+        }
+        npc.root.position.set(previous.anchor.x, previous.anchor.y, previous.anchor.z);
+        npc.target.copy(npc.root.position);
+        npc.figure?.setYaw(THREE.MathUtils.degToRad(previous.anchor.yaw));
+      }
+      npc.figure?.finishPropEntry(st.char.activity_animation || poseClip('standing'));
+      npc.entry = null;
+      npc.route = null;
+      return;
+    }
+    const stamp = st.stamp ?? 0;
+    if (npc.entry?.stamp === stamp) return;
+    const key = entryIdentity(spec);
+    if (!npc.entry || npc.entry.key !== key) {
+      npc.entryBlocked = false;
+      npc.entry = { spec, key, stamp, receivedAt: st.entryAt ?? performance.now(), failed: false, played: false };
+    } else {
+      npc.entry.spec = spec;
+      npc.entry.stamp = stamp;
+      npc.entry.receivedAt = st.entryAt ?? performance.now();
+    }
+    npc.route = null;
+    npc.waypoints = [];
+    this.updateTravelLine(npc, null);
+  }
+
+  private tickPropEntry(npc: Npc, labelVisible: boolean): void {
+    const entry = npc.entry!;
+    const spec = entry.spec;
+    const phase = entryPhase(spec, (performance.now() - entry.receivedAt) / 1000);
+    npc.root.position.set(spec.access.x, spec.access.y, spec.access.z);
+    npc.target.copy(npc.root.position);
+    npc.root.userData.propActionRole = spec.role;
+    const ready = npc.figure?.playPropEntry(spec.kind, phase, spec.height_cm,
+      THREE.MathUtils.degToRad(spec.access.yaw), spec.access.y, spec.anchor.y, spec.root_offset,
+      spec.game_seconds_per_real_second <= 0);
+    if (!ready) {
+      if (!entry.failed) {
+        const message = `${npc.name}: measured entry clip/support ${spec.kind} unavailable`;
+        console.error(`[prop-entry] ${message}`);
+        this.onPropEntryError?.(message);
+      }
+      entry.failed = true;
+      npc.labelActivity.textContent = `Entry unavailable: ${spec.kind}`;
+    } else {
+      entry.played = true;
+      entry.failed = false;
+      npc.labelActivity.textContent = npc.activity;
+    }
+    npc.label.visible = labelVisible;
+  }
+
   /** `firstPerson` names the camera's own figure while the view is first
    *  person, with the facing yaw the view looks along
    *  (`cameraFraming.viewHeading`) — the standing body turns after it. */
@@ -1291,6 +1416,8 @@ export class NpcManager {
       // A hidden root takes its label with it (CSS2DRenderer hides the
       // subtree); the rule states it all the same, for the native client.
       const labelVisible = tagVisible(camDist, !npc.root.visible, own);
+      if (npc.entryBlocked) { npc.label.visible = false; continue; }
+      if (npc.entry) { this.tickPropEntry(npc, labelVisible); continue; }
       if (npc.interaction && this.tickInteraction(npc, dt, labelVisible, frozen)) continue;
       // Server journey (§ A11): walk along the route instead of npc.target.
       // Metres along the polyline carry the whole journey: the server target
@@ -1304,6 +1431,23 @@ export class NpcManager {
       // it.
       if (npc.route && npc.route.points.length >= 2) {
         const r = npc.route;
+        if (r.exact) {
+          const at = localApproachPoint({ waypoints: r.points, paces_m_s_real: r.paces,
+            progress_m: r.serverM ?? 0, starts_in_s: r.startsInS },
+            (performance.now() - (r.receivedAt ?? performance.now())) / 1000);
+          const previousX = npc.root.position.x, previousZ = npc.root.position.z;
+          npc.root.position.set(at[0], this.groundY(at[0], at[1]), at[1]);
+          npc.target.copy(npc.root.position);
+          const moving = Math.hypot(at[0] - previousX, at[1] - previousZ) > 1e-6;
+          if (moving) {
+            _goal.set(at[0] - previousX, 0, at[1] - previousZ);
+            npc.figure?.faceTowards(_goal);
+          }
+          npc.figure?.play(poseClip(moving ? 'walking' : 'standing'));
+          npc.figure?.update(dt, { frozen });
+          npc.label.visible = labelVisible;
+          continue;
+        }
         // BRIDGE TRAVEL ON A JOURNEY (rule 4, `Figure.travelBase`): the figure
         // stood up out of its seat carrying its body along the clip's travel
         // while the root stayed on the seat — the journey had not started

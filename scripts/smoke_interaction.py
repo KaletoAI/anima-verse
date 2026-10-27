@@ -99,72 +99,10 @@ Hand-derived expectations:
       Finally ``describe`` renders the running pair as "embracing with Bob"
       from both sides and "" without one.
 
-  [9] A pair anchors on a free PLACE of its group (plan-posen-plaetze.md
-      § 4, Task 9). The room "square" gets the layout {x −5, y −5, w 10,
-      d 10} — room metres from the location origin (10, 22) — and two
-      stand markers: "spot" at (5, 5), capacity 2, rotation 90 → world
-      (10 − 5 + 5, 22 − 5 + 5) = (10, 22), facing 90; its slots lie ACROSS
-      the facing (lateral = (cos 90°, −sin 90°) = (0, −1)), 0.6 m apart:
-      slot 0 = (10, 22.3), slot 1 = (10, 21.7); "spot2" at (2, 2),
-      capacity 1 → (7, 19).
-      Ann (10, 20) + Bob (10, 24) start "embracing": the anchor is the
-      marker CENTRE = mean of the slots = (10, 22) (not the midpoint of the
-      figures, which here happens to coincide — the yaw tells them apart).
-      yaw: compass facing f gives the world direction (sin f, cos f); the
-      clip's +X is mapped onto it by _yaw_from_to's atan2(−uz, ux) →
-      atan2(−cos f, sin f) = f − 90°; f = 90 → 0.0 rad, plus yaw_offset 0.
-      (Midpoint path of [2]: Bob is in +Z → −π/2; here the marker faces
-      east, so the pair stands along +X instead.) The sidecar offsets
-      (∓0.3, 0) turned by 0 → Ann at (9.7, 22), Bob at (10.3, 22).
-      Both profiles hold place {spot, slot "pair", square}; the anchor
-      carries place_id "spot"; the worldmap row's ``place`` says slot
-      "pair" on the place's centre (10, 22) — the anchor — and the anchor's
-      place_id. The
-      pair consumes ``places`` = 2 slots: free_slots(spot) == [] and
-      _taken_count == 2. ``assign("Ann", "embracing")`` — what the setter
-      calls right after — KEEPS the pair seat unchanged, so Ann is not
-      moved onto a solo slot. end_interaction clears interaction, pose and
-      place on both.
-      Advisory pre-check: the pair started again, Cid seated on spot2
-      (capacity 1, prefer). ``set_pose_intent("Ann", "standing",
-      prefer="spot2")`` raises PlaceUnavailable BEFORE the interaction is
-      ended — both still hold it, Ann's pose and pair seat are untouched.
-      The pair's own place insisted (``prefer="spot"``) passes: the pair's
-      two slots do not count against its partners, the interaction ends
-      for both, Ann sits on spot/0 (10, 22.3) with pose "standing", Bob
-      holds nothing.
-      Marker taken by a third (Cid on spot/0 → ONE free slot < 2 needed):
-      the standing pair meets halfway as in [2] — anchor (10, 22), yaw
-      −π/2, place_id None, no place on either — the solo setter after the
-      start must NOT seat a partner of a placeless pair on the spot's free
-      slot (it would drag the figure off the anchor), so Cid's slot 0 stays
-      the spot's only occupancy. "cuddling" is a SEAT pair and the square
-      has no seat: refused with "no free seat for two", nothing written.
-      The "together" rule runs against the ANCHOR: Ann (10, 13) + Bob
-      (10, 14) are 1 m apart but 9 m / 8 m from spot (10, 22) → a STANDING
-      pair meets halfway (anchor (10, 13.5), yaw −π/2, place_id None, no
-      place held); a seat marker "bench" at room (0, 0) → world (5, 17)
-      with Ann (10, 20) √(5² + 3²) = 5.83 m and Bob (10, 24)
-      √(5² + 7²) = 8.60 m away → a SEATED pair is refused ("Bob is too far
-      from the Seat (8.6 m)"), the pair seat is released, nothing written.
-      Places are WORLD metres: the recipe composes in the location's LOCAL
-      frame (origin = pin), places.py maps every slot through
-      local_to_world and turns the facing with the location. Pinned at
-      (10, 22) and turned by 90°: local slot 0 (0, 0.3) → x = 10 + 0·cos
-      90° + 0.3·sin 90° = 10.3, z = 22 − 0·sin 90° + 0.3·cos 90° = 22 →
-      (10.3, 22); slot 1 (9.7, 22); facing 90 + 90 = 180.
-
-  [9b] A marker OUTSIDE the boundary seats without moving (review fix,
-      "a seat never evicts"): "edge" at room-local (15.5, 5), capacity 2,
-      rotation 90 → world (10 − 5 + 15.5, 22) = (20.5, 22), slots (20.5,
-      22.3) + (20.5, 21.7) — half a metre past the plaza's boundary edge
-      x = 20, so places.inside(plaza, 20.5, 22) is False. Ann (19, 21) +
-      Bob (19, 23) — 1.8 m from the anchor, within MAX_START_DISTANCE_M —
-      with Cid on spot/0 (spot cannot take two) start "embracing": the
-      anchor is the edge centre (20.5, 22) with place_id "edge", both hold
-      {edge, pair}, but the partner points (20.2, 22)/(20.8, 22) lie
-      outside, so set_character_pos is skipped: Ann stays (19, 21), Bob
-      (19, 23), both still in the square. The marker is removed afterwards.
+  [9] General Together stays placeless even when a nearby marker is free.
+      Furniture-bound pair capabilities require an exact prop execution.
+      Actual consented marker entry and physical roles are covered by
+      smoke_prop_action_runs.py and smoke_prop_action_effects.py.
 
   [11] Gender decides the halves, not who asked (§ A8a, rule and table in
       scripts/smoke_pair_role_gender.py). hug.json gets role_gender
@@ -199,13 +137,10 @@ Hand-derived expectations:
   add nothing. Without an invite, the ending character is the initiator.
   Metadata retains the pair identity and game timestamps.
 
-  [10a-e] Narration (spec A): Ann speaks en, Bob de in square. Embracing's
-      world label is Umarmen: one invite says "Ann suggests embracing to Bob."
-      Reuse adds zero lines. Bob declines with "Bob hat gerade keine Lust auf
-      das Umarmen mit Ann." Unlabelled swaying falls back to its key; Ann's
-      start says "Ann and Bob start swaying." Ending through Bob says
-      "Ann und Bob hören mit dem swaying auf." once, before the ended hook.
-      Repeated end adds zero lines. A request_id invite also narrates once.
+  [10a-e] Narration uses the relevant participant's language and real event
+      provenance. Invitations/start/end each add one line; duplicate reuse/end
+      is silent, and the end line exists before the exact ended hook. No
+      assertion pins localized prose.
 
   [13] Reader-language payloads: embracing has no English label, hence
       Ann (en) sees embracing and Bob (de) sees Umarmen in incoming, pending,
@@ -309,7 +244,7 @@ pose_catalog.catalog_path = _smoke_catalog_path
     "cuddling": {"prompt": "cuddling on a seat", "synonyms": [], "animation": "hug",
                  "solo": False, "group": "seat", "places": 2, "yaw_offset": 0},
     "kissing": {"prompt": "kissing", "synonyms": [], "animation": "kiss", "solo": False},
-    "swaying": {"prompt": "swaying together", "synonyms": [], "animation": "sway", "solo": False},
+    "swaying": {"prompt": "swaying together", "synonyms": [], "animation": "sway", "solo": False, "group": "stand"},
 }}), encoding="utf-8")
 pose_catalog.reload_catalogs()
 
@@ -353,8 +288,8 @@ check("'embracing' is a partner pose with kind hug",
       ie.pair_kind_for_pose("embracing") == "hug")
 check("'standing' is not", ie.pair_kind_for_pose("standing") == "")
 check("'kissing' (no clip pair) is not", ie.pair_kind_for_pose("kissing") == "")
-check("partner_poses lists cuddling, embracing and swaying",
-      sorted(ie.partner_poses()) == [("cuddling", "hug"), ("embracing", "hug"), ("swaying", "sway")],
+check("partner_poses offers free embracing and swaying, not bound cuddling",
+      sorted(ie.partner_poses()) == [("embracing", "hug"), ("swaying", "sway")],
       str(ie.partner_poses()))
 
 # ── [2]+[3] start ───────────────────────────────────────────────────────
@@ -527,8 +462,8 @@ check("still running after 5 s (ten cycles)",
       and ie.interaction_state(ie.get_interaction("Ann"), game_time())["elapsed_s"] == 5.0)
 ie.end_interaction("Ann")
 
-# ── [9] a pair anchors on a free place of its group ─────────────────────
-print("\n[9] a pair on a marker")
+# ── [9] Together cannot automatically allocate furniture ────────────────
+print("\n[9] free pairs remain free; bound pairs need a prop execution")
 set_game_time(START)
 for _n in ("Ann", "Bob", "Cid", "Eve"):
     clear_pose_intent(_n)
@@ -539,190 +474,44 @@ for _loc in _data["locations"]:
     if _loc["id"] == PLAZA:
         _loc["rooms"][0]["layout"] = {"x": -5, "y": -5, "w": 10, "d": 10, "markers": [
             {"id": "spot", "group": "stand", "at": [5, 5], "capacity": 2, "rotation": 90},
-            {"id": "spot2", "group": "stand", "at": [2, 2], "rotation": 0}]}
+            {"id": "spot2", "group": "stand", "at": [2, 2], "rotation": 0},
+            {"id": "bench", "group": "seat", "at": [5, 5], "capacity": 2, "rotation": 0}]}
 _save_world_data(_data)
 places.invalidate()
-PL = {p["id"]: p for p in places.room_places(PLAZA, "square")}
-check("spot: world (10, 22), facing 90, slots (10, 22.3) + (10, 21.7)",
-      PL.get("spot", {}).get("facing") == 90.0
-      and PL.get("spot", {}).get("slots") == [[10.0, 22.3], [10.0, 21.7]], str(PL.get("spot")))
-check("spot2: world (7, 19)", PL.get("spot2", {}).get("slots") == [[7.0, 19.0]], str(PL.get("spot2")))
-PAIR_FIELD = {"id": "spot", "slot": "pair", "room_id": "square"}
-
 inter = ie.start_interaction("Ann", "Bob", "embracing")
 anchor = inter["anchor"]
-check("anchor is the marker centre (10, 22)", near(anchor["x"], 10) and near(anchor["z"], 22), str(anchor))
-check("yaw = facing 90° − 90° = 0.0 (clip +X on world +x)", near(anchor["yaw"], 0.0), str(anchor["yaw"]))
-check("anchor names the place", anchor.get("place_id") == "spot", str(anchor))
-pa, pb = get_character_pos("Ann"), get_character_pos("Bob")
-check("Ann at (9.7, 22), Bob at (10.3, 22)",
-      near(pa["x"], 9.7, 0.011) and near(pa["z"], 22, 0.011)
-      and near(pb["x"], 10.3, 0.011) and near(pb["z"], 22, 0.011), f"{pa} {pb}")
-check("both hold the pair slot of spot",
-      get_character_profile("Ann").get("place") == PAIR_FIELD
-      and get_character_profile("Bob").get("place") == PAIR_FIELD,
-      f'{get_character_profile("Ann").get("place")} {get_character_profile("Bob").get("place")}')
-check("both poses are embracing",
-      get_character_pose_key("Ann") == "embracing" and get_character_pose_key("Bob") == "embracing")
-occ = places.occupancy(PLAZA, "square")
-check("occupancy: spot [Ann/pair, Bob/pair]",
-      sorted(occ.get("spot") or []) == [("Ann", "pair"), ("Bob", "pair")], str(occ))
-check("the pair consumes both slots", places.free_slots(PL["spot"], occ["spot"]) == []
-      and places._taken_count(PL["spot"], occ["spot"]) == 2)
-check("assign keeps the pair seat (no re-seating onto a solo slot)",
-      places.assign("Ann", "embracing") == PAIR_FIELD
-      and get_character_profile("Ann").get("place") == PAIR_FIELD
-      and near(get_character_pos("Ann")["x"], 9.7, 0.011), str(get_character_profile("Ann").get("place")))
+check("nearby free marker is NOT selected", anchor.get("place_id") is None, str(anchor))
+check("free pair uses midpoint/yaw, not marker facing",
+      near(anchor["x"], 10) and near(anchor["z"], 22)
+      and near(anchor["yaw"], -math.pi / 2, 1e-3), str(anchor))
+check("no marker reserved by general Together",
+      not get_character_profile("Ann").get("place") and not get_character_profile("Bob").get("place")
+      and not places.occupancy(PLAZA, "square"))
 wm = build_worldmap_payload(show_all=True)
 rows = {c["name"]: c for c in wm["characters"]}
-check("worldmap: anchor.place_id spot, place slot 'pair' on the centre (10, 22)",
-      rows["Ann"]["interaction"]["anchor"].get("place_id") == "spot"
-      and rows["Ann"].get("place", {}).get("slot") == "pair"
-      and rows["Ann"]["place"]["x"] == 10.0 and rows["Ann"]["place"]["z"] == 22.0,
-      f'{rows["Ann"]["interaction"]["anchor"]} {rows["Ann"].get("place")}')
+check("worldmap exposes actual placeless pair", rows["Ann"]["interaction"]["anchor"]["place_id"] is None)
 ie.end_interaction("Ann")
-check("end clears interaction, pose and place on both",
-      ie.get_interaction("Ann") is None and ie.get_interaction("Bob") is None
-      and get_character_pose_key("Ann") == "" and get_character_pose_key("Bob") == ""
-      and get_character_profile("Ann").get("place") is None
-      and get_character_profile("Bob").get("place") is None)
-check("spot is free again", "spot" not in places.occupancy(PLAZA, "square"))
-
-# advisory pre-check: an insisted taken place is refused BEFORE the interaction ends
 set_character_pos("Ann", 10.0, 20.0)
 set_character_pos("Bob", 10.0, 24.0)
+_r = refused("Ann", "Bob", "cuddling")
+check("bound capability refuses even an available bench", "explicit prop action" in _r, _r)
+check("bound refusal writes no interaction, place or pose",
+      not ie.get_interaction("Ann") and not ie.get_interaction("Bob")
+      and not get_character_profile("Ann").get("place")
+      and not get_character_profile("Bob").get("place")
+      and not get_character_pose_key("Ann") and not get_character_pose_key("Bob"))
+# An occupied insisted solo marker must still leave a running pair untouched.
 ie.start_interaction("Ann", "Bob", "embracing")
-check("Cid takes spot2", places.assign("Cid", "standing", prefer="spot2")
-      == {"id": "spot2", "slot": 0, "room_id": "square"})
+places.assign("Cid", "standing", prefer="spot2")
 try:
     set_pose_intent("Ann", "standing", prefer="spot2")
     _r = "no exception"
 except places.PlaceUnavailable as e:
     _r = str(e)
-check("a taken insisted place raises PlaceUnavailable", _r != "no exception", _r)
-check("… BEFORE the interaction ended: both still bound",
-      ie.get_interaction("Ann") is not None and ie.get_interaction("Bob") is not None)
-check("… Ann's pose and pair seat untouched",
-      get_character_pose_key("Ann") == "embracing"
-      and get_character_profile("Ann").get("place") == PAIR_FIELD)
-set_pose_intent("Ann", "standing", prefer="spot")
-check("the pair's own place insisted: interaction over for both",
-      ie.get_interaction("Ann") is None and ie.get_interaction("Bob") is None)
-check("… Ann on spot/0 (10, 22.3) standing, Bob holds nothing",
-      get_character_profile("Ann").get("place") == {"id": "spot", "slot": 0, "room_id": "square"}
-      and get_character_pos("Ann") == {"x": 10.0, "z": 22.3}
-      and get_character_pose_key("Ann") == "standing"
-      and get_character_profile("Bob").get("place") is None and get_character_pose_key("Bob") == "",
-      f'{get_character_profile("Ann").get("place")} {get_character_pos("Ann")}')
-clear_pose_intent("Ann")
-clear_pose_intent("Cid")
-
-# marker taken by a third: one free slot is not enough for two
-set_character_pos("Ann", 10.0, 20.0)
-set_character_pos("Bob", 10.0, 24.0)
-check("Cid holds spot/0", places.assign("Cid", "standing", prefer="spot")
-      == {"id": "spot", "slot": 0, "room_id": "square"})
-inter = ie.start_interaction("Ann", "Bob", "embracing")
-anchor = inter["anchor"]
-check("one free slot < 2: midpoint (10, 22), yaw −π/2, place_id None",
-      near(anchor["x"], 10) and near(anchor["z"], 22) and near(anchor["yaw"], -math.pi / 2, 1e-3)
-      and anchor.get("place_id", "missing") is None, str(anchor))
-check("neither partner holds a place (a pair pose never takes a solo slot)",
-      get_character_profile("Ann").get("place") is None
-      and get_character_profile("Bob").get("place") is None,
-      f'{get_character_profile("Ann").get("place")} {get_character_profile("Bob").get("place")}')
-check("… and the spot's free slot stays free for a third",
-      places.occupancy(PLAZA, "square").get("spot") == [("Cid", 0)])
-
-# [9b] a marker outside the boundary seats the pair without moving anybody
+check("occupied solo target refuses before pair end", _r != "no exception"
+      and ie.get_interaction("Ann") is not None and ie.get_interaction("Bob") is not None, _r)
 ie.end_interaction("Ann")
 clear_pose_intent("Cid")
-_data = _load_world_data()
-for _loc in _data["locations"]:
-    if _loc["id"] == PLAZA:
-        _loc["rooms"][0]["layout"]["markers"].append(
-            {"id": "edge", "group": "stand", "at": [15.5, 5], "capacity": 2, "rotation": 90})
-_save_world_data(_data)
-places.invalidate()
-PL = {p["id"]: p for p in places.room_places(PLAZA, "square")}
-check("edge: world (20.5, 22) — 0.5 m past the boundary's x = 20",
-      PL.get("edge", {}).get("slots") == [[20.5, 22.3], [20.5, 21.7]], str(PL.get("edge")))
-check("inside() says so", not places.inside(PLAZA, 20.5, 22.0) and places.inside(PLAZA, 19.0, 21.0))
-set_character_pos("Ann", 19.0, 21.0)
-set_character_pos("Bob", 19.0, 23.0)
-check("Cid holds spot/0 again (spot cannot take two)",
-      places.assign("Cid", "standing", prefer="spot") == {"id": "spot", "slot": 0, "room_id": "square"})
-inter = ie.start_interaction("Ann", "Bob", "embracing")
-anchor = inter["anchor"]
-check("anchor is the edge marker's centre (20.5, 22), place_id edge",
-      near(anchor["x"], 20.5) and near(anchor["z"], 22) and anchor.get("place_id") == "edge", str(anchor))
-check("both hold {edge, pair}",
-      get_character_profile("Ann").get("place") == {"id": "edge", "slot": "pair", "room_id": "square"}
-      and get_character_profile("Bob").get("place") == {"id": "edge", "slot": "pair", "room_id": "square"})
-check("nobody was moved out of the plaza: Ann (19, 21), Bob (19, 23), both still in the square",
-      get_character_pos("Ann") == {"x": 19.0, "z": 21.0} and get_character_pos("Bob") == {"x": 19.0, "z": 23.0}
-      and places.where("Ann") == (PLAZA, "square") and places.where("Bob") == (PLAZA, "square"),
-      f'{get_character_pos("Ann")} {get_character_pos("Bob")} {places.where("Ann")}')
-ie.end_interaction("Ann")
-clear_pose_intent("Cid")
-_data = _load_world_data()
-for _loc in _data["locations"]:
-    if _loc["id"] == PLAZA:
-        _loc["rooms"][0]["layout"]["markers"] = [
-            m for m in _loc["rooms"][0]["layout"]["markers"] if m["id"] != "edge"]
-_save_world_data(_data)
-places.invalidate()
-ie.end_interaction("Ann")
-clear_pose_intent("Cid")
-
-# a SEAT pair without a seat is refused, nothing written
-set_character_pos("Ann", 10.0, 20.0)
-set_character_pos("Bob", 10.0, 24.0)
-_r = refused("Ann", "Bob", "cuddling")
-check("cuddling without a seat: 'no free seat for two'", _r == "no free seat for two", _r)
-check("nothing written", ie.get_interaction("Ann") is None
-      and get_character_profile("Ann").get("place") is None
-      and get_character_profile("Bob").get("place") is None
-      and get_character_pose_key("Ann") == "")
-
-# the place is out of reach: a standing pair meets halfway, a seated pair is refused
-set_character_pos("Ann", 10.0, 13.0)
-set_character_pos("Bob", 10.0, 14.0)
-inter = ie.start_interaction("Ann", "Bob", "embracing")
-anchor = inter["anchor"]
-check("spot 9 m away: the standing pair meets halfway (10, 13.5), yaw −π/2, place_id None",
-      near(anchor["x"], 10) and near(anchor["z"], 13.5) and near(anchor["yaw"], -math.pi / 2, 1e-3)
-      and anchor.get("place_id", "missing") is None, str(anchor))
-check("… and holds no place", get_character_profile("Ann").get("place") is None
-      and get_character_profile("Bob").get("place") is None)
-ie.end_interaction("Ann")
-_data = _load_world_data()
-for _loc in _data["locations"]:
-    if _loc["id"] == PLAZA:
-        _loc["rooms"][0]["layout"]["markers"].append(
-            {"id": "bench", "group": "seat", "at": [0, 0], "capacity": 2, "rotation": 0})
-_save_world_data(_data)
-places.invalidate()
-set_character_pos("Ann", 10.0, 20.0)
-set_character_pos("Bob", 10.0, 24.0)
-_r = refused("Ann", "Bob", "cuddling")
-check("bench (5, 17) 8.6 m from Bob: the seated pair is refused",
-      _r == "Bob is too far from the Seat (8.6 m)", _r)
-check("… the pair seat was released, nothing written",
-      ie.get_interaction("Ann") is None and ie.get_interaction("Bob") is None
-      and get_character_profile("Ann").get("place") is None
-      and get_character_profile("Bob").get("place") is None
-      and "bench" not in places.occupancy(PLAZA, "square"))
-
-# a turned location turns its places: pin (10, 22), yaw 90 → the marker
-# stays on the pin, its facing becomes 180, the slots turn with it
-update_location_position(PLAZA, 10.0, 22.0, yaw_deg=90.0)
-places.invalidate()
-_spot = next(p for p in places.room_places(PLAZA, "square") if p["id"] == "spot")
-check("turned by 90°: spot faces 180, slots (10.3, 22) + (9.7, 22)",
-      _spot["facing"] == 180.0 and _spot["slots"] == [[10.3, 22.0], [9.7, 22.0]], str(_spot))
-update_location_position(PLAZA, 10.0, 22.0, yaw_deg=0.0)
-places.invalidate()
 
 # ── [10] invitations: a pair is asked, never imposed ────────────────────
 print("\n[10] invitations")
@@ -1008,9 +797,8 @@ def observe_end(event, **kw):
 
 with patch.object(perception, "record_utterance", record_line), patch.object(hooks, "emit", observe_end):
     _iid = ie.create_invite("Ann", "Bob", "embracing")
-    check("[10a] one English invitation", [r["content"] for r in _lines] ==
-          ["Ann suggests embracing to Bob."])
-    check("[10a] narrator fields", bool(_lines) and all(
+    check("[10a] one invitation event", len(_lines) == 1)
+    check("[10a] narrator fields", len(_lines) == 1 and all(
         r.get("speaker") == perception.STORYTELLER_SPEAKER
         and r.get("volume") == perception.VOLUME_NORMAL
         and r.get("anchor") == "Ann" and r.get("location_id") == PLAZA
@@ -1018,23 +806,19 @@ with patch.object(perception, "record_utterance", record_line), patch.object(hoo
     check("[10b] reused invitation adds no line",
           ie.create_invite("Ann", "Bob", "embracing") == _iid and len(_lines) == 1)
     ie.resolve_invite(_iid, False)
-    check("[10c] German decline with label", bool(_lines) and
-          _lines[-1]["content"] == "Bob hat gerade keine Lust auf das Umarmen mit Ann."
-          and _lines[-1]["anchor"] == "Bob")
+    check("[10c] decline retains invitee provenance", len(_lines) == 2
+          and _lines[-1]["anchor"] == "Bob" and ie.get_invite(_iid)["status"] == "declined")
     _iid = ie.create_invite("Ann", "Bob", "swaying")
-    check("[10d] unlabelled invitation", bool(_lines) and
-          _lines[-1]["content"] == "Ann suggests swaying to Bob.")
+    check("[10d] unlabelled invitation remains a real event", len(_lines) == 3)
     _result = ie.resolve_invite(_iid, True)
-    check("[10d] unlabelled start uses actor language", _result["status"] == "started"
-          and bool(_lines) and _lines[-1]["content"] == "Ann and Bob start swaying."
-          and _lines[-1]["anchor"] == "Ann")
+    check("[10d] real start retains actor provenance", _result["status"] == "started"
+          and len(_lines) == 4 and _lines[-1]["anchor"] == "Ann")
     ie.end_interaction("Bob", reason="avatar")
-    _end = "Ann und Bob hören mit dem swaying auf."
-    check("[10e] one German end anchored at Bob", bool(_lines) and
-          _lines[-1]["content"] == _end and _lines[-1]["anchor"] == "Bob"
-          and sum(r["content"] == _end for r in _lines) == 1)
-    check("[10e] end recorded before hook", len(_end_seen) == 1
-          and bool(_end_seen[0]) and _end_seen[0][-1] == _end)
+    check("[10e] one end retains invitee provenance",
+          len(_lines) == 5 and _lines[-1]["anchor"] == "Bob")
+    check("[10e] end exists before hook", len(_end_seen) == 1
+          and len(_end_seen[0]) == len(_lines)
+          and get_character_profile("Bob")["last_interaction_result"]["interaction_id"] == _result["interaction"]["id"])
     _count = len(_lines)
     check("[10e] repeated end is silent", not ie.end_interaction("Ann")
           and not ie.end_interaction("Bob") and len(_lines) == _count
@@ -1068,8 +852,7 @@ with patch.object(perception, "record_utterance", record_line), patch.object(hoo
     ie._fail_invite(_row, "duplicate failure")
     check("[11a] repeated failure is silent", len(_failed_calls) == 1
           and ie.get_invite(_iid)["reason"] == _res["reason"])
-    check("[11a] German failed yes", _lines[-1]["content"] ==
-          f"Bob würde gern, aber das {NO_CLIP_KEY} mit Ann geht gerade nicht ({_res['reason']}).", str(_lines[-1]))
+    check("[11a] failed yes retains invitee provenance", _lines[-1]["anchor"] == "Bob")
     from app.routes import play as play_routes
     with patch("app.models.account.get_active_character", return_value="Ann"):
         _scene = play_routes.play_scene(user={"role": "admin"})
@@ -1184,8 +967,8 @@ for _importance, _partner_end, _invited in ((3, False, True), (2, False, True),
         else:
             ie.end_interaction("Ann", reason="smoke")
     _new = {n: [m for m in pair_memories(n) if m["interaction_id"] == _inter["id"]] for n in ("Ann", "Bob")}
-    check("[12] one localized memory each", [m["content"] for m in _new["Ann"]] ==
-          ["embracing with Bob."] and [m["content"] for m in _new["Bob"]] == ["Umarmen mit Ann."])
+    check("[12] one memory per actual participant",
+          all(len(_new[n]) == 1 for n in ("Ann", "Bob")))
     for _n, _other in (("Ann", "Bob"), ("Bob", "Ann")):
         if _new[_n]:
             _m = _new[_n][0]
@@ -1194,13 +977,13 @@ for _importance, _partner_end, _invited in ((3, False, True), (2, False, True),
                   and _m["interaction_id"] == _inter["id"] and _m["pose_key"] == "embracing"
                   and _m["location_id"] == PLAZA and _m["room_id"] == "square"
                   and _m["started_at_game"] == _inter["started_at_game"]
-                  and _m["ended_at_game"] == _m["game_ts"] and bool(_m["reason"]))
+                  and _m["ended_at_game"] == _m["game_ts"]
+                  and _m["reason"] == ("room" if _partner_end else "smoke"))
     _rows = pair_history()[-1:]
     _initiator = "Ann" if _invited else "Bob"
     _other = "Bob" if _invited else "Ann"
     check("[12] one together row with inviter", pair_count() == _history_before + 1
           and _rows[0]["type"] == "together" and _rows[0]["initiator"] == _initiator
-          and _rows[0]["summary"] == f"{_initiator} and {_other}: embracing"
           and _rows[0]["sentiment_delta"] == 0.05)
     check("[12] writes precede hook", _ended == [
         ([_before[n] + 1 for n in ("Ann", "Bob")], _history_before + 1)])

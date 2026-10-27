@@ -525,6 +525,9 @@ def _extract_activity(agent_name: str, response: str) -> Optional[str]:
     Returns the marker text, or None when there is no marker, nothing
     changed, or the text names a two-person pose.
     """
+    from app.core.prop_action_engine import has_semantic_action
+    if has_semantic_action(agent_name):
+        return None  # Narrative adoption is not an explicit stop/new action.
     match = re.search(r'\*\*I\s+do\s+(.+?)\*\*', response, re.IGNORECASE)
     if not match:
         return None
@@ -871,6 +874,7 @@ def _extract_context_from_last_chat(agent_name: str,
         # the avatar and filled its activity/detail from the LLM answer (e.g.
         # "Talking" + "sleeps"). The is_player_controlled check stops that.
         from app.models.account import is_player_controlled as _is_pc
+        from app.core.prop_action_engine import has_semantic_action
         if not is_avatar and not _is_pc(target_name) and source_available:
             # Key + detail (plan-pose-key-detail.md): a key from the shown
             # menu is written exactly; an empty or unknown key keeps the
@@ -878,7 +882,7 @@ def _extract_context_from_last_chat(agent_name: str,
             # must never overturn the body shape.
             extracted_pose = str(data.get("pose") or "").strip()
             extracted_detail = str(data.get("detail") or "").strip()
-            if extracted_pose or extracted_detail:
+            if (extracted_pose or extracted_detail) and not has_semantic_action(target_name):
                 from app.core.pose_catalog import PairPoseWithoutPartner
                 from app.models.character import set_pose_key_detail
                 try:
@@ -1352,9 +1356,8 @@ def _build_chat_prompt(character_name: str,
     # The marker RULE is stable (system prompt); the place offer it points at
     # follows the room's occupancy and goes to the scene state.
     activity_marker_enabled = bool(current_location_id and _has("activities_enabled"))
-    known_activities = ""
-    if activity_marker_enabled:
-        known_activities = _current_activity_hint(character_name, current_location_id)
+    # Semantic tools are independent of the legacy **I do** marker switch.
+    known_activities = _current_activity_hint(character_name, current_location_id)
 
     # ---- Intent tracking flag (unified plans & tasks) -----------------
     # One block teaches the [INTENT:] marker syntax (plan-intents-unified.md).

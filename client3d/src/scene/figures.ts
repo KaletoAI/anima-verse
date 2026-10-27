@@ -29,6 +29,7 @@ import { clipRootPath, clipRootTurn, rootPathAt, setClipRootPath, setClipRootTur
 import type { RootPath, RootTurn } from './bridgeTravel';
 import { BRIDGE_FADE_IN_S, clipBridgeLift, fadeCarry, liftAt } from './bridgeLift';
 import type { BridgeLift } from './bridgeLift';
+import { entrySupportLift } from '../game/propActionMotion';
 import { relockRootPaths } from './footLockMeasure';
 import { restEyePoint } from './cameraFraming';
 
@@ -1758,6 +1759,8 @@ export class Figure {
   private mixer: THREE.AnimationMixer;
   private actions = new Map<ClipKind, THREE.AnimationAction>();
   private current: THREE.AnimationAction | null = null;
+  private propEntrySupport: { sample: THREE.LinearInterpolant; firstY: number; lastY: number } | null = null;
+  private readonly propEntryUpdate = { frozen: false };
   private currentKind: ClipKind | null = null;
   /** The one-shot clip bridging two states, and where it is headed. While
    *  this runs, `currentKind` IS the bridge — the target only arrives when it
@@ -2577,6 +2580,76 @@ export class Figure {
     }
     action.timeScale = frozen ? 0 : 1;
     return true;
+  }
+
+  /** Exact public entry: seek the measured clip, without transition lookup or
+   *  fallback. Its root travel remains the rig's measured path, not a lerp. */
+  playPropEntry(kind: string, phase: number, heightCm: number, yaw: number,
+    accessY: number, anchorY: number, rootOffset: number, frozen: boolean): boolean {
+    const action = this.actions.get(kind);
+    const path = action && clipRootPath(action.getClip());
+    if (!action || !path || !(heightCm > 0)) return false;
+    if (this.current !== action || !this.propEntrySupport) {
+      const hips = action.getClip().tracks.find(track => track.name.endsWith('.position')
+        && normBoneName(track.name.slice(0, -9)) === 'hips');
+      if (!hips) return false;
+      const sample = new THREE.LinearInterpolant(hips.times, hips.values, 3, new Float32Array(3));
+      const firstY = sample.evaluate(0)[1];
+      const lastY = sample.evaluate(action.getClip().duration)[1];
+      if (entrySupportLift(firstY, lastY, firstY, accessY, anchorY, rootOffset) === null) return false;
+      this.propEntrySupport = { sample, firstY, lastY };
+      this.releaseBridge();
+      this.takeTravel();
+      this.mixer.stopAllAction();
+      action.reset().setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = true;
+      action.play();
+      this.current = action;
+      this.currentKind = kind;
+      this.transition = action;
+      this.bridgeAccel = 0;
+      this.bridgeUntil = Infinity;
+      this.travelOrigin = { x: 0, z: 0 };
+      this.travelPath = path;
+      this.travelAction = action;
+      this.root.rotation.y = yaw;
+      this.targetYaw = yaw;
+      this.startTurn(clipRootTurn(action.getClip()) ?? null, action);
+      this.liftAction = null;
+      this.liftSpec = null;
+      this.lift = 0;
+      this.setClipDrop(0);
+      this.root.userData.clipKind = kind;
+      this.root.userData.clipBound = true;
+    }
+    action.time = Math.min(action.getClip().duration - 1e-6,
+      Math.max(0, phase) * action.getClip().duration);
+    action.paused = true;
+    const support = this.propEntrySupport;
+    if (!support) return false;
+    const lift = entrySupportLift(support.firstY, support.lastY,
+      support.sample.evaluate(action.time)[1], accessY, anchorY, rootOffset);
+    if (lift === null) return false;
+    this.lift = lift;
+    this.applyHeight();
+    this.propEntryUpdate.frozen = frozen;
+    this.update(0, this.propEntryUpdate);
+    return true;
+  }
+
+  /** Direct committed pose: entry has already played, so no second bridge. */
+  finishPropEntry(clip: string): void {
+    this.releaseBridge();
+    this.travelPath = null;
+    this.travelAction = null;
+    this.turn = null;
+    this.turnAction = null;
+    this.takeTravel();
+    this.propEntrySupport = null;
+    this.lift = 0;
+    this.applyHeight();
+    if (this.current) this.current.paused = false;
+    this.playPair(clip, 0, false, true);
   }
 
   /** Lean from an animation marker (degrees): `tilt` = head up/down,

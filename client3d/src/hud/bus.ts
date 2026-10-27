@@ -24,7 +24,7 @@ import type { PerfStats } from '../game/perfstats';
 import type { GraphicsPrefs, Prefs, ScatterPrefs } from '../game/prefs';
 import type { StairPrompt } from '../game/stairs';
 import type { InfoPanelData } from '../game/infoPanel';
-import type { MapCharacter, PlaceOffer } from '../types';
+import type { MapCharacter, PlaceOffer, PropActionTarget } from '../types';
 
 export type GameMode = 'overview' | 'embodied';
 
@@ -110,7 +110,13 @@ export interface HudGameActions {
   infoAction?: (id: string, kind: 'zoom' | 'lookInside' | 'closeView') => void;
   closeInfo?: () => void;
   closeOpenView?: () => void;
-  pickPlacePose?: (poseKey: string | null) => void;
+  pickPropAction?: (actionId: string, target: PropActionTarget, revision: string, partner?: string) => void | Promise<void>;
+  pickRoomPose?: (placeId: string, poseKey: string) => void | Promise<void>;
+  closePlaceMenu?: () => void;
+  respondPropAction?: (executionId: string, accept: boolean) => void | Promise<void>;
+  cancelPropAction?: (executionId: string) => void | Promise<void>;
+  /** Internal awaited host barrier, not an invokable HUD game command. */
+  preparePropAction?: (requestId: string) => Promise<void>;
   setVolumes?: (prefs: Prefs) => void;
   speak?: (url: string) => void | Promise<void>;
   stopSpeech?: () => void;

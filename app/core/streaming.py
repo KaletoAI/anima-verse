@@ -158,16 +158,21 @@ def _inject_rp_context(tool_input: str, rp_response: str, user_input: str = "") 
 
 
 def is_error_result(text: Any) -> bool:
-    """Whether a tool's answer reports a failure.
-
-    The convention every producer follows: tools and the image service do not
-    raise, they answer with prose — and a failure starts with "Error" (or the
-    older German "Fehler"). ONE predicate for every reader of that
-    convention (the deferred runners here and in chat_engine, npc_assets).
-    """
-    if not isinstance(text, str):
-        return False
-    return text.strip().lower().startswith(("error", "fehler"))
+    """Shared failure boundary for legacy prose and structured tool results."""
+    if isinstance(text, str):
+        stripped = text.strip()
+        if stripped.lower().startswith(("error", "fehler")):
+            return True
+        if not stripped.startswith("{"):
+            return False
+        import json
+        try:
+            text = json.loads(stripped)
+        except (ValueError, TypeError):
+            return False
+    return (isinstance(text, dict) and
+            (text.get("success") is False or text.get("ok") is False
+             or bool(text.get("error")) or text.get("status") in ("refused", "failed", "error")))
 
 
 def report_deferred_failure(character: str, tool_name: str, result: Any, *,

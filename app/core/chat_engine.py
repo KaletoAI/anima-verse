@@ -155,15 +155,12 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
     loc_list = ", ".join(l.get("name", "")
                          for l in list_locations_for_character(character_name)
                          if l.get("name"))
-    act_list = ""
-    if loc_id:
-        try:
-            from app.core import places
-            from app.models.character import get_character_current_room
-            act_list = places.room_offer(character_name, loc_id,
-                                         get_character_current_room(character_name) or "")
-        except Exception:
-            act_list = ""
+    from app.core import places
+    from app.models.character import get_character_current_room
+    # Semantic actions remain available independently of the old pose-marker
+    # switch, with exact targets and effects rather than global pose guesses.
+    act_list = places.room_offer(character_name, loc_id,
+                                 get_character_current_room(character_name) or "")
     self_outfit = (undressed_line(character_name)
                    or render_outfit(character_name=character_name).get("full", "")
                    or "(nothing equipped)")

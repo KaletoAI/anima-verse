@@ -19,7 +19,7 @@ import { installSkinnedNormalCorrection } from '@anima/scene-render';
 import * as THREE from 'three';
 installSkinnedNormalCorrection(THREE);
 import * as api from './api';
-import { pollCore, syncHub, SYNC_ENDPOINTS } from '@anima/player-ui';
+import { pollCore, syncHub, SYNC_ENDPOINTS, onPropActionChanged } from '@anima/player-ui';
 import { initDebug3d, initIsolation } from './debug3d';
 import { Engine, MIN_DIST } from './scene/engine';
 import { fitDistance, worldCentreXZ } from './scene/cameraMath';
@@ -101,7 +101,8 @@ import { createGround } from './scene/ground';
 import { createBackdrop } from './scene/backdrop';
 import { createWorldProps } from './scene/worldProps';
 import { ageAtReceiptS, createErrWindow, maxErr, clampProgress, pointAtDistance, polylineLength, type MetrePoint } from './scene/travelPath';
-import type { MapCharacter, MapTravel, PlaceOffer, WorldBounds, WorldLocation, WorldMap } from './types';
+import { createManualPropGate, createPositionDrain, createPropPreparationBarrier } from './game/propActionMotion';
+import type { MapCharacter, PlaceOffer, PropActionOffer, PropActionState, WorldBounds, WorldLocation, WorldMap } from './types';
 
 // Ignore the server's generic login redirect: after login the game always starts.
 const bootUrl = new URL(location.href);
@@ -603,6 +604,7 @@ async function startApp(username: string, role: string) {
   const syncCounters: SyncCounters = { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 };
   const errWindow = createErrWindow();
   const npcs = new NpcManager(figures, { syncCounters, errWindow });
+  npcs.onPropEntryError = message => uiActions.toast?.(message);
   figures.setModelFocus((name) => {
     const p = npcs.positionOf(name);
     return { avatar: name === firstMap.avatar,
@@ -2376,7 +2378,7 @@ async function startApp(username: string, role: string) {
       // client keeps believing it stands in a room of the PREVIOUS location.
       roomOf.set(c.name, c.room_id ?? '');
       figures.setCharacterSets(c.name, c.animation_sets);
-      figures.setCharacterHeight(c.name, c.height_cm);
+      figures.setCharacterHeight(c.name, c.prop_action_entry?.height_cm ?? c.height_cm);
       // MODEL SWAP (§ A11a): the served mesh's signature rides in this
       // very payload, exactly as `terrain_sig` does for the ground — so the
       // check is a string compare inside the poll that runs anyway, and the
@@ -2503,6 +2505,7 @@ async function startApp(username: string, role: string) {
       reconcileAvatarPlace(map, polledAt); // server seated the avatar? (places § 4)
       reconcileAvatarPos(map, polledAt);   // server moved the avatar? (E4-T5)
       void syncPlaceGlyphs(map);  // free slots to sit down on (places § 4)
+      if (figures.state !== 'loading') npcs.update(computeNpcStates(map), npcUpdateOpts());
       announceSceneProblems(map); // what the composer found wrong (§ 4.3)
     } catch (error) {
       // Preserve the original poll's handling of failures during application.
@@ -2546,7 +2549,7 @@ async function startApp(username: string, role: string) {
   takeRoomsFrom(firstMap);
   updatePins(firstMap);
   // One subscription for the page lifetime; cadence and budget live in the table.
-  pollCore().subscribe('c3d-worldmap', fetchWorldMap, SYNC_ENDPOINTS.worldmap3d,
+  pollCore().subscribe('c3d-worldmap', fetchWorldMap, { ...SYNC_ENDPOINTS.worldmap3d, minSpacingMs: 150 },
     (data, error) => {
       if (error) {
         // An expired session opens the login gate without marking the server offline.
@@ -2626,8 +2629,10 @@ async function startApp(username: string, role: string) {
    * marker for a place the avatar may not know.
    */
   function travellerState(c: MapCharacter, stamp: number, map: WorldMap): NpcState | null {
-    const tr: MapTravel | null = c.travel ?? null;
-    if (!tr) return null;
+    const local = c.name !== avatarName && c.local_approach?.room_id === c.room_id
+      ? c.local_approach : null;
+    const tr = local ?? c.travel;
+    if (!tr || (c.name === avatarName && manualPropGate.withdrawn(tr.journey_id))) return null;
     const wp = tr.waypoints;
     // The knowledge filter thins route AND distance out together (§ A12); a
     // route without a `progress_m` is therefore a withheld row, not a walkable
@@ -2646,10 +2651,11 @@ async function startApp(username: string, role: string) {
         // is the only surface there is (`ground_y` discipline, § A16). The
         // figure keeps sampling it while it walks the polyline between polls —
         // that half lives in `npcs.ts`, on the same sampler.
-        pos: new THREE.Vector3(at[0], terrainGround.heightAt(at[0], at[1]), at[1]),
+        pos: new THREE.Vector3(at[0], local ? groundY(at[0], at[1]) : terrainGround.heightAt(at[0], at[1]), at[1]),
         route: { points, totalM, paces: tr.paces_m_s_real, serverM: progressM,
                  ageAtParsedS: ageAtReceiptS(map.sync, meta), parsedAt: meta.parsedAt,
-                 journeyId: tr.journey_id ?? null, stamp },
+                 journeyId: tr.journey_id ?? null, stamp, exact: !!local || (c.name === avatarName && ownedPropRun()?.status === 'approaching'),
+                 startsInS: tr.starts_in_s ?? 0 },
       };
     }
     // Withheld route, or a degenerate one-point line (a journey without a way):
@@ -2670,8 +2676,14 @@ async function startApp(username: string, role: string) {
     // placement for as long as it lasts. The poll stamp goes with it so the
     // locally advanced clip time reconciles only against a NEW payload.
     for (const st of states) {
+      if (st.char.name === avatarName && manualPropRelease) st.char = { ...st.char, prop_action_entry: null };
       st.interaction = st.char.interaction ?? null;
       st.stamp = mapStamp;
+      const meta = api.mapMetaOf(map);
+      if (meta) st.entryAt = meta.parsedAt - ageAtReceiptS(map.sync, meta) * 1000;
+      const place = st.char.place;
+      const marker = place && residency.get(st.char.location_id)?.tile.roomMarkers.get(place.room_id)?.get(place.id);
+      if (place && marker?.fixed) st.committedPropKey = `${place.id}#${place.slot}#${st.char.activity_animation ?? ''}`;
     }
     return states;
   }
@@ -2681,11 +2693,11 @@ async function startApp(username: string, role: string) {
     hiddenChars.clear();
     const states: NpcState[] = [];
     for (const c of map.characters) {
-      if (c.name === avatarName && c.travel && suppressedJourney(avatarDrive, avatarCancelled, c.travel.journey_id)) {
+      if (c.name === avatarName && c.travel && (manualPropGate.withdrawn(c.travel.journey_id) || suppressedJourney(avatarDrive, avatarCancelled, c.travel.journey_id))) {
         const local = npcs.positionOf(avatarName);
         if (local) avatarLocalPos = { x: local.x, z: local.z };
         const pos = local ?? avatarLocalPos ?? c.pos;
-        if (pos) states.push({ char: { ...c, travel: null }, pos: new THREE.Vector3(pos.x, groundY(pos.x, pos.z), pos.z) });
+        if (pos) states.push({ char: { ...c, travel: null, prop_action_entry: null }, pos: new THREE.Vector3(pos.x, groundY(pos.x, pos.z), pos.z) });
         shownPlacement.set(c.name, { room: null, interiorShown: false });
         continue;
       }
@@ -2700,7 +2712,7 @@ async function startApp(username: string, role: string) {
       // character stands in the WILDERNESS (`location_id: ""`, § A11), which
       // is no tile — grouping by location would drop it off the map for the
       // whole journey.
-      const travelling = travellerState(c, mapStamp, map);
+      const travelling = c.local_approach ? null : travellerState(c, mapStamp, map);
       if (travelling) {
         states.push(travelling);
         shownPlacement.set(c.name, { room: null, interiorShown: false });
@@ -2867,9 +2879,11 @@ async function startApp(username: string, role: string) {
         // needs no figure to click on, so the exemption is gone.
         const hidden = p.hidden;
         if (hidden) hiddenChars.add(c.name);
+        const localMotion = c.local_approach && !hidden ? travellerState(c, mapStamp, map) : null;
         states.push({
+          ...localMotion,
           char: c,
-          pos,
+          pos: localMotion?.pos ?? pos,
           via,
           face,
           lean,
@@ -3757,6 +3771,7 @@ async function startApp(username: string, role: string) {
   const REFUSAL_QUIET_MS = 4000;
 
   let posInFlight = false;
+  const positionDrain = createPositionDrain();
   /** Counts the reports of THIS session, one up per request. It travels with
    *  every report (`seq`) and is the server's ordering: a request we gave up
    *  on (the deadline above) keeps running on a stalled server, and without a
@@ -3800,9 +3815,20 @@ async function startApp(username: string, role: string) {
   /** The last answer of `GET /play/places` and the room it was given for. */
   let placeOffers: PlaceOffer[] = [];
   let placeOffersRoom = '';
-  /** What the inventory depends on, as one string; a poll whose signature
-   *  matches does not ask the server again. */
-  let placeSig = '';
+  let semanticOffers: PropActionOffer[] = [];
+  let semanticState: PropActionState = { incoming: [], outgoing: [], current: [], recent_results: [] };
+  let offersGeneration = 0;
+  const manualPropGate = createManualPropGate();
+  let offersAppliedGeneration = 0;
+  let manualPropRelease = false;
+  let propMutationPending = false;
+  let propStateUncertain = false;
+  let propStateEpoch = 0;
+  let ownedPropJourney: string | null = null;
+  const releasedPropExecutions = new Set<string>();
+  const propPreparation = createPropPreparationBarrier();
+  let propPositionDrainActive = false;
+  let propPositionDrainFailed = false;
   /** The rings in the scene right now, or null. Only places WITHOUT a prop
    *  get one (ruling 2026-08-28) — a seat on a piece of furniture is clicked
    *  on the furniture. */
@@ -3910,9 +3936,10 @@ async function startApp(username: string, role: string) {
 
   /** Adopt server ownership only from a payload fresh enough to know our last move. */
   function applyDriver(map: WorldMap, polledAt: number): void {
-    if (pollIsStale(polledAt, ownCorrectionAt)) return;
+    if (pollIsStale(polledAt, Math.max(ownCorrectionAt, ownSeatChangeAt)) || manualPropGate.pending) return;
     const me = map.characters.find((c) => c.name === avatarName);
-    const tr = me?.travel ?? null;
+    const tr = manualPropGate.withdrawn(me?.travel?.journey_id) ? null : me?.travel ?? null;
+    if (tr?.journey_id && ownedPropRun()?.status === 'approaching') ownedPropJourney = tr.journey_id;
     const prev = avatarDrive;
     const r = avatarDriver(avatarDrive, { kind: 'payload',
       hasRoute: !!(tr && tr.waypoints && tr.waypoints.length >= 2),
@@ -3951,15 +3978,18 @@ async function startApp(username: string, role: string) {
     if (posInFlight || !pendingReport) return;
     const p = pendingReport; pendingReport = null;
     if (avatarDrive.kind === 'SERVER') return;
-    void reportPosWithSeq(p.x, p.z, p.seq);
+    void reportPosWithSeq(p.x, p.z, p.seq, propPositionDrainActive);
   }
 
   /** Send ONE report. Never throws: every refusal is either a correction plus
    *  a toast, or (the throttle) nothing at all. */
-  async function reportPosWithSeq(x: number, z: number, seq: number): Promise<void> {
+  async function reportPosWithSeq(x: number, z: number, seq: number, preparationDrain = false): Promise<void> {
     // A reserved cancel number may remain unsent; later reports still acknowledge seq >= S.
+    if (!preparationDrain && (manualPropGate.pending || propMutationPending || propStateUncertain || propPreparation.pending || ownedPropRun()
+      || (!manualPropRelease && lastMap?.characters.find(c => c.name === avatarName)?.prop_action_entry))) return;
     if (pendingSnap) { posDirty = true; return; }
     posInFlight = true;
+    const releaseDrain = positionDrain.begin();
     const sentAt = performance.now();
     lastReportAt = sentAt;
     const abort = new AbortController();
@@ -3985,6 +4015,7 @@ async function startApp(username: string, role: string) {
       reportedPos = { x, z };
       adoptReport(res);
     } catch (e) {
+      if (propPositionDrainActive && !(e instanceof api.ApiError)) propPositionDrainFailed = true;
       // AN EXPIRED SESSION IS NOT A WALKING PROBLEM. `json()` fires
       // `auth:required` before it throws, so the relogin flow is already
       // running and the login form is on its way up; logging it here would
@@ -4039,6 +4070,7 @@ async function startApp(username: string, role: string) {
       clearTimeout(deadline);
       posInFlight = false;
       flushPendingReport();
+      releaseDrain();
     }
   }
 
@@ -4232,6 +4264,13 @@ async function startApp(username: string, role: string) {
       return;
     }
     if (pendingSnap) { toastQuiet('Loading this place…'); return; }
+    const manualInput = !!walkDir(engine.keysDown(), engine.yaw) || !!route;
+    if (manualPropGate.pending || propMutationPending || propStateUncertain || propPreparation.pending) return;
+    if (ownedPropRun()) {
+      if (manualInput) void releaseOwnedProp();
+      return;
+    }
+    if (lastMap?.characters.find(c => c.name === avatarName)?.prop_action_entry && !manualPropRelease) return;
     // THE STAND-UP'S TRAVEL (rule 4 of `Figure.travelBase`): a bridge clip
     // with root motion carried the body out of the seat along its own travel
     // while the root stayed put. Once it has ended, the root takes that
@@ -4560,6 +4599,7 @@ async function startApp(username: string, role: string) {
   function reconcileAvatarPos(map: WorldMap, polledAt: number) {
     if (getGameState().mode !== 'embodied') return;
     if (avatarDrive.kind === 'SERVER') return;
+    if (npcs.propEntryUnavailable(avatarName)) return;
     // A poll older than our own last seat change knows nothing about now (the
     // one rule, `pollIsStale` — see `reconcileAvatarPlace`). Its point is the
     // SEAT the figure has just stood up from, and `correctTo` would walk the
@@ -4652,6 +4692,7 @@ async function startApp(username: string, role: string) {
     // into the chair through the third.
     if (pollIsStale(polledAt, ownSeatChangeAt)) return;
     const me = map.characters.find((c) => c.name === avatarName);
+    if (me?.prop_action_entry || manualPropGate.pending || npcs.propEntryUnavailable(avatarName)) return;
     const place = me?.place ?? null;
     if (!place) {
       // Not seated (any more): the server released the place — by our own
@@ -4720,42 +4761,133 @@ async function startApp(username: string, role: string) {
       held.group);
   }
 
-  // --- Sitting down by click (plan-posen-plaetze.md § 4, Task 13) -----------
-  // The rings on the free slots of the avatar's room and the seat menu a
-  // click on one opens. The inventory (`GET /play/places`: free slots and
-  // the poses per place) is fetched only when what it depends on has changed
-  // — the avatar's room or a seat held in its location — and the rings are
-  // rebuilt on every poll from it, because a re-lifted marker or a freshly
-  // mounted interior moves the points under them. State: with the report
-  // state above (`placeOffers`, `placeOffersRoom`, `placeSig`,
-  // `placeGlyphs`, `glyphsEmbodied`).
-
+  // Geometry and semantic availability are refreshed together on EVERY poll.
+  // People, consent, definitions and claims can change without anyone sitting.
   async function syncPlaceGlyphs(map: WorldMap): Promise<void> {
-    const me = map.characters.find((c) => c.name === avatarName);
-    const here = me?.location_id ?? '';
-    const room = me?.room_id ?? '';
-    const seated = map.characters
-      .filter((c) => c.place && c.location_id === here)
-      .map((c) => `${c.name}:${c.place!.id}#${c.place!.slot}`)
-      .sort();
-    const sig = `${here}|${room}|${seated.join(',')}`;
-    if (sig !== placeSig) {
-      placeSig = sig;
-      if (!here || !room) {
-        placeOffers = [];
-        placeOffersRoom = '';
-      } else {
-        try {
-          const r = await api.getPlaces();
-          placeOffers = r.places;
-          placeOffersRoom = r.room_id;
-        } catch (e) {
-          placeSig = '';          // ask again with the next poll
-          if (api.isAuthError(e)) return;
-        }
+    const generation = ++offersGeneration;
+    const askedAt = performance.now();
+    const stateEpoch = propStateEpoch;
+    const me = map.characters.find(c => c.name === avatarName);
+    try {
+      const [places, actions, state] = await Promise.all([
+        api.getPlaces(), api.getPropActions(), api.getPropActionState(),
+      ]);
+      const currentMe = lastMap?.characters.find(c => c.name === avatarName);
+      if (stateEpoch !== propStateEpoch || generation < offersAppliedGeneration || me?.location_id !== currentMe?.location_id
+        || me?.room_id !== currentMe?.room_id || pollIsStale(askedAt, ownSeatChangeAt)) return;
+      offersAppliedGeneration = generation;
+      placeOffers = places.places;
+      placeOffersRoom = me?.room_id ?? places.room_id;
+      semanticOffers = actions;
+      semanticState = state;
+      propStateUncertain = false;
+      propPreparation.adoptFreshState();
+      if (!state.current.some(run => run.status === 'approaching' || run.status === 'active')) manualPropRelease = false;
+      rebuildPlaceGlyphs();
+      const menu = getGameState().placeMenu;
+      if (menu) {
+        const offer = placeOffers.find(o => o.id === menu.offer.id);
+        setGameState({ placeMenu: offer ? { ...menu, offer } : null });
       }
+      if (lastMap && figures.state !== 'loading') npcs.update(computeNpcStates(lastMap), npcUpdateOpts());
+    } catch (e) {
+      if (!api.isAuthError(e)) uiActions.toast?.(`Furniture actions unavailable: ${String(e)}`);
     }
-    rebuildPlaceGlyphs();
+  }
+
+  function ownedPropRun() {
+    return semanticState.current.find(run => !releasedPropExecutions.has(run.execution_id)
+      && (run.status === 'approaching' || run.status === 'active'))
+      ?? semanticState.outgoing.find(run => !releasedPropExecutions.has(run.execution_id) && run.status === 'approaching');
+  }
+
+  async function preparePropAction(requestId: string): Promise<void> {
+    // Synchronous pause before acknowledging the host/iframe preparation.
+    propPreparation.begin(requestId, performance.now());
+    propStateUncertain = true;
+    propStateEpoch++;
+    cancelRoute();
+    const point = npcs.positionOf(avatarName);
+    const serverOwned = avatarDrive.kind === 'SERVER' || !!ownedPropRun()
+      || !!lastMap?.characters.find(c => c.name === avatarName)?.prop_action_entry;
+    if (serverOwned) pendingReport = null;
+    else if (point) npcs.setPlayerTarget(avatarName, point);
+    propPositionDrainActive = true;
+    propPositionDrainFailed = false;
+    try {
+      if (!serverOwned && !avatarSeated && point && posDirty) {
+        reserveReport(point.x, point.z);
+        posDirty = false;
+      } else flushPendingReport();
+      await positionDrain.wait();
+      if (propPositionDrainFailed) throw new Error('Position synchronization failed; furniture action was not sent.');
+    } finally {
+      propPositionDrainActive = false;
+    }
+  }
+  gameActions.preparePropAction = preparePropAction;
+  api.setPropActionPreparation(preparePropAction);
+
+  async function refreshPropMotion(): Promise<void> {
+    const stateEpoch = propStateEpoch;
+    const state = await api.getPropActionState();
+    if (stateEpoch !== propStateEpoch) return;
+    semanticState = state;
+    if (ownedPropRun()) manualPropRelease = false;
+    propStateUncertain = false;
+    propPreparation.adoptFreshState();
+    await pollCore().refresh('c3d-worldmap');
+    if (lastMap) await syncPlaceGlyphs(lastMap);
+  }
+  onPropActionChanged(requestId => {
+    // Completion/refusal of this exact HTTP operation may release its pause
+    // only after a new private state; unrelated lifecycle changes never do.
+    propPreparation.changed(requestId);
+    propStateUncertain = true;
+    propStateEpoch++;
+    void refreshPropMotion().catch(e => uiActions.toast?.(String(e)));
+  });
+  // Short entries must be sampled while live, never replayed after commit.
+  let propPollBusy = false;
+  let propPollUntil = 0;
+  onPropActionChanged(() => { propPollUntil = performance.now() + 5000; });
+  setInterval(() => {
+    if (propPreparation.expire(performance.now())) {
+      // A disconnected HUD cannot strand control. Expiry only makes its
+      // exact lease releasable by a NEW canonical state, never by a timer.
+      propStateUncertain = true;
+      propStateEpoch++;
+      void refreshPropMotion().catch(e => uiActions.toast?.(String(e)));
+    }
+    const moving = lastMap?.characters.some(c => c.local_approach || c.prop_action_entry)
+      || !!ownedPropRun() || performance.now() < propPollUntil;
+    if (!moving || propPollBusy) return;
+    propPollBusy = true;
+    void pollCore().refresh('c3d-worldmap').finally(() => { propPollBusy = false; });
+  }, 150);
+
+  async function releaseOwnedProp(): Promise<void> {
+    const run = ownedPropRun();
+    if (!run || manualPropGate.pending) return;
+    const journey = lastMap?.characters.find(c => c.name === avatarName)?.travel?.journey_id ?? ownedPropJourney;
+    try {
+      await manualPropGate.cancel(run.execution_id, journey, async () => {
+        const result = await api.cancelPropAction(run.execution_id);
+        if (result.status === 'refused') throw new Error(result.reason);
+      });
+      releasedPropExecutions.add(run.execution_id);
+      manualPropRelease = true;
+      ownSeatChangeAt = performance.now();
+      avatarCancelled = journey;
+      avatarDrive = { kind: 'PLAYER' };
+      npcs.setServerDriven(avatarName, false);
+      npcs.clearPropEntry(avatarName);
+      avatarSeated = false;
+      seatedKey = '';
+      npcs.setPlayerPose(avatarName, null, null);
+      npcs.setPlayerAnimation(avatarName, null);
+      await refreshPropMotion();
+    } catch (e) { uiActions.toast?.(String(e)); }
   }
 
   /** Throw the rings and the mesh targets away and derive them anew from the
@@ -4780,9 +4912,10 @@ async function startApp(username: string, role: string) {
     if (getGameState().mode !== 'embodied' || !placeOffersRoom) return;
     const me = lastMap?.characters.find((c) => c.name === avatarName);
     const tile = me?.location_id ? residency.get(me.location_id)?.tile : undefined;
-    const entries = tile?.roomMarkers.get(placeOffersRoom);
-    if (!entries) return;
+    if (!tile) return;
+    const entries = new Map(tile.roomMarkers.get(placeOffersRoom) ?? []);
     placeEntries = entries;
+    placeOffers = placeOffers.filter(offer => !entries.get(offer.id)?.fixed);
     // The mesh side of the same inventory: every mounted prop placement of
     // this room, matched to its markers by the placement anchor the payload
     // states on both — PLUS the room's diorama, if any place of the room says
@@ -4794,7 +4927,7 @@ async function startApp(username: string, role: string) {
       if (rec.spec.room_id !== placeOffersRoom) continue;
       if (rec.spec.role === 'prop') {
         refs.push({ role: 'prop', roomId: placeOffersRoom, anchor: rec.spec.anchor,
-                    object: rec.object });
+                    object: rec.object, placementId: rec.spec.placement_id, variantUid: rec.spec.variant_uid });
       } else if (rec.spec.role === 'room' && wantsDiorama) {
         refs.push({ role: 'room', roomId: placeOffersRoom, anchor: rec.spec.anchor,
                     object: rec.object });
@@ -4805,6 +4938,23 @@ async function startApp(username: string, role: string) {
         // that already carries the patch is skipped.
         if (rec.object) installSpotHighlight(rec.object);
       }
+    }
+    // The scene carries stable placement/variant provenance even for blocked
+    // bindings without usable markers. Its mesh must still open honest offers.
+    placeOffers = placeOffers.filter(offer => !offer.prop_actions);
+    for (const rec of tile?.placedModels ?? []) {
+      const spec = rec.spec;
+      if (spec.role !== 'prop' || spec.room_id !== placeOffersRoom || !spec.placement_id) continue;
+      const actions = semanticOffers.filter(action => action.target.placement_id === spec.placement_id
+        && action.target.variant_uid === spec.variant_uid);
+      if (!actions.length) continue;
+      const id = `prop-action:${spec.placement_id}`;
+      const at = tileToWorld(tile!, spec.anchor[0], spec.anchor[1]);
+      entries.set(id, { slots: [at], roomId: placeOffersRoom, group: '', drop: 0, offsetY: 0,
+        fixed: true, diorama: false, level: 0, lift: 0, liftAt: { x: at.x, z: at.z }, anchor: spec.anchor,
+        placementId: spec.placement_id, variantUid: spec.variant_uid });
+      placeOffers.push({ id, label: actions[0].label, group: '', capacity: 1, free: 0,
+        free_slots: [], poses: [], prop_actions: actions });
     }
     // The rings go to the places that have NO mesh target: neither a prop of
     // their own nor a MOUNTED diorama. A room whose interior has not loaded
@@ -4921,38 +5071,41 @@ async function startApp(username: string, role: string) {
   /** The seat menu for a clicked place; a pick seats the avatar there. */
   function openPlaceMenuFor(placeId: string, x: number, y: number): void {
     const offer = placeOffers.find((p) => p.id === placeId);
-    if (!offer || !offer.poses.length) return;
+    if (!offer || (!offer.poses.length && !offer.prop_actions?.length)) return;
     setGameState({ placeMenu: { x, y, offer } });
   }
-  gameActions.pickPlacePose = (pose) => {
-    const menu = getGameState().placeMenu;
-    setGameState({ placeMenu: null });
-    // Return keyboard control from the iframe popover to the scene window.
-    window.focus();
-    if (!menu || pose === null) return;
-    const placeId = menu.offer.id;
-    if (!menu.offer.poses.some(p => p.key === pose)) return;
-    void api.postActivity({ place_id: placeId, pose })
-      .then(() => {
-        // The server has seated the avatar: from this moment no position
-        // report may go out (a report is how a seat is RELEASED) and
-        // whatever the figure was walking towards is void. The figure is
-        // put on the slot by `reconcileAvatarPlace` — from a poll asked
-        // AFTER this answer (the stamp below), and one is asked right away.
-        avatarSeated = true;
-        seatedKey = '';
-        ownSeatChangeAt = performance.now();
-        cancelRoute();
-        void pollCore().refresh('c3d-worldmap');
-      })
-      .catch((e) => {
-        if (api.isAuthError(e)) return;
-        if (e instanceof api.ApiError && e.status === 409) {
-          uiActions.toast?.('Place is taken', true);
-        } else {
-          uiActions.toast?.(e instanceof Error ? e.message : String(e));
-        }
-      });
+  gameActions.closePlaceMenu = () => { setGameState({ placeMenu: null }); window.focus(); };
+  gameActions.pickRoomPose = (placeId, pose) => {
+    const offer = placeOffers.find(o => o.id === placeId);
+    if (!offer || offer.prop_actions || !offer.poses.some(p => p.key === pose)) return;
+    gameActions.closePlaceMenu?.();
+    void api.postActivity({ place_id: placeId, pose }).then(() => {
+      ownSeatChangeAt = performance.now();
+      cancelRoute();
+      void refreshPropMotion();
+    }).catch(e => uiActions.toast?.(String(e)));
+  };
+  async function mutatePropAction(operation: () => Promise<{status: string; reason: string}>): Promise<void> {
+    if (propMutationPending) return;
+    propMutationPending = true;
+    try {
+      const result = await operation();
+      if (result.status === 'refused' || result.status === 'failed') throw new Error(result.reason);
+      cancelRoute();
+      await refreshPropMotion();
+    } catch (e) { uiActions.toast?.(String(e)); }
+    finally { propMutationPending = false; }
+  }
+  gameActions.pickPropAction = (actionId, target, revision, partner) => {
+    gameActions.closePlaceMenu?.();
+    void mutatePropAction(() => api.requestPropAction(actionId, target, revision, partner));
+  };
+  gameActions.respondPropAction = (executionId, accept) => {
+    void mutatePropAction(() => api.respondPropAction(executionId, accept));
+  };
+  gameActions.cancelPropAction = executionId => {
+    if (ownedPropRun()?.execution_id === executionId) void releaseOwnedProp();
+    else void mutatePropAction(() => api.cancelPropAction(executionId));
   };
 
   // --- Changing rooms on foot (E3-T6) ---------------------------------------

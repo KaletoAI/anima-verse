@@ -337,6 +337,9 @@ deliberate — nobody walks out of a running scene and nobody is swept away
 mid-sentence. The practical effect in the player's own room is about one
 exchange per 10 minutes.
 
-A pair invitation to a temporary NPC is accepted at once (the interact
-package's hook); the engine's own state check decides whether the pair can
-start.
+General Together invitations to temporary NPCs retain immediate acceptance:
+the existing engine still decides whether the actual pair capability can start,
+without adding a model decision or response turn. New semantic prop actions
+are different: normal and temporary NPCs must explicitly accept or decline the
+exact `execution_id` through a decision/on-demand reply. Silence remains open;
+a general same-pose proposal or another object cannot supply that consent.

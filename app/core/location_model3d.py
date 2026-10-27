@@ -481,7 +481,7 @@ def get_building_info(location_id: str, room_id: str = "") -> Dict[str, Any]:
 
 def get_client_meta(location_id: str, room_id: str = "",
                     filename: str = "", *,
-                    with_surface: bool = False) -> Optional[Dict[str, Any]]:
+                    with_surface: bool = False, read_only: bool = False) -> Optional[Dict[str, Any]]:
     """Lean meta for the 3D client (``{format, rig, rotation, offset_y,
     tiers, signature}``) of the ACTIVE model, or None when there is none — no
     backend/model enumeration (that is the admin status's job). ``rotation``
@@ -518,7 +518,8 @@ def get_client_meta(location_id: str, room_id: str = "",
     # This meta IS the client payload's tier list (model/meta route and the
     # scene recipe's inputs), so it is where a missing distance mesh is
     # noticed and asked for — see :func:`_demand_low`.
-    _demand_low(location_id, room_id, tiers, owner=owner)
+    if not read_only:
+        _demand_low(location_id, room_id, tiers, owner=owner)
     out = {"format": meta.get("format", p.suffix.lstrip(".").lower() or "glb"),
            "rig": meta.get("rig", "none"),
            "rotation": meta.get("rotation") or {"x": 0, "y": 0, "z": 0},

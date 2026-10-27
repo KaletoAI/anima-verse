@@ -87,6 +87,17 @@ def _in_footprint(px: float, pz: float, box: Blocker, grow: float) -> bool:
             and abs(lz) <= float(box.get("depth_m") or 0.0) / 2.0 + grow)
 
 
+def footprint_corners(box: Blocker, grow: float = 0.0) -> List[Point]:
+    """The same conservative, turned footprint as ``_in_footprint``."""
+    angle = math.radians(float(box.get("yaw") or 0))
+    cos, sin = math.cos(angle), math.sin(angle)
+    x, z = map(float, box["at"])
+    w = float(box["width_m"]) / 2 + grow
+    d = float(box["depth_m"]) / 2 + grow
+    return [(x + u * cos + v * sin, z - u * sin + v * cos)
+            for u, v in ((-w, -d), (w, -d), (w, d), (-w, d))]
+
+
 def _edge_clearance(pt: Point, poly: Sequence[Point]) -> float:
     """Distance to the NEAREST polygon edge — unsigned, so it says the same
     just inside and just outside the wall (like ``scene_recipe._ring_clearance``)."""
@@ -208,7 +219,7 @@ def _blockers(recipe: Dict[str, Any], cx: float, cz: float,
             continue
         pid = str(p.get("prop_id") or "")
         if pid not in records:
-            records[pid] = prop_store.get_prop(pid) or {}
+            records[pid] = prop_store.get_prop(pid, read_only=True) or {}
         prop = records[pid]
         if (str(prop.get("mount") or "floor").strip().lower() or "floor") != "floor":
             continue
@@ -217,7 +228,7 @@ def _blockers(recipe: Dict[str, Any], cx: float, cz: float,
         at = p.get("at") or [0.0, 0.0]
         wx, wz = local_to_world(float(at[0]), float(at[1]), cx, cz, yaw)
         out.append({"at": [wx, wz], "yaw": (float(p.get("yaw") or 0.0) + yaw) % 360.0,
-                    "width_m": w, "depth_m": d})
+                    "width_m": w, "depth_m": d, "placement_id": str(p.get("id") or "")})
     return out
 
 
@@ -284,7 +295,7 @@ def room_geometry(location_id: str, room_id: str
     if room is None:
         return None
     recipe = compose_recipe(room, [r for r in rooms if r is not room],
-                            map3d=loc.get("map3d") or {})
+                            map3d=loc.get("map3d") or {}, read_only=True)
     if not recipe or recipe.get("is_ground"):
         return None
     cx, cz = float(loc["pos_x"]), float(loc["pos_z"])
@@ -419,6 +430,31 @@ def bridge_stand_point(name: str, place: Dict[str, Any], pose_key: str,
     scale = bridge_scale(height_cm(profile), clip_ref_height_m(kind))
     dx, dz = bridge_offset(travel, float(place.get("facing") or 0.0), scale)
     return (float(place["x"]) + dx, float(place["z"]) + dz)
+
+
+def approach_departure(name: str, *, profile: Optional[Dict[str, Any]] = None
+                       ) -> Tuple[Optional[Point], Optional[Point], str]:
+    """Read-only start for an indoor approach, including the real exit clip.
+
+    Unlike free standing-point selection, this never relocates a seated actor
+    to a convenient free point. The measured existing bridge must put it on a
+    walkable floor point; the planner checks that point against room geometry.
+    """
+    from app.core import places
+    from app.models.character import get_character_pos, get_effective_pose_key
+    pos = get_character_pos(name)
+    if pos is None:
+        return None, None, "missing_actor_position"
+    here = (float(pos["x"]), float(pos["z"]))
+    held = places.place_of(name)
+    if held is None:
+        return here, None, ""
+    pose = get_effective_pose_key(name, profile=profile)
+    stand = bridge_stand_point(name, held, pose, profile=profile, at=here)
+    if stand is None:
+        return None, None, "missing_exit_transition"
+    # The stored path and the authoritative position use centimetres.
+    return (round(stand[0], 2), round(stand[1], 2)), here, ""
 
 
 def stand_up(name: str, *, from_place: Optional[Dict[str, Any]] = None,

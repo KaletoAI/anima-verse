@@ -91,15 +91,34 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 WORLD = Path(tempfile.mkdtemp(prefix="prop-bulk-smoke-"))
 os.environ["STORAGE_DIR"] = str(WORLD)
+os.environ["INSTANCE_DIR"] = str(WORLD / "instance")
 
 from app.core import paths  # noqa: E402
 
 paths.init(WORLD)
+paths.init_instance(WORLD / "instance")
 
 from app.core import props as store  # noqa: E402
+from app.blender import runner as blender_runner  # noqa: E402
+# Surface jobs may finish after an individual patch context. This standalone
+# persistence probe never permits a real background Blender process.
+blender_runner.is_available = lambda: False
 
 FAILURES = []
 
+
+def save_current(prop_id, general=None, variants=None):
+    """Resolve fixture indices before creating a revision-bound author request."""
+    current = store.get_prop(prop_id)
+    entries = store.list_variants(prop_id) if current else []
+    patches = {}
+    for key, patch in (variants or {}).items():
+        try:
+            patches[entries[int(key)]["uid"]] = patch
+        except (ValueError, IndexError):
+            patches[str(key)] = patch
+    return store.bulk_update(prop_id, general, patches,
+                             base_revision=current["revision"] if current else "")
 
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'✓' if ok else '✗'} {label}{f' — {detail}' if detail else ''}")
@@ -132,7 +151,7 @@ def refused(label: str, **kwargs) -> None:
     before = (store._sidecar_path(BENCH) or Path()).read_text(encoding="utf-8")
     with WriteCounter() as w:
         try:
-            store.bulk_update(BENCH, **kwargs)
+            save_current(BENCH, **kwargs)
             check(label, False, "no ValueError")
             return
         except ValueError as exc:
@@ -140,6 +159,244 @@ def refused(label: str, **kwargs) -> None:
     after = (store._sidecar_path(BENCH) or Path()).read_text(encoding="utf-8")
     check(label, before == after and w.n == 0,
           f"{w.n} writes; {reason[:70]}")
+
+
+def bbox_upload_regression():
+    """A real low-only GLB upload still measures and refines estimated sizes."""
+    import struct
+    from unittest.mock import patch
+    from app.blender import refine, runner
+    vertices = [(x, y, z) for x in (0., 2.) for y in (0., 4.) for z in (0., 1.)]
+    indices = [0, 1, 3, 0, 3, 2, 4, 6, 7, 4, 7, 5,
+               0, 4, 5, 0, 5, 1, 2, 3, 7, 2, 7, 6,
+               0, 2, 6, 0, 6, 4, 1, 5, 7, 1, 7, 3]
+    binary = b"".join(struct.pack("<3f", *vertex) for vertex in vertices)
+    binary += struct.pack("<36H", *indices)
+    document = {
+        "asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}], "buffers": [{"byteLength": len(binary)}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 96, "target": 34962},
+                        {"buffer": 0, "byteOffset": 96, "byteLength": 72, "target": 34963}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 8,
+                       "type": "VEC3", "min": [0, 0, 0], "max": [2, 4, 1]},
+                      {"bufferView": 1, "componentType": 5123, "count": 36, "type": "SCALAR"}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "mode": 4}]}],
+    }
+    encoded = json.dumps(document).encode()
+    encoded += b" " * (-len(encoded) % 4)
+    chunks = struct.pack("<II", len(encoded), 0x4E4F534A) + encoded
+    chunks += struct.pack("<II", len(binary), 0x004E4942) + binary
+    blob = struct.pack("<III", 0x46546C67, 2, len(chunks) + 12) + chunks
+    measured = []
+
+    def measurement(path):
+        measured.append(path)
+        return {"tris": 12}
+
+    pid = store.create_prop(name="Low-only bbox fixture")["id"]
+    with patch.object(refine, "auto_retexture_enabled", return_value=False), \
+         patch.object(refine, "auto_bake_vc_enabled", return_value=False), \
+         patch.object(refine, "auto_lod_enabled", return_value=False), \
+         patch.object(refine, "measure_file", measurement), \
+         patch.object(runner, "is_available", return_value=False):
+        check("low-only primary upload succeeds", store.save_uploaded_glb(pid, blob, tier="low", variant=0))
+    meta = store.read_sidecar(pid)
+    check("low-only upload redistributes the estimated cube from real mesh proportions",
+          store.variant_dims(meta) == {"width_m": .5, "depth_m": .25, "height_m": 1.}
+          and not store.variant_dims_estimated(meta))
+    check("low-only upload persists its bbox and measurement",
+          meta.get("bbox") == [2., 4., 1.] and meta.get("measured") == {"tris": 12}
+          and measured == [store.model_path(pid)])
+
+
+def concurrency_regressions():
+    """Event-driven interleavings; timeouts bound failures, not scheduling."""
+    from threading import Event, Thread, current_thread
+    from unittest.mock import patch
+    from app.blender import refine, runner
+
+    pid = store.create_prop(name="Lock order fixture")["id"]
+    store.add_variant(pid)
+    lookup_entered, toggle_entered = Event(), Event()
+    failures = []
+    real_path, real_pending = store.model_path, store.pending_variants
+
+    def model_path(*args, **kwargs):
+        if current_thread().name == "surface-delete":
+            lookup_entered.set()
+            if not toggle_entered.wait(5):
+                raise AssertionError("toggle did not reach generation check")
+        return real_path(*args, **kwargs)
+
+    def pending(*args, **kwargs):
+        if current_thread().name == "variant-toggle":
+            toggle_entered.set()
+        return real_pending(*args, **kwargs)
+
+    def capture(fn):
+        try:
+            fn()
+        except Exception as exc:
+            failures.append(exc)
+
+    with patch.object(store, "model_path", model_path), patch.object(store, "pending_variants", pending):
+        deletion = Thread(name="surface-delete", target=lambda: capture(
+            lambda: store.delete_surface_for(pid, 1)), daemon=True)
+        toggle = Thread(name="variant-toggle", target=lambda: capture(
+            lambda: store.set_variant_active(pid, 1, False)), daemon=True)
+        deletion.start()
+        check("surface deletion reaches model lookup", lookup_entered.wait(5))
+        toggle.start()
+        deletion.join(5)
+        toggle.join(5)
+        check("surface deletion and variant toggle both terminate",
+              not deletion.is_alive() and not toggle.is_alive() and not failures,
+              str(failures))
+    if deletion.is_alive() or toggle.is_alive():
+        return
+
+    pid = store.create_prop(name="LOD lock order fixture")["id"]
+    store.add_variant(pid)
+    gallery = store.model_gallery(pid, 1)
+    source = gallery.new_path()
+    source.write_bytes(b"lod-fixture")
+    gallery.select(source.name, "full")
+    lookup_entered, toggle_entered = Event(), Event()
+    real_gallery = store.model_gallery
+    calls = 0
+
+    def landing_gallery(*args, **kwargs):
+        nonlocal calls
+        if current_thread().name == "lod-landing":
+            calls += 1
+            if calls == 2:
+                lookup_entered.set()
+                if store._lock.locked() and not toggle_entered.wait(5):
+                    raise AssertionError("toggle did not reach generation check")
+        return real_gallery(*args, **kwargs)
+
+    with patch.object(store, "model_gallery", landing_gallery), \
+         patch.object(store, "pending_variants", pending), \
+         patch.object(refine, "build_static_lod", return_value={
+             "ok": True, "blob": b"reduced-fixture", "tris": 1, "tris_before": 2}):
+        landing = Thread(name="lod-landing", target=lambda: capture(
+            lambda: store._reduce_to_low(pid, source, .5, 1)), daemon=True)
+        toggle = Thread(name="variant-toggle", target=lambda: capture(
+            lambda: store.set_variant_active(pid, 1, False)), daemon=True)
+        landing.start()
+        check("LOD landing reaches fresh gallery lookup", lookup_entered.wait(5))
+        toggle.start()
+        landing.join(5)
+        toggle.join(5)
+        check("LOD landing and variant toggle both terminate",
+              not landing.is_alive() and not toggle.is_alive() and not failures,
+              str(failures))
+    if landing.is_alive() or toggle.is_alive():
+        return
+
+    cases = [(change_mesh, through_upload, failed_run)
+             for change_mesh in (False, True) for through_upload in (False, True)
+             for failed_run in (False, True)]
+    for change_mesh, through_upload, failed_run in cases:
+        pid = store.create_prop(name="Area transaction fixture",
+                                key_areas=["picture"] if through_upload else None)["id"]
+        gallery = store.model_gallery(pid, 0)
+        source = gallery.new_path()
+        source.write_bytes(b"external-processing-fixture")
+        gallery.select(source.name, "full")
+        entered, release, saved = Event(), Event(), Event()
+        area_errors, save_errors = [], []
+        processed, upload_results, expected_source = [], [], []
+        expected_metadata = []
+
+        def run(*args, **kwargs):
+            entered.set()
+            processed.append(kwargs["inputs"]["model"])
+            if not release.wait(10):
+                raise AssertionError("test did not release external processor")
+            return ({"ok": False, "error": "fixture processing failure"} if failed_run else
+                    {"ok": True, "data": {"areas": []}, "outputs": {}})
+
+        def areas():
+            try:
+                if through_upload:
+                    upload_results.append(store.save_uploaded_glb(pid, b"uploaded-fixture", variant=0))
+                else:
+                    store._areas_run(pid, 0, {"mode": "auto"}, default_source="auto", wait_s=0)
+            except Exception as exc:
+                area_errors.append(exc)
+
+        def save():
+            try:
+                revision = store.get_prop(pid)["revision"]
+                if not change_mesh:
+                    store.bulk_update(pid, {"name": "Authored during processing"},
+                                      base_revision=revision)
+                if change_mesh:
+                    fresh = store.model_gallery(pid, 0)
+                    replacement = fresh.new_path()
+                    replacement.write_bytes(b"replacement-mesh")
+                    store.set_file_areas(replacement, areas=[{
+                        "id": "picture_1", "kind": "picture", "size_m": [1, 1],
+                        "normal": [0, 0, 1], "source": "manual", "faces": 2}],
+                        leaf_bbox={"min": [0, 0, 0], "max": [1, 1, 1]})
+                    fresh.select(replacement.name, "full")
+                expected_source.append(store.model_path(pid, variant=0))
+                expected_metadata.append(store.read_model_sidecar(expected_source[-1]))
+            except Exception as exc:
+                save_errors.append(exc)
+            finally:
+                saved.set()
+
+        with patch.object(refine, "unavailable_reason", return_value=""), \
+             patch.object(refine, "take_lod_slot", return_value=True), \
+             patch.object(refine, "free_lod_slot"), patch.object(runner, "run", run), \
+             patch.object(refine, "auto_lod_enabled", return_value=False), \
+             patch.object(refine, "auto_retexture_enabled", return_value=False), \
+             patch.object(refine, "auto_bake_vc_enabled", return_value=False), \
+             patch.object(runner, "is_available", return_value=False), \
+             patch.object(store, "_extract_bbox", return_value=None):
+            worker = Thread(target=areas, daemon=True)
+            worker.start()
+            check("area processing starts", entered.wait(5))
+            writer = Thread(target=save, daemon=True)
+            writer.start()
+            save_finished_while_processing = saved.wait(5)
+            release.set()
+            worker.join(5)
+            writer.join(5)
+        check("read and draft save finish while external processing is blocked",
+              save_finished_while_processing and not save_errors, str(save_errors))
+        check("stale area landing is rejected without overwriting the author",
+              not worker.is_alive()
+              and ((not area_errors and upload_results == [True]) if through_upload else
+                   (len(area_errors) == 1 and isinstance(area_errors[0],
+                       RuntimeError if failed_run else store.PropRevisionConflict)))
+              and store.read_sidecar(pid)["name"] == (
+                  "Area transaction fixture" if change_mesh else "Authored during processing"),
+              str(area_errors))
+        check("stale processing leaves the chosen mesh and its area metadata untouched",
+              bool(processed) and not store.areas_sidecar_path(processed[0]).exists()
+              and expected_source == [store.model_path(pid, variant=0)]
+              and not store.read_model_sidecar(processed[0]).get("areas_error"))
+        check("failed or superseded processing preserves the selected mesh metadata",
+              expected_metadata == [store.read_model_sidecar(expected_source[-1])])
+
+    # A failure for the still-current source remains visible; guarding stale
+    # diagnostics must not turn genuine processing errors into silent success.
+    pid = store.create_prop(name="Current failure fixture", key_areas=["picture"])["id"]
+    failure_reason = "fixture processing failure"
+    with patch.object(refine, "unavailable_reason", return_value=""), \
+         patch.object(refine, "take_lod_slot", return_value=True), \
+         patch.object(refine, "free_lod_slot"), \
+         patch.object(runner, "run", return_value={"ok": False, "error": failure_reason}), \
+         patch.object(refine, "auto_lod_enabled", return_value=False), \
+         patch.object(refine, "auto_retexture_enabled", return_value=False), \
+         patch.object(refine, "auto_bake_vc_enabled", return_value=False), \
+         patch.object(runner, "is_available", return_value=False):
+        store.save_uploaded_glb(pid, b"current-failure-fixture", variant=0)
+    check("a current processing failure retains the original diagnostic",
+          store.file_areas(store.model_path(pid))["areas_error"] == failure_reason)
 
 
 def main() -> int:
@@ -164,7 +421,7 @@ def main() -> int:
     check("the single-value setters write once each", singles.n == 6,
           str(singles.n))
     with WriteCounter() as batch:
-        store.bulk_update(
+        save_current(
             bench,
             {"name": "Bench"},
             {"0": {"dims": {"width_m": 2.0}, "description": "a bench",
@@ -174,7 +431,7 @@ def main() -> int:
           str(batch.n))
 
     print("\n[2] the same sanitation, verbatim")
-    store.bulk_update(
+    save_current(
         bench,
         {"name": "  ", "tags": "a, b, A", "sway_factor": 1.0,
          "category": "seating"},
@@ -231,13 +488,13 @@ def main() -> int:
 
     print("\n[4] an empty body is a read")
     with WriteCounter() as empty:
-        rec = store.bulk_update(bench)
+        rec = save_current(bench)
     check("nothing to do writes nothing", empty.n == 0, str(empty.n))
     check("…and still answers with the record", (rec or {}).get("id") == bench)
-    check("an unknown prop is None", store.bulk_update("nope-there") is None)
+    check("an unknown prop is None", save_current("nope-there") is None)
 
     print("\n[5] the answer is what was stored")
-    answer = store.bulk_update(bench, {"name": "Long bench"})
+    answer = save_current(bench, {"name": "Long bench"})
     check("the name the batch just stored", answer["name"] == "Long bench",
           str(answer.get("name")))
     check("the primary variant's clamped width", answer["width_m"] == 100.0,
@@ -245,6 +502,94 @@ def main() -> int:
     check("and the sway factor reads back as the full amount",
           answer.get("sway_factor") == 1.0, str(answer.get("sway_factor")))
 
+    print("\n[6] revision conflicts and author validation are atomic")
+    from copy import deepcopy
+    revision = store.get_prop(bench)["revision"]
+    store.bulk_update(bench, {"name": "First reader"}, base_revision=revision)
+    before = store.read_sidecar(bench)
+    try:
+        store.bulk_update(bench, {"name": "Stale reader"}, base_revision=revision)
+        check("stale reader is rejected", False)
+    except store.PropRevisionConflict:
+        check("stale reader preserves first save", store.read_sidecar(bench) == before)
+    action = dict(id="rest", name="Rest", description="", enabled=True,
+                  ability="pose", pose_key="", participants=1, presence="any",
+                  interrupt_on_presence_change=False, phases=[], effects=[],
+                  requirements=[])
+    for label, actions in (
+        ("duplicate action IDs", [action, deepcopy(action)]),
+        ("unknown condition requirement", [{**action, "requirements": [
+            dict(id="req", target="actor", type="condition",
+                 condition_id="not-a-real-condition", present=True)]}]),
+        ("unknown effect condition", [{**action, "effects": [
+            dict(id="fx", target="actor", type="condition_remove",
+                 condition_id="not-a-real-condition", when="start")]}]),
+        ("solo partner requirement", [{**action, "requirements": [
+            dict(id="req", target="partner", type="condition",
+                 condition_id="not-a-real-condition", present=True)]}]),
+        ("nonfinite phase", [{**action, "ability": "combined", "phases": [
+            dict(id="prepare", label="Prepare", duration_game_s=float("nan"), pose_key="")]}]),
+    ):
+        before = store.read_sidecar(bench)
+        try:
+            store.bulk_update(bench, {"name": "Must not land"},
+                              actions=actions,
+                              base_revision=store.get_prop(bench)["revision"])
+            check(label, False)
+        except store.PropDocumentInvalid as exc:
+            check(label, bool(exc.issues) and store.read_sidecar(bench) == before)
+    old_uid = store.list_variants(bench)[1]["uid"]
+    store.delete_variant(bench, 1)
+    replacement = store.add_variant(bench)
+    check("delete/recreate never reuses UID",
+          store.list_variants(bench)[replacement]["uid"] != old_uid)
+    uid = store.list_variants(bench)[0]["uid"]
+    binding = dict(action_id="rest", variant_uid=uid, supported=True,
+                   marker_ids=["seat1"], access_points={
+                       "actor": dict(x=0, z=-1, yaw=0)}, validation="local_valid")
+    with WriteCounter() as action_write:
+        answer = store.bulk_update(bench, actions=[action],
+                                   variants={uid: {"action_bindings": [binding]}},
+                                   base_revision=store.get_prop(bench)["revision"])
+    check("actions and bindings land in one write", action_write.n == 1)
+    check("actions round-trip", store.get_prop(bench)["actions"] == [action])
+    check("bindings round-trip", store.list_variants(bench)[0]["action_bindings"] == [binding])
+    copied = store.add_variant(bench, 0)
+    copied_row = store.list_variants(bench)[copied]
+    check("copied bindings name only their new owning UID",
+          copied_row["action_bindings"] == [{**binding, "variant_uid": copied_row["uid"]}])
+    from app.routes.world import _prop_bulk_update_sync
+    from fastapi import HTTPException
+    for label, body, expected_status in (
+        ("missing revision", {"general": {"name": "Rejected"}}, 422),
+        ("deleted UID", {"base_revision": store.get_prop(bench)["revision"],
+                         "variants": {old_uid: {"description": "Wrong owner"}}}, 422),
+        ("stale HTTP draft", {"base_revision": revision, "actions": []}, 409),
+        ("null actions", {"base_revision": store.get_prop(bench)["revision"], "actions": None}, 422),
+    ):
+        before = store.read_sidecar(bench)
+        try:
+            _prop_bulk_update_sync(bench, body)
+            check(label, False)
+        except HTTPException as exc:
+            check(label, exc.status_code == expected_status and store.read_sidecar(bench) == before)
+    sleep = {**action, "id": "sleep", "ability": "sleep", "effects": [
+        dict(id="asleep", target="actor", type="mood", mood="rested", when="success")]}
+    saved_sleep = store.bulk_update(bench, actions=[action, sleep],
+                                   base_revision=store.get_prop(bench)["revision"])
+    check("real sleep transition allows success effects", saved_sleep["actions"][-1] == sleep)
+    before = store.read_sidecar(bench)
+    try:
+        store.bulk_update(bench, actions=[action, {**sleep, "effects": [
+            dict(id="rate", target="actor", type="stat_delta", stat="unknown",
+                 amount=1, when="active")]}], base_revision=store.get_prop(bench)["revision"])
+        check("sleep custom active regeneration is rejected", False)
+    except store.PropDocumentInvalid as exc:
+        check("sleep custom active regeneration is rejected",
+              any(issue["code"] == "unsupported_combination" for issue in exc.issues)
+              and store.read_sidecar(bench) == before)
+    bbox_upload_regression()
+    concurrency_regressions()
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + "; ".join(FAILURES))

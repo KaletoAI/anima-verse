@@ -135,8 +135,9 @@ happened. Do not reuse a sentence, a phrase or an image from these lines.
 
 === Places and activities here ===
 {{ activity_hint_block }}
-Use SetActivity to set what you are doing right now — pose: one of the pose keys above, detail: <what a bystander sees, 2-6 words, third person — never I/my/ich/mein> (for example pose sitting, detail sketching in a notebook). The tool description states the JSON input.
+SetActivity is only a free body pose or room-owned marker; furniture requires the exact PropAction contract below.
 {% endif %}
+{{ prop_actions_block }}
 {% if skill_context_blocks %}
 
 {{ skill_context_blocks }}

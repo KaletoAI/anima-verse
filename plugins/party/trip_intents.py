@@ -151,7 +151,8 @@ def _save(intent: Dict, state: Dict, **changes) -> Dict:
 def _cancel_owned(intent: Dict) -> None:
     claim = _state(intent).get("claim_id")
     if claim:
-        cancel_journey(intent["owner"], journey_id=claim, execution_ref=intent["id"])
+        cancel_journey(intent["owner"], journey_id=claim, execution_ref=intent["id"],
+                       execution_kind="party_intent")
     from plugins.party.undertakings import cancel
     cancel(intent)
 
@@ -671,7 +672,8 @@ def _guard_execution(name: str, journey: Dict, ref: str):
             current = get_journey(name)
             if not intent or intent["status"] != "active" or not intent_action_managed(intent) \
                     or intent["owner"] != name:
-                cancel_journey(name, journey_id=journey.get("journey_id"), execution_ref=ref)
+                cancel_journey(name, journey_id=journey.get("journey_id"), execution_ref=ref,
+                               execution_kind="party_intent")
                 yield False
                 return
             if _expired(intent):

@@ -70,6 +70,11 @@ def _observe(intent, result):
     status = result.get("status")
     if status in {"pending", "approaching", "running", "declined"}:
         state = {**state, "activity": {**(state.get("activity") or {}), "submitted": True}}
+    if status == "completed":
+        activity = {**(state.get("activity") or {}), "interaction_id": result["interaction_id"], "ended": True}
+        intent = T._save(intent, {**state, "activity": activity})
+        arrive(intent)
+        return
     if result.get("terminal"):
         T._terminate(intent, result.get("reason") or "The activity invitation ended without execution.")
         return
@@ -185,7 +190,7 @@ def ended(character, partner, interaction_id, reason="ended", invite_id=""):
                 continue
             if {character, partner} != {intent["owner"], state["invitee"]}:
                 continue
-            if reason not in {"ended", "avatar", "pose"} or not T._arrived(intent):
+            if reason not in {"ended", "avatar"} or not T._arrived(intent):
                 T._terminate(intent, f"The agreed activity was interrupted ({reason}).")
                 continue
             intent = T._save(intent, {**state, "activity": {**activity,

@@ -88,6 +88,8 @@ export interface SurfaceStatus {
 
 export interface PropFull {
   id: string
+  revision: string
+  actions: ActionDefinition[]
   name: string
   category: string
   /** Real extent in metres AFTER the orientation fix (x/y/z) — of the PRIMARY
@@ -179,6 +181,21 @@ export interface PropFull {
   mount_suggested?: boolean
 }
 
+/** Direct workspace navigation; semantic editors use the same draft and viewer. */
+export type PropWorkspaceArea = 'overview' | 'actions' | 'places' | 'assets' | 'appearance'
+
+/** A deliberate unsupported variant is not broken; decoration needs no action. */
+export function hasIncompleteActionBindings(prop: PropFull): boolean {
+  const active = (prop.actions || []).filter((action) => action.enabled)
+  if (!active.length) return false
+  const variants = prop.variant_tiers || []
+  return !variants.length || variants.some((variant) => active.some((action) => {
+    const binding = (variant.action_bindings || []).find((item) => item.action_id === action.id)
+    return !binding || (binding.supported
+      && (binding.validation === 'repair_required' || !binding.marker_ids.length))
+  }))
+}
+
 /** The four mount kinds, mirroring `props.MOUNT_KINDS`. `''` is not one of
  *  them — it is the ABSENCE of an answer, and every reader has to keep the
  *  two apart. */
@@ -216,6 +233,8 @@ export interface PropVariantTier {
   /** STORE index — not the position in the list (a switched-off variant
    *  leaves a gap), and what every variant-scoped URL names. */
   variant: number
+  uid: string
+  action_bindings: VariantBinding[]
   /** Resolution tiers this variant HAS (`full` / `low`). */
   tiers: string[]
   /** The three real metres THIS variant renders at (props.variant_dims). */
@@ -296,6 +315,8 @@ export interface PropSourceImage {
 
 export interface PropVariant {
   index: number
+  uid: string
+  action_bindings: VariantBinding[]
   /** File stem this variant's meshes are stored under (informational). */
   stem: string
   /** Switched off variants keep their meshes but are not rendered. */
@@ -713,4 +734,49 @@ export interface ModelWater {
   box_max: [number, number, number]
   extent_snapped: [number, number, number]
   regions: WaterRegion[]
+}
+
+export interface PropActionIssue {
+  path: string
+  code: string
+  message: string
+  severity: 'error' | 'warning'
+}
+
+export type ActionTarget = 'actor' | 'partner' | 'both'
+export type ActionRequirement = {
+  id: string; target: ActionTarget
+} & (
+  | { type: 'stat'; stat: string; op: 'lt' | 'le' | 'eq' | 'ge' | 'gt'; value: number }
+  | { type: 'condition'; condition_id: string; present: boolean }
+)
+export type ActionEffect = {
+  id: string; target: ActionTarget; when: 'start' | 'success' | 'active'
+} & (
+  | { type: 'stat_delta'; stat: string; amount: number }
+  | { type: 'mood'; mood: string }
+  | { type: 'condition_add'; condition_id: string; duration_game_s: number; repeat: 'refresh' | 'ignore' }
+  | { type: 'condition_remove'; condition_id: string }
+)
+export interface ActionDefinition {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  ability: 'pose' | 'combined' | 'sleep' | 'pair'
+  pose_key: string
+  participants: 1 | 2
+  presence: 'any' | 'alone' | 'others' | 'participants_only'
+  interrupt_on_presence_change: boolean
+  phases: { id: string; label: string; duration_game_s: number; pose_key: string }[]
+  requirements: ActionRequirement[]
+  effects: ActionEffect[]
+}
+export interface VariantBinding {
+  action_id: string
+  variant_uid: string
+  supported: boolean
+  marker_ids: string[]
+  access_points: Partial<Record<'actor' | 'partner', { x: number; z: number; yaw: number }>>
+  validation: 'suggested' | 'local_valid' | 'repair_required'
 }

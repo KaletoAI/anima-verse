@@ -790,7 +790,7 @@ def compose_on_chain(
 
 
 def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
-                     default_u: float, default_v: float,
+                     default_u: float, default_v: float, *, read_only: bool = False,
                      ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """``(placements, prop_markers)`` of one layout, joined with the library.
 
@@ -824,7 +824,8 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
 
     def _record(prop_id: str) -> Optional[Dict[str, Any]]:
         if prop_id not in records:
-            records[prop_id] = prop_store.get_prop(prop_id)
+            records[prop_id] = (prop_store.get_prop(prop_id, read_only=True) if read_only
+                                else prop_store.get_prop(prop_id))
         return records[prop_id]
 
     def _stack_facts(prop_id: str, variant: Any) -> Dict[str, Any]:
@@ -901,6 +902,15 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         entry["dims"] = _placement_dims(prop, entry.get("variant"))
         entry["prop_name"] = str(prop.get("name") or pid)
         _carry_ground_offset(entry, prop, entry.get("variant"))
+        published = _variant_entry(prop, entry.get("variant")) or {}
+        entry["variant_uid"] = published.get("uid", "")
+        entry["definition_revision"] = prop.get("revision", "")
+        entry["support_reason"] = placement.get("support_reason") or composed["reason"]
+        entry["action_dependency_invalid"] = bool(
+            placement.get("action_dependency_invalid")
+            or (placement.get("variant_uid") and placement["variant_uid"] != entry["variant_uid"])
+            or (placement.get("definition_revision")
+                and placement["definition_revision"] != entry["definition_revision"]))
         entry["has_model"] = bool(prop.get("has_model"))
         if prop.get("has_model"):
             # Which resolution tiers the prop has, plus the change key of its
@@ -936,6 +946,23 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
             composed["group"] = str(marker.get("group") or "")
             composed["capacity"] = int(marker.get("capacity") or 1)
             composed["spacing_m"] = float(marker.get("spacing_m") or 0.6)
+            from app.core.prop_action_migration import compose_binding
+            composed["placement_id"] = entry["id"]
+            composed["prop_id"] = pid
+            composed["variant_uid"] = entry["variant_uid"]
+            composed["marker_id"] = composed["id"]
+            composed["action_bindings"] = [
+                compose_binding(binding, placement=entry,
+                                revision=entry["definition_revision"])
+                for binding in published.get("action_bindings", [])
+                if marker.get("id") in binding.get("marker_ids", [])]
+            if entry["action_dependency_invalid"] or entry["support_reason"]:
+                for binding in composed["action_bindings"]:
+                    binding["supported"] = False
+                    binding["validation"] = "repair_required"
+                    binding["reason"] = ("incompatible_prop_dependency"
+                                         if entry["action_dependency_invalid"]
+                                         else "invalid_support_chain")
             # WHICH WAY THE ROW RUNS (2026-08-29). Object-local like the
             # facing it is measured against, so the placement yaw carries both
             # at once — the angle between them never changes when the prop is
@@ -944,13 +971,42 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                 composed["slot_axis"] = float(marker.get("slot_axis"))
             composed["placement"] = idx
             prop_markers.append(composed)
+    # A device-local proposal can be inside its supporting table. Keep that
+    # point visible, but block it; choosing a real room route is executor work.
+    from app.core.room_stand import BODY_R_M, _in_footprint
+    by_id = {entry["id"]: entry for entry in placements if entry["id"]}
+    for marker in prop_markers:
+        child = placements[marker["placement"]]
+        support = by_id.get(child.get("on"))
+        visited = {child["id"]}
+        while support is not None and support["id"] not in visited:
+            visited.add(support["id"])
+            dims = support.get("dims") or {}
+            box = dict(at=support["at"], yaw=support["yaw"],
+                       width_m=dims.get("width_m"), depth_m=dims.get("depth_m"))
+            for binding in marker["action_bindings"]:
+                if support.get("action_dependency_invalid") or support.get("support_reason"):
+                    binding.update(supported=False, validation="repair_required",
+                                   reason=("incompatible_prop_dependency"
+                                           if support.get("action_dependency_invalid")
+                                           else "invalid_support_chain"))
+                elif binding["supported"] and (
+                        not dims or any(_in_footprint(point["x"], point["z"], box, BODY_R_M)
+                                        for point in binding["access_points"].values())):
+                    binding.update(supported=False, validation="repair_required",
+                                   reason="support_access_blocked")
+            support = by_id.get(support.get("on"))
+        if support is not None:
+            for binding in marker["action_bindings"]:
+                binding.update(supported=False, validation="repair_required",
+                               reason="invalid_support_chain")
     return placements, prop_markers
 
 
 def _scatter_into(placements: List[Dict[str, Any]],
                   scatter_sources: List[Dict[str, Any]],
                   keep_in: List[List[float]],
-                  keepouts: List[List[List[float]]]) -> None:
+                  keepouts: List[List[List[float]]], *, read_only: bool = False) -> None:
     """Append the scattered copies of every scattering placement, in place.
 
     Prop scatter (plan-area-detail-scenes.md, 2026-08-02 redesign) is a
@@ -982,7 +1038,7 @@ def _scatter_into(placements: List[Dict[str, Any]],
             spacing = float(source.get("scatter_spacing_m") or 0)
         except (TypeError, ValueError):
             spacing = 0.0
-        prop = prop_store.get_prop(pid)
+        prop = prop_store.get_prop(pid, read_only=True) if read_only else prop_store.get_prop(pid)
         # WHICH of the prop's model variants each copy shows (E2.3): the
         # copies of one scatter source walk the active variants in the fixed
         # order `(scatter_seed + instance) mod count`, so twenty pines are
@@ -1035,7 +1091,7 @@ def boundary_points(map3d: Any) -> List[List[float]]:
 
 
 def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
-                          map3d: Any = None) -> Optional[Dict[str, Any]]:
+                          map3d: Any = None, *, read_only: bool = False) -> Optional[Dict[str, Any]]:
     """The REDUCED recipe of the ground room (§ A13a), or None when the yard
     carries nothing.
 
@@ -1059,7 +1115,7 @@ def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
         return None
     boundary = boundary_points(map3d)
     placements, prop_markers = _join_placements(
-        lay, lambda u, v: (u, v), 0.0, 0.0, 0.0)
+        lay, lambda u, v: (u, v), 0.0, 0.0, 0.0, read_only=read_only)
 
     scatter_sources = [p for p in (lay.get("props") or [])
                        if isinstance(p, dict) and p.get("scatter_count")]
@@ -1089,7 +1145,7 @@ def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
             if isinstance(mat, (list, tuple)) and len(mat) == 2:
                 keepouts.append(_square(float(mat[0]), float(mat[1]),
                                         SCATTER_POINT_CLEAR_M))
-        _scatter_into(placements, scatter_sources, boundary, keepouts)
+        _scatter_into(placements, scatter_sources, boundary, keepouts, read_only=read_only)
 
     payload: Dict[str, Any] = {
         "room_id": room.get("id") or "",
@@ -1109,7 +1165,7 @@ def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
 
 def compose_recipe(room: Dict[str, Any],
                    siblings: Any = (),
-                   map3d: Any = None) -> Optional[Dict[str, Any]]:
+                   map3d: Any = None, *, read_only: bool = False) -> Optional[Dict[str, Any]]:
     """The full recipe of ONE room, or None when it has no layout.
 
     ``siblings`` are the OTHER rooms of the same location; those on the same
@@ -1121,7 +1177,7 @@ def compose_recipe(room: Dict[str, Any],
     """
     from app.models.world import GROUND_ROOM_ID
     if str(room.get("id") or "") == GROUND_ROOM_ID:
-        return compose_ground_recipe(room, siblings, map3d)
+        return compose_ground_recipe(room, siblings, map3d, read_only=read_only)
     lay = room.get("layout")
     rect = _layout_rect(lay)
     if not rect:
@@ -1166,7 +1222,7 @@ def compose_recipe(room: Dict[str, Any],
                 op["edge"] = edge_map[e]
 
     placements, prop_markers = _join_placements(lay, place, room_yaw,
-                                                w / 2, d / 2)
+                                                w / 2, d / 2, read_only=read_only)
 
     scatter_sources = [p for p in (lay.get("props") or [])
                        if isinstance(p, dict) and p.get("scatter_count")]
@@ -1199,7 +1255,7 @@ def compose_recipe(room: Dict[str, Any],
             if isinstance(mat, (list, tuple)) and len(mat) == 2:
                 mx, my = place(float(mat[0]), float(mat[1]))
                 keepouts.append(_square(mx, my, SCATTER_POINT_CLEAR_M))
-        _scatter_into(placements, scatter_sources, outline, keepouts)
+        _scatter_into(placements, scatter_sources, outline, keepouts, read_only=read_only)
 
     payload: Dict[str, Any] = {
         "room_id": room.get("id") or "",

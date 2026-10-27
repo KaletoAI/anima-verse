@@ -343,6 +343,12 @@ export interface SceneModelSpec {
    *  itself. No renderer rolls a die here: the same copy shows the same mesh in
    *  both renderers. */
   variant?: number
+  /** Stable semantic identity of this authored prop placement; never infer it
+   *  from a mesh id, numeric variant index or transform. Scatter has no target. */
+  placement_id?: string
+  variant_uid?: string
+  /** Revision against which the offered action was checked by Core. */
+  definition_revision?: string
   room_id?: string
   level: number
   /** Orientation fix, Euler 'YXZ' in degrees — BEFORE measuring. Yaw on the

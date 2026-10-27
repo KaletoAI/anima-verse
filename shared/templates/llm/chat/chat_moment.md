@@ -97,6 +97,7 @@ FOCUSED ITEMS IN THE ROOM (the person you're talking to has drawn attention to t
 
 {{ known_activities }}
 {% endif %}
+{{ prop_actions_block }}
 {% if events_section %}
 
 {{ events_section }}

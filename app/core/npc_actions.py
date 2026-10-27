@@ -552,6 +552,8 @@ def _with_action_context(name: str, variables: Dict[str, Any]) -> Dict[str, Any]
     blocks = [variables["extension_prompt"]] if variables["extension_prompt"] else []
     emit("character.prompt_context", character_name=name, mode=TASK, blocks=blocks)
     variables["extension_prompt"] = "\n\n".join(blocks)
+    from app.core.prop_actions import prompt_block
+    variables["prop_actions_block"] = prompt_block(name)
     return variables
 
 
@@ -895,6 +897,27 @@ def run_action_for(name: str, *,
         logger.info("npc_action(%s): execution became unavailable during the turn", name)
         return None
 
+    if "prop_action" in answer:
+        # Structured action wins over implicit status adoption in this turn.
+        # The installed skill uses the same Core/consent as player requests.
+        if (answer.get("room", variables["current_room_id"]) != variables["current_room_id"]
+                or any(answer.get(key) for key in ("pose", "say", "pair", "action"))):
+            return None
+        from app.core.dependencies import get_skill_manager
+        manager = get_skill_manager()
+        skill = manager.get_skill("prop_action")
+        available = manager.get_agent_tools(name)
+        tool = next((tool for tool in available if skill and tool.name == skill.name), None)
+        if not tool:
+            return None
+        from app.core.skill_gate import run_tool
+        raw = run_tool(name, tool.name, lambda: tool.func(json.dumps(answer["prop_action"])))
+        try:
+            outcome = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        return dict(name=name, room=variables["current_room_id"], moved=False,
+                    action_result=outcome, said_to="", invited="") if outcome["status"] != "refused" else None
     if variables["home"]:
         # The solo-action guard rechecks placement and home before writing;
         # pooling or an admin move may have happened during the model call.

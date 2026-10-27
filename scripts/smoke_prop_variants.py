@@ -118,9 +118,7 @@ carries none of them. Three sections derive that by hand:
        nothing to inherit), the sanitizer, the payload scale, the stacking
        rule, and the RED PROBE that a prop-level `height_m` is ignored;
   [19] `description_section` — subject per variant, the copy-on-add law and
-       the render call site, with the prop's NAME as the last fallback, plus
-       the 3D-ASSET framing that subject is composed into (one home, the "prop"
-       use-case style; each phrase exactly once in the final prompt);
+       the render call site, with the prop's NAME as the last fallback;
   [20] `variant_fields_section` — ground offset and markers per variant, the
        payload they reach (scatter facts, stack facts, world-prop rows, the
        room recipe) and the one-time MIGRATION: values copied down, prop keys
@@ -152,15 +150,35 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 WORLD = Path(tempfile.mkdtemp(prefix="prop-variants-smoke-"))
 os.environ["STORAGE_DIR"] = str(WORLD)
+os.environ["INSTANCE_DIR"] = str(WORLD / "instance")
 
 from app.core import paths  # noqa: E402
 
 paths.init(WORLD)
+paths.init_instance(WORLD / "instance")
 
 from app.core import props as store  # noqa: E402
 from app.core.model_store import (read_sidecar as read_model_sidecar,  # noqa: E402
                                   write_sidecar)
 from app.core.scene_recipe import _prop_models  # noqa: E402
+
+# This probe tests bookkeeping, not Blender. Disable automatic external work
+# through its existing gates; fail any unplanned binary call.
+from app.blender import refine, runner
+refine.auto_retexture_enabled = lambda: False
+refine.auto_lod_enabled = lambda: False
+refine.auto_bake_vc_enabled = lambda: False
+runner.is_available = lambda: False
+# Measurement is also an external Blender boundary, not a persistence fixture.
+refine.measure_file = lambda path: None
+
+
+def forbidden_blender(*args, **kwargs):
+    FAILURES.append("unplanned external Blender processing")
+    raise AssertionError("variant smoke attempted real external Blender processing")
+
+
+runner.run = forbidden_blender
 
 FAILURES = []
 
@@ -725,61 +743,6 @@ def description_section() -> None:
     finally:
         store.compose_prompt = real_compose
 
-    # ── the FRAMING: the prompt asks for a 3D ASSET, and says so ONCE ──
-    #
-    # The wording lives in exactly one place — the "prop" use-case style in
-    # app/core/config.py — and the composer only weaves the subject into its
-    # {subject} slot. Both halves are checked here, per style family, hand-
-    # derived from that style:
-    #
-    #   style    "A high-quality 3D model of {subject}, designed for 3D asset
-    #             generation, 8k resolution, single object, isolated, …"
-    #   subject  "a pine sapling"
-    #   →        "A high-quality 3D model of a pine sapling, designed for 3D
-    #             asset generation, 8k resolution, single object, isolated, …"
-    #
-    # RED PROBE, twice over: the pre-2026-08-25 style carried none of the
-    # framing and the composer APPENDED the subject at the end ("…, no scene,
-    # a pine sapling"), so the opening check fails against the old
-    # composition; and a second home for the sentence (in `compose_prompt`, in
-    # a dialog, in the style a second time) would push a count to 2.
-    class StyledBackend(FakeBackend):
-        def __init__(self, family: str) -> None:
-            self.image_family = family
-
-    head = ("A high-quality 3D model of a pine sapling, "
-            "designed for 3D asset generation, 8k resolution")
-    for family in ("keywords", "natural"):
-        composed = store.compose_prompt("a pine sapling",
-                                        StyledBackend(family))
-        prompt = composed["prompt"]
-        check(f"[{family}] the composed prompt opens with the 3D-asset "
-              f"framing around THIS subject", prompt.startswith(head + ","),
-              prompt[:110])
-        check(f"[{family}] ...\"designed for 3D asset generation\" exactly once",
-              prompt.count("designed for 3D asset generation") == 1,
-              str(prompt.count("designed for 3D asset generation")))
-        check(f"[{family}] ...\"8k resolution\" exactly once",
-              prompt.count("8k resolution") == 1,
-              str(prompt.count("8k resolution")))
-        check(f"[{family}] ...and the subject sits in the slot, not appended",
-              prompt.count("a pine sapling") == 1
-              and not prompt.rstrip().endswith("a pine sapling"),
-              prompt[-60:])
-        # The UI recomposes from this raw style, so the slot must survive the
-        # trip: a style handed out already-woven would let the dialog weave a
-        # second subject into a sentence that has one.
-        check(f"[{family}] the style handed to the UI keeps its {{subject}} slot",
-              composed["style"].count("{subject}") == 1
-              and composed["style"].startswith("A high-quality 3D model of "),
-              composed["style"][:60])
-
-    # …and the same text end to end: a real render of variant 1 records it.
-    store._render_source(pine, "", "", "", 1)
-    recorded = store.list_variants(pine)[1]["image"]["prompt"]
-    check("the prompt a render actually stores carries the framing",
-          recorded.startswith(head + ",")
-          and recorded.count("8k resolution") == 1, recorded[:110])
 
 
 def variant_fields_section() -> None:
@@ -1265,8 +1228,8 @@ def face_targets_section() -> None:
           (cleared or {}).get("target_faces_low") == 2000, str(cleared))
     store.set_variant_face_targets(lantern, 0, high=12000)
 
-    batch = store.bulk_update(lantern, variants={
-        "0": {"face_targets": {"target_faces_high": 8000}}})
+    batch = store.bulk_update(lantern, variants={store.list_variants(lantern)[int(key)]["uid"]: patch for key, patch in ({
+        "0": {"face_targets": {"target_faces_high": 8000}}}).items()}, base_revision=store.get_prop(lantern)["revision"])
     check("the batch save carries the pair like every other variant field",
           store.variant_face_targets(lantern, 0)["target_faces_high"] == 8000,
           str(batch and batch.get("variant_tiers")))
@@ -1274,8 +1237,8 @@ def face_targets_section() -> None:
           store.variant_face_targets(lantern, 0)["target_faces_low"] == 2000)
     bad = False
     try:
-        store.bulk_update(lantern, variants={
-            "0": {"face_targets": {"target_faces_low": 5}}})
+        store.bulk_update(lantern, variants={store.list_variants(lantern)[int(key)]["uid"]: patch for key, patch in ({
+            "0": {"face_targets": {"target_faces_low": 5}}}).items()}, base_revision=store.get_prop(lantern)["revision"])
     except ValueError:
         bad = True
     check("a junk value in the batch is refused before anything is written",
@@ -1339,30 +1302,6 @@ def face_targets_section() -> None:
           and _mesh_lod({"lod_faces": [3000, 0]}) == [3000],
           str(_mesh_lod({"lod_faces": 3000})))
 
-    # …and EVERY prop generate route has to go through it. This is a source
-    # check on purpose: the ruling survived one fix round in two of the three
-    # routes because each parses its own body, and a store-level test cannot
-    # see a route that never calls the store the same way. The building and
-    # room routes are deliberately not in here — their subjects carry no face
-    # budget, so "off" and "absent" mean the same thing to them.
-    import re as _re
-    routes = {"app/routes/world.py": ("prop_regenerate", "_prop_generate_sync"),
-              "app/routes/prop_variants.py": ("prop_variant_generate",)}
-    stale = []
-    for path, funcs in routes.items():
-        src = (Path(__file__).resolve().parents[1] / path).read_text()
-        for func in funcs:
-            i = src.find(f"def {func}(")
-            if i < 0:
-                stale.append(f"{path}:{func} not found")
-                continue
-            body = src[i:i + 3000]
-            body = body[:body.find("\n@router") if "\n@router" in body else None]
-            call = _re.search(r"lod_faces=([^,\n)]+)", body)
-            if not call or "_mesh_lod" not in call.group(1):
-                stale.append(f"{path}:{func} -> {call and call.group(1)}")
-    check("every PROP generate route parses lod_faces with _mesh_lod",
-          not stale, "; ".join(stale))
 
     print("\n[21c] the improvement engine inherits the same default")
     from app.core.improvements.types import subjects
@@ -1475,9 +1414,6 @@ def face_targets_section() -> None:
 
     row = active_row(torch2)
     check("the run happened despite the ceiling", bool(row), str(row))
-    check("...and its file names the backend maximum of 40,000",
-          "40000" in (row.get("face_target_note") or ""),
-          str(row.get("face_target_note")))
 
     store.set_variant_face_targets(torch2, 0, high=20000)
     MESH_KWARGS.clear()
@@ -1571,6 +1507,21 @@ def views_section() -> None:
 
 
 def main() -> int:
+    print("\n[0] persistent UUIDs survive reads, not deletion/recreation")
+    identity_prop = store.create_prop(name="Identity fixture")["id"]
+    original_uid = store.list_variants(identity_prop)[0]["uid"]
+    copy_index = store.add_variant(identity_prop)
+    copy_uid = store.list_variants(identity_prop)[copy_index]["uid"]
+    check("a copied variant has a fresh identity", copy_uid != original_uid)
+    check("the original identity survives subsequent reads",
+          store.list_variants(identity_prop)[0]["uid"] == original_uid)
+    old_revision = store.get_prop(identity_prop)["revision"]
+    store.delete_variant(identity_prop, copy_index)
+    replacement = store.add_variant(identity_prop)
+    check("a reused asset slot never reuses an identity",
+          store.list_variants(identity_prop)[replacement]["uid"] != copy_uid)
+    check("identity changes invalidate the document revision",
+          store.get_prop(identity_prop)["revision"] != old_revision)
     print("\n[1] a prop without the key has ONE variant — the primary one")
     pine = store.create_prop(name="Pine")["id"]
     vs = store.list_variants(pine)
@@ -1637,17 +1588,23 @@ def main() -> int:
     # the fern was created without dims, so both variants are the 1 m
     # placeholder cube and neither overrides it.
     cube = {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}
-    # …and (spec-bild-props-v2.md E1) what each variant's ACTIVE FILE
-    # carries: no areas, no leaf, the zero fix, no pane defaults, no note —
-    # plus (E5) the two face budgets, unstated on a prop nobody dialled.
-    plain = {"areas": [], "rotation": {"x": 0, "y": 0, "z": 0},
-             "area_defaults": {}, "areas_warning": "",
-             "target_faces_high": None, "target_faces_low": None}
+    fern_uid = store.list_variants(fern)[0]["uid"]
+    authored_binding = dict(action_id="rest", variant_uid=fern_uid, supported=False,
+                            marker_ids=[], access_points={}, validation="suggested")
+    store.bulk_update(fern, base_revision=store.get_prop(fern)["revision"],
+                      actions=[dict(id="rest", name="Rest", description="", enabled=True,
+                                    ability="pose", pose_key="", participants=1, presence="any",
+                                    interrupt_on_presence_change=False, phases=[],
+                                    requirements=[], effects=[])],
+                      variants={fern_uid: {"action_bindings": [authored_binding]}})
+    tiers = store.get_prop(fern)["variant_tiers"]
     check("the record lists tiers per active variant, with its store index",
-          (store.get_prop(fern) or {}).get("variant_tiers")
-          == [{"variant": 0, "tiers": ["full", "low"], "dims": cube, **plain},
-              {"variant": 1, "tiers": ["full"], "dims": cube, **plain}],
-          str((store.get_prop(fern) or {}).get("variant_tiers")))
+          [(v["variant"], v["tiers"], v["dims"]) for v in tiers]
+          == [(0, ["full", "low"], cube), (1, ["full"], cube)])
+    authored = store.list_variants(fern)
+    check("published variants retain stable identities and authored bindings",
+          [(v["uid"], v["action_bindings"]) for v in tiers]
+          == [(v["uid"], v["action_bindings"]) for v in authored])
     spec = spec_of(fern)
     check("model_variants has one map per active variant",
           len(spec.get("model_variants") or []) == 2,

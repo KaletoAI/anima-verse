@@ -1283,6 +1283,23 @@ def _create_built_props(needs: List[Dict[str, Any]], placed_ids: set,
             # describes the mesh this run is about to bake, and markers belong
             # to the variant since 2026-08-25.
             set_variant_markers(prop["id"], 0, [need["marker"]])
+            # A solver marker is an explicit suggestion, not permission to
+            # activate a new action (and never a real-sleep inference).
+            from app.core.props import read_sidecar, _write_sidecar
+            from app.core.prop_action_migration import normalize_import
+            suggested = read_sidecar(prop["id"])
+            suggested.pop("actions")
+            suggested["id"] = prop["id"]
+            suggested = normalize_import(suggested)
+            suggested.pop("id", None)
+            for action in suggested["actions"]:
+                action["enabled"] = False
+            for variant in suggested["model_variants"]:
+                for binding in variant["action_bindings"]:
+                    binding["supported"] = False
+                    if binding["validation"] == "local_valid":
+                        binding["validation"] = "suggested"
+            _write_sidecar(prop["id"], suggested)
         # PERSIST AFTER EVERY PIECE, not after the loop: a create_prop that
         # raises halfway would otherwise leave the props already made without
         # an id on the row, and the next accept would make them a second time.

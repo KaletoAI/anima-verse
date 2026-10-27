@@ -318,7 +318,7 @@ def migrate_catalog_overlay_once() -> Dict[str, int]:
     return counts
 
 
-def _load(axis: str) -> Dict[str, dict]:
+def _load(axis: str, *, world: Optional[Dict[str, dict]] = None) -> Dict[str, dict]:
     """Every entry of an axis, the world layer laid over the shared file.
 
     A key present in both is the world's — override-replace per key. Each
@@ -329,7 +329,8 @@ def _load(axis: str) -> Dict[str, dict]:
     entries: Dict[str, dict] = {}
     origin: Dict[str, str] = {}
     shared = _read_shared(axis).get("entries") or {}
-    for store, block in (("shared", shared), ("world", world_entries(axis))):
+    for store, block in (("shared", shared),
+                         ("world", world_entries(axis) if world is None else world)):
         if not isinstance(block, dict):
             continue
         for key, entry in block.items():
@@ -379,7 +380,7 @@ def pose_label(key: str, lang: str = "en") -> str:
         return fallback
 
 
-def _load_groups() -> Dict[str, dict]:
+def _load_groups(*, world: Optional[Dict[str, dict]] = None) -> Dict[str, dict]:
     """Place types of the pose axis (plan-platztypen.md): the finite
     vocabulary a MARKER speaks. A place type is a BODY SHAPE, not a kind of
     furniture — one lies on the floor, on a couch and in a bed, so ``lie``
@@ -465,7 +466,8 @@ def _load_groups() -> Dict[str, dict]:
     raw: Dict[str, dict] = {}
     origin: Dict[str, str] = {}
     shared = _read_shared("pose").get("groups") or {}
-    for store, block in (("shared", shared), ("world", world_groups())):
+    for store, block in (("shared", shared),
+                         ("world", world_groups() if world is None else world)):
         if not isinstance(block, dict):
             continue
         for key, spec in block.items():
@@ -509,9 +511,11 @@ def get_catalog(axis: str) -> Dict[str, dict]:
         return _cache[axis]
 
 
-def activity_catalog(axis: str = "pose") -> Dict[str, Dict]:
-    """Catalog entries eligible for activities, excluding movement-only poses."""
-    return {key: entry for key, entry in get_catalog(axis).items()
+def activity_catalog(axis: str = "pose", *,
+                     catalog: Optional[Dict[str, dict]] = None) -> Dict[str, Dict]:
+    """Eligible activities from the live catalog or an explicit read-only snapshot."""
+    entries = get_catalog(axis) if catalog is None else catalog
+    return {key: entry for key, entry in entries.items()
             if axis != "pose" or key not in MOVEMENT_ONLY_POSES}
 
 

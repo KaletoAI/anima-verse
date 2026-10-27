@@ -77,10 +77,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 STORAGE = Path(tempfile.mkdtemp(prefix="content-slim-smoke-"))
 os.environ["STORAGE_DIR"] = str(STORAGE)
+os.environ["INSTANCE_DIR"] = str(STORAGE / "instance")
 os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="content-slim-clips-")
 
 from app.core import paths  # noqa: E402
 paths.init(STORAGE)
+paths.init_instance(STORAGE / "instance")
+from app.blender import runner as blender_runner
+blender_runner.is_available = lambda: False
 from app.core import db  # noqa: E402
 db.init_schema()
 
@@ -147,6 +151,14 @@ barrel = props.create_prop(name="Barrel", category="furniture",
 check("second variant", props.add_variant(barrel), 1)
 meta = props.read_sidecar(barrel)
 meta["model_variants"][1]["seasons"] = ["Winter"]
+meta["actions"] = [{"id": "barrel-rest", "name": "Rest", "description": "", "enabled": False,
+    "ability": "pose", "pose_key": "sitting", "participants": 1, "presence": "any",
+    "interrupt_on_presence_change": False, "phases": [], "requirements": [], "effects": []}]
+for variant in meta["model_variants"]:
+    variant["markers"] = [{"id": "rest", "group": "seat", "at": [.5, .5, .5], "facing": 0}]
+    variant["action_bindings"] = [{"action_id": "barrel-rest", "variant_uid": variant["uid"],
+        "supported": True, "marker_ids": ["rest"], "access_points": {"actor": {"x": 0, "z": .8, "yaw": 180}},
+        "validation": "local_valid"}]
 props._write_sidecar(barrel, meta)
 bd = props._prop_dir(barrel)
 put(bd / "model_100.glb", b"GLB-full")
@@ -242,6 +254,10 @@ check("bundled prop files", zip_files(mill_zip, f"props/{barrel}/"), BARREL_EXPE
 print("\n[5] roundtrip: the copy reads the same as the original")
 res = import_prop_from_zip(barrel_zip, overwrite=True)
 check("prop import status", res.get("status"), "success")
+check("slim action definitions survive", props.read_sidecar(barrel)["actions"], meta["actions"])
+check("slim stable bindings survive", [
+    v["action_bindings"] for v in props.read_sidecar(barrel)["model_variants"]],
+    [v["action_bindings"] for v in meta["model_variants"]])
 on_disk = sorted(p.relative_to(bd).as_posix() for p in bd.rglob("*") if p.is_file())
 check("prop dir after import", on_disk, BARREL_EXPECTED)
 check("LOW still answers the PARENT's rotation",

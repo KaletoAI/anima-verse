@@ -165,6 +165,14 @@ it for its own direct calls.
 | `charge(name, skill_id) -> dict` | Deduct the configured cost (source `skill:<id>`) |
 | `stat_costs_shortfall(profile, costs) -> str|None` | Generic "needs N <stat>" check; stats the character lacks are free |
 
+The shared `streaming.is_error_result` boundary recognizes legacy
+`Error`/`Fehler` prose and dictionary/serialized-JSON failures: explicit
+`success:false`, `ok:false`, a nonempty `error`, or `status` equal to
+`refused`, `failed`, or `error`. Structured tools may retain their machine-readable
+contract without paying success-only costs on refusals. Cancellation is not
+classified as failure merely because its status is terminal.
+
+
 ## Modifiers — `app.core.modifiers` ⚠
 
 Rules of type `modify` (`{"modify": {"quantity", "factor"}}`, factor 0.1..5)

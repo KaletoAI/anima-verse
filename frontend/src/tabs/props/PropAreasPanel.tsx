@@ -46,6 +46,7 @@ import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clock
 import { AREA_KINDS, PRESET_LABELS, areaKindOf } from './propTypes'
 import type { PropArea, PropAreasInfo, PropFull, PropSlotValues,
   PropVariant } from './propTypes'
+import type { PreparePropVariantOperation } from './propOperations'
 
 /**
  * THE HANDLE ON THE ONE 3D VIEW (V11) — what this panel may switch on the
@@ -71,7 +72,7 @@ export interface PropAreaTools {
   setBusy: (what: string) => void
   /** Run one areas call: it holds the lock, hands a fresh payload to the
    *  reader and maps a failure onto a toast. */
-  run: (what: string, call: () => Promise<unknown>) => void
+  run: (what: string, call: (index: number) => Promise<unknown>) => void
 }
 
 /** The server's `LEAF_RESIDUAL_NOTE` (props.py) — a warning with a number
@@ -86,7 +87,7 @@ function variantName(v: PropVariant, t: (s: string) => string): string {
 }
 
 export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
-  info, infoFailed, tools, onVariantsChanged }: {
+  info, infoFailed, tools, onVariantsChanged, prepareVariantOperation }: {
   prop: PropFull
   /** STORE index of the variant the detail has open — the mesh this panel
    *  reads, draws on and splits. Every route below takes it. */
@@ -113,6 +114,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   /** Reload the variant list (one was added, re-copied, or its pane
    *  defaults changed). */
   onVariantsChanged: () => void
+  prepareVariantOperation: PreparePropVariantOperation
 }) {
   // Subscribe to the shared clock settings so the stamps above re-render
   // once the server-configured format and timezone arrive.
@@ -124,16 +126,15 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
    *  PropDetail, switched from here. */
   const { busy, setBusy, run, drawKind, preview } = tools
   /** The variant the dialog is editing (null = a new one, undefined = closed). */
-  const [editing, setEditing] = useState<number | null | undefined>(undefined)
+  const [editing, setEditing] = useState<string | null | undefined>(undefined)
+  const [frameUid, setFrameUid] = useState('')
+  const editingVariant = variants.find((entry) => entry.uid === editing)
 
-  /** Every route of this panel names the variant — one place that writes it,
-   *  so no verb can quietly fall back to the primary mesh. */
-  const q = `?variant=${variant}`
 
   // A prop OR variant switch closes the dialog: the previous variant index
   // means something else on the next prop. The VIEW state is dropped by the
   // detail, which owns it together with the viewer it belongs to.
-  useEffect(() => { setEditing(undefined) }, [prop.id, variant])
+  useEffect(() => { setEditing(undefined) }, [prop.id])
   /** The areas of the variant the DIALOG is editing, whenever that is not the
    *  one the panel has open. The record publishes only the variants a scene
    *  renders, and a switched-off or out-of-season one has to be dressed too —
@@ -142,19 +143,19 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   const [editAreas, setEditAreas] = useState<PropArea[] | null>(null)
   useEffect(() => {
     setEditAreas(null)
-    if (editing === undefined || editing === null || editing === variant) return
+    if (!editingVariant || editingVariant.index === variant) return
     let cancelled = false
     void (async () => {
       try {
         const d = await apiGet<PropAreasInfo>(
-          `/world/props/${enc}/areas?variant=${editing}`)
-        if (!cancelled && d.variant === editing) setEditAreas(d.areas || [])
+          `/world/props/${enc}/areas?variant=${editingVariant.index}`)
+        if (!cancelled && d.variant === editingVariant.index) setEditAreas(d.areas || [])
       } catch {
         if (!cancelled) setEditAreas([])
       }
     })()
     return () => { cancelled = true }
-  }, [enc, editing, variant, reloadKey])
+  }, [enc, editingVariant?.uid, editingVariant?.index, variant, reloadKey])
 
   const areas = useMemo(() => info?.areas || [], [info])
   // Split by what an area is FILLED with, not by its kind name (R8): a picture
@@ -181,15 +182,15 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
    *  for everything it knows; "Detect now" hands it exactly what the prop
    *  asked its render for (E3). */
   const detect = (kinds?: string[]) => run(kinds ? 'detect-kinds' : 'detect',
-    () => apiPost(`/world/props/${enc}/areas${q}`,
+    (index) => apiPost(`/world/props/${enc}/areas?variant=${index}`,
       kinds ? { mode: 'auto', kinds } : { mode: 'auto' }))
 
   const setKind = (areaId: string, kind: string) => run('kind',
-    () => apiPatch(`/world/props/${enc}/areas/${encodeURIComponent(areaId)}${q}`,
+    (index) => apiPatch(`/world/props/${enc}/areas/${encodeURIComponent(areaId)}?variant=${index}`,
       { kind }))
 
   const removeArea = (areaId: string) => run('delete',
-    () => apiDelete(`/world/props/${enc}/areas/${encodeURIComponent(areaId)}${q}`))
+    (index) => apiDelete(`/world/props/${enc}/areas/${encodeURIComponent(areaId)}?variant=${index}`))
 
   /** What THIS variant's pane shows when nobody hung anything on it. The
    *  defaults describe ONE mesh, so they live on the variant entry like its
@@ -199,8 +200,8 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
     const next: PropSlotValues = { ...(info?.area_defaults || {}) }
     if (preset) next[areaId] = { preset }
     else delete next[areaId]
-    run('defaults', async () => {
-      await apiPost(`/world/props/${enc}/variants/${variant}/area-defaults`,
+    run('defaults', async (index) => {
+      await apiPost(`/world/props/${enc}/variants/${index}/area-defaults`,
         { area_defaults: next })
       onVariantsChanged()
       return undefined
@@ -208,6 +209,13 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
   }
 
   const submitVariant = async (values: PropSlotValues, label: string | undefined) => {
+    const target = await prepareVariantOperation(editing === null ? frameUid : editing || '',
+      t('Save picture variant'))
+    if (!target) return
+    if (editing === null && !target.primary) {
+      toast(t('Die primäre Rahmenvariante wurde geändert. Bildeditor neu öffnen; Bildentwurf bleibt erhalten.'), 'error')
+      return
+    }
     setBusy('variant')
     try {
       // R10: the label travels only when the admin typed one — an omitted key
@@ -218,7 +226,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
         await apiPost(`/world/props/${enc}/variants/picture`, body)
         toast(t('Picture variant created.'))
       } else if (editing !== undefined) {
-        await apiPost(`/world/props/${enc}/variants/${editing}/slot-values`, body)
+        await apiPost(`/world/props/${enc}/variants/${target.index}/slot-values`, body)
         toast(t('Saved.'))
       }
       setEditing(undefined)
@@ -230,10 +238,12 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
     }
   }
 
-  const recopy = async (index: number) => {
+  const recopy = async (uid: string) => {
+    const target = await prepareVariantOperation(uid, t('Re-copy mesh'))
+    if (!target) return
     setBusy('recopy')
     try {
-      await apiPost(`/world/props/${enc}/variants/${index}/recopy`, {})
+      await apiPost(`/world/props/${enc}/variants/${target.index}/recopy`, {})
       toast(t('Frame copied again.'))
       onVariantsChanged()
     } catch (e) {
@@ -263,7 +273,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
    *  So the controls are built from the entry that will be validated. */
   const dialogAreas = editing === null || editing === undefined
     ? frameAreas
-    : (editing === variant ? areas : (editAreas || []))
+    : (editingVariant?.index === variant ? areas : (editAreas || []))
   /** Which key surfaces the NEXT render of this prop is asked for (R7, E3) —
    *  a prop-wide wish, edited in the generation dialogs. `info` answers with
    *  the record's list, the record itself before the first payload. */
@@ -279,6 +289,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
         {t('Areas')}
         {shownVariant?.label ? ` · ${shownVariant.label}` : ''}
       </div>
+      <p className="ga-hint">{t('Flächen, Materialien und Bildvarianten werden sofort angewendet. Verwerfen setzt diese Änderungen nicht zurück.')}</p>
       <span className="ga-hint" style={{ display: 'block' }}>
         {t('The key surfaces of THIS variant’s mesh — the panel a picture hangs on, the pane of a door. Each one is a material of that model file; a picture is hung on it as a variant of this prop.')}
       </span>
@@ -507,12 +518,12 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
                   disabled={running}
                   aria-label={t('Edit the pictures')}
                   title={t('Change the pictures on this variant.')}
-                  onClick={() => setEditing(v.index)}>✏</button>
+                  onClick={() => setEditing(v.uid)}>✏</button>
                 {v.stale ? (
                   <button type="button" className="ga-btn ga-btn-sm"
                     disabled={running}
                     title={t('Copy the prop’s current frame into this variant again — its pictures stay.')}
-                    onClick={() => void recopy(v.index)}>
+                    onClick={() => void recopy(v.uid)}>
                     ⟳ {t('Re-copy mesh')}
                   </button>
                 ) : null}
@@ -532,7 +543,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
           title={framePictureAreas.length
             ? t('Hang a picture: the server copies the PRIMARY variant’s frame into a new variant and puts the picture on it.')
             : t('The primary variant has no picture area yet — detect or draw one on it first.')}
-          onClick={() => setEditing(null)}>
+          onClick={() => { setFrameUid(primaryEntry?.uid || ''); setEditing(null) }}>
           ＋ {t('New picture variant')}
         </button>
         <span className="ga-hint">
@@ -546,15 +557,13 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
         open={editing !== undefined}
         title={editing === null
           ? t('New picture variant')
-          : `${t('Picture variant')} · ${editing !== undefined && editing !== null
-            ? variantName(variants.find((v) => v.index === editing)
-              || ({ index: editing } as PropVariant), t) : ''}`}
+          : `${t('Picture variant')} · ${editingVariant ? variantName(editingVariant, t) : t('Variante entfernt')}`}
         areas={dialogAreas}
         initial={editing !== null && editing !== undefined
-          ? variants.find((v) => v.index === editing)?.slot_values
+          ? editingVariant?.slot_values
           : primaryEntry?.area_defaults}
         initialLabel={editing !== null && editing !== undefined
-          ? variants.find((v) => v.index === editing)?.label || '' : ''}
+          ? editingVariant?.label || '' : ''}
         busy={busy === 'variant'}
         onSubmit={(values, label) => void submitVariant(values, label)}
         onClose={() => setEditing(undefined)}

@@ -1606,54 +1606,17 @@ def apply_item_effects(character_name: str, item_id: str, giver: str = "") -> Di
     item = get_item(item_id)
     if not item:
         return {"success": False, "changes": {}, "condition_applied": None}
-    changes: Dict[str, Any] = {}
-    condition_applied: Optional[str] = None
+    from app.core.effect_application import apply_character_effects, legacy_effects
     effects = item.get("effects") or {}
-    if isinstance(effects, dict) and effects:
-        try:
-            from app.core.activity_engine import apply_effects
-            # apply_condition and condition_duration_hours are item-specific;
-            # apply_effects processes only *_change and mood_influence.
-            changes = apply_effects(character_name, effects, source=f"item:{item.get('name', item_id)}")
-        except Exception as e:
-            logger.warning("Effects fuer Item %s anwenden fehlgeschlagen: %s", item_id, e)
-
-        cond_name = (effects.get("apply_condition") or "").strip()
-        if cond_name:
-            try:
-                from app.core.keyed_lock import keyed_lock
-                from app.models.character import get_character_profile, save_character_profile, record_state_change
-                # Read AND write under the per-character profile lock
-                # (DATA-3): the save rewrites the whole profile_json blob.
-                # The lock is re-entrant, so the equip/consume routes that
-                # already hold this very lock pass straight through.
-                with keyed_lock("character_profile", character_name):
-                    profile = get_character_profile(character_name)
-                    active = profile.get("active_conditions", [])
-                    if not any(c.get("name") == cond_name for c in active):
-                        duration = int(effects.get("condition_duration_hours") or 2)
-                        active.append({
-                            "name": cond_name,
-                            "source": f"item:{item.get('name', item_id)}",
-                            # Who handed over / gifted the item (the giver) — for the
-                            # {giver} substitution and the Mind-tab display. Kept for
-                            # the lifetime of the condition.
-                            "source_character": (giver or "").strip(),
-                            # in-world duration -> canonical GAME-time stamp
-                            "started_at": game_time().canonical(),
-                            "duration_hours": max(1, duration),
-                        })
-                        profile["active_conditions"] = active
-                        save_character_profile(character_name, profile)
-                        record_state_change(character_name, "condition", cond_name,
-                                             metadata={"source": f"item:{item_id}",
-                                                       "duration_hours": max(1, duration)})
-                        condition_applied = cond_name
-                        logger.info("Condition '%s' aktiviert fuer %s (Quelle: item %s)",
-                                     cond_name, character_name, item_id)
-            except Exception as e:
-                logger.warning("Condition-Apply fuer Item %s fehlgeschlagen: %s", item_id, e)
-    return {"success": True, "changes": changes, "condition_applied": condition_applied}
+    if not isinstance(effects, dict) or not effects:
+        return {"success": True, "changes": {}, "condition_applied": None}
+    source = f"item:{item.get('name', item_id)}"
+    result = apply_character_effects(
+        character_name, legacy_effects(effects, source=source, include_condition=True, giver=giver),
+        game_time(), source=source)
+    condition = result["results"].get("condition") or {}
+    return {"success": True, "changes": result["changes"],
+            "condition_applied": condition.get("condition_id") if condition.get("applied") else None}
 
 
 def consume_item(character_name: str, item_id: str) -> Dict[str, Any]:
