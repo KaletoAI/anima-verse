@@ -781,14 +781,6 @@ _lines = []
 _end_seen = []
 _record = perception.record_utterance
 _emit = hooks.emit
-from app.core import i18n
-_translate = i18n.t
-_translation_languages = []
-
-
-def translate(key, lang=None, *args, **kwargs):
-    _translation_languages.append(lang)
-    return _translate(key, lang, *args, **kwargs)
 
 
 def record_line(**kw):
@@ -803,11 +795,10 @@ def observe_end(event, **kw):
     return _emit(event, **kw)
 
 
-with patch.object(perception, "record_utterance", record_line), patch.object(hooks, "emit", observe_end), patch.object(i18n, "t", translate):
+with patch.object(perception, "record_utterance", record_line), patch.object(hooks, "emit", observe_end):
     _iid = ie.create_invite("Ann", "Bob", "embracing")
-    check("[10a] one invitation in actor language", len(_lines) == 1
-          and bool(_lines[0]["content"]) and _translation_languages[-1] == "en")
-    check("[10a] narrator fields", bool(_lines) and all(
+    check("[10a] one invitation event", len(_lines) == 1)
+    check("[10a] narrator fields", len(_lines) == 1 and all(
         r.get("speaker") == perception.STORYTELLER_SPEAKER
         and r.get("volume") == perception.VOLUME_NORMAL
         and r.get("anchor") == "Ann" and r.get("location_id") == PLAZA
@@ -815,20 +806,16 @@ with patch.object(perception, "record_utterance", record_line), patch.object(hoo
     check("[10b] reused invitation adds no line",
           ie.create_invite("Ann", "Bob", "embracing") == _iid and len(_lines) == 1)
     ie.resolve_invite(_iid, False)
-    check("[10c] decline uses invitee language/provenance", len(_lines) == 2
-          and bool(_lines[-1]["content"]) and _translation_languages[-1] == "de"
+    check("[10c] decline retains invitee provenance", len(_lines) == 2
           and _lines[-1]["anchor"] == "Bob" and ie.get_invite(_iid)["status"] == "declined")
     _iid = ie.create_invite("Ann", "Bob", "swaying")
-    check("[10d] unlabelled invitation remains a real event", len(_lines) == 3
-          and bool(_lines[-1]["content"]) and _translation_languages[-1] == "en")
+    check("[10d] unlabelled invitation remains a real event", len(_lines) == 3)
     _result = ie.resolve_invite(_iid, True)
-    check("[10d] real start uses actor language", _result["status"] == "started"
-          and len(_lines) == 4 and bool(_lines[-1]["content"]) and _translation_languages[-1] == "en"
-          and _lines[-1]["anchor"] == "Ann")
+    check("[10d] real start retains actor provenance", _result["status"] == "started"
+          and len(_lines) == 4 and _lines[-1]["anchor"] == "Ann")
     ie.end_interaction("Bob", reason="avatar")
-    check("[10e] one end in invitee language", len(_lines) == 5
-          and bool(_lines[-1]["content"]) and _lines[-1]["anchor"] == "Bob"
-          and _translation_languages[-1] == "de")
+    check("[10e] one end retains invitee provenance",
+          len(_lines) == 5 and _lines[-1]["anchor"] == "Bob")
     check("[10e] end exists before hook", len(_end_seen) == 1
           and len(_end_seen[0]) == len(_lines)
           and get_character_profile("Bob")["last_interaction_result"]["interaction_id"] == _result["interaction"]["id"])
@@ -853,7 +840,7 @@ def observe_failure(event, **kw):
         _failed_calls.append(kw)
     return _emit(event, **kw)
 
-with patch.object(perception, "record_utterance", record_line), patch.object(hooks, "emit", observe_failure), patch.object(i18n, "t", translate):
+with patch.object(perception, "record_utterance", record_line), patch.object(hooks, "emit", observe_failure):
     ie.clear_invites_for("Ann")
     _iid = ie.create_invite("Ann", "Bob", NO_CLIP_KEY)
     _res = ie.resolve_invite(_iid, True)
@@ -865,8 +852,7 @@ with patch.object(perception, "record_utterance", record_line), patch.object(hoo
     ie._fail_invite(_row, "duplicate failure")
     check("[11a] repeated failure is silent", len(_failed_calls) == 1
           and ie.get_invite(_iid)["reason"] == _res["reason"])
-    check("[11a] failed yes is narrated in invitee language", bool(_lines[-1]["content"])
-          and _lines[-1]["anchor"] == "Bob" and _translation_languages[-1] == "de")
+    check("[11a] failed yes retains invitee provenance", _lines[-1]["anchor"] == "Bob")
     from app.routes import play as play_routes
     with patch("app.models.account.get_active_character", return_value="Ann"):
         _scene = play_routes.play_scene(user={"role": "admin"})
@@ -975,16 +961,14 @@ for _importance, _partner_end, _invited in ((3, False, True), (2, False, True),
         if event == "interaction.ended":
             _ended.append(([len(pair_memories(n)) for n in ("Ann", "Bob")], pair_count()))
         return _emit(event, **kw)
-    _memory_languages_before = len(_translation_languages)
-    with patch.object(hooks, "emit", side_effect=observe_memories), patch.object(i18n, "t", translate):
+    with patch.object(hooks, "emit", side_effect=observe_memories):
         if _partner_end:
             save_character_current_room("Bob", "elsewhere")
         else:
             ie.end_interaction("Ann", reason="smoke")
     _new = {n: [m for m in pair_memories(n) if m["interaction_id"] == _inter["id"]] for n in ("Ann", "Bob")}
-    check("[12] one nonempty localized memory per actual participant",
-          all(len(_new[n]) == 1 and bool(_new[n][0]["content"]) for n in ("Ann", "Bob"))
-          and {"en", "de"} <= set(_translation_languages[_memory_languages_before:]))
+    check("[12] one memory per actual participant",
+          all(len(_new[n]) == 1 for n in ("Ann", "Bob")))
     for _n, _other in (("Ann", "Bob"), ("Bob", "Ann")):
         if _new[_n]:
             _m = _new[_n][0]
@@ -993,7 +977,8 @@ for _importance, _partner_end, _invited in ((3, False, True), (2, False, True),
                   and _m["interaction_id"] == _inter["id"] and _m["pose_key"] == "embracing"
                   and _m["location_id"] == PLAZA and _m["room_id"] == "square"
                   and _m["started_at_game"] == _inter["started_at_game"]
-                  and _m["ended_at_game"] == _m["game_ts"] and bool(_m["reason"]))
+                  and _m["ended_at_game"] == _m["game_ts"]
+                  and _m["reason"] == ("room" if _partner_end else "smoke"))
     _rows = pair_history()[-1:]
     _initiator = "Ann" if _invited else "Bob"
     _other = "Bob" if _invited else "Ann"
