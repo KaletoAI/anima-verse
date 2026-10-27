@@ -4402,8 +4402,8 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
     """Compare/remove only this execution, atomically waking and standing.
 
     There is no unlocked ownership decision followed by a generic setter.
-    Place/pose/flag/position commit together before releasing write authority;
-    replay cannot wake or move a replacement run after the old marker is gone.
+    Place/pose/flag and an unchanged position/origin commit together. A newer
+    manual position wins even while the old owned place is still present.
     """
     from app.core import places
     from app.core.keyed_lock import keyed_lock, _after_locks
@@ -4420,12 +4420,17 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
         old_pose = get_effective_pose_key(character_name, profile=profile)
         old_place = dict(field) if own_place else None
         point = None
+        position_authority = None
         if own_place and places.where(character_name, profile=profile) == (location, room):
-            pos = get_character_pos(character_name)
+            row = get_connection().execute(
+                "SELECT pos_x,pos_z,pos_session,pos_seq FROM character_state WHERE character_name=?",
+                (character_name,)).fetchone()
+            position_authority = tuple(row) if row is not None else None
             seat = places.resolve_place(character_name, field, profile=profile)
-            if pos and seat:
-                here = (pos["x"], pos["z"])
-                near = bridge_stand_point(character_name, seat, old_pose, profile=profile, at=here) or here
+            if row is not None and row[0] is not None and row[1] is not None:
+                here = (float(row[0]), float(row[1]))
+                near = (bridge_stand_point(character_name, seat, old_pose, profile=profile, at=here)
+                        if seat else None) or here
                 candidate = free_stand_point(location, room, near, exclude=character_name)
                 if candidate is not None and places.inside(location, *candidate):
                     point = candidate
@@ -4443,7 +4448,8 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
                     (execution_id, utc_now_iso(), character_name, execution_id)).rowcount
                 if not changed:
                     return False
-                state = conn.execute("SELECT meta,is_sleeping,current_activity FROM character_state WHERE character_name=?",
+                state = conn.execute("SELECT meta,is_sleeping,current_activity,pos_x,pos_z,pos_session,pos_seq "
+                                     "FROM character_state WHERE character_name=?",
                                      (character_name,)).fetchone()
                 meta = json.loads(state[0] or "{}")
                 profile["is_sleeping"] = bool(state[1])
@@ -4453,7 +4459,11 @@ def release_prop_action_state(character_name: str, execution_id: str) -> bool:
                 meta["state_flag_since"] = profile["state_flag_since"]
                 sql = "UPDATE character_state SET pose_key='',pose_flavor='',is_sleeping=?,current_activity=?,meta=?"
                 args = [int(profile["is_sleeping"]), profile["current_activity"], json.dumps(meta)]
-                if point is not None:
+                # The first owned-state UPDATE holds SQLite write authority.
+                # A raw/manual writer may have won during stand calculation,
+                # without changing this solo place; preserve all four columns
+                # in that case (including same-XZ reports with a newer origin).
+                if point is not None and tuple(state)[3:] == position_authority:
                     sql += ",pos_x=?,pos_z=?,pos_session=NULL,pos_seq=NULL"
                     args.extend((round(point[0], 2), round(point[1], 2)))
                 conn.execute(sql + " WHERE character_name=?", (*args, character_name))

@@ -750,6 +750,94 @@ class Runs(unittest.TestCase):
         self.assertEqual({who: F.C.get_character_profile(who) for who in (name, partner)}, before)
 
 
+    def test_cleanup_standing_preserves_concurrent_manual_position_and_origin(self):
+        for same_xz in (False, True):
+            name, target, _ = setup_run()
+            measured_entry()
+            result = request(name, target)
+            tick(30)
+            tick(2)
+            initial = F.C.get_character_pos(name)
+            F.C.set_character_pos(name, initial["x"], initial["z"], preserve_movement_target=True,
+                                  origin=("owned-position", 1))
+            calculated, resume = Event(), Event()
+            errors = []
+            real_stand = F.S.free_stand_point
+            def paused_stand(*args, **kwargs):
+                point = real_stand(*args, **kwargs)
+                if current_thread().name == "paused-owned-standing":
+                    calculated.set()
+                    if not resume.wait(10):
+                        raise AssertionError("standing calculation was not released")
+                return point
+            def cancelling():
+                try:
+                    A.cancel(name, result["execution_id"])
+                except BaseException as exc:
+                    errors.append(exc)
+            worker = Thread(target=cancelling, name="paused-owned-standing", daemon=True)
+            with patch.object(F.S, "free_stand_point", side_effect=paused_stand):
+                try:
+                    worker.start()
+                    self.assertTrue(calculated.wait(10))
+                    self.assertFalse(R.claims(result["execution_id"]))
+                    self.assertEqual(F.C.get_character_profile(name)["place"]["execution_id"], result["execution_id"])
+                    x, z = (initial["x"], initial["z"]) if same_xz else (2, 3)
+                    F.C.set_character_pos(name, x, z, origin=("manual-position", 7))
+                    # The actual canonical manual writer intentionally leaves
+                    # the old solo place/pose intact in this terminal window.
+                    self.assertEqual(F.C.get_character_profile(name)["place"]["execution_id"], result["execution_id"])
+                    manual = tuple(F.db.get_connection().execute(
+                        "SELECT pos_x,pos_z,pos_session,pos_seq FROM character_state WHERE character_name=?",
+                        (name,)).fetchone())
+                finally:
+                    resume.set()
+                    worker.join(10)
+            self.assertFalse(worker.is_alive())
+            self.assertFalse(errors, errors)
+            actual = tuple(F.db.get_connection().execute(
+                "SELECT pos_x,pos_z,pos_session,pos_seq FROM character_state WHERE character_name=?",
+                (name,)).fetchone())
+            self.assertEqual(actual, manual)
+            self.assertEqual(actual, (x, z, "manual-position", 7))
+            self.assertFalse(F.C.get_character_profile(name).get("place"))
+            self.assertEqual(F.C.get_character_profile(name).get("pose_key"), "")
+
+    def test_removed_authored_marker_keeps_furniture_and_releases_to_walkable_floor(self):
+        name, target, pid = setup_run()
+        measured_entry()
+        result = request(name, target)
+        tick(30)
+        tick(2)
+        original = F.props.read_sidecar(pid)
+        saved = F.props.bulk_update(pid, base_revision=F.props._document_revision(original),
+            variants={F.UID: {"markers": [], "action_bindings": []}}, actions=[])
+        self.assertTrue(saved)
+        geometry = F.S.room_geometry(target["location_id"], target["room_id"])
+        box = next(b for b in geometry[1] if b["placement_id"] == "device")
+        self.assertEqual((box["width_m"], box["depth_m"]), (1, 1))
+        before = F.C.get_character_pos(name)
+        self.assertTrue(F.S._in_footprint(before["x"], before["z"], box, F.S.BODY_R_M))
+        tick(1)
+        row = R.get(result["execution_id"])
+        self.assertEqual(row["status"], "failed", row)
+        self.assertFalse(R.claims(result["execution_id"]))
+        self.assertFalse(F.C.get_character_profile(name).get("place"))
+        after = F.C.get_character_pos(name)
+        self.assertFalse(F.S._in_footprint(after["x"], after["z"], box, F.S.BODY_R_M))
+        variant = original["model_variants"][0]
+        variant["markers"][0]["id"] = "replacement"
+        variant["action_bindings"][0]["marker_ids"] = ["replacement"]
+        current = F.props.read_sidecar(pid)
+        saved = F.props.bulk_update(pid, base_revision=F.props._document_revision(current),
+            variants={F.UID: {"markers": variant["markers"], "action_bindings": variant["action_bindings"]}},
+            actions=original["actions"])
+        target["definition_revision"] = saved["revision"]
+        restarted = request(name, target)
+        self.assertEqual(restarted["status"], "approaching", restarted)
+        self.assertEqual(F.E.get_journey(name)["approach_target"]["marker_id"], "replacement")
+
+
 def execution_scenario(stage):
     """Real process stops/restarts, actual arrival receipts and partial phases."""
     path = F.ROOT / "execution.json"

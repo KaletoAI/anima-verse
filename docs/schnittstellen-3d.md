@@ -7785,6 +7785,16 @@ derived stand position share one transaction. No later unconditional pose,
 position or wake setter can erase a replacement execution. Owned pair end
 defers both this cleanup and its exact-execution interruption until **all**
 caller-held keyed/world locks have exited.
+Cleanup captures `(pos_x,pos_z,pos_session,pos_seq)` **before** calculating
+the standing point. Inside its SQL write transaction it compares all four
+columns again before writing any position/origin. A newer canonical/raw manual
+position report wins even when it leaves the old solo place intact, including
+a same-XZ report with a new origin. Old owned pose/place cleanup still completes.
+If the old marker no longer resolves while its furniture remains, the current
+position is still the standing-search origin; only a measured exit offset
+requires the marker. The existing room-floor free-point selection then releases
+the body outside the preserved furniture footprint without inventing an entry
+or relocating it to another action target.
 
 Entry requires a discovered real transition asset plus duration and measured,
 height-scaled root travel matching access to the selected anchor within 5 cm.
