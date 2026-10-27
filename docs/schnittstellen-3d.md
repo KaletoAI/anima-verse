@@ -8120,8 +8120,8 @@ entry once **at access**, and adopt Core's committed body anchor without a
 second entry transition. Missing clip readiness must be reported, not replaced
 with a fabricated intro or long position correction.
 
-The browser and native hosts use HUD bridge **v3** as a clean cutover.
-Old protocol versions are rejected; no furniture-pose alias remains.
+The browser host uses HUD bridge **v3** as a clean cutover.
+Old browser protocol versions are rejected; no browser furniture-pose alias remains.
 Besides `pickPropAction`, v3 carries `closePlaceMenu`,
 `pickRoomPose`, `respondPropAction(executionId,accept)` and
 `cancelPropAction(executionId)`. The bidirectional `prop-actions-changed`
@@ -8140,14 +8140,18 @@ invalidation carries no ID and must not release a different pending mutation.
 This transport correlation is neither a Core execution identity nor a server
 request nonce. Disconnection clears pending HUD waits; preparation has a
 10-second deadline and does not retry. A stale manual position write therefore
-cannot overtake the newly admitted action through either shared-panel client.
+cannot overtake the newly admitted action through the browser's shared panels.
 
 Shared hand-derived motion vectors are in
 `shared/test-vectors/prop_action_motion.json`: two room bends, segment paces,
 delayed starts, trimmed polylines, freeze, measured entry phase and fitted hips-Y
 support-height cases (including nonzero marker root offsets). Runtime
 client acceptance is separate from these mathematical/protocol regressions;
-see the Task9 handoff for actual browser/native scenario requirements.
+see the Task9 handoff for actual browser scenario requirements.
+
+The unfinished native client is explicitly excluded from this prop-action
+cutover and its acceptance. Its native-specific implementation remains
+unchanged; this section does not claim native HUD v3 or prop-action parity.
 
 Controller commands (private fixtures only):
 `./.venv/bin/python scripts/smoke_prop_action_api.py` and

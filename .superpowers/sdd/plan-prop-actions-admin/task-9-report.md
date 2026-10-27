@@ -2,6 +2,15 @@
 
 BASE `485800bc`, worktree `/home/dev/projekte/anima-verse/.claude/worktrees/props-actions-admin`, branch `feat/props-actions-admin`. The scoped commit hash is supplied in the final handoff.
 
+## Superseding user scope
+
+The user explicitly excluded the unfinished native client after this handoff.
+Commit `58402fea` restores all Task9 `native/` implementation, tests and native
+documentation to the pre-Task9 state. The controller stopped its own native
+process and display. Native build observations below belong to the superseded
+scope, not to the remaining acceptance. Only browser/shared browser HUD,
+authoritative server motion and the final effective LLM prompt check remain.
+
 ## Evidence boundary
 
 This worker and its children ran **no checks, tests, builds, linters, formatters, browser/native sessions, servers, model/media jobs, or fixture operations**. No RED/GREEN, compilation result, playable-client parity, anatomical contact, successful live input, or acceptance result is claimed. The implementation and behavioral regressions are prepared for the controller. Existing parent-observed admin coffee completion is not Task9 client proof.
