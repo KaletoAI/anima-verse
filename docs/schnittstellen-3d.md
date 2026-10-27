@@ -7697,9 +7697,17 @@ existing scene datum; support height belongs only to the body anchor.
 execution_ref, journey_id='') -> (journey, reason)` replans and persists an
 authoritative game-time polyline. An existing journey is never overwritten.
 Departure from a held seat uses the existing measured exit transition and its
-delay/zero-time seat leg, not raster relocation. The target is pinned to the
+delay/zero-time seat leg, not raster relocation. The complete seat-to-exit
+bridge is checked against walls, door zones and all unrelated grown furniture;
+only the actually occupied departing placement can be exempted, never another
+copy of the same prop. Its placement identity is retained on the journey and
+the bridge is rechecked on large ticks too. The target is pinned to the
 selected marker/slot. Each tick revalidates provenance and every promised
 walking segment before any position write; changed geometry cancels in place.
+Intermediate and arrival position writes compare the complete current journey
+snapshot (including ID/kind/ref) and commit under the same character-profile
+write lock used by cancellation. Accepted cancellation cannot be followed by a
+stale tick's position write. Owner callbacks remain outside that lock.
 Arrival is exactly at floor access, not at the body anchor or a new stand point.
 
 `register_execution_owner(kind, *, guard, validate_arrival, arrived, cancelled)`

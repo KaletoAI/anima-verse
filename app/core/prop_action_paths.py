@@ -186,6 +186,25 @@ def visibility_path(start: Sequence[float], goal: Sequence[float], polygon,
     return None
 
 
+def _departure_walkable(seat: Point, start: Point, geometry, placement_id: str) -> bool:
+    """Check the whole measured exit, exempting only its occupied furniture.
+
+    A body's seat may legitimately start inside its OWN grown footprint. That
+    one placement is exempt only if it actually contains the seat. All other
+    furniture (even another copy of the same prop), walls and opening zones
+    constrain the complete bridge, not just its free endpoint.
+    """
+    from app.core.room_stand import _in_footprint
+    polygon, blockers, zones = geometry
+    try:
+        others = [box for box in blockers if not (
+            placement_id and box.get("placement_id") == placement_id
+            and _in_footprint(seat[0], seat[1], box, BODY_R_M))]
+        return _Space(polygon, others, zones).visible(seat, start)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
 def _blocked(reason: str) -> dict:
     return dict(status="blocked", reason=reason, waypoints=[], access=None, entry_anchor=None)
 
@@ -201,7 +220,8 @@ def plan_approach(actor: str, target: dict, role: str) -> dict:
     return _plan_approach(actor, target, role)
 
 
-def _plan_approach(actor: str, target: dict, role: str, *, departure=None) -> dict:
+def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
+                   departure_placement_id: str = "") -> dict:
     """Internal revalidation can reuse the persisted, measured seat exit."""
     from app.core import places
     from app.core.room_stand import approach_departure, room_geometry
@@ -238,6 +258,10 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None) -> di
         return _blocked(departure_reason)
     if not space.free(start):
         return _blocked("start_not_walkable")
+    departing_placement = departure_placement_id if departure is not None else (
+        (places.place_of(actor, profile=profile) or {}).get("placement_id", "") if seat is not None else "")
+    if seat is not None and not _departure_walkable(seat, start, geometry, departing_placement):
+        return _blocked("departure_not_walkable")
     choices = []
     reason = "binding_not_found"
     for place in sorted(candidates, key=lambda p: p["id"]):
@@ -283,5 +307,6 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None) -> di
                           root_offset=place.get("root_offset", 0))
             choices.append((length, place["id"], dict(status="ok", reason="", waypoints=[list(p) for p in route],
                                                      access=dict(access), entry_anchor=anchor,
-                                                     departure_seat=list(seat) if seat else None)))
+                                                     departure_seat=list(seat) if seat is not None else None,
+                                                     departure_placement_id=departing_placement)))
     return min(choices, key=lambda row: row[:2])[2] if choices else _blocked(reason)

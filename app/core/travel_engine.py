@@ -1048,7 +1048,7 @@ def start_approach_journey(character_name: str, target: dict, role: str, *,
                    journey_id=journey_id or uuid.uuid4().hex,
                    execution_kind=execution_kind, execution_ref=execution_ref,
                    floor_y=plan["access"]["y"], departure_seat=plan.get("departure_seat"),
-                   departure_point=points[0])
+                   departure_point=points[0], departure_placement_id=plan["departure_placement_id"])
     if exit_clip:
         journey.update(exit_clip=exit_clip, exit_s=round(exit_s, 3))
     origin = plan.get("departure_seat") or points[0]
@@ -1074,13 +1074,44 @@ def start_approach_journey(character_name: str, target: dict, role: str, *,
     return journey, ""
 
 
+def _commit_approach_position(name: str, journey: dict, pos: Point, *, arrived: bool = False) -> bool:
+    """Compare-and-write one indoor step under the cancellation write lock.
+
+    The entire stored snapshot (including journey_id/kind/ref) must still
+    match. Raw position columns are appropriate only here: the room/location
+    were checked and must not run a world-crossing cascade under this lock.
+    Owner callbacks run only after this function releases the profile lock.
+    """
+    from app.core import places
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile, _write_character_pos
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        if profile.get("journey") != journey:
+            return False
+        target = journey["approach_target"]
+        if places.where(name, profile=profile) != (target["location_id"], target["room_id"]):
+            return False
+        if not places.inside(target["location_id"], *pos):
+            return False
+        _write_character_pos(name, round(pos[0], 2), round(pos[1], 2))
+        if arrived:
+            profile.pop("journey", None)
+            profile["movement_target"] = ""
+            profile["last_journey_result"] = dict(
+                journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
+                execution_ref=journey["execution_ref"], status="arrived", reason="")
+            if not save_character_profile(name, profile):
+                return False
+    return True
+
+
 def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     """Recheck concrete provenance and the remaining floor path before movement."""
-    from app.core.prop_action_paths import _plan_approach, _Space
+    from app.core.prop_action_paths import _plan_approach, _Space, _departure_walkable
     from app.core.room_stand import room_geometry
     from app.core import sync_topics
-    from app.core.keyed_lock import keyed_lock
-    from app.models.character import get_character_profile, get_character_pos, save_character_profile, set_character_pos
+    from app.models.character import get_character_pos
     from app.models.world import is_world_frozen
     if is_world_frozen():
         return
@@ -1090,7 +1121,8 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     if journey.get("departure_seat") and pos is not None and (
             pos["x"], pos["z"]) == tuple(journey["departure_seat"]):
         departure = (tuple(journey["departure_point"]), tuple(journey["departure_seat"]), "")
-    plan = _plan_approach(name, target, journey["approach_role"], departure=departure)
+    plan = _plan_approach(name, target, journey["approach_role"], departure=departure,
+                          departure_placement_id=journey.get("departure_placement_id", ""))
     before_start = now < GameTime.parse(journey["started_at_game"])
     if plan["status"] != "ok":
         cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
@@ -1101,6 +1133,12 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
         return
     geometry = room_geometry(target["location_id"], target["room_id"])
     space = _Space(*geometry) if geometry else None
+    if journey.get("departure_seat") and (geometry is None or not _departure_walkable(
+            tuple(journey["departure_seat"]), tuple(journey["departure_point"]), geometry,
+            journey.get("departure_placement_id", ""))):
+        cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
+                       execution_ref=journey["execution_ref"], reason="departure_not_walkable")
+        return
     # Never replace the promised polyline with a fresh route. Revalidate EVERY
     # walking segment, including the interval a large ticker step would cross;
     # checking only the new position/remaining suffix could jump a new blocker.
@@ -1117,7 +1155,7 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
                        execution_ref=journey["execution_ref"], reason="approach_target_changed")
         return
     if not st["arrived"]:
-        set_character_pos(name, *st["pos"], preserve_movement_target=True)
+        _commit_approach_position(name, journey, st["pos"])
         return
     allowed, reason = _validate_owned_arrival(name, journey, target["room_id"])
     if not allowed:
@@ -1126,18 +1164,8 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
         return
     # The endpoint is the authored ACCESS, never the body anchor. No generic
     # room arrival/stand-up cascade is allowed to replace it with another point.
-    set_character_pos(name, *st["pos"], preserve_movement_target=True)
-    with keyed_lock("character_profile", name):
-        profile = get_character_profile(name) or {}
-        if profile.get("journey") != journey:
-            return
-        profile.pop("journey", None)
-        profile["movement_target"] = ""
-        profile["last_journey_result"] = dict(
-            journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-            execution_ref=journey["execution_ref"], status="arrived", reason="")
-        if not save_character_profile(name, profile):
-            return
+    if not _commit_approach_position(name, journey, st["pos"], arrived=True):
+        return
     _owner_arrived(name, journey)
     sync_topics.travel_changed(name)
 

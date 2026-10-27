@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from threading import Event, RLock, Thread
 import unittest
 from unittest.mock import patch
 
@@ -27,7 +28,9 @@ ROOT = ARGS.observe_dir.resolve() if ARGS.observe_dir else Path(TEMP.name)
 if ARGS.observe_dir:
     ROOT.mkdir(parents=True, exist_ok=False)
 os.environ.update(STORAGE_DIR=str(ROOT / "world"), INSTANCE_DIR=str(ROOT / "instance"),
-                  ANIMATION_CLIPS_DIR=str(ROOT / "clips"), ANIMATION_RIG_FILE=str(ROOT / "rig.fbx"))
+                  ANIMATION_CLIPS_DIR=str(ROOT / "clips"), ANIMATION_RIG_FILE=str(ROOT / "rig.fbx"),
+                  EVENT_GENERATION_ENABLED="0", EVENT_ENTRY_ROLL_ENABLED="0",
+                  EVENT_RESOLUTION_PROACTIVE="false")
 from app.core import paths
 paths.init(ROOT / "world")
 paths.init_instance(ROOT / "instance")
@@ -63,6 +66,17 @@ def actor(location, room="hall", at=(1, 5)):
     return name
 
 
+def furniture_prop(name, *, width, depth, height):
+    """Author dimensions on the canonical variant, never ignored prop fields."""
+    pid = props.create_prop(name=name)["id"]
+    doc = props.read_sidecar(pid)
+    doc["mount"] = "floor"
+    doc["model_variants"][0].update(width_m=width, depth_m=depth, height_m=height,
+                                    dims_estimated=False)
+    props._write_sidecar(pid, doc)
+    return pid
+
+
 def fixture(*, yaw=0, support=False, floor_y=0):
     """Real sidecar -> published variant -> recipe -> world places/geometry."""
     # Replace previous PRIVATE fixtures so overlapping room footprints cannot
@@ -80,7 +94,7 @@ def fixture(*, yaw=0, support=False, floor_y=0):
         "phases": [], "requirements": [], "effects": []}], model_variants=[{
         "stem": "model", "uid": UID, "active": True,
         "width_m": 1, "depth_m": 1, "height_m": 1, "dims_estimated": False,
-        "markers": [{"id": "body", "group": "sit", "at": [.5, .5, .5], "facing": 0}],
+        "markers": [{"id": "body", "group": "seat", "at": [.5, .5, .5], "facing": 0}],
         "action_bindings": [{"action_id": "rest", "variant_uid": UID, "supported": True,
                              "marker_ids": ["body"], "validation": "local_valid",
                              "access_points": {"actor": {"x": 0, "z": 2, "yaw": 180}}}]}])
@@ -92,10 +106,7 @@ def fixture(*, yaw=0, support=False, floor_y=0):
     placement = {"id": "device", "prop_id": pid, "at": [8, 5], "yaw": yaw}
     furniture = [placement]
     if support:
-        table = props.create_prop(name="Support fixture")["id"]
-        table_doc = props.read_sidecar(table)
-        table_doc.update(mount="floor", width_m=3, depth_m=2, height_m=1)
-        props._write_sidecar(table, table_doc)
+        table = furniture_prop("Support fixture", width=3, depth=2, height=1)
         furniture = [{"id": "table", "prop_id": table, "at": [8, 5], "yaw": yaw},
                      {**placement, "at": [0, 0], "yaw": 0, "on": "table"}]
     loc = W.add_location("Approach room", "Throwaway geometry", rooms=[{
@@ -130,6 +141,16 @@ class Paths(unittest.TestCase):
                     self.assertTrue(abs(x) > box["width_m"] / 2 + .3 or abs(z) > box["depth_m"] / 2 + .3, p)
                 for zone in zones:
                     self.assertFalse(point_in_poly(p, zone), p)
+
+    def test_departure_exempts_only_held_furniture_never_walls_or_another_placement(self):
+        own = {"placement_id": "chair", "at": [8, 5], "width_m": 1, "depth_m": 1}
+        self.assertTrue(N._departure_walkable((8, 5), (8, 6), (SQUARE, [own], []), "chair"))
+        other = {**own, "placement_id": "same-prop-other-placement"}
+        self.assertFalse(N._departure_walkable((8, 5), (8, 6), (SQUARE, [own, other], []), "chair"))
+        self.assertFalse(N._departure_walkable((8, 5), (8, 6), (SQUARE, [own], []), "another-chair"))
+        self.assertFalse(N._departure_walkable((11.5, 5), (12.5, 5), (SQUARE, [], []), "chair"))
+        door_zone = [(7.5, 5.4), (8.5, 5.4), (8.5, 5.6), (7.5, 5.6)]
+        self.assertFalse(N._departure_walkable((8, 5), (8, 6), (SQUARE, [own], [door_zone]), "chair"))
 
     def test_shortest_direct_and_zero_distance(self):
         self.assertEqual(N.visibility_path((1, 5), (10, 5), SQUARE, []), [(1, 5), (10, 5)])
@@ -217,10 +238,7 @@ class Paths(unittest.TestCase):
     def test_real_unreachable_access_has_no_world_route_or_position_write(self):
         name, target, _ = fixture()
         before = C.get_character_pos(name)
-        pid = props.create_prop(name="Full-width obstruction")["id"]
-        doc = props.read_sidecar(pid)
-        doc.update(mount="floor", width_m=1, depth_m=10, height_m=2)
-        props._write_sidecar(pid, doc)
+        pid = furniture_prop("Full-width obstruction", width=1, depth=10, height=2)
         location = W.get_location_by_id(target["location_id"])
         next(r for r in location["rooms"] if r["id"] == "hall")["layout"]["props"].append(
             {"id": "barrier", "prop_id": pid, "at": [5, 5]})
@@ -238,29 +256,38 @@ class Paths(unittest.TestCase):
         self.assertGreater(len(result["waypoints"]), 2, "support table must force a real detour")
         poly, boxes, zones = S.room_geometry(target["location_id"], "hall")
         self.assert_clear(result["waypoints"], poly, boxes, zones)
+        self.assert_clear(result["waypoints"], poly,
+                          [{"at": [8, 5], "yaw": 90, "width_m": 3, "depth_m": 2}], zones)
 
 
 class ScenarioOwner:
     """Separate real execution owner, NOT a pretend prop_action implementation."""
     def __init__(self):
         self.runs = {}
+        self.lock = RLock()
+        self.cancellation_started = None
 
     @contextmanager
     def guard(self, name, journey):
-        row = self.runs.get(journey["execution_ref"])
-        allowed = bool(row and row["actor"] == name and row["journey_id"] == journey["journey_id"]
-                       and row["status"] == "approaching")
-        yield allowed
+        with self.lock:
+            row = self.runs.get(journey["execution_ref"])
+            allowed = bool(row and row["actor"] == name and row["journey_id"] == journey["journey_id"]
+                           and row["status"] == "approaching")
+            yield allowed
 
     def validate(self, name, journey, room):
         row = self.runs.get(journey["execution_ref"])
         return bool(row and row["actor"] == name and row["room"] == room), "scenario_owner_mismatch"
 
     def arrived(self, name, journey):
-        self.runs[journey["execution_ref"]]["status"] = "arrived"
+        with self.lock:
+            self.runs[journey["execution_ref"]]["status"] = "arrived"
 
     def cancelled(self, name, journey, reason):
-        self.runs[journey["execution_ref"]].update(status="cancelled", reason=reason)
+        if self.cancellation_started is not None:
+            self.cancellation_started.set()
+        with self.lock:
+            self.runs[journey["execution_ref"]].update(status="cancelled", reason=reason)
 
 
 class Ownership(unittest.TestCase):
@@ -289,6 +316,62 @@ class Ownership(unittest.TestCase):
         self.assertIsNotNone(journey)
         return name, target, plan, journey
 
+    def seat_actor(self, name):
+        from app.core import animation_clips as A
+        clip_dir = ROOT / "clips"
+        clip_dir.mkdir(exist_ok=True)
+        (clip_dir / "path-rise.json").write_text(json.dumps({
+            "kind": "path-rise", "duration_s": 2, "loop": False,
+            "geometry": {"root_motion": {"mode": "foot_lock", "travel_m": [0, 1], "ref_height_m": 1.7}}}))
+        previous = A.world_transitions()
+        A._write_world_transitions([{"from": "sitting", "to": "walking", "kind": "path-rise", "accel": 0}])
+        self.addCleanup(A._write_world_transitions, previous)
+        profile = C.get_character_profile(name)
+        profile["height"] = 170
+        C.save_character_profile(name, profile)
+        C.set_pose_intent(name, "sitting", prefer="device/body")
+
+    def obstruct_departure(self, target):
+        pid = furniture_prop("Unrelated thin exit obstruction", width=.1, depth=.1, height=1)
+        location = W.get_location_by_id(target["location_id"])
+        next(r for r in location["rooms"] if r["id"] == "hall")["layout"]["props"].append(
+            {"id": "exit-obstruction", "prop_id": pid, "at": [8, 5.6]})
+        W.upsert_location(location, sync_world=True)
+
+    def test_seat_exit_crossing_unrelated_furniture_blocks_without_position_write(self):
+        name, target, _ = fixture()
+        self.seat_actor(name)
+        before = C.get_character_pos(name)
+        self.obstruct_departure(target)
+        # Obstruction grown to z=5.95: endpoint (8,6) is free, but the
+        # measured bridge (8,5)->(8,6) crosses its entire narrow footprint.
+        result = N.plan_approach(name, target, "actor")
+        self.assertEqual((result["status"], result["reason"], result["waypoints"]),
+                         ("blocked", "departure_not_walkable", []))
+        journey, reason = E.start_approach_journey(name, target, "actor",
+                            execution_kind="path_scenario", execution_ref="blocked-seat")
+        self.assertIsNone(journey)
+        self.assertEqual(reason, "departure_not_walkable")
+        self.assertEqual(C.get_character_pos(name), before)
+        self.assertIsNone(E.get_journey(name))
+
+    def test_new_seat_exit_obstruction_cancels_before_large_tick(self):
+        name, target, _ = fixture()
+        self.seat_actor(name)
+        before = C.get_character_pos(name)
+        ref, jid = "blocked-after-start-" + name, "seat-journey-" + name
+        self.owner.runs[ref] = {"actor": name, "journey_id": jid, "room": "hall", "status": "approaching"}
+        journey, reason = E.start_approach_journey(name, target, "actor",
+                            execution_kind="path_scenario", execution_ref=ref, journey_id=jid)
+        self.assertFalse(reason)
+        self.assertIsNotNone(journey)
+        self.obstruct_departure(target)
+        set_game_time(game_time() + GameDuration.of(minutes=1))
+        E.advance_all_journeys()
+        self.assertIsNone(E.get_journey(name))
+        self.assertEqual(C.get_character_pos(name), before)
+        self.assertEqual(self.owner.runs[ref]["reason"], "departure_not_walkable")
+
     def test_positions_freeze_arrival_and_foreign_cancel(self):
         name, target, plan, j = self.start()
         origin = C.get_character_pos(name)
@@ -311,21 +394,62 @@ class Ownership(unittest.TestCase):
         self.assertEqual(C.get_character_current_room(name), "hall")
         self.assertEqual(self.owner.runs[j["execution_ref"]]["status"], "arrived")
 
+    def test_accepted_cancel_prevents_halfway_and_arrival_position_commit(self):
+        # The real cancel removes the journey under the profile lock, then its
+        # callback blocks on the tick's owner guard. Resume that exact window:
+        # no part of the cancelled snapshot may commit another position.
+        for elapsed in (2, 60):
+            with self.subTest(arrival=elapsed == 60):
+                name, _, _, journey = self.start()
+                before = C.get_character_pos(name)
+                set_game_time(game_time() + GameDuration.of(seconds=elapsed))
+                tick_ready, release_tick, cancel_removed = Event(), Event(), Event()
+                self.owner.cancellation_started = cancel_removed
+                errors = []
+                original = N._plan_approach
+
+                def paused_plan(*args, **kwargs):
+                    result = original(*args, **kwargs)
+                    tick_ready.set()
+                    if not release_tick.wait(10):
+                        raise AssertionError("cancel-versus-tick release timed out")
+                    return result
+
+                def run(fn):
+                    try:
+                        fn()
+                    except BaseException as exc:
+                        errors.append(exc)
+
+                tick = Thread(target=lambda: run(E.advance_all_journeys))
+                cancel = Thread(target=lambda: run(lambda: E.cancel_journey(
+                    name, journey_id=journey["journey_id"], execution_kind="path_scenario",
+                    execution_ref=journey["execution_ref"], reason="race_cancel")))
+                with patch.object(N, "_plan_approach", side_effect=paused_plan):
+                    try:
+                        tick.start()
+                        self.assertTrue(tick_ready.wait(10), "real tick must reach completed geometry planning")
+                        cancel.start()
+                        self.assertTrue(cancel_removed.wait(10), "real cancellation must remove journey before its callback")
+                        self.assertNotIn("journey", C.get_character_profile(name))
+                        self.assertEqual(C.get_character_pos(name), before)
+                    finally:
+                        release_tick.set()
+                        tick.join(10)
+                        if cancel.ident is not None:
+                            cancel.join(10)
+                        self.owner.cancellation_started = None
+                self.assertFalse(tick.is_alive())
+                self.assertFalse(cancel.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(C.get_character_pos(name), before)
+                self.assertNotIn("journey", C.get_character_profile(name))
+                self.assertEqual(C.get_character_profile(name)["last_journey_result"]["reason"], "race_cancel")
+                self.assertEqual(self.owner.runs[journey["execution_ref"]]["status"], "cancelled")
+
     def test_existing_measured_seat_exit_precedes_polyline_without_early_move(self):
-        from app.core import animation_clips as A
         name, target, _ = fixture()
-        clip_dir = ROOT / "clips"
-        clip_dir.mkdir(exist_ok=True)
-        (clip_dir / "path-rise.json").write_text(json.dumps({
-            "kind": "path-rise", "duration_s": 2, "loop": False,
-            "geometry": {"root_motion": {"mode": "foot_lock", "travel_m": [0, 1], "ref_height_m": 1.7}}}))
-        previous = A.world_transitions()
-        A._write_world_transitions([{"from": "sitting", "to": "walking", "kind": "path-rise", "accel": 0}])
-        self.addCleanup(A._write_world_transitions, previous)
-        profile = C.get_character_profile(name)
-        profile["height"] = 170
-        C.save_character_profile(name, profile)
-        C.set_pose_intent(name, "sitting", prefer="device/body")
+        self.seat_actor(name)
         seat = C.get_character_pos(name)
         self.assertEqual((seat["x"], seat["z"]), (8, 5))
         plan = N.plan_approach(name, target, "actor")
@@ -392,10 +516,7 @@ class Ownership(unittest.TestCase):
     def test_changed_room_geometry_cancels_before_large_tick_crosses_blocker(self):
         name, target, _, j = self.start()
         before = C.get_character_pos(name)
-        blocker = props.create_prop(name="New obstruction")["id"]
-        doc = props.read_sidecar(blocker)
-        doc.update(mount="floor", width_m=1, depth_m=2, height_m=2)
-        props._write_sidecar(blocker, doc)
+        blocker = furniture_prop("New obstruction", width=1, depth=2, height=2)
         location = W.get_location_by_id(target["location_id"])
         next(r for r in location["rooms"] if r["id"] == "hall")["layout"]["props"].append(
             {"id": "barrier", "prop_id": blocker, "at": [4, 5.86]})

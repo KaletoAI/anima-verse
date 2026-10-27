@@ -228,7 +228,7 @@ def _blockers(recipe: Dict[str, Any], cx: float, cz: float,
         at = p.get("at") or [0.0, 0.0]
         wx, wz = local_to_world(float(at[0]), float(at[1]), cx, cz, yaw)
         out.append({"at": [wx, wz], "yaw": (float(p.get("yaw") or 0.0) + yaw) % 360.0,
-                    "width_m": w, "depth_m": d})
+                    "width_m": w, "depth_m": d, "placement_id": str(p.get("id") or "")})
     return out
 
 
