@@ -99,6 +99,10 @@ paths.init(WORLD)
 paths.init_instance(WORLD / "instance")
 
 from app.core import props as store  # noqa: E402
+from app.blender import runner as blender_runner  # noqa: E402
+# Surface jobs may finish after an individual patch context. This standalone
+# persistence probe never permits a real background Blender process.
+blender_runner.is_available = lambda: False
 
 FAILURES = []
 
@@ -155,6 +159,54 @@ def refused(label: str, **kwargs) -> None:
     after = (store._sidecar_path(BENCH) or Path()).read_text(encoding="utf-8")
     check(label, before == after and w.n == 0,
           f"{w.n} writes; {reason[:70]}")
+
+
+def bbox_upload_regression():
+    """A real low-only GLB upload still measures and refines estimated sizes."""
+    import struct
+    from unittest.mock import patch
+    from app.blender import refine, runner
+    vertices = [(x, y, z) for x in (0., 2.) for y in (0., 4.) for z in (0., 1.)]
+    indices = [0, 1, 3, 0, 3, 2, 4, 6, 7, 4, 7, 5,
+               0, 4, 5, 0, 5, 1, 2, 3, 7, 2, 7, 6,
+               0, 2, 6, 0, 6, 4, 1, 5, 7, 1, 7, 3]
+    binary = b"".join(struct.pack("<3f", *vertex) for vertex in vertices)
+    binary += struct.pack("<36H", *indices)
+    document = {
+        "asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}], "buffers": [{"byteLength": len(binary)}],
+        "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 96, "target": 34962},
+                        {"buffer": 0, "byteOffset": 96, "byteLength": 72, "target": 34963}],
+        "accessors": [{"bufferView": 0, "componentType": 5126, "count": 8,
+                       "type": "VEC3", "min": [0, 0, 0], "max": [2, 4, 1]},
+                      {"bufferView": 1, "componentType": 5123, "count": 36, "type": "SCALAR"}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "mode": 4}]}],
+    }
+    encoded = json.dumps(document).encode()
+    encoded += b" " * (-len(encoded) % 4)
+    chunks = struct.pack("<II", len(encoded), 0x4E4F534A) + encoded
+    chunks += struct.pack("<II", len(binary), 0x004E4942) + binary
+    blob = struct.pack("<III", 0x46546C67, 2, len(chunks) + 12) + chunks
+    measured = []
+
+    def measurement(path):
+        measured.append(path)
+        return {"tris": 12}
+
+    pid = store.create_prop(name="Low-only bbox fixture")["id"]
+    with patch.object(refine, "auto_retexture_enabled", return_value=False), \
+         patch.object(refine, "auto_bake_vc_enabled", return_value=False), \
+         patch.object(refine, "auto_lod_enabled", return_value=False), \
+         patch.object(refine, "measure_file", measurement), \
+         patch.object(runner, "is_available", return_value=False):
+        check("low-only primary upload succeeds", store.save_uploaded_glb(pid, blob, tier="low", variant=0))
+    meta = store.read_sidecar(pid)
+    check("low-only upload redistributes the estimated cube from real mesh proportions",
+          store.variant_dims(meta) == {"width_m": .5, "depth_m": .25, "height_m": 1.}
+          and not store.variant_dims_estimated(meta))
+    check("low-only upload persists its bbox and measurement",
+          meta.get("bbox") == [2., 4., 1.] and meta.get("measured") == {"tris": 12}
+          and measured == [store.model_path(pid)])
 
 
 def concurrency_regressions():
@@ -242,7 +294,10 @@ def concurrency_regressions():
     if landing.is_alive() or toggle.is_alive():
         return
 
-    for change_mesh, through_upload in ((False, False), (True, False), (False, True), (True, True)):
+    cases = [(change_mesh, through_upload, failed_run)
+             for change_mesh in (False, True) for through_upload in (False, True)
+             for failed_run in (False, True)]
+    for change_mesh, through_upload, failed_run in cases:
         pid = store.create_prop(name="Area transaction fixture",
                                 key_areas=["picture"] if through_upload else None)["id"]
         gallery = store.model_gallery(pid, 0)
@@ -252,13 +307,15 @@ def concurrency_regressions():
         entered, release, saved = Event(), Event(), Event()
         area_errors, save_errors = [], []
         processed, upload_results, expected_source = [], [], []
+        expected_metadata = []
 
         def run(*args, **kwargs):
             entered.set()
             processed.append(kwargs["inputs"]["model"])
             if not release.wait(10):
                 raise AssertionError("test did not release external processor")
-            return {"ok": True, "data": {"areas": []}, "outputs": {}}
+            return ({"ok": False, "error": "fixture processing failure"} if failed_run else
+                    {"ok": True, "data": {"areas": []}, "outputs": {}})
 
         def areas():
             try:
@@ -279,8 +336,13 @@ def concurrency_regressions():
                     fresh = store.model_gallery(pid, 0)
                     replacement = fresh.new_path()
                     replacement.write_bytes(b"replacement-mesh")
+                    store.set_file_areas(replacement, areas=[{
+                        "id": "picture_1", "kind": "picture", "size_m": [1, 1],
+                        "normal": [0, 0, 1], "source": "manual", "faces": 2}],
+                        leaf_bbox={"min": [0, 0, 0], "max": [1, 1, 1]})
                     fresh.select(replacement.name, "full")
                 expected_source.append(store.model_path(pid, variant=0))
+                expected_metadata.append(store.read_model_sidecar(expected_source[-1]))
             except Exception as exc:
                 save_errors.append(exc)
             finally:
@@ -308,7 +370,8 @@ def concurrency_regressions():
         check("stale area landing is rejected without overwriting the author",
               not worker.is_alive()
               and ((not area_errors and upload_results == [True]) if through_upload else
-                   (len(area_errors) == 1 and isinstance(area_errors[0], store.PropRevisionConflict)))
+                   (len(area_errors) == 1 and isinstance(area_errors[0],
+                       RuntimeError if failed_run else store.PropRevisionConflict)))
               and store.read_sidecar(pid)["name"] == (
                   "Area transaction fixture" if change_mesh else "Authored during processing"),
               str(area_errors))
@@ -316,6 +379,24 @@ def concurrency_regressions():
               bool(processed) and not store.areas_sidecar_path(processed[0]).exists()
               and expected_source == [store.model_path(pid, variant=0)]
               and not store.read_model_sidecar(processed[0]).get("areas_error"))
+        check("failed or superseded processing preserves the selected mesh metadata",
+              expected_metadata == [store.read_model_sidecar(expected_source[-1])])
+
+    # A failure for the still-current source remains visible; guarding stale
+    # diagnostics must not turn genuine processing errors into silent success.
+    pid = store.create_prop(name="Current failure fixture", key_areas=["picture"])["id"]
+    failure_reason = "fixture processing failure"
+    with patch.object(refine, "unavailable_reason", return_value=""), \
+         patch.object(refine, "take_lod_slot", return_value=True), \
+         patch.object(refine, "free_lod_slot"), \
+         patch.object(runner, "run", return_value={"ok": False, "error": failure_reason}), \
+         patch.object(refine, "auto_lod_enabled", return_value=False), \
+         patch.object(refine, "auto_retexture_enabled", return_value=False), \
+         patch.object(refine, "auto_bake_vc_enabled", return_value=False), \
+         patch.object(runner, "is_available", return_value=False):
+        store.save_uploaded_glb(pid, b"current-failure-fixture", variant=0)
+    check("a current processing failure retains the original diagnostic",
+          store.file_areas(store.model_path(pid))["areas_error"] == failure_reason)
 
 
 def main() -> int:
@@ -507,6 +588,7 @@ def main() -> int:
         check("sleep custom active regeneration is rejected",
               any(issue["code"] == "unsupported_combination" for issue in exc.issues)
               and store.read_sidecar(bench) == before)
+    bbox_upload_regression()
     concurrency_regressions()
     print()
     if FAILURES:

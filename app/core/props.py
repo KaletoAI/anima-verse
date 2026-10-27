@@ -1860,6 +1860,18 @@ class BlenderUnavailable(RuntimeError):
     """Blender cannot run right now — missing, disabled or every slot busy.
     A state of the host, not a defect of the mesh: the route answers 503."""
 
+    def __init__(self, message: str, snapshot: Optional[Dict[str, Any]] = None):
+        self.snapshot = snapshot
+        super().__init__(message)
+
+
+class AreaProcessingError(RuntimeError):
+    """An external area failure tied to the exact source that was processed."""
+
+    def __init__(self, snapshot: Dict[str, Any], cause: Exception):
+        self.snapshot = snapshot
+        super().__init__(str(cause) or type(cause).__name__)
+
 
 def areas_sidecar_path(model_path: Optional[Path]) -> Optional[Path]:
     """``model_<ts>.glb`` -> ``model_<ts>.glb.areas.json`` — the outline
@@ -2209,32 +2221,34 @@ def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
     variant without a full-tier GLB."""
     from app.blender import refine, runner
     from app.core.model_validate import validate_static_glb
-    reason = refine.unavailable_reason()
-    if reason:
-        raise BlenderUnavailable(reason)
     pid = safe_prop_id(prop_id)
     snapshot = _areas_snapshot(pid, variant)
     src = snapshot["src"]
+    reason = refine.unavailable_reason()
+    if reason:
+        raise BlenderUnavailable(reason, snapshot)
     if not refine.take_lod_slot(wait_s):
         raise BlenderUnavailable("blender is busy with another model — try "
-                                 "again in a moment")
+                                 "again in a moment", snapshot)
     try:
-        with tempfile.TemporaryDirectory(prefix="av-areas-") as tmp:
-            res = runner.run("picture_areas", inputs={"model": src},
-                             params=params, out_dir=Path(tmp), timeout_s=600)
-            if not res.get("ok"):
-                raise RuntimeError(res.get("error") or "picture_areas failed")
-            data = res.get("data") or {}
-            produced = (res.get("outputs") or {}).get("model")
-            blob = Path(produced).read_bytes() if produced else None
-    finally:
-        refine.free_lod_slot()
-
-    if blob is not None:
-        verdict = validate_static_glb(blob)
-        if not verdict.get("ok"):
-            raise RuntimeError("split model failed validation: "
-                               + "; ".join(verdict.get("errors") or []))
+        try:
+            with tempfile.TemporaryDirectory(prefix="av-areas-") as tmp:
+                res = runner.run("picture_areas", inputs={"model": src},
+                                 params=params, out_dir=Path(tmp), timeout_s=600)
+                if not res.get("ok"):
+                    raise RuntimeError(res.get("error") or "picture_areas failed")
+                data = res.get("data") or {}
+                produced = (res.get("outputs") or {}).get("model")
+                blob = Path(produced).read_bytes() if produced else None
+        finally:
+            refine.free_lod_slot()
+        if blob is not None:
+            verdict = validate_static_glb(blob)
+            if not verdict.get("ok"):
+                raise RuntimeError("split model failed validation: "
+                                   + "; ".join(verdict.get("errors") or []))
+    except Exception as exc:
+        raise AreaProcessingError(snapshot, exc) from exc
     return _land_areas_result(pid, snapshot, blob, data, params, default_source)
 
 
@@ -2734,7 +2748,8 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
         except PropRevisionConflict:
             return False
         except Exception as e:                              # noqa: BLE001
-            _landing_run_failed(pid, variant, e, "adoption of named materials")
+            if not _landing_run_failed(pid, variant, e, "adoption of named materials"):
+                return False
     if not meta.get(KEY_AREAS_KEY) and not is_door_prop(meta):
         _reconcile_areas(pid, variant)
         return True
@@ -2743,7 +2758,8 @@ def _areas_after_landing(prop_id: str, variant: Any = None,
     except PropRevisionConflict:
         return False
     except Exception as e:                                  # noqa: BLE001
-        _landing_run_failed(pid, variant, e, "picture-area detection")
+        if not _landing_run_failed(pid, variant, e, "picture-area detection"):
+            return False
     return True
 
 
@@ -2760,8 +2776,9 @@ def _names_slot_materials(mp: Optional[Path]) -> bool:
         return False
 
 
+@_author_transaction
 def _landing_run_failed(pid: str, variant: Any, e: BaseException,
-                        what: str) -> None:
+                        what: str) -> bool:
     """A landing run failed: log it and store it on the landed FILE.
 
     The fresh mesh is unsplit, so it names no area and carries no leaf node
@@ -2772,14 +2789,22 @@ def _landing_run_failed(pid: str, variant: Any, e: BaseException,
     halves stay until the next SUCCESSFUL run prunes them (R15)."""
     logger.warning("Prop %s: automatic %s failed (variant %s): %s", pid, what,
                    variant, e)
-    mp = _variant_full_file(pid, variant)
-    if not mp:
-        return
+    snapshot = e.snapshot if isinstance(e, (AreaProcessingError, BlenderUnavailable)) else None
+    if snapshot is None:
+        # Invalid input never started processing and names no diagnostic target.
+        return True
     try:
-        set_file_areas(mp, areas=[], leaf_bbox=None,
+        current = _areas_snapshot(pid, snapshot["index"])
+    except (OSError, ValueError):
+        return False
+    if current != snapshot:
+        return False
+    try:
+        set_file_areas(snapshot["src"], areas=[], leaf_bbox=None,
                        areas_error=str(e) or type(e).__name__)
     except (OSError, ValueError):
         pass
+    return True
 
 
 @_author_transaction
@@ -5568,6 +5593,18 @@ def _demand_low(prop_id: str, variant: Any, tiers: List[str]) -> None:
         request_low_tier(prop_id, variant)
 
 
+@_author_transaction
+def _bbox_snapshot(pid: str) -> Dict[str, Any]:
+    """Snapshot the same fallback-capable source used by _extract_bbox."""
+    meta = read_sidecar(pid)
+    index = _resolve_variant(pid, None, meta) if meta else -1
+    src = model_path(pid) if index >= 0 else None
+    if not src:
+        raise ValueError("this prop has no model to measure")
+    return {"index": index, "src": src, "uid": _variant_list(meta)[index]["uid"],
+            "revision": _document_revision(meta), "model_token": _area_model_token(src)}
+
+
 def _store_bbox(prop_id: str, variant: Any = None, *,
                 landing: bool = False) -> None:
     """Everything that happens once a model has landed: re-encode its
@@ -5622,7 +5659,7 @@ def _store_bbox(prop_id: str, variant: Any = None, *,
     _autofill_slots(prop_id)
     pid = safe_prop_id(prop_id)
     try:
-        snapshot = _areas_snapshot(pid, None)
+        snapshot = _bbox_snapshot(pid)
     except ValueError:
         return
     bbox = _extract_bbox(prop_id)
@@ -5643,7 +5680,7 @@ def _land_bbox_result(pid: str, snapshot: Dict[str, Any], bbox: List[float],
     if not meta or _document_revision(meta) != snapshot["revision"]:
         return
     try:
-        current = _areas_snapshot(pid, None)
+        current = _bbox_snapshot(pid)
     except (OSError, ValueError):
         return
     if any(current[key] != snapshot[key] for key in ("uid", "src", "model_token")):
