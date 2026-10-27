@@ -63,6 +63,7 @@ export interface PlacementRow {
 
 /** What the ladder reads off a place marker (a subset of `PlaceEntry`). */
 export interface PlacementMarker {
+  group?: string;
   rotation?: number;
   tilt?: number;
   roll?: number;
@@ -117,6 +118,7 @@ export interface LocatedFigure<R extends PlacementRow> {
   /** World facing direction (y = 0), or undefined = no fixed facing. */
   face?: PlacementPoint;
   lean?: { tilt: number; roll: number };
+  surfaceGroup?: string;
   /** The room drawn in, or null (huddle / closed interior). */
   inRoom: string | null;
   interiorShown: boolean;
@@ -153,6 +155,7 @@ export function placeAtLocation<R extends PlacementRow, M extends PlacementMarke
     let pos: PlacementPoint;
     let face: PlacementPoint | undefined;
     let lean: { tilt: number; roll: number } | undefined;
+    let surfaceGroup: string | undefined;
     const room = ctx.roomOf(c.name);
     const roomCenter = room ? tile.roomCenters.get(room) : undefined;
     // A pure VIEW state: whether the client can draw the character inside.
@@ -178,6 +181,7 @@ export function placeAtLocation<R extends PlacementRow, M extends PlacementMarke
         // nothing is chosen here.
         branch = 'seat';
         pos = copy(seat);
+        surfaceGroup = held.group;
         if (held.rotation !== undefined) {
           // `facing` is TILE-LOCAL like every other payload angle, and a gaze
           // is a DIRECTION: it turns with the footprint but is not shifted by
@@ -194,6 +198,7 @@ export function placeAtLocation<R extends PlacementRow, M extends PlacementMarke
       } else if (pool?.length) {
         branch = 'pool';
         pos = copy(pool[idx % pool.length]);
+        surfaceGroup = pool === lieDown ? 'lie' : 'seat';
       } else if (tile.corridors.some((cor) => cor.roomId === inRoom)) {
         // A STOREY CORRIDOR (§ A13c) is no room with a hull: the server picks
         // no standing point in it, and `pos` is whatever point the figure
@@ -235,7 +240,7 @@ export function placeAtLocation<R extends PlacementRow, M extends PlacementMarke
       && !tile.alwaysVisibleRooms.has(inRoom)
       && (tile.roomLevels.get(inRoom) ?? 0) !== tile.levelFilter;
     const roomIsClosed = !inRoom && !!room && !!roomCenter;
-    return { row: c, branch, pos, face, lean, inRoom, interiorShown,
+    return { row: c, branch, pos, face, lean, surfaceGroup, inRoom, interiorShown,
              hidden: wrongStorey || roomIsClosed, transition };
   });
 }

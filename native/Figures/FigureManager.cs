@@ -365,6 +365,7 @@ public partial class FigureManager : Node3D
     private void ApplyPlan(Figure fig, FigurePlan plan, bool fresh)
     {
         fig.Rule = plan.Rule;
+        fig.SurfaceGroup = plan.SurfaceGroup;
         AdoptInteraction(fig);
         // THE GOAL: the server's point — or, after a stand-up, the spot the bridge left the figure on, for as long as the
         // server sends the SAME point (settleOffset against the kept server point); a different one voids the spot.
@@ -562,7 +563,8 @@ public partial class FigureManager : Node3D
         bool run = !reckoning && plan.Dist > NpcWalk.RunDistance;
         fig.SetMotion(plan.Moving, plan.Moving && run && FigureClips.CanRun(stand.Word.Movement), stand.Word.Movement);
         PlayLifting(fig, plan.Moving ? FigureClips.MoveClip(stand.Word.Movement, run, fig.Poses) : standingClip,
-                    plan.Moving || standIdle.Length > 0, standSink, rootYBefore, goalY);
+                    plan.Moving || standIdle.Length > 0, standSink, rootYBefore, goalY,
+                    plan.Moving ? "ground" : fig.SurfaceGroup);
         fig.SecondaryFrozen = WorldFrozen;
         fig.UpdateFigure(dt);
         fig.Portrait?.Tick(dt, camDist, plan.Moving);
@@ -588,7 +590,14 @@ public partial class FigureManager : Node3D
             fig.UpdateFigure(dt);
             return true;
         }
-        if (!fig.PlayPair(it.Clip, phase, it.Rate <= 0, it.Loop)) return false;
+        var surfaceGroup = "ground";
+        if (it.Anchor.PlaceId is { Length: > 0 } placeId
+            && _rowByName.TryGetValue(fig.CharacterName, out var placedRow)
+            && Slots?.Invoke() is { } slots && slots.TryGetValue(placedRow.LocationId, out var slot)
+            && slot.Places.Markers.TryGetValue(placedRow.RoomId, out var markers)
+            && markers.TryGetValue(placeId, out var marker) && marker.Slots.Length > 0)
+            surfaceGroup = ClipHeightOffsets.Surface(marker.Group);
+        if (!fig.PlayPair(it.Clip, phase, it.Rate <= 0, it.Loop, surfaceGroup)) return false;
         if (fig.HoldsTravel) fig.TakeTravel();
         var room = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.RoomId : "";
         var at = it.Place(root, (id, x, z) => SeatYAt?.Invoke(room, id, x, z),
@@ -621,10 +630,11 @@ public partial class FigureManager : Node3D
     /// npcs.ts <c>playLifting</c>: ask the figure for its clip — and when that opens a bridge the figure LIFTS, put the
     /// root onto its goal height at once and hand the difference over (<see cref="Figure.BeginBridgeLift"/>).
     /// </summary>
-    private static void PlayLifting(Figure fig, string kind, bool terrainClip, double sink, double rootYBefore, double goalY)
+    private static void PlayLifting(Figure fig, string kind, bool terrainClip, double sink, double rootYBefore, double goalY,
+                                    string surfaceGroup)
     {
         bool wasBridging = fig.Bridging;
-        fig.Play(kind, terrainClip, sink);
+        fig.Play(kind, terrainClip, sink, surfaceGroup);
         if (!wasBridging && fig.Bridging && fig.BeginBridgeLift(rootYBefore - goalY))
             fig.Position = new Vector3(fig.Position.X, (float)goalY, fig.Position.Z);
         // Lazy (Task 35b): the HOLDING bridge this frame asked for waits for its clip — the root keeps the height it had,
@@ -1630,6 +1640,7 @@ public partial class FigureManager : Node3D
         fig.Poses = Clips.Poses;
         fig.Transitions = Clips.Transitions;
         fig.Extras = t.Extras;
+        fig.HeightOffsetsOf = t.Lazy is { } calibrated ? action => calibrated.ClipOf(action)?.HeightOffsets ?? default : null;
         fig.BaseScale = scale;
         fig.Clock = () => _clock;
         fig.LoadedUrl = t.Url;

@@ -16,9 +16,9 @@ import { clipGroundOffset, measureGroundOffsets } from './clipGround';
 import {
   findLegChains as findLegChainsData, advanceProceduralPhase, proceduralGaitAmplitudes, proceduralIdleAmplitudes,
   createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
-  rigHipsHeight, standingHipsRef,
+  rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM,
 } from '@anima/scene-render';
-import type { SecondaryMotion, RestCorrection, RestPose } from '@anima/scene-render';
+import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
@@ -64,6 +64,13 @@ export const BASE_FIGURE_HEIGHT_M = 1.70;
  *  listing without the field) LOOPS — a walk cycle must never stop
  *  mid-stride. */
 const clipLoopFlags = new WeakMap<THREE.AnimationClip, boolean>();
+const clipHeightOffsets = new WeakMap<THREE.AnimationClip, ClipHeightOffsetsCm>();
+
+/** Attach the listing metadata to this exact selected file, before rig adaptation. */
+export function setClipHeightOffsets(clip: THREE.AnimationClip,
+                                     offsets: ClipHeightOffsetsCm | undefined): void {
+  if (offsets) clipHeightOffsets.set(clip, offsets);
+}
 
 /** Remembers the listing's flag for one loaded clip file. */
 function setClipLoop(clip: THREE.AnimationClip, loop: boolean | undefined): void {
@@ -82,14 +89,14 @@ export function applyEmbeddedClipLoops(clips: readonly THREE.AnimationClip[],
  *  no flag keeps none (and thus loops). */
 function carryClipLoops(from: readonly THREE.AnimationClip[],
                         to: readonly THREE.AnimationClip[]): void {
-  const byName = new Map<string, boolean>();
-  for (const c of from) {
-    const flag = clipLoopFlags.get(c);
-    if (flag !== undefined) byName.set(c.name.toLowerCase(), flag);
-  }
+  const byName = new Map<string, THREE.AnimationClip>();
+  for (const c of from) byName.set(c.name.toLowerCase(), c);
   for (const c of to) {
-    const flag = byName.get(c.name.toLowerCase());
+    const source = byName.get(c.name.toLowerCase());
+    const flag = source && clipLoopFlags.get(source);
     if (flag !== undefined) clipLoopFlags.set(c, flag);
+    const heights = source && clipHeightOffsets.get(source);
+    if (heights) clipHeightOffsets.set(c, heights);
   }
 }
 
@@ -931,11 +938,12 @@ export class FigureLibrary {
       // carries a travel in its hips track that the figure is to follow
       // (`Figure.update`); `strip` or no block plays in place as before.
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean;
-                             rootMotion?: boolean }> =
+                             rootMotion?: boolean; heightOffsets?: ClipHeightOffsetsCm }> =
         serverClips.map((c) => ({
           kind: c.role ? `${c.kind}__${c.role}` : c.kind, set: c.set ?? '',
           url: c.url, loop: c.loop,
           rootMotion: !!c.root_motion && c.root_motion.mode !== 'strip',
+          heightOffsets: c.height_offsets_cm,
         }));
       if (!sources.length) {
         // Dev/offline fallback: the local manifest clips (no sets)
@@ -989,6 +997,7 @@ export class FigureLibrary {
         setFlags: (clip, source) => {
           setClipLoop(clip, source.loop);
           setClipRootMotion(clip, source.rootMotion);
+          setClipHeightOffsets(clip, source.heightOffsets);
         },
         isPair: isPairClipName,
         pairRoot: extractRootPath,
@@ -1483,6 +1492,8 @@ export class FigureLibrary {
           // for this kind — its flag is the one that counts from here on.
           setClipLoop(c, clipLoopFlags.get(clip));
           setClipRootMotion(c, clipRootMotionFlags.get(clip));
+          const heights = clipHeightOffsets.get(clip);
+          if (heights) clipHeightOffsets.set(c, heights);
           out.push(c);
           break;
         }
@@ -1895,6 +1906,11 @@ export class Figure {
    *  0 for everything but a clip the GROUND named (move or idle). The
    *  instance stands at `groundY − clipDrop + lift` (`applyHeight`). */
   private clipDrop = 0;
+  private clipHeight = 0;
+  /** World-up calibration expressed in the root's local frame. */
+  private readonly heightCorrection = new THREE.Vector3();
+  private readonly heightRotation = new THREE.Quaternion();
+  private heightGroup: 'ground' | 'seat' | 'lie' = 'ground';
   /** Whether the clip playing right now was named by the GROUND
    *  (`walk.moveClip` / `walk.idleClip`) — part of the play state, because the
    *  same kind can be asked for both by the terrain and as a plain activity. */
@@ -2044,7 +2060,7 @@ export class Figure {
    *  giant. WHICH depth this is — the ground's move or its idle one — is the
    *  caller's decision (`walk.sinkForState`); the two are different numbers
    *  because a swimmer lies flat and a treader hangs upright. */
-  play(rawKind: ClipKind, terrainClip = false, sink = 0) {
+  play(rawKind: ClipKind, terrainClip = false, sink = 0, surfaceGroup?: string) {
     const kind = (rawKind || poseClip('standing')).toLowerCase();
     // A bridge is running: let it finish. Cutting it short is the abruptness
     // this exists to remove, and a figure that changes its mind mid-standup
@@ -2111,15 +2127,22 @@ export class Figure {
       this.currentKind = via;
       this.root.userData.clipKind = via;
       this.root.userData.clipBound = true;
+      this.heightGroup = 'ground';
+      this.setClipHeight(bridge.getClip(), 'ground');
+      this.terrainClip = false;
+      this.sink = 0;
+      this.setClipDrop(0);
       return;
     }
     // Junk is no depth, and never NaN: one NaN in the drop and the figure
     // hangs at no height for the rest of the session.
     const sinkM = terrainClip && Number.isFinite(sink) && sink > 0 ? sink : 0;
+    const group = terrainClip ? 'ground' : clipHeightGroup(surfaceGroup);
     if (this.currentKind === kind && this.terrainClip === terrainClip
-        && this.sink === sinkM) return;
+        && this.sink === sinkM && this.heightGroup === group) return;
     this.terrainClip = terrainClip;
     this.sink = sinkM;
+    this.heightGroup = group;
     // WHICH kind actually plays: exact first, then a take of the same FAMILY
     // (`walk-cmu` ↔ `walk`), then the curated stand-in, then idle — the one
     // rule, `clipCoverage.resolveClipKind`. Without the family step a rig
@@ -2142,6 +2165,7 @@ export class Figure {
     // ground's sink depth comes on top of that measurement, in world metres.
     this.setClipDrop(terrainClip && resolved
       ? clipGroundOffset(resolved.getClip()) * this.baseScale + sinkM : 0);
+    this.setClipHeight(resolved?.getClip(), group);
     // Stand-in pace: no idle clip at all -> slow motion (reads as breathing);
     // no clip of the RUN family -> the walk take, sped up. Judged by family so
     // that a `run-cmu` served from `run` runs at its own pace.
@@ -2307,8 +2331,8 @@ export class Figure {
     }
     const inst = this.root.children[0];
     if (inst) {
-      inst.position.x = this.travelBase.x;
-      inst.position.z = this.travelBase.z;
+      inst.position.x = this.travelBase.x + this.heightCorrection.x;
+      inst.position.z = this.travelBase.z + this.heightCorrection.z;
     }
     return out;
   }
@@ -2349,11 +2373,28 @@ export class Figure {
     this.applyHeight();
   }
 
+  private setClipHeight(clip: THREE.AnimationClip | undefined, group: string) {
+    const height = clipHeightOffsetM(clip && clipHeightOffsets.get(clip), group, this.height);
+    if (height === this.clipHeight) return;
+    this.clipHeight = height;
+    this.applyHeight();
+  }
+
   /** The instance's height over the figure root: the bind anchor, minus the
    *  ground offset of the clip playing, plus the running bridge's lift. */
   private applyHeight() {
     const inst = this.root.children[0];
-    if (inst) inst.position.y = this.groundY - this.clipDrop + this.lift;
+    if (!inst) return;
+    inst.position.x -= this.heightCorrection.x;
+    inst.position.z -= this.heightCorrection.z;
+    this.heightCorrection.set(0, this.clipHeight, 0);
+    if (this.clipHeight !== 0) {
+      this.root.getWorldQuaternion(this.heightRotation).invert();
+      this.heightCorrection.applyQuaternion(this.heightRotation);
+    }
+    inst.position.x += this.heightCorrection.x;
+    inst.position.z += this.heightCorrection.z;
+    inst.position.y = this.groundY - this.clipDrop + this.lift + this.heightCorrection.y;
   }
 
   /** The owner has just put the root of a figure whose HOLDING bridge started
@@ -2494,7 +2535,7 @@ export class Figure {
    *  own time drifted more than PAIR_RESYNC_S from `t`, so a poll never makes
    *  the figure stutter. Returns false when the half is not bound on this rig
    *  — the caller then falls back to a solo clip. */
-  playPair(clipName: string, t: number, frozen: boolean, loop: boolean): boolean {
+  playPair(clipName: string, t: number, frozen: boolean, loop: boolean, surfaceGroup?: string): boolean {
     const action = this.actions.get(clipName);
     if (!action) return false;
     // The pair takes the body over: a running bridge ends HERE, not at its
@@ -2507,6 +2548,8 @@ export class Figure {
     this.setClipDrop(0);
     this.terrainClip = false;
     this.sink = 0;
+    this.heightGroup = clipHeightGroup(surfaceGroup);
+    this.setClipHeight(action.getClip(), this.heightGroup);
     const duration = action.getClip().duration || 1;
     // The caller already wrapped/clamped against the clip length the SERVER
     // stated; this repeats it against the length the loaded clip actually has
@@ -2544,6 +2587,7 @@ export class Figure {
     this.root.rotation.order = 'YXZ';
     this.root.rotation.x = THREE.MathUtils.degToRad(tilt);
     this.root.rotation.z = THREE.MathUtils.degToRad(roll);
+    if (this.clipHeight !== 0) this.applyHeight();
   }
 
   /** true when there are no animation clips (e.g. an animal rig or a static
@@ -2634,8 +2678,8 @@ export class Figure {
       const inst = this.root.children[0];
       if (inst) {
         const o = this.instanceOffset();
-        inst.position.x = this.travelBase.x + o.x;
-        inst.position.z = this.travelBase.z + o.z;
+        inst.position.x = this.travelBase.x + o.x + this.heightCorrection.x;
+        inst.position.z = this.travelBase.z + o.z + this.heightCorrection.z;
       }
     }
     // The height of a holding bridge (see `liftAction`), read at the action's
@@ -2659,8 +2703,9 @@ export class Figure {
           this.liftSpec = null;
         }
       }
-      this.applyHeight();
     }
+    // Yaw/lean may change the local representation of the WORLD-up correction.
+    if (!this.isStatic) this.applyHeight();
     // Final anchors now include mixer pose, bridge travel, turn and lift.
     // The engine clamps its animation delta; secondary motion uses real time.
     const now = performance.now();

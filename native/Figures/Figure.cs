@@ -19,7 +19,7 @@ namespace AnimaNative.Figures;
 /// the goal (<see cref="Target"/>), the stations of a room change (<see cref="Waypoints"/>) and a guided stair climb
 /// (<see cref="Ride"/>); <see cref="FigureManager"/> steps it every frame through <see cref="NpcWalk"/>. The yaw eases
 /// ×10/s towards the last asked direction (<see cref="FaceTowards"/>), the clip follows the ground word
-/// (<see cref="Play(string, bool, double)"/>).
+/// (<see cref="Play"/>).
 /// </summary>
 public partial class Figure : Node3D
 {
@@ -123,6 +123,8 @@ public partial class Figure : Node3D
     /// <summary>The body's drop under the root (the ground's sink while the ground names the clip, figures.ts <c>setClipDrop</c>).</summary>
     public double Drop { get; private set; }
     public string Rule { get; set; } = "";
+    /// <summary>The actual placement surface; ignored while walking.</summary>
+    public string SurfaceGroup { get; set; } = "ground";
     /// <summary>The standing facing (world direction, y ignored): a seat's marker or the movement target; null = none.</summary>
     public Vector3? Face { get; set; }
     /// <summary>A seat's lean in degrees (<c>setLean(tilt, roll)</c>, Euler YXZ like the browser's root); null = upright.</summary>
@@ -202,7 +204,10 @@ public partial class Figure : Node3D
     public void ApplyRotation()
     {
         var lean = Lean ?? (0, 0);
-        Rotation = new Vector3((float)(lean.Tilt * Math.PI / 180), (float)Yaw, (float)(lean.Roll * Math.PI / 180));
+        var previous = Rotation;
+        var rotation = new Vector3((float)(lean.Tilt * Math.PI / 180), (float)Yaw, (float)(lean.Roll * Math.PI / 180));
+        Rotation = rotation;
+        if (HeightCorrectionM != 0 && (previous.X != rotation.X || previous.Z != rotation.Z)) ApplyBody();
     }
 
     /// <summary>Show or hide the figure for the placement (<c>npc.root.visible = !st.hidden</c>).</summary>
@@ -243,6 +248,7 @@ public partial class Figure : Node3D
         _terrainClip = false;
         _sink = 0;
         Drop = 0;
+        HeightCorrectionM = 0;
         ResetBridges();
         var bind = bindOffset ?? V3.Zero;
         _travelBase = new P2(bind.X, bind.Z);
@@ -329,10 +335,10 @@ public partial class Figure : Node3D
     /// What the figure asked for last (<c>play(kind, terrainClip, sink)</c> of the manager's frame; "" = the standing
     /// pose) — a new body plays it again at once.
     /// </summary>
-    public (string Kind, bool TerrainClip, double Sink) WantedClip { get; private set; } = ("", false, 0);
+    public (string Kind, bool TerrainClip, double Sink, string SurfaceGroup) WantedClip { get; private set; } = ("", false, 0, "ground");
 
-    /// <summary>Ask for the wanted clip again (<see cref="Play(string, bool, double)"/> of <see cref="WantedClip"/>).</summary>
-    public void UpdateClip() => Play(WantedClip.Kind, WantedClip.TerrainClip, WantedClip.Sink);
+    /// <summary>Ask for the wanted clip and calibration surface again after a body replacement.</summary>
+    public void UpdateClip() => Play(WantedClip.Kind, WantedClip.TerrainClip, WantedClip.Sink, WantedClip.SurfaceGroup);
 
     /// <summary>Forget what plays and ask again (after something drove the player directly, e.g. a check).</summary>
     public void Replay()
@@ -345,7 +351,7 @@ public partial class Figure : Node3D
     private double _sink;
 
     /// <summary>
-    /// The last <see cref="Play(string, bool, double)"/> asked for a bridge whose clip is still being fitted (lazy, Task
+    /// The last <see cref="Play"/> asked for a bridge whose clip is still being fitted (lazy, Task
     /// 35b): the rule's accel (≤ 0 = a holding bridge); null = none waits. The owner keeps a holding bridge's height until
     /// it opens, so the lift it hands over is the whole one, as on the frame the eager fit would have opened it.
     /// </summary>
@@ -359,6 +365,9 @@ public partial class Figure : Node3D
     public IReadOnlyDictionary<Animation, ClipExtras> Extras { get; set; } = new Dictionary<Animation, ClipExtras>();
     /// <summary>World metres per template unit (<c>baseScale</c>): the body node's scale.</summary>
     public double BaseScale { get; set; } = 1;
+    /// <summary>Calibration from the source behind each planned action, not the potentially shared Animation.</summary>
+    public Func<string, ClipHeightOffsets>? HeightOffsetsOf { get; set; }
+    public double HeightCorrectionM { get; private set; }
     /// <summary>
     /// The clock bridges are timed by, seconds (the browser's <c>performance.now()</c>): the manager's accumulated frame
     /// time, so a headless check runs the same rules on simulated frames. Default: the engine's monotonic clock.
@@ -451,12 +460,17 @@ public partial class Figure : Node3D
     /// actions, else the first; the stand-in pace; the action's own loop flag; a crossfade of
     /// <see cref="ClipLibraryRules.CrossfadeS"/> from the start of the clip.
     /// </summary>
-    public void Play(string rawKind, bool terrainClip = false, double sink = 0)
+    public void Play(string rawKind, bool terrainClip = false, double sink = 0, string? surfaceGroup = null)
     {
-        WantedClip = (rawKind, terrainClip, sink);
+        surfaceGroup = terrainClip ? "ground" : ClipHeightOffsets.Surface(surfaceGroup);
+        WantedClip = (rawKind, terrainClip, sink, surfaceGroup);
         var kind = (rawKind.Length > 0 ? rawKind : FigureClips.PoseKind(FigureClips.Standing, Poses)).ToLowerInvariant();
         // A bridge is running: let it finish; the frame after it asks again.
-        if (Bridging) return;
+        if (Bridging)
+        {
+            SetHeightCorrection(CurrentClip, "ground");
+            return;
+        }
         PendingBridgeAccel = null;
         var rule = FigureClips.Transition(CurrentKind, kind, Transitions);
         var via = rule?.Kind ?? "";
@@ -467,26 +481,38 @@ public partial class Figure : Node3D
             if (!EnsureClip(via))
             {
                 PendingBridgeAccel = rule.Accel;
+                SetHeightCorrection(CurrentClip, surfaceGroup);
                 return;
             }
             StartBridge(via, rule.Accel);
+            SetHeightCorrection(via, "ground");
             return;
         }
         double sinkM = terrainClip && double.IsFinite(sink) && sink > 0 ? sink : 0;
-        if (kind == CurrentKind && terrainClip == _terrainClip && sinkM == _sink) return;
+        if (kind == CurrentKind && terrainClip == _terrainClip && sinkM == _sink)
+        {
+            SetHeightCorrection(CurrentClip, surfaceGroup);
+            return;
+        }
         if (Player is null)
         {
             _terrainClip = terrainClip;
             _sink = sinkM;
             // No actions: `resolved` is undefined in the browser, so the drop is 0 (a static rig's height is its bob's).
             SetClipDrop(0);
+            SetHeightCorrection("", surfaceGroup);
             CurrentKind = kind;
             return;
         }
         var chosen = FigureClips.ResolveClipKind(kind, _clipKinds, Poses);
         var resolved = chosen.Length > 0 ? chosen : _clipKinds.FirstOrDefault() ?? "";
         // Lazy (Task 35b): the clip is being fitted — keep what plays (kind, drop, pace) and ask again next frame.
-        if (resolved.Length > 0 && !EnsureClip(resolved)) return;
+        if (resolved.Length > 0 && !EnsureClip(resolved))
+        {
+            SetHeightCorrection(CurrentClip, surfaceGroup);
+            return;
+        }
+        SetHeightCorrection(resolved, surfaceGroup);
         _terrainClip = terrainClip;
         _sink = sinkM;
         // The drop belongs to the clip that ACTUALLY plays; the ground's sink comes on top, in world metres.
@@ -558,11 +584,12 @@ public partial class Figure : Node3D
     /// half re-seeks only when its own time drifted more than <see cref="PairClip.ResyncS"/> (measured on the circle for
     /// a cycle). <paramref name="frozen"/> stops the player where it stands. False when the half is not bound on this rig.
     /// </summary>
-    public bool PlayPair(string clipName, double t, bool frozen, bool loop)
+    public bool PlayPair(string clipName, double t, bool frozen, bool loop, string? surfaceGroup = null)
     {
         if (Player is not { } p || !HasAction(clipName)) return false;
         ReleaseBridge();
         SetClipDrop(0);
+        SetHeightCorrection(clipName, surfaceGroup);
         _terrainClip = false;
         _sink = 0;
         var anim = p.GetAnimation(clipName);
@@ -796,6 +823,15 @@ public partial class Figure : Node3D
         => BridgeLift.LiftAt(t, _liftStart, _liftSpec!.EndLift * BaseScale, _liftSpec.FirstContactS)
            + BridgeLift.FadeCarry(_liftCarry, t - _liftCarryAt);
 
+    private void SetHeightCorrection(string clip, string? surfaceGroup)
+    {
+        double correction = clip.Length > 0 && HeightOffsetsOf is { } offsets
+            ? offsets(clip).Metres(surfaceGroup, BodyHeight) : 0;
+        if (HeightCorrectionM == correction) return;
+        HeightCorrectionM = correction;
+        ApplyBody();
+    }
+
     /// <summary>figures.ts <c>setClipDrop</c>: the clip's ground offset (+ the sink) the body hangs under the root.</summary>
     private void SetClipDrop(double drop)
     {
@@ -805,8 +841,8 @@ public partial class Figure : Node3D
     }
 
     /// <summary>
-    /// The body: <c>(base + offset).xz</c>, height <c>groundY − drop + lift</c> (a portrait never drops); a static rig's
-    /// height and scale are its procedural bob's and breath's alone, once the first frame computed them.
+    /// The body: <c>(base + offset).xz</c>, height <c>groundY − drop + lift</c>, plus calibration on WORLD up.
+    /// A static rig's height and scale are its procedural bob's and breath's alone.
     /// </summary>
     private void ApplyBody()
     {
@@ -818,7 +854,17 @@ public partial class Figure : Node3D
         }
         var o = InstanceOffset();
         double y = _procedural is { } p ? p.Y : _groundY - Drop + _lift;
-        b.Position = new Vector3((float)(_travelBase.X + o.X), (float)y, (float)(_travelBase.Z + o.Z));
+        double dx = 0, dy = 0, dz = 0;
+        if (_procedural is null && HeightCorrectionM != 0)
+        {
+            // Inverse YXZ root rotation of world up: yaw leaves up unchanged.
+            double tilt = Rotation.X, roll = Rotation.Z;
+            double vertical = HeightCorrectionM * Math.Cos(tilt);
+            dx = vertical * Math.Sin(roll);
+            dy = vertical * Math.Cos(roll);
+            dz = -HeightCorrectionM * Math.Sin(tilt);
+        }
+        b.Position = new Vector3((float)(_travelBase.X + o.X + dx), (float)(y + dy), (float)(_travelBase.Z + o.Z + dz));
         if (_procedural is { } q) b.Scale = Vector3.One * (float)q.Scale;
     }
 

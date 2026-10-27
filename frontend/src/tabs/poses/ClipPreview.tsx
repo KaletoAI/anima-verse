@@ -24,7 +24,8 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { AnimationClip, Object3D } from 'three'
-import { anchorFigureBind, clipHipsDrop, pairYaw } from '@anima/scene-render'
+import { anchorFigureBind, clipHipsDrop, clipHeightOffsetM, pairYaw,
+  type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { loadTestFigure, standHipsRef } from '../characters/Model3DViewer'
@@ -48,10 +49,9 @@ const FIGURE_H = 1.7
  *  a place type of its own) every box left is one they rest on.
  *
  *  `lie` covers a mattress, a couch and the bare floor — the group no longer
- *  says which, the marker's own height does. Its box is therefore the
- *  footprint of a lying body on a low slab, not a bed: 2.0 × 1.0 m shows how
- *  much room the pose takes, and a slab makes no claim about furniture that
- *  the marker has not made.
+ *  says which, the marker's own height does. A pillow marks the head end;
+ *  a backrest marks the rear of a seat. These orientation aids do not change
+ *  the calibration body's contact height or footprint.
  *
  *  This is the PAIR body. A SOLO figure is calibrated against `SOLO_BOX`,
  *  which is the same slab turned 90° — see there. */
@@ -93,11 +93,16 @@ function soloBox(group?: string): MarkerBox | undefined {
   return SOLO_BOX[(group || '').trim().toLowerCase()]
 }
 
-interface ApiClip { kind: string; role?: string; set?: string; url: string }
+interface ApiClip {
+  kind: string; role?: string; set?: string; url: string
+  height_offsets_cm?: ClipHeightOffsetsCm
+}
 
 /** Explicit clip URLs instead of a kind lookup — how the CMU catalog browser
  *  previews a TRIAL clip, which is in no library and has no kind yet. */
 export interface ClipUrls { a?: string; b?: string; solo?: string }
+
+interface RootPath { times: ArrayLike<number>; xyz: Float32Array }
 
 /** Root path of a half: hips XZ per key, clip centimetres → metres.
  *
@@ -105,8 +110,7 @@ export interface ClipUrls { a?: string; b?: string; solo?: string }
  *  (`standHipsRef`, the reference rig's rest hips height) — a clip without a
  *  hips track carries no height of its own, so it is played at exactly that
  *  reference and the figure stays where it binds. */
-function rootPath(clip: AnimationClip, standRefM: number):
-{ times: ArrayLike<number>; xyz: Float32Array } {
+function rootPath(clip: AnimationClip, standRefM: number): RootPath {
   const track = clip.tracks.find((tr) => tr.name.endsWith('.position') && /hips/i.test(tr.name))
   if (!track) return { times: [0], xyz: new Float32Array([0, standRefM, 0]) }
   const n = track.times.length
@@ -115,7 +119,7 @@ function rootPath(clip: AnimationClip, standRefM: number):
   return { times: track.times, xyz }
 }
 
-function rootAt(path: { times: ArrayLike<number>; xyz: Float32Array }, t: number) {
+function rootAt(path: RootPath, t: number) {
   const { times, xyz } = path
   const n = times.length
   const at = (i: number) => ({ x: xyz[i * 3], y: xyz[i * 3 + 1], z: xyz[i * 3 + 2] })
@@ -158,11 +162,11 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
      *  are the right-handed turn about the vertical, `rotation.y = a` and
      *  `Matrix.Rotation(a, "Y")` (pinned by scripts/smoke_clip_yaw.py). */
     importYaw?: number
-    /** THE OTHER THREE DIALS (degrees / metres), same contract as `importYaw`:
-     *  the clip frame is turned `YXZ` — yaw about the vertical, tilt about +X
-     *  (head forward/down), roll about +Z (to the figure's right) — and then
-     *  lifted. That is the order `clip_orient.py` bakes, so what is seen here
-     *  is what "Apply orientation" writes into the file. */
+    /** The two remaining angle dials (degrees), same contract as `importYaw`:
+     *  the clip frame turns `YXZ` — yaw about the vertical, tilt about +X
+     *  (head forward/down), roll about +Z (to the figure's right).
+     *  `importHeightM`, when given, overrides the saved surface correction
+     *  in metres for this preview only; it is never baked into the FBX. */
     importTilt?: number
     importRoll?: number
     importHeightM?: number
@@ -207,8 +211,8 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
   importTiltRef.current = importTilt || 0
   const importRollRef = useRef(importRoll || 0)
   importRollRef.current = importRoll || 0
-  const importHeightRef = useRef(importHeightM || 0)
-  importHeightRef.current = importHeightM || 0
+  const importHeightRef = useRef(importHeightM)
+  importHeightRef.current = importHeightM
   const dialled = importYaw !== undefined || importTilt !== undefined
     || importRoll !== undefined || importHeightM !== undefined
   const box = markerBox(group)
@@ -235,7 +239,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         const { OrbitControls } = await import('three/examples/jsm/controls/OrbitControls.js')
         const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
         const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
-        let parts: Array<{ role: 'a' | 'b' | ''; url: string }> = []
+        let parts: Array<{ role: 'a' | 'b' | ''; url: string; heightOffsets?: ClipHeightOffsetsCm }> = []
         if (direct) {
           parts = urlA && urlB
             ? [{ role: 'a', url: urlA }, { role: 'b', url: urlB }]
@@ -255,9 +259,13 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             || clips.find((c) => c.kind === kind && (c.role || '') === role)
           const bustUrl = (u: string) => (bust ? `${u}${u.includes('?') ? '&' : '?'}v=${bust}` : u)
           const isPair = !!(pick('a') && pick('b'))
+          const part = (role: 'a' | 'b' | '') => {
+            const clip = pick(role)!
+            return { role, url: bustUrl(clip.url), heightOffsets: clip.height_offsets_cm }
+          }
           parts = isPair
-            ? [{ role: 'a', url: bustUrl(pick('a')!.url) }, { role: 'b', url: bustUrl(pick('b')!.url) }]
-            : pick('') ? [{ role: '', url: bustUrl(pick('')!.url) }] : []
+            ? [part('a'), part('b')]
+            : pick('') ? [part('')] : []
         }
         if (!parts.length) { setStatus(t('No clip file for this kind in shared/models/clips.')); return }
         const src = await loadTestFigure()
@@ -339,6 +347,25 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             (mesh.material as { dispose: () => void }).dispose();
             (edges.material as { dispose: () => void }).dispose()
           })
+          // Orientation aids remain in the fixed surface frame, never in the
+          // dialled clip frame. Their materials and buffers belong to this mount.
+          const surfaceGroup = (seat ? group : footprint)?.trim().toLowerCase()
+          if (surfaceGroup === 'lie' || surfaceGroup === 'seat') {
+            const pillow = surfaceGroup === 'lie'
+            const across = pillow && !!seat
+            const aidGeom = pillow
+              ? new THREE.BoxGeometry(across ? 0.32 : bw * 0.8, 0.09, across ? bd * 0.8 : 0.32)
+              : new THREE.BoxGeometry(bw, 0.55, 0.07)
+            const aidMat = new THREE.MeshStandardMaterial({
+              color: pillow ? 0xe4d9b8 : 0x526785, roughness: 0.95,
+            })
+            const aid = new THREE.Mesh(aidGeom, aidMat)
+            aid.position.set(across ? bw / 2 - 0.22 : 0,
+              bh + (pillow ? 0.045 : 0.275),
+              across ? 0 : -bd / 2 + (pillow ? 0.22 : 0.035))
+            scene.add(aid)
+            disposers.push(() => { aidGeom.dispose(); aidMat.dispose() })
+          }
         }
         const camera = new THREE.PerspectiveCamera(40, width / height, 0.05, 100)
         camera.position.set(0.6, 2.2, 4.2)
@@ -349,7 +376,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
 
         // ── figures + clips ──
         const fbx = new FBXLoader()
-        const players: Array<{ root: Object3D; mixer: InstanceType<typeof THREE.AnimationMixer>; path: ReturnType<typeof rootPath>; duration: number; hipsBindY: number }> = []
+        const players: Array<{ root: Object3D; mixer: InstanceType<typeof THREE.AnimationMixer>; path: RootPath; duration: number; hipsBindY: number; heightM: number }> = []
         const hipsOf = (root: Object3D): Object3D | null => {
           let found: Object3D | null = null
           root.traverse((o) => { if (!found && /hips/i.test(o.name)) found = o })
@@ -363,7 +390,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         // the figures play at their bind height.
         const standRefM = ((await standHipsRef()) || 0) / 100
         if (disposed) return
-        for (const { role, url } of parts) {
+        for (const { role, url, heightOffsets } of parts) {
           const obj = await fbx.loadAsync(url)
           const clip = obj.animations?.[0]
           if (!clip || disposed) return
@@ -417,11 +444,14 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           root.add(sprite)
           const mixer = new THREE.AnimationMixer(inst)
           mixer.clipAction(inplace).play()
-          players.push({ root, mixer, path, duration: clip.duration, hipsBindY })
+          players.push({ root, mixer, path, duration: clip.duration, hipsBindY,
+            heightM: clipHeightOffsetM(heightOffsets, seat ? group : (footprint || group), FIGURE_H) })
         }
         if (disposed) return
         setStatus('')
         const fullDuration = Math.min(...players.map((p) => p.duration))
+        const heightShift = new THREE.Vector3()
+        const inverseFrame = new THREE.Quaternion()
         const started = performance.now()
         let lastInfo = 0
         const tick = () => {
@@ -432,9 +462,8 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           const end = w && w.end > start ? Math.min(w.end, fullDuration) : fullDuration
           const duration = Math.max(end - start, 1 / 30)
           const time = start + (((performance.now() - started) / 1000) * speedRef.current) % duration
-          // The dials turn and lift the clip frame as a whole — exactly what
-          // baking them will do to the file (smoke_clip_yaw.py [2] for the
-          // yaw, smoke_clip_orient.py for all four).
+          // Angles turn the clip frame as a whole, as the orientation bake does.
+          // Surface height remains a separate world-up translation.
           const rad = Math.PI / 180
           // `YXZ` is the order the bake applies (roll, then tilt, then yaw),
           // so the Euler here and `Ry · Rx · Rz` there are the same rotation.
@@ -447,9 +476,11 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             'YXZ',
           )
           // The clip frame's origin sits `root_drop × 1.70` under the MARKED
-          // SURFACE, which is the box top — plus whatever the height dial adds.
+          // SURFACE, which is the box top. A draft overrides both halves;
+          // saved corrections belong to each actually resolved file/set.
           frame.position.y = (calib ? calib.size[1] - (dropRef.current || 0) * FIGURE_H : 0)
-            + (importHeightRef.current || 0)
+            + (importHeightRef.current ?? 0)
+          inverseFrame.copy(frame.quaternion).invert()
           for (const p of players) {
             p.mixer.setTime(time)
             const r = rootAt(p.path, time)
@@ -458,6 +489,10 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             // place, so this preview walks the root along the path itself).
             // A standing clip yields 0 and the figure stays where it binds.
             p.root.position.set(r.x, -clipHipsDrop(p.hipsBindY, r.y, standRefM), r.z)
+            if (importHeightRef.current === undefined && p.heightM) {
+              heightShift.set(0, p.heightM, 0).applyQuaternion(inverseFrame)
+              p.root.position.add(heightShift)
+            }
           }
           if (performance.now() - lastInfo > 150) {
             lastInfo = performance.now()
@@ -494,6 +529,10 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
     ? ` · ${t('calibration box')} ${footprint} ${fp.size[0].toFixed(2)}`
       + ` × ${fp.size[1].toFixed(2)} × ${fp.size[2].toFixed(2)} m, ${t('facing south')}`
     : ''
+  const surfaceGroup = (seated ? group : footprint)?.trim().toLowerCase()
+  const directionNote = surfaceGroup === 'lie'
+    ? t('Pillow = head end; the opposite end is the foot end.')
+    : surfaceGroup === 'seat' ? t('Backrest = rear; the open side is the front.') : ''
 
   return (
     <div style={{ marginTop: 8 }}>
@@ -507,6 +546,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
               + footNote + (dialled ? ` · ${t('arrow = the clip’s forward axis')}` : ''))
           : '')}
       </div>
+      {directionNote ? <div className="ga-hint" style={{ marginTop: 2 }}>{directionNote}</div> : null}
       {onYawOffset ? (
         <>
           <SliderInput

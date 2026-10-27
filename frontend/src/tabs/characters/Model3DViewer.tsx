@@ -18,8 +18,8 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   installSkinnedNormalCorrection, createSecondaryMotion, bindRelativeClip, clipHipsDrop, disposeSlotMaterials, figureRootY,
   hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
   restCorrections, restPoseOf, rigHipsHeight,
-  standingHipsRef } from '@anima/scene-render'
-import type { SecondaryMotion, SecondaryMotionPayload, RestPose } from '@anima/scene-render'
+  standingHipsRef, clipHeightOffsetM } from '@anima/scene-render'
+import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -92,7 +92,8 @@ export const loadTestFigure = (): Promise<Object3D | null> => {
 }
 /** One entry of `GET /assets/animation-clips`: the clip's KIND, the half of a
  *  pair it plays (`a`/`b`, empty = solo) and the figure set it was made for. */
-interface ClipEntry { kind: string; role?: string; set: string; url: string }
+interface ClipEntry { kind: string; role?: string; set: string; url: string
+  height_offsets_cm?: ClipHeightOffsetsCm }
 /** The sidecar of a complete PAIR kind (§ A8a): where each half stands around
  *  the shared anchor, in metres of the clip's own frame. */
 interface PairMeta {
@@ -147,7 +148,8 @@ const donorRig = () => {
 }
 const donorRest = async () => (await donorRig()).rest
 const _clipCache = new Map<string, Promise<{ clip: AnimationClip; restObj: Object3D
-                                             hipsMedian: number | null } | null>>()
+                                             hipsMedian: number | null
+                                             heightOffsets?: ClipHeightOffsetsCm } | null>>()
 /** One clip of `kind` — the `role` half of it when it is a pair clip. */
 const loadClip = (kind: string, role = '') => {
   const key = role ? `${kind}#${role}` : kind
@@ -175,7 +177,7 @@ const loadClip = (kind: string, role = '') => {
         // and carries the locomotion of the take across the room.
         clip.tracks = clip.tracks.filter(
           (tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')))
-        return { clip, restObj: clipObj, hipsMedian }
+        return { clip, restObj: clipObj, hipsMedian, heightOffsets: pick.height_offsets_cm }
       } catch {
         return null
       }
@@ -185,6 +187,14 @@ const loadClip = (kind: string, role = '') => {
   return cached
 }
 let _standRefPromise: Promise<number | null> | null = null
+
+/** Refresh all admin consumers after a clip sidecar or file changes. */
+export function invalidateAnimationPreviewClips(): void {
+  _clipIndexPromise = null
+  _clipCache.clear()
+  _standRefPromise = null
+  window.dispatchEvent(new Event('animation-clips-changed'))
+}
 /** The STANDING hips height of the clip library, in clip units — the
  *  reference every clip's own hips height is read against (`clipHipsDrop`).
  *  The SAME rule the 3D client applies (`standingHipsRef` of
@@ -636,6 +646,11 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   // without reload — a typed number must show up while it is being typed.
   useEffect(() => { overlayFnRef.current?.() },
     [markers, lightPoint, waterRegions, dimsOverlay, figureHeight, scaleFigure, groundOffsetM])
+  useEffect(() => {
+    const refresh = () => overlayFnRef.current?.()
+    window.addEventListener('animation-clips-changed', refresh)
+    return () => window.removeEventListener('animation-clips-changed', refresh)
+  }, [])
   // Switching the scale kit on widens what has to be in view.
   useEffect(() => { refitFnRef.current?.() }, [scaleFigure])
   // The armed pick tool reads as a crosshair on the canvas.
@@ -1622,7 +1637,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             // `figGroup`, never under the model or the area overlay.
             const addMarkerFigure = async (o: {
               x: number; y: number; z: number
-              kind?: string; role?: 'a' | 'b'
+              kind?: string; role?: 'a' | 'b'; surfaceGroup?: string
               facingDeg?: number; figH: number; token: number }) => {
               const src = await loadTestFigure()
               if (!src || disposed || figTokenRef.current !== o.token) return
@@ -1706,7 +1721,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 mixer.setTime(Math.max(0, anim.clip.duration - 0.001))
               }
               const fig = new THREE.Group()
-              fig.position.set(o.x, o.y - hipsDrop, o.z)
+              fig.position.set(o.x, o.y - hipsDrop
+                + clipHeightOffsetM(anim?.heightOffsets, o.surfaceGroup, o.figH), o.z)
               fig.rotation.y = _deg(o.facingDeg)
               fig.add(fpivot)
               fig.userData.__shared = true
@@ -1826,7 +1842,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                   for (const role of ['a', 'b'] as const) {
                     await addMarkerFigure({
                       x: pts[role][0], y: rootY, z: pts[role][1],
-                      kind, role, facingDeg: yawDeg, figH, token: figToken })
+                      kind, role, surfaceGroup: m.group, facingDeg: yawDeg, figH, token: figToken })
                   }
                   return
                 }
@@ -1835,7 +1851,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                                                    m.capacity || 1,
                                                    (m.spacing_m || 0.6) * perMetre,
                                                    m.slot_axis)) {
-                  await addMarkerFigure({ x: sx, y: rootY, z: sz, kind,
+                  await addMarkerFigure({ x: sx, y: rootY, z: sz, kind, surfaceGroup: m.group,
                                           facingDeg: m.facing, figH, token: figToken })
                 }
               })()

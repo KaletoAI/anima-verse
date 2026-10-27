@@ -79,6 +79,88 @@ public class FigureRuntimeRulesTests
         Assert.Equal(new[] { "walk/", "idle/" }, ClipLibraryRules.ClipsFor(index, null).Select(x => $"{x.Kind}/{x.Set}"));
     }
 
+    /// <summary>
+    /// Independent reference corrections +10/-20/+30 cm become +0.10/-0.20/+0.30 m at 1.70 m.
+    /// At 0.85 m they halve; stand, no marker and unknown markers use ground, never the last seat/lie value.
+    /// </summary>
+    [Theory]
+    [InlineData("ground", 1.7, 0.10)]
+    [InlineData("seat", 1.7, -0.20)]
+    [InlineData("lie", 1.7, 0.30)]
+    [InlineData("seat", 0.85, -0.10)]
+    [InlineData("lie", 3.4, 0.60)]
+    [InlineData("stand", 1.7, 0.10)]
+    [InlineData(null, 1.7, 0.10)]
+    [InlineData("unknown", 1.7, 0.10)]
+    public void HeightCorrectionsAreIndependentAndScale(string? group, double height, double expected)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse("""{"ground":10,"seat":-20,"lie":30}""");
+        Assert.Equal(expected, ClipHeightOffsets.Parse(doc.RootElement).Metres(group, height), 10);
+    }
+
+    [Fact]
+    public void MissingSurfaceCorrectionDoesNotBorrowAnotherSurface()
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse("""{"seat":-20}""");
+        var offsets = ClipHeightOffsets.Parse(doc.RootElement);
+        Assert.Equal(-0.20, offsets.Metres("seat", 1.7), 10);
+        Assert.Equal(0, offsets.Metres("lie", 1.7));
+        Assert.Equal(0, offsets.Metres("ground", 1.7));
+        Assert.Equal(0, offsets.Metres(null, 1.7));
+    }
+
+    /// <summary>A sitting animation can land on a bed when no seat exists: the selected surface, not its name, wins.</summary>
+    [Theory]
+    [InlineData("sit", false, true, "lie")]
+    [InlineData("lie", true, false, "seat")]
+    [InlineData("sit", true, true, "seat")]
+    [InlineData("lie", true, true, "lie")]
+    [InlineData("sit", false, false, "ground")]
+    public void CalibrationFollowsActualFallbackSurface(string animation, bool seat, bool lie, string expected)
+    {
+        var point = new AnimaNative.Overview.Vec3(0, 0.5, 0);
+        var tile = new PlacementTile
+        {
+            Frame = new AnimaNative.Scene.TileFrame(default, 0), Fade = 1,
+            RoomCenters = new Dictionary<string, AnimaNative.Overview.Vec3> { ["room"] = point },
+            RoomSitSpots = new Dictionary<string, IReadOnlyList<AnimaNative.Overview.Vec3>>
+            {
+                ["room"] = seat ? new[] { point } : Array.Empty<AnimaNative.Overview.Vec3>(),
+            },
+            RoomLieSpots = new Dictionary<string, IReadOnlyList<AnimaNative.Overview.Vec3>>
+            {
+                ["room"] = lie ? new[] { point } : Array.Empty<AnimaNative.Overview.Vec3>(),
+            },
+        };
+        var placed = NpcPlacement.PlaceAtLocation(new[] { new PlacementRow("demo", ActivityAnimation: animation) },
+                                                tile, new PlacementContext { Near = true, RoomOf = _ => "room" });
+        Assert.Equal(expected, Assert.Single(placed).SurfaceGroup);
+    }
+
+    [Fact]
+    public void HeightCorrectionComesFromCommittedClipAndResolvedSet()
+    {
+        var sources = new[]
+        {
+            new ClipSourceEntry("idle", "", "neutral") { HeightOffsets = new(1, 2, 3) },
+            new ClipSourceEntry("idle", "female", "first") { HeightOffsets = new(10, 20, 30) },
+            new ClipSourceEntry("idle", "female", "duplicate") { HeightOffsets = new(100, 200, 300) },
+        };
+        var index = ClipLibraryRules.CommitInListOrder(sources, sources, new EntryOps());
+        var picked = Assert.Single(ClipLibraryRules.ClipsFor(index, new[] { "female" })).Clip;
+        Assert.Equal(0.20, picked.HeightOffsets.Metres("seat", 1.7), 10);
+        var fallback = Assert.Single(ClipLibraryRules.ClipsFor(index, new[] { "missing" })).Clip;
+        Assert.Equal(0.02, fallback.HeightOffsets.Metres("seat", 1.7), 10);
+    }
+
+    private sealed class EntryOps : IClipCommitOps<ClipSourceEntry>
+    {
+        public void SetFlags(ClipSourceEntry clip, ClipSourceEntry source) { }
+        public bool IsPair(string kind) => false;
+        public object? PairRoot(ClipSourceEntry clip) => null;
+        public ClipSourceEntry Rename(ClipSourceEntry clip, string kind) => clip with { Kind = kind };
+    }
+
     private sealed class UrlOps : IClipCommitOps<string>
     {
         public void SetFlags(string c, ClipSourceEntry s) { }

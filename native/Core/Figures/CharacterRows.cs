@@ -182,6 +182,8 @@ public readonly record struct FigureSpot(double X, double Z, string Rule);
 public sealed record FigurePlan(string Name, Vec3 Pos, string Rule, bool Snap, bool Hidden, Vec3? Face,
                                 (double Tilt, double Roll)? Lean, bool OnTerrain, string? InRoom = null)
 {
+    /// <summary>The actual marker or selected fallback surface; ground without one.</summary>
+    public string SurfaceGroup { get; init; } = "ground";
     /// <summary>A real room change was routed this pass (<c>transition === 'route'</c>): a climb left from before ends.</summary>
     public bool Routed { get; init; }
     /// <summary>The stations of that route (doors, landings, lift stops; npcs.ts <c>st.via</c>); null = none.</summary>
@@ -272,6 +274,7 @@ public static class FigurePlacement
                 plans.Add(new FigurePlan(f.Row.Name, f.Pos, f.Branch == "huddle" ? "tile" : f.Branch,
                                          f.Transition == FigureTransition.Snap, f.Hidden, f.Face, f.Lean, false, f.InRoom)
                 {
+                    SurfaceGroup = f.SurfaceGroup,
                     Routed = f.Transition == FigureTransition.Route,
                     Via = route is { Via.Count: > 0 } ? route.Via : null,
                     Legs = route?.Legs ?? (IReadOnlyList<Scene.StairLeg>)Array.Empty<Scene.StairLeg>(),

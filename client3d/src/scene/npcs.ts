@@ -120,6 +120,7 @@ interface Npc {
   name: string;
   /** AV3D-6: the animation category the server delivered (authoritative) */
   animation?: string;
+  surfaceGroup?: string;
   root: THREE.Group;
   figure: Figure | null;
   sprite: THREE.Sprite | null;
@@ -241,6 +242,7 @@ export interface NpcState {
   /** Lean from the marker (degrees): head up/down or tilted sideways — a
    *  figure lying askew on the sand does not stand upright. */
   lean?: { tilt: number; roll: number };
+  surfaceGroup?: string;
   /** hide the figure (e.g. a storey other than the shown one) */
   hidden?: boolean;
   /** Waypoints in between (e.g. room exits on a room change, AV3D-2) */
@@ -547,10 +549,11 @@ export class NpcManager {
    *  seated avatar staring at its neighbours instead of along its chair
    *  would look wrong exactly where every NPC looks right. */
   setPlayerPose(name: string, face: THREE.Vector3 | null,
-                lean: { tilt: number; roll: number } | null) {
+                lean: { tilt: number; roll: number } | null, surfaceGroup?: string) {
     const npc = this.npcs.get(name);
     if (!npc) return;
     npc.face = face;
+    npc.surfaceGroup = surfaceGroup;
     npc.figure?.setLean(lean?.tilt ?? 0, lean?.roll ?? 0);
   }
 
@@ -605,11 +608,11 @@ export class NpcManager {
    *  their first contact. A bridge the figure cannot lift (no rule that holds
    *  it, no measurement on this rig) leaves the height to the ease as before. */
   private playLifting(npc: Npc, kind: string, terrainClip: boolean, sink: number,
-                      rootYBefore: number, goalY: number) {
+                      rootYBefore: number, goalY: number, surfaceGroup?: string) {
     const figure = npc.figure;
     if (!figure) return;
     const wasBridging = figure.bridging;
-    figure.play(kind, terrainClip, sink);
+    figure.play(kind, terrainClip, sink, surfaceGroup);
     if (!wasBridging && figure.bridging && figure.beginBridgeLift(rootYBefore - goalY)) {
       npc.root.position.y = goalY;
     }
@@ -949,6 +952,7 @@ export class NpcManager {
       // steers, the branch above `continue`s long before this line.
       npc.pace = 1;
       npc.face = st.face ?? null;
+      npc.surfaceGroup = st.surfaceGroup;
       npc.figure?.setLean(st.lean?.tilt ?? 0, st.lean?.roll ?? 0);
       npc.root.visible = !st.hidden;
       if (st.char.name !== this.playerDriven) {
@@ -1067,6 +1071,7 @@ export class NpcManager {
       target: st.pos.clone(), settle: null, pace: 1, face: st.face ?? null, waypoints: [], route: null,
       travelling: false, reckon: null, interaction: null, activity: st.char.activity || '',
       animation: st.char.activity_animation || undefined,
+      surfaceGroup: st.surfaceGroup,
       travelLine: null, travelKey: '',
       bobPhase: Math.random() * Math.PI * 2,
     };
@@ -1227,7 +1232,9 @@ export class NpcManager {
     if (!root) return false;
     // `playPair` also ends a bridge that was still running (getting up out of
     // bed when the handshake came): its height, turn and travel let go with it.
-    if (!npc.figure.playPair(it.clip, phase, it.rate <= 0, it.loop)) return false;
+    const seat = it.anchor.placeId
+      ? this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z) : undefined;
+    if (!npc.figure.playPair(it.clip, phase, it.rate <= 0, it.loop, seat?.group)) return false;
     // A bridge travel nobody took yet has no meaning here: the ANCHOR places
     // the figure, absolutely, every frame — kept on the instance it would
     // stand the body beside its anchor for the whole interaction.
@@ -1236,8 +1243,6 @@ export class NpcManager {
     const s = Math.sin(it.anchor.yaw);
     const x = it.anchor.x + root.x * c + root.z * s;
     const z = it.anchor.z - root.x * s + root.z * c;
-    const seat = it.anchor.placeId
-      ? this.placeAt(npc.name, it.anchor.placeId, it.anchor.x, it.anchor.z) : undefined;
     npc.root.position.set(x,
       seat ? seat.slots[0].y : (this.roomStandAt(npc.name, x, z) ?? this.groundY(x, z)), z);
     npc.figure.setYaw(it.anchor.yaw);
@@ -1630,7 +1635,8 @@ export class NpcManager {
         // pair meet: root − sink is the surface the body rests on.
         this.playLifting(npc,
           moving ? moveClip(standGm.movement, !reckoning && dist > RUN_DISTANCE)
-            : standingClip, moving || !!standIdle, standSink, rootYBefore, goalY);
+            : standingClip, moving || !!standIdle, standSink, rootYBefore, goalY,
+          moving || standIdle ? 'ground' : npc.surfaceGroup);
         npc.figure.update(dt, { frozen });
       } else if (npc.sprite) {
         if (moving) {

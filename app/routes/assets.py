@@ -3,7 +3,7 @@
 Reading is public, editing is not: everything a client plays is served
 unauthenticated, while the import sources, the two library edit routes
 (``DELETE`` / ``PATCH /assets/animation-clips/{library}/{rel}``, and
-``POST …/orient``, which turns and lifts a clip in the file) are admin-only.
+``POST …/orient``, which turns a clip in the file) are admin-only.
 
 Clips live in ``shared/models/clips`` (see the README there for the hard file
 requirements: Mixamo FBX "Without Skin", one rig source, 52-bone rig). They
@@ -56,7 +56,8 @@ from app.core.animation_clips import (CLIP_EXTS, ClipExists,
                                       annotated_transitions, client_transition_rules,
                                       orient_clip, pair_kinds, rename_clip,
                                       save_transitions,
-                                      set_clip_loop, set_clip_role_gender)
+                                      set_clip_height_offsets, set_clip_loop,
+                                      set_clip_role_gender, validate_height_offsets)
 from app.core.movement import movement_pose_kinds
 from app.core.auth_dependency import require_admin
 from app.core.cmu_import import ClipImportError, validate_root_motion
@@ -85,8 +86,9 @@ def list_animation_clips() -> Dict[str, Any]:
     For the library view every clip also carries what its sidecar knows —
     ``duration_s`` / ``fps`` / ``frames`` (``null`` without a sidecar),
     ``loop``, ``origin`` (``cmu`` / a generator / ``studio`` / the skeleton family /
-    ``unknown``) and
-    ``has_sidecar`` — plus ``library`` (= ``source``) and ``rel``, the
+    ``unknown``), ``height_offsets_cm`` (absolute ground/seat/lie corrections
+    for a 1.70 m figure; empty without corrections) and ``has_sidecar`` —
+    plus ``library`` (= ``source``) and ``rel``, the
     library-relative ``[<set>/]<file>`` the edit routes address it by.
 
     A set clip's ``url`` carries its directory segment. Clients take the URL
@@ -157,13 +159,16 @@ def delete_animation_clip(library: str, rel: str,
 async def patch_animation_clip(library: str, rel: str, request: Request,
                                _: Dict[str, Any] = Depends(require_admin)
                                ) -> Dict[str, Any]:
-    """Renames a clip, moves it to another set or library, and/or sets its
-    LOOP flag or the genders of its pair halves.
+    """Renames or moves a clip and/or edits its playback metadata.
 
-    Body ``{kind?, set?, library?, loop?, role_gender?, overwrite?}``, at
-    least one of the first five. ``role_gender`` is ``{"a": "male", "b":
-    "female"}`` (or reversed) or ``null`` to clear it — pair clips only,
-    stored in the ``<kind>.json`` like ``loop`` (§ A8a). ``set: ""``
+    Body ``{kind?, set?, library?, loop?, role_gender?, height_offsets_cm?,
+    overwrite?}``, at least one edit field. ``height_offsets_cm`` is a partial
+    map of ground/seat/lie to finite numbers from -50 to 50 cm; zero removes
+    only that surface. Corrections are absolute for a 1.70 m figure, shared
+    by pair halves and applied by the renderer, never baked into the clip.
+    ``role_gender`` is ``{"a": "male", "b": "female"}`` (or reversed) or
+    ``null`` to clear it — pair clips only, stored in the ``<kind>.json``
+    like ``loop`` (§ A8a). ``set: ""``
     moves the clip to the neutral root — the ONE empty value with a meaning;
     ``library: ""`` is a bad request, not a silent no-op. ``loop`` is the
     admin's "repeat this clip / hold its last frame" and is written into the
@@ -179,10 +184,11 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
         raise HTTPException(status_code=400, detail="invalid JSON body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
-    if not any(k in body for k in ("kind", "set", "library", "loop", "role_gender")):
+    if not any(k in body for k in
+               ("kind", "set", "library", "loop", "role_gender", "height_offsets_cm")):
         raise HTTPException(
             status_code=400,
-            detail="one of kind, set, library, loop, role_gender is required")
+            detail="one of kind, set, library, loop, role_gender, height_offsets_cm is required")
     if "role_gender" in body and not (body["role_gender"] is None
                                       or isinstance(body["role_gender"], dict)):
         raise HTTPException(status_code=400,
@@ -195,6 +201,11 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
     if "overwrite" in body and not isinstance(body["overwrite"], bool):
         raise HTTPException(status_code=400,
                             detail="overwrite must be true or false")
+    if "height_offsets_cm" in body:
+        try:
+            body["height_offsets_cm"] = validate_height_offsets(body["height_offsets_cm"])
+        except ClipLibraryError as error:
+            raise _clip_edit_error(error)
     try:
         clips: List[Dict[str, Any]] = []
         if any(k in body for k in ("kind", "set", "library")):
@@ -204,18 +215,17 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
                                 to_library=body["library"] if "library" in body
                                 else None,
                                 overwrite=bool(body.get("overwrite")))
-        if "loop" in body:
-            # After the move, not before: the flag is written beside the file
-            # where it ends up. The moved view names that place.
+            # Only a move changes the addressed identity. Kind-wide metadata
+            # writers return siblings too; their first result is not our target.
             if clips:
                 library = str(clips[0].get("library") or library)
                 rel = str(clips[0].get("rel") or rel)
+        if "loop" in body:
             clips = set_clip_loop(library, rel, bool(body["loop"]))
         if "role_gender" in body:
-            if clips:
-                library = str(clips[0].get("library") or library)
-                rel = str(clips[0].get("rel") or rel)
             clips = set_clip_role_gender(library, rel, body["role_gender"])
+        if "height_offsets_cm" in body:
+            clips = set_clip_height_offsets(library, rel, body["height_offsets_cm"])
     except ClipLibraryError as e:
         raise _clip_edit_error(e)
     return {"clips": clips}
@@ -225,13 +235,14 @@ async def patch_animation_clip(library: str, rel: str, request: Request,
 async def post_animation_clip_orient(library: str, rel: str, request: Request,
                                      _: Dict[str, Any] = Depends(require_admin)
                                      ) -> Dict[str, Any]:
-    """Turns and lifts an already imported clip — the import's orientation
-    dial, applied to the FILE.
+    """Turns an already imported clip — the import's orientation dial,
+    applied to the FILE.
 
-    Body ``{yaw_deg?, tilt_deg?, roll_deg?, height_cm?}``, at least one of them
-    non-zero: the rigid rotation ``Ry(yaw) · Rx(tilt) · Rz(roll)`` about the
-    origin of the clip frame on the floor, then the lift. Both halves of a
-    pair are turned in ONE Blender run, the sidecar's angles add up and a
+    Body ``{yaw_deg?, tilt_deg?, roll_deg?}``, at least one of them non-zero:
+    the rigid rotation ``Ry(yaw) · Rx(tilt) · Rz(roll)`` about the origin of
+    the clip frame on the floor. Surface heights use the PATCH route's
+    ``height_offsets_cm`` instead. Both halves of a pair are turned in ONE
+    Blender run, the sidecar's angles add up and a
     pair's root geometry is re-measured on the written file. Needs Blender
     (503 when the host has none), answers the touched clips plus the run time.
     """
@@ -241,8 +252,12 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
         raise HTTPException(status_code=400, detail="invalid JSON body")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="object expected")
+    if "height_cm" in body:
+        raise HTTPException(
+            status_code=400,
+            detail="height_cm is not an orientation; PATCH height_offsets_cm for ground, seat or lie")
     dials: Dict[str, float] = {}
-    for field in ("yaw_deg", "tilt_deg", "roll_deg", "height_cm"):
+    for field in ("yaw_deg", "tilt_deg", "roll_deg"):
         raw = body.get(field, 0)
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             raise HTTPException(status_code=400, detail=f"{field} must be a number")
@@ -250,7 +265,7 @@ async def post_animation_clip_orient(library: str, rel: str, request: Request,
     if not any(abs(v) > 1e-9 for v in dials.values()):
         raise HTTPException(
             status_code=400,
-            detail="one of yaw_deg, tilt_deg, roll_deg, height_cm must be non-zero")
+            detail="one of yaw_deg, tilt_deg, roll_deg must be non-zero")
     if not blender_runner.is_available():
         raise HTTPException(status_code=503,
                             detail="Blender is not available on this server")

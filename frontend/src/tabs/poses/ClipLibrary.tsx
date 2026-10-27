@@ -29,19 +29,20 @@
  * and offers "Replace", which repeats the same call with `overwrite` and lets
  * the incoming file take the place of the one lying there.
  *
- * Under the preview sit the ORIENTATION dials: turn, tilt, roll and height.
- * The preview shows them live against the calibration box of a place type,
- * and "Apply orientation" BAKES them into the file — there is no second
- * truth, because the clients read a pair's root path out of the clip itself.
+ * Under the preview sit the ORIENTATION dials: turn, tilt and roll.
+ * "Apply orientation" BAKES these angles into the file. Height corrections
+ * are saved separately per surface type in the sidecar, never in the FBX.
  * The import's own dial is gone by then and most mocap sources with it, so
  * this is the only way a clip that lies across the bed gets straightened.
  *
  *   PATCH  /assets/animation-clips/{library}/{rel}     {kind?, set?, library?, loop?, overwrite?}
- *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?, height_cm?}
+ *   POST   /assets/animation-clips/{library}/{rel}/orient  {yaw_deg?, tilt_deg?, roll_deg?}
  *   DELETE /assets/animation-clips/{library}/{rel}
  */
 import { useCallback, useMemo, useState } from 'react'
+import { clipHeightGroup, type ClipHeightOffsetsCm } from '@anima/scene-render'
 import { ClipPreview } from './ClipPreview'
+import { invalidateAnimationPreviewClips } from '../characters/Model3DViewer'
 import { SliderInput } from '../../components/SliderInput'
 import { useI18n } from '../../i18n/I18nProvider'
 import { ApiError, apiDelete, apiPatch, apiPost } from '../../lib/api'
@@ -149,15 +150,14 @@ export function ClipLibrary({
   // Bumped after every write so the preview reloads the (possibly renamed) clip
   const [seq, setSeq] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
-  // The orientation dials of the selected clip: degrees, degrees, degrees and
-  // centimetres. They are a DRAFT — the preview turns live, nothing is written
-  // until "Apply orientation".
+  // Angles are a draft baked into ONE clip; heights are absolute per-surface
+  // sidecar values. Changing the reference surface must not share its height.
   const [yawDeg, setYawDeg] = useState(0)
   const [tiltDeg, setTiltDeg] = useState(0)
   const [rollDeg, setRollDeg] = useState(0)
-  const [heightCm, setHeightCm] = useState(0)
-  // Which place type the preview draws as the calibration box — a view
-  // setting, never sent to the server.
+  const [heightDraft, setHeightDraft] = useState<ClipHeightOffsetsCm>({})
+  const [heightBusy, setHeightBusy] = useState(false)
+  // Empty selects the ground height and draws only the grid.
   const [footprint, setFootprint] = useState('')
   const [orientBusy, setOrientBusy] = useState(false)
   const [orientError, setOrientError] = useState('')
@@ -261,13 +261,14 @@ export function ClipLibrary({
     setYawDeg(0)
     setTiltDeg(0)
     setRollDeg(0)
-    setHeightCm(0)
+    setHeightDraft({})
     setOrientError('')
     setOrientSeconds(null)
   }, [])
 
   const pick = useCallback(
     (kind: string, set?: string) => {
+      if (orientBusy || heightBusy) return
       setSelected(kind)
       resetDials()
       // Clicking the row (no column) previews the set the kind actually has —
@@ -278,7 +279,7 @@ export function ClipLibrary({
       setError('')
       setConflict(null)
     },
-    [clips, resetDials],
+    [clips, heightBusy, orientBusy, resetDials],
   )
 
   /** The file the dials act on: the previewed set's clip, and for a pair its
@@ -289,10 +290,16 @@ export function ClipLibrary({
       : null),
     [previewSet, row],
   )
-  const orientDirty = !!(yawDeg || tiltDeg || rollDeg || heightCm)
+  const heightGroup = clipHeightGroup(footprint)
+  const heightCm = heightDraft[heightGroup] ?? orientTarget?.height_offsets_cm?.[heightGroup] ?? 0
+  const heightDirty = Object.entries(heightDraft).some(
+    ([group, cm]) => cm !== (orientTarget?.height_offsets_cm?.[group as keyof ClipHeightOffsetsCm] ?? 0),
+  )
+  const orientDirty = !!(yawDeg || tiltDeg || rollDeg)
   // The baked angles live in the sidecar, so a clip without one has nowhere to
   // put them — the block says so instead of earning a 400 after Apply.
-  const orientLocked = orientBusy || orientTarget?.has_sidecar === false
+  const heightLocked = orientBusy || heightBusy
+  const orientLocked = heightLocked || orientTarget?.has_sidecar === false
 
   const applyOrientation = useCallback(async () => {
     if (!orientTarget || orientBusy || !orientDirty) return
@@ -300,23 +307,40 @@ export function ClipLibrary({
     setOrientError('')
     try {
       const res = await apiPost<{ seconds?: number }>(`${clipPath(orientTarget)}/orient`, {
-        yaw_deg: yawDeg, tilt_deg: tiltDeg, roll_deg: rollDeg, height_cm: heightCm,
+        yaw_deg: yawDeg, tilt_deg: tiltDeg, roll_deg: rollDeg,
       })
       setOrientSeconds(typeof res.seconds === 'number' ? res.seconds : null)
       setYawDeg(0)
       setTiltDeg(0)
       setRollDeg(0)
-      setHeightCm(0)
       // The file keeps its URL, so the preview has to be rebuilt AND the
       // clip re-fetched — `seq` does both (component key + cache buster).
       setSeq((n) => n + 1)
+      invalidateAnimationPreviewClips()
       await onReload()
     } catch (e) {
       setOrientError((e as Error).message)
     } finally {
       setOrientBusy(false)
     }
-  }, [heightCm, onReload, orientBusy, orientDirty, orientTarget, rollDeg, tiltDeg, yawDeg])
+  }, [onReload, orientBusy, orientDirty, orientTarget, rollDeg, tiltDeg, yawDeg])
+
+  const saveHeights = useCallback(async () => {
+    if (!orientTarget || heightBusy || !heightDirty) return
+    setHeightBusy(true)
+    setOrientError('')
+    try {
+      await apiPatch(clipPath(orientTarget), { height_offsets_cm: heightDraft })
+      invalidateAnimationPreviewClips()
+      await onReload()
+      setHeightDraft({})
+      setSeq((n) => n + 1)
+    } catch (e) {
+      setOrientError((e as Error).message)
+    } finally {
+      setHeightBusy(false)
+    }
+  }, [heightBusy, heightDirty, heightDraft, onReload, orientTarget])
 
   /** What the FILE already carries — the import's dial plus every earlier
    *  apply. A new angle is added to this, not to zero, so it is named. */
@@ -822,7 +846,8 @@ export function ClipLibrary({
                         key={s || 'neutral'}
                         type="button"
                         className={`ga-btn ga-btn-sm${previewSet === s ? ' ga-btn-primary' : ''}`}
-                        onClick={() => setPreviewSet(s)}
+                        disabled={orientBusy || heightBusy}
+                        onClick={() => { resetDials(); setPreviewSet(s) }}
                       >
                         {s || t('neutral')}
                       </button>
@@ -861,7 +886,7 @@ export function ClipLibrary({
                     <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
                       <strong>{t('Orientation')}</strong>
                       <span className="ga-hint">
-                        {t('Turns and lifts the clip in the FILE — both halves of a pair together. The preview shows it live, Apply writes it; the sources of most clips are gone, so this replaces a re-import.')}
+                        {t('Apply orientation writes angles into the clip file. Surface heights are saved separately and also apply in game. Both halves of a pair stay together.')}
                       </span>
                     </div>
                     <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -917,15 +942,15 @@ export function ClipLibrary({
                         style={{ display: 'flex', flex: '1 1 200px' }}
                       />
                       <SliderInput
-                        label={t('Height')}
+                        label={t('Surface height correction')}
                         unit="cm"
-                        title={t('Centimetres the clip is lifted after the turn — a tilted figure that sinks into the floor is raised back out with it.')}
+                        title={t('Absolute height correction for the selected surface only. Other surface types keep their own values.')}
                         min={-50}
                         max={50}
                         step={1}
                         value={heightCm}
-                        onChange={setHeightCm}
-                        disabled={orientLocked}
+                        onChange={(cm) => setHeightDraft((prev) => ({ ...prev, [heightGroup]: cm }))}
+                        disabled={heightLocked}
                         sliderWidth="auto"
                         sliderStyle={{ flex: 1, minWidth: 70 }}
                         style={{ display: 'flex', flex: '1 1 200px' }}
@@ -935,12 +960,18 @@ export function ClipLibrary({
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                         <span className="ga-hint">{t('Turn against')}</span>
                         <select className="ga-input" value={footprint}
+                          disabled={orientBusy || heightBusy}
                           onChange={(e) => setFootprint(e.target.value)}>
                           <option value="">{t('grid only')}</option>
                           <option value="lie">{t('bed / lying surface')}</option>
                           <option value="seat">{t('seat')}</option>
                         </select>
                       </label>
+                      <button type="button" className="ga-btn ga-btn-sm ga-btn-primary"
+                        disabled={!heightDirty || heightLocked}
+                        onClick={() => void saveHeights()}>
+                        {heightBusy ? t('Saving…') : t('Save surface heights')}
+                      </button>
                       <button
                         type="button"
                         className="ga-btn ga-btn-sm ga-btn-primary"
@@ -952,7 +983,7 @@ export function ClipLibrary({
                       <button
                         type="button"
                         className="ga-btn ga-btn-sm"
-                        disabled={!orientDirty || orientLocked}
+                        disabled={(!orientDirty && !heightDirty) || heightLocked}
                         onClick={resetDials}
                       >
                         {t('Reset dials')}

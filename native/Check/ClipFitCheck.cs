@@ -30,7 +30,9 @@ namespace AnimaNative.Check;
 ///      position, rotation and scale bit for bit;
 ///   C5 memory: the lazy fit holds fewer keys than the eager fit until everything was played;
 ///   C6 a pair half adopted later (pairs world, poll 2: Ben joins Ann) holds the figure on its point until fitted, then
-///      plays in phase with its partner.
+///      plays in phase with its partner;
+///   C7 per-surface reference height corrections compose with bind/ground drop, follow the actual fallback clip,
+///      update without restarting an action, and reset when entering an uncalibrated pair.
 /// </summary>
 public static class ClipFitCheck
 {
@@ -42,11 +44,94 @@ public static class ClipFitCheck
 
     public static async Task<string> RunAsync(Node3D host, string fixtures)
     {
+        HeightCorrections(host);
         var bridges = await BridgesAsync(host, fixtures);
         var pairs = await PairsAsync(host, fixtures);
-        var report = $"clips C1..C6 ok ({bridges}; {pairs})";
+        var report = $"clips C1..C7 ok ({bridges}; {pairs})";
         GD.Print($"[check-clips] {report}");
         return report;
+    }
+
+    /// <summary>
+    /// C7: +10/-20/+30 cm at half reference height = +0.05/-0.10/+0.15 m.
+    /// The real Figure keeps one action playing across surface changes, composes its bind/drop,
+    /// resolves an unavailable kind to that action, and clears the correction for an uncalibrated pair half.
+    /// </summary>
+    private static void HeightCorrections(Node3D host)
+    {
+        var figure = new Figure("HeightCorrectionCheck");
+        host.AddChild(figure);
+        try
+        {
+            var body = new Node3D();
+            var player = new AnimationPlayer();
+            body.AddChild(player);
+            var library = new AnimationLibrary();
+            var clip = new Animation { Length = 1, LoopMode = Animation.LoopModeEnum.Linear };
+            library.AddAnimation("idle", clip);
+            library.AddAnimation("pair__a", new Animation { Length = 1 });
+            library.AddAnimation("bridge", new Animation { Length = 1 });
+            player.AddAnimationLibrary("", library);
+            figure.HeightOffsetsOf = action => action == "idle" ? new ClipHeightOffsets(10, -20, 30) : default;
+            figure.Extras = new Dictionary<Animation, ClipExtras> { [clip] = new() { GroundOffset = 0.04 } };
+            figure.BaseScale = 2;
+            figure.SetBody(body, true, null, player, new[] { "idle", "pair__a", "bridge" },
+                           new V3(0, 0.2, 0), bodyHeight: 0.85);
+            figure.Play("idle", false, 0, "seat");
+            Expect("C7 seat bind + calibration = 0.10",
+                   Math.Abs(body.Position.Y - 0.10) < 1e-6, body.Position.Y.ToString());
+            figure.Play("idle", false, 0, "lie");
+            Expect("C7 same action uses independent lie correction = 0.35",
+                   Math.Abs(body.Position.Y - 0.35) < 1e-6, body.Position.Y.ToString());
+            figure.Play("idle", true, 0.02);
+            Expect("C7 no marker resets to ground = 0.15",
+                   Math.Abs(body.Position.Y - 0.15) < 1e-6, body.Position.Y.ToString());
+            figure.Play("idle", true, 0.02, "lie");
+            Expect("C7 terrain forces ground despite a lie marker = 0.15",
+                   Math.Abs(body.Position.Y - 0.15) < 1e-6, body.Position.Y.ToString());
+            figure.Play("missing-kind", false, 0, "stand");
+            Expect("C7 actual fallback uses idle correction, without terrain drop = 0.25",
+                   figure.CurrentClip == "idle" && Math.Abs(body.Position.Y - 0.25) < 1e-6,
+                   $"{figure.CurrentClip} {body.Position.Y}");
+            figure.PlayPair("pair__a", 0.2, false, true, "seat");
+            Expect("C7 uncalibrated pair half clears the solo correction",
+                   Math.Abs(body.Position.Y - 0.2) < 1e-6, body.Position.Y.ToString());
+            figure.HeightOffsetsOf = _ => new ClipHeightOffsets(10, -20, 30);
+            figure.PlayPair("pair__a", 0.2, false, true, "lie");
+            Expect("C7 pair half uses lying calibration = 0.35",
+                   Math.Abs(body.Position.Y - 0.35) < 1e-6, body.Position.Y.ToString());
+            figure.PlayPair("pair__a", 0.2, false, true);
+            Expect("C7 same pair half resets to ground calibration = 0.25",
+                   Math.Abs(body.Position.Y - 0.25) < 1e-6, body.Position.Y.ToString());
+            // Subtract the tilted bind anchoring: only the calibration must move on WORLD up.
+            figure.Play("idle", false, 0, "seat");
+            figure.Lean = (30, 40);
+            figure.FaceTowards(new Vector3(1, 0, 1), snap: true);
+            var baseline = figure.ToGlobal(new Vector3(0, 0.2f, 0));
+            var delta = body.GlobalPosition - baseline;
+            Expect("C7 tilted and rolled correction is world-up only",
+                   (delta - new Vector3(0, -0.1f, 0)).Length() < 1e-6f, delta.ToString());
+            figure.Lean = (-25, -35);
+            figure.ApplyRotation();
+            baseline = figure.ToGlobal(new Vector3(0, 0.2f, 0));
+            delta = body.GlobalPosition - baseline;
+            Expect("C7 lean changes reproject an unchanged correction",
+                   (delta - new Vector3(0, -0.1f, 0)).Length() < 1e-6f, delta.ToString());
+            figure.Lean = null;
+            figure.ApplyRotation();
+            figure.Transitions = new[] { new ClipTransition("idle", "target", "bridge", 0) };
+            figure.Play("target", false, 0, "lie");
+            Expect("C7 newly opened bridge uses ground correction, not lie",
+                   figure.Bridging && Math.Abs(body.Position.Y - 0.25) < 1e-6, body.Position.Y.ToString());
+            figure.Play("target", false, 0, "seat");
+            Expect("C7 active bridge keeps ground correction, not seat",
+                   figure.Bridging && Math.Abs(body.Position.Y - 0.25) < 1e-6, body.Position.Y.ToString());
+        }
+        finally
+        {
+            host.RemoveChild(figure);
+            figure.Free();
+        }
     }
 
     private static FigureManager Manager(FixtureSource source, WorldBuilder builder, ClipFitMode mode, string tag)

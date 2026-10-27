@@ -71,6 +71,8 @@ LIBRARIES = ("free", "licensed")
 #: The cumulative orientation dials a clip sidecar records, in degrees —
 #: what the import baked plus every later ``orient_clip``.
 ORIENT_ANGLES = ("yaw_deg", "tilt_deg", "roll_deg")
+#: Absolute renderer-only corrections for a 1.70 m reference figure, in cm.
+HEIGHT_OFFSET_SURFACES = ("ground", "seat", "lie")
 #: How an import treats the root's horizontal travel — the ONE list the routes
 #: and the import core validate against. ``strip`` keeps the figure on the
 #: spot, ``keep`` bakes the source's travel into the file, ``foot_lock``
@@ -779,6 +781,53 @@ def clip_ref_height_m(kind: str, cset: str = "") -> Optional[float]:
     return v if v > 0 else None
 
 
+def clip_height_offsets(meta: Optional[Dict[str, Any]]) -> Dict[str, float]:
+    """Read only finite, non-zero surface corrections from a sidecar."""
+    raw = (meta or {}).get("height_offsets_cm")
+    if not isinstance(raw, dict):
+        return {}
+    return {key: value for key, value in raw.items()
+            if key in HEIGHT_OFFSET_SURFACES
+            and not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and -50 <= value <= 50 and value != 0}
+
+
+def validate_height_offsets(raw: Any) -> Dict[str, float]:
+    """Validate a partial height patch completely before any library mutation."""
+    if not isinstance(raw, dict):
+        raise ClipLibraryError("height_offsets_cm must be an object")
+    for key, value in raw.items():
+        if key not in HEIGHT_OFFSET_SURFACES:
+            raise ClipLibraryError(
+                "height_offsets_cm keys must be ground, seat or lie")
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not -50 <= value <= 50):
+            raise ClipLibraryError(
+                f"height_offsets_cm.{key} must be a finite number from -50 to 50")
+    return dict(raw)
+
+
+def _height_meta(path: Path, kind: str, root: Path,
+                 *, pair: bool = False) -> Optional[Dict[str, Any]]:
+    """Resolve heights within the actual file's library, never another winner.
+
+    A pair's shared sidecar is authoritative for both halves. Solo variants
+    prefer their own sidecar, with the same set/root fallback as clip_meta.
+    """
+    names = [kind] if pair else list(dict.fromkeys((path.stem, kind)))
+    for name in names:
+        for directory in dict.fromkeys((path.parent, root)):
+            sidecar = directory / f"{name}.json"
+            if sidecar.is_file():
+                try:
+                    data = json.loads(sidecar.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    return None
+                return data if isinstance(data, dict) else None
+    return None
+
+
 def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
     """One ``clip_entries()`` entry as the API delivers it — the file facts
     plus what its sidecar knows.
@@ -823,6 +872,9 @@ def clip_view(entry: Dict[str, Any]) -> Dict[str, Any]:
         "fps": (meta or {}).get("fps"),
         "frames": (meta or {}).get("frames"),
         "loop": clip_loops(meta),
+        "height_offsets_cm": clip_height_offsets(_height_meta(
+            path, entry["kind"], library_root(entry["source"]).resolve(),
+            pair=bool(entry["role"]))),
         # Which gender plays which half — pair halves only, {} = not assigned.
         "role_gender": clip_role_gender(meta) if entry["role"] else {},
         # What has already been BAKED into the file — the import's dial plus
@@ -1096,9 +1148,10 @@ def rename_clip(library: str, rel: str, *, kind: Optional[str] = None,
         logger.info("clip replaced at the target: %s (%s%s, %s library)",
                     ", ".join(gone), f"{new_set}/" if new_set else "",
                     new_kind, new_library)
-    # Only a file WITHOUT a sidecar of its own still depends on the shared
-    # <kind>.json — one that brings its own must not drag a copy along.
-    needs_shared = False
+    # A pair always depends on its shared metadata (geometry and heights),
+    # even when both halves also carry sidecars of their own. Solo variants
+    # with own sidecars do not need to drag the shared kind sidecar along.
+    needs_shared = bool(_role)
     for source, dest in moves:
         own = _own_sidecar(source)
         needs_shared = needs_shared or own is None
@@ -1224,6 +1277,81 @@ def set_clip_role_gender(library: str, rel: str,
     logger.info("clip role genders: %s%s (%s) -> %s", f"{cset}/" if cset else "",
                 kind, library, value or "not assigned")
     return [_view_of(p, cset, library) for p in _kind_files(path.parent, kind)]
+
+
+@_library_writer
+def set_clip_height_offsets(library: str, rel: str,
+                            height_offsets_cm: Any) -> List[Dict[str, Any]]:
+    """Merge absolute per-surface corrections without touching animation bytes.
+
+    Solo variants use their own sidecar when present, otherwise the shared
+    kind sidecar. Inheriting a root variant sidecar creates a local own
+    sidecar, so the write wins the same lookup without touching siblings.
+    Both pair halves use the shared map; existing half sidecars receive it
+    too. All input and sidecar reads are validated before writing. Zero
+    removes only the addressed key.
+    """
+    patch = validate_height_offsets(height_offsets_cm)
+    path = resolve_clip(library, rel)
+    if not path.is_file():
+        raise ClipNotFound(f"{rel} does not exist in the {library} library")
+    root = library_root(library).resolve()
+    kind, role = parse_clip_role(path.name)
+    cset = path.parent.name if path.parent != root else ""
+    files = [path]
+    partner = _pair_partner(path)
+    if partner is not None:
+        files.append(partner)
+    sidecar = _orient_sidecar(path, kind, bool(role))
+    # An exact-stem sidecar (including original filename case) wins the
+    # lookup. Write its local owner, or materialize a root-inherited variant.
+    if (not role and path.stem != kind
+            and (path.with_suffix(".json").is_file()
+                 or (root / f"{path.stem}.json").is_file())):
+        sidecar = path.with_suffix(".json")
+    targets = [sidecar]
+    if role:
+        targets.extend(s for s in (_own_sidecar(p) for p in files)
+                       if s is not None and s != sidecar)
+    inherited = _height_meta(path, kind, root, pair=bool(role)) or {}
+    corrections = clip_height_offsets(inherited)
+    for key, value in patch.items():
+        if value == 0:
+            corrections.pop(key, None)
+        else:
+            corrections[key] = value
+    updates = []
+    for target in targets:
+        if not target.resolve().is_relative_to(root):
+            raise ClipLibraryError("sidecar escapes the library")
+        data = dict(inherited)
+        if target.exists():
+            try:
+                data = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                raise ClipLibraryError(f"{target.name} is not readable: {error}")
+            if not isinstance(data, dict):
+                raise ClipLibraryError(f"{target.name} is not an object")
+        if corrections:
+            data["height_offsets_cm"] = dict(corrections)
+        else:
+            data.pop("height_offsets_cm", None)
+        updates.append((target, data))
+    for target, data in updates:
+        fd, name = tempfile.mkstemp(dir=target.parent, suffix=".clip-tmp")
+        os.close(fd)
+        stage = Path(name)
+        try:
+            stage.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                             encoding="utf-8")
+            atomic_replace(stage, target)
+        finally:
+            stage.unlink(missing_ok=True)
+    reload_clip_caches()
+    # A shared solo sidecar also affects its variants; report all of them.
+    if not role and sidecar.name == f"{kind}.json":
+        files = _kind_files(path.parent, kind)
+    return [_view_of(p, cset, library) for p in files]
 
 
 # ── Turning a clip AFTER the import (plan-clip-library-…-ausrichtung U2) ──
@@ -1427,9 +1555,9 @@ def _move_sidecar(src_dir: Path, old_kind: str, dest_dir: Path,
     already sitting at the target wins — those are the numbers of the clips
     that were there first.
 
-    ``needed`` is False when every moved file brought a sidecar of ITS OWN:
-    the shared one is then only taken along when it would otherwise dangle in
-    the source directory, and never copied to a kind nothing reads it for.
+    ``needed`` is False only for solo variants that all brought sidecars of
+    their OWN. The shared one then moves only when it would otherwise dangle
+    at the source. Pairs always need the shared geometry and height map.
     """
     sidecar = src_dir / f"{old_kind}.json"
     if not sidecar.is_file():

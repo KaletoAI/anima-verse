@@ -24,7 +24,7 @@ import type { AnimationClip, AnimationMixer, Clock, Group, Material, Mesh, Objec
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildPropWater, buildWall,
-  anchorFigureBind, clipHipsDrop, figureRootY, hipsTrackMedian,
+  anchorFigureBind, clipHipsDrop, figureRootY, hipsTrackMedian, clipHeightOffsetM,
   pairPoints, pairYaw,
   applyClipOutline, applyDepthCut, applySlotMaterials,
   disposeClipMaterials, disposeCutMaterials, disposeSlotMaterials,
@@ -33,7 +33,7 @@ import { applyCutouts, buildExtra, buildPlaceholder, buildPlate, buildPropWater,
   VERIFY_EPS, surfaceMaterial, updateSurfaceMaterials, wallLength,
   wallTargets } from '@anima/scene-render'
 import type { CutoutHandle, MirrorOptions, SurfaceMaterialSpec,
-  VerifyRow } from '@anima/scene-render'
+  VerifyRow, ClipHeightOffsetsCm } from '@anima/scene-render'
 import { fmtM, levelOutline } from './planGeometry'
 import type { Map3D, Room, SceneModelSpec, ScenePayload, ScenePlate } from './worldTypes'
 import { hasRect, readMapWater } from './worldTypes'
@@ -224,14 +224,15 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
   // '' = solo) and the set; `pairs[kind].geometry.roles.<role>.anchor_xz_m`
   // is where each half stands in the pair's own frame (clip +X = A → B).
   const clipListRef = useRef<{ status: 'idle' | 'loading' | 'ready' | 'missing'
-    clips: Array<{ kind: string; role?: string; set: string; url: string }>
+    clips: Array<{ kind: string; role?: string; set: string; url: string
+      height_offsets_cm?: ClipHeightOffsetsCm }>
     pairs: Record<string, { geometry?: { roles?: Record<string, { anchor_xz_m?: [number, number] }> } }> }>(
       { status: 'idle', clips: [], pairs: {} })
   // `hipsMedian` is the clip's own hips height in CLIP units, measured before
   // the position track is dropped — the figure is lowered by it again in
   // `placeFigure` (`clipHipsDrop`).
   const clipCacheRef = useRef<Map<string, { clip: AnimationClip; restObj: Object3D
-    hipsMedian: number | null } | 'loading' | 'missing'>>(new Map())
+    hipsMedian: number | null; heightOffsets?: ClipHeightOffsetsCm } | 'loading' | 'missing'>>(new Map())
   // The clip library's STANDING hips height (clip units) — `standHipsRef` of
   // the model viewer, the one cached reference-rig loader of every admin
   // preview. `resolved` once it answered; `value` null = neither rig nor idle
@@ -240,6 +241,17 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     value: number | null }>({ status: 'idle', value: null })
   const mixersRef = useRef<AnimationMixer[]>([])
   const clockRef = useRef<Clock | null>(null)
+
+  useEffect(() => {
+    const refresh = () => {
+      clipListRef.current = { status: 'idle', clips: [], pairs: {} }
+      clipCacheRef.current.clear()
+      standRefRef.current = { status: 'idle', value: null }
+      setBump((b) => b + 1)
+    }
+    window.addEventListener('animation-clips-changed', refresh)
+    return () => window.removeEventListener('animation-clips-changed', refresh)
+  }, [])
 
   // Stand-in until the first payload: the declared REAL storey height read as
   // if k were 1. From then on `scene.storey_m` decides.
@@ -363,7 +375,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
     const idx = clipListRef.current
     if (idx.status === 'idle') {
       clipListRef.current = { status: 'loading', clips: [], pairs: {} }
-      apiGet<{ clips?: Array<{ kind: string; role?: string; set: string; url: string }>
+      apiGet<{ clips?: Array<{ kind: string; role?: string; set: string; url: string
+                 height_offsets_cm?: ClipHeightOffsetsCm }>
                pairs?: typeof idx.pairs }>('/assets/animation-clips')
         .then((d) => {
           clipListRef.current = { status: 'ready', clips: d.clips || [], pairs: d.pairs || {} }
@@ -399,7 +412,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         // Mixamo centimetres; it would fling the scaled figure around).
         clip.tracks = clip.tracks.filter(
           (tr) => !(/hips/i.test(tr.name) && tr.name.endsWith('.position')))
-        clipCacheRef.current.set(cacheKey, { clip, restObj: clipObj, hipsMedian })
+        clipCacheRef.current.set(cacheKey, { clip, restObj: clipObj, hipsMedian,
+          heightOffsets: pick.height_offsets_cm })
       } catch {
         clipCacheRef.current.set(cacheKey, 'missing')
       }
@@ -704,6 +718,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
                                  animation?: string
                                  /** half of a pair clip ('a'/'b'), '' = solo */
                                  role?: string
+                                 surfaceGroup?: string
                                  facing?: number
                                  tilt?: number; roll?: number
                                  /** a place's figure (marker colour), not the
@@ -828,7 +843,8 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
         msprite.position.y = figBase * 1.15
         fig.add(msprite)
       }
-      fig.position.set(opts.x, opts.y, opts.z)
+      fig.position.set(opts.x,
+        opts.y + clipHeightOffsetM(anim?.heightOffsets, opts.surfaceGroup, figBase), opts.z)
       boxes.add(fig)
       return fig
     }
@@ -1095,6 +1111,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
             y: rootY,
             z: pts[role][1],
             animation: kind, role, facing: yawDeg,
+            surfaceGroup: marker.group,
             tilt: marker.tilt, roll: marker.roll,
             marker: true,
             label: `${n}${role.toUpperCase()} · ${name}`,
@@ -1108,6 +1125,7 @@ export function FloorPlanPreview({ locationId, rooms, map3d, storeyHeightM, onSt
           y: rootY,
           z: sz,
           animation: kind, facing: marker.facing,
+          surfaceGroup: marker.group,
           tilt: marker.tilt, roll: marker.roll,
           marker: true,
           label: slots.length > 1 ? `${n}.${i + 1} · ${name}` : `${n} · ${name}`,

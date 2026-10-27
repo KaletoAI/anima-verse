@@ -2299,7 +2299,7 @@ GET /characters/{name}/model3d      → { model: {url, format, rig,
 GET /play/test-figure/meta|/model   → Referenz-Figur der Admin-Vorschau
 GET /assets/props                   → Bare Array (§ A2 Props)
 GET /assets/props/{id}/model        → GLB (ETag; 404 = kein Mesh)
-GET /assets/animation-clips         → [{ kind, set?, url, loop, … }]
+GET /assets/animation-clips         → {clips: [{kind, set?, url, loop, height_offsets_cm, …}], …}
 GET /characters/{name}/model/meta   → {url, low_url?, texture_url?, …}
 GET /assets/animation-clips/{rel}   → FBX/GLB (content ETag)
 GET /assets/surface-textures        → Flächen + Blends (§ A9)
@@ -9003,6 +9003,18 @@ Nenner hob jede Figur um hipsBindY × (m / 110,179 − m / 113,032) — je Clip
 verschieden: idle 2,47 cm, sit 1,48 cm, laying 0,46 cm an der
 1,70-m-Referenzfigur. Der Szenen-Fingerprint hasht `pose_catalog.get_groups()`,
 eine gecachte Szene holt die neuen `root_offset` deshalb ohne Versionssprung.
+
+**Flächenspezifische Clip-Korrektur (2026-10-27).** Das Clip-Sidecar und jeder
+Eintrag der Clip-Liste tragen optional `height_offsets_cm: {ground?, seat?, lie?}`:
+absolute Zentimeterwerte für die 1,70-m-Referenzfigur, fehlend/0 = keine Korrektur.
+Zusätzlich zur obigen Platz-/Clip-Absenkung hebt der Renderer den Körper um
+`height_offsets_cm[Gruppe] / 100 × Figurenhöhe_m / 1,70`, genau einmal in Welt-Y.
+Die Werte gehören zur tatsächlich abgespielten Datei samt Set, auch bei
+Clip-/Set-Fallbacks und Paarhälften; sie ändern weder die FBX-Keyframes noch
+`root_offset`. Maßgeblich ist die tatsächliche Markergruppe; Boden, `stand`,
+Bewegung und Brücken verwenden `ground`. Bibliothek, Prop-/Grundrissvorschau,
+Browser- und nativer Spielclient verwenden dieselbe Korrektur.
+
 Die Hüftgelenk-Werte vom Vormittag des 2026-09-08 (0,320 / 0,075) steckten den
 Sitzenden 0,131 m ins Polster und den Liegenden 0,122 m in die Matratze; die
 Erst-Werte dieses Nachtrags (0,314 / 0,051) waren gegen die Clip-Bibliothek vor

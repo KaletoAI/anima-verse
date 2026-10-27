@@ -55,6 +55,22 @@ import { normBoneName } from './clipRetarget'
 /** The figure of this contract: 1.70 m, everywhere and always (§ A3). */
 export const FIGURE_HEIGHT_M = 1.7
 
+/** Absolute clip corrections for the 1.70 m reference figure, never baked into tracks. */
+export type ClipHeightOffsetsCm = Partial<Record<'ground' | 'seat' | 'lie', number>>
+
+/** Standing, unknown and unmarked places all use the ground calibration. */
+export function clipHeightGroup(group?: string | null): 'ground' | 'seat' | 'lie' {
+  return group === 'seat' || group === 'lie' ? group : 'ground'
+}
+
+export function clipHeightOffsetM(offsets: ClipHeightOffsetsCm | null | undefined,
+                                  group?: string | null,
+                                  figureHeight = FIGURE_HEIGHT_M): number {
+  const cm = offsets?.[clipHeightGroup(group)]
+  return typeof cm === 'number' && Number.isFinite(cm)
+    ? cm / 100 * figureHeight / FIGURE_HEIGHT_M : 0
+}
+
 /**
  * The y a figure's bind-pose root sits at, for a marker naming `surfaceY`.
  *

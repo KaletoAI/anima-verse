@@ -61,7 +61,10 @@ public sealed class PlacementContext
 
 /// <summary>One figure of a location as the ladder places it; <see cref="Face"/> / <see cref="Lean"/> null = none.</summary>
 public sealed record LocatedFigure(PlacementRow Row, string Branch, Vec3 Pos, Vec3? Face, (double Tilt, double Roll)? Lean,
-                                   string? InRoom, bool InteriorShown, bool Hidden, FigureTransition Transition);
+                                   string? InRoom, bool InteriorShown, bool Hidden, FigureTransition Transition)
+{
+    public string SurfaceGroup { get; init; } = "ground";
+}
 
 /// <summary>
 /// JavaScript's <c>String.prototype.localeCompare</c> without arguments (the ICU root collation V8 uses): .NET's
@@ -114,6 +117,7 @@ public static class NpcPlacement
             Vec3 pos;
             Vec3? face = null;
             (double, double)? lean = null;
+            var surfaceGroup = "ground";
             var room = ctx.RoomOf(c.Name);
             bool hasRoom = !string.IsNullOrEmpty(room);
             Vec3? roomCenter = hasRoom && tile.RoomCenters.TryGetValue(room!, out var rc) ? rc : null;
@@ -135,6 +139,7 @@ public static class NpcPlacement
                 {
                     branch = "seat";
                     pos = seatAt;
+                    surfaceGroup = ClipHeightOffsets.Surface(held.Group);
                     if (held.Rotation is { } rot)
                     {
                         double a = rot * (Math.PI / 180);
@@ -148,6 +153,7 @@ public static class NpcPlacement
                 {
                     branch = "pool";
                     pos = pool[idx % pool.Count];
+                    surfaceGroup = ReferenceEquals(pool, lieDown) ? "lie" : "seat";
                 }
                 else if (tile.Corridors.Contains(inRoom))
                 {
@@ -180,7 +186,10 @@ public static class NpcPlacement
             bool wrongStorey = inRoom is not null && tile.Fade > 0.5 && !tile.AlwaysVisibleRooms.Contains(inRoom)
                                && (tile.RoomLevels.TryGetValue(inRoom, out var lv) ? lv : 0) != tile.LevelFilter;
             bool roomIsClosed = inRoom is null && hasRoom && roomCenter is not null;
-            result.Add(new LocatedFigure(c, branch, pos, face, lean, inRoom, interiorShown, wrongStorey || roomIsClosed, transition));
+            result.Add(new LocatedFigure(c, branch, pos, face, lean, inRoom, interiorShown, wrongStorey || roomIsClosed, transition)
+            {
+                SurfaceGroup = surfaceGroup,
+            });
         }
         return result;
     }

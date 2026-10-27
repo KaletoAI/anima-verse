@@ -24,6 +24,8 @@ public sealed record ClipSource
     public required bool Loop { get; init; }
     /// <summary>The file carries a root travel (<c>root_motion.mode</c> keep/foot_lock); its path is built at fit time.</summary>
     public required bool RootMotion { get; init; }
+    /// <summary>Saved reference-height corrections of this exact file and set.</summary>
+    public ClipHeightOffsets HeightOffsets { get; init; }
     public required Animation Anim { get; init; }
     public required string[] Bones { get; init; }
     /// <summary>The bone's node default — for a clip FBX that is the take's first frame (Godot stores it as the rest).</summary>
@@ -143,7 +145,10 @@ public sealed class ClipLibrary
             // `!!c.root_motion && c.root_motion.mode !== 'strip'`
             bool rootMotion = c.TryGetProperty("root_motion", out var rm) && rm.ValueKind == JsonValueKind.Object
                               && !(rm.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String && mode.GetString() == "strip");
-            Entries.Add(new ClipSourceEntry(role.Length > 0 ? $"{kind}__{role}" : kind, Json.Str(c, "set"), url, loop, rootMotion));
+            Entries.Add(new ClipSourceEntry(role.Length > 0 ? $"{kind}__{role}" : kind, Json.Str(c, "set"), url, loop, rootMotion)
+            {
+                HeightOffsets = c.TryGetProperty("height_offsets_cm", out var offsets) ? ClipHeightOffsets.Parse(offsets) : default,
+            });
         }
         Poses = FigureClips.ResolveMovementPoses(root.TryGetProperty("movement_poses", out var mp) ? mp : null);
         Transitions = FigureClips.ResolveClipTransitions(root.TryGetProperty("transition_clips", out var tc) ? tc : null);
@@ -386,6 +391,7 @@ public sealed class ClipLibrary
             return new ClipSource
             {
                 Kind = entry.Kind, Set = entry.Set, Url = entry.Url, Loop = entry.Loops, RootMotion = entry.RootMotion,
+                HeightOffsets = entry.HeightOffsets,
                 Anim = anim, Bones = bones, RestRotations = rots, RestPositions = poss,
                 RotationTracks = rot, PositionTracks = pos, HipsMedian = median, Length = anim.Length,
                 RotationKeys = rot.ToDictionary(kv => kv.Key, kv => KeysOf(anim, kv.Value, rotation: true)),

@@ -7,6 +7,7 @@
  * and the entry editor's coverage badge speak the same vocabulary.
  */
 import type { ClipRootMotion } from './rootMotion'
+import type { ClipHeightOffsetsCm } from '@anima/scene-render'
 
 /** One installed clip file as the listing reports it. Everything past the
  *  first four fields is sidecar detail — a clip written before the sidecar
@@ -36,6 +37,8 @@ export interface ApiClipRow {
   role_gender?: { a?: string; b?: string }
   origin?: string
   has_sidecar?: boolean
+  /** Per-surface corrections in centimetres of the 1.70 m reference figure. */
+  height_offsets_cm?: ClipHeightOffsetsCm
   /** What the FILE already carries: the import's orientation dial plus every
    *  later "Apply orientation" (`geometry.yaw_deg` / `tilt_deg` / `roll_deg`
    *  in degrees, `floor_shift_cm` in centimetres). A field the sidecar never

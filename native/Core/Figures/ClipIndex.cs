@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace AnimaNative.Figures;
@@ -13,8 +14,27 @@ namespace AnimaNative.Figures;
 /// </summary>
 public sealed record ClipSourceEntry(string Kind, string Set, string Url, bool? Loop = null, bool RootMotion = false)
 {
+    /// <summary>Per-surface reference-height corrections of THIS file, never baked into its tracks.</summary>
+    public ClipHeightOffsets HeightOffsets { get; init; }
     /// <summary><c>clipLoops</c>: a missing flag loops (§ A8).</summary>
     public bool Loops => Loop ?? true;
+}
+
+/// <summary>Absolute per-surface centimetre corrections for a 1.70 m figure; absent fields mean zero.</summary>
+public readonly record struct ClipHeightOffsets(double Ground = 0, double Seat = 0, double Lie = 0)
+{
+    public static string Surface(string? group) => group is "seat" or "lie" ? group : "ground";
+
+    public double Metres(string? group, double figureHeight)
+        => (Surface(group) switch { "seat" => Seat, "lie" => Lie, _ => Ground }) / 100 * figureHeight / 1.7;
+
+    public static ClipHeightOffsets Parse(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object) return default;
+        double Cm(string key) => value.TryGetProperty(key, out var n) && n.ValueKind == JsonValueKind.Number
+                                 && n.TryGetDouble(out var v) && double.IsFinite(v) ? v : 0;
+        return new(Cm("ground"), Cm("seat"), Cm("lie"));
+    }
 }
 
 /// <summary>The committed library: kind → (set → clip) in listing order of the kinds, plus the pair-half roots.</summary>

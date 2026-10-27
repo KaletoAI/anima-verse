@@ -2873,6 +2873,7 @@ async function startApp(username: string, role: string) {
           via,
           face,
           lean,
+          surfaceGroup: p.surfaceGroup,
           hidden,
           // A visibility change places the figure, it does not walk it
           // (finding B5) — and the very first placement of a figure has
@@ -4715,7 +4716,8 @@ async function startApp(username: string, role: string) {
       face = new THREE.Vector3(dir.x, 0, dir.z);
     }
     npcs.setPlayerPose(avatarName, face,
-      held.tilt || held.roll ? { tilt: held.tilt || 0, roll: held.roll || 0 } : null);
+      held.tilt || held.roll ? { tilt: held.tilt || 0, roll: held.roll || 0 } : null,
+      held.group);
   }
 
   // --- Sitting down by click (plan-posen-plaetze.md § 4, Task 13) -----------

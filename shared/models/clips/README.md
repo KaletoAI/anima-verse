@@ -49,12 +49,31 @@ Written by the importer, edited by the Poses tab. What a renderer reads:
 | `kind`, `pair`, `roles` | the kind, whether it is a pair and which role letters exist |
 | `fps`, `source_fps`, `frames`, `duration_s` | timing; `speed` is `1.0` for everything converted since the capture rate reached Blender |
 | `loop` | `true` = repeat, `false` = hold the last frame (Three.js `LoopOnce` + `clampWhenFinished`). Measured on import, overridden by the admin's switch in the Poses tab; it holds for both halves of a pair and for every numbered take of that kind in that set. A kind with NO listing entry counts as looping — locomotion must never stand still |
+| `height_offsets_cm` | independent absolute height corrections for `ground`, `seat` and `lie`, in centimetres of the 1.70 m reference figure; missing/zero = no correction. Applied at playback from the actual selected clip/set, never baked into the FBX |
 | `geometry` | what the conversion measured: `floor_shift_cm`, the `root_motion` block of a solo clip (`mode` strip/keep/foot_lock, `travel_m` = `[x, z]` where the clip ends up in the clip frame — +Z forward, +X the figure's left, metres of the reference rig —, `ref_height_m` = the reference rig's standing height, `contact_s` = the full-contact spans `[[start, end], …]` in seconds, `max_drift_cm` = the worst planted-foot slide foot_lock left), `foot_plant` of a solo clip = the feet the import put onto the rig's floor, `{"<Foot>": {"frames", "max_cm", "pin_max_cm"}}` (`LeftFoot`/`RightFoot`, only a foot it actually moved; `frames` = frames with a correction, `max_cm` = the largest vertical one, `pin_max_cm` = the largest horizontal pin, foot_lock only), the pair anchor (`anchor_frame`, `anchor_s`, `root_distance_m`, per-role `start_xz_m`/`anchor_xz_m`), the hip scale and, after a `…/orient` run, the accumulated angles |
 | `source` | where it came from: the CMU take plus its credit, or the file, take and `bone_map` of an inbox import |
 
 The sidecar of `<stem>.fbx` is `<stem>.json` when that file exists (so
 `idle_02.fbx` may carry its own duration in `idle_02.json`), otherwise the
 shared `<kind>.json` of its kind.
+
+In **Poses → Library**, select **Turn against** to choose the surface whose
+**Surface height correction** is being edited. **Save surface heights** saves
+all edited surfaces independently; resetting one to `0` leaves the others
+unchanged. The pillow marks the lying surface's head end; the backrest marks
+the rear of a seat. **Apply orientation** writes only turn/tilt/roll into the
+FBX. Heights already baked by earlier versions remain part of that file.
+
+`PATCH /assets/animation-clips/{library}/{rel}` accepts a partial
+`height_offsets_cm` object, for example `{"lie": 12, "seat": -7}`. Keys merge;
+`0` removes only that key. Values must be finite numbers from −50 to +50 cm.
+Both halves of a pair share the correction. Browsers, native client and admin
+previews add `cm / 100 × figure_height_m / 1.70` in world-up coordinates.
+Unmarked figures, `stand`, movement and bridge clips use `ground`; a marked
+figure uses the actual surface group's correction. Clip/set fallback follows
+the file actually played, not the requested name. Saving does not alter FBX
+bytes or require Blender. Public `…/orient` no longer accepts `height_cm`.
+
 
 ## Layout → `kind` + `set`
 
