@@ -7751,10 +7751,12 @@ partner='', request_id='')`, `respond(actor, execution_id, accept)`,
 `cancel(actor, execution_id)` and `advance(now: GameTime)` are real Core
 operations. A target has exactly `location_id`, `room_id`, `placement_id`,
 `variant_uid`; the separate action/revision arguments pin the complete author
-snapshot. Results are `{execution_id,status,reason}`; refusals have an empty
-execution ID and `status: refused`. Same actor/request ID with identical
-parameters returns its original execution, while changed parameters return
-`request_id_conflict`. No HTTP route or UI activation is installed here.
+snapshot. Results are `{execution_id,status,reason}` plus `effects` when
+receipts exist; each targeted numeric result contains its actual clamped
+`delta`, never the requested amount. Refusals have an empty execution ID and
+`status: refused`. Same actor/request ID with identical parameters returns its
+original execution; changed parameters return `request_id_conflict`.
+No HTTP route or UI activation is installed here.
 
 World schema 10 stores `prop_action_runs`, `prop_action_claims` and
 `prop_action_effect_receipts`. Runs retain the complete accepted definition
@@ -7808,12 +7810,20 @@ access and anchor for the later client cutover. Only after this entry interval
 does the Core bind the exact slot and authoritative body position.
 
 `interaction_engine.start_interaction_at(actor,partner,pose_key,
-execution_id=...,plans=...)` is the bounded exact-target pair seam. It
-revalidates the durable consent, person/slot claims and exact access, then
-shares the existing pair clip/role/geometry/profile persistence implementation
-instead of auto-selecting furniture. Both ordinary `end_interaction` and prop
-cancellation correlate the shared interaction ID and execution reference.
-Generic interaction/NPC-invitation cutover remains separate work.
+execution_id=...,plans=...,commit_profiles=...)` is the bounded exact-target
+pair seam. It revalidates durable consent, claims and exact access, sharing
+the existing clip/role/geometry machinery. Its required commit callback writes
+both owned profiles/positions, active phase, start effects and receipts together.
+General Together never automatically selects a prop marker: free pair
+capabilities meet at the midpoint; furniture-required capabilities need an
+explicit prop action. Both ordinary end and prop cancellation correlate the
+actual shared interaction ID/execution reference. An undertaking completes only
+from its own exact real end (`ended`/`avatar`), not a generic pose change.
+Actual pair removal persists `last_interaction_result` on both participants
+with interaction/invitation IDs, partner, pose, start/end stamps and exact
+reason. Shared undertakings can recover a lost end-hook delivery from those
+matching real receipts; interrupted (`pose`, position, sleep, etc.) ends cancel,
+never complete the undertaking or stop a later replacement pair.
 `interaction_engine.plan_interaction_at(actor,partner,pose_key,place)` shares
 the existing gender-aware clip-role and marker geometry primitives. Before
 claims/approaches it resolves and persists `data.clip_roles` (`a`/`b`→person)
@@ -7857,17 +7867,46 @@ when TravelTicker advanced independently before process death.
 Existing sleep regeneration remains owned by the sleep mechanic; this executor
 invents no bed rate.
 
-**Intermediate effect boundary:** until Task5 installs the real transactional
-effect adapter, *every* effectful request is explicitly refused with
-`effect_application_unavailable`. There are no stub effect methods, fabricated
-receipts or successful effectful completions. Task5 must remove the temporary
-guards in `request` and `_validate` as a clean cutover and use the store
-transaction for character-effect writes plus `(execution_id,effect_id,phase)`
-receipt/result and progress writes. That adapter must write using the supplied
-connection, not call a separately committing thread-local profile writer
-inside the dedicated claims transaction.
-No receipt is inserted for an effect-free execution. `state_for`, HTTP and
-client projection/entry rendering belong to their later cutover tasks.
+**Transactional effects:** `effect_application.apply_effects_to_profile(
+profile,effects,now)` is a pure, input-preserving transformation returning
+`{profile,changes,results}`. It reuses `status_effects`, `current_feeling` and
+`active_conditions`; enabled condition definitions and actual template/actor
+stats are resolved by adapters, never invented. Existing condition boosts and
+strictly-beyond-duration expiry remain derived, not copied into base values.
+Actions support explicit `refresh`/`ignore`; item/activity fields translate into
+the same pure logic, but items retain their historical `ignore` and minimum
+one-hour/default-two-hour condition policy.
+
+`apply_execution_effects(execution_id,phase,now)` cannot invent a lifecycle
+signal. The internal adapter also accepts the caller's dedicated connection,
+locked profiles and run snapshot. Lock order is execution → location-place
+(where entry requires it) → sorted participant profiles → SQLite write. Bounded
+character state/profile writes, receipts `(execution_id,effect_id,phase)`, phase,
+elapsed progress and terminal claim release share that connection/commit.
+No separately committing profile save runs inside it. History/sync notifications
+run only after commit and outside caller-held keyed/world locks.
+
+`start` is after real measured entry; combined success is after final drink;
+sleep success observes the actual canonical flag, including recovery before
+and after its flag write. Open pose/pair has no success reward. Active numeric
+amounts are per game minute; receipts persist processed active seconds, signed
+fractional carry and actual cumulative delta per semantic target. Cancellation
+settles the last online partial interval; combined time is capped at its actual
+remaining phases. Restart/offline/freeze earns no extra time. Capped overflow
+(including fractional credit pointing past a cap) is spent, never banked.
+Declared numeric targets are excluded from parallel activity-model evaluation
+and rechecked under the real profile write lock; unrelated stats and canonical
+sleep regeneration retain their ownership.
+
+The installed `interact` package consumes `prop_action.invited` only after
+request locks/transaction exit. Normal and temporary NPCs explicitly decide via
+`pair_invite` or an on-demand respond turn; no answer remains awaiting consent,
+never automatic yes. The executable `InteractWith` reply takes
+`{execution_id,answer:"yes"|"no"}` and verifies the actual invitee. A generic
+same-pose counter-call or another placement cannot consent to this question.
+The run pins action/revision/variant/placement/participants and semantic versus
+physical roles; acceptance revalidates them. Scene offers, HTTP, `state_for`
+and final prompt/HUD integrations belong to the subsequent cutover tasks.
 
 Controller verification: `scripts/smoke_prop_action_runs.py` reuses the Task3
 real DB/profile/published-variant/scene/way fixture, copies complete shipped
@@ -7881,6 +7920,16 @@ The scenario also stops before a pending canonical sleep transition and after
 atomic wake/bed removal, then restarts to recover sleep and prove old cleanup
 preserves a new independent sleep generation. Private fixtures include the
 complete public terrain catalog, including `grass`, as well as pose/templates.
+
+`scripts/smoke_prop_action_effects.py` adds real effectful combined execution,
+profile/receipt/run rollback, bounded rates, conditions/items, sleep recovery,
+explicit executable NPC replies, semantic/physical roles, concurrent replay and
+replacement ownership coverage. `--scenario-dir NEW_DIRECTORY` runs four
+actual private Core processes: enter/prepare, fail a real SQL receipt write and
+roll back, finish drink and stop after effect/receipt/run commit before cleanup,
+then restart cleanup/replay without a second reward. `effects.json` retains
+actual DB-derived values, profiles, receipts and run snapshots. Fixture FBX
+bytes remain test assets, not a claim of playable client media.
 
 
 

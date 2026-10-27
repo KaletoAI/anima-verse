@@ -36,7 +36,7 @@ _tick_pending: set[str] = set()
 _tick_lock = threading.Lock()
 
 
-def build_stat_list(character_name: str) -> Tuple[bool, str]:
+def build_stat_list(character_name: str, *, excluded=frozenset()) -> Tuple[bool, str]:
     """Bullet list of the character's status values (+hint, current value)
     from the character template — the single source for every evaluator.
     Returns (enabled, list); disabled feature or no values -> (False, '')."""
@@ -58,7 +58,7 @@ def build_stat_list(character_name: str) -> Tuple[bool, str]:
                 if fld.get("store") != "status_effects":
                     continue
                 k = fld.get("key")
-                if not k or k not in cur:
+                if not k or k not in cur or k in excluded:
                     continue
                 hint = (fld.get("hint") or "").strip()
                 line = f"- {k}, currently {cur.get(k)}/100"
@@ -79,7 +79,8 @@ def build_stat_list(character_name: str) -> Tuple[bool, str]:
 def _evaluate_deltas(character_name: str, situation_text: str, *,
                      per_hour: bool) -> Dict[str, int]:
     """Ask for event deltas or activity rates without applying them."""
-    enabled, stat_list = build_stat_list(character_name)
+    enabled, stat_list = build_stat_list(character_name,
+        excluded=declared_action_stats(character_name) if per_hour else frozenset())
     if not enabled:
         return {}
     try:
@@ -123,6 +124,19 @@ def evaluate_stat_rates(name: str, situation: str) -> dict[str, int]:
     return _evaluate_deltas(name, situation, per_hour=True)
 
 
+def declared_action_stats(name: str) -> set[str]:
+    """Current semantic targets, not clip A/B; no authority from stale LLM work."""
+    from app.core import prop_action_store
+    result = set()
+    for run in prop_action_store.live_runs():
+        if run["status"] not in ("active", "sleeping") or name not in (run["actor"], run["partner"]):
+            continue
+        role = "actor" if name == run["actor"] else "partner"
+        result.update(effect["stat"] for effect in run["definition"]["effects"]
+                      if effect["type"] == "stat_delta" and effect["target"] in (role, "both"))
+    return result
+
+
 def _apply_deltas(name: str, deltas: dict[str, int], source: str) -> dict[str, int]:
     if not deltas:
         return {}
@@ -141,9 +155,13 @@ def _scaled_deltas(name: str, rates: dict[str, int], elapsed_min: float,
     """Scale rates with a fractional carry per character, stat and source."""
     scale = max(0.0, min(elapsed_min, _TICK_CAP_MIN)) / 60.0
     deltas = {}
+    excluded = declared_action_stats(name) if source == "activity" else set()
     with _tick_lock:
         for key, rate in rates.items():
             carry_key = (name, key, source)
+            if key in excluded:
+                _activity_carry.pop(carry_key, None)
+                continue
             value = rate * scale + _activity_carry.get(carry_key, 0.0)
             delta = round_half_away(value)
             _activity_carry[carry_key] = value - delta

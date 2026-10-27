@@ -81,7 +81,7 @@ the point does not exist.
 
 | Point | Package | Where | Question | `on` does | Outcome |
 |---|---|---|---|---|---|
-| `pair_invite` | `interact` | `interaction.invited` hook, ordinary NPC invitee (not a player, not a temporary NPC), before the bump | `answer`: `accept` / `decline` (`decision_points.invite_questions`; state `invite_state`) | `accept` → `resolve_invite(True)`; a `cannot` that leaves the invitation `pending` falls back to waking the NPC, a closed one (`stale`) counts as settled. `decline` → `resolve_invite(False)`. The inviter reads the answer from its own tool result / the `/play` response | the invitee's counter-call of `InteractWith` (accept, or `answer=no`) |
+| `pair_invite` | `interact` | `interaction.invited` and exact `prop_action.invited` hooks, normal or temporary NPC invitee (never a player), after request locks/transaction exit | `answer`: `accept` / `decline` (`decision_points.invite_questions`; `invite_state`; prop offer pins action/revision/target/semantic and physical roles) | General invitations use `resolve_invite(id,bool)`; exact prop questions use `prop_action_engine.respond(invitee,execution_id,bool)`. No confident answer requests an on-demand reply, never automatic acceptance. | Invitee's explicit `InteractWith` answer; prop questions require the exact `execution_id` and `answer=yes/no`, not a same-pose counter-call |
 | `party_join` | `party` | After an invitation is persisted, before its answer is requested. Ordinary NPC invitations exclude avatars and temporary NPCs; destination-bound trips also support temporary NPCs, but avatars always decide in the UI | `answer`: `accept` / `decline` (`decision_points.invite_questions`; state `invite_state`, offer names destination and exact group) | Both choices use `resolve_pending_invite(invite_id, bool)`. A linked plan revalidates consent before joining and moves only under its normal world/queue/access gates. Unsettled decisions fall back to an answer turn: direct on-demand chat/tools for trips, ordinary agent turns for ordinary invitations | Linked `JoinParty` responses include the exact `invite_id`; explicit yes/no is never inferred from prose |
 
 `npc_scenes` may create several pair invitations in one tick, so in mode `on` each of them can wait up
@@ -96,6 +96,11 @@ autonomous thought HOT-skip or chime substitution. This requested answer
 may run during world freeze. Ordinary room reactions and autonomous thoughts
 remain frozen; queue pause and world sleep still block all queued answers.
 Acceptance remains an `InteractWith` call, never a match on reply prose.
+Temporary NPCs use that same explicit answer lane without enabling autonomous
+thoughts. Prop questions never inherit consent from general Together or another
+object; changing the action revision or physical role allocation invalidates
+the pending question. The tool reply path is installed by the `interact`
+package; final scene/action-offer prompting is a separate integration.
 
 ## Adding a point (core or plugin)
 

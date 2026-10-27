@@ -113,6 +113,23 @@ def _result(status: str, request_id: str, reason: str = "", interaction_id: str 
     return result
 
 
+def _owned_end(owner, target, pose_key, request_id, recorded_id):
+    """Actual persisted removals on BOTH participants, never a pose inference."""
+    results = [(get_character_profile(name) or {}).get("last_interaction_result") or {}
+               for name in (owner, target)]
+    first, second = results
+    if (not first.get("interaction_id") or first.get("interaction_id") != second.get("interaction_id")
+            or (recorded_id and recorded_id != first["interaction_id"])):
+        return None
+    for result, partner in ((first, target), (second, owner)):
+        if (result.get("invite_id") != request_id or result.get("partner") != partner
+                or result.get("pose_key") != pose_key):
+            return None
+    if first.get("reason") != second.get("reason"):
+        return None
+    return first
+
+
 def shared_activity_status(owner: str, target: str, action: Any, request_id: str) -> Dict:
     """Inspect only this question and its actual start receipt; never submit or restart."""
     if not isinstance(request_id, str) or not request_id:
@@ -129,6 +146,11 @@ def shared_activity_status(owner: str, target: str, action: Any, request_id: str
         if invitation and not _matches_invite(invitation, owner, target, normalized["pose_key"]):
             return _result("blocked", request_id, "The request id belongs to a different invitation.")
         return _result("running", request_id, interaction_id=provenance_id)
+    ended = _owned_end(owner, target, normalized["pose_key"], request_id, recorded_id)
+    if ended and (not invitation or _matches_invite(invitation, owner, target, normalized["pose_key"])):
+        normal = ended["reason"] in ("ended", "avatar")
+        return {**_result("completed" if normal else "cancelled", request_id, ended["reason"],
+                         ended["interaction_id"]), "terminal": not normal}
     if not invitation:
         if receipt is not None and not receipt.get("submitted") and not receipt.get("interaction_id"):
             return _result("not_found", request_id, "The shared activity has not been requested yet.")

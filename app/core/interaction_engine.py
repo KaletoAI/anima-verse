@@ -37,15 +37,9 @@ places a figure at ``anchor + R_y(yaw) · clip_root`` with three.js's Y
 rotation (``x' = x·cos + z·sin``, ``z' = −x·sin + z·cos``), so ``yaw`` is
 chosen here such that clip +X lands on the world direction from A to B.
 
-Where the anchor IS (plan-posen-plaetze.md § 4): a pair sits on ONE place
-of its pose's group when the room has one with ``places`` free slots
-(``places.assign_pair`` — the sofa for a cuddle, a standing spot for a
-hug): the anchor is that place's centre, ``yaw`` follows the marker's
-facing (+ the pose's ``yaw_offset``) and ``place_id`` names it, so a client
-draws the pair at the seat's height. Without such a place — none free, or
-the free one beyond ``MAX_START_DISTANCE_M`` from a partner — a STANDING
-pair meets halfway between the two figures (``place_id`` None); a seated
-pair without a reachable seat is refused.
+General Together actions never select a furniture marker. Only an exact
+consented prop execution may supply a shared reserved anchor; free pair
+capabilities meet at the participants' midpoint.
 """
 import math
 import uuid
@@ -199,15 +193,14 @@ def pair_kind_for_pose(pose_key: str,
 
 
 def partner_poses() -> List[Tuple[str, str]]:
-    """``(pose_key, pair_kind)`` for every catalog pose that has a complete
-    pair clip — what the interact verb offers."""
+    """Free ``(pose_key, pair_kind)`` capabilities; props own bound actions."""
     from app.core.animation_clips import pair_kinds
-    from app.core.pose_catalog import get_catalog
+    from app.core.pose_catalog import get_catalog, group_of, needs_place
     complete = set(pair_kinds())
     out = []
     for key in get_catalog("pose"):
         kind = pair_kind_for_pose(key, complete)
-        if kind:
+        if kind and not needs_place(group_of(key)):
             out.append((key, kind))
     return out
 
@@ -340,7 +333,7 @@ def plan_interaction_at(actor: str, partner: str, pose_key: str, place: dict) ->
 
 
 def start_interaction_at(actor: str, partner: str, pose_key: str, *,
-                         execution_id: str, plans: dict) -> Dict[str, Any]:
+                         execution_id: str, plans: dict, commit_profiles) -> Dict[str, Any]:
     """Real shared pair entry at an executor's exact jointly claimed marker.
 
     No invitation/automatic seat search: the prop run already owns consent,
@@ -358,11 +351,12 @@ def start_interaction_at(actor: str, partner: str, pose_key: str, *,
         if (runs.held(runs.person_key(name)) != execution_id or
                 runs.held(runs.slot_key(run["target"], anchor["marker_id"], anchor["slot"])) != execution_id):
             raise ValueError("pair_claim_lost")
-    return start_interaction(actor, partner, pose_key, _reserved=run)
+    return start_interaction(actor, partner, pose_key, _reserved=run, _commit_profiles=commit_profiles)
 
 
 def start_interaction(actor: str, partner: str, pose_key: str, *,
-                      invite_id: str = "", _reserved: Optional[dict] = None) -> Dict[str, Any]:
+                      invite_id: str = "", _reserved: Optional[dict] = None,
+                      _commit_profiles=None) -> Dict[str, Any]:
     """Binds ``actor`` (the initiator) and ``partner`` to the pair clip the
     pose names. Who plays which half follows the clip's gender assignment
     (``assign_roles``); without one the actor plays A. Raises ``ValueError``
@@ -419,11 +413,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     if not _reserved and dist > MAX_START_DISTANCE_M:
         raise TooFarApart(f"{partner} is too far away ({dist:.1f} m)")
 
-    # Anchor: a free place of the pose's group when the room has one — its
-    # centre, the clip turned to the marker's facing; else (pairs whose
-    # group needs no marker only) the midpoint, clip +X towards the
-    # partner. A degenerate zero distance keeps the actor's facing
-    # irrelevant — any yaw will do.
+    # Furniture is exclusively an exact prop action capability. General
+    # invitations cannot choose a marker or bypass its action requirements.
     from app.core import places
     if _reserved:
         a = _reserved["data"]["plans"]["actor"]["entry_anchor"]
@@ -436,26 +427,10 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
             raise ValueError("pair_marker_lost")
         seated = (place, places.pair_yaw(place, pose_key))
     else:
-        try:
-            seated = places.assign_pair(actor, partner, pose_key)
-        except places.PlaceUnavailable as e:
-            raise ValueError(str(e))
-    if seated and not _reserved:
-        place, yaw = seated
-        ax, az = places.centre_of(place)
-        # The "together" rule runs against the ANCHOR here: a place out of
-        # reach for one of them is no place for this pair — a standing pair
-        # meets halfway instead, a seated pair is refused.
-        who, pos = max(((actor, pa), (partner, pb)),
-                       key=lambda wp: math.dist((wp[1]["x"], wp[1]["z"]), (ax, az)))
-        far = math.dist((pos["x"], pos["z"]), (ax, az))
-        if far > MAX_START_DISTANCE_M:
-            from app.core.pose_catalog import needs_place
-            places.release_pair(actor, partner)
-            if needs_place(place["group"]):
-                raise TooFarApart(
-                    f"{who} is too far from the {place['label']} ({far:.1f} m)")
-            seated = None
+        from app.core.pose_catalog import group_of, needs_place
+        if needs_place(group_of(pose_key)):
+            raise ValueError("This pair action requires an explicit prop action.")
+        seated = None
     if seated:
         place, yaw = seated
         ax, az = places.centre_of(place)
@@ -513,8 +488,18 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
                                      room_id=point["room_id"], execution_id=_reserved["execution_id"])
                 prof["pose_key"], prof["pose_flavor"] = pose_key, ""
                 prof.pop("prop_action_entry", None)
-            if not save_character_profile(name, prof):
+            if not _commit_profiles and not save_character_profile(name, prof):
                 stored = False
+        if _commit_profiles:
+            runtime = {}
+            for name, _role, _other in halves:
+                semantic_role = "actor" if name == actor else "partner"
+                point = _reserved["data"]["plans"][semantic_role]["entry_anchor"]
+                prof = profiles[name]
+                runtime[name] = dict(interaction=prof["interaction"], place=prof["place"],
+                                     pose_key=pose_key, pose_flavor="", prop_action_entry=None,
+                                     pos_x=point["x"], pos_z=point["z"], pos_session=None, pos_seq=None)
+            _commit_profiles(runtime)
     # OUTSIDE the locks: both of these write the profile themselves and reach
     # the places-lock (``set_pose_intent`` -> ``places.assign``), which by the
     # documented order comes BEFORE ``character_profile``. Neither reads the
@@ -530,7 +515,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
         if off:
             dx, dz = _rotate(float(off[0]), float(off[1]), yaw)
             px, pz = anchor["x"] + dx, anchor["z"] + dz
-            if not anchor.get("place_id") or places.inside(loc_a, px, pz):
+            if not _commit_profiles and (not anchor.get("place_id") or places.inside(loc_a, px, pz)):
                 set_character_pos(name, px, pz, preserve_movement_target=True)
         if not _reserved:
             set_pose_intent(name, pose_key)
@@ -602,6 +587,10 @@ def end_interaction(character_name: str, reason: str = "ended", *,
             if not ended_invite_id:
                 ended_invite_id = str(cur.get("invite_id") or "")
             p.pop("interaction", None)
+            p["last_interaction_result"] = dict(
+                interaction_id=cur["id"], invite_id=cur.get("invite_id", ""),
+                partner=cur["partner"], pose_key=cur["pose_key"], reason=reason,
+                started_at_game=cur["started_at_game"], ended_at_game=game_time().canonical())
             same_pose = (p.get("pose_key") or "") == inter.get("pose_key")
             if not same_pose:
                 # The pair seat goes with the interaction; with the pair pose
@@ -851,8 +840,9 @@ def create_invite(inviter: str, invitee: str, pose_key: str, *,
     # with the verb it owns — the package that owns that verb listens here.
     try:
         from app.core.hooks import emit
-        emit("interaction.invited", invite_id=invite_id, inviter=inviter,
-             invitee=invitee, pose_key=pose_key)
+        from app.core.keyed_lock import _after_locks
+        _after_locks(lambda: emit("interaction.invited", invite_id=invite_id, inviter=inviter,
+                                 invitee=invitee, pose_key=pose_key))
     except Exception as e:
         logger.debug("interaction.invited emit failed: %s", e)
     return invite_id

@@ -3,10 +3,10 @@
 Run locks are reentrant (travel cancellation can call back inside its guard).
 Claims use SQLite, never actor-global locks. No owner callback runs under a
 profile lock. Offline intervals pause execution; receipts recover actual Core
-arrival writes, not inferred animation completion. Task5 installs effects;
-until then effectful requests are explicitly unavailable, never successful.
+arrival writes, not inferred animation completion. Effects and lifecycle
+progress share one transaction, with notifications strictly after commit.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from contextvars import ContextVar
 from threading import Lock, RLock
 from weakref import WeakValueDictionary
@@ -46,7 +46,10 @@ def _lock(ref):
 
 
 def _result(run):
-    return {"execution_id": run["execution_id"], "status": run["status"], "reason": run["reason"]}
+    result = {"execution_id": run["execution_id"], "status": run["status"], "reason": run["reason"]}
+    if run["data"].get("effect_results"):
+        result["effects"] = run["data"]["effect_results"]
+    return result
 
 
 def _refused(reason):
@@ -58,9 +61,74 @@ def _members(run):
 
 
 def _save(run):
+    """Plain progress write; active effect progress must use _commit instead."""
     with store.transaction() as conn:
         store.save(conn, run)
 
+
+def _commit(run, phases=(), *, runtime=None, now=None, catalogs=None):
+    """Profiles -> dedicated DB write, never DB write -> profile locks.
+
+    Run/phase/clock, bounded runtime state, effects and receipts either all
+    commit or all roll back. No separately committing save helper is used.
+    """
+    from app.core import effect_application as effects
+    if not runtime and not any(effect["when"] in phases for effect in run["definition"]["effects"]):
+        _save(run)
+        return run["data"].get("effect_results", {})
+    catalogs = catalogs if catalogs is not None else effects.effect_catalogs()
+    now = now if now is not None else game_time()
+    changed = {}
+    with ExitStack() as locks:
+        for name in sorted(n for _, n in _members(run)):
+            locks.enter_context(keyed_lock("character_profile", name))
+        with store.transaction() as conn:
+            current = store.get(run["execution_id"], conn=conn)
+            if not current or current["status"] in store.TERMINAL:
+                return {}
+            profiles = {name: C.read_effect_profile(conn, name) for _, name in _members(run)}
+            for phase in phases:
+                for effect in run["definition"]["effects"]:
+                    if effect["when"] != phase:
+                        continue
+                    names = [run["actor"], run["partner"]] if effect["target"] == "both" else [run[effect["target"]]]
+                    for name in names:
+                        reason = effects.validate_profile_effects(profiles[name], [effect], catalogs)
+                        if reason and phase != "active":
+                            raise ValueError(reason)
+                result = effects.apply_execution_effects(run["execution_id"], phase, now,
+                                                        conn=conn, run=run, profiles=profiles, catalogs=catalogs)
+                if result["effects"]:
+                    run["data"].setdefault("effect_results", {})[phase] = result["effects"]
+                for name, update in result["changed"].items():
+                    aggregate = changed.setdefault(name, dict(changes={}, results={}))
+                    aggregate["changes"].update(update["changes"])
+                    aggregate["results"].update(update["results"])
+            for name in profiles:
+                if name in changed or (runtime and name in runtime):
+                    C.write_effect_profile(conn, name, profiles[name], runtime=(runtime or {}).get(name))
+            if not store.save(conn, run):
+                raise RuntimeError("execution_progress_write_failed")
+    effects.notify_effects(changed, "prop_action:" + run["execution_id"])
+    return run["data"].get("effect_results", {})
+
+
+def apply_execution_effects(execution_id: str, phase: str, now: GameTime) -> dict:
+    """Replay only durable real lifecycle evidence, never a caller's wish."""
+    with _lock(execution_id):
+        run = store.get(execution_id)
+        if not run:
+            return dict(effects={}, reason="execution_not_found")
+        recorded = run["data"].get("effect_results", {}).get(phase)
+        if run["status"] in store.TERMINAL:
+            return dict(effects=recorded or {})
+        allowed = ((phase == "start" and run["status"] in ("active", "sleeping"))
+                   or (phase == "active" and run["status"] == "active" and run["definition"]["ability"] != "sleep")
+                   or (phase == "success" and run["status"] == "sleeping" and C.is_character_sleeping(run["actor"])))
+        if not allowed:
+            return dict(effects=recorded or {}, reason="effect_phase_not_reached")
+        result = _commit(run, (phase,), now=now)
+        return dict(effects=result.get(phase, {}))
 
 @contextmanager
 def _claim_transaction(run):
@@ -161,8 +229,8 @@ def _validate(run, *, conn=None, require_claims=False, presence=True):
         return reason
     if definition != run["definition"]:
         return "stale_definition"
-    if definition.get("effects"):
-        return "effect_application_unavailable"
+    from app.core.effect_application import effect_catalogs, validate_profile_effects
+    catalogs = effect_catalogs()
     profiles = {}
     for role, name in _members(run):
         row = (conn or store.db.get_connection()).execute("SELECT status FROM characters WHERE name=?", (name,)).fetchone()
@@ -185,6 +253,11 @@ def _validate(run, *, conn=None, require_claims=False, presence=True):
             return "journey_already_active"
         if profile.get("interaction") and profile["interaction"].get("execution_ref") != run["execution_id"]:
             return "interaction_active"
+        targeted = [effect for effect in definition["effects"]
+                    if effect["target"] in (role, "both")]
+        reason = validate_profile_effects(profile, targeted, catalogs)
+        if reason:
+            return reason
     if presence:
         present = {n for n, _ in places._present(run["target"]["location_id"], run["target"]["room_id"])}
         members = set(profiles)
@@ -302,9 +375,6 @@ def request(actor: str, target: dict, action_id: str, revision: str, partner: st
         return _refused(reason)
     if bool(partner) != (definition["participants"] == 2) or actor == partner:
         return _refused("invalid_partner")
-    # Internal pre-Task5 boundary, removed by its real transactional adapter.
-    if definition.get("effects"):
-        return _refused("effect_application_unavailable")
     now = game_time().canonical()
     run = dict(execution_id=uuid.uuid4().hex, actor=actor, partner=partner, request_id=request_id or None,
                request_fingerprint=fingerprint, action_id=action_id, definition_revision=revision,
@@ -328,7 +398,13 @@ def request(actor: str, target: dict, action_id: str, revision: str, partner: st
                 store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
         if not partner:
             _start_checked(run)
-        return _result(store.get(run["execution_id"]))
+    if partner:
+        # A decision/model or respond-lane request must never run inside an
+        # execution/profile/place lock or an SQLite transaction.
+        from app.core.hooks import emit
+        from app.core.keyed_lock import _after_locks
+        _after_locks(lambda: emit("prop_action.invited", execution_id=run["execution_id"], inviter=actor, invitee=partner))
+    return _result(store.get(run["execution_id"]))
 
 
 def respond(actor: str, execution_id: str, accept: bool) -> dict:
@@ -424,16 +500,22 @@ def _own_journey(run, name, journey):
 def _finish(run, status, reason):
     if run["status"] in store.TERMINAL:
         return _result(run)
-    if run["status"] == "active":
-        # Preserve the final actually online interval even when cancellation
-        # precedes the next periodic tick. Task5 applies its rates atomically.
+    phases = []
+    if run["status"] == "active" and run["definition"]["ability"] != "sleep":
+        # Include the final online partial interval before any cleanup. _clock
+        # has already advanced on scheduler paths, so this never counts twice.
         delta = _clock(run, game_time())
-        run["data"]["active_game_s"] = run["data"].get("active_game_s", 0) + delta
         if run["definition"]["ability"] == "combined":
+            duration = sum(p["duration_game_s"] for p in run["definition"]["phases"])
+            delta = min(delta, max(0, duration - run["data"].get("active_game_s", 0)))
             run["data"]["phase_elapsed"] += delta
+        run["data"]["active_game_s"] = run["data"].get("active_game_s", 0) + delta
+        phases.append("active")
+    if status == "completed" and reason == "phases_completed":
+        phases.append("success")
     run.update(status=status, reason=reason)
     run["data"]["cleanup_pending"] = True
-    _save(run)  # Terminal and claim release precede recursive cancellation.
+    _commit(run, phases)  # Terminal, effects and claim release precede cleanup.
     _cleanup(run)
     return _result(run)
 
@@ -656,37 +738,39 @@ def _activate(run):
     if reason:
         _finish(run, "failed", reason)
         return
+    from app.core.effect_application import effect_catalogs
+    catalogs = effect_catalogs()
     ability = run["definition"]["ability"]
     pose = next(iter(run["data"]["entries"].values()))["pose_key"]
-    if ability == "pair":
-        from app.core.interaction_engine import start_interaction_at
-        try:
-            start_interaction_at(run["actor"], run["partner"], pose, execution_id=run["execution_id"],
-                                 plans=run["data"]["plans"])
-        except ValueError as exc:
-            _finish(run, "failed", str(exc))
-            return
-    else:
-        # Exactly the reserved slot; generic assign/set_pose would pick another.
-        from app.core.keyed_lock import keyed_lock
-        name = run["actor"]
-        anchor = run["data"]["plans"]["actor"]["entry_anchor"]
-        with keyed_lock("places", run["target"]["location_id"]):
-            with keyed_lock("character_profile", name):
-                profile = C.get_character_profile(name)
-                profile.update(pose_key=pose, pose_flavor="", place=dict(id=anchor["place_id"], slot=anchor["slot"],
-                               room_id=run["target"]["room_id"], execution_id=run["execution_id"]))
-                profile.pop("prop_action_entry", None)
-                if not C.save_character_profile(name, profile):
-                    raise RuntimeError("prop action entry profile write failed")
-                C._write_character_pos(name, anchor["x"], anchor["z"])
-        C._publish_activity_changed(name, pose, "", pose, profile["place"], None)
-    run["status"] = "active"
-    run["phase"] = run["definition"]["phases"][0]["id"] if ability == "combined" else "active"
-    if ability == "sleep":
-        run["phase"] = "sleep_pending"
-    run["data"].update(phase_elapsed=0.0, active_game_s=0.0, last_game=game_time().canonical())
-    _save(run)
+    # Build the desired lifecycle, but do not persist it separately from the
+    # real entry state and start effects. A failed commit remains at entry.
+    def entered(runtime):
+        run["status"] = "active"
+        run["phase"] = run["definition"]["phases"][0]["id"] if ability == "combined" else "active"
+        if ability == "sleep":
+            run["phase"] = "sleep_pending"
+        run["data"].update(phase_elapsed=0.0, active_game_s=0.0, last_game=game_time().canonical())
+        _commit(run, ("start",), runtime=runtime, catalogs=catalogs)
+    with keyed_lock("places", run["target"]["location_id"]):
+        if ability == "pair":
+            from app.core.interaction_engine import start_interaction_at
+            try:
+                start_interaction_at(run["actor"], run["partner"], pose, execution_id=run["execution_id"],
+                                     plans=run["data"]["plans"], commit_profiles=entered)
+            except ValueError as exc:
+                # Validation failures are refusals, not synthetic entry success.
+                run = store.get(run["execution_id"])
+                _finish(run, "failed", str(exc))
+                return
+        else:
+            name = run["actor"]
+            anchor = run["data"]["plans"]["actor"]["entry_anchor"]
+            place = dict(id=anchor["place_id"], slot=anchor["slot"],
+                         room_id=run["target"]["room_id"], execution_id=run["execution_id"])
+            entered({name: dict(pose_key=pose, pose_flavor="", place=place, prop_action_entry=None,
+                                pos_x=anchor["x"], pos_z=anchor["z"], pos_session=None, pos_seq=None)})
+    if ability != "pair":
+        C._publish_activity_changed(run["actor"], pose, "", pose, place, None)
     if ability == "sleep":
         _resume_sleep(run)
 
@@ -707,7 +791,9 @@ def _resume_sleep(run):
         _finish(run, "failed", "sleep_transition_failed")
         return
     run["status"], run["phase"] = "sleeping", "sleeping"
-    _save(run)
+    # The actual canonical flag has committed. Recovery from either side of
+    # that flag write reaches this one receipt/run transaction exactly once.
+    _commit(run, ("success",))
 
 
 def advance(now: GameTime) -> int:
@@ -725,6 +811,11 @@ def advance(now: GameTime) -> int:
             if is_world_frozen():
                 _save(run)
                 continue
+            if run["status"] == "active" and run["definition"]["ability"] != "sleep":
+                if run["definition"]["ability"] == "combined":
+                    duration = sum(p["duration_game_s"] for p in run["definition"]["phases"])
+                    delta = min(delta, max(0, duration - run["data"].get("active_game_s", 0)))
+                run["data"]["active_game_s"] += delta
             if (run["status"] == "sleeping" and not C.is_character_sleeping(run["actor"])
                     and store.db.get_connection().execute("SELECT 1 FROM characters WHERE name=?", (run["actor"],)).fetchone()):
                 _finish(run, "completed", "awake")
@@ -748,11 +839,7 @@ def advance(now: GameTime) -> int:
                 if run["phase"] == "entry":
                     data["entry_elapsed"] += delta
                     if data["entry_elapsed"] >= max(e["duration_game_s"] for e in data["entries"].values()):
-                        try:
-                            _activate(run)
-                        except Exception:
-                            logger.exception("Prop action entry failed: %s", run["execution_id"])
-                            _finish(run, "failed", "entry_error")
+                        _activate(run)
                         advanced += 1
                         continue
                 else:
@@ -785,7 +872,6 @@ def advance(now: GameTime) -> int:
                     _finish(run, "completed", "awake")
                     continue
             elif run["status"] == "active":
-                data["active_game_s"] += delta
                 if run["definition"]["ability"] == "combined":
                     phases = run["definition"]["phases"]
                     index = next(i for i, p in enumerate(phases) if p["id"] == run["phase"])
@@ -797,13 +883,14 @@ def advance(now: GameTime) -> int:
                             _finish(run, "completed", "phases_completed")
                             break
                         run["phase"] = phases[index]["id"]
-                        # Phase pose is applied to the same exact occupied slot.
-                        from app.core.keyed_lock import keyed_lock
-                        with keyed_lock("character_profile", run["actor"]):
-                            profile = C.get_character_profile(run["actor"])
-                            profile["pose_key"] = phases[index]["pose_key"]
-                            C.save_character_profile(run["actor"], profile)
-            if run["status"] not in store.TERMINAL:
+                        # Pose and phase/effect progress commit together below.
+            if run["status"] == "active" and run["definition"]["ability"] != "sleep":
+                runtime = None
+                if run["definition"]["ability"] == "combined":
+                    phase = next(p for p in run["definition"]["phases"] if p["id"] == run["phase"])
+                    runtime = {run["actor"]: {"pose_key": phase["pose_key"]}}
+                _commit(run, ("active",), runtime=runtime, now=now)
+            elif run["status"] not in store.TERMINAL:
                 _save(run)
             advanced += 1
     return advanced

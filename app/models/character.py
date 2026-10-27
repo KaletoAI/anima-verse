@@ -4309,6 +4309,68 @@ def is_character_sleeping(character_name: str,
         return False
 
 
+def read_effect_profile(conn, character_name: str) -> dict:
+    """Read runtime effect inputs on the caller's connection, without I/O helpers.
+
+    Caller holds the profile lock before acquiring DB write authority. Soul,
+    config and catalog consumers are deliberately not part of this bounded read.
+    """
+    row = conn.execute("SELECT profile_json,template FROM characters WHERE name=?",
+                       (character_name,)).fetchone()
+    if row is None:
+        raise ValueError("participant_unavailable")
+    profile = json.loads(row[0] or "{}")
+    profile.update(character_name=character_name, template=row[1] or profile.get("template", ""))
+    state = conn.execute("SELECT * FROM character_state WHERE character_name=?",
+                         (character_name,)).fetchone()
+    if state is None:
+        raise ValueError("participant_state_missing")
+    profile.update({key: state[key] for key in _STATE_COLS})
+    profile.update({name: read_cast(state[name]) for name, _, read_cast, _ in _STATE_TYPED_COLS})
+    profile.update(json.loads(state["meta"] or "{}"))
+    return profile
+
+
+def write_effect_profile(conn, character_name: str, profile: dict, *, runtime: dict | None = None) -> None:
+    """Bounded same-connection write; never commits or publishes.
+
+    Only effects and explicitly supplied owned-runtime keys are changed. A raw
+    position writer or unrelated profile key is never overwritten by a snapshot.
+    """
+    row = conn.execute("SELECT meta FROM character_state WHERE character_name=?",
+                       (character_name,)).fetchone()
+    if row is None:
+        raise ValueError("participant_state_missing")
+    meta = json.loads(row[0] or "{}")
+    for key in ("status_effects", "active_conditions"):
+        if key in profile:
+            meta[key] = profile[key]
+    patch = dict(runtime or {})
+    for key in ("state_flag_since",):
+        if key in patch:
+            meta[key] = patch.pop(key)
+    columns = {"meta": json.dumps(meta, ensure_ascii=False),
+               "current_feeling": profile.get("current_feeling", "")}
+    for key in ("pose_key", "pose_flavor", "current_activity", "is_sleeping", "pos_x", "pos_z", "pos_session", "pos_seq"):
+        if key in patch:
+            columns[key] = patch.pop(key)
+    conn.execute("UPDATE character_state SET " + ",".join(key + "=?" for key in columns) +
+                 " WHERE character_name=?", (*columns.values(), character_name))
+    if patch:
+        # Owned entry/pair fields live in profile_json, not a second state store.
+        row = conn.execute("SELECT profile_json FROM characters WHERE name=?", (character_name,)).fetchone()
+        body = json.loads(row[0] or "{}")
+        for key, value in patch.items():
+            if key not in ("place", "interaction", "prop_action_entry"):
+                raise ValueError("unsupported_owned_runtime_patch")
+            if value is None:
+                body.pop(key, None)
+            else:
+                body[key] = value
+        conn.execute("UPDATE characters SET profile_json=?,updated_at=? WHERE name=?",
+                     (json.dumps(body, ensure_ascii=False), utc_now_iso(), character_name))
+
+
 def adjust_status_effects(character_name: str, deltas: Dict[str, int],
                           source: str = "") -> Dict[str, Any]:
     """Apply integer deltas to existing status_effects, clamped to 0-100.
@@ -4331,6 +4393,10 @@ def adjust_status_effects(character_name: str, deltas: Dict[str, int],
         except Exception:
             return {}
         status = profile.get("status_effects", {}) or {}
+        if source == "activity":
+            from app.core.stat_effects import declared_action_stats
+            excluded = declared_action_stats(character_name)
+            deltas = {key: delta for key, delta in deltas.items() if key not in excluded}
         if not status:
             return {}
         for key, delta in deltas.items():

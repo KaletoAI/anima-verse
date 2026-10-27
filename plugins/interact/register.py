@@ -41,16 +41,7 @@ def pair_verb_name() -> str:
 
 def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
                 pose_key: str = "", **_kwargs) -> None:
-    """An invitation was recorded. A player answers it in the UI; an ordinary
-    NPC answers through the respond lane, not an autonomous thought that
-    an active conversation or world freeze could suppress.
-
-    A TEMPORARY NPC has no will system to consult: it says yes at once,
-    without an LLM answer turn. The engine's own state check decides
-    whether the pair can start
-    (asleep, travelling, occupied -> ``cannot``). The engine owns all
-    terminal failure cleanup and notifications.
-    """
+    """Ask an NPC through the decision/respond lane, never automatic consent."""
     if not inviter or not invitee:
         return
     try:
@@ -59,16 +50,6 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
             return
     except Exception:
         return
-    try:
-        from app.models.character import is_temporary_npc
-        if invite_id and is_temporary_npc(invitee):
-            from app.core import interaction_engine as IE
-            res = IE.resolve_invite(invite_id, accept=True)
-            logger.info("interaction invite %s: temporary NPC %s says yes -> %s",
-                        invite_id, invitee, res.get("status"))
-            return
-    except Exception as e:
-        logger.debug("temporary-NPC acceptance failed for %s: %s", invitee, e)
     if invite_id and _decide_invite(invite_id, inviter, invitee, pose_key):
         return
     try:
@@ -149,6 +130,42 @@ def _decide_invite(invite_id: str, inviter: str, invitee: str,
     return False
 
 
+def _on_prop_invited(execution_id: str = "", inviter: str = "", invitee: str = "", **_kwargs) -> None:
+    """Explicit exact-run consent, including temporary NPCs without thoughts."""
+    from app.core import prop_action_engine as actions, prop_action_store as runs
+    from app.models.account import is_player_controlled
+    run = runs.get(execution_id)
+    if (not run or run["status"] != "awaiting_consent" or run["actor"] != inviter
+            or run["partner"] != invitee or is_player_controlled(invitee)):
+        return
+    offer = (f"to {run['definition']['name']} at placement {run['target']['placement_id']} "
+             f"in {run['target']['location_id']}/{run['target']['room_id']}; "
+             f"action {run['action_id']}, revision {run['definition_revision']}, "
+             f"semantic initiator {inviter}, invitee {invitee}, clip roles {run['data']['clip_roles']}")
+    try:
+        if decision.is_active(PAIR_INVITE):
+            d = decision.decide(PAIR_INVITE,
+                decision_points.invite_state(invitee, inviter, offer),
+                decision_points.invite_questions(invitee, inviter), key=execution_id)
+            answer = d.answers.get("answer") if d else None
+            if answer and answer.value in ("accept", "decline"):
+                result = actions.respond(invitee, execution_id, answer.value == "accept")
+                if result["status"] != "refused":
+                    decision.mark_taken(PAIR_INVITE, execution_id)
+                    return
+    except Exception as exc:
+        logger.debug("prop consent decision failed for %s: %s", invitee, exc)
+    try:
+        from app.core.agent_loop import get_agent_loop
+        get_agent_loop().bump_respond(
+            invitee, speaker=inviter, content=f"{inviter} invites you {offer}.", on_demand=True,
+            hint=(f"Decide explicitly in character. Answer this exact question using {VERB_NAME} "
+                  f'with execution_id="{execution_id}", answer="yes" or answer="no". '
+                  "A counter-proposal using a pose or another object is NOT consent."))
+    except Exception as exc:
+        logger.debug("prop consent respond request failed for %s: %s", invitee, exc)
+
+
 decision.register_point(
     PAIR_INVITE,
     label="Pair invitation: accept?",
@@ -166,3 +183,4 @@ register_provider("shared_activity_request", shared_activity_request)
 register_provider("shared_activity_status", shared_activity_status)
 register_provider("shared_activity_cancel", shared_activity_cancel)
 register("interaction.invited", _on_invited, tag="interact.bump_invitee")
+register("prop_action.invited", _on_prop_invited, tag="interact.prop_consent")

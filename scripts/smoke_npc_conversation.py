@@ -29,17 +29,10 @@ Hand-derived expectations, case by case:
       because the sentence was meant for the room it just left. A ``pair`` in
       such a turn is dropped for the same reason — the partner would be in
       the room the NPC has just left, so the invitation could never bind.
-  (e) Mode ``turns`` with a valid ``pair`` key. ``create_invite`` writes an
-      invitation, and the hook ``_on_invited`` makes a temporary NPC accept
-      right away, so ``resolve_invite`` is called with ``accept=True`` (the
-      engine start is monkeypatched and returns ``started``). The ROW says so
-      the moment ``create_invite`` returns (``accepted``) — a caller that
-      reports "asked" without reading it back would promise an answer that
-      has already been given. And when the engine cannot bind the pair
-      (``start_interaction`` raises ``ValueError``) it puts the question back
-      on ``pending`` for a second answer that a temporary NPC never gives, so
-      the hook cancels it: nothing stays open. A full character as the
-      invitee keeps today's ``bump`` path — that is the regression.
+  (e) A valid pair proposal records a real pending invitation. Temporary and
+      normal NPCs both receive explicit response requests; no automatic yes.
+      A real explicit decline settles the row without starting an interaction.
+      Complete real pair entry is covered by smoke_prop_action_effects.py.
   (f) ``mode == "off"`` produces no conversation block at all and a ``say`` is
       ignored. ``mode == "scene"`` behaves the same way inside a house. Out in
       the open with an ``npc_home``, ``talk_allowed`` is True again.
@@ -378,27 +371,10 @@ save_character_current_location(AVATAR, LOC_ID)
 force_set_status(AVATAR, room="kitchen")
 
 
-# ── (e) a pair proposal: invitation created, the hook answers yes ──────────
-print("(e) pair: the invite is created and a temporary NPC accepts at once")
+# ── (e) a pair proposal is a question, including temporary NPCs ───────────
+print("(e) pair: explicit consent, never automatic temporary-NPC acceptance")
 import plugins.interact.register  # noqa: E402,F401 — registers the hook
-
 interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
-STARTED = []
-_real_start = interaction_engine.start_interaction
-
-
-def _record_start(a, b, pose, **_kwargs):
-    STARTED.append((a, b, pose))
-    return {"id": "fake", "kind": "handshake"}
-
-
-def _raise_seat_taken(_a, _b, _pose, **_kwargs):
-    """What the engine raises when the pair cannot bind right now — the case
-    in which it puts the question BACK on `pending`."""
-    raise ValueError("seat taken")
-
-
-interaction_engine.start_interaction = _record_start
 PAIR_KEY = npc_actions._pair_pose_keys()[0] if npc_actions._pair_pose_keys() else ""
 check("the catalog offers at least one pair key", bool(PAIR_KEY), True)
 isolate(A)
@@ -406,33 +382,23 @@ LLM = FakeLLM('{"room": "taproom", "activity": "Sie tritt vor.",'
               ' "pair": {"with": "Halvard", "pose": "%s"}}' % PAIR_KEY)
 res = npc_actions.run_action_for(A, llm=LLM)
 check("the turn reports the invitation", res.get("invited") if res else None, B)
-check("no open invitation is left", interaction_engine.pending_invites_for(B), [])
-
-# The row itself must say so: the hook answers INSIDE create_invite, so a
-# caller that reports "asked" without reading the row back tells the player
-# to wait for an answer that was already given.
-_inv_id = interaction_engine.create_invite(A, B, PAIR_KEY)
-check("the row is accepted the moment create_invite returns",
-      (interaction_engine.get_invite(_inv_id) or {}).get("status"), "accepted")
-
-# A dead end: the engine keeps a "not yet" question open for a second answer
-# — which a temporary NPC never gives, so the hook must close it itself.
-interaction_engine.start_interaction = _raise_seat_taken
-_dead_id = interaction_engine.create_invite(A, B, PAIR_KEY)
-check("a cannot that nobody re-answers is cancelled, not left open",
-      ((interaction_engine.get_invite(_dead_id) or {}).get("status"),
-       interaction_engine.pending_invites_for(B)), ("cancelled", []))
-interaction_engine.start_interaction = _record_start
-
-# an ordinary character invitee keeps the bump path
-LOOP.bumps.clear(); STARTED.clear()
+pending = interaction_engine.pending_invites_for(B)
+check("temporary NPC has an actual open question", len(pending), 1)
+check("no interaction starts before its answer", interaction_engine.get_interaction(B), None)
+_inv_id = pending[0]["invite_id"]
+check("repeated proposal preserves the exact unanswered question",
+      interaction_engine.create_invite(A, B, PAIR_KEY), _inv_id)
+check("explicit temporary-NPC decline settles its actual row",
+      interaction_engine.resolve_invite(_inv_id, False)["status"], "declined")
+check("decline leaves no open question", interaction_engine.pending_invites_for(B), [])
+LOOP.bumps.clear()
 save_character_current_location(FULL, LOC_ID)
 force_set_status(FULL, room="taproom")
-interaction_engine.create_invite(A, FULL, PAIR_KEY)
-check("an ordinary character is bumped, not auto-accepted",
-      ([b[0] for b in LOOP.bumps], STARTED), ([FULL], []))
+_normal_id = interaction_engine.create_invite(A, FULL, PAIR_KEY)
+check("normal NPC also has a real unanswered row",
+      interaction_engine.get_invite(_normal_id)["status"], "pending")
+check("normal NPC response lane is requested", [b[0] for b in LOOP.bumps], [FULL])
 interaction_engine.clear_invites_for(FULL)
-interaction_engine.start_interaction = _real_start
 interaction_engine.partner_poses = _real_partner_poses
 
 # ── (g) scene mode: one call writes the exchange ───────────────────────────
@@ -510,23 +476,19 @@ SCENE = FakeLLM('{"lines": {"speaker": "Gudrun"}, "pair": null, "activities": {}
 check("lines as an object -> nothing", npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE), None)
 check("and no new utterance", len(utterances()), before)
 
-# ── (i) the scene may bind a pair ──────────────────────────────────────────
-print("(i) scene: a pair is proposed as an invitation the NPC accepts at once")
-# The throwaway clip dir has no pair clip, so the catalog offers no pair key
-# of its own — the same stand-in as in (d)/(e).
+# ── (i) scenes propose, not consent on behalf of another person ──────────
+print("(i) scene: a pair proposal waits for an explicit answer")
 interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
-STARTED.clear()
-interaction_engine.start_interaction = _record_start
 npc_scenes._last_scene.clear()
 SCENE = FakeLLM('{"lines": [{"speaker": "Gudrun", "line": "Komm."}, {"speaker": "Halvard", "line": "Gut."}],'
                 ' "pair": {"a": "Gudrun", "b": "Halvard", "pose": "%s"}, "activities": {}}' % PAIR_KEY)
 res = npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE)
-# The scene INVITES; the interact package's hook (imported in (e)) makes the
-# temporary invitee accept synchronously inside create_invite, so the
-# monkeypatched start records the pair and no invitation stays open.
 check("reported", res.get("pair") if res else None, True)
-check("no open invitation is left", interaction_engine.pending_invites_for(B), [])
-interaction_engine.start_interaction = _real_start
+pending = interaction_engine.pending_invites_for(B)
+check("scene leaves an actual pending invitation", len(pending), 1)
+check("scene prose is not consent", interaction_engine.get_interaction(B), None)
+check("invitee can explicitly decline the scene's question",
+      interaction_engine.resolve_invite(pending[0]["invite_id"], False)["status"], "declined")
 interaction_engine.partner_poses = _real_partner_poses
 set_npc_config(conversation_mode="turns")
 

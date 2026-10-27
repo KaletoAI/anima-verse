@@ -69,7 +69,9 @@ class InteractSkill(PluginSkill):
         """No pair clip in the library → the verb is not offered at all."""
         try:
             from app.core.interaction_engine import partner_poses
-            return bool(partner_poses())
+            from app.core.prop_action_store import live_runs
+            return bool(partner_poses() or any(run["partner"] == character_name and
+                        run["status"] == "awaiting_consent" for run in live_runs()))
         except Exception:
             return False
 
@@ -79,7 +81,10 @@ class InteractSkill(PluginSkill):
             keys = ", ".join(sorted(k for k, _ in partner_poses()))
         except Exception:
             keys = ""
-        extra = f" Known two-person actions: {keys}." if keys else ""
+        extra = (f" Known free two-person actions: {keys}." if keys else "")
+        extra += (' Answer an exact prop-action invitation with '
+                  '{"execution_id":"<offered id>","answer":"yes" or "no"}; '
+                  'never substitute a pose or a different object.')
         return ToolSpec(name=self.name, description=f"{self.description}{extra}",
                         func=self.execute)
 
@@ -90,6 +95,8 @@ class InteractSkill(PluginSkill):
         actor = (data.get("agent_name") or "").strip()
         if not actor:
             return "Error: character_name missing."
+        if data.get("execution_id"):
+            return self._answer_prop(actor, data)
         partner_raw = str(data.get("partner") or data.get("name")
                           or data.get("target") or "").strip()
         action = str(data.get("action") or data.get("pose") or "").strip()
@@ -149,17 +156,34 @@ class InteractSkill(PluginSkill):
             self.ctx.logger.exception("%s [%s] failed: %s", self.name, actor, e)
             return f"Error in {self.name}: {e}"
 
+    def _answer_prop(self, actor: str, data: Dict[str, Any]) -> str:
+        from app.core import prop_action_engine as actions, prop_action_store as runs
+        ref = data["execution_id"]
+        if not isinstance(ref, str):
+            return "Cannot: invalid execution_id."
+        run = runs.get(ref)
+        if not run or run["partner"] != actor:
+            return "Cannot: this exact prop invitation is not addressed to you."
+        if data.get("partner") and data["partner"] != run["actor"]:
+            return "Cannot: invitation partner mismatch."
+        answer = data.get("answer")
+        accepted = answer is True or (isinstance(answer, str) and answer.strip().lower() in
+                                      {"yes", "ja", "accept", "agree", "true"})
+        refused = _is_refusal(data)
+        if not accepted and not refused:
+            return "Cannot: give an explicit answer=yes or answer=no for this execution_id."
+        result = actions.respond(actor, ref, accepted)
+        if result["status"] != "refused":
+            _record_answer(ref, accepted)
+        return f"Prop action {ref}: {result['status']} ({result['reason'] or 'explicit answer recorded'})."
+
     def _ask(self, actor: str, partner: str, key: str,
              invite_id: str = "") -> str:
         """Hand the recorded question to whoever has to answer it: the player
         sees it in the UI, an NPC is nudged to answer in its own turn.
 
-        An invitee may already have answered by the time we get here: the
-        hook in ``register.py`` resolves the invitation synchronously inside
-        ``create_invite`` for a TEMPORARY NPC, and for an ordinary NPC when
-        the decision model of PAIR_INVITE settles it (mode 'on'). Telling the
-        actor "X was asked" would be a lie the very next line contradicts, so
-        the row is read back and the sentence says what actually happened.
+        A decision model may already have explicitly answered inside the hook.
+        Read the real row back rather than claiming a still-open question.
         """
         try:
             from app.models.account import is_player_controlled
@@ -181,10 +205,7 @@ class InteractSkill(PluginSkill):
 
     def _answered_at_once(self, partner: str, invite_id: str,
                           key: str) -> str:
-        """The sentence for an invitation that is ALREADY answered, or ``""``
-        when it is still open. Read back for ANY invitee: a temporary NPC
-        answers inside ``create_invite``, and so does an ordinary NPC whose
-        decision model settled the invitation."""
+        """Describe an explicit decision already recorded, or an open question."""
         if not invite_id:
             return ""
         try:

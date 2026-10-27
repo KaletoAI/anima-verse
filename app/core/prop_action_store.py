@@ -1,8 +1,9 @@
 """Durable prop runs; exclusive person and exact slot claims share one transaction.
 
-No profile locks/callbacks are taken here. Transaction callers may only READ
-world/profile guards; journey/profile side effects happen after commit. Task5
-can atomically write effects and receipts using the provided SQLite connection.
+No profile locks/callbacks are taken here. Claim acquisition reads guards only.
+Effect adapters acquire sorted participant profile locks BEFORE transaction(),
+then write bounded state, receipts and run progress on its dedicated connection.
+Notifications and journey/cleanup callbacks run after commit.
 """
 from contextlib import contextmanager
 import json
