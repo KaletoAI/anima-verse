@@ -7974,9 +7974,14 @@ Player routes require the authenticated user's current authorized avatar:
 - `POST /play/prop-actions/request`: `{target,action_id,revision,partner?,request_id?}`.
   Extra payload fields are rejected; nonces are scoped to actor and exact input.
   The declared player skill gate checks current skill-block rules and configured
-  cost shortfalls before requesting. Only an accepted, nonfailed request is
-  charged through the existing player success-cost boundary. Paying for an
-  invitation never supplies consent; respond/cancel endpoints do not charge.
+  cost shortfalls for a truly new execution. Only its creator charges the accepted,
+  nonfailed request once. Exact actor/fingerprint nonce replay returns the prior
+  result without rechecking depleted funds/new rules or charging again; changed
+  payload under the nonce refuses without a charge. A weak-lifetime per-nonce
+  deferred guard serializes HTTP admission/charging, and Core creation metadata
+  comes from the actual SQLite insert/transactional duplicate check, not status
+  inference. Paying for an invitation never supplies consent; respond/cancel
+  endpoints do not charge.
 - `POST /play/prop-actions/respond`: `{execution_id,accept:bool}`, exact invitee only.
 - `POST /play/prop-actions/cancel`: `{execution_id}`, either real participant only.
 - `GET /play/prop-actions/state`: `{incoming,outgoing,current,recent_results}`.

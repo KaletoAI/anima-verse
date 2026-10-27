@@ -81,12 +81,32 @@ def state(user=Depends(get_current_user)):
 @router.post("/play/prop-actions/request")
 def request(body: ActionRequest, user=Depends(get_current_user)):
     actor = _avatar(user)
+    from app.core import prop_action_store as store
     from app.routes.play import _player_action_gate
-    skill = _player_action_gate(actor, "prop_action")
-    result = _answer(_request(actor, body))
-    if skill is not None and result["status"] not in ("failed", "cancelled"):
-        from app.core.skill_gate import charge
-        charge(actor, skill.SKILL_ID)
+    with engine.request_guard(actor, body.request_id):
+        if store.by_request(actor, body.request_id):
+            # Core verifies the full fingerprint; a mismatched nonce is never
+            # a gate bypass and never pays a cost.
+            return _answer(_request(actor, body))
+        try:
+            skill = _player_action_gate(actor, "prop_action")
+        except HTTPException:
+            # Another Core caller/process may have committed this nonce while
+            # the gate read the newly depleted profile. Recheck before refusing.
+            if store.by_request(actor, body.request_id):
+                return _answer(_request(actor, body))
+            raise
+        result, created = engine.request_with_creation(
+            actor, body.target.model_dump(), body.action_id, body.revision,
+            body.partner, body.request_id)
+        result = _answer(result)
+        if created and skill is not None and result["status"] not in ("failed", "cancelled"):
+            from app.core.skill_gate import charge
+            charge(actor, skill.SKILL_ID)
+    if created:
+        # Deferred consent listeners run after the charge/outer guard. Project
+        # their real current outcome just as an ordinary Core request does.
+        result = engine._result(store.get(result["execution_id"]))
     return result
 
 

@@ -2539,8 +2539,6 @@ def test_threshold_base_y() -> None:
     check("client3d/src/main.ts is where it is", bool(src), str(main_ts))
     check("no doorFloorY/doorMarkY left — nothing recomputes the height",
           "doorFloorY" not in src and "doorMarkY" not in src)
-    check("the quad takes base_y + the lift straight from the payload",
-          "m.baseY + DOOR_MARK_LIFT" in src)
     check("...and hangs in the TILE frame, like the walls",
           "tile.group.add(root)" in src)
     # Same error class, same pin (review 2026-08-16, re-derived for E5b): a

@@ -186,8 +186,9 @@ async def streamed_tool(name, offered):
         calls.append(kwargs)
         return SimpleNamespace(content='{"pose":"standing","detail":"waits for coffee","removed":[],"stats":{}}')
     with patch.object(llm_router, 'llm_call', side_effect=captured_extraction):
-        _extract_context_from_last_chat(name, [{'role': 'assistant', 'content': narrative}],
-                                        F.C.get_character_config(name))
+        await asyncio.to_thread(
+            _extract_context_from_last_chat, name,
+            [{'role': 'assistant', 'content': narrative}], F.C.get_character_config(name))
     if not calls or R.get(outcome['execution_id'])['status'] != 'approaching':
         raise AssertionError('actual postprocessing lost the explicit semantic run')
     return dict(captured_model_output=captured, tool_result=outcome, narrative=narrative,
@@ -223,6 +224,72 @@ class ApiContracts(unittest.TestCase):
         self.assertEqual(denied.status_code, 403, denied.text)
         self.assertFalse(R.claims())
         self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 50)
+
+    def test_positive_cost_nonce_replay_survives_spent_funds_and_new_rules(self):
+        from app.core import stat_rules
+        from app.models import rules
+        previous = stat_rules.get_setting('skill_costs')
+        self.addCleanup(stat_rules.save_setting, 'skill_costs', previous)
+        for cost in (5, 50):
+            name, target, _ = S.setup_run()
+            stat_rules.save_setting('skill_costs', {'prop_action': {'run_energy': cost}})
+            player = client(name)
+            body = payload(target, request_id='paid-once')
+            created = player.post('/play/prop-actions/request', json=body)
+            self.assertEqual(created.status_code, 200, created.text)
+            self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 50 - cost)
+            replay = player.post('/play/prop-actions/request', json=body)
+            self.assertEqual(replay.status_code, 200, replay.text)
+            self.assertEqual(replay.json(), created.json())
+            self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 50 - cost)
+            mismatch = player.post('/play/prop-actions/request', json=dict(body, revision='other-definition'))
+            self.assertEqual(mismatch.status_code, 409, mismatch.text)
+            self.assertEqual(mismatch.json()['detail']['reason'], 'request_id_conflict')
+            self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 50 - cost)
+            rule_id = 'api-nonce-block-' + str(cost)
+            rules.add_rule(dict(id=rule_id, name='Block new action requests', type='block',
+                                target={'scope': 'skill', 'skills': ['prop_action']},
+                                character=name, condition='', message='No new action'))
+            self.addCleanup(rules.delete_rule, rule_id, target_dir='world')
+            replay = player.post('/play/prop-actions/request', json=body)
+            self.assertEqual(replay.status_code, 200, replay.text)
+            self.assertEqual(replay.json(), created.json())
+            new_request = player.post('/play/prop-actions/request',
+                                      json=dict(body, request_id='truly-new'))
+            self.assertEqual(new_request.status_code, 403, new_request.text)
+            self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 50 - cost)
+            self.assertEqual(F.db.get_connection().execute(
+                'SELECT count(*) FROM prop_action_runs WHERE actor=? AND request_id=?',
+                (name, 'paid-once')).fetchone()[0], 1)
+            A.cancel(name, created.json()['execution_id'])
+
+    def test_concurrent_duplicate_paid_http_request_creates_and_charges_once(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        from app.core import stat_rules
+        previous = stat_rules.get_setting('skill_costs')
+        self.addCleanup(stat_rules.save_setting, 'skill_costs', previous)
+        stat_rules.save_setting('skill_costs', {'prop_action': {'run_energy': 5}})
+        name, target, _ = S.setup_run()
+        token = login(name)
+        barrier = Barrier(2)
+        body = payload(target, request_id='concurrent-once')
+        def send(_):
+            with TestClient(app()) as http:
+                http.cookies.set(sessions.SESSION_COOKIE_NAME, token)
+                barrier.wait()
+                return http.post('/play/prop-actions/request', json=body)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(send, range(2)))
+        self.assertEqual([result.status_code for result in results], [200, 200])
+        self.assertEqual(results[0].json(), results[1].json())
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 45)
+        ref = results[0].json()['execution_id']
+        self.assertEqual(F.db.get_connection().execute(
+            'SELECT count(*) FROM prop_action_runs WHERE actor=? AND request_id=?',
+            (name, 'concurrent-once')).fetchone()[0], 1)
+        self.assertEqual(len(R.claims(ref)), 2)
+        self.assertEqual(F.E.get_journey(name)['execution_ref'], ref)
 
     def test_player_request_costs_refusals_and_pair_consent(self):
         from app.core import stat_rules

@@ -258,3 +258,96 @@ never-existing destination:
 The broader existing NPC/chat/rendering/geometry command chain earlier in this
 report remains applicable. No fix-commit passing count or actual scenario result
 is claimed by the worker.
+
+## Fix round 2/5 — nonce/cost idempotency and deterministic extraction completion
+
+Fix BASE `a7e93525`; resulting scoped commit is supplied in the final handoff.
+
+### Controller evidence accepted without rerunning
+
+`agent://ApiFixReview` accepted production findings 1, 2, 4 and 5 plus measured
+entry fixture 6. It identified the remaining positive-cost nonce interaction:
+an exact HTTP replay was charged again, or refused by depleted funds before
+Core could return the original execution. This is a real adapter regression;
+the initial cost test and nonce test covered those features separately.
+
+Controller API run **14 tests / 5 failures** (`artifact://167`) exposed one
+fixture scheduling race plus four contaminated teardowns, not five independent
+runtime defects. `streamed_tool` called extraction on its running event loop,
+where `run_follow_up` schedules executor work and returns. It removed the model
+capture and checked `calls` before that real work completed. The external-model
+tripwire then correctly recorded the uncaptured call and contaminated subsequent
+teardowns. This did not establish that narration cancelled the semantic run.
+
+Controller reports lifecycle **31 passed**, skill gate/cost passed, and daily
+rhythm **ALL GREEN** (`artifact://165`). Scene recipe exposed a separate obsolete
+literal `main.ts` quad-expression source pin, not incorrect door-mark geometry.
+The actual HTTP/prompt/tool/effect scenario still had not been reached.
+
+Worker ran **no tests, builds, linters, formatters, scenarios, server/model/media
+commands or failure-confirmation probes** in this round.
+
+### Applied changes
+
+1. **Atomic new-creation versus replay metadata:** the unchanged public
+   `prop_action_engine.request(...) -> dict` delegates to
+   `request_with_creation(...) -> (result,created)`. Every refusal/nonce replay
+   returns `created:false`; only the actual committed insert returns true. Its
+   existing second actor/nonce/fingerprint check under SQLite `BEGIN IMMEDIATE`
+   handles competing Core callers/processes. No caller infers creation from an
+   `approaching`/successful status, and no metadata leaks into the public JSON.
+2. **Nonce-scoped HTTP gate/charge boundary:** an existing weak-lifetime lock map
+   supplies the existing deferred reentrant lock for one `(actor,request_id)`,
+   not an actor-global claim lock or an unbounded permanent nonce lock registry.
+   Player HTTP holds it around prior-row lookup, gate, admission and creator-only
+   charge. An existing nonce returns through Core's real fingerprint comparison
+   before any new-action gate; mismatches refuse without spending. If another
+   Core caller/process publishes the nonce while the gate reads newly depleted
+   stats, the refusal path rechecks it. Truly new executions still pass the
+   configured skill gate. Only a new accepted/nonfailed creator charges.
+   Domain/invitation/model callbacks use the existing outer-lock deferral and
+   run after the charge/guard; the returned creation result is then projected
+   from the real current run. Consent and executor/effect ownership are unchanged.
+3. **Actual extraction completion, not weaker assertions:** the fixture now
+   awaits `_extract_context_from_last_chat` through `asyncio.to_thread` while the
+   captured external model remains installed. That real consumer takes its
+   existing inline worker branch, so the model capture, actual pose guard and
+   postprocessing finish before inspection. No runtime guard, model tripwire,
+   effect assertion, unexpected-call list or acceptance check was relaxed.
+4. **Obsolete quad expression pin deleted:** removed only the two-line assertion
+   requiring literal `m.baseY + DOOR_MARK_LIFT` in `main.ts`. It was not repinned
+   to `doorMarkTransform` source spelling. The real threshold/composer/surface
+   geometry assertions remain.
+
+### New interaction regressions prepared
+
+- Positive-cost exact actor/nonce replay preserves its original execution and
+  spends only once: both five-point (50→45) and exhausting fifty-point (50→0)
+  cases. Changed revision under the same nonce refuses with
+  `request_id_conflict`, not a new cost/refusal caused by funds. A newly persisted
+  block rule still allows a read-only replay but rejects a genuinely new nonce.
+- Two simultaneous authenticated HTTP requests sharing one actor/nonce both
+  receive the same real execution; actual DB has one nonce row, actual journey
+  owns that ID, real person/slot claims total two, and base energy is 45 rather
+  than 40. Real sessions, routers, threads, gate, cost writer and executor are
+  used; no successful response/receipt is mocked.
+
+Product API documentation now states creator-only nonce charging explicitly.
+All changes remain in the approved worktree; no original checkout, unrelated
+asset work, live world, deployment or restart was touched.
+
+### Exact controller commands
+
+```sh
+./.venv/bin/python scripts/smoke_prop_action_api.py
+./.venv/bin/python scripts/smoke_prop_action_runs.py
+./.venv/bin/python scripts/smoke_stat_skill_gate.py
+./.venv/bin/python scripts/smoke_stat_skill_costs.py
+./.venv/bin/python scripts/smoke_scene_recipe.py
+./.venv/bin/python scripts/smoke_auth_gate.py
+./.venv/bin/python scripts/smoke_prop_action_api.py --api-scenario-dir /tmp/prop-actions-task6-fix2-http-prompt-001
+```
+
+Use a never-existing scenario destination. Existing broader Core/NPC/geometry
+regressions from the prior sections remain applicable. None of these fix-round
+checks/scenarios were exercised by the worker; no GREEN claim is made.

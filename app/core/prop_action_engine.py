@@ -6,7 +6,7 @@ profile lock. Offline intervals pause execution; receipts recover actual Core
 arrival writes, not inferred animation completion. Effects and lifecycle
 progress share one transaction, with notifications strictly after commit.
 """
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, nullcontext
 from contextvars import ContextVar
 from threading import Lock, RLock
 from weakref import WeakValueDictionary
@@ -17,7 +17,7 @@ import uuid
 from app.core import prop_action_store as store, places, props, travel_engine as travel
 from app.core.game_time import GameTime, GameDuration
 from app.core.timeutils import game_time, game_speed_factor, utc_now
-from app.core.keyed_lock import keyed_lock
+from app.core.keyed_lock import keyed_lock, _DeferredRLock
 from app.core.log import get_logger
 from app.models import character as C
 from app.models.world import is_world_frozen
@@ -43,6 +43,23 @@ def _internal_mutation():
 def _lock(ref):
     with _locks_mutex:
         return _locks.setdefault(ref, RLock())
+
+
+def request_guard(actor: str, request_id: str):
+    """Serialize one actor/nonce's admission and adapter charge, not all actions.
+
+    Weak lifetime bounds the caller-supplied key space. The existing deferred
+    RLock keeps invitation/model callbacks outside the adapter's outer guard.
+    """
+    if not isinstance(actor, str) or not isinstance(request_id, str) or not request_id:
+        return nullcontext()
+    key = "request:" + store.encode([actor, request_id])
+    with _locks_mutex:
+        guard = _locks.get(key)
+        if guard is None:
+            guard = _DeferredRLock()
+            _locks[key] = guard
+        return guard
 
 
 def _result(run):
@@ -387,23 +404,36 @@ def _plan(run, *, conn):
 
 
 def request(actor: str, target: dict, action_id: str, revision: str, partner: str = "", request_id: str = "") -> dict:
+    """Public Core result remains unchanged; admission metadata stays internal."""
+    return request_with_creation(actor, target, action_id, revision, partner, request_id)[0]
+
+
+def request_with_creation(actor: str, target: dict, action_id: str, revision: str,
+                          partner: str = "", request_id: str = "") -> tuple[dict, bool]:
+    """Return (result, created), with creation decided at the SQLite insert.
+
+    Adapters must not infer creation from a successful status: a replay has the
+    same result. The second nonce lookup under BEGIN IMMEDIATE also handles a
+    competing Core caller/process that does not hold the adapter's nonce guard.
+    """
     if (not isinstance(actor, str) or not actor or not isinstance(target, dict) or set(target) != set(_TARGET)
             or any(not isinstance(target[k], str) or not target[k] for k in _TARGET)
             or not all(isinstance(v, str) for v in (action_id, revision, partner, request_id))):
-        return _refused("invalid_request")
+        return _refused("invalid_request"), False
     fingerprint = store.encode([target, action_id, revision, partner])
     previous = store.by_request(actor, request_id)
     if previous:
-        return _result(previous) if previous["request_fingerprint"] == fingerprint else _refused("request_id_conflict")
+        return (_result(previous) if previous["request_fingerprint"] == fingerprint
+                else _refused("request_id_conflict")), False
     if places.where(actor) != (target["location_id"], target["room_id"]):
-        return _refused("target_not_in_actor_room")
+        return _refused("target_not_in_actor_room"), False
     if is_world_frozen():
-        return _refused("world_frozen")
+        return _refused("world_frozen"), False
     definition, reason = _definition(target, action_id, revision)
     if reason:
-        return _refused(reason)
+        return _refused(reason), False
     if bool(partner) != (definition["participants"] == 2) or actor == partner:
-        return _refused("invalid_partner")
+        return _refused("invalid_partner"), False
     now = game_time().canonical()
     run = dict(execution_id=uuid.uuid4().hex, actor=actor, partner=partner, request_id=request_id or None,
                request_fingerprint=fingerprint, action_id=action_id, definition_revision=revision,
@@ -414,13 +444,14 @@ def request(actor: str, target: dict, action_id: str, revision: str, partner: st
         with _claim_transaction(run) as conn:
             previous = store.by_request(actor, request_id, conn=conn)
             if previous:
-                return _result(previous) if previous["request_fingerprint"] == fingerprint else _refused("request_id_conflict")
+                return (_result(previous) if previous["request_fingerprint"] == fingerprint
+                        else _refused("request_id_conflict")), False
             reason = _validate(run, conn=conn)
             if reason:
-                return _refused(reason)
+                return _refused(reason), False
             plans, reason = _plan(run, conn=conn)
             if reason:
-                return _refused(reason)
+                return _refused(reason), False
             run["data"]["plans"] = plans
             store.insert(conn, run)
             if not partner:
@@ -434,7 +465,7 @@ def request(actor: str, target: dict, action_id: str, revision: str, partner: st
         from app.core.hooks import emit
         from app.core.keyed_lock import _after_locks
         _after_locks(lambda: emit("prop_action.invited", execution_id=run["execution_id"], inviter=actor, invitee=partner))
-    return _result(store.get(run["execution_id"]))
+    return _result(store.get(run["execution_id"])), True
 
 
 def _respond(actor: str, execution_id: str, accept: bool) -> dict:
