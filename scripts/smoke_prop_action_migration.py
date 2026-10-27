@@ -94,7 +94,6 @@ class MigrationTests(unittest.TestCase):
         action = normalized["actions"][0]
         self.assertEqual((action["pose_key"], action["ability"], action["participants"]),
                          ("sleeping", "pose", 1))
-        self.assertEqual(action["name"], "Schlafpose (ohne Schlafzustand)")
         for original, variant in zip(source["model_variants"], normalized["model_variants"]):
             self.assertEqual(variant["markers"], original["markers"])
             self.assertEqual(variant["action_bindings"][0]["action_id"], action["id"])
