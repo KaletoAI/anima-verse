@@ -7593,6 +7593,15 @@ authoring issues for missing state/stat/marker/action dependencies before any
 destructive prop replacement. Both standalone prop and bundled-location packs
 use it. Canonical exports retain their original sidecar bytes, IDs, bindings and
 state references; collections and marketplace dispatch reuse those same paths.
+Prop pack preflight canonicalizes guarded relative destination paths before
+indexing or validating them. Duplicate canonical destinations—including repeated
+raw ZIP names and `sidecar.json`/`./sidecar.json` aliases—are rejected before
+standalone replacement or bundled-location insertion. A single accepted alias
+is installed at its canonical destination, using exactly the validated document.
+Bundled directory IDs and placement references use the same normalized prop ID;
+distinct raw directory spellings that collapse onto one ID are rejected rather
+than merged. Incompatibility flags therefore survive case/space normalization
+and also block actions on dependent supported placements.
 Marker IDs must already have the store's canonical lowercase alphanumeric
 shape (1–16 characters) and be unique within their variant. Ingress rejects
 noncanonical or colliding IDs before replacement; it never lets the store

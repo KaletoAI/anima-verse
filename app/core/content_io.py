@@ -23,7 +23,7 @@ import zlib
 from datetime import datetime
 
 from app.core.timeutils import utc_now_iso
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
@@ -42,6 +42,15 @@ def _safe_relpath(rel: str) -> Optional[str]:
     if ".." in Path(rel).parts:
         return None
     return rel
+
+
+def _prop_payload_path(relative: str) -> Optional[str]:
+    """Canonical destination for a guarded prop member, before indexing it."""
+    safe = _safe_relpath(relative)
+    if not safe:
+        return None
+    canonical = PurePosixPath(safe).as_posix()
+    return canonical if canonical != "." else None
 
 
 def _read_manifest(zf: zipfile.ZipFile, expected_type: str) -> Dict[str, Any]:
@@ -976,16 +985,27 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     # touching any dependency directory. Both pack forms use the same ingress.
     from app.core.props import _prop_dir, safe_prop_id
     bundled_payloads = {}
+    bundled_directory_ids = {}
     dependency_issues = []
-    for member in zf.namelist():
+    for entry in zf.infolist():
+        member = entry.filename
         if not member.startswith("props/") or member.count("/") < 2:
             continue
-        _, pid, relative = member.split("/", 2)
-        safe = _safe_relpath(relative)
-        if not safe_prop_id(pid) or not safe:
+        _, raw_pid, relative = member.split("/", 2)
+        pid = safe_prop_id(raw_pid)
+        if not pid:
             continue
+        previous = bundled_directory_ids.setdefault(pid, raw_pid)
+        if previous != raw_pid:
+            raise ValueError(f"duplicate canonical prop directory: {pid}")
+        safe = _prop_payload_path(relative)
+        if not safe:
+            continue
+        payload = bundled_payloads.setdefault(pid, {})
+        if safe in payload:
+            raise ValueError(f"duplicate prop destination: {pid}/{safe}")
         try:
-            bundled_payloads.setdefault(pid, {})[safe] = zf.read(member)
+            payload[safe] = zf.read(entry)
         except (zipfile.BadZipFile, zlib.error, EOFError, OSError, RuntimeError) as error:
             raise ValueError(f"unreadable bundled prop {pid}: {error}") from error
     action_warnings = []
@@ -1004,7 +1024,7 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
                 dependency_issues.append({"prop_id": pid, "code": "incompatible_prop_dependency"})
                 for room in loc.get("rooms") or []:
                     for placement in (room.get("layout") or {}).get("props") or []:
-                        if placement.get("prop_id") == pid:
+                        if safe_prop_id(str(placement.get("prop_id") or "")) == pid:
                             placement["action_dependency_invalid"] = True
     if manifest.get("discovery_scale") != "stat":
         for room in loc.get("rooms") or []:
@@ -1360,13 +1380,16 @@ def import_prop_from_zip(
         # sits in memory anyway.
         payload: Dict[str, bytes] = {}
         try:
-            for member in zf.namelist():
+            for entry in zf.infolist():
+                member = entry.filename
                 if not member.startswith("files/"):
                     continue
-                safe = _safe_relpath(member[len("files/"):])
+                safe = _prop_payload_path(member[len("files/"):])
                 if not safe:
                     continue                      # Zip-Slip / directory entry
-                payload[safe] = zf.read(member)
+                if safe in payload:
+                    raise ValueError(f"duplicate prop destination: {pid}/{safe}")
+                payload[safe] = zf.read(entry)
         except (zipfile.BadZipFile, zlib.error, EOFError,
                 OSError, RuntimeError) as e:
             # The exports are ZIP_DEFLATED, so a corrupt member usually fails

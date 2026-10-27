@@ -350,6 +350,132 @@ class MigrationTests(unittest.TestCase):
         props.add_variant(pid)
         self.assertNotEqual(props.read_sidecar(pid)["model_variants"][1]["uid"], old_uid)
 
+    def test_prop_destination_aliases_and_duplicate_zip_names_leave_storage_unchanged(self):
+        import warnings
+        from app.core.content_io import import_location_from_zip
+        from app.models.world import list_locations
+        pid = props.create_prop(name="Protected alias target")["id"]
+        directory = props._prop_dir(pid)
+        (directory / "keep.bin").write_bytes(b"local bytes must survive")
+        before = {p.relative_to(directory).as_posix(): p.read_bytes()
+                  for p in directory.rglob("*") if p.is_file()}
+        valid = json.dumps(normalize_import(legacy())).encode()
+        invalid = json.dumps({"actions": None}).encode()
+        cases = [
+            [("sidecar.json", valid), ("./sidecar.json", invalid)],
+            [("./sidecar.json", invalid), ("sidecar.json", valid)],
+            [("sidecar.json", valid), ("sidecar.json", invalid)],
+            [("sidecar.json", invalid), ("sidecar.json", valid)],
+            [("sidecar.json", valid), ("nested//asset.bin", b"first"),
+             ("nested/asset.bin", b"second")],
+            [("sidecar.json", valid), ("nested/asset.bin", b"first"),
+             ("nested//asset.bin", b"second")],
+        ]
+        for kind in ("prop", "location"):
+            for index, entries in enumerate(cases):
+                with self.subTest(kind=kind, case=index):
+                    locations_before = list_locations()
+                    output = io.BytesIO()
+                    # Duplicate raw names are intentional malformed fixtures,
+                    # not a warning emitted by the importer under test.
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", message="Duplicate name:", category=UserWarning)
+                        with zipfile.ZipFile(output, "w") as archive:
+                            archive.writestr("manifest.json", json.dumps(
+                                {"version": 1, "type": kind, "prop_id": pid}))
+                            if kind == "location":
+                                archive.writestr("db/location.json", json.dumps(
+                                    {"name": "Rejected aliases", "description": "Fixture", "rooms": []}))
+                            prefix = "files/" if kind == "prop" else f"props/{pid}/"
+                            for relative, data in entries:
+                                archive.writestr(prefix + relative, data)
+                    with self.assertRaisesRegex(ValueError, "duplicate prop destination"):
+                        if kind == "prop":
+                            import_prop_from_zip(output.getvalue(), overwrite=True)
+                        else:
+                            import_location_from_zip(output.getvalue())
+                    self.assertEqual({p.relative_to(directory).as_posix(): p.read_bytes()
+                                      for p in directory.rglob("*") if p.is_file()}, before)
+                    self.assertEqual(list_locations(), locations_before)
+
+    def test_single_canonicalized_sidecar_is_the_exact_validated_document(self):
+        pid = props.create_prop(name="Single sidecar alias")["id"]
+        document = normalize_import(legacy())
+        encoded = json.dumps(document).encode()
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as archive:
+            archive.writestr("manifest.json", json.dumps(
+                {"version": 1, "type": "prop", "prop_id": pid}))
+            archive.writestr("files/./sidecar.json", encoded)
+        self.assertEqual(import_prop_from_zip(output.getvalue(), overwrite=True)["status"], "success")
+        self.assertEqual((props._prop_dir(pid) / "sidecar.json").read_bytes(), encoded)
+        self.assertEqual(props.read_sidecar(pid), document)
+
+    def test_canonical_prop_directory_collisions_are_rejected_before_location_insert(self):
+        from app.core.content_io import import_location_from_zip
+        from app.models.world import list_locations
+        pid = props.create_prop(name="Protected dependency directory")["id"]
+        directory = props._prop_dir(pid)
+        before = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
+        for alias in (pid.upper(), f" {pid} "):
+            for first, second in ((pid, alias), (alias, pid)):
+                with self.subTest(first=first, second=second):
+                    locations_before = list_locations()
+                    output = io.BytesIO()
+                    with zipfile.ZipFile(output, "w") as archive:
+                        archive.writestr("manifest.json", json.dumps({"version": 1, "type": "location"}))
+                        archive.writestr("db/location.json", json.dumps(
+                            {"name": "Rejected directory aliases", "description": "Fixture", "rooms": []}))
+                        archive.writestr(f"props/{first}/sidecar.json", json.dumps(normalize_import(legacy())))
+                        archive.writestr(f"props/{second}/distinct-file.bin", b"must not merge directories")
+                    with self.assertRaisesRegex(ValueError, "duplicate canonical prop directory"):
+                        import_location_from_zip(output.getvalue())
+                    self.assertEqual(list_locations(), locations_before)
+                    self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}, before)
+
+    def test_normalized_bundle_and_placement_ids_block_incompatible_support_descendants(self):
+        from app.core.content_io import import_location_from_zip
+        from app.models.world import get_location_by_id
+        support_document = legacy()
+        support_document["actions"] = []
+        for variant in support_document["model_variants"]:
+            variant["action_bindings"] = []
+        support = publish_fixture("Canonical dependency", support_document)
+        machine_document = normalize_import(legacy())
+        machine_document["model_variants"][0]["action_bindings"][0]["access_points"]["actor"]["z"] = 1.6
+        machine = publish_fixture("Canonical dependent machine", machine_document)
+        layout = {"x": 0, "y": 0, "w": 12, "d": 12, "props": [
+            {"id": "support", "prop_id": support, "at": [3, 4]},
+            {"id": "child", "prop_id": machine, "at": [0, 0], "on": "support"}]}
+        self.assertTrue(child_binding(layout)["supported"])
+        local = props.read_sidecar(support)
+        local["model_variants"][0]["height_m"] = 2
+        props._write_sidecar(support, local)
+        protected = (props._prop_dir(support) / "sidecar.json").read_bytes()
+        for directory_id in (support, support.upper(), f" {support} "):
+            for reference_id in (support, support.upper(), f" {support} "):
+                with self.subTest(directory=directory_id, reference=reference_id):
+                    imported_layout = copy.deepcopy(layout)
+                    imported_layout["props"][0]["prop_id"] = reference_id
+                    output = io.BytesIO()
+                    with zipfile.ZipFile(output, "w") as archive:
+                        archive.writestr("manifest.json", json.dumps({"version": 1, "type": "location"}))
+                        archive.writestr("db/location.json", json.dumps({
+                            "name": "Canonical dependency collision", "description": "Fixture",
+                            "rooms": [{"id": "a", "name": "A", "layout": imported_layout}]}))
+                        archive.writestr(f"props/{directory_id}/sidecar.json", json.dumps(support_document))
+                    result = import_location_from_zip(output.getvalue())
+                    self.assertEqual(result["action_dependency_issues"],
+                                     [{"prop_id": support, "code": "incompatible_prop_dependency"}])
+                    room = next(r for r in get_location_by_id(result["location_id"])["rooms"]
+                                if r.get("name") == "A")
+                    placed_support = next(p for p in room["layout"]["props"] if p["id"] == "support")
+                    self.assertEqual(placed_support["prop_id"], support)
+                    self.assertTrue(placed_support["action_dependency_invalid"])
+                    self.assertFalse(child_binding(room["layout"])["supported"])
+                    self.assertEqual(child_binding(room["layout"])["reason"], "incompatible_prop_dependency")
+                    self.assertEqual((props._prop_dir(support) / "sidecar.json").read_bytes(), protected)
+
     def test_invalid_import_leaves_existing_directory_untouched(self):
         prop = props.create_prop(name="Pack original")
         pid = prop["id"]
