@@ -212,6 +212,6 @@ Take the FIRST that applies:
 {{ n.i }}. Your general task → one concrete step leaving a result (a post, message, finished piece, item used), not preparation or thought.
 {% set n.i = n.i + 1 %}
 {{ n.i }}. Otherwise something new, different from where you left off — or SKIP.
-Changing clothes, re-setting the same activity or thinking about a plan without acting is not a step.
+Changing an already suitable outfit merely to occupy yourself is not progress. Getting appropriately dressed when something is missing is a valid action. Re-setting the same activity or thinking about a plan without acting is not progress.
 
 {{ action_instruction }}

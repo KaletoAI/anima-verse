@@ -581,7 +581,8 @@ def _outfit_decision_hint(character_name: str) -> str:
                     return (
                         "You recently changed location. Consider whether your "
                         "current outfit still fits the new context — if not, "
-                        "use OutfitChange.")
+                        "put on suitable pieces from your wardrobe. "
+                        "Name the exact pieces you actually put on.")
             except (ValueError, TypeError):
                 pass
 
@@ -621,7 +622,8 @@ def _outfit_decision_hint(character_name: str) -> str:
                                 return (
                                     "You just woke up. Consider whether your "
                                     "sleepwear still fits the day ahead — if "
-                                    "not, use OutfitChange.")
+                                    "not, put on suitable pieces from your wardrobe. "
+                                    "Name the exact pieces you actually put on.")
                             break  # only check the most recent activity
                 except Exception:
                     pass
@@ -633,9 +635,10 @@ def _outfit_decision_hint(character_name: str) -> str:
             bare = _bare_slots_summary(character_name)
             if bare:
                 return (
-                    f"You are currently {bare}. If that is not intentional "
-                    "for the situation you are in, get dressed via "
-                    "OutfitChange (your inventory has clothes).")
+                    f"You are currently {bare}. If that does not fit your "
+                    "preferences and the current situation, put on suitable "
+                    "pieces from your wardrobe. Name the exact pieces you "
+                    "actually put on.")
 
         return ""
     except Exception as e:
