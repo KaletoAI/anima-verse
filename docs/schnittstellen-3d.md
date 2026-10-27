@@ -7670,6 +7670,57 @@ furniture height. Like existing scene `y_world`, storey-zero scene access Y is
 terrain-relative; the concrete-world consumer samples the room ground, not the
 supporting table. No teleport, route fallback or action execution is introduced.
 
+### Indoor prop approaches (pre-activation Core contract)
+
+`prop_action_paths.plan_approach(actor, target, role)` is read-only. Target
+requires `location_id`, `room_id`, `placement_id`, `variant_uid`, `action_id`,
+`definition_revision`; optional raw `marker_id` and integer `slot` pin the
+executor's reservation. Role is `actor` or `partner`. Result contains
+`status` (`ok`/`blocked`), `reason`, world-XZ `waypoints`, floor `access`
+(`x,z,y,yaw`) and a distinct `entry_anchor` (`place_id`, raw marker/placement/
+prop/variant identity, `slot`, `x,z,y,yaw,root_offset`). No slot is claimed and
+no action is started. Revisions, actual actor room, selected stable variant,
+support provenance and role access are resolved from fresh composed places.
+Blocked results have no waypoints/access/anchor, never a straight-line fallback.
+
+The indoor visibility graph reuses `room_stand.room_geometry`: concave room
+outline, turned furniture footprints grown by `BODY_R_M`, and opening keep-clear
+zones. Wall clearance is `WALL_CLEAR_M`; rounded corner candidates retain 2 cm
+slack. Every segment is tested analytically, not by sampling. The shortest
+admissible graph route wins deterministically. Same-room requests never cross
+an outline edge, even at a door, or detour through another room/the world.
+Door-zone corners enter the graph only as useful obstacle geometry. This is not
+a new internal-wall schema or cross-room navigation. Floor/access Y retains the
+existing scene datum; support height belongs only to the body anchor.
+
+`travel_engine.start_approach_journey(actor, target, role, *, execution_kind,
+execution_ref, journey_id='') -> (journey, reason)` replans and persists an
+authoritative game-time polyline. An existing journey is never overwritten.
+Departure from a held seat uses the existing measured exit transition and its
+delay/zero-time seat leg, not raster relocation. The target is pinned to the
+selected marker/slot. Each tick revalidates provenance and every promised
+walking segment before any position write; changed geometry cancels in place.
+Arrival is exactly at floor access, not at the body anchor or a new stand point.
+
+`register_execution_owner(kind, *, guard, validate_arrival, arrived, cancelled)`
+registers a real typed owner. Guard returns a context manager yielding bool;
+arrival validation returns `(allowed, reason)` for the actual arrival room.
+Callbacks are `arrived(actor, journey)` and `cancelled(actor, journey, reason)`.
+The guard must check the exact run/journey/actor and serialize its execution.
+Callbacks run outside profile locks, possibly inside the owner's guard; owner
+locking must therefore support that re-entry. Identical registration is
+idempotent; replacing an owner or registering reserved `party_intent` fails.
+Task4 must register the real `prop_action` owner; none is installed here.
+
+`party_intent` dispatch dynamically uses the existing party single-providers,
+without replacing them. A persisted `execution_ref` without a kind is normalized
+once to `party_intent`; ordinary journeys remain ownerless. An unavailable or
+unknown typed owner is visibly cancelled (`last_journey_result`, state event,
+log). `cancel_journey` accepts exact `journey_id`, `execution_kind` and
+`execution_ref` selectors; all supplied selectors must match. Runtime prop
+actions remain inactive until the complete executor/cutover is installed.
+
+
 
 
 ### Ein Prop, mehrere Modell-Varianten (§ B2)
