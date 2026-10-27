@@ -113,10 +113,17 @@ def legacy_effects(effects: dict, *, source="", include_condition=False, giver="
         result.append(dict(id="mood", type="mood", mood=effects["mood_influence"], source=source))
     name = str(effects.get("apply_condition") or "").strip()
     if include_condition and name:
-        duration = max(1, int(effects.get("condition_duration_hours") or 2))
-        result.append(dict(id="condition", type="condition_add", condition_id=name,
-                           duration_game_s=duration * 3600, repeat="ignore",
-                           source=source, source_character=giver.strip()))
+        try:
+            duration = max(1, int(effects.get("condition_duration_hours") or 2))
+        except (TypeError, ValueError, OverflowError) as exc:
+            from app.core.log import get_logger
+            get_logger("effect_application").warning(
+                "Condition-Apply fuer %s (%s) fehlgeschlagen: invalid condition_duration_hours: %s",
+                source, name, exc)
+        else:
+            result.append(dict(id="condition", type="condition_add", condition_id=name,
+                               duration_game_s=duration * 3600, repeat="ignore",
+                               source=source, source_character=giver.strip()))
     return result
 
 
@@ -152,6 +159,25 @@ def apply_character_effects(name, effects, now, *, source=''):
     return result
 
 
+def _active_amount(rate, seconds, previous):
+    """Exact decimal-rate credit, bounded before conversion to actor units.
+
+    Rational carry avoids tick-partition rounding loss. At most 100 whole
+    points can affect a 0..100 stat; anything beyond that is spent, not banked.
+    Even the largest accepted finite rate never passes through float overflow.
+    """
+    from fractions import Fraction
+    fraction = previous.get("carry_fraction")
+    carry = Fraction(*fraction) if fraction is not None else Fraction(str(previous.get("carry", 0)))
+    earned = Fraction(str(rate)) * Fraction(str(seconds)) / 60 + carry
+    if earned >= 100:
+        return 100, Fraction(0)
+    if earned <= -100:
+        return -100, Fraction(0)
+    whole = int(earned)
+    return whole, earned - whole
+
+
 def _apply_on_connection(conn, run, phase, now, profiles, catalogs):
     """Caller owns sorted profile locks AND this connection's transaction."""
     from app.core import prop_action_store as store
@@ -176,11 +202,10 @@ def _apply_on_connection(conn, run, phase, now, profiles, catalogs):
         for name in names:
             actual = dict(effect, source='prop_action:' + run['execution_id'])
             previous = receipt['targets'].get(name, {})
-            carry = 0.0
+            from fractions import Fraction
+            carry = Fraction(0)
             if phase == 'active':
-                earned = effect['amount'] * delta_s / 60 + previous.get('carry', 0)
-                actual['amount'] = math.trunc(earned)
-                carry = earned - actual['amount']
+                actual['amount'], carry = _active_amount(effect['amount'], delta_s, previous)
             reason = validate_profile_effects(profiles[name], [actual], catalogs)
             if reason:
                 transformed = dict(profile=profiles[name], changes={}, results={
@@ -195,8 +220,9 @@ def _apply_on_connection(conn, run, phase, now, profiles, catalogs):
                 if (applied.get('delta') != actual['amount'] or
                         (applied.get('new') == 100 and carry > 0) or
                         (applied.get('new') == 0 and carry < 0)):
-                    carry = 0.0
-                applied.update(carry=carry, interval_delta=applied.get('delta', 0),
+                    carry = Fraction(0)
+                applied.update(carry=float(carry), carry_fraction=[carry.numerator, carry.denominator],
+                               interval_delta=applied.get('delta', 0),
                                delta=previous.get('delta', 0) + applied.get('delta', 0),
                                old=previous.get('old', applied.get('old')))
             receipt['targets'][name] = applied

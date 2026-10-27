@@ -30,7 +30,8 @@ logger = get_logger("stat_effects")
 _TICK_MIN = 30.0
 _TICK_CAP_MIN = 180.0
 _last_tick: Dict[str, GameTime] = {}
-_activity_rates: dict[str, tuple[str, dict[str, int]]] = {}
+_activity_rates: dict[str, tuple[str, tuple, dict[str, int]]] = {}
+_activity_context: dict[str, tuple] = {}
 _activity_carry: dict[tuple[str, str, str], float] = {}
 _tick_pending: set[str] = set()
 _tick_lock = threading.Lock()
@@ -77,10 +78,10 @@ def build_stat_list(character_name: str, *, excluded=frozenset()) -> Tuple[bool,
 
 
 def _evaluate_deltas(character_name: str, situation_text: str, *,
-                     per_hour: bool) -> Dict[str, int]:
-    """Ask for event deltas or activity rates without applying them."""
-    enabled, stat_list = build_stat_list(character_name,
-        excluded=declared_action_stats(character_name) if per_hour else frozenset())
+                     per_hour: bool, excluded=None) -> Dict[str, int]:
+    """Ask for deltas/rates, retaining the evaluation-time ownership snapshot."""
+    excluded = frozenset(declared_action_stats(character_name) if per_hour and excluded is None else excluded or ())
+    enabled, stat_list = build_stat_list(character_name, excluded=excluded)
     if not enabled:
         return {}
     try:
@@ -110,6 +111,8 @@ def _evaluate_deltas(character_name: str, situation_text: str, *,
         return {}
     deltas: Dict[str, int] = {}
     for k, v in stats.items():
+        if str(k) in excluded:
+            continue
         try:
             d = round_half_away(float(v))
         except (TypeError, ValueError, OverflowError):
@@ -119,22 +122,40 @@ def _evaluate_deltas(character_name: str, situation_text: str, *,
     return deltas
 
 
-def evaluate_stat_rates(name: str, situation: str) -> dict[str, int]:
-    """Return per-hour activity rates without changing the character."""
-    return _evaluate_deltas(name, situation, per_hour=True)
+def evaluate_stat_rates(name: str, situation: str, *, excluded=None) -> dict[str, int]:
+    """Return per-hour rates, excluding the SAME keys at prompt and reply time."""
+    return _evaluate_deltas(name, situation, per_hour=True, excluded=excluded)
 
 
-def declared_action_stats(name: str) -> set[str]:
-    """Current semantic targets, not clip A/B; no authority from stale LLM work."""
+def _declarative_context(name: str) -> tuple:
+    """Actual execution ownership matters even when two runs declare one stat."""
     from app.core import prop_action_store
-    result = set()
+    context = []
     for run in prop_action_store.live_runs():
         if run["status"] not in ("active", "sleeping") or name not in (run["actor"], run["partner"]):
             continue
         role = "actor" if name == run["actor"] else "partner"
-        result.update(effect["stat"] for effect in run["definition"]["effects"]
-                      if effect["type"] == "stat_delta" and effect["target"] in (role, "both"))
-    return result
+        keys = tuple(sorted({effect["stat"] for effect in run["definition"]["effects"]
+                            if effect["type"] == "stat_delta" and effect["target"] in (role, "both")}))
+        if keys:
+            context.append((run["execution_id"], keys))
+    return tuple(sorted(context))
+
+
+def declared_action_stats(name: str) -> set[str]:
+    return {key for _, keys in _declarative_context(name) for key in keys}
+
+
+def reanchor_activity_accounting(names, now):
+    """An ownership boundary is not a new billable LLM interval."""
+    contexts = {name: _declarative_context(name) for name in names}
+    with _tick_lock:
+        for name, context in contexts.items():
+            _last_tick[name] = now
+            _activity_context[name] = context
+            _activity_rates.pop(name, None)
+            for key in [key for key in _activity_carry if key[0] == name and key[2] == "activity"]:
+                del _activity_carry[key]
 
 
 def _apply_deltas(name: str, deltas: dict[str, int], source: str) -> dict[str, int]:
@@ -189,7 +210,15 @@ def maybe_activity_tick(character_name: str) -> None:
     from app.core.timeutils import game_time
     from app.models.character import get_effective_activity, is_character_sleeping
     now = game_time()
+    context = _declarative_context(character_name)
+    excluded = frozenset(key for _, keys in context for key in keys)
     with _tick_lock:
+        if character_name in _activity_context and _activity_context[character_name] != context:
+            _last_tick[character_name] = now
+            _activity_context[character_name] = context
+            _activity_rates.pop(character_name, None)
+            return
+        _activity_context[character_name] = context
         last = _last_tick.get(character_name)
         if last is None or now < last:
             _last_tick[character_name] = now
@@ -201,8 +230,9 @@ def maybe_activity_tick(character_name: str) -> None:
         _tick_pending.add(character_name)
 
     def finish(activity: str, rates: dict[str, int]) -> None:
+        rates = {key: rate for key, rate in rates.items() if key not in excluded}
         with _tick_lock:
-            _activity_rates[character_name] = (activity, rates)
+            _activity_rates[character_name] = (activity, context, rates)
         deltas = _scaled_deltas(character_name, rates, elapsed_min, "activity")
         _apply_deltas(character_name, deltas, "activity")
 
@@ -211,7 +241,7 @@ def maybe_activity_tick(character_name: str) -> None:
             minutes = int(min(elapsed_min, _TICK_CAP_MIN))
             text = (f"{character_name} has been doing this for about {minutes} "
                     f"minutes: {activity}")
-            finish(activity, evaluate_stat_rates(character_name, text))
+            finish(activity, evaluate_stat_rates(character_name, text, excluded=excluded))
         finally:
             with _tick_lock:
                 _tick_pending.discard(character_name)
@@ -225,8 +255,8 @@ def maybe_activity_tick(character_name: str) -> None:
             return
         with _tick_lock:
             cached = _activity_rates.get(character_name)
-        if cached is not None and cached[0] == activity:
-            finish(activity, cached[1])
+        if cached is not None and cached[:2] == (activity, context):
+            finish(activity, cached[2])
             return
         thread = threading.Thread(target=evaluate, args=(activity,),
                                   daemon=True, name="activity-stat-tick")

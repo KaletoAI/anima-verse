@@ -111,6 +111,109 @@ class Effects(unittest.TestCase):
             A.cancel(run['actor'], run['execution_id'])
         F.assert_no_external_work()
 
+    def test_rate_settlement_is_partition_independent_signed_and_restart_safe(self):
+        for amount, pieces in ((2, [3] * 30), (-2, [3] * 30), (2, [90]), (-2, [90])):
+            name, _, _, ref = begin('pose', [stat(amount, 'active')])
+            for index, seconds in enumerate(pieces):
+                S.tick(seconds)
+                if index == 14:
+                    with patch.object(A, '_PROCESS', 'fraction-restart'):
+                        A.advance(F.game_time())
+                    A.advance(F.game_time())  # reanchor original process, no time
+            A.cancel(name, ref)  # zero-new-time cancellation cannot lose a unit
+            self.assertEqual(value(name), 43 if amount > 0 else 37)
+            result = json.loads(receipts(ref)[0]['result'])['targets'][name]
+            self.assertEqual(result['delta'], 3 if amount > 0 else -3)
+            self.assertEqual(result['carry'], 0)
+
+    def test_huge_finite_rate_saturates_and_cancellation_releases_claims(self):
+        for amount, expected, delta in ((1e308, 100, 60), (-1e308, 0, -40)):
+            name, _, _, ref = begin('pose', [stat(amount, 'active')])
+            F.set_game_time(F.game_time() + GameDuration.of(seconds=2))
+            result = A.cancel(name, ref)
+            self.assertEqual(result['status'], 'completed')
+            self.assertEqual(value(name), expected)
+            self.assertFalse(R.claims(ref))
+            applied = json.loads(receipts(ref)[0]['result'])['targets'][name]
+            self.assertEqual(applied['delta'], delta)
+            self.assertEqual(applied['carry'], 0)
+
+    def test_malformed_item_condition_does_not_lose_consumed_numeric_and_mood(self):
+        name, _, _, ref = begin('pose', [])
+        condition()
+        from app.models import inventory
+        item = inventory.add_item(name='Malformed duration fixture', consumable=True, effects={
+            'run_energy_change': 15, 'mood_influence': 'calm', 'apply_condition': 'effects-boost',
+            'condition_duration_hours': 'not-a-duration'})
+        self.assertTrue(inventory.add_to_inventory(name, item['id']))
+        result = inventory.consume_item(name, item['id'])
+        self.assertTrue(result['success'])
+        self.assertFalse(inventory.has_item(name, item['id']))
+        self.assertEqual(value(name), 55)
+        self.assertEqual(F.C.get_character_profile(name)['current_feeling'], 'calm')
+        self.assertFalse(F.C.get_character_profile(name).get('active_conditions'))
+
+    def test_late_activity_model_reply_retains_its_original_exclusion_snapshot(self):
+        from app.core import stat_effects as stats
+        name, _, _, ref = begin('pose', [stat(2, 'active')])
+        template = S.character_template.get_template('run-person')
+        template.setdefault('features', {})['status_effects_enabled'] = True
+        S.character_template.save_template('run-person', template)
+        profile = F.C.get_character_profile(name)
+        profile['status_effects']['other_energy'] = 40
+        F.C.save_character_profile(name, profile)
+        def model_reply(**kwargs):
+            A.cancel(name, ref)
+            return SimpleNamespace(content='{"stats":{"run_energy":10,"other_energy":7}}')
+        with patch.object(llm_router, 'llm_call', model_reply):
+            rates = stats.evaluate_stat_rates(name, 'same activity')
+        F.C.adjust_status_effects(name, rates, source='activity')
+        self.assertEqual(value(name), 40)
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['other_energy'], 47)
+
+    def test_same_activity_cache_re_evaluates_after_declared_ownership_ends(self):
+        from app.core import stat_effects as stats
+        name, _, _, ref = begin('pose', [stat(2, 'active')])
+        template = S.character_template.get_template('run-person')
+        template.setdefault('features', {})['status_effects_enabled'] = True
+        S.character_template.save_template('run-person', template)
+        class InlineWorker:
+            def __init__(self, target, args, **kwargs):
+                self.target, self.args = target, args
+            def start(self):
+                self.target(*self.args)
+        with patch.object(stats.threading, 'Thread', InlineWorker), \
+             patch('app.models.character.get_effective_activity', return_value='same activity'), \
+             patch.object(llm_router, 'llm_call', return_value=SimpleNamespace(
+                 content='{"stats":{"run_energy":6,"other_energy":2}}')):
+            stats.maybe_activity_tick(name)
+            F.set_game_time(F.game_time() + GameDuration.of(minutes=30))
+            stats.maybe_activity_tick(name)
+            A.cancel(name, ref)
+            F.C.adjust_status_effects(name, {'run_energy': -60})
+            baseline = value(name)
+            stats.maybe_activity_tick(name)  # ownership boundary is not billable
+            F.set_game_time(F.game_time() + GameDuration.of(minutes=30))
+            stats.maybe_activity_tick(name)
+            self.assertEqual(value(name), baseline + 3)
+
+    def test_general_temporary_together_keeps_real_immediate_legacy_start(self):
+        from app.core import interaction_engine as interactions
+        name, partner, target, _ = S.authored_pair()
+        entries = S.pose_catalog.world_entries('pose')
+        entries['effects-free-pair'] = dict(solo=False, animation='run-pair', group='stand',
+                                           places=2, prompt='Free pair fixture')
+        S.pose_catalog.replace_world_entries('pose', entries)
+        S.pose_catalog.reload_catalogs()
+        self.assertTrue(F.C.is_temporary_npc(partner))
+        ref = interactions.create_invite(name, partner, 'effects-free-pair')
+        self.assertEqual(interactions.get_invite(ref)['status'], 'accepted')
+        actor, invitee = (F.C.get_character_profile(n)['interaction'] for n in (name, partner))
+        self.assertEqual(actor['id'], invitee['id'])
+        self.assertEqual(actor['invite_id'], ref)
+        self.assertIsNone(actor['anchor']['place_id'])
+        interactions.end_interaction(name, interaction_id=actor['id'])
+
     def test_success_is_final_drink_and_replay_reports_actual_delta(self):
         name, _, _, ref = begin()
         self.assertEqual(value(name), 40)

@@ -63,7 +63,23 @@ def _members(run):
 def _save(run):
     """Plain progress write; active effect progress must use _commit instead."""
     with store.transaction() as conn:
-        store.save(conn, run)
+        previous = store.get(run["execution_id"], conn=conn)
+        saved = store.save(conn, run)
+    if saved:
+        _activity_boundary(run, previous["status"], game_time())
+
+
+def _activity_boundary(run, previous_status, now):
+    owned = ("active", "sleeping")
+    if ((previous_status in owned) == (run["status"] in owned)
+            or not any(effect["type"] == "stat_delta" for effect in run["definition"]["effects"])):
+        return
+    from app.core.keyed_lock import _after_locks
+    from app.core.stat_effects import reanchor_activity_accounting
+    names = [name for role, name in _members(run) if any(
+        effect["type"] == "stat_delta" and effect["target"] in (role, "both")
+        for effect in run["definition"]["effects"])]
+    _after_locks(lambda: reanchor_activity_accounting(names, now))
 
 
 def _commit(run, phases=(), *, runtime=None, now=None, catalogs=None):
@@ -110,6 +126,7 @@ def _commit(run, phases=(), *, runtime=None, now=None, catalogs=None):
             if not store.save(conn, run):
                 raise RuntimeError("execution_progress_write_failed")
     effects.notify_effects(changed, "prop_action:" + run["execution_id"])
+    _activity_boundary(run, current["status"], now)
     return run["data"].get("effect_results", {})
 
 

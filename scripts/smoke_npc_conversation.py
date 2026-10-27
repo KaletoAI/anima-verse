@@ -29,10 +29,10 @@ Hand-derived expectations, case by case:
       because the sentence was meant for the room it just left. A ``pair`` in
       such a turn is dropped for the same reason — the partner would be in
       the room the NPC has just left, so the invitation could never bind.
-  (e) A valid pair proposal records a real pending invitation. Temporary and
-      normal NPCs both receive explicit response requests; no automatic yes.
-      A real explicit decline settles the row without starting an interaction.
-      Complete real pair entry is covered by smoke_prop_action_effects.py.
+  (e) General temporary-NPC Together preserves its existing immediate attempt,
+      without a new model/response turn. This clip-free fixture observes the
+      real terminal capability failure, not a fake successful pair start.
+      Real successful general pair entry is covered by smoke_prop_action_effects.py.
   (f) ``mode == "off"`` produces no conversation block at all and a ``say`` is
       ignored. ``mode == "scene"`` behaves the same way inside a house. Out in
       the open with an ``npc_home``, ``talk_allowed`` is True again.
@@ -371,8 +371,8 @@ save_character_current_location(AVATAR, LOC_ID)
 force_set_status(AVATAR, room="kitchen")
 
 
-# ── (e) a pair proposal is a question, including temporary NPCs ───────────
-print("(e) pair: explicit consent, never automatic temporary-NPC acceptance")
+# ── (e) preserve existing general temporary Together policy ──────────────
+print("(e) general temporary Together does not add a response turn")
 import plugins.interact.register  # noqa: E402,F401 — registers the hook
 interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
 PAIR_KEY = npc_actions._pair_pose_keys()[0] if npc_actions._pair_pose_keys() else ""
@@ -382,15 +382,15 @@ LLM = FakeLLM('{"room": "taproom", "activity": "Sie tritt vor.",'
               ' "pair": {"with": "Halvard", "pose": "%s"}}' % PAIR_KEY)
 res = npc_actions.run_action_for(A, llm=LLM)
 check("the turn reports the invitation", res.get("invited") if res else None, B)
-pending = interaction_engine.pending_invites_for(B)
-check("temporary NPC has an actual open question", len(pending), 1)
-check("no interaction starts before its answer", interaction_engine.get_interaction(B), None)
-_inv_id = pending[0]["invite_id"]
-check("repeated proposal preserves the exact unanswered question",
-      interaction_engine.create_invite(A, B, PAIR_KEY), _inv_id)
-check("explicit temporary-NPC decline settles its actual row",
-      interaction_engine.resolve_invite(_inv_id, False)["status"], "declined")
-check("decline leaves no open question", interaction_engine.pending_invites_for(B), [])
+check("general temporary attempt leaves no unanswered invitation",
+      interaction_engine.pending_invites_for(B), [])
+check("real missing clip cannot fabricate an interaction", interaction_engine.get_interaction(B), None)
+from app.core.db import get_connection
+_row = get_connection().execute(
+    "SELECT status,reason FROM interaction_invites WHERE inviter=? AND invitee=? ORDER BY created_at DESC LIMIT 1",
+    (A, B)).fetchone()
+check("actual general capability failure is terminal", _row["status"], "failed")
+check("failure retains a real cause", bool(_row["reason"]), True)
 LOOP.bumps.clear()
 save_character_current_location(FULL, LOC_ID)
 force_set_status(FULL, room="taproom")
@@ -476,19 +476,16 @@ SCENE = FakeLLM('{"lines": {"speaker": "Gudrun"}, "pair": null, "activities": {}
 check("lines as an object -> nothing", npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE), None)
 check("and no new utterance", len(utterances()), before)
 
-# ── (i) scenes propose, not consent on behalf of another person ──────────
-print("(i) scene: a pair proposal waits for an explicit answer")
+# ── (i) general scene pairs retain their existing immediate attempt ──────
+print("(i) scene: legacy temporary Together attempts the actual capability")
 interaction_engine.partner_poses = lambda: [("shaking hands", "handshake")]
 npc_scenes._last_scene.clear()
 SCENE = FakeLLM('{"lines": [{"speaker": "Gudrun", "line": "Komm."}, {"speaker": "Halvard", "line": "Gut."}],'
                 ' "pair": {"a": "Gudrun", "b": "Halvard", "pose": "%s"}, "activities": {}}' % PAIR_KEY)
 res = npc_scenes.run_scene_for(LOC_ID, "taproom", [A, B], llm=SCENE)
 check("reported", res.get("pair") if res else None, True)
-pending = interaction_engine.pending_invites_for(B)
-check("scene leaves an actual pending invitation", len(pending), 1)
-check("scene prose is not consent", interaction_engine.get_interaction(B), None)
-check("invitee can explicitly decline the scene's question",
-      interaction_engine.resolve_invite(pending[0]["invite_id"], False)["status"], "declined")
+check("general scene attempt leaves no open invitation", interaction_engine.pending_invites_for(B), [])
+check("missing clip is not reported as an actual interaction", interaction_engine.get_interaction(B), None)
 interaction_engine.partner_poses = _real_partner_poses
 set_npc_config(conversation_mode="turns")
 

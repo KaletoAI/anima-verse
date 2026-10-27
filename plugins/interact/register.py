@@ -41,7 +41,7 @@ def pair_verb_name() -> str:
 
 def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
                 pose_key: str = "", **_kwargs) -> None:
-    """Ask an NPC through the decision/respond lane, never automatic consent."""
+    """Preserve general Together policy; semantic prop consent is separate."""
     if not inviter or not invitee:
         return
     try:
@@ -50,6 +50,16 @@ def _on_invited(invite_id: str = "", inviter: str = "", invitee: str = "",
             return
     except Exception:
         return
+    try:
+        from app.models.character import is_temporary_npc
+        if invite_id and is_temporary_npc(invitee):
+            from app.core import interaction_engine as IE
+            res = IE.resolve_invite(invite_id, accept=True)
+            logger.info("interaction invite %s: temporary NPC %s says yes -> %s",
+                        invite_id, invitee, res.get("status"))
+            return
+    except Exception as exc:
+        logger.debug("temporary-NPC acceptance failed for %s: %s", invitee, exc)
     if invite_id and _decide_invite(invite_id, inviter, invitee, pose_key):
         return
     try:

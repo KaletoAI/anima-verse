@@ -7894,9 +7894,16 @@ fractional carry and actual cumulative delta per semantic target. Cancellation
 settles the last online partial interval; combined time is capped at its actual
 remaining phases. Restart/offline/freeze earns no extra time. Capped overflow
 (including fractional credit pointing past a cap) is spent, never banked.
-Declared numeric targets are excluded from parallel activity-model evaluation
-and rechecked under the real profile write lock; unrelated stats and canonical
-sleep regeneration retain their ownership.
+Rate settlement uses exact rational fractional credit from decimal authored
+rates and elapsed game seconds, making equivalent tick partitions identical.
+Credit is bounded before integer conversion, so accepted huge finite positive
+or negative rates saturate real 0..100 stats without overflow or stuck claims.
+Declared numeric targets are excluded using the evaluation-time snapshot at
+both prompt and reply parsing, plus the live profile write guard. Activity-rate
+cache keys include actual execution ownership/excluded-stat context; entry/end
+reanchor that accounting interval and invalidate cached rates/fractions. A late
+reply cannot restore its excluded stat after terminal commit. Unrelated keys
+in that response and canonical sleep regeneration retain their ownership.
 
 The installed `interact` package consumes `prop_action.invited` only after
 request locks/transaction exit. Normal and temporary NPCs explicitly decide via
@@ -7907,6 +7914,9 @@ same-pose counter-call or another placement cannot consent to this question.
 The run pins action/revision/variant/placement/participants and semantic versus
 physical roles; acceptance revalidates them. Scene offers, HTTP, `state_for`
 and final prompt/HUD integrations belong to the subsequent cutover tasks.
+The explicit-consent policy above is only for semantic prop actions. General
+temporary Together keeps its previous immediate acceptance and incurs no new
+decision-model call or waiting response turn.
 
 Controller verification: `scripts/smoke_prop_action_runs.py` reuses the Task3
 real DB/profile/published-variant/scene/way fixture, copies complete shipped

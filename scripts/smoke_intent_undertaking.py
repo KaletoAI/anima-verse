@@ -39,16 +39,22 @@ def undertaking(temporary=True):
 
 
 def accept_activity(intent):
-    """An actual explicit second answer, not automatic temporary-NPC consent."""
+    """Legacy temporary Together still starts immediately; normal NPCs answer."""
     request_id = "iinv_intent_" + intent["id"]
-    assert IE.get_invite(request_id)["status"] == "pending"
-    assert IE.resolve_invite(request_id, True)["status"] == "started"
+    row = IE.get_invite(request_id)
+    if F.C.is_temporary_npc(row["invitee"]):
+        assert row["status"] == "accepted"
+        interaction = IE.get_interaction(row["inviter"])
+        assert interaction and interaction["invite_id"] == request_id
+    else:
+        assert row["status"] == "pending"
+        assert IE.resolve_invite(request_id, True)["status"] == "started"
 
 
 def complete_after_real_end():
     a, b, intent = undertaking()
     assert F.P.resolve_pending_invite(F.invite_id(intent), True)["status"] == "accepted"
-    assert IE.get_interaction(a) is None, "temporary NPC accepted without an explicit answer"
+    assert IE.get_interaction(a)["partner"] == b, "legacy temporary Together did not start"
     accept_activity(intent)
     row = F.I.get_intent(intent["id"])
     assert row["status"] == "active", "arrival prematurely completed the undertaking"
@@ -308,16 +314,19 @@ def old_live_question_survives_housekeeping():
 
 def temporary_failure_keeps_actual_cause():
     a, b, intent = undertaking()
-    F.P.resolve_pending_invite(F.invite_id(intent), True)
-    # Real capability loss between question and explicit answer, not a mocked
-    # start failure. Restore only this disposable fixture's asset afterwards.
+    # Lose actual clip capability after preflight but before the existing
+    # temporary Together hook starts it. No successful engine result is faked.
     clip = F.CLIPS / "hug__b.fbx"
     contents = clip.read_bytes()
-    clip.unlink()
     from app.core import animation_clips
-    animation_clips._clear_entries_cache()
+    real_create = IE.create_invite
+    def lose_clip_before_question(*args, **kwargs):
+        clip.unlink()
+        animation_clips._clear_entries_cache()
+        return real_create(*args, **kwargs)
     try:
-        assert IE.resolve_invite("iinv_intent_" + intent["id"], True)["status"] == "cannot"
+        with patch.object(IE, "create_invite", lose_clip_before_question):
+            F.P.resolve_pending_invite(F.invite_id(intent), True)
         row = F.I.get_intent(intent["id"])
         assert row["status"] == "cancelled"
         assert "no pair animation" in row["meta"]["travel"]["reason"]
