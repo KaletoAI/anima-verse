@@ -49,6 +49,7 @@ import { apiDelete, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import type { PropVariant } from './propTypes'
 import type { PreparePropVariantOperation } from './propOperations'
+import { PropWorkspaceDialog } from './PropWorkspaceDialog'
 
 /** One chip's width in pixels — wide enough for the badge row, which is the
  *  widest thing in it since the inputs moved into the second column. Fixed on
@@ -102,9 +103,10 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // window.confirm.
   const [armedDel, setArmedDel] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<PropVariant | null>(null)
   // Arming is bound to an INDEX, and a delete renumbers everything behind it —
   // so any change of the list disarms rather than pointing at another variant.
-  useEffect(() => { setArmedDel(null) }, [propId, variants.length])
+  useEffect(() => { setArmedDel(null); setDeleteTarget(null) }, [propId, variants.length])
 
   const activeCount = variants.filter((v) => v.active).length
   const capReached = activeCount >= max
@@ -156,13 +158,25 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // Deleting a variant is IMMEDIATE (it takes its meshes and its source image
   // with it and renumbers everything behind it) — so the detail is told which
   // index went, and it renumbers its pending fields the same way.
-  const remove = useCallback((index: number) => {
+  const remove = useCallback(async (uid: string, acceptedBindings?: string[]) => {
     setArmedDel(null)
-    void run(variants.find((entry) => entry.index === index)?.uid || '', async (target) => {
+    const target = await prepareVariantOperation(uid, t('Variante und ihre Bindungen löschen'))
+    if (!target) return
+    const references = (target.action_bindings || []).map(binding => binding.action_id)
+    if (references.length && (!acceptedBindings || references.some(id => !acceptedBindings.includes(id)))) {
+      setDeleteTarget(target)
+      return
+    }
+    setBusy(true)
+    try {
       await apiDelete(`/world/props/${enc}/variants/${target.index}`)
+      setDeleteTarget(null)
       onDeleted(target.index)
-    }, t('Variant deleted'))
-  }, [enc, onDeleted, run, variants, t])
+      await onChanged()
+      toast(t('Variant deleted'))
+    } catch (error) { toast(t('Error') + ': ' + (error as Error).message, 'error') }
+    finally { setBusy(false) }
+  }, [enc, onDeleted, onChanged, prepareVariantOperation, t, toast])
 
   return (
     <>
@@ -185,7 +199,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
               (s) => s.toLowerCase() === currentSeason.toLowerCase())
           return (
             <div
-              key={v.index}
+              key={v.uid}
               style={{
                 // FIXED WIDTH, not content width: a chip whose width depended
                 // on its badges would re-flow the whole strip whenever a mesh
@@ -282,7 +296,8 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                   className={`ga-btn ga-btn-sm${armedDel === v.index ? ' ga-btn-danger' : ''}`}
                   disabled={busy || isBusy || behindBusy || variants.length < 2}
                   onClick={() => {
-                    if (armedDel === v.index) remove(v.index)
+                    if (v.action_bindings?.length) setDeleteTarget(v)
+                    else if (armedDel === v.index) void remove(v.uid)
                     else setArmedDel(v.index)
                   }}
                   title={isBusy
@@ -323,6 +338,15 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
         {' '}
         {`${t('Active:')} ${activeCount}/${max}`}
       </span>
+      {deleteTarget && <PropWorkspaceDialog title={t('Variante mit Aktionsbindungen löschen')} onCancel={() => setDeleteTarget(null)}>
+        <p>{t('Wird sofort angewendet: Diese Variante, ihre Dateien und alle folgenden Bindungen werden gemeinsam entfernt. Aktionen bleiben am Prop bestehen; andere Varianten bleiben unverändert. Die UUID wird nach der Speicherschranke erneut aufgelöst.')}</p>
+        <ul>{(deleteTarget.action_bindings || []).map(binding => <li key={binding.action_id}>{binding.action_id}</li>)}</ul>
+        <div className="ga-form-row">
+          <button type="button" className="ga-btn ga-btn-danger" disabled={busy}
+            onClick={() => { void remove(deleteTarget.uid, (deleteTarget.action_bindings || []).map(binding => binding.action_id)) }}>{t('Variante und sämtliche abhängigen Bindungen löschen')}</button>
+          <button type="button" className="ga-btn" disabled={busy} onClick={() => setDeleteTarget(null)}>{t('Abbrechen')}</button>
+        </div>
+      </PropWorkspaceDialog>}
     </>
   )
 }

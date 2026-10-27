@@ -456,6 +456,27 @@ class ApiContracts(unittest.TestCase):
         self.assertEqual(requested.json()['status'], 'awaiting_consent')
         self.assertFalse(R.claims())
 
+    def test_admin_target_catalog_is_actual_private_read_only_census(self):
+        name, partner, target, pid = S.authored_pair()
+        bystander = F.actor(target['location_id'], at=(3, 5))
+        F.C.set_is_sleeping(bystander, True)
+        admin, ordinary = client(name, 'admin'), client(name)
+        url = '/world/props/' + pid + '/check-targets'
+        before = snapshot()
+        with pure_tripwires():
+            response = admin.get(url, params={'location_id': target['location_id']})
+            self.assertEqual(response.status_code, 200)
+            result = response.json()
+            self.assertEqual(result['revision'], target['definition_revision'])
+            room = next(row for row in result['rooms'] if row['id'] == target['room_id'])
+            self.assertIn({'target': {key: target[key] for key in A._TARGET}}, room['placements'])
+            census = {row['name']: row['sleeping'] for row in room['persons']}
+            self.assertIn(name, census)
+            self.assertIn(partner, census)
+            self.assertTrue(census[bystander])
+            self.assertEqual(ordinary.get(url, params={'location_id': target['location_id']}).status_code, 403)
+        self.assertEqual(snapshot(), before)
+
     def test_actual_renderers_available_blocked_empty_marker_switch_and_override(self):
         name, target, pid = S.setup_run()
         for marker in (False, True):

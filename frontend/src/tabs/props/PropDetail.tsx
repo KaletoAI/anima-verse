@@ -1,13 +1,13 @@
 import { ExportButton, PublishButton } from '../../components/ImportExport'
 import { PropOverview } from './PropOverview'
-import { PropActionsSummary } from './PropActionsSummary'
+import { PropActionsPanel } from './PropActionsPanel'
 import { PropPlaces } from './PropPlaces'
 import { PropAssets } from './PropAssets'
 import { PropAppearance } from './PropAppearance'
 import { PropPreview } from './PropPreview'
 import { PropWorkspaceDialog } from './PropWorkspaceDialog'
 import { usePropWorkspace, type PropDetailProps } from './usePropWorkspace'
-import type { PropWorkspaceArea } from './propTypes'
+import type { PropActionIssue, PropWorkspaceArea } from './propTypes'
 
 const AREAS: { id: PropWorkspaceArea; label: string }[] = [
   { id: 'overview', label: 'Übersicht' },
@@ -24,7 +24,43 @@ export function PropDetail(props: PropDetailProps) {
     dirtyCount, saving, save, discard, discardArmed, setDiscardArmed,
     variant, variants, shownVariant, setVariant, conflicts, saveError,
     resolveConflict, beforeImmediate, operation, finishOperation,
-    revisionReady, variantLoadError, loadVariants } = workspace
+    revisionReady, variantLoadError, loadVariants, saveIssues, authoringIssues } = workspace
+  const openIssue = (issue: PropActionIssue) => {
+    const actionMatch = /^actions\.(\d+)/.exec(issue.path)
+    const variantMatch = /^model_variants\.(\d+)/.exec(issue.path)
+    let focusId = ''
+    let markerToSelect: number | undefined
+    if (actionMatch) {
+      workspace.setSelectedActionId(workspace.actions[Number(actionMatch[1])]?.id || '')
+      navigate('actions')
+    } else if (variantMatch) {
+      const target = variants[Number(variantMatch[1])]
+      if (target) {
+        setVariant(target.index)
+        const bindingMatch = /\.action_bindings\.(\d+)(?:\.(.*))?$/.exec(issue.path)
+        const markerMatch = /\.markers\.(\d+)/.exec(issue.path)
+        if (bindingMatch) {
+          workspace.setSelectedActionId(target.action_bindings[Number(bindingMatch[1])]?.action_id || '')
+          focusId = `prop-binding-${(bindingMatch[2] || 'supported').replace(/\./g, '-')}`
+        }
+        if (markerMatch) markerToSelect = Number(markerMatch[1])
+      }
+      navigate('places')
+    } else navigate('actions')
+    requestAnimationFrame(() => {
+      if (markerToSelect !== undefined) workspace.setSelectedMarker(markerToSelect)
+      requestAnimationFrame(() => {
+        const fields = Array.from(document.querySelectorAll<HTMLElement>('[data-author-path]'))
+        const field = fields.find(item => item.dataset.authorPath === issue.path)
+          || fields.find(item => item.dataset.authorPath?.startsWith(`${issue.path}.`))
+          || (focusId ? document.getElementById(focusId)?.querySelector<HTMLElement>('input,select,button,[tabindex]') || document.getElementById(focusId) : null)
+          || (markerToSelect !== undefined ? document.querySelector<HTMLElement>('.ga-marker-card input, .ga-marker-card select') : null)
+          || document.getElementById('prop-workspace-editor')
+        field?.focus()
+        field?.scrollIntoView({ block: 'nearest' })
+      })
+    })
+  }
   return <div className={`prop-workspace is-${mobilePane}`}>
     <header className="prop-workspace-header">
       <div className="prop-workspace-title">
@@ -41,7 +77,7 @@ export function PropDetail(props: PropDetailProps) {
         </button>}
         {discardArmed && <button type="button" className="ga-btn" onClick={() => setDiscardArmed(false)}>{t('Cancel')}</button>}
         <button type="button" className="ga-btn ga-btn-primary"
-          disabled={!dirtyCount || saving || conflicts.length > 0 || !revisionReady}
+          disabled={!dirtyCount || saving || conflicts.length > 0 || !revisionReady || authoringIssues.length > 0}
           onClick={() => { void save() }}>{t(saving ? 'Saving…' : 'Speichern')}</button>
         <details className="prop-object-menu" onKeyDown={(event) => {
           if (event.key !== 'Escape') return
@@ -113,6 +149,16 @@ export function PropDetail(props: PropDetailProps) {
         </div>
       </div>)}
     </section>}
+    {saveIssues.length > 0 && <section className="prop-workspace-conflicts" role="alert">
+      <strong>{t('Konfiguration reparieren')}</strong>
+      <ul>{saveIssues.map((issue, index) => <li key={`${issue.path}:${issue.code}:${index}`}>
+        <button type="button" className="ga-btn ga-btn-sm" onClick={() => openIssue(issue)}>{t(issue.message)}</button>
+      </li>)}</ul>
+    </section>}
+    {authoringIssues.length > 0 && <div className="prop-action-errors" role="status">
+      {t('Speichern ist gesperrt, bis die Aktionskonfiguration repariert ist.')}
+      {' '}<button type="button" className="ga-btn ga-btn-sm" onClick={() => openIssue(authoringIssues[0])}>{t('Fehler in Aktionen öffnen')}</button>
+    </div>}
     <div className="prop-mobile-switch" aria-label={t('Arbeitsansicht')}>
       <button type="button" className="ga-btn" aria-pressed={mobilePane === 'editor'} onClick={() => setMobilePane('editor')}>{t('Editor')}</button>
       <button type="button" className="ga-btn" aria-pressed={mobilePane === 'preview'} onClick={() => setMobilePane('preview')}>{t('Vorschau')}</button>
@@ -122,7 +168,7 @@ export function PropDetail(props: PropDetailProps) {
         className="prop-workspace-editor" tabIndex={0}>
         <fieldset className="prop-editor-fields" disabled={saving}>
           {area === 'overview' && <PropOverview workspace={workspace} />}
-          {area === 'actions' && <PropActionsSummary workspace={workspace} />}
+          {area === 'actions' && <PropActionsPanel workspace={workspace} onIssue={openIssue} />}
           {area === 'places' && <PropPlaces workspace={workspace} />}
           {area === 'assets' && <PropAssets workspace={workspace} />}
           {area === 'appearance' && <PropAppearance workspace={workspace} />}

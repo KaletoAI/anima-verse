@@ -12,7 +12,7 @@ import {
   variantTarget, type PendingFields, type AuthorFields, type FieldConflict,
 } from './pendingFields'
 import {
-  groupKeys, newId, posesInGroup, usePoseCatalog,
+  groupKeys, newId, posesInGroup, type PoseCatalog,
 } from '../world/placeTypes'
 import {
   descPatch,
@@ -20,9 +20,12 @@ import {
 } from './variantFields'
 import type { DimKey } from './dims'
 import { editDimensionGesture, type DimensionGesture } from './dimensionGesture'
+import { removeBoundMarker, type AccessRole, type AccessPoint } from './spatialBindings'
+import { usePropActionCatalog } from './usePropActionCatalog'
+import { actionEditorIssues } from './propActionAuthoring'
 import type {
   PropAreasInfo, PropFull, PropLight, PropMarker, PropSlotValues, PropSourceImage,
-  PropVariant, PropView, PropWorkspaceArea,
+  PropVariant, PropView, PropWorkspaceArea, PropActionIssue, VariantBinding,
 } from './propTypes'
 import { resolveVariantAfterBarrier, propGenerationSubject, propGenerationTarget,
   type PropGenerationTarget } from './propOperations'
@@ -213,6 +216,11 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     }
   }, [beforeImmediate, enc, toast])
   const [saving, setSaving] = useState(false)
+  const [saveIssues, setSaveIssues] = useState<PropActionIssue[]>([])
+  // Server issue paths index the validated snapshot, not a later edited/reloaded list.
+  useEffect(() => { setSaveIssues([]) }, [buf, variantRevision, prop.revision])
+  const [selectedActionId, setSelectedActionId] = useState('')
+  const { catalog, reloadActionCatalog } = usePropActionCatalog()
   /** The Discard button's second click (no `window.confirm` in this UI). */
   const [discardArmed, setDiscardArmed] = useState(false)
   const dirtyCount = pendingFieldCount(buf)
@@ -223,8 +231,14 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   const [serverVariants, setServerVariants] = useState<PropVariant[]>([])
   const queueVariant = useCallback((index: number,
     patch: Record<string, unknown>) => {
-    const uid = serverVariants.find((v) => v.index === index)?.uid
-    if (uid) setBuf((b) => queueFields(b, variantTarget(uid), patch))
+    const row = serverVariants.find((v) => v.index === index)
+    if (row) setBuf((b) => {
+      const draft = applyVariantDraft([row], b)[0]
+      const next = ('dims' in patch || 'ground_offset_m' in patch) && !('action_bindings' in patch)
+        ? { ...patch, action_bindings: (draft.action_bindings || []).map(binding => ({
+          ...binding, validation: 'repair_required' })) } : patch
+      return queueFields(b, variantTarget(row.uid), next)
+    })
   }, [serverVariants])
   const [variantMax, setVariantMax] = useState(1)
   // The world's season names + the one it is in now (E2c) — the season chips
@@ -255,6 +269,8 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setVariantRevision('')
     setConflicts([])
     setSaveError('')
+    setSaveIssues([])
+    setSelectedActionId('')
   }, [prop.id])
   useEffect(() => { setPreviewFile('') }, [prop.id, variant])
   const variantRequest = useRef(0)
@@ -413,11 +429,18 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
    *  ring that closes would hand the canvas back to a pick armed minutes
    *  ago, which then drops a marker on the next click. */
   const [placing, setPlacing] = useState<'add' | 'light' | number | null>(null)
+  const [accessPlacing, setAccessPlacing] = useState<{ actionId: string; role: AccessRole } | null>(null)
+  const [markerRemoval, setMarkerRemoval] = useState<{ uid: string; markerId: string } | null>(null)
+  useEffect(() => {
+    if (waterController.shape) { setPlacing(null); setAccessPlacing(null); setDrawKind('') }
+  }, [waterController.shape])
+  useEffect(() => { setAccessPlacing(null) }, [selectedActionId])
   // A prop or variant switch puts another mesh under the camera: the view
   // state means nothing there, and the previous variant index means something
   // else on the next prop.
   useEffect(() => {
     setAreaFrontal(false); setDrawKind(''); setAreaPreview(null)
+    setAccessPlacing(null); setMarkerRemoval(null)
   }, [prop.id, variant])
   /** THE COUPLING RULES, in one place because they are invariants of the one
    *  view: arming the ring turns the front view on and drops a stored gallery
@@ -432,18 +455,20 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
       if (!patch.frontal) setDrawKind('')
     }
     if (patch.drawKind !== undefined) {
+      if (patch.drawKind && (saving || previewFile)) return
       setDrawKind(patch.drawKind)
       // ONE CANVAS, ONE GESTURE: arming the ring disarms the marker pick.
       if (patch.drawKind) {
         setMobilePane('preview')
         setAreaFrontal(true); setPreviewFile(''); setPlacing(null); cancelWaterPlacement(null)
+        setAccessPlacing(null)
       }
     }
     if (patch.preview !== undefined) {
       setAreaPreview(patch.preview)
       if (patch.preview !== null) setPreviewFile('')
     }
-  }, [cancelWaterPlacement])
+  }, [cancelWaterPlacement, saving, previewFile])
   /** A file picked in the mesh gallery below. It is a DIFFERENT file — its
    *  triangles are not the ones the areas were split against — so the tools
    *  stand down while it is on screen. */
@@ -451,6 +476,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setPreviewFile(file)
     if (file) {
       setDrawKind(''); setAreaPreview(null); setPlacing(null)
+      setAccessPlacing(null)
       cancelWaterPlacement(null)
     }
   }, [cancelWaterPlacement])
@@ -458,11 +484,19 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
    *  drops a running ring, and while a ring IS running every pick button is
    *  disabled, so the two modes are never both offered. */
   const armPlacing = useCallback((which: 'add' | 'light' | number) => {
+    if (saving || previewFile || !shownHasMesh) return
     setMobilePane('preview')
     setPlacing((cur) => (cur === which ? null : which))
     setDrawKind('')
+    setAccessPlacing(null)
     cancelWaterPlacement(null)
-  }, [cancelWaterPlacement])
+  }, [cancelWaterPlacement, saving, previewFile, shownHasMesh])
+  const armAccess = (actionId: string, role: AccessRole) => {
+    if (saving || previewFile || !shownHasMesh) return
+    setAccessPlacing(cur => cur?.actionId === actionId && cur.role === role ? null : { actionId, role })
+    setPlacing(null); setDrawKind(''); cancelWaterPlacement(null)
+    setMobilePane('preview')
+  }
   /** Every areas call answers the same payload — one place that holds the
    *  lock, hands a fresh payload to the reader above (which drops it if the
    *  admin has moved on) and maps a failure onto a toast. */
@@ -651,10 +685,14 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // the client adopts THAT rather than believing its own draft.
   const save = useCallback(async () => {
     if (saving || conflicts.length || !revisionReady) return false
+    const issues = actionEditorIssues(draftValue(buf, GENERAL_TARGET, 'actions', prop.actions || []), catalog)
+    if (issues.length) { setSaveIssues(issues); return false }
     setSaveError('')
+    setSaveIssues([])
     const body = toBulkFieldBody(buf, baseRevision.current)
     setSaving(true)
     setPlacing(null)
+    setAccessPlacing(null)
     setDrawKind('')
     cancelWaterPlacement(null)
     try {
@@ -671,6 +709,9 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     } catch (e) {
       const message = (e as Error).message
       setSaveError(message)
+      const detail = e instanceof ApiError && e.detail && typeof e.detail === 'object'
+        ? e.detail as { issues?: PropActionIssue[] } : null
+      setSaveIssues(Array.isArray(detail?.issues) ? detail.issues : [])
       toast(t('Error') + ': ' + message, 'error')
       if ((e as ApiError).status === 409) {
         await onChanged()
@@ -681,13 +722,14 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
       setSaving(false)
     }
   }, [buf, enc, onChanged, t, toast, saving, conflicts.length,
-    revisionReady, loadVariants, cancelWaterPlacement])
+    revisionReady, loadVariants, cancelWaterPlacement, catalog, prop.actions])
 
   /** Discard only author fields; already changed files remain on the server. */
   const discard = useCallback(() => {
     setBuf(emptyFields())
     setDiscardArmed(false)
     setSaveError('')
+    setSaveIssues([])
     setDimDraft({})
     dimGesture.current = null
     setDescDraft(null)
@@ -948,7 +990,10 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // They belong to the VARIANT since 2026-08-25: a fraction of one mesh's box
   // means nothing on another bake, so the editor below always edits the chip
   // the viewer has open, and the write goes to that variant's route.
-  const poseCatalog = usePoseCatalog()
+  const poseCatalog: PoseCatalog = useMemo(() => ({
+    status: catalog.status === 'error' ? 'missing' : catalog.status,
+    entries: catalog.poses, groups: catalog.groups,
+  }), [catalog])
   const groups = poseCatalog.groups
   // Which pose of its place type a marker's preview figures play, keyed by
   // marker id. VIEW state only — nothing of it is stored.
@@ -993,8 +1038,9 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   const selMarker: PropMarker | undefined = markers[selIdx]
 
   const saveMarkers = useCallback((next: PropMarker[]) => {
-    queueVariant(variant, { markers: next })
-  }, [queueVariant, variant])
+    queueVariant(variant, { markers: next, action_bindings: (shownVariant?.action_bindings || [])
+      .map(binding => ({ ...binding, validation: 'repair_required' })) })
+  }, [queueVariant, variant, shownVariant])
 
   const patchMarker = (i: number, patch: Partial<PropMarker>) =>
     saveMarkers(markers.map((m, idx) => (idx === i ? { ...m, ...patch } : m)))
@@ -1021,11 +1067,18 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // Removing leaves the NEIGHBOUR selected: the place that slid into the gap,
   // or the new last one when the tail went. An armed pick would otherwise
   // point at an index that now means another place.
+  const commitMarkerRemoval = (markerId: string, choice?: { replaceWith: string } | { removeBindings: true }) => {
+    if (!shownVariant || saving || previewFile) return
+    queueVariant(variant, removeBoundMarker(shownVariant, markerId, choice))
+    setSelectedMarker(0); setPlacing(null); setMarkerRemoval(null)
+  }
   const removeMarker = (i: number) => {
-    const next = markers.filter((_, idx) => idx !== i)
-    saveMarkers(next)
-    setSelectedMarker(Math.max(0, Math.min(i, next.length - 1)))
-    setPlacing(null)
+    const marker = markers[i]
+    if (!shownVariant || !marker?.id) return
+    setPlacing(null); setAccessPlacing(null)
+    if ((shownVariant.action_bindings || []).some(binding => binding.marker_ids.includes(marker.id!))) {
+      setMarkerRemoval({ uid: shownVariant.uid, markerId: marker.id })
+    } else commitMarkerRemoval(marker.id)
   }
 
   // Capacity 1 is a single spot and carries no key — the shape the server
@@ -1051,15 +1104,19 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // list of places: an index selected here means something else there.
   useEffect(() => { setPlacing(null); setSelectedMarker(0) }, [prop.id, variant])
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPlacing(null) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setPlacing(null); setAccessPlacing(null); setDrawKind(''); cancelWaterPlacement(null)
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [cancelWaterPlacement])
   // The hit lands on the place the editor is about: 'add' appends one and
   // selects it, an armed index is the selected place (✥ arms exactly that
   // one). Reading `placing` instead of updating through it keeps the write
   // out of a state updater, which React may run more than once.
   const onPickPoint = useCallback((at: [number, number, number]) => {
+    if (saving || previewFile) return
     if (placing === 'light') {
       if (light) queueVariant(variant, { light: { ...light, at } })
     } else if (placing === 'add') {
@@ -1069,8 +1126,29 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
       saveMarkers(markers.map((m, idx) => (idx === placing ? { ...m, at } : m)))
     }
     setPlacing(null)
-  }, [placing, markers, firstGroup, saveMarkers, light, queueVariant, variant])
+  }, [placing, markers, firstGroup, saveMarkers, light, queueVariant, variant, saving, previewFile])
+  const patchBinding = (actionId: string, patch: Partial<VariantBinding>) => {
+    if (!shownVariant || saving || previewFile) return
+    const bindings = shownVariant.action_bindings || []
+    const existing = bindings.find(binding => binding.action_id === actionId)
+    const next: VariantBinding = { supported: true, marker_ids: [], access_points: {},
+      validation: 'repair_required', ...existing, ...patch, action_id: actionId, variant_uid: shownVariant.uid }
+    queueVariant(variant, { action_bindings: existing
+      ? bindings.map(binding => binding === existing ? next : binding) : [...bindings, next] })
+  }
+  const onPickAccess = (point: Pick<AccessPoint, 'x' | 'z'>) => {
+    if (!accessPlacing || saving || previewFile) return
+    const binding = shownVariant?.action_bindings?.find(b => b.action_id === accessPlacing.actionId)
+    patchBinding(accessPlacing.actionId, { access_points: { ...binding?.access_points,
+      [accessPlacing.role]: { yaw: binding?.access_points[accessPlacing.role]?.yaw ?? 0, ...point } },
+      validation: 'repair_required' })
+    setAccessPlacing(null)
+  }
   const actions = draftValue(buf, GENERAL_TARGET, 'actions', prop.actions || [])
+  const authoringIssues = useMemo(() => actionEditorIssues(actions, catalog), [actions, catalog])
+  useEffect(() => {
+    if (!actions.some(action => action.id === selectedActionId)) setSelectedActionId(actions[0]?.id || '')
+  }, [actions, selectedActionId])
   const openImageGeneration = async (view: PropView) => {
     const target = await prepareVariantOperation(shownVariant?.uid || '', t('New image'))
     if (!target) return
@@ -1101,6 +1179,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setArea(next)
     setMobilePane('editor')
     setPlacing(null)
+    setAccessPlacing(null)
     setDrawKind('')
     cancelWaterPlacement(null)
     document.getElementById(`prop-tab-${next}`)?.focus()
@@ -1133,6 +1212,9 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     area, navigate, mobilePane, setMobilePane,
     revisionReady, variantLoadError,
     prepareVariantOperation,
+    selectedActionId, setSelectedActionId, saveIssues, accessPlacing, armAccess, onPickAccess,
+    patchBinding, markerRemoval, setMarkerRemoval, commitMarkerRemoval,
+    catalog, reloadActionCatalog, authoringIssues,
   }
 }
 

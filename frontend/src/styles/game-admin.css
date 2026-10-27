@@ -3062,8 +3062,6 @@ a.ga-btn {
 .prop-inspector-group { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 4px; }
 .prop-inspector-group > summary { cursor: pointer; font-size: 16px; font-weight: 600; padding-bottom: 12px; }
 .prop-overview-status { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-.prop-actions-summary { list-style: none; padding: 0; margin: 0; }
-.prop-actions-summary > li { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px 0; border-bottom: 1px solid var(--border); }
 .prop-history-notice { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px; border-left: 3px solid var(--warning, var(--accent)); background: var(--bg-secondary); overflow-wrap: anywhere; }
 .prop-object-menu { position: relative; }
 .prop-object-menu > summary { list-style-position: inside; }
@@ -3123,3 +3121,31 @@ a.ga-btn {
   .ga-header-controls { flex: 1 1 100%; min-width: 0; max-width: 100%; flex-wrap: wrap; }
   .ga-header-controls > * { min-width: 0; max-width: 100%; }
 }
+
+/* Semantic actions share the workshop inspector, rather than a second form shell. */
+.prop-action-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.prop-action-toolbar h3 { margin: 0 auto 0 0; }
+.prop-action-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; margin: 0; list-style: none; }
+.prop-action-list li { min-width: 0; max-width: 100%; }
+.prop-action-list button { display: flex; flex-direction: column; align-items: flex-start; text-align: left; white-space: normal; max-width: 100%; }
+.prop-action-list button span { font-size: 12px; font-weight: 400; }
+.prop-action-inspector { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.prop-action-section { border-top: 1px solid var(--border); padding-top: 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.prop-action-section h4 { margin: 0; font-size: 16px; font-weight: 600; }
+.prop-action-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr)); gap: 10px; min-width: 0; }
+.prop-action-field { display: flex; flex-direction: column; align-items: stretch; gap: 5px; min-width: 0; max-width: 100%; font-size: 14px; }
+.prop-action-field > .ga-input, .prop-action-field > .ga-textarea { width: 100%; min-width: 0; }
+.prop-action-row { display: flex; flex-direction: column; gap: 10px; min-width: 0; max-width: 100%; margin: 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius, 6px); }
+.prop-action-row legend { font-size: 14px; padding: 0 5px; max-width: 100%; overflow-wrap: anywhere; }
+.prop-action-row > button { align-self: flex-start; white-space: normal; }
+.prop-action-duration { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+.prop-action-duration > .ga-input { flex: 1 1 95px; width: 0; min-width: 0; }
+.prop-action-error, .prop-action-errors { color: var(--danger); overflow-wrap: anywhere; }
+.prop-action-errors { padding: 10px; border-left: 3px solid var(--danger); }
+.prop-action-errors ul { padding-left: 20px; margin: 6px 0 0; }
+.prop-action-errors button { white-space: normal; text-align: left; }
+.prop-action-presets { display: flex; flex-direction: column; gap: 10px; }
+.prop-action-presets > button { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; white-space: normal; text-align: left; }
+.prop-action-presets > button span { font-weight: 400; font-size: 13px; line-height: 1.5; }
+.prop-workspace [data-author-path][aria-invalid="true"] { border-color: var(--danger); }
+.prop-workspace-dialog .prop-action-field { margin-bottom: 10px; }

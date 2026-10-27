@@ -1,12 +1,34 @@
 import { FIGURE_HEIGHT_M } from '@anima/scene-render'
+import { useMemo } from 'react'
 import { Model3DViewer } from '../characters/Model3DViewer'
 import { previewEntry } from '../world/placeTypes'
 import { saveScaleFigure } from './usePropWorkspace'
 import type { PropWorkspace } from './usePropWorkspace'
+import { orientedDims } from './dims'
+import type { AccessRole } from './spatialBindings'
 
 export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
   const { t, viewerRef, shownHasMesh, previewFile, enc, variant, reloadKey, prop, variantRotation, areaFrontal, setAreaView, areasOnView, areaOutlines, variantAreas, previewSlots, drawKind, onPolygonFaces, setShownBbox, light, waterController, markers, poseCatalog, previewPose, groups, shownDims, shownVariant, shownBbox, scaleFigure, placing, onPickPoint, variants, setScaleFigure } = workspace
   const { showStoredFile, navigate, saving } = workspace
+  const action = workspace.actions.find(entry => entry.id === workspace.selectedActionId)
+  const binding = shownVariant?.action_bindings?.find(entry => entry.action_id === action?.id)
+  const spatialAuthoring = !previewFile && (workspace.area === 'places' || workspace.area === 'actions')
+  const toolEnabled = !saving && !previewFile
+  const accessPoints = useMemo(() => spatialAuthoring && binding ? (['actor', 'partner'] as AccessRole[]).flatMap(role => {
+    const point = binding.access_points[role]
+    return point && [point.x, point.z, point.yaw].every(Number.isFinite)
+      ? [{ role, ...point, label: action?.participants === 2
+        ? role === 'actor' ? t('Zugang A') : t('Zugang B') : t('Zugang handelnde Person') }] : []
+  }) : [], [spatialAuthoring, binding, action?.participants, t])
+  const markerOverlays = useMemo(() => markers.map(m => {
+    const selectedPose = spatialAuthoring && binding?.marker_ids.includes(m.id || '')
+      ? action?.pose_key : undefined
+    const entry = selectedPose ? poseCatalog.entries.find(pose => pose.key === selectedPose)
+      : previewEntry(poseCatalog, m.group, m.id ? previewPose[m.id] : undefined)
+    return { at: m.at, group: m.group, capacity: m.capacity, spacing_m: m.spacing_m,
+      facing: m.facing, slot_axis: m.slot_axis, previewKind: entry?.animation,
+      previewYawOffset: entry?.yaw_offset, rootDrop: groups[m.group]?.root_drop }
+  }), [markers, spatialAuthoring, binding?.marker_ids, action?.pose_key, poseCatalog, previewPose, groups])
   return <div className="ga-form prop-area-content">
           <div className="ga-form-section-label" style={{ marginTop: 0 }}>
             {t('3D preview')}
@@ -14,7 +36,7 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
     {previewFile && <div className="prop-history-notice" role="status">
       <strong>{t('Historische / alternative Meshvorschau')}</strong>
       <span>{previewFile}</span>
-      <span>{t('Dateivorschau statt bearbeitbarer Full-Geometrie. Flächenwerkzeuge sind gesperrt.')}</span>
+      <span>{t('Dateivorschau statt bearbeitbarer Full-Geometrie. Körperanker-, Zugangs-, Flächen-, Wasser- und Lichtwerkzeuge sind gesperrt.')}</span>
       <button type="button" className="ga-btn ga-btn-sm" onClick={() => showStoredFile('')}>{t('Aktives Modell zeigen')}</button>
     </div>}
           <div ref={viewerRef}>
@@ -53,6 +75,9 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
               drawThrough={drawKind === 'leaf'}
               onPolygonFaces={onPolygonFaces}
               onDrawCancel={() => setAreaView({ drawKind: '' })}
+              spatialAuthoring={spatialAuthoring}
+              actionAccessPoints={accessPoints}
+              onPickGroundPoint={toolEnabled && workspace.accessPlacing ? workspace.onPickAccess : undefined}
               leafBbox={areasOnView ? (variantAreas?.leaf_bbox || null) : null}
               onBounds={(b) => setShownBbox(b.size)}
               // ONE FIGURE PER SLOT, holding the pose the cycler stands on
@@ -62,18 +87,7 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
               lightPoint={light || undefined}
               waterRegions={previewFile ? null : waterController.water}
               onPickModelPoint={!saving && waterController.shape && !previewFile ? waterController.pick : undefined}
-              markers={markers.map((m) => {
-                const entry = previewEntry(poseCatalog, m.group,
-                                           m.id ? previewPose[m.id] : undefined)
-                return {
-                  at: m.at, group: m.group, capacity: m.capacity,
-                  spacing_m: m.spacing_m, facing: m.facing,
-                  slot_axis: m.slot_axis,
-                  previewKind: entry?.animation,
-                  previewYawOffset: entry?.yaw_offset,
-                  rootDrop: groups[m.group]?.root_drop,
-                }
-              })}
+              markers={markerOverlays}
               // The DISPLAYED variant's own size — the three numbers the strip
               // edits for exactly this chip.
               dimsOverlay={shownDims}
@@ -92,14 +106,14 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
               figureHeight={(() => {
                 const bb = shownBbox ?? (shownVariant?.primary ? prop.bbox : null)
                 if (!bb) return 0
-                const maxExtent = Math.max(bb[0], bb[1], bb[2])
+                const maxExtent = Math.max(...orientedDims(bb, variantRotation))
                 const maxDim = Math.max(shownDims.width_m, shownDims.depth_m,
                   shownDims.height_m) || 1
                 return FIGURE_HEIGHT_M * (maxExtent / maxDim)
               })()}
               scaleFigure={scaleFigure}
-              picking={!saving && (placing !== null || !!waterController.shape)}
-              onPickPoint={onPickPoint}
+              picking={toolEnabled && (placing !== null || !!waterController.shape || !!workspace.accessPlacing)}
+              onPickPoint={toolEnabled && placing !== null ? onPickPoint : undefined}
             />
           ) : (
             <div className="ga-empty">
@@ -135,6 +149,7 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
               .replace('{d}', shownDims.depth_m.toFixed(2))
               .replace('{h}', shownDims.height_m.toFixed(2))}
           </span>
+          {spatialAuthoring && <p className="ga-hint">{t('Grün: Körperanker, Slot-/Clipgeometrie und Facing. Blau/Violett: bodenseitige Zugänge und Heading. Keine Raumroute dargestellt oder geprüft.')}</p>}
           </div>
   </div>
 }

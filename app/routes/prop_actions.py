@@ -129,6 +129,38 @@ def _admin_target(prop_id, body):
         raise HTTPException(409, detail="Placement does not resolve to this prop/variant")
 
 
+@router.get("/world/props/{prop_id}/check-targets")
+def check_targets(prop_id: str, location_id: str, user=Depends(require_admin)):
+    """Saved, resolvable placements and the actual room census; never build assets."""
+    from app.models.world import get_location_by_id
+    from app.models.character import is_character_sleeping
+    document = props.read_sidecar(prop_id, read_only=True)
+    if not document:
+        raise HTTPException(404, detail="Unknown prop")
+    location = get_location_by_id(location_id)
+    if not location:
+        raise HTTPException(404, detail="Location not found")
+    composed = places._compose(location_id)
+    rooms = []
+    for room in location.get("rooms", []):
+        room_id = room.get("id", "")
+        targets = {}
+        for place in composed.get(room_id, []):
+            if place.get("prop_id") != prop_id:
+                continue
+            placement_id, variant_uid = place.get("placement_id"), place.get("variant_uid")
+            if placement_id and variant_uid:
+                targets[(placement_id, variant_uid)] = dict(
+                    location_id=location_id, room_id=room_id,
+                    placement_id=placement_id, variant_uid=variant_uid)
+        if targets:
+            rooms.append(dict(id=room_id, name=room.get("name") or room_id,
+                              placements=[dict(target=target) for target in targets.values()],
+                              persons=[dict(name=name, sleeping=bool(is_character_sleeping(name)))
+                                       for name, _ in places._present(location_id, room_id)]))
+    return dict(revision=props._document_revision(document), rooms=rooms)
+
+
 @router.post("/world/props/{prop_id}/validate")
 def validate(prop_id: str, body: Document, user=Depends(require_admin)):
     if not props.read_sidecar(prop_id, read_only=True):

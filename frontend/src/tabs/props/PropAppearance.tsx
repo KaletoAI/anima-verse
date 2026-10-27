@@ -14,7 +14,7 @@ export function PropAppearance({ workspace }: { workspace: PropWorkspace }) {
   return <div className="ga-form prop-area-content">
     <h3>{t('Darstellung')}</h3>
     <p className="ga-hint">{t('Licht gehört zum gemeinsamen Entwurf. Flächen und Wasser werden sofort angewendet.')}</p>
-          {shownVariant && <section>
+          {shownVariant && <fieldset className="prop-editor-fields" disabled={!!previewFile}>
             <div className="ga-form-section-label">{t('Prop light')}</div>
             <Field label={t('Light preset')}>
               <select className="ga-input" value={lightPreset} onChange={(e) => {
@@ -66,14 +66,14 @@ export function PropAppearance({ workspace }: { workspace: PropWorkspace }) {
                 </Field>)}
               </div>
               <button type="button" className={`ga-btn ga-btn-sm${placing === 'light' ? ' ga-btn-primary' : ''}`}
-                disabled={!(shownHasMesh || previewFile) || !!drawKind}
+                disabled={!shownHasMesh || !!previewFile || !!drawKind}
                 onClick={() => armPlacing('light')}>{placing === 'light' ? t('Click the model…') : t('Place in viewer')}</button>
             </>}
             <button type="button" className="ga-btn ga-btn-sm" onClick={() => {
               for (const v of variants) queueVariant(v.index, { light: light ? { ...light, at: [...light.at] } : null })
             }}>{t('Apply to all variants')}</button>
-          </section>}
-    {previewFile && <p role="status" className="ga-hint">{t('Historische Meshvorschau: Flächen- und Wasserbearbeitung sind gesperrt. In der Vorschau zum veröffentlichten Modell zurückkehren.')}</p>}
+          </fieldset>}
+    {previewFile && <p role="status" className="ga-hint">{t('Historische Meshvorschau: Licht-, Flächen- und Wasserbearbeitung sind gesperrt. In der Vorschau zum veröffentlichten Modell zurückkehren.')}</p>}
     <fieldset className="prop-editor-fields" disabled={!!previewFile}>
 
     {dirtyCount > 0 && <button type="button" className="ga-btn" onClick={async () => {

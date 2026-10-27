@@ -7996,6 +7996,15 @@ Player routes require the authenticated user's current authorized avatar:
 
 All author routes below explicitly require admin. `POST /world/props/{id}/validate`
 takes `{document}` and returns issues plus `placement:"not_checked"`.
+The admin workspace submits its **entire unsaved canonical document**: top-level
+`actions`, every `model_variants` entry including its stable `uid`, body markers,
+action bindings and scalar `width_m/depth_m/height_m`. HTTP variant projections
+with nested `dims` and UUID-keyed bulk patches are not author documents.
+`GET /world/props/{id}/check-targets?location_id=…` supplies only actual saved,
+marker-backed placements of this prop and the current room census:
+`{revision,rooms:[{id,name,placements:[{target}],persons:[{name,sleeping}]}]}`.
+It uses the same read-only scene composition and includes sleeping bystanders;
+it creates neither placements nor test people.
 `POST /world/props/{id}/check-placement` takes request fields plus an explicit
 `actor` and checks the saved exact placement/revision without executing.
 `POST /world/props/{id}/execute-test` is separate: same input plus
@@ -8007,6 +8016,24 @@ input is 422. Checks are read-only even on uncached real scene composition.
 `compose_recipe(...,read_only=True)` and published prop/model read-only getters
 preserve actual hulls, openings, surfaces and furniture dimensions while skipping
 lazy bbox persistence, LOD and visual door/window build queues.
+
+The actions inspector and places inspector use the same workspace field draft,
+global Save/Discard, selected action ID, variant UUID and mounted model viewer.
+Actions copied from another prop receive fresh action/phase/requirement/effect
+IDs and no inherited geometry bindings. Coffee exposes exactly preparation and
+drinking phases with game-time durations; awake poses/pairs have no completion
+reward, and genuine sleep has no additional active regeneration. Effects and
+requirements select existing stat/condition references; unknown references stay
+visible and repairable rather than disappearing. Mood suggestions use the
+existing catalog, while the backend mood remains free text.
+
+Access-point coordinates are oriented local ground metres relative to the
+footprint centre, not normalized body-marker coordinates. Viewer access picking
+uses the ground plane and allows points outside the model box. Overlays describe
+body/access positions and headings, not a claimed room route. Historical model
+previews and concurrent surface/water/light/marker tools cannot edit access
+points. Referenced marker removal requires a deliberate replacement or removal
+of dependent bindings in the same draft.
 
 The enabled `set_pose` package also loads the real `prop_action` capability/tool
 `PropAction`. Its request signature is

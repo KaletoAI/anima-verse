@@ -2,10 +2,19 @@ import { SliderInput } from '../../components/SliderInput'
 import { groupLabel } from '../world/placeTypes'
 import { AT_AXES, AT_MAX } from './usePropWorkspace'
 import type { PropWorkspace } from './usePropWorkspace'
+import { PropSpatialBindings } from './PropSpatialBindings'
+import { orientedDims } from './dims'
 
 export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
   const { t, markers, selIdx, setSelectedMarker, placing, setPlacing, groups, addMarker, firstGroup, shownHasMesh, previewFile, drawKind, armPlacing, selMarker, patchMarker, groupOptions, removeMarker, shownDims, setMarkerAt, selCapacity, selPoses, setPreview, selPoseIdx } = workspace
+  const rawBbox = workspace.shownBbox ?? (workspace.shownVariant?.primary ? workspace.prop.bbox : null)
+  const oriented = rawBbox ? orientedDims(rawBbox, workspace.variantRotation) : null
+  const metresPerUnit = oriented ? Math.max(shownDims.width_m, shownDims.height_m, shownDims.depth_m)
+    / (Math.max(...oriented) || 1) : 0
   return <div className="ga-form prop-area-content">
+          <PropSpatialBindings workspace={workspace} />
+          {previewFile && <p role="status" className="ga-hint">{t('Historische Meshvorschau: Körperanker und Zugänge sind gesperrt. Zum aktiven Modell zurückkehren, um zu bearbeiten.')}</p>}
+          <fieldset className="prop-editor-fields" disabled={workspace.saving || !!previewFile || !workspace.shownVariant}>
           <div className="ga-form-section-label">{t('Prop places')}</div>
           <span className="ga-hint">
             {t('Object-local PLACES a character is seated on — each names a place type of the pose catalog and takes as many figures as its capacity. They belong to THIS variant, because at = fraction of ITS model bounding box (X = width, Y = height, Z = depth); the range reaches from -0.5 to 2, because seats and lying surfaces sit on the hull or outside it. Place roughly with ✥, fine-tune with the sliders — the figures in the preview follow live.')}
@@ -75,6 +84,9 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
             
             {selMarker ? (
               <div className="ga-marker-card">
+                <p className="ga-hint">{t('Verwendende Aktionen dieses Körperankers')}: {(workspace.shownVariant?.action_bindings || [])
+                  .filter(b => !!selMarker.id && b.marker_ids.includes(selMarker.id))
+                  .map(b => workspace.actions.find(a => a.id === b.action_id)?.name || b.action_id).join(', ') || t('Keine')}</p>
                 <div className="ga-form-row">
                   <span className="ga-hint" style={{ minWidth: 20 }}>🎯 {selIdx + 1}</span>
                   <select
@@ -97,7 +109,7 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
                     className={`ga-btn ga-btn-sm${placing === selIdx ? ' ga-btn-primary' : ''}`}
                     // One canvas, one gesture: while a ring is being drawn the
                     // SVG over the viewer swallows every click a pick needs.
-                    disabled={!!drawKind}
+                    disabled={!shownHasMesh || !!previewFile || workspace.saving}
                     onClick={() => armPlacing(selIdx)}
                     title={drawKind
                       ? t('Finish or cancel the surface you are drawing first — the ring and the marker pick share the one preview.')
@@ -115,10 +127,8 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
                   </button>
                 </div>
                 {AT_AXES.map((axis, ax) => {
-                  // Metres = fraction × the dim of the VARIANT this marker
-                  // belongs to, so the seat height is directly dialable in
-                  // real units.
-                  const dimM = shownDims[axis.dim]
+                  // Body coordinates remain fractions of the raw box even after an orientation fix.
+                  const dimM = rawBbox ? rawBbox[ax] * metresPerUnit : shownDims[axis.dim]
                   return (
                     <SliderInput
                       key={axis.label}
@@ -140,7 +150,7 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
                       inputWidth={72}
                       readback={(
                         <span className="ga-hint" style={{ width: 58, flex: '0 0 auto', textAlign: 'right' }}
-                          title={t('Fraction × this variant’s dimension.')}>
+                          title={t('Bruchteil der rohen Modell-Bounding-Box, in Meter derselben Viewer-Skalierung umgerechnet.')}>
                           {(selMarker.at[ax] * dimM).toFixed(2)} m
                         </span>
                       )}
@@ -264,5 +274,6 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
               </div>
             ) : null}
           </div>
+          </fieldset>
   </div>
 }
