@@ -91,15 +91,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 WORLD = Path(tempfile.mkdtemp(prefix="prop-bulk-smoke-"))
 os.environ["STORAGE_DIR"] = str(WORLD)
+os.environ["INSTANCE_DIR"] = str(WORLD / "instance")
 
 from app.core import paths  # noqa: E402
 
 paths.init(WORLD)
+paths.init_instance(WORLD / "instance")
 
 from app.core import props as store  # noqa: E402
 
 FAILURES = []
 
+
+def save_current(prop_id, general=None, variants=None):
+    """Resolve fixture indices before creating a revision-bound author request."""
+    current = store.get_prop(prop_id)
+    entries = store.list_variants(prop_id) if current else []
+    patches = {}
+    for key, patch in (variants or {}).items():
+        try:
+            patches[entries[int(key)]["uid"]] = patch
+        except (ValueError, IndexError):
+            patches[str(key)] = patch
+    return store.bulk_update(prop_id, general, patches,
+                             base_revision=current["revision"] if current else "")
 
 def check(label: str, ok: bool, detail: str = "") -> None:
     print(f"  {'✓' if ok else '✗'} {label}{f' — {detail}' if detail else ''}")
@@ -132,7 +147,7 @@ def refused(label: str, **kwargs) -> None:
     before = (store._sidecar_path(BENCH) or Path()).read_text(encoding="utf-8")
     with WriteCounter() as w:
         try:
-            store.bulk_update(BENCH, **kwargs)
+            save_current(BENCH, **kwargs)
             check(label, False, "no ValueError")
             return
         except ValueError as exc:
@@ -164,7 +179,7 @@ def main() -> int:
     check("the single-value setters write once each", singles.n == 6,
           str(singles.n))
     with WriteCounter() as batch:
-        store.bulk_update(
+        save_current(
             bench,
             {"name": "Bench"},
             {"0": {"dims": {"width_m": 2.0}, "description": "a bench",
@@ -174,7 +189,7 @@ def main() -> int:
           str(batch.n))
 
     print("\n[2] the same sanitation, verbatim")
-    store.bulk_update(
+    save_current(
         bench,
         {"name": "  ", "tags": "a, b, A", "sway_factor": 1.0,
          "category": "seating"},
@@ -231,13 +246,13 @@ def main() -> int:
 
     print("\n[4] an empty body is a read")
     with WriteCounter() as empty:
-        rec = store.bulk_update(bench)
+        rec = save_current(bench)
     check("nothing to do writes nothing", empty.n == 0, str(empty.n))
     check("…and still answers with the record", (rec or {}).get("id") == bench)
-    check("an unknown prop is None", store.bulk_update("nope-there") is None)
+    check("an unknown prop is None", save_current("nope-there") is None)
 
     print("\n[5] the answer is what was stored")
-    answer = store.bulk_update(bench, {"name": "Long bench"})
+    answer = save_current(bench, {"name": "Long bench"})
     check("the name the batch just stored", answer["name"] == "Long bench",
           str(answer.get("name")))
     check("the primary variant's clamped width", answer["width_m"] == 100.0,
@@ -245,6 +260,77 @@ def main() -> int:
     check("and the sway factor reads back as the full amount",
           answer.get("sway_factor") == 1.0, str(answer.get("sway_factor")))
 
+    print("\n[6] revision conflicts and author validation are atomic")
+    from copy import deepcopy
+    revision = store.get_prop(bench)["revision"]
+    store.bulk_update(bench, {"name": "First reader"}, base_revision=revision)
+    before = store.read_sidecar(bench)
+    try:
+        store.bulk_update(bench, {"name": "Stale reader"}, base_revision=revision)
+        check("stale reader is rejected", False)
+    except store.PropRevisionConflict:
+        check("stale reader preserves first save", store.read_sidecar(bench) == before)
+    action = dict(id="rest", name="Rest", description="", enabled=True,
+                  ability="pose", pose_key="", participants=1, presence="any",
+                  interrupt_on_presence_change=False, phases=[], effects=[],
+                  requirements=[])
+    for label, actions in (
+        ("duplicate action IDs", [action, deepcopy(action)]),
+        ("unknown condition requirement", [{**action, "requirements": [
+            dict(id="req", target="actor", type="condition",
+                 condition_id="not-a-real-condition", present=True)]}]),
+        ("unknown effect condition", [{**action, "effects": [
+            dict(id="fx", target="actor", type="condition_remove",
+                 condition_id="not-a-real-condition", when="start")]}]),
+        ("solo partner requirement", [{**action, "requirements": [
+            dict(id="req", target="partner", type="condition",
+                 condition_id="not-a-real-condition", present=True)]}]),
+        ("nonfinite phase", [{**action, "ability": "combined", "phases": [
+            dict(id="prepare", label="Prepare", duration_game_s=float("nan"), pose_key="")]}]),
+    ):
+        before = store.read_sidecar(bench)
+        try:
+            store.bulk_update(bench, {"name": "Must not land"},
+                              actions=actions,
+                              base_revision=store.get_prop(bench)["revision"])
+            check(label, False)
+        except store.PropDocumentInvalid as exc:
+            check(label, bool(exc.issues) and store.read_sidecar(bench) == before)
+    old_uid = store.list_variants(bench)[1]["uid"]
+    store.delete_variant(bench, 1)
+    replacement = store.add_variant(bench)
+    check("delete/recreate never reuses UID",
+          store.list_variants(bench)[replacement]["uid"] != old_uid)
+    uid = store.list_variants(bench)[0]["uid"]
+    binding = dict(action_id="rest", variant_uid=uid, supported=True,
+                   marker_ids=["seat1"], access_points={
+                       "actor": dict(x=0, z=-1, yaw=0)}, validation="local_valid")
+    with WriteCounter() as action_write:
+        answer = store.bulk_update(bench, actions=[action],
+                                   variants={uid: {"action_bindings": [binding]}},
+                                   base_revision=store.get_prop(bench)["revision"])
+    check("actions and bindings land in one write", action_write.n == 1)
+    check("actions round-trip", store.get_prop(bench)["actions"] == [action])
+    check("bindings round-trip", store.list_variants(bench)[0]["action_bindings"] == [binding])
+    copied = store.add_variant(bench, 0)
+    copied_row = store.list_variants(bench)[copied]
+    check("copied bindings name only their new owning UID",
+          copied_row["action_bindings"] == [{**binding, "variant_uid": copied_row["uid"]}])
+    from app.routes.world import _prop_bulk_update_sync
+    from fastapi import HTTPException
+    for label, body, expected_status in (
+        ("missing revision", {"general": {"name": "Rejected"}}, 422),
+        ("deleted UID", {"base_revision": store.get_prop(bench)["revision"],
+                         "variants": {old_uid: {"description": "Wrong owner"}}}, 422),
+        ("stale HTTP draft", {"base_revision": revision, "actions": []}, 409),
+        ("null actions", {"base_revision": store.get_prop(bench)["revision"], "actions": None}, 422),
+    ):
+        before = store.read_sidecar(bench)
+        try:
+            _prop_bulk_update_sync(bench, body)
+            check(label, False)
+        except HTTPException as exc:
+            check(label, exc.status_code == expected_status and store.read_sidecar(bench) == before)
     print()
     if FAILURES:
         print(f"FAILED ({len(FAILURES)}): " + "; ".join(FAILURES))

@@ -195,6 +195,41 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from functools import wraps
+from uuid import UUID, uuid4
+
+
+_author_lock = threading.RLock()
+_author_locks: Dict[str, Any] = {}
+
+
+def _author_transaction(fn):
+    """Serialize sidecar read/modify/write transactions, including nested reads."""
+    @wraps(fn)
+    def transaction(*args, **kwargs):
+        pid = safe_prop_id(str(args[0] if args else kwargs.get("prop_id", kwargs.get("pid", ""))))
+        with _author_lock:
+            lock = _author_locks.get(pid)
+            if lock is None:
+                lock = _author_locks[pid] = threading.RLock()
+        with lock:
+            return fn(*args, **kwargs)
+    return transaction
+
+
+class PropRevisionConflict(ValueError):
+    """The draft no longer describes the stored document."""
+
+
+class PropDocumentInvalid(ValueError):
+    def __init__(self, issues):
+        self.issues = issues
+        super().__init__("Invalid prop action document")
+
+
+def _document_revision(meta):
+    return hashlib.sha256(json.dumps(meta, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode()).hexdigest()
 
 from app.core.game_time import (current_season_tokens, sanitize_season_tags,
                                 season_tags_active)
@@ -659,22 +694,29 @@ def _sidecar_path(prop_id: str) -> Optional[Path]:
     return (d / SIDECAR_NAME) if d else None
 
 
+@_author_transaction
 def read_sidecar(prop_id: str) -> Dict[str, Any]:
     sp = _sidecar_path(prop_id)
     if sp and sp.exists():
         try:
             meta = json.loads(sp.read_text(encoding="utf-8"))
             if isinstance(meta, dict):
+                entries = _variant_list(meta)
+                if meta.get(VARIANTS_KEY) != entries:
+                    meta[VARIANTS_KEY] = entries
+                    _write_sidecar(prop_id, meta)
                 return meta
         except (OSError, ValueError):
             pass
     return {}
 
 
+@_author_transaction
 def _write_sidecar(prop_id: str, meta: Dict[str, Any]) -> None:
     d = _prop_dir(prop_id, create=True)
     if not d:
         raise ValueError("bad prop id")
+    meta[VARIANTS_KEY] = _variant_list(meta)
     (d / SIDECAR_NAME).write_text(
         json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
     # A prop's markers are part of the seat inventory of every room it
@@ -733,6 +775,7 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
     raw = meta.get(VARIANTS_KEY) if isinstance(meta, dict) else None
     out: List[Dict[str, Any]] = []
     seen: set = set()
+    seen_uids = set()
     if isinstance(raw, list):
         for entry in raw[:VARIANT_MAX_CAP]:
             if not isinstance(entry, dict):
@@ -743,6 +786,15 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
             seen.add(stem)
             rec: Dict[str, Any] = {"stem": stem,
                                    "active": bool(entry.get("active", True))}
+            try:
+                uid = str(UUID(entry.get("uid", "")))
+                if uid in seen_uids:
+                    raise ValueError("duplicate UID")
+            except (ValueError, TypeError, AttributeError):
+                uid = str(uuid4())
+            seen_uids.add(uid)
+            rec["uid"] = uid
+            rec["action_bindings"] = entry.get("action_bindings", [])
             img = entry.get("image")
             if isinstance(img, dict):
                 rec["image"] = {k: str(img.get(k) or "") for k in IMAGE_META_KEYS}
@@ -802,7 +854,7 @@ def _new_variant_entry(stem: str) -> Dict[str, Any]:
     This is what a record WITHOUT the variants key answers with — a prop whose
     sidecar was hand-emptied — and the seed :func:`add_variant` copies over.
     """
-    return {"stem": stem, "active": True,
+    return {"stem": stem, "uid": str(uuid4()), "action_bindings": [], "active": True,
             **{k: DEFAULT_DIM_M for k in DIM_KEYS},
             DIMS_ESTIMATED_KEY: True}
 
@@ -1742,6 +1794,7 @@ def default_variant_label(slot_values: Dict[str, Dict[str, str]]) -> str:
     return _coerce_variant_label(", ".join(p for p in parts if p))
 
 
+@_author_transaction
 def _autofill_slots(prop_id: str) -> None:
     """Re-read the texture slots off the PRIMARY variant's mesh.
 
@@ -2120,6 +2173,7 @@ def _land_split(gallery: ModelGallery, src: Path, blob: bytes,
     return target
 
 
+@_author_transaction
 def _areas_run(prop_id: str, variant: Any, params: Dict[str, Any], *,
                default_source: str, wait_s: float) -> List[Dict[str, Any]]:
     """ONE Blender run of ``scripts/picture_areas.py`` on a variant's full
@@ -2489,6 +2543,7 @@ def _rewrite_glb_material_names(blob: bytes, mapping: Dict[str, str]) -> bytes:
     return struct.pack("<III", 0x46546C67, 2, 12 + len(out)) + out
 
 
+@_author_transaction
 def rename_area_kind(prop_id: str, area_id: str, kind: str,
                      variant: Any = None) -> List[Dict[str, Any]]:
     """Change what an area of ONE variant's mesh IS (picture <-> glass): the
@@ -2682,6 +2737,7 @@ def _landing_run_failed(pid: str, variant: Any, e: BaseException,
         pass
 
 
+@_author_transaction
 def _reconcile_areas(pid: str, variant: Any = None) -> None:
     """Give ONE variant's ACTIVE full mesh its area reading when it has none
     yet, and let that variant's defaults follow it — after the admin
@@ -2812,7 +2868,7 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
         meta[MOUNT_KEY] = mount_kind
     _write_sidecar(prop_id, meta)
     logger.info("Prop %s created (%s)", prop_id, name)
-    return {"id": prop_id, **meta}
+    return {"id": prop_id, **meta, "revision": _document_revision(meta), "actions": []}
 
 
 #: What the PROP record itself still carries — the fields the general section
@@ -2928,6 +2984,7 @@ def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
         meta.pop(MOUNT_SUGGESTED_KEY, None)
 
 
+@_author_transaction
 def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update the PROP's own fields (name / category / tags / sway_factor /
     slots / key_areas / mount). None when the prop does not exist.
@@ -2949,6 +3006,7 @@ def update_prop(prop_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]
     return {"id": pid, **meta}
 
 
+@_author_transaction
 def set_suggested_mount(prop_id: str, mount: str) -> bool:
     """Store a CLASSIFIER's mount guess (``props_mount.classify_mounts``) —
     the value plus :data:`MOUNT_SUGGESTED_KEY`. False when the prop does not
@@ -3348,6 +3406,9 @@ def _published_entry(meta: Dict[str, Any], index: int,
     """
     entry: Dict[str, Any] = {"variant": index, "tiers": tiers,
                              "dims": variant_dims(meta, index)}
+    authored = _variant_entry(meta, index)
+    entry["uid"] = authored["uid"]
+    entry["action_bindings"] = authored.get("action_bindings", [])
     off = variant_ground_offset(meta, index)
     if off:
         entry[GROUND_OFFSET_KEY] = off
@@ -3519,6 +3580,8 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
         has_source = source_path(prop_id, i) is not None
         out.append({
             "index": i,
+            "uid": entry["uid"],
+            "action_bindings": entry.get("action_bindings", []),
             "stem": entry["stem"],
             "active": bool(entry["active"]),
             "seasons": list(entry.get(SEASONS_KEY) or []),
@@ -3575,6 +3638,7 @@ _COPIED_ON_ADD = (*DIM_KEYS, DIMS_ESTIMATED_KEY, DESCRIPTION_KEY,
                   TARGET_FACES_HIGH_KEY, TARGET_FACES_LOW_KEY)
 
 
+@_author_transaction
 def add_variant(prop_id: str, source: Any = None) -> int:
     """Append a variant slot and return its index; ``-1`` when the prop does
     not exist or the active cap is already reached.
@@ -3605,6 +3669,10 @@ def add_variant(prop_id: str, source: Any = None) -> int:
         return -1
     src = _variant_entry(meta, source)
     entry: Dict[str, Any] = {"stem": stem, "active": True}
+    entry["uid"] = str(uuid4())
+    entry["action_bindings"] = [
+        {**json.loads(json.dumps(binding)), "variant_uid": entry["uid"]}
+        for binding in src.get("action_bindings", [])]
     for key in _COPIED_ON_ADD:
         if key in src:
             entry[key] = json.loads(json.dumps(src[key]))
@@ -3614,6 +3682,7 @@ def add_variant(prop_id: str, source: Any = None) -> int:
     return len(entries) - 1
 
 
+@_author_transaction
 def set_variant_active(prop_id: str, variant: int, active: bool) -> bool:
     """Switch one variant on or off. Switching the LAST active one off is
     refused: a prop with no active variant would render nothing, and that
@@ -3643,6 +3712,7 @@ def set_variant_active(prop_id: str, variant: int, active: bool) -> bool:
     return True
 
 
+@_author_transaction
 def set_variant_seasons(prop_id: str, variant: int, seasons: Any) -> bool:
     """Tag one variant with the seasons it depicts, or clear the tag (E2c).
 
@@ -3829,6 +3899,7 @@ VARIANT_PATCH_APPLIERS = {
 VARIANT_PATCH_KEYS = tuple(VARIANT_PATCH_APPLIERS)
 
 
+@_author_transaction
 def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
     """Set this variant's real size (2026-08-24, variant-only since
     2026-08-25).
@@ -3856,6 +3927,7 @@ def set_variant_dims(prop_id: str, variant: int, dims: Any) -> bool:
     return True
 
 
+@_author_transaction
 def set_variant_ground_offset(prop_id: str, variant: int, offset: Any) -> bool:
     """How deep THIS variant stands in the ground, ± 5 m in centimetre steps
     (2026-08-25).
@@ -3875,6 +3947,7 @@ def set_variant_ground_offset(prop_id: str, variant: int, offset: Any) -> bool:
     return True
 
 
+@_author_transaction
 def set_variant_markers(prop_id: str, variant: int, markers: Any) -> bool:
     """Replace THIS variant's object-local marker list (2026-08-25).
 
@@ -3892,6 +3965,7 @@ def set_variant_markers(prop_id: str, variant: int, markers: Any) -> bool:
     return True
 
 
+@_author_transaction
 def set_variant_description(prop_id: str, variant: int, text: Any) -> bool:
     """Give ONE variant its own generation subject, or clear it (2026-08-24).
 
@@ -3912,6 +3986,7 @@ def set_variant_description(prop_id: str, variant: int, text: Any) -> bool:
     return True
 
 
+@_author_transaction
 def set_variant_slot_values(prop_id: str, variant: int, slot_values: Any,
                             label: Any = None) -> bool:
     """WHAT this variant shows in the prop's picture areas — the picture
@@ -3948,6 +4023,7 @@ def set_variant_slot_values(prop_id: str, variant: int, slot_values: Any,
     return True
 
 
+@_author_transaction
 def set_variant_area_defaults(prop_id: str, variant: int,
                               area_defaults: Any) -> Optional[Dict[str, Any]]:
     """What this variant shows in its PANES when nobody hung anything —
@@ -3979,6 +4055,7 @@ def set_variant_area_defaults(prop_id: str, variant: int,
 _KEEP = object()
 
 
+@_author_transaction
 def set_variant_face_targets(prop_id: str, variant: int,
                              high: Any = _KEEP,
                              low: Any = _KEEP) -> Optional[Dict[str, Any]]:
@@ -4023,6 +4100,7 @@ def variant_face_targets(prop_id: str,
             TARGET_FACES_LOW_KEY: entry.get(TARGET_FACES_LOW_KEY)}
 
 
+@_author_transaction
 def _copy_variant_mesh(prop_id: str, target: int, source: Any = None) -> Path:
     """Copy the SOURCE variant's active full mesh into the TARGET variant's
     stem and select it — the mechanic a picture variant runs on (ruling R4).
@@ -4203,6 +4281,7 @@ def recopy_variant_mesh(prop_id: str, variant: int) -> bool:
     return True
 
 
+@_author_transaction
 def _prune_variant_values(pid: str, index: int) -> None:
     """Drop what ONE variant's ``slot_values`` and ``area_defaults`` say
     about areas its FRESH COPY does not carry (R15, the re-copy event: the
@@ -4220,95 +4299,51 @@ def _prune_variant_values(pid: str, index: int) -> None:
         return
 
 
-def bulk_update(prop_id: str, general: Any = None,
-                variants: Any = None) -> Optional[Dict[str, Any]]:
-    """THE BATCH SAVE of the prop detail: the prop's own fields and any number
-    of variant field patches, in ONE sidecar write. ``None`` when the prop does
-    not exist.
-
-    The detail panel keeps a LOCAL DRAFT and writes it with one explicit Save
-    (the map editor's law, ``core/bulk_edit.py`` / ``tabs/props/pendingFields``).
-    Every field used to go out on its own route the moment it lost focus, so
-    authoring one variant — three metres, a subject, a sink, a season, a marker
-    — was seven requests and seven sidecar writes for one thought.
-
-    ``general`` is the prop patch :func:`update_prop` takes; ``variants`` maps a
-    STORE INDEX (as a string or an int, the way JSON object keys arrive) to a
-    patch of the five fields the variant owns
-    (:data:`VARIANT_PATCH_APPLIERS`)::
-
-        {"general": {"name": "Bench"},
-         "variants": {"0": {"dims": {"width_m": 2.0}, "markers": []},
-                      "2": {"seasons": ["Winter"]}}}
-
-    EVERYTHING IS CHECKED BEFORE ANYTHING IS WRITTEN (``plan_batch``'s law): an
-    unknown field, a moved field or an index this prop has no variant for raises
-    ``ValueError`` and the sidecar is left exactly as it was. A body that is
-    half junk must not leave a half-saved prop behind — the admin would have no
-    way of telling which half arrived.
-
-    Unknown keys are REFUSED rather than ignored, for the same reason the prop
-    patch refuses the moved ones: a green "Saved" over a value that reached
-    nothing is the worst of the three possible answers.
-
-    NO VERSION STAMP, unlike the map's batch (``bulk_edit.plan_batch``), and
-    that is a decision rather than an omission:
-
-    * The map's stamps are a column of a SQLite row and its other writers are
-      other EDITORS. A prop sidecar has no stamp, and its other writers are
-      BACKGROUND JOBS — a finished render stores the image provenance, a
-      finished mesh stores the bbox, a gallery selection writes too. A stamp
-      would be bumped by all of them, so the honest single-editor case ("type a
-      size while your own mesh bakes") would come back "changed on the server".
-    * This batch merges FIELD BY FIELD into the sidecar as it is right now
-      (read → apply the named fields → write), never a whole-record replace, so
-      whatever a job wrote into OTHER keys survives it.
-    * What is left is the write that lands between this read and this write —
-      a race the single-value routes have had since they existed, which a
-      stamp would report rather than prevent, and which needs one editor per
-      prop to even occur.
-
-    Nothing to do writes nothing — an empty body is a read.
-    """
+@_author_transaction
+def bulk_update(prop_id: str, general: Any = None, variants: Any = None, *,
+                base_revision: str, actions: Any = _KEEP) -> Optional[Dict[str, Any]]:
+    """Compare-and-write an author document; variant patches use stable UIDs."""
+    from app.core.prop_actions import validate_document
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
         return None
-    prop_patch = general if isinstance(general, dict) else {}
+    if not isinstance(base_revision, str) or base_revision != _document_revision(meta):
+        raise PropRevisionConflict("Prop changed on the server; reload before saving")
+    if general is not None and not isinstance(general, dict):
+        raise ValueError("general must be an object")
+    if variants is not None and not isinstance(variants, dict):
+        raise ValueError("variants must be an object keyed by variant UID")
+    prop_patch = general or {}
     _check_prop_patch(prop_patch, meta)
-
-    raw = variants if isinstance(variants, dict) else {}
     entries = _variant_list(meta)
-    plan: List[Tuple[int, Dict[str, Any]]] = []
-    for key, patch in raw.items():
-        try:
-            i = int(key)
-        except (TypeError, ValueError):
-            raise ValueError(f"variant key must be a store index: {key!r}")
-        if not 0 <= i < len(entries):
-            raise ValueError(f"this prop has no variant {i}")
+    by_uid = {entry["uid"]: entry for entry in entries}
+    for uid, patch in (variants or {}).items():
+        if uid not in by_uid:
+            raise ValueError(f"this prop has no variant UID {uid!r}")
         if not isinstance(patch, dict):
-            raise ValueError(f"variant {i}: patch must be an object")
-        unknown = [k for k in patch if k not in VARIANT_PATCH_APPLIERS]
+            raise ValueError("variant patch must be an object")
+        unknown = set(patch) - set(VARIANT_PATCH_APPLIERS) - {"action_bindings"}
         if unknown:
-            raise ValueError(
-                f"variant {i}: unknown field(s) "
-                + ", ".join(sorted(unknown))
-                + " (a variant owns: " + ", ".join(VARIANT_PATCH_KEYS) + ")")
-        plan.append((i, patch))
-
-    if not prop_patch and not plan:
-        return _prop_record(pid, meta, full=True)
-    _apply_prop_fields(meta, prop_patch)
-    for i, patch in plan:
+            raise ValueError("unknown variant fields: " + ", ".join(sorted(unknown)))
         for field, value in patch.items():
-            VARIANT_PATCH_APPLIERS[field](entries[i], value)
-    if plan:
-        meta[VARIANTS_KEY] = entries
-    _write_sidecar(pid, meta)
-    return _prop_record(pid, meta, full=True)
+            if field == "action_bindings":
+                by_uid[uid][field] = value
+            else:
+                VARIANT_PATCH_APPLIERS[field](by_uid[uid], value)
+    _apply_prop_fields(meta, prop_patch)
+    meta[VARIANTS_KEY] = entries
+    if actions is not _KEEP:
+        meta["actions"] = actions
+    issues = validate_document(meta)
+    if issues:
+        raise PropDocumentInvalid(issues)
+    if prop_patch or variants or actions is not _KEEP:
+        _write_sidecar(pid, meta)
+    return _prop_record(pid, meta, full=True, ensure_bbox=False)
 
 
+@_author_transaction
 def delete_variant(prop_id: str, variant: int) -> bool:
     """Remove one variant WITH its stored meshes, its selection entry and its
     SOURCE IMAGE. Refused for the last remaining variant — a prop always has
@@ -4911,6 +4946,7 @@ def _drop_image_meta(meta: Dict[str, Any], stem: str, view: str) -> None:
     meta[VARIANTS_KEY] = entries
 
 
+@_author_transaction
 def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
                       view: str = "front", backend: str = "", prompt: str = "",
                       negative: str = "",
@@ -4957,6 +4993,7 @@ def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
     return True
 
 
+@_author_transaction
 def delete_source_image(prop_id: str, variant: Any, view: str) -> bool:
     """Remove ONE extra view image of a variant (never the front — that is
     the variant's identity picture). False when nothing was there."""
@@ -5458,6 +5495,7 @@ def _demand_low(prop_id: str, variant: Any, tiers: List[str]) -> None:
         request_low_tier(prop_id, variant)
 
 
+@_author_transaction
 def _store_bbox(prop_id: str, variant: Any = None, *,
                 landing: bool = False) -> None:
     """Everything that happens once a model has landed: re-encode its
@@ -5623,8 +5661,10 @@ def _picture_signature_part(entries: List[Dict[str, Any]],
                              "rotation": fixes}, sort_keys=True)
 
 
-def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
-    meta = _ensure_bbox(prop_id, meta)
+def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
+                 ensure_bbox: bool = True) -> Dict[str, Any]:
+    if ensure_bbox:
+        meta = _ensure_bbox(prop_id, meta)
     entries = _variant_list(meta)
     # EFFECTIVELY active (E2c): manually active AND in season. The record is a
     # RENDER payload — the client prop library and every room recipe read
@@ -5806,6 +5846,8 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool) -> Dict[str,
         })
         if meta.get("bbox"):
             rec["bbox"] = meta["bbox"]
+    rec["revision"] = _document_revision(meta)
+    rec["actions"] = meta.get("actions", [])
     return rec
 
 
@@ -5825,6 +5867,7 @@ def list_props(*, full: bool = False) -> List[Dict[str, Any]]:
     return out
 
 
+@_author_transaction
 def get_prop(prop_id: str) -> Optional[Dict[str, Any]]:
     """Full detail of ONE prop, or None."""
     pid = safe_prop_id(prop_id)
@@ -6407,6 +6450,20 @@ def _generate(prop_id: str, prompt: str, negative: str,
                 pass
 
 
+@_author_transaction
+def _land_generated_metadata(prop_id: str, variant: Any, path: Path) -> bool:
+    meta = read_sidecar(prop_id)
+    meta["source"] = "generated"
+    primary = _stem_of(prop_id, variant) == _stem_of(prop_id)
+    if primary:
+        bbox = _extract_bbox(prop_id)
+        if bbox:
+            meta["bbox"] = bbox
+            _redistribute_dims(meta, file_areas(path)[ROTATION_KEY])
+    _write_sidecar(prop_id, meta)
+    return primary
+
+
 def _mesh_stages(op) -> Dict[str, Any]:
     """Stage ``mesh`` → publish of one prop record — shared by the fresh run
     and the resume. Reads only the record, never the variant's current files."""
@@ -6490,17 +6547,7 @@ def _mesh_stages(op) -> Dict[str, Any]:
         logger.info("Prop %s: LOD stage %s selected as low variant",
                     prop_id, low)
 
-    meta = read_sidecar(prop_id)
-    meta["source"] = "generated"
-    # Only the PRIMARY variant informs the object's proportions — a second
-    # chair mesh must not redistribute the dims the admin sees.
-    primary = _stem_of(prop_id, variant) == _stem_of(prop_id)
-    if primary:
-        bbox = _extract_bbox(prop_id)
-        if bbox:
-            meta["bbox"] = bbox
-            _redistribute_dims(meta, file_areas(path)[ROTATION_KEY])
-    _write_sidecar(prop_id, meta)
+    primary = _land_generated_metadata(prop_id, variant, path)
     # The picture-area split of the mesh that just landed (when the prop
     # asked for key colours) — for EVERY variant (v2 E1: each is its own
     # mesh), same law as the slots below: this chain does not go through

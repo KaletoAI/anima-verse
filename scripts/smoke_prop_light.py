@@ -21,6 +21,7 @@ from app.core import paths
 def main():
     with tempfile.TemporaryDirectory(prefix='prop-light-') as tmp:
         paths.init(Path(tmp))
+        paths.init_instance(Path(tmp) / 'instance')
         from app.core import props
         raw = dict(color='#FFB35C', intensity=500, range_m=.1, at=[3,-1,.5],
                    flicker='x', when='y', glow_m=-1, foo=1)
@@ -31,11 +32,11 @@ def main():
         pid = props.create_prop(name='Light fixture')['id']
         props.add_variant(pid)
         light = {'color':'#ffb35c'}
-        props.bulk_update(pid, variants={'1':{'light':light}})
+        props.bulk_update(pid, variants={props.list_variants(pid)[int(key)]["uid"]: patch for key, patch in ({'1':{'light':light}}).items()}, base_revision=props.get_prop(pid)["revision"])
         variants = props.list_variants(pid)
         assert not variants[0].get('light')
         assert variants[1]['light'] == props.sanitize_light(light)
-        props.bulk_update(pid, variants={'1':{'light':None}})
+        props.bulk_update(pid, variants={props.list_variants(pid)[int(key)]["uid"]: patch for key, patch in ({'1':{'light':None}}).items()}, base_revision=props.get_prop(pid)["revision"])
         assert not props.list_variants(pid)[1].get('light')
         print('PASS: light sanitization, variant bulk write/read/clear')
         from app.core import db, scene_recipe, room_recipe
@@ -51,8 +52,8 @@ def main():
         meta = props.read_sidecar(pid)
         meta['bbox'] = [1,2,1]
         props._write_sidecar(pid, meta)
-        props.bulk_update(pid, variants={str(i):{'dims':{
-            'width_m':1, 'depth_m':1, 'height_m':2}} for i in (0,1)})
+        props.bulk_update(pid, variants={props.list_variants(pid)[int(key)]["uid"]: patch for key, patch in ({str(i):{'dims':{
+            'width_m':1, 'depth_m':1, 'height_m':2}} for i in (0,1)}).items()}, base_revision=props.get_prop(pid)["revision"])
         loc = {'id':'light-room', 'map3d':{'plan_width_m':10,
             'outline':[[-5,-5],[5,-5],[5,5],[-5,5]]}, 'rooms':[
             {'id':'r', 'layout':{'x':-2,'y':-2,'w':4,'d':4,
@@ -60,7 +61,7 @@ def main():
         before = scene_recipe.scene_fingerprint(loc, loc['id'])
         assert before == scene_recipe.scene_fingerprint(loc, loc['id'])
         light = {'color':'#ffb35c','at':[1,.5,.5]}
-        props.bulk_update(pid, variants={'1':{'light':light}})
+        props.bulk_update(pid, variants={props.list_variants(pid)[int(key)]["uid"]: patch for key, patch in ({'1':{'light':light}}).items()}, base_revision=props.get_prop(pid)["revision"])
         after = scene_recipe.scene_fingerprint(loc, loc['id'])
         assert before != after, 'light edit must invalidate scene fingerprint'
         for at, yaw, off, offset, height in [([.5,1,.5],0,0,[0,0],2),
@@ -110,7 +111,7 @@ def main():
         from app.routes.world import get_world_props_route
         route_rows = get_world_props_route()['world_props']
         assert next(row for row in route_rows if row['variant'] == 1)['light'] == spec['light']
-        props.bulk_update(pid, variants={'0':{'light':{'color':'#3366ff'}}})
+        props.bulk_update(pid, variants={props.list_variants(pid)[int(key)]["uid"]: patch for key, patch in ({'0':{'light':{'color':'#3366ff'}}}).items()}, base_revision=props.get_prop(pid)["revision"])
         for variant, color in [(0, '#3366ff'), (1, '#ffb35c')]:
             placement['variant'] = variant
             shown = next(m for m in scene_recipe.compose_scene(loc, plan_width_m=10)['models']
@@ -120,7 +121,7 @@ def main():
         for row in world_props.payload_rows():
             assert row['light']['color'] == ('#3366ff' if row['variant'] == 0 else '#ffb35c'), row
             assert_url_maps(row)
-        props.bulk_update(pid, variants={'1':{'light':{'color':'#ffffff'}}})
+        props.bulk_update(pid, variants={props.list_variants(pid)[int(key)]["uid"]: patch for key, patch in ({'1':{'light':{'color':'#ffffff'}}}).items()}, base_revision=props.get_prop(pid)["revision"])
         assert world_props.payload_snapshot()[1] != sig
         model = props.model_path(pid, variant=1)
         props.set_file_areas(model, rotation={'x':0,'y':0,'z':90})

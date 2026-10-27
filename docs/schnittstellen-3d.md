@@ -7541,6 +7541,52 @@ y = −2,96 + 1,46 − 0,0640394 = −1,5640394.
 
 ## C3. Props, Varianten und Modelle
 
+### Prop authoring: revision-bound actions and stable variant identities
+
+`GET /world/props/{id}` returns `prop.revision` and `prop.actions`.
+`GET /world/props/{id}/variants` returns `revision` and variant rows with
+persisted UUID `uid` and `action_bindings`. Copying a variant mints a fresh UID
+and rebinds copied bindings; deleting/recreating a slot never reuses its UID.
+Numeric asset-route indices and file stems remain asset addresses, not action
+or draft identities.
+
+`POST /world/props/{id}/bulk` requires the revision the draft was opened with:
+
+```json
+{
+  "base_revision": "<revision from the read>",
+  "general": {"name": "Bench"},
+  "actions": [],
+  "variants": {"<variant uid>": {"description": "A bench", "action_bindings": []}}
+}
+```
+
+Each half is optional except `base_revision`. Actions have one canonical write
+path (`actions`, not `general.actions`). The response includes `revision`,
+`prop` and `variants`. Missing revision or invalid author data returns 422 with
+`detail.issues` (`path`, `code`, `message`, `severity`); stale revision returns
+409. Rejected requests perform no partial writes. Preserve a conflicted local
+draft; do not silently rebase it onto a fresh revision.
+
+Action definitions include stable IDs, name/description, enabled, ability
+(`pose`, `combined`, `sleep`, `pair`), pose key, participants, presence policy,
+presence interruption, named finite-duration phases, typed AND requirements
+and effects. Stat requirements use existing stat IDs, `lt/le/eq/ge/gt` and
+finite values; condition requirements use existing condition IDs and boolean
+`present`. Effects support stat deltas, mood text, condition add/remove, actor/
+partner/both targets and start/success/active timing. Solo actions cannot target
+a partner; only combined actions have completion rewards/phases; sleep has no
+custom active regeneration rate.
+
+Bindings identify action and owning variant UID, supported state, alternative
+marker IDs, per-role `access_points` (`actor`, plus `partner` for pairs) and
+`validation` (`suggested`, `local_valid`, `repair_required`). Access points are
+`{x,z,yaw}`: oriented local metres relative to footprint centre and yaw in
+degrees, with no authored/support-mesh height. Author validation is the read-only
+`app.core.prop_actions.validate_document(prop)` contract. This schema alone does
+not execute or expose runtime actions; deployment waits for the complete cutover.
+
+
 ### Ein Prop, mehrere Modell-Varianten (§ B2)
 
 Ein Prop trägt seit E2.3 nicht mehr ein Mesh, sondern eine **geordnete Liste

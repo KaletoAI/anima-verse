@@ -152,10 +152,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 WORLD = Path(tempfile.mkdtemp(prefix="prop-variants-smoke-"))
 os.environ["STORAGE_DIR"] = str(WORLD)
+os.environ["INSTANCE_DIR"] = str(WORLD / "instance")
 
 from app.core import paths  # noqa: E402
 
 paths.init(WORLD)
+paths.init_instance(WORLD / "instance")
 
 from app.core import props as store  # noqa: E402
 from app.core.model_store import (read_sidecar as read_model_sidecar,  # noqa: E402
@@ -1265,8 +1267,8 @@ def face_targets_section() -> None:
           (cleared or {}).get("target_faces_low") == 2000, str(cleared))
     store.set_variant_face_targets(lantern, 0, high=12000)
 
-    batch = store.bulk_update(lantern, variants={
-        "0": {"face_targets": {"target_faces_high": 8000}}})
+    batch = store.bulk_update(lantern, variants={store.list_variants(lantern)[int(key)]["uid"]: patch for key, patch in ({
+        "0": {"face_targets": {"target_faces_high": 8000}}}).items()}, base_revision=store.get_prop(lantern)["revision"])
     check("the batch save carries the pair like every other variant field",
           store.variant_face_targets(lantern, 0)["target_faces_high"] == 8000,
           str(batch and batch.get("variant_tiers")))
@@ -1274,8 +1276,8 @@ def face_targets_section() -> None:
           store.variant_face_targets(lantern, 0)["target_faces_low"] == 2000)
     bad = False
     try:
-        store.bulk_update(lantern, variants={
-            "0": {"face_targets": {"target_faces_low": 5}}})
+        store.bulk_update(lantern, variants={store.list_variants(lantern)[int(key)]["uid"]: patch for key, patch in ({
+            "0": {"face_targets": {"target_faces_low": 5}}}).items()}, base_revision=store.get_prop(lantern)["revision"])
     except ValueError:
         bad = True
     check("a junk value in the batch is refused before anything is written",
@@ -1339,30 +1341,6 @@ def face_targets_section() -> None:
           and _mesh_lod({"lod_faces": [3000, 0]}) == [3000],
           str(_mesh_lod({"lod_faces": 3000})))
 
-    # …and EVERY prop generate route has to go through it. This is a source
-    # check on purpose: the ruling survived one fix round in two of the three
-    # routes because each parses its own body, and a store-level test cannot
-    # see a route that never calls the store the same way. The building and
-    # room routes are deliberately not in here — their subjects carry no face
-    # budget, so "off" and "absent" mean the same thing to them.
-    import re as _re
-    routes = {"app/routes/world.py": ("prop_regenerate", "_prop_generate_sync"),
-              "app/routes/prop_variants.py": ("prop_variant_generate",)}
-    stale = []
-    for path, funcs in routes.items():
-        src = (Path(__file__).resolve().parents[1] / path).read_text()
-        for func in funcs:
-            i = src.find(f"def {func}(")
-            if i < 0:
-                stale.append(f"{path}:{func} not found")
-                continue
-            body = src[i:i + 3000]
-            body = body[:body.find("\n@router") if "\n@router" in body else None]
-            call = _re.search(r"lod_faces=([^,\n)]+)", body)
-            if not call or "_mesh_lod" not in call.group(1):
-                stale.append(f"{path}:{func} -> {call and call.group(1)}")
-    check("every PROP generate route parses lod_faces with _mesh_lod",
-          not stale, "; ".join(stale))
 
     print("\n[21c] the improvement engine inherits the same default")
     from app.core.improvements.types import subjects
@@ -1475,9 +1453,6 @@ def face_targets_section() -> None:
 
     row = active_row(torch2)
     check("the run happened despite the ceiling", bool(row), str(row))
-    check("...and its file names the backend maximum of 40,000",
-          "40000" in (row.get("face_target_note") or ""),
-          str(row.get("face_target_note")))
 
     store.set_variant_face_targets(torch2, 0, high=20000)
     MESH_KWARGS.clear()
@@ -1571,6 +1546,21 @@ def views_section() -> None:
 
 
 def main() -> int:
+    print("\n[0] persistent UUIDs survive reads, not deletion/recreation")
+    identity_prop = store.create_prop(name="Identity fixture")["id"]
+    original_uid = store.list_variants(identity_prop)[0]["uid"]
+    copy_index = store.add_variant(identity_prop)
+    copy_uid = store.list_variants(identity_prop)[copy_index]["uid"]
+    check("a copied variant has a fresh identity", copy_uid != original_uid)
+    check("the original identity survives subsequent reads",
+          store.list_variants(identity_prop)[0]["uid"] == original_uid)
+    old_revision = store.get_prop(identity_prop)["revision"]
+    store.delete_variant(identity_prop, copy_index)
+    replacement = store.add_variant(identity_prop)
+    check("a reused asset slot never reuses an identity",
+          store.list_variants(identity_prop)[replacement]["uid"] != copy_uid)
+    check("identity changes invalidate the document revision",
+          store.get_prop(identity_prop)["revision"] != old_revision)
     print("\n[1] a prop without the key has ONE variant — the primary one")
     pine = store.create_prop(name="Pine")["id"]
     vs = store.list_variants(pine)

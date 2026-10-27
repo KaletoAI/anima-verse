@@ -206,24 +206,28 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
 
   // ── THE DRAFT (2026-08-25) ─────────────────────────────────────────────
   // Every field edit of this prop, waiting for one explicit Save. It is keyed
-  // by target ("general" / "v:<store index>") and merges field by field, so
+  // by stable target ("general" / "v:<uid>") and merges field by field, so
   // editing the size and then the subject of one variant is one entry with two
   // fields — see `pendingFields` for the rules.
   const [buf, setBuf] = useState<PendingFields>(emptyFields)
+  const baseRevision = useRef(prop.revision)
   const [saving, setSaving] = useState(false)
   /** The Discard button's second click (no `window.confirm` in this UI). */
   const [discardArmed, setDiscardArmed] = useState(false)
   const dirtyCount = pendingFieldCount(buf)
+  useEffect(() => {
+    if (!dirtyCount) baseRevision.current = prop.revision
+  }, [prop.revision, dirtyCount])
   useEffect(() => { if (!dirtyCount) setDiscardArmed(false) }, [dirtyCount])
   const queueGeneral = useCallback((patch: Record<string, unknown>) => {
     setBuf((b) => queueFields(b, GENERAL_TARGET, patch))
   }, [])
+  const [serverVariants, setServerVariants] = useState<PropVariant[]>([])
   const queueVariant = useCallback((index: number,
     patch: Record<string, unknown>) => {
-    setBuf((b) => queueFields(b, variantTarget(index), patch))
-  }, [])
-
-  const [serverVariants, setServerVariants] = useState<PropVariant[]>([])
+    const uid = serverVariants.find((v) => v.index === index)?.uid
+    if (uid) setBuf((b) => queueFields(b, variantTarget(uid), patch))
+  }, [serverVariants])
   const [variantMax, setVariantMax] = useState(1)
   // The world's season names + the one it is in now (E2c) — the season chips
   // are a pick from this list, and an empty list (a world without seasons)
@@ -607,11 +611,12 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
   // patch travel in the batch body, the answer is what was really stored, and
   // the client adopts THAT rather than believing its own draft.
   const save = useCallback(async () => {
-    const body = toBulkFieldBody(buf)
+    const body = toBulkFieldBody(buf, baseRevision.current)
     setSaving(true)
     try {
-      const d = await apiPost<{ variants?: PropVariant[] }>(
+      const d = await apiPost<{ variants?: PropVariant[]; revision: string }>(
         `/world/props/${enc}/bulk`, body)
+      baseRevision.current = d.revision
       setBuf(emptyFields())
       if (d?.variants) setServerVariants(d.variants)
       // The prop record (name, category, the library row) is the container's —
@@ -1187,10 +1192,11 @@ export function PropDetail({ prop, pending, generatingVariants, cacheBump,
             onSelect={setVariant}
             onChanged={meshesChanged}
             onEditVariant={queueVariant}
-            // A deleted variant renumbers the list, so the draft is renumbered
-            // with it — an unsaved size must never land on the neighbour that
-            // moved into the gap.
-            onDeleted={(index) => setBuf((b) => dropDeletedVariant(b, index))}
+            // Only this identity is removed; surviving drafts never shift.
+            onDeleted={(index) => {
+              const uid = serverVariants.find((v) => v.index === index)?.uid
+              if (uid) setBuf((b) => dropDeletedVariant(b, uid))
+            }}
             generating={generatingVariants}
             worldSeasons={worldSeasons}
             currentSeason={currentSeason}

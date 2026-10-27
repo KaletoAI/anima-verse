@@ -33,8 +33,9 @@
  *   scaled uniformly, so the trio is one statement (how big, and what shape) —
  *   and "Save (1)" for one resize is what the admin actually did.
  * - Delete a variant (an immediate operation, see below) → its pending fields
- *   go with it, AND every pending target behind it moves down by one, because
- *   that is exactly how the server renumbers the list.
+ *   go with its UUID. Surviving targets never shift to another identity.
+ * - Actions share the general draft; serialization moves them to the canonical
+ *   top-level `actions` field. Bindings share each variant's UUID-keyed patch.
  *
  * WHAT IS NOT IN THE BUFFER, deliberately: everything that moves a FILE.
  * Rendering or uploading a source image, meshing, picking a mesh from the
@@ -61,17 +62,9 @@ export type PendingFields = ReadonlyMap<string, FieldPatch>
  *  this one key — the batch body's `general`. */
 export const GENERAL_TARGET = 'general'
 
-/** A variant's target key. The STORE INDEX is what every variant-scoped route
- *  takes, so it is what the buffer is keyed by as well. */
-export function variantTarget(index: number): string {
-  return `v:${index}`
-}
-
-/** The store index behind a variant target key, or -1 for the general one. */
-function targetIndex(target: string): number {
-  if (!target.startsWith('v:')) return -1
-  const n = Number(target.slice(2))
-  return Number.isInteger(n) ? n : -1
+/** Stable variant identity, never the recyclable store index. */
+export function variantTarget(uid: string): string {
+  return `v:${uid}`
 }
 
 export function emptyFields(): PendingFields {
@@ -124,42 +117,34 @@ export function draftValue<T>(buf: PendingFields, target: string,
   return patch && field in patch ? (patch[field] as T) : stored
 }
 
-/**
- * The buffer after a variant was DELETED on the server.
- *
- * Its own pending fields are gone — there is nothing left to save them onto —
- * and every target behind it moves down by one, because a delete pops the
- * entry out of the stored list and renumbers exactly that way. Leaving them
- * would write one variant's unsaved size onto its neighbour.
- */
+/** Deletion removes only the deleted identity, never renumbers drafts. */
 export function dropDeletedVariant(buf: PendingFields,
-  index: number): PendingFields {
-  const next = new Map<string, FieldPatch>()
-  for (const [target, patch] of buf) {
-    const i = targetIndex(target)
-    if (i < 0) { next.set(target, patch); continue }
-    if (i === index) continue
-    next.set(i > index ? variantTarget(i - 1) : target, patch)
-  }
+  uid: string): PendingFields {
+  const next = new Map(buf)
+  next.delete(variantTarget(uid))
   return next
 }
 
 /** The body of one batch save (`POST /world/props/{id}/bulk`). An empty half
  *  is left out entirely, so a body says what it changes and nothing else. */
-export function toBulkFieldBody(buf: PendingFields): {
+export function toBulkFieldBody(buf: PendingFields, baseRevision: string): {
+  base_revision: string
+  actions?: unknown
   general?: FieldPatch
   variants?: Record<string, FieldPatch>
 } {
-  const body: { general?: FieldPatch; variants?: Record<string, FieldPatch> } = {}
+  const body: { base_revision: string; actions?: unknown; general?: FieldPatch;
+    variants?: Record<string, FieldPatch> } = { base_revision: baseRevision }
   const variants: Record<string, FieldPatch> = {}
   for (const [target, patch] of buf) {
     if (!Object.keys(patch).length) continue
     if (target === GENERAL_TARGET) {
-      body.general = patch
-      continue
+      const { actions, ...general } = patch
+      if ('actions' in patch) body.actions = actions
+      if (Object.keys(general).length) body.general = general
+    } else if (target.startsWith('v:')) {
+      variants[target.slice(2)] = patch
     }
-    const i = targetIndex(target)
-    if (i >= 0) variants[String(i)] = patch
   }
   if (Object.keys(variants).length) body.variants = variants
   return body
@@ -169,6 +154,7 @@ export function toBulkFieldBody(buf: PendingFields): {
  *  `VARIANT_PATCH_APPLIERS` knows, spelled the same way. */
 interface VariantDraftFields {
   index: number
+  uid: string
   dims: { width_m: number; depth_m: number; height_m: number }
   dims_estimated: boolean
   description: string
@@ -204,7 +190,7 @@ export function applyVariantDraft<T extends VariantDraftFields>(
   list: T[], buf: PendingFields): T[] {
   if (!buf.size) return list
   return list.map((v) => {
-    const patch = buf.get(variantTarget(v.index))
+    const patch = buf.get(variantTarget(v.uid))
     if (!patch || !Object.keys(patch).length) return v
     const out = { ...v, ...patch } as T
     if (patch.dims) {
