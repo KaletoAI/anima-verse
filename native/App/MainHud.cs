@@ -188,7 +188,9 @@ public partial class Main : Node3D
         if (_figures is null || _camera is null) return;
         var (o, d) = _camera.RayAt(click);
         var figure = _figures.CharacterAt(o, d);
-        if (figure is null && PickPropMenu(click, o, d)) return;
+        if (figure is null && PickPropMenu(click,
+            new Vector3((float)o.X, (float)o.Y, (float)o.Z),
+            new Vector3((float)d.X, (float)d.Y, (float)d.Z))) return;
         // Asked only when no figure took the click, as engine.ts does.
         var location = figure is null ? _picking?.Pick(o, d) : null;
         var outcome = PickChain.Resolve(figure?.Name, location?.Id);

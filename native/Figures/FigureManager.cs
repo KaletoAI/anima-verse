@@ -414,8 +414,8 @@ public partial class FigureManager : Node3D
         if (fig.CharacterName == ControlledName) return;
         if (!_publicEntries.ContainsKey(fig.CharacterName) && _failedEntries.TryGetValue(fig.CharacterName, out var failed))
         {
-            var row = _rowByName.GetValueOrDefault(fig.CharacterName);
-            if (row?.Place is not null || row?.Interaction is not null)
+            var failedRow = _rowByName.GetValueOrDefault(fig.CharacterName);
+            if (failedRow?.Place is not null || failedRow?.Interaction is not null)
             {
                 // Core completed but this renderer never had a valid measured entry: hide, never invent a teleport.
                 fig.SnapTo(new Vector3((float)failed.Access.X, (float)failed.Access.Y, (float)failed.Access.Z));
@@ -438,8 +438,8 @@ public partial class FigureManager : Node3D
         }
         if (_finishedEntries.Remove(fig.CharacterName, out var finished))
         {
-            var row = _rowByName.GetValueOrDefault(fig.CharacterName);
-            bool committed = row?.Place is not null || row?.Interaction is not null;
+            var finishedRow = _rowByName.GetValueOrDefault(fig.CharacterName);
+            bool committed = finishedRow?.Place is not null || finishedRow?.Interaction is not null;
             if (committed && !fig.PlayPublicEntry(finished, 1))
             {
                 _failedEntries[fig.CharacterName] = finished;
