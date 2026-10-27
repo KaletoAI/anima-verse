@@ -7,15 +7,23 @@ import { VIEW_LABEL } from './usePropWorkspace'
 import type { PropWorkspace } from './usePropWorkspace'
 
 export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
-  const { variantBusy, t, pending, shownImage, srcOk, enc, variant, reloadKey, setSrcOk, enlarge, prop, imageTip, variants, onRegenerateImage, shownVariant, refVariants, sourceUploadRef, uploadSource, onRefresh, setUploadView, viewUploadRef, armedView, setArmedView, deleteView, uploadView, onRegenerateMesh, dimDraft, setDimDraft, commitDim, commitSink, descOpen, descDraft, setDescOpen, setDescDraft, commitDesc, shownHasMesh, variantAreas, rotate, variantRotation, setRotationAxis, areasFailed, surfaceLabel, bakeSurface, shownSurface, removeArmed, removeSurface, setRemoveArmed, previewFile, showStoredFile, meshesChanged, commitFaces, backendFaces, onGenerating } = workspace
-  const { beforeImmediate, onRegenerate, variantMax, setVariant, queueVariant,
-    generatingVariants, worldSeasons, currentSeason, onVariantDeleted } = workspace
+  const { variantBusy, t, pending, shownImage, srcOk, enc, variant, reloadKey,
+    setSrcOk, enlarge, prop, imageTip, variants, openImageGeneration, shownVariant,
+    sourceUploadRef, uploadSource, onRefresh, setUploadView, viewUploadRef,
+    armedView, setArmedView, deleteView, uploadView, openMeshGeneration,
+    dimDraft, editDim, commitDim, commitSink, descOpen, descDraft, setDescOpen,
+    setDescDraft, commitDesc, shownHasMesh, variantAreas, rotate, variantRotation,
+    setRotationAxis, areasFailed, surfaceLabel, bakeSurface, shownSurface,
+    removeArmed, removeSurface, setRemoveArmed, previewFile, showStoredFile,
+    meshesChanged, commitFaces, backendFaces, onGenerating, openRegeneration,
+    variantMax, setVariant, queueVariant, generatingVariants, worldSeasons,
+    currentSeason, onVariantDeleted, prepareVariantOperation } = workspace
   return <div className="ga-form prop-area-content">
     <h3>{t('Modell & Varianten')}</h3>
     <p className="ga-hint">{t('Upload, Generierung, Orientierung und begehbare Oberfläche werden sofort angewendet. Beschreibung, Maße, Bodenausgleich und Budgets gehören zum Entwurf.')}</p>
     <button type="button" className="ga-btn" disabled={pending}
-      onClick={async () => { if (await beforeImmediate(t('Regenerate'))) onRegenerate() }}>
-      {t(pending ? 'Generating…' : 'Regenerate')} · {t('weitere Variante')}
+      onClick={() => { void openRegeneration() }}>
+      {t(pending ? 'Generating…' : 'Regenerate')} · {t('Ziel im Generierungsdialog prüfen')}
     </button>
     <details className="prop-inspector-group" open>
       <summary>{t('Aktivität & Jahreszeiten')}</summary>
@@ -23,7 +31,7 @@ export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
         selected={variant} onSelect={setVariant} onChanged={meshesChanged}
         onEditVariant={queueVariant} onDeleted={onVariantDeleted}
         generating={generatingVariants} worldSeasons={worldSeasons}
-        currentSeason={currentSeason} beforeImmediate={beforeImmediate} />
+        currentSeason={currentSeason} prepareVariantOperation={prepareVariantOperation} />
     </details>
           {variantBusy ? (
             <span className="ga-hint">
@@ -84,10 +92,7 @@ export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
                 // VARIANT renders from — its own, and the prop's NAME when it
                 // has none (the server resolves it the same way for an empty
                 // prompt, `props.variant_description`).
-                onClick={async () => {
-                  if (await beforeImmediate(t('New image'))) onRegenerateImage(variant, 'front',
-                    shownImage || undefined, shownVariant?.description || prop.name, refVariants)
-                }}
+                onClick={() => { void openImageGeneration('front') }}
                 title={variantBusy
                   ? t('This variant is generating right now.')
                   : t('Render a NEW source image FOR THIS VARIANT (backend and prompt in the dialog). Its 3D model stays until you re-mesh from the new image; the other variants keep their own images.')}>
@@ -143,10 +148,7 @@ export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
                     <div style={{ display: 'flex', gap: 3 }}>
                       <button type="button" className="ga-btn ga-btn-sm" style={{ flex: 1 }}
                         disabled={variantBusy}
-                        onClick={async () => {
-                          if (await beforeImmediate(t('Render view'))) onRegenerateImage(variant,
-                            view, rec, shownVariant?.description || prop.name, refVariants)
-                        }}
+                        onClick={() => { void openImageGeneration(view) }}
                         title={t('Render this view (optionally with a front image as reference).')}>
                         🖼
                       </button>
@@ -186,10 +188,7 @@ export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
             
             <button type="button" className="ga-btn ga-btn-sm"
               disabled={variantBusy || !shownImage || !srcOk}
-              onClick={async () => {
-                if (await beforeImmediate(t('3D from this image'))) onRegenerateMesh(variant,
-                  PROP_EXTRA_VIEWS.filter((view) => !!shownVariant?.images?.[view]))
-              }}
+              onClick={() => { void openMeshGeneration() }}
               title={variantBusy
                 ? t('This variant is generating right now.')
                 : t('Mesh THIS image again into the SELECTED variant — no new render, no new variant; backend, face count and texture size come from the dialog. Dims and markers stay.')}>
@@ -218,10 +217,7 @@ export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
                         step={0.05}
                         style={{ width: 74 }}
                         value={shown}
-                        onChange={(e) => {
-                          const value = e.target.value
-                          setDimDraft((d) => ({ ...d, [f.key]: value }))
-                        }}
+                        onChange={(e) => editDim(f.key, e.target.value)}
                         onBlur={(e) => commitDim(f.key, e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') e.currentTarget.blur()
@@ -267,7 +263,10 @@ export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
                 placeholder={t('Description (generation subject)')}
                 title={t('What THIS variant’s source image is rendered from — the subject of its prompt. Empty = the render composes from the prop’s name. A new variant starts as a copy of the one it was added from, so a version differs by an edit: “…as a sapling”, “…broken”, “…covered in snow”.')}
                 onFocus={() => setDescOpen(true)}
-                onChange={(e) => setDescDraft(e.target.value)}
+                onChange={(e) => {
+                  setDescDraft(e.target.value)
+                  queueVariant(variant, { description: e.target.value })
+                }}
                 onBlur={(e) => {
                   setDescOpen(false)
                   commitDesc(e.target.value)
@@ -351,9 +350,10 @@ export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
           ) : null}
     </fieldset>
           <PropModelPanel
-            beforeImmediate={beforeImmediate}
+            prepareVariantOperation={prepareVariantOperation}
             propId={prop.id}
             variant={variant}
+            variantUid={shownVariant?.uid || ''}
             reloadKey={reloadKey}
             preview={previewFile}
             onPreview={(file) => showStoredFile(file === shownVariant?.model_file ? '' : file)}

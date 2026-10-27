@@ -4,7 +4,7 @@
 
 Produktcode im isolierten Worktree `props-actions-admin`, nicht im ursprünglichen Checkout. `PropDetail` ist die Layout-Komposition; `usePropWorkspace` besitzt den bisherigen gemeinsamen Feldentwurf, Basisrevision, ausgewählte Geometrie und alle Werkzeuge des einen Viewers. Aufgabenbereiche sind eigene Komponenten. Die HTML-Studie wurde nicht als Produktnachweis verwendet.
 
-**Nicht ausgeführt:** TypeScript, Build, Tests, Lint, Formatter, Server, Browser, Modell-/Bild-/LLM-Jobs. Das ist der vereinbarte Worker-Vertrag; insbesondere sind 1440/900/390 px und tatsächliche API-/Dateioperationen noch kein beobachteter UI-Nachweis. Diese Datei dokumentiert implementierten Code und die notwendige Controller-Abnahme, keine bestandene Abnahme. Der Übergabe-Commit-Hash steht in der Worker-Abschlussnachricht (der Commit enthält diesen Bericht).
+**Vom Worker nicht ausgeführt:** TypeScript, Build, Tests, Lint, Formatter, Server, Browser, Modell-/Bild-/LLM-Jobs. Der Controller meldete für Basis `a007cad4` erfolgreiche TypeScript-/Buffer-/Bulk-/Build-Prüfungen (Artefakt 185) und reale UI-Nachweise u. a. für einen gültigen texturierten Upload, eine Canvas, bereichsübergreifenden Entwurf und History-Sperren. Das ist Controller-Evidenz, kein eigener Lauf. Die nachfolgend dokumentierte Fixrunde 1 wurde vom Worker wiederum nicht geprüft; Controller-Rebuild, Review und Browser-Nachabnahme bleiben erforderlich. Der Übergabe-Commit-Hash steht in der Worker-Abschlussnachricht.
 
 Task 7 bietet im Bereich Aktionen ausschließlich eine Liste/Summary der wirklichen gespeicherten bzw. gepufferten Aktionsdefinitionen und der Bindung der ausgewählten Variante. Es gibt keine behaupteten Aktions-, Effekt-, Zugangs- oder Laufzeittest-Editoren. Diese gehören zu Task 8. Der vom Nutzer verlangte tatsächliche LLM-Prompt-Nachweis nach Client-Cutover bleibt ein eigener späterer Abnahmepunkt; hier wurde kein kostenpflichtiger Aufruf getätigt.
 
@@ -20,7 +20,7 @@ Task 7 bietet im Bereich Aktionen ausschließlich eine Liste/Summary der wirklic
 - Navigation über `workspace.navigate(area)`; beendet aktuelle Platzierwerkzeuge, setzt mobil auf Editor und fokussiert den zugehörigen Tab. `setMobilePane('preview')` zeigt den existierenden Viewer, ohne ihn neu zu erzeugen.
 - Vorhandene Marker-/Preview-Schnittstellen: `markers`, `selMarker`, `selIdx`, `setSelectedMarker`, `patchMarker`, `saveMarkers` indirekt über `queueVariant`, `armPlacing`, `placing`, `setPlacing`, `previewPose`, `setPreview`. Task 8 kann die Auswahl-/Zugangswerkzeuge hier erweitern. Zugangspunkte-/Rollen-Overlays sind mit Task 7 nicht vorgetäuscht implementiert.
 - Viewer-/Flächenvertrag: `viewerRef`, `areaTools`, `setAreaView`, `drawKind`, `areasOnView`, `previewFile`, `showStoredFile`. Es gibt nur `PropPreview` mit einem `Model3DViewer`. Historische Galerie-Dateien sind explizit Vorschau; Flächen, Wasser, Orientierung und Walkable-Werkzeuge bleiben dann gesperrt. `showStoredFile('')` kehrt zum veröffentlichten Modell zurück. Semantische Werkzeuge müssen dieselbe Ausschlussregel mit Polygon-/Wasser-/Marker-Modus beachten.
-- `beforeImmediate(label): Promise<boolean>` ist die gemeinsame Save-and-continue-/Cancel-Entscheidung. Bei `false` muss der Aufrufer ohne Schreibrequest zurückkehren. Bei Savefehler/409 bleibt der Dialog bzw. Entwurf erhalten, ohne automatische Schreibwiederholung. Task 8 kann diesen Vertrag für eigene abhängige Sofortoperationen nutzen.
+- `beforeImmediate(label): Promise<boolean>` bleibt die gemeinsame Prop-/Entwurfsentscheidung. Variantenbezogene Sofortoperationen verwenden zwingend `prepareVariantOperation(uid, label): Promise<PropVariant | null>`: vor dem Dialog die UUID festhalten, nach erfolgreicher Entscheidung neu lesen, die UUID auf den aktuellen Datei-API-Index auflösen; bei Abbruch/fehlender UUID kein Schreibrequest. Task 8 darf keinen numerischen Index über ein Await hinweg als Identität verwenden.
 
 ## Alt → Neu: erhaltene Funktionen einzeln
 
@@ -83,7 +83,7 @@ Task 7 bietet im Bereich Aktionen ausschließlich eine Liste/Summary der wirklic
 ## Kleine gemeinsame Komponentenänderungen
 
 - `ListPane`: optionale kontrollierte Expansion und Sperre des Einklappens; unverändertes Verhalten ohne diese Props. Benötigt für Drawer und laufende Bulk-Veröffentlichung.
-- `BuildDistanceMeshButton`: optionales `beforeBuild(): Promise<boolean>`; bestehende Verbraucher ohne Callback behalten ihren bisherigen Pfad. Props hängt die gemeinsame Save-Schranke davor.
+- `BuildDistanceMeshButton`: optionales `prepareBuild(): Promise<string | null>`; liefert nach der Save-Schranke die neu aufgelöste Ziel-URL oder bricht mit `null` ab. Bestehende Verbraucher ohne Callback behalten ihren bisherigen URL-Pfad.
 - `Model3DViewer`: Container-`ResizeObserver` statt ausschließlich Window-Resize; nötig für Bibliothekseinklappen/mobile Preview bei gemountetem Viewer.
 
 ## Vorbereitete Regressionen, nicht ausgeführt
@@ -97,6 +97,7 @@ Aus dem isolierten Worktree, nach Integration und ohne parallele Worker-Checks:
 ```sh
 ./frontend/node_modules/.bin/tsc -b frontend/tsconfig.json
 node scripts/smoke_prop_fields_buffer.mjs
+node scripts/smoke_prop_operation_targets.mjs
 ./.venv/bin/python scripts/smoke_prop_bulk_save.py
 npm --prefix frontend run build
 ```
@@ -113,3 +114,29 @@ Anschließend echte Admin-Browserprüfung bei **1440, 900 und 390 px**, nicht di
 - Galerie-Vorschau historischer Datei, gesperrte Flächen-/Wasser-/Orientierungs-/Walkable-Werkzeuge, explizite Rückkehr; genau eine Canvas/Viewer-Instanz.
 - Sämtliche in der Zuordnungstabelle genannten Assetwerkzeuge; Wasser-Editor nach einem dirty Maßentwurf erst nach benanntem Speichern und erneutem Lesen bedienen.
 - Tastaturpfad, Pfeiltasten/Home/End, sichtbarer Fokus, Modal-Tabbindung/Rückfokus, Escape für aktuelles Werkzeug, mobile Editor-/Preview-Umschaltung, numerische Marker-/Wassergrößen-/Wasserstand-Eingaben und erreichbare Speicheraktionen ohne horizontales Dokumentoverflow.
+
+## Fixrunde 1 / unabhängiges Workspace-Review
+
+Basis `a007cad4`, alle sieben Reviewbefunde sowie die vom Controller genehmigte 390-px-Hostkorrektur adressiert. Keine Worker-Checks, Jobs, Server oder Fixture-Änderungen.
+
+1. **Async-Zielidentität:** Die neue Consumer-Hilfe `resolveVariantAfterBarrier` liest erst nach der Entscheidung und löst die ursprünglich festgehaltene UUID neu auf. Source-/View-Uploads, Galerieauswahl/-löschung/-upload, Reduktion, CPU-LOD, Variantenanlage/-aktivität/-löschung, Orientierung, Walkable, Flächen, Pane-Defaults, Bildvarianten, Rahmenkopie und Wasser verwenden die aufgelöste Variante bzw. URL. Orientierung liest auch die übrigen Achsen frisch. Flächen lehnen eine inzwischen gewechselte Modelldatei ab. Wasser bindet UI-Antworten an die ursprüngliche UUID; ein Indexwechsel ist keine neue Identität. Auch die spätere bezahlte Bestätigung in Bild-/Meshdialogs löst Target- und Referenz-UUIDs erneut auf. Eine entfernte UUID schreibt weder in den Nachfolger noch in einen anderen Slot.
+2. **Tippen vor Blur:** Dimensionen, Generierungsbeschreibung und Face-Budgets schreiben ihre kanonischen Feldwerte bereits beim ersten `onChange` in denselben `pendingFields`-Buffer. Eine unvollständige Dimensionszahl pinnt den bisherigen Dimensionswert als bearbeitetes Feld. `dimDraft`, `descDraft` und `faceDraft` halten nur die Eingabezeichenfolge, nicht unerkannte Author-Änderungen. Ein Hintergrundresultat kann deshalb weder die betreffende Konfliktbasis vorziehen noch lokale Eingabezeichenfolgen einer überlebenden UUID durch bloßes Reindexieren zurücksetzen. Kein zweiter State-/Form-Store.
+3. **Bildvariantenmodal:** Die Save-/Cancel-Entscheidung ist jetzt ein Body-Portal mit expliziter höherer Ebene (1200 statt bestehender Bildmodalebene 1000), Fokusbindung und Rückfokus. Der geöffnete `PictureVariantDialog` bleibt samt Bild-/Namensentwurf gemountet; Zielidentität ist die UUID. Escape in der oberen Entscheidung erreicht den unteren Dokument-Listener nicht. Bei einer neuen Bildvariante wird zusätzlich geprüft, dass die ursprüngliche Rahmen-UUID noch primär ist.
+4. **Drawer / Sammelveröffentlichung:** Der vorhandene portaled `AnchoredPopover` bietet eine optionale Fokus-Scope für Bulk-Publish. Nach sichtbarer Positionierung wird Fokus in die Veröffentlichung übertragen; Tab bleibt dort, Escape schließt nur diese Oberfläche und Schließen fokussiert den Auslöser zurück. Die native Drawer-Fokusbindung läuft nur für tatsächliche DOM-Nachfahren und fängt die Portal-Tastatur nicht ab. Keine Bibliotheks-/Popover-Kopie.
+5. **Bildsubject nach Save:** `openImageGeneration(view)` liest nach der Save-Schranke die gespeicherte Prop-Definition und die UID-aufgelöste Variante. `propGenerationSubject` verwendet deren Beschreibung bzw. den tatsächlich gespeicherten neuen Namen. Front- und Zusatzansichten benutzen denselben Pfad; Bildprovenienz und Referenz-UUIDs bleiben erhalten. `openMeshGeneration()` verwendet ebenfalls die frisch gelesene Variante.
+6. **Regenerierungsziel / Kosten:** `propGenerationTarget` spiegelt die bestehende Serverregel (erst aktiver leerer Slot, sonst neuer Slot unter Cap, sonst letzter aktiver Slot). Der Dialog benennt ein bestehendes Ziel und bei Cap ausdrücklich den Austausch von Quellbild/aktivem Mesh sowie den Erhalt der Mesh-Galerie. Der Auslöser verspricht nicht mehr bedingungslos eine zusätzliche Variante. Vor dem kostenpflichtigen Request wird der Plan erneut gelesen; ein verändertes Ziel/Cap/Reindexieren öffnet den aktualisierten Hinweis ohne Jobstart und verlangt erneute bewusste Bestätigung. Bestehende Ziele werden explizit über die UUID-aufgelöste Variantenroute angesprochen.
+7. **Zugängliche Übersicht:** Name, Kategorie, Tags, neue Beschreibung, Befestigung und Wind haben explizite zugängliche Namen entsprechend ihren sichtbaren Beschriftungen. Keine Änderung des gemeinsamen `Field`-Bausteins.
+8. **390-px-Host:** Der identifizierte globale Header-Control-Container erhält nur eine Klasse. Unter 800 px darf der Header umbrechen und seine Controls dürfen innerhalb der verfügbaren Breite wrappen; Desktopregeln bleiben unverändert. Kein Abschneiden/Verstecken der Controls, keine Änderung parent-eigener Acceptance-Fixtures oder Templates.
+
+### Aktualisierte Task-8-Verbraucher
+
+- `workspace.prepareVariantOperation(uid, label)` ist die Schranke für varianteigene Schreiboperationen. `null` bedeutet abbrechen. Kein alter Index und keine vor der Schranke zusammengebaute URL nach dem Await.
+- `workspace.openImageGeneration(view)`, `openMeshGeneration()` und `openRegeneration()` sind die Asset-Einstiege statt direkter Aufrufe mit alten Render-Closures. Interne Container-Callbacks tragen `PropVariant` bzw. `PropGenerationTarget`, Bildreferenzen als UID-haltige Variantenrecords und die frisch gespeicherte Prop-Definition.
+- `areaTools.run(what, call)` übergibt `call(currentIndex)` den neu aufgelösten Index; nicht mehr eine parameterlose Closure mit altem Query-Index.
+- `editDim(key, raw)` pinnt den Feldentwurf beim Tippen; `commitDim` normalisiert beim Blur. Beschreibungs-/Face-Budget-Consumer puffern ebenfalls auf Change und normalisieren weiter beim Blur.
+
+### Zusätzliche Regressionen und erneute Controller-Abnahme
+
+`scripts/smoke_prop_operation_targets.mjs` übt die tatsächliche UID-Continuation-Hilfe mit einer wartenden Entscheidung, nachfolgender Reindexierung, entferntem Ziel und Abbruch ohne nachfolgenden Read/Write aus. Zusätzlich werden die drei realen Generationstargetfälle und der gespeicherte Namensfallback geprüft. `smoke_prop_fields_buffer.mjs` ergänzt gleichzeitig aktive Dimension-/Beschreibungs-/Budgetfelder gegen spätere Hintergrundänderungen. Beide Erweiterungen sind **nicht vom Worker ausgeführt**; keine Überschrift-/Source-Pin-/Komponentenverdrahtungsasserts.
+
+Controller bitte Kommandos erneut ausführen und Async-Target-Smoke ergänzen. Im tatsächlichen Admin besonders: B/1 mit dirty Draft wählen, Schranke öffnen, A/0 extern entfernen, Konflikt gezielt auflösen und fortfahren; B muss am neuen Index angesprochen werden und C unverändert bleiben. Entferntes B darf keinen Folgeslot bearbeiten. Aktiver Zahlen-/Beschreibung-/Budgetinput während eines Hintergrund-Authorupdates muss einen Feldkonflikt auslösen. Bildvarianten-Save mit dirty Prop muss pointer- und keyboard-bedienbar über dem Bildmodal bleiben; Cancel muss den Bildentwurf erhalten. Im 900-/390-Drawer Bulk-Publish per Tastatur öffnen und Catalog/Tags/Publish/Close erreichen. Rename bei leerer Variantenbeschreibung vor New image/Extra view speichern; Prompt muss den gespeicherten neuen Namen enthalten. Regenerate am Cap muss das tatsächliche Austauschziel vor dem Jobstart benennen. 390 px: Dokument-Scrollbreite am echten Header erneut messen und alle Header-/Speichercontrols bedienen. Kein Produktnachweis dieser Fixrunde wird hier behauptet.

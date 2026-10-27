@@ -83,7 +83,7 @@ export default function App() {
           ← {t('Back to chat')}
         </a>
         <h1>{t('Game Admin')}</h1>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div className="ga-header-controls" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           <GameClock />
           <FreezeToggle />
           <SleepToggle />

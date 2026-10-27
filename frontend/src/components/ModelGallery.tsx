@@ -102,7 +102,7 @@ export interface BlenderStatus {
  * Blender: an action that can only fail is worse than no action.
  */
 export function BuildDistanceMeshButton({
-  url, hasLow, blender, disabled = false, targetFaces = 0, onDone, beforeBuild,
+  url, hasLow, blender, disabled = false, targetFaces = 0, onDone, prepareBuild,
 }: {
   /** POST endpoint of this subject's build (…/lod). */
   url: string
@@ -119,16 +119,17 @@ export function BuildDistanceMeshButton({
   /** Reload the gallery — the build added a file and moved the selection. */
   onDone: () => void | Promise<unknown>
   /** Authoring workspaces can save dependent draft fields before this write. */
-  beforeBuild?: () => Promise<boolean>
+  prepareBuild?: () => Promise<string | null>
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [busy, setBusy] = useState(false)
   const build = useCallback(async () => {
-    if (beforeBuild && !await beforeBuild()) return
+    const targetUrl = prepareBuild ? await prepareBuild() : url
+    if (!targetUrl) return
     setBusy(true)
     try {
-      const d = await apiPost<{ tris?: number; tris_before?: number }>(url, {})
+      const d = await apiPost<{ tris?: number; tris_before?: number }>(targetUrl, {})
       // The counts come from the Blender stage and may be absent (an older
       // stage reported none) — then the message says the build happened and
       // stays quiet about numbers instead of printing "undefined".
@@ -147,7 +148,7 @@ export function BuildDistanceMeshButton({
     try {
       await onDone()
     } catch { /* the mesh is stored either way */ }
-  }, [url, onDone, t, toast, beforeBuild])
+  }, [url, onDone, t, toast, prepareBuild])
   if (!blender?.usable) return null
   return (
     <button

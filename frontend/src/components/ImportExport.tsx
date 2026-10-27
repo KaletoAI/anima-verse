@@ -27,15 +27,42 @@ function AnchoredPopover({
   minWidth,
   padding,
   children,
+  focusTrap = false,
 }: {
   anchorRef: RefObject<HTMLElement | null>
   onClose: () => void
   minWidth: number
   padding: number
   children: ReactNode
+  focusTrap?: boolean
 }) {
   const boxRef = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const placed = pos !== null
+  useEffect(() => {
+    if (!focusTrap || !placed) return
+    const previous = document.activeElement as HTMLElement | null
+    const box = boxRef.current
+    const controls = () => Array.from(box?.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]') || [])
+    ;(controls()[0] || box)?.focus()
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation(); onClose()
+      } else if (event.key === 'Tab') {
+        const items = controls()
+        const first = items[0], last = items[items.length - 1]
+        if (!first) { event.preventDefault(); box?.focus() }
+        else if (event.shiftKey && (document.activeElement === first || document.activeElement === box)) {
+          event.preventDefault(); last.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first.focus()
+        }
+      }
+    }
+    box?.addEventListener('keydown', onKey)
+    return () => { box?.removeEventListener('keydown', onKey); previous?.focus() }
+  }, [focusTrap, placed, onClose])
 
   useLayoutEffect(() => {
     const place = () => {
@@ -92,6 +119,7 @@ function AnchoredPopover({
   return createPortal(
     <div
       ref={boxRef}
+      tabIndex={focusTrap ? -1 : undefined}
       style={{
         position: 'fixed',
         top: pos?.top ?? -9999,
@@ -560,7 +588,7 @@ export function BulkPublishButton({
         ↑↑ {t('Publish selected')} ({entityIds.length})
       </button>
       {open ? (
-        <AnchoredPopover anchorRef={btnRef} onClose={close} minWidth={300} padding={12}>
+        <AnchoredPopover anchorRef={btnRef} onClose={close} minWidth={300} padding={12} focusTrap>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
             <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 2 }}>
               {t('Catalog')}

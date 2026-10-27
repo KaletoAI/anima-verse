@@ -73,5 +73,23 @@ try {
   assert.deepEqual(fieldConflicts(actionDraft, base, remoteActions).map(({ field, local, server }) => ({ field, local, server })),
     [{ field: 'actions', local: [{ id: 'local' }], server: [{ id: 'remote' }] }]);
   assert.deepEqual(toBulkFieldBody(actionDraft, 'accepted-revision').actions, [{ id: 'local' }]);
+  // Active text controls pin their canonical field on the first change,
+  // before blur. Even an incomplete numeric string keeps this old baseline.
+  let typing = queueFields(emptyFields(), variantTarget('uid-b'), {
+    dims: base.get(variantTarget('uid-b')).dims,
+    description: 'currently typing',
+    face_targets: { target_faces_high: 10000, target_faces_low: null },
+  });
+  const typingBase = new Map(base);
+  typingBase.set(variantTarget('uid-b'), { ...typingBase.get(variantTarget('uid-b')),
+    face_targets: { target_faces_high: 10000, target_faces_low: null } });
+  const background = new Map(typingBase);
+  background.set(variantTarget('uid-b'), { ...background.get(variantTarget('uid-b')),
+    dims: { width_m: 4, depth_m: 4, height_m: 4 }, description: 'remote author',
+    face_targets: { target_faces_high: 20000, target_faces_low: null } });
+  assert.deepEqual(fieldConflicts(typing, typingBase, background).map(({ field }) => field),
+    ['dims', 'description', 'face_targets']);
+  assert.deepEqual(toBulkFieldBody(typing, 'old-base').variants['uid-b'].dims,
+    base.get(variantTarget('uid-b')).dims);
   console.log('PASS: merged fields, actions/bindings, stable UUIDs, disjoint rebase and explicit overlap resolution');
 } finally { await rm(dir, { recursive: true, force: true }); }

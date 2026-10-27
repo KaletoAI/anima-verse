@@ -30,6 +30,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { FACE_FIELDS, FACE_TARGET_MAX, FACE_TARGET_MIN } from './variantFields'
+import type { PreparePropVariantOperation } from './propOperations'
 
 interface PropModelInfo {
   models?: GalleryModel[]
@@ -42,13 +43,14 @@ interface PropModelInfo {
   blender?: BlenderStatus
 }
 
-export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
+export function PropModelPanel({ propId, variant, variantUid, reloadKey, preview, onPreview,
   onChanged, pending = false, faceTargets = {}, onEditFaceTarget,
-  backendFaces = 0, onGenerating, beforeImmediate }: {
+  backendFaces = 0, onGenerating, prepareVariantOperation }: {
   propId: string
   /** Index of the model variant this gallery belongs to (0 = the first one;
    *  the primary variant is the first ACTIVE one, which the strip marks). */
   variant: number
+  variantUid: string
   /** Bumped by the container when a generation finished — reloads the list. */
   reloadKey: number
   /** Filename the detail viewer shows ('' = the active model). */
@@ -78,7 +80,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
   /** Start the container's pending poll — a low variant runs in the
    *  background like every mesh job. */
   onGenerating?: () => void
-  beforeImmediate: (label: string) => Promise<boolean>
+  prepareVariantOperation: PreparePropVariantOperation
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -86,6 +88,10 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
   // Everything this panel touches belongs to ONE variant — one base, so a
   // route can never be reached unqualified by accident.
   const base = `/world/props/${enc}/variants/${variant}`
+  const prepareBase = useCallback(async (label: string, uid = variantUid) => {
+    const target = await prepareVariantOperation(uid, label)
+    return target ? `/world/props/${enc}/variants/${target.index}` : null
+  }, [enc, variantUid, prepareVariantOperation])
   const [info, setInfo] = useState<PropModelInfo | null>(null)
   const [armedDel, setArmedDel] = useState<string | null>(null)
   const [uploadTier, setUploadTier] = useState<ModelTier>(DEFAULT_MODEL_TIER)
@@ -96,7 +102,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
   // read back as "cleared" until it is committed — and another variant never
   // shows the number typed into the one before it.
   const [faceDraft, setFaceDraft] = useState<Record<string, string>>({})
-  useEffect(() => { setFaceDraft({}) }, [base])
+  useEffect(() => { setFaceDraft({}) }, [propId, variantUid])
 
   const load = useCallback(async () => {
     try {
@@ -112,42 +118,43 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
   }, [load, reloadKey])
 
   const select = useCallback(async (filename: string, tier: ModelTier) => {
-    if (!await beforeImmediate(t('Select model tier'))) return
+    const targetBase = await prepareBase(t('Select model tier'))
+    if (!targetBase) return
     try {
-      await apiPost(`${base}/models/select`, { file: filename, tier })
-      await load()
+      await apiPost(`${targetBase}/models/select`, { file: filename, tier })
       await onChanged()
       toast(t('Active model set'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [base, load, onChanged, t, toast, beforeImmediate])
+  }, [prepareBase, onChanged, t, toast])
 
   const remove = useCallback(async (filename: string) => {
-    if (!await beforeImmediate(t('Delete model file'))) return
+    const targetBase = await prepareBase(t('Delete model file'))
+    if (!targetBase) return
     setArmedDel(null)
     try {
-      await apiDelete(`${base}/models?file=${encodeURIComponent(filename)}`)
+      await apiDelete(`${targetBase}/models?file=${encodeURIComponent(filename)}`)
       if (preview === filename) onPreview('')
-      await load()
       await onChanged()
       toast(t('Deleted'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [base, preview, onPreview, load, onChanged, t, toast, beforeImmediate])
+  }, [prepareBase, preview, onPreview, onChanged, t, toast])
 
   // Upload a GLB as a NEW mesh of the chosen tier (validated server-side;
   // surface the 422 reasons instead of a bare status code). The variant route
   // takes the tier as a FORM field, not as a query parameter.
   const upload = useCallback(async (file: File) => {
     if (!file) return
-    if (!await beforeImmediate(t('Upload model'))) return
+    const targetBase = await prepareBase(t('Upload model'))
+    if (!targetBase) return
     try {
       const fd = new FormData()
       fd.append('file', file)
       fd.append('tier', uploadTier)
-      const res = await fetch(`${base}/upload`,
+      const res = await fetch(`${targetBase}/upload`,
         { method: 'POST', body: fd, credentials: 'same-origin' })
       const body = await res.json().catch(() => null)
       if (!res.ok) {
@@ -156,25 +163,25 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
           : (body?.detail?.toString?.() || `HTTP ${res.status}`))
       }
       onPreview('')
-      await load()
       await onChanged()
       toast(t('Saved'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [base, uploadTier, onPreview, load, onChanged, t, toast, beforeImmediate])
+  }, [prepareBase, uploadTier, onPreview, onChanged, t, toast])
 
   // Stored mesh waiting in the low-variant dialog (mesh→mesh reduction of
   // THAT file — the prop's dims stay untouched, they belong to the full mesh).
-  const [shrinkFile, setShrinkFile] = useState<string | null>(null)
+  const [shrinkFile, setShrinkFile] = useState<{ file: string; uid: string } | null>(null)
   const shrinkBackends = info?.shrink_backends || []
   const shrink = useCallback(async (backend: string, opts?: MeshGenerateOpts) => {
-    const file = shrinkFile
+    const target = shrinkFile
     setShrinkFile(null)
-    if (!file) return
-    if (!await beforeImmediate(t('Create low variant'))) return
-    void apiPost<{ status?: string }>(`${base}/models/shrink`,
-      { file, backend,
+    if (!target) return
+    const targetBase = await prepareBase(t('Create low variant'), target.uid)
+    if (!targetBase) return
+    void apiPost<{ status?: string }>(`${targetBase}/models/shrink`,
+      { file: target.file, backend,
         ...(opts?.face_num ? { face_num: opts.face_num } : {}),
         ...(opts?.texture_size ? { texture_size: opts.texture_size } : {}) })
       .then((d) => {
@@ -184,7 +191,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
         onGenerating?.()
       })
       .catch((e) => { toast(t('Error') + ': ' + (e as Error).message, 'error') })
-  }, [shrinkFile, base, onGenerating, t, toast, beforeImmediate])
+  }, [shrinkFile, prepareBase, onGenerating, t, toast])
 
   const models = info?.models || []
   const tiers = info?.tiers || []
@@ -229,8 +236,11 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
             blender={info?.blender}
             disabled={pending}
             targetFaces={faceTargets.low || 0}
-            beforeBuild={() => beforeImmediate(t('Build distance mesh'))}
-            onDone={async () => { await load(); await onChanged() }}
+            prepareBuild={async () => {
+              const targetBase = await prepareBase(t('Build distance mesh'))
+              return targetBase ? `${targetBase}/models/lod` : null
+            }}
+            onDone={onChanged}
           />
         ) : null}
       </div>
@@ -268,6 +278,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
                   onChange={(e) => {
                     const value = e.target.value
                     setFaceDraft((d) => ({ ...d, [f.key]: value }))
+                    onEditFaceTarget(f.key, value)
                   }}
                   onBlur={(e) => {
                     const raw = e.target.value
@@ -310,7 +321,7 @@ export function PropModelPanel({ propId, variant, reloadKey, preview, onPreview,
               onSelect={(tier) => { void select(m.filename, tier) }}
               onArmDelete={setArmedDel}
               onDelete={() => { void remove(m.filename) }}
-              onShrink={() => setShrinkFile(m.filename)}
+              onShrink={() => setShrinkFile({ file: m.filename, uid: variantUid })}
               shrinkAvailable={shrinkBackends.length > 0}
               shrinkPending={pending}
             />

@@ -10,7 +10,7 @@ export function PropAppearance({ workspace }: { workspace: PropWorkspace }) {
     editLight, placing, shownHasMesh, previewFile, drawKind, armPlacing,
     variants, waterController, setDrawKind, prop, serverVariants, variantMax,
     reloadKey, variantAreas, areasFailed, areaTools, meshesChanged,
-    beforeImmediate, setMobilePane, dirtyCount } = workspace
+    beforeImmediate, prepareVariantOperation, setMobilePane, dirtyCount } = workspace
   return <div className="ga-form prop-area-content">
     <h3>{t('Darstellung')}</h3>
     <p className="ga-hint">{t('Licht gehört zum gemeinsamen Entwurf. Flächen und Wasser werden sofort angewendet.')}</p>
@@ -101,7 +101,7 @@ export function PropAppearance({ workspace }: { workspace: PropWorkspace }) {
               // switches the preview in the column beside it and shares its
               // call lock.
               tools={areaTools}
-              beforeImmediate={beforeImmediate}
+              prepareVariantOperation={prepareVariantOperation}
               onVariantsChanged={() => { void meshesChanged() }}
             />
           ) : null}

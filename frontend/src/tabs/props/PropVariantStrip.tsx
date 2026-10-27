@@ -48,6 +48,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import type { PropVariant } from './propTypes'
+import type { PreparePropVariantOperation } from './propOperations'
 
 /** One chip's width in pixels — wide enough for the badge row, which is the
  *  widest thing in it since the inputs moved into the second column. Fixed on
@@ -56,7 +57,7 @@ const CHIP_W = 170
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   onChanged, onEditVariant, onDeleted, generating = [], worldSeasons = [],
-  currentSeason = '', beforeImmediate }: {
+  currentSeason = '', prepareVariantOperation }: {
   propId: string
   /** Every variant, active or not, in order — the DRAFT list (PropDetail's
    *  load with the change buffer laid on top), so a field edit shows here and
@@ -91,7 +92,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   worldSeasons?: string[]
   /** The season the world is in right now, for the "renders now" hint. */
   currentSeason?: string
-  beforeImmediate: (label: string) => Promise<boolean>
+  prepareVariantOperation: PreparePropVariantOperation
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -108,11 +109,12 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   const activeCount = variants.filter((v) => v.active).length
   const capReached = activeCount >= max
 
-  const run = useCallback(async (fn: () => Promise<unknown>, ok: string) => {
-    if (!await beforeImmediate(ok)) return
+  const run = useCallback(async (uid: string, fn: (target: PropVariant) => Promise<unknown>, ok: string) => {
+    const target = await prepareVariantOperation(uid, ok)
+    if (!target) return
     setBusy(true)
     try {
-      await fn()
+      await fn(target)
       await onChanged()
       toast(ok)
     } catch (e) {
@@ -120,7 +122,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
     } finally {
       setBusy(false)
     }
-  }, [onChanged, t, toast, beforeImmediate])
+  }, [onChanged, t, toast, prepareVariantOperation])
 
   // The new slot carries no mesh — it is filled by the next generation
   // targeted at it, so selecting it right away is what the admin wants to do
@@ -128,16 +130,16 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // object is authored by editing the one beside it, not by re-typing size,
   // subject, sink and markers.
   const add = useCallback(() => {
-    void run(async () => {
+    void run(variants.find((entry) => entry.index === selected)?.uid || '', async (target) => {
       const d = await apiPost<{ index?: number }>(
-        `/world/props/${enc}/variants`, { from: selected })
+        `/world/props/${enc}/variants`, { from: target.index })
       if (typeof d?.index === 'number') onSelect(d.index)
     }, t('Variant added'))
-  }, [enc, onSelect, run, selected, t])
+  }, [enc, onSelect, run, selected, variants, t])
 
   const toggle = useCallback((v: PropVariant) => {
-    void run(
-      () => apiPost(`/world/props/${enc}/variants/${v.index}/active`, { active: !v.active }),
+    void run(v.uid,
+      (target) => apiPost(`/world/props/${enc}/variants/${target.index}/active`, { active: !v.active }),
       v.active ? t('Variant switched off') : t('Variant switched on'))
   }, [enc, run, t])
 
@@ -156,11 +158,11 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   // index went, and it renumbers its pending fields the same way.
   const remove = useCallback((index: number) => {
     setArmedDel(null)
-    void run(async () => {
-      await apiDelete(`/world/props/${enc}/variants/${index}`)
-      onDeleted(index)
+    void run(variants.find((entry) => entry.index === index)?.uid || '', async (target) => {
+      await apiDelete(`/world/props/${enc}/variants/${target.index}`)
+      onDeleted(target.index)
     }, t('Variant deleted'))
-  }, [enc, onDeleted, run, t])
+  }, [enc, onDeleted, run, variants, t])
 
   return (
     <>

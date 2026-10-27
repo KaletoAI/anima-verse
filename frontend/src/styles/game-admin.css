@@ -3116,3 +3116,10 @@ a.ga-btn {
 @media (prefers-reduced-motion: reduce) {
   .props-admin *, .props-admin *::before, .props-admin *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
+
+/* Keep the shared host usable when the prop workspace uses its mobile mode. */
+@media (max-width: 799px) {
+  .ga-header { flex-wrap: wrap; gap: 8px; min-width: 0; }
+  .ga-header-controls { flex: 1 1 100%; min-width: 0; max-width: 100%; flex-wrap: wrap; }
+  .ga-header-controls > * { min-width: 0; max-width: 100%; }
+}

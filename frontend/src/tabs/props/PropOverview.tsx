@@ -16,18 +16,18 @@ export function PropOverview({ workspace }: { workspace: PropWorkspace }) {
     <h3>{t('Übersicht')}</h3>
     <p className="ga-hint">{t('Objektfelder und Geometriefelder werden gemeinsam mit Speichern übernommen.')}</p>
     <Field label={t('Name')}>
-      <input className="ga-input" value={nameNow} onChange={(event) => queueGeneral({ name: event.target.value })} />
+      <input aria-label={t('Name')} className="ga-input" value={nameNow} onChange={(event) => queueGeneral({ name: event.target.value })} />
     </Field>
     <Field label={t('Category')}>
-      <input className="ga-input" list={CATEGORY_DATALIST_ID} value={categoryNow}
+      <input aria-label={t('Category')} className="ga-input" list={CATEGORY_DATALIST_ID} value={categoryNow}
         onChange={(event) => queueGeneral({ category: event.target.value })} />
     </Field>
     <Field label={t('Tags (comma-separated)')}
       tip={t('Tag "walkable" lets figures stand on this prop; its surface is baked from the mesh.')}>
-      <input className="ga-input" value={tagsNow} onChange={(event) => queueGeneral({ tags: event.target.value })} />
+      <input aria-label={t('Tags (comma-separated)')} className="ga-input" value={tagsNow} onChange={(event) => queueGeneral({ tags: event.target.value })} />
     </Field>
     {shownVariant && <Field label={t('Beschreibung / Generierungsbeschreibung der ausgewählten Variante')}>
-      <textarea className="ga-textarea" rows={5} value={shownVariant.description || ''}
+      <textarea aria-label={t('Beschreibung / Generierungsbeschreibung der ausgewählten Variante')} className="ga-textarea" rows={5} value={shownVariant.description || ''}
         onChange={(event) => queueVariant(variant, { description: event.target.value })} />
     </Field>}
     <section className="prop-inspector-group">
@@ -36,7 +36,7 @@ export function PropOverview({ workspace }: { workspace: PropWorkspace }) {
         : !mountKnown ? 'Unbekannter Befestigungswert — bitte zuordnen'
           : mountSuggested ? 'LLM-Vorschlag — bestätigen oder ändern'
             : mountInDraft ? 'Bestätigung im Entwurf — noch nicht gespeichert' : 'Bestätigt')}>
-        <select className="ga-input" value={mountNow} onChange={(event) => queueGeneral({ mount: event.target.value })}>
+        <select aria-label={t('Mount')} className="ga-input" value={mountNow} onChange={(event) => queueGeneral({ mount: event.target.value })}>
           <option value="">{t('— unclassified —')}</option>
           {mountNow && !mountKnown && <option value={mountNow}>{t('Unbekannter Wert')}: {mountNow}</option>}
           {MOUNT_KINDS.map((mount) => <option key={mount.kind} value={mount.kind}>{t(mount.label)}</option>)}
@@ -47,7 +47,7 @@ export function PropOverview({ workspace }: { workspace: PropWorkspace }) {
         onClick={() => queueGeneral({ mount: mountNow })}>{t('Vorschlag im Entwurf bestätigen')}</button>}
       <Field label={t('Sway factor')}
         tip={t('1 = volle Windbewegung des Untergrunds; 0 = unbeweglich. Gilt für das gesamte Prop.')}>
-        <input className="ga-input" type="number" min={0} max={1} step={0.05} value={swayNow}
+        <input aria-label={t('Sway factor')} className="ga-input" type="number" min={0} max={1} step={0.05} value={swayNow}
           onChange={(event) => {
             const value = event.currentTarget.valueAsNumber
             if (Number.isFinite(value)) queueGeneral({ sway_factor: Math.max(0, Math.min(1, value)) })

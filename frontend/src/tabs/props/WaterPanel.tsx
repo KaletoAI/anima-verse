@@ -8,8 +8,8 @@ const looks = ['Pool', 'Bath', 'Pond', 'Hot spring', 'Lake', 'Custom']
 const presets = ['pool', 'bath', 'pond', 'hot_spring', 'lake', 'custom']
 
 export function useModelWater(endpoint: string, revision: string | number,
-  beforeImmediate?: (label: string) => Promise<boolean>,
-  onChanged?: () => Promise<unknown>) {
+  prepareEndpoint?: () => Promise<string | null>,
+  onChanged?: () => Promise<unknown>, identity = endpoint) {
   const [data, setData] = useState<WaterResponse>({ status: 'none', water: null })
   const [busy, setBusy] = useState(false)
   const [detecting, setDetecting] = useState(false)
@@ -17,6 +17,8 @@ export function useModelWater(endpoint: string, revision: string | number,
   const [shape, setShape] = useState<'rect' | 'ellipse' | null>(null)
   const [size, setSize] = useState<[number, number]>([1, 1])
   const generation = useRef(0)
+  const latestIdentity = useRef(identity)
+  latestIdentity.current = identity
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
     const gen = ++generation.current
@@ -32,31 +34,30 @@ export function useModelWater(endpoint: string, revision: string | number,
   }, [endpoint, revision])
   const patch = async (body: unknown) => {
     if (busy || detecting) return
-    if (beforeImmediate && !await beforeImmediate('Change water')) return
-    const gen = generation.current
-    setBusy(true)
-    setError('')
+    const target = prepareEndpoint ? await prepareEndpoint() : endpoint
+    if (!target) return
+    const gen = latestIdentity.current === identity ? generation.current : -1
+    if (gen >= 0) { setBusy(true); setError('') }
     try {
-      const d = await apiPatch<WaterResponse>(endpoint, body)
+      const d = await apiPatch<WaterResponse>(target, body)
       if (generation.current === gen) setData(d)
       await onChanged?.()
     } catch (e) { if (generation.current === gen) setError((e as Error).message) }
     finally { if (generation.current === gen) setBusy(false) }
   }
   const detect = async () => {
-    if (beforeImmediate && !await beforeImmediate('Detect water')) return
-    const gen = generation.current
+    const target = prepareEndpoint ? await prepareEndpoint() : endpoint
+    if (!target) return
+    const gen = latestIdentity.current === identity ? generation.current : -1
     const stamp = data.water?.detected_at
     const deadline = Date.now() + 300000
-    setDetecting(true)
-    setShape(null)
-    setError('')
+    if (gen >= 0) { setDetecting(true); setShape(null); setError('') }
     try {
-      await apiPost(endpoint + '/detect', {})
+      await apiPost(target + '/detect', {})
       const poll = async () => {
         if (generation.current !== gen) return
         try {
-          const d = await apiGet<WaterResponse>(endpoint)
+          const d = await apiGet<WaterResponse>(target)
           if (generation.current !== gen) return
           setData(d)
           if (d.water && d.water.detected_at !== stamp) {

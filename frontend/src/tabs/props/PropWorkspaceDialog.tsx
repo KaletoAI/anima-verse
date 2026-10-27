@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 
 /** The existing admin modal surface, with focus contained until the decision. */
 export function PropWorkspaceDialog({ title, children, onCancel }: {
@@ -31,11 +32,11 @@ export function PropWorkspaceDialog({ title, children, onCancel }: {
     node?.addEventListener('keydown', key)
     return () => { node?.removeEventListener('keydown', key); previous?.focus() }
   }, [])
-  return <div className="ga-modal-backdrop" role="presentation">
+  return createPortal(<div className="ga-modal-backdrop" role="presentation" style={{ zIndex: 1200 }}>
     <div ref={ref} className="ga-modal prop-workspace-dialog" role="dialog"
       aria-modal="true" aria-label={title}>
       <div className="ga-modal-header"><h3>{title}</h3></div>
       {children}
     </div>
-  </div>
+  </div>, document.body)
 }

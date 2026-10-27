@@ -23,8 +23,9 @@ import { PropDetail } from './PropDetail'
 import { PropImageDialog } from './PropImageDialog'
 import { PropWorkspaceDialog } from './PropWorkspaceDialog'
 import { CATEGORY_DATALIST_ID, MOUNT_KINDS, mountLabel, hasIncompleteActionBindings } from './propTypes'
+import { propGenerationTarget, resolveVariantAfterBarrier, type PropGenerationTarget } from './propOperations'
 import type {
-  ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage, PropView,
+  ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage, PropVariant, PropView,
 } from './propTypes'
 
 export type { ImageBackendInfo, MeshBackendInfo, PropFull, PropMarker } from './propTypes'
@@ -79,8 +80,8 @@ export function PropsTab() {
   // offers exactly those to the multi-view alias, and the ones the admin
   // ticks travel with the mesh call.
   const [regen, setRegen] = useState<
-    { id: string; meshOnly: boolean; variant?: number
-      views?: PropView[] } | null>(null)
+    { id: string; meshOnly: boolean; variant?: number; uid?: string
+      plan?: PropGenerationTarget; views?: PropView[] } | null>(null)
   // Prop whose 🖼 image-only regenerate waits in the image dialog (backend +
   // final prompt; the mesh stays until re-meshed from the new image). The
   // VARIANT travels with it: the source image belongs to the variant, so the
@@ -95,8 +96,8 @@ export function PropsTab() {
   // this render may take as its appearance reference, which is how a new
   // version of the object is authored from the one before it.
   const [imgRegen, setImgRegen] = useState<
-    { prop: PropFull; variant: number; view: PropView; refVariants: number[]
-      image?: PropSourceImage; subject?: string } | null>(null)
+    { prop: PropFull; variant: number; uid: string; view: PropView; refs: PropVariant[]
+      image?: PropSourceImage; subject: string } | null>(null)
   const [query, setQuery] = useState('')
   const [catFilter, setCatFilter] = useState('')
   // How the pieces are MOUNTED: '' = every prop, 'none' = the ones nobody has
@@ -472,12 +473,13 @@ export function PropsTab() {
             onChanged={load}
             onDelete={() => remove(selectedProp.id)}
             armedDelete={armedDel === selectedProp.id}
-            onRegenerate={() => setRegen({ id: selectedProp.id, meshOnly: false })}
-            onRegenerateMesh={(variant, views) =>
-              setRegen({ id: selectedProp.id, meshOnly: true, variant, views })}
-            onRegenerateImage={(variant, view, image, subject, refVariants) =>
-              setImgRegen({ prop: selectedProp, variant, view,
-                refVariants: refVariants || [], image, subject })}
+            onRegenerate={(plan) => setRegen({ id: selectedProp.id, meshOnly: false, plan,
+              ...(plan.kind === 'existing' ? { variant: plan.index, uid: plan.uid } : {}) })}
+            onRegenerateMesh={(target, views) =>
+              setRegen({ id: selectedProp.id, meshOnly: true, variant: target.index, uid: target.uid, views })}
+            onRegenerateImage={(target, view, image, subject, refs, author) =>
+              setImgRegen({ prop: author, variant: target.index, uid: target.uid, view,
+                refs, image, subject })}
             onGenerating={startPoll}
             // The face count a run would really start on — the PLACEHOLDER
             // behind the variants' budget fields (v2 E5). The admin's
@@ -500,7 +502,13 @@ export function PropsTab() {
           open={regen !== null}
           title={regen?.meshOnly
             ? `${t('Re-mesh from the source image')} · ${t('Variant')} ${(regen.variant || 0) + 1}`
-            : t('Regenerate prop model — as another variant')}
+            : t('Prop-Modell generieren — Ziel und Ersetzung prüfen')}
+          hint={regen?.meshOnly ? t('Das Modell der gewählten Variante wird aus ihrem Quellbild neu erstellt.')
+            : regen?.plan?.kind === 'existing'
+              ? `${t('Ziel')}: ${t('Variant')} ${regen.plan.index + 1}. ${t(regen.plan.replaces
+                ? 'Aktive Obergrenze erreicht: Quellbild und aktives Modell dieser Variante werden durch die kostenpflichtige Generierung ersetzt. Frühere Meshes bleiben in der Galerie.'
+                : 'Diese bestehende Variante hat kein Mesh. Ihre Quellbilder werden neu erzeugt und ihr Modell wird gefüllt.')}`
+              : t('Eine neue Modellvariante wird angelegt. Die Generierung verursacht die konfigurierten Backendkosten.')}
           backends={meshBackends}
           defaultBackend={meshDefault
             || (meshBackends.length === 1 ? meshBackends[0].name : '')}
@@ -523,45 +531,46 @@ export function PropsTab() {
           views={regen?.meshOnly && regen.views?.length
             ? regen.views.map((view) => ({ view, options: [{ value: view, label: t('stored') }] }))
             : undefined}
-          onGenerate={(backend, opts) => {
-            const target = regen
+          onGenerate={async (backend, opts) => {
+            const request = regen
             setRegen(null)
-            if (!target) return
-            // A RE-MESH refines the variant the detail has open, so it goes to
-            // that variant's route; the plain regenerate stays unqualified,
-            // which is what makes it APPEND another variant.
-            const base = `/world/props/${encodeURIComponent(target.id)}`
-            void apiPost<{ status?: string }>(
-              target.meshOnly
-                ? `${base}/variants/${target.variant || 0}/generate`
-                : `${base}/generate`,
-              { mesh_backend: backend,
-                ...(target.meshOnly ? { mesh_only: true } : {}),
-                ...(opts.face_num ? { face_num: opts.face_num } : {}),
-                ...(opts.texture_size ? { texture_size: opts.texture_size } : {}),
-                // `[]` is a VALUE here, not "nothing" (ruling V9): it is how
-                // the dialog says its stage toggle is off, and the server must
-                // see it or it falls back to the variant's low budget.
-                ...(opts.lod_faces !== undefined
-                  ? { lod_faces: opts.lod_faces } : {}),
-                ...(opts.tier ? { tier: opts.tier } : {}),
-                // The views the dialog had ticked — `{}` (nothing picked)
-                // becomes `[]`, which is the front alone.
-                ...(opts.views ? { views: Object.keys(opts.views) } : {}) })
-              .then((d) => {
-                toast(d?.status === 'already_running'
-                  // The refusal is per (variant, backend) — a re-mesh names
-                  // its variant, the appending run has the target picked for
-                  // it, so the two say different things.
-                  ? (target.meshOnly
-                    ? t('This variant is already generating.')
-                    : t('This prop is already generating into that variant.'))
-                  : target.meshOnly
-                    ? t('Meshing the source image…')
-                    : t('Generating another model variant…'))
-                startPoll()
-              })
-              .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+            if (!request) return
+            const base = `/world/props/${encodeURIComponent(request.id)}`
+            try {
+              const current = await apiGet<{ variants: PropVariant[]; max: number }>(`${base}/variants`)
+              let index: number | undefined
+              if (request.meshOnly) {
+                const target = await resolveVariantAfterBarrier(request.uid || '', async () => true,
+                  async () => current.variants)
+                if (!target) return
+                index = target.index
+              } else {
+                const plan = propGenerationTarget(current.variants, current.max)
+                const shown = request.plan
+                const unchanged = plan.kind === 'append' ? shown?.kind === 'append'
+                  : shown?.kind === 'existing' && shown.uid === plan.uid && shown.index === plan.index
+                    && shown.replaces === plan.replaces
+                if (!unchanged) {
+                  setRegen({ ...request, plan,
+                    variant: plan.kind === 'existing' ? plan.index : undefined,
+                    uid: plan.kind === 'existing' ? plan.uid : undefined })
+                  toast(t('Das Generierungsziel wurde geändert. Neues Ziel und Ersetzung vor dem Start prüfen.'), 'error')
+                  return
+                }
+                if (plan.kind === 'existing') index = plan.index
+              }
+              const answer = await apiPost<{ status?: string }>(
+                index === undefined ? `${base}/generate` : `${base}/variants/${index}/generate`,
+                { mesh_backend: backend, ...(request.meshOnly ? { mesh_only: true } : {}),
+                  ...(opts.face_num ? { face_num: opts.face_num } : {}),
+                  ...(opts.texture_size ? { texture_size: opts.texture_size } : {}),
+                  ...(opts.lod_faces !== undefined ? { lod_faces: opts.lod_faces } : {}),
+                  ...(opts.tier ? { tier: opts.tier } : {}),
+                  ...(opts.views ? { views: Object.keys(opts.views) } : {}) })
+              toast(answer?.status === 'already_running' ? t('This variant is already generating.')
+                : t('Generierung für das bestätigte Ziel gestartet.'))
+              startPoll()
+            } catch (error) { toast(t('Error') + ': ' + (error as Error).message, 'error') }
           }}
           onClose={() => setRegen(null)}
         />
@@ -569,36 +578,36 @@ export function PropsTab() {
           prop={imgRegen?.prop || null}
           variant={imgRegen?.variant || 0}
           view={imgRegen?.view || 'front'}
-          refVariants={imgRegen?.refVariants || []}
+          refVariants={imgRegen?.refs.map((entry) => entry.index) || []}
           subject={imgRegen?.subject}
           image={imgRegen?.image}
           backends={imageBackends}
           cacheBump={cacheBump}
-          onGenerate={(imageBackend, prompt, negative, referenceVariant) => {
-            const target = imgRegen
+          onGenerate={async (imageBackend, prompt, negative, referenceVariant) => {
+            const request = imgRegen
             setImgRegen(null)
-            if (!target) return
-            // The variant-scoped route: the image belongs to the variant, so
-            // the render lands in ITS file and leaves every other one alone.
-            // `view` says which of its four pictures — an extra view never
-            // touches the front.
-            void apiPost<{ status?: string }>(
-              `/world/props/${encodeURIComponent(target.prop.id)}/variants/${target.variant}/generate`,
-              { image_only: true, image_backend: imageBackend,
-                prompt, negative, view: target.view,
-                // `front_reference` is the SWITCH, `reference_variant` says
-                // whose front image — the pair the two generate routes read
-                // (`_view_args`).
-                front_reference: referenceVariant !== null,
-                ...(referenceVariant !== null
-                  ? { reference_variant: referenceVariant } : {}) })
-              .then((d) => {
-                toast(d?.status === 'already_running'
-                  ? t('This variant is already generating.')
-                  : t('Rendering a new source image…'))
-                startPoll()
-              })
-              .catch((e) => toast(t('Error') + ': ' + (e as Error).message, 'error'))
+            if (!request) return
+            try {
+              const base = `/world/props/${encodeURIComponent(request.prop.id)}`
+              const current = await apiGet<{ variants: PropVariant[] }>(`${base}/variants`)
+              const target = await resolveVariantAfterBarrier(request.uid, async () => true,
+                async () => current.variants)
+              if (!target) return
+              let referenceIndex: number | undefined
+              if (referenceVariant !== null) {
+                const uid = request.refs.find((entry) => entry.index === referenceVariant)?.uid || ''
+                const reference = await resolveVariantAfterBarrier(uid, async () => true,
+                  async () => current.variants)
+                if (!reference) return
+                referenceIndex = reference.index
+              }
+              const answer = await apiPost<{ status?: string }>(`${base}/variants/${target.index}/generate`,
+                { image_only: true, image_backend: imageBackend, prompt, negative, view: request.view,
+                  front_reference: referenceIndex !== undefined,
+                  ...(referenceIndex !== undefined ? { reference_variant: referenceIndex } : {}) })
+              toast(answer?.status === 'already_running' ? t('This variant is already generating.') : t('Rendering a new source image…'))
+              startPoll()
+            } catch (error) { toast(t('Error') + ': ' + (error as Error).message, 'error') }
           }}
           onClose={() => setImgRegen(null)}
         />

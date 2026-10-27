@@ -23,6 +23,8 @@ import type {
   PropAreasInfo, PropFull, PropLight, PropMarker, PropSlotValues, PropSourceImage,
   PropVariant, PropView, PropWorkspaceArea,
 } from './propTypes'
+import { resolveVariantAfterBarrier, propGenerationSubject, propGenerationTarget,
+  type PropGenerationTarget } from './propOperations'
 
 // Starting values from the prop-lights spec, section 7.1.
 export const LIGHT_PRESETS: Array<{ name: string; light: Omit<PropLight, 'at'> }> = [
@@ -115,10 +117,10 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
    *  are the extra views this variant holds a file for, so the dialog can
    *  offer exactly those to the multi-view alias: `PropFull` has no variant
    *  list, the detail owns it. */
-  onRegenerateMesh: (variant: number, existingViews: PropView[]) => void
+  onRegenerateMesh: (target: PropVariant, existingViews: PropView[]) => void
   /** Re-run the source→mesh chain with the stored description/name — this
    *  APPENDS another model variant. */
-  onRegenerate: () => void
+  onRegenerate: (target: PropGenerationTarget) => void
   /** Render a NEW source image for the SELECTED variant only — its mesh stays
    *  until re-meshed, and no other variant's image is touched. `view` says
    *  WHICH of the four pictures is being rendered, `image` is that view's own
@@ -126,8 +128,8 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
    *  and `refVariants` names every variant that holds a front image — the
    *  pictures the dialog may offer as this render's appearance reference.
    *  `PropFull` has no variant list, the detail owns it. */
-  onRegenerateImage: (variant: number, view: PropView, image?: PropSourceImage,
-    subject?: string, refVariants?: number[]) => void
+  onRegenerateImage: (target: PropVariant, view: PropView, image: PropSourceImage | undefined,
+    subject: string, refs: PropVariant[], author: PropFull) => void
   /** Reload the prop + bust the image cache — generations run in the
    *  background, this fetches the current state on demand. */
   onRefresh: () => void
@@ -199,6 +201,16 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setOperation(null)
   }, [])
   useEffect(() => () => { operationRef.current?.resolve(false) }, [])
+  const prepareVariantOperation = useCallback(async (uid: string, label: string) => {
+    try {
+      return await resolveVariantAfterBarrier(uid, () => beforeImmediate(label),
+        async () => (await apiGet<{ variants: PropVariant[] }>(
+          `/world/props/${enc}/variants`)).variants)
+    } catch (error) {
+      toast((error as Error).message, 'error')
+      return null
+    }
+  }, [beforeImmediate, enc, toast])
   const [saving, setSaving] = useState(false)
   /** The Discard button's second click (no `window.confirm` in this UI). */
   const [discardArmed, setDiscardArmed] = useState(false)
@@ -222,11 +234,12 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // The variant everything below the strip works on. Index, not stem: that is
   // what every variant-scoped route takes.
   const [variant, setVariant] = useState(0)
-  const onVariantDeleted = useCallback((index: number) => {
-    // Preserve drafts created during the write. A removed UID becomes a
-    // conflict on the next snapshot, never an unnoticed discarded edit.
-    setVariant((current) => current > index ? current - 1
-      : current === index ? Math.max(0, index - 1) : current)
+  const selectedUid = useRef('')
+  selectedUid.current = serverVariants.find((entry) => entry.index === variant)?.uid || ''
+  const onVariantDeleted = useCallback((_index: number) => {
+    // Selection follows the surviving UID when the fresh list arrives.
+    setPreviewFile('')
+    setPlacing(null)
   }, [])
   // Dropping the list with the selection matters: a record of the PREVIOUS
   // prop would otherwise answer for the same index until the reload lands.
@@ -252,6 +265,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
         `/world/props/${enc}/variants`)
       if (request !== variantRequest.current) return
       const list = d.variants || []
+      const previousUid = selectedUid.current
       setVariantLoadError('')
       setServerVariants(list)
       setVariantRevision(d.revision)
@@ -261,8 +275,8 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
       // Clamping belongs HERE and not in an effect of its own: a deletion
       // shortens the list, and a separate effect would fight the strip, which
       // selects the freshly added slot before its record has arrived.
-      setVariant((i) => (list.some((v) => v.index === i)
-        ? i : list[0]?.index ?? 0))
+      setVariant((i) => list.find((entry) => entry.uid === previousUid)?.index
+        ?? list[Math.min(i, Math.max(0, list.length - 1))]?.index ?? 0)
     } catch (error) {
       if (request !== variantRequest.current) return
       setVariantLoadError((error as Error).message)
@@ -305,13 +319,6 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   const variants = useMemo(() => applyVariantDraft(serverVariants, buf),
     [serverVariants, buf])
   const shownVariant = variants.find((v) => v.index === variant) || null
-  // Every variant that HAS a front image — the pictures a render may take as
-  // its appearance reference (the image dialog drops the target itself for a
-  // front render). Read off the SERVER list, not the draft: a reference is a
-  // file, and an unsaved field edit does not create or remove one.
-  const refVariants = useMemo(
-    () => serverVariants.filter((v) => v.has_source).map((v) => v.index),
-    [serverVariants])
   // Is the variant the detail has OPEN the one that is generating? Every
   // variant-scoped action below reads this instead of the prop-level flag —
   // rendering variant 3's image must not put "Generating…" on variant 1.
@@ -385,7 +392,10 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   const [areaFrontal, setAreaFrontal] = useState(false)
   const waterController = useModelWater(
     shownHasMesh ? `/world/props/${enc}/variants/${variant}/water` : '',
-    `${reloadKey}-${prop.revision}-${JSON.stringify(variantRotation)}`, beforeImmediate, meshesChanged)
+    `${reloadKey}-${prop.revision}-${JSON.stringify(variantRotation)}`, async () => {
+      const target = await prepareVariantOperation(shownVariant?.uid || '', t('Change water'))
+      return target ? `/world/props/${enc}/variants/${target.index}/water` : null
+    }, meshesChanged, shownVariant?.uid || '')
   const { setShape: cancelWaterPlacement } = waterController
   /** The kind the polygon tool is drawing for ('' = not drawing). */
   const [drawKind, setDrawKind] = useState('')
@@ -456,15 +466,20 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
    *  lock, hands a fresh payload to the reader above (which drops it if the
    *  admin has moved on) and maps a failure onto a toast. */
   const runAreas = useCallback((what: string,
-    call: () => Promise<unknown>): void => {
+    call: (index: number) => Promise<unknown>): void => {
     setAreaBusy(what)
     void (async () => {
-      if (previewFile || !await beforeImmediate(t('Change model surfaces'))) {
+      const target = previewFile ? null : await prepareVariantOperation(
+        shownVariant?.uid || '', t('Change model surfaces'))
+      if (!target) {
         setAreaBusy('')
         return
       }
       try {
-        const answer = await call() as PropAreasInfo | undefined
+        if (variantAreas && target.model_file !== variantAreas.model_file) {
+          throw new Error(t('Das Modell wurde geändert. Flächenwerkzeug neu öffnen.'))
+        }
+        const answer = await call(target.index) as PropAreasInfo | undefined
         if (answer && Array.isArray(answer.areas)) onAreasInfo(answer)
         else reloadAreas()
         onRefresh()
@@ -475,7 +490,8 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
         setAreaBusy('')
       }
     })()
-  }, [onAreasInfo, reloadAreas, onRefresh, t, toast, beforeImmediate, previewFile])
+  }, [onAreasInfo, reloadAreas, onRefresh, t, toast, prepareVariantOperation,
+    shownVariant?.uid, variantAreas, previewFile])
   /** The closed ring, as flat R1 triangle indices of the mesh on screen. The
    *  door leaf is a BODY (E2): its ring is a prism and the server cuts the
    *  same prism through what it gets. A surface kind is picked by sight. */
@@ -486,7 +502,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
       toast(t('Nothing was inside the outline — draw around the surface, facing it.'), 'error')
       return
     }
-    runAreas('draw', () => apiPost(`/world/props/${enc}/areas?variant=${variant}`,
+    runAreas('draw', (index) => apiPost(`/world/props/${enc}/areas?variant=${index}`,
       { mode: 'manual', faces, kind, through: kind === 'leaf' }))
   }, [drawKind, enc, variant, runAreas, t, toast])
   /** MAY THE TOOLS SPEAK ABOUT WHAT IS ON SCREEN? Only while the viewer shows
@@ -708,12 +724,13 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // overwrite another version's picture.
   const sourceUploadRef = useRef<HTMLInputElement>(null)
   const uploadSource = useCallback(async (file: File, view: PropView = 'front') => {
-    if (!await beforeImmediate(t('Upload source image'))) return
+    const target = await prepareVariantOperation(shownVariant?.uid || '', t('Upload source image'))
+    if (!target) return
     try {
       const fd = new FormData()
       fd.append('file', file)
       const res = await fetch(
-        `/world/props/${enc}/variants/${variant}/source${view === 'front' ? '' : `?view=${view}`}`,
+        `/world/props/${enc}/variants/${target.index}/source${view === 'front' ? '' : `?view=${view}`}`,
         { method: 'POST', body: fd, credentials: 'same-origin' })
       const body = await res.json().catch(() => null)
       if (!res.ok) throw new Error(body?.detail?.toString?.() || `HTTP ${res.status}`)
@@ -722,21 +739,22 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, variant, meshesChanged, t, toast, beforeImmediate])
+  }, [enc, shownVariant?.uid, meshesChanged, t, toast, prepareVariantOperation])
 
   // Drop ONE extra view's picture. The front is not deletable here — it is
   // the variant's source image, and a variant without one cannot be meshed
   // at all; an extra view is an addition and goes back to "none".
   const deleteView = useCallback(async (view: PropView) => {
-    if (!await beforeImmediate(t('Delete view image'))) return
+    const target = await prepareVariantOperation(shownVariant?.uid || '', t('Delete view image'))
+    if (!target) return
     try {
-      await apiDelete(`/world/props/${enc}/variants/${variant}/source?view=${view}`)
+      await apiDelete(`/world/props/${enc}/variants/${target.index}/source?view=${view}`)
       await meshesChanged()
       toast(t('Deleted'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, variant, meshesChanged, t, toast, beforeImmediate])
+  }, [enc, shownVariant?.uid, meshesChanged, t, toast, prepareVariantOperation])
   // Which tile's × is armed (the two-click delete of this admin, never a
   // window.confirm), and which view the shared file input is filling.
   const [armedView, setArmedView] = useState<PropView | null>(null)
@@ -770,11 +788,19 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setDimDraft({})
     setDescDraft(null)
     setDescOpen(false)
-  }, [prop.id, variant])
+  }, [prop.id, shownVariant?.uid])
 
   // One edited edge, three answers — the whole row is rewritten, so no field
   // of it keeps a draft (a stale one would show a number the server never
   // got). The proportions come from the mesh ON SCREEN when it is loaded.
+  const editDim = (key: DimKey, raw: string) => {
+    setDimDraft((draft) => ({ ...draft, [key]: raw }))
+    if (!shownVariant) return
+    const next = dimsPatch(shownVariant.dims, key, raw,
+      dimRatios(shownVariant.dims, shownBbox, variantRotation))
+    // Even incomplete numeric text pins the field's author baseline.
+    queueVariant(variant, { dims: next || shownVariant.dims })
+  }
   const commitDim = useCallback((key: DimKey, raw: string) => {
     setDimDraft({})
     if (!shownVariant) return
@@ -807,7 +833,10 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     if (!shownVariant) return
     const next = facePatch({ high: shownVariant.target_faces_high,
       low: shownVariant.target_faces_low }, which, raw)
-    if (next) queueVariant(variant, { face_targets: next })
+    queueVariant(variant, { face_targets: next || {
+      target_faces_high: shownVariant.target_faces_high ?? null,
+      target_faces_low: shownVariant.target_faces_low ?? null,
+    } })
   }, [shownVariant, queueVariant, variant])
 
   // THE FIX IS THE FILE'S (v2 E1): the route takes the variant, and what comes
@@ -815,10 +844,12 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // and the strip's dims all turn with it, so this reloads the meshes rather
   // than the record alone.
   const rotate = useCallback(async (axis: 'x' | 'y' | 'z') => {
-    if (!await beforeImmediate(t('Orientation fix'))) return
-    const cur = variantRotation || {}
+    const target = await prepareVariantOperation(shownVariant?.uid || '', t('Orientation fix'))
+    if (!target) return
     try {
-      await apiPost(`/world/props/${enc}/rotation?variant=${variant}`, {
+      const fresh = await apiGet<PropAreasInfo>(`/world/props/${enc}/areas?variant=${target.index}`)
+      const cur = fresh.rotation || {}
+      await apiPost(`/world/props/${enc}/rotation?variant=${target.index}`, {
         x: cur.x || 0, y: cur.y || 0, z: cur.z || 0,
         [axis]: ((cur[axis] || 0) + 90) % 360,
       })
@@ -826,23 +857,25 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [variantRotation, enc, variant, meshesChanged, t, toast, beforeImmediate])
+  }, [enc, shownVariant?.uid, meshesChanged, t, toast, prepareVariantOperation])
 
   const setRotationAxis = useCallback(async (axis: 'x' | 'y' | 'z', raw: string) => {
     const n = parseFloat(raw)
     const v = Number.isFinite(n) ? ((n % 360) + 360) % 360 : 0
     if (v === (variantRotation?.[axis] || 0)) return
-    if (!await beforeImmediate(t('Orientation fix'))) return
-    const cur = variantRotation || {}
+    const target = await prepareVariantOperation(shownVariant?.uid || '', t('Orientation fix'))
+    if (!target) return
     try {
-      await apiPost(`/world/props/${enc}/rotation?variant=${variant}`, {
+      const fresh = await apiGet<PropAreasInfo>(`/world/props/${enc}/areas?variant=${target.index}`)
+      const cur = fresh.rotation || {}
+      await apiPost(`/world/props/${enc}/rotation?variant=${target.index}`, {
         x: cur.x || 0, y: cur.y || 0, z: cur.z || 0, [axis]: v,
       })
       await meshesChanged()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [variantRotation, enc, variant, meshesChanged, t, toast, beforeImmediate])
+  }, [variantRotation, enc, shownVariant?.uid, meshesChanged, t, toast, prepareVariantOperation])
 
   // The walkable surface of the SHOWN variant's mesh. Blender bakes it in the
   // background, so the answer is only "queued" — but the record is reloaded
@@ -851,15 +884,16 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // on this panel refreshes the record it edited. Without it the line kept
   // saying "baked 33×33" until something else happened to reload the prop.
   const bakeSurface = useCallback(async () => {
-    if (!await beforeImmediate(t('Bake surface'))) return
+    const target = await prepareVariantOperation(shownVariant?.uid || '', t('Bake surface'))
+    if (!target) return
     try {
-      await apiPost(`/world/props/${enc}/surface`, { variant })
+      await apiPost(`/world/props/${enc}/surface`, { variant: target.index })
       toast(t('Baking the surface — this runs in the background.'))
       await onChanged()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     }
-  }, [enc, variant, onChanged, t, toast, beforeImmediate])
+  }, [enc, shownVariant?.uid, onChanged, t, toast, prepareVariantOperation])
 
   /** The Remove button's second click (no `window.confirm` in this UI). */
   const [removeArmed, setRemoveArmed] = useState(false)
@@ -873,11 +907,12 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // `meshesChanged` reloads the VARIANT records, and it is the shown variant's
   // `surface_status` the line reads, not the prop record's.
   const removeSurface = useCallback(async () => {
-    if (!await beforeImmediate(t('Remove surface'))) return
+    const target = await prepareVariantOperation(shownVariant?.uid || '', t('Remove surface'))
+    if (!target) return
     setRemoveArmed(false)
     try {
       const d = await apiDelete<{ deleted?: boolean }>(
-        `/world/props/${enc}/surface?variant=${variant}`)
+        `/world/props/${enc}/surface?variant=${target.index}`)
       toast(d?.deleted ? t('Surface removed.') : t('There was no surface to remove.'))
       await meshesChanged()
     } catch (e) {
@@ -891,7 +926,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       }
     }
-  }, [enc, variant, meshesChanged, t, toast, beforeImmediate])
+  }, [enc, shownVariant?.uid, meshesChanged, t, toast, prepareVariantOperation])
 
   // Object-local PLACES (A4, plan-posen-plaetze.md § 4) — same vocabulary as
   // room markers, but the frame is the MESH's own bounding box: `at` =
@@ -1029,6 +1064,32 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setPlacing(null)
   }, [placing, markers, firstGroup, saveMarkers, light, queueVariant, variant])
   const actions = draftValue(buf, GENERAL_TARGET, 'actions', prop.actions || [])
+  const openImageGeneration = async (view: PropView) => {
+    const target = await prepareVariantOperation(shownVariant?.uid || '', t('New image'))
+    if (!target) return
+    try {
+      const [author, refs] = await Promise.all([
+        apiGet<{ prop: PropFull }>(`/world/props/${enc}`),
+        apiGet<{ variants: PropVariant[] }>(`/world/props/${enc}/variants`),
+      ])
+      onRegenerateImage(target, view, view === 'front' ? target.image : target.images?.[view],
+        propGenerationSubject(author.prop, target),
+        refs.variants.filter((entry) => entry.has_source), author.prop)
+    } catch (error) { toast((error as Error).message, 'error') }
+  }
+  const openMeshGeneration = async () => {
+    const target = await prepareVariantOperation(shownVariant?.uid || '', t('3D from this image'))
+    if (target) onRegenerateMesh(target,
+      (['back', 'left', 'right'] as PropView[]).filter((view) => !!target.images?.[view]))
+  }
+  const openRegeneration = async () => {
+    if (!await beforeImmediate(t('Regenerate'))) return
+    try {
+      const current = await apiGet<{ variants: PropVariant[]; max: number }>(
+        `/world/props/${enc}/variants`)
+      onRegenerate(propGenerationTarget(current.variants, current.max))
+    } catch (error) { toast((error as Error).message, 'error') }
+  }
   const navigate = (next: PropWorkspaceArea) => {
     setArea(next)
     setMobilePane('editor')
@@ -1044,10 +1105,10 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     armPlacing, selMarker, patchMarker, groupOptions, removeMarker, shownDims,
     setMarkerAt, selCapacity, selPoses, setPreview, selPoseIdx, variantBusy,
     pending, shownImage, srcOk, enc, variant, reloadKey, setSrcOk, enlarge,
-    imageTip, variants, onRegenerateImage, shownVariant, refVariants,
+    imageTip, variants, openImageGeneration, shownVariant,
     sourceUploadRef, uploadSource, onRefresh, setUploadView, viewUploadRef,
-    armedView, setArmedView, deleteView, uploadView, onRegenerateMesh,
-    dimDraft, setDimDraft, commitDim, commitSink, descOpen, descDraft,
+    armedView, setArmedView, deleteView, uploadView, openMeshGeneration,
+    dimDraft, editDim, commitDim, commitSink, descOpen, descDraft,
     setDescOpen, setDescDraft, commitDesc, variantAreas, rotate,
     variantRotation, setRotationAxis, areasFailed, surfaceLabel, bakeSurface,
     shownSurface, removeArmed, removeSurface, setRemoveArmed, showStoredFile,
@@ -1058,12 +1119,13 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setShownBbox, poseCatalog, previewPose, shownBbox, scaleFigure, onPickPoint,
     setScaleFigure, dirtyCount, saving, save, discard, discardArmed,
     setDiscardArmed, setVariant, generatingVariants, worldSeasons,
-    currentSeason, onDelete, armedDelete, onRegenerate, buf, baseRevision,
+    currentSeason, onDelete, armedDelete, openRegeneration, buf, baseRevision,
     actions, conflicts, saveError, resolveConflict, beforeImmediate,
     operation, finishOperation,
     onVariantDeleted,
     area, navigate, mobilePane, setMobilePane,
     revisionReady, variantLoadError,
+    prepareVariantOperation,
   }
 }
 
