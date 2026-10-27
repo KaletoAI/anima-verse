@@ -20,7 +20,7 @@ from typing import Any, Dict
 
 from app.plugins.base import PluginSkill
 from app.plugins.context import PluginContext
-from app.skills.base import ToolSpec
+from app.skills.base import ToolRefusal, ToolSpec
 
 
 #: The decision point of this package: an NPC invited to a pair activity
@@ -90,18 +90,18 @@ class InteractSkill(PluginSkill):
 
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
-            return f"{self.name} skill is disabled."
+            return ToolRefusal(f"{self.name} skill is disabled.")
         data = self._parse_base_input(raw_input)
         actor = (data.get("agent_name") or "").strip()
         if not actor:
-            return "Error: character_name missing."
+            return ToolRefusal("character_name missing.")
         if data.get("execution_id"):
             return self._answer_prop(actor, data)
         partner_raw = str(data.get("partner") or data.get("name")
                           or data.get("target") or "").strip()
         action = str(data.get("action") or data.get("pose") or "").strip()
         if not partner_raw or not action:
-            return "Error: pass {\"partner\": \"<name>\", \"action\": \"<what you do together>\"}."
+            return ToolRefusal('pass {"partner": "<name>", "action": "<what you do together>"}.')
         try:
             from app.core import interaction_engine as IE
             from app.core.pose_catalog import resolve_to_catalog
@@ -110,12 +110,12 @@ class InteractSkill(PluginSkill):
             partner = next((n for n in available
                             if n.lower() == partner_raw.lower()), "")
             if not partner:
-                return f"Character '{partner_raw}' not found. Available: {', '.join(available)}"
+                return ToolRefusal(f"Character '{partner_raw}' not found. Available: {', '.join(available)}")
             known = dict(IE.partner_poses())
             key, _how = resolve_to_catalog(action, "pose")
             if key not in known:
-                return (f"'{action}' is not a two-person action. "
-                        f"Known: {', '.join(sorted(known)) or 'none'}.")
+                return ToolRefusal(f"'{action}' is not a two-person action. "
+                                   f"Known: {', '.join(sorted(known)) or 'none'}.")
             # The other one already asked US for this very thing: calling the
             # verb back is how a character says yes. Answering an invitation
             # with a counter-invitation would otherwise leave two open
@@ -138,23 +138,23 @@ class InteractSkill(PluginSkill):
                     # already running and the pair starts on arrival.
                     return (f"{actor} agrees and walks over to {partner} "
                             f"— the {key} starts when they get there.")
-                return f"Cannot: {res.get('reason') or res.get('status')}"
+                return ToolRefusal(f"Cannot: {res.get('reason') or res.get('status')}")
             if _is_refusal(data):
                 # Nothing to refuse — never turn a "no" into a fresh proposal
                 # of the very thing that was refused.
-                return f"{partner} has not asked {actor} for anything."
+                return ToolRefusal(f"{partner} has not asked {actor} for anything.")
             blocked = IE.check_can_pair(actor, partner)
             if blocked:
-                return f"Cannot: {blocked}"
+                return ToolRefusal(f"Cannot: {blocked}")
             invite_id = IE.create_invite(actor, partner, key)
             if not invite_id:
-                return f"Cannot ask {partner} right now."
+                return ToolRefusal(f"Cannot ask {partner} right now.")
             return self._ask(actor, partner, key, invite_id)
         except ValueError as e:
-            return f"Cannot: {e}"
+            return ToolRefusal(f"Cannot: {e}")
         except Exception as e:
             self.ctx.logger.exception("%s [%s] failed: %s", self.name, actor, e)
-            return f"Error in {self.name}: {e}"
+            return ToolRefusal(f"Error in {self.name}: {e}")
 
     def _answer_prop(self, actor: str, data: Dict[str, Any]) -> str:
         from app.core import prop_action_engine as actions, prop_action_store as runs
@@ -220,9 +220,9 @@ class InteractSkill(PluginSkill):
         if status == "approaching":
             return f"{partner} agrees and comes over for the {key}."
         if status == "declined":
-            return f"{partner} does not want to {key} right now."
+            return ToolRefusal(f"{partner} does not want to {key} right now.")
         if status == "failed":
-            return f"{partner} cannot right now: {row.get('reason') or 'The activity could not start'}."
+            return ToolRefusal(f"{partner} cannot right now: {row.get('reason') or 'The activity could not start'}.")
         if status in ("stale", "cancelled"):
-            return f"{partner} cannot right now."
+            return ToolRefusal(f"{partner} cannot right now.")
         return ""

@@ -646,7 +646,7 @@ def build_chat_context(
 
 def execute_tool_matches(ctx: Dict[str, Any], responder: str,
                          matches: List[tuple], *, rp_text: str,
-                         incoming_message: str) -> None:
+                         incoming_message: str) -> List[tuple]:
     """Run the tool calls of ONE reply under the respond lane's rules.
 
     Shared by the rp_first tool phase (matches from the tool LLM's decision)
@@ -656,30 +656,50 @@ def execute_tool_matches(ctx: Dict[str, Any], responder: str,
     its result back); a SUPPRESS_IN_PERSON verb is skipped while the medium
     is in_person (one does not walk away in the turn one answers in); a
     DEFERRED tool runs in a daemon thread with the RP text injected;
-    everything else runs right here. Nothing raises out of this function.
+    everything else runs right here. Returns (name, input, result) rows for
+    synchronous calls and None results for scheduled deferred work. Refusals
+    remain machine-readable; exceptions become terminal refusals.
     """
     from app.core.streaming import _inject_rp_context
+    from app.skills.base import ToolRefusal
+    from app.core.streaming import is_error_result
+    results: List[tuple] = []
+    # A pose may otherwise undo a pair that another call just started.
+    # Dependencies are declared by ToolSpecs, never by core tool names.
+    before = {tool.name: set(getattr(tool, "run_before", ()))
+              for tool in ctx.get("agent_tools", ())}
+    pending = list(matches)
+    ordered = []
+    while pending:
+        ready = next((i for i, (name, _) in enumerate(pending)
+                      if not any(name in before.get(other, ())
+                                 for other, _ in pending if other != name)), None)
+        if ready is None:
+            ordered.extend(pending)  # A declaration cycle retains model order.
+            break
+        ordered.append(pending.pop(ready))
     _deferred_set = ctx.get("deferred_tools") or set()
     _content_set = ctx.get("content_tools") or set()
     _deferred_matches: List[tuple] = []
-    for _name, _inp in matches:
+    for _name, _inp in ordered:
         _fn = ctx["tools_dict"].get(_name)
         if not _fn:
             # The model called a tool this character does not have (name
             # mismatch or not enabled). Silently dropping it used to show up
             # as "tool call in the log, never executed" — logged so the
             # reason is visible.
-            logger.warning("run_chat_turn[%s]: Tool-Call '%s' ohne Executor "
-                           "(nicht verfügbar/Name-Mismatch) — übersprungen "
-                           "(verfügbar: %s)", responder, _name,
+            logger.warning("run_chat_turn[%s]: tool '%s' has no executor "
+                           "(available: %s)", responder, _name,
                            ", ".join(sorted(ctx["tools_dict"].keys())))
+            results.append((_name, _inp, ToolRefusal("Tool is unavailable.")))
             continue
         if _name in _content_set:
-            logger.info("run_chat_turn[%s]: Content-Tool %s übersprungen "
-                        "(kein Retry-Pfad in run_chat_turn)", responder, _name)
+            logger.info("run_chat_turn[%s]: skipping content tool %s "
+                        "(no narrative retry in run_chat_turn)", responder, _name)
             continue
         if _name in _deferred_set:
             _deferred_matches.append((_name, _inp))
+            results.append((_name, _inp, None))
             continue
         # A (plan-follow-room-conversation-bug): whoever ANSWERS in an
         # in-person conversation does not walk away in the same turn.
@@ -690,16 +710,21 @@ def execute_tool_matches(ctx: Dict[str, Any], responder: str,
         # act and NOT affected.
         from app.core.streaming import _suppress_in_person_tool_names
         if _name in _suppress_in_person_tool_names() and ctx.get("medium") == "in_person":
-            logger.info("run_chat_turn[%s]: %s unterdrückt — Antwort im selben "
-                        "in-person-Turn (man geht nicht weg, während man spricht)",
+            logger.info("run_chat_turn[%s]: suppressing %s during an in-person reply",
                         responder, _name)
             continue
         try:
-            _fn(_inp)
-            logger.info("run_chat_turn[%s]: Tool ausgeführt → %s", responder, _name)
+            _result = _fn(_inp)
+            results.append((_name, _inp, _result))
+            if isinstance(_result, ToolRefusal) or is_error_result(_result):
+                logger.warning("run_chat_turn[%s]: tool %s refused: %s",
+                               responder, _name, _result)
+            else:
+                logger.info("run_chat_turn[%s]: tool ran → %s", responder, _name)
         except Exception as _te:
-            logger.warning("run_chat_turn[%s]: Tool %s fehlgeschlagen: %s",
+            logger.warning("run_chat_turn[%s]: tool %s failed: %s",
                            responder, _name, _te)
+            results.append((_name, _inp, ToolRefusal(str(_te))))
     if _deferred_matches:
         # Post-RP execution in a daemon thread: does not block the chat
         # answer (a skill's execute may contain LLM calls for the prompt
@@ -755,6 +780,93 @@ def execute_tool_matches(ctx: Dict[str, Any], responder: str,
             for completion in _source_completions:
                 _finish_source_work(completion)
             logger.exception("run_chat_turn[%s]: deferred worker could not start", responder)
+    return results
+
+
+def _execute_tools_with_correction(ctx: Dict[str, Any], responder: str,
+                                   matches: List[tuple], *, rp_text: str,
+                                   incoming_message: str) -> List[tuple]:
+    """Dispatch once, then correct explicitly redirectable refusals once.
+
+    Uses only the intent LLM already resolved for this turn. No successful
+    original tool name is eligible again, even if the model repeats it.
+    """
+    from app.skills.base import ToolRefusal
+    from app.core.streaming import (decision_tools, is_error_result,
+                                    report_deferred_failure)
+
+    def failed(result):
+        return isinstance(result, ToolRefusal) or is_error_result(result)
+
+    results = execute_tool_matches(ctx, responder, matches, rp_text=rp_text,
+                                   incoming_message=incoming_message)
+    successful = {name for name, _, result in results if not failed(result)}
+    attempted = {name for name, _, _ in results}
+    refusals = [(name, inp, result) for name, inp, result in results
+                if isinstance(result, ToolRefusal) and result.correction_tools
+                and not successful.intersection(result.correction_tools)]
+    terminal = [(name, result) for name, _, result in results
+                if failed(result) and not (
+                    isinstance(result, ToolRefusal) and result.correction_tools)]
+    declared = {target for _, _, result in refusals for target in result.correction_tools}
+    available = decision_tools(ctx["tools_dict"],
+                               suppress_in_person=ctx.get("medium") == "in_person")
+    allowed = {name: fn for name, fn in available.items()
+               if name in declared and name not in attempted
+               and name not in (ctx.get("deferred_tools") or ())
+               and name not in (ctx.get("content_tools") or ())}
+    if refusals:
+        reason = ""
+        corrected = []
+        if not allowed:
+            reason = "No declared correction tool is available."
+        elif ctx.get("tool_llm") is None:
+            reason = "No tool LLM is available for correction."
+        else:
+            try:
+                from app.core.llm_queue import get_llm_queue, Priority
+                from app.core.prompt_templates import render
+                from app.core.tool_formats import find_tool_calls, get_format
+                prompt = render(
+                    "chat/tool_correction.md", actor=responder,
+                    incoming_message=incoming_message, narrative=rp_text,
+                    failures=[{"tool": name, "input": inp, "reason": str(result)}
+                              for name, inp, result in results if failed(result)],
+                    successful_tools=sorted(successful), allowed_tools=sorted(allowed),
+                    tool_instructions=get_format(ctx.get("tool_format", "tag"))["instruction"])
+                response = get_llm_queue().submit(
+                    task_type="intent", priority=Priority.CHAT, llm=ctx["tool_llm"],
+                    messages_or_prompt=[{"role": "user", "content": prompt}],
+                    agent_name=responder, label=f"Tool correction: {responder}")
+                correction_matches = find_tool_calls(
+                    ctx.get("tool_format", "tag"), getattr(response, "content", "") or "", allowed)
+                # Enforce the allowlist even for parsers that retain unknown names.
+                # Each declared target gets at most one attempt in this round.
+                selected = []
+                seen = set()
+                for name, inp in correction_matches:
+                    if name in allowed and name not in seen:
+                        selected.append((name, inp))
+                        seen.add(name)
+                correction_ctx = dict(ctx, tools_dict=allowed)
+                corrected = execute_tool_matches(
+                    correction_ctx, responder, selected, rp_text=rp_text,
+                    incoming_message=incoming_message)
+                if not corrected:
+                    reason = "The correction produced no permitted tool call."
+            except Exception as exc:
+                reason = f"Tool correction failed: {exc}"
+        results.extend(corrected)
+        corrected_success = {name for name, _, result in corrected if not failed(result)}
+        for name, _, result in refusals:
+            if not corrected_success.intersection(result.correction_tools):
+                correction_errors = [str(value) for target, _, value in corrected
+                                     if target in result.correction_tools and failed(value)]
+                detail = reason or "; ".join(correction_errors) or "The declared correction did not complete."
+                terminal.append((name, ToolRefusal(f"{result} {detail}")))
+    for name, result in terminal:
+        report_deferred_failure(responder, name, result, speaker=ctx.get("speaker") or "")
+    return results
 
 
 # A signature shorter than this is a stock line ("Ja.", "Okay, gern.") that
@@ -998,7 +1110,7 @@ def run_chat_turn(
             # hand back first, so nothing waits on this.
             logger.info("run_chat_turn[%s]: reply is tool calls only (%s)",
                         responder, ", ".join(n for n, _ in _inline_matches))
-            execute_tool_matches(ctx, responder, _inline_matches, rp_text="",
+            _execute_tools_with_correction(ctx, responder, _inline_matches, rp_text=raw,
                                  incoming_message=incoming_message)
             if post_process:
                 # The published tool message is the communication turn. Silence
@@ -1096,7 +1208,7 @@ def run_chat_turn(
                 label=f"Tool: {speaker} → {responder}")
             _ttext = getattr(_tresp, "content", "") or ""
             _matches = find_tool_calls(ctx.get("tool_format", "tag"), _ttext, ctx["tools_dict"])
-            execute_tool_matches(ctx, responder, _matches, rp_text=clean,
+            _execute_tools_with_correction(ctx, responder, _matches, rp_text=clean,
                                  incoming_message=incoming_message)
             return _extract_markers(_ttext, clean) or ""
         except Exception as _e:
@@ -1140,7 +1252,7 @@ def run_chat_turn(
                          "(%d of 4 writes failed) — the turn is not in the DB",
                          speaker, responder, _stored.count(False))
 
-    # Pending-Report Sofort-Trigger: if the speaker owes someone a report
+    # Immediate pending-report trigger: if the speaker owes someone a report
     # back, bump them in the AgentLoop so they think on the next slot.
     # The pending_reports block in their thought context shows the open
     # obligation directly.
@@ -1189,7 +1301,7 @@ def run_chat_turn(
                     # Single mode: the fallback markers (**I do …**) sit
                     # in the chat text itself, so they are read from the
                     # raw answer for the post-processing below.
-                    _caller_ctx.run(execute_tool_matches, ctx, responder,
+                    _caller_ctx.run(_execute_tools_with_correction, ctx, responder,
                                     _inline_matches, rp_text=clean,
                                     incoming_message=incoming_message)
                     try:

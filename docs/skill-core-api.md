@@ -28,6 +28,35 @@ Character-Template-Fragmente (`templates.character` + `apply_to`), Admin-Config
 (`capability_label`), Default-Aktivierung (`default_enabled`), Spezies-Inhalte
 (`body_slots`/`piece_slots`/`silhouette`), Abhängigkeiten (`requires`/`conflicts`).
 
+## Tool results and ordering — `app.skills.base`
+
+Plugins may import `ToolRefusal` from `app.skills.base` and return it when a
+tool refuses the requested action. Its constructor is
+`ToolRefusal(reason: str, *, correction_tools: tuple[str, ...] = ())`.
+The result is a `str` subclass: ordinary tool consumers receive readable
+`Error: <reason>` text, while the room-chat dispatcher can inspect its
+`correction_tools` tuple without interpreting prose.
+
+`correction_tools` contains public tool names that could correct this refusal;
+derive optional capability names from the existing provider registry rather
+than naming another package in core code. The dispatcher offers only declared
+tools that are actually available, for at most one intent-LLM correction round.
+It does not repeat any tool already attempted in the original batch, including
+terminal refusals. Inferred solo pose markers and state extraction cannot undo
+an active pair interaction; an explicit new action can still end it. An unavailable
+correction or a refused correction remains visible through the existing failure
+feedback; returning this result is not a guarantee that another tool will run.
+Declare nonempty `correction_tools` only when the refused call made **no side
+effects**. A terminal refusal may have recorded bookkeeping (such as a failed
+invitation row); it must leave `correction_tools` empty and is not retried.
+Do not report a successfully completed requested action as a refusal.
+
+`ToolSpec.run_before: tuple[str, ...] = ()` declares public peer-tool names
+that must execute after this tool when both occur in the same room-chat reply.
+The dispatcher stably orders matching calls; it does not suppress either action
+or carry the ordering into later turns. Resolve optional peer names through the
+existing capability provider rather than hardcoding package dependencies.
+
 ## Sperren — `app.core.keyed_lock` ✅ (Pflicht für Profil-Schreiber)
 
 `save_character_profile` schreibt den **ganzen** `profile_json`-Blob. Seit die Routen
@@ -346,7 +375,7 @@ Public discovery helpers (stable):
 | Function | Contract |
 |---|---|
 | `discovery_value(viewer: str, *, profile=None) -> int` | Effective stat selected by world config `inventory.discovery_stat` (default `"attention"`). A missing stat counts as 0. An existing profile can be passed to avoid another load. |
-| `placement_visible_to(viewer: str, location_id: str, room_id: str, placement: dict, *, profile=None) -> bool` | Visible placements return True. Hidden placements return True if already found by this viewer, or if the discovery value meets their integer difficulty (0–999). A new find is recorded silently with game time in `item_discoveries`; it changes neither world generation nor scene fingerprints. |
+| `placement_visible_to(viewer: str, location_id: str, room_id: str, placement: dict, *, profile=None) -> bool` | Visible placements return True. Hidden placements return True if already found by this viewer, or if the discovery value meets their integer difficulty (0–999). The first find records game time in `item_discoveries` and creates a personal, localized `item_discovered` notice after releasing locks. Repeated reads do not notify again. Call without holding the world lock. Changes neither world generation nor scene fingerprints. |
 | `discovered_by(location_id: str, room_id: str, item_id: str) -> list[str]` | Alphabetically sorted names that found this placement. Full removal through `remove_item_from_room` clears these rows; partial removal and edits retain them. Moving an item by removing and placing it in another room requires discovering it again. |
 
 Public item placement helpers (stable):
@@ -370,13 +399,21 @@ Pages are chronological (oldest first),
 with `{ref: str, heading: str, text: str, secret_id: str = ""}`. A missing provider
 or a provider exception makes the item unreadable; an empty list is a readable
 empty book. Providers may perform blocking work and are called without locks.
+Optional presentation fields: `date_label: str` and `image: str | Callable[[], str]`
+(empty by default). An image is a data URI; a lazy image loader is evaluated only
+for the selected human page, after room visibility and owner-catching checks.
+Images never reach NPC responses. Providers must not publish private images under
+public static URLs. Neither `secret_id` nor `ref` is included in the public page.
+The shared reader keeps headings to one line (ellipsis with the full title on hover),
+renders date separately and scrolls image/text above fixed page controls.
+
 
 | Function | Contract |
 |---|---|
 | `has_pages(item: dict) -> bool` | A provider is registered for the item's `pages_source`; does not call it (used by the polled room listing). |
 | `pages_of(item: dict, reader: str) -> list[dict] \| None` | Get pages; None for absent source/provider or a logged provider failure. |
 | `readable_here(reader: str, item_id: str) -> bool` | Requires a placement in the reader's current room, `placement_visible_to` (stable above), and non-None pages. Carried items do not qualify. |
-| `read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict` | Returns `{item_name, index, total, page: {heading, text}}`, or `{error}` / `{caught_by}`. Index clamps to the book; an empty book has index 0 and page None. Learns the returned page. `opening=True` starts a session; later pages extend it. A pending owner catch returns no page and learns nothing. |
+| `read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict` | Returns `{item_name, index, total, page: {heading, date_label, text, image}}`, or `{error}` / `{caught_by}`. Index clamps to the book; an empty book has index 0 and page None. Learns the returned page. `opening=True` starts a session; later pages extend it. A pending owner catch returns no page and learns nothing. |
 | `npc_read(reader: str, item_id: str) -> dict` | Once daily, returns `{item_name, pages}` with up to two newest unknown linked secrets (newest first), otherwise the newest page; returned text is at most 600 characters per page. Invalid/missing secrets and pages without a secret ID are not unknown. Repeat calls that day return `{error}`. Starts a full-duration session without changing pose; a catch returns `{caught_by}` before learning. |
 | `npc_read_today(reader: str, item_id: str) -> bool` | Whether the NPC path was used on this GameTime day. |
 | `start_session(reader: str, item_id: str, location_id: str, room_id: str) -> dict` | Replaces this reader's session; started=now, until=now + world `inventory.reading_minutes` (int, default 10). Callers invoke `reading_watch.on_session_started` after return, outside locks. |
@@ -809,12 +846,21 @@ der Storyteller-Fallback in `routes/play.py`. Die Storyteller-Whitelist
 |---|---|
 | `get_image_service() -> ImageService` | Singleton der Medien-Engine (Backend-Pool, Auswahl, Pipeline, Vision-Analyse). `svc.enabled` prüfen; `generate_from_input(prompt)` = voller Generierungslauf. Das JSON-Payload nennt seinen Anlass im Feld `occasion` (Katalog `app/imagegen/occasions.py`, z. B. `photo`, `instagram`; fehlt es: `photo`) — ohne `backend` wird der Anlass geroutet (Kette + Neuanlauf + Markierung, siehe Bild-Routing), mit `backend` = eine EXPLIZITE Wahl: genau dieses Backend, kein Rückfall. Ein Fehlschlag kommt als String mit Präfix `Error: ` zurück |
 | `ImageService.run_on_backend_channel(backend, gen_fn, *, task_type, agent_name='', label='', priority=-1)` | **Jeder** Backend-Lauf geht hier durch: der Aufruf wird auf dem GPU-/Backend-Kanal serialisiert und zählt gegen das Job-Budget. Nie `backend.generate` direkt rufen |
+| `ImageService.run_on_backend(backend, op, character_name="")` | Run an operation against a resolved backend with the service's busy/failure/cooldown semantics. The operation must use `run_on_backend_channel` for generation. |
 | `reset_image_service()` | Pool-Neuaufbau beim nächsten Zugriff (ruft `skill_manager.reload_skills` automatisch) |
 | `app.imagegen.base.BackendBusyError` | **Last, kein Defekt.** Überlebt die Queue-Grenze als typisierte Exception und wird ohne Cooldown erneut versucht. Ein Paket darf sie nicht in ein generisches „Fehler" umschreiben |
 | `app.imagegen.base.BackendFailedError` | **Ausfall** eines Backends (nach Cooldown) — das EINE Signal, auf das das Bild-Routing neu anläuft. Ein Paket fängt es nicht, um selbst ein anderes Backend zu versuchen |
 
 Das TakePhoto-VERB (`plugins/take_photo`, SKILL_ID `image_generation`) ist nur die
 LLM-Tool-Oberfläche — Pakete, die Bilder brauchen, rufen den Service.
+## Image prompt construction
+
+| Function | Contract |
+|---|---|
+| `app.core.prompt_builder.person_description(name, *, include_outfit=False, apply_state_modifiers=True, ...) -> str` | The shared appearance description, including template/body-slot resolution and optionally the current outfit. Capture the returned text before queuing historical-scene work; do not read a later outfit as historical evidence. |
+| `app.core.prompt_compose.compose(*, use_case, subject, backend, hints=None, negative_extra="", style_override=None, conditions="")` | Compose the selected backend family's use-case style and negative prompt. Returns `.prompt`, `.negative`, `.warnings`, `.meta`. Call inside the routing callback so each fallback backend gets its own composition. |
+| `app.core.llm_json.parse_json(raw: str) -> dict \| None` | Extract a JSON object from a queued LLM answer, tolerating code fences; returns None when it cannot be parsed. A bare array is returned under `_list`. Validate task-specific fields in the caller. |
+
 
 ## Bild-Routing — `app.imagegen.routing` ✅
 

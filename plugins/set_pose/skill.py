@@ -11,6 +11,7 @@ from typing import Any, Dict
 
 from app.plugins.base import PluginSkill
 from app.plugins.context import PluginContext
+from app.skills.base import ToolRefusal, ToolSpec
 
 
 class SetPoseSkill(PluginSkill):
@@ -23,6 +24,14 @@ class SetPoseSkill(PluginSkill):
         # name/description/action_hint come from templates/llm/skills/set_pose.md
         self._defaults = {"enabled": True}
 
+    def as_tool(self, character_name: str = "") -> ToolSpec:
+        from app.core.hooks import get_provider
+        provider = get_provider("pair_verb_name")
+        pair_name = provider() if provider else ""
+        return ToolSpec(name=self.name, description=self.description,
+                        func=self.execute,
+                        run_before=(pair_name,) if pair_name else ())
+
     def execute(self, raw_input: str) -> str:
         if not self.enabled:
             return f"{self.name} skill is disabled."
@@ -34,7 +43,7 @@ class SetPoseSkill(PluginSkill):
             key = str(data.get("pose") or "").strip()
             detail = str(data.get("detail") or "").strip()
             if not key and not detail:
-                # Bare text ("standing: wartet" or just "wartet") — the
+                # Bare text ("standing: waiting" or simply "waiting"): the
                 # split decides what is key and what is detail.
                 from app.core.pose_catalog import split_key_detail
                 key, detail = split_key_detail(str(data.get("input") or ""))
@@ -43,9 +52,7 @@ class SetPoseSkill(PluginSkill):
             from app.core.pose_catalog import PairPoseWithoutPartner
             from app.models.character import set_pose_key_detail
             # A known key is written exactly with the detail as display text;
-            # an unknown one goes through the resolver net (a candidate row
-            # beats a silently dropped pose — the tool phase does not loop
-            # back for a second choice).
+            # an unknown one goes through the resolver net.
             try:
                 written = set_pose_key_detail(character_name, key, detail,
                                               unknown="resolve")
@@ -56,9 +63,11 @@ class SetPoseSkill(PluginSkill):
                 how = (f"Start it together with {_name}: "
                        f"{{\"partner\": \"<name>\", \"action\": \"{e}\"}}. "
                        if _name else "There is no way to start it here. ")
-                return (f"'{e}' is a two-person action, not something "
-                        f"{character_name} does alone. {how}For a solo pose, "
-                        f"pass a pose key from the list plus a short detail.")
+                return ToolRefusal(
+                    f"'{e}' is a two-person action, not something "
+                    f"{character_name} does alone. {how}For a solo pose, "
+                    f"pass a pose key from the list plus a short detail.",
+                    correction_tools=(_name,) if _name else ())
             return f"{character_name}: {written or key or detail}"
         except Exception as e:
             self.ctx.logger.exception("%s [%s] failed: %s", self.name, character_name, e)

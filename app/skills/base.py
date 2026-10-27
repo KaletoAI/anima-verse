@@ -1,4 +1,4 @@
-"""Base Skill Class für alle Skills"""
+"""Base class and string-compatible result contracts for skills."""
 import json
 import os
 from abc import ABC, abstractmethod
@@ -15,23 +15,36 @@ from app.models.character import get_character_skill_config, save_character_skil
 
 @dataclass
 class ToolSpec:
-    """Einfacher Tool-Descriptor (Ersatz fuer LangChain Tool)."""
+    """Lightweight tool descriptor."""
     name: str
     description: str
     func: Callable
+    run_before: tuple[str, ...] = ()
+
+
+class ToolRefusal(str):
+    """An action refused, optionally correctable once.
+
+    The text remains compatible with existing string consumers. Nonempty
+    correction targets require a call without side effects; terminal refusals
+    may retain failure bookkeeping. Targets are explicit tool names supplied
+    by the producing skill, never inferred from the message.
+    """
+
+    def __new__(cls, reason: str, *, correction_tools: tuple[str, ...] = ()):
+        text = str(reason)
+        if not text.startswith("Error"):
+            text = f"Error: {text}"
+        result = super().__new__(cls, text)
+        result.correction_tools = tuple(correction_tools)
+        return result
 
 
 class BaseSkill(ABC):
-    """
-    Basis-Klasse für alle Skills.
+    """Shared skill contract.
 
-    Jeder Skill definiert:
-    - SKILL_ID: Identifier für per-Agent Config-Dateien (z.B. "image_generation")
-    - name / description: Fest definiert in der Subklasse
-    - _defaults: Dict mit Default-Werten aus .env
-
-    Per-Agent Overrides werden zur Laufzeit aus
-    storage/users/{user}/agents/{agent}/skills/{SKILL_ID}.json geladen.
+    Each skill defines SKILL_ID, its name/description and configuration
+    defaults. Per-character overrides are stored in the world database.
     """
 
     SKILL_ID = ""  # subclass must define
@@ -95,7 +108,7 @@ class BaseSkill(ABC):
         return data
 
     def _get_effective_config(self, character_name: str) -> Dict[str, Any]:
-        """Merged .env-Defaults mit per-Agent Overrides. Typen werden automatisch anhand der Defaults gecastet."""
+        """Merge defaults with per-character overrides, casting by default type."""
         result = dict(self._defaults)
 
         if not character_name or not self.SKILL_ID:
@@ -106,7 +119,7 @@ class BaseSkill(ABC):
             for key, default_val in result.items():
                 if key in agent_config:
                     val = agent_config[key]
-                    # bool VOR int pruefen (bool ist Subklasse von int)
+                    # Check bool before int: bool is an int subclass.
                     if isinstance(default_val, bool):
                         result[key] = bool(val)
                     elif isinstance(default_val, float):
@@ -118,14 +131,15 @@ class BaseSkill(ABC):
                     else:
                         result[key] = str(val).strip()
         else:
-            # Erstelle per-Agent Config mit Defaults beim ersten Aufruf
+            # Initialize per-character configuration on first use.
             save_character_skill_config(character_name, self.SKILL_ID, dict(self._defaults))
-            logger.info(f"[{self.name}] Per-Agent Config erstellt für {character_name}: {self.SKILL_ID}.json")
+            logger.info("[%s] Initialized skill config for %s: %s",
+                        self.name, character_name, self.SKILL_ID)
 
         return result
 
     def get_config_fields(self) -> Dict[str, Dict[str, Any]]:
-        """Gibt die konfigurierbaren Felder mit Typ-Info und Defaults zurueck.
+        """Return configurable fields with type metadata and defaults.
 
         Returns:
             Dict[field_name, {"type": ..., "default": value, "label": str}]
@@ -144,7 +158,7 @@ class BaseSkill(ABC):
         fields = {}
         for key, default_val in self._defaults.items():
             if key == "enabled":
-                continue  # enabled wird separat per Checkbox gesteuert
+                continue  # Activation has its own checkbox.
             if isinstance(default_val, bool):
                 field_type = "bool"
             elif isinstance(default_val, float):
@@ -199,7 +213,7 @@ class BaseSkill(ABC):
         raw_input = json.dumps({k: v for k, v in payload.items()
                                 if k != "intent_type"}, ensure_ascii=False)
         result = self.execute(raw_input)
-        success = bool(result) and "Fehler" not in str(result) \
+        success = not isinstance(result, ToolRefusal) and bool(result) and "Fehler" not in str(result) \
             and "Error" not in str(result)
         return {"success": success, "result": str(result)[:500]}
 
@@ -225,13 +239,13 @@ class BaseSkill(ABC):
         return s
 
     def memorize_result(self, result: str, character_name: str) -> bool:
-        """Speichert das Execute-Ergebnis als Memory (optional).
+        """Optionally store the execution result as a memory.
 
-        Default: Nichts speichern. Skills ueberschreiben dies bei Bedarf,
-        damit Scheduler-Ergebnisse als Erinnerung erhalten bleiben.
+        The default stores nothing. Skills override this when scheduled
+        results should remain available as memories.
 
         Returns:
-            True wenn eine Memory gespeichert wurde, False sonst.
+            True when a memory was stored, otherwise False.
         """
         return False
 
@@ -243,7 +257,7 @@ class BaseSkill(ABC):
 
     @classmethod
     def from_env(cls, env_prefix: str) -> 'BaseSkill':
-        """Erstellt einen Skill aus Umgebungsvariablen."""
+        """Construct a skill from environment variables (legacy)."""
         config = {}
         for key, value in os.environ.items():
             if key.startswith(env_prefix):

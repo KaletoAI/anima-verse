@@ -526,6 +526,9 @@ def _extract_activity(agent_name: str, response: str) -> Optional[str]:
     changed, or the text names a two-person pose.
     """
     from app.core.prop_action_engine import has_semantic_action
+    from app.core.interaction_engine import get_interaction
+    if get_interaction(agent_name):
+        return None  # Inferred solo poses must not undo an explicit pair action.
     if has_semantic_action(agent_name):
         return None  # Narrative adoption is not an explicit stop/new action.
     match = re.search(r'\*\*I\s+do\s+(.+?)\*\*', response, re.IGNORECASE)
@@ -875,6 +878,7 @@ def _extract_context_from_last_chat(agent_name: str,
         # "Talking" + "sleeps"). The is_player_controlled check stops that.
         from app.models.account import is_player_controlled as _is_pc
         from app.core.prop_action_engine import has_semantic_action
+        from app.core.interaction_engine import get_interaction
         if not is_avatar and not _is_pc(target_name) and source_available:
             # Key + detail (plan-pose-key-detail.md): a key from the shown
             # menu is written exactly; an empty or unknown key keeps the
@@ -882,7 +886,9 @@ def _extract_context_from_last_chat(agent_name: str,
             # must never overturn the body shape.
             extracted_pose = str(data.get("pose") or "").strip()
             extracted_detail = str(data.get("detail") or "").strip()
-            if (extracted_pose or extracted_detail) and not has_semantic_action(target_name):
+            if ((extracted_pose or extracted_detail)
+                    and not has_semantic_action(target_name)
+                    and not get_interaction(target_name)):
                 from app.core.pose_catalog import PairPoseWithoutPartner
                 from app.models.character import set_pose_key_detail
                 try:
