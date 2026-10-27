@@ -7,6 +7,7 @@ export interface StatChange {
   id: number
   game_ts: string
   label: string
+  stat_labels?: Record<string, string>
   changes: Record<string, { old: number; new: number }>
   cause?: Record<string, StatCause>
 }
@@ -47,11 +48,17 @@ export function StatHistoryPopover({ stat, name, rows, anchor, onClose }: {
         const cause = row.cause?.[stat]
         const change = row.changes[stat]
         return <div key={row.id} style={{ marginTop: 8 }}>
-          <div>{t(row.label)}: {change.old}→{change.new}</div>
+          <div>{t(row.stat_labels?.[stat] ?? row.label)}: {change.old}→{change.new}</div>
           {cause ? <div style={{ fontSize: '0.85em', overflowWrap: 'anywhere' }}>
             {cause.actor ? <div>{t('Actor')}: {cause.actor}</div> : null}
-            <div>{t('Base delta')}: {cause.base_delta} × {cause.factor} = {cause.modified_delta}</div>
-            <div>{t('After chat cap')}: {cause.capped_delta}</div>
+            {cause.capped_base_delta !== undefined ? <>
+              <div>{t('Base delta')}: {cause.base_delta}</div>
+              <div>{t('After base chat cap')}: {cause.capped_base_delta}</div>
+              <div>{t('After influence')}: {cause.capped_base_delta} × {cause.factor} = {cause.capped_delta}</div>
+            </> : <>
+              <div>{t('Base delta')}: {cause.base_delta} × {cause.factor} = {cause.modified_delta}</div>
+              <div>{t('After chat cap')}: {cause.capped_delta}</div>
+            </>}
             <div>{t('Actual change')}: {change.new - change.old}</div>
             {cause.capped_delta !== change.new - change.old ? <div>{t('Limited by the stat range.')}</div> : null}
           </div> : null}

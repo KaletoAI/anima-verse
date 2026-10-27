@@ -45,7 +45,7 @@ def main():
         assert save_character_profile("demo-actor", {"template": "human-roleplay"}, create_new=True)
         private_rule = "private-rule-token"
         private_event = "room:private-event-token"
-        trace = {"actor": "demo-actor", "base_delta": 3, "modified_delta": 6,
+        trace = {"actor": "demo-actor", "base_delta": 3, "capped_base_delta": 3, "modified_delta": 6,
                  "capped_delta": 6, "factor": 2.0,
                  "rules": [{"id": private_rule, "name": "Private rule name", "factor": 2.0}]}
         assert record_state_change("demo", "effects", "chat", metadata={
@@ -87,6 +87,7 @@ def main():
                 cause = row["cause"]["signal"]
                 assert {key: cause[key] for key in ("actor", "base_delta", "modified_delta", "capped_delta", "factor")} == {
                     "actor": "demo-actor", "base_delta": 3, "modified_delta": 6, "capped_delta": 6, "factor": 2.0}
+                assert cause["capped_base_delta"] == 3
                 if is_admin:
                     assert row["event_id"] == private_event
                     assert cause["rules"][0]["id"] == private_rule

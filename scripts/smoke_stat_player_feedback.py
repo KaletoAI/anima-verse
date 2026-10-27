@@ -7,6 +7,8 @@ Hand-derived: 50→30 then 30→20 yields two rows, newest first, with
 Tea then Chat labels. At 20, max 25 selects Low. No stats means no bands
 or history; an activity row does not count toward effects history. Ten
 additional effects rows replace both older rows in the ten-row window.
+An hourly row with energy +3 and a separate stat -4 must label energy only
+as Base +3, not mix the other stat's Rest value -2 and Base -2 into it.
 """
 import json
 import os
@@ -50,9 +52,18 @@ def main():
             rows = payload['stat_changes']
             assert len(rows) == 2 and [r['label'] for r in rows] == ['Tea', 'Chat'], rows
             assert rows[0]['id'] > rows[1]['id'] and all(r['game_ts'] for r in rows)
-            assert set(rows[0]) == {'id', 'game_ts', 'label', 'changes'}
             assert rows[0]['changes'] == {'energy': {'old': 30, 'new': 20}}
             assert payload['stat_bands'] == {'energy': 'Low'}, payload['stat_bands']
+            assert record_state_change('demo', 'effects', 'hourly', metadata={
+                'source': 'hourly', 'changes': {'energy': {'old': 46, 'new': 49},
+                                              'fixture_other': {'old': 60, 'new': 56}},
+                'parts': {'energy': [{'label': 'Base', 'delta': 3}],
+                          'fixture_other': [{'label': 'Rest value', 'delta': -2},
+                                            {'label': 'Base', 'delta': -2}]}})
+            with patch('app.models.account.get_active_character', return_value='demo'):
+                hourly = play_self()['stat_changes'][0]
+            assert hourly['stat_labels']['energy'] == 'Base +3', hourly
+            assert hourly['stat_labels']['fixture_other'] == 'Rest value −2, Base −2', hourly
             for _ in range(10):
                 assert record_state_change('demo', 'effects', 'chat', metadata={
                     'source': 'chat', 'changes': {'energy': {'old': 20, 'new': 20}}})

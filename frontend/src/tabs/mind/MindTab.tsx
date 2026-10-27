@@ -92,16 +92,23 @@ function StatHistoryCard({ character, revision }: { character: string; revision:
                   <span>{label(key)} {change.old}→<b>{change.new}</b></span>
                   {cause ? <div style={{ fontSize: '0.9em', opacity: 0.8 }}>
                     {cause.actor ? <div>{t('Actor')}: {cause.actor}</div> : null}
-                    <div>{t('Base delta')}: {cause.base_delta} × {cause.factor} = {cause.modified_delta}</div>
-                    <div>{t('After chat cap')}: {cause.capped_delta} · {t('Actual change')}: {change.new - change.old}</div>
+                    {cause.capped_base_delta !== undefined ? <>
+                      <div>{t('Base delta')}: {cause.base_delta}</div>
+                      <div>{t('After base chat cap')}: {cause.capped_base_delta}</div>
+                      <div>{t('After influence')}: {cause.capped_base_delta} × {cause.factor} = {cause.capped_delta}</div>
+                    </> : <>
+                      <div>{t('Base delta')}: {cause.base_delta} × {cause.factor} = {cause.modified_delta}</div>
+                      <div>{t('After chat cap')}: {cause.capped_delta}</div>
+                    </>}
+                    <div>{t('Actual change')}: {change.new - change.old}</div>
                     {cause.capped_delta !== change.new - change.old ? <div>{t('Limited by the stat range.')}</div> : null}
                     {cause.rules?.length ? <ul>
                       {cause.rules.map(rule => <li key={rule.id}>{rule.name || rule.id} ({rule.id}) × {rule.factor}</li>)}
                     </ul> : null}
                   </div> : null}
+                  <span style={{ opacity: 0.55 }}> · {t(row.stat_labels?.[key] ?? row.label)}</span>
                 </div>
               })}
-              {row.label ? <span style={{ opacity: 0.55 }}> · {t(row.label)}</span> : null}
               {row.event_id ? <div style={{ fontSize: '0.8em', opacity: 0.6, overflowWrap: 'anywhere' }}>{t('Event ID')}: {row.event_id}</div> : null}
             </li>
           ))}

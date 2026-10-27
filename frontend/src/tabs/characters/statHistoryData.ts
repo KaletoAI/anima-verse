@@ -10,6 +10,7 @@ export interface StatHistoryRow {
   /** World-calendar label rendered by the server; empty for old rows. */
   game_label?: string
   label: string
+  stat_labels?: Record<string, string>
   changes: Record<string, { old: number; new: number }>
   cause?: Record<string, StatCause & { rules?: { id: string; name: string; factor: number }[] }>
   event_id?: string

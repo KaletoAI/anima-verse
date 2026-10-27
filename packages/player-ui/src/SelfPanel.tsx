@@ -22,6 +22,8 @@ import { transparentPortraitUrl } from './thumbs'
 export interface StatCause {
   actor: string | null
   base_delta: number
+  /** Present on records whose hourly budget was applied before influence. */
+  capped_base_delta?: number
   modified_delta: number
   capped_delta: number
   factor: number
@@ -68,7 +70,7 @@ export function SelfPanel() {
       if (change) {
         const [key, value] = change
         const delta = value.new - value.old
-        toast(`${name(key)} ${delta < 0 ? '−' : '+'}${Math.abs(delta)}: ${t(row.label)}`, 'info')
+        toast(`${name(key)} ${delta < 0 ? '−' : '+'}${Math.abs(delta)}: ${t(row.stat_labels?.[key] ?? row.label)}`, 'info')
         return
       }
     }

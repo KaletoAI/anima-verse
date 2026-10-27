@@ -295,6 +295,10 @@ def project_stat_metadata(metadata: dict, *, include_rule_details: bool = False)
             if not all(_number(cause.get(key)) for key in numeric_keys):
                 continue
             entry = {"actor": actor, **{key: cause[key] for key in numeric_keys}}
+            if "capped_base_delta" in cause:
+                if not _number(cause["capped_base_delta"]):
+                    continue
+                entry["capped_base_delta"] = cause["capped_base_delta"]
             if include_rule_details and isinstance(cause.get("rules"), list):
                 entry["rules"] = [
                     {"id": rule["id"], "name": rule["name"], "factor": rule["factor"]}

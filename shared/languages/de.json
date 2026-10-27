@@ -2372,14 +2372,14 @@
     "The row draws a new random mix every this many GAME minutes — parked cars that are not the same cars tomorrow. Empty = never, the placement stays as it is.": "Die Zeile zieht alle so viele SPIEL-Minuten eine neue Zufallsmischung — geparkte Autos, die morgen nicht dieselben sind. Leer = nie, die Platzierung bleibt, wie sie ist.",
     "never": "nie",
     "Orientation": "Ausrichtung",
-    "Turns and lifts the clip in the FILE — both halves of a pair together. The preview shows it live, Apply writes it; the sources of most clips are gone, so this replaces a re-import.": "Dreht und hebt den Clip in der DATEI — beide Hälften eines Paars zusammen. Die Vorschau zeigt es live, Anwenden schreibt es; die Quellen der meisten Clips sind weg, das ersetzt also einen Neu-Import.",
+    "Apply orientation writes angles into the clip file. Surface heights are saved separately and also apply in game. Both halves of a pair stay together.": "Ausrichtung anwenden schreibt die Winkel in die Clip-Datei. Flächenhöhen werden getrennt gespeichert und gelten auch im Spiel. Beide Hälften eines Paars bleiben zusammen.",
     "Turn the clip": "Clip drehen",
     "Degrees the clip turns about the vertical — the import dial, applied after the fact. A lying clip is aimed at the bed with it.": "Grad, um die sich der Clip um die Senkrechte dreht — der Import-Regler, nachträglich angewandt. Damit wird ein liegender Clip aufs Bett ausgerichtet.",
     "Tilt": "Neigen",
     "Degrees the clip tips forward — a standing figure bows, a lying one rolls onto its face. Positive tips the head towards the clip’s forward axis.": "Grad, um die der Clip nach vorn kippt — eine stehende Figur verbeugt sich, eine liegende dreht sich aufs Gesicht. Positiv neigt den Kopf zur Vorwärtsachse des Clips.",
     "Roll": "Kippen",
     "Degrees the clip tips sideways. Positive tips the figure to its own right.": "Grad, um die der Clip seitlich kippt. Positiv kippt die Figur auf ihre eigene rechte Seite.",
-    "Centimetres the clip is lifted after the turn — a tilted figure that sinks into the floor is raised back out with it.": "Zentimeter, um die der Clip nach der Drehung angehoben wird — eine geneigte Figur, die im Boden versinkt, kommt damit wieder heraus.",
+    "Absolute height correction for the selected surface only. Other surface types keep their own values.": "Absolute Höhenkorrektur nur für den gewählten Flächentyp. Andere Flächentypen behalten ihre eigenen Werte.",
     "Turn against": "Ausrichten an",
     "grid only": "nur Raster",
     "bed / lying surface": "Bett / Liegefläche",
@@ -3118,8 +3118,15 @@
     "Target layer saved, but the source layer could not be removed. Both layers are retained.": "Die Zielebene wurde gespeichert, aber die Quellebene konnte nicht entfernt werden. Beide Ebenen bleiben erhalten.",
     "Base delta": "Grundänderung",
     "After chat cap": "Nach Gesprächslimit",
+    "After base chat cap": "Nach Grundänderungslimit",
+    "After influence": "Nach Einfluss",
+    "Limits original chat base deltas per stat and game hour. Influence applies afterward and may exceed this budget. 0 disables the limit.": "Begrenzt ursprüngliche Gesprächs-Grundänderungen pro Wert und Spielstunde. Einfluss wirkt danach und darf dieses Budget überschreiten. 0 deaktiviert das Limit.",
     "Actual change": "Tatsächliche Änderung",
     "Limited by the stat range.": "Durch den Wertebereich begrenzt.",
-    "Event ID": "Ereignis-ID"
+    "Event ID": "Ereignis-ID",
+    "Surface height correction": "Höhenkorrektur der Fläche",
+    "Save surface heights": "Flächenhöhen speichern",
+    "Pillow = head end; the opposite end is the foot end.": "Kopfkissen = Kopfende; gegenüber liegt das Fußende.",
+    "Backrest = rear; the open side is the front.": "Rückenlehne = hinten; die offene Seite ist vorn."
   }
 }

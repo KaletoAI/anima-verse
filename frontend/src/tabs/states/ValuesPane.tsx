@@ -242,7 +242,10 @@ export function ValuesPane() {
       {(value, change) => <RuleEditor value={value} onChange={change} />}
     </ValueCard>)}
     <h2>{t('Settings')}</h2>
-    {settingCard('chat_cap_per_hour', t('Chat cap per hour'), (value, change) => <NumberField label={t('Chat cap per hour')} value={value} min={0} max={100} onChange={n => change(n as number)} />)}
+    {settingCard('chat_cap_per_hour', t('Chat cap per hour'), (value, change) => <>
+      <NumberField label={t('Chat cap per hour')} value={value} min={0} max={100} onChange={n => change(n as number)} />
+      <p className="ga-hint">{t('Limits original chat base deltas per stat and game hour. Influence applies afterward and may exceed this budget. 0 disables the limit.')}</p>
+    </>)}
     {settingCard('rewards', t('Rewards'), (value, change) => <GroupEditor value={value} onChange={change} groups={payload.occasions} stats={payload.stats} />)}
     {settingCard('skill_costs', t('Skill costs'), (value, change) => <SkillCosts value={value} onChange={change} payload={payload} />)}
     {settingCard('perception_gate', t('Perception gate'), (value, change) => <div className="ga-form-row">

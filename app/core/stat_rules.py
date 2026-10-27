@@ -253,10 +253,11 @@ def reserve_chat_deltas(name: str, deltas: dict[str, int], *,
                         turning_points: set[str], game_hour: int):
     """Hold the cap lock for exactly one event/recipient database commit.
 
-    Deltas are already multiplied and rounded. ``turning_points`` names stats
-    whose ORIGINAL deltas had magnitude at least 30; amplified ordinary
-    deltas must not bypass the cap. Take the recipient's profile lock inside
-    this context, recheck its receipt there, and call ``commit()`` only after
+    Deltas are the original LLM base changes, before influence or rounding.
+    ``turning_points`` names stats whose ORIGINAL deltas had magnitude at
+    least 30; multiplying a small base delta never grants that exemption.
+    Take the recipient's profile lock inside this context, recheck its receipt,
+    and call ``commit()`` only after
     an applied/unchanged database result. Leaving without it spends nothing.
     Do not reserve a batch spanning multiple independent database commits.
     """
@@ -409,17 +410,19 @@ def validate_setting(name: str, value) -> list[str]:
     return [] if valid else [f'Invalid value for {name}']
 
 
-def describe_source(source: str, metadata: dict | None = None) -> str:
-    """Explain a history source using its recorded parts, without stat names."""
+def describe_source(source: str, metadata: dict | None = None, *, stat: str | None = None) -> str:
+    """Explain a history source, optionally restricted to one stat's contributions."""
     if source == 'hourly':
         parts = []
-        for entries in ((metadata or {}).get('parts') or {}).values():
+        contributions = (metadata or {}).get('parts') or {}
+        entries_by_stat = contributions.values() if stat is None else (contributions.get(stat, []),)
+        for entries in entries_by_stat:
             for part in entries:
                 delta = part.get('delta', 0)
                 if not delta:
                     continue
                 text = f"{part.get('label', '')} {'+' if delta > 0 else '−'}{abs(delta)}"
-                if text not in parts:
+                if stat is not None or text not in parts:
                     parts.append(text)
         # Explain active sources before the common base drift.
         parts.sort(key=lambda text: text.startswith('Base '))

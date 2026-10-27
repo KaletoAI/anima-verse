@@ -179,7 +179,8 @@ history, and the block order is checked against the cache contract.
 not part of `chat/reply_base.md`, the stable system prompt or its scene-state
 moment. Influence multipliers never enter the main RP prompt. The utility
 model judges BASE deltas only; local code resolves exact actors, targets,
-conditions, directed capabilities, rule factors, rounding and the hourly cap.
+conditions and directed capabilities. The hourly budget admits original base
+deltas before influence factors, rounding and the 0–100 value clamp.
 All sources/recipients/rules share the existing character extraction phase:
 there is no model task or call per rule, source or target.
 

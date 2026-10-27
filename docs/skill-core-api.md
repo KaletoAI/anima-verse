@@ -239,22 +239,26 @@ silently moving a private rule.
 
 The shared RP application owns this order: validate all source/target results,
 snapshot profiles/config/rules and the current apply clock, compute local
-factors, multiply each base delta, round half away from zero, reserve the
-recipient/stat/current-game-hour budget, then clamp stored values to 0..100.
-Both signs consume the same absolute hourly budget; `chat_cap_per_hour = 0`
-disables it. Turning points are classified by the ORIGINAL `abs(base_delta) >= 30`
-and bypass the ordinary budget even when reduced by a factor; amplifying a
-small base delta never creates that exemption. The budget is current-hour RAM
-state, not a persistent historical cap or a source-publication-hour budget.
+factors, reserve the recipient/stat/current-game-hour budget against the ORIGINAL
+base delta, multiply the admitted base, round half away from zero, then clamp
+stored values to 0..100. Both signs consume the same absolute BASE budget;
+`chat_cap_per_hour = 0` disables it. Turning points are classified by the
+ORIGINAL `abs(base_delta) >= 30` and bypass that budget even when damped.
+An amplified ordinary change may exceed the base budget; amplification never
+creates a turning-point exemption. The budget is current-hour RAM state.
 
 Each canonical `(event_id, recipient)` commits status, actual-change history
 and a durable receipt atomically. Empty, zero and fully clamped valid results
 also commit receipts; failed/duplicate commits spend no budget. A receipt
 survives history trimming, so re-reading context cannot reapply an old event.
 Independent pairs apply in canonical source order and can fail independently.
-History `cause[stat]` captures `actor`, `base_delta`, `modified_delta`,
-`capped_delta`, `factor` and matched `rules`; `changes` records actual old/new
-values after clamping. Admin Mind history shows event/rule snapshots. Player
+History `cause[stat]` captures `actor`, `base_delta`, `capped_base_delta`,
+`modified_delta` (uncapped potential), `capped_delta` (admitted base × factor,
+rounded), `factor` and matched `rules`; `changes` records actual clamped old/new
+values. Historical records without `capped_base_delta` retain their original
+post-influence cap interpretation; no stored history is rewritten. Hourly
+history supplies `stat_labels` from each stat's own contributions, not a
+combined explanation from unrelated values. Admin Mind shows event/rule snapshots. Player
 history, debug and ZIP exports retain only their own permitted numeric effects
 and observed actor, never private rule names/IDs or canonical event IDs.
 

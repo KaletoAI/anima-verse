@@ -196,8 +196,10 @@ stops acting autonomously).
   chat stat changes, with optional actor/recipient bindings, conditions on each person and exact-pair
   relationship or directed-attraction prerequisites. Kai's encouragement can strengthen courage without
   romance; attraction-dependent effects use the recipient's existing interests through the optional
-  attraction package. Stats come from templates, not a fixed list. Matching factors multiply, with a
-  final range of 0.1–5, before rounding, the existing chat-hour budget and the 0–100 clamp.
+  attraction package. Stats come from templates, not a fixed list. The chat-hour budget limits
+  the original LLM base delta first. Matching factors multiply (bounded to 0.1–5) and apply
+  afterward, followed by rounding and the 0–100 clamp. With base budget 15, +5 and +10 can
+  become +25 and +50 under factor 5 without exhausting the budget after the first change.
   Only actually delivered room speech/direct messages and private self-reactions are evaluated;
   there is no passive aura, new listener turn or multiplication of hourly rates, item rewards or
   skill costs. One shared extraction handles the turn's eligible sources, including tool-only

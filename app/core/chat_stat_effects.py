@@ -215,48 +215,52 @@ def apply_chat_stat_results(context: StatExtractionContext, results: list[dict])
     for result in pending:
         source, recipient = result["source"], result["recipient"]
         if recipient not in profiles or not keys.get(recipient):
-            plans.append((result, None, None))
+            plans.append((result, None))
             continue
         actor_error = errors.get(source.actor)
         if actor_error is not None and not isinstance(actor_error, LookupError):
-            plans.append((result, None, None))
+            plans.append((result, None))
             continue
         deltas = _validated_deltas(result["deltas"], keys[recipient])
-        modified, cause = {}, {}
+        cause = {}
         try:
             for key, base in deltas.items():
                 influence = influence_factor(source.actor, recipient, key, base, rules=rules, profiles=profiles)
                 delta = round_half_away(base * influence["factor"])
-                modified[key] = delta
                 cause[key] = {
                     "actor": source.actor, "base_delta": base, "modified_delta": delta,
                     "factor": influence["factor"], "rules": influence["rules"],
                 }
         except Exception:
             logger.warning("RP stat factor calculation failed for %s (%s)", recipient, source.event_id, exc_info=True)
-            plans.append((result, None, None))
+            plans.append((result, None))
         else:
-            plans.append((result, modified, cause))
+            plans.append((result, cause))
 
     applied = []
-    for result, modified, cause in plans:
+    for result, cause in plans:
         source, recipient = result["source"], result["recipient"]
         outcome = {"status": "failed", "changes": {}}
         try:
             if has_evaluation(source.event_id, recipient):
                 outcome = {"status": "duplicate", "changes": {}}
-            elif modified is not None:
+            elif cause is not None:
                 turning_points = {key for key, base in result["deltas"].items() if abs(base) >= 30}
-                with reserve_chat_deltas(recipient, modified, turning_points=turning_points,
+                with reserve_chat_deltas(recipient, result["deltas"], turning_points=turning_points,
                                          game_hour=game_hour) as reservation:
                     with keyed_lock("character_profile", recipient):
                         if has_evaluation(source.event_id, recipient):
                             outcome = {"status": "duplicate", "changes": {}}
                         else:
+                            final_deltas = {}
                             for key, details in cause.items():
-                                details["capped_delta"] = reservation.deltas.get(key, 0)
+                                admitted_base = reservation.deltas.get(key, 0)
+                                final_delta = round_half_away(admitted_base * details["factor"])
+                                details["capped_base_delta"] = admitted_base
+                                details["capped_delta"] = final_delta
+                                final_deltas[key] = final_delta
                             outcome = commit_evaluation(
-                                source.event_id, recipient, reservation.deltas, game_ts=game_ts,
+                                source.event_id, recipient, final_deltas, game_ts=game_ts,
                                 metadata={"source": "chat", "event_id": source.event_id, "cause": cause},
                             )
                             if outcome["status"] in {"applied", "unchanged"}:

@@ -2364,7 +2364,7 @@ def play_self(user=Depends(get_current_user)):
         from app.core.character_ops import build_stat_history
         from app.core.stat_hints import stat_bands
         out["stat_changes"] = [
-            {key: row[key] for key in ("id", "game_ts", "label", "changes", "cause") if key in row}
+            {key: row[key] for key in ("id", "game_ts", "label", "stat_labels", "changes", "cause") if key in row}
             for row in build_stat_history(avatar, limit=10)["rows"]
         ]
         out["stat_bands"] = {band["key"]: band["label"] for band in stat_bands(avatar)}

@@ -3208,6 +3208,10 @@ def build_stat_history(character_name: str, limit: int = 50, *,
                  'changes': metadata.get('changes') or {}}
         if 'parts' in metadata:
             entry['parts'] = metadata['parts']
+            entry['stat_labels'] = {
+                key: describe_source(source, metadata, stat=key)
+                for key in entry['changes']
+            }
         if 'cause' in metadata:
             entry['cause'] = metadata['cause']
         if include_rule_details and 'event_id' in metadata:

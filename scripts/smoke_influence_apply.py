@@ -9,11 +9,11 @@ Hand-derived expectations (synthetic stat names, no live world):
   An empty evaluation still has a receipt; later +6 for it remains a no-op.
 * A value 97 plus 10 clamps to 100, recording old=97/new=100, not 107.
   Unknown stats and recipients must never be materialized.
-* Ordinary original +8 scaled by 5 is +40, but cap 15 admits only +15.
-  The next ordinary +1 admits zero. Original -30 is a turning point even
-  when its scaled -15 is small; it bypasses and consumes no ordinary budget.
-  Conversely scaled +40 is NOT a turning point when its original was +8.
-  Half-away rounding makes +3*.5 -> +2 and -3*.5 -> -2.
+* This reservation API receives BASE deltas: ordinary +29 is limited to
+  +15 and exhausts the budget; the next +1 admits zero. Original -30 is
+  a turning point, bypasses and consumes no ordinary budget.
+  Multipliers are applied by the chat consumer AFTER this reservation
+  (covered in smoke_influence_chat). Half-away rounding resolves +/-1.5 to +/-2.
 * Cap 15 counts absolute movement: +8 then -8 admits +8 then -7. An hour
   change resets the budget. Characters and stat keys remain independent.
 * Ordered sources +8, +8 (DB failure), +8 admit +8, no change, then +7.
@@ -222,19 +222,19 @@ def main():
         assert history("Clamp")[0]["metadata"]["changes"] == {STAT: {"old": 97, "new": 100}}
 
         seed("Scaled")
-        assert apply_pair("scaled-eight", "Scaled", {STAT: 40})["changes"] == {
+        assert apply_pair("ordinary-large", "Scaled", {STAT: 29})["changes"] == {
             STAT: {"old": 50, "new": 65}}
         assert apply_pair("scaled-one", "Scaled", {STAT: 1}) == {"status": "unchanged", "changes": {}}
-        assert receipts("Scaled") == {"scaled-eight", "scaled-one"}
-        assert apply_pair("turning-point", "Scaled", {STAT: -15}, turning_points={STAT})["changes"] == {
-            STAT: {"old": 65, "new": 50}}
+        assert receipts("Scaled") == {"ordinary-large", "scaled-one"}
+        assert apply_pair("turning-point", "Scaled", {STAT: -30}, turning_points={STAT})["changes"] == {
+            STAT: {"old": 65, "new": 35}}
         assert apply_pair("still-capped", "Scaled", {STAT: 1})["status"] == "unchanged"
         # A turning point first must leave all fifteen ordinary units available.
         seed("Turning")
-        assert apply_pair("turning-first", "Turning", {STAT: -15}, turning_points={STAT})["changes"] == {
-            STAT: {"old": 50, "new": 35}}
+        assert apply_pair("turning-first", "Turning", {STAT: -30}, turning_points={STAT})["changes"] == {
+            STAT: {"old": 50, "new": 20}}
         assert apply_pair("ordinary-after-turning", "Turning", {STAT: 15})["changes"] == {
-            STAT: {"old": 35, "new": 50}}
+            STAT: {"old": 20, "new": 35}}
         assert stat_rules.round_half_away(3 * .5) == 2
         assert stat_rules.round_half_away(-3 * .5) == -2
         seed("Rounding")
@@ -332,8 +332,8 @@ def main():
         # This writer is not part of chat influence/capping; its ordinary
         # delta must not inherit either a multiplier or a spent chat budget.
         assert character.adjust_status_effects("Scaled", {STAT: 3}, source="fixture-direct") == {
-            STAT: {"old": 50, "new": 53}}
-        assert value("Scaled") == 53
+            STAT: {"old": 35, "new": 38}}
+        assert value("Scaled") == 38
 
         seed("DeleteMe")
         assert apply_pair("delete-receipt", "DeleteMe", {})["status"] == "unchanged"

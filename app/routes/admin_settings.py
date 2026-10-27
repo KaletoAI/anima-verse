@@ -434,7 +434,7 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
             {"text": "Actor is the person whose delivered action caused the change. Recipient is the person whose stat changes. Any character leaves that role unbound; it does not create an aura or affect passive listeners."},
             {"text": "Stat selects a value declared by a character template. Only eligible recipients with that value can be affected."},
             {"text": "Direction checks the original LLM delta: Increase is positive, Decrease is negative, Both accepts either sign."},
-            {"code": "3 × 2 = 6", "text": "Factor must be a finite number from 0.1 to 5. One is neutral; below one dampens the change. Matching factors multiply, then their product is limited to 0.1–5. Rounding, the chat-hour budget and the 0–100 clamp follow."},
+            {"code": "3 × 2 = 6", "text": "Factor must be a finite number from 0.1 to 5. One is neutral; below one dampens the change. The chat-hour budget limits the original base delta first. Matching factors multiply (product limited to 0.1–5) and apply afterward, followed by rounding and the 0–100 clamp. Amplified changes can exceed the base budget."},
             {"text": "Actor condition, recipient condition and every pair condition must all match. No pair condition means no attraction requirement."},
         ],
     },

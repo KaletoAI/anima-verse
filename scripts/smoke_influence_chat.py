@@ -12,9 +12,10 @@ Hand-derived expectations from the Task 5 contract (all names/stats synthetic):
 * Two incoming DMs and a private self source stay separate: +3*2 +4*1 +2*1
   changes 50 -> 62, irrespective of JSON pair order. The self consequence
   never receives an actor's rule or duplicates an outgoing body effect.
-* Cap 15: original +8 times 5 yields +40, admitted as +15 (50 -> 65).
-  A further +1 admits zero, but original -30 times .5 yields -15 and
-  bypasses that exhausted ordinary cap (65 -> 50). +/-3*.5 round to +/-2.
+* Base cap 15 precedes influence: +8*5 yields +40 (50 -> 90); +1*5
+  yields +5 (90 -> 95), and original -30*.5 is exempt (95 -> 80).
+  The remaining six base units yield +30, clamped to +20 at 100.
+  A further base +1 is exhausted. +/-3*.5 round to +/-2.
   Value 97 plus 10 clamps to 100; history records actual movement of 3.
 * Ordered +8, +8 (receipt INSERT fails), +8 admits +8, failure, +7:
   final 65, only first/third receipts. Failure cannot consume RAM budget.
@@ -197,7 +198,8 @@ def main():
             assert has_evaluation(incoming.event_id, AGENT)
             cause = history(AGENT)[-1]["state"]["metadata"]
             assert cause["source"] == "chat" and cause["event_id"] == incoming.event_id
-            assert cause["cause"][STAT] == {
+            trace = cause["cause"][STAT]
+            assert {key: trace[key] for key in ("actor", "base_delta", "modified_delta", "capped_delta", "factor", "rules")} == {
                 "actor": AVATAR, "base_delta": 3, "modified_delta": 6, "capped_delta": 6,
                 "factor": 2.0, "rules": [{"id": "demo-incoming", "name": "demo-incoming", "factor": 2.0}],
             }, cause
@@ -412,22 +414,47 @@ def main():
             seed("demo-cap")
             rules.add_rule(influence("demo-cap-increase", AVATAR, "demo-cap", 5, "increase"))
             rules.add_rule(influence("demo-cap-decrease", AVATAR, "demo-cap", .5, "decrease"))
-            cap_sources = [dm(AVATAR, "demo-cap") for _ in range(3)]
+            cap_sources = [dm(AVATAR, "demo-cap") for _ in range(5)]
             cap_ctx = context("demo-cap", *cap_sources)
             cap_data = payload(cap_ctx, dict(zip(
                 [(source.event_id, "demo-cap") for source in cap_sources],
-                [{STAT: 8}, {STAT: 1}, {STAT: -30}], strict=True)))
+                [{STAT: 8}, {STAT: 1}, {STAT: -30}, {STAT: 8}, {STAT: 1}], strict=True)))
             assert extract("demo-cap", cap_ctx, cap_data) == 1
-            assert value("demo-cap") == 50
+            assert value("demo-cap") == 100
             cap_history = history("demo-cap")
             assert [row["state"]["metadata"]["changes"][STAT] for row in cap_history] == [
-                {"old": 50, "new": 65}, {"old": 65, "new": 50}]
+                {"old": 50, "new": 90}, {"old": 90, "new": 95},
+                {"old": 95, "new": 80}, {"old": 80, "new": 100}]
             assert cap_history[0]["state"]["metadata"]["cause"][STAT] == {
-                "actor": AVATAR, "base_delta": 8, "modified_delta": 40, "capped_delta": 15,
+                "actor": AVATAR, "base_delta": 8, "capped_base_delta": 8,
+                "modified_delta": 40, "capped_delta": 40,
                 "factor": 5.0, "rules": [{"id": "demo-cap-increase", "name": "demo-cap-increase", "factor": 5.0}],
             }
-            assert cap_history[1]["state"]["metadata"]["cause"][STAT]["capped_delta"] == -15
+            assert [row["state"]["metadata"]["cause"][STAT]["capped_base_delta"]
+                    for row in cap_history] == [8, 1, -30, 6]
+            assert cap_history[-1]["state"]["metadata"]["cause"][STAT]["capped_delta"] == 30
             assert receipt_ids("demo-cap") == {source.event_id for source in cap_sources}
+
+            # The hourly budget counts five plus ten BASE units, not 25+50.
+            seed("demo-base-budget", 16)
+            rules.add_rule(influence("demo-base-five", AVATAR, "demo-base-budget", 5))
+            base_sources = [dm(AVATAR, "demo-base-budget") for _ in range(3)]
+            apply(context("demo-base-budget", *base_sources), {
+                (source.event_id, "demo-base-budget"): {STAT: delta}
+                for source, delta in zip(base_sources, (5, 10, 1), strict=True)})
+            assert value("demo-base-budget") == 91
+            assert [row["state"]["metadata"]["changes"][STAT]
+                    for row in history("demo-base-budget")] == [
+                {"old": 16, "new": 41}, {"old": 41, "new": 91}]
+            assert receipt_ids("demo-base-budget") == {source.event_id for source in base_sources}
+
+            # Limit before damping, and round only after multiplying the admitted base.
+            for name, delta, expected in (("demo-damp-plus", 20, 58), ("demo-damp-minus", -20, 42)):
+                seed(name)
+                rules.add_rule(influence(f"{name}-half", AVATAR, name, .5))
+                source = dm(AVATAR, name)
+                apply(context(name, source), {(source.event_id, name): {STAT: delta}})
+                assert value(name) == expected
 
             seed("demo-round")
             rules.add_rule(influence("demo-round-half", AVATAR, "demo-round", .5))
@@ -517,7 +544,8 @@ def main():
             apply(context("demo-rule-read-failure", remaining), {
                 (remaining.event_id, "demo-rule-read-failure"): {STAT: 22},
             })
-            assert value("demo-rule-read-failure") == 65, "Failed rule snapshot must not consume cap"
+            # Eight base units already spent; seven remain: 7*.5 rounds to +4.
+            assert value("demo-rule-read-failure") == 58, "Failed rule snapshot must not consume base cap"
             shared_rules.write_text('{"rules": []}', encoding="utf-8")
 
             # A failed persisted clock read must not assign an epoch-hour
