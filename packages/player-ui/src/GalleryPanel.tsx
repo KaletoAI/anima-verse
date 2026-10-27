@@ -127,9 +127,9 @@ export function GalleryPanel({ regenDialog }: GalleryPanelProps = {}) {
     setZoom(null)  // close the detail/zoom box, otherwise it covers the dialog
     let opts = { detected: [] as string[], available: [] as string[] }
     try {
-      const cd = await apiPost<{ detected?: string[]; available?: string[] }>(
+      const cd = await apiPost<{ detected?: string[]; available?: { name: string; type: string }[] }>(
         `/characters/${encodeURIComponent(selected)}/images/${encodeURIComponent(img.name)}/detect-characters`, {})
-      opts = { detected: cd.detected || [], available: cd.available || [] }
+      opts = { detected: cd.detected || [], available: (cd.available || []).map((c) => c.name) }
     } catch { /* proceed without detection */ }
     setCharOpts(opts)
     setRegenImg(img)

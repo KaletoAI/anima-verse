@@ -47,6 +47,12 @@ Two conventions matter when touching a panel:
 - **The package never imports an app.** It receives everything through props and the shared API
   client; `react` and `react-dom` are peer dependencies supplied by the consumer.
 
+Gallery and Instagram regeneration controls expose `detected` and `available` as
+character-name arrays. Their `detect-characters` API responses instead carry
+`available` as `{name, type}[]`; each panel extracts the names at the API boundary.
+Dialog selection and submitted `character_names` therefore use strings, never
+the API objects.
+
 ## `@anima/scene-render`
 
 The geometric half of the 3D scene contract (`docs/schnittstellen-3d.md`, part B) — the code that

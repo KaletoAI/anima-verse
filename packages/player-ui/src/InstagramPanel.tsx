@@ -314,10 +314,10 @@ export function InstagramPanel({ imageGenDialog, animateDialog }: InstagramPanel
   const openRegen = useCallback(async (p: Post) => {
     let opts = { detected: [] as string[], available: [] as string[] }
     try {
-      const cd = await apiPost<{ detected?: string[]; available?: string[] }>(
+      const cd = await apiPost<{ detected?: string[]; available?: { name: string; type: string }[] }>(
         `/instagram/post/${encodeURIComponent(p.id)}/detect-characters`, {},
       )
-      opts = { detected: cd.detected || [], available: cd.available || [] }
+      opts = { detected: cd.detected || [], available: (cd.available || []).map((c) => c.name) }
     } catch { /* proceed without character detection */ }
     setCharOpts(opts)
     setRegenPost(p)
