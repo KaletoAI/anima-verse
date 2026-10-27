@@ -747,7 +747,7 @@ function RuleForm({ draft, locations, characters, skills, quantities, onUpdate }
 
       <Field
         label={draft.type === 'influence' ? t('Recipient condition') : t('Condition')}
-        help="condition"
+        help={draft.type === 'influence' ? 'influence_recipient_condition' : 'condition'}
         hint={draft.type === 'influence' ? t('Evaluated against the recipient. Empty means always; all role and pair conditions must match.') :
           <>
             <strong>{t('Always')}</strong> always (hard block) · {' '}

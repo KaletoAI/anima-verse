@@ -78,7 +78,7 @@ export function InfluenceRuleFields({ influence, actorCondition, pairConditions,
   return <>
     <p className="ga-hint">{t('Influence creates no base effect. Conditions only gate the multiplier. Matching factors multiply; the effective product is limited to 0.1–5.')}</p>
     <div className="ga-form-row">
-      {(['actor', 'recipient'] as const).map(role => <Field key={role} label={role === 'actor' ? t('Actor') : t('Recipient')}>
+      {(['actor', 'recipient'] as const).map(role => <Field key={role} help="influence" label={role === 'actor' ? t('Actor') : t('Recipient')}>
         <select className="ga-input" name={`influence-${role}`} aria-label={role === 'actor' ? t('Actor') : t('Recipient')} value={influence[role]}
           onChange={event => onInfluence({ ...influence, [role]: event.target.value })}>
           <option value="">{t('Any character')}</option>
@@ -89,7 +89,7 @@ export function InfluenceRuleFields({ influence, actorCondition, pairConditions,
       </Field>)}
     </div>
     <div className="ga-form-row">
-      <Field label={t('Stat')}>
+      <Field label={t('Stat')} help="influence">
         <select className="ga-input" name="influence-stat" aria-label={t('Stat')} value={influence.stat}
           onChange={event => onInfluence({ ...influence, stat: event.target.value })}>
           <option value="">— {t('select')} —</option>
@@ -98,7 +98,7 @@ export function InfluenceRuleFields({ influence, actorCondition, pairConditions,
           {options?.stats.map(stat => <option key={stat.key} value={stat.key}>{t(stat.label)}</option>)}
         </select>
       </Field>
-      <Field label={t('Direction')}>
+      <Field label={t('Direction')} help="influence">
         <select className="ga-input" name="influence-direction" aria-label={t('Direction')} value={influence.direction}
           onChange={event => onInfluence({ ...influence, direction: event.target.value as Influence['direction'] })}>
           {!['increase', 'decrease', 'both'].includes(influence.direction) ? <option value={influence.direction}>{t('Unavailable: {value}').replace('{value}', influence.direction)}</option> : null}
@@ -107,13 +107,13 @@ export function InfluenceRuleFields({ influence, actorCondition, pairConditions,
           <option value="both">{t('Both directions')}</option>
         </select>
       </Field>
-      <Field label={t('Factor')} hint={t('Enter a finite number from 0.1 to 5. A factor of 1 is neutral.')}>
+      <Field label={t('Factor')} help="influence" hint={t('Enter a finite number from 0.1 to 5. A factor of 1 is neutral.')}>
         <input className="ga-input" name="influence-factor" aria-label={t('Factor')} type="number" min={options?.factor_min ?? 0.1} max={options?.factor_max ?? 5} step="any"
           value={Number.isFinite(influence.factor) ? influence.factor : ''}
           onChange={event => onInfluence({ ...influence, factor: event.target.value === '' ? NaN : Number(event.target.value) })} />
       </Field>
     </div>
-    <Field label={t('Actor condition')} hint={t('Evaluated against the actor. Empty means always; all role and pair conditions must match.')}>
+    <Field label={t('Actor condition')} help="influence_actor_condition" hint={t('Evaluated against the actor. Empty means always; all role and pair conditions must match.')}>
       <input className="ga-input" name="actor-condition" aria-label={t('Actor condition')} autoComplete="off" spellCheck={false} value={actorCondition} onChange={event => onActorCondition(event.target.value)} />
     </Field>
     <fieldset style={{ minWidth: 0 }}>
@@ -123,7 +123,7 @@ export function InfluenceRuleFields({ influence, actorCondition, pairConditions,
         const capability = options?.pair_conditions.find(option => option.kind === pair.kind)
         return <div key={index} style={{ marginBottom: 12 }}>
           <div className="ga-form-row" style={{ alignItems: 'end', flexWrap: 'wrap' }}>
-            <Field label={t('Pair condition')}>
+            <Field label={t('Pair condition')} help="influence_pair">
               <select className="ga-input" name={`pair-${index}-kind`} aria-label={t('Pair condition')} value={pair.kind} onChange={event => changePair(index,
                 event.target.value === 'relationship' ? { kind: 'relationship', op: '>', value: 0 } : { kind: 'attraction', observer: 'recipient' })}>
                 {pair.kind !== 'relationship' && pair.kind !== 'attraction' ? <option value={pair.kind}>{t('Unavailable: {value}').replace('{value}', pair.kind)}</option> : null}
@@ -132,16 +132,16 @@ export function InfluenceRuleFields({ influence, actorCondition, pairConditions,
               </select>
             </Field>
             {pair.kind === 'relationship' ? <>
-              <Field label={t('Comparison')}>
+              <Field label={t('Comparison')} help="influence_pair">
                 <select className="ga-input" name={`pair-${index}-comparison`} aria-label={t('Comparison')} value={pair.op || ''} onChange={event => changePair(index, { ...pair, op: event.target.value })}>
                   {['>', '<', '='].map(op => <option key={op} value={op}>{op}</option>)}
                 </select>
               </Field>
-              <Field label={t('Threshold')}>
+              <Field label={t('Threshold')} help="influence_pair">
                 <input className="ga-input" name={`pair-${index}-threshold`} aria-label={t('Threshold')} type="number" min={0} max={100} value={Number.isFinite(pair.value) ? pair.value : ''}
                   onChange={event => changePair(index, { ...pair, value: event.target.value === '' ? NaN : Number(event.target.value) })} />
               </Field>
-            </> : pair.kind === 'attraction' ? <Field label={t('Observer → subject')}>
+            </> : pair.kind === 'attraction' ? <Field label={t('Observer → subject')} help="influence_pair">
               <select className="ga-input" name={`pair-${index}-observer`} aria-label={t('Observer → subject')} value={pair.observer || ''} onChange={event => changePair(index, { ...pair, observer: event.target.value })}>
                 <option value="recipient">{t('Recipient → actor')}</option>
                 <option value="actor">{t('Actor → recipient')}</option>

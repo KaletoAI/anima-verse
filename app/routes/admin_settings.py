@@ -334,7 +334,7 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
             {"code": "offmap", "text": "No current location and no metre position"},
             {"code": "travelling", "text": "A journey is in progress"},
             {"code": "location_danger>N / <N / =N", "text": "Danger level of the character's own current location (0 without one)"},
-            {"code": "state:<id>", "text": "Enabled state active by profile tag or expression; cyclic references return false. Use a block rule with target Skill to disable selected skills"},
+            {"code": "state:<id>", "text": "Enabled state active by profile tag or expression. Use a block rule with target Skill to disable selected skills"},
             {"code": "present:Name", "text": "Name is in the same room"},
             {"code": "npc_present", "text": "Any non-avatar character is here"},
             {"code": "relationship:Name>N, romantic:Name>N", "text": "Name or 'any'"},
@@ -427,6 +427,27 @@ _HELP_TOPICS: Dict[str, Dict[str, Any]] = {
              "text": "Common task keys (the full list is the Tasks page under LLM Routing)"},
         ],
     },
+    "influence": {
+        "title": "RP influence",
+        "intro": "Multiply a stat change already recognized by the chat LLM; this rule creates no base effect.",
+        "items": [
+            {"text": "Actor is the person whose delivered action caused the change. Recipient is the person whose stat changes. Any character leaves that role unbound; it does not create an aura or affect passive listeners."},
+            {"text": "Stat selects a value declared by a character template. Only eligible recipients with that value can be affected."},
+            {"text": "Direction checks the original LLM delta: Increase is positive, Decrease is negative, Both accepts either sign."},
+            {"code": "3 × 2 = 6", "text": "Factor must be a finite number from 0.1 to 5. One is neutral; below one dampens the change. Matching factors multiply, then their product is limited to 0.1–5. Rounding, the chat-hour budget and the 0–100 clamp follow."},
+            {"text": "Actor condition, recipient condition and every pair condition must all match. No pair condition means no attraction requirement."},
+        ],
+    },
+    "influence_pair": {
+        "title": "Influence pair conditions",
+        "intro": "These conditions refer to the actual actor and recipient of the same delivered action. All rows must match.",
+        "items": [
+            {"text": "Pair relationship strength checks only this pair's relationship strength from 0 to 100. Choose >, < or = and a threshold. A missing relationship counts as 0; unreadable or missing stored values cannot grant influence."},
+            {"text": "Recipient → actor means the recipient finds the actor attractive. Actor → recipient checks the opposite direction; neither implies the other."},
+            {"text": "Directed attraction uses the observer's romantic interests through the optional attraction capability. If that capability is unavailable, the condition does not match. Attraction is not consent."},
+            {"text": "Remove a row if it is not required. Encouragement can affect a stat without any romantic condition."},
+        ],
+    },
 }
 
 
@@ -439,6 +460,16 @@ def help_topics(user=Depends(require_admin)):
     """
     import copy as _copy
     topics = _copy.deepcopy(_HELP_TOPICS)
+    for role in ("actor", "recipient"):
+        topics[f"influence_{role}_condition"] = {
+            "title": f"Influence: {role} condition",
+            "intro": f"Evaluated against the {role}, not the other person. Empty means always. This condition gates the multiplier; it does not generate a stat change.",
+            "items": [
+                {"text": "Use the profile fields, stat keys, flags and current context of this role. For example, gender=male checks this person's gender. Use the pair-condition rows for the relationship or directed attraction between the two people."},
+                {"text": "Actor condition, recipient condition and all pair conditions must match. Unknown expressions, unavailable references, missing values, cyclic state references and read errors never grant influence, including under NOT or OR. Do not use placeholders or parentheses."},
+                *topics["condition"]["items"],
+            ],
+        }
     try:
         from app.core.stat_hints import get_all_stat_keys
         keys = get_all_stat_keys()
