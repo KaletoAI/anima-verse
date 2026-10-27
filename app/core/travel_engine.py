@@ -1085,24 +1085,33 @@ def _commit_approach_position(name: str, journey: dict, pos: Point, *, arrived: 
     from app.core import places
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile, _write_character_pos
+    failure_reason = ""
     with keyed_lock("character_profile", name):
         profile = get_character_profile(name) or {}
         if profile.get("journey") != journey:
             return False
         target = journey["approach_target"]
         if places.where(name, profile=profile) != (target["location_id"], target["room_id"]):
-            return False
-        if not places.inside(target["location_id"], *pos):
-            return False
-        _write_character_pos(name, round(pos[0], 2), round(pos[1], 2))
-        if arrived:
-            profile.pop("journey", None)
-            profile["movement_target"] = ""
-            profile["last_journey_result"] = dict(
-                journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
-                execution_ref=journey["execution_ref"], status="arrived", reason="")
-            if not save_character_profile(name, profile):
-                return False
+            failure_reason = "target_not_in_actor_room"
+        elif not places.inside(target["location_id"], *pos):
+            failure_reason = "approach_location_boundary_changed"
+        else:
+            _write_character_pos(name, round(pos[0], 2), round(pos[1], 2))
+            if arrived:
+                profile.pop("journey", None)
+                profile["movement_target"] = ""
+                profile["last_journey_result"] = dict(
+                    journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
+                    execution_ref=journey["execution_ref"], status="arrived", reason="")
+                if not save_character_profile(name, profile):
+                    return False
+    if failure_reason:
+        # The snapshot was current but its location boundary is no longer
+        # usable. Cancel AFTER releasing the write lock so the owner's callback
+        # can reconcile safely. Exact selectors cannot remove a new journey.
+        cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
+                       execution_ref=journey["execution_ref"], reason=failure_reason)
+        return False
     return True
 
 

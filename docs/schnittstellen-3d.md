@@ -7708,6 +7708,11 @@ Intermediate and arrival position writes compare the complete current journey
 snapshot (including ID/kind/ref) and commit under the same character-profile
 write lock used by cancellation. Accepted cancellation cannot be followed by a
 stale tick's position write. Owner callbacks remain outside that lock.
+A still-current journey whose point no longer derives its location (for example,
+because a smaller overlapping boundary was inserted) is cancelled after releasing
+the profile lock with `approach_location_boundary_changed`. A stale snapshot
+never cancels or moves its replacement; boundary rejection does not leave a
+permanently active approach or suppress the owner's cancellation callback.
 Arrival is exactly at floor access, not at the body anchor or a new stand point.
 
 `register_execution_owner(kind, *, guard, validate_arrival, arrived, cancelled)`

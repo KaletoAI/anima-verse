@@ -29,15 +29,54 @@ if ARGS.observe_dir:
     ROOT.mkdir(parents=True, exist_ok=False)
 os.environ.update(STORAGE_DIR=str(ROOT / "world"), INSTANCE_DIR=str(ROOT / "instance"),
                   ANIMATION_CLIPS_DIR=str(ROOT / "clips"), ANIMATION_RIG_FILE=str(ROOT / "rig.fbx"),
-                  EVENT_GENERATION_ENABLED="0", EVENT_ENTRY_ROLL_ENABLED="0",
-                  EVENT_RESOLUTION_PROACTIVE="false")
+                  EVENT_ENTRY_ROLL_ENABLED="0")
 from app.core import paths
 paths.init(ROOT / "world")
 paths.init_instance(ROOT / "instance")
+# Disable actual external work at the same boundaries as the variant smoke.
+# The door worker captures runner.run, so guard that alias explicitly as well.
+from app.blender import refine, runner
+refine.auto_retexture_enabled = lambda: False
+refine.auto_lod_enabled = lambda: False
+refine.auto_bake_vc_enabled = lambda: False
+refine.measure_file = lambda path: None
+runner.is_available = lambda: False
+EXTERNAL_CALLS = []
+EXTERNAL_LOCK = RLock()
+
+
+def forbidden_blender(*args, **kwargs):
+    with EXTERNAL_LOCK:
+        EXTERNAL_CALLS.append(str(args[0]) if args else "unknown Blender job")
+    raise AssertionError("indoor-path fixture attempted external Blender processing")
+
+
+runner.run = forbidden_blender
+from app.core import door_models
+door_models._run_blender = forbidden_blender
+# Unavailable optional visual assets retain the real scene's numeric door/
+# window geometry; they must not schedule an asset build for a path fixture.
+door_models.ensure_door_model = lambda *args, **kwargs: None
+door_models.ensure_window_model = lambda *args, **kwargs: None
+
+
+def assert_no_external_work():
+    # A worker may catch AssertionError; recording BEFORE raising plus draining
+    # the real queue makes that attempted binary call fail the test process.
+    door_models._queue.join()
+    with EXTERNAL_LOCK:
+        if EXTERNAL_CALLS:
+            raise AssertionError(f"unexpected external Blender jobs: {EXTERNAL_CALLS}")
+
+
 from app.core import config, db, hooks, props, places, travel_engine as E
-from app.blender import runner
-runner.is_available = lambda: False  # authored bbox; never request Blender/media
-config.load(ROOT / "world/config.json")
+WORLD_CONFIG = ROOT / "world/config.json"
+WORLD_CONFIG.write_text(json.dumps({"random_events": {
+    "enabled": False, "entry_roll_enabled": False, "resolution_proactive": False}}))
+config.load(WORLD_CONFIG)
+from app.core import random_events
+assert not random_events.is_enabled(), "temporary config must disable event generation after flattening"
+assert not random_events.resolution_proactive_enabled(), "temporary config must disable proactive event resolution"
 db.init_schema()
 from app.core import prop_action_paths as N
 from app.core import room_stand as S
@@ -124,6 +163,9 @@ def fixture(*, yaw=0, support=False, floor_y=0):
 
 
 class Paths(unittest.TestCase):
+    def tearDown(self):
+        assert_no_external_work()
+
     def assert_clear(self, route, poly, boxes=(), zones=()):
         """Independent dense check of the entire line, not just its vertices."""
         from app.core.furnish_geometry import point_in_poly, point_segment_distance
@@ -315,6 +357,46 @@ class Ownership(unittest.TestCase):
         self.assertEqual(reason, "")
         self.assertIsNotNone(journey)
         return name, target, plan, journey
+
+    def tearDown(self):
+        assert_no_external_work()
+
+    def test_overlapping_location_boundary_cancels_halfway_and_arrival_then_allows_retry(self):
+        for elapsed in (2, 60):
+            with self.subTest(arrival=elapsed == 60):
+                name, target, _, journey = self.start()
+                before = C.get_character_pos(name)
+                overlap = W.add_location("Temporary boundary intrusion", "Private boundary regression")
+                # Smaller than the real room's location, contains both access
+                # (8,7) and the 2s walking point (~3.69,5.77), not origin (1,5).
+                overlap.update(pos_x=0, pos_z=0, map3d={"plan_width_m": 12,
+                               "boundary": [[2, 5], [9, 5], [9, 8], [2, 8]]})
+                W.upsert_location(overlap, sync_world=True)
+                set_game_time(game_time() + GameDuration.of(seconds=elapsed))
+                E.advance_all_journeys()
+                self.assertIsNone(E.get_journey(name))
+                self.assertEqual(C.get_character_pos(name), before)
+                self.assertEqual(C.get_character_current_location(name), target["location_id"])
+                self.assertEqual(self.owner.runs[journey["execution_ref"]]["status"], "cancelled")
+                self.assertEqual(self.owner.runs[journey["execution_ref"]]["reason"],
+                                 "approach_location_boundary_changed")
+                receipt = C.get_character_profile(name)["last_journey_result"]
+                self.assertEqual((receipt["journey_id"], receipt["execution_kind"], receipt["execution_ref"]),
+                                 (journey["journey_id"], "path_scenario", journey["execution_ref"]))
+                self.assertEqual(receipt["status"], "cancelled")
+                E.advance_all_journeys()
+                self.assertEqual(C.get_character_pos(name), before)
+                self.assertTrue(W.delete_location(overlap["id"]))
+                ref, jid = journey["execution_ref"] + "-retry", journey["journey_id"] + "-retry"
+                self.owner.runs[ref] = {"actor": name, "journey_id": jid, "room": "hall", "status": "approaching"}
+                retry, reason = E.start_approach_journey(name, target, "actor",
+                                execution_kind="path_scenario", execution_ref=ref, journey_id=jid)
+                self.assertEqual(reason, "")
+                self.assertIsNotNone(retry)
+                set_game_time(game_time() + GameDuration.of(minutes=1))
+                E.advance_all_journeys()
+                self.assertEqual(self.owner.runs[ref]["status"], "arrived")
+                self.assertEqual((C.get_character_pos(name)["x"], C.get_character_pos(name)["z"]), (8, 7))
 
     def seat_actor(self, name):
         from app.core import animation_clips as A
@@ -653,6 +735,7 @@ def observe_movement():
     data = dict(actor=name, target=target, plan=plan, journey=journey, polygon=poly,
                 furniture=[S.footprint_corners(b) for b in boxes],
                 grown=[S.footprint_corners(b, .3) for b in boxes], zones=zones, snapshots=snapshots)
+    assert_no_external_work()
     (ROOT / "movement.json").write_text(json.dumps(data, indent=2))
     # Every displayed position was read back from real character_state writes.
     # The slider only selects records; this HTML does not simulate the executor.
@@ -690,5 +773,9 @@ slider.addEventListener('input',show);show();</script>"""
 if __name__ == "__main__":
     if ARGS.observe_dir:
         observe_movement()
+        assert_no_external_work()
     else:
-        unittest.main(argv=[sys.argv[0], *REST])
+        result = unittest.main(argv=[sys.argv[0], *REST], exit=False).result
+        assert_no_external_work()
+        if not result.wasSuccessful():
+            sys.exit(1)
