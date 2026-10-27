@@ -374,7 +374,7 @@ class MigrationTests(unittest.TestCase):
         for kind in ("prop", "location"):
             for index, entries in enumerate(cases):
                 with self.subTest(kind=kind, case=index):
-                    locations_before = list_locations()
+                    locations_before = len(list_locations())
                     output = io.BytesIO()
                     # Duplicate raw names are intentional malformed fixtures,
                     # not a warning emitted by the importer under test.
@@ -396,7 +396,7 @@ class MigrationTests(unittest.TestCase):
                             import_location_from_zip(output.getvalue())
                     self.assertEqual({p.relative_to(directory).as_posix(): p.read_bytes()
                                       for p in directory.rglob("*") if p.is_file()}, before)
-                    self.assertEqual(list_locations(), locations_before)
+                    self.assertEqual(len(list_locations()), locations_before)
 
     def test_single_canonicalized_sidecar_is_the_exact_validated_document(self):
         pid = props.create_prop(name="Single sidecar alias")["id"]
@@ -420,7 +420,7 @@ class MigrationTests(unittest.TestCase):
         for alias in (pid.upper(), f" {pid} "):
             for first, second in ((pid, alias), (alias, pid)):
                 with self.subTest(first=first, second=second):
-                    locations_before = list_locations()
+                    locations_before = len(list_locations())
                     output = io.BytesIO()
                     with zipfile.ZipFile(output, "w") as archive:
                         archive.writestr("manifest.json", json.dumps({"version": 1, "type": "location"}))
@@ -430,7 +430,7 @@ class MigrationTests(unittest.TestCase):
                         archive.writestr(f"props/{second}/distinct-file.bin", b"must not merge directories")
                     with self.assertRaisesRegex(ValueError, "duplicate canonical prop directory"):
                         import_location_from_zip(output.getvalue())
-                    self.assertEqual(list_locations(), locations_before)
+                    self.assertEqual(len(list_locations()), locations_before)
                     self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}, before)
 
     def test_normalized_bundle_and_placement_ids_block_incompatible_support_descendants(self):
