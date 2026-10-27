@@ -32,6 +32,7 @@ export function createActionPreset(preset: ActionPreset, catalog: ActionCatalog)
     || available.find(pose => pose.animation === 'cooking') : undefined
   const drink = preset === 'coffee' ? available.find(pose => pose.animation === 'drinking') : undefined
   const preferred = preset === 'coffee' ? prepare
+    : preset === 'sit' ? available.find(pose => pose.group === 'seat' && pose.animation === 'sit')
     : available.find(p => p.group === (preset === 'lie' || preset === 'sleep' ? 'lie' : 'seat'))
       || (preset === 'pair' ? available[0] : undefined)
   const pose_key = preferred?.key || ''

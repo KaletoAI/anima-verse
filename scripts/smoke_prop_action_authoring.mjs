@@ -60,6 +60,10 @@ try {
   assert(actionEditorIssues([coffee], catalog).some(i => i.path === 'actions.0.effects.0.stat'));
   assert.equal(coffee.effects[0].stat, 'unknown');
   const relax = createActionPreset('sit', catalog);
+  assert.equal(relax.pose_key, 'sitting');
+  const missingSit = createActionPreset('sit', { ...catalog, kinds: ['driving'] });
+  assert.equal(missingSit.pose_key, '');
+  assert(actionEditorIssues([missingSit], catalog).some(i => i.path === 'actions.0.pose_key'));
   relax.effects = [{ id: 'reward', type: 'stat_delta', target: 'actor', when: 'success', stat: 'energy', amount: 5 }];
   assert(!effectTimings(relax, 'stat_delta').includes('success'));
   assert(actionEditorIssues([relax], catalog).some(i => i.code === 'unsupported_combination'));
