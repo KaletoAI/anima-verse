@@ -1,22 +1,24 @@
 /** Real change/change/blur resize arithmetic and before-blur author conflicts. */
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const require = createRequire(new URL('../frontend/package.json', import.meta.url));
-const { build } = require('esbuild');
+const ts = require('typescript');
 const root = fileURLToPath(new URL('..', import.meta.url));
 const dir = await mkdtemp(join(tmpdir(), 'prop-dimension-gesture-'));
 try {
-  await build({ entryPoints: [
-    join(root, 'frontend/src/tabs/props/dimensionGesture.ts'),
-    join(root, 'frontend/src/tabs/props/pendingFields.ts'),
-  ], outdir: dir, outExtension: { '.js': '.mjs' }, bundle: true,
-    format: 'esm', platform: 'node', logLevel: 'silent' });
-  const { editDimensionGesture, dimsPatch, dimRatios } = await import(`file://${join(dir, 'dimensionGesture.mjs')}`);
-  const { emptyFields, queueFields, variantTarget, fieldConflicts, toBulkFieldBody } = await import(`file://${join(dir, 'pendingFields.mjs')}`);
+  for (const name of ['dims', 'dimensionGesture', 'pendingFields']) {
+    const source = await readFile(join(root, 'frontend/src/tabs/props', name + '.ts'), 'utf8');
+    const out = ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    });
+    await writeFile(join(dir, name + '.js'), out.outputText);
+  }
+  const { editDimensionGesture, dimsPatch, dimRatios } = require(join(dir, 'dimensionGesture.js'));
+  const { emptyFields, queueFields, variantTarget, fieldConflicts, toBulkFieldBody } = require(join(dir, 'pendingFields.js'));
   const original = { width_m: 20, depth_m: 0.01, height_m: 20 };
   const target = variantTarget('meshless-B');
   const base = new Map([[target, { dims: original }]]);
