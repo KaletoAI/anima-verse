@@ -144,7 +144,8 @@ logger = get_logger(__name__)
 #: 17 (2026-10-24): Prop variant lights and room ambience.
 #: 18 (2026-10-25): Model-owned prop and room water regions.
 #: 19 (2026-10-27): Action binding provenance and floor-only access projection.
-SCENE_RECIPE_VERSION = 19
+#: 20 (2026-10-27): Preserve broken/stale support provenance in action bindings.
+SCENE_RECIPE_VERSION = 20
 
 # ── Contract constants (§ A2/A3/A6) ─────────────────────────────────────
 # THERE IS NO REFERENCE SQUARE ANY MORE (contract v6 Nr. 2, the metric wave):

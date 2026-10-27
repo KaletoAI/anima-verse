@@ -904,7 +904,7 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         published = _variant_entry(prop, entry.get("variant")) or {}
         entry["variant_uid"] = published.get("uid", "")
         entry["definition_revision"] = prop.get("revision", "")
-        entry["support_reason"] = composed["reason"]
+        entry["support_reason"] = placement.get("support_reason") or composed["reason"]
         entry["action_dependency_invalid"] = bool(
             placement.get("action_dependency_invalid")
             or (placement.get("variant_uid") and placement["variant_uid"] != entry["variant_uid"])
@@ -984,7 +984,12 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
             box = dict(at=support["at"], yaw=support["yaw"],
                        width_m=dims.get("width_m"), depth_m=dims.get("depth_m"))
             for binding in marker["action_bindings"]:
-                if binding["supported"] and (
+                if support.get("action_dependency_invalid") or support.get("support_reason"):
+                    binding.update(supported=False, validation="repair_required",
+                                   reason=("incompatible_prop_dependency"
+                                           if support.get("action_dependency_invalid")
+                                           else "invalid_support_chain"))
+                elif binding["supported"] and (
                         not dims or any(_in_footprint(point["x"], point["z"], box, BODY_R_M)
                                         for point in binding["access_points"].values())):
                     binding.update(supported=False, validation="repair_required",

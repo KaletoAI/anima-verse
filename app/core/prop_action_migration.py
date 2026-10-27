@@ -109,7 +109,8 @@ def normalize_import(document: dict, *, catalogs: dict | None = None) -> dict:
     from app.core.prop_field_migration import move_fields_to_variants, _rename_sidecar_place_groups
     from app.core.prop_actions import validate_document
     from app.core.props import PropDocumentInvalid, _VARIANT_STEM_RE
-    from app.core.pose_catalog import get_catalog
+    from app.core.pose_catalog import activity_catalog
+    from app.core.world_ops import _place_ref
     if not isinstance(document, dict):
         raise PropDocumentInvalid([dict(path='', code='invalid_type', message='Expected a sidecar object', severity='error')])
     result = copy.deepcopy(document)
@@ -127,6 +128,25 @@ def normalize_import(document: dict, *, catalogs: dict | None = None) -> dict:
                 code='invalid_variant_stem', message='Expected a unique supported model stem',
                 severity='error')])
         stems.add(stem)
+    # The store shapes marker IDs when it writes. Refuse any input whose IDs
+    # would change (or collide) before that lossy boundary can break bindings.
+    marker_homes = [('markers', result.get('markers', []))] + [
+        (f'model_variants.{i}.markers', variant.get('markers', []))
+        for i, variant in enumerate(raw_variants or [])]
+    for path, markers in marker_homes:
+        if not isinstance(markers, list):
+            raise PropDocumentInvalid([dict(path=path, code='invalid_type',
+                message='Expected a marker list', severity='error')])
+        seen_markers = set()
+        for index, marker in enumerate(markers):
+            identity = marker.get('id') if isinstance(marker, dict) else None
+            canonical = isinstance(identity, str) and bool(identity) and _place_ref(identity) == identity
+            duplicate = canonical and identity in seen_markers
+            if not canonical or duplicate:
+                raise PropDocumentInvalid([dict(path=f'{path}.{index}.id',
+                    code='duplicate_marker_id' if duplicate else 'invalid_marker_id',
+                    message='Expected a unique canonical stored marker ID', severity='error')])
+            seen_markers.add(identity)
     move_fields_to_variants(result, known_groups=None if catalogs is None else catalogs['groups'])
     variants = result.setdefault('model_variants', [{'stem': 'model', 'active': True}])
     _rename_sidecar_place_groups(result)
@@ -138,7 +158,7 @@ def normalize_import(document: dict, *, catalogs: dict | None = None) -> dict:
         variant.setdefault('action_bindings', [])
     if 'actions' not in result:
         result['actions'] = []
-        catalog = get_catalog('pose') if catalogs is None else catalogs['poses']
+        catalog = activity_catalog(catalog=None if catalogs is None else catalogs['poses'])
         prop_key = result.get('id') or result.get('prop_id') or next(
             (v['uid'] for v in variants if isinstance(v, dict)), '')
         for key, pose in sorted(catalog.items()):
@@ -151,7 +171,8 @@ def normalize_import(document: dict, *, catalogs: dict | None = None) -> dict:
             if not matches:
                 continue
             aid = str(uuid5(NAMESPACE_URL, f'anima:prop-action:{prop_key}:{key}'))
-            result['actions'].append(dict(id=aid, name=pose.get('label') or key,
+            label = 'Schlafpose (ohne Schlafzustand)' if key == 'sleeping' else pose.get('label') or key
+            result['actions'].append(dict(id=aid, name=label,
                 description='', enabled=True, ability='pose', pose_key=key,
                 participants=1, presence='any', interrupt_on_presence_change=False,
                 phases=[], requirements=[], effects=[]))

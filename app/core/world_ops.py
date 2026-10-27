@@ -1886,6 +1886,8 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
                 entry[key] = value
         if p.get("action_dependency_invalid") is True:
             entry["action_dependency_invalid"] = True
+        if p.get("support_reason") in ("unknown", "self", "cycle", "depth"):
+            entry["support_reason"] = p["support_reason"]
         # WHAT THIS PIECE STANDS ON (E1) — an id of this same list. Whether it
         # names one is decided after the whole list is read: ids are minted in
         # this very pass, so the reference can only be resolved against the
@@ -1893,6 +1895,8 @@ def _sanitize_props(raw: Any) -> List[Dict[str, Any]]:
         on = _place_ref(p.get("on"))
         if on:
             entry["on"] = on
+        elif p.get("on"):
+            entry["support_reason"] = "unknown"
         yaw = p.get("yaw")
         if yaw is not None and f"{yaw}".strip() != "":
             try:
@@ -1989,6 +1993,9 @@ def _resolve_prop_parents(placements: List[Dict[str, Any]]) -> None:
         logger.warning("prop placement %s drops 'on' %r (%s)", entry["id"],
                        entry["on"], composed["reason"])
         entry.pop("on", None)
+        # Drawing may keep the flattened fallback, but actions must not mistake
+        # a broken dependency for an intentionally floor-mounted placement.
+        entry["support_reason"] = composed["reason"]
         au, av = _metre(composed["at"][0]), _metre(composed["at"][1])
         if au is not None and av is not None:
             entry["at"] = [au, av]

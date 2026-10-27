@@ -511,9 +511,11 @@ def get_catalog(axis: str) -> Dict[str, dict]:
         return _cache[axis]
 
 
-def activity_catalog(axis: str = "pose") -> Dict[str, Dict]:
-    """Catalog entries eligible for activities, excluding movement-only poses."""
-    return {key: entry for key, entry in get_catalog(axis).items()
+def activity_catalog(axis: str = "pose", *,
+                     catalog: Optional[Dict[str, dict]] = None) -> Dict[str, Dict]:
+    """Eligible activities from the live catalog or an explicit read-only snapshot."""
+    entries = get_catalog(axis) if catalog is None else catalog
+    return {key: entry for key, entry in entries.items()
             if axis != "pose" or key not in MOVEMENT_ONLY_POSES}
 
 

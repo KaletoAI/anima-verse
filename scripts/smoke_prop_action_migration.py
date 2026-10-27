@@ -34,9 +34,19 @@ UID_A = "11111111-1111-4111-8111-111111111111"
 UID_B = "22222222-2222-4222-8222-222222222222"
 CATALOG = {"sleeping": {"group": "lie", "solo": True, "label": "Sleeping"},
            "sitting": {"group": "sit", "solo": True, "label": "Sitting"},
-           "embrace": {"group": "lie", "solo": False, "label": "Embrace"}}
+           "embrace": {"group": "lie", "solo": False, "label": "Embrace"},
+           "standing": {"group": "stand", "solo": True},
+           "kneeling": {"group": "ground", "solo": True},
+           "swimming": {"group": "stand", "solo": True},
+           "treading_water": {"group": "stand", "solo": True},
+           "crawling": {"group": "ground", "solo": True},
+           "crawling_rest": {"group": "ground", "solo": True}}
+GROUPS = {key: {"label": key.title(), "default": default, "root_drop": 0,
+                "needs_place": True}
+          for key, default in (("lie", "sleeping"), ("sit", "sitting"),
+                               ("stand", "standing"), ("ground", "kneeling"))}
 CATALOG_FILE = ROOT / "fixture-pose-catalog.json"
-CATALOG_FILE.write_text(json.dumps({"entries": CATALOG}))
+CATALOG_FILE.write_text(json.dumps({"entries": CATALOG, "groups": GROUPS}))
 
 
 def legacy():
@@ -50,11 +60,28 @@ def legacy():
                                for stem, uid in (("model", UID_A), ("model-v2", UID_B))]}
 
 
+def publish_fixture(name, document):
+    """Publish an opaque mesh only; geometry comes from the authored bbox."""
+    pid = props.create_prop(name=name)["id"]
+    props._write_sidecar(pid, document)
+    directory = props._prop_dir(pid)
+    (directory / "model_1.glb").write_bytes(b"isolated-provenance-mesh")
+    (directory / "model_1.json").write_text(json.dumps({"tier": "full"}))
+    (directory / "selection.json").write_text(json.dumps({"model": {"full": "model_1.glb"}}))
+    return pid
+
+
+def child_binding(layout):
+    from app.core.room_recipe import _join_placements
+    _, markers = _join_placements(layout, lambda x, z: (x, z), 0, 0, 0)
+    return next(m["action_bindings"][0] for m in markers if m["placement_id"] == "child")
+
+
 class MigrationTests(unittest.TestCase):
     def setUp(self):
-        self.catalog = patch("app.core.pose_catalog.get_catalog", return_value=CATALOG)
-        self.catalog.start()
-        self.addCleanup(self.catalog.stop)
+        from app.core import pose_catalog
+        pose_catalog.reload_catalogs()
+        self.addCleanup(pose_catalog.reload_catalogs)
         catalog_file = patch("app.core.pose_catalog.catalog_path", return_value=CATALOG_FILE)
         catalog_file.start()
         self.addCleanup(catalog_file.stop)
@@ -67,12 +94,50 @@ class MigrationTests(unittest.TestCase):
         action = normalized["actions"][0]
         self.assertEqual((action["pose_key"], action["ability"], action["participants"]),
                          ("sleeping", "pose", 1))
+        self.assertEqual(action["name"], "Schlafpose (ohne Schlafzustand)")
         for original, variant in zip(source["model_variants"], normalized["model_variants"]):
             self.assertEqual(variant["markers"], original["markers"])
             self.assertEqual(variant["action_bindings"][0]["action_id"], action["id"])
             self.assertEqual(variant["action_bindings"][0]["variant_uid"], variant["uid"])
         self.assertEqual(validate_document(normalized), [])
         self.assertEqual(normalize_import(normalized), normalized)
+
+    def test_migration_uses_activity_eligible_poses_for_live_and_snapshot_catalogs(self):
+        from app.core.pose_catalog import poses_in_group
+        source = legacy()
+        for variant, group in zip(source["model_variants"], ("stand", "ground")):
+            variant["markers"][0]["group"] = group
+        self.assertEqual(poses_in_group("stand"), ["standing"])
+        self.assertEqual(poses_in_group("ground"), ["kneeling"])
+        normalized = normalize_import(source)
+        self.assertEqual({a["pose_key"] for a in normalized["actions"]}, {"standing", "kneeling"})
+        pid = props.create_prop(name="Activity-only migration")["id"]
+        props._write_sidecar(pid, source)
+        row = next(row for row in migrate_actions()["props"] if row["prop_id"] == pid)
+        self.assertEqual({a["pose_key"] for a in row["document"]["actions"]}, {"standing", "kneeling"})
+
+    def test_noncanonical_and_colliding_marker_ids_are_rejected_before_replace(self):
+        pid = props.create_prop(name="Marker identity target")["id"]
+        directory = props._prop_dir(pid)
+        before = {p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}
+        for identities, code in ((("seat-left", "seatleft"), "invalid_marker_id"),
+                                 (("seatleft", "seatleft"), "duplicate_marker_id")):
+            with self.subTest(identities=identities):
+                document = normalize_import(legacy())
+                variant = document["model_variants"][0]
+                variant["markers"] = [{**variant["markers"][0], "id": identity}
+                                      for identity in identities]
+                variant["action_bindings"][0]["marker_ids"] = [identities[0]]
+                with self.assertRaises(ValueError) as error:
+                    normalize_import(document)
+                self.assertIn(code, {issue["code"] for issue in error.exception.issues})
+                out = io.BytesIO()
+                with zipfile.ZipFile(out, "w") as archive:
+                    archive.writestr("manifest.json", json.dumps({"version": 1, "type": "prop", "prop_id": pid}))
+                    archive.writestr("files/sidecar.json", json.dumps(document))
+                with self.assertRaisesRegex(ValueError, code):
+                    import_prop_from_zip(out.getvalue(), overwrite=True)
+                self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}, before)
 
     def test_uncertain_access_is_blocked_not_claimed_as_route(self):
         source = legacy()
@@ -351,14 +416,14 @@ class MigrationTests(unittest.TestCase):
     def test_building_and_autofurnish_append_preserve_placement_provenance(self):
         from app.models.world import (GROUND_ROOM_ID, add_location, upsert_location,
             append_room_props, append_rooms_props, get_location_by_id)
-        location = add_location("Action building", rooms=[{"name": "A"}, {"name": "B"}])
+        location = add_location("Action building", "Provenance fixture", rooms=[{"name": "A"}, {"name": "B"}])
         rooms = [r for r in location["rooms"] if r["id"] != GROUND_ROOM_ID]
         for room in rooms:
             room["layout"] = {"x": 0, "y": 0, "w": 6, "d": 4}
         upsert_location(location, sync_world=True)
         placement = {"id": "kept", "prop_id": "missing-but-valid-id", "at": [2, 2],
             "variant": 7, "variant_uid": UID_B, "definition_revision": "f" * 64,
-            "action_dependency_invalid": True}
+            "action_dependency_invalid": True, "support_reason": "cycle"}
         self.assertTrue(append_room_props(location["id"], rooms[0]["id"], [placement]))
         self.assertEqual(append_rooms_props(location["id"], {rooms[1]["id"]: [placement]}),
                          {rooms[1]["id"]: True})
@@ -396,6 +461,101 @@ class MigrationTests(unittest.TestCase):
         self.assertTrue(room["layout"]["props"][0]["action_dependency_invalid"])
         self.assertEqual((props._prop_dir(pid) / "sidecar.json").read_bytes(), original_bytes)
 
+    def test_broken_support_survives_actual_append_and_pack_import(self):
+        from app.models.world import (add_location, upsert_location, append_room_props,
+                                      get_location_by_id)
+        from app.core.content_io import export_location_to_zip, import_location_from_zip
+        from app.core.world_ops import _sanitize_room_layout
+        document = normalize_import(legacy())
+        document["model_variants"][0]["action_bindings"][0]["access_points"]["actor"]["z"] = 1.6
+        pid = publish_fixture("Broken support fixture", document)
+
+        def placement(identity, parent=""):
+            return {"id": identity, "prop_id": pid, "at": [0, 0], **({"on": parent} if parent else {})}
+
+        cases = {
+            "unknown": [placement("child", "absent")],
+            "self": [placement("child", "child")],
+            "cycle": [placement("child", "parent"), placement("parent", "child")],
+            "depth": [placement("root"), placement("b", "root"), placement("c", "b"),
+                      placement("d", "c"), placement("child", "d")],
+        }
+        for reason, placements in cases.items():
+            with self.subTest(reason=reason):
+                location = add_location("Broken support " + reason, "Isolated regression",
+                                        rooms=[{"name": "A"}])
+                room = next(r for r in location["rooms"] if r.get("name") == "A")
+                room["layout"] = {"x": 0, "y": 0, "w": 12, "d": 12}
+                upsert_location(location, sync_world=True)
+                self.assertTrue(append_room_props(location["id"], room["id"], placements))
+                stored = next(r for r in get_location_by_id(location["id"])["rooms"]
+                              if r["id"] == room["id"])["layout"]
+                child = next(p for p in stored["props"] if p["id"] == "child")
+                self.assertNotIn("on", child)
+                self.assertEqual(child["support_reason"], reason)
+                self.assertFalse(child_binding(stored)["supported"])
+                self.assertEqual(_sanitize_room_layout(stored), stored)
+                # Feed the raw broken links through the actual import sanitizer
+                # too, rather than only importing an already flagged layout.
+                blob = export_location_to_zip(location["id"])
+                rewritten = io.BytesIO()
+                with zipfile.ZipFile(io.BytesIO(blob)) as source, zipfile.ZipFile(rewritten, "w") as target:
+                    for member in source.namelist():
+                        data = source.read(member)
+                        if member == "db/location.json":
+                            raw_location = json.loads(data)
+                            next(r for r in raw_location["rooms"] if r.get("name") == "A")["layout"]["props"] = placements
+                            data = json.dumps(raw_location).encode()
+                        target.writestr(member, data)
+                result = import_location_from_zip(rewritten.getvalue())
+                imported = next(r for r in get_location_by_id(result["location_id"])["rooms"]
+                                if r.get("name") == "A")["layout"]
+                self.assertEqual(next(p for p in imported["props"] if p["id"] == "child")["support_reason"], reason)
+                self.assertFalse(child_binding(imported)["supported"])
+                self.assertEqual(child_binding(imported)["reason"], "invalid_support_chain")
+
+    def test_incompatible_and_stale_support_blocks_child_without_parent_actions(self):
+        from app.models.world import add_location, upsert_location, get_location_by_id
+        from app.core.content_io import export_location_to_zip, import_location_from_zip
+        table_document = legacy()
+        table_document["actions"] = []
+        table_document["bbox"] = [3, 1, 2]
+        for variant in table_document["model_variants"]:
+            variant.update(width_m=3, depth_m=2, height_m=1, action_bindings=[])
+            variant.pop("markers")
+        table = publish_fixture("Dependency table", table_document)
+        machine_document = normalize_import(legacy())
+        machine_document["model_variants"][0]["action_bindings"][0]["access_points"]["actor"]["z"] = 1.6
+        machine = publish_fixture("Dependency machine", machine_document)
+        location = add_location("Support dependency", "Isolated regression", rooms=[{"name": "A"}])
+        room = next(r for r in location["rooms"] if r.get("name") == "A")
+        room["layout"] = {"x": 0, "y": 0, "w": 12, "d": 12, "props": [
+            {"id": "table", "prop_id": table, "at": [3, 4]},
+            {"id": "child", "prop_id": machine, "at": [0, 0], "on": "table"}]}
+        upsert_location(location, sync_world=True)
+        self.assertTrue(child_binding(room["layout"])["supported"])
+        archive = export_location_to_zip(location["id"])
+        changed = props.read_sidecar(table)
+        changed["model_variants"][0]["height_m"] = 2
+        props._write_sidecar(table, changed)
+        result = import_location_from_zip(archive)
+        imported = next(r for r in get_location_by_id(result["location_id"])["rooms"]
+                        if r.get("name") == "A")["layout"]
+        self.assertTrue(next(p for p in imported["props"] if p["id"] == "table")["action_dependency_invalid"])
+        self.assertFalse(child_binding(imported)["supported"])
+        self.assertEqual(child_binding(imported)["reason"], "incompatible_prop_dependency")
+        stale = copy.deepcopy(room["layout"])
+        stale["props"][0]["variant_uid"] = UID_B
+        self.assertFalse(child_binding(stale)["supported"])
+        self.assertEqual(child_binding(stale)["reason"], "incompatible_prop_dependency")
+        from app.core.world_ops import _sanitize_room_layout
+        ancestor = copy.deepcopy(room["layout"])
+        ancestor["props"][0]["on"] = "absent"
+        ancestor = _sanitize_room_layout(ancestor)
+        self.assertEqual(ancestor["props"][0]["support_reason"], "unknown")
+        self.assertFalse(child_binding(ancestor)["supported"])
+        self.assertEqual(child_binding(ancestor)["reason"], "invalid_support_chain")
+
     def test_support_body_height_and_floor_access_have_same_provenance(self):
         from app.core.room_recipe import _join_placements
         from app.core.scene_recipe import _markers
@@ -414,8 +574,7 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(placements[1]["variant_uid"], UID_B)
         self.assertEqual(placements[1]["variant"], 7, "published selector is not a stable identity")
         recipe = {"placements": placements, "prop_markers": markers, "room_id": "kitchen", "level": 0}
-        with patch("app.core.pose_catalog.get_groups", return_value={"lie": {"root_drop": 0}}):
-            finished = _markers(recipe, {"layout": {}}, 3, False)
+        finished = _markers(recipe, {"layout": {}}, 3, False)
         body = finished[0]
         self.assertGreater(body["y_world"], 1.4)
         self.assertEqual(body["variant_uid"], UID_B)

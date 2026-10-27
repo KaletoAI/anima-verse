@@ -7593,6 +7593,10 @@ authoring issues for missing state/stat/marker/action dependencies before any
 destructive prop replacement. Both standalone prop and bundled-location packs
 use it. Canonical exports retain their original sidecar bytes, IDs, bindings and
 state references; collections and marketplace dispatch reuse those same paths.
+Marker IDs must already have the store's canonical lowercase alphanumeric
+shape (1–16 characters) and be unique within their variant. Ingress rejects
+noncanonical or colliding IDs before replacement; it never lets the store
+rewrite a marker ID while retaining a binding to its former spelling.
 An existing local prop is never replaced by a bundled dependency. Incompatible
 full author revisions (including changed marker geometry) are returned as `action_dependency_issues`, mirrored
 in the existing import `warnings` UI channel, and the affected placement carries
@@ -7631,8 +7635,11 @@ normalization. No global DB replacement, mutable context override, second
 pose/state model or persistent compatibility reader is installed.
 
 Only legacy documents **without** `actions` derive group-compatible solo pose
-definitions, shared across variants with deterministic per-prop/pose IDs.
-`sleeping` remains `ability: pose`, not a sleep signal. Explicit `actions: []`
+definitions, shared across variants with deterministic per-prop/pose IDs. Both
+live and explicit snapshot migration reuse `pose_catalog.activity_catalog`'s
+eligibility filter, excluding movement-only swimming/crawling poses.
+`sleeping` is displayed as `Schlafpose (ohne Schlafzustand)` and remains
+`ability: pose`, not a sleep signal. Explicit `actions: []`
 means decorative; creation writes that empty list. Autofurnish creates disabled,
 unsupported `suggested` actions only when its solver explicitly supplies a
 marker. Missing/ambiguous facing or dimensions yields blocked `repair_required`
@@ -7648,6 +7655,13 @@ provenance survives layout/building/ground sanitization; stale identity and
 invalid support chains block bindings rather than retargeting them. A locally
 valid device approach inside a supporting table's footprint is also blocked,
 not relocated. Scatter copies never acquire place markers or action targets.
+Invalid parent provenance blocks descendants even when the parent has no
+actions and the child's approach lies outside its footprint. Layout sanitation
+retains `support_reason` (`unknown`, `self`, `cycle`, `depth`) when it removes
+an unusable `on`; this diagnostic survives append/import/resave and blocks
+actions on the flattened drawing fallback. Explicit dependency repair must
+also clear/update that diagnostic; losing `on` during sanitation is not an
+intentional floor mount. Scene payload version 20 invalidates older projections.
 
 Body anchors include the entire `on` support transform and object trim/sink.
 Role access XZ/yaw composes through placement and room/location rotations, but
