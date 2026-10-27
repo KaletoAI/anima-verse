@@ -111,6 +111,7 @@ def setup_run(ability="pose"):
     profile["template"] = "run-person"
     profile["status_effects"] = {"run_energy": 50}
     F.C.save_character_profile(name, profile)
+    measured_entry()
     return name, target, pid
 
 
@@ -215,12 +216,12 @@ class Runs(unittest.TestCase):
 
     def test_missing_entry_transition_is_visible_without_body_jump(self):
         name, target, _ = setup_run()
+        clips._write_world_transitions([])
+        before = F.C.get_character_pos(name)
         result = request(name, target)
-        # A genuinely absent measured asset is not replaced by an invented clip.
-        tick(30)
-        row = R.get(result["execution_id"])
-        self.assertEqual(row["reason"], "missing_entry_transition", row)
-        self.assertEqual(F.C.get_character_pos(name), {"x": 8.0, "z": 7.0})
+        self.assertEqual(result["status"], "refused", result)
+        self.assertEqual(result["reason"], "missing_entry_transition", result)
+        self.assertEqual(F.C.get_character_pos(name), before)
         self.assertFalse(F.C.get_character_profile(name).get("place"))
         self.assertFalse(R.claims())
 

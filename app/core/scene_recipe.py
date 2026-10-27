@@ -3252,7 +3252,7 @@ def _plate_top(recipe: Dict[str, Any]) -> float:
 
 def _prop_record(prop_id: str,
                  cache: Optional[Dict[str, Dict[str, Any]]] = None,
-                 ) -> Dict[str, Any]:
+                 *, read_only: bool = False) -> Dict[str, Any]:
     """``props.get_prop`` for ONE compose, asked once per prop id.
 
     Every PLACEMENT used to ask again, and the answer is a function of the
@@ -3273,7 +3273,8 @@ def _prop_record(prop_id: str,
         if hit is not None:
             return hit
     from app.core import props as prop_store
-    record = prop_store.get_prop(prop_id) or {}
+    record = (prop_store.get_prop(prop_id, read_only=True) if read_only
+              else prop_store.get_prop(prop_id)) or {}
     if cache is not None:
         cache[prop_id] = record
     return record
@@ -3281,7 +3282,7 @@ def _prop_record(prop_id: str,
 
 def _prop_models(recipe: Dict[str, Any], storey: float,
                  prop_cache: Optional[Dict[str, Dict[str, Any]]] = None,
-                 ) -> List[Dict[str, Any]]:
+                 *, read_only: bool = False) -> List[Dict[str, Any]]:
     """The room's prop placements as specs (REAL-SIZE rule, § A2).
 
     A placement never scales its prop: the size comes from the prop's own
@@ -3330,7 +3331,7 @@ def _prop_models(recipe: Dict[str, Any], storey: float,
         anchor_u = _num(at[0])
         anchor_v = _num(at[1])
         has_model = bool(placement.get("has_model"))
-        prop = _prop_record(pid, prop_cache)
+        prop = _prop_record(pid, prop_cache, read_only=read_only)
         model_variants = (_prop_variant_urls(pid, placement)
                           if has_model else [])
         # The published entry THIS placement resolves to — its file's
@@ -4420,7 +4421,7 @@ def layout_signature(map3d: Dict[str, Any],
 
 def scene_inputs(location: Dict[str, Any], location_id: str,
                  building_model_file: str = "", *,
-                 with_surface: bool = True,
+                 with_surface: bool = True, read_only: bool = False,
                  ) -> Tuple[float, Dict[str, Any], Dict[str, Any]]:
     """What :func:`compose_scene` needs beside the location: plan width, the
     building model's meta and one meta per laid-out room (each a
@@ -4453,7 +4454,7 @@ def scene_inputs(location: Dict[str, Any], location_id: str,
             continue
         rid = str(room.get("id") or "")
         meta = get_client_meta(location_id, room_id=rid,
-                               with_surface=with_surface) if rid else None
+                               with_surface=with_surface, read_only=read_only) if rid else None
         if meta:
             from app.core.location_model3d import find_building_model
             from app.core.model_water import read_water
@@ -4462,7 +4463,7 @@ def scene_inputs(location: Dict[str, Any], location_id: str,
                 meta["water"] = water
             room_metas[rid] = meta
     return (derive_plan_width_m(location_id, map3d),
-            get_client_meta(location_id, filename=building_model_file) or {},
+            get_client_meta(location_id, filename=building_model_file, read_only=read_only) or {},
             room_metas)
 
 
@@ -4471,6 +4472,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                   room_metas: Optional[Dict[str, Dict[str, Any]]] = None,
                   surface_kinds: Optional[Set[str]] = None,
                   door_meta: Optional[Dict[str, Any]] = None,
+                  read_only: bool = False,
                   ) -> Dict[str, Any]:
     """The whole scene of ONE location as finished primitives (§ B1).
 
@@ -4495,6 +4497,8 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     room_metas = room_metas or {}
     # ONE prop record per prop id for this compose (:func:`_prop_record`) —
     # the placements of a room and the doors of the whole location share it.
+    # A no-build compose keeps the identical authored placement/collision data.
+    # Only visual door/window generation and lazy prop backfills are disabled.
     prop_cache: Dict[str, Dict[str, Any]] = {}
     extent, k, storey = derive_scalars(map3d, plan_width_m)
 
@@ -4502,7 +4506,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     by_room: Dict[str, Dict[str, Any]] = {}
     for room in rooms:
         recipe = compose_recipe(room, [r for r in rooms if r is not room],
-                                map3d=map3d)
+                                map3d=map3d, read_only=read_only)
         if not recipe:
             continue
         recipes.append(recipe)
@@ -4696,7 +4700,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                                  storey)
         if diorama:
             models.append(diorama)
-        models.extend(_prop_models(recipe, storey, prop_cache))
+        models.extend(_prop_models(recipe, storey, prop_cache, read_only=read_only))
         # ONE determination, two readers: the spec just built above IS the
         # answer to "does this room have a diorama", so the marker branch is
         # handed that very result instead of re-deciding it from the meta.
@@ -4732,14 +4736,17 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
     # The resolved style is also public for hull construction; it remains
     # available while a door model is queued and for doors along the contour.
     palette = (door_source.get("hull_style") or {}).get("palette") or {}
-    models.extend(_window_models(
-        walls, styles=window_styles,
-        color=door_source.get("hull_frame_color") or palette.get("frame"),
-        glass=palette.get("glass"),
-        bars=_num(door_source.get("hull_ornament_density", .5)) > 0 if door_source else True))
-    door_props, door_prop_sigs = _door_prop_models(
-        doorways, prop_cache, door_styles=door_styles,
-        door_color=door_source.get("hull_door_color") or None)
+    if read_only:
+        door_props, door_prop_sigs = [], {}
+    else:
+        models.extend(_window_models(
+            walls, styles=window_styles,
+            color=door_source.get("hull_frame_color") or palette.get("frame"),
+            glass=palette.get("glass"),
+            bars=_num(door_source.get("hull_ornament_density", .5)) > 0 if door_source else True))
+        door_props, door_prop_sigs = _door_prop_models(
+            doorways, prop_cache, door_styles=door_styles,
+            door_color=door_source.get("hull_door_color") or None)
     # Retain leaf rectangles for hull facts. Only renderer suppression
     # changes when a complete style door exists. Carry the same resolved
     # style onto mirrored walls and projected contour leaves for hull facts,
@@ -4938,7 +4945,7 @@ def compose_scene(location: Dict[str, Any], *, plan_width_m: float = 0.0,
                      + furnish_findings.furnishing_problems(
                          str(location.get("id") or ""), recipes, walls,
                          doorways, map3d.get("elevator"), storey,
-                         lambda pid: _prop_record(pid, prop_cache))),
+                         lambda pid: _prop_record(pid, prop_cache, read_only=read_only))),
     }
     if boundary:
         out["boundary_openings"] = boundary

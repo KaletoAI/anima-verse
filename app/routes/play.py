@@ -3841,6 +3841,11 @@ def _play_set_activity_sync(body: Dict[str, Any]) -> Dict[str, Any]:
     place_id = str(body.get("place_id") or "").strip()
     pose = str(body.get("pose") or "").strip().lower()
     activity = str(body.get("activity") or "").strip()
+    if place_id:
+        loc, room = places.where(avatar)
+        target = next((p for p in places.room_places(loc, room) if p["id"] == place_id), None)
+        if target and target.get("source") == "prop":
+            raise HTTPException(status_code=409, detail={"reason": "prop_action_required"})
     # Every shape of this endpoint is the avatar acting on its own body, and
     # that wakes it — the same rule ``/play/enter-room`` and the journey start
     # apply. CLEARING the pose is the case that matters most: it IS the
@@ -3920,7 +3925,8 @@ def _play_places_sync() -> Dict[str, Any]:
     out: List[Dict[str, Any]] = []
     for p in places.room_places(loc, room):
         free = places.free_slots(p, occ.get(p["id"], []))
-        poses = [k for k in poses_in_group(p["group"]) if catalog.get(k, {}).get("solo", True)]
+        poses = ([] if p.get("source") == "prop" else
+                 [k for k in poses_in_group(p["group"]) if catalog.get(k, {}).get("solo", True)])
         out.append({"id": p["id"], "label": p["label"], "group": p["group"],
                     "capacity": p["capacity"], "free": len(free), "free_slots": free,
                     "poses": [{"key": k, "label": k} for k in poses]})

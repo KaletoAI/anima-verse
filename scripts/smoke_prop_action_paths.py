@@ -417,8 +417,15 @@ class Ownership(unittest.TestCase):
         self.addCleanup(A._write_world_transitions, previous)
         profile = C.get_character_profile(name)
         profile["height"] = 170
+        # Seed an already persisted historical seat to exercise departure
+        # geometry, not the removed raw-pose furniture allocation API.
+        loc, room = places.where(name, profile=profile)
+        place = next(p for p in places.room_places(loc, room) if p["id"] == "device/body")
+        C.set_character_pos(name, *place["slots"][0])
+        profile = C.get_character_profile(name)
+        profile.update(height=170, pose_key="sitting",
+                       place={"id": place["id"], "slot": 0, "room_id": room})
         C.save_character_profile(name, profile)
-        C.set_pose_intent(name, "sitting", prefer="device/body")
 
     def obstruct_departure(self, target):
         pid = furniture_prop("Unrelated thin exit obstruction", width=.1, depth=.1, height=1)

@@ -1,4 +1,4 @@
-"""Persistent exact-target prop actions, deliberately not exposed through HTTP.
+"""Persistent exact-target prop actions shared by authenticated HTTP and tools.
 
 Run locks are reentrant (travel cancellation can call back inside its guard).
 Claims use SQLite, never actor-global locks. No owner callback runs under a
@@ -16,7 +16,7 @@ import uuid
 
 from app.core import prop_action_store as store, places, props, travel_engine as travel
 from app.core.game_time import GameTime, GameDuration
-from app.core.timeutils import game_time, game_speed_factor
+from app.core.timeutils import game_time, game_speed_factor, utc_now
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
 from app.models import character as C
@@ -67,6 +67,7 @@ def _save(run):
         saved = store.save(conn, run)
     if saved:
         _activity_boundary(run, previous["status"], game_time())
+        _notify(run)
 
 
 def _activity_boundary(run, previous_status, now):
@@ -127,6 +128,7 @@ def _commit(run, phases=(), *, runtime=None, now=None, catalogs=None):
                 raise RuntimeError("execution_progress_write_failed")
     effects.notify_effects(changed, "prop_action:" + run["execution_id"])
     _activity_boundary(run, current["status"], now)
+    _notify(run)
     return run["data"].get("effect_results", {})
 
 
@@ -165,7 +167,7 @@ def _definition(target, action_id, revision):
     if not candidates:
         return None, "stale_variant"
     # Author snapshot, not the rendering getter (which can demand media work).
-    prop = props.read_sidecar(candidates[0]["prop_id"])
+    prop = props.read_sidecar(candidates[0]["prop_id"], read_only=True)
     if props._document_revision(prop) != revision:
         return None, "stale_definition"
     action = next((a for a in prop.get("actions", []) if a["id"] == action_id), None)
@@ -283,7 +285,7 @@ def _validate(run, *, conn=None, require_claims=False, presence=True):
                 (rule == "others" and not present - {run["actor"]}) or
                 (rule == "participants_only" and present != members)):
             return "presence_not_met"
-    reason = _requirements(run, profiles)
+    reason = _requirements(run, profiles) if presence else ""
     if reason:
         return reason
     if require_claims:
@@ -367,6 +369,14 @@ def _plan(run, *, conn):
                 break
             plans[role] = plan
         if len(plans) == len(_members(run)):
+            pose = (definition["phases"][0]["pose_key"] if definition["ability"] == "combined"
+                    else definition["pose_key"])
+            for role, name in _members(run):
+                _, last_reason = _entry_spec(name, plans[role], pose)
+                if last_reason:
+                    break
+            if last_reason:
+                continue
             distance = sum(sum(math.dist(a, b) for a, b in zip(p["waypoints"], p["waypoints"][1:])) for p in plans.values())
             choices.append((distance, place["id"], plans, allocation))
     if not choices:
@@ -385,6 +395,8 @@ def request(actor: str, target: dict, action_id: str, revision: str, partner: st
     previous = store.by_request(actor, request_id)
     if previous:
         return _result(previous) if previous["request_fingerprint"] == fingerprint else _refused("request_id_conflict")
+    if places.where(actor) != (target["location_id"], target["room_id"]):
+        return _refused("target_not_in_actor_room")
     if is_world_frozen():
         return _refused("world_frozen")
     definition, reason = _definition(target, action_id, revision)
@@ -415,6 +427,7 @@ def request(actor: str, target: dict, action_id: str, revision: str, partner: st
                 store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
         if not partner:
             _start_checked(run)
+    _notify(run)
     if partner:
         # A decision/model or respond-lane request must never run inside an
         # execution/profile/place lock or an SQLite transaction.
@@ -424,7 +437,7 @@ def request(actor: str, target: dict, action_id: str, revision: str, partner: st
     return _result(store.get(run["execution_id"]))
 
 
-def respond(actor: str, execution_id: str, accept: bool) -> dict:
+def _respond(actor: str, execution_id: str, accept: bool) -> dict:
     with _lock(execution_id):
         run = store.get(execution_id)
         if not run or run["partner"] != actor:
@@ -700,7 +713,7 @@ def register_owner():
 
 
 def _entry_spec(name, plan, pose):
-    from app.core.animation_clips import resolve_transition, clip_meta, clip_travel_m, clip_ref_height_m, clip_kinds
+    from app.core.animation_clips import resolve_transition, clip_meta, clip_travel_m, clip_ref_height_m, _solo_kinds
     from app.core.room_stand import bridge_offset, bridge_scale, room_geometry
     from app.core.height import height_cm
     rule = resolve_transition("walking", pose)
@@ -708,7 +721,13 @@ def _entry_spec(name, plan, pose):
         return None, "missing_entry_transition"
     kind = rule["kind"]
     meta = clip_meta(kind)
-    if kind not in clip_kinds() or not meta or not math.isfinite(float(meta.get("duration_s", 0))) or float(meta.get("duration_s", 0)) <= 0:
+    if kind not in _solo_kinds() or not meta or meta.get("pair"):
+        return None, "missing_entry_transition"
+    try:
+        duration = float(meta.get("duration_s", 0))
+    except (TypeError, ValueError, OverflowError):
+        return None, "missing_entry_transition"
+    if not math.isfinite(duration) or duration <= 0:
         return None, "missing_entry_transition"
     anchor, access = plan["entry_anchor"], plan["access"]
     delta = bridge_offset(clip_travel_m(kind), float(access["yaw"]),
@@ -911,3 +930,89 @@ def advance(now: GameTime) -> int:
                 _save(run)
             advanced += 1
     return advanced
+
+
+def _notify(run):
+    """Private invalidation only, never broadcast invitation/target payloads."""
+    from app.core.keyed_lock import _after_locks
+    from app.core.sync_topics import avatars
+    names = tuple(name for _, name in _members(run))
+    _after_locks(lambda: avatars(names, ("self", "scene")))
+
+
+def check(actor: str, target: dict, action_id: str, revision: str, partner: str = "") -> dict:
+    """Read-only execution preflight. No transaction, claims, wake or journey."""
+    if (not isinstance(target, dict) or set(target) != set(_TARGET)
+            or any(not isinstance(target[k], str) or not target[k] for k in _TARGET)
+            or not all(isinstance(v, str) and v for v in (actor, action_id, revision))
+            or not isinstance(partner, str)):
+        return dict(enabled=False, reason="invalid_request")
+    if places.where(actor) != (target["location_id"], target["room_id"]):
+        return dict(enabled=False, reason="target_not_in_actor_room")
+    definition, reason = _definition(target, action_id, revision)
+    if reason:
+        return dict(enabled=False, reason=reason)
+    if bool(partner) != (definition["participants"] == 2) or actor == partner:
+        return dict(enabled=False, reason="invalid_partner")
+    run = dict(execution_id="", actor=actor, partner=partner, action_id=action_id,
+               definition_revision=revision, target=target, definition=definition,
+               status="awaiting_consent" if partner else "approaching",
+               data=dict(plans={}, journey_ids={}, access_roles={}))
+    reason = "world_frozen" if is_world_frozen() else _validate(run)
+    if not reason:
+        plans, reason = _plan(run, conn=store.db.get_connection())
+    return dict(enabled=not reason, reason=reason)
+
+
+def state_for(actor: str) -> dict:
+    """Only an execution's exact participants may see its question/result."""
+    from datetime import datetime, timedelta
+    result = dict(incoming=[], outgoing=[], current=[], recent_results=[])
+    if not isinstance(actor, str) or not actor:
+        return result
+    cutoff = utc_now() - timedelta(minutes=30)
+    rows = store.db.get_connection().execute(
+        "SELECT * FROM prop_action_runs WHERE actor=? OR partner=? ORDER BY created_at,execution_id",
+        (actor, actor))
+    for raw in rows:
+        run = store._decode(raw)
+        terminal = run["status"] in store.TERMINAL
+        if terminal:
+            try:
+                if datetime.fromisoformat(run["updated_at"].replace("Z", "+00:00")) < cutoff:
+                    continue
+            except (ValueError, TypeError):
+                continue
+        pending = run["status"] == "awaiting_consent"
+        row = {k: run[k] for k in ("execution_id", "action_id", "definition_revision",
+                                  "target", "actor", "partner", "status", "phase", "reason")}
+        row.update(label=run["definition"]["name"],
+                   roles={"actor": run["actor"], **({"partner": run["partner"]} if run["partner"] else {}),
+                          "clip": run["data"].get("clip_roles", {}),
+                          "access": run["data"].get("access_roles", {})},
+                   can_respond=pending and actor == run["partner"], can_cancel=not terminal)
+        if terminal:
+            row["effects"] = run["data"].get("effect_results", {})
+            result["recent_results"].append(row)
+        elif pending:
+            result["incoming" if actor == run["partner"] else "outgoing"].append(row)
+        else:
+            result["current"].append(row)
+    return result
+
+
+def respond(actor: str, execution_id: str, accept: bool) -> dict:
+    result = _respond(actor, execution_id, accept)
+    if result["status"] != "refused":
+        run = store.get(execution_id)
+        if run:
+            _notify(run)
+    return result
+
+
+def has_semantic_action(actor: str) -> bool:
+    """Implicit narration never overrides an explicit, still-owned action."""
+    row = store.db.get_connection().execute(
+        "SELECT 1 FROM prop_action_runs WHERE (actor=? OR partner=?) "
+        "AND status NOT IN ('completed','cancelled','failed') LIMIT 1", (actor, actor)).fetchone()
+    return row is not None

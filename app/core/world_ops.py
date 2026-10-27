@@ -379,6 +379,51 @@ def _fog_inputs() -> Dict[str, dict]:
     return out
 
 
+def _local_prop_approach(name, observer, profile, observer_profile, journey, visible,
+                         now, fraction, factor):
+    """Public motion only, withdrawn on room/sight/ownership loss.
+
+    No target, execution/consent identity, foreign room or overland segment.
+    Remaining waypoints start at the actual current interpolated room point.
+    """
+    if (not observer or name == observer or name not in visible or not journey
+            or journey.get("execution_kind") != "prop_action"):
+        return None
+    from app.core import places
+    room = places.where(name, profile=profile)
+    if not all(room) or room != places.where(observer, profile=observer_profile):
+        return None
+    target = journey.get("approach_target") or {}
+    if (target.get("location_id"), target.get("room_id")) != room:
+        return None
+    from app.core.prop_action_engine import _own_journey
+    from app.core.prop_action_store import get
+    run = get(journey.get("execution_ref", ""))
+    if not run or run["status"] != "approaching" or not _own_journey(run, name, journey):
+        return None
+    from app.core.travel_engine import journey_state, segment_paces_m_s_real
+    from app.core.room_stand import room_geometry
+    from app.core.prop_action_paths import _Space
+    state = journey_state(journey["waypoints"], journey["started_at_game"], now, offset_s=fraction)
+    if state["arrived"]:
+        return None
+    remaining = [list(state["pos"])] + [list(point[:2]) for point in journey["waypoints"][state["seg"] + 1:]]
+    geometry = room_geometry(*room)
+    if not geometry:
+        return None
+    space = _Space(*geometry)
+    if not all(space.visible(tuple(a), tuple(b)) for a, b in zip(remaining, remaining[1:])):
+        return None
+    from app.core.game_time import GameTime
+    pending = max(0, (GameTime.parse(journey["started_at_game"]) - now).seconds - fraction)
+    paces = segment_paces_m_s_real(journey["waypoints"], factor) if factor > 0 and not pending else None
+    return dict(journey_id=journey.get("journey_id"), room_id=room[1],
+                waypoints=remaining, progress_m=0, walked_m=state["progress_m"],
+                remaining_m=round(max(0, state["total_m"] - state["progress_m"]), 2),
+                paces_m_s_real=paces[state["seg"]:] if paces else None,
+                starts_in_s=round(pending / factor, 3) if pending and factor > 0 else None)
+
+
 def _visible_row(name, loc_id, pos, journey, ctx) -> bool:
     """The existing off-map, sight, location and explored-ground gates."""
     if not loc_id and pos is None:
@@ -624,6 +669,10 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
     # like every other localized string this endpoint hands out. Without an
     # avatar (admin overview) the base language is what is left.
     _lang = (get_character_language(avatar) if avatar else "") or "en"
+    from app.core.perception import addressable_for
+    from app.models.character import get_character_profile
+    _local_visible = set(addressable_for(avatar)) if avatar else set()
+    _observer_profile = get_character_profile(avatar) if avatar else {}
 
     # How far the avatar sees OUT IN THE OPEN (E6, § A12). Deliberately the
     # SAME number that discovers a place by coming close to it
@@ -876,6 +925,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
             "movement_target_id": mt,
             "movement_target_name": target_name,
             "travel": travel,
+            "local_approach": _local_prop_approach(
+                name, avatar, _prof, _observer_profile, _j, _local_visible,
+                _now_game, _frac, _factor),
             # Running pair interaction (§ A8a): kind/role/partner/anchor and
             # the GAME-clock start, so both figures play their halves in
             # lockstep at one anchor; null when the character has none.

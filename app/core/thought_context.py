@@ -1202,10 +1202,11 @@ def location_presence_split(character_name: str, location_id: str,
 def _build_activity_hint_block(character_name: str,
                                location_id: str,
                                room_id: str) -> str:
-    """The room's place offer (``places.room_offer``): free seats with the
-    poses they allow, busy ones by name, the room's free-text hint as the
-    tail. The LLM decides freely; there is no activity library anymore
-    (renamed from the library-era available_activities_block)."""
+    """Shared current semantic furniture actions plus free/room-marker poses.
+
+    Effective renderers enforce the mandatory prop-action context even when an
+    optional thought/filter block or World override omits this legacy hint.
+    """
     if not location_id:
         return ""
     try:

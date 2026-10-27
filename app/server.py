@@ -126,6 +126,7 @@ from app.routes import play as play_route
 from app.routes import api_images as api_images_route
 from app.routes import assist as assist_route
 from app.routes import prop_variants as prop_variants_route
+from app.routes import prop_actions as prop_actions_route
 from app.routes import improvements as improvements_route
 from app.routes import npc as npc_route
 from app.routes import extension_motion as extension_motion_route
@@ -171,6 +172,15 @@ async def lifespan(app: FastAPI):
     # Remove obsolete state prompt drops before any runtime prompt reads.
     from app.core.skill_drop_migration import migrate_skill_drop_blocks_once
     migrate_skill_drop_blocks_once()
+    # One owner for all real player/NPC requests, restored before jobs tick.
+    from app.core.prop_action_engine import register_owner
+    register_owner()
+    from app.core.prop_action_migration import migrate_actions
+    _prop_action_inventory = migrate_actions(dry_run=True)
+    logger.info("Prop action migration inventory: %s", _prop_action_inventory)
+    if _prop_action_inventory["issues"]:
+        raise RuntimeError("Prop action migration requires repair; inspect startup inventory")
+    migrate_actions(dry_run=False)
 
     # Add persistent location IDs and clean up legacy filesystem storage.
     from app.models.world import migrate_location_ids
@@ -921,6 +931,7 @@ app.include_router(world.router, tags=["world"])
 # (…/props/{id}/variants/…), so this is order-independent, but the variant
 # routes are an extension of the prop library and belong beside it.
 app.include_router(prop_variants_route.router)
+app.include_router(prop_actions_route.router)
 app.include_router(templates.router)
 app.include_router(story.router)
 app.include_router(story_dev.router)

@@ -2138,6 +2138,12 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
         if flavor.lower() == key.lower():
             flavor = ""          # flavor that adds nothing is noise
     profile = get_character_profile(character_name) or {}
+    if prefer:
+        from app.core import places
+        loc, room = places.where(character_name, profile=profile)
+        target = next((p for p in places.room_places(loc, room) if p["id"] == prefer), None)
+        if target and target.get("source") == "prop":
+            raise places.PlaceUnavailable("prop_action_required")
     # A two-person pose belongs to a BOUND pair, never to a lone profile.
     # ``interaction_engine.start_interaction`` writes the interaction first
     # and only then calls this setter, so the running interaction naming the

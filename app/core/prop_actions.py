@@ -218,3 +218,88 @@ def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue
                         issue(q + '.marker_ids', 'incompatible_marker',
                               'Pair alternatives each need two slots on one shared marker')
     return issues
+
+
+def offers(actor: str) -> list[dict]:
+    """Actual same-room actions, including blocked entries and partner checks.
+
+    Read only: use published geometry without bbox/LOD/door generation. Never
+    call request or reserve a slot to discover whether an action is possible.
+    """
+    from app.core import places, props, prop_action_engine as engine
+    from app.core.room_recipe import compose_recipe
+    from app.models.world import get_location_by_id
+    location_id, room_id = places.where(actor)
+    loc = get_location_by_id(location_id) if location_id else None
+    room = next((r for r in (loc or {}).get("rooms", []) if r.get("id") == room_id), None)
+    if not room:
+        return []
+    recipe = compose_recipe(room, [r for r in loc["rooms"] if r is not room],
+                            map3d=loc.get("map3d") or {}, read_only=True)
+    present = sorted(name for name, _ in places._present(location_id, room_id) if name != actor)
+    result = []
+    documents = {}
+    for placement in (recipe or {}).get("placements", []):
+        pid = placement.get("prop_id", "")
+        if pid not in documents:
+            documents[pid] = props.read_sidecar(pid, read_only=True)
+        document = documents[pid]
+        revision = props._document_revision(document)
+        target = dict(location_id=location_id, room_id=room_id,
+                      placement_id=placement.get("id", ""), variant_uid=placement.get("variant_uid", ""))
+        for action in document.get("actions", []):
+            pair = action.get("participants") == 2
+            targets = []
+            if pair:
+                for partner in present:
+                    checked = engine.check(actor, target, action["id"], revision, partner)
+                    targets.append(dict(partner=partner, **checked))
+                checked = next((t for t in targets if t["enabled"]), None)
+                if checked is None:
+                    checked = targets[0] if targets else dict(enabled=False, reason="partner_required")
+            else:
+                checked = engine.check(actor, target, action["id"], revision)
+            result.append(dict(action_id=action["id"], definition_revision=revision,
+                               placement_id=target["placement_id"], variant_uid=target["variant_uid"],
+                               target=target, label=action["name"], description=action.get("description", ""),
+                               enabled=checked["enabled"], reason=checked["reason"], required_partner=pair,
+                               available_targets=targets, effects=action.get("effects", [])))
+    return result
+
+
+def prompt_block(actor: str) -> str:
+    """Mandatory executable context shared by every real LLM consumer."""
+    import json
+    from app.core.prop_action_engine import state_for
+    rows = offers(actor)
+    return ("<prop_actions_contract>\n"
+            "Use PropAction for furniture actions, never SetActivity or a raw pose. "
+            "Only enabled offers and enabled exact partners can be requested. "
+            "Effects describe real rewards and timing; blocked reasons are authoritative. "
+            "Call PropAction with JSON {\"operation\":\"request\",\"action_id\":ID,"
+            "\"revision\":DEFINITION_REVISION,\"target\":EXACT_TARGET,\"partner\":NAME_OR_EMPTY}. "
+            "An accepted request starts walking, not instant seating or success. "
+            "Consent: InteractWith {\"execution_id\":ID,\"answer\":\"yes\"|\"no\"}; "
+            "stop: PropAction {\"operation\":\"cancel\",\"execution_id\":ID}. "
+            "Never invent IDs, targets, consent or completion.\n"
+            "offers=" + json.dumps(rows, ensure_ascii=False, separators=(",", ":")) + "\n"
+            "own_state=" + json.dumps(state_for(actor), ensure_ascii=False, separators=(",", ":")) +
+            "\n</prop_actions_contract>")
+
+
+def execute(actor: str, payload: dict) -> dict:
+    """Structured NPC/tool adapter; no selected actor or geometric overrides."""
+    from app.core import prop_action_engine as engine
+    refused = dict(status="refused", execution_id="", reason="invalid_request")
+    if not isinstance(payload, dict):
+        return refused
+    operation = payload.get("operation")
+    if operation == "cancel":
+        if set(payload) != {"operation", "execution_id"} or not isinstance(payload["execution_id"], str):
+            return refused
+        return engine.cancel(actor, payload["execution_id"])
+    if operation != "request" or set(payload) - {
+            "operation", "action_id", "revision", "target", "partner", "request_id"}:
+        return refused
+    return engine.request(actor, payload.get("target"), payload.get("action_id"),
+                          payload.get("revision"), payload.get("partner", ""), payload.get("request_id", ""))

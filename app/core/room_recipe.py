@@ -790,7 +790,7 @@ def compose_on_chain(
 
 
 def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
-                     default_u: float, default_v: float,
+                     default_u: float, default_v: float, *, read_only: bool = False,
                      ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """``(placements, prop_markers)`` of one layout, joined with the library.
 
@@ -824,7 +824,8 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
 
     def _record(prop_id: str) -> Optional[Dict[str, Any]]:
         if prop_id not in records:
-            records[prop_id] = prop_store.get_prop(prop_id)
+            records[prop_id] = (prop_store.get_prop(prop_id, read_only=True) if read_only
+                                else prop_store.get_prop(prop_id))
         return records[prop_id]
 
     def _stack_facts(prop_id: str, variant: Any) -> Dict[str, Any]:
@@ -1005,7 +1006,7 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
 def _scatter_into(placements: List[Dict[str, Any]],
                   scatter_sources: List[Dict[str, Any]],
                   keep_in: List[List[float]],
-                  keepouts: List[List[List[float]]]) -> None:
+                  keepouts: List[List[List[float]]], *, read_only: bool = False) -> None:
     """Append the scattered copies of every scattering placement, in place.
 
     Prop scatter (plan-area-detail-scenes.md, 2026-08-02 redesign) is a
@@ -1037,7 +1038,7 @@ def _scatter_into(placements: List[Dict[str, Any]],
             spacing = float(source.get("scatter_spacing_m") or 0)
         except (TypeError, ValueError):
             spacing = 0.0
-        prop = prop_store.get_prop(pid)
+        prop = prop_store.get_prop(pid, read_only=True) if read_only else prop_store.get_prop(pid)
         # WHICH of the prop's model variants each copy shows (E2.3): the
         # copies of one scatter source walk the active variants in the fixed
         # order `(scatter_seed + instance) mod count`, so twenty pines are
@@ -1090,7 +1091,7 @@ def boundary_points(map3d: Any) -> List[List[float]]:
 
 
 def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
-                          map3d: Any = None) -> Optional[Dict[str, Any]]:
+                          map3d: Any = None, *, read_only: bool = False) -> Optional[Dict[str, Any]]:
     """The REDUCED recipe of the ground room (§ A13a), or None when the yard
     carries nothing.
 
@@ -1114,7 +1115,7 @@ def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
         return None
     boundary = boundary_points(map3d)
     placements, prop_markers = _join_placements(
-        lay, lambda u, v: (u, v), 0.0, 0.0, 0.0)
+        lay, lambda u, v: (u, v), 0.0, 0.0, 0.0, read_only=read_only)
 
     scatter_sources = [p for p in (lay.get("props") or [])
                        if isinstance(p, dict) and p.get("scatter_count")]
@@ -1144,7 +1145,7 @@ def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
             if isinstance(mat, (list, tuple)) and len(mat) == 2:
                 keepouts.append(_square(float(mat[0]), float(mat[1]),
                                         SCATTER_POINT_CLEAR_M))
-        _scatter_into(placements, scatter_sources, boundary, keepouts)
+        _scatter_into(placements, scatter_sources, boundary, keepouts, read_only=read_only)
 
     payload: Dict[str, Any] = {
         "room_id": room.get("id") or "",
@@ -1164,7 +1165,7 @@ def compose_ground_recipe(room: Dict[str, Any], siblings: Any = (),
 
 def compose_recipe(room: Dict[str, Any],
                    siblings: Any = (),
-                   map3d: Any = None) -> Optional[Dict[str, Any]]:
+                   map3d: Any = None, *, read_only: bool = False) -> Optional[Dict[str, Any]]:
     """The full recipe of ONE room, or None when it has no layout.
 
     ``siblings`` are the OTHER rooms of the same location; those on the same
@@ -1176,7 +1177,7 @@ def compose_recipe(room: Dict[str, Any],
     """
     from app.models.world import GROUND_ROOM_ID
     if str(room.get("id") or "") == GROUND_ROOM_ID:
-        return compose_ground_recipe(room, siblings, map3d)
+        return compose_ground_recipe(room, siblings, map3d, read_only=read_only)
     lay = room.get("layout")
     rect = _layout_rect(lay)
     if not rect:
@@ -1221,7 +1222,7 @@ def compose_recipe(room: Dict[str, Any],
                 op["edge"] = edge_map[e]
 
     placements, prop_markers = _join_placements(lay, place, room_yaw,
-                                                w / 2, d / 2)
+                                                w / 2, d / 2, read_only=read_only)
 
     scatter_sources = [p for p in (lay.get("props") or [])
                        if isinstance(p, dict) and p.get("scatter_count")]
@@ -1254,7 +1255,7 @@ def compose_recipe(room: Dict[str, Any],
             if isinstance(mat, (list, tuple)) and len(mat) == 2:
                 mx, my = place(float(mat[0]), float(mat[1]))
                 keepouts.append(_square(mx, my, SCATTER_POINT_CLEAR_M))
-        _scatter_into(placements, scatter_sources, outline, keepouts)
+        _scatter_into(placements, scatter_sources, outline, keepouts, read_only=read_only)
 
     payload: Dict[str, Any] = {
         "room_id": room.get("id") or "",

@@ -219,7 +219,7 @@ def _blockers(recipe: Dict[str, Any], cx: float, cz: float,
             continue
         pid = str(p.get("prop_id") or "")
         if pid not in records:
-            records[pid] = prop_store.get_prop(pid) or {}
+            records[pid] = prop_store.get_prop(pid, read_only=True) or {}
         prop = records[pid]
         if (str(prop.get("mount") or "floor").strip().lower() or "floor") != "floor":
             continue
@@ -295,7 +295,7 @@ def room_geometry(location_id: str, room_id: str
     if room is None:
         return None
     recipe = compose_recipe(room, [r for r in rooms if r is not room],
-                            map3d=loc.get("map3d") or {})
+                            map3d=loc.get("map3d") or {}, read_only=True)
     if not recipe or recipe.get("is_ground"):
         return None
     cx, cz = float(loc["pos_x"]), float(loc["pos_z"])

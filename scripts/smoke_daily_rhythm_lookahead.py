@@ -77,6 +77,7 @@ from app.core import paths
 
 STORAGE = Path(tempfile.mkdtemp(prefix="rhythm-lookahead-"))
 paths.init(STORAGE)
+paths.init_instance(STORAGE / "instance")
 from app.core import db, thought_context
 from app.core.game_time import GameTime
 from app.models.world import add_location, list_locations, replace_all_locations
@@ -201,6 +202,7 @@ from app.core.prompt_templates import _env, render
 template = "chat/agent_thought.md"
 source = _env.loader.get_source(_env, template)[0]
 ctx = {name: "" for name in meta.find_undeclared_variables(_env.parse(source))}
+ctx["character_name"] = NAME
 for tracking in (False, True):
     plan_end = "; close it with [INTENT_DONE: <id>] when done" if tracking else ""
     original = [

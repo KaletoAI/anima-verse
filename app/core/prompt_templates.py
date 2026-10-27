@@ -230,6 +230,44 @@ def _compile(template_name: str) -> Template:
     return tmpl
 
 
+_ACTION_TEMPLATES = frozenset(("chat/agent_thought.md", "chat/agent_thought_in_chat.md",
+                              "chat/chat_moment.md", "tasks/npc_action.md"))
+
+
+def _prop_action_context(path, variables):
+    if path not in _ACTION_TEMPLATES:
+        return variables, ""
+    variables = dict(variables)
+    actor = variables.get("character_name") or variables.get("npc_name")
+    if not actor:
+        raise ValueError(f"{path}: mandatory prop action actor missing")
+    block = variables.get("prop_actions_block", "")
+    # Reuse the actual current room-offer snapshot, avoiding a second planner.
+    for key in ("activity_hint_block", "known_activities"):
+        text = variables.get(key, "")
+        start = text.find("<prop_actions_contract>")
+        end = text.find("</prop_actions_contract>", start)
+        if start >= 0 and end >= 0:
+            block = text[start:end + len("</prop_actions_contract>")]
+            variables[key] = text[:start] + text[end + len("</prop_actions_contract>"):]
+    if not block:
+        from app.core.prop_actions import prompt_block
+        block = prompt_block(actor)
+    variables["prop_actions_block"] = block
+    return variables, block
+
+
+def _ensure_prop_actions(rendered, block, path):
+    if block and block not in rendered:
+        # World overrides remain intact. Repair a missing mandatory runtime
+        # section visibly instead of silently hiding executable capabilities.
+        from app.core.log import get_logger
+        get_logger("prompt_templates").warning(
+            "%s omitted mandatory prop_actions_block; appended runtime context", path)
+        return rendered + "\n\n" + block
+    return rendered
+
+
 def render_task(task: str, **vars) -> Tuple[str, str]:
     """Render `tasks/<task>.md` and return (system_prompt, user_prompt).
 
@@ -237,14 +275,19 @@ def render_task(task: str, **vars) -> Tuple[str, str]:
     """
     # Compiled from the body (after frontmatter strip) so `{% include %}` etc.
     # still works, and so frontmatter is not handled twice.
-    rendered = _compile(f"tasks/{task}.md").render(**vars)
-    return _split_system_user(rendered)
+    path = f"tasks/{task}.md"
+    vars, block = _prop_action_context(path, vars)
+    rendered = _compile(path).render(**vars)
+    system, user = _split_system_user(rendered)
+    return _ensure_prop_actions(system, block, path), user
 
 
 def render(template_path: str, **vars) -> str:
     """Render any single template file (sections/, chat/, ...) and return
     the result as a plain string."""
-    return _compile(template_path).render(**vars).strip()
+    vars, block = _prop_action_context(template_path, vars)
+    rendered = _compile(template_path).render(**vars).strip()
+    return _ensure_prop_actions(rendered, block, template_path)
 
 
 def template_exists(template_path: str) -> bool:

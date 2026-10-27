@@ -12,22 +12,17 @@ location and dropped whenever a layout, a prop sidecar or the catalog is
 written (every writer calls :func:`invalidate`); the TTL only covers a
 writer nobody thought of.
 
-``assign`` is the one entry: keep your own place when the new pose is of the
-same group, else the place with the fewest taken slots, nearest free slot to
-where the character stands. ``prefer`` insists on one place and raises
-:class:`PlaceUnavailable` instead of falling back. A PAIR (an interaction,
-``interaction_engine``) takes ONE place for two through ``assign_pair``:
-both profiles hold it as the ``PAIR_SLOT`` and the pair consumes the pose's
-``places`` slots from slot 0 upwards; ``assign`` never re-seats a running
-pair, ``release_pair`` stands both up. A place carries at most ONE pair —
-its centre is the pair's anchor, unique per place — so ``assign_pair``
-refuses a place another pair holds, however many slots are left.
+Raw ``assign``/``assign_pair`` serve room-owned markers only; props are claimed
+by the semantic executor after exact consent and route checks. ``prefer`` never
+turns a raw pose into prop authority. Free body poses remain unbound. A persisted
+pair place uses ``PAIR_SLOT`` and consumes its pose's slots as one owned pair;
+``release_pair`` releases that binding, never seats on a different object.
 
 What the LLM is told about all this lives here too (plan § 5):
 :func:`room_offer` is the prompt block every chat/thought consumer shows —
-free places with the poses they allow, busy ones by name, the room's
-free-text ``activity_hint`` as the tail; :func:`room_offer_short` is the
-per-group free count the NPC director picks a room by; :func:`place_label`
+semantic prop actions with exact targets/effects and free/room-marker poses,
+plus the room's free-text hint; :func:`room_offer_short` counts only raw
+room-marker capacity for room selection; :func:`place_label`
 names the seat a character holds, :func:`place_phrase` puts the group's
 preposition in front of it ("on the sofa") for the 2D prompt, the presence
 line and the player's Others panel.
@@ -87,9 +82,9 @@ def _compose(location_id: str) -> Dict[str, List[Place]]:
     loc = get_location_by_id(location_id)
     if not loc or loc.get("pos_x") is None or loc.get("pos_z") is None:
         return {}
-    plan_width_m, building_meta, room_metas = scene_inputs(loc, location_id)
+    plan_width_m, building_meta, room_metas = scene_inputs(loc, location_id, read_only=True)
     scene = compose_scene(loc, plan_width_m=plan_width_m,
-                          building_meta=building_meta, room_metas=room_metas)
+                          building_meta=building_meta, room_metas=room_metas, read_only=True)
     cx, cz = float(loc["pos_x"]), float(loc["pos_z"])
     yaw = float(loc.get("yaw_deg") or 0.0)
 
@@ -370,7 +365,7 @@ def _warn_outside(location_id: str, place: Place, x: float, z: float) -> None:
 
 
 def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
-    """Give ``name`` a free place of the pose's group in its room, write it to
+    """Give ``name`` a free room-owned marker of its pose group, write it to
     the profile and put the character on the slot; returns the profile field
     ``{"id", "slot", "room_id"}``. None when the room has no free place of
     that group (the pose stays, the client falls back) — and a place held
@@ -409,7 +404,10 @@ def assign(name: str, pose_key: str, prefer: str = "") -> Optional[dict]:
     # not both read "slot 0 is free". room_places/occupancy take only the
     # cache lock, never this one — a keyed_lock is a plain Lock.
     with keyed_lock("places", loc):
-        cands = [p for p in room_places(loc, room) if p["group"] == group]
+        # Semantic furniture is never allocated by a raw pose. Room-owned
+        # markers keep their existing semantics; free body poses need no prop.
+        cands = [p for p in room_places(loc, room)
+                 if p["group"] == group and p.get("source") != "prop"]
         if prefer:
             cands = [p for p in cands if p["id"] == prefer]
         occ = occupancy(loc, room, exclude=name)
@@ -560,7 +558,7 @@ def assign_pair(actor: str, partner: str, pose_key: str) -> Optional[Tuple[Place
         mine = {actor, partner}
         fitting = []
         for p in room_places(loc, room):
-            if p["group"] != group:
+            if p["group"] != group or p.get("source") == "prop":
                 continue
             others = [(n, s) for n, s in occ.get(p["id"], []) if n not in mine]
             if not _has_pair(others) and len(free_slots(p, others)) >= need:
@@ -648,8 +646,7 @@ _PREPOSITION = {"seat": "on", "lie": "on", "ground": "on"}
 
 def _group_lines(location_id: str, room_id: str,
                  viewer: str) -> Tuple[List[str], Set[str]]:
-    """One line per place — the markers of one prop collapse into a single
-    line per group (a "2× Chair" is one row), room markers stay apart —
+    """One line per room-owned place, never an unchecked furniture offer —
     busy ones by the names holding them, free ones with the poses of their
     group the free slots allow. A pair pose needs ``places`` free slots ON
     ONE place (a pair sits on one marker, never across two chairs), so the
@@ -668,7 +665,9 @@ def _group_lines(location_id: str, room_id: str,
     cat = activity_catalog()
     rows: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for p in room_places(location_id, room_id):
-        key = (p["label"], p["group"]) if p["source"] == "prop" else (p["id"], p["group"])
+        if p.get("source") == "prop":
+            continue  # Furniture offers semantic actions, not group-wide poses.
+        key = (p["id"], p["group"])
         row = rows.setdefault(key, {"label": p["label"], "group": p["group"], "count": 0,
                                     "free": 0, "max_free": 0, "cap": 0, "who": []})
         taken = occ.get(p["id"], [])
@@ -727,8 +726,8 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
     nothing, so its poses come back here: a full room must not stop anyone
     standing.
 
-    A room without markers still gets the last two lines; nothing at all
-    yields ``""`` so a template can ``{% if %}`` it away."""
+    The mandatory semantic contract is present even in an empty room; it
+    reports an empty offer rather than silently disappearing from prompts."""
     from app.core.pose_catalog import activity_catalog, poses_without_place
     from app.models.world import get_room_activity_hint
     if location_id and room_id:
@@ -752,6 +751,8 @@ def room_offer(name: str, location_id: str, room_id: str) -> str:
     hint = get_room_activity_hint(location_id, room_id) if location_id else ""
     if hint:
         out.append(f"Also typical here: {hint}")
+    from app.core.prop_actions import prompt_block
+    out.append(prompt_block(name))
     return "\n".join(out)
 
 
@@ -783,6 +784,8 @@ def room_offer_short(location_id: str, room_id: str,
         occ = occupancy(location_id, room_id)
     free: Dict[str, int] = {}
     for p in room_places(location_id, room_id):
+        if p.get("source") == "prop":
+            continue
         free[p["group"]] = free.get(p["group"], 0) + len(free_slots(p, occ.get(p["id"], [])))
     return ", ".join(f"{g} {n} free" for g, n in free.items())
 

@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 _TEMP = tempfile.TemporaryDirectory(prefix="thought-focus-")
 from app.core import paths
 paths.init(Path(_TEMP.name))
+paths.init_instance(Path(_TEMP.name) / "instance")
 from app.core import db
 db.init_schema()
 from app.core import thought_context as tc, agent_loop as al

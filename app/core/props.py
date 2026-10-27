@@ -700,7 +700,7 @@ def _sidecar_path(prop_id: str) -> Optional[Path]:
 
 
 @_author_transaction
-def read_sidecar(prop_id: str) -> Dict[str, Any]:
+def read_sidecar(prop_id: str, *, read_only: bool = False) -> Dict[str, Any]:
     sp = _sidecar_path(prop_id)
     if sp and sp.exists():
         try:
@@ -709,7 +709,8 @@ def read_sidecar(prop_id: str) -> Dict[str, Any]:
                 entries = _variant_list(meta)
                 if meta.get(VARIANTS_KEY) != entries:
                     meta[VARIANTS_KEY] = entries
-                    _write_sidecar(prop_id, meta)
+                    if not read_only:
+                        _write_sidecar(prop_id, meta)
                 return meta
         except (OSError, ValueError):
             pass
@@ -925,7 +926,7 @@ def _stem_of(prop_id: str, variant: Any = None,
     """File stem of ONE variant of a prop — ``None`` (or a negative index)
     means the PRIMARY variant, i.e. the first EFFECTIVELY active one. ``''``
     when the index names no variant this prop has."""
-    entries = _variant_list(read_sidecar(prop_id) if meta is None else meta)
+    entries = _variant_list(read_sidecar(prop_id, read_only=True) if meta is None else meta)
     if variant is None:
         return entries[_effective_indices(entries)[0]]["stem"]
     try:
@@ -5788,8 +5789,8 @@ def _picture_signature_part(entries: List[Dict[str, Any]],
 
 
 def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
-                 ensure_bbox: bool = True) -> Dict[str, Any]:
-    if ensure_bbox:
+                 ensure_bbox: bool = True, read_only: bool = False) -> Dict[str, Any]:
+    if ensure_bbox and not read_only:
         meta = _ensure_bbox(prop_id, meta)
     entries = _variant_list(meta)
     # EFFECTIVELY active (E2c): manually active AND in season. The record is a
@@ -5810,8 +5811,9 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
     # The record IS a client payload (the prop library the 3D client reads),
     # so this is one of the two places a missing distance mesh is noticed —
     # for every variant, not just the primary one.
-    for i, vt in zip(active_idx, tier_lists):
-        _demand_low(prop_id, i, vt)
+    if not read_only:
+        for i, vt in zip(active_idx, tier_lists):
+            _demand_low(prop_id, i, vt)
     gallery = galleries[0]
     tiers = tier_lists[0]
     # …plus everything the VARIANT owns (2026-08-25): the three real metres it
@@ -5994,13 +5996,13 @@ def list_props(*, full: bool = False) -> List[Dict[str, Any]]:
 
 
 @_author_transaction
-def get_prop(prop_id: str) -> Optional[Dict[str, Any]]:
-    """Full detail of ONE prop, or None."""
+def get_prop(prop_id: str, *, read_only: bool = False) -> Optional[Dict[str, Any]]:
+    """Full detail; read_only retains published geometry without lazy writes/jobs."""
     pid = safe_prop_id(prop_id)
-    meta = read_sidecar(pid) if pid else {}
+    meta = read_sidecar(pid, read_only=read_only) if pid else {}
     if not meta:
         return None
-    return _prop_record(pid, meta, full=True)
+    return _prop_record(pid, meta, full=True, read_only=read_only)
 
 
 # ── Generation state (populated by the generation chain, A2) ─────────────

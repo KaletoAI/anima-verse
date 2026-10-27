@@ -64,8 +64,8 @@ variable raises, which is exactly what this block guards. "" is a valid
 value for the boolean flags too because the template only truth-tests
 them; partner_mode "room" + present_characters "Bob" + medium
 "in_person" pick concrete branches so the render is not an empty shell.
-The app's own Jinja environment (app.core.prompt_templates) is used —
-it builds without a world, so no paths.init() is needed.
+The app's real Jinja renderer uses a private storage/instance/schema fixture,
+including its mandatory semantic action/state context.
 
 Usage:  ./.venv/bin/python scripts/smoke_reply_shape.py
 """
@@ -86,6 +86,9 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(prefix="reply-shape-clips-"
 from app.core import paths  # noqa: E402
 
 paths.init(tempfile.mkdtemp(prefix="reply-shape-storage-"))
+paths.init_instance(paths.get_storage_dir() / "instance")
+from app.core.db import init_schema
+init_schema()
 
 from app.core.reply_shape import (  # noqa: E402
     BRIEF_MAX_WORDS,
@@ -283,6 +286,7 @@ def test_template_render():
                        char_lines=[], partner_lines=[], partner_state_lines=[],
                        self_state_lines=[], moment_notes=[])
             ctx = {k: v for k, v in ctx.items() if k in names}
+            ctx["character_name"] = "Reply Shape Fixture"
             parts.append(render(tpl, **ctx))
         return "\n".join(parts)
 

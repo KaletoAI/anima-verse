@@ -63,6 +63,9 @@ os.environ["ANIMATION_CLIPS_DIR"] = tempfile.mkdtemp(
 
 from app.core import paths  # noqa: E402
 paths.init(tempfile.mkdtemp(prefix="game-weather-prompts-storage-"))
+paths.init_instance(paths.get_storage_dir() / "instance")
+from app.core.db import init_schema
+init_schema()
 
 import app.core.game_time as gt          # noqa: E402
 import app.core.timeutils as timeutils   # noqa: E402

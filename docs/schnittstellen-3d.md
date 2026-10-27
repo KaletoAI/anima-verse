@@ -7584,8 +7584,8 @@ marker IDs, per-role `access_points` (`actor`, plus `partner` for pairs) and
 `validation` (`suggested`, `local_valid`, `repair_required`). Access points are
 `{x,z,yaw}`: oriented local metres relative to footprint centre and yaw in
 degrees, with no authored/support-mesh height. Author validation is the read-only
-`app.core.prop_actions.validate_document(prop)` contract. This schema alone does
-not execute or expose runtime actions; deployment waits for the complete cutover.
+`app.core.prop_actions.validate_document(prop)` contract. The HTTP/tool/Core
+interfaces below expose semantic actions; deployment still waits for all clients.
 
 `app.core.prop_action_migration.normalize_import(document)` is the one-way
 pack ingress: it returns a deep-copied canonical document and raises structured
@@ -7619,8 +7619,10 @@ getter. Its report contains `props` (prop ID, changed flag, variant/action/offer
 counts, repair count, proposed document), `changed`, structured `issues`,
 `runtime_activated: false` and per-prop `route_checked: false`. Explicit
 `dry_run=False` persists valid documents under the existing per-prop author lock;
-repeating it writes nothing. Startup only logs the dry report, never activates
-or applies it. Intermediate schema/migration commits must not deploy alone.
+repeating it writes nothing. Startup logs the dry inventory, refuses unreadable/
+invalid documents, then persists valid normalization before runtime jobs start.
+This only writes the current world's prop store, never Shared source assets.
+Intermediate commits must not deploy before the full client cutover.
 
 Dry inventory uses an isolated read-only catalog snapshot, not
 `db.get_connection()`: missing `world.db` means no world overrides, while
@@ -7653,8 +7655,8 @@ means decorative; creation writes that empty list. Autofurnish creates disabled,
 unsupported `suggested` actions only when its solver explicitly supplies a
 marker. Missing/ambiguous facing or dimensions yields blocked `repair_required`
 bindings. `local_valid` means only a footprint-local approach proposal, never a
-proof of room accessibility or a route. The future executor must check the
-current room, supporters, obstacles and participants independently.
+proof of room accessibility or a route. The executor independently checks the
+current room, supporters, obstacles, transitions and participants.
 
 Composed prop places retain `placement_id`, `prop_id`, `variant_uid`, `marker_id`
 and `action_bindings` with `definition_revision` and room/location provenance.
@@ -7677,9 +7679,10 @@ Role access XZ/yaw composes through placement and room/location rotations, but
 access Y uses the room-floor datum (including storey/plate), never supporting
 furniture height. Like existing scene `y_world`, storey-zero scene access Y is
 terrain-relative; the concrete-world consumer samples the room ground, not the
-supporting table. No teleport, route fallback or action execution is introduced.
+supporting table. Real execution uses the exact indoor route below, without
+teleportation or another-furniture fallback.
 
-### Indoor prop approaches (pre-activation Core contract)
+### Indoor prop approaches (Core contract)
 
 `prop_action_paths.plan_approach(actor, target, role)` is read-only. Target
 requires `location_id`, `room_id`, `placement_id`, `variant_uid`, `action_id`,
@@ -7741,10 +7744,10 @@ without replacing them. A persisted `execution_ref` without a kind is normalized
 once to `party_intent`; ordinary journeys remain ownerless. An unavailable or
 unknown typed owner is visibly cancelled (`last_journey_result`, state event,
 log). `cancel_journey` accepts exact `journey_id`, `execution_kind` and
-`execution_ref` selectors; all supplied selectors must match. Runtime prop
-actions remain inactive until the complete executor/cutover is installed.
+`execution_ref` selectors; all supplied selectors must match. Server lifespan
+registers the prop owner before jobs start; final client cutover is still required.
 
-### Durable prop executions (internal, pre-HTTP cutover)
+### Durable prop executions
 
 `app.core.prop_action_engine.request(actor, target, action_id, revision,
 partner='', request_id='')`, `respond(actor, execution_id, accept)`,
@@ -7756,7 +7759,8 @@ receipts exist; each targeted numeric result contains its actual clamped
 `delta`, never the requested amount. Refusals have an empty execution ID and
 `status: refused`. Same actor/request ID with identical parameters returns its
 original execution; changed parameters return `request_id_conflict`.
-No HTTP route or UI activation is installed here.
+HTTP and installed tool adapters are described below; clients consume these
+same execution IDs instead of interpreting a successful request as seating.
 
 World schema 10 stores `prop_action_runs`, `prop_action_claims` and
 `prop_action_effect_receipts`. Runs retain the complete accepted definition
@@ -7912,8 +7916,8 @@ never automatic yes. The executable `InteractWith` reply takes
 `{execution_id,answer:"yes"|"no"}` and verifies the actual invitee. A generic
 same-pose counter-call or another placement cannot consent to this question.
 The run pins action/revision/variant/placement/participants and semantic versus
-physical roles; acceptance revalidates them. Scene offers, HTTP, `state_for`
-and final prompt/HUD integrations belong to the subsequent cutover tasks.
+physical roles; acceptance revalidates them. HTTP, `state_for`, room offers and
+effective prompts use the contracts below; final client bindings consume them.
 The explicit-consent policy above is only for semantic prop actions. General
 temporary Together keeps its previous immediate acceptance and incurs no new
 decision-model call or waiting response turn.
@@ -7944,6 +7948,92 @@ bytes remain test assets, not a claim of playable client media.
 
 
 
+
+### Authorized semantic action APIs and effective prompts
+
+`prop_actions.offers(actor)` returns the actual room's authored actions, including
+blocked ones. Each row includes `action_id`, `definition_revision`, exact `target`
+(`location_id,room_id,placement_id,variant_uid`), `placement_id`, `variant_uid`,
+`label`, `description`, `enabled`, `reason`, `required_partner`, `available_targets`
+(per-partner `{partner,enabled,reason}`) and declared `effects`. Checks cover every
+present person, awake/exact partners, effective requirements, exclusive claims,
+current revision/variant/bindings/capability, real collision route and measured
+entry asset. They do not reserve, start, wake, change profiles or queue media.
+`missing_entry_transition` means an author must install/select a real solo
+walking-to-pose asset/rule; a paired-only kind or pair metadata cannot be used as
+an individual bridge. There is no fake/default intro. Default installed rules may
+therefore leave furniture actions visibly blocked.
+
+Player routes require the authenticated user's current authorized avatar:
+
+- `GET /play/prop-actions` returns offers; body/query actor cannot select a figure.
+- `POST /play/prop-actions/request`: `{target,action_id,revision,partner?,request_id?}`.
+  Extra payload fields are rejected; nonces are scoped to actor and exact input.
+- `POST /play/prop-actions/respond`: `{execution_id,accept:bool}`, exact invitee only.
+- `POST /play/prop-actions/cancel`: `{execution_id}`, either real participant only.
+- `GET /play/prop-actions/state`: `{incoming,outgoing,current,recent_results}`.
+  Rows contain `execution_id,action_id,definition_revision,label,target,actor,
+  partner,roles,status,phase,reason,can_respond,can_cancel`. Roles distinguish
+  semantic actor/partner from physical clip/access roles. Incoming is only for
+  the exact recipient; outgoing is only the initiator's; current is participant
+  only. Own terminal rows/effect results disappear after 30 **system** minutes.
+  No foreign consent or overland destination is projected. Core equivalent:
+  `prop_action_engine.state_for(actor)`. Sync invalidation targets only those
+  participants' `self`/`scene` topics, not a public invitation payload.
+
+All author routes below explicitly require admin. `POST /world/props/{id}/validate`
+takes `{document}` and returns issues plus `placement:"not_checked"`.
+`POST /world/props/{id}/check-placement` takes request fields plus an explicit
+`actor` and checks the saved exact placement/revision without executing.
+`POST /world/props/{id}/execute-test` is separate: same input plus
+`confirmed:true`, then the **same** normal executor/consent path. It may change
+world values; admin actor selection is never accepted by the player endpoints.
+Refusals are HTTP 409 (or 403 for unauthorized recipient/participant); malformed
+input is 422. Checks are read-only even on uncached real scene composition.
+`compose_scene(...,read_only=True)`, `scene_inputs(...,read_only=True)`,
+`compose_recipe(...,read_only=True)` and published prop/model read-only getters
+preserve actual hulls, openings, surfaces and furniture dimensions while skipping
+lazy bbox persistence, LOD and visual door/window build queues.
+
+The enabled `set_pose` package also loads the real `prop_action` capability/tool
+`PropAction`. Its request signature is
+`{operation:"request",action_id,revision,target,partner?,request_id?}`; stop is
+`{operation:"cancel",execution_id}`. Actor is bound by the real tool wrapper.
+NPC structured action answers use `{prop_action:<same payload>}` and execute
+through that installed skill/Core instead of applying a new narrative pose.
+`InteractWith {execution_id,answer:"yes"|"no"}` remains the exact consent verb.
+General temporary Together's legacy acceptance is unchanged.
+
+Effective Shared/World `chat_moment`, both thought templates and `npc_action`
+render `prop_actions_block`: current IDs/targets, enabled/blocked reasons,
+partner choices, effect timing and exact executable signatures, even when the
+legacy activity-marker switch is off. If an override drops mandatory context,
+the renderer preserves its custom text, logs a repair warning and appends the
+real runtime block. Missing actor context raises instead of silently omitting it.
+Raw SetActivity never allocates a prop or bypasses action rules; room-owned
+markers/free body poses remain. Implicit chat marker/context adoption does not
+interrupt an explicitly owned semantic action. Explicit tools, movement and stop
+retain their normal interruption authority.
+
+`worldmap.characters[].local_approach` is nullable public **motion**, not consent:
+only an actually addressable/visible same-room observer receives a foreign owned
+prop approach. It contains `journey_id`, current `room_id`, remaining world-XZ
+`waypoints` starting at the current interpolated point, `progress_m:0` relative
+to that trimmed path, `walked_m`, `remaining_m`, remaining `paces_m_s_real`, and
+optional departure `starts_in_s`. No target/execution/partner/foreign room is
+included. Every published segment is checked against the same current room
+geometry. Loss of room, sight, ownership or route returns null; clients must
+delete their cached local path. Existing foreign overland travel stays thinned.
+
+Controller commands (private fixtures only):
+`./.venv/bin/python scripts/smoke_prop_action_api.py` and
+`./.venv/bin/python scripts/smoke_auth_gate.py`.
+Non-unittest loopback HTTP/rendered-prompt/actual streaming tool/effect scenario:
+`./.venv/bin/python scripts/smoke_prop_action_api.py --api-scenario-dir /tmp/prop-api-unused`.
+Use a never-existing destination. It retains `api-prompt-scenario.json` with real
+HTTP state/nonce observations, effective rendered prompts, captured external
+model text passed through the actual parser/skill/streaming/postprocessing, and
+the completed real 50→65 value/receipt. Fixture media is not playable-client proof.
 
 ### Ein Prop, mehrere Modell-Varianten (§ B2)
 

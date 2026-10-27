@@ -7,6 +7,11 @@ skills:
     always_load: true
     default_enabled: true
     singleton: true        # replaces the class attribute (F7)
+  - skill_id: prop_action
+    module: skill_prop_action.py
+    always_load: true
+    default_enabled: true
+    singleton: true
 
 templates:
   llm: templates/llm
@@ -14,5 +19,9 @@ templates:
 config_schema:
   set_pose:
     label: SetActivity
+    fields:
+      enabled: {type: bool, label: Enabled, default: true}
+  prop_action:
+    label: PropAction
     fields:
       enabled: {type: bool, label: Enabled, default: true}
