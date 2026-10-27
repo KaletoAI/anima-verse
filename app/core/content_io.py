@@ -972,6 +972,40 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
             "metres, and would import as centimetre rooms; no longer importable. "
             f"Export the location again from a current world. ({reason})")
 
+    # Validate every bundled action document before creating a location or
+    # touching any dependency directory. Both pack forms use the same ingress.
+    from app.core.props import _prop_dir, safe_prop_id
+    bundled_payloads = {}
+    dependency_issues = []
+    for member in zf.namelist():
+        if not member.startswith("props/") or member.count("/") < 2:
+            continue
+        _, pid, relative = member.split("/", 2)
+        safe = _safe_relpath(relative)
+        if not safe_prop_id(pid) or not safe:
+            continue
+        try:
+            bundled_payloads.setdefault(pid, {})[safe] = zf.read(member)
+        except (zipfile.BadZipFile, zlib.error, EOFError, OSError, RuntimeError) as error:
+            raise ValueError(f"unreadable bundled prop {pid}: {error}") from error
+    action_warnings = []
+    for pid, payload in bundled_payloads.items():
+        action_warnings.extend(_normalize_prop_payload(payload, pid))
+        existing = _prop_dir(pid)
+        if existing and existing.is_dir():
+            incoming = json.loads(payload["sidecar.json"])
+            try:
+                local = json.loads((existing / "sidecar.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                local = {}
+            # Do not mistake an ID collision for compatible action dependency.
+            from app.core.props import _document_revision
+            if _document_revision(incoming) != _document_revision(local):
+                dependency_issues.append({"prop_id": pid, "code": "incompatible_prop_dependency"})
+                for room in loc.get("rooms") or []:
+                    for placement in (room.get("layout") or {}).get("props") or []:
+                        if placement.get("prop_id") == pid:
+                            placement["action_dependency_invalid"] = True
     if manifest.get("discovery_scale") != "stat":
         for room in loc.get("rooms") or []:
             for placement in room.get("items") or []:
@@ -1009,6 +1043,10 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     # bypass them.
     _remap_room_refs(loc, room_id_map)
     sanitize_warnings = _sanitize_imported_location(loc)
+    sanitize_warnings.extend(
+        f'{issue["prop_id"]}: incompatible action dependency; placed actions blocked'
+        for issue in dependency_issues)
+    sanitize_warnings.extend(action_warnings)
     # The corridor of every used storey, after the sanitizers settled the room
     # layouts: a pack exported from a world that predates them carries none,
     # and the reserved ids are the server's to bring (spec § 2.2). Nobody
@@ -1131,15 +1169,7 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
     # Bundled props are a DEPENDENCY, not content of their own: an existing
     # prop is never overwritten (other locations place the same id), a missing
     # one is installed, and a placement whose prop is neither is reported.
-    from app.core.prop_field_migration import normalize_prop_sidecar
-    from app.core.props import _prop_dir, safe_prop_id
-    # An id the prop store would refuse is NOT a dependency this ZIP satisfies:
-    # it is filtered out BEFORE the props_missing subtraction below, so a
-    # bundled-but-invalid id is reported as missing instead of counting as
-    # delivered.
-    bundled = sorted({m.split("/", 2)[1] for m in zf.namelist()
-                      if m.startswith("props/") and m.count("/") >= 2
-                      and safe_prop_id(m.split("/", 2)[1])})
+    bundled = sorted(bundled_payloads)
     props_imported: List[str] = []
     props_existing: List[str] = []
     for pid in bundled:
@@ -1148,23 +1178,11 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
             props_existing.append(pid)          # never overwrite an existing prop
             continue
         dest = _prop_dir(pid, create=True)
-        prefix = f"props/{pid}/"
-        for member in zf.namelist():
-            if not member.startswith(prefix):
-                continue
-            safe = _safe_relpath(member[len(prefix):])
-            if not safe:
-                continue
-            target = dest / safe
+        for relative, data in bundled_payloads[pid].items():
+            target = dest / relative
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(zf.read(member))
+            target.write_bytes(data)
         _reanchor_surfaces(dest.iterdir())
-        # A pack authored before 2026-08-25 carries the size, subject, ground
-        # offset and markers on the PROP record, which nothing reads any more.
-        # The boot migration ran long before this import, so the sidecar is
-        # brought into the current shape here — the same one-way transform,
-        # applied where the file lands.
-        normalize_prop_sidecar(pid)
         props_imported.append(pid)
 
     # Read from the SANITIZED location: a placement the sanitizer already threw
@@ -1205,6 +1223,7 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
         "props_imported": props_imported,
         "props_existing": props_existing,
         "props_missing": props_missing,
+        "action_dependency_issues": dependency_issues,
         "items_imported": items_imported,
         # What the sanitizers refused, in plain words. Empty for a pack from a
         # current world; non-empty is the no-migration doctrine made visible —
@@ -1217,6 +1236,38 @@ def import_location_from_zip(content: bytes) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Props
 # ---------------------------------------------------------------------------
+
+def _normalize_prop_payload(payload: Dict[str, bytes], prop_id: str) -> List[str]:
+    """Validate in memory before installation; retain canonical byte exports."""
+    from app.core.prop_action_migration import normalize_import
+    if "sidecar.json" not in payload:
+        raise ValueError(f"{prop_id}: sidecar.json missing — not a prop export")
+    try:
+        original = json.loads(payload["sidecar.json"])
+    except (ValueError, UnicodeError) as error:
+        raise ValueError(f"{prop_id}: invalid sidecar JSON") from error
+    if not isinstance(original, dict):
+        raise ValueError(f"{prop_id}: sidecar must be an object")
+    seeded = dict(original)
+    seeded["id"] = prop_id
+    from app.core.props import PropDocumentInvalid
+    try:
+        normalized = normalize_import(seeded)
+    except PropDocumentInvalid as error:
+        raise ValueError(f"{prop_id}: action dependencies/document invalid: "
+                         + json.dumps(error.issues, ensure_ascii=False)) from error
+    if "id" in original:
+        normalized["id"] = original["id"]
+    else:
+        normalized.pop("id", None)
+    if normalized != original:
+        payload["sidecar.json"] = json.dumps(normalized, ensure_ascii=False, indent=2).encode()
+    repairs = sum(binding["validation"] == "repair_required"
+                  for variant in normalized["model_variants"]
+                  for binding in variant["action_bindings"])
+    return ([f"{prop_id}: {repairs} action binding(s) repair_required; actions blocked"]
+            if repairs else [])
+
 
 def _reanchor_surfaces(paths: Any) -> None:
     """Re-bind the baked surface lattice of every imported model file to the
@@ -1288,7 +1339,7 @@ def import_prop_from_zip(
     BEFORE the first byte on disk changes — a broken ZIP never costs the
     prop that is already there.
     """
-    from app.core.prop_field_migration import normalize_prop_sidecar
+    # Action ingress is validated in memory, never after destructive replace.
     from app.core.props import _prop_dir, read_sidecar, safe_prop_id
 
     try:
@@ -1328,27 +1379,27 @@ def import_prop_from_zip(
         # The master record is what MAKES a prop.
         if "sidecar.json" not in payload:
             raise ValueError("files/sidecar.json missing — not a prop export")
+        action_warnings = _normalize_prop_payload(payload, pid)
 
-        dst = _prop_dir(pid)
-        if dst is not None and dst.is_dir():
-            if not overwrite:
-                return {"status": "exists", "prop_id": pid}
-            shutil.rmtree(dst, ignore_errors=True)
+        from app.core.props import _author_mutex
+        with _author_mutex(pid):
+            dst = _prop_dir(pid)
+            if dst is not None and dst.is_dir():
+                if not overwrite:
+                    return {"status": "exists", "prop_id": pid}
+                shutil.rmtree(dst, ignore_errors=True)
 
-        dst = _prop_dir(pid, create=True)
-        for rel, blob in payload.items():
-            target = dst / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(blob)
-        _reanchor_surfaces(dst.iterdir())
-        count = len(payload)
+            dst = _prop_dir(pid, create=True)
+            for rel, blob in payload.items():
+                target = dst / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(blob)
+            _reanchor_surfaces(dst.iterdir())
+            count = len(payload)
     finally:
         zf.close()
 
-    # A ZIP authored before 2026-08-25 puts size, subject, ground offset and
-    # markers on the master record, which nothing reads any more — the same
-    # one-way transform the boot migration runs, applied where the file lands.
-    normalize_prop_sidecar(pid)
+    # The canonical document was validated before the destination was replaced.
     name = read_sidecar(pid).get("name") or manifest.get("prop_name") or pid
     logger.info("Prop import: %s (%s, files=%d)", pid, name, count)
     return {
@@ -1356,6 +1407,7 @@ def import_prop_from_zip(
         "prop_id": pid,
         "prop_name": name,
         "files_imported": count,
+        "warnings": action_warnings,
     }
 
 
