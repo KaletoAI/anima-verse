@@ -126,3 +126,135 @@ Existing deeper process scenarios remain controller regressions:
 - Deterministic fixture FBX bytes are not playable-media evidence. Parent's separate private `playable-fixture/clips/fixture-sit-down.{fbx,json}` was not installed, published or replaced by this task. Default real entry rules remain honestly blocked until real compatible media/rules are configured; actual browser/native validation remains Task9/10.
 - Runtime/API/tool implementation is on this branch only. Do not deploy its intermediate state before remaining admin/client cutover tasks land.
 - No automatic replacement of an already owned semantic execution was invented: explicit cancel/stop or explicit movement/pose remains the authoritative interruption before requesting a different semantic run.
+
+## Fix round 1/5 — production defaults, startup order, gates and NPC override envelope
+
+Fix BASE `9e826233`. The resulting scoped commit is supplied in the final handoff.
+The original implementation narrative above is historical where superseded here.
+
+### Controller evidence accepted, not rerun
+
+Independent review `agent://ApiPromptsReview` reported five production findings
+and the measured-entry receipt-recovery fixture defect. Controller ran API
+**10 tests / 2 failures** (`artifact://154`) and lifecycle **31 / 1 failure**
+(`artifact://157`). The failed arrival row already showed actual receipt recovery,
+the participant at floor access, `approaching/entry`, measured two-second duration,
+and zero elapsed entry time; another advance at the same clock was correctly not
+activation. This runtime observation was accepted, not repeated.
+
+Controller reported auth gate, paths **23**, effects **29**, places, room standing
+and interaction passed (`artifact://159`). NPC/home/conversation/undertaking/
+decision/chat-order/thought-focus passed before the daily-rhythm wording failure
+(`artifact://158`). Commitments/reply-shape/weather passed before the obsolete
+scene-version pin (`artifact://160`); lookup **13** and furnishing passed.
+These are observations for the initial commit, not GREEN evidence for this fix.
+The real HTTP/prompt/tool/effect scenario was not reached by the failed API chain.
+
+This worker ran **no tests, builds, linters, formatters, scenario/server/model/
+media commands or failure-confirmation probes** in this fix round.
+
+### Applied root-cause corrections
+
+1. **Existing-character activation:** `PropActionSkill.default_enabled_for`
+   supplies its intended enabled package/global-skill runtime default. Manifest
+   `always_load` no longer substitutes for activation; explicit per-character
+   `enabled:false` remains the manager's first decision, and generic rules/cost
+   blocks still filter the actual executable tool. No character override file
+   is written merely to obtain this default; unrelated ALWAYS_LOAD skills retain
+   their existing policy.
+2. **Actual startup prerequisite chain:** `prop_action_migration.prepare_runtime`
+   is the single production preparation used by lifespan before jobs. It runs
+   stable marker/placement-ID migration, variant-field migration and place-group
+   normalization in order, then performs dry action inventory and real application
+   and registers the owner. The premature early inventory and duplicate later
+   dry-only startup block were removed. Invalid post-prerequisite data still
+   refuses startup visibly; supported legacy data gets its existing repair first.
+3. **Player gate and successful-call cost:** player request uses the existing
+   `_player_action_gate` declaration lookup before Core and the existing `charge`
+   boundary only after an accepted nonfailed request. Rule/cost refusal is 403;
+   a semantic Core refusal raises before charging. Accepted pair questions remain
+   `awaiting_consent` with no claims: a cost never acts as consent. Respond/cancel
+   endpoints remain free and retain exact participant authorization.
+4. **Structured tool failures:** the shared `streaming.is_error_result` predicate,
+   already consumed by `run_gated`, now recognizes dict/serialized-JSON explicit
+   failures (`success:false`, `ok:false`, nonempty `error`, or failure status
+   `refused`/`failed`/`error`) as well as legacy Error/Fehler prose. PropAction
+   retains its machine-readable JSON result unchanged. Refused stale/claimed/
+   invalid requests can no longer be mistaken for successful cost-bearing calls.
+   This is the existing failure boundary, not an offer-only or PropAction-only
+   exception; successful/terminal cancellation is not automatically a failure.
+5. **NPC-specific effective override contract:** the mandatory NPC renderer block
+   now also includes structured `npc_action_request_shape` and
+   `npc_action_cancel_shape` envelopes with top-level `prop_action`, exact target
+   field shape and request/cancel operation. The NPC director is explicitly told
+   not to emit bare tool payloads/tool syntax or a simultaneous pose/room change.
+   This consumer-specific shape is enforced together with the common action block
+   even when World replaces the whole task template. The formerly Shared-only
+   duplicate instruction was removed.
+6. **Measured receipt recovery:** the lifecycle regression now asserts actual
+   recovered receipt/participant arrival, exact floor access, no premature place,
+   `approaching/entry` and zero entry elapsed; it then advances the actual stored
+   measured interval and asserts real active body placement/owned execution ID.
+   No runtime entry duration or recovery guard was weakened.
+7. **Obsolete snapshots deleted, not repinned:** removed the unrelated literal
+   decision-prose snapshot from `smoke_daily_rhythm_lookahead.py`; its real daily
+   schedule/lookahead checks remain. Removed only the old code-version-18 pin
+   from `smoke_scene_recipe.py`; its real baked-surface and geometry assertions
+   remain. No production wording/version was changed to satisfy either snapshot.
+
+### New meaningful boundary regressions, prepared but not run
+
+- Existing actor with no skill override: actual manager exposure without writing
+  an activation file; explicit disable hides it; explicit enable plus a persisted
+  real skill-block rule still hides/refuses it with no claims or stat spend.
+- Real HTTP stale refusal leaves 50; accepted request spends configured five to
+  45; cost shortfall refuses without changing the real run/profile; cancellation
+  still works. A paid actual pair request remains pending/no claims until the
+  real recipient's HTTP response, and response does not charge again.
+- Captured tool text passes the actual parser, loaded bound skill, streaming tool
+  executor and generic gate. A stale serialized refusal costs zero; a real
+  accepted request spends five; the following real participant-claimed refusal
+  remains structured JSON and spends nothing further.
+- The actual NPC structured/effectful execution case now replaces the entire
+  task with a genuine World override that knows no semantic fields. It checks the
+  repaired *rendered* JSON envelope/target structure, preserves custom World text,
+  and dispatches the captured external model response through the real NPC skill/
+  executor to the real 50→65 success value.
+- A fresh private subprocess creates an authentic raw legacy sidecar with
+  animation-based markers lacking IDs and prop-level fields. It invokes the exact
+  production `prepare_runtime` function, checks actual persisted stable marker IDs
+  and binding references/action data, repeats to prove zero further action writes,
+  and checks unchanged actor position/no claims. It never imports or starts full
+  production lifespan/jobs and never uses live storage.
+
+Product contracts updated in `docs/schnittstellen-3d.md`, `docs/llm-templates.md`
+and the existing `docs/skill-core-api.md`. No original checkout, live world,
+unrelated asset preparation, deployment or restart was touched.
+
+### Exact controller commands for the fix
+
+Run from the approved worktree:
+
+```sh
+./.venv/bin/python scripts/smoke_prop_action_api.py
+./.venv/bin/python scripts/smoke_prop_action_runs.py
+./.venv/bin/python scripts/smoke_auth_gate.py
+./.venv/bin/python scripts/smoke_stat_skill_gate.py
+./.venv/bin/python scripts/smoke_stat_skill_costs.py
+./.venv/bin/python scripts/smoke_daily_rhythm_lookahead.py
+./.venv/bin/python scripts/smoke_scene_recipe.py
+./.venv/bin/python scripts/smoke_prop_action_paths.py
+./.venv/bin/python scripts/smoke_prop_action_effects.py
+./.venv/bin/python scripts/smoke_prop_action_migration.py
+```
+
+Then run the actual non-unittest HTTP/prompt/tool/effect driver with a
+never-existing destination:
+
+```sh
+./.venv/bin/python scripts/smoke_prop_action_api.py --api-scenario-dir /tmp/prop-actions-task6-fix1-http-prompt-001
+```
+
+The broader existing NPC/chat/rendering/geometry command chain earlier in this
+report remains applicable. No fix-commit passing count or actual scenario result
+is claimed by the worker.

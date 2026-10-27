@@ -287,6 +287,27 @@ def prompt_block(actor: str) -> str:
             "\n</prop_actions_contract>")
 
 
+def npc_action_response_contract() -> str:
+    """Mandatory JSON envelope understood by the NPC director's real dispatcher."""
+    import json
+    request = dict(prop_action=dict(operation="request", action_id="<offered action_id>",
+        revision="<offered definition_revision>",
+        target={key: "<offered " + key + ">" for key in
+                ("location_id", "room_id", "placement_id", "variant_uid")},
+        partner="<enabled exact partner, or empty string>"))
+    cancel = dict(prop_action=dict(operation="cancel", execution_id="<own execution_id>"))
+    return ("<npc_action_response_contract>\n"
+            "This NPC director does not emit tool syntax. For a furniture action, "
+            "replace the ordinary room/activity/pose answer with a SINGLE JSON object "
+            "using the prop_action envelope below. Copy exact IDs, revision, target "
+            "and an enabled partner from the current offers. A bare tool payload "
+            "is not executable here. Do not also set pose, say, pair or action, "
+            "and do not change rooms. Use the cancel envelope only for an own run.\n"
+            "npc_action_request_shape=" + json.dumps(request, separators=(",", ":")) + "\n"
+            "npc_action_cancel_shape=" + json.dumps(cancel, separators=(",", ":")) +
+            "\n</npc_action_response_contract>")
+
+
 def execute(actor: str, payload: dict) -> dict:
     """Structured NPC/tool adapter; no selected actor or geometric overrides."""
     from app.core import prop_action_engine as engine

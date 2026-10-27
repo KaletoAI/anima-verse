@@ -13,6 +13,11 @@ class PropActionSkill(PluginSkill):
         super().__init__(config, ctx)
         self._defaults = {"enabled": True}
 
+    def default_enabled_for(self, character_name):
+        # ALWAYS_LOAD controls installation, not existing-character activation.
+        # The manager still gives explicit character overrides precedence.
+        return self.enabled and bool(self.ctx.get_config("skills.prop_action.enabled", True))
+
     def execute(self, raw_input):
         if not self.enabled:
             return json.dumps({"status": "refused", "reason": "skill_disabled", "execution_id": ""})

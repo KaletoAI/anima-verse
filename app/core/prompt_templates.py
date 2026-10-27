@@ -253,6 +253,11 @@ def _prop_action_context(path, variables):
     if not block:
         from app.core.prop_actions import prompt_block
         block = prompt_block(actor)
+    if path == "tasks/npc_action.md":
+        from app.core.prop_actions import npc_action_response_contract
+        contract = npc_action_response_contract()
+        if contract not in block:
+            block += "\n" + contract
     variables["prop_actions_block"] = block
     return variables, block
 

@@ -172,15 +172,6 @@ async def lifespan(app: FastAPI):
     # Remove obsolete state prompt drops before any runtime prompt reads.
     from app.core.skill_drop_migration import migrate_skill_drop_blocks_once
     migrate_skill_drop_blocks_once()
-    # One owner for all real player/NPC requests, restored before jobs tick.
-    from app.core.prop_action_engine import register_owner
-    register_owner()
-    from app.core.prop_action_migration import migrate_actions
-    _prop_action_inventory = migrate_actions(dry_run=True)
-    logger.info("Prop action migration inventory: %s", _prop_action_inventory)
-    if _prop_action_inventory["issues"]:
-        raise RuntimeError("Prop action migration requires repair; inspect startup inventory")
-    migrate_actions(dry_run=False)
 
     # Add persistent location IDs and clean up legacy filesystem storage.
     from app.models.world import migrate_location_ids
@@ -324,64 +315,11 @@ async def lifespan(app: FastAPI):
     except Exception as _tre:
         logger.warning("terrain relief migration failed: %s", _tre)
 
-    # Markers speak PLACE TYPES (plan-posen-plaetze.md § 9): the clip kind
-    # `animation` becomes the catalog group, every marker and placement gets
-    # a stable id. No reader keeps a fallback for the old key. BEFORE the
-    # field migration, which copies the (already converted) record-level
-    # markers onto the variants.
-    try:
-        from app.core.places_migration import migrate_places_once
-        _pl = migrate_places_once()
-        if _pl:
-            logger.info("places migration: %s", _pl)
-    except Exception as e:
-        logger.warning("places migration failed: %s", e)
-
-    # Size, generation subject, ground offset and markers belong to the MODEL
-    # VARIANT now, not to the prop (2026-08-25): a variant is a whole version
-    # of the object, and all four differ per version. The master record lost
-    # the keys without a fallback reader, so the value the old rule would have
-    # used is copied onto every variant that authors none — otherwise every
-    # existing prop would come back as a 1 m cube without markers on this boot.
-    # AFTER the marker-surface repair above, which reads the pre-move shape.
-    try:
-        from app.core.prop_field_migration import migrate_prop_fields_once
-        _pf = migrate_prop_fields_once()
-        if _pf and _pf.get("moved"):
-            logger.info("Prop fields moved onto the variants: %s", _pf)
-    except Exception as _pfe:
-        logger.warning("prop field migration failed: %s", _pfe)
-
-    # A place type names a BODY SHAPE now, not a piece of furniture
-    # (plan-platztypen.md E1): `bed` and `floor` merge into `lie`, `counter`
-    # becomes `stand`. The catalog no longer knows the old names, and
-    # scene_recipe skips a marker with an unknown group SILENTLY — an
-    # unmigrated marker would vanish from the scene and from the place
-    # inventory without an error. AFTER the field migration above, which is
-    # what puts the record-level markers onto the variants in the first
-    # place: renaming before it would leave half of them at the old address.
-    try:
-        from app.core.place_group_migration import migrate_place_groups_once
-        _pg = migrate_place_groups_once()
-        if _pg and any(_pg.values()):
-            logger.info("Place groups renamed to the body-shape vocabulary: "
-                        "%s", _pg)
-    except Exception as _pge:
-        logger.warning("place group migration failed: %s", _pge)
-
-    # Pre-activation inventory ONLY. The author schema and executor cut over
-    # together; an intermediate server must not silently activate migrated data.
-    try:
-        from app.core.prop_action_migration import migrate_actions
-        action_report = migrate_actions(dry_run=True)
-        for row in action_report["props"]:
-            if row["changed"] or row["repair_required"]:
-                logger.info("Prop action pre-activation report: %s",
-                            {key: value for key, value in row.items() if key != "document"})
-        for issue in action_report["issues"]:
-            logger.warning("Prop action pre-activation issue: %s", issue)
-    except Exception as error:
-        logger.warning("Prop action inventory failed; no activation: %s", error)
+    # Semantic action inventory depends on legacy stable marker/placement IDs,
+    # variant field moves and place-group normalization, in that exact order.
+    # Complete the same production preparation before any runtime job starts.
+    from app.core.prop_action_migration import prepare_runtime
+    prepare_runtime()
 
     # Picture areas, the door-leaf box and the orientation fix belong to the
     # MODEL FILE now (spec-bild-props-v2.md E1, ruling V0, 2026-08-28): every

@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 from threading import Thread
+import tempfile
 import time
 from types import SimpleNamespace
 import unittest
@@ -26,6 +27,7 @@ from unittest.mock import patch
 OPTIONS = argparse.ArgumentParser(add_help=False)
 OPTIONS.add_argument('--api-scenario-dir', type=Path)
 OPTIONS.add_argument('--api-scenario-worker', action='store_true')
+OPTIONS.add_argument('--api-startup-worker', action='store_true')
 ARGS, REST = OPTIONS.parse_known_args()
 sys.argv = [sys.argv[0], *REST]
 if ARGS.api_scenario_dir:
@@ -199,6 +201,105 @@ class ApiContracts(unittest.TestCase):
         for run in R.live_runs():
             A.cancel(run['actor'], run['execution_id'])
         F.assert_no_external_work()
+
+    def test_existing_character_runtime_default_explicit_disable_and_rules(self):
+        name, target, _ = S.setup_run()
+        manager = get_skill_manager()
+        skill = manager.get_skill('prop_action')
+        override = F.C.get_character_skills_dir(name) / 'prop_action.json'
+        override.unlink(missing_ok=True)
+        self.assertIn(skill.name, {tool.name for tool in manager.get_agent_tools(name)})
+        self.assertFalse(override.exists(), 'runtime default must not write activation overrides')
+        F.C.save_character_skill_config(name, 'prop_action', {'enabled': False})
+        self.assertNotIn(skill.name, {tool.name for tool in manager.get_agent_tools(name)})
+        F.C.save_character_skill_config(name, 'prop_action', {'enabled': True})
+        from app.models import rules
+        rules.add_rule(dict(id='api-prop-block', name='Actual skill block', type='block',
+                            target={'scope': 'skill', 'skills': ['prop_action']},
+                            character=name, condition='', message='Blocked by fixture rule'))
+        self.addCleanup(rules.delete_rule, 'api-prop-block', target_dir='world')
+        self.assertNotIn(skill.name, {tool.name for tool in manager.get_agent_tools(name)})
+        denied = client(name).post('/play/prop-actions/request', json=payload(target))
+        self.assertEqual(denied.status_code, 403, denied.text)
+        self.assertFalse(R.claims())
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 50)
+
+    def test_player_request_costs_refusals_and_pair_consent(self):
+        from app.core import stat_rules
+        previous = stat_rules.get_setting('skill_costs')
+        self.addCleanup(stat_rules.save_setting, 'skill_costs', previous)
+        stat_rules.save_setting('skill_costs', {'prop_action': {'run_energy': 5}})
+        name, target, _ = S.setup_run()
+        player = client(name)
+        refused = player.post('/play/prop-actions/request', json=dict(payload(target), revision='stale'))
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 50)
+        accepted = player.post('/play/prop-actions/request', json=payload(target))
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 45)
+        stat_rules.save_setting('skill_costs', {'prop_action': {'run_energy': 46}})
+        before = R.get(accepted.json()['execution_id'])
+        denied = player.post('/play/prop-actions/request', json=payload(target))
+        self.assertEqual(denied.status_code, 403, denied.text)
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 45)
+        self.assertEqual(R.get(accepted.json()['execution_id']), before)
+        self.assertEqual(player.post('/play/prop-actions/cancel',
+                                    json={'execution_id': before['execution_id']}).status_code, 200)
+        name, partner, target, _ = S.authored_pair()
+        player, recipient = client(name), client(partner)
+        stat_rules.save_setting('skill_costs', {'prop_action': {'run_energy': 5}})
+        asked = player.post('/play/prop-actions/request', json=payload(target, partner=partner))
+        self.assertEqual(asked.json()['status'], 'awaiting_consent')
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 45)
+        self.assertFalse(R.claims(), 'paying for a request is not partner consent')
+        responded = recipient.post('/play/prop-actions/respond',
+                                   json={'execution_id': asked.json()['execution_id'], 'accept': True})
+        self.assertEqual(responded.json()['status'], 'approaching', responded.text)
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 45)
+
+    def test_structured_tool_refusals_do_not_pay_success_cost(self):
+        from app.core import stat_rules
+        from app.core.streaming import StreamingAgent
+        from app.core.tool_formats import find_tool_calls
+        previous = stat_rules.get_setting('skill_costs')
+        self.addCleanup(stat_rules.save_setting, 'skill_costs', previous)
+        stat_rules.save_setting('skill_costs', {'prop_action': {'run_energy': 5}})
+        name, target, _ = S.setup_run()
+        manager = get_skill_manager()
+        verb = manager.get_skill('prop_action').name
+        tools = {tool.name: tool.func for tool in manager.get_agent_tools(name)}
+        agent = StreamingAgent(llm=None, tool_format='tag', tools_dict=tools, agent_name=name)
+        async def captured_call(data):
+            captured = '<tool name="' + verb + '">' + json.dumps(data) + '</tool>'
+            matches = find_tool_calls('tag', captured, tools)
+            results = []
+            events = [event async for event in agent._execute_tools(matches, results, [])]
+            self.assertTrue(events)
+            self.assertEqual(len(results), 1)
+            return results[0][1]
+        request = dict(operation='request', **payload(target))
+        refused = json.loads(asyncio.run(captured_call(dict(request, revision='stale'))))
+        self.assertEqual(refused['status'], 'refused')
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 50)
+        accepted = json.loads(asyncio.run(captured_call(request)))
+        self.assertEqual(accepted['status'], 'approaching')
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 45)
+        refused = json.loads(asyncio.run(captured_call(request)))
+        self.assertEqual(refused['reason'], 'participant_claimed')
+        self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 45)
+
+    def test_startup_repairs_legacy_marker_prerequisites_before_actions(self):
+        with tempfile.TemporaryDirectory(prefix='prop-action-startup-') as temporary:
+            root = Path(temporary)
+            (root / '.prop-action-scenario').write_text('Private legacy startup fixture\n')
+            subprocess.run([sys.executable, __file__, '--api-startup-worker'], check=True,
+                           env=dict(os.environ, PROP_ACTION_SMOKE_RESUME_ROOT=str(root)))
+            actual = json.loads((root / 'startup.json').read_text())
+            self.assertTrue(actual['marker_id'])
+            self.assertEqual(actual['binding_marker_ids'], [actual['marker_id']])
+            self.assertEqual(actual['repeat_changed'], 0)
+            self.assertEqual(actual['before_pos'], actual['after_pos'])
+            self.assertFalse(actual['claims'])
 
     def test_offers_read_only_real_geometry_entry_and_pair_capability(self):
         name, target, pid = S.setup_run()
@@ -406,8 +507,17 @@ class ApiContracts(unittest.TestCase):
         def model(**kwargs):
             prompts.append(kwargs['system_prompt'] + '\n' + kwargs['user_prompt'])
             return SimpleNamespace(content=captured)
-        result = run_action_for(name, llm=model)
+        override = 'tasks/npc_action.md'
+        template_overrides.set_override(override, '## system\nKEEP_PRIVATE_WORLD_DIRECTOR\n## user\n{{ npc_name }}', '')
+        try:
+            result = run_action_for(name, llm=model)
+        finally:
+            template_overrides.delete_override(override)
         self.assertTrue(result, result)
+        shape = json.loads(prompts[0].split('npc_action_request_shape=', 1)[1].splitlines()[0])
+        self.assertEqual(shape['prop_action']['operation'], 'request')
+        self.assertEqual(set(shape['prop_action']['target']), set(A._TARGET))
+        self.assertIn('KEEP_PRIVATE_WORLD_DIRECTOR', prompts[0])
         self.assertEqual(offered_rows(prompts[0])[0]['target'], offer['target'])
         ref = result['action_result']['execution_id']
         self.assertEqual(R.get(ref)['status'], 'approaching')
@@ -489,6 +599,39 @@ class ApiContracts(unittest.TestCase):
         self.assertIsNone(withdrawn['travel']['waypoints'])
 
 
+def startup_scenario():
+    """Exercise the exact production startup preparation against raw legacy data."""
+    from app.core.prop_action_migration import prepare_runtime
+    name, target, pid = F.fixture()
+    document = F.props.read_sidecar(pid)
+    document.pop('actions')
+    variant = document['model_variants'][0]
+    variant.pop('action_bindings')
+    variant.pop('markers')
+    for key in ('width_m', 'depth_m', 'height_m', 'dims_estimated'):
+        variant.pop(key, None)
+    document.update(width_m=1, depth_m=1, height_m=1, dims_estimated=False,
+                    markers=[dict(animation='sit', at=[.5, .5, .5], facing=0)])
+    # An authentic pre-migration sidecar must bypass current author normalization.
+    (F.props._prop_dir(pid) / F.props.SIDECAR_NAME).write_text(json.dumps(document))
+    before = F.C.get_character_pos(name)
+    prepared = prepare_runtime()
+    assert prepared['applied']['changed'] >= 1, prepared
+    actual = F.props.read_sidecar(pid)
+    marker = actual['model_variants'][0]['markers'][0]
+    binding = actual['model_variants'][0]['action_bindings'][0]
+    assert marker['group'] == 'seat' and 'animation' not in marker, marker
+    assert 'markers' not in actual and actual['actions'], actual
+    marker_id = marker['id']
+    repeated = prepare_runtime()
+    assert F.props.read_sidecar(pid)['model_variants'][0]['markers'][0]['id'] == marker_id
+    (F.ROOT / 'startup.json').write_text(json.dumps(dict(
+        marker_id=marker_id, binding_marker_ids=binding['marker_ids'],
+        repeat_changed=repeated['applied']['changed'], before_pos=before,
+        after_pos=F.C.get_character_pos(name), claims=R.claims())))
+    F.assert_no_external_work()
+
+
 def scenario():
     """Non-unittest scenario with a real loopback HTTP socket and prompts."""
     import requests
@@ -558,4 +701,9 @@ def scenario():
 
 
 if __name__ == '__main__':
-    scenario() if ARGS.api_scenario_worker else unittest.main()
+    if ARGS.api_startup_worker:
+        startup_scenario()
+    elif ARGS.api_scenario_worker:
+        scenario()
+    else:
+        unittest.main()

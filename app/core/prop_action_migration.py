@@ -265,3 +265,35 @@ def compose_binding(binding: dict, *, placement: dict, revision: str) -> dict:
     result.update(placement_id=placement['id'], prop_id=placement['prop_id'],
                   definition_revision=revision, route_checked=False)
     return result
+
+
+def prepare_runtime() -> dict:
+    """Complete legacy prerequisites before inventory/application and job startup.
+
+    All writes belong to the current world store. Reused migrations are
+    idempotent; action validation never invents IDs before the marker migration.
+    """
+    from app.core.places_migration import migrate_places_once
+    from app.core.prop_field_migration import migrate_prop_fields_once
+    from app.core.place_group_migration import migrate_place_groups_once
+    from app.core.prop_action_engine import register_owner
+    from app.core.log import get_logger
+    logger = get_logger("prop_action_migration")
+    prerequisites = dict(places=migrate_places_once())
+    prerequisites["fields"] = migrate_prop_fields_once()
+    prerequisites["groups"] = migrate_place_groups_once()
+    logger.info("Prop action migration prerequisites: %s", prerequisites)
+    inventory = migrate_actions(dry_run=True)
+    logger.info("Prop action migration inventory: %d props, %d changed, %d issues",
+                len(inventory["props"]), inventory["changed"], len(inventory["issues"]))
+    for issue in inventory["issues"]:
+        logger.error("Prop action migration issue: %s", issue)
+    if inventory["issues"]:
+        raise RuntimeError("Prop action migration requires repair; inspect startup inventory")
+    applied = migrate_actions(dry_run=False)
+    if applied["issues"]:
+        for issue in applied["issues"]:
+            logger.error("Prop action migration application issue: %s", issue)
+        raise RuntimeError("Prop action migration application requires repair")
+    register_owner()
+    return dict(prerequisites=prerequisites, inventory=inventory, applied=applied)

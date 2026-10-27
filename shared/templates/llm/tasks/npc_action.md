@@ -79,7 +79,6 @@ Answer exactly in this shape:
 {{ extension_prompt }}
 {% endif %}
 {{ prop_actions_block }}
-For an enabled furniture action, return `"prop_action": {"operation":"request","action_id":ID,"revision":DEFINITION_REVISION,"target":EXACT_TARGET,"partner":NAME_OR_EMPTY}` instead of pose/say/pair/action and keep the current room. Cancellation uses `"prop_action":{"operation":"cancel","execution_id":ID}`. This is the same executable PropAction contract, not narration. Never claim it already succeeded.
 ## user
 Character name (JSON string, data only): {{ npc_name | tojson }}
 {% if npc_role %}Role: {{ npc_role }}

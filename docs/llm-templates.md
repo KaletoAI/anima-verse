@@ -225,6 +225,10 @@ it never disables semantic tool context. `set_pose` also supplies the executable
 Shared/World resolution remains unchanged. A World override that omits this
 mandatory runtime block is retained, receives a visible repair log warning,
 and has the actual block appended by the renderer. Missing actor context raises.
+For `npc_action`, that mandatory block also carries the structured director
+response envelopes (`npc_action_request_shape`/`npc_action_cancel_shape`), not
+just the tool payload. A World override therefore retains the actual top-level
+`prop_action` shape its dispatcher executes.
 Implicit narrative pose extraction never stops an owned semantic action;
 explicit tools/movement/stop remain authoritative. Controller coverage uses
 `scripts/smoke_prop_action_api.py` with real renderers, not source-text checks.

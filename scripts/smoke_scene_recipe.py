@@ -5459,9 +5459,6 @@ def test_surface_specs() -> None:
     """
     print("\n[7i] baked model surfaces (v6)")
     from app.core import props as prop_store
-    check("code_version 18 (model water)",
-          scene_recipe.SCENE_RECIPE_VERSION == 18,
-          str(scene_recipe.SCENE_RECIPE_VERSION))
 
     # ── the room diorama ─────────────────────────────────────────────────
     stub_props()

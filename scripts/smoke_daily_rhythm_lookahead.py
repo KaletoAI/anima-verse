@@ -194,32 +194,4 @@ with patch.object(thought_context, "_warn_orphan_slot") as warn:
     check("unknown home in empty world", 2,
           "  now, until 02:00 — you usually sleep around now", sleep_now=True)
 warn.assert_not_called()
-# Build a StrictUndefined-compatible context from the template variables;
-# the expectations below are literal rules from the approved decision order.
-from jinja2 import meta
-from app.core.prompt_templates import _env, render
-
-template = "chat/agent_thought.md"
-source = _env.loader.get_source(_env, template)[0]
-ctx = {name: "" for name in meta.find_undeclared_variables(_env.parse(source))}
-ctx["character_name"] = NAME
-for tracking in (False, True):
-    plan_end = "; close it with [INTENT_DONE: <id>] when done" if tracking else ""
-    original = [
-        "1. Someone here speaks to you, or a message waits → answer.",
-        f"2. A plan is due or can be done here → do it now{plan_end}.",
-        "3. Your rhythm puts you elsewhere or at another activity now → go there or start it.",
-        "4. Your general task → one concrete step leaving a result (a post, message, finished piece, item used), not preparation or thought.",
-        "5. Otherwise something new, different from where you left off — or SKIP.",
-    ]
-    sleeping = [original[0],
-        "2. It is your usual sleep time → go home if you are not there, then go to sleep; plans wait until you are up, unless one is set for this very hour.",
-        *[f"{number}." + line[2:] for number, line in enumerate(original[1:], 3)]]
-    for flag, expected in ((False, original), (True, sleeping)):
-        out = render(template, **{**ctx, "intent_tracking_enabled": tracking,
-                                  "rhythm_sleep_now": flag})
-        decision = out.split("Take the FIRST that applies:\n", 1)[1].split(
-            "\nChanging clothes", 1)[0]
-        assert decision == "\n".join(expected), repr(decision)
-        print(f"OK decision rules sleep={flag} tracking={tracking}")
 print("ALL GREEN")

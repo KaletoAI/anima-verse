@@ -7619,8 +7619,12 @@ getter. Its report contains `props` (prop ID, changed flag, variant/action/offer
 counts, repair count, proposed document), `changed`, structured `issues`,
 `runtime_activated: false` and per-prop `route_checked: false`. Explicit
 `dry_run=False` persists valid documents under the existing per-prop author lock;
-repeating it writes nothing. Startup logs the dry inventory, refuses unreadable/
-invalid documents, then persists valid normalization before runtime jobs start.
+repeating it writes nothing. Startup calls `prepare_runtime()` after location
+preparation and before runtime jobs. It first runs stable marker/placement-ID
+migration, then prop fields-to-variants, then place-group renaming, and only then
+inventories/applies actions and registers their journey owner. Unreadable/invalid
+post-prerequisite data refuses startup; repairable legacy IDs are not rejected
+before their existing migration can run.
 This only writes the current world's prop store, never Shared source assets.
 Intermediate commits must not deploy before the full client cutover.
 
@@ -7969,6 +7973,10 @@ Player routes require the authenticated user's current authorized avatar:
 - `GET /play/prop-actions` returns offers; body/query actor cannot select a figure.
 - `POST /play/prop-actions/request`: `{target,action_id,revision,partner?,request_id?}`.
   Extra payload fields are rejected; nonces are scoped to actor and exact input.
+  The declared player skill gate checks current skill-block rules and configured
+  cost shortfalls before requesting. Only an accepted, nonfailed request is
+  charged through the existing player success-cost boundary. Paying for an
+  invitation never supplies consent; respond/cancel endpoints do not charge.
 - `POST /play/prop-actions/respond`: `{execution_id,accept:bool}`, exact invitee only.
 - `POST /play/prop-actions/cancel`: `{execution_id}`, either real participant only.
 - `GET /play/prop-actions/state`: `{incoming,outgoing,current,recent_results}`.
@@ -7999,8 +8007,18 @@ The enabled `set_pose` package also loads the real `prop_action` capability/tool
 `PropAction`. Its request signature is
 `{operation:"request",action_id,revision,target,partner?,request_id?}`; stop is
 `{operation:"cancel",execution_id}`. Actor is bound by the real tool wrapper.
+Existing characters without a `prop_action` override receive its runtime default
+when the package/global skill is enabled. Explicit per-character disable and
+generic skill-block/cost rules still take precedence. `always_load` is not used
+as a substitute for runtime activation. Structured refused/failed tool results
+remain JSON and are recognized by the shared failure classifier, so refusal
+cannot pay a success-only tool cost.
 NPC structured action answers use `{prop_action:<same payload>}` and execute
 through that installed skill/Core instead of applying a new narrative pose.
+The mandatory NPC renderer context includes `npc_action_request_shape` and
+`npc_action_cancel_shape` with the actual top-level `prop_action` envelope.
+This consumer-specific contract is enforced even when a World override replaces
+the entire Shared NPC template; a bare tool request is not an NPC answer.
 `InteractWith {execution_id,answer:"yes"|"no"}` remains the exact consent verb.
 General temporary Together's legacy acceptance is unchanged.
 

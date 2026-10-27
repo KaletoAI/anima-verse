@@ -80,7 +80,14 @@ def state(user=Depends(get_current_user)):
 
 @router.post("/play/prop-actions/request")
 def request(body: ActionRequest, user=Depends(get_current_user)):
-    return _answer(_request(_avatar(user), body))
+    actor = _avatar(user)
+    from app.routes.play import _player_action_gate
+    skill = _player_action_gate(actor, "prop_action")
+    result = _answer(_request(actor, body))
+    if skill is not None and result["status"] not in ("failed", "cancelled"):
+        from app.core.skill_gate import charge
+        charge(actor, skill.SKILL_ID)
+    return result
 
 
 @router.post("/play/prop-actions/respond")

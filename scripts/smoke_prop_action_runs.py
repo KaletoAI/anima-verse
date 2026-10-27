@@ -198,9 +198,19 @@ class Runs(unittest.TestCase):
             tick(30)
         A.advance(F.game_time())
         row = R.get(result["execution_id"])
-        self.assertNotEqual(row["status"], "approaching", row)
+        self.assertEqual((row["status"], row["phase"]), ("approaching", "entry"), row)
         self.assertEqual(F.C.get_character_profile(name)["last_journey_result"]["status"], "arrived")
         self.assertIn(name, row["data"]["arrived"])
+        access = row["data"]["plans"]["actor"]["access"]
+        self.assertEqual(F.C.get_character_pos(name), {"x": access["x"], "z": access["z"]})
+        self.assertFalse(F.C.get_character_profile(name).get("place"))
+        self.assertEqual(row["data"]["entry_elapsed"], 0)
+        tick(row["data"]["entries"][name]["duration_game_s"])
+        activated = R.get(result["execution_id"])
+        self.assertEqual(activated["status"], "active", activated)
+        anchor = activated["data"]["plans"]["actor"]["entry_anchor"]
+        self.assertEqual(F.C.get_character_pos(name), {"x": anchor["x"], "z": anchor["z"]})
+        self.assertEqual(F.C.get_character_profile(name)["place"]["execution_id"], result["execution_id"])
 
     def test_deleted_target_during_approach_releases_only_own_claims(self):
         name, target, pid = setup_run()
