@@ -29,11 +29,10 @@
  * that never changed — and, worse, it can hand the maximum to another axis,
  * which DOES change the rendered size in a way nobody typed.
  *
- * Hence: the edited edge is the statement, the other two are recomputed from
- * it, and all three go out in one call. Clearing any one of them clears all
- * three (a two-thirds override matches no aspect ratio) — that half is client
- * wiring, `variantFields.dimsPatch`, and is documented rather than asserted
- * here.
+ * Hence: the edited edge is the statement and all three are recomputed from
+ * the gesture's original proportions. Empty or unusable input leaves the
+ * canonical trio unchanged. `smoke_prop_dimension_gesture.mjs` covers the
+ * real change/change/blur law and its before-blur conflict tracking.
  *
  * ============================================================================
  * (A) THE FACTOR — edited/base, applied to the other two

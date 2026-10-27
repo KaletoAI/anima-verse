@@ -16,9 +16,10 @@ import {
 } from '../world/placeTypes'
 import {
   descPatch,
-  dimRatios, dimsPatch, facePatch, sinkPatch,
+  facePatch, sinkPatch,
 } from './variantFields'
 import type { DimKey } from './dims'
+import { editDimensionGesture, type DimensionGesture } from './dimensionGesture'
 import type {
   PropAreasInfo, PropFull, PropLight, PropMarker, PropSlotValues, PropSourceImage,
   PropVariant, PropView, PropWorkspaceArea,
@@ -688,6 +689,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setDiscardArmed(false)
     setSaveError('')
     setDimDraft({})
+    dimGesture.current = null
     setDescDraft(null)
   }, [])
 
@@ -778,6 +780,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // to the stored number, so a background reload can never stomp what is under
   // the cursor and no sync effect is needed.
   const [dimDraft, setDimDraft] = useState<Record<string, string>>({})
+  const dimGesture = useRef<DimensionGesture | null>(null)
   const [descDraft, setDescDraft] = useState<string | null>(null)
   /** Is the description expanded to writing size? Readable at rest, a real
    *  editor while it is written in. */
@@ -786,6 +789,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // would show its size in the new one's fields.
   useEffect(() => {
     setDimDraft({})
+    dimGesture.current = null
     setDescDraft(null)
     setDescOpen(false)
   }, [prop.id, shownVariant?.uid])
@@ -796,17 +800,20 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   const editDim = (key: DimKey, raw: string) => {
     setDimDraft((draft) => ({ ...draft, [key]: raw }))
     if (!shownVariant) return
-    const next = dimsPatch(shownVariant.dims, key, raw,
-      dimRatios(shownVariant.dims, shownBbox, variantRotation))
-    // Even incomplete numeric text pins the field's author baseline.
-    queueVariant(variant, { dims: next || shownVariant.dims })
+    const next = editDimensionGesture(dimGesture.current, shownVariant.uid,
+      shownVariant.dims, key, raw, shownBbox, variantRotation)
+    dimGesture.current = next.gesture
+    queueVariant(variant, { dims: next.dims })
   }
   const commitDim = useCallback((key: DimKey, raw: string) => {
     setDimDraft({})
+    const previous = dimGesture.current
+    dimGesture.current = null
     if (!shownVariant) return
-    const next = dimsPatch(shownVariant.dims, key, raw,
-      dimRatios(shownVariant.dims, shownBbox, variantRotation))
-    if (next) queueVariant(variant, { dims: next })
+    const next = editDimensionGesture(previous, shownVariant.uid,
+      shownVariant.dims, key, raw, shownBbox, variantRotation)
+    if ((previous?.uid === shownVariant.uid && previous.key === key)
+      || next.dims !== shownVariant.dims) queueVariant(variant, { dims: next.dims })
   }, [shownVariant, shownBbox, variantRotation, queueVariant, variant])
 
   // How deep this variant stands in the ground. No debounce and no local echo:

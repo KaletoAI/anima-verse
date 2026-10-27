@@ -18,9 +18,7 @@
  */
 import { faceFor } from '../../components/faceBudget'
 import { DEFAULT_MODEL_TIER } from '../../components/ModelGallery'
-import { DIM_KEYS, DIM_MAX_M, DIM_MIN_M, orientedDims, variantRedistribute,
-  type DimKey } from './dims'
-import type { PropDims } from './propTypes'
+import type { DimKey } from './dims'
 
 /** The three dims in the form's own order. `label` is the short caption on
  *  the input, `title` the sentence behind it. */
@@ -68,58 +66,6 @@ export const SINK_LIMIT_M = 5
 export const DESC_ROWS_REST = 5
 export const DESC_ROWS_OPEN = 12
 
-/**
- * WHERE THE PROPORTIONS OF A RESIZE COME FROM — never the prop's box.
- *
- * The variant on screen is MEASURED: `bbox` is its raw mesh box, and the
- * file's orientation fix turns it into [width, height, depth] exactly as every
- * renderer does. That is the only true statement about THIS mesh the client
- * holds — a sapling's GLB is not a small pine, so redistributing along the
- * prop's aspect would give it the grown tree's footprint.
- *
- * Without a loaded box the stored dims stand in: they ARE the variant's
- * declared aspect, and since every renderer sizes a variant by exactly those
- * three numbers, rescaling along them keeps the object the shape it is
- * rendered at.
- */
-export function dimRatios(dims: PropDims, bbox: [number, number, number] | null,
-  rotation?: { x?: number; y?: number; z?: number }): Record<DimKey, number> {
-  if (bbox) {
-    const [w, h, d] = orientedDims(bbox, rotation)
-    return { width_m: w, depth_m: d, height_m: h }
-  }
-  return { width_m: dims.width_m, depth_m: dims.depth_m, height_m: dims.height_m }
-}
-
-/**
- * ONE edited size field, and with it the other two.
- *
- * The trio is a resize of a known mesh, not three free numbers (see `dims.ts`),
- * so the edited value drives and the other two follow the variant's
- * proportions. All three travel as ONE `dims` object, so the preview follows
- * immediately and Save writes one field.
- *
- * An empty or unusable input is not a size at all — `null` comes back and the
- * field snaps to what is stored. There is nothing to inherit since 2026-08-25,
- * so "cleared" is not a state a variant may be in: a typing slip costs the
- * edit, never the size.
- */
-export function dimsPatch(stored: PropDims, key: DimKey, raw: string,
-  ratios: Record<DimKey, number>): PropDims | null {
-  const n = parseFloat(raw)
-  if (!Number.isFinite(n) || n <= 0) return null
-  // A ratio source with a flat edge (a mesh box measuring zero on one axis)
-  // redistributes to nothing usable — then the edited field goes out alone
-  // rather than a zero, and the other two stay where they are. Clamped and
-  // rounded to the same window the helper keeps, so this path cannot store a
-  // number the server would round away into a cleared key either.
-  const next = variantRedistribute(key, n, ratios) ?? {
-    ...stored,
-    [key]: Math.round(Math.min(Math.max(n, DIM_MIN_M), DIM_MAX_M) * 1000) / 1000,
-  }
-  if (DIM_KEYS.every((k) => next[k] === stored[k])) return null
-  return next as PropDims
-}
 
 /**
  * ONE of the two face budgets (v2 E5).

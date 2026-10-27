@@ -1938,10 +1938,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
 
         setLoading(false)
 
-        let raf = 0
+        let raf: number | null = null
+        let renderVisible = false
+        let renderWidth = width
         let displayedTilt = { forward: 0, sideways: 0 }
         const animate = () => {
-          raf = requestAnimationFrame(animate)
+          raf = null
+          if (disposed || !renderVisible) return
           const realDelta = clock.getDelta()
           if (embeddedTakes && mixer) {
             const control = takeRef.current
@@ -1977,22 +1980,43 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           object.updateMatrixWorld(true)
           controls.update()
           renderer.render(scene, camera)
+          raf = requestAnimationFrame(animate)
         }
-        animate()
-        disposers.push(() => cancelAnimationFrame(raf))
 
+        disposers.push(() => {
+          renderVisible = false
+          clock.stop()
+          if (raf !== null) cancelAnimationFrame(raf)
+        })
         const onResize = () => {
           const w = mount.clientWidth
-          if (!w) return
-          camera.aspect = w / height
-          camera.updateProjectionMatrix()
-          renderer.setSize(w, height)
+          if (disposed || document.hidden || !w || !mount.clientHeight) {
+            renderVisible = false
+            clock.stop()
+            if (raf !== null) { cancelAnimationFrame(raf); raf = null }
+            return
+          }
+          if (w !== renderWidth) {
+            renderWidth = w
+            camera.aspect = w / height
+            camera.updateProjectionMatrix()
+            renderer.setSize(w, height)
+          }
+          if (!renderVisible) {
+            renderVisible = true
+            // Hidden time is not animation/physics time. Keep object and camera.
+            clock.start()
+            raf = requestAnimationFrame(animate)
+          }
         }
-        // A workspace drawer or editor/preview toggle resizes the container
-        // without a window resize. Keep the camera, only resize its viewport.
+        // A hidden mobile editor keeps this viewer mounted, but no RAF or scene
+        // updates run until its stage has a visible size again.
         const resizeObserver = new ResizeObserver(onResize)
         resizeObserver.observe(mount)
         disposers.push(() => resizeObserver.disconnect())
+        document.addEventListener('visibilitychange', onResize)
+        disposers.push(() => document.removeEventListener('visibilitychange', onResize))
+        onResize()
       } catch (e) {
         cleanup?.()  // dispose the context if the renderer was already created
         if (!disposed) {

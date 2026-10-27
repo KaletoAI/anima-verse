@@ -98,6 +98,7 @@ Aus dem isolierten Worktree, nach Integration und ohne parallele Worker-Checks:
 ./frontend/node_modules/.bin/tsc -b frontend/tsconfig.json
 node scripts/smoke_prop_fields_buffer.mjs
 node scripts/smoke_prop_operation_targets.mjs
+node scripts/smoke_prop_dimension_gesture.mjs
 ./.venv/bin/python scripts/smoke_prop_bulk_save.py
 npm --prefix frontend run build
 ```
@@ -140,3 +141,24 @@ Basis `a007cad4`, alle sieben Reviewbefunde sowie die vom Controller genehmigte 
 `scripts/smoke_prop_operation_targets.mjs` übt die tatsächliche UID-Continuation-Hilfe mit einer wartenden Entscheidung, nachfolgender Reindexierung, entferntem Ziel und Abbruch ohne nachfolgenden Read/Write aus. Zusätzlich werden die drei realen Generationstargetfälle und der gespeicherte Namensfallback geprüft. `smoke_prop_fields_buffer.mjs` ergänzt gleichzeitig aktive Dimension-/Beschreibungs-/Budgetfelder gegen spätere Hintergrundänderungen. Beide Erweiterungen sind **nicht vom Worker ausgeführt**; keine Überschrift-/Source-Pin-/Komponentenverdrahtungsasserts.
 
 Controller bitte Kommandos erneut ausführen und Async-Target-Smoke ergänzen. Im tatsächlichen Admin besonders: B/1 mit dirty Draft wählen, Schranke öffnen, A/0 extern entfernen, Konflikt gezielt auflösen und fortfahren; B muss am neuen Index angesprochen werden und C unverändert bleiben. Entferntes B darf keinen Folgeslot bearbeiten. Aktiver Zahlen-/Beschreibung-/Budgetinput während eines Hintergrund-Authorupdates muss einen Feldkonflikt auslösen. Bildvarianten-Save mit dirty Prop muss pointer- und keyboard-bedienbar über dem Bildmodal bleiben; Cancel muss den Bildentwurf erhalten. Im 900-/390-Drawer Bulk-Publish per Tastatur öffnen und Catalog/Tags/Publish/Close erreichen. Rename bei leerer Variantenbeschreibung vor New image/Extra view speichern; Prompt muss den gespeicherten neuen Namen enthalten. Regenerate am Cap muss das tatsächliche Austauschziel vor dem Jobstart benennen. 390 px: Dokument-Scrollbreite am echten Header erneut messen und alle Header-/Speichercontrols bedienen. Kein Produktnachweis dieser Fixrunde wird hier behauptet.
+
+## Fixrunde 2 — Resize-Geste und unsichtbare Vorschau
+
+Basis `6b647cf2`. Der Controller meldete für diese Basis erfolgreiche TypeScript-/Buffer-/Operation-Target-/Bulk-/Build-Prüfungen (Artefakt 216). Die unabhängige Prüfung `WorkspaceFixReview` bewertete alle sieben ursprünglichen Befunde als adressiert. Zusätzlich meldete der Controller reale 390/900/1440-px-Ansichten ohne Dokumentoverflow, zugänglich benannte Felder, dieselbe Canvas beim mobilen Umschalten, funktionierende Portal-/Drawer-Tastatur sowie echten 409 mit erhaltenem Entwurf, ausdrücklichem Keep-local und anschließendem Save/Reload. Der Namensfallback wurde im tatsächlichen Bilddialog beobachtet, aber mangels Image-Backend nicht als Provider-Prompt oder bezahlter Render nachgewiesen.
+
+Die neue Resize-Regressionsbeobachtung ist als Ground Truth übernommen, nicht zur Bestätigung erneut ausgeführt: meshlose Ausgangsmaße `20 / 0.01 / 20` konnten beim Tippen von `1` und danach `10` auf `10 / 0.01 / 10` driften, statt der direkten korrekten Skalierung `10 / 0.005 / 10`.
+
+### Produktänderungen
+
+- Die bestehenden reinen Funktionen `dimRatios` und `dimsPatch` sind ohne zweiten Mathematikpfad aus `variantFields.ts` in das React-unabhängige `dimensionGesture.ts` umgezogen. Der Consumer ist vollständig auf diesen Pfad migriert; keine Kompatibilitäts-Reexports.
+- `editDimensionGesture(previous, uid, storedDims, key, raw, bbox, rotation)` hält die ursprüngliche Ratioquelle pro Varianten-UUID und Eingabefeld fest, bevor die erste Eingabe verarbeitet wird. Nachfolgende Zeichen und Blur verwenden dieselbe Quelle, nie die bereits gerundeten/geclampten Zwischenmaße. Eine spät eintreffende BBox ändert die laufende Geste ebenfalls nicht.
+- Der Workspace hält ausschließlich diesen kurzlebigen Rechenkontext in einer Ref. Die kanonischen Dimensionen gehen weiterhin bei jedem Change sofort in denselben `pendingFields`-Buffer, auch bei noch unvollständigem Zahlentext. Damit bleibt der vor Blur bestehende Author-Konfliktschutz erhalten. Blur, Verwerfen und Varianten-UUID-Wechsel beenden die Geste.
+- Der bestehende Viewer pausiert seine RAF-Kette vollständig bei Nullgröße oder verborgenem Dokument: ausstehender Frame wird abgebrochen und Clock angehalten, Mixer/Secondary-Motion/Matrix-/Controls-Updates und Render laufen dann nicht weiter. Resize-/Dokumentsichtbarkeit starten bei sichtbarer Stage genau eine RAF-Kette neu; verdeckt vergangene Zeit wird nicht als Animations-/Physikdelta nachgeholt. Kamera, Renderer, Modell und Canvas bleiben dieselben. Die Größe wird nur bei geänderter Breite gesetzt. Es gibt keine neue Viewer-Instanz und keinen zusätzlichen öffentlichen Pause-/State-Vertrag. Laden und feldgetriebene Overlaypflege sind damit nicht pauschal als unterbunden behauptet.
+
+### Regression und Task-8-Vertrag
+
+`scripts/smoke_prop_dimension_gesture.mjs` verwendet den tatsächlichen produktiven Gestenpfad samt echter `dims.ts`-Mathematik und `pendingFields`. Es prüft Change mit leerem Text, Change `1`, Change `10`, Blur, Gleichheit zur Ein-Schritt-Skalierung und den handabgeleiteten Sollwert `10 / 0.005 / 10`. Zusätzlich werden entfernte BBox-Abhängigkeit innerhalb einer laufenden Geste, Reset bei neuer UUID sowie ein Server-Dimensionskonflikt vor Blur und das finale Bulk-Payload geprüft. Keine Source-/Überschrift-/Komponentenverdrahtungsasserts.
+
+Für Task 8 bleiben `workspace.editDim(key, raw)` und `commitDim(key, raw)` unverändert. Weitere Geometrie-Inputs sollen diese Change-/Blur-Handler verwenden; weder eigenständig Ratios aus den Live-Zwischenmaßen ableiten noch die interne Gesten-Ref verändern. Falls ein reiner Größen-Consumer gebraucht wird, liegt die einzige Dimensions-/Gestenmathematik jetzt in `dimensionGesture.ts`. Der Viewer-Propvertrag bleibt unverändert; Sichtbarkeit folgt der tatsächlichen Stage-Größe und Dokument-Sichtbarkeit.
+
+**Keine Worker-Checks oder Browser-/Server-/Modell-/Medienjobs in Fixrunde 2.** Der neue Regressionstest wurde vorbereitet, nicht ausgeführt. Controller bitte die Kommandos erneut ausführen, einschließlich `node scripts/smoke_prop_dimension_gesture.mjs`, und mobil nach sichtbarer Vorschau wieder auf Editor wechseln: kein fortlaufendes verborgenes Update/Render, beim erneuten Anzeigen unveränderte Canvas-/Kameraidentität und fortgesetzte Vorschau ohne Zeitsprung. Die neue Verhaltens- und Performancekorrektur ist hier kein behaupteter Laufzeitnachweis.
