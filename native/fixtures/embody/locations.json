@@ -1,0 +1,43 @@
+{
+  "locations": [
+    {
+      "id": "loc-hall",
+      "name": "Fixture Hall",
+      "terrain": null,
+      "map3d": null,
+      "rooms": [
+        {
+          "id": "r-a",
+          "name": "Front"
+        },
+        {
+          "id": "r-b",
+          "name": "Back"
+        },
+        {
+          "id": "r-up",
+          "name": "Upper"
+        }
+      ]
+    },
+    {
+      "id": "loc-free",
+      "name": "Fixture Meadow",
+      "terrain": null,
+      "map3d": null,
+      "rooms": []
+    },
+    {
+      "id": "loc-locked",
+      "name": "Fixture Locked",
+      "terrain": null,
+      "map3d": null,
+      "rooms": [
+        {
+          "id": "locked-room",
+          "name": "Closed"
+        }
+      ]
+    }
+  ]
+}

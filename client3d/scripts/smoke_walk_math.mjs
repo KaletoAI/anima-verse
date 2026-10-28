@@ -1246,7 +1246,45 @@
  * at the query; floor corridor __floor__-1 at (3,-3) is sqrt(30.5) away.
  * A floor corridor on the requested level wins before the distance rule,
  * so __floor__-1 wins despite k1's zero distance. Room eg is on level 0.
+ *
+ * Task 46 shared-vector index (existing hand tables above apply verbatim):
+ * [1] walkDir and its unit norm; [2] slideBlocked; [3] terrainBlocks;
+ * [4] slopeBlocks and STEP_DISTANCE_M=1; [5] groundStoreyFloors (unknown=0);
+ * [6] clickmove; [7] talkTargetNear; [8] roomSwitchSequence; [9] candidates;
+ * [10] elevator offers/options; [11] locks; [12] wall segments; [13] clamp.
+ * Stateful adapters start fresh and preserve current until an external room
+ * answer; [8] returns every next plus the final clock, so a 1600 ms switch
+ * re-arms at 1600 and a 2000 ms sample still returns current.
+ * [9] Candidate table: k1/k2 on -1 at (+/-2.5,-2.5), pos (0,2).
+ * No rect contains it -> __floor__-1, same level and pos. Inside k2 -> k2.
+ * Level 0 inside outline with a corridor -> __floor__0; outside -> ground;
+ * no corridor -> ground. Locked/missing cellar corridor or locked ground
+ * falls through to [k1,k2]. Unknown storey means 0. No rooms means [].
+ * [11] Own keys only: kitchen='The door is locked.', vault='' both lock;
+ * hall, empty id and inherited toString do not. Doorway order supplies the
+ * first reason, including ''; current room is exempt. unlockedRooms removes
+ * kitchen except while current=kitchen, preserving payload order.
+ * [12] Mini room: square (0,0)..(4,4). Window x=4 spans z=1.5..2.5:
+ * sill, head and glass block. Door x=0 has the same span: lintel and leaf
+ * do not block. Of 11 level-0 pieces, 9 remain. Free cheeks retract .12:
+ * (0,4)->(0,2.62), (0,1.38)->(0,0). Joined corners/window unchanged.
+ * Level-1 lone segment (0,0)->(0,4) retracts both ends to .12 and 3.88.
+ * Body radius=.25*k; k=.21 gives .0525. Origin (40,20) adds to endpoints.
+ * [13] Bare wall x=0, z=0..4, radius .25: (1,1)->(-1,1) stands (1,1),
+ * oblique to (-1,2) slides to (1,2); past z=4 is free. Goal (.1,3) pushes
+ * to (.25,3), unless radius=.05. Gap z=1.5..2.5 passes at z=2; z=1 blocks.
+ * Mini-room door passes (2,2)->(-2,2), window blocks (2,2)->(6,2), north
+ * wall blocks (2,2)->(2,-2). Unflagged lintel/leaf bricks up the door.
+ * Eased cheek allows z=1.45. Level 1 blocks. Empty segments preserve goal.
+ * On-wall starts (0,2) can leave either way; (.05,2)->(.05,3) pushes to
+ * (.25,3). Corridor walls x=0,.3, radius .25, middle x=.15: along z keeps
+ * .15 clearance; an outward goal stands. Niche x=0,.089, radius .109,
+ * start (.0445,2) cannot move to either +/-2 through a wall and stands.
+ * The independent minWallDistance invariant and counter-probes stay inline.
+ * Callback data is explicit rectangles/discs and floor-level maps; no table
+ * or expected value comes from production output.
  */
+import { vectorChecks } from './embodyVectorDispatch.mjs';
 import { runBridgeVectors } from './bridgeVectorDispatch.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1256,6 +1294,8 @@ import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 
 // '../..' = the REPO root (this file lives in client3d/scripts/) — the same
 // anchor smoke_enter_math.mjs and smoke_ground_math.mjs use.
+const vectorCase = vectorChecks(check, ["walk_control","collide"]);
+
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC_DIR = join(ROOT, 'client3d/src/game');
 /** The pure modules under test. `walk.ts` and `proximity.ts` are import-free;
@@ -1463,23 +1503,22 @@ async function main() {
   console.log('walkDir — the engine forward (-sin yaw, 0, -cos yaw)');
 
   const keys = (...k) => new Set(k);
-  check('yaw 0, w', walkDir(keys('w'), 0), { x: 0, z: -1 });
-  check('yaw 0, s', walkDir(keys('s'), 0), { x: 0, z: 1 });
-  check('yaw 0, d', walkDir(keys('d'), 0), { x: 1, z: 0 });
-  check('yaw 0, a', walkDir(keys('a'), 0), { x: -1, z: 0 });
-  check('yaw 0, w+d normalised', walkDir(keys('w', 'd'), 0),
-    { x: SQRT_HALF, z: -SQRT_HALF });
-  check('yaw pi/2, w', walkDir(keys('w'), Math.PI / 2), { x: -1, z: 0 });
-  check('yaw pi/2, d', walkDir(keys('d'), Math.PI / 2), { x: 0, z: -1 });
-  check('yaw pi/4, w', walkDir(keys('w'), Math.PI / 4), { x: -SQRT_HALF, z: -SQRT_HALF });
-  check('arrow keys walk like wasd', walkDir(keys('arrowup'), 0), { x: 0, z: -1 });
-  check('no key -> null', walkDir(keys(), 0), null);
-  check('w+s cancel -> null', walkDir(keys('w', 's'), 0), null);
-  check('a+d cancel -> null', walkDir(keys('a', 'd'), Math.PI / 3), null);
-  check('unrelated key -> null', walkDir(keys('q'), 0), null);
+  vectorCase("[1] " + ('yaw 0, w'));
+  vectorCase("[1] " + ('yaw 0, s'));
+  vectorCase("[1] " + ('yaw 0, d'));
+  vectorCase("[1] " + ('yaw 0, a'));
+  vectorCase("[1] " + ('yaw 0, w+d normalised'));
+  vectorCase("[1] " + ('yaw pi/2, w'));
+  vectorCase("[1] " + ('yaw pi/2, d'));
+  vectorCase("[1] " + ('yaw pi/4, w'));
+  vectorCase("[1] " + ('arrow keys walk like wasd'));
+  vectorCase("[1] " + ('no key -> null'));
+  vectorCase("[1] " + ('w+s cancel -> null'));
+  vectorCase("[1] " + ('a+d cancel -> null'));
+  vectorCase("[1] " + ('unrelated key -> null'));
   for (const yaw of [0, 0.3, 1.1, -2.4, Math.PI]) {
     const d = walkDir(keys('w', 'a'), yaw);
-    check(`yaw ${yaw}: diagonal is unit length`, Math.hypot(d.x, d.z), 1);
+    vectorCase("[1] " + (`yaw ${yaw}: diagonal is unit length`));
   }
 
   // --- slideBlocked (E4 task 5) --------------------------------------------
@@ -1506,18 +1545,13 @@ async function main() {
   console.log('slideBlocked — a blocked step slides along the boundary');
   {
     const wall = (x) => x > 5;
-    check('a free step is unchanged',
-      slideBlocked({ x: 4, z: 0 }, { x: 4.5, z: 0.5 }, wall), { x: 4.5, z: 0.5 });
-    check('straight into the wall: the figure stands',
-      slideBlocked({ x: 4, z: 0 }, { x: 6, z: 0 }, wall), { x: 4, z: 0 });
-    check('diagonally into the wall: it slides along z',
-      slideBlocked({ x: 4, z: 0 }, { x: 6, z: 2 }, wall), { x: 4, z: 2 });
+    vectorCase("[2] " + ('a free step is unchanged'));
+    vectorCase("[2] " + ('straight into the wall: the figure stands'));
+    vectorCase("[2] " + ('diagonally into the wall: it slides along z'));
     const disc = (x, z) => Math.hypot(x, z) < 1;
-    check('a disc blocks the same way',
-      slideBlocked({ x: 2, z: 0 }, { x: 0.5, z: 0 }, disc), { x: 2, z: 0 });
+    vectorCase("[2] " + ('a disc blocks the same way'));
     const quadrant = (x, z) => x > 0 && z > 0;
-    check('the tie goes to x, deterministically',
-      slideBlocked({ x: -1, z: -1 }, { x: 1, z: 1 }, quadrant), { x: 1, z: -1 });
+    vectorCase("[2] " + ('the tie goes to x, deterministically'));
   }
 
   // --- terrainBlocks (decision 2026-08-13) ---------------------------------
@@ -1527,13 +1561,10 @@ async function main() {
   // over it — the B1 case (a hall on a rock plateau) and the wilderness wall.
   console.log('terrainBlocks — painted ground judges the wilderness only');
   {
-    check('rock INSIDE a footprint is walkable (finding B1)',
-      terrainBlocks(false, true), false);
-    check('the same rock with no location over it blocks',
-      terrainBlocks(false, false), true);
-    check('walkable ground never blocks — outside',
-      terrainBlocks(true, false), false);
-    check('...nor inside', terrainBlocks(true, true), false);
+    vectorCase("[3] " + ('rock INSIDE a footprint is walkable (finding B1)'));
+    vectorCase("[3] " + ('the same rock with no location over it blocks'));
+    vectorCase("[3] " + ('walkable ground never blocks — outside'));
+    vectorCase("[3] " + ('...nor inside'));
     // And the same pair once THROUGH slideBlocked, because that is how the
     // figure meets it: a rock strip 4 <= x <= 6 with a location standing on
     // its northern half (z >= 0). Walking east at z = 1 crosses it; walking
@@ -1541,10 +1572,8 @@ async function main() {
     const rock = (x) => x >= 4 && x <= 6;
     const tiled = (_x, z) => z >= 0;
     const blocked = (x, z) => terrainBlocks(!rock(x), tiled(x, z));
-    check('into the rock UNDER the location: the step goes through',
-      slideBlocked({ x: 3, z: 1 }, { x: 5, z: 1 }, blocked), { x: 5, z: 1 });
-    check('into the same rock beside it: the figure stays put',
-      slideBlocked({ x: 3, z: -1 }, { x: 5, z: -1 }, blocked), { x: 3, z: -1 });
+    vectorCase("[2] " + ('into the rock UNDER the location: the step goes through'));
+    vectorCase("[2] " + ('into the same rock beside it: the figure stays put'));
   }
 
   // --- groundScope (reach decision, round 2 of 2026-08-13) -----------------
@@ -1599,18 +1628,12 @@ async function main() {
       leadFor() > MOVE_EPS_M, true);
     check('the slowest legal ground still steps 0.0141666 m',
       stepFor(terrainPace(0.05, 'wilderness'), leadFor()), 3.4 / 60 * 0.25);
-    check('...which the stall detector does NOT call a stall',
-      walkStalled({ x: 0, z: 0 },
-        { x: stepFor(terrainPace(0.05, 'wilderness'), leadFor()), z: 0 }),
-      false);
+    vectorCase("[6] " + ('...which the stall detector does NOT call a stall'));
     // RED COUNTER-PROBE 1: without the clamp the same ground stalls the walk.
     const unclamped = (f, scope) => (scope === 'open' && f <= 0 ? 1 : f);
     check('RED: an unclamped 0.05 steps only 0.00283 m',
       stepFor(unclamped(0.05, 'wilderness'), leadFor()), 3.4 / 60 * 0.05);
-    check('...and that IS a stall — the click order would be dropped',
-      walkStalled({ x: 0, z: 0 },
-        { x: stepFor(unclamped(0.05, 'wilderness'), leadFor()), z: 0 }),
-      true);
+    vectorCase("[6] " + ('...and that IS a stall — the click order would be dropped'));
     // RED COUNTER-PROBE 2: the OLD placement of the pace — on the LEAD. On a
     // 0.25 ground the goal lands 0.0375 m ahead, under MOVE_EPS_M, and the
     // figure stands still with an idle clip instead of swimming.
@@ -2025,43 +2048,26 @@ async function main() {
   {
     const STEP = 0.4;
     const SLOPE = 40;
-    check('the Mondscheinsee shore: 1.2 m over 0.5 m is a wall',
-      slopeBlocks(1.2, 0.5, STEP, SLOPE), true);
-    check('the flat beach: 0.3 m over 2 m (8.53 deg) is walked',
-      slopeBlocks(0.3, 2, STEP, SLOPE), false);
-    check('a 0.3 m step under the cap passes',
-      slopeBlocks(0.3, 0.5, STEP, SLOPE), false);
-    check('the cap itself passes (strictly greater blocks)',
-      slopeBlocks(0.4, 0.5, STEP, SLOPE), false);
-    check('a DROP is never judged — only climbing is (rule 2026-08-28)',
-      slopeBlocks(-1.2, 0.5, STEP, SLOPE), false);
-    check('...nor a 0.9 m drop over 0.5 m',
-      slopeBlocks(-0.9, 0.5, STEP, SLOPE), false);
-    check('...nor three metres straight down over one',
-      slopeBlocks(-3, 1, STEP, SLOPE), false);
-    check('but the SAME 0.9 m upwards over 0.5 m is a step',
-      slopeBlocks(0.9, 0.5, STEP, SLOPE), true);
-    check('45 deg over 2 m is refused',
-      slopeBlocks(2, 2, STEP, SLOPE), true);
-    check('38.66 deg over the same 2 m is not',
-      slopeBlocks(1.6, 2, STEP, SLOPE), false);
-    check('...and the very same rise a hair under the metre is a step',
-      slopeBlocks(1.6, 0.99, STEP, SLOPE), true);
-    check('one metre exactly is already a slope (26.57 deg)',
-      slopeBlocks(0.5, 1, STEP, SLOPE), false);
-    check('...0.999 m of it is a 0.5 m step and blocks',
-      slopeBlocks(0.5, 0.999, STEP, SLOPE), true);
-    check('level ground never blocks, at any distance',
-      slopeBlocks(0, 0, STEP, SLOPE), false);
-    check('a world with the limits wide open lets the cliff through',
-      slopeBlocks(1.2, 0.5, 5, 89), false);
+    vectorCase("[4] " + ('the steep shore: 1.2 m over 0.5 m is a wall'));
+    vectorCase("[4] " + ('the flat beach: 0.3 m over 2 m (8.53 deg) is walked'));
+    vectorCase("[4] " + ('a 0.3 m step under the cap passes'));
+    vectorCase("[4] " + ('the cap itself passes (strictly greater blocks)'));
+    vectorCase("[4] " + ('a DROP is never judged — only climbing is (rule 2026-08-28)'));
+    vectorCase("[4] " + ('...nor a 0.9 m drop over 0.5 m'));
+    vectorCase("[4] " + ('...nor three metres straight down over one'));
+    vectorCase("[4] " + ('but the SAME 0.9 m upwards over 0.5 m is a step'));
+    vectorCase("[4] " + ('45 deg over 2 m is refused'));
+    vectorCase("[4] " + ('38.66 deg over the same 2 m is not'));
+    vectorCase("[4] " + ('...and the very same rise a hair under the metre is a step'));
+    vectorCase("[4] " + ('one metre exactly is already a slope (26.57 deg)'));
+    vectorCase("[4] " + ('...0.999 m of it is a 0.5 m step and blocks'));
+    vectorCase("[4] " + ('level ground never blocks, at any distance'));
+    vectorCase("[4] " + ('a world with the limits wide open lets the cliff through'));
     // THE TWO REGIME CASES (findings F1/F2) — the step limit alone is blind
     // to both, and the client is where the first one bites: it walks in leads
     // of ~0.15 m while the server judges ~1.12 m report steps.
-    check('one 0.15 m lead up a 50.19° wall is blocked here too',
-      slopeBlocks(0.18, 0.15, STEP, SLOPE), true);
-    check('...and crawling 0.4 m per 0.1 m does not climb 75.96° either',
-      slopeBlocks(0.4, 0.1, STEP, SLOPE), true);
+    vectorCase("[4] " + ('one 0.15 m lead up a 50.19° wall is blocked here too'));
+    vectorCase("[4] " + ('...and crawling 0.4 m per 0.1 m does not climb 75.96° either'));
     // RED COUNTER-PROBE: the either/or form this rule started as. Both cases
     // pass under it, which is exactly why the two limits now hold together.
     const eitherOr = (dh, dist, maxStep, maxSlope) => {
@@ -2091,18 +2097,14 @@ async function main() {
     const onRoof = gateStandY(2.5, null, 0);           // rung 0 answers 2.5
     // THE CLIMB the server refuses: 2.5 m up, over a 0.15 m walking lead
     // (step: 2.5 > 0.4) and over a 1.12 m report step (slope: 65.8676° > 40).
-    check('a 2.5 m lattice is a wall over a 0.15 m lead',
-      slopeBlocks(onRoof - outside, 0.15, STEP, SLOPE), true);
-    check('...and over a 1.12 m report step as well',
-      slopeBlocks(onRoof - outside, 1.12, STEP, SLOPE), true);
+    vectorCase("[4] " + ('a 2.5 m lattice is a wall over a 0.15 m lead'));
+    vectorCase("[4] " + ('...and over a 1.12 m report step as well'));
     // THE COUNTER-PROBE (409b4f3e): coming back down is never judged.
-    check('stepping off the same roof is free',
-      slopeBlocks(outside - onRoof, 0.15, STEP, SLOPE), false);
+    vectorCase("[4] " + ('stepping off the same roof is free'));
     // RED: the terrain-only ladder the gate used until this task. Both points
     // read 0, the step is invisible here and the server refuses it — the
     // figure walks up and is snapped back three times a second.
-    check('RED: terrain only sees no step at all',
-      slopeBlocks(0 - 0, 0.15, STEP, SLOPE), false);
+    vectorCase("[4] " + ('RED: terrain only sees no step at all'));
     // [G1] RUNG 1, where no lattice answers: the room's own declared floor, a
     // podium 1.2 m over the flat ground (1.2; under a 2.5 lattice 2.5, ruling
     // R1). RUNG 2 is also the LOWER BOUND (Entscheid 5): a hollow in a
@@ -2133,28 +2135,20 @@ async function main() {
       { roomId: 'attic', top: 3.3, outline: square(3) },
     ];
     const levelOf = (id) => ({ hall: 0, attic: 1 })[id];
-    check('the upper storey drops out of the gate\'s list',
-      groundStoreyFloors(HOUSE, levelOf).map((f) => f.roomId), ['hall']);
+    vectorCase("[5] " + ('the upper storey drops out of the gate\'s list'));
     check('...so the gate stands on the ground floor',
       gateStandY(null, pickDeclared(groundStoreyFloors(HOUSE, levelOf), 0, 0), 0),
       0);
-    check('...and the step in from outside is free, as on the server',
-      slopeBlocks(0 - 0, 1.12, STEP, SLOPE), false);
+    vectorCase("[4] " + ('...and the step in from outside is free, as on the server'));
     check('RED: unfiltered, the attic hull wins the tie-break',
       pickDeclared(HOUSE, 0, 0), 3.3);
-    check('RED: ...and the gate refuses a step the server accepts',
-      slopeBlocks(gateStandY(null, pickDeclared(HOUSE, 0, 0), 0) - 0, 1.12,
-        STEP, SLOPE), true);
+    vectorCase("[4] " + ('RED: ...and the gate refuses a step the server accepts'));
     // A BASEMENT is not storey 0 either — the server's test is `!= 0`.
-    check('a basement is dropped just like an upper floor',
-      groundStoreyFloors([{ roomId: 'cellar', top: -2.5, outline: square(3) }],
-        () => -1), []);
+    vectorCase("[5] " + ('a basement is dropped just like an upper floor'));
     // `int(level or 0)` reads a missing level as storey 0; a room the tile
     // knows no level for is read the same way, so a scene whose room list has
     // not landed yet does not silently lose its ground floor.
-    check('a room with no level known is on storey 0',
-      groundStoreyFloors(HOUSE, () => undefined).map((f) => f.roomId),
-      ['hall', 'attic']);
+    vectorCase("[5] " + ('a room with no level known is on storey 0'));
   }
 
   // --- clickmove (E4 task 5) -----------------------------------------------
@@ -2168,26 +2162,17 @@ async function main() {
   console.log('clickmove — one goal, no route');
   {
     const free = () => false;
-    check('GOAL_ARRIVE_M', GOAL_ARRIVE_M, 0.2);
-    check('STALL_STEP_M', STALL_STEP_M, 0.01);
-    check('a clear click gives the point itself',
-      planClickWalk({ x: 0, z: 0 }, { x: 10, z: 0 }, free), { x: 10, z: 0 });
-    check('a blocked point plans nothing (the click falls through)',
-      planClickWalk({ x: 0, z: 0 }, { x: 10, z: 0 }, (x) => x > 5), null);
-    check('a click where one stands plans nothing either',
-      planClickWalk({ x: 0, z: 0 }, { x: 0.1, z: 0 }, free), null);
-    check('arrived inside the threshold',
-      reachedGoal({ x: 0, z: 0 }, { x: 0.1, z: 0 }), true);
-    check('...and not outside it',
-      reachedGoal({ x: 0, z: 0 }, { x: 0.3, z: 0 }), false);
-    check('the direction and the distance left',
-      goalDir({ x: 0, z: 0 }, { x: 3, z: 4 }), { x: 0.6, z: 0.8, dist: 5 });
-    check('no direction to a point one is on',
-      goalDir({ x: 2, z: 2 }, { x: 2, z: 2 }), null);
-    check('half a frame of walking is a stall',
-      walkStalled({ x: 0, z: 0 }, { x: 0.005, z: 0 }), true);
-    check('a whole frame is not',
-      walkStalled({ x: 0, z: 0 }, { x: 0.02, z: 0 }), false);
+    vectorCase("[6] " + ('GOAL_ARRIVE_M'));
+    vectorCase("[6] " + ('STALL_STEP_M'));
+    vectorCase("[6] " + ('a clear click gives the point itself'));
+    vectorCase("[6] " + ('a blocked point plans nothing (the click falls through)'));
+    vectorCase("[6] " + ('a click where one stands plans nothing either'));
+    vectorCase("[6] " + ('arrived inside the threshold'));
+    vectorCase("[6] " + ('...and not outside it'));
+    vectorCase("[6] " + ('the direction and the distance left'));
+    vectorCase("[6] " + ('no direction to a point one is on'));
+    vectorCase("[6] " + ('half a frame of walking is a stall'));
+    vectorCase("[6] " + ('a whole frame is not'));
   }
 
   console.log('talkTargetNear — who the avatar may address by walking up (task 5)');
@@ -2204,64 +2189,40 @@ async function main() {
      *  below; every case here is about WHO, and reads better without it. */
     const talkName = (avatar, others) => talkTargetNear(avatar, others)?.name ?? null;
 
-    check('TALK_RANGE is the documented 2.5 m', TALK_RANGE, 2.5);
-    check('2.0 m away -> in range', talkName(me(0, 0), [npc('Ayla', 2, 0)]), 'Ayla');
-    check('3.0 m away -> out of range', talkName(me(0, 0), [npc('Ayla', 3, 0)]), null);
-    check('exactly 2.5 m still counts', talkName(me(0, 0), [npc('Ayla', 2.5, 0)]), 'Ayla');
+    vectorCase("[7] " + ('TALK_RANGE is the documented 2.5 m'));
+    vectorCase("[7] " + ('2.0 m away -> in range'));
+    vectorCase("[7] " + ('3.0 m away -> out of range'));
+    vectorCase("[7] " + ('exactly 2.5 m still counts'));
     // 3-4-5: (1.5, 2.0) is exactly 2.5 m away, (1.8, 2.4) is 3.0 m.
-    check('diagonal 1.5/2.0 = 2.5 m -> in range',
-      talkName(me(0, 0), [npc('Ayla', 1.5, 2)]), 'Ayla');
-    check('diagonal 1.8/2.4 = 3.0 m -> out of range',
-      talkName(me(0, 0), [npc('Ayla', 1.8, 2.4)]), null);
-    check('nobody around -> null', talkName(me(0, 0), []), null);
+    vectorCase("[7] " + ('diagonal 1.5/2.0 = 2.5 m -> in range'));
+    vectorCase("[7] " + ('diagonal 1.8/2.4 = 3.0 m -> out of range'));
+    vectorCase("[7] " + ('nobody around -> null'));
 
-    check('another location, same distance -> null',
-      talkName(me(0, 0), [npc('Ayla', 2, 0, { locId: 'L2' })]), null);
-    check('another shown room, 1 m away through the wall -> null',
-      talkName(me(0, 0, { room: 'hall' }),
-        [npc('Ayla', 1, 0, { room: 'kitchen' })]), null);
-    check('same shown room -> in range',
-      talkName(me(0, 0, { room: 'hall' }),
-        [npc('Ayla', 1, 0, { room: 'hall' })]), 'Ayla');
-    check('avatar outdoors, NPC drawn inside a room -> null',
-      talkName(me(0, 0), [npc('Ayla', 1, 0, { room: 'hall' })]), null);
-    check('avatar inside, NPC drawn outdoors -> null',
-      talkName(me(0, 0, { room: 'hall' }), [npc('Ayla', 1, 0)]), null);
+    vectorCase("[7] " + ('another location, same distance -> null'));
+    vectorCase("[7] " + ('another shown room, 1 m away through the wall -> null'));
+    vectorCase("[7] " + ('same shown room -> in range'));
+    vectorCase("[7] " + ('avatar outdoors, NPC drawn inside a room -> null'));
+    vectorCase("[7] " + ('avatar inside, NPC drawn outdoors -> null'));
 
     // Interior scale 0.3: the range shrinks with the figures, 2.5 * 0.3 = 0.75.
-    check('scale 0.3: 0.7 m -> in range (radius 0.75)',
-      talkName(me(0, 0, { room: 'hall' }),
-        [npc('Ayla', 0.7, 0, { room: 'hall', scale: 0.3 })]), 'Ayla');
-    check('scale 0.3: 0.8 m -> out of range',
-      talkName(me(0, 0, { room: 'hall' }),
-        [npc('Ayla', 0.8, 0, { room: 'hall', scale: 0.3 })]), null);
-    check('scale 0.3: 2.0 m would be in range at scale 1, but is not here',
-      talkName(me(0, 0, { room: 'hall' }),
-        [npc('Ayla', 2, 0, { room: 'hall', scale: 0.3 })]), null);
+    vectorCase("[7] " + ('scale 0.3: 0.7 m -> in range (radius 0.75)'));
+    vectorCase("[7] " + ('scale 0.3: 0.8 m -> out of range'));
+    vectorCase("[7] " + ('scale 0.3: 2.0 m would be in range at scale 1, but is not here'));
 
-    check('the nearer of two wins',
-      talkName(me(0, 0), [npc('Ayla', 2, 0), npc('Bea', 0, 1.2)]), 'Bea');
-    check('order of the list does not matter',
-      talkName(me(0, 0), [npc('Bea', 0, 1.2), npc('Ayla', 2, 0)]), 'Bea');
-    check('the nearer one is out of range -> the other one is not taken either',
-      talkName(me(0, 0), [npc('Ayla', 3, 0), npc('Bea', 4, 0)]), null);
-    check('equal distance -> the name decides (no 1 Hz flicker)',
-      talkName(me(0, 0), [npc('Bea', 2, 0), npc('Ayla', 0, 2)]), 'Ayla');
+    vectorCase("[7] " + ('the nearer of two wins'));
+    vectorCase("[7] " + ('order of the list does not matter'));
+    vectorCase("[7] " + ('the nearer one is out of range -> the other one is not taken either'));
+    vectorCase("[7] " + ('equal distance -> the name decides (no 1 Hz flicker)'));
 
-    check('the avatar itself is never a candidate',
-      talkName(me(0, 0), [npc('Avatar', 0, 0), npc('Ayla', 2, 0)]), 'Ayla');
-    check('alone with itself -> null',
-      talkName(me(0, 0), [npc('Avatar', 0, 0)]), null);
+    vectorCase("[7] " + ('the avatar itself is never a candidate'));
+    vectorCase("[7] " + ('alone with itself -> null'));
 
     // THE MEASURED DISTANCE, hand-derived: (1.5, 2.0) is 2.5 m by 3-4-5, and
     // the nearer of two is 1.2 m straight along z. It is what decides this
     // offer against the lift, the stairs and the location entry
     // (`scripts/smoke_offer_resolve.mjs`).
-    check('the offer carries the distance it was measured at',
-      talkTargetNear(me(0, 0), [npc('Ayla', 1.5, 2)]), { name: 'Ayla', dist: 2.5 });
-    check('...of the NEAREST candidate, not of the first',
-      talkTargetNear(me(0, 0), [npc('Ayla', 2, 0), npc('Bea', 0, 1.2)]),
-      { name: 'Bea', dist: 1.2 });
+    vectorCase("[7] " + ('the offer carries the distance it was measured at'));
+    vectorCase("[7] " + ('...of the NEAREST candidate, not of the first'));
   }
 
   console.log('nearestRoomSwitch — walking from room to room (task 6)');
@@ -2275,7 +2236,7 @@ async function main() {
     ];
     const HOLD = 1.5;   // seconds — the value main.ts hands in
 
-    check('idleRoomWalk is the empty clock', idleRoomWalk(), { candidate: null, sinceMs: 0 });
+    vectorCase("[8] " + ('idleRoomWalk is the empty clock'));
     check('...and a fresh object each time', idleRoomWalk() !== idleRoomWalk(), true);
 
     // 1. the hold itself
@@ -2738,7 +2699,7 @@ async function main() {
     const at = (x, level, scale, stops = STOPS, rooms = ROOMS) =>
       elevatorAt({ x, z: 0 }, level, stops, rooms, scale);
 
-    check('range is 1.5 figure metres', ELEVATOR_RANGE, 1.5);
+    vectorCase("[10] " + ('range is 1.5 figure metres'));
     // Migrated to npc_ground.json: [30] both storeys have a stop AND a room
     check('0.9 m at scale 1 is inside the range', at(2.9, 0, 1),
       { levels: [0, 1], current: 0, dist: 0.9 });
@@ -2752,21 +2713,16 @@ async function main() {
       at(2.9, 0, 1, STOPS, ROOMS.filter((r) => r.level === 0)), null);
     check('a storey with a room but no stop has no holding point to stand at',
       at(2.9, 3, 1, STOPS, [...ROOMS, { id: 'shed', level: 3, center: { x: 0, z: 0 } }]), null);
-    check('the own storey is never offered as a destination',
-      elevatorOptions({ levels: [0, 1, 2], current: 1 }), [0, 2]);
+    vectorCase("[10] " + ('the own storey is never offered as a destination'));
     // Migrated to npc_ground.json: [30] the ride ends in the room nearest that storey's stop
     // Migrated to npc_ground.json: [30] ...and downwards likewise
 
     // Two storeys: one option, so F rides it instead of unfolding a picker
     // with a single button.
-    check('two storeys, standing below: the sole option is up',
-      elevatorSoleOption({ levels: [0, 1], current: 0 }), 1);
-    check('...standing above: the sole option is down',
-      elevatorSoleOption({ levels: [0, 1], current: 1 }), 0);
-    check('three storeys leave a choice, so there is no sole option',
-      elevatorSoleOption({ levels: [0, 1, 2], current: 1 }), null);
-    check('and the offer of a two-storey house carries exactly that one option',
-      elevatorOptions(at(2.9, 0, 1)), [1]);
+    vectorCase("[10] " + ('two storeys, standing below: the sole option is up'));
+    vectorCase("[10] " + ('...standing above: the sole option is down'));
+    vectorCase("[10] " + ('three storeys leave a choice, so there is no sole option'));
+    vectorCase("[10] " + ('and the offer of a two-storey house carries exactly that one option'));
   }
 
   console.log('elevator ride — the ride owns the figure until it arrives (E3 review)');
@@ -3080,10 +3036,10 @@ async function main() {
   //   (0,1.5)->(0,0)  free end (0,1.5)  ->  (0,1.38)-> (0,0)
   // The 1.00 m door therefore collides as a 1.24 m gap.
   console.log('\nwallSegments — level filter, door gaps, window still blocks');
-  check('BODY_RADIUS_M is the figure-metre half width', BODY_RADIUS_M, 0.25);
-  check('DOOR_EASE_M', DOOR_EASE_M, 0.12);
-  check('bodyRadius scales with k (Willowbrook k = 0.21)', bodyRadius(0.21), 0.0525);
-  check('bodyRadius(1) = BODY_RADIUS_M', bodyRadius(1), 0.25);
+  vectorCase("[12] " + ('BODY_RADIUS_M is the figure-metre half width'));
+  vectorCase("[12] " + ('DOOR_EASE_M'));
+  vectorCase("[12] " + ('bodyRadius scales with k (small-scale k = 0.21)'));
+  vectorCase("[12] " + ('bodyRadius(1) = BODY_RADIUS_M'));
   const segs0 = wallSegments(room, 0);
   check('the payload carries eleven level-0 pieces',
     room.walls.filter((w) => w.level === 0).length, 11);
@@ -3092,14 +3048,13 @@ async function main() {
   check('the skipped two are exactly the flagged lintel and leaf',
     segs0.filter((s) => s.ax === 0 && s.bx === 0
       && Math.min(s.az, s.bz) >= 1.5 && Math.max(s.az, s.bz) <= 2.5).length, 0);
-  check('upper storey is ONE segment', wallSegments(room, 1).length, 1);
+  vectorCase("[12] " + ('upper storey is ONE segment'));
   // It stands ALONE on its storey, so BOTH of its ends count as free and both
   // are pulled back by the ease — the rule has no notion of "this end is a
   // corner", only "another wall ends here too". Harmless in a real payload
   // (every corner is shared) and visible here on purpose.
-  check('upper storey segment is the level-1 wall, both ends eased',
-    wallSegments(room, 1)[0], { ax: 0, az: 0.12, bx: 0, bz: 3.88 }, 1e-9);
-  check('a storey nobody built has no segments', wallSegments(room, 2).length, 0);
+  vectorCase("[12] " + ('upper storey segment is the level-1 wall, both ends eased'));
+  vectorCase("[12] " + ('a storey nobody built has no segments'));
   // The two door cheeks, pulled back by the ease; everything else untouched.
   check('door cheek from the north corner ends 0.12 short', segs0[7],
     { ax: 0, az: 4, bx: 0, bz: 2.62 }, 1e-9);
@@ -3119,72 +3074,56 @@ async function main() {
   //  The move is projected onto the wall direction (0,1): dot((-2,0),(0,1)) = 0
   //  -> the goal collapses onto the position. Nothing is pushed out afterwards
   //  (distance from (1,1) to the wall is 1 >= 0.25).
-  check('head-on into a wall stands still',
-    clampAgainstWalls({ x: 1, z: 1 }, { x: -1, z: 1 }, wall, R), { x: 1, z: 1 });
+  vectorCase("[13] " + ('head-on into a wall stands still'));
   //  oblique: delta = (-2,1); dot((-2,1),(0,1)) = 1 -> goal = (1,1) + (0,1)*1.
   //  The parallel component SURVIVES: the figure slides along the wall.
-  check('an oblique run slides along the wall',
-    clampAgainstWalls({ x: 1, z: 1 }, { x: -1, z: 2 }, wall, R), { x: 1, z: 2 });
+  vectorCase("[13] " + ('an oblique run slides along the wall'));
   //  the crossing test is bounded by the segment: past its end (z = 4) the
   //  same head-on move is free, only the push-out around the end cap applies.
   //  from (1,5) to (-1,5): closest point on the segment is (0,4),
   //  |(-1,5)-(0,4)| = sqrt(2) = 1.4142 >= 0.25 -> untouched.
-  check('beyond the end of the wall nothing blocks',
-    clampAgainstWalls({ x: 1, z: 5 }, { x: -1, z: 5 }, wall, R), { x: -1, z: 5 });
+  vectorCase("[13] " + ('beyond the end of the wall nothing blocks'));
   //  radius: from (1,1) to (0.1,3) never reaches x = 0, so nothing is crossed,
   //  but the goal lies 0.1 m from the wall. Push out along (1,0) to exactly r.
-  check('a grazing pass is pushed out to the body radius',
-    clampAgainstWalls({ x: 1, z: 1 }, { x: 0.1, z: 3 }, wall, R), { x: 0.25, z: 3 });
-  check('and with a smaller radius it is left alone',
-    clampAgainstWalls({ x: 1, z: 1 }, { x: 0.1, z: 3 }, wall, 0.05),
-    { x: 0.1, z: 3 });
+  vectorCase("[13] " + ('a grazing pass is pushed out to the body radius'));
+  vectorCase("[13] " + ('and with a smaller radius it is left alone'));
   //  a door gap: the same wall split at z = 1.5 / 2.5. Walking through z = 2
   //  crosses neither piece, and the nearest end cap is
   //  |(-1,2)-(0,1.5)| = sqrt(1 + 0.25) = 1.118 >= 0.25 -> straight through.
   const gap = [{ ax: 0, az: 0, bx: 0, bz: 1.5 }, { ax: 0, az: 2.5, bx: 0, bz: 4 }];
-  check('through the door gap the goal survives untouched',
-    clampAgainstWalls({ x: 1, z: 2 }, { x: -1, z: 2 }, gap, R), { x: -1, z: 2 });
+  vectorCase("[13] " + ('through the door gap the goal survives untouched'));
   //  ... and the pieces beside it still block.
-  check('beside the door the wall still holds',
-    clampAgainstWalls({ x: 1, z: 1 }, { x: -1, z: 1 }, gap, R), { x: 1, z: 1 });
+  vectorCase("[13] " + ('beside the door the wall still holds'));
 
   console.log('\nclampAgainstWalls — against the mini payload');
   //  Through the DOOR on edge 3 (gap z in [1.38, 2.62] after the ease):
   //  a walk west at z = 2 crosses nothing, nearest cheek end is
   //  |(-2,2)-(0,2.62)| = sqrt(4 + 0.3844) = 2.094 >= 0.25.
-  check('the avatar walks out through the door',
-    clampAgainstWalls({ x: 2, z: 2 }, { x: -2, z: 2 }, segs0, R), { x: -2, z: 2 });
+  vectorCase("[13] " + ('the avatar walks out through the door'));
   //  RED: the same payload with the flag dropped walls the door up — the
   //  lintel spans z in [1.5, 2.5], so the walk west at z = 2 crosses it and
   //  the move collapses onto the wall direction. That is the regression the
   //  flag exists for; without it the door is a picture, not a way through.
   const unflagged = { ...room,
     walls: room.walls.map((w) => (w.lintel ? { ...w, lintel: false } : w)) };
-  check('RED: an unflagged lintel would block the doorway',
-    clampAgainstWalls({ x: 2, z: 2 }, { x: -2, z: 2 },
-      wallSegments(unflagged, 0), R), { x: 2, z: 2 });
+  vectorCase("[13] " + ('RED: an unflagged lintel would block the doorway'));
   //  RED, the same for the LEAF: the door leaf spans the very same z
   //  [1.5, 2.5]. A leaf that counted as a wall would brick up every door in
   //  the world — it is a picture of a door, not a door that shuts.
   const solidLeaf = { ...room,
     walls: room.walls.map((w) => (w.leaf ? { ...w, leaf: false } : w)) };
-  check('RED: a blocking leaf would brick up the doorway',
-    clampAgainstWalls({ x: 2, z: 2 }, { x: -2, z: 2 },
-      wallSegments(solidLeaf, 0), R), { x: 2, z: 2 });
+  vectorCase("[13] " + ('RED: a blocking leaf would brick up the doorway'));
   //  Through the WINDOW on edge 1 (same z, opposite side): the sill/head/glass
   //  entries span it, the move is projected onto their direction (0,1) and
   //  dot((4,0),(0,1)) = 0 -> stands still.
-  check('the window blocks like any wall',
-    clampAgainstWalls({ x: 2, z: 2 }, { x: 6, z: 2 }, segs0, R), { x: 2, z: 2 });
+  vectorCase("[13] " + ('the window blocks like any wall'));
   //  Straight through the north wall (edge 0) — no opening there at all.
-  check('a wall without an opening blocks',
-    clampAgainstWalls({ x: 2, z: 2 }, { x: 2, z: -2 }, segs0, R), { x: 2, z: 2 });
+  vectorCase("[13] " + ('a wall without an opening blocks'));
   //  Diagonally at the door: delta = (-4,-1) still crosses nothing (it passes
   //  x = 0 at z = 2 - 1*(2/4) = 1.5, inside the eased gap [1.38, 2.62]) —
   //  BUT the cheek end (0,1.38) is 0.6 m away in z at x = -2, so no push
   //  either: |(-2,1)-(0,1.38)| = sqrt(4 + 0.1444) = 2.036 >= 0.25.
-  check('an oblique run through the door passes too',
-    clampAgainstWalls({ x: 2, z: 2 }, { x: -2, z: 1 }, segs0, R), { x: -2, z: 1 });
+  vectorCase("[13] " + ('an oblique run through the door passes too'));
   //  Without the ease the same run would still pass; what the ease buys is the
   //  cheek CLEARANCE. Aiming at the untrimmed cheek corner (0,1.5): without
   //  the ease the goal (-0.1, 1.55) sits 0.1 m from the wall end and gets
@@ -3193,9 +3132,7 @@ async function main() {
   //  so it is pushed out, but from a point 0.12 m FARTHER from the doorway.
   //  The check that matters for the player: a walk hugging the eased cheek at
   //  z = 1.45 gets through instead of being stopped by the frame.
-  check('hugging the door cheek gets through',
-    clampAgainstWalls({ x: 2, z: 1.45 }, { x: -2, z: 1.45 }, segs0, R),
-    { x: -2, z: 1.45 });
+  vectorCase("[13] " + ('hugging the door cheek gets through'));
   //  Same run against the UNEASED gap: the cheek ends at (0,1.5), the goal
   //  passes 0.05 m from it -> pushed out along (-2-0, 1.45-1.5)/0.05... the
   //  point is only that it is NOT left alone. Compare the two.
@@ -3204,11 +3141,8 @@ async function main() {
   check('without the ease the same run is clamped', hug.x > -2, true);
   //  Storey filter at the clamp: the upper storey wall runs (0,0)-(0,4) with
   //  NO door, so the same walk west is blocked there.
-  check('the storey above has no door and blocks',
-    clampAgainstWalls({ x: 2, z: 2 }, { x: -2, z: 2 }, wallSegments(room, 1), R),
-    { x: 2, z: 2 });
-  check('with no segments at all the goal is returned unchanged',
-    clampAgainstWalls({ x: 2, z: 2 }, { x: -2, z: 2 }, [], R), { x: -2, z: 2 });
+  vectorCase("[13] " + ('the storey above has no door and blocks'));
+  vectorCase("[13] " + ('with no segments at all the goal is returned unchanged'));
 
   // --- Review findings C1 / I2 / I3 ----------------------------------------
   //
@@ -3235,15 +3169,9 @@ async function main() {
   check('the raw payload really is NOT world-absolute', segs0[0],
     { ax: 0, az: 0, bx: 4, bz: 0 });
   // The proof that the offset is what makes it work: the same world move.
-  check('offset segments block the world move',
-    clampAgainstWalls({ x: 42, z: 22 }, { x: 42, z: 18 }, at40, R),
-    { x: 42, z: 22 });
-  check('unoffset segments let it walk straight through (the bug)',
-    clampAgainstWalls({ x: 42, z: 22 }, { x: 42, z: 18 }, segs0, R),
-    { x: 42, z: 18 });
-  check('and the door still works in world coordinates',
-    clampAgainstWalls({ x: 42, z: 22 }, { x: 38, z: 22 }, at40, R),
-    { x: 38, z: 22 });
+  vectorCase("[13] " + ('offset segments block the world move'));
+  vectorCase("[13] " + ('unoffset segments let it walk straight through (the bug)'));
+  vectorCase("[13] " + ('and the door still works in world coordinates'));
 
   // I3 — the ORIGIN of the move may sit on the wall. Nothing walks a figure
   // there, but `snapPlayerTo` (the put-back after a refused step), a teleport
@@ -3254,15 +3182,11 @@ async function main() {
   // the side the player is heading for — the only sane pick, and unreachable
   // by walking (the goal never gets closer than the radius).
   console.log('\nclampAgainstWalls — an origin on the wall does not freeze (I3)');
-  check('standing on the wall, walking east: the move happens',
-    clampAgainstWalls({ x: 0, z: 2 }, { x: 1, z: 2 }, wall, R), { x: 1, z: 2 });
-  check('standing on the wall, walking west: it works the other way too',
-    clampAgainstWalls({ x: 0, z: 2 }, { x: -1, z: 2 }, wall, R), { x: -1, z: 2 });
+  vectorCase("[13] " + ('standing on the wall, walking east: the move happens'));
+  vectorCase("[13] " + ('standing on the wall, walking west: it works the other way too'));
   // Inside the capsule but off the line: the side IS known, so the figure is
   // pushed out to the radius while it walks along.
-  check('too close to the wall, walking along it: pushed out to r',
-    clampAgainstWalls({ x: 0.05, z: 2 }, { x: 0.05, z: 3 }, wall, R),
-    { x: 0.25, z: 3 });
+  vectorCase("[13] " + ('too close to the wall, walking along it: pushed out to r'));
 
   // I2 — the push-out is an iteration, and between two walls closer together
   // than 2r it cannot converge: it ping-pongs and the loop simply ends
@@ -3276,13 +3200,11 @@ async function main() {
   console.log('\nclampAgainstWalls — never worse off than before (I2)');
   const corridor = [{ ax: 0, az: 0, bx: 0, bz: 4 }, { ax: 0.3, az: 0, bx: 0.3, bz: 4 }];
   const mid = { x: 0.15, z: 2 };
-  check('down the middle of a too-narrow corridor: keeps walking',
-    clampAgainstWalls(mid, { x: 0.15, z: 3 }, corridor, R), { x: 0.15, z: 3 });
+  vectorCase("[13] " + ('down the middle of a too-narrow corridor: keeps walking'));
   check('and its clearance is not eaten by the push-out',
     minWallDistance(clampAgainstWalls(mid, { x: 0.15, z: 3 }, corridor, R), corridor),
     0.15, 1e-9);
-  check('out through the corridor wall: blocked, still in the middle',
-    clampAgainstWalls(mid, { x: 0.5, z: 2 }, corridor, R), { x: 0.15, z: 2 });
+  vectorCase("[13] " + ('out through the corridor wall: blocked, still in the middle'));
   // The invariant itself, over every case of this section.
   const invariant = [
     [{ x: 1, z: 1 }, { x: -1, z: 1 }, wall],
@@ -3322,19 +3244,15 @@ async function main() {
   const niche = [{ ax: 0, az: 0, bx: 0, bz: 4 }, { ax: 0.089, az: 0, bx: 0.089, bz: 4 }];
   const NR = 0.109;
   const inNiche = { x: 0.0445, z: 2 };
-  check('walking in: the figure is not shoved through the hull',
-    clampAgainstWalls(inNiche, { x: 2, z: 2 }, niche, NR), { x: 0.0445, z: 2 });
-  check('walking out: it is not shoved through either',
-    clampAgainstWalls(inNiche, { x: -2, z: 2 }, niche, NR), { x: 0.0445, z: 2 });
+  vectorCase("[13] " + ('walking in: the figure is not shoved through the hull'));
+  vectorCase("[13] " + ('walking out: it is not shoved through either'));
   check('and it never ends up past the hull wall',
     clampAgainstWalls(inNiche, { x: 2, z: 2 }, niche, NR).x <= 0.089, true);
   // The exemption that keeps this from freezing the on-the-wall case (I3):
   // contact AT the figure's own position is not a crossing — it is where it
   // stands. Only contact BEYOND it counts.
-  check('a figure standing on the wall still gets off it',
-    clampAgainstWalls({ x: 0, z: 2 }, { x: 1, z: 2 }, wall, R), { x: 1, z: 2 });
-  check('and walking ALONG the wall line is still not free',
-    clampAgainstWalls({ x: 1, z: 1 }, { x: -1, z: 1 }, wall, R), { x: 1, z: 1 });
+  vectorCase("[13] " + ('a figure standing on the wall still gets off it'));
+  vectorCase("[13] " + ('and walking ALONG the wall line is still not free'));
 
   // --- Doorways (E3 acceptance "you cannot see the doors", rehung in B3) ---
   //
@@ -4191,47 +4109,35 @@ async function main() {
     const { isLocked, lockReason, doorwayLock, unlockedRooms, NO_LOCKS } = locks;
     const LOCKS = { kitchen: 'The door is locked.', vault: '' };
 
-    check('a listed room is locked', isLocked(LOCKS, 'kitchen'), true);
-    check('an unlisted room is not', isLocked(LOCKS, 'hall'), false);
-    check('a wordless entry is still a lock', isLocked(LOCKS, 'vault'), true);
-    check('no map at all locks nothing', isLocked(null, 'kitchen'), false);
-    check('the empty id is never locked', isLocked(LOCKS, ''), false);
-    check('NO_LOCKS is empty', isLocked(NO_LOCKS, 'kitchen'), false);
+    vectorCase("[11] " + ('a listed room is locked'));
+    vectorCase("[11] " + ('an unlisted room is not'));
+    vectorCase("[11] " + ('a wordless entry is still a lock'));
+    vectorCase("[11] " + ('no map at all locks nothing'));
+    vectorCase("[11] " + ('the empty id is never locked'));
+    vectorCase("[11] " + ('NO_LOCKS is empty'));
     // The sentence travels untranslated — it is the server's, already localized.
-    check('the reason is the server\'s own sentence',
-      lockReason(LOCKS, 'kitchen'), 'The door is locked.');
-    check('an open room has no reason', lockReason(LOCKS, 'hall'), '');
-    check('a wordless lock has none either', lockReason(LOCKS, 'vault'), '');
+    vectorCase("[11] " + ('the reason is the server\'s own sentence'));
+    vectorCase("[11] " + ('an open room has no reason'));
+    vectorCase("[11] " + ('a wordless lock has none either'));
     // A map is a plain object: an inherited property must not pass for a lock.
-    check('a prototype property is no lock', isLocked(LOCKS, 'toString'), false);
+    vectorCase("[11] " + ('a prototype property is no lock'));
 
     // null = open, a string (even the empty one) = locked. The two must not be
     // one answer: a wordless lock has to be drawn as a lock all the same.
-    check('a doorway into a locked room is locked',
-      doorwayLock(['hall', 'kitchen'], LOCKS), 'The door is locked.');
-    check('a doorway between two open rooms is not',
-      doorwayLock(['hall', 'study'], LOCKS), null);
-    check('the first locked room in payload order supplies the words',
-      doorwayLock(['kitchen', 'vault'], LOCKS), 'The door is locked.');
-    check('a wordless lock is a lock, not an open door',
-      doorwayLock(['vault', 'kitchen'], LOCKS), '');
-    check('standing IN the locked room, its own door stays open',
-      doorwayLock(['kitchen', 'hall'], LOCKS, 'kitchen'), null);
-    check('...but a second locked room behind it still shows',
-      doorwayLock(['kitchen', 'vault'], LOCKS, 'kitchen'), '');
-    check('an outside door of a locked room, standing in it, is open',
-      doorwayLock(['kitchen'], LOCKS, 'kitchen'), null);
-    check('a doorway without rooms is open', doorwayLock([], LOCKS), null);
-    check('and so is one with nothing locked', doorwayLock(['hall'], NO_LOCKS), null);
+    vectorCase("[11] " + ('a doorway into a locked room is locked'));
+    vectorCase("[11] " + ('a doorway between two open rooms is not'));
+    vectorCase("[11] " + ('the first locked room in payload order supplies the words'));
+    vectorCase("[11] " + ('a wordless lock is a lock, not an open door'));
+    vectorCase("[11] " + ('standing IN the locked room, its own door stays open'));
+    vectorCase("[11] " + ('...but a second locked room behind it still shows'));
+    vectorCase("[11] " + ('an outside door of a locked room, standing in it, is open'));
+    vectorCase("[11] " + ('a doorway without rooms is open'));
+    vectorCase("[11] " + ('and so is one with nothing locked'));
 
     const ROOMS = [{ id: 'hall' }, { id: 'kitchen' }, { id: 'study' }];
-    check('a locked room is no candidate',
-      unlockedRooms(ROOMS, LOCKS).map((r) => r.id), ['hall', 'study']);
-    check('the room one is in survives its own lock',
-      unlockedRooms(ROOMS, LOCKS, 'kitchen').map((r) => r.id),
-      ['hall', 'kitchen', 'study']);
-    check('nothing locked leaves the list alone',
-      unlockedRooms(ROOMS, NO_LOCKS).map((r) => r.id), ['hall', 'kitchen', 'study']);
+    vectorCase("[11] " + ('a locked room is no candidate'));
+    vectorCase("[11] " + ('the room one is in survives its own lock'));
+    vectorCase("[11] " + ('nothing locked leaves the list alone'));
   }
 
   console.log('locks + nearestRoomSwitch — a locked room is never walked into');

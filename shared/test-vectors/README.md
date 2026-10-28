@@ -565,3 +565,81 @@ source smoke. A blocked scenario fails after one second instead of hanging.
 
 C# travel/residency consumers arrive with Tasks 42/44. Task 41 changes only the common
 C# sentinel loader and its test; it adds no travel/residency C# test classes.
+
+## Embodiment and controls (Task 46, E7-T1)
+
+| File | Canonical source smoke | Cases | Functions |
+|---|---|---:|---|
+| `walk_control.json` | `client3d/scripts/smoke_walk_math.mjs` | 151 | Walk direction/slide, terrain/slope gates, ground-storey filter, click goals/stall, talk, room switch/candidates, elevator offers/options, locks |
+| `collide.json` | `client3d/scripts/smoke_walk_math.mjs` | 45 | Body radius, wall segments (storeys, door gaps, windows, origin), capsule clamp/slide and narrow-corridor cases |
+| `enter.json` | `client3d/scripts/smoke_enter_math.mjs` | 57 | Local transform, authored/free/locked entry, polygon sanitize/area/bounds/containment/distance/rim |
+| `embody.json` | `client3d/scripts/smoke_embody_vectors.mjs` | 100 | Offer resolution, place picking, driver/answer/suppression, echo ring, readiness, Esc/key routing |
+| `camera.json` (extended) | `client3d/scripts/smoke_camera_math.mjs` | 83 (62 existing + 21 E7) | Adds first-person dwell sequence, rest eye/eye height, view/body yaw and zoom floor/ceiling |
+
+Run `node client3d/scripts/smoke_embody_vectors.mjs` for all **436** cases,
+without live config, assets, server or renderer. The canonical docstrings
+contain the numbered hand derivations; the embodiment canonical source
+collects the offer, place and position smoke headers. The original source
+smokes consume their migrated cases and retain their integration/invariant
+checks. Both first-person smokes consume their camera subset and retain the
+synthetic Figure rig checks. `node client3d/scripts/smoke_embody_fixture.mjs`
+checks the separate synthetic world and scripted answers in
+`native/fixtures/embody/`; its README derives the path frames and offer probes.
+
+`client3d/scripts/embodyVectorDispatch.mjs` bundles the existing pure production
+modules and provides test adapters only. It contains no expected-value tables.
+All distances are metres, times are seconds except `nowMs`/echo protocol stamps
+in milliseconds, and angles are radians except explicitly degree arguments.
+There is one `source` per JSON file. C# consumers for the new functions arrive
+in Task 47; the existing camera tests explicitly defer these seven function
+names until then: `firstPersonZoomSequence`, `restEyePoint`, `eyeHeight`,
+`viewHeading`, `bodyYawForView`, `zoomFloorOf`, `zoomCeiling`. Every old camera
+case still runs and every other unknown function still fails. Task 47 must
+remove that deferral when the ports and dispatch bindings land.
+
+Native-facing adapter conventions:
+
+- `walkDir(keys, yaw)` takes an array of key strings; the adapter restores a Set.
+- `slideBlocked(from,to,data)` and `planClickWalk(from,to,data)` restore a blocked
+  callback from `rects:[[minX,minZ,maxX,maxZ],...]` and `discs:[[x,z,r],...]`.
+  Rectangles use strict bounds by default, inclusive bounds with
+  `inclusive:true`; discs use strict radius. Optional `footprints` are inclusive
+  rectangles where terrain passability is overridden through `terrainBlocks`.
+  Bounds can use the common string sentinels for infinity.
+- `groundStoreyFloors(floors, levels)` restores the room-id → level callback;
+  missing/undefined levels retain the ground-storey fallback.
+- `roomSwitchSequence(current,rooms,level,steps,holdS=1.5,locks=null)` starts
+  with `idleRoomWalk`, applies lock filtering preserving `current`, then calls
+  `nearestRoomSwitch` for `[pos,nowMs]` steps. It returns `{next:[...],state}`.
+  `current` stays fixed for the sequence, matching an unconfirmed server room.
+- `roomWalkCandidatesValue(data)` uses explicit `insideRooms`, `insideLevels`
+  membership lists and `floorIds` keyed by level in place of the three
+  callbacks. It returns the complete room candidate list. `talkName` selects
+  a talk offer's name, normalizing absent offers to null.
+- `avatarDriver(state,event,cancelled)` accepts/returns the reserved string
+  **`$NO_CANCEL`** for the production unique symbol. It is adapter-specific,
+  not a fifth common-loader sentinel. JSON null remains a distinct, legitimate
+  legacy journey key. `suppressedJourney` uses the same cancellation argument.
+- `echoSequence(sent,session,origins,cap=64)` pushes each explicit report number
+  through production `pushSeq`, then returns `{ring,own:[...]}` using
+  `isOwnEcho`. This models SEND time, rather than reception or reservation.
+- `holdForSequence(steps)` starts with both pins null. Each step supplies
+  `{id,ready,x?,z?,clear?}` for fake deps; it returns `{frames:[{held,state}],
+  calls:[['pin'|'release',id,owner],...]}`. `clear:true` calls `clearApproach`.
+  Owner strings and call ordering are compared exactly.
+- `firstPersonZoomSequence(steps)` constructs one fresh `FirstPersonZoom` and
+  returns each `update(distance,enabled,dt)` result for explicit tuples.
+- `constant(name)` reads an actual exported constant; unknown names throw.
+  A projection adapter named `<fn>Value(args,path)` calls its production
+  function with the nested `args` and selects the explicit `path`. Paths use
+  property names/integer indices; `$ids` maps room ids, `$roomIds` maps floor
+  room ids, `$length` measures an XZ direction's unit norm. The explicit
+  `roomWalkCandidatesValue(data)` signature above takes precedence.
+- `polygonDistanceInfinite(...)` checks the production result `=== Infinity`;
+  finite JSON expectations remain mandatory. Invalid polygon coordinates use
+  `$NaN`. No production algorithm is copied into the test dispatch.
+
+The capsule-clamp invariant based on the source smoke's independent
+`minWallDistance`, room/ride hook simulations, source pins and Figure rig
+checks stay inline. Prop integration references in the position harness are
+inert stubs only: no prop-action API or native prop behavior was added.

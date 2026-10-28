@@ -80,6 +80,23 @@
  *        -> [5, 1 + 10, −3 + 17.3205081] = [5, 11, 14.3205081]
  *     e) [0,0,0], 10, yaw π/4, 45°: sin π/4 · cos 45° = 0.5 -> [5, 7.0710678, 5]
  *
+ * [11] First-person sequences (smoke_first_person.mjs): enter <=1.2, exit >=1.8,
+ *      after .18 continuous seconds. .1+.079 is short, +.001 switches; a band
+ *      sample cancels the dwell. Disabled resets both mode and dwell. The full
+ *      20-step sequence's true spans are steps 5..11 and 19 (one-based).
+ * [12] Rest lens (smoke_first_person_body.mjs): head [0,1.52,.02], crown
+ *      [0,1.72,.03], height 1.7: y=1.52+.2*.45=1.61,
+ *      z=.02+1.7*.055=.1135. Without crown y=1.7*.94=1.598;
+ *      eyeHeight(.5)=.47.
+ * [13] viewHeading=atan2(-sin yaw,-cos yaw): yaw 0 -> -pi,
+ *      yaw pi/2 -> -pi/2 (the browser's signed-zero atan2 convention).
+ * [14] Body threshold 60 degrees: 1 rad stays; 1.1 turns; 3 to -3 has
+ *      wrapped difference .2831853 and stays; 4*pi to 1.1 turns. Equal
+ *      angles at custom threshold zero stay because the comparison is strict.
+ * [15] zoomFloorOf(null/.5/.8/2)=.8/.8/.8/2. Ceiling=max(floor,
+ *      min(cap ?? 150,150)): (.8,null/34/500)=150/34/150; (2,1)=2.
+ *      These are the floor/cap used by the engine's +1e-6 cap-toast test.
+ *
  * The cases (inputs + expectations) live in shared/test-vectors/camera.json, shared with
  * the native client's C# tests; each case label starts with the [n] of its derivation above.
  * What stays inline below: constant pins, properties (frame-rate independence of `damp`,
@@ -89,6 +106,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { embodyDispatch } from './embodyVectorDispatch.mjs';
 import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -113,6 +131,7 @@ async function load() {
 
 const m = await load();
 const { passed: vPassed, failed: vFailed } = runVectors(loadVectors('camera'), {
+  ...embodyDispatch,
   fitDistance: m.fitDistance,
   worldCentreXZ: m.worldCentreXZ,
   basePitchDeg: m.basePitchDeg,

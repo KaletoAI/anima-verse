@@ -1,0 +1,47 @@
+{
+  "sig": "embody-terrain",
+  "default_kind": "grass",
+  "types": [
+    {
+      "kind": "grass",
+      "name": "Grass",
+      "color": "#6f9a4a",
+      "passable": true,
+      "speed_factor": 1,
+      "meta": {}
+    },
+    {
+      "kind": "rock",
+      "name": "Rock",
+      "color": "#555555",
+      "passable": false,
+      "speed_factor": 1,
+      "meta": {}
+    }
+  ],
+  "areas": [
+    {
+      "id": "blocked-patch",
+      "kind": "rock",
+      "polygon": [
+        [
+          8,
+          8
+        ],
+        [
+          12,
+          8
+        ],
+        [
+          12,
+          12
+        ],
+        [
+          8,
+          12
+        ]
+      ],
+      "meta": {}
+    }
+  ]
+}

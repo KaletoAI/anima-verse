@@ -1,0 +1,15 @@
+{
+  "/assets/animation-clips/stand-relaxed.fbx?v=fixturestand0001": "repo:shared/models/clips/idle.fbx",
+  "/assets/animation-clips/walk.fbx?v=fixturewalk00001": "repo:shared/models/clips/walk.fbx",
+  "/assets/animation-clips/female/waiting.fbx?v=fixturefemale003": "repo:shared/models/clips/female/waiting.fbx",
+  "/assets/animation-clips/waiting.fbx?v=fixturewaiting01": "repo:shared/models/clips/waiting.fbx",
+  "/assets/animation-clips/reading.fbx?v=fixturereading01": "repo:shared/models/clips/reading.fbx",
+  "/assets/animation-rig": "repo:shared/models/rig/reference.fbx",
+  "/assets/surface-textures/ground_grass.png": "../ground_grass.png",
+  "/assets/surface-textures/dark_stone_2.jpg": "repo:shared/surface_textures/dark_stone_2_1785267141.jpg",
+  "/static/client3d/models/manifest.json": "repo:static/client3d/models/manifest.json",
+  "/static/client3d/models/Soldier.glb": "repo:static/client3d/models/Soldier.glb",
+  "/static/client3d/models/Xbot.glb": "repo:static/client3d/models/Xbot.glb",
+  "/static/client3d/models/RobotExpressive.glb": "repo:static/client3d/models/RobotExpressive.glb",
+  "/fixture/embody/diorama.glb": "../fidelity/box.glb"
+}

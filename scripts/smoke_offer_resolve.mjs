@@ -1,7 +1,7 @@
 /**
  * Smoke: WHICH standing offer the F key answers — `game/offers.nearestOffer`.
  *
- * Usage: direct node call, self-bundling via esbuild (run from anywhere):
+ * Usage: direct node call (pure modules bundled by the shared test adapter):
  *     node scripts/smoke_offer_resolve.mjs
  *
  * WHY THIS CHECK EXISTS. Four rules offer the avatar something at the same
@@ -38,44 +38,9 @@
  * All distances are plain hypotenuses along +x, so every expected number below
  * is the x coordinate itself.
  */
-import { spawnSync } from 'child_process'
-import * as fs from 'fs'
-import * as path from 'path'
-import { fileURLToPath } from 'url'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
-
+import { embodyDispatch as m, vectorChecks } from '../client3d/scripts/embodyVectorDispatch.mjs';
 async function main() {
-  if (!process.env.SMOKE_BUNDLED) {
-    const bundlePath = '/tmp/smoke_offer_resolve_bundled.mjs'
-    const root = path.join(__dirname, '../')
-    const bin = ['client3d/node_modules/.bin/esbuild',
-                 'node_modules/.bin/esbuild']
-      .map((rel) => path.join(root, rel)).find((p) => fs.existsSync(p))
-    if (!bin) {
-      console.error('esbuild not found (npm install) — nothing was checked')
-      process.exit(1)
-    }
-    const built = spawnSync(bin, [
-      __filename, '--bundle', '--platform=node', '--format=esm',
-      `--outfile=${bundlePath}`,
-    ], { cwd: root, stdio: 'inherit' })
-    if (built.status !== 0) process.exit(built.status ?? 1)
-    const run = spawnSync('node', [bundlePath], {
-      stdio: 'inherit', env: { ...process.env, SMOKE_BUNDLED: '1' },
-    })
-    process.exit(run.status ?? 1)
-  }
-
-  const { nearestOffer, OFFER_TIEBREAK } =
-    await import('../client3d/src/game/offers.ts')
-  const { talkTargetNear, TALK_RANGE } =
-    await import('../client3d/src/game/proximity.ts')
-  const { stairsAt, STAIR_RANGE } = await import('../client3d/src/game/stairs.ts')
-  const { elevatorAt, ELEVATOR_RANGE } =
-    await import('../client3d/src/game/elevator.ts')
-
+  const {nearestOffer, OFFER_TIEBREAK, talkTargetNear, TALK_RANGE, stairsAt, STAIR_RANGE, elevatorAt, ELEVATOR_RANGE} = m;
   const failures = []
   const check = (label, actual, expected) => {
     const ok = actual === expected
@@ -85,6 +50,7 @@ async function main() {
       console.log(`      expected ${JSON.stringify(expected)}`)
     }
   }
+  const vectorCase = vectorChecks(check, ['embody']);
   /** A state as the game bus publishes it; anything unnamed is "no offer". */
   const state = (o = {}) => ({
     talkTarget: null, elevator: null, stairs: null, enterOffer: null, ...o,
@@ -119,8 +85,7 @@ async function main() {
   const stairNear = stairsAt(HERE, 0, [flight(1)], 1)
   check('the talk rule measures 2.4 m', ayla?.dist, 2.4)
   check('the stair rule measures 1.0 m', stairNear?.dist, 1)
-  check('the NEARER offer wins: the stairs',
-        nearestOffer(state({ talkTarget: ayla, stairs: stairNear })), 'stairs')
+  vectorCase('[30] ' + ('the NEARER offer wins: the stairs'))
 
   console.log('\n[2] …and the other way round: an NPC at 0.5 m beats a landing'
     + ' at 1.4 m')
@@ -128,41 +93,30 @@ async function main() {
   const stairFar = stairsAt(HERE, 0, [flight(1.4)], 1)
   check('the talk rule measures 0.5 m', bea?.dist, 0.5)
   check('the stair rule measures 1.4 m', stairFar?.dist, 1.4)
-  check('the NEARER offer wins: the conversation',
-        nearestOffer(state({ talkTarget: bea, stairs: stairFar })), 'talk')
+  vectorCase('[30] ' + ('the NEARER offer wins: the conversation'))
 
   console.log('\n[3] a single offer wins whatever its distance')
-  check('talk alone', nearestOffer(state({ talkTarget: { dist: 2.4 } })), 'talk')
-  check('lift alone', nearestOffer(state({ elevator: { dist: 1.49 } })), 'elevator')
-  check('stairs alone', nearestOffer(state({ stairs: { dist: 1.4 } })), 'stairs')
-  check('entry alone', nearestOffer(state({ enterOffer: { dist: 2.9 } })), 'enter')
-  check('…even at zero distance',
-        nearestOffer(state({ stairs: { dist: 0 } })), 'stairs')
+  vectorCase('[30] ' + ('talk alone'))
+  vectorCase('[30] ' + ('lift alone'))
+  vectorCase('[30] ' + ('stairs alone'))
+  vectorCase('[30] ' + ('entry alone'))
+  vectorCase('[30] ' + ('…even at zero distance'))
 
   console.log('\n[4] no offer at all')
-  check('nothing stands', nearestOffer(state()), null)
+  vectorCase('[30] ' + ('nothing stands'))
 
   console.log('\n[5] lift and stairs at once — the nearer one')
   const lift = elevatorAt(HERE, 0, stops(1.2), ROOMS, 1)
   check('the lift rule measures 1.2 m', lift?.dist, 1.2)
-  check('lift 1.2 m vs stairs 0.4 m → stairs',
-        nearestOffer(state({ elevator: lift, stairs: { dist: 0.4 } })), 'stairs')
-  check('lift 1.2 m vs stairs 1.4 m → lift',
-        nearestOffer(state({ elevator: lift, stairs: { dist: 1.4 } })), 'elevator')
+  vectorCase('[30] ' + ('lift 1.2 m vs stairs 0.4 m → stairs'))
+  vectorCase('[30] ' + ('lift 1.2 m vs stairs 1.4 m → lift'))
 
   console.log('\n[6] an exact tie falls to the documented order')
-  check('talk vs lift at 1.0 m → talk',
-        nearestOffer(state({ talkTarget: { dist: 1 }, elevator: { dist: 1 } })), 'talk')
-  check('lift vs stairs at 1.0 m → lift',
-        nearestOffer(state({ elevator: { dist: 1 }, stairs: { dist: 1 } })), 'elevator')
-  check('stairs vs entry at 1.0 m → stairs',
-        nearestOffer(state({ stairs: { dist: 1 }, enterOffer: { dist: 1 } })), 'stairs')
-  check('all four at 1.0 m → talk',
-        nearestOffer(state({ talkTarget: { dist: 1 }, elevator: { dist: 1 },
-                             stairs: { dist: 1 }, enterOffer: { dist: 1 } })), 'talk')
-  check('…and a hair of difference beats the order: stairs at 0.999',
-        nearestOffer(state({ talkTarget: { dist: 1 }, stairs: { dist: 0.999 } })),
-        'stairs')
+  vectorCase('[30] ' + ('talk vs lift at 1.0 m → talk'))
+  vectorCase('[30] ' + ('lift vs stairs at 1.0 m → lift'))
+  vectorCase('[30] ' + ('stairs vs entry at 1.0 m → stairs'))
+  vectorCase('[30] ' + ('all four at 1.0 m → talk'))
+  vectorCase('[30] ' + ('…and a hair of difference beats the order: stairs at 0.999'))
 
   console.log('\n[7] out of its own reach is NO offer — not even as the only one')
   const cara = talkTargetNear(ME, [npc('Cara', 2.6)])
@@ -171,22 +125,14 @@ async function main() {
   check('an NPC at 2.6 m (> 2.5) is no talk offer', cara, null)
   check('a landing at 1.6 m (> 1.5) is no stair offer', stairOut, null)
   check('a pad at exactly 1.5 m is no lift offer (strict)', liftOut, null)
-  check('so nothing wins, though each would have been alone',
-        nearestOffer(state({ talkTarget: cara, stairs: stairOut, elevator: liftOut })),
-        null)
-  check('…and a landing at 1.6 m does not win over an NPC at 2.4 m either',
-        nearestOffer(state({ talkTarget: ayla, stairs: stairOut })), 'talk')
+  vectorCase('[30] ' + ('so nothing wins, though each would have been alone'))
+  vectorCase('[30] ' + ('…and a landing at 1.6 m does not win over an NPC at 2.4 m either'))
 
   console.log('\n[8] RED PROBES: a distance that is not a distance never wins')
-  check('NaN loses to a real offer',
-        nearestOffer(state({ talkTarget: { dist: NaN }, stairs: { dist: 1.4 } })),
-        'stairs')
-  check('NaN alone wins nothing',
-        nearestOffer(state({ talkTarget: { dist: NaN } })), null)
-  check('a negative distance wins nothing',
-        nearestOffer(state({ stairs: { dist: -1 } })), null)
-  check('Infinity wins nothing',
-        nearestOffer(state({ enterOffer: { dist: Infinity } })), null)
+  vectorCase('[30] ' + ('NaN loses to a real offer'))
+  vectorCase('[30] ' + ('NaN alone wins nothing'))
+  vectorCase('[30] ' + ('a negative distance wins nothing'))
+  vectorCase('[30] ' + ('Infinity wins nothing'))
 
   console.log(`\n${failures.length
     ? 'FAILED: ' + failures.join(', ') : 'all checks passed'}`)

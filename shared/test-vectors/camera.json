@@ -138,6 +138,27 @@
     { "label": "[10d] 30 deg at 20 m from [5, 1, -3]", "fn": "cameraPose",
       "args": [[5, 1, -3], 20, 0, 30], "expect": { "pos": [5, 11, 14.3205080757] }, "eps": 1e-9 },
     { "label": "[10e] yaw pi/4, 45 deg at 10 m", "fn": "cameraPose",
-      "args": [[0, 0, 0], 10, 0.7853981633974483, 45], "expect": { "pos": [5, 7.0710678119, 5] }, "eps": 1e-9 }
+      "args": [[0, 0, 0], 10, 0.7853981633974483, 45], "expect": { "pos": [5, 7.0710678119, 5] }, "eps": 1e-9 },
+    {"label": "[11] first person dwell, interrupted entry and exit, reset", "fn": "firstPersonZoomSequence", "args": [[[1.2, true, 0.1], [1.3, true, 0.1], [1.2, true, 0.1], [1.2, true, 0.079], [1.2, true, 0.001], [1.2001, true, 1], [1.7999, true, 1], [1.8, true, 0.1], [1.7, true, 0.1], [1.8, true, 0.1], [1.8, true, 0.079], [1.8, true, 0.001], [1.2001, true, 1], [1.7999, true, 1], [0.8, false, 0.18], [0.8, true, 0.1], [0.8, false, 0.001], [0.8, true, 0.1], [0.8, true, 0.08], [0.8, false, 0.001]]], "expect": [false, false, false, false, true, true, true, true, true, true, true, false, false, false, false, false, false, false, true, false]},
+    {"label": "[11] exact entry and exit thresholds", "fn": "firstPersonZoomSequence", "args": [[[1.2, true, 0.18], [1.8, true, 0.18]]], "expect": [true, false]},
+    {"label": "[12] rest eye between head and crown", "fn": "restEyePoint", "args": [[0, 1.52, 0.02], [0, 1.72, 0.03], 1.7], "expect": [0, 1.61, 0.1135]},
+    {"label": "[12] no crown falls back to standing eye", "fn": "restEyePoint", "args": [[0, 1.52, 0.02], null, 1.7], "expect": [0, 1.598, 0.1135]},
+    {"label": "[12] standing eye is 94 percent", "fn": "eyeHeight", "args": [1.7], "expect": 1.598},
+    {"label": "[12] small figure eye", "fn": "eyeHeight", "args": [0.5], "expect": 0.47},
+    {"label": "[13] orbit zero looks toward minus Z", "fn": "viewHeading", "args": [0], "expect": -3.141592653589793},
+    {"label": "[13] orbit quarter turn looks toward minus X", "fn": "viewHeading", "args": [1.5707963267948966], "expect": -1.5707963267948966},
+    {"label": "[14] below sixty degrees", "fn": "bodyYawForView", "args": [0, 1], "expect": null},
+    {"label": "[14] above sixty degrees", "fn": "bodyYawForView", "args": [0, 1.1], "expect": 1.1},
+    {"label": "[14] wrapped seam", "fn": "bodyYawForView", "args": [3, -3], "expect": null},
+    {"label": "[14] unwrapped body", "fn": "bodyYawForView", "args": [12.566370614359172, 1.1], "expect": 1.1},
+    {"label": "[14] exact custom threshold", "fn": "bodyYawForView", "args": [0, 0, 0], "expect": null},
+    {"label": "[15] floor default", "fn": "zoomFloorOf", "args": [null], "expect": 0.8},
+    {"label": "[15] floor below lens", "fn": "zoomFloorOf", "args": [0.5], "expect": 0.8},
+    {"label": "[15] floor embodied", "fn": "zoomFloorOf", "args": [0.8], "expect": 0.8},
+    {"label": "[15] floor third person stand off", "fn": "zoomFloorOf", "args": [2], "expect": 2},
+    {"label": "[15] ceiling default", "fn": "zoomCeiling", "args": [0.8, null], "expect": 150},
+    {"label": "[15] ceiling embodied cap", "fn": "zoomCeiling", "args": [0.8, 34], "expect": 34},
+    {"label": "[15] ceiling beyond lens", "fn": "zoomCeiling", "args": [0.8, 500], "expect": 150},
+    {"label": "[15] ceiling floor beats low cap", "fn": "zoomCeiling", "args": [2, 1], "expect": 2}
   ]
 }

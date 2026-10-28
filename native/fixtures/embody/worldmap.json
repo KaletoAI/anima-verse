@@ -1,0 +1,152 @@
+{
+  "avatar": "fixture-avatar",
+  "current_location_id": "loc-hall",
+  "locations": [
+    {
+      "id": "loc-hall",
+      "name": "Fixture Hall",
+      "pos_x": 0,
+      "pos_z": 0,
+      "yaw_deg": 0,
+      "plan_width_m": 12,
+      "boundary": [
+        [
+          -6,
+          -4
+        ],
+        [
+          6,
+          -4
+        ],
+        [
+          6,
+          4
+        ],
+        [
+          -6,
+          4
+        ]
+      ],
+      "openings": [
+        {
+          "edge": 2,
+          "at_world": [
+            3,
+            4
+          ],
+          "inward": [
+            0,
+            -1
+          ],
+          "room": "r-b"
+        }
+      ]
+    },
+    {
+      "id": "loc-free",
+      "name": "Fixture Meadow",
+      "pos_x": 24,
+      "pos_z": 0,
+      "yaw_deg": 0,
+      "plan_width_m": 8,
+      "boundary": [
+        [
+          -4,
+          -4
+        ],
+        [
+          4,
+          -4
+        ],
+        [
+          4,
+          4
+        ],
+        [
+          -4,
+          4
+        ]
+      ],
+      "openings": []
+    },
+    {
+      "id": "loc-locked",
+      "name": "Fixture Locked",
+      "pos_x": 40,
+      "pos_z": 0,
+      "yaw_deg": 0,
+      "plan_width_m": 8,
+      "boundary": [
+        [
+          -4,
+          -4
+        ],
+        [
+          4,
+          -4
+        ],
+        [
+          4,
+          4
+        ],
+        [
+          -4,
+          4
+        ]
+      ],
+      "openings": [
+        {
+          "edge": 2,
+          "at_world": [
+            40,
+            4
+          ],
+          "inward": [
+            0,
+            -1
+          ],
+          "room": "locked-room"
+        }
+      ]
+    }
+  ],
+  "world_props": [],
+  "world_props_sig": "embody-none",
+  "events_by_location": {},
+  "world_bounds": {
+    "min_x": -16,
+    "min_z": -16,
+    "max_x": 48,
+    "max_z": 16
+  },
+  "height_sig": "embody-step-1",
+  "fogged": false,
+  "max_step_height_m": 0.4,
+  "max_slope_deg": 40,
+  "characters": [
+    {
+      "name": "fixture-avatar",
+      "location_id": "loc-hall",
+      "room_id": "r-a",
+      "pos": {
+        "x": -3,
+        "z": 1
+      },
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": null
+    },
+    {
+      "name": "fixture-npc",
+      "location_id": "loc-hall",
+      "room_id": "r-a",
+      "pos": {
+        "x": -3,
+        "z": 3
+      },
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": null
+    }
+  ]
+}

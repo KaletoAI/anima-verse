@@ -30,10 +30,13 @@
  * walked clockwise, so the shoelace sum is POSITIVE: 0+8+4+4+8+0 = 24 →
  * signed area +12, and 4×4 minus the 2×2 notch is 12 as well. ✓
  */
+import { vectorChecks } from './embodyVectorDispatch.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const vectorCase = vectorChecks(check, ["enter"]);
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC_DIR = join(ROOT, 'client3d/src/game');
@@ -113,18 +116,14 @@ async function main() {
    * (v6 Nr. 6), so its sign convention has to be the server's exactly.
    */
   console.log('winding / area (hand: +12 CW, 16 − 4 notch)');
-  check('signed area L', polygonSignedArea(L_SHAPE), 12);
-  check('area L', polygonArea(L_SHAPE), 12);
-  check('signed area CW triangle',
-    polygonSignedArea([[0, 0], [1, 0], [0, 1]]), 0.5);
-  check('signed area CCW triangle',
-    polygonSignedArea([[0, 0], [0, 1], [1, 0]]), -0.5);
-  check('closed ring tolerated', polygonArea([...L_SHAPE, [0, 0]]), 12);
-  check('degenerate (2 points)', polygonArea([[0, 0], [4, 0]]), 0);
-  check('bounds L', polygonBounds(L_SHAPE),
-    { minX: 0, minZ: 0, maxX: 4, maxZ: 4 });
-  check('a malformed point poisons the whole outline',
-    sanitizePolygon([[0, 0], [1, Number.NaN], [2, 2]]), null);
+  vectorCase("[22] " + ('signed area L'));
+  vectorCase("[22] " + ('area L'));
+  vectorCase("[22] " + ('signed area CW triangle'));
+  vectorCase("[22] " + ('signed area CCW triangle'));
+  vectorCase("[22] " + ('closed ring tolerated'));
+  vectorCase("[22] " + ('degenerate (2 points)'));
+  vectorCase("[22] " + ('bounds L'));
+  vectorCase("[22] " + ('a malformed point poisons the whole outline'));
 
   /**
    * ------------------------------------------------------------------------
@@ -132,11 +131,11 @@ async function main() {
    * ------------------------------------------------------------------------
    */
   console.log('containment in the LOCAL frame (the notch is outside)');
-  check('(1,1) wide arm', pointInPolygon(1, 1, L_SHAPE), true);
-  check('(3,1) right arm', pointInPolygon(3, 1, L_SHAPE), true);
-  check('(3,3) notch', pointInPolygon(3, 3, L_SHAPE), false);
-  check('(5,5) far outside', pointInPolygon(5, 5, L_SHAPE), false);
-  check('a line contains nothing', pointInPolygon(0, 0, [[0, 0], [1, 1]]), false);
+  vectorCase("[23] " + ('(1,1) wide arm'));
+  vectorCase("[23] " + ('(3,1) right arm'));
+  vectorCase("[23] " + ('(3,3) notch'));
+  vectorCase("[23] " + ('(5,5) far outside'));
+  vectorCase("[23] " + ('a line contains nothing'));
 
   /**
    * ------------------------------------------------------------------------
@@ -144,13 +143,11 @@ async function main() {
    * ------------------------------------------------------------------------
    */
   console.log('distance to the rim (hand: 1 / 1 / 5 / 0)');
-  check('(5,1) east of the x=4 edge', polygonDistance(5, 1, L_SHAPE), 1);
-  check('(3,3) in the notch, 1 m from both notch edges',
-    polygonDistance(3, 3, L_SHAPE), 1);
-  check('(−3,−4) past the (0,0) corner, hypot(3,4)',
-    polygonDistance(-3, -4, L_SHAPE), 5);
-  check('(1,1) inside = 0', polygonDistance(1, 1, L_SHAPE), 0);
-  check('degenerate = Infinity', polygonDistance(0, 0, [[0, 0]]), Infinity);
+  vectorCase("[24] " + ('(5,1) east of the x=4 edge'));
+  vectorCase("[24] " + ('(3,3) in the notch, 1 m from both notch edges'));
+  vectorCase("[24] " + ('(−3,−4) past the (0,0) corner, hypot(3,4)'));
+  vectorCase("[24] " + ('(1,1) inside = 0'));
+  vectorCase("[24] " + ('degenerate = Infinity'));
 
   /**
    * ------------------------------------------------------------------------
@@ -173,12 +170,9 @@ async function main() {
   check('world (101,47) is local (3,1)', at(101, 47), { x: 3, z: 1 }, 1e-9);
   check('world (103,47) is local (3,3)', at(103, 47), { x: 3, z: 3 }, 1e-9);
   check('world (100,44) is local (6,0)', at(100, 44), { x: 6, z: 0 }, 1e-9);
-  check('contains: world (101,47)',
-    pointInPolygon(at(101, 47).x, at(101, 47).z, L_SHAPE), true);
-  check('contains: world (103,47) is the NOTCH',
-    pointInPolygon(at(103, 47).x, at(103, 47).z, L_SHAPE), false);
-  check('distance: world (100,44) -> 2',
-    polygonDistance(at(100, 44).x, at(100, 44).z, L_SHAPE), 2, 1e-9);
+  vectorCase("[23] " + ('contains: world (101,47)'));
+  vectorCase("[23] " + ('contains: world (103,47) is the NOTCH'));
+  vectorCase("[24] " + ('distance: world (100,44) -> 2'));
 
   /**
    * ------------------------------------------------------------------------
@@ -195,8 +189,8 @@ async function main() {
    */
   console.log('smallest AREA wins (hut in the village)');
   const VILLAGE = [[-10, -10], [10, -10], [10, 10], [-10, 10]];
-  check('the village square is 400 m²', polygonArea(VILLAGE), 400);
-  check('the hut is 12 m²', polygonArea(L_SHAPE), 12);
+  vectorCase("[22] " + ('the village square is 400 m²'));
+  vectorCase("[22] " + ('the hut is 12 m²'));
   /** The rule of `main.tileAt`, on plain outlines: every one that contains the
    *  point, smallest area first. */
   const pick = (x, z, places) => {
@@ -237,12 +231,9 @@ async function main() {
    *                    inward (0, 4)/4 = (0, 1), and +z IS the interior.
    */
   console.log('the rim point and its inward normal');
-  check('east of the right arm', nearestRimPoint(5, 1, L_SHAPE),
-    { x: 4, z: 1, inward: { x: -1, z: 0 }, dist: 1 });
-  check('north of the wide arm', nearestRimPoint(1, -2, L_SHAPE),
-    { x: 1, z: 0, inward: { x: 0, z: 1 }, dist: 2 });
-  check('a degenerate outline has no rim',
-    nearestRimPoint(0, 0, [[0, 0], [1, 1]]), null);
+  vectorCase("[25] " + ('east of the right arm'));
+  vectorCase("[25] " + ('north of the wide arm'));
+  vectorCase("[25] " + ('a degenerate outline has no rim'));
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);

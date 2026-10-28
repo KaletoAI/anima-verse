@@ -1,0 +1,259 @@
+{
+  "format": "anima-pos-answers/1",
+  "selection": "Choose a named scenario; consume its steps in order. Match method, path and exact request JSON; unknown or exhausted scenarios fail. No implicit server mutation or replay.",
+  "scenarios": {
+    "accepted": [
+      {
+        "method": "POST",
+        "path": "/play/pos",
+        "request": {
+          "x": -3,
+          "z": 0,
+          "seq": 1,
+          "t_ms": 330,
+          "session": "fixture-session-46"
+        },
+        "status": 200,
+        "body": {
+          "ok": true,
+          "location_id": "loc-hall",
+          "room_id": "r-a"
+        }
+      }
+    ],
+    "throttled-retry": [
+      {
+        "method": "POST",
+        "path": "/play/pos",
+        "request": {
+          "x": -3,
+          "z": 0,
+          "seq": 1,
+          "t_ms": 330,
+          "session": "fixture-session-46"
+        },
+        "status": 200,
+        "body": {
+          "ok": false,
+          "throttled": true
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/play/pos",
+        "request": {
+          "x": -3,
+          "z": 0,
+          "seq": 2,
+          "t_ms": 660,
+          "session": "fixture-session-46"
+        },
+        "status": 200,
+        "body": {
+          "ok": true,
+          "location_id": "loc-hall",
+          "room_id": "r-a"
+        }
+      }
+    ],
+    "stale": [
+      {
+        "method": "POST",
+        "path": "/play/pos",
+        "request": {
+          "x": -3,
+          "z": 0,
+          "seq": 1,
+          "t_ms": 330,
+          "session": "fixture-session-46"
+        },
+        "status": 200,
+        "body": {
+          "ok": false,
+          "stale": true
+        }
+      }
+    ],
+    "refusal-walk": [
+      {
+        "method": "POST",
+        "path": "/play/pos",
+        "request": {
+          "x": 1,
+          "z": 2,
+          "seq": 1,
+          "t_ms": 330,
+          "session": "fixture-session-46"
+        },
+        "status": 409,
+        "body": {
+          "error": "Fixture wall refuses movement.",
+          "reason": "boundary_blocked",
+          "pos": {
+            "x": -3,
+            "z": 2
+          }
+        }
+      }
+    ],
+    "refusal-snap": [
+      {
+        "method": "POST",
+        "path": "/play/pos",
+        "request": {
+          "x": 10,
+          "z": 2,
+          "seq": 1,
+          "t_ms": 330,
+          "session": "fixture-session-46"
+        },
+        "status": 409,
+        "body": {
+          "error": "Fixture wall refuses movement.",
+          "reason": "boundary_blocked",
+          "pos": {
+            "x": -3,
+            "z": 2
+          }
+        }
+      }
+    ],
+    "party-follower": [
+      {
+        "method": "POST",
+        "path": "/play/pos",
+        "request": {
+          "x": -3,
+          "z": 0,
+          "seq": 1,
+          "t_ms": 330,
+          "session": "fixture-session-46"
+        },
+        "status": 403,
+        "body": {
+          "error": "Party follower cannot walk.",
+          "reason": "party_follower",
+          "pos": {
+            "x": -3,
+            "z": 1
+          }
+        }
+      }
+    ],
+    "enter-room": [
+      {
+        "method": "POST",
+        "path": "/play/enter-room",
+        "request": {
+          "room_id": "r-b"
+        },
+        "status": 200,
+        "body": {
+          "ok": true,
+          "location_id": "loc-hall",
+          "room_id": "r-b"
+        }
+      }
+    ],
+    "enter-room-refused": [
+      {
+        "method": "POST",
+        "path": "/play/enter-room",
+        "request": {
+          "room_id": "locked-room"
+        },
+        "status": 403,
+        "body": {
+          "error": "Fixture gate is locked.",
+          "reason": "locked"
+        }
+      }
+    ],
+    "take-room-pose": [
+      {
+        "method": "GET",
+        "path": "/play/places",
+        "request": null,
+        "status": 200,
+        "body": {
+          "room_id": "r-a",
+          "places": [
+            {
+              "id": "room-seat",
+              "label": "Room seat",
+              "group": "seat",
+              "capacity": 2,
+              "free": 2,
+              "free_slots": [
+                0,
+                1
+              ],
+              "poses": [
+                {
+                  "key": "sitting",
+                  "label": "Sit"
+                },
+                {
+                  "key": "reading",
+                  "label": "Read"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/play/self/activity",
+        "request": {
+          "place_id": "room-seat",
+          "pose": "sitting"
+        },
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/play/self/activity",
+        "request": {
+          "activity": ""
+        },
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    ],
+    "read-room-pose": [
+      {
+        "method": "POST",
+        "path": "/play/self/activity",
+        "request": {
+          "place_id": "room-seat",
+          "pose": "reading"
+        },
+        "status": 200,
+        "body": {
+          "ok": true
+        }
+      }
+    ],
+    "room-place-full": [
+      {
+        "method": "POST",
+        "path": "/play/self/activity",
+        "request": {
+          "place_id": "room-seat",
+          "pose": "sitting"
+        },
+        "status": 409,
+        "body": {
+          "error": "Fixture room place is full.",
+          "reason": "place_full"
+        }
+      }
+    ]
+  }
+}

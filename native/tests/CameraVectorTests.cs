@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Nodes;
 using AnimaNative.Overview;
 using AnimaNative.Tests.Vectors;
@@ -112,7 +113,24 @@ public class CameraVectorTests
                 ? el.ValueKind == System.Text.Json.JsonValueKind.True
                 : throw new ArgumentException($"expected a boolean, got {VectorCompare.Show(node)}");
 
-    public static TheoryData<string> Cases => VectorFile.Labels("camera");
+    // Task 46 adds TS-first E7 cases; Task 47 removes this explicit deferral
+    // when their production ports arrive. Unknown functions still fail below.
+    private static readonly HashSet<string> DeferredE7Functions = new(StringComparer.Ordinal)
+    {
+        "firstPersonZoomSequence", "restEyePoint", "eyeHeight", "viewHeading",
+        "bodyYawForView", "zoomFloorOf", "zoomCeiling",
+    };
+
+    public static TheoryData<string> Cases
+    {
+        get
+        {
+            var rows = new TheoryData<string>();
+            foreach (var c in File.Value.Cases.Where(c => !DeferredE7Functions.Contains(c.Fn)))
+                rows.Add(c.Label);
+            return rows;
+        }
+    }
 
     [Theory]
     [MemberData(nameof(Cases))]
@@ -120,7 +138,11 @@ public class CameraVectorTests
 
     [Fact]
     public void EveryFunctionIsDispatched()
-        => Assert.Empty(File.Value.MissingFunctions(Dispatch));
+        => Assert.Empty(File.Value.MissingFunctions(Dispatch).Except(DeferredE7Functions));
+
+    [Fact]
+    public void EveryDeferredE7FunctionHasVectors()
+        => Assert.Empty(DeferredE7Functions.Except(File.Value.Cases.Select(c => c.Fn)));
 
     /// <summary>The constants the TS module exports, pinned to the same numbers.</summary>
     [Fact]

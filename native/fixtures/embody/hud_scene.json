@@ -1,0 +1,9 @@
+{
+  "lockedRooms": {},
+  "lockedLocations": {
+    "loc-locked": "Fixture gate is locked."
+  },
+  "lockedLoc": "loc-hall",
+  "movementLocked": false,
+  "partyLeader": ""
+}

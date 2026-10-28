@@ -173,5 +173,12 @@ for (const name of ['travel', 'residency']) {
     c.args[1].length === c.expect.length), '18 residency scenarios have one expected snapshot per step');
 }
 
+console.log('\n[14] E7 files obey the shared format');
+for (const name of ['walk_control', 'collide', 'enter', 'embody', 'camera']) {
+  const vectors = loadVectors(name);
+  check(vectors.cases.every(c => /^\[\d+[a-z]?\]/.test(c.label)),
+    `${name}: numbered cases, unique labels, resolved fixtures and finite JSON`);
+}
+
 console.log(fails ? `\n${fails} FAILED, ${oks} ok` : `\nall ok (${oks})`);
 process.exit(fails ? 1 : 0);

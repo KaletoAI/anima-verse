@@ -16,6 +16,7 @@
  * Token bytes 0..15 encode as 00,01,...,09,0a,...,0f: exactly 32 hex chars.
  * The HTTP crypto fixture exposes getRandomValues only, as on a LAN origin.
  */
+import { vectorChecks } from './embodyVectorDispatch.mjs';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -32,6 +33,8 @@ async function load(relative) {
   } finally { await rm(dir, { recursive:true, force:true }); }
 }
 function check(label, got, want) { assert.deepEqual(got,want,label); console.log('PASS',label); }
+const vectorCase = vectorChecks(check, ["embody"]);
+
 const m = await load('../src/game/posEcho.ts');
 const A = 'sessAAAA01', B = 'sessBBBB02';
 const ring = []; for (const s of [1, 2, 3]) m.pushSeq(ring, s);
@@ -78,22 +81,22 @@ check('legacy_null', D(P, pay(true, null), NO_CANCEL).state, { kind: 'SERVER', j
 check('legacy same', D({ kind: 'SERVER', j: null }, pay(true, null), NO_CANCEL).state, { kind: 'SERVER', j: null });
 check('input in PLAYER is no-op', D(P, { kind: 'input', firstSeq: 9 }, NO_CANCEL).state, P);
 // A cancelled journey stays suppressed after acknowledgement (R5-17).
-check('suppress own',     m.suppressedJourney(C, 'J1', 'J1'), true);
-check('suppress other',   m.suppressedJourney(C, 'J1', 'J2'), false);
-check('server no supp.',  m.suppressedJourney({ kind: 'SERVER', j: 'J1' }, NO_CANCEL, 'J1'), false);
-check('suppress legacy',  m.suppressedJourney({ kind: 'CANCELLING', j: null, s: 1 }, null, null), true);
-check('PLAYER suppresses remembered J', m.suppressedJourney(P, 'J1', 'J1'), true);
-check('PLAYER allows legacy null', m.suppressedJourney(P, null, null), false);
+vectorCase("[33] " + ('suppress own'));
+vectorCase("[33] " + ('suppress other'));
+vectorCase("[33] " + ('server no supp.'));
+vectorCase("[33] " + ('suppress legacy'));
+vectorCase("[33] " + ('PLAYER suppresses remembered J'));
+vectorCase("[33] " + ('PLAYER allows legacy null'));
 // only answers the automaton still owns may correct the figure (round 2, finding 3)
-check('answer player',       m.answerApplies(P, 3, 0), true);
-check('answer server',       m.answerApplies({ kind: 'SERVER', j: 'J1' }, 9, 0), false);
-check('answer pre-cancel',   m.answerApplies(C, 4, 0), false);
-check('answer cancel',       m.answerApplies(C, 5, 0), true);
-check('answer after',        m.answerApplies(C, 6, 0), true);
+vectorCase("[34] " + ('answer player'));
+vectorCase("[34] " + ('answer server'));
+vectorCase("[34] " + ('answer pre-cancel'));
+vectorCase("[34] " + ('answer cancel'));
+vectorCase("[34] " + ('answer after'));
 // Round 4: answers to reports numbered before the last server drive stay outgrown
-check('answer below floor',  m.answerApplies(P, 7, 8), false);
-check('answer at floor',     m.answerApplies(P, 8, 8), true);
-check('cancel at floor',     m.answerApplies({ kind: 'CANCELLING', j: 'J1', s: 8 }, 8, 8), true);
+vectorCase("[34] " + ('answer below floor'));
+vectorCase("[34] " + ('answer at floor'));
+vectorCase("[34] " + ('cancel at floor'));
 // Execute the actual report and adoption functions with controlled network completion.
 const reportCode = main.slice(main.indexOf('  function applyDriver('), main.indexOf('  /**\n   * The reporting tick,'));
 function productionFunction(name) {
@@ -105,10 +108,14 @@ function reportFixture() {
   const sent = [], effects = [];
   class ApiError extends Error { status = 409; pos = { x: 0, z: 0 }; }
   const deps = {
-    ...m, effects, pollIsStale: (asked, corrected) => asked < corrected,
+    ...m, effects,
+    ownedPropRun: () => null, propMutationPending: false, propStateUncertain: false,
+    propPreparation: { pending: false }, manualPropRelease: false, lastMap: null,
+    propPositionDrainActive: false, positionDrain: { begin: () => () => {} },
+    manualPropGate: { pending: false, withdrawn: () => false }, pollIsStale: (asked, corrected) => asked < corrected,
     performance: { now: () => 100 }, THREE: { Vector3: class { constructor(x,y,z) { Object.assign(this,{x,y,z}); } } },
     groundY: () => 0, clearSnap() {}, cancelRoute() {},
-    npcs: { setServerDriven: (...args) => effects.push(['drive', ...args]), positionOf: () => ({x:3,z:0}) },
+    npcs: { propEntryUnavailable: () => false, setServerDriven: (...args) => effects.push(['drive', ...args]), positionOf: () => ({x:3,z:0}) },
     api: { ApiError, isAuthError: () => false, postPos: (...args) => new Promise((resolve,reject) => sent.push({args,resolve,reject})) },
     adoptReport: () => effects.push('adopt'), rememberRefused: () => effects.push('refused'),
     getGameState: () => ({mode:'embodied'}),

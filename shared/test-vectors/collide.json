@@ -1,0 +1,242 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_walk_math.mjs",
+  "fixtures": {
+    "MINI_ROOM": {
+      "k": 1,
+      "walls": [
+        {
+          "level": 0,
+          "from": [
+            0,
+            0
+          ],
+          "to": [
+            4,
+            0
+          ]
+        },
+        {
+          "level": 0,
+          "from": [
+            4,
+            0
+          ],
+          "to": [
+            4,
+            1.5
+          ]
+        },
+        {
+          "level": 0,
+          "from": [
+            4,
+            2.5
+          ],
+          "to": [
+            4,
+            4
+          ]
+        },
+        {
+          "level": 0,
+          "from": [
+            4,
+            1.5
+          ],
+          "to": [
+            4,
+            2.5
+          ],
+          "base_y": 0
+        },
+        {
+          "level": 0,
+          "from": [
+            4,
+            1.5
+          ],
+          "to": [
+            4,
+            2.5
+          ],
+          "base_y": 2.1
+        },
+        {
+          "level": 0,
+          "from": [
+            4,
+            1.5
+          ],
+          "to": [
+            4,
+            2.5
+          ],
+          "glass": true
+        },
+        {
+          "level": 0,
+          "from": [
+            4,
+            4
+          ],
+          "to": [
+            0,
+            4
+          ]
+        },
+        {
+          "level": 0,
+          "from": [
+            0,
+            4
+          ],
+          "to": [
+            0,
+            2.5
+          ]
+        },
+        {
+          "level": 0,
+          "from": [
+            0,
+            1.5
+          ],
+          "to": [
+            0,
+            0
+          ]
+        },
+        {
+          "level": 0,
+          "from": [
+            0,
+            2.5
+          ],
+          "to": [
+            0,
+            1.5
+          ],
+          "base_y": 2.1,
+          "lintel": true
+        },
+        {
+          "level": 0,
+          "from": [
+            0,
+            2.5
+          ],
+          "to": [
+            0,
+            1.5
+          ],
+          "base_y": 0,
+          "leaf": true
+        },
+        {
+          "level": 1,
+          "from": [
+            0,
+            0
+          ],
+          "to": [
+            0,
+            4
+          ]
+        }
+      ]
+    }
+  },
+  "cases": [
+    {"label": "[12] BODY_RADIUS_M is the figure-metre half width", "fn": "constant",
+      "args": ["BODY_RADIUS_M"], "expect": 0.25, "eps": 1e-09},
+    {"label": "[12] DOOR_EASE_M", "fn": "constant",
+      "args": ["DOOR_EASE_M"], "expect": 0.12, "eps": 1e-09},
+    {"label": "[12] bodyRadius scales with k (small-scale k = 0.21)", "fn": "bodyRadius",
+      "args": [0.21], "expect": 0.0525, "eps": 1e-09},
+    {"label": "[12] bodyRadius(1) = BODY_RADIUS_M", "fn": "bodyRadius",
+      "args": [1], "expect": 0.25, "eps": 1e-09},
+    {"label": "[12] upper storey is ONE segment", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 1], ["length"]], "expect": 1, "eps": 1e-09},
+    {"label": "[12] upper storey segment is the level-1 wall, both ends eased", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 1], [0]], "expect": {"ax": 0, "az": 0.12, "bx": 0, "bz": 3.88}, "eps": 1e-09},
+    {"label": "[12] a storey nobody built has no segments", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 2], ["length"]], "expect": 0, "eps": 1e-09},
+    {"label": "[13] head-on into a wall stands still", "fn": "clampAgainstWalls",
+      "args": [{"x": 1, "z": 1}, {"x": -1, "z": 1}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}], 0.25], "expect": {"x": 1, "z": 1}, "eps": 1e-09},
+    {"label": "[13] an oblique run slides along the wall", "fn": "clampAgainstWalls",
+      "args": [{"x": 1, "z": 1}, {"x": -1, "z": 2}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}], 0.25], "expect": {"x": 1, "z": 2}, "eps": 1e-09},
+    {"label": "[13] beyond the end of the wall nothing blocks", "fn": "clampAgainstWalls",
+      "args": [{"x": 1, "z": 5}, {"x": -1, "z": 5}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}], 0.25], "expect": {"x": -1, "z": 5}, "eps": 1e-09},
+    {"label": "[13] a grazing pass is pushed out to the body radius", "fn": "clampAgainstWalls",
+      "args": [{"x": 1, "z": 1}, {"x": 0.1, "z": 3}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}], 0.25], "expect": {"x": 0.25, "z": 3}, "eps": 1e-09},
+    {"label": "[13] and with a smaller radius it is left alone", "fn": "clampAgainstWalls",
+      "args": [{"x": 1, "z": 1}, {"x": 0.1, "z": 3}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}], 0.05], "expect": {"x": 0.1, "z": 3}, "eps": 1e-09},
+    {"label": "[13] through the door gap the goal survives untouched", "fn": "clampAgainstWalls",
+      "args": [{"x": 1, "z": 2}, {"x": -1, "z": 2}, [{"ax": 0, "az": 0, "bx": 0, "bz": 1.5}, {"ax": 0, "az": 2.5, "bx": 0, "bz": 4}], 0.25], "expect": {"x": -1, "z": 2}, "eps": 1e-09},
+    {"label": "[13] beside the door the wall still holds", "fn": "clampAgainstWalls",
+      "args": [{"x": 1, "z": 1}, {"x": -1, "z": 1}, [{"ax": 0, "az": 0, "bx": 0, "bz": 1.5}, {"ax": 0, "az": 2.5, "bx": 0, "bz": 4}], 0.25], "expect": {"x": 1, "z": 1}, "eps": 1e-09},
+    {"label": "[13] the avatar walks out through the door", "fn": "clampAgainstWalls",
+      "args": [{"x": 2, "z": 2}, {"x": -2, "z": 2}, [{"ax": 0, "az": 0, "bx": 4, "bz": 0}, {"ax": 4, "az": 0, "bx": 4, "bz": 1.5}, {"ax": 4, "az": 2.5, "bx": 4, "bz": 4}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 4, "bx": 0, "bz": 4}, {"ax": 0, "az": 4, "bx": 0, "bz": 2.62}, {"ax": 0, "az": 1.38, "bx": 0, "bz": 0}], 0.25], "expect": {"x": -2, "z": 2}, "eps": 1e-09},
+    {"label": "[13] RED: an unflagged lintel would block the doorway", "fn": "clampAgainstWalls",
+      "args": [{"x": 2, "z": 2}, {"x": -2, "z": 2}, [{"ax": 0, "az": 0, "bx": 4, "bz": 0}, {"ax": 4, "az": 0, "bx": 4, "bz": 1.5}, {"ax": 4, "az": 2.5, "bx": 4, "bz": 4}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 4, "bx": 0, "bz": 4}, {"ax": 0, "az": 4, "bx": 0, "bz": 2.5}, {"ax": 0, "az": 1.5, "bx": 0, "bz": 0}, {"ax": 0, "az": 2.5, "bx": 0, "bz": 1.5}], 0.25], "expect": {"x": 2, "z": 2}, "eps": 1e-09},
+    {"label": "[13] RED: a blocking leaf would brick up the doorway", "fn": "clampAgainstWalls",
+      "args": [{"x": 2, "z": 2}, {"x": -2, "z": 2}, [{"ax": 0, "az": 0, "bx": 4, "bz": 0}, {"ax": 4, "az": 0, "bx": 4, "bz": 1.5}, {"ax": 4, "az": 2.5, "bx": 4, "bz": 4}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 4, "bx": 0, "bz": 4}, {"ax": 0, "az": 4, "bx": 0, "bz": 2.5}, {"ax": 0, "az": 1.5, "bx": 0, "bz": 0}, {"ax": 0, "az": 2.5, "bx": 0, "bz": 1.5}], 0.25], "expect": {"x": 2, "z": 2}, "eps": 1e-09},
+    {"label": "[13] the window blocks like any wall", "fn": "clampAgainstWalls",
+      "args": [{"x": 2, "z": 2}, {"x": 6, "z": 2}, [{"ax": 0, "az": 0, "bx": 4, "bz": 0}, {"ax": 4, "az": 0, "bx": 4, "bz": 1.5}, {"ax": 4, "az": 2.5, "bx": 4, "bz": 4}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 4, "bx": 0, "bz": 4}, {"ax": 0, "az": 4, "bx": 0, "bz": 2.62}, {"ax": 0, "az": 1.38, "bx": 0, "bz": 0}], 0.25], "expect": {"x": 2, "z": 2}, "eps": 1e-09},
+    {"label": "[13] a wall without an opening blocks", "fn": "clampAgainstWalls",
+      "args": [{"x": 2, "z": 2}, {"x": 2, "z": -2}, [{"ax": 0, "az": 0, "bx": 4, "bz": 0}, {"ax": 4, "az": 0, "bx": 4, "bz": 1.5}, {"ax": 4, "az": 2.5, "bx": 4, "bz": 4}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 4, "bx": 0, "bz": 4}, {"ax": 0, "az": 4, "bx": 0, "bz": 2.62}, {"ax": 0, "az": 1.38, "bx": 0, "bz": 0}], 0.25], "expect": {"x": 2, "z": 2}, "eps": 1e-09},
+    {"label": "[13] an oblique run through the door passes too", "fn": "clampAgainstWalls",
+      "args": [{"x": 2, "z": 2}, {"x": -2, "z": 1}, [{"ax": 0, "az": 0, "bx": 4, "bz": 0}, {"ax": 4, "az": 0, "bx": 4, "bz": 1.5}, {"ax": 4, "az": 2.5, "bx": 4, "bz": 4}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 4, "bx": 0, "bz": 4}, {"ax": 0, "az": 4, "bx": 0, "bz": 2.62}, {"ax": 0, "az": 1.38, "bx": 0, "bz": 0}], 0.25], "expect": {"x": -2, "z": 1}, "eps": 1e-09},
+    {"label": "[13] hugging the door cheek gets through", "fn": "clampAgainstWalls",
+      "args": [{"x": 2, "z": 1.45}, {"x": -2, "z": 1.45}, [{"ax": 0, "az": 0, "bx": 4, "bz": 0}, {"ax": 4, "az": 0, "bx": 4, "bz": 1.5}, {"ax": 4, "az": 2.5, "bx": 4, "bz": 4}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 4, "bx": 0, "bz": 4}, {"ax": 0, "az": 4, "bx": 0, "bz": 2.62}, {"ax": 0, "az": 1.38, "bx": 0, "bz": 0}], 0.25], "expect": {"x": -2, "z": 1.45}, "eps": 1e-09},
+    {"label": "[13] the storey above has no door and blocks", "fn": "clampAgainstWalls",
+      "args": [{"x": 2, "z": 2}, {"x": -2, "z": 2}, [{"ax": 0, "az": 0.12, "bx": 0, "bz": 3.88}], 0.25], "expect": {"x": 2, "z": 2}, "eps": 1e-09},
+    {"label": "[13] with no segments at all the goal is returned unchanged", "fn": "clampAgainstWalls",
+      "args": [{"x": 2, "z": 2}, {"x": -2, "z": 2}, [], 0.25], "expect": {"x": -2, "z": 2}, "eps": 1e-09},
+    {"label": "[13] offset segments block the world move", "fn": "clampAgainstWalls",
+      "args": [{"x": 42, "z": 22}, {"x": 42, "z": 18}, [{"ax": 40, "az": 20, "bx": 44, "bz": 20}, {"ax": 44, "az": 20, "bx": 44, "bz": 21.5}, {"ax": 44, "az": 22.5, "bx": 44, "bz": 24}, {"ax": 44, "az": 21.5, "bx": 44, "bz": 22.5}, {"ax": 44, "az": 21.5, "bx": 44, "bz": 22.5}, {"ax": 44, "az": 21.5, "bx": 44, "bz": 22.5}, {"ax": 44, "az": 24, "bx": 40, "bz": 24}, {"ax": 40, "az": 24, "bx": 40, "bz": 22.62}, {"ax": 40, "az": 21.38, "bx": 40, "bz": 20}], 0.25], "expect": {"x": 42, "z": 22}, "eps": 1e-09},
+    {"label": "[13] unoffset segments let it walk straight through (the bug)", "fn": "clampAgainstWalls",
+      "args": [{"x": 42, "z": 22}, {"x": 42, "z": 18}, [{"ax": 0, "az": 0, "bx": 4, "bz": 0}, {"ax": 4, "az": 0, "bx": 4, "bz": 1.5}, {"ax": 4, "az": 2.5, "bx": 4, "bz": 4}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 4, "bx": 0, "bz": 4}, {"ax": 0, "az": 4, "bx": 0, "bz": 2.62}, {"ax": 0, "az": 1.38, "bx": 0, "bz": 0}], 0.25], "expect": {"x": 42, "z": 18}, "eps": 1e-09},
+    {"label": "[13] and the door still works in world coordinates", "fn": "clampAgainstWalls",
+      "args": [{"x": 42, "z": 22}, {"x": 38, "z": 22}, [{"ax": 40, "az": 20, "bx": 44, "bz": 20}, {"ax": 44, "az": 20, "bx": 44, "bz": 21.5}, {"ax": 44, "az": 22.5, "bx": 44, "bz": 24}, {"ax": 44, "az": 21.5, "bx": 44, "bz": 22.5}, {"ax": 44, "az": 21.5, "bx": 44, "bz": 22.5}, {"ax": 44, "az": 21.5, "bx": 44, "bz": 22.5}, {"ax": 44, "az": 24, "bx": 40, "bz": 24}, {"ax": 40, "az": 24, "bx": 40, "bz": 22.62}, {"ax": 40, "az": 21.38, "bx": 40, "bz": 20}], 0.25], "expect": {"x": 38, "z": 22}, "eps": 1e-09},
+    {"label": "[13] standing on the wall, walking east: the move happens", "fn": "clampAgainstWalls",
+      "args": [{"x": 0, "z": 2}, {"x": 1, "z": 2}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}], 0.25], "expect": {"x": 1, "z": 2}, "eps": 1e-09},
+    {"label": "[13] standing on the wall, walking west: it works the other way too", "fn": "clampAgainstWalls",
+      "args": [{"x": 0, "z": 2}, {"x": -1, "z": 2}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}], 0.25], "expect": {"x": -1, "z": 2}, "eps": 1e-09},
+    {"label": "[13] too close to the wall, walking along it: pushed out to r", "fn": "clampAgainstWalls",
+      "args": [{"x": 0.05, "z": 2}, {"x": 0.05, "z": 3}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}], 0.25], "expect": {"x": 0.25, "z": 3}, "eps": 1e-09},
+    {"label": "[13] down the middle of a too-narrow corridor: keeps walking", "fn": "clampAgainstWalls",
+      "args": [{"x": 0.15, "z": 2}, {"x": 0.15, "z": 3}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}, {"ax": 0.3, "az": 0, "bx": 0.3, "bz": 4}], 0.25], "expect": {"x": 0.15, "z": 3}, "eps": 1e-09},
+    {"label": "[13] out through the corridor wall: blocked, still in the middle", "fn": "clampAgainstWalls",
+      "args": [{"x": 0.15, "z": 2}, {"x": 0.5, "z": 2}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}, {"ax": 0.3, "az": 0, "bx": 0.3, "bz": 4}], 0.25], "expect": {"x": 0.15, "z": 2}, "eps": 1e-09},
+    {"label": "[13] walking in: the figure is not shoved through the hull", "fn": "clampAgainstWalls",
+      "args": [{"x": 0.0445, "z": 2}, {"x": 2, "z": 2}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}, {"ax": 0.089, "az": 0, "bx": 0.089, "bz": 4}], 0.109], "expect": {"x": 0.0445, "z": 2}, "eps": 1e-09},
+    {"label": "[13] walking out: it is not shoved through either", "fn": "clampAgainstWalls",
+      "args": [{"x": 0.0445, "z": 2}, {"x": -2, "z": 2}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}, {"ax": 0.089, "az": 0, "bx": 0.089, "bz": 4}], 0.109], "expect": {"x": 0.0445, "z": 2}, "eps": 1e-09},
+    {"label": "[13] a figure standing on the wall still gets off it", "fn": "clampAgainstWalls",
+      "args": [{"x": 0, "z": 2}, {"x": 1, "z": 2}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}], 0.25], "expect": {"x": 1, "z": 2}, "eps": 1e-09},
+    {"label": "[13] and walking ALONG the wall line is still not free", "fn": "clampAgainstWalls",
+      "args": [{"x": 1, "z": 1}, {"x": -1, "z": 1}, [{"ax": 0, "az": 0, "bx": 0, "bz": 4}], 0.25], "expect": {"x": 1, "z": 1}, "eps": 1e-09},
+    {"label": "[12] full nine blocking segments", "fn": "wallSegments",
+      "args": [{"$fixture": "MINI_ROOM"}, 0], "expect": [{"ax": 0, "az": 0, "bx": 4, "bz": 0}, {"ax": 4, "az": 0, "bx": 4, "bz": 1.5}, {"ax": 4, "az": 2.5, "bx": 4, "bz": 4}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}, {"ax": 4, "az": 4, "bx": 0, "bz": 4}, {"ax": 0, "az": 4, "bx": 0, "bz": 2.62}, {"ax": 0, "az": 1.38, "bx": 0, "bz": 0}]},
+    {"label": "[12] level zero has nine barriers", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 0], ["length"]], "expect": 9},
+    {"label": "[12] north door cheek", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 0], [7]], "expect": {"ax": 0, "az": 4, "bx": 0, "bz": 2.62}},
+    {"label": "[12] south door cheek", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 0], [8]], "expect": {"ax": 0, "az": 1.38, "bx": 0, "bz": 0}},
+    {"label": "[12] joined corner stays", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 0], [0]], "expect": {"ax": 0, "az": 0, "bx": 4, "bz": 0}},
+    {"label": "[12] window sill stays", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 0], [3]], "expect": {"ax": 4, "az": 1.5, "bx": 4, "bz": 2.5}},
+    {"label": "[12] shifted north wall", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 0, {"x": 40, "z": 20}], [0]], "expect": {"ax": 40, "az": 20, "bx": 44, "bz": 20}},
+    {"label": "[12] shifted north cheek", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 0, {"x": 40, "z": 20}], [7]], "expect": {"ax": 40, "az": 24, "bx": 40, "bz": 22.62}},
+    {"label": "[12] shifted south cheek", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 0, {"x": 40, "z": 20}], [8]], "expect": {"ax": 40, "az": 21.38, "bx": 40, "bz": 20}},
+    {"label": "[12] unknown storey has no barriers", "fn": "wallSegmentsValue",
+      "args": [[{"$fixture": "MINI_ROOM"}, 2], ["length"]], "expect": 0}
+  ]
+}

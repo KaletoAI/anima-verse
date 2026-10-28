@@ -1,0 +1,44 @@
+{
+  "signature": "embody-loc-free",
+  "k": 1,
+  "extent_m": 8,
+  "storey_m": 3,
+  "boundary": [
+    [
+      -4,
+      -4
+    ],
+    [
+      4,
+      -4
+    ],
+    [
+      4,
+      4
+    ],
+    [
+      -4,
+      4
+    ]
+  ],
+  "levels": [
+    {
+      "level": 0,
+      "floor_y": 0
+    }
+  ],
+  "rooms": [],
+  "style": {},
+  "outdoor_rooms": [],
+  "floor_plan": [],
+  "plates": [],
+  "walls": [],
+  "extras": [],
+  "stairs": [],
+  "markers": [],
+  "doorways": [],
+  "models": [],
+  "corridors": [],
+  "boundary_openings": [],
+  "problems": []
+}

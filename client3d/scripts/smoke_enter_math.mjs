@@ -143,11 +143,66 @@
  * with authored openings may carry any yaw at all and the offer does not move
  * — the check below turns HALL by 90° and expects the very same point, which
  * is what "verbatim" means.
+ *
+ * Task 46 label index: [20] localToWorld; [21] entryOfferNear, including the
+ * free-boundary and lock tables still written beside the calls below;
+ * [22] area/bounds/sanitize; [23] contains; [24] distance; [25] rim.
+ * [21] Meadow square +/-5 at (50,50): (57,50) -> rim (55,50), dist2,
+ * inward(-1,0); (59,50) is out; (52,50) is exactly3 inside. Yaw90 turns
+ * (50,43) to local(7,0), rim back to (50,45), inward(0,1). Open HALL at
+ * (50,45), distance1.5, beats locked gate at (50,44.5), distance1, from
+ * (50,43.5); among locked the distance1 wins. Authored openings beat rim.
+ * [22] Triangles (0,0),(1,0),(0,1) and reversed have signed area +/-0.5.
+ * A repeated closing vertex keeps area12; two points have area0. L bounds
+ * are min(0,0), max(4,4); a NaN coordinate invalidates the whole outline.
+ * [23] L: (1,1),(3,1) in; (3,3),(5,5) out; line contains nothing.
+ * [24] L: (5,1) and (3,3) distance1; (-3,-4) distance5; (1,1) inside0.
+ * Degenerate outline distance is infinite: adapter returns its exact
+ * Infinity predicate because finite JSON expectations cannot encode it.
+ * Pin(100,50), yaw90: world(101,47)/(103,47)/(100,44) -> local(3,1)/(3,3)/(6,0),
+ * respectively true/false/distance2. The world-transform glue stays inline.
+ * [25] Rim at (5,1) -> (4,1), inward(-1,0), dist1; (1,-2) -> (1,0),
+ * inward(0,1), dist2. A two-point outline has no rim.
+ * Collected polygon source header:
+
+ * Smoke: the CLIENT's polygon primitives answer exactly what the SERVER's do
+ * (contract v6 "Gebiete", § B5a — numbers, never screenshots).
+ *
+ * Usage:  node client3d/scripts/smoke_polygon_containment.mjs
+ *
+ * Since v6 a location is a drawn POLYGON: `map3d.boundary` in local metres
+ * around the pin, turned by `yaw_deg` (§ A1.1). Both sides of the wire have to
+ * agree about which metre belongs to which place — the server judges every
+ * position report (`world_geometry.boundary_contains` /`location_at_point`),
+ * the client predicts that judgement (`game/polygon.ts` + `scene/tiles.tile
+ * Contains` + `main.tileAt`), and a client that decided differently would walk
+ * the figure into a refusal three times a second.
+ *
+ * EVERY NUMBER BELOW IS THE SERVER SMOKE'S. `scripts/smoke_world_polygon.py`
+ * derives them by hand from the contract; this file repeats the SAME cases
+ * against the TypeScript twins and must produce identical answers. Where that
+ * file names an expectation, the comment here names it too, so the two can be
+ * read side by side.
+ *
+ * The fixture is its concave L-shape (map view, x east / z south):
+ *
+ *         (0,0) ──── (4,0)
+ *           │  wide     │
+ *           │  arm    (4,2)
+ *           │    (2,2)──┘
+ *           │      │  notch at (3,3)
+ *         (0,4)─(2,4)
+ *
+ * walked clockwise, so the shoelace sum is POSITIVE: 0+8+4+4+8+0 = 24 →
+ * signed area +12, and 4×4 minus the 2×2 notch is 12 as well. ✓
  */
+import { vectorChecks } from './embodyVectorDispatch.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const vectorCase = vectorChecks(check, ["enter"]);
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const SRC_DIR = join(ROOT, 'client3d/src/game');
@@ -213,17 +268,12 @@ async function main() {
   const { localToWorld, entryOfferNear, ENTER_RADIUS } = await loadEnterLocation();
 
   console.log('\nlocalToWorld — § A1.1, the mapping the server uses');
-  check('yaw 0 is a plain translation (N edge of a 10 m square)',
-    localToWorld(0, -5, 50, 50, 0), { x: 50, z: 45 }, EPS);
-  check('yaw 0, the E edge', localToWorld(5, 0, 50, 50, 0), { x: 55, z: 50 }, EPS);
-  check('yaw 90: the N edge point lands west of the centre',
-    localToWorld(0, -5, 50, 50, RAD(90)), { x: 45, z: 50 }, EPS);
-  check('yaw 90: the E edge point lands north of it',
-    localToWorld(5, 0, 50, 50, RAD(90)), { x: 50, z: 45 }, EPS);
-  check('yaw 180 mirrors through the centre',
-    localToWorld(3, 4, 0, 0, RAD(180)), { x: -3, z: -4 }, EPS);
-  check('yaw 270 turns the other way',
-    localToWorld(5, 0, 0, 0, RAD(270)), { x: 0, z: 5 }, EPS);
+  vectorCase("[20] " + ('yaw 0 is a plain translation (N edge of a 10 m square)'));
+  vectorCase("[20] " + ('yaw 0, the E edge'));
+  vectorCase("[20] " + ('yaw 90: the N edge point lands west of the centre'));
+  vectorCase("[20] " + ('yaw 90: the E edge point lands north of it'));
+  vectorCase("[20] " + ('yaw 180 mirrors through the centre'));
+  vectorCase("[20] " + ('yaw 270 turns the other way'));
 
   /**
    * THE GATEHOUSE — the one fixture `scripts/smoke_worldmap_v2.py` [9] checks
@@ -236,12 +286,8 @@ async function main() {
     footprint: { x: 0, z: 0, yaw: 0 },
     openings: [{ edge: 0, at_world: [0, -6], inward: [0, 1], room: '' }],
   };
-  check('2 m from the gatehouse opening: offered, verbatim',
-    entryOfferNear({ x: 0, z: -8 }, '', [GATE]),
-    { locId: 'gate', point: { x: 0, z: -6 }, edge: 0, dist: 2,
-      inward: { x: 0, z: 1 } }, EPS);
-  check('4 m from it: nothing on offer',
-    entryOfferNear({ x: 0, z: -10 }, '', [GATE]), null);
+  vectorCase("[21] " + ('2 m from the gatehouse opening: offered, verbatim'));
+  vectorCase("[21] 4 m from it: nothing on offer (1)");
   // The TURNED gatehouse: the server delivered (−6, 0) / (1, 0) for yaw 90,
   // and the client must not turn that a second time — the footprint yaw is
   // read for the free boundary alone.
@@ -250,10 +296,7 @@ async function main() {
     footprint: { x: 0, z: 0, yaw: RAD(90) },
     openings: [{ edge: 0, at_world: [-6, 0], inward: [1, 0], room: '' }],
   };
-  check('yaw 90: the server-turned point is handed back unturned',
-    entryOfferNear({ x: -8, z: 0 }, '', [GATE_90]),
-    { locId: 'gate', point: { x: -6, z: 0 }, edge: 0, dist: 2,
-      inward: { x: 1, z: 0 } }, EPS);
+  vectorCase("[21] " + ('yaw 90: the server-turned point is handed back unturned'));
 
   console.log('\nentryOfferNear — when "Betreten" stands');
   check('ENTER_RADIUS is the 3 m of the plan', ENTER_RADIUS, 3);
@@ -269,33 +312,18 @@ async function main() {
   };
   const SHED = { locId: 'shed', footprint: { x: 65, z: 50, yaw: 0 }, openings: [] };
 
-  check('2 m from the opening: offered, with the point to walk to',
-    entryOfferNear({ x: 50, z: 43 }, '', [HALL, BARN]),
-    { locId: 'hall', point: { x: 50, z: 45 }, edge: 0, dist: 2,
-      inward: { x: 0, z: 1 } }, EPS);
-  check('4 m from it: nothing on offer',
-    entryOfferNear({ x: 50, z: 41 }, '', [HALL, BARN]), null);
-  check('the other side of the road offers the OTHER barn',
-    entryOfferNear({ x: 50, z: 37 }, '', [HALL, BARN])?.locId, 'barn');
-  check('...and its own inward normal comes with it',
-    entryOfferNear({ x: 50, z: 37 }, '', [HALL, BARN])?.inward,
-    { x: 0, z: -1 }, EPS);
-  check('exactly between the two, out of reach of both',
-    entryOfferNear({ x: 50, z: 40 }, '', [HALL, BARN]), null);
-  check('the location one is IN is never offered',
-    entryOfferNear({ x: 50, z: 44 }, 'hall', [HALL, BARN]), null);
-  check('a location without openings AND without an outline offers nothing',
-    entryOfferNear({ x: 63, z: 50 }, '', [SHED]), null);
-  check('...not even standing where its rim would be',
-    entryOfferNear({ x: 60, z: 50 }, '', [SHED]), null);
+  vectorCase("[21] " + ('2 m from the opening: offered, with the point to walk to'));
+  vectorCase("[21] 4 m from it: nothing on offer (2)");
+  vectorCase("[21] " + ('the other side of the road offers the OTHER barn'));
+  vectorCase("[21] " + ('...and its own inward normal comes with it'));
+  vectorCase("[21] " + ('exactly between the two, out of reach of both'));
+  vectorCase("[21] " + ('the location one is IN is never offered'));
+  vectorCase("[21] " + ('a location without openings AND without an outline offers nothing'));
+  vectorCase("[21] " + ('...not even standing where its rim would be'));
   // A turned footprint does not move an authored opening — the payload point
   // is the payload point (the same statement as the gatehouse case, made on
   // the fixture the distance rules run on).
-  check('the footprint yaw does not touch an authored opening',
-    entryOfferNear({ x: 50, z: 43 }, '',
-      [{ ...HALL, footprint: { x: 50, z: 50, yaw: RAD(90) } }]),
-    { locId: 'hall', point: { x: 50, z: 45 }, edge: 0, dist: 2,
-      inward: { x: 0, z: 1 } }, EPS);
+  vectorCase("[21] " + ('the footprint yaw does not touch an authored opening'));
 
   /**
    * --- A FREE BOUNDARY IS ITS WHOLE RIM (contract v6 "Gebiete") ------------
@@ -333,28 +361,17 @@ async function main() {
     openings: [],
     boundary: SQUARE,
   };
-  check('2 m outside the rim: offered, at the rim point, with its inward normal',
-    entryOfferNear({ x: 57, z: 50 }, '', [MEADOW]),
-    { locId: 'meadow', point: { x: 55, z: 50 }, edge: null, dist: 2,
-      inward: { x: -1, z: 0 } }, EPS);
-  check('4 m outside: out of reach', entryOfferNear({ x: 59, z: 50 }, '', [MEADOW]), null);
-  check('3 m INSIDE the rim: the distance is a distance, so it stands',
-    entryOfferNear({ x: 52, z: 50 }, '', [MEADOW])?.dist, 3, EPS);
-  check('the place one is IN is dropped before any of that',
-    entryOfferNear({ x: 52, z: 50 }, 'meadow', [MEADOW]), null);
+  vectorCase("[21] " + ('2 m outside the rim: offered, at the rim point, with its inward normal'));
+  vectorCase("[21] " + ('4 m outside: out of reach'));
+  vectorCase("[21] " + ('3 m INSIDE the rim: the distance is a distance, so it stands'));
+  vectorCase("[21] " + ('the place one is IN is dropped before any of that'));
   const TURNED = { ...MEADOW, locId: 'turned',
                    footprint: { x: 50, z: 50, yaw: RAD(90) } };
-  check('yaw 90: the rim point and the normal turn with the footprint',
-    entryOfferNear({ x: 50, z: 43 }, '', [TURNED]),
-    { locId: 'turned', point: { x: 50, z: 45 }, edge: null, dist: 2,
-      inward: { x: 0, z: 1 } }, EPS);
+  vectorCase("[21] " + ('yaw 90: the rim point and the normal turn with the footprint'));
   // An authored opening still wins over the rim: a place that says where its
   // way in is has no free boundary at all, and the offer is the opening's own
   // point — the outline is not consulted.
-  check('with an authored opening the rim is not consulted',
-    entryOfferNear({ x: 50, z: 43 }, '', [{ ...HALL, boundary: SQUARE }]),
-    { locId: 'hall', point: { x: 50, z: 45 }, edge: 0, dist: 2,
-      inward: { x: 0, z: 1 } }, EPS);
+  vectorCase("[21] " + ('with an authored opening the rim is not consulted'));
 
   console.log('\nentryOfferNear — open beats locked, then nearest');
   const LOCKED_HALL = { ...HALL, locked: true };
@@ -366,8 +383,7 @@ async function main() {
   };
   // Avatar at (50, 36.5): the locked gate's opening is 1.5 m away, HALL's is
   // 8.5 m — out of reach, so the locked one is the only answer there is.
-  check('a lone locked place is still the answer (the key says why)',
-    entryOfferNear({ x: 50, z: 36.5 }, '', [NEAR_LOCKED, HALL])?.locId, 'gate');
+  vectorCase("[21] " + ('a lone locked place is still the answer (the key says why)'));
   // Avatar at (50, 43.5): HALL 1.5 m (open) — and a locked gate 1 m off, whose
   // opening sits at (50, 44.5).
   const LOCKED_IN_REACH = {
@@ -384,26 +400,17 @@ async function main() {
     openings: [{ edge: 0, at_world: [50, 34.5], inward: [0, 1] }],
     locked: true,
   };
-  check('an open one 1.5 m off beats a locked one 1 m off',
-    entryOfferNear({ x: 50, z: 43.5 }, '', [LOCKED_IN_REACH, HALL])?.locId, 'hall');
-  check('...and the order of the candidates does not decide it',
-    entryOfferNear({ x: 50, z: 43.5 }, '', [HALL, LOCKED_IN_REACH])?.locId, 'hall');
-  check('two locked ones: the nearer wins',
-    entryOfferNear({ x: 50, z: 43.5 }, '', [LOCKED_HALL, LOCKED_IN_REACH])?.locId,
-    'gate');
-  check('the far locked gate is out of reach either way',
-    entryOfferNear({ x: 50, z: 43.5 }, '', [FAR_LOCKED]), null);
+  vectorCase("[21] " + ('an open one 1.5 m off beats a locked one 1 m off'));
+  vectorCase("[21] " + ('...and the order of the candidates does not decide it'));
+  vectorCase("[21] " + ('two locked ones: the nearer wins'));
+  vectorCase("[21] " + ('the far locked gate is out of reach either way'));
 
   console.log('\nthe free-boundary statement is the EMPTY list (v6)');
   // No `freeBoundaryOf` any more: an empty opening list IS "enter anywhere
   // along the rim", and a non-empty one IS "only here". Both are shown on the
   // same fixture, with and without an outline.
-  check('no openings + an outline -> the rim answers',
-    entryOfferNear({ x: 57, z: 50 }, '', [{ ...MEADOW, openings: [] }])?.edge,
-    null);
-  check('openings + the same outline -> the opening answers',
-    entryOfferNear({ x: 50, z: 43 }, '',
-      [{ ...MEADOW, openings: HALL.openings }])?.edge, 0);
+  vectorCase("[21] " + ('no openings + an outline -> the rim answers'));
+  vectorCase("[21] " + ('openings + the same outline -> the opening answers'));
 
   console.log(`\n${passed} passed, ${failed} failed`);
   return failed ? 1 : 0;

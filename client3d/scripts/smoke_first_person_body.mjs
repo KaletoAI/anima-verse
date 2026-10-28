@@ -33,6 +33,8 @@
  *     0.8499999762, which shifts every point by 2.4e-8 m.
  *     A rig without a head bone reports `hasHead` false and no lens.
  */
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+import { embodyDispatch } from './embodyVectorDispatch.mjs';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -72,21 +74,10 @@ const nearV = (v, [x, y, z], eps, what) => {
 const THREE = await import('three');
 const { bodyYawForView, restEyePoint, viewHeading, Figure } = await loadClient();
 
-// [1]
-let e = restEyePoint([0, 1.52, 0.02], [0, 1.72, 0.03], 1.70);
-near(e[0], 0, 1e-12, '[1] x'); near(e[1], 1.61, 1e-12, '[1] y'); near(e[2], 0.1135, 1e-12, '[1] z');
-e = restEyePoint([0, 1.52, 0.02], null, 1.70);
-near(e[1], 1.598, 1e-12, '[1] no crown y');
-
-// [2]
-near(Math.abs(viewHeading(0)), Math.PI, 1e-12, '[2] yaw 0');
-near(viewHeading(Math.PI / 2), -Math.PI / 2, 1e-12, '[2] yaw π/2');
-
-// [3]
-assert.equal(bodyYawForView(0, 1.0), null, '[3] 57.3° stays');
-assert.equal(bodyYawForView(0, 1.1), 1.1, '[3] 63.0° turns');
-assert.equal(bodyYawForView(3.0, -3.0), null, '[3] across the seam stays');
-assert.equal(bodyYawForView(4 * Math.PI, 1.1), 1.1, '[3] unwrapped body turns');
+const framingVectors = loadVectors('camera');
+const result = runVectors({ ...framingVectors, cases: framingVectors.cases.filter(c =>
+  ['restEyePoint', 'eyeHeight', 'viewHeading', 'bodyYawForView'].includes(c.fn)) }, embodyDispatch);
+assert.equal(result.failed, 0, 'shared first-person body arithmetic');
 
 // [4]
 function rig(withHead) {
