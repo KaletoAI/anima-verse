@@ -1635,3 +1635,9 @@ independent sag, swing, straightening or state length/girth. At least the root
 remains driven. For two unit links, parent length 1.5 moves the rigid tip head
 1.5 units from the parent head while the tip's own axes remain unit length.
 Removing the group or disposing motion restores the original bind transforms.
+
+
+Packages with per-character derived state register reset handlers in `on_load`
+using `app.core.character_reset.register_reset_store`. See
+[Character reset stores](skill-core-api.md#character-reset-stores) for scopes,
+transaction ownership, failure reporting and queued-work requirements.

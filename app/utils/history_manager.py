@@ -577,7 +577,7 @@ def _create_history_summary(
 # === Cached Summary (non-blocking) ===
 
 def get_cached_summary(character_name: str) -> str:
-    """Laedt gecachte History-Summary aus DB. Fallback auf JSON-Datei."""
+    """Read the cached history summary exclusively from the database."""
     try:
         conn = get_connection()
         row = conn.execute("""
@@ -587,17 +587,7 @@ def get_cached_summary(character_name: str) -> str:
         if row:
             return row[0] or ""
     except Exception as e:
-        logger.debug("get_cached_summary DB-Fehler fuer %s: %s", character_name, e)
-
-    # Fallback: JSON-Datei
-    from app.models.character import get_character_dir
-    path = get_character_dir(character_name) / "history_summary.json"
-    if path.exists():
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return data.get("summary", "")
-        except Exception:
-            pass
+        logger.debug("get_cached_summary DB error for %s: %s", character_name, e)
     return ""
 
 

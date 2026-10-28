@@ -8,6 +8,7 @@
     }
   },
   "translations": {
+    "Memory partially wiped: {n} reset errors": "Gedächtnis teilweise gelöscht: {n} Reset-Fehler",
     "World map": "Weltkarte",
     "Connection": "Verbindung",
     "Backend unreachable": "Backend nicht erreichbar",

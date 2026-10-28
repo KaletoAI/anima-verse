@@ -1329,3 +1329,29 @@ prompt block. Stamped entries come first in descending learning order, followed
 by unstamped entries in descending `created_at` order. Storage and `list_secrets`
 remain unlimited. All secret read-modify-write operations serialize through
 `keyed_lock("secrets", character_name)`.
+
+
+## Character reset stores
+
+`app.core.character_reset.register_reset_store(key, fn, scopes=SCOPES, *, what, lock=None)`
+registers a package-owned store from its manifest `on_load` module. `SCOPES` is
+`("memory", "reinit")`; use `(SCOPE_REINIT,)` for fresh-start-only state. Keys
+must be unique, nonempty and must not collide with core stores/result fields.
+Reloading the same key replaces its handler. Registration and snapshots are
+protected by a registry lock; register before serving reset requests. Optional
+`lock(name)` returns a context manager held around the handler AND its commit;
+use the same keyed locks as ordinary writers, acquired before the DB transaction.
+
+`fn(conn, character_name) -> int` runs synchronously in its own world-DB
+transaction and returns a count of deleted/changed records. It must raise on
+failure, must not commit the supplied connection, and must preserve other
+characters' shared state. File cleanup must be idempotent and enforce resolved
+path containment. The handler must guard any queued work that could recreate
+its records (for example using a persisted reset generation).
+
+`reset_character(name, scope="memory")` includes per-key counts and
+`errors: [{"store": key, "error": message}]`; a failed key has value `None`,
+never a fabricated zero. Other stores still run. `describe_scope(scope)` lists
+registered keys and their `what` descriptions. The HTTP wipe returns that same
+result. Core never imports package implementations. Both scopes also reset
+derived beliefs/lessons/goals and `retrospect.last_at:<name>`.

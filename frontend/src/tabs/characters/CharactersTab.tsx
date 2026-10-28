@@ -373,16 +373,23 @@ export function CharactersTab() {
   // Memory wipe (admin test tool for the consolidation pipeline): clears the
   // character's derived memory artifacts — memories, summaries + rollups, the
   // whole day timeline (diary entries, thoughts, mood/state/evolution history,
-  // action log) and the day cursor. Chat history + shared scenes stay.
+  // action log), derived beliefs/lessons/goals and the day/Retrospect cursors.
+  // Chat history and shared scenes stay.
   const wipeMemory = useCallback(async () => {
     if (!selected || wiping) return
     setWiping(true)
     try {
-      const r = await apiPost<{ memories?: number; summaries?: number }>(
+      const r = await apiPost<{ memories?: number; summaries?: number; errors?: { store: string; error: string }[] }>(
         `/characters/${encodeURIComponent(selected)}/memory/wipe`, {})
-      toast(t('Memory wiped: {m} memories, {s} summaries')
-        .replace('{m}', String(r.memories ?? 0))
-        .replace('{s}', String(r.summaries ?? 0)))
+      if (r.errors?.length) {
+        toast(t('Memory partially wiped: {n} reset errors')
+          .replace('{n}', String(r.errors.length)) + ': ' +
+          r.errors.map(e => `${e.store}: ${e.error}`).join('; '), 'error')
+      } else {
+        toast(t('Memory wiped: {m} memories, {s} summaries')
+          .replace('{m}', String(r.memories ?? 0))
+          .replace('{s}', String(r.summaries ?? 0)))
+      }
       setConfirmWipe(false)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')

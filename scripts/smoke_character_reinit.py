@@ -14,11 +14,9 @@ character reference to match on. So the re-init ran and the pack promptly put
 the old world back. Section [2] of this smoke asserts that the pack really does
 carry that state, so the mechanism is a checked fact, not a claim.
 
-The wipe list and the import's restore filter are now DERIVED FROM THE SAME
-TABLE (``character_reset.STORES``), so this smoke walks that table and asserts
-one store at a time — a new per-character table that is added to STORES is
-covered here automatically, and one that is forgotten fails the count check in
-section [1].
+The core table and import filter share an implementation, but the expected
+inventory below is hand-written independently. Package stores are exercised
+with owned and shared records; failures must remain visible in the result.
 
 Doctrine under test (re-init = "this character starts fresh in THIS world"):
   * the character's OWN memory, relations and history go — relationship edges
@@ -73,6 +71,10 @@ from app.core import paths  # noqa: E402
 paths.init(STORAGE)
 from app.core import db  # noqa: E402
 db.init_schema()
+
+from app.core import embedding  # noqa: E402
+# Reset verification needs no model downloads or background ONNX workers.
+embedding.embed = lambda text: None
 
 from app.core import character_reset  # noqa: E402
 from app.core.character_io import (  # noqa: E402
@@ -294,6 +296,19 @@ def assert_reinit_cleared(prefix, name, seeded_intro=False):
 
 print("\n[1] The store table (one list drives both the wipe and the restore filter)")
 
+# Independent specification inventory, deliberately hand-written.
+EXPECTED_MEMORY = {"memories", "summaries", "diary_entries", "thoughts",
+                   "mood_history", "state_history", "evolution_history", "character_action_log"}
+EXPECTED_REINIT = EXPECTED_MEMORY | {
+    "chat_messages", "perceptions", "knowledge", "relationships", "assignments",
+    "scheduler_jobs", "stories", "events", "party_invites", "explored_cells",
+    "intents", "story_arcs", "group_chats", "parties", "notifications",
+    "item_reading_sessions", "item_reads", "item_caught_today", "item_discoveries",
+    "reading_secret_membership"}
+for scope, expected in (("memory", EXPECTED_MEMORY), ("reinit", EXPECTED_REINIT)):
+    check(f"independent {scope} inventory covered", expected - {
+        row["store"] for row in character_reset.describe_scope(scope)["cleared"]}, set())
+
 mem_stores = character_reset.stores_for(character_reset.SCOPE_MEMORY)
 reinit_stores = character_reset.stores_for(character_reset.SCOPE_REINIT)
 check("memory scope is a strict subset of re-init",
@@ -510,13 +525,136 @@ check("[button] knowledge stays",
 check("[button] relationships stay",
       db.get_connection().execute("SELECT COUNT(*) FROM relationships "
                                   "WHERE from_char=?", (NAME,)).fetchone()[0], 1)
-check("[button] the soul files stay (not derived memory)",
-      soul_body_lines(NAME, "beliefs") is not None
-      and len(soul_body_lines(NAME, "beliefs")) == 1, True)
+check("[button] derived beliefs reset", soul_body_lines(NAME, "beliefs"), [])
 check("[button] the other character's memory stays",
       db.get_connection().execute("SELECT COUNT(*) FROM memories "
                                   "WHERE character_name=?", (OTHER,)).fetchone()[0], 1)
 check("[button] the wipe names what it kept", len(wipe["kept"]) > 0, True)
+
+
+print("\n[7] Registered stores, reading visibility, fallback and error reporting")
+from app.core.task_queue import get_task_queue
+get_task_queue()._started = True
+from plugins.knowledge import register as knowledge_registration
+# A temporary pack copy can be tested without writing the private repository.
+pack_root = os.environ.get("RESET_SMOKE_PACKS_ROOT")
+if pack_root:
+    import importlib
+    for package in ("secret_diary", "intimacy"):
+        module = importlib.import_module(f"plugins.{package}")
+        module.__path__ = [str(Path(pack_root) / "packs" / package)]
+from plugins.intimacy import register as intimacy_registration
+from plugins.secret_diary import register as diary_registration, store as diary_store
+
+for scope, expected in (("memory", {"secret_diary", "knowledge_extract_cache", "soul_files"}),
+                        ("reinit", {"secret_diary", "knowledge_extract_cache", "intimacy_participation"})):
+    check(f"independent package {scope} inventory", expected - {
+        row["store"] for row in character_reset.describe_scope(scope)["cleared"]}, set())
+
+for scope in ("memory", "reinit"):
+    seed_soul(NAME)
+    cache = get_character_dir(NAME) / "skills" / "knowledge_extract_cache.json"
+    cache.parent.mkdir(exist_ok=True)
+    cache.write_text('{"fact.txt": 123}', encoding="utf-8")
+    eid = diary_store.add_entry(NAME, "inner", "Y0001-D001T12:00:00", "private")
+    other_eid = diary_store.add_entry(OTHER, "inner", "Y0001-D001T12:00:00", "other private")
+    diary_store.set_digest(NAME, "old digest", "Y0001-D001T12:00:00")
+    with db.transaction() as conn:
+        conn.execute("INSERT INTO secret_diary_images VALUES (?, ?)", (eid, b"image"))
+        conn.execute("INSERT INTO secrets(character_name, content, meta) VALUES (?, ?, ?)",
+                     (NAME, "derived record", json.dumps({"source_ref": f"secret_diary:{eid}"})))
+        conn.execute("INSERT INTO secrets(character_name, content, meta, visibility) VALUES (?, ?, ?, ?)",
+                     (OTHER, "shared secret", json.dumps({"known_by": [NAME, OTHER]}),
+                      json.dumps({"discovered_by": [NAME, OTHER]})))
+        for table in ("item_reads", "item_caught_today"):
+            conn.execute(f"INSERT OR REPLACE INTO {table}(reader,item_id,game_day) VALUES (?,?,?)",
+                         (NAME, "book", "Y0001-D001"))
+        conn.execute("INSERT OR REPLACE INTO item_reading_sessions(reader,item_id) VALUES (?,?)", (NAME,"book"))
+        conn.execute("INSERT OR REPLACE INTO item_discoveries VALUES (?,?,?,?,?)", ("place","room","book",NAME,"t"))
+        conn.execute("INSERT OR REPLACE INTO world_kv VALUES (?,?)", (f"retrospect.last_at:{NAME}","old"))
+    outcome = character_reset.reset_character(NAME, scope)
+    check(f"{scope} reset errors", outcome["errors"], [])
+    check(f"{scope} diary own entries", diary_store.all_entries(NAME), [])
+    check(f"{scope} diary other entry stays", diary_store.entry_by_id(OTHER, other_eid) is not None, True)
+    check(f"{scope} diary digest", diary_store.get_digest(NAME), "")
+    check(f"{scope} diary image removed", db.get_connection().execute(
+        "SELECT count(*) FROM secret_diary_images WHERE entry_id=?",(eid,)).fetchone()[0], 0)
+    check(f"{scope} diary sourced secrets removed", db.get_connection().execute(
+        "SELECT count(*) FROM secrets WHERE character_name=? AND json_extract(meta,'$.source_ref') LIKE 'secret_diary:%'",(NAME,)).fetchone()[0], 0)
+    check(f"{scope} manual secret survives", db.get_connection().execute(
+        "SELECT count(*) FROM secrets WHERE character_name=? AND content='Was born somewhere else.'",(NAME,)).fetchone()[0] > 0, True)
+    check(f"{scope} knowledge cache removed", cache.exists(), False)
+    for file_id in ("beliefs", "lessons", "goals"):
+        check(f"{scope} {file_id} reset", soul_body_lines(NAME,file_id), [])
+    check(f"{scope} retrospect stamp gone", db.get_connection().execute(
+        "SELECT count(*) FROM world_kv WHERE key=?",(f"retrospect.last_at:{NAME}",)).fetchone()[0],0)
+    for table, column in (("item_reads","reader"),("item_caught_today","reader"),
+                          ("item_reading_sessions","reader"),("item_discoveries","character_name")):
+        check(f"{scope} {table}", db.get_connection().execute(
+            f"SELECT count(*) FROM {table} WHERE {column}=?",(NAME,)).fetchone()[0],
+              0 if scope == "reinit" else 1)
+    row = db.get_connection().execute("SELECT meta,visibility FROM secrets WHERE character_name=? AND content='shared secret' ORDER BY id DESC", (OTHER,)).fetchone()
+    check(f"{scope} shared secret knowledge", NAME in json.loads(row[0])["known_by"], scope == "memory")
+    check(f"{scope} shared secret discovery", NAME in json.loads(row[1])["discovered_by"], scope == "memory")
+
+from app.utils.history_manager import get_cached_summary
+history_file = get_character_dir(NAME) / "history_summary.json"
+history_file.write_text('{"summary":"resurrected"}', encoding="utf-8")
+check("legacy JSON summary never resurrected", get_cached_summary(NAME), "")
+history_file.unlink()
+
+def fail_reset(conn, name):
+    conn.execute("INSERT INTO thoughts(character_name,ts,content) VALUES (?,?,?)", (name,"t","rollback"))
+    raise RuntimeError("intentional reset failure")
+
+character_reset.register_reset_store("smoke_failure", fail_reset, ("memory",), what="failure probe")
+failed = wipe_character_memory(NAME)
+check("failed handler error reaches route adapter", failed["errors"],
+      [{"store":"smoke_failure", "error":"intentional reset failure"}])
+check("failed count is not zero", failed["smoke_failure"], None)
+check("failed transaction rolled back", db.get_connection().execute(
+    "SELECT count(*) FROM thoughts WHERE content='rollback'").fetchone()[0], 0)
+
+
+# A handler's writer lock must cover commit, not merely its function body.
+from contextlib import contextmanager
+from unittest.mock import patch
+real_transaction = db.transaction
+lock_state = {"held": False, "committed": False}
+
+@contextmanager
+def probe_lock(name):
+    lock_state["held"] = True
+    try:
+        yield
+    finally:
+        check("handler commit completed before lock release", lock_state["committed"], True)
+        lock_state["held"] = False
+
+@contextmanager
+def probe_transaction():
+    with real_transaction() as conn:
+        yield conn
+    if lock_state["held"]:
+        lock_state["committed"] = True
+
+character_reset.register_reset_store("smoke_locked", lambda conn, name: 0,
+    ("memory",), what="lock lifetime probe", lock=probe_lock)
+with patch.object(db, "transaction", probe_transaction):
+    wipe_character_memory(NAME)
+
+
+# SQLite failures must be reported just like package exceptions; later steps run.
+with db.transaction() as conn:
+    conn.execute("CREATE TRIGGER smoke_cursor_failure BEFORE INSERT ON world_kv "
+                 "WHEN NEW.key LIKE 'day_cursor:%' BEGIN SELECT RAISE(ABORT, 'cursor blocked'); END")
+try:
+    blocked = wipe_character_memory(NAME)
+    check("cursor DB failure is visible", {"store":"day_cursor", "error":"cursor blocked"} in blocked["errors"], True)
+    check("soul reset continues after cursor failure", blocked["soul_files"], 3)
+finally:
+    with db.transaction() as conn:
+        conn.execute("DROP TRIGGER smoke_cursor_failure")
 
 
 # ---------------------------------------------------------------------------

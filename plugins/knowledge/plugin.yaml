@@ -2,6 +2,7 @@ name: knowledge
 version: "1.1.0"
 description: File knowledge extraction (LLM-based) and search over extracted memories
 always_load: true
+on_load: register.py
 env_prefix: "SKILL_KNOWLEDGE_"
 
 # Multiple skills in one package — each module is loaded separately

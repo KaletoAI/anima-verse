@@ -6,7 +6,8 @@ Two callers, two scopes, one implementation and one declarative store list:
     The Game-Admin "Wipe memory" button. Erases everything the character
     *derived* about its own past in THIS world — memories, summaries, diary,
     the whole day timeline (mood/state history, thoughts, action log) and the
-    consolidation cursor. Correspondence (``chat_messages``) and the shared
+    consolidation cursor, plus derived beliefs/lessons/goals and the Retrospect
+    stamp. Correspondence (``chat_messages``) and the shared
     room record (``utterances``/``scenes``) stay: they are not derived, and
     the room stream is other minds' truth as much as this character's.
 
@@ -14,7 +15,7 @@ Two callers, two scopes, one implementation and one declarative store list:
     The character import's "Fresh start" (re-initialize). Everything ``memory``
     erases PLUS every other world-bound store: correspondence, knowledge,
     relationships in BOTH directions, obligations, schedules, party/group/story
-    membership, the explored map, notifications, the Retrospect soul files —
+    membership, the explored map, notifications, reading history —
     and the mechanical state, which falls back to the profile's own values.
 
 Doctrine (why a store is on a list or not)
@@ -31,13 +32,15 @@ Re-init means "this character starts fresh in THIS world".
   this character's state, and erasing them would rewrite somebody else's past.
 * Mechanical state (position, room, activity, pose) resets to the imported
   profile's values instead of being carried over.
-* Identity stays: profile, soul/personality, outfits, inventory, secrets,
+* Identity stays: profile, authored soul/personality, outfits, inventory, manual secrets,
   daily routine, gallery.
 """
 from __future__ import annotations
 
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from threading import RLock
+from typing import Any, Callable, Dict, List, Tuple
 
 from app.core.log import get_logger
 
@@ -51,7 +54,7 @@ SCOPES: Tuple[str, ...] = (SCOPE_MEMORY, SCOPE_REINIT)
 #: Retrospect writes these three soul files from lived experience — they are
 #: accumulated world history in file form, not authored identity, and they are
 #: the one carrier the read-side dangling filter can never see (free prose, no
-#: character reference to match on). A re-init resets them to an empty
+#: character reference to match on). Either reset scope resets them to an empty
 #: scaffold; ``personality``/``presence``/``roleplay_rules``/``soul``/``tasks``
 #: are authored and stay untouched.
 RETROSPECT_SOUL_FILES: Tuple[str, ...] = ("beliefs", "lessons", "goals")
@@ -75,8 +78,44 @@ class Store:
     json_column: str = ""
 
 
-#: The store table. Everything a re-init or a memory wipe touches is here —
-#: adding a per-character table means adding one row, not editing two wipes.
+@dataclass(frozen=True)
+class ResetHandler:
+    key: str
+    fn: Callable
+    scopes: Tuple[str, ...]
+    what: str
+    lock: Callable | None = None
+
+
+_HANDLERS: Dict[str, ResetHandler] = {}
+_REGISTRY_LOCK = RLock()
+
+
+def register_reset_store(key: str, fn: Callable, scopes=SCOPES, *,
+                         what: str, lock: Callable | None = None) -> None:
+    """Register a reload-safe package handler fn(conn, character_name) -> int.
+
+    The handler runs in its own transaction. Exceptions roll back that handler
+    and are returned in errors; filesystem effects must be idempotent.
+    Optional lock(name) supplies the ordinary writer lock, held through commit.
+    """
+    scopes = tuple(scopes)
+    if not key or key in {s.key for s in STORES} or key in {
+            "character", "scope", "errors", "kept", "day_cursor", "soul_files", "character_state"}:
+        raise ValueError(f"reserved or empty reset key: {key!r}")
+    if not callable(fn) or not scopes or set(scopes) - set(SCOPES):
+        raise ValueError("callable handler and valid reset scopes required")
+    with _REGISTRY_LOCK:
+        _HANDLERS[key] = ResetHandler(key, fn, scopes, what, lock)
+
+
+def _handlers_for(scope):
+    with _REGISTRY_LOCK:
+        return [h for h in _HANDLERS.values() if scope in h.scopes]
+
+
+#: Core table stores. Package stores use register_reset_store; both scopes
+#: share the same execution and error-reporting path.
 STORES: Tuple[Store, ...] = (
     # ── derived memory ────────────────────────────────────────────────────
     Store("memories", "memories", "character_name=?", SCOPES,
@@ -121,6 +160,10 @@ STORES: Tuple[Store, ...] = (
           (SCOPE_REINIT,), "pending party invitations", params=2),
     Store("explored_cells", "explored_cells", "character_id=?", (SCOPE_REINIT,),
           "fog-of-war cells of the previous world"),
+    Store("item_reading_sessions", "item_reading_sessions", "reader=?", (SCOPE_REINIT,), "active reading sessions"),
+    Store("item_reads", "item_reads", "reader=?", (SCOPE_REINIT,), "reading memory"),
+    Store("item_caught_today", "item_caught_today", "reader=?", (SCOPE_REINIT,), "reading catches"),
+    Store("item_discoveries", "item_discoveries", "character_name=?", (SCOPE_REINIT,), "discovered items"),
     # ── JSON-participant stores: pruned, not deleted ──────────────────────
     Store("intents", "intents", "", (SCOPE_REINIT,),
           "intents owned by or naming this character", json_column="participants"),
@@ -140,7 +183,7 @@ KEPT: Dict[str, Tuple[str, ...]] = {
     SCOPE_MEMORY: (
         "chat_messages — correspondence, not derived memory",
         "utterances / scenes — the room's shared record",
-        "knowledge, relationships, secrets — identity, not day history",
+        "knowledge, relationships, manual secrets — identity, not day history",
         "inventory, outfits, gallery, daily routine",
     ),
     SCOPE_REINIT: (
@@ -151,7 +194,7 @@ KEPT: Dict[str, Tuple[str, ...]] = {
         "the other character's memory of them",
         "other characters' memories mentioning them — other minds are not "
         "this character's state",
-        "profile, soul/personality, secrets, daily routine — identity",
+        "profile, authored soul/personality, manual secrets, daily routine — identity",
         "inventory, equipped pieces, outfit sets, gallery metadata",
     ),
 }
@@ -269,19 +312,18 @@ def _prune_notifications(conn, character_name: str) -> int:
 def _reset_day_cursor(character_name: str) -> str:
     """Cursor to NOW + clear the sleep flags, so already-collapsed old scenes
     are not re-consolidated into fresh day entries after the wipe."""
-    try:
-        from app.core import day_consolidation as _dc
-        from app.core.timeutils import utc_now
-        _dc.set_cursor(character_name, utc_now().isoformat(timespec="seconds"))
-        _dc._kv_set(f"sleep_start:{character_name}", "")
-        _dc._kv_set(f"woke_main_sleep:{character_name}", "")
-        return "reset"
-    except Exception as e:
-        logger.error("reset [%s]: day cursor failed: %s", character_name, e)
-        return "error"
+    from app.core.db import transaction
+    from app.core.timeutils import utc_now
+    with transaction() as conn:
+        for key, value in (("day_cursor", utc_now().isoformat(timespec="seconds")),
+                           ("sleep_start", ""), ("woke_main_sleep", "")):
+            conn.execute("INSERT INTO world_kv(key,value) VALUES (?,?) "
+                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                         (f"{key}:{character_name}", value))
+    return "reset"
 
 
-def _reset_retrospect_soul_files(character_name: str) -> int:
+def _reset_retrospect_soul_files(character_name: str, errors: list) -> int:
     """Rewrite beliefs/lessons/goals as an empty scaffold and forget the last
     retrospect stamp. These files ARE the fixation carrier: Retrospect writes
     lines like "About others: …" from lived experience, the export ships them
@@ -292,7 +334,8 @@ def _reset_retrospect_soul_files(character_name: str) -> int:
 
     try:
         language = get_character_language(character_name)
-    except Exception:
+    except Exception as e:
+        errors.append({"store": "soul_files.language", "error": str(e)})
         language = "en"
     done = 0
     for file_id in RETROSPECT_SOUL_FILES:
@@ -300,6 +343,7 @@ def _reset_retrospect_soul_files(character_name: str) -> int:
             rewrite_file(character_name, file_id, [], language=language)
             done += 1
         except Exception as e:
+            errors.append({"store": f"soul_files.{file_id}", "error": str(e)})
             logger.error("reset [%s]: soul/%s rewrite failed: %s",
                          character_name, file_id, e)
     try:
@@ -308,7 +352,7 @@ def _reset_retrospect_soul_files(character_name: str) -> int:
             conn.execute("DELETE FROM world_kv WHERE key=?",
                          (f"retrospect.last_at:{character_name}",))
     except Exception as e:
-        logger.debug("reset [%s]: retrospect stamp: %s", character_name, e)
+        errors.append({"store": "retrospect.last_at", "error": str(e)})
     # Clearing the FILE is only half a reset while a copy can sit in the
     # profile blob — that copy is what the character would keep speaking from.
     # Saves no longer create one; this covers a row that an import of an older
@@ -316,12 +360,29 @@ def _reset_retrospect_soul_files(character_name: str) -> int:
     # dropped Retrospect text is backed up.
     try:
         from app.core.soul_blob_migration import migrate_soul_blobs_once
-        _sb = migrate_soul_blobs_once(only=character_name)
-        if _sb.get("dropped") or _sb.get("rescued"):
-            logger.info("reset [%s]: soul values stripped from the profile: %s",
-                        character_name, _sb)
+        import json
+        from app.core.db import get_connection
+        from app.core.keyed_lock import keyed_lock
+        from app.models.character_template import get_template, source_file_keys
+        with keyed_lock("character_profile", character_name):
+            _sb = migrate_soul_blobs_once(only=character_name)
+            # Migration logs some write failures itself. Verify its persisted
+            # postcondition so a failed strip cannot look like a clean reset.
+            row = get_connection().execute(
+                "SELECT template, profile_json FROM characters WHERE name=?",
+                (character_name,)).fetchone()
+            if row:
+                profile = json.loads(row[1] or "{}")
+                template = get_template(profile.get("template") or row[0] or "")
+                keys = source_file_keys(template) if template else {}
+                remaining = [key for key in keys if key in profile]
+                if remaining:
+                    raise RuntimeError(f"Soul profile cleanup incomplete: {remaining}")
+            if _sb.get("dropped") or _sb.get("rescued"):
+                logger.info("reset [%s]: soul values stripped from the profile: %s",
+                            character_name, _sb)
     except Exception as e:
-        logger.warning("reset [%s]: soul blob strip failed: %s", character_name, e)
+        errors.append({"store": "soul_blobs", "error": str(e)})
     return done
 
 
@@ -337,7 +398,7 @@ def _reset_mechanical_state(character_name: str) -> str:
         return "reset"
     except Exception as e:
         logger.error("reset [%s]: character_state failed: %s", character_name, e)
-        return "error"
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +420,7 @@ def reset_character(character_name: str, scope: str = SCOPE_MEMORY) -> Dict[str,
 
     from app.core.db import transaction
 
-    result: Dict[str, Any] = {"character": name, "scope": scope}
+    result: Dict[str, Any] = {"character": name, "scope": scope, "errors": []}
 
     for store in stores_for(scope):
         try:
@@ -373,12 +434,31 @@ def reset_character(character_name: str, scope: str = SCOPE_MEMORY) -> Dict[str,
                     result[store.key] = cur.rowcount if cur.rowcount is not None else 0
         except Exception as e:
             logger.error("reset [%s]: %s failed: %s", name, store.table, e)
-            result[store.key] = 0
+            result[store.key] = None
+            result["errors"].append({"store": store.key, "error": str(e)})
 
-    result["day_cursor"] = _reset_day_cursor(name)
+    for handler in _handlers_for(scope):
+        try:
+            guard = handler.lock(name) if handler.lock else nullcontext()
+            with guard, transaction() as conn:
+                result[handler.key] = int(handler.fn(conn, name))
+        except Exception as e:
+            result[handler.key] = None
+            result["errors"].append({"store": handler.key, "error": str(e)})
+
+    for key, fn in (("day_cursor", _reset_day_cursor),
+                    ("soul_files", lambda n: _reset_retrospect_soul_files(n, result["errors"]))):
+        try:
+            result[key] = fn(name)
+        except Exception as e:
+            result[key] = None
+            result["errors"].append({"store": key, "error": str(e)})
     if scope == SCOPE_REINIT:
-        result["soul_files"] = _reset_retrospect_soul_files(name)
-        result["character_state"] = _reset_mechanical_state(name)
+        try:
+            result["character_state"] = _reset_mechanical_state(name)
+        except Exception as e:
+            result["character_state"] = None
+            result["errors"].append({"store": "character_state", "error": str(e)})
 
     result["kept"] = list(KEPT[scope])
     logger.info("Character reset [%s] scope=%s: %s", name, scope,
@@ -393,6 +473,49 @@ def describe_scope(scope: str) -> Dict[str, Any]:
         raise ValueError(f"unknown reset scope: {scope!r}")
     return {
         "scope": scope,
-        "cleared": [{"store": s.key, "what": s.what} for s in stores_for(scope)],
+        "cleared": [{"store": s.key, "what": s.what} for s in stores_for(scope)]
+                   + [{"store": h.key, "what": h.what} for h in _handlers_for(scope)]
+                   + [{"store": "soul_files", "what": "derived beliefs, lessons, goals and Retrospect stamp"}],
         "kept": list(KEPT[scope]),
     }
+
+
+def _reset_reading_secret_membership(conn, name):
+    """Remove learned-secret visibility while preserving the owners' records."""
+    import json
+    touched = 0
+    conn.execute("BEGIN IMMEDIATE")
+    for row in conn.execute("SELECT id, character_name, meta, visibility FROM secrets").fetchall():
+        if row[1] == name:
+            continue
+        changed = False
+        values = []
+        for raw in (row[2], row[3]):
+            value = json.loads(raw or "{}")
+            for key in ("known_by", "discovered_by"):
+                if name in value.get(key, []):
+                    value[key] = [n for n in value[key] if n != name]
+                    changed = True
+            values.append(json.dumps(value, ensure_ascii=False))
+        if changed:
+            conn.execute("UPDATE secrets SET meta=?, visibility=? WHERE id=?", (*values, row[0]))
+            touched += 1
+    return touched
+
+
+@contextmanager
+def _reading_secret_locks(name):
+    """Lock owners before SQLite, matching the secrets read-modify-write order."""
+    from app.core.db import get_connection
+    from app.core.keyed_lock import keyed_lock
+    owners = sorted({r[0] for r in get_connection().execute(
+        "SELECT DISTINCT character_name FROM secrets") if r[0] != name})
+    with ExitStack() as stack:
+        for owner in owners:
+            stack.enter_context(keyed_lock("secrets", owner))
+        yield
+
+
+register_reset_store("reading_secret_membership", _reset_reading_secret_membership,
+                     (SCOPE_REINIT,), what="learned-secret visibility in other owners' rows",
+                     lock=_reading_secret_locks)
