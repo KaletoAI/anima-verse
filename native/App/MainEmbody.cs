@@ -21,6 +21,7 @@ public partial class Main
     private FigureManager? _steeringFigures;
     private AvatarPositionController? _avatarPosition;
     private AvatarRoomsController? _avatarRooms;
+    private AvatarOffersController? _avatarOffers;
     private string? _entryPin;
 
     /// <summary>Task 50: entry waits own their pin independently of approach and teleport holds.</summary>
@@ -75,11 +76,11 @@ public partial class Main
             hud.SetState("mode", Embodied ? "embodied" : "overview");
             SyncPlayerSteering();
             _avatarRooms?.SetActive(Embodied);
+            _avatarOffers?.SetActive(Embodied);
             PoseEmbody();
         };
         camera.Posed += PoseEmbody;
         hud.SceneEscape = CancelPendingControl;
-        hud.LockedEntry = null; // Entry offers are supplied by E7's subsequent room/entry task.
         hud.Handlers["enterEmbodied"] = _ => EnterEmbodied();
         hud.Handlers["exitEmbodied"] = _ => { CancelPendingControl(); _embody.Exit(); };
         hud.Handlers["takeControl"] = _ => TakeControl();
@@ -151,6 +152,7 @@ public partial class Main
         if (Leaving) { CancelPendingControl(); _avatarRooms?.SetActive(false); _playerSteering?.SetActive(false); return; }
         SyncPlayerSteering();
         TickAvatarRooms();
+        TickAvatarOffers();
         if ((_pendingTakeControl || _pendingArrivalTakeControl) && ControlBootReady && AvatarRow() is null)
             CancelPendingControl();
         if (_pendingTakeControl && ControlBootReady && AvatarFigure()?.Loading != true) TakeControl();
@@ -188,6 +190,7 @@ public partial class Main
         if (_steeringFigures != _figures)
         {
             if (_steeringFigures is { } old && IsInstanceValid(old)) old.BeforeTick -= StepPlayerSteering;
+            _avatarOffers?.Dispose(); _avatarOffers = null;
             _avatarRooms?.Dispose(); _avatarRooms = null;
             _avatarPosition?.Dispose();
             _steeringFigures = _figures;
@@ -204,6 +207,14 @@ public partial class Main
                     Toast = EmbodyToast,
                     AdoptRoom = room => _avatarPosition?.AdoptRoom(room),
                     AutoOpen = id => { if (id is null) CloseOpenLocation(); else OpenLocation(id); }
+                };
+            if (_hud is { } offerHud)
+                _avatarOffers = new AvatarOffersController(_figures, _builder, _playerSteering, _source!, offerHud, _avatarPosition)
+                {
+                    Toast = EmbodyToast,
+                    OpenLocation = OpenLocation,
+                    RefreshMap = RefreshOffersMap,
+                    RoomRequestInFlight = () => _avatarRooms?.Channel.InFlight == true
                 };
             _figures.BeforeTick += StepPlayerSteering;
         }
@@ -228,6 +239,7 @@ public partial class Main
     private void DetachEmbody()
     {
         SetEntryPin(null);
+        _avatarOffers?.Dispose(); _avatarOffers = null;
         _avatarRooms?.Dispose(); _avatarRooms = null;
         _avatarPosition?.Dispose(); _avatarPosition = null;
         _playerSteering?.SetActive(false);

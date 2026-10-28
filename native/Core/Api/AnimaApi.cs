@@ -35,6 +35,12 @@ public sealed class ApiException : Exception
 /// </summary>
 public interface IWorldSource
 {
+    /// <summary>Task 52 / E7-T7: authoritative room-marker availability, labels, capacities and pose keys.</summary>
+    Task<JsonDocument> GetPlacesAsync()
+        => Task.FromException<JsonDocument>(new ApiException(404, "/play/places", "not served by this source"));
+    /// <summary>Task 52: verbatim {place_id,pose} or {activity:""}; prop actions use a separate Task 57 API.</summary>
+    Task<PositionAnswer> PostActivityAsync(JsonElement body, CancellationToken ct = default)
+        => Task.FromException<PositionAnswer>(new ApiException(404, "/play/self/activity", "not served by this source"));
     /// <summary>Task 51: the shared room-walk/vertical-ride write; no server mutation is synthesized locally.</summary>
     Task<PositionAnswer> EnterRoomAsync(string roomId, CancellationToken ct = default)
         => Task.FromException<PositionAnswer>(new ApiException(404, "/play/enter-room", "not served by this source"));

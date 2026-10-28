@@ -501,6 +501,13 @@ public partial class HudOverlay : CanvasLayer
         }
     }
 
+    /// <summary>Task 52 / E7-T7: viewport coordinates to the bridge v3 PlaceMenu's HUD CSS pixels.</summary>
+    public Vector2 ViewportToCss(Vector2 point)
+    {
+        double scale=_cef is not null && _rect is not null ? CssPerWindowPx : 1;
+        return (point-(_rect?.GlobalPosition ?? Vector2.Zero))*(float)scale;
+    }
+
     /// <summary>
     /// The argument of the HUD's <c>setChatBox(box | null)</c> (Hud.tsx: the chat panel's
     /// <c>getBoundingClientRect</c>, CSS px of the HUD page) in VIEWPORT px — the unit the camera's view

@@ -29,6 +29,8 @@ public sealed class AvatarPositionController : IDisposable
     /// <summary>Task 52 seat write hook: infinity while pending, answer time after acknowledgement.</summary>
     public double OwnSeatChangeAt { get; set; }
     public string RoomId { get; private set; } = "";
+    /// <summary>Task 52: a crossing is acknowledged by the position answer's destination, never guessed locally.</summary>
+    public string LocationId { get; private set; } = "";
     private double _ownRoomChangeAt;
     /// <summary>Task 51: successful rides outrank polls started before their acknowledgement and all older position flights.</summary>
     private double OwnStateChangedAt => Math.Max(_ownRoomChangeAt, Math.Max(OwnCorrectionAt, OwnSeatChangeAt));
@@ -43,9 +45,10 @@ public sealed class AvatarPositionController : IDisposable
     public PendingSnap? PendingSnap => _readiness.PendingSnap;
     private Figure? Avatar => _figures.Figures.GetValueOrDefault(_figures.AvatarName);
     private bool InPair => Avatar?.Pair is not null;
-    private bool Seated => _row is { } row && HasObject(row, "place") && _steering.Correction is null;
+    private bool Seated => _steering.AvatarSeated || (_row is { } row && HasObject(row, "place")
+        && OwnSeatChangeAt==0 && _steering.Correction is null);
     private bool CanReport => _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven
-        && !InPair && !Seated && _readiness.PendingSnap is null && _steering.Correction is null;
+        && !InPair && !Seated && !_steering.SeatWritePending && _readiness.PendingSnap is null && _steering.Correction is null;
 
     public AvatarPositionController(FigureManager figures, WorldBuilder world, PlayerSteering steering,
         IWorldSource source, Func<double>? clock = null, PositionChannel? channel = null)
@@ -54,7 +57,7 @@ public sealed class AvatarPositionController : IDisposable
         _clock = clock ?? (() => source.MonotonicMs);
         Channel = channel ?? new PositionChannel(source.ReportPositionAsync, _clock);
         Channel.CanReport = () => CanReport;
-        Channel.Adopted += answer => { RoomId = answer.RoomId; _steering.RoomId = RoomId; };
+        Channel.Adopted += answer => { RoomId = answer.RoomId; LocationId=Text(answer.Body,"location_id"); _steering.RoomId = RoomId; };
         Channel.Refused += (point, home) => steering.RememberRefused(point, home ?? CurrentPoint());
         Channel.Corrected += CorrectTo;
         Channel.Toast += message => Toast?.Invoke(message);
@@ -103,6 +106,7 @@ public sealed class AvatarPositionController : IDisposable
         foreach (var row in rows.EnumerateArray()) if (Text(row,"name") == Text(root,"avatar")) { _row = row.Clone(); break; }
         if (_row is not { } me) return;
         RoomId = Text(me,"room_id"); _steering.RoomId = RoomId;
+        LocationId = Text(me,"location_id");
         // Task 57 hook: a browser-started prop entry/approach remains entirely server driven here.
         bool wasPropDriven = _steering.PropActionDriven;
         _steering.PropActionDriven = HasObject(me,"prop_action_entry") || HasObject(me,"local_approach");

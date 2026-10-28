@@ -172,7 +172,8 @@ public static class EmbodyCheck
             string walking = await EmbodyWalkCheck.RunAsync(host, fixtures);
             string position = await EmbodyPositionCheck.RunAsync(host, fixtures);
             string rooms = await EmbodyRoomsCheck.RunAsync(host, fixtures);
-            return $"embody cases={n} {walking} {position} {rooms} fly=7 cap=34 hints=1/session floor=0.8 first_person=180ms exit=70 menu_esc=only";
+            string offers = await EmbodyOffersCheck.RunAsync(host, fixtures);
+            return $"embody cases={n} {walking} {position} {rooms} {offers} fly=7 cap=34 hints=1/session floor=0.8 first_person=180ms exit=70 menu_esc=only";
         }
         finally { hud.Free(); vp.QueueFree(); }
     }

@@ -191,6 +191,8 @@ public partial class Main : Node3D
         var location = figure is null ? _picking?.Pick(o, d) : null;
         var outcome = PickChain.Resolve(figure?.Name, location?.Id, () =>
         {
+            // Task 52: Task 57's prop-action hook runs inside Pick before room markers/dioramas.
+            if (_avatarOffers?.Pick(o, d, click) == true) return true;
             if (_avatarRooms?.Picking.Hit(o, d) is { } vertical)
             { _avatarRooms.UseVertical(vertical.Target); return true; }
             return _playerSteering?.OnGroundRay(o, d) == true;
@@ -285,7 +287,7 @@ public partial class Main : Node3D
         if (at is { } p && _hud?.Active == true && _picking is not null && _camera is not null)
         {
             var (o, d) = _camera.RayAt(p);
-            if (_avatarRooms?.Picking.HasHover == true || _picking.Pick(o, d) is not null) shape = Input.CursorShape.PointingHand;
+            if (_avatarOffers?.Places.HasHover == true || _avatarRooms?.Picking.HasHover == true || _picking.Pick(o, d) is not null) shape = Input.CursorShape.PointingHand;
         }
         if (_hud is not null) _hud.SceneCursor = shape;
         if (_hud?.PointerOverHud == true) return;   // the page owns the cursor there

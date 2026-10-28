@@ -19,6 +19,8 @@ public partial class FigureManager
     public event Action<JsonElement, double>? PositionMapApplied;
     public event Action? AfterTick;
     public bool IsPlayerDriven(string name) => name == PlayerDriven && !ServerDriven;
+    /// <summary>Task 52: proximity uses the room actually shown, including the closed-interior null room.</summary>
+    public string? ShownRoom(string name) => _shown.TryGetValue(name,out var shown) ? shown.Room : null;
 
     /// <summary>Task 50: SERVER keeps E6 routes; input takes over at the rendered point, arrival at the server point.</summary>
     public void SetServerDriven(bool server, Vector3? arriveAt = null)

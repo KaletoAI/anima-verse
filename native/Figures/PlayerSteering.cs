@@ -35,6 +35,12 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     public Action? LoadingPlace { get; set; }
     /// <summary>Local stand-up notification; the activity write and stale-seat reconciliation are E7-T7.</summary>
     public Action? StandUp { get; set; }
+    /// <summary>Task 52: authoritative seat ownership, reset for each seat so repeated sit/stand cycles work.</summary>
+    public bool AvatarSeated { get; private set; }
+    public bool SeatWritePending { get; set; }
+    /// <summary>Task 52: taking a new seat holds input; getting up waits only for the local bridge, not the network.</summary>
+    public bool SeatTakingPending { get; set; }
+    public void SetSeated(bool seated) { if(seated && !AvatarSeated) _stoodUp=false; AvatarSeated=seated; }
     private readonly List<(P2 At, double Until)> _refused = new();
     private bool _clipOverride, _bridgeHeld, _stoodUp;
     private double _clock, _nextLoadingToast;
@@ -113,6 +119,7 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         if (!Active) { CancelRoute(); VerticalRide=WalkIn=Correction=null; return; }
         if (PendingSnap) { ToastLoading(); return; }
         if (PropActionDriven) { CancelRoute(); return; }
+        if (SeatTakingPending) return;
         if (!figures.ServerDriven) figures.TakePlayerTravel(figures.AvatarName);
         if (Avatar is not { } f) return;
         if (MovementLocked) { CancelRoute(); f.Target=f.Position; return; }
@@ -146,9 +153,9 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         }
         if (dir is not null) SteeringInput?.Invoke(from);
         if (figures.ServerDriven) return;
-        if (dir is not null && !_stoodUp && figures.LastPlans.GetValueOrDefault(f.CharacterName)?.Rule is "seat" or "pool")
+        if (dir is not null && !_stoodUp && (AvatarSeated || figures.LastPlans.GetValueOrDefault(f.CharacterName)?.Rule is "seat" or "pool"))
         {
-            _stoodUp=true; f.Face=null; f.Lean=null; f.SurfaceGroup="ground"; f.ApplyRotation();
+            _stoodUp=true; AvatarSeated=false; f.Face=null; f.Lean=null; f.SurfaceGroup="ground"; f.ApplyRotation();
             // Task 49 / groundAvatarGoal: even a released key must land the get-up on the floor, not seat height.
             double floor=world.PlayerFloorY(world.FootprintAt(pos.X,pos.Z),RoomId,pos.X,pos.Z);
             figures.SetPlayerTarget(f.CharacterName,new(pos.X,(float)floor,pos.Z));

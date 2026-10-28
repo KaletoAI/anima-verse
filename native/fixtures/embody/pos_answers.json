@@ -282,6 +282,91 @@
           "room_id": "r-up"
         }
       }
+    ],
+    "entry-crossing": [
+      {
+        "method": "POST",
+        "path": "/play/pos",
+        "request": {
+          "x": 3,
+          "z": 3.53,
+          "seq": 1,
+          "t_ms": 330,
+          "session": "fixture-entry-52"
+        },
+        "status": 200,
+        "body": {
+          "ok": true,
+          "location_id": "loc-hall",
+          "room_id": "r-b"
+        }
+      }
+    ],
+    "places-refresh-race": [
+      {
+        "method": "GET",
+        "path": "/play/places",
+        "request": null,
+        "status": 200,
+        "body": {
+          "room_id": "r-a",
+          "places": [
+            {
+              "id": "room-seat",
+              "label": "Older inventory",
+              "group": "seat",
+              "capacity": 2,
+              "free": 2,
+              "free_slots": [
+                0,
+                1
+              ],
+              "poses": [
+                {
+                  "key": "sitting",
+                  "label": "Sit"
+                },
+                {
+                  "key": "reading",
+                  "label": "Read"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/places",
+        "request": null,
+        "status": 200,
+        "body": {
+          "room_id": "r-a",
+          "places": [
+            {
+              "id": "room-seat",
+              "label": "Newer inventory",
+              "group": "seat",
+              "capacity": 2,
+              "free": 2,
+              "free_slots": [
+                0,
+                1
+              ],
+              "poses": [
+                {
+                  "key": "sitting",
+                  "label": "Sit"
+                },
+                {
+                  "key": "reading",
+                  "label": "Read"
+                }
+              ]
+            }
+          ]
+        }
+      }
     ]
   }
 }

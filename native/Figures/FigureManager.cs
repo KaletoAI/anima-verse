@@ -290,6 +290,8 @@ public partial class FigureManager : Node3D
         {
             if (!plans.TryGetValue(row.Name, out var plan)) continue;
             bool fresh = !_figures.TryGetValue(row.Name, out var fig);
+            // Task 52: a poll older than a local seat write cannot restore its activity/clip/label either.
+            if (!fresh && row.Name == PlayerDriven && HoldAvatarPlacement) continue;
             if (fresh)
             {
                 fig = new Figure(row.Name);
