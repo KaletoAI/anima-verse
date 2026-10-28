@@ -32,8 +32,7 @@ public sealed class DoorProp
 /// The door props: <c>registerDoorProp</c> + <c>hangLeafPivot</c> + <c>retargetDoorProp</c> of sceneRecipe.ts. WHERE the
 /// leaf turns is <see cref="LeafPivot.Compute"/> (scene_models.json [L]); this only inserts the pivot node between the
 /// leaf and its parent (below the fix, inside the scaled root — raw model coordinates are the right ones) with the leaf
-/// keeping its place. WHEN a door stands open is <see cref="DoorSwing"/>: view state that needs an avatar (E7) — in the
-/// overview no one stands in front of any door, so every door eases to (and stays) shut.
+/// keeping its place. WHEN a door stands open is <see cref="DoorSwing"/>: view state from the rendered avatar in every camera mode (Task 51 / E7-T6).
 /// </summary>
 public static class DoorProps
 {
@@ -103,7 +102,7 @@ public static class DoorProps
 
     /// <summary>
     /// One frame of the swing (main.ts' door loop): the target from the avatar's distance (<see cref="DoorSwing.DoorDistance"/>
-    /// on the avatar's storey) — +∞ in the overview, so the target is 0 — eased at 3 rad/s.
+    /// on the avatar's storey) — +∞ only when absent — eased at 3 rad/s in all modes (Task 51).
     /// </summary>
     public static void Tick(DoorProp door, double dt, double avatarDistM = double.PositiveInfinity, bool enterable = true)
     {

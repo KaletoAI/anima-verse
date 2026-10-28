@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using AnimaNative.Scene;
+using AnimaNative.Embody;
 using Godot;
 
 namespace AnimaNative.World;
@@ -94,15 +95,27 @@ public sealed partial class WorldBuilder
 
     /// <summary>
     /// The prop half of main.ts' frame hook: <c>engine.lightPool.update(dt, lightFocus, nightFactor, visibleLightRooms)</c>,
-    /// the mirror passes of this frame (three's render hooks) and the door swing (shut in the overview: no avatar).
+    /// the mirror passes of this frame (three's render hooks) and avatar-distance door swing in every mode (Task 51).
     /// </summary>
-    public void TickProps(double dt, Camera3D? camera, Vector3 focus, double night)
+    public void TickProps(double dt, Camera3D? camera, Vector3 focus, double night, Vector3? avatar = null, string avatarRoom = "", string groundRoom = "")
     {
         PropLights?.Tick(dt, focus, night, VisibleLightRooms());
         if (camera is not null) Mirrors?.Tick(camera);
+        // Task 51 / E7-T6 §0.9: avatar proximity in ALL modes; light/camera focus never stands for the avatar.
         foreach (var slot in _slots.Values)
+        {
+            var room = slot.RouteView()?.RoomIdOf(avatarRoom) ?? (avatarRoom == groundRoom ? groundRoom : "");
+            int level = slot.Stands.RoomLevels.TryGetValue(room, out int own) ? own
+                : room.Length > 0 && room != groundRoom ? slot.LevelFilter : 0;
+            var local = avatar is { } p ? SceneView.WorldToTile(slot.Stands.Frame, p.X, p.Z) : (AnimaNative.Scatter.P2?)null;
+            var locks = slot.Loc.Id == _locks.Loc ? _locks.Rooms : null;
             foreach (var rec in slot.Placements)
-                if (rec.Door is { } door) DoorProps.Tick(door, dt);
+                if (rec.Door is { } door)
+                {
+                    double distance = local is { } at ? double.Hypot(at.X-door.At.X, at.Z-door.At.Z) : double.PositiveInfinity;
+                    DoorProps.Tick(door, dt, DoorSwing.DoorDistance(door.Level, level, distance), Locks.DoorwayLock(door.Rooms, locks, room) is null);
+                }
+        }
     }
 
     /// <summary>

@@ -20,6 +20,7 @@ public partial class Main
     private PlayerSteering? _playerSteering;
     private FigureManager? _steeringFigures;
     private AvatarPositionController? _avatarPosition;
+    private AvatarRoomsController? _avatarRooms;
     private string? _entryPin;
 
     /// <summary>Task 50: entry waits own their pin independently of approach and teleport holds.</summary>
@@ -73,6 +74,7 @@ public partial class Main
         {
             hud.SetState("mode", Embodied ? "embodied" : "overview");
             SyncPlayerSteering();
+            _avatarRooms?.SetActive(Embodied);
             PoseEmbody();
         };
         camera.Posed += PoseEmbody;
@@ -146,8 +148,9 @@ public partial class Main
     /// <summary>Resume pending requests only after their gate changes; no async continuation can revive cancelled control.</summary>
     private void TickEmbody()
     {
-        if (Leaving) { CancelPendingControl(); _playerSteering?.SetActive(false); return; }
+        if (Leaving) { CancelPendingControl(); _avatarRooms?.SetActive(false); _playerSteering?.SetActive(false); return; }
         SyncPlayerSteering();
+        TickAvatarRooms();
         if ((_pendingTakeControl || _pendingArrivalTakeControl) && ControlBootReady && AvatarRow() is null)
             CancelPendingControl();
         if (_pendingTakeControl && ControlBootReady && AvatarFigure()?.Loading != true) TakeControl();
@@ -185,6 +188,7 @@ public partial class Main
         if (_steeringFigures != _figures)
         {
             if (_steeringFigures is { } old && IsInstanceValid(old)) old.BeforeTick -= StepPlayerSteering;
+            _avatarRooms?.Dispose(); _avatarRooms = null;
             _avatarPosition?.Dispose();
             _steeringFigures = _figures;
             _playerSteering = new PlayerSteering(_figures, _builder)
@@ -194,6 +198,13 @@ public partial class Main
                 Toast = EmbodyToast,
                 FlyTo = point => { if (_camera is { } cam) cam.FlyTo(point, cam.Control.TargetDist); }
             };
+            if (_hud is { } overlay)
+                _avatarRooms = new AvatarRoomsController(_figures, _builder, _playerSteering, _source!, overlay)
+                {
+                    Toast = EmbodyToast,
+                    AdoptRoom = room => _avatarPosition?.AdoptRoom(room),
+                    AutoOpen = id => { if (id is null) CloseOpenLocation(); else OpenLocation(id); }
+                };
             _figures.BeforeTick += StepPlayerSteering;
         }
         _playerSteering!.SetActive(Embodied);
@@ -217,6 +228,7 @@ public partial class Main
     private void DetachEmbody()
     {
         SetEntryPin(null);
+        _avatarRooms?.Dispose(); _avatarRooms = null;
         _avatarPosition?.Dispose(); _avatarPosition = null;
         _playerSteering?.SetActive(false);
         if (_steeringFigures is { } manager && IsInstanceValid(manager)) manager.BeforeTick -= StepPlayerSteering;

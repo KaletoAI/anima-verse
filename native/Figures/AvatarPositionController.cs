@@ -29,6 +29,15 @@ public sealed class AvatarPositionController : IDisposable
     /// <summary>Task 52 seat write hook: infinity while pending, answer time after acknowledgement.</summary>
     public double OwnSeatChangeAt { get; set; }
     public string RoomId { get; private set; } = "";
+    private double _ownRoomChangeAt;
+    /// <summary>Task 51: successful rides outrank polls started before their acknowledgement and all older position flights.</summary>
+    private double OwnStateChangedAt => Math.Max(_ownRoomChangeAt, Math.Max(OwnCorrectionAt, OwnSeatChangeAt));
+    public void AdoptRoom(string room)
+    {
+        _ownRoomChangeAt = _clock();
+        Channel.DiscardPendingAnswers();
+        RoomId = room; _steering.RoomId = room;
+    }
     public Action<string>? Toast { get; set; }
     public Action<Vector3>? FlyTo { get; set; }
     public PendingSnap? PendingSnap => _readiness.PendingSnap;
@@ -86,7 +95,7 @@ public sealed class AvatarPositionController : IDisposable
     private void Applying(JsonElement root, double polledAt)
     {
         if (!_active) return;
-        _figures.HoldAvatarPlacement = FigureGround.PollIsStale(polledAt, Math.Max(OwnCorrectionAt, OwnSeatChangeAt));
+        _figures.HoldAvatarPlacement = FigureGround.PollIsStale(polledAt, OwnStateChangedAt);
         if (_figures.HoldAvatarPlacement) return;
         _world.SetPlayerReadinessMap(root);
         if (!root.TryGetProperty("characters",out var rows) || rows.ValueKind != JsonValueKind.Array) return;
@@ -128,6 +137,7 @@ public sealed class AvatarPositionController : IDisposable
     {
         Readiness.ClearSnap(_world, _readiness); _world.ClearPlayerApproach();
         _steering.PendingSnap = false; _steering.CancelRoute(); _steering.WalkIn = _steering.Correction = null;
+        _steering.VerticalRide = null; _figures.SetStairRide(_figures.AvatarName, null);
     }
 
     /// <summary>Walk at most 8 m for at most 3 s; farther corrections snap and invalidate the local plan.</summary>
@@ -135,6 +145,8 @@ public sealed class AvatarPositionController : IDisposable
     {
         if (!_active || Avatar is not { } f) return;
         OwnCorrectionAt = _clock();
+        // Task 51: the authoritative correction takes ownership even while a stair/lift owns the steering branch.
+        _steering.VerticalRide = null; _figures.SetStairRide(f.CharacterName, null);
         _world.ClearPlayerApproach(); _steering.CancelRoute(); _steering.WalkIn = null;
         var goal = GroundPoint(point);
         if (double.Hypot(point.X-f.Position.X,point.Z-f.Position.Z) > PositionChannel.CorrectWalkM)
@@ -150,7 +162,7 @@ public sealed class AvatarPositionController : IDisposable
     private void Applied(JsonElement root, double polledAt)
     {
         if (!_active || _steering.PropActionDriven || Channel.Driver.Kind == DriverKind.SERVER
-            || FigureGround.PollIsStale(polledAt,Math.Max(OwnCorrectionAt,OwnSeatChangeAt)) || _row is not { } row) return;
+            || FigureGround.PollIsStale(polledAt,OwnStateChangedAt) || _row is not { } row) return;
         if (row.TryGetProperty("travel",out var tr) && tr.ValueKind == JsonValueKind.Object && Channel.Suppressed(Text(tr,"journey_id"))) return;
         Readiness.ClearSnap(_world,_readiness); _steering.PendingSnap = false;
         if (Seated || InPair || Channel.InFlight || _steering.WalkIn is not null || _steering.VerticalRide is not null

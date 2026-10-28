@@ -57,6 +57,8 @@ uniform float roughness_v = 0.85;
 uniform float metallic_v = 0.02;
 uniform float opacity = 1.0;
 uniform float wall_cull = 0.0;
+// Task 51: hover materials clone this value and share this shader.
+uniform float hover_light = 0.0;
 // Per mesh instance: whether the wall cull runs right now. The interior's meshes keep 1 (they are only shown with
 // the interior up); an outdoor mesh gets 0 while its location is closed and 1 once the crossfade passes 0.03
 // (applyWallCulling runs only then) — LocationFade sets it, no material clone per location.
@@ -73,6 +75,7 @@ void vertex() {{
 void fragment() {{
 	vec4 c = has_tex > 0.5 ? texture(albedo_tex, UV) : albedo_color;
 	ALBEDO = c.rgb;
+	EMISSION = c.rgb * hover_light;
 	ROUGHNESS = roughness_v;
 	METALLIC = metallic_v;
 {(translucent ? "	ALPHA *= opacity;" : "")}

@@ -63,6 +63,10 @@ public partial class FigureManager
         f.Pace = double.IsFinite(pace) && pace > 0 ? pace : 1;
     }
 
+    /// <summary>Task 51 / E7-T6: avatar climbs through the same ramp and swept landing tick as NPCs.</summary>
+    public void SetStairRide(string name, AnimaNative.Scene.StairRide? ride)
+    { if (_figures.TryGetValue(name, out var f)) f.Ride = ride; }
+
     /// <summary>Task 49: correction/teleport resets competing routes, climb, pace and secondary motion.</summary>
     public void SnapPlayerTo(string name, Vector3 point)
     {

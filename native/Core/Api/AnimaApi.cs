@@ -35,6 +35,9 @@ public sealed class ApiException : Exception
 /// </summary>
 public interface IWorldSource
 {
+    /// <summary>Task 51: the shared room-walk/vertical-ride write; no server mutation is synthesized locally.</summary>
+    Task<PositionAnswer> EnterRoomAsync(string roomId, CancellationToken ct = default)
+        => Task.FromException<PositionAnswer>(new ApiException(404, "/play/enter-room", "not served by this source"));
     /// <summary>Task 50 / E7-T5: the sole position write, including authoritative refusal bodies.</summary>
     Task<PositionAnswer> ReportPositionAsync(PositionReport report, CancellationToken ct = default)
         => Task.FromException<PositionAnswer>(new ApiException(404, "/play/pos", "not served by this source"));

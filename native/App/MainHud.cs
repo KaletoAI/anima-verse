@@ -189,7 +189,12 @@ public partial class Main : Node3D
         var figure = _figures.CharacterAt(o, d);
         // Asked only when no figure took the click, as engine.ts does.
         var location = figure is null ? _picking?.Pick(o, d) : null;
-        var outcome = PickChain.Resolve(figure?.Name, location?.Id, () => _playerSteering?.OnGroundRay(o, d) == true);
+        var outcome = PickChain.Resolve(figure?.Name, location?.Id, () =>
+        {
+            if (_avatarRooms?.Picking.Hit(o, d) is { } vertical)
+            { _avatarRooms.UseVertical(vertical.Target); return true; }
+            return _playerSteering?.OnGroundRay(o, d) == true;
+        });
         Log($"pick at ({click.X:0},{click.Y:0}): "
             + (figure is { } f ? $"figure {f.Name} at {f.Distance:0.##} m ({_figures.LastPickCandidates} near the ray, "
                                  + $"{_figures.LastPickSkinnedVertices} vertices skinned, {_figures.LastPickMs:0.##} ms)"
@@ -280,7 +285,7 @@ public partial class Main : Node3D
         if (at is { } p && _hud?.Active == true && _picking is not null && _camera is not null)
         {
             var (o, d) = _camera.RayAt(p);
-            if (_picking.Pick(o, d) is not null) shape = Input.CursorShape.PointingHand;
+            if (_avatarRooms?.Picking.HasHover == true || _picking.Pick(o, d) is not null) shape = Input.CursorShape.PointingHand;
         }
         if (_hud is not null) _hud.SceneCursor = shape;
         if (_hud?.PointerOverHud == true) return;   // the page owns the cursor there

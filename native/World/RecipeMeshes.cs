@@ -73,6 +73,8 @@ public enum StoreyRole { Slab, RoomPlate, OutlineWall, Other }
 /// </summary>
 public readonly record struct PieceUnit(string Room, bool Outdoor, StoreyRole Role, int Level)
 {
+    /// <summary>Task 51: preserve the connection when batching extras by look; no added storey visibility rule.</summary>
+    public VerticalTarget? Vertical { get; init; }
     public string Tag => Role switch
     {
         StoreyRole.Slab => $"slab{Level}",
@@ -244,7 +246,13 @@ public static class RecipeMeshes
                 continue;
             }
             // Extras hang in the interior group (lift and flights alike) and are not storey-filtered.
-            pieces.Extra(new PieceUnit("", false, StoreyRole.Other, 0), e, materials.Extra(e, scene));
+            VerticalTarget? vertical = e.Kind.StartsWith("elevator_", StringComparison.Ordinal) ? new("elevator", -1) : null;
+            if (e.Kind.StartsWith("stair_", StringComparison.Ordinal) && e.Stair is { } stairId)
+            {
+                int flight = scene.Stairs.FindIndex(s => s.Id == stairId);
+                if (flight >= 0) vertical = new("stairs", flight);
+            }
+            pieces.Extra(new PieceUnit("", false, StoreyRole.Other, 0) { Vertical = vertical }, e, materials.Extra(e, scene));
             stats.InteriorMounted++;
             if (view.Open) stats.Extras++;
             else stats.Interior++;
@@ -293,6 +301,11 @@ public static class RecipeMeshes
                     Name = $"{name}_{unit.Tag}_{i++}", Mesh = st.Commit(),
                     CastShadow = cast ? GeometryInstance3D.ShadowCastingSetting.On : GeometryInstance3D.ShadowCastingSetting.Off,
                 };
+                if (unit.Vertical is { } target)
+                {
+                    mesh.SetMeta(VerticalPicking.KindMeta, target.Kind);
+                    mesh.SetMeta(VerticalPicking.FlightMeta, target.Flight);
+                }
                 list.Add(new RecipePiece(mesh, unit, solid is { } sl ? materials.Get(sl) : null, cast));
             }
             return list;

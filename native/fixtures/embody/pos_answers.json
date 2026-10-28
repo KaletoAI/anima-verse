@@ -254,6 +254,34 @@
           "reason": "place_full"
         }
       }
+    ],
+    "stairs-up": [
+      {
+        "method": "POST",
+        "path": "/play/enter-room",
+        "request": {
+          "room_id": "r-up"
+        },
+        "status": 200,
+        "body": {
+          "ok": true,
+          "room_id": "r-up"
+        }
+      }
+    ],
+    "lift-up": [
+      {
+        "method": "POST",
+        "path": "/play/enter-room",
+        "request": {
+          "room_id": "r-up"
+        },
+        "status": 200,
+        "body": {
+          "ok": true,
+          "room_id": "r-up"
+        }
+      }
     ]
   }
 }

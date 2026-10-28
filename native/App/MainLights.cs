@@ -68,7 +68,10 @@ public partial class Main : Node3D
     {
         if (_builder is null || _camera is null) return;
         var focus = Embodied && AvatarFigure() is { } avatar ? avatar.GlobalPosition : _camera.Target;
-        _builder.TickProps(delta, _camera, focus, _night);
+        var map = _figures?.LatestMap ?? _builder.FirstMap;
+        string room = Embodied ? _playerSteering?.RoomId ?? "" : map is { } m ? AvatarRoomOf(m) : "";
+        _builder.TickProps(delta, _camera, focus, _night, AvatarFigure()?.GlobalPosition, room,
+            _hud?.HudOwned("groundRoomId")?.GetValue<string>() ?? "");
         var target = Ambience.Target(_builder.AmbienceAt(_openView.OpenId, focus));
         _ambience = Ambience.Step(_ambience, target, delta);
         _stage?.Apply(_ambience);
