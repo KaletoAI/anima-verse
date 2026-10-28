@@ -315,6 +315,7 @@ public partial class FigureManager : Node3D
         }
         foreach (var gone in _figures.Keys.Where(n => !plans.ContainsKey(n)).ToList())
         {
+            _figures[gone].DropTravelLine();
             _figures[gone].QueueFree();
             _figures.Remove(gone);
             _shown.Remove(gone);
@@ -423,6 +424,25 @@ public partial class FigureManager : Node3D
         fig.ApplyRotation();
         fig.SetHidden(plan.Hidden);
         fig.Travelling = _rowByName.TryGetValue(fig.CharacterName, out var row) && row.Travelling;
+        AdoptReckoning(fig, plan);
+        UpdateTravelLine(fig);
+    }
+
+    /// <summary>
+    /// Task 43 / E6-T3: npcs.ts update measures distinct polled placement points against the source's monotonic
+    /// real-time clock, independent of Godot's capped frame deltas. Manual AutoTick=false uses only Tick time.
+    /// Cached 1 Hz placement cannot overwrite an observation. Null is missing evidence, zero is a measured stop;
+    /// a revealed route or arrival ends this journey's observation. No hidden speed or destination is consulted.
+    /// </summary>
+    private void AdoptReckoning(Figure fig, FigurePlan plan)
+    {
+        if (!fig.Travelling || fig.Route is not null) { fig.Reckon = null; return; }
+        var cur = (plan.Pos.X, plan.Pos.Z);
+        double atS = AutoTick ? _source.MonotonicMs / 1000 : _clock;
+        if (fig.Reckon is not { } prev) fig.Reckon = new DeadReckoning(cur, atS, Stats.Polls, null);
+        else if (prev.Stamp != Stats.Polls)
+            fig.Reckon = new DeadReckoning(cur, atS, Stats.Polls,
+                TravelPath.DeadReckonRate(prev.Pos, prev.AtS, cur, atS) ?? prev.RateMS);
     }
 
     /// <summary>
@@ -565,6 +585,7 @@ public partial class FigureManager : Node3D
         if (fig.Travelling && fig.Player is not null && !fig.Bridging && fig.HoldsTravel) ApplyBridgeTravel(fig);
         r.ShownM = TravelPath.StepShown(r.Points, r.Paces, r.ShownM, r.TargetM, dt);
         r.TargetM = TravelPath.AdvanceAlongPaces(r.Points, r.Paces, r.TargetM, dt);
+        UpdateTravelLine(fig);
         _travelErrors.Push(_clock * 1000, Math.Abs(r.TargetM - r.ShownM));
         var at = TravelPath.PointAtDistance(r.Points, r.ShownM)!.Value;
         double bedY = GroundY(at.X, at.Z), rootYBefore = fig.Position.Y;
@@ -619,7 +640,12 @@ public partial class FigureManager : Node3D
             : fig.PaceLimit;
         if (plan.Moving && paceLimit > 0)
         {
-            var (_, step) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning, dt, fig.Pace, paceLimit);
+            // Task 43: read the raw pace under the starting foot; the post-step word below owns clips and height.
+            var rawPace = stepGround.Raw;
+            double? reckonedStep = reckoning && fig.Reckon?.RateMS is { } rate
+                ? TravelPath.DeadReckonStep(rate, WalkGround.TerrainPace(rawPace.Speed, rawPace.Scope), dt, plan.DistToGoal)
+                : null;
+            var (_, step) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning, dt, fig.Pace, paceLimit, reckonedStep);
             double len = plan.DistToGoal;
             double dx = plan.Delta.X / len, dz = plan.Delta.Z / len;
             pos = new Vec3(pos.X + dx * step, pos.Y, pos.Z + dz * step);

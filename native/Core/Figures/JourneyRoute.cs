@@ -16,3 +16,10 @@ public sealed class JourneyRoute
     public double ShownM { get; set; }
     public int Stamp { get; set; }
 }
+
+/// <summary>
+/// Task 43 / E6-T3: npcs.ts reckon observation, in world metres and elapsed real seconds. The poll stamp gates
+/// measurement; a rejected interval retains RateMS, whereas a measured zero replaces it. Route adoption or
+/// arrival discards the observation, so a later journey cannot inherit its rate. Arithmetic stays in TravelPath.
+/// </summary>
+public sealed record DeadReckoning((double X, double Z) Pos, double AtS, int Stamp, double? RateMS);

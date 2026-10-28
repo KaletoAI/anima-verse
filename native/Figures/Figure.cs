@@ -117,6 +117,27 @@ public partial class Figure : Node3D
     public bool Travelling { get; set; }
     /// <summary>Task 42: server route; null for ordinary placement or a traveller whose route is withheld.</summary>
     public JourneyRoute? Route { get; set; }
+    /// <summary>Task 43: last distinct poll observation for a traveller whose route is withheld; null otherwise.</summary>
+    public DeadReckoning? Reckon { get; set; }
+    /// <summary>Task 43: this figure owns its route line, attached to the manager in world-map coordinates.</summary>
+    public TravelLine? TravelLine { get; internal set; }
+    /// <summary>Task 43: route identity, clamped five-metre trim bucket, and sampled height revision.</summary>
+    public string TravelKey { get; internal set; } = "";
+    /// <summary>Task 43: cumulative geometry builds; unchanged keys and empty tails allocate no buffers.</summary>
+    public int TravelLineBuilds { get; internal set; }
+
+    /// <summary>
+    /// Task 43: drop the figure-owned geometry and material on a route change, arrival or removal. Hide immediately;
+    /// deferred node deletion releases its resources safely even while the manager's tree is exiting.
+    /// </summary>
+    internal void DropTravelLine()
+    {
+        if (IsInstanceValid(TravelLine)) { TravelLine!.Visible = false; TravelLine.QueueFree(); }
+        TravelLine = null;
+        TravelKey = "";
+    }
+
+    public override void _ExitTree() => DropTravelLine();
     /// <summary>The last frame moved the figure (<c>plan.moving</c>) and, moving, ran.</summary>
     public bool Moving { get; private set; }
     public bool Running { get; private set; }

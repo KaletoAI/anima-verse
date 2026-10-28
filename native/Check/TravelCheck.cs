@@ -103,10 +103,197 @@ public static class TravelCheck
                 AtRoute(t);
                 Near("height at reached point", t.Position.Y, .035 * i, .001);
             }
+            await CheckLine(host, fixtures);
+            await CheckFogged(host, fixtures);
             await CheckBridgeAndWater(host, fixtures);
-            return "travel vectors=134 age=.49 target=10.686 frames=24 shown=19.086 smooth=19.2351429236 back=1 fwd=1 arrive=1 corner=12 bridge=held+handover water=move+idle epsilon=.01";
+            return "travel vectors=134 age=.49 target=10.686 frames=24 shown=19.086 smooth=19.2351429236 back=1 fwd=1 arrive=1 corner=12 bridge=held+handover water=move+idle epsilon=.01 line=8->7 builds=1->2->3->4 dash=.9/.6 reckon=2*.5*.5=.5 capped=14";
         }
         finally { world.QueueFree(); }
+    }
+    /// <summary>
+    /// Task 43 / E6-T3: a 12 m east + 16 m north route densifies to eight points at 4 m spacing. Bed=x/4
+    /// puts the first point .3 m above the foot and gives the first UV distance sqrt(4²+1²)=sqrt(17).
+    /// Checks inspect the actual mesh and material used by the manager, rather than a parallel line builder.
+    /// </summary>
+    private static async Task CheckLine(Node3D host, string fixtures)
+    {
+        var source = new FixtureSource(Path.Combine(fixtures, "travel"), fixtures);
+        using var hf = await source.GetHeightfieldAsync();
+        var height = new WorldHeight(HeightfieldOverview.Parse(hf.RootElement));
+        double raise = 0;
+        var mgr = new FigureManager(source, height, _ => { }, strict: true)
+        { AutoTick = false, GroundYAt = (x, _) => x / 4 + raise };
+        host.AddChild(mgr);
+        try
+        {
+            using var map = await source.GetWorldMapAsync();
+            var changed = JsonNode.Parse(map.RootElement.GetRawText())!;
+            changed.AsObject().Remove("_nativeReceipt");
+            changed["avatar"] = "Timeless Traveller";
+            var row = changed["characters"]![3]!;
+            row["travel"]!["waypoints"] = JsonNode.Parse("[[0,-80],[12,-80],[12,-64]]");
+            row["travel"]!["progress_m"] = 0;
+            row["travel"]!["paces_m_s_real"] = null;
+            using var doc = JsonDocument.Parse(changed.ToJsonString());
+            await mgr.Apply(doc.RootElement);
+            var f = mgr.Figures["Timeless Traveller"];
+            var line = f.TravelLine;
+            Expect("avatar has a dashed travel line", line?.Mesh is not null);
+            var geometry = line!.Mesh!;
+            using var arrays = geometry.SurfaceGetArrays(0);
+            var points = arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+            var uv = arrays[(int)Mesh.ArrayType.TexUV].AsVector2Array();
+            Expect("densified line point count", points.Length == 8);
+            Near("line starts at foot X", points[0].X, 0, .0001);
+            Near("line starts at foot Z", points[0].Z, -80, .0001);
+            Near("line ground plus .3", points[0].Y, .3, .0001);
+            Near("UV starts at zero", uv[0].X, 0);
+            Near("UV uses cumulative 3D distance", uv[1].X, Math.Sqrt(17), .0001);
+            Near("UV includes bend distance", uv[^1].X, 3 * Math.Sqrt(17) + 16, .0001);
+            Expect("route line has the shared shader material", line.MaterialOverride is ShaderMaterial);
+            var material = (ShaderMaterial)line.MaterialOverride!;
+            Expect("line shader compiles with three uniforms", material.Shader.GetShaderUniformList().Count == 3);
+            Near("browser dash metres", material.GetShaderParameter("dash_size").AsDouble(), .9, .0001);
+            Near("browser gap metres", material.GetShaderParameter("gap_size").AsDouble(), .6, .0001);
+            var color = material.GetShaderParameter("line_color").AsColor();
+            Near("browser line red", color.R, 242.0 / 255, .0001);
+            Near("browser line green", color.G, 205.0 / 255, .0001);
+            Near("browser line blue", color.B, 110.0 / 255, .0001);
+            Near("browser line opacity", color.A, .9, .0001);
+            Expect("one initial line build", f.TravelLineBuilds == 1);
+            f.Route!.ShownM = 4.9;
+            mgr.Tick(0);
+            mgr.TickPlacement();
+            Expect("within bucket reuses buffer", f.TravelLine == line && f.TravelLineBuilds == 1);
+            f.Route.ShownM = 5;
+            mgr.Tick(0);
+            Expect("bucket rollover rebuilds once", f.TravelLine != line && f.TravelLineBuilds == 2);
+            Expect("old line hidden and queued by owner", !line.Visible && line.IsQueuedForDeletion());
+            var trimmed = f.TravelLine!.Mesh!.SurfaceGetArrays(0)[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+            Expect("trimmed point count", trimmed.Length == 7);
+            Near("trimmed first point is shown foot X", trimmed[0].X, 5, .0001);
+            Near("trimmed first point is shown foot Z", trimmed[0].Z, -80, .0001);
+            Near("trimmed first point is terrain plus .3", trimmed[0].Y, 1.55, .0001);
+            raise = 2;
+            height.Reset(height.Overview);
+            mgr.Tick(0);
+            Expect("height revision rebuilds within same bucket", f.TravelLineBuilds == 3);
+            var raised = f.TravelLine!.Mesh!.SurfaceGetArrays(0)[(int)Mesh.ArrayType.Vertex].AsVector3Array();
+            Near("new relief resampled", raised[0].Y, 3.55, .0001);
+            row["travel"]!["journey_id"] = "line-v2";
+            row["travel"]!["progress_m"] = 5;
+            changed["fogged"] = false;
+            using (var reroute = JsonDocument.Parse(changed.ToJsonString())) await mgr.Apply(reroute.RootElement);
+            Expect("route identity rebuilds within same bucket", f.TravelLineBuilds == 4);
+            f.Route!.ShownM = 28;
+            mgr.Tick(0);
+            Expect("terminal single point has no line", f.TravelLine is null && f.TravelLineBuilds == 4);
+            var terminalKey = f.TravelKey;
+            f.Route.ShownM = 100;
+            mgr.Tick(0);
+            Expect("overshoot keeps clamped terminal key", f.TravelKey == terminalKey && f.TravelLineBuilds == 4);
+            // The unfiltered view supplies routes for foreign figures too; each gets its own line, all share one material.
+            var foreign = mgr.Figures["Frozen Traveller"];
+            var foreignLine = foreign.TravelLine!;
+            Expect("show-all known foreign route drawn", foreignLine is not null && foreignLine.MaterialOverride == material);
+            row["travel"] = null;
+            using (var arrived = JsonDocument.Parse(changed.ToJsonString())) await mgr.Apply(arrived.RootElement);
+            Expect("arrival clears travel line key", f.TravelLine is null && f.TravelKey == "");
+            changed["characters"] = new JsonArray();
+            using (var removed = JsonDocument.Parse(changed.ToJsonString())) await mgr.Apply(removed.RootElement);
+            Expect("figure removal queues owned foreign line", foreignLine!.IsQueuedForDeletion() && !foreignLine.Visible);
+            await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
+            await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
+            Expect("replaced line freed", !GodotObject.IsInstanceValid(line));
+            Expect("replaced mesh disposed, shared material kept", GodotObject.IsInstanceValid(material) && !GodotObject.IsInstanceValid(geometry));
+            Expect("removed figure line freed", !GodotObject.IsInstanceValid(foreignLine));
+        }
+        finally { mgr.QueueFree(); }
+    }
+    /// <summary>
+    /// Task 43 / E6-T3: two polled points 6 m apart over 3 s measure 2 m/s. A wilderness pace of .5
+    /// gives a .5 m half-second step; cached placement must not measure the same stamp again. The final
+    /// long frame stops at the only position the server revealed, and a measured zero replaces the rate.
+    /// </summary>
+    private static async Task CheckFogged(Node3D host, string fixtures)
+    {
+        var source = new FixtureSource(Path.Combine(fixtures, "travel"), fixtures);
+        using var hf = await source.GetHeightfieldAsync();
+        var mgr = new FigureManager(source, new WorldHeight(HeightfieldOverview.Parse(hf.RootElement)), _ => { }, strict: true)
+        {
+            AutoTick = false, GroundYAt = (_, _) => 0,
+            GroundMoveAt = (_, _) => new GroundMove(FigureClips.WalkRun, new GroundSink(0, 0), null, 0, .5, GroundScope.Wilderness, null),
+        };
+        host.AddChild(mgr);
+        try
+        {
+            using var map = await source.GetWorldMapAsync();
+            var changed = JsonNode.Parse(map.RootElement.GetRawText())!;
+            changed.AsObject().Remove("_nativeReceipt");
+            var row = changed["characters"]![3]!;
+            row["travel"] = JsonNode.Parse("""{"waypoints":null,"progress_m":null,"starts_in_s":null}""");
+            row["pos"] = JsonNode.Parse("""{"x":0,"z":-80}""");
+            async Task Poll() { using var doc = JsonDocument.Parse(changed.ToJsonString()); await mgr.Apply(doc.RootElement); }
+            await Poll();
+            var f = mgr.Figures["Timeless Traveller"];
+            f.Position = new Vector3(-2, 0, -80);
+            mgr.Tick(.5);
+            Near("first sighting falls back to unboosted walk", f.Position.X, -.3, .0001);
+            Expect("first sighting has no measured rate or line", f.Reckon is { RateMS: null } && f.TravelLine is null);
+            f.Position = new Vector3(0, 0, -80);
+            mgr.Tick(2.5);
+            row["pos"]!["x"] = 6;
+            await Poll();
+            Near("rate from distinct polls", f.Reckon!.RateMS!.Value, 2);
+            var observation = f.Reckon;
+            mgr.Tick(.5);
+            Near("fogged measured rate times terrain pace", f.Position.X, .5, .0001);
+            Expect("fogged stranger never runs", !f.Running && f.Route is null);
+            mgr.TickPlacement();
+            Expect("cached placement preserves entire observation", ReferenceEquals(f.Reckon, observation));
+            mgr.Tick(.5);
+            Near("cached stamp keeps measured rate", f.Position.X, 1, .0001);
+            // Two observations at the same instant reject the new measurement and retain the prior rate.
+            row["pos"]!["x"] = 8;
+            await Poll();
+            row["pos"]!["x"] = 14;
+            await Poll();
+            mgr.Tick(.5);
+            Near("refused measurement retains rate", f.Position.X, 1.5, .0001);
+            mgr.Tick(100);
+            Near("fogged step caps at revealed goal", f.Position.X, 14, .0001);
+            await Poll();
+            f.Position = new Vector3(12, 0, -80);
+            mgr.Tick(.5);
+            Near("measured zero stops fogged walk", f.Position.X, 12, .0001);
+            row["travel"] = null;
+            await Poll();
+            Expect("arrival forgets measured rate", f.Reckon is null);
+            row["travel"] = JsonNode.Parse("""{"waypoints":null,"progress_m":null,"starts_in_s":null}""");
+            await Poll();
+            Expect("new fogged journey starts unmeasured", f.Reckon is { RateMS: null });
+            row["travel"] = JsonNode.Parse("""{"waypoints":[[0,-80],[20,-80]],"progress_m":12,"paces_m_s_real":null}""");
+            await Poll();
+            Expect("revealed route drops reckoning and draws line", f.Reckon is null && f.Route is not null && f.TravelLine is not null);
+            row["travel"] = null;
+            await Poll();
+            // Live mode measures wall time, even when Godot supplied only 3 s of capped frame deltas over
+            // the fixture receipt interval 540 -> 5540 ms. Six metres over five real seconds is 1.2 m/s.
+            mgr.SetProcess(false);
+            mgr.AutoTick = true;
+            try
+            {
+                row["travel"] = JsonNode.Parse("""{"waypoints":null,"progress_m":null,"starts_in_s":null}""");
+                await Poll();
+                mgr.Tick(3);
+                using var nextReceipt = await source.GetWorldMapFileAsync("worldmap_poll2.json");
+                row["pos"]!["x"] = 20;
+                await Poll();
+                Near("live observations use monotonic seconds despite capped frames", f.Reckon!.RateMS!.Value, 1.2);
+            }
+            finally { mgr.AutoTick = false; }
+        }
+        finally { mgr.QueueFree(); }
     }
     /// <summary>
     /// Task 42: reuse the measured bridge assets, with an ordinary travel block instead of the non-route order.
