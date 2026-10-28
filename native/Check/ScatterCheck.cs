@@ -38,12 +38,44 @@ public static class ScatterCheck
 
     public static async Task<string> RunAsync(Node3D world, FixtureSource source, WorldHeight height, string dir)
     {
+        await CheckParseThreads(source);
         using var refDoc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "scatter_reference.json")));
         var root = refDoc.RootElement;
         int cases = CheckCases(root);
         CheckPure(root);
         string fixture = await CheckFixture(root.GetProperty("fixture"), world, source, height);
         return $"cases={cases} {fixture}";
+    }
+
+    /// <summary>Task 37 (E4-T2): observe the real glTF callbacks, so a main-thread parse regresses the check even
+    /// when its geometry is unchanged. Scene generation and the awaiting caller must still run on the main thread.</summary>
+    private static async Task CheckParseThreads(FixtureSource source)
+    {
+        int main = System.Environment.CurrentManagedThreadId;
+        using var probe = new PropParseThreadProbe();
+        PropParseThreadProbe.Parsed.Clear();
+        PropParseThreadProbe.Generated.Clear();
+        GltfDocument.RegisterGltfDocumentExtension(probe);
+        var cache = new ModelCache(source, _ => { });
+        try
+        {
+            var prop = await PropMesh.LoadAsync(source, LowUrl, 8);
+            Expect("prop parse on worker", prop is not null && PropParseThreadProbe.Parsed.Count == 1 && PropParseThreadProbe.Parsed.All(t => t != main),
+                   $"main={main}, parse={string.Join(",", PropParseThreadProbe.Parsed)}");
+            Expect("prop continuation on main", System.Environment.CurrentManagedThreadId == main && PropParseThreadProbe.Generated.IsEmpty,
+                   "scatter generated nodes or resumed off main");
+            PropParseThreadProbe.Parsed.Clear();
+            var model = await cache.GetAsync("/play/locations/loc-house/model?tier=full");
+            Expect("model parse on worker", model is not null && PropParseThreadProbe.Parsed.Count == 1 && PropParseThreadProbe.Parsed.All(t => t != main),
+                   $"main={main}, parse={string.Join(",", PropParseThreadProbe.Parsed)}");
+            Expect("model generation on main", PropParseThreadProbe.Generated.Count == 1 && PropParseThreadProbe.Generated.All(t => t == main)
+                   && System.Environment.CurrentManagedThreadId == main, $"main={main}, generate={string.Join(",", PropParseThreadProbe.Generated)}");
+        }
+        finally
+        {
+            cache.FreeAll();
+            GltfDocument.UnregisterGltfDocumentExtension(probe);
+        }
     }
 
     // ---- 1. reference vectors -------------------------------------------------------------------

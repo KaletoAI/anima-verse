@@ -17,6 +17,10 @@ public sealed class PropMeshData
     public int Triangles => Indices.Length > 0 ? Indices.Length / 3 : Vertices.Length / 3;
 }
 
+/// <summary>Task 37 (E4-T2): worker-built geometry and clearance bounds; the main thread only makes the scatter
+/// shader and places the instances. The material is the first glTF surface's, as before.</summary>
+public sealed record GroundedPropMesh(ArrayMesh Mesh, Aabb Bounds, Material? Material, int Triangles);
+
 /// <summary>
 /// Prop GLB → the geometry a scatter entry instances (<c>mountUrl</c> + <c>groundedGeometry</c> in
 /// client3d/src/scene/ground.ts):
@@ -33,14 +37,27 @@ public sealed class PropMeshData
 /// </summary>
 public static class PropMesh
 {
-    public static async Task<PropMeshData?> LoadAsync(IWorldSource source, string url)
+    /// <summary>Task 37 (E4-T2): decode, parse, first-mesh walk and transform bake in one worker turn (resource and
+    /// array work only, Task 35b; no scene nodes). Once per URL — every height grounds the same parse.</summary>
+    public static async Task<PropMeshData?> ParseAsync(IWorldSource source, string url)
     {
         var bytes = await source.GetBytesAsync(url);
-        var plain = await Task.Run(() => GlbLoader.Prepare(bytes));
-        return Extract(plain, url);
+        return await Task.Run(() => Extract(GlbLoader.Prepare(bytes), url));
     }
 
-    /// <summary>Main thread: the glTF parse creates the material resources.</summary>
+    /// <summary>Task 37 (E4-T2): grounding and the <see cref="ArrayMesh"/> for one target height, on a worker.</summary>
+    public static Task<GroundedPropMesh> GroundAsync(PropMeshData data, double targetH)
+        => Task.Run(() =>
+        {
+            var (mesh, bounds) = Grounded(data, targetH);
+            return new GroundedPropMesh(mesh, bounds, data.Material, data.Triangles);
+        });
+
+    /// <summary><see cref="ParseAsync"/> then <see cref="GroundAsync"/> (null = no mesh in the file).</summary>
+    public static async Task<GroundedPropMesh?> LoadAsync(IWorldSource source, string url, double targetH)
+        => await ParseAsync(source, url) is { } data ? await GroundAsync(data, targetH) : null;
+
+    /// <summary>Resource-only glTF parse and first-mesh extraction; runs on the worker (Task 37, E4-T2).</summary>
     public static PropMeshData? Extract(byte[] plainGlb, string label)
     {
         var doc = new GltfDocument();

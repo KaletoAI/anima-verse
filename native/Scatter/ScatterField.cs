@@ -78,8 +78,10 @@ public partial class ScatterField : Node3D
     private readonly List<AreaScatter> _areas = new();
     private (double X, double Y, double Z)? _lodCam;
     private ScatterViewCone _cone = ScatterLod.ViewCone(0, 1, double.NaN);
-    private readonly Dictionary<string, Task<PropMeshData?>> _loads = new();
-    private readonly Dictionary<(string Url, double H), (ArrayMesh Mesh, Aabb Bounds, int Tris)> _grounded = new();
+    /// <summary>Task 37 (E4-T2): one worker parse per URL and one worker grounding per URL/height, both shared with
+    /// in-flight requests. The caches and the measured-spread ledger stay on the main thread.</summary>
+    private readonly Dictionary<string, Task<PropMeshData?>> _parses = new();
+    private readonly Dictionary<(string Url, double H), Task<GroundedPropMesh?>> _loads = new();
     private readonly Dictionary<string, ShaderMaterial> _materials = new();
     private readonly Dictionary<double, ArrayMesh> _cones = new();
     private bool _spreadArmed;
@@ -660,17 +662,23 @@ public partial class ScatterField : Node3D
         _ = LoadAndMount(p, url, high);
     }
 
-    private Task<PropMeshData?> LoadData(string url)
+    private Task<GroundedPropMesh?> LoadData(string url, double targetH)
     {
-        if (_loads.TryGetValue(url, out var t)) return t;
-        t = LoadDataInner(url);
-        _loads[url] = t;
+        if (_loads.TryGetValue((url, targetH), out var t)) return t;
+        t = LoadDataInner(url, targetH);
+        _loads[(url, targetH)] = t;
         return t;
     }
 
-    private async Task<PropMeshData?> LoadDataInner(string url)
+    private async Task<GroundedPropMesh?> LoadDataInner(string url, double targetH)
     {
-        try { return await PropMesh.LoadAsync(_source, url); }
+        if (!_parses.TryGetValue(url, out var parse)) _parses[url] = parse = ParseInner(url);
+        return await parse is { } data ? await PropMesh.GroundAsync(data, targetH) : null;
+    }
+
+    private async Task<PropMeshData?> ParseInner(string url)
+    {
+        try { return await PropMesh.ParseAsync(_source, url); }
         catch (Exception e)
         {
             LoadFailures++;
@@ -684,7 +692,7 @@ public partial class ScatterField : Node3D
         _pending++;
         try
         {
-            var data = await LoadData(url);
+            var data = await LoadData(url, p.TargetH);
             if (data is null)
             {
                 // A load that never mounted must not pin the wish (`abandon`).
@@ -692,16 +700,11 @@ public partial class ScatterField : Node3D
                 return;
             }
             if (p.Disposed || (high ? p.WantHigh : p.WantLow) != url) return;
-            if (!_grounded.TryGetValue((url, p.TargetH), out var g))
-            {
-                var (mesh, bounds) = PropMesh.Grounded(data, p.TargetH);
-                _grounded[(url, p.TargetH)] = g = (mesh, bounds, data.Triangles);
-            }
-            NoteSpread(url, g.Bounds);
+            NoteSpread(url, data.Bounds);
             string key = $"{url}|{p.Sway:0.00}|{p.TargetH}";
             if (!_materials.TryGetValue(key, out var mat))
                 _materials[key] = mat = ScatterShaders.FromGltf(data.Material, p.Sway, p.TargetH);
-            Place(p, url, high, g.Mesh, mat, g.Tris);
+            Place(p, url, high, data.Mesh, mat, data.Triangles);
         }
         finally { _pending--; }
     }

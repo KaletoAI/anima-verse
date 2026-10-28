@@ -33,7 +33,8 @@ public sealed class ModelCache
         _log = log;
     }
 
-    /// <summary>The template of a URL (null = not loadable). Main-thread continuation: the import creates nodes.</summary>
+    /// <summary>The template of a URL (null = not loadable). Task 37 (E4-T2): resource parsing runs on a worker;
+    /// scene generation, material neutralisation and cache accounting resume on the main thread.</summary>
     public Task<Template?> GetAsync(string url)
     {
         if (!_loads.TryGetValue(url, out var task)) _loads[url] = task = Load(url);
@@ -46,8 +47,8 @@ public sealed class ModelCache
         {
             var bytes = await _source.GetBytesAsync(url);
             bool compressed = GlbMeshoptDecoder.IsCompressed(bytes);
-            var plain = await Task.Run(() => GlbLoader.Prepare(bytes));
-            var (root, counts) = GlbLoader.Import(plain, url);
+            var (doc, state, counts) = await Task.Run(() => GlbLoader.Parse(GlbLoader.Prepare(bytes), url));
+            var root = GlbLoader.Generate(doc, state, url);
             Neutralized += NeutralizeMaterials(root);
             Loaded++;
             Bytes += bytes.Length;
