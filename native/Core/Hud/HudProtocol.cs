@@ -11,7 +11,7 @@ public readonly record struct HudRect(double X, double Y, double W, double H);
 
 /// <summary>
 /// The scene's copy of <c>HudUiState</c> (bus.ts) — written ONLY by the HUD
-/// (<c>{v:2, kind:'hud', patch}</c>), read by the input routing.
+/// (<c>{v:3, kind:'hud', patch}</c>), read by the input routing.
 /// </summary>
 public sealed class HudUi
 {
@@ -55,12 +55,12 @@ public sealed class HudUi
         => o[key] is JsonValue v && v.GetValueKind() == JsonValueKind.Number ? v.GetValue<double>() : null;
 }
 
-/// <summary>A message from the HUD that passed validation.</summary>
-public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, JsonArray? Args);
+/// <summary>A message from the HUD that passed validation (<paramref name="RequestId"/>: the prop-action kinds of v3).</summary>
+public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, JsonArray? Args, string? RequestId = null);
 
 /// <summary>
-/// Protocol v2 of client3d/src/hud/bridge.ts (<c>HUD_BRIDGE_VERSION</c>), scene side, as pure functions:
-/// the same validation (<c>valid()</c>: an object, <c>v === 2</c>, a <c>kind</c>),
+/// Protocol v3 of client3d/src/hud/bridge.ts (<c>HUD_BRIDGE_VERSION</c>), scene side, as pure functions:
+/// the same validation (<c>valid()</c>: an object, <c>v === 3</c>, a <c>kind</c>),
 /// the same name lists (<c>gameNames</c>, <c>uiNames</c>) and the same field
 /// ownership (<c>HUD_OWNED_FIELDS</c>). On the gdCEF wire each message is ONE
 /// JSON string. Keep the lists in step with bridge.ts/bus.ts — <c>--check</c>
@@ -70,15 +70,20 @@ public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, Js
 /// another <c>v</c> is dropped with a reason (no negotiation, no fallback reader).
 ///   - v1: the first wire (native spike S4).
 ///   - v2 (Task 26d): game action <c>applyGraphicsPrefs(prefs)</c>, the menu's Graphics tab.
+///   - v3 (browser prop-action cutover): the semantic prop-action commands replace <c>pickPlacePose</c>, plus the kinds
+///     <c>prop-action-prepare</c> / <c>prop-action-prepared</c> / <c>prop-actions-changed</c>. The native client speaks the
+///     wire but has no prop actions (excluded from that cutover by the user): it answers every preparation with an error
+///     and ignores the invalidations.
 /// </summary>
 public static class HudProtocol
 {
-    public const int Version = 2;
+    public const int Version = 3;
 
     /// <summary><c>gameNames</c> of bridge.ts — actions HUD → scene.</summary>
     public static readonly string[] GameActions =
     {
-        "infoAction", "closeInfo", "closeOpenView", "pickPlacePose", "clearSelection", "setVolumes", "speak", "stopSpeech",
+        "infoAction", "closeInfo", "closeOpenView", "pickPropAction", "pickRoomPose", "closePlaceMenu", "respondPropAction",
+        "cancelPropAction", "clearSelection", "setVolumes", "speak", "stopSpeech",
         "markResume", "zoomTo", "sayBubble", "enterEmbodied", "takeControl", "exitEmbodied", "rideElevator", "rideStairs",
         "enterLocation", "backToTitle", "setShowAll", "applyAudioPrefs", "applyScatterPrefs", "applyGraphicsPrefs", "setChatBox",
     };
@@ -130,6 +135,15 @@ public static class HudProtocol
                 if (!GameActions.Contains(name)) { reason = $"undeclared action '{name}'"; return null; }
                 if (msg["args"] is not JsonArray args) { reason = $"action '{name}' without an args array"; return null; }
                 return new HudInbound(kind, null, name, args);
+            case "prop-action-prepare":
+                if (msg["request_id"] is not JsonValue r || r.GetValueKind() != JsonValueKind.String)
+                { reason = "prop-action-prepare without a string request_id"; return null; }
+                return new HudInbound(kind, null, null, null, r.GetValue<string>());
+            case "prop-actions-changed":
+                if (!msg.ContainsKey("request_id")) return new HudInbound(kind, null, null, null);
+                if (msg["request_id"] is not JsonValue c || c.GetValueKind() != JsonValueKind.String)
+                { reason = "prop-actions-changed with a request_id that is not a string"; return null; }
+                return new HudInbound(kind, null, null, null, c.GetValue<string>());
             default:
                 reason = $"unknown kind '{kind}'";
                 return null;
@@ -152,25 +166,33 @@ public static class HudProtocol
         return (accepted, dropped);
     }
 
-    /// <summary><c>{v:2, kind:'state', patch}</c></summary>
+    /// <summary><c>{v:3, kind:'state', patch}</c></summary>
     public static string State(JsonObject patch)
         => new JsonObject { ["v"] = Version, ["kind"] = "state", ["patch"] = patch.DeepClone() }.ToJsonString();
 
-    /// <summary><c>{v:2, kind:'boot', value}</c></summary>
+    /// <summary><c>{v:3, kind:'boot', value}</c></summary>
     public static string Boot(JsonObject value)
         => new JsonObject { ["v"] = Version, ["kind"] = "boot", ["value"] = value.DeepClone() }.ToJsonString();
 
-    /// <summary><c>{v:2, kind:'perf', value}</c> — the performance readout (<c>PerfStats</c> of bus.ts) or null.</summary>
+    /// <summary><c>{v:3, kind:'perf', value}</c> — the performance readout (<c>PerfStats</c> of bus.ts) or null.</summary>
     public static string Perf(JsonObject? value)
         => new JsonObject { ["v"] = Version, ["kind"] = "perf", ["value"] = value?.DeepClone() }.ToJsonString();
 
-    /// <summary><c>{v:2, kind:'ui', name, args}</c>; only the declared ui actions.</summary>
+    /// <summary><c>{v:3, kind:'ui', name, args}</c>; only the declared ui actions.</summary>
     public static string Ui(string name, params JsonNode?[] args)
     {
         if (!UiActions.Contains(name)) throw new ArgumentException($"undeclared ui action '{name}'");
         var arr = new JsonArray();
         foreach (var a in args) arr.Add(a?.DeepClone());
         return new JsonObject { ["v"] = Version, ["kind"] = "ui", ["name"] = name, ["args"] = arr }.ToJsonString();
+    }
+
+    /// <summary><c>{v:3, kind:'prop-action-prepared', request_id, error?}</c> — the answer to a preparation request.</summary>
+    public static string PropActionPrepared(string requestId, string? error)
+    {
+        var msg = new JsonObject { ["v"] = Version, ["kind"] = "prop-action-prepared", ["request_id"] = requestId };
+        if (error is not null) msg["error"] = error;
+        return msg.ToJsonString();
     }
 
     /// <summary>

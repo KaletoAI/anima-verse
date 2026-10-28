@@ -419,6 +419,12 @@ public partial class HudOverlay : CanvasLayer
             case "action":
                 Dispatch(msg.Name!, msg.Args!);
                 break;
+            case "prop-action-prepare":
+                // No prop actions natively (excluded from the v3 cutover): fail fast instead of the HUD's 10 s timeout.
+                Send(HudProtocol.PropActionPrepared(msg.RequestId!, "Prop actions are not available in the native client"));
+                break;
+            case "prop-actions-changed":
+                break;
         }
     }
 

@@ -1101,7 +1101,8 @@ The browser HUD itself — `client3d/hud.html`, served by the Anima server at
   premultiplied, so the rect blends premultiplied. 3 s after the page loaded a
   log line `hud: transparency probe: … alpha=…` reports the painted alpha
   outside every HUD surface (0 = transparent) and inside the first one.
-- **Bridge**: protocol v1 of `client3d/src/hud/bridge.ts`, one JSON string per
+- **Bridge**: protocol v3 of `client3d/src/hud/bridge.ts` (no prop actions natively: a
+  `prop-action-prepare` is answered with an error, `prop-actions-changed` is ignored), one JSON string per
   message over gdCEF's JS binding (`window.godotMethods.hud_bridge(json)` →
   `HudOverlay.hud_bridge`, Godot's `js_emit("hud_bridge", json)` →
   `window.godotEvents`); the page picks `gdcefTransport` by `?bridge=gdcef`.
@@ -1182,7 +1183,7 @@ works the same way.
 | `Gltf/` | runtime GLB import (the Meshopt decode is in `Core/Gltf/`) |
 | `Figures/` | world-map characters: figures (fed by Main's poll, placed by the room ladder once a second), portrait sprite, fallback pool, clip library (import, pick, retarget), rest-pose correction |
 | `Ui/` | login screen (server, user, password), `LauncherStore` (`user://launcher.json`), `HudStorageStore` (`user://hud_storage.json`), the overview camera, the label overlay (`LabelOverlay.cs`: projection, order, the label CSS in `LabelStyle`), the performance probe (`PerfProbe.cs`) |
-| `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v1 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
+| `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v3 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |
 | `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); the water numbers are `Core/Water/` (the tile field `Core/Ground/WaterTileField.cs`), the water's fields ride on the terrain's near lattice (`Core/Terrain/TerrainField.cs`) |
 | `Scatter/` | (payload, sampler and LOD/undergrowth maths are in `Core/Scatter/`) prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
