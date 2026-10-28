@@ -198,7 +198,9 @@ public static class FidelityCheck
                    && ReferenceEquals(builder.Slots["loc-area"], area), string.Join(",", remounted));
             Expect("F7 new signature, open carried, new group on today's ground", hull2.Signature == "hull-2" && hull2.Open
                    && hull2.Group.IsInsideTree() && Math.Abs(hull2.Group.Position.Y - 10) < 1e-4, $"{hull2.Signature} {hull2.Group.Position}");
-            await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
+            // QueueFree lands at a frame end; under a loaded full --check that can be a frame or two later.
+            for (int f = 0; f < 5 && GodotObject.IsInstanceValid(hull.Group); f++)
+                await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
             Expect("F7 old group gone", !GodotObject.IsInstanceValid(hull.Group), "");
             var room2 = hull2.Placements.Single(r => r.Spec.Id == "r-hall");
             Near("F7 the moved diorama (anchor z −1)", ModelPlacement.Measure(room2.Node!, Transform3D.Identity).GetCenter().Z, -1);

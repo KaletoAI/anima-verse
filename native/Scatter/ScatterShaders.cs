@@ -116,6 +116,23 @@ void fragment() {{
     public static ShaderMaterial FromGltf(Material? src, double sway, double refH)
         => GltfMaterial(src, sway, refH, null);
 
+    private static readonly Dictionary<string, Shader> BakeCache = new();
+
+    /// <summary>The bake variant of the scatter shader (clip-space X/Y compensation for the frame's aspect), cached per
+    /// aspect and flags so a bake does not compile one shader per surface.</summary>
+    private static Shader BakeShader(double aspect, bool textured, bool alphaCut, bool cullOff)
+    {
+        string a = (Math.Max(1, aspect) / aspect).ToString("R", CultureInfo.InvariantCulture);
+        string b = Math.Max(1, aspect).ToString("R", CultureInfo.InvariantCulture);
+        string key = $"{a}|{b}|{textured}|{alphaCut}|{cullOff}";
+        if (BakeCache.TryGetValue(key, out var s)) return s;
+        s = new Shader { Code = Code(0, textured, false, alphaCut, cullOff)
+            .Replace("void vertex() {", "void vertex() {\n\tPOSITION = PROJECTION_MATRIX * MODELVIEW_MATRIX * vec4(VERTEX, 1.0);\n\tPOSITION.xy *= vec2("
+                + a + ", " + b + ");") };
+        BakeCache[key] = s;
+        return s;
+    }
+
     private static ShaderMaterial GltfMaterial(Material? src, double sway, double refH, double? bakeAspect)
     {
         using var std = src is BaseMaterial3D b ? Neutralize(b) : null;
@@ -123,10 +140,7 @@ void fragment() {{
         bool cullOff = std is { CullMode: BaseMaterial3D.CullModeEnum.Disabled };
         var tex = std?.AlbedoTexture;
         var shader = bakeAspect is double aspect
-            ? new Shader { Code = Code(0, tex is not null, false, alphaCut, cullOff)
-                .Replace("void vertex() {", "void vertex() {\n\tPOSITION = PROJECTION_MATRIX * MODELVIEW_MATRIX * vec4(VERTEX, 1.0);\n\tPOSITION.xy *= vec2("
-                    + (Math.Max(1, aspect) / aspect).ToString("R", CultureInfo.InvariantCulture) + ", "
-                    + Math.Max(1, aspect).ToString("R", CultureInfo.InvariantCulture) + ");") }
+            ? BakeShader(aspect, tex is not null, alphaCut, cullOff)
             : Get(Amp(sway), tex is not null, false, alphaCut, cullOff);
         var m = new ShaderMaterial { Shader = shader };
         if (bakeAspect is null) World.HemiUniforms.Bind(m);
@@ -160,9 +174,16 @@ void fragment() {{
 
     /// <summary>Task 38 (E4-T3): sRGB input, opaque alpha scissor, +Z front face. Orientation lives in the LOD
     /// instance matrices, never in a per-frame billboard shader. StageAmbience uses linear tonemapping/exposure 1.</summary>
+    private static Shader? _impostorShader;
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Texture2D, ShaderMaterial> ImpostorMaterials = new();
+
+    /// <summary>The billboard material of one bake: ONE shader for every billboard and one material per baked texture,
+    /// shared by all entries leasing that URL. A shader per call compiled hundreds of shaders on every scatter rebuild
+    /// (136–212 ms main-thread applies, multi-second first-use hitches on the 2026-10-28 bench).</summary>
     public static ShaderMaterial Impostor(Texture2D texture)
-    {
-        var m = new ShaderMaterial { Shader = new Shader { Code = @"shader_type spatial;
+        => ImpostorMaterials.GetValue(texture, t =>
+        {
+            _impostorShader ??= new Shader { Code = @"shader_type spatial;
 render_mode unshaded, cull_back, depth_draw_opaque, shadows_disabled;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap, repeat_disable;
 void fragment() {
@@ -170,10 +191,11 @@ void fragment() {
     ALBEDO = c.rgb;
     ALPHA = c.a;
     ALPHA_SCISSOR_THRESHOLD = 0.5;
-}" } };
-        m.SetShaderParameter("albedo_tex", texture);
-        return m;
-    }
+}" };
+            var m = new ShaderMaterial { Shader = _impostorShader };
+            m.SetShaderParameter("albedo_tex", t);
+            return m;
+        });
 
     /// <summary><c>undergrowthMaterial</c>: blade texture, colour × 0.75 × the tint maximum, alpha cut 0.35,
     /// front side, per-instance colour, wind referenced to the mean tuft height.</summary>
