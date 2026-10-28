@@ -114,19 +114,64 @@ void fragment() {{
 
     /// <summary>A loaded prop's own material (a CLONE in the browser) with the wind on top.</summary>
     public static ShaderMaterial FromGltf(Material? src, double sway, double refH)
+        => GltfMaterial(src, sway, refH, null);
+
+    private static ShaderMaterial GltfMaterial(Material? src, double sway, double refH, double? bakeAspect)
     {
-        var std = src as BaseMaterial3D;
+        using var std = src is BaseMaterial3D b ? Neutralize(b) : null;
         bool alphaCut = std is { Transparency: BaseMaterial3D.TransparencyEnum.AlphaScissor };
         bool cullOff = std is { CullMode: BaseMaterial3D.CullModeEnum.Disabled };
         var tex = std?.AlbedoTexture;
-        var m = new ShaderMaterial { Shader = Get(Amp(sway), tex is not null, false, alphaCut, cullOff) };
-        World.HemiUniforms.Bind(m);
+        var shader = bakeAspect is double aspect
+            ? new Shader { Code = Code(0, tex is not null, false, alphaCut, cullOff)
+                .Replace("void vertex() {", "void vertex() {\n\tPOSITION = PROJECTION_MATRIX * MODELVIEW_MATRIX * vec4(VERTEX, 1.0);\n\tPOSITION.xy *= vec2("
+                    + (Math.Max(1, aspect) / aspect).ToString("R", CultureInfo.InvariantCulture) + ", "
+                    + Math.Max(1, aspect).ToString("R", CultureInfo.InvariantCulture) + ");") }
+            : Get(Amp(sway), tex is not null, false, alphaCut, cullOff);
+        var m = new ShaderMaterial { Shader = shader };
+        if (bakeAspect is null) World.HemiUniforms.Bind(m);
         m.SetShaderParameter("albedo_color", std?.AlbedoColor ?? Colors.White);
         if (tex is not null) m.SetShaderParameter("albedo_tex", tex);
         m.SetShaderParameter("roughness_v", std?.Roughness ?? 1f);
         m.SetShaderParameter("metallic_v", std?.Metallic ?? 0f);
         m.SetShaderParameter("sway_ref", (float)(refH > 0 ? refH : 1));
         if (alphaCut) m.SetShaderParameter("alpha_cut", std!.AlphaScissorThreshold);
+        return m;
+    }
+
+    /// <summary>Task 38 (E4-T3), D7: clone before neutralizing. Only an untextured metallic factor strictly above
+    /// 0.5 is zeroed; source textures and factors on authored metal remain owned by the imported material.</summary>
+    public static BaseMaterial3D Neutralize(BaseMaterial3D src)
+    {
+        var copy = (BaseMaterial3D)src.Duplicate();
+        if (copy.MetallicTexture is null && copy.Metallic > 0.5f) copy.Metallic = 0;
+        return copy;
+    }
+
+    /// <summary>Task 38 (E4-T3): the same material as the native scatter, with no wind or live hemisphere binding.
+    /// A square Camera3D frustum conservatively encloses the frame; adjusting clip X/Y preserves the browser's rectangular
+    /// orthographic frame exactly in a 128² texture, without stretching geometry, normals or light directions.</summary>
+    public static ShaderMaterial ForImpostorBake(Material? src, double aspect, Vector3 hemi)
+    {
+        var m = GltfMaterial(src, 0, 1, aspect);
+        m.SetShaderParameter("av_hemi", hemi);
+        return m;
+    }
+
+    /// <summary>Task 38 (E4-T3): sRGB input, opaque alpha scissor, +Z front face. Orientation lives in the LOD
+    /// instance matrices, never in a per-frame billboard shader. StageAmbience uses linear tonemapping/exposure 1.</summary>
+    public static ShaderMaterial Impostor(Texture2D texture)
+    {
+        var m = new ShaderMaterial { Shader = new Shader { Code = @"shader_type spatial;
+render_mode unshaded, cull_back, depth_draw_opaque, shadows_disabled;
+uniform sampler2D albedo_tex : source_color, filter_linear_mipmap, repeat_disable;
+void fragment() {
+    vec4 c = texture(albedo_tex, UV);
+    ALBEDO = c.rgb;
+    ALPHA = c.a;
+    ALPHA_SCISSOR_THRESHOLD = 0.5;
+}" } };
+        m.SetShaderParameter("albedo_tex", texture);
         return m;
     }
 

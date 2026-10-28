@@ -11,9 +11,9 @@ public readonly record struct ScatterViewCone(double FwdX, double FwdZ, double C
 /// <summary>
 /// Port of <c>client3d/src/scene/scatterLod.ts</c> — the per-instance LOD of the scatter and the
 /// undergrowth constants, with its DEFAULT config (<c>SCATTER_LOD_DEFAULTS</c> = 35 / 45 / 120 m).
-/// The impostor half (beyond the cull line) is not ported, see <c>ScatterField</c>.
+/// Task 38 (E4-T3) adds the vectored impostor half beyond the mesh cull line.
 /// </summary>
-public static class ScatterLod
+public static partial class ScatterLod
 {
     public const double TierNear = 35, TierFar = 45, CullFar = 120;
     public const double MinShare = 0.25;

@@ -40,8 +40,8 @@ public readonly record struct LayerCounts(int Meshes, int Instances, long Triang
 /// old props keep drawing until the new ones stand. The boot's first build (<see cref="SetTerrain"/> with
 /// <c>inline: true</c>) runs the very same <see cref="SampleWindow"/> inline — before the first picture.
 ///
-/// NOT ported (each named in the S3 report with the side it favours): the impostor billboards beyond the
-/// cull line (<c>impostors.ts</c> — Godot draws LESS than the browser beyond 120 m); the along/edge/center
+/// Task 38 (E4-T3): billboards beyond the cull line run FIRST in each LOD pass (ScatterField.Impostors.cs).
+/// NOT ported (each named in the S3 report with the side it favours): the along/edge/center
 /// rows (<c>strokeStations</c>, <c>scatterEdgeInstances</c>, <c>scatterCenterInstance</c> — skipped and
 /// counted); the <c>aligned</c> yaw's surface axis (the angle alone is used; position and count are
 /// unaffected).
@@ -142,17 +142,25 @@ public partial class ScatterField : Node3D
         public string WantLow = "", WantHigh = "", ShownLow = "", ShownHigh = "";
         public int LowTris = 10, HighTris;
         public int LowN, HighN;
+        /// <summary>Task 38 (E4-T3): one held bake and one upright quad buffer per (row, variant), independent of mesh hiding.</summary>
+        public ImpostorBake? Bake;
+        public MultiMesh? Impostor;
+        public MultiMeshInstance3D? ImpostorNode;
+        public float[]? ImpostorBuf;
+        public int ImpostorN;
     }
 
     public IEnumerable<Prop> Props => _areas.SelectMany(a => a.Props);
 
-    public ScatterField(IWorldSource source, WorldHeight height, Action<string> log)
+    public ScatterField(IWorldSource source, WorldHeight height, Action<string> log, IImpostorSource? impostors = null)
     {
         Name = "Scatter";
         _source = source;
         _height = height;
         _log = log;
         _build = new Coalescer(BuildOnceAsync);
+        _impostors = impostors ?? new ImpostorBaker(source, log);
+        if (_impostors is ImpostorBaker baker) AddChild(baker);
     }
 
     /// <summary>
@@ -329,6 +337,7 @@ public partial class ScatterField : Node3D
         foreach (var p in props)
         {
             p.Disposed = true;
+            DropImpostor(p);
             p.LowNode.QueueFree();
             p.HighNode?.QueueFree();
         }
@@ -589,9 +598,10 @@ public partial class ScatterField : Node3D
             foreach (var p in a.Props) BinProp(p, _lodCam.Value);
     }
 
-    /// <summary><c>binProp</c> without the impostor half.</summary>
+    /// <summary>Task 38 (E4-T3): <c>binImpostors</c> precedes even the entry-wide mesh sphere early return.</summary>
     private void BinProp(Prop p, (double X, double Y, double Z) cam)
     {
+        BinImpostors(p, cam);
         var cfg = _cfg;
         double cdx = cam.X - p.SphereCenter.X, cdy = cam.Y - p.SphereCenter.Y, cdz = cam.Z - p.SphereCenter.Z;
         if (Math.Sqrt(cdx * cdx + cdy * cdy + cdz * cdz) - p.SphereRadius > cfg.CullM)
@@ -783,6 +793,7 @@ public partial class ScatterField : Node3D
             baseN += p.BaseCount;
             if (p.LowN > 0) { meshes++; inst += p.LowN; tris += (long)p.LowN * p.LowTris; }
             if (p.HighN > 0) { meshes++; inst += p.HighN; tris += (long)p.HighN * p.HighTris; }
+            if (p.ImpostorN > 0) { meshes++; inst += p.ImpostorN; tris += (long)p.ImpostorN * 2; }
         }
         return new LayerCounts(meshes, inst, tris, baseN);
     }

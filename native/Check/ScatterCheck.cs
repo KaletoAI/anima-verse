@@ -39,6 +39,7 @@ public static class ScatterCheck
     public static async Task<string> RunAsync(Node3D world, FixtureSource source, WorldHeight height, string dir)
     {
         await CheckParseThreads(source);
+        await ImpostorCheck.RunAsync(world, source, height);
         using var refDoc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "scatter_reference.json")));
         var root = refDoc.RootElement;
         int cases = CheckCases(root);
