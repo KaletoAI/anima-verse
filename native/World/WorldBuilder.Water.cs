@@ -78,25 +78,21 @@ public sealed partial class WorldBuilder
     }
 
     /// <summary>
-    /// A world prop's water (<c>redrapeOne</c> + <c>ghostLevelOf</c>): its sheets at <c>region.y + ground(x, z)</c> in the
-    /// world frame, its ghost at its bottom over the raster at (x, z).
+    /// Task 40: publish the live layer's sheets/ghosts to bench switches and all authored water regions to
+    /// movement queries (culled rows still answer waterAt), replacing the boot-only water ledger.
     /// </summary>
-    private void PlaceWorldPropWater(SceneModelSpec spec, Node3D? node, Node3D group, Water.WaterRaster? raster)
+    private void SyncWorldPropWater()
     {
-        var sheets = spec.Water.Length > 0
-            ? PropWaterSheets.Build(spec.Water, group, Height!.GroundAt(spec.AnchorX, spec.AnchorZ))
-            : new List<MeshInstance3D>();
-        SubmergedGhost? ghost = null;
-        if (node is not null && WaterGates.PlacementGhostCut(raster, spec.AnchorX, spec.AnchorZ, spec.BottomY) is { } level)
+        if (WorldProps is null) return;
+        WorldPropWater.Clear();
+        lock (_worldPropWaterSpecs)
         {
-            ghost = new SubmergedGhost(node);
-            ghost.Set(level);
-        }
-        lock (_waterCounts)
-        {
-            _waterCounts.Sheets += sheets.Count;
-            if (ghost is not null) _waterCounts.Ghosts++;
-            if (sheets.Count > 0 || ghost is not null) WorldPropWater.Add((spec, node, sheets, ghost));
+            _worldPropWaterSpecs.Clear();
+            foreach (var r in WorldProps.Records.Values)
+            {
+                if (r.Spec.Water.Length > 0) _worldPropWaterSpecs.Add(r.Spec);
+                if (r.Sheets.Count > 0 || r.Ghost is not null) WorldPropWater.Add((r.Spec, r.Node, r.Sheets, r.Ghost));
+            }
         }
     }
 
@@ -104,7 +100,7 @@ public sealed partial class WorldBuilder
     private readonly WaterCounts _waterCounts = new();
 
     /// <summary>Prop water sheets made and placement ghosts created so far (the stats line and the check).</summary>
-    public (int Sheets, int Ghosts) WaterParts { get { lock (_waterCounts) return (_waterCounts.Sheets, _waterCounts.Ghosts); } }
+    public (int Sheets, int Ghosts) WaterParts { get { lock (_waterCounts) return (_waterCounts.Sheets + WorldPropWater.Sum(r => r.Sheets.Count), _waterCounts.Ghosts + WorldPropWater.Count(r => r.Ghost is not null)); } }
 
     /// <summary>The world props that carry water regions (worldProps.ts <c>waterAt</c> reads every row, culled or not).</summary>
     private readonly List<SceneModelSpec> _worldPropWaterSpecs = new();

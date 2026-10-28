@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using AnimaNative.Bench;
 using AnimaNative.Scene;
@@ -68,6 +69,7 @@ public static class MatrixCheck
             built = builder;
             await builder.BuildAsync(world, "Lamp House");
             await Task.WhenAll(builder.SlotLoads);
+            await WorldPropWaterSwitch(builder);
             // Night at the room: the pool lights its lamps; a first mirror pass is granted (the props check's P3 / P4 path).
             var focus = builder.Slots["loc-room"].Group.Position + new Vector3(1, 1.5f, -8);
             camera.Position = focus + new Vector3(0, 0, 3);
@@ -86,7 +88,9 @@ public static class MatrixCheck
             var spec = new SceneModelSpec("prop", "ghost", "ghost", false, new Dictionary<string, string>(), null, 0, 0, 0, 0, 0, 1,
                                           "", null, 0, 0, 0);
             builder.WorldPropWater.Add((spec, ghostRoot, new List<MeshInstance3D> { sheet }, ghost));
-            var ctx = new BenchSwitchContext { Stage = stage, Fog = fog, Backdrop = () => backdrop, Builder = builder, Gate = gate };
+            var scatter = new Scatter.ScatterLayer(source, builder.Height!, () => Vector3.Zero, _ => { });
+            root.AddChild(scatter);
+            var ctx = new BenchSwitchContext { Scatter = scatter, Stage = stage, Fog = fog, Backdrop = () => backdrop, Builder = builder, Gate = gate };
             fog.UseCompute = true;   // Main's default (Task 26c); headless the screen pass stays all the same
             fog.Decide();
             stage.Track(focus, 40);
@@ -124,6 +128,36 @@ public static class MatrixCheck
             built?.Models?.FreeAll();
             root.QueueFree();
         }
+    }
+
+    /// <summary>Task 40 review regression: an extras pass survives ticks, redrape and new sheets;
+    /// restoring it uses the current tier, including a prop culled during the pass.</summary>
+    private static async Task WorldPropWaterSwitch(WorldBuilder builder)
+    {
+        var map = JsonNode.Parse(builder.FirstMap!.Value.GetRawText())!.AsObject();
+        var row = map["world_props"]![0]!.AsObject();
+        row["water"] = JsonNode.Parse("""{"regions":[{"outline":[[0,0],[2,0],[2,2],[0,2]],"y":1,"tint":"#337799","opacity":0.5}]}""");
+        map["world_props_sig"] = "matrix-water";
+        var props = builder.WorldProps!;
+        props.SyncWorldMap(JsonSerializer.SerializeToElement(map));
+        var r = props.Records.Values.Single();
+        var near = new Vector3((float)r.Spec.AnchorX, 0, (float)r.Spec.AnchorZ);
+        await props.TickAsync(near);
+        var sw = BenchSwitches.Apply("no-water-extras", new BenchSwitchContext { Builder = builder });
+        try
+        {
+            await props.TickAsync(near); props.Redrape();
+            Expect("M1 world-prop water stays suppressed on tick/redrape", !r.Sheets[0].Visible, "sheet reappeared during extras pass");
+            row["water"]!["regions"]![0]!["y"] = 2; map["world_props_sig"] = "matrix-water-new";
+            props.SyncWorldMap(JsonSerializer.SerializeToElement(map));
+            Expect("M1 newly replaced sheets stay suppressed", !r.Sheets[0].Visible, "new sheet appeared");
+            await props.TickAsync(near + new Vector3(1000, 0, 0));
+        }
+        finally { sw.Restore(); }
+        Expect("M2 restore respects current culled tier", !r.Sheets[0].Visible, "restore showed a culled sheet");
+        await props.TickAsync(near);
+        Expect("M2 restoring extras allows water at visible tier", r.Sheets[0].Visible, "sheet stayed hidden");
+        props.SyncWorldMap(builder.FirstMap.Value);
     }
 
     private static void Effect(string variant, BenchSwitch sw, BenchSwitchContext c, List<CutHandle.Entry> cuts, Camera3D camera)
@@ -182,6 +216,18 @@ public static class MatrixCheck
                 Expect("M3 fog-pass headless: n/a, the screen pass fogs the main view", !sw.Applied && fog.PassInMainView
                        && !fog.ComputeActive && fog.Compute is { Available: false }, sw.Detail);
                 break;
+            case "no-scatter":
+                Expect("M1 no-scatter: subtree hidden and suspended", sw.Applied && !c.Scatter!.Visible
+                    && c.Scatter.ProcessMode == Node.ProcessModeEnum.Disabled, sw.Detail);
+                break;
+            case "no-undergrowth":
+                Expect("M1 no-undergrowth: authored field stays visible", sw.Applied && !c.Scatter!.Undergrowth.Visible
+                    && c.Scatter.Field.Visible && c.Scatter.Undergrowth.ProcessMode == Node.ProcessModeEnum.Disabled, sw.Detail);
+                break;
+            case "no-impostors":
+                Expect("M1 no-impostors: gate persists across bins", sw.Applied && !c.Scatter!.Field.ImpostorsEnabled
+                    && c.Scatter.Field.Visible && c.Scatter.Undergrowth.Visible, sw.Detail);
+                break;
             case "no-figures":
                 // The props world carries no figure manager: the pass runs and says so (the offline world switches 15 figures).
                 Expect("M1 no-figures without figures: n/a, said so", !sw.Applied && sw.Detail == "no figure manager", sw.Detail);
@@ -215,6 +261,8 @@ public static class MatrixCheck
             b.Mirrors!.Suspended, b.PropLights!.Visible, CutMaterials.Plain,
             string.Join(",", cuts.Select(e => e.Mesh.GetSurfaceOverrideMaterial(e.Surface)?.GetInstanceId())),
             b.Terrain!.PixelScaleFactor,
+            c.Scatter!.Visible, c.Scatter.ProcessMode, c.Scatter.Undergrowth.Visible,
+            c.Scatter.Undergrowth.ProcessMode, c.Scatter.Field.ImpostorsEnabled,
         }.Select(o => o?.ToString() ?? "null"));
     }
 

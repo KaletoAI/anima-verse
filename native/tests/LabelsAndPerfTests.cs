@@ -108,6 +108,17 @@ public class PerfStatsTests
         Assert.Equal(34, w.Push(66));
     }
 
+    /// <summary>Task 40: measured stage costs and LOD time must reach the same HUD keys without zeroing.</summary>
+    [Fact]
+    public void ReadoutPreservesMeasuredScatterSplit()
+    {
+        var json = PerfReadout.ToJson(new PerfSample(60, 20, 100, 4, 10, 0, 0, 0, 0, 1.25,
+            new ScatterCost(2, 7, 70), new ScatterCost(1, 3, 6)));
+        Assert.Equal("{\"mesh\":{\"calls\":2,\"instances\":7,\"triangles\":70},\"impostor\":{\"calls\":1,\"instances\":3,\"triangles\":6}}",
+            json["scatter"]!.ToJsonString());
+        Assert.Equal(1.25, (double)json["scatterLodMs"]!);
+    }
+
     [Fact]
     public void ReadoutHasEveryPerfStatsKey()
     {

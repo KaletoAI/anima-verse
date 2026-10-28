@@ -250,7 +250,7 @@ public sealed partial class WorldBuilder
     /// <summary>Keyframe 0 of the bench path, relative to the anchor: where the static tiers are measured from.</summary>
     public static readonly Vector3 StartCameraOffset = new(0, 24, 40);
     /// <summary><c>WORLD_PROP_LOD_SCALE</c> (worldProps.ts): landmarks keep their tiers 3× as far as scatter.</summary>
-    public const double WorldPropLodScale = 3;
+    public const double WorldPropLodScale = WorldPropMath.LodScale;
 
     private readonly IWorldSource _source;
     private readonly Action<string> _log;
@@ -1203,51 +1203,22 @@ public sealed partial class WorldBuilder
     /// </summary>
     private async Task BuildWorldProps(Node3D root, JsonElement map, WorldHeight height, WorldStats stats, Vector3 camera)
     {
-        var group = new Node3D { Name = "WorldProps" };
-        root.AddChild(group);
-        var cfg = new Scatter.ScatterLodCfg(Scatter.ScatterLod.TierNear * WorldPropLodScale,
-                                            Scatter.ScatterLod.TierFar * WorldPropLodScale,
-                                            Scatter.ScatterLod.CullFar * WorldPropLodScale);
-        var models = new ModelStats();
-        var jobs = new List<Task>();
-        var raster = height.WaterRaster();
-        foreach (var wp in Json.Arr(map, "world_props"))
-        {
-            if (wp.ValueKind != JsonValueKind.Object || Json.Str(wp, "id").Length == 0) continue;
-            if (Json.NumOrNull(wp, "x") is not double x || Json.NumOrNull(wp, "z") is not double z) continue;
-            stats.WorldPropRows++;
-            double bottom = height.GroundAt(x, z) + Json.Num(wp, "offset_y") + Json.Num(wp, "ground_offset_m");
-            var spec = WorldPropSpec(wp, x, z, bottom);
-            if (spec.Water.Length > 0) lock (_worldPropWaterSpecs) _worldPropWaterSpecs.Add(spec);   // worldProps.waterAt reads every row
-            // worldProps.ts redrapeOne: a row's light is registered whatever its tier (a culled landmark still lights),
-            // at (x + offset x, bottom + height, z + offset z) in world metres.
-            if (spec.Light is { } light && PropLights is { } pool)
-                pool.Register(light, new Vector3((float)(x + light.Offset.X), (float)(bottom + light.HeightM), (float)(z + light.Offset.Z)), "");
-            double d = Math.Sqrt((x - camera.X) * (x - camera.X) + (z - camera.Z) * (z - camera.Z));
-            byte tier = Scatter.ScatterLod.InstanceTier(d, 1, cfg);
-            if (tier == 2) { models.Culled++; continue; }
-            jobs.Add(PlaceWorldProp(spec, tier == 0 ? "full" : "low", group, models, raster));
-        }
-        await Task.WhenAll(jobs);
-        lock (stats) Merge(stats.Models, models);
+        WorldProps = new WorldPropsLayer(_models, height, PropLights, _log);
+        root.AddChild(WorldProps);
+        WorldProps.WaterChanged += SyncWorldPropWater;
+        WorldProps.SyncWorldMap(map);
+        await WorldProps.TickAsync(camera);
+        stats.WorldPropRows = WorldProps.Records.Count;
+        WorldProps.Stats.Culled = WorldProps.Records.Values.Count(r => r.Tier == 2);
+        lock (stats) Merge(stats.Models, WorldProps.Stats);
     }
 
-    /// <summary>One world prop placed, then its water (sheets, ghost) — <c>mount</c> + <c>redrapeOne</c>.</summary>
-    private async Task PlaceWorldProp(SceneModelSpec spec, string tier, Node3D group, ModelStats models, Water.WaterRaster? raster)
-    {
-        var node = await SceneModels.PlaceAsync(_models, spec, tier, "world", group, 0, models, null);
-        PlaceWorldPropWater(spec, node, group, raster);
-    }
+    /// <summary>Task 40: the sole runtime path replacing the static boot-only world props.</summary>
+    public WorldPropsLayer? WorldProps { get; private set; }
 
     /// <summary><c>worldPropSceneSpec</c>: role prop, measure fixed to xyz, max_m || 1, anchor (x, z) in world metres.</summary>
     public static SceneModelSpec WorldPropSpec(JsonElement wp, double x, double z, double bottom)
     {
-        var parsed = ScenePayload.ParseModel(wp);
-        return parsed with
-        {
-            Role = "prop", Id = Json.Str(wp, "prop_id"), Measure = "xyz",
-            MaxM = Js.Or(Json.Num(wp, "max_m"), 1),
-            AnchorX = x, AnchorZ = z, BottomY = bottom, SizeM = null,
-        };
+        return WorldPropMath.SceneSpec(wp, bottom) with { AnchorX = x, AnchorZ = z };
     }
 }

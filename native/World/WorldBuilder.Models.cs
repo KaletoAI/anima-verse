@@ -59,7 +59,8 @@ public sealed partial class WorldBuilder
     {
         var result = new ModelTickResult();
         bool heightMoved = Height is not null && Height.Revision != _heightRevision;
-        if (heightMoved) _heightRevision = Height!.Revision;
+        if (heightMoved) { _heightRevision = Height!.Revision; WorldProps?.Redrape(); }
+        if (WorldProps is { } props) _ = props.TickAsync(camera);
         foreach (var slot in _slots.Values.ToList())
         {
             if (!GodotObject.IsInstanceValid(slot.Group)) continue;

@@ -84,9 +84,8 @@ public partial class Main : Node3D
 
     /// <summary>
     /// <c>applyScatterPrefs(prefs)</c> from the HUD's menu: checked again here (<see cref="ScatterPrefs.Check"/> — a
-    /// malformed message must not invert the band), then the scatter LOD of the standing scatter layer. The
-    /// undergrowth keeps its own fixed distances (ground.ts leaves it alone too); the world props' tiers are set
-    /// once at build in this client (no live prop LOD yet), so they are not touched.
+    /// malformed message must not invert the band), then both scatter and world-prop LOD (Task 40).
+    /// Undergrowth keeps its fixed distances, as in ground.ts.
     /// </summary>
     private void ApplyScatterPrefs(JsonArray args)
     {
@@ -102,9 +101,9 @@ public partial class Main : Node3D
             return;
         }
         _scatterPrefs = prefs;
-        _scatter?.Field.SetLod(ScatterPrefs.LodCfgOf(prefs));
+        Scatter.ScatterDetail.Apply(ScatterPrefs.LodCfgOf(prefs), _scatter?.Field, _builder?.WorldProps);
         Log($"scatter detail distances {prefs.ScatterNearM}/{prefs.ScatterFarM}/{prefs.ScatterCullM} m"
-            + (_scatter is null ? " (kept for a scatter layer; none is drawn without --scatter)" : " applied"));
+            + (_scatter is null ? " applied to world props (scatter is disabled)" : " applied to scatter and world props"));
     }
 
     /// <summary>

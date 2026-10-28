@@ -41,6 +41,8 @@ public partial class ScatterLayer : Node3D
     private double _sinceTick = double.PositiveInfinity, _sinceLod = double.PositiveInfinity, _sinceLog;
     private Vector3 _lodPos = new(float.NaN, float.NaN, float.NaN);
     private double _lodYaw = double.NaN;
+    /// <summary>Task 40 D13: elapsed wall time of the latest complete scatter + undergrowth LOD pass, ms.</summary>
+    public double LastLodMs { get; private set; }
     public int LodPasses { get; private set; }
 
     public ScatterLayer(IWorldSource source, WorldHeight height, Func<Vector3> anchor, Action<string> log)
@@ -152,7 +154,7 @@ public partial class ScatterLayer : Node3D
             RunLod(cam);
             var a = _anchor();
             Field.SetAnchor(a.X, a.Z);
-            Undergrowth.SetAnchor(a.X, a.Z);
+            if (Undergrowth.ProcessMode != ProcessModeEnum.Disabled) Undergrowth.SetAnchor(a.X, a.Z);
         }
         else if (_sinceLod >= LodMinS)
         {
@@ -175,8 +177,10 @@ public partial class ScatterLayer : Node3D
         var fwd = -cam.GlobalTransform.Basis.Z;
         var size = GetViewport().GetVisibleRect().Size;
         double aspect = size.Y > 0 ? size.X / size.Y : 16.0 / 9.0;
+        long lodStart = System.Diagnostics.Stopwatch.GetTimestamp();
         Field.Tick(p.X, p.Y, p.Z, fwd.X, fwd.Z, cam.Fov, aspect);
-        Undergrowth.Tick(p.X, p.Y, p.Z);
+        if (Undergrowth.ProcessMode != ProcessModeEnum.Disabled) Undergrowth.Tick(p.X, p.Y, p.Z);
+        LastLodMs = System.Diagnostics.Stopwatch.GetElapsedTime(lodStart).TotalMilliseconds;
         _sinceLod = 0;
         _lodPos = p;
         _lodYaw = Math.Atan2(fwd.X, fwd.Z);

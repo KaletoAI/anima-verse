@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Godot;
 
 namespace AnimaNative.Scatter;
@@ -9,9 +10,23 @@ public partial class ScatterField
 {
     private readonly IImpostorSource _impostors;
     private QuadMesh? _impostorQuad;
+    private bool _impostorsEnabled = true;
+    /// <summary>Task 40: matrix switch, persistent across LOD ticks and newly sampled entries; restore re-bins immediately.</summary>
+    public bool ImpostorsEnabled
+    {
+        get => _impostorsEnabled;
+        set
+        {
+            _impostorsEnabled = value;
+            foreach (var p in Props.Concat(_retiring))
+                if (!value) HideImpostor(p);
+                else if (_lodCam is { } cam) BinImpostors(p, cam);
+        }
+    }
 
     private void BinImpostors(Prop p, (double X, double Y, double Z) cam)
     {
+        if (!_impostorsEnabled) { HideImpostor(p); return; }
         if (p.LoUrl.Length == 0) return;
         double dx = cam.X - p.SphereCenter.X, dy = cam.Y - p.SphereCenter.Y, dz = cam.Z - p.SphereCenter.Z;
         double distance = Math.Sqrt(dx * dx + dy * dy + dz * dz);

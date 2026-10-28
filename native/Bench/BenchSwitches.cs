@@ -14,6 +14,7 @@ public sealed class BenchSwitchContext
     public DistanceFog? Fog { get; init; }
     public Func<WorldBackdrop?>? Backdrop { get; init; }
     public WorldBuilder? Builder { get; init; }
+    public Scatter.ScatterLayer? Scatter { get; init; }
     public FigureManager? Figures { get; init; }
     /// <summary>The browser's shadow-caster box (Task 26c).</summary>
     public ShadowCasterGate? Gate { get; init; }
@@ -50,8 +51,29 @@ public static class BenchSwitches
         "shadow-atlas-2048" => Atlas2048(),
         "fog-pass" => FogPass(c),
         "no-figures" => NoFigures(c),
+        "no-scatter" => HideScatter("no-scatter", c.Scatter),
+        "no-undergrowth" => HideScatter("no-undergrowth", c.Scatter?.Undergrowth),
+        "no-impostors" => NoImpostors(c),
         _ => throw new ArgumentException($"bench matrix: no switch for variant '{variant}'"),
     };
+
+    /// <summary>Task 40: hide the live subtree; inherited processing is suspended and restore preserves prior state.</summary>
+    private static BenchSwitch HideScatter(string variant, Node3D? node)
+    {
+        if (node is null || !GodotObject.IsInstanceValid(node)) return new(variant, false, "no scatter layer", Nothing);
+        bool visible = node.Visible;
+        var process = node.ProcessMode;
+        node.Visible = false;
+        node.ProcessMode = Node.ProcessModeEnum.Disabled;
+        return new(variant, visible, "scatter subtree hidden and suspended", () => { node.Visible = visible; node.ProcessMode = process; });
+    }
+    private static BenchSwitch NoImpostors(BenchSwitchContext c)
+    {
+        if (c.Scatter?.Field is not { } field) return new("no-impostors", false, "no scatter layer", Nothing);
+        bool was = field.ImpostorsEnabled;
+        field.ImpostorsEnabled = false;
+        return new("no-impostors", was, "billboards hidden; binning gated", () => field.ImpostorsEnabled = was);
+    }
 
     private static BenchSwitch NoShadow(BenchSwitchContext c)
     {
@@ -151,6 +173,14 @@ public static class BenchSwitches
             wf.Visible = false;
             falls = wf.Falls.Count;
             restore.Add(() => wf.Visible = was);
+        }
+        // Task 40: runtime world-prop sheets own their tier; suppression must also cover future sheets.
+        if (c.Builder?.WorldProps is { } props)
+        {
+            bool was = props.WaterSuppressed;
+            sheets += props.Records.Values.Sum(r => r.Sheets.Count(s => s.Visible));
+            props.WaterSuppressed = true;
+            restore.Add(() => props.WaterSuppressed = was);
         }
         foreach (var sheet in AllSheets(c))
         {

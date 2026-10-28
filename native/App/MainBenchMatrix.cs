@@ -37,6 +37,7 @@ public partial class Main : Node3D
             Backdrop = () => _backdrop,
             Builder = builder,
             Figures = _figures,
+            Scatter = _scatter,
             Gate = _shadowGate,
         };
         double minutes = variants.Count * (settings.Warmup + settings.Duration) / 60;

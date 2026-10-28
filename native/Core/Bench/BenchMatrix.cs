@@ -46,6 +46,9 @@ public static class BenchMatrix
         new("shadow-atlas-2048", "the directional shadow atlas 4096 -> 2048 px (texel twice as large)"),
         new("fog-pass", "the distance fog as the screen-texture pass (the fallback, --fog=pass) instead of the compute pass (the default)"),
         new("no-figures", "every figure hidden and its frame tick stopped (no walking, no clip advance, no skinning, nothing drawn)"),
+        new("no-scatter", "authored meshes, impostors and undergrowth hidden; their frame ticks stopped"),
+        new("no-undergrowth", "undergrowth hidden and its frame tick stopped"),
+        new("no-impostors", "far billboards hidden and their LOD binning gated"),
     };
 
     public static BenchVariant? Find(string name) => Variants.FirstOrDefault(v => v.Name == name);

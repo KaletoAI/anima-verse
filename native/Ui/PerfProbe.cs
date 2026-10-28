@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using AnimaNative.Overview;
+using AnimaNative.Scatter;
 using Godot;
 
 namespace AnimaNative.Ui;
@@ -20,7 +21,7 @@ namespace AnimaNative.Ui;
 ///     (an invisible node drops its subtree) the vertex count of its mesh, once per node (a MultiMesh counts its
 ///     mesh once, like three's <c>InstancedMesh</c>).
 /// Not known natively, sent as 0: <c>geometries</c>/<c>textures</c> (Godot reports bytes, not counts), the model tier
-/// split, the scatter split and its LOD-pass time, the movement-sync counters.
+/// split and the movement-sync counters. Task 40 measures the scatter split and LOD-pass time.
 /// </summary>
 public sealed class PerfProbe
 {
@@ -29,6 +30,7 @@ public sealed class PerfProbe
     private bool _measuring;
     private double _sinceHeavyMs = double.PositiveInfinity, _sincePublishMs;
     private long _vertices;
+    private ScatterCost _mesh, _impostor;
 
     /// <summary>
     /// One frame. Returns the readout to publish (every <see cref="PerfReadout.PublishMs"/>) or null.
@@ -57,6 +59,7 @@ public sealed class PerfProbe
         {
             _sinceHeavyMs = 0;
             _vertices = root is not null && GodotObject.IsInstanceValid(root) ? VisibleVertices(root) : 0;
+            (_mesh, _impostor) = root is not null && GodotObject.IsInstanceValid(root) ? ScatterSnapshot(root) : default;
         }
         if (_sincePublishMs < PerfReadout.PublishMs) return null;
         _sincePublishMs = 0;
@@ -64,7 +67,49 @@ public sealed class PerfProbe
             _fps.Fps, _worst.WorstFrameMs,
             (long)Performance.GetMonitor(Performance.Monitor.RenderTotalPrimitivesInFrame),
             (long)Performance.GetMonitor(Performance.Monitor.RenderTotalDrawCallsInFrame),
-            _vertices, 0, 0, 0, 0, 0));
+            _vertices, 0, 0, 0, 0, root is not null ? LodTime(root) : 0, _mesh, _impostor));
+    }
+
+    /// <summary>Task 40 D13: perfstats.ts scatterCosts over debugParts.scatter (authored scatter only); hidden ancestors
+    /// suppress a stage, zero instances suppress a draw, indexed and nonindexed meshes use their actual geometry.</summary>
+    public static (ScatterCost Mesh, ScatterCost Impostor) ScatterSnapshot(Node root)
+    {
+        ScatterCost mesh = default, impostor = default;
+        void Walk(Node n, bool scatter)
+        {
+            if (n is Node3D { Visible: false }) return;
+            if (n is UndergrowthField) return;
+            scatter |= n is ScatterField;
+            if (scatter && n is MultiMeshInstance3D { Multimesh: { Mesh: { } geometry } mm })
+            {
+                int count = mm.VisibleInstanceCount < 0 ? mm.InstanceCount : mm.VisibleInstanceCount;
+                if (count > 0)
+                {
+                    long triangles = 0;
+                    for (int i = 0; i < geometry.GetSurfaceCount(); i++)
+                    {
+                        var arrays = geometry.SurfaceGetArrays(i);
+                        var indexArray = arrays[(int)Mesh.ArrayType.Index];
+                        var indices = indexArray.VariantType == Variant.Type.Nil ? System.Array.Empty<int>() : indexArray.AsInt32Array();
+                        triangles += (indices.Length > 0 ? indices.Length : arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array().Length) / 3;
+                    }
+                    bool billboard = n.Name.ToString().StartsWith("ScatterImpostor_", System.StringComparison.Ordinal);
+                    var c = billboard ? impostor : mesh;
+                    c = new ScatterCost(c.Calls + 1, c.Instances + count, c.Triangles + triangles * count);
+                    if (billboard) impostor = c; else mesh = c;
+                }
+            }
+            foreach (var child in n.GetChildren()) Walk(child, scatter);
+        }
+        Walk(root, false);
+        return (mesh, impostor);
+    }
+    private static double LodTime(Node root)
+    {
+        if (root is ScatterLayer layer) return layer.LastLodMs;
+        double ms = 0;
+        foreach (var child in root.GetChildren()) ms += LodTime(child);
+        return ms;
     }
 
     /// <summary><c>visibleVertices(root)</c>: vertices of every visible mesh node under <paramref name="node"/>, itself included.</summary>

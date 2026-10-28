@@ -56,6 +56,34 @@ public static class ImpostorCheck
         Need("tuft has no far half", tuft.Impostor is null);
         Need("one lease per entry", frames.Refs == 1);
         Need("mesh sphere hides independently", tree.Hidden && tree.LowN == 0 && tree.ImpostorNode!.Visible);
+        var costs = Ui.PerfProbe.ScatterSnapshot(field);
+        Need("perf split counts billboard and its two triangles", costs.Impostor == new Overview.ScatterCost(1, 1, 2));
+        var ug = new UndergrowthField(height); field.AddChild(ug);
+        using var triangle = new ArrayMesh();
+        var arrays = new Godot.Collections.Array(); arrays.Resize((int)Mesh.ArrayType.Max);
+        arrays[(int)Mesh.ArrayType.Vertex] = new[] { Vector3.Zero, Vector3.Right, Vector3.Up };
+        triangle.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+        using var mm = new MultiMesh { Mesh = triangle, TransformFormat = MultiMesh.TransformFormatEnum.Transform3D, InstanceCount = 7 };
+        var ugNode = new MultiMeshInstance3D { Multimesh = mm }; ug.AddChild(ugNode);
+        Need("perf split excludes undergrowth as browser debugParts.scatter does", Ui.PerfProbe.ScatterSnapshot(field) == costs);
+        ug.RemoveChild(ugNode); field.AddChild(ugNode);
+        var authored = Ui.PerfProbe.ScatterSnapshot(field);
+        Need("nonindexed authored mesh counts geometry times instances", authored.Mesh ==
+            new Overview.ScatterCost(costs.Mesh.Calls + 1, costs.Mesh.Instances + 7, costs.Mesh.Triangles + 7));
+        ugNode.Visible = false;
+        Need("hidden authored mesh excluded", Ui.PerfProbe.ScatterSnapshot(field) == costs);
+        ugNode.Free(); ug.Free();
+        var probe = new Ui.PerfProbe();
+        var readout = probe.Frame(true, 0.3, field)!;
+        Need("HUD actual perf keys", (long)readout["scatter"]!["impostor"]!["calls"]! == 1
+            && (long)readout["scatter"]!["impostor"]!["instances"]! == 1
+            && (long)readout["scatter"]!["impostor"]!["triangles"]! == 2 && readout.ContainsKey("scatterLodMs"));
+        field.ImpostorsEnabled = false;
+        Need("matrix impostors off hides the drawn stage immediately", tree.ImpostorN == 0 && !tree.ImpostorNode!.Visible);
+        field.Tick(0, 0, 121, 0, -1, 60, 1);
+        Need("matrix gate survives ticks", tree.ImpostorN == 0);
+        field.ImpostorsEnabled = true;
+        Need("restore re-bins immediately", tree.ImpostorN == 1);
         var first = tree.ImpostorBuf!.Take(12).ToArray();
         field.Tick(121, 0, 0, -1, 0, 60, 1);
         Need("yaw refreshed on next LOD pass", Math.Abs(tree.ImpostorBuf![0]) < 1e-5 && Math.Abs(first[0]) > 1);
@@ -91,6 +119,12 @@ public static class ImpostorCheck
         await baker.BakeAndStoreAsync("/assets/surface-textures/ground_grass.png");
         Need("decode/parse failure retries without caching a refusal", baker.LastVerdict == "retry" && baker.CachedCount == 0);
         baker.Free();
-        GD.Print("[check] impostors: bins=1 seam=0.25 corners=Y-only no-renderer=retry parse-failed=retry wide-frustum=pass D7=pass");
+        var layer = new ScatterLayer(source, height, () => Vector3.Zero, _ => { }); world.AddChild(layer);
+        var perfCamera = new Camera3D(); world.AddChild(perfCamera);
+        layer.RunLod(perfCamera);
+        var timed = new Ui.PerfProbe().Frame(true, 0.3, layer)!;
+        Need("HUD carries measured complete LOD pass time", layer.LastLodMs > 0 && (double)timed["scatterLodMs"]! == layer.LastLodMs);
+        layer.Free(); perfCamera.Free();
+        GD.Print("[check] impostors: bins=1 seam=0.25 corners=Y-only no-renderer=retry parse-failed=retry wide-frustum=pass D7=pass perf=mesh/impostor/time");
     }
 }

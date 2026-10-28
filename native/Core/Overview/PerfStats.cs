@@ -61,10 +61,13 @@ public sealed class WorstFrame
     }
 }
 
-/// <summary>What the native client measures for one readout; what it cannot know stays 0 (see <see cref="PerfReadout"/>).</summary>
+/// <summary>Task 40: browser ScatterCost, counting visible stage nodes, instances and triangles (before frustum culling).</summary>
+public readonly record struct ScatterCost(long Calls, long Instances, long Triangles);
+
+/// <summary>One native readout, with measured scatter stages (Task 40); unsupported monitors stay zero.</summary>
 public readonly record struct PerfSample(
     double Fps, double WorstFrameMs, long Triangles, long Calls, long Vertices, long Geometries, long Textures,
-    int TiersFull, int TiersLow, double ScatterLodMs);
+    int TiersFull, int TiersLow, double ScatterLodMs, ScatterCost Mesh = default, ScatterCost Impostor = default);
 
 /// <summary>
 /// The HUD's performance readout (<c>{v:3, kind:'perf', value: PerfStats}</c>, client3d/src/hud/bus.ts /
@@ -73,7 +76,7 @@ public readonly record struct PerfSample(
 /// <see cref="PublishMs"/> — and nothing at all while <c>HudUiState.perfOn</c> is off; switching it off throws the
 /// window and the worst frame away, so switching on starts measuring anew.
 ///
-/// Every key of the TS <c>PerfStats</c> is sent (the HUD reads them all): the scatter split and the movement
+/// Every key of the TS <c>PerfStats</c> is sent (the HUD reads them all): Task 40 supplies the scatter split and LOD time; movement
 /// sync counters have no native source yet and go out as zeros.
 /// </summary>
 public static class PerfReadout
@@ -86,7 +89,7 @@ public static class PerfReadout
     /// <summary>The <c>PerfStats</c> object of bus.ts for one sample.</summary>
     public static JsonObject ToJson(PerfSample s)
     {
-        static JsonObject Cost() => new() { ["calls"] = 0, ["instances"] = 0, ["triangles"] = 0 };
+        static JsonObject Cost(ScatterCost c) => new() { ["calls"] = c.Calls, ["instances"] = c.Instances, ["triangles"] = c.Triangles };
         return new JsonObject
         {
             ["fps"] = s.Fps,
@@ -97,7 +100,7 @@ public static class PerfReadout
             ["geometries"] = s.Geometries,
             ["textures"] = s.Textures,
             ["tiers"] = new JsonObject { ["full"] = s.TiersFull, ["low"] = s.TiersLow },
-            ["scatter"] = new JsonObject { ["mesh"] = Cost(), ["impostor"] = Cost() },
+            ["scatter"] = new JsonObject { ["mesh"] = Cost(s.Mesh), ["impostor"] = Cost(s.Impostor) },
             ["scatterLodMs"] = s.ScatterLodMs,
             ["sync"] = new JsonObject
             {
