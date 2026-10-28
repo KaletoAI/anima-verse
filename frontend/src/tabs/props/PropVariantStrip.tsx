@@ -1,47 +1,8 @@
 /**
- * PropVariantStrip — the prop's MODEL VARIANTS as one row of chips.
- *
- * A prop carries several meshes of the same object (E2.3): a scattered wood
- * was the same tree twenty times over, so the prop keeps an ORDERED list of
- * variants, each a mesh gallery of its own. The FIRST ACTIVE one is the
- * PRIMARY variant — what `/assets/props/{id}/model` serves without a
- * `variant` parameter and therefore what every consumer that knows nothing
- * about variants keeps getting.
- *
- * The strip is the selector for everything below it: clicking a chip decides
- * which variant the 3D preview and the mesh gallery (`PropModelPanel`) show
- * and act on. It owns the four variant verbs (add, toggle, delete, select);
- * the LIST itself is loaded by `PropDetail`, because the viewer up there needs
- * the same records to know which mesh URL to show.
- *
- * The active cap comes from the server (`image_generation.prop_variant_max`),
- * so "add" is greyed with a reason instead of letting the POST come back 409.
- *
- * SEASONS (E2c): a variant may be tagged with the seasons it depicts — one row
- * of toggle chips per variant, offered from the world's own season list, never
- * free text. Untagged (the default) means every season. A variant that is
- * tagged for another season keeps its meshes but renders nowhere until that
- * season comes round, which the chip row says in as many words. A world
- * without seasons gets no chips at all: the tags would be inert.
- *
- * THE CHIP IS THE SELECTOR (2026-08-29, user decision "column 2 always shows
- * the selected variant"). Size, generation subject, sink and the two triangle
- * budgets are the VARIANT's (2026-08-25) — but they are edited beside the
- * model they describe, in the second column: the strip would otherwise be a
- * form of forms, one per version, next to a preview showing exactly one of
- * them. What is left on a chip is what says WHICH version this is and whether
- * it renders: its number, its badges, its seasons, active and delete. The
- * fields themselves live in `variantFields.ts` and are drawn by `PropDetail`.
- *
- * THE FIELDS ARE DRAFTED, THE VERBS ARE IMMEDIATE (2026-08-25). Seasons — like
- * every other field — go into the detail's change buffer (`pendingFields`) and
- * reach the server when Save is pressed, which is why this strip posts none of
- * them; it hands them up. Add, on/off and delete stay immediate: they change
- * the store indices, the mesh signature and what a running generation
- * addresses, and every file action beside them (mesh gallery, source image)
- * speaks to the server about a variant that has to exist there. The `variants`
- * this strip renders are the DRAFT list, so an edit is on screen and in the 3D
- * preview long before it is stored.
+ * Operations for the variant selected in the workspace's single selector.
+ * Seasons are drafted; add, activation and deletion use the existing
+ * UUID-resolved save barrier. The full list still determines active limits
+ * and generation/deletion safety, including background variants.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -50,11 +11,6 @@ import { useToast } from '../../lib/Toast'
 import type { PropVariant } from './propTypes'
 import type { PreparePropVariantOperation } from './propOperations'
 import { PropWorkspaceDialog } from './PropWorkspaceDialog'
-
-/** One chip's width in pixels — wide enough for the badge row, which is the
- *  widest thing in it since the inputs moved into the second column. Fixed on
- *  purpose: the strip may only ever grow DOWNWARDS, never re-flow sideways. */
-const CHIP_W = 170
 
 export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   onChanged, onEditVariant, onDeleted, generating = [], worldSeasons = [],
@@ -68,7 +24,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
   max: number
   /** Index of the variant the detail currently works on. */
   selected: number
-  /** Select a variant — the caller also drops its file preview. */
+  /** Select the newly added variant after the immediate add succeeds. */
   onSelect: (index: number) => void
   /** Reload the variant list and the prop record (a variant changes both the
    *  strip and the prop's mesh signature). */
@@ -180,10 +136,13 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
 
   return (
     <>
-      <div className="ga-form-section-label">{t('Model variants')}</div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        {variants.map((v) => {
-          const isSelected = v.index === selected
+      <div className="ga-form-section-label">{t('Ausgewählte Modellvariante')}</div>
+      {generating.length > 0 && <span className="ga-hint" role="status">
+        {t('generating…')}: {generating.map(index =>
+          variants.find(v => v.index === index)?.label || `${t('Variant')} ${index + 1}`).join(', ')}
+      </span>}
+      <div className="prop-selected-variant-management">
+        {variants.filter(v => v.index === selected).map((v) => {
           const isBusy = generating.includes(v.index)
           // A delete renumbers every variant behind this one, so a run there
           // blocks it too (server: variant_delete_blocked).
@@ -200,20 +159,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
           return (
             <div
               key={v.uid}
-              style={{
-                // FIXED WIDTH, not content width: a chip whose width depended
-                // on its badges would re-flow the whole strip whenever a mesh
-                // finished or a season was lit. With every chip the same width
-                // the line-up never changes.
-                display: 'flex', flexDirection: 'column', gap: 4, width: CHIP_W,
-                padding: '4px 6px', borderRadius: 6,
-                border: `1px solid ${isSelected
-                  ? 'var(--accent, #58a6ff)' : 'var(--border, #30363d)'}`,
-                background: isSelected ? 'rgba(88,166,255,0.10)' : 'transparent',
-                // A switched-off variant keeps its meshes but is not rendered
-                // anywhere — it reads as muted, not as missing.
-                opacity: v.active ? 1 : 0.55,
-              }}
+              className="prop-selected-variant-fields"
             >
               <strong>{v.primary ? '★ ' : ''}{t('Variant')} {v.index + 1}</strong>
               <div style={{ display: 'flex', gap: 3, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -256,6 +202,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                         className={`ga-btn ga-btn-sm${on ? ' ga-btn-primary' : ''}`}
                         style={{ padding: '0 5px', fontSize: '0.85em' }}
                         disabled={busy}
+                        aria-pressed={on}
                         onClick={() => toggleSeason(v, season)}
                         title={on
                           ? t('This variant renders in {season}. Click to drop that season; with no season left it renders all year.')
@@ -280,7 +227,7 @@ export function PropVariantStrip({ propId, variants, max, selected, onSelect,
                 <button
                   type="button"
                   className={`ga-btn ga-btn-sm${v.active ? ' ga-btn-primary' : ''}`}
-                  style={{ flex: 1 }}
+                  aria-pressed={v.active}
                   disabled={busy || isBusy}
                   onClick={() => toggle(v)}
                   title={isBusy

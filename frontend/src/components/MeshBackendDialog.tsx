@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../i18n/I18nProvider'
 // The budget arithmetic is shared with the variant strip — one rule, so the
@@ -85,6 +85,7 @@ export function MeshBackendDialog({
   generateLabel,
   showTier = false,
   hint = '',
+  children,
   faceTargets = {},
   views,
   onGenerate,
@@ -104,6 +105,7 @@ export function MeshBackendDialog({
   showTier?: boolean
   /** One line above the fields explaining what this particular run does. */
   hint?: string
+  children?: ReactNode
   /** What the subject STATES it should cost — prefilled over the backend
    *  default, and editable per run like everything else here. */
   faceTargets?: FaceTargets
@@ -260,6 +262,7 @@ export function MeshBackendDialog({
           </button>
         </div>
         <div className="ga-modal-body">
+          {children}
           {none ? (
             <div className="ga-hint">
               {t('No mesh backend available — configure one (api_type openai_mesh) in Media Generation.')}

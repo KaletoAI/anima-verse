@@ -226,6 +226,10 @@ class PropRevisionConflict(ValueError):
     """The draft no longer describes the stored document."""
 
 
+class PropGenerationUnavailable(ValueError):
+    """The active variant cap leaves no idle target for another generation."""
+
+
 class PropDocumentInvalid(ValueError):
     def __init__(self, issues):
         self.issues = issues
@@ -599,10 +603,8 @@ _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _MODEL_URL_RE = re.compile(r"^/assets/props/([^/?#]+)/model$")
 
 _lock = threading.Lock()
-# Running generation job keys "<prop_id>|<backend glob>" (see A2 generation
-# chain) — a prop may be regenerated on a DIFFERENT backend concurrently (each
-# serializes on its own GPU channel); only the same prop+backend double-click
-# is rejected.
+# Running keys are prop|store-index|backend|view. Allocation and reservation
+# take the prop's author mutex before this lock, never the other way around.
 _generating: set = set()
 # Props whose distance mesh is being built right now (one build per prop).
 _lod_building: set = set()
@@ -3163,6 +3165,7 @@ def set_rotation(prop_id: str, rotation: Any, variant: Any = None,
             "prop": _prop_record(pid, read_sidecar(pid), full=True)}
 
 
+@_author_transaction
 def delete_prop(prop_id: str) -> bool:
     """Remove the whole prop directory (model + source + sidecar)."""
     d = _prop_dir(prop_id)
@@ -5034,7 +5037,8 @@ def _drop_image_meta(meta: Dict[str, Any], stem: str, view: str) -> None:
 def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
                       view: str = "front", backend: str = "", prompt: str = "",
                       negative: str = "",
-                      routing: Optional[Dict[str, Any]] = None) -> bool:
+                      routing: Optional[Dict[str, Any]] = None,
+                      variant_uid: str = "") -> bool:
     """Store image bytes as ONE view of a variant's source image (default
     front). False when the prop/variant/view is unknown or the bytes are not
     a readable image.
@@ -5053,6 +5057,8 @@ def save_source_image(prop_id: str, contents: bytes, variant: Any = None, *,
     # A prop that does not exist gets no directory: a write path may create
     # the folder of a KNOWN prop, never conjure a ghost one from a typo'd id.
     if not read_sidecar(prop_id):
+        return False
+    if variant_uid and not _generation_identity_matches(prop_id, variant, variant_uid):
         return False
     target = _source_file(prop_id, variant, view=view, create=True)
     if not target:
@@ -6212,7 +6218,9 @@ def _render_source(prop_id: str, backend_glob: str,
                    view: str = "front",
                    front_reference: bool = False,
                    reference_variant: Any = None,
-                   errors: Optional[List[str]] = None) -> bool:
+                   errors: Optional[List[str]] = None,
+                   variant_uid: str = "",
+                   reference_variant_uid: str = "") -> bool:
     """txt2img render of the product shot → THIS VARIANT's source image. Runs
     the GPU job on the backend queue channel (like every render). Records the
     image backend + final prompt with the variant. Returns True on success.
@@ -6261,6 +6269,12 @@ def _render_source(prop_id: str, backend_glob: str,
 
     use_case = view_use_case("prop", view)
     meta0 = read_sidecar(prop_id)
+    if (variant_uid and not _generation_identity_matches(prop_id, variant, variant_uid)
+            or reference_variant_uid and not _generation_identity_matches(
+                prop_id, reference_variant, reference_variant_uid)):
+        if errors is not None:
+            errors.append("the target or reference variant was removed or replaced")
+        return False
     key_areas = meta0.get(KEY_AREAS_KEY) or []
     # A render may take a FRONT image as its appearance reference — which one
     # is `reference_front`'s decision (resolved ONCE: the routing asks for a
@@ -6350,7 +6364,7 @@ def _render_source(prop_id: str, backend_glob: str,
     # (backend + when; prompt/negative in the tooltip) plus the routing marks.
     if save_source_image(prop_id, images[0], variant, view=view,
                          backend=used.name, prompt=p, negative=n,
-                         routing=route_meta(route)):
+                         routing=route_meta(route), variant_uid=variant_uid):
         return True
     if errors is not None:
         errors.append(f"the image rendered on {used.name} could not be stored")
@@ -6421,6 +6435,47 @@ def _store_lod_stages(gallery: ModelGallery, stages: List[Dict[str, Any]],
 _OP_MESH = "prop_mesh"
 _OP_SHRINK = "prop_shrink"
 
+def _generation_identity_matches(prop_id: str, variant: Any, uid: str) -> bool:
+    meta = read_sidecar(prop_id)
+    if not meta:
+        return False
+    entries = _variant_list(meta)
+    return (isinstance(variant, int) and 0 <= variant < len(entries)
+            and entries[variant]["uid"] == uid)
+
+def _mesh_op_target(op):
+    """New records freeze identity; legacy records need an explicit binding."""
+    if op.inputs.get("variant_uid"):
+        return op.inputs.get("variant"), op.inputs["variant_uid"]
+    binding = op.state.get("legacy_variant_binding") or {}
+    return binding.get("variant", op.inputs.get("variant")), binding.get("uid", "")
+
+
+def _defer_legacy_mesh(op) -> None:
+    """Collect already-paid work, but never infer a UID from a reusable index."""
+    from app.imagegen.base import GenerationCancelled, GpuTaskCancelled
+    collection_error = ""
+    for name, job in op.jobs().items():
+        if not job.get("job_id") or job.get("collected") or op.done(name):
+            continue
+        try:
+            op.stage(name).collect()
+        except (GenerationCancelled, GpuTaskCancelled):
+            raise
+        except Exception as exc:
+            # A missing/offline old backend must not destroy the record either.
+            # Explicit repair can attach the recorded job; it never resubmits.
+            collection_error = str(exc) or type(exc).__name__
+            break
+    message = (f"Legacy prop mesh {op.op_id} has no proven target identity. "
+               "Paid inputs/results are retained. Choose a variant UID and its "
+               "current revision explicitly using resume_op_id to publish.")
+    if collection_error:
+        message += f" Collection could not finish: {collection_error}"
+    raise hub_ops.HubOpDeferred(message)
+
+
+
 
 def _op_variant_match(prop_id: str, variant: Any):
     def match(inputs: Dict[str, Any]) -> bool:
@@ -6431,9 +6486,30 @@ def _op_variant_match(prop_id: str, variant: Any):
 
 def _resume_open(op):
     from app.core import hub_ops
+    from app.imagegen.base import GenerationCancelled, GpuTaskCancelled
     if op.status == hub_ops.FAILED:
         hub_ops.raise_failed(op)
-    return hub_ops.resume(op, lambda: _KIND_STAGES[op.kind](op))
+    legacy = op.kind == _OP_MESH and not op.inputs.get("variant_uid")
+
+    def continue_stages():
+        try:
+            result = _KIND_STAGES[op.kind](op)
+        except (GenerationCancelled, GpuTaskCancelled, hub_ops.HubOpDeferred):
+            raise
+        except Exception as exc:
+            if not legacy:
+                raise
+            raise hub_ops.HubOpDeferred(
+                f"Legacy mesh {op.op_id} could not finish collection/publication; "
+                f"paid work remains retained for manual repair: {exc}") from exc
+        if legacy and not result.get("ok"):
+            if op.should_cancel and op.should_cancel():
+                raise GenerationCancelled("legacy mesh repair was cancelled")
+            raise hub_ops.HubOpDeferred(
+                f"Legacy mesh {op.op_id} remains retained for manual repair: "
+                f"{result.get('error') or 'collection/publication did not finish'}")
+        return result
+    return hub_ops.resume(op, continue_stages)
 
 
 def _generate(prop_id: str, prompt: str, negative: str,
@@ -6447,7 +6523,9 @@ def _generate(prop_id: str, prompt: str, negative: str,
               view: str = "front",
               front_reference: bool = False,
               reference_variant: Any = None,
-              views: Optional[List[str]] = None) -> Dict[str, Any]:
+              views: Optional[List[str]] = None,
+              variant_uid: str = "",
+              reference_variant_uid: str = "") -> Dict[str, Any]:
     """Blocking chain on a worker thread — source render then img2mesh. ONE
     tracked header task wraps the whole chain (the actual GPU jobs show in the
     queue panel via their channel entries).
@@ -6466,6 +6544,16 @@ def _generate(prop_id: str, prompt: str, negative: str,
         op = hub_ops.find_open(_OP_MESH, _op_variant_match(prop_id, variant))
         if op is not None:
             return _resume_open(op)
+    with _author_mutex(prop_id):
+        meta = read_sidecar(prop_id)
+        if not meta:
+            return {"ok": False, "error": "subject deleted during generation"}
+        if variant is None:
+            variant = primary_variant(prop_id)
+        if not variant_uid:
+            variant_uid = _variant_entry(meta, variant)["uid"]
+        if not _generation_identity_matches(prop_id, variant, variant_uid):
+            return {"ok": False, "error": "target variant removed or replaced"}
     name = read_sidecar(prop_id).get("name") or prop_id
     task_id = ""
     try:
@@ -6484,7 +6572,9 @@ def _generate(prop_id: str, prompt: str, negative: str,
         if not mesh_only and not _render_source(
                 prop_id, image_backend_glob, prompt, negative, variant,
                 view=view, front_reference=front_reference,
-                reference_variant=reference_variant, errors=_why):
+                reference_variant=reference_variant, errors=_why,
+                variant_uid=variant_uid,
+                reference_variant_uid=reference_variant_uid):
             error = "source render failed" + (f": {_why[-1]}" if _why else "")
             return {"ok": False, "error": error}
         if image_only:
@@ -6536,12 +6626,12 @@ def _generate(prop_id: str, prompt: str, negative: str,
                             prop_id, v)
         # The source render took minutes: a prop deleted meanwhile must not
         # come back through ``new_path`` (which creates its directory).
-        if not read_sidecar(prop_id):
+        if not _generation_identity_matches(prop_id, variant, variant_uid):
             error = "subject deleted during generation"
             return {"ok": False, "error": error}
         # A target in flight raises HubOpBusy (improvements read it as busy).
         op = hub_ops.create(_OP_MESH, "prop:" + _gen_key(prop_id, variant, mesh_backend_glob), {
-            "prop_id": prop_id, "variant": variant, "name": name,
+            "prop_id": prop_id, "variant": variant, "variant_uid": variant_uid, "name": name,
             "guard_key": _gen_key(prop_id, variant, mesh_backend_glob),
             "mesh_backend_glob": mesh_backend_glob, "face_num": face_num,
             "texture_size": texture_size, "lod_faces": lod_faces, "tier": tier,
@@ -6554,11 +6644,14 @@ def _generate(prop_id: str, prompt: str, negative: str,
             # Frozen inputs: the variant's picture may be re-rendered while
             # the mesh job runs; the mesh is made from THIS one. Inside the
             # settled run, so a failing copy never leaves a claim behind.
-            op.freeze_file(src, "inputs", src.name)
-            views_frozen = {v: op.rel(op.freeze_file(p, "inputs", "views", Path(p).name))
-                            for v, p in view_paths.items()}
-            op.update_state(lambda st: st.update(view_files=views_frozen))
-            op.reload()
+            with _author_mutex(prop_id):
+                if not _generation_identity_matches(prop_id, variant, variant_uid):
+                    return {"ok": False, "error": "target variant removed or replaced"}
+                op.freeze_file(src, "inputs", src.name)
+                views_frozen = {v: op.rel(op.freeze_file(p, "inputs", "views", Path(p).name))
+                                for v, p in view_paths.items()}
+                op.update_state(lambda st: st.update(view_files=views_frozen))
+                op.reload()
             return _mesh_stages(op)
         result = hub_ops.execute(op, run)
         if not result.get("ok"):
@@ -6592,52 +6685,22 @@ def _land_generated_metadata(prop_id: str, variant: Any, path: Path) -> bool:
     return primary
 
 
-def _mesh_stages(op) -> Dict[str, Any]:
-    """Stage ``mesh`` → publish of one prop record — shared by the fresh run
-    and the resume. Reads only the record, never the variant's current files."""
-    from app.imagegen.service import get_image_service
+@_author_transaction
+def _publish_generated_mesh(prop_id: str, variant: Any, op):
+    """Commit to the reserved UID while merging the current author document."""
     inputs = op.inputs
-    prop_id, variant = inputs["prop_id"], inputs.get("variant")
-    face_num, texture_size = inputs.get("face_num"), inputs.get("texture_size")
-    tier = inputs.get("tier") or DEFAULT_TIER
-    if not op.done("mesh"):
-        if not read_sidecar(prop_id):
-            return {"ok": False, "error": "subject deleted during generation"}
-        views = {v: str(op.abs(rel)) for v, rel in (op.state.get("view_files") or {}).items()}
-        res = get_image_service().generate_mesh(
-            source_image_path=str(op.abs(inputs["src"])),
-            output_path=str(op.path("mesh", "model.glb")),
-            backend_glob=inputs.get("mesh_backend_glob") or "",
-            mesh_name=prop_id,
-            face_num=face_num,
-            texture_size=texture_size,
-            view_images=views or None,
-            lod_faces=inputs.get("lod_faces"),
-            # An empty glob = the "mesh_object" chain of the image routing.
-            occasion="mesh_object",
-            hub_stage=op.stage("mesh"))
-        if not res.get("ok"):
-            error = str(res.get("error") or "mesh generation failed")
-            logger.error("Prop %s mesh failed: %s", prop_id, error)
-            return {"ok": False, "error": error}
-        stages = []
-        for i, st in enumerate(res.pop("stages", None) or []):
-            target = op.path("mesh", f"lod_{i}.{st.get('format') or 'glb'}")
-            target.write_bytes(st["blob"])
-            stages.append({k: v for k, v in st.items() if k != "blob"} | {"file": op.rel(target)})
-        op.complete("mesh", {**hub_ops.result_json(op, res), "stages": stages})
-    res = op.result("mesh")
-    built = op.abs(res["path"])
-
-    # ── publish ──
-    # A NEW file in the gallery, active for its tier — the previous meshes
-    # stay (pick one of them in the admin panel). Everything about THIS
-    # run goes on the file's own sidecar, not on the prop record.
-    if not read_sidecar(prop_id):
-        return {"ok": False, "error": "subject deleted during generation"}
+    _, uid = _mesh_op_target(op)
+    if not _generation_identity_matches(prop_id, variant, uid):
+        if not inputs.get("variant_uid"):
+            _defer_legacy_mesh(op)
+        return None
     g = model_gallery(prop_id, variant)
     if not g:
-        return {"ok": False, "error": "bad prop id"}
+        return None
+    res = op.result("mesh")
+    built = op.abs(res["path"])
+    face_num, texture_size = inputs.get("face_num"), inputs.get("texture_size")
+    tier = inputs.get("tier") or DEFAULT_TIER
     path = hub_ops.gallery_path(op, g, "path", built.suffix or ".glb")
     path.write_bytes(built.read_bytes())
     inherited = inputs.get("inherited")
@@ -6676,6 +6739,50 @@ def _mesh_stages(op) -> Dict[str, Any]:
                     prop_id, low)
 
     primary = _land_generated_metadata(prop_id, variant, path)
+    return path, primary
+
+
+def _mesh_stages(op) -> Dict[str, Any]:
+    """Stage ``mesh`` → publish of one prop record — shared by the fresh run
+    and the resume. Reads only the record, never the variant's current files."""
+    from app.imagegen.service import get_image_service
+    inputs = op.inputs
+    variant, uid = _mesh_op_target(op)
+    prop_id = inputs["prop_id"]
+    face_num, texture_size = inputs.get("face_num"), inputs.get("texture_size")
+    if not op.done("mesh"):
+        if not _generation_identity_matches(prop_id, variant, uid):
+            if not inputs.get("variant_uid"):
+                _defer_legacy_mesh(op)
+            return {"ok": False, "error": "target variant removed or replaced"}
+        views = {v: str(op.abs(rel)) for v, rel in (op.state.get("view_files") or {}).items()}
+        res = get_image_service().generate_mesh(
+            source_image_path=str(op.abs(inputs["src"])),
+            output_path=str(op.path("mesh", "model.glb")),
+            backend_glob=inputs.get("mesh_backend_glob") or "",
+            mesh_name=prop_id,
+            face_num=face_num,
+            texture_size=texture_size,
+            view_images=views or None,
+            lod_faces=inputs.get("lod_faces"),
+            # An empty glob = the "mesh_object" chain of the image routing.
+            occasion="mesh_object",
+            hub_stage=op.stage("mesh"))
+        if not res.get("ok"):
+            error = str(res.get("error") or "mesh generation failed")
+            logger.error("Prop %s mesh failed: %s", prop_id, error)
+            return {"ok": False, "error": error}
+        stages = []
+        for i, st in enumerate(res.pop("stages", None) or []):
+            target = op.path("mesh", f"lod_{i}.{st.get('format') or 'glb'}")
+            target.write_bytes(st["blob"])
+            stages.append({k: v for k, v in st.items() if k != "blob"} | {"file": op.rel(target)})
+        op.complete("mesh", {**hub_ops.result_json(op, res), "stages": stages})
+    published = _publish_generated_mesh(prop_id, variant, op)
+    if published is None:
+        return {"ok": False, "error": "target variant removed or replaced"}
+    path, primary = published
+    res = op.result("mesh")
     # The picture-area split of the mesh that just landed (when the prop
     # asked for key colours) — for EVERY variant (v2 E1: each is its own
     # mesh), same law as the slots below: this chain does not go through
@@ -6824,11 +6931,13 @@ _KIND_STAGES = {_OP_MESH: _mesh_stages, _OP_SHRINK: _shrink_stages}
 def _op_reserve(op):
     """The double-start guard of the record's target, taken by the resumer
     before the AgentLoop starts (``is_pending`` reports the prop busy)."""
-    key = op.inputs.get("guard_key") or ""
-    with _lock:
-        if not key or key in _generating:
-            return lambda: None
-        _generating.add(key)
+    binding = op.state.get("legacy_variant_binding") or {}
+    key = binding.get("guard_key") or op.inputs.get("guard_key") or ""
+    with _author_mutex(op.inputs.get("prop_id") or ""):
+        with _lock:
+            if not key or key in _generating:
+                return lambda: None
+            _generating.add(key)
 
     def release() -> None:
         with _lock:
@@ -6846,6 +6955,100 @@ def _register_hub_kinds() -> None:
 _register_hub_kinds()
 
 
+def generation_repairs(prop_id: str) -> List[Dict[str, Any]]:
+    """Admin-visible legacy work awaiting an explicit identity decision."""
+    pid = safe_prop_id(prop_id)
+    repairs = []
+    for op in hub_ops.list_ops():
+        if (op.kind != _OP_MESH or op.inputs.get("prop_id") != pid
+                or op.inputs.get("variant_uid") or not op.state.get("deferred_error")
+                or op.state.get("dismissed_at")):
+            continue
+        job = op.jobs().get("mesh") or {}
+        ready, collected = op.done("mesh"), bool(job.get("collected"))
+        recorded = bool(job.get("job_id"))
+        repairs.append({
+            "op_id": op.op_id, "original_variant": op.inputs.get("variant"),
+            "original_name": op.inputs.get("name") or op.label,
+            "backend": (op.result("mesh").get("backend") or job.get("backend")
+                        or op.inputs.get("mesh_backend_glob") or ""),
+            "tier": op.inputs.get("tier") or DEFAULT_TIER,
+            "reason": op.error, "created_at": op.created_at,
+            "mesh_ready": ready, "collected": collected,
+            "can_resume": ready or collected or recorded,
+            "status": ("ready" if ready else "collected" if collected
+                       else "waiting_provider" if recorded else "unrecorded"),
+        })
+    return repairs
+
+
+@_author_transaction
+def dismiss_generation_repair(prop_id: str, op_id: str) -> None:
+    """Dismiss only this prop's retained legacy result; keep all files."""
+    pid = safe_prop_id(prop_id)
+    op = hub_ops.get(op_id)
+    if (not pid or op is None or op.kind != _OP_MESH
+            or op.inputs.get("prop_id") != pid or op.inputs.get("variant_uid")
+            or not op.state.get("deferred_error") or op.status != hub_ops.DEFERRED):
+        raise PropRevisionConflict("The retained legacy result is not awaiting a decision")
+    try:
+        hub_ops.dismiss_deferred(op)
+    except hub_ops.HubOpBusy as exc:
+        raise PropRevisionConflict(str(exc)) from exc
+
+
+@_author_transaction
+def trigger_generation_repair(prop_id: str, op_id: str, *, variant: Any,
+                              variant_uid: str, base_revision: str) -> bool:
+    """Bind retained paid work to an explicitly confirmed current UID."""
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid) if pid else {}
+    if (not base_revision or not meta or base_revision != _document_revision(meta)
+            or not variant_uid or not _generation_identity_matches(pid, variant, variant_uid)):
+        raise PropRevisionConflict("Review the current variant UID and revision before repairing this mesh")
+    op = hub_ops.get(op_id)
+    if (op is None or op.kind != _OP_MESH or op.inputs.get("prop_id") != pid
+            or op.inputs.get("variant_uid") or not op.state.get("deferred_error")
+            or op.status != hub_ops.DEFERRED or op.state.get("dismissed_at")):
+        raise PropRevisionConflict("The retained legacy mesh is missing or is not awaiting identity repair")
+    job = op.jobs().get("mesh") or {}
+    if not op.done("mesh") and not (job.get("job_id") or job.get("collected")):
+        raise PropRevisionConflict("No paid mesh job or result was recorded; repair cannot submit a new job")
+    key = _gen_key(pid, variant, op.inputs.get("mesh_backend_glob") or "")
+    old_key = (op.state.get("legacy_variant_binding") or {}).get("guard_key") or op.inputs.get("guard_key")
+    with _lock:
+        if old_key in _generating or any(_split_gen_key(item) == (pid, variant) for item in _generating):
+            return False
+
+    def bind(state):
+        state["legacy_variant_binding"] = {
+            "variant": variant, "uid": variant_uid, "guard_key": key,
+            "confirmed_revision": base_revision,
+        }
+        state.pop("deferred_error", None)
+        # A pre-restart publish reservation may name a different gallery.
+        # Keep staged results, but choose a path for the explicitly bound target.
+        (state.get("results") or {}).pop("publish", None)
+    try:
+        hub_ops.resume_deferred(op, "prop:" + key, bind)
+    except hub_ops.HubOpBusy as exc:
+        raise PropGenerationUnavailable(str(exc)) from exc
+    with _lock:
+        _generating.add(key)
+
+    def run():
+        try:
+            _resume_open(op)
+        except Exception as exc:
+            logger.warning("Prop legacy mesh %s requires attention: %s", op.op_id, exc)
+        finally:
+            with _lock:
+                _generating.discard(key)
+    threading.Thread(target=run, daemon=True).start()
+    return True
+
+
+@_author_transaction
 def trigger_shrink(prop_id: str, *, source_file: str, backend_glob: str = "",
                    face_num: Any = None, texture_size: Any = None,
                    variant: Any = None) -> bool:
@@ -6886,39 +7089,40 @@ def trigger_shrink(prop_id: str, *, source_file: str, backend_glob: str = "",
     return True
 
 
-def target_variant(prop_id: str) -> int:
-    """Which variant a NEWLY generated mesh belongs in — the rule behind
-    "generating APPENDS a variant instead of replacing one" (E2.3).
-
-    In order:
-
-    1. the first ACTIVE variant that carries no mesh yet — a freshly created
-       prop has exactly one such slot, so its first generation still fills
-       variant 0 and nothing about a one-mesh prop changed;
-    2. a freshly appended slot, while the active cap allows one;
-    3. at the cap, the LAST active variant — the new mesh joins its gallery as
-       another stored file and becomes its active one. Nothing is lost (a
-       gallery keeps its history), and the cap is not quietly exceeded.
-
-    A re-mesh does NOT go through here: it names its variant explicitly, so
-    "make a better version of THIS one" replaces inside that gallery."""
+@_author_transaction
+def target_variant(prop_id: str, *, expected: Any = None) -> int:
+    """Legacy creation fills an empty slot; explicit append always adds one.
+    The active cap refuses new variants; it never replaces an existing one.
+    The caller holds the author mutex until its generation guard is reserved."""
     pid = safe_prop_id(prop_id)
     meta = read_sidecar(pid) if pid else {}
     if not meta:
         return 0
     entries = _variant_list(meta)
     active = _active_indices(entries)
+    busy = pending_variants(pid).get(pid, [])
+
+    def confirmed(plan):
+        if expected is not None and expected != plan:
+            raise PropRevisionConflict("The generation target changed; review it before starting")
+
     for i in active:
+        if i in busy or expected is not None:
+            continue
         g = model_gallery(pid, i)
         if not (g and g.tiers()):
             return i
     if len(active) < variant_max():
+        source = _effective_indices(entries)[0]
+        confirmed({"kind": "append", "index": len(entries),
+                   "sourceUid": entries[source]["uid"], "sourceIndex": source})
         fresh = add_variant(pid)
         if fresh >= 0:
             return fresh
-    return active[-1]
+    raise PropGenerationUnavailable("Variant limit reached. Disable or remove a variant first.")
 
 
+@_author_transaction
 def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        image_backend_glob: str = "",
                        mesh_backend_glob: str = "",
@@ -6932,19 +7136,21 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                        view: str = "front",
                        front_reference: bool = False,
                        reference_variant: Any = None,
-                       views: Optional[List[str]] = None) -> bool:
-    """Start the source→mesh chain in the background. Different mesh backends
-    for the same prop run concurrently (each queues on its own GPU channel);
-    False only while THIS prop+variant+backend combination is already
-    generating (double-click guard), or when the prop does not exist.
+                       views: Optional[List[str]] = None,
+                       variant_uid: str = "",
+                       base_revision: str = "",
+                       reference_variant_uid: str = "",
+                       generation_target: Any = None) -> bool:
+    """Start the source→mesh chain behind the prop-wide generation gate.
+    Return False when this prop is already generating or does not exist.
+    The author transaction holds allocation and reservation together.
 
-    ``variant`` names the model variant the run belongs to — BOTH its source
-    image and its mesh, they are one version of the object. ``None`` lets
-    :func:`target_variant` decide, which APPENDS a variant while the cap
-    allows — that is the plain "generate" button. A re-mesh passes the index
-    it is refining, and so does ``image_only``, which re-renders exactly that
-    variant's picture and leaves every other one alone; with no index it is
-    the PRIMARY variant's image, like every other unqualified read.
+    ``variant`` names both the source image and mesh of an existing version.
+    Admin regeneration always passes that index and its confirmed stable UID.
+    An explicit append ``generation_target`` allocates a new variant, refuses
+    the active cap and never fills or replaces an existing slot. Legacy
+    creation/furnishing calls without a plan may fill an empty initial slot.
+    An unqualified ``image_only`` run uses the primary variant instead.
 
     ``lod_faces`` additionally asks the mesh alias for reduced stages of the
     same bake; the smallest one lands as that variant's ``low`` tier. It is
@@ -6959,10 +7165,32 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
     from the one before it. ``views`` names the extra views a MESH run should
     send along."""
     pid = safe_prop_id(prop_id)
-    if not pid or not read_sidecar(pid):
+    meta = read_sidecar(pid) if pid else {}
+    if not meta:
         return False
-    if variant is None and not image_only:
-        variant = target_variant(pid)
+    if base_revision and base_revision != _document_revision(meta):
+        raise PropRevisionConflict("Prop changed after generation confirmation; review the target again")
+    if variant_uid and not _generation_identity_matches(pid, variant, variant_uid):
+        raise PropRevisionConflict("The confirmed target variant was removed or replaced")
+    if reference_variant_uid and not _generation_identity_matches(
+            pid, reference_variant, reference_variant_uid):
+        raise PropRevisionConflict("The confirmed reference variant was removed or replaced")
+    # Only a run that CHOOSES its slot waits for the whole prop: picking while
+    # another run is busy is how repeated clicks used to append variant after
+    # variant. A run naming its variant keeps the per-key guard below, so the
+    # back/left/right renders still run side by side.
+    if variant is None and not image_only and pending_variants(pid).get(pid):
+        return False
+    if variant is None:
+        variant = primary_variant(pid) if image_only else target_variant(pid, expected=generation_target)
+    entries = _variant_list(read_sidecar(pid))
+    if not isinstance(variant, int) or not 0 <= variant < len(entries):
+        return False
+    variant_uid = entries[variant]["uid"]
+    if reference_variant is not None and not reference_variant_uid:
+        if not isinstance(reference_variant, int) or not 0 <= reference_variant < len(entries):
+            return False
+        reference_variant_uid = entries[reference_variant]["uid"]
     # The VIEW separates the extra-view renders from each other — back, left
     # and right write their own files, so they may run side by side. The FRONT
     # deliberately keeps the historic collision with a mesh/full run: both
@@ -6983,7 +7211,9 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
                       image_only=image_only, tier=tier, lod_faces=lod_faces,
                       variant=variant, view=view,
                       front_reference=front_reference,
-                      reference_variant=reference_variant, views=views)
+                      reference_variant=reference_variant, views=views,
+                      variant_uid=variant_uid,
+                      reference_variant_uid=reference_variant_uid)
         except Exception as e:
             logger.error("Prop generation for %s failed: %s", pid, e)
         finally:

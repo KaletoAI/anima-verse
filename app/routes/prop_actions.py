@@ -43,6 +43,19 @@ class AdminExecution(AdminCheck):
     confirmed: StrictBool
 
 
+class AdminRun(AdminCheck):
+    execution_id: StrictStr
+
+
+class AdminResponse(AdminRun):
+    accept: StrictBool
+    participant: StrictStr
+
+
+class AdminParticipant(AdminRun):
+    participant: StrictStr
+
+
 class Document(Input):
     document: dict
 
@@ -173,7 +186,8 @@ def validate(prop_id: str, body: Document, user=Depends(require_admin)):
 @router.post("/world/props/{prop_id}/check-placement")
 def check_placement(prop_id: str, body: AdminCheck, user=Depends(require_admin)):
     _admin_target(prop_id, body)
-    return engine.check(body.actor, body.target.model_dump(), body.action_id, body.revision, body.partner)
+    return engine.check(body.actor, body.target.model_dump(), body.action_id, body.revision, body.partner,
+                        include_plans=True)
 
 
 @router.post("/world/props/{prop_id}/execute-test")
@@ -181,4 +195,143 @@ def execute_test(prop_id: str, body: AdminExecution, user=Depends(require_admin)
     if body.confirmed is not True:
         raise HTTPException(422, detail="Explicit confirmation required: execution can change world values")
     _admin_target(prop_id, body)
-    return _answer(_request(body.actor, body))
+    from app.core import prop_action_store as store
+    with engine.request_guard(body.actor, body.request_id):
+        previous = store.by_request(body.actor, body.request_id)
+        if previous and (previous["data"].get("admin_test") or {}).get("prop_id") != prop_id:
+            raise HTTPException(409, detail="Request belongs to another execution")
+        before = _participant_snapshots(body.actor, body.partner)
+        result, created = engine.request_with_creation(
+            body.actor, body.target.model_dump(), body.action_id, body.revision,
+            body.partner, body.request_id)
+        result = _answer(result)
+        admitted = store.get(result["execution_id"])
+        if not created and (admitted["data"].get("admin_test") or {}).get("prop_id") != prop_id:
+            raise HTTPException(409, detail="Request belongs to another execution")
+        if created:
+            # Adapter provenance only; Core remains sole owner of run progress.
+            with engine._lock(result["execution_id"]), store.transaction() as conn:
+                conn.execute("UPDATE prop_action_runs SET data=json_set(data,'$.admin_test',json(?)) "
+                             "WHERE execution_id=?",
+                             (store.encode(dict(prop_id=prop_id, before=before)), result["execution_id"]))
+    return dict(result, observation=_admin_observation(store.get(result["execution_id"])))
+
+
+def _participant_snapshots(actor, partner, *, allow_missing=False):
+    from app.models.character import get_character_profile, get_avatar_sync_snapshot
+    result = {}
+    for name in (actor, partner):
+        if not name:
+            continue
+        try:
+            profile = get_character_profile(name, strict=True)
+        except LookupError:
+            if not allow_missing:
+                raise HTTPException(409, detail=f"Participant no longer exists: {name}") from None
+            result[name] = dict(unavailable="participant_not_found")
+            continue
+        result[name] = dict(stats=profile.get("status_effects") or {},
+                            mood=profile.get("current_feeling", ""),
+                            conditions=profile.get("active_conditions") or [],
+                            sleeping=bool(profile.get("is_sleeping")),
+                            position=get_avatar_sync_snapshot(name),
+                            place=profile.get("place"))
+    return result
+
+
+def _admin_run(prop_id, body):
+    from app.core import prop_action_store as store
+    run = store.get(body.execution_id)
+    if not run:
+        raise HTTPException(404, detail="Execution not found")
+    if ((run["data"].get("admin_test") or {}).get("prop_id") != prop_id
+            or run["target"] != body.target.model_dump()
+            or run["actor"] != body.actor or run["partner"] != body.partner
+            or run["action_id"] != body.action_id or run["definition_revision"] != body.revision):
+        raise HTTPException(403, detail="Execution does not belong to this exact admin test")
+    # Do not resolve today's placement/revision: deletion must not strand cleanup.
+    return run
+
+
+def _admin_observation(run):
+    from app.core import prop_action_store as store
+    state = engine.state_for(run["partner"] or run["actor"])
+    row = next((row for rows in state.values() for row in rows
+                if row["execution_id"] == run["execution_id"]), None)
+    return dict(run=row or dict(engine._result(run), phase=run["phase"], phase_label="",
+                                can_respond=False, can_cancel=run["status"] not in store.TERMINAL),
+                before=run["data"]["admin_test"]["before"],
+                current=_participant_snapshots(run["actor"], run["partner"], allow_missing=True),
+                claims=store.claims(run["execution_id"]),
+                plans=run["data"].get("plans", {}))
+
+
+@router.get("/world/prop-action-tests")
+def admin_test_runs(user=Depends(require_admin)):
+    """Recover durable Admin tests, including all live runs regardless of age."""
+    from app.core import prop_action_store as store
+    conn = store.db.get_connection()
+    live = conn.execute(
+        "SELECT * FROM prop_action_runs WHERE status NOT IN ('completed','cancelled','failed') "
+        "AND json_type(data,'$.admin_test.prop_id')='text' ORDER BY created_at,execution_id")
+    recent = conn.execute(
+        "SELECT * FROM prop_action_runs WHERE status IN ('completed','cancelled','failed') "
+        "AND json_type(data,'$.admin_test.prop_id')='text' "
+        "AND julianday(updated_at)>=julianday('now','-30 minutes') "
+        "ORDER BY updated_at DESC,execution_id DESC LIMIT 20")
+    tests = []
+    for raw in [*live, *recent]:
+        run = store._decode(raw)
+        tests.append(dict(prop_id=run["data"]["admin_test"]["prop_id"],
+                          request=dict(target=run["target"], action_id=run["action_id"],
+                                       revision=run["definition_revision"], actor=run["actor"],
+                                       partner=run["partner"], execution_id=run["execution_id"]),
+                          observation=_admin_observation(run)))
+    return dict(tests=tests)
+
+
+@router.post("/world/props/{prop_id}/test-state")
+def admin_test_state(prop_id: str, body: AdminRun, user=Depends(require_admin)):
+    return _admin_observation(_admin_run(prop_id, body))
+
+
+@router.post("/world/props/{prop_id}/test-respond")
+def admin_test_respond(prop_id: str, body: AdminResponse, user=Depends(require_admin)):
+    run = _admin_run(prop_id, body)
+    if body.participant != run["partner"] or not run["partner"]:
+        raise HTTPException(403, detail="Only the exact invited partner can answer")
+    _answer(engine.respond(body.participant, body.execution_id, body.accept))
+    return admin_test_state(prop_id, body, user)
+
+
+@router.post("/world/props/{prop_id}/test-cancel")
+def admin_test_cancel(prop_id: str, body: AdminParticipant, user=Depends(require_admin)):
+    run = _admin_run(prop_id, body)
+    if body.participant not in (run["actor"], run["partner"]) or not body.participant:
+        raise HTTPException(403, detail="Only an exact participant can stop")
+    _answer(engine.cancel(body.participant, body.execution_id))
+    return admin_test_state(prop_id, body, user)
+
+
+@router.post("/world/props/{prop_id}/test-wake")
+def admin_test_wake(prop_id: str, body: AdminParticipant, user=Depends(require_admin)):
+    from app.models.character import get_character_profile
+    from app.core import prop_action_store as store
+    run = _admin_run(prop_id, body)
+    if body.participant not in (run["actor"], run["partner"]) or not body.participant:
+        raise HTTPException(403, detail="Only an exact participant can wake")
+    # A stale test must never wake somebody now owned by a replacement run.
+    with engine._lock(body.execution_id):
+        run = _admin_run(prop_id, body)
+        owner = store.held(store.person_key(body.participant))
+        try:
+            profile = get_character_profile(body.participant, strict=True)
+        except LookupError:
+            raise HTTPException(409, detail="Participant no longer exists") from None
+        if (run["status"] != "sleeping" or owner != body.execution_id
+                or (profile.get("place") or {}).get("execution_id") != body.execution_id):
+            raise HTTPException(409, detail="This test no longer owns the sleeping participant")
+        # Core's owned cleanup atomically compares the place execution ID,
+        # wakes through the existing lifecycle and releases only this bed.
+        engine.interrupt(body.participant, "awake", execution_id=body.execution_id)
+    return admin_test_state(prop_id, body, user)

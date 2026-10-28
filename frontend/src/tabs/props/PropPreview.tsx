@@ -9,7 +9,7 @@ import { actionPreviewPose } from './propActionAuthoring'
 
 export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
   const { t, viewerRef, shownHasMesh, previewFile, enc, variant, reloadKey, prop, variantRotation, areaFrontal, setAreaView, areasOnView, areaOutlines, variantAreas, previewSlots, drawKind, onPolygonFaces, setShownBbox, light, waterController, markers, poseCatalog, previewPose, groups, shownDims, shownVariant, shownBbox, scaleFigure, placing, onPickPoint, variants, setScaleFigure } = workspace
-  const { showStoredFile, navigate, saving } = workspace
+  const { showStoredFile, saving } = workspace
   const action = workspace.actions.find(entry => entry.id === workspace.selectedActionId)
   const binding = shownVariant?.action_bindings?.find(entry => entry.action_id === action?.id)
   const [previewPhaseId, setPreviewPhaseId] = useState('')
@@ -24,18 +24,22 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
       ? [{ role, ...point, label: action?.participants === 2
         ? role === 'actor' ? t('Zugang A') : t('Zugang B') : t('Zugang handelnde Person') }] : []
   }) : [], [spatialAuthoring, binding, action?.participants, t])
-  const markerOverlays = useMemo(() => markers.map(m => {
-    const boundToAction = spatialAuthoring && binding?.marker_ids.includes(m.id || '')
-    const entry = boundToAction ? poseCatalog.entries.find(pose => pose.key === actionPoseKey)
+  const markerOverlays = useMemo(() => markers.map((m, index) => {
+    const boundToAction = !!binding?.marker_ids.includes(m.id || '')
+    const entry = spatialAuthoring && boundToAction ? poseCatalog.entries.find(pose => pose.key === actionPoseKey)
       : previewEntry(poseCatalog, m.group, m.id ? previewPose[m.id] : undefined)
     return { at: m.at, group: m.group, capacity: m.capacity, spacing_m: m.spacing_m,
       facing: m.facing, slot_axis: m.slot_axis, previewKind: entry?.animation,
+      assigned: boundToAction, selected: spatialAuthoring && index === workspace.selIdx,
       previewYawOffset: entry?.yaw_offset, rootDrop: groups[m.group]?.root_drop }
-  }), [markers, spatialAuthoring, binding?.marker_ids, actionPoseKey, poseCatalog, previewPose, groups])
+  }), [markers, spatialAuthoring, workspace.selIdx, binding?.marker_ids, actionPoseKey, poseCatalog, previewPose, groups])
   return <div className="ga-form prop-area-content">
           <div className="ga-form-section-label" style={{ marginTop: 0 }}>
             {t('3D preview')}
           </div>
+    {spatialAuthoring && <p className="ga-hint">
+      {t('Körperanker: Grün = der gewählten Handlung zugewiesen; Grau = nicht zugewiesen; goldener Rahmen = ausgewählt.')}
+    </p>}
     {spatialAuthoring && action?.ability === 'combined' && <label className="prop-action-field">
       <span>{t('Vorschauphase (ohne Weltänderung)')}</span>
       <select className="ga-input" value={previewPhase?.id || ''} onChange={event => setPreviewPhaseId(event.target.value)}>
@@ -126,9 +130,8 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
           ) : (
             <div className="ga-empty">
               {variants.length > 1
-                ? t('This variant has no model yet — mesh the source image into it or upload a GLB below.')
-                : t('No model yet — generate it or upload a GLB below.')}
-              <button type="button" className="ga-btn" onClick={() => navigate('assets')}>{t('Modell & Varianten öffnen')}</button>
+                ? t('This variant has no model yet — mesh its source image or upload a GLB in Model & variants.')
+                : t('No model yet — generate it or upload a GLB in Model & variants.')}
             </div>
           )}
           

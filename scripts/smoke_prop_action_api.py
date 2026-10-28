@@ -203,6 +203,209 @@ class ApiContracts(unittest.TestCase):
             A.cancel(run['actor'], run['execution_id'])
         F.assert_no_external_work()
 
+    def test_admin_nonce_race_never_adopts_an_ordinary_core_run(self):
+        name, target, pid = S.setup_run()
+        admin = client(name, 'admin')
+        body = dict(payload(target), actor=name, confirmed=True, request_id='admission-race')
+        original = routes._participant_snapshots
+        raced = []
+        def admit_between_lookup_and_request(actor, partner):
+            # A real competing Core admission commits after the adapter's
+            # initial lookup; only scheduling is controlled, not its result.
+            if not raced:
+                raced.append(S.request(name, target, request_id=body['request_id']))
+            return original(actor, partner)
+        with patch.object(routes, '_participant_snapshots', side_effect=admit_between_lookup_and_request):
+            response = admin.post('/world/props/' + pid + '/execute-test', json=body)
+        self.assertEqual(response.status_code, 409, response.text)
+        run = R.get(raced[0]['execution_id'])
+        self.assertEqual(run['status'], 'approaching')
+        self.assertNotIn('admin_test', run['data'])
+        self.assertEqual(admin.post('/world/props/' + pid + '/execute-test', json=body).status_code, 409)
+        self.assertNotIn(run['execution_id'], {
+            row['request']['execution_id'] for row in admin.get('/world/prop-action-tests').json()['tests']})
+
+    def test_admin_recovery_keeps_old_live_runs_and_immutable_controls_across_sessions(self):
+        name, target, pid = S.setup_run()
+        admin = client(name, 'admin')
+        ordinary = S.request(name, target, request_id='ordinary-not-an-admin-test')
+        A.cancel(name, ordinary['execution_id'])
+        body = dict(payload(target), actor=name, confirmed=True, request_id='recover-this-test')
+        start = admin.post('/world/props/' + pid + '/execute-test', json=body)
+        self.assertEqual(start.status_code, 200, start.text)
+        ref = start.json()['execution_id']
+        replay = admin.post('/world/props/' + pid + '/execute-test', json=body)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.json()['execution_id'], ref)
+        self.assertEqual(replay.json()['observation']['before'], start.json()['observation']['before'])
+        with R.transaction() as conn:
+            conn.execute("UPDATE prop_action_runs SET created_at='2000-01-01T00:00:00Z',"
+                         "updated_at='2000-01-01T00:00:00Z' WHERE execution_id=?", (ref,))
+        document = F.props.read_sidecar(pid)
+        document['actions'][0]['name'] = 'Definition changed while away'
+        F.props._write_sidecar(pid, document)
+        # Fresh authenticated clients model a reload; there is no client handle,
+        # selected action, current prop, placement census or revision dependency.
+        reloaded, ordinary_user = client(name, 'admin'), client(name)
+        self.assertEqual(ordinary_user.get('/world/prop-action-tests').status_code, 403)
+        before = snapshot()
+        with pure_tripwires():
+            recovered = reloaded.get('/world/prop-action-tests')
+        self.assertEqual(recovered.status_code, 200, recovered.text)
+        self.assertEqual(snapshot(), before)
+        rows = {row['request']['execution_id']: row for row in recovered.json()['tests']}
+        self.assertIn(ref, rows, 'all live Admin tests survive the recent-result age cutoff')
+        self.assertNotIn(ordinary['execution_id'], rows)
+        handle = rows[ref]
+        self.assertEqual(handle['prop_id'], pid)
+        self.assertEqual(handle['request']['revision'], target['definition_revision'])
+        self.assertEqual(handle['request']['target'], body['target'])
+        stopped = reloaded.post('/world/props/' + handle['prop_id'] + '/test-cancel',
+                                json=dict(handle['request'], participant=name))
+        self.assertEqual(stopped.status_code, 200, stopped.text)
+        self.assertFalse(R.claims(ref))
+        self.assertIn(ref, {row['request']['execution_id'] for row in reloaded.get('/world/prop-action-tests').json()['tests']})
+        with R.transaction() as conn:
+            conn.execute("UPDATE prop_action_runs SET updated_at='2000-01-01T00:00:00Z' WHERE execution_id=?", (ref,))
+        self.assertNotIn(ref, {row['request']['execution_id'] for row in reloaded.get('/world/prop-action-tests').json()['tests']})
+
+    def test_admin_recovery_deleted_participant_does_not_hide_unrelated_live_test(self):
+        name, target, pid = S.setup_run()
+        admin = client(name, 'admin')
+        started = admin.post('/world/props/' + pid + '/execute-test',
+                             json=dict(payload(target), actor=name, confirmed=True, request_id='deleted-participant'))
+        self.assertEqual(started.status_code, 200, started.text)
+        old_ref = started.json()['execution_id']
+        self.assertTrue(F.C.delete_character(name))
+        self.assertIn(R.get(old_ref)['status'], R.TERMINAL)
+        # A new actual fixture supplies a different surviving actor/placement.
+        live_name, live_target, live_pid = S.setup_run()
+        surviving_admin = client(live_name, 'admin')
+        live = surviving_admin.post('/world/props/' + live_pid + '/execute-test',
+                                    json=dict(payload(live_target), actor=live_name,
+                                              confirmed=True, request_id='unrelated-live-test'))
+        self.assertEqual(live.status_code, 200, live.text)
+        live_ref = live.json()['execution_id']
+        before = snapshot()
+        with pure_tripwires():
+            recovered = surviving_admin.get('/world/prop-action-tests')
+        self.assertEqual(recovered.status_code, 200, recovered.text)
+        self.assertEqual(snapshot(), before)
+        rows = {row['request']['execution_id']: row for row in recovered.json()['tests']}
+        missing = rows[old_ref]['observation']['current'][name]
+        self.assertEqual(missing['unavailable'], 'participant_not_found')
+        self.assertNotIn('sleeping', missing)
+        self.assertNotIn('stats', missing)
+        self.assertEqual(rows[old_ref]['observation']['before'][name],
+                         started.json()['observation']['before'][name])
+        self.assertEqual(rows[live_ref]['observation']['run']['status'], 'approaching')
+        self.assertNotIn('unavailable', rows[live_ref]['observation']['current'][live_name])
+        refused = surviving_admin.post('/world/props/' + live_pid + '/execute-test',
+                                       json=dict(payload(live_target), actor=name,
+                                                 confirmed=True, request_id='cannot-start-deleted-person'))
+        self.assertEqual(refused.status_code, 409, refused.text)
+        self.assertIsNone(R.by_request(name, 'cannot-start-deleted-person'))
+        stopped = surviving_admin.post('/world/props/' + live_pid + '/test-cancel',
+                                       json=dict(rows[live_ref]['request'], participant=live_name))
+        self.assertEqual(stopped.status_code, 200, stopped.text)
+        self.assertFalse(R.claims(live_ref))
+
+    def test_admin_exact_pair_controls_are_private_and_read_only_until_answered(self):
+        name, partner, target, pid = S.authored_pair()
+        admin, ordinary = client(name, 'admin'), client(name)
+        path = '/world/props/' + pid
+        start = dict(payload(target, partner=partner), actor=name,
+                     confirmed=True, request_id='admin-pair-decline')
+        self.assertEqual(ordinary.post(path + '/execute-test', json=start).status_code, 403)
+        started = admin.post(path + '/execute-test', json=start)
+        self.assertEqual(started.status_code, 200, started.text)
+        self.assertEqual(started.json()['status'], 'awaiting_consent')
+        body = dict(payload(target, partner=partner), actor=name,
+                    execution_id=started.json()['execution_id'])
+        before = snapshot()
+        with pure_tripwires():
+            state = admin.post(path + '/test-state', json=body)
+        self.assertEqual(state.status_code, 200, state.text)
+        self.assertTrue(state.json()['run']['can_respond'])
+        self.assertEqual(state.json()['run']['actor'], name)
+        self.assertEqual(state.json()['run']['partner'], partner)
+        self.assertEqual(snapshot(), before)
+        self.assertFalse(R.claims(body['execution_id']))
+        self.assertEqual(ordinary.post(path + '/test-state', json=body).status_code, 403)
+        for endpoint, extra in (
+                ('test-respond', dict(participant=partner, accept=True)),
+                ('test-cancel', dict(participant=name)),
+                ('test-wake', dict(participant=name))):
+            self.assertEqual(ordinary.post(path + '/' + endpoint, json=dict(body, **extra)).status_code, 403)
+        self.assertEqual(admin.post('/world/props/not-this-prop/test-state', json=body).status_code, 403)
+        for altered in (dict(body, actor=partner), dict(body, partner=name),
+                        dict(body, revision='not-this-run'),
+                        dict(body, target=dict(body['target'], placement_id='other'))):
+            self.assertEqual(admin.post(path + '/test-state', json=altered).status_code, 403)
+        self.assertEqual(admin.post(path + '/test-respond',
+                                   json=dict(body, participant=name, accept=True)).status_code, 403)
+        declined = admin.post(path + '/test-respond', json=dict(body, participant=partner, accept=False))
+        self.assertEqual(declined.status_code, 200, declined.text)
+        self.assertEqual(declined.json()['run']['status'], 'cancelled')
+        self.assertFalse(R.claims(body['execution_id']))
+        started = admin.post(path + '/execute-test', json=dict(start, request_id='admin-pair-accept'))
+        body['execution_id'] = started.json()['execution_id']
+        accepted = admin.post(path + '/test-respond', json=dict(body, participant=partner, accept=True))
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        self.assertEqual(accepted.json()['run']['status'], 'approaching')
+        self.assertTrue(accepted.json()['claims'])
+        # Today's edited/deleted definition must not strand this immutable test.
+        document = F.props.read_sidecar(pid)
+        document['actions'][0]['name'] = 'Edited after start'
+        F.props._write_sidecar(pid, document)
+        stopped = admin.post(path + '/test-cancel', json=dict(body, participant=name))
+        self.assertEqual(stopped.status_code, 200, stopped.text)
+        self.assertIn(stopped.json()['run']['status'], R.TERMINAL)
+        self.assertFalse(R.claims(body['execution_id']))
+
+    def test_admin_real_before_after_effects_and_sleep_wake_release_claims(self):
+        name, target, pid = S.setup_run('sleep')
+        document = F.props.read_sidecar(pid)
+        document['actions'][0]['pose_key'] = 'sleeping'
+        document['model_variants'][0]['markers'][0]['group'] = 'lie'
+        document['actions'][0]['effects'] = [
+            dict(id='admin-sleep-energy', type='stat_delta', target='actor',
+                 when='success', stat='run_energy', amount=7)]
+        F.props._write_sidecar(pid, document)
+        target['definition_revision'] = F.props.get_prop(pid)['revision']
+        S.measured_entry('sleeping')
+        admin = client(name, 'admin')
+        path = '/world/props/' + pid
+        started = admin.post(path + '/execute-test',
+                             json=dict(payload(target), actor=name, confirmed=True, request_id='admin-sleep'))
+        self.assertEqual(started.status_code, 200, started.text)
+        body = dict(payload(target), actor=name, execution_id=started.json()['execution_id'])
+        self.assertEqual(started.json()['observation']['before'][name]['stats']['run_energy'], 50)
+        S.tick(30)
+        S.tick(2)
+        state = admin.post(path + '/test-state', json=body)
+        self.assertEqual(state.status_code, 200, state.text)
+        self.assertEqual(state.json()['run']['status'], 'sleeping')
+        self.assertEqual(state.json()['current'][name]['stats']['run_energy'], 57)
+        self.assertEqual(state.json()['before'][name]['stats']['run_energy'], 50)
+        self.assertTrue(state.json()['current'][name]['sleeping'])
+        self.assertTrue(R.claims(body['execution_id']))
+        woken = admin.post(path + '/test-wake', json=dict(body, participant=name))
+        self.assertEqual(woken.status_code, 200, woken.text)
+        self.assertFalse(woken.json()['current'][name]['sleeping'])
+        self.assertFalse(R.claims(body['execution_id']))
+        self.assertEqual(admin.post(path + '/test-wake', json=dict(body, participant=name)).status_code, 409)
+        replacement = admin.post(path + '/execute-test',
+                                 json=dict(payload(target), actor=name, confirmed=True, request_id='admin-sleep-replacement'))
+        self.assertEqual(replacement.status_code, 200, replacement.text)
+        S.tick(30)
+        S.tick(2)
+        replacement_id = replacement.json()['execution_id']
+        self.assertEqual(R.get(replacement_id)['status'], 'sleeping')
+        self.assertEqual(admin.post(path + '/test-wake', json=dict(body, participant=name)).status_code, 409)
+        self.assertTrue(F.C.is_character_sleeping(name))
+        self.assertTrue(R.claims(replacement_id))
+
     def test_existing_character_runtime_default_explicit_disable_and_rules(self):
         name, target, _ = S.setup_run()
         manager = get_skill_manager()
@@ -479,7 +682,20 @@ class ApiContracts(unittest.TestCase):
         before = snapshot()
         with pure_tripwires():
             self.assertTrue(admin.post(base + '/validate', json={'document': doc}).json()['valid'])
-            self.assertTrue(admin.post(base + '/check-placement', json=body).json()['enabled'])
+            checked = admin.post(base + '/check-placement', json=body).json()
+            self.assertTrue(checked['enabled'])
+            self.assertEqual(set(checked['plans']), {'actor', 'partner'})
+            for role, plan in checked['plans'].items():
+                person = name if role == 'actor' else partner
+                position = F.C.get_character_pos(person)
+                self.assertEqual(plan['waypoints'][0], [position['x'], position['z']])
+                self.assertEqual(plan['waypoints'][-1], [plan['access']['x'], plan['access']['z']])
+                self.assertEqual(plan['entry_anchor']['placement_id'], target['placement_id'])
+            default_check = A.check(name, body['target'], body['action_id'], body['revision'], partner)
+            self.assertNotIn('plans', default_check)
+            offers_response = admin.get('/play/prop-actions')
+            self.assertEqual(offers_response.status_code, 200, offers_response.text)
+            self.assertNotIn('"plans"', offers_response.text)
         self.assertEqual(snapshot(), before)
         denied = admin.post(base + '/execute-test', json=dict(body, confirmed=False))
         self.assertEqual(denied.status_code, 422)

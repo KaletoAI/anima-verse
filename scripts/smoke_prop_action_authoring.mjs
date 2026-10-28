@@ -16,7 +16,7 @@ try {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
     }).outputText);
   }
-  const { createActionPreset, copyAction, actionEditorIssues, effectTimings, presentations, actionPreviewPose } = require(join(dir, 'propActionAuthoring.js'));
+  const { actionId, createRequirement, createActionPreset, copyAction, actionEditorIssues, effectTimings, presentations, actionPreviewPose } = require(join(dir, 'propActionAuthoring.js'));
   const { propActionCheckDocument, resolveCheckIssue } = require(join(dir, 'propActionChecks.js'));
   const { emptyFields, queueFields, applyVariantDraft } = require(join(dir, 'pendingFields.js'));
   const catalog = { status: 'ready', stats: ['energy'], conditions: [{ name: 'alert', label: 'Alert' }],
@@ -29,6 +29,24 @@ try {
       { key: 'embracing', group: 'seat', solo: false, animation: 'embrace' },
       { key: 'fake_pair', group: 'seat', solo: false, animation: 'missing_pair' }],
     kinds: ['driving', 'sit', 'lie', 'cooking', 'drinking'], pairKinds: ['embrace'], groups: {} };
+  const originalCrypto = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  const webcrypto = require('node:crypto').webcrypto;
+  try {
+    Object.defineProperty(globalThis, 'crypto', { configurable: true, value: {
+      getRandomValues: webcrypto.getRandomValues.bind(webcrypto),
+    } });
+    const ids = Array.from({ length: 100 }, () => actionId());
+    assert.equal(new Set(ids).size, ids.length);
+    assert(ids.every(id => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)));
+    const requirement = createRequirement(catalog);
+    assert.equal(requirement.type, 'stat');
+    assert.equal(requirement.stat, 'energy');
+    assert.equal(createRequirement({ ...catalog, stats: [] }).condition_id, 'alert');
+    assert.equal(createRequirement({ ...catalog, stats: [], conditions: [] }), null);
+  } finally {
+    if (originalCrypto) Object.defineProperty(globalThis, 'crypto', originalCrypto);
+    else delete globalThis.crypto;
+  }
   assert.deepEqual(presentations(catalog, 'pair').map(p => p.key), ['embracing']);
   const coffee = createActionPreset('coffee', catalog);
   assert.equal(coffee.ability, 'combined');

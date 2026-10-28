@@ -45,16 +45,24 @@ export function PropSpatialBindings({ workspace: w }: { workspace: PropWorkspace
           <button type="button" className="ga-btn ga-btn-sm" onClick={() => patchBinding(action.id, { validation: 'repair_required' })}>{t('Mit dieser Variante verknüpfen')}</button>
         </p>}
         <p role="status" className="ga-hint" id="prop-binding-validation" tabIndex={-1}>{!binding.supported ? t('Diese Variante bietet die Handlung nicht an.')
-          : binding.validation === 'local_valid' && !problems.length ? t('Lokal bestätigt. Raumweg und Anwesenheit nicht geprüft.')
-            : t('Reparatur nötig: Körperanker/Zugänge bearbeiten und lokal bestätigen.')}</p>
+          : binding.validation === 'suggested' ? t('Vorgeschlagene Altbindung: ausdrücklich übernehmen oder bearbeiten.')
+            : !problems.length && binding.variant_uid === shownVariant?.uid ? t('Lokal gültig. Raumweg und Anwesenheit nicht geprüft.')
+              : t('Reparatur nötig: Körperanker und Zugänge bearbeiten. Lokale Gültigkeit wird automatisch geprüft.')}</p>
         <div id="prop-binding-marker_ids" tabIndex={-1}>
           <strong>{t('Körperanker — Alternativen, keine aufeinanderfolgenden Schritte')}</strong>
-          {markers.map((m, i) => <label key={m.id || i} className="ga-form-row">
+          {markers.map((m, i) => <div key={m.id || i} className="ga-form-row"><label>
             <input type="checkbox" checked={!!m.id && binding.marker_ids.includes(m.id)} disabled={!m.id}
               onChange={e => patchBinding(action.id, { marker_ids: e.target.checked ? [...binding.marker_ids, m.id!] : binding.marker_ids.filter(id => id !== m.id), validation: 'repair_required' })} />
             {t('Marker')} {i + 1} · {groupLabel(w.groups, m.group)} · {t('Kapazität')} {m.capacity || 1}
-            <button type="button" className="ga-btn ga-btn-sm" onClick={() => w.setSelectedMarker(i)}>{t('Körperanker bearbeiten')}</button>
-          </label>)}
+            </label><button type="button" className="ga-btn ga-btn-sm" onClick={() => {
+              w.setSelectedMarker(i)
+              requestAnimationFrame(() => {
+                const card = document.getElementById('prop-marker-card')
+                card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                card?.querySelector<HTMLElement>('input, select, textarea')?.focus({ preventScroll: true })
+              })
+            }}>{t('Edit body anchor')}</button>
+          </div>)}
           {binding.marker_ids.filter(id => !markers.some(m => m.id === id)).map(id => <div key={id} role="alert">
             {t('Unbekannter Marker')}: {id}
             <select className="ga-input" aria-label={t('Fehlenden Marker ersetzen')} value="" onChange={e => {
@@ -97,16 +105,21 @@ export function PropSpatialBindings({ workspace: w }: { workspace: PropWorkspace
           </div>
         })}
         {binding.supported && problems.length > 0 && <ul role="alert">{problems.map(p => <li key={p}>{t(p)}</li>)}</ul>}
-        <button type="button" className="ga-btn" disabled={problems.length > 0 || !binding.supported}
-          onClick={() => patchBinding(action.id, { validation: 'local_valid' })}>{t('Zugänge lokal bestätigen (kein Raumweg)')}</button>
-        <p className="ga-hint">{t('Bestätigt nur vollständige Anker und freie Zugänge außerhalb der eigenen Grundfläche mit 0,30 m Abstand. Paar-Slotpassung, Eintrittsübergang, andere Möbel, Wände und Personen prüft erst der Server/Raumcheck.')}</p>
+        {binding.validation === 'suggested' && <button type="button" className="ga-btn" disabled={problems.length > 0 || !binding.supported}
+          onClick={() => patchBinding(action.id, { validation: 'repair_required' })}>{t('Vorgeschlagene Bindung übernehmen')}</button>}
+        <p className="ga-hint">{t('Automatisch geprüft werden vollständige Anker und freie Zugänge außerhalb der eigenen Grundfläche mit 0,30 m Abstand. Paar-Slotpassung, Eintrittsübergang, andere Möbel, Wände und Personen prüft erst der Server/Raumcheck.')}</p>
       </>}
     </fieldset>}
     {!!unknown.length && <div role="alert"><strong>{t('Unbekannte oder doppelte Aktionsbindungen')}</strong>{unknown.map((b, i) => <div key={`${b.action_id}-${i}`}>
       {b.action_id} <button className="ga-btn ga-btn-sm" type="button" disabled={saving || !!previewFile} onClick={() => w.queueVariant(w.variant, { action_bindings: bindings.filter(entry => entry !== b) })}>{t('Ungültige Bindung entfernen')}</button>
     </div>)}</div>}
     <div><strong>{t('Alle verwendenden Aktionen dieser Variante')}</strong>
-      <ul>{bindings.map((b, i) => <li key={`${b.action_id}-${i}`}><button type="button" className="ga-btn ga-btn-sm" onClick={() => setSelectedActionId(b.action_id)}>{actions.find(a => a.id === b.action_id)?.name || b.action_id}</button> · {!b.supported ? t('Nicht unterstützt') : b.validation === 'local_valid' ? t('Lokal bestätigt') : t('Reparatur nötig')}</li>)}</ul>
+      <ul>{bindings.map((b, i) => {
+        const entryAction = actions.find(a => a.id === b.action_id)
+        const valid = entryAction && b.variant_uid === shownVariant?.uid
+          && !bindingProblems(b, entryAction, markers, w.shownDims).length
+        return <li key={`${b.action_id}-${i}`}><button type="button" className="ga-btn ga-btn-sm" onClick={() => setSelectedActionId(b.action_id)}>{entryAction?.name || b.action_id}</button> · {!b.supported ? t('Nicht unterstützt') : b.validation === 'suggested' ? t('Vorgeschlagene Bindung') : valid ? t('Lokal gültig') : t('Reparatur nötig')}</li>
+      })}</ul>
     </div>
     {removal && <PropWorkspaceDialog title={t('Referenzierten Körperanker entfernen')} onCancel={() => { w.setMarkerRemoval(null); setReplacement('') }}>
       <p>{t('Diese Aktionen verwenden den Marker. Ersatz verknüpfen oder alle abhängigen Bindungen zusammen mit dem Marker aus demselben Entwurf entfernen:')}</p>

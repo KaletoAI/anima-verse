@@ -75,3 +75,21 @@ export function bindingProblems(binding: VariantBinding, action: Pick<ActionDefi
   }
   return problems
 }
+
+/** Called only at user-edit boundaries; inspecting saved geometry never dirties it. */
+export function editedBindingValidation(variant: Pick<PropVariant, 'uid' | 'markers' | 'dims' | 'action_bindings'>,
+  actions: ActionDefinition[]) {
+  const bindings = variant.action_bindings || []
+  let changed = false
+  const normalized = bindings.map(binding => {
+    if (binding.validation === 'suggested') return binding
+    const action = actions.find(item => item.id === binding.action_id)
+    const validation = action && binding.variant_uid === variant.uid
+      && (!binding.supported || !bindingProblems(binding, action, variant.markers, variant.dims).length)
+      ? 'local_valid' as const : 'repair_required' as const
+    if (validation === binding.validation) return binding
+    changed = true
+    return { ...binding, validation }
+  })
+  return changed ? normalized : bindings
+}

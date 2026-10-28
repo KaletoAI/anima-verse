@@ -120,7 +120,6 @@ export interface PropPlacementCheckRequest {
   target: PropCheckTarget; action_id: string; revision: string; actor: string; partner: string
 }
 export interface PropPlacementCheckResult { enabled: boolean; reason: string }
-export interface PropExecutionResult { execution_id: string; status: string; phase?: string; reason: string }
 
 const REASONS: Record<string, string> = {
   missing_entry_transition: 'Ein passender gemessener Eintrittsübergang vom Zugang zum Körperanker fehlt. Keine Ausführung und kein Teleport. Die Übergangsregel und passende Animation müssen im bestehenden Animationssystem eingerichtet werden.',

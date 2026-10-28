@@ -81,7 +81,7 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
             </div>
             
             {selMarker ? (
-              <div className="ga-marker-card">
+              <div id="prop-marker-card" className="ga-marker-card">
                 <p className="ga-hint">{t('Verwendende Aktionen dieses Körperankers')}: {(workspace.shownVariant?.action_bindings || [])
                   .filter(b => !!selMarker.id && b.marker_ids.includes(selMarker.id))
                   .map(b => workspace.actions.find(a => a.id === b.action_id)?.name || b.action_id).join(', ') || t('Keine')}</p>

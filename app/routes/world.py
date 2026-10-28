@@ -2141,6 +2141,26 @@ async def _require_prop_picks(data: Dict[str, Any]) -> None:
         await require_explicit_backend_async(mesh_pick, media="mesh")
 
 
+def _start_prop_generation(prop_id: str, data: Dict[str, Any], **kwargs: Any) -> bool:
+    """Revalidate the paid target inside the allocator's author transaction."""
+    from app.core.props import (trigger_generation, trigger_generation_repair,
+                                PropRevisionConflict, PropGenerationUnavailable)
+    try:
+        if data.get("resume_op_id"):
+            return trigger_generation_repair(
+                prop_id, str(data["resume_op_id"]), variant=kwargs.get("variant"),
+                variant_uid=str(data.get("variant_uid") or ""),
+                base_revision=str(data.get("base_revision") or ""))
+        return trigger_generation(
+            prop_id, **kwargs,
+            variant_uid=str(data.get("variant_uid") or ""),
+            reference_variant_uid=str(data.get("reference_variant_uid") or ""),
+            base_revision=str(data.get("base_revision") or ""),
+            generation_target=data.get("generation_target"))
+    except (PropRevisionConflict, PropGenerationUnavailable) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/props/generate")
 async def prop_generate(request: Request) -> Dict[str, Any]:
     """Create a prop from a prompt and kick off the source→mesh chain (body:
@@ -2430,7 +2450,7 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
     slots that variant's front image as its appearance reference, and ``views``
     lists the extra views a MESH run sends along to the mesh alias. Background
     job — poll /world/props for pending."""
-    from app.core.props import get_prop, trigger_generation
+    from app.core.props import get_prop
     if not get_prop(prop_id):
         raise HTTPException(status_code=404, detail="Prop not found")
     data = await request.json() if (request.headers.get("content-length") or "0") != "0" else {}
@@ -2441,7 +2461,7 @@ async def prop_regenerate(prop_id: str, request: Request) -> Dict[str, Any]:
                             detail="mesh_only and image_only are exclusive")
     view, front_reference, reference_variant, views = _view_args(data)
     await _require_prop_picks(data)
-    if not trigger_generation(prop_id,
+    if not _start_prop_generation(prop_id, data,
                               prompt=str(data.get("prompt") or ""),
                               negative=str(data.get("negative") or ""),
                               image_backend_glob=str(data.get("image_backend") or "").strip(),

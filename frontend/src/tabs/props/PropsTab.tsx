@@ -12,7 +12,6 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BulkPublishButton, ImportButton } from '../../components/ImportExport'
-import { ListHeader } from '../../components/ListHeader'
 import { ListPane } from '../../components/ListPane'
 import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -23,9 +22,9 @@ import { PropDetail } from './PropDetail'
 import { PropImageDialog } from './PropImageDialog'
 import { PropWorkspaceDialog } from './PropWorkspaceDialog'
 import { CATEGORY_DATALIST_ID, MOUNT_KINDS, mountLabel, hasIncompleteActionBindings } from './propTypes'
-import { propGenerationTarget, resolveVariantAfterBarrier, type PropGenerationTarget } from './propOperations'
+import { propGenerationTarget, propGenerationAuthor, resolveVariantAfterBarrier, type PropGenerationTarget } from './propOperations'
 import type {
-  ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage, PropVariant, PropView,
+  ImageBackendInfo, MeshBackendInfo, PropFull, PropSourceImage, PropVariant, PropView, PropWorkspaceArea,
 } from './propTypes'
 
 export type { ImageBackendInfo, MeshBackendInfo, PropFull, PropMarker } from './propTypes'
@@ -48,6 +47,7 @@ export function PropsTab() {
   const [meshDefault, setMeshDefault] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [selected, setSelected] = useState('')
+  const [area, setArea] = useState<PropWorkspaceArea>('overview')
   const [armedDel, setArmedDel] = useState('')
   const [cacheBump, setCacheBump] = useState(0)
   const [creating, setCreating] = useState(false)
@@ -74,13 +74,13 @@ export function PropsTab() {
   }, [libraryOpen])
   // Prop id whose 🧊 regenerate waits in the backend dialog (every 3D
   // generate button goes through the dialog — face count / texture size
-  // are per-run overrides). `variant` is the model variant a RE-MESH refines;
-  // the plain regenerate has none, because it appends one.
+  // are per-run overrides). Existing targets keep their stable UID; only
+  // the explicit new-variant operation carries an append plan.
   // `views` are the extra views that variant HAS a picture for — the dialog
   // offers exactly those to the multi-view alias, and the ones the admin
   // ticks travel with the mesh call.
   const [regen, setRegen] = useState<
-    { id: string; meshOnly: boolean; variant?: number; uid?: string
+    { id: string; meshOnly: boolean; variant?: number; uid?: string; author: PropVariant
       plan?: PropGenerationTarget; views?: PropView[] } | null>(null)
   // Prop whose 🖼 image-only regenerate waits in the image dialog (backend +
   // final prompt; the mesh stays until re-meshed from the new image). The
@@ -280,30 +280,36 @@ export function PropsTab() {
         collapseDisabled={bulkRunning}
         onExpandedChange={libraryOpen ? () => setLibraryOpen(false) : undefined}>
         <div id="prop-library" className="prop-library-content">
-        <ListHeader
-          title={t('Props')}
-          onNew={() => navigate('', true)}
-          extra={
-            <>
-              <button className="ga-btn ga-btn-sm" disabled={classifying}
-                onClick={() => setClassifyOpen(true)}
-                title={t('Let the LLM say how each unclassified prop is mounted — on the floor, on a wall, on the ceiling or on another prop.')}>
-                {classifying ? t('Classifying…') : t('Classify mount (LLM)')}
-              </button>
-              <ImportButton
-                onImported={() => { void load(); setCacheBump((b) => b + 1) }}
-              />
-              <button className={`ga-btn ga-btn-sm${pickMode ? ' ga-btn-primary' : ''}`}
-                disabled={bulkRunning}
-                onClick={() => { setPickMode((m) => !m); setPicked(new Set()) }}
-                title={t('Tick props to publish them to a marketplace catalog in one go.')}>
-                ☑ {t('Select')}
-              </button>
-            </>
-          }
-        />
+        <header className="ga-twocol-header prop-library-header">
+          <h3>{t('Props')}</h3>
+          <div className="prop-library-actions" role="group" aria-label={t('Bibliotheksaktionen')}>
+            <button type="button" className="ga-btn ga-btn-sm ga-btn-primary"
+              aria-label={t('New')} title={t('New')} onClick={() => navigate('', true)}>
+              <span aria-hidden="true">+</span>
+            </button>
+            <button type="button" className="ga-btn ga-btn-sm" disabled={classifying}
+              aria-label={classifying ? t('Classifying…') : t('Classify mount (LLM)')}
+              title={classifying ? t('Classifying…') : t('Classify mount (LLM)')}
+              onClick={() => setClassifyOpen(true)}>
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m4 20 12-12 4 4L8 24M14 10l4 4M5 3v6M2 6h6M19 2v4M17 4h4" transform="translate(0 -2)" />
+              </svg>
+            </button>
+            <div className="prop-library-import">
+              <ImportButton title={t('Import')}
+                onImported={() => { void load(); setCacheBump((b) => b + 1) }} />
+            </div>
+            <button type="button" className={`ga-btn ga-btn-sm${pickMode ? ' ga-btn-primary' : ''}`}
+              disabled={bulkRunning} aria-label={t('Select')} title={t('Select')} aria-pressed={pickMode}
+              onClick={() => { setPickMode((m) => !m); setPicked(new Set()) }}>
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="4" y="4" width="16" height="16" rx="2" /><path d="m8 12 3 3 5-6" />
+              </svg>
+            </button>
+          </div>
+        </header>
         {pickMode ? (
-          <div className="ga-form-row" style={{ padding: '0 8px 8px', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <div className="ga-form-row prop-library-selection">
             <span style={{ fontSize: 12 }}>{t('{n} selected').replace('{n}', String(picked.size))}</span>
             <button className="ga-btn ga-btn-sm"
               onClick={() => setPicked(new Set(visible.map((p) => p.id)))}>
@@ -317,33 +323,34 @@ export function PropsTab() {
               onRunningChange={setBulkRunning} />
           </div>
         ) : null}
-        <div className="ga-form-row" style={{ padding: '0 8px 8px' }}>
+        <div className="prop-library-search">
           <input className="ga-input" value={query} placeholder={t('Search…')} aria-label={t('Props durchsuchen')}
             onChange={(e) => setQuery(e.target.value)} />
-          <select className="ga-input" value={catFilter} style={{ maxWidth: 140 }}
-            onChange={(e) => setCatFilter(e.target.value)}>
-            <option value="">{t('All categories')}</option>
-            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <select className="ga-input" value={mountFilter} style={{ maxWidth: 140 }}
-            onChange={(e) => setMountFilter(e.target.value)}>
-            <option value="">{t('All mounts')}</option>
-            <option value="none">{t('Unclassified')}</option>
-            {MOUNT_KINDS.map((m) => (
-              <option key={m.kind} value={m.kind}>{t(m.label)}</option>
-            ))}
-          </select>
+          <div className="prop-library-filter-selects">
+            <select className="ga-input" value={catFilter} aria-label={t('Category')}
+              title={t('Category')} onChange={(e) => setCatFilter(e.target.value)}>
+              <option value="">{t('All categories')}</option>
+              {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select className="ga-input" value={mountFilter} aria-label={t('All mounts')}
+              title={t('All mounts')} onChange={(e) => setMountFilter(e.target.value)}>
+              <option value="">{t('All mounts')}</option>
+              <option value="none">{t('Unclassified')}</option>
+              {MOUNT_KINDS.map((m) => (
+                <option key={m.kind} value={m.kind}>{t(m.label)}</option>
+              ))}
+            </select>
+          </div>
         </div>
-        <label className="ga-check-row" style={{ padding: '0 8px 8px' }}
-          title={t('Props whose size is still the placeholder cube of the create form. Those metres are what a room’s furnishing budget is spent from — fix them in the variant strip.')}>
-          <input type="checkbox" checked={estimatedOnly}
-            onChange={(e) => setEstimatedOnly(e.target.checked)} />
-          {t('Estimated size only')}
-        </label>
         <div className="prop-library-filters">
-          <label><input type="checkbox" checked={missingModelOnly} onChange={(event) => setMissingModelOnly(event.target.checked)} /> {t('Modell fehlt')}</label>
-          <label><input type="checkbox" checked={actionsOnly} onChange={(event) => setActionsOnly(event.target.checked)} /> {t('Aktionen vorhanden')}</label>
-          <label><input type="checkbox" checked={incompleteBindingsOnly} onChange={(event) => setIncompleteBindingsOnly(event.target.checked)} /> {t('Aktionsbindung unvollständig')}</label>
+          <label title={t('Props whose size is still the placeholder cube of the create form. Those metres are what a room’s furnishing budget is spent from — fix them in the variant strip.')}>
+            <input type="checkbox" checked={estimatedOnly}
+              onChange={(e) => setEstimatedOnly(e.target.checked)} />
+            {t('Maße geschätzt')}
+          </label>
+          <label title={t('Modell fehlt')}><input type="checkbox" checked={missingModelOnly} onChange={(event) => setMissingModelOnly(event.target.checked)} /> {t('Ohne Modell')}</label>
+          <label title={t('Aktionen vorhanden')}><input type="checkbox" checked={actionsOnly} onChange={(event) => setActionsOnly(event.target.checked)} /> {t('Mit Aktionen')}</label>
+          <label title={t('Aktionsbindung unvollständig')}><input type="checkbox" checked={incompleteBindingsOnly} onChange={(event) => setIncompleteBindingsOnly(event.target.checked)} /> {t('Bindung offen')}</label>
         </div>
         <ul className="ga-list">
           {!loaded ? (
@@ -355,14 +362,18 @@ export function PropsTab() {
           ) : (
             visible.map((p) => {
               const isActive = p.id === selected
-              // Incompleteness of the ACTIVE variants, straight from the three
-              // counts the record carries. A prop with no mesh at all already
-              // says "no model", so the mesh badge only speaks up when SOME
-              // variants have one and others do not.
-              const total = p.variants_total || 0
-              const noMesh = p.has_model ? (p.variants_missing_mesh || 0) : 0
-              const noImage = p.variants_missing_image || 0
-              const fraction = (n: number) => `${n}/${total}`
+              const secondary = [
+                p.category, p.mount ? t(mountLabel(p.mount)) : '',
+                pending.includes(p.id) ? t('generating…') : '',
+                !p.has_model ? t('no model') : '',
+                (p.variant_count || 0) > 1 ? `${p.variant_count} ${t('Varianten')}` : '',
+                p.variants_missing_mesh ? `${p.variants_missing_mesh} ${t('mesh missing')}` : '',
+                p.variants_missing_image ? `${p.variants_missing_image} ${t('image missing')}` : '',
+                hasIncompleteActionBindings(p) ? t('Aktionsbindung prüfen')
+                  : (p.actions || []).length ? t('Aktionen definiert; Raumweg nicht geprüft')
+                    : t('Dekorativ · keine Aktionen nötig'),
+                p.mount_suggested ? t('suggested') : '',
+              ].filter(Boolean).join(' · ')
               return (
                 <li key={p.id}>
                   <button
@@ -371,81 +382,16 @@ export function PropsTab() {
                     aria-pressed={pickMode ? picked.has(p.id) : undefined}
                     onClick={() => (pickMode ? togglePick(p.id) : navigate(p.id))}
                   >
+                    {pickMode && <span aria-hidden className="prop-library-pick">
+                      {picked.has(p.id) ? '☑' : '☐'}
+                    </span>}
+                    {p.has_source ? <img className="ga-list-thumb" alt=""
+                      src={`/assets/props/${encodeURIComponent(p.id)}/source?v=${cacheBump}`} />
+                      : <span aria-hidden className="prop-library-icon">📦</span>}
                     <span className="ga-list-row-main">
-                      {pickMode ? (
-                        <span aria-hidden style={{ fontSize: 16 }}>
-                          {picked.has(p.id) ? '☑' : '☐'}
-                        </span>
-                      ) : null}
-                      {p.has_source ? (
-                        <img className="ga-list-thumb" alt=""
-                          src={`/assets/props/${encodeURIComponent(p.id)}/source?v=${cacheBump}`} />
-                      ) : (
-                        <span style={{ fontSize: 18 }}>📦</span>
-                      )}
-                      <span>{p.name}</span>
-                      <span className="ga-list-row-sub">
-                        {p.category ? `${p.category} · ` : ''}
-                        {`${p.width_m}×${p.depth_m}×${p.height_m} m`}
-                      </span>
-                      {/* The mount column: which surface the piece is set
-                          down on. An em dash where nobody has said yet —
-                          that is a to-do, not a floor. */}
-                      <span className="ga-list-row-sub"
-                        title={t('How this prop is mounted')}>
-                        {p.mount ? t(mountLabel(p.mount)) : '—'}
-                      </span>
-                      {p.mount_suggested ? (
-                        <span className="ga-tag"
-                          title={t('Suggested by the LLM — open the prop to confirm or change it.')}>
-                          {t('suggested')}
-                        </span>
-                      ) : null}
-                      <span className="ga-list-row-sub">{hasIncompleteActionBindings(p)
-                        ? t('Aktionsbindung prüfen') : (p.actions || []).length
-                          ? t('Aktionen definiert; Raumweg nicht geprüft')
-                          : t('Dekorativ · keine Aktionen nötig')}</span>
+                      <span className="prop-library-name" title={p.name}>{p.name}</span>
+                      <span className="ga-list-row-sub" title={secondary}>{secondary}</span>
                     </span>
-                    {pending.includes(p.id) ? (
-                      <span className="ga-source">{t('generating…')}</span>
-                    ) : null}
-                    {!p.has_model ? <span className="ga-source">{t('no model')}</span> : null}
-                    {/* The placeholder cube of the create form is what a
-                        room's furnishing budget is spent from — a wrong one
-                        eats the room, so it is flagged here. */}
-                    {p.dims_estimated ? (
-                      <span className="ga-tag ga-tag-missing"
-                        title={t('The size is still the placeholder cube of the create form — fix it in the variant strip before this prop is furnished into a room.')}>
-                        {t('size estimated')}
-                      </span>
-                    ) : null}
-                    {/* Several meshes of the same object — worth seeing from
-                        the list, a scattered prop looks different with them. */}
-                    {(p.variant_count || 0) > 1 ? (
-                      <span className="ga-tag" title={t('Model variants of this prop')}>
-                        ×{p.variant_count}
-                      </span>
-                    ) : null}
-                    {/* An incomplete variant is invisible in the list otherwise
-                        — the thumbnail and the ×N badge come from the primary
-                        variant alone, so a second one without a mesh or
-                        without its own product shot never shows up. */}
-                    {noMesh > 0 ? (
-                      <span className="ga-tag ga-tag-missing"
-                        title={t('{n} of {total} active model variants have no mesh yet. Open the prop — the variant strip says which one and meshes it.')
-                          .replace('{n}', String(noMesh))
-                          .replace('{total}', String(total))}>
-                        ⬡ {fraction(noMesh)} {t('mesh missing')}
-                      </span>
-                    ) : null}
-                    {noImage > 0 ? (
-                      <span className="ga-tag ga-tag-missing"
-                        title={t('{n} of {total} active model variants have no source image. Without it that variant cannot be re-meshed. Open the prop — the variant strip says which one.')
-                          .replace('{n}', String(noImage))
-                          .replace('{total}', String(total))}>
-                        🖼 {fraction(noImage)} {t('image missing')}
-                      </span>
-                    ) : null}
                   </button>
                 </li>
               )
@@ -467,16 +413,19 @@ export function PropsTab() {
           <PropDetail
             key={selectedProp.id}
             prop={selectedProp}
+            area={area}
+            onAreaChange={setArea}
             pending={pending.includes(selectedProp.id)}
             generatingVariants={genVariants[selectedProp.id] || []}
             cacheBump={cacheBump}
             onChanged={load}
             onDelete={() => remove(selectedProp.id)}
             armedDelete={armedDel === selectedProp.id}
-            onRegenerate={(plan) => setRegen({ id: selectedProp.id, meshOnly: false, plan,
+            onRegenerate={(plan, author) => setRegen({ id: selectedProp.id, meshOnly: plan.kind === 'existing' && author.has_source, plan, author,
+              views: (['back', 'left', 'right'] as PropView[]).filter(view => !!author.images?.[view]),
               ...(plan.kind === 'existing' ? { variant: plan.index, uid: plan.uid } : {}) })}
             onRegenerateMesh={(target, views) =>
-              setRegen({ id: selectedProp.id, meshOnly: true, variant: target.index, uid: target.uid, views })}
+              setRegen({ id: selectedProp.id, meshOnly: true, variant: target.index, uid: target.uid, author: target, views })}
             onRegenerateImage={(target, view, image, subject, refs, author) =>
               setImgRegen({ prop: author, variant: target.index, uid: target.uid, view,
                 refs, image, subject })}
@@ -500,30 +449,17 @@ export function PropsTab() {
         )}
         <MeshBackendDialog
           open={regen !== null}
-          title={regen?.meshOnly
-            ? `${t('Re-mesh from the source image')} · ${t('Variant')} ${(regen.variant || 0) + 1}`
-            : t('Prop-Modell generieren — Ziel und Ersetzung prüfen')}
-          hint={regen?.meshOnly ? t('Das Modell der gewählten Variante wird aus ihrem Quellbild neu erstellt.')
-            : regen?.plan?.kind === 'existing'
-              ? `${t('Ziel')}: ${t('Variant')} ${regen.plan.index + 1}. ${t(regen.plan.replaces
-                ? 'Aktive Obergrenze erreicht: Quellbild und aktives Modell dieser Variante werden durch die kostenpflichtige Generierung ersetzt. Frühere Meshes bleiben in der Galerie.'
-                : 'Diese bestehende Variante hat kein Mesh. Ihre Quellbilder werden neu erzeugt und ihr Modell wird gefüllt.')}`
-              : t('Eine neue Modellvariante wird angelegt. Die Generierung verursacht die konfigurierten Backendkosten.')}
+          title={regen?.plan?.kind === 'append' ? t('+ Generate new variant') : t('Regenerate selected variant')}
+          hint={regen?.plan?.kind === 'append'
+            ? t('A new variant will be created. Generation uses the configured paid backends.')
+            : t('Only the selected variant is replaced. No variant is created.')}
           backends={meshBackends}
           defaultBackend={meshDefault
             || (meshBackends.length === 1 ? meshBackends[0].name : '')}
           generateLabel={regen?.meshOnly ? t('Mesh') : t('Regenerate')}
-          // What the addressed variant STATES it should cost (v2 E5) — the
-          // dialog opens on it instead of on the backend default, because the
-          // budget is a decision about the object and outlives the run. A
-          // plain regenerate APPENDS a variant, and the new slot copies its
-          // source's budgets, so variant 0's are the right prefill there too.
-          faceTargets={(() => {
-            const tier = (selectedProp?.variant_tiers || [])
-              .find((v) => v.variant === (regen?.variant || 0))
-            return { high: tier?.target_faces_high,
-              low: tier?.target_faces_low }
-          })()}
+          // Existing targets use their own budgets; append copies the confirmed
+          // primary author's settings, independent of the currently selected prop.
+          faceTargets={{ high: regen?.author.target_faces_high, low: regen?.author.target_faces_low }}
           showTier
           // Only a RE-MESH offers views, and only the ones this variant
           // really holds a file for — a stored picture has no alternatives,
@@ -537,43 +473,67 @@ export function PropsTab() {
             if (!request) return
             const base = `/world/props/${encodeURIComponent(request.id)}`
             try {
-              const current = await apiGet<{ variants: PropVariant[]; max: number }>(`${base}/variants`)
+              const current = await apiGet<{ variants: PropVariant[]; max: number;
+                revision: string; generating_variants: number[] }>(`${base}/variants`)
               let index: number | undefined
-              if (request.meshOnly) {
+              let plan = request.plan
+              let author: PropVariant
+              if (request.plan?.kind === 'append' && current.generating_variants.length) {
+                throw new Error(t('Generation is running for this prop. Wait for it to finish.'))
+              }
+              if (request.plan?.kind !== 'append') {
                 const target = await resolveVariantAfterBarrier(request.uid || '', async () => true,
                   async () => current.variants)
                 if (!target) return
-                index = target.index
-              } else {
-                const plan = propGenerationTarget(current.variants, current.max)
-                const shown = request.plan
-                const unchanged = plan.kind === 'append' ? shown?.kind === 'append'
-                  : shown?.kind === 'existing' && shown.uid === plan.uid && shown.index === plan.index
-                    && shown.replaces === plan.replaces
-                if (!unchanged) {
-                  setRegen({ ...request, plan,
-                    variant: plan.kind === 'existing' ? plan.index : undefined,
-                    uid: plan.kind === 'existing' ? plan.uid : undefined })
-                  toast(t('Das Generierungsziel wurde geändert. Neues Ziel und Ersetzung vor dem Start prüfen.'), 'error')
-                  return
+                if (current.generating_variants.includes(target.index)) {
+                  throw new Error(t('This variant is generating right now.'))
                 }
-                if (plan.kind === 'existing') index = plan.index
+                if (request.meshOnly && !target.has_source) throw new Error(t('This variant has no source image.'))
+                index = target.index
+                author = target
+              } else {
+                plan = propGenerationTarget(current.variants, current.max, current.generating_variants)
+                author = propGenerationAuthor(current.variants, plan)
+              }
+              const changed = JSON.stringify(plan) !== JSON.stringify(request.plan)
+                || author.uid !== request.author.uid
+                || author.index !== request.author.index
+                || author.target_faces_high !== request.author.target_faces_high
+                || author.target_faces_low !== request.author.target_faces_low
+                || (request.meshOnly && JSON.stringify(author.images) !== JSON.stringify(request.author.images))
+              if (changed) {
+                setRegen({ ...request, plan, author,
+                  variant: index,
+                  uid: index === undefined ? undefined : author.uid,
+                  views: request.meshOnly ? (['back', 'left', 'right'] as PropView[])
+                    .filter((view) => !!author.images?.[view]) : request.views })
+                toast(t('The generation target or its settings changed. Review again before starting.'), 'error')
+                return
               }
               const answer = await apiPost<{ status?: string }>(
                 index === undefined ? `${base}/generate` : `${base}/variants/${index}/generate`,
-                { mesh_backend: backend, ...(request.meshOnly ? { mesh_only: true } : {}),
+                { mesh_backend: backend, base_revision: current.revision,
+                  ...(index !== undefined ? { mesh_only: request.meshOnly, variant_uid: author.uid } : { generation_target: plan }),
                   ...(opts.face_num ? { face_num: opts.face_num } : {}),
                   ...(opts.texture_size ? { texture_size: opts.texture_size } : {}),
                   ...(opts.lod_faces !== undefined ? { lod_faces: opts.lod_faces } : {}),
                   ...(opts.tier ? { tier: opts.tier } : {}),
                   ...(opts.views ? { views: Object.keys(opts.views) } : {}) })
               toast(answer?.status === 'already_running' ? t('This variant is already generating.')
-                : t('Generierung für das bestätigte Ziel gestartet.'))
+                : t('Generation started for the confirmed target.'))
               startPoll()
-            } catch (error) { toast(t('Error') + ': ' + (error as Error).message, 'error') }
+            } catch (error) { toast(t('Error') + ': ' + t((error as Error).message), 'error') }
           }}
           onClose={() => setRegen(null)}
-        />
+        >
+          {regen?.plan?.kind === 'existing' && regen.author.has_source && <fieldset>
+            <legend>{t('Generation mode')}</legend>
+            <label><input type="radio" name="prop-regen-mode" checked={regen.meshOnly}
+              onChange={() => setRegen({ ...regen, meshOnly: true })} />{t('3D model from the existing image')}</label>
+            <label><input type="radio" name="prop-regen-mode" checked={!regen.meshOnly}
+              onChange={() => setRegen({ ...regen, meshOnly: false })} />{t('New image + 3D model')}</label>
+          </fieldset>}
+        </MeshBackendDialog>
         <PropImageDialog
           prop={imgRegen?.prop || null}
           variant={imgRegen?.variant || 0}
@@ -589,25 +549,33 @@ export function PropsTab() {
             if (!request) return
             try {
               const base = `/world/props/${encodeURIComponent(request.prop.id)}`
-              const current = await apiGet<{ variants: PropVariant[] }>(`${base}/variants`)
+              const current = await apiGet<{ variants: PropVariant[]; revision: string;
+                generating_variants: number[] }>(`${base}/variants`)
               const target = await resolveVariantAfterBarrier(request.uid, async () => true,
                 async () => current.variants)
               if (!target) return
+              if (current.generating_variants.includes(target.index)) {
+                throw new Error(t('This variant is generating right now.'))
+              }
               let referenceIndex: number | undefined
+              let referenceUid: string | undefined
               if (referenceVariant !== null) {
                 const uid = request.refs.find((entry) => entry.index === referenceVariant)?.uid || ''
                 const reference = await resolveVariantAfterBarrier(uid, async () => true,
                   async () => current.variants)
                 if (!reference) return
                 referenceIndex = reference.index
+                referenceUid = reference.uid
               }
               const answer = await apiPost<{ status?: string }>(`${base}/variants/${target.index}/generate`,
                 { image_only: true, image_backend: imageBackend, prompt, negative, view: request.view,
+                  base_revision: current.revision, variant_uid: target.uid,
                   front_reference: referenceIndex !== undefined,
-                  ...(referenceIndex !== undefined ? { reference_variant: referenceIndex } : {}) })
+                  ...(referenceIndex !== undefined
+                    ? { reference_variant: referenceIndex, reference_variant_uid: referenceUid } : {}) })
               toast(answer?.status === 'already_running' ? t('This variant is already generating.') : t('Rendering a new source image…'))
               startPoll()
-            } catch (error) { toast(t('Error') + ': ' + (error as Error).message, 'error') }
+            } catch (error) { toast(t('Error') + ': ' + t((error as Error).message), 'error') }
           }}
           onClose={() => setImgRegen(null)}
         />

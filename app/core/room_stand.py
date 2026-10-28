@@ -432,8 +432,8 @@ def bridge_stand_point(name: str, place: Dict[str, Any], pose_key: str,
     return (float(place["x"]) + dx, float(place["z"]) + dz)
 
 
-def approach_departure(name: str, *, profile: Optional[Dict[str, Any]] = None
-                       ) -> Tuple[Optional[Point], Optional[Point], str]:
+def approach_departure(name: str, *, profile: Optional[Dict[str, Any]] = None,
+                       _places=None) -> Tuple[Optional[Point], Optional[Point], str]:
     """Read-only start for an indoor approach, including the real exit clip.
 
     Unlike free standing-point selection, this never relocates a seated actor
@@ -446,7 +446,7 @@ def approach_departure(name: str, *, profile: Optional[Dict[str, Any]] = None
     if pos is None:
         return None, None, "missing_actor_position"
     here = (float(pos["x"]), float(pos["z"]))
-    held = places.place_of(name)
+    held = places.place_of(name, profile=profile, _places=_places)
     if held is None:
         return here, None, ""
     pose = get_effective_pose_key(name, profile=profile)

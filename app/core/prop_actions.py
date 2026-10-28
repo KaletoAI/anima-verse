@@ -238,12 +238,10 @@ def offers(actor: str) -> list[dict]:
                             map3d=loc.get("map3d") or {}, read_only=True)
     present = sorted(name for name, _ in places._present(location_id, room_id) if name != actor)
     result = []
-    documents = {}
+    query = places._GeometryQuery()
     for placement in (recipe or {}).get("placements", []):
         pid = placement.get("prop_id", "")
-        if pid not in documents:
-            documents[pid] = props.read_sidecar(pid, read_only=True)
-        document = documents[pid]
+        document = query.prop_document(pid)
         revision = props._document_revision(document)
         target = dict(location_id=location_id, room_id=room_id,
                       placement_id=placement.get("id", ""), variant_uid=placement.get("variant_uid", ""))
@@ -252,13 +250,13 @@ def offers(actor: str) -> list[dict]:
             targets = []
             if pair:
                 for partner in present:
-                    checked = engine.check(actor, target, action["id"], revision, partner)
+                    checked = engine.check(actor, target, action["id"], revision, partner, _query=query)
                     targets.append(dict(partner=partner, **checked))
                 checked = next((t for t in targets if t["enabled"]), None)
                 if checked is None:
                     checked = targets[0] if targets else dict(enabled=False, reason="partner_required")
             else:
-                checked = engine.check(actor, target, action["id"], revision)
+                checked = engine.check(actor, target, action["id"], revision, _query=query)
             result.append(dict(action_id=action["id"], definition_revision=revision,
                                placement_id=target["placement_id"], variant_uid=target["variant_uid"],
                                target=target, label=action["name"], description=action.get("description", ""),

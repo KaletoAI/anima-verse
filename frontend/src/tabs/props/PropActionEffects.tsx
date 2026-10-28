@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useMoods } from '../../lib/moods'
-import { actionId, effectTimings, type ActionCatalog } from './propActionAuthoring'
+import { actionId, createRequirement, effectTimings, type ActionCatalog } from './propActionAuthoring'
 import type { ActionDefinition, ActionEffect, ActionRequirement, ActionTarget } from './propTypes'
 
 export const referenceLabel = (key: string) => key.replace(/_/g, ' ').replace(/^./, letter => letter.toUpperCase())
@@ -38,8 +38,9 @@ function TargetField({ action, value, onChange, path }: { action: ActionDefiniti
   return <ActionReference value={value} options={options} label={t('Zielperson')} path={path} onChange={target => onChange(target as ActionTarget)} />
 }
 
-export function PropActionRequirements({ action, catalog, path, onChange }: {
+export function PropActionRequirements({ action, catalog, path, onChange, onReloadCatalog }: {
   action: ActionDefinition; catalog: ActionCatalog; path: string; onChange: (rows: ActionRequirement[]) => void
+  onReloadCatalog?: () => void
 }) {
   const { t } = useI18n()
   const update = (id: string, next: ActionRequirement) => onChange(action.requirements.map(row => row.id === id ? next : row))
@@ -70,9 +71,15 @@ export function PropActionRequirements({ action, catalog, path, onChange }: {
         </div><button type="button" className="ga-btn ga-btn-sm ga-btn-danger" onClick={() => onChange(action.requirements.filter(item => item.id !== row.id))}>{t('Voraussetzung entfernen')}</button>
       </fieldset>
     })}
-    <button type="button" className="ga-btn ga-btn-sm" disabled={!catalog.stats.length && !catalog.conditions.length} onClick={() => onChange([...action.requirements, catalog.stats.length
-      ? { id: actionId(), target: 'actor', type: 'stat', stat: catalog.stats[0], op: 'ge', value: 0 }
-      : { id: actionId(), target: 'actor', type: 'condition', condition_id: catalog.conditions[0].name, present: true }])}>{t('Voraussetzung hinzufügen')}</button>
+    <button type="button" className="ga-btn ga-btn-sm" disabled={!catalog.stats.length && !catalog.conditions.length} onClick={() => {
+      const row = createRequirement(catalog)
+      if (row) onChange([...action.requirements, row])
+    }}>{t('Voraussetzung hinzufügen')}</button>
+    {catalog.status !== 'ready' && <p role={catalog.status === 'error' ? 'alert' : 'status'}>{t(catalog.status === 'loading'
+      ? 'Werte und Zustände werden geladen. Sobald eine Auswahl verfügbar ist, kann eine Voraussetzung angelegt werden.'
+      : 'Werte und Zustände konnten nicht geladen werden. Katalog erneut laden.')}</p>}
+    {catalog.status === 'ready' && !catalog.stats.length && !catalog.conditions.length && <p role="status">{t('Keine Werte oder Zustände im Weltkatalog vorhanden. Zuerst einen Weltwert oder Zustand anlegen, dann den Katalog erneut laden.')}</p>}
+    {onReloadCatalog && <button type="button" className="ga-btn ga-btn-sm" disabled={catalog.status === 'loading'} onClick={onReloadCatalog}>{t('Katalog erneut laden')}</button>}
   </section>
 }
 

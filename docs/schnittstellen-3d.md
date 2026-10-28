@@ -8017,6 +8017,20 @@ it creates neither placements nor test people.
 `POST /world/props/{id}/execute-test` is separate: same input plus
 `confirmed:true`, then the **same** normal executor/consent path. It may change
 world values; admin actor selection is never accepted by the player endpoints.
+
+The Game-Admin no longer starts `execute-test` (2026-10-28): the admin stays
+read-only — `validate` and `check-placement` only. The test-lifecycle routes
+below have no UI consumer left and are slated for removal.
+`check-placement` includes the actual successful Core plans for inspection;
+ordinary player offers do not expose those diagnostics. After explicit test
+execution, `test-state`, `test-respond`, `test-cancel` and `test-wake` under
+`/world/props/{id}/` require Admin authorization and the exact immutable test
+identity, including its execution ID and participants. Consent remains an
+explicit answer by the selected test partner; no automatic acceptance is added.
+`GET /world/prop-action-tests` restores all live Admin tests and up to twenty
+terminal tests from the last thirty system minutes across area/prop changes and
+reloads. Before/current snapshots show actual stats, mood, conditions and
+positions; a deleted participant is unavailable, never an invented empty actor.
 Refusals are HTTP 409 (or 403 for unauthorized recipient/participant); malformed
 input is 422. Checks are read-only even on uncached real scene composition.
 `compose_scene(...,read_only=True)`, `scene_inputs(...,read_only=True)`,
@@ -8033,6 +8047,13 @@ reward, and genuine sleep has no additional active regeneration. Effects and
 requirements select existing stat/condition references; unknown references stay
 visible and repairable rather than disappearing. Mood suggestions use the
 existing catalog, while the backend mood remains free text.
+
+On HTTP LAN origins, authoring IDs use cryptographic `getRandomValues` when
+`randomUUID` is unavailable. Local binding validity is derived automatically;
+opening a prop or discarding edits does not create a new draft. User edits
+update canonical binding validity, while imported suggestions require explicit
+adoption. Variant selection is one nonwrapping button row, and the active
+workspace area survives prop changes without carrying over another prop's draft.
 Preparation independently selects an available `making-coffee` presentation,
 then `cooking`; drinking selects an available `drinking` presentation. Missing
 phase capabilities stay empty repair errors, never unrelated fallback poses.

@@ -1,4 +1,4 @@
-import type { ActionDefinition, ActionEffect, PropActionIssue } from './propTypes'
+import type { ActionDefinition, ActionEffect, ActionRequirement, PropActionIssue } from './propTypes'
 import type { PoseGroupSpec } from '../world/placeTypes'
 
 export interface ActionPresentation {
@@ -15,7 +15,21 @@ export interface ActionCatalog {
   groups: Record<string, PoseGroupSpec>
 }
 export type ActionPreset = 'sit' | 'lie' | 'sleep' | 'coffee' | 'pair'
-export const actionId = () => crypto.randomUUID()
+/** randomUUID is secure-context-only; getRandomValues also works on HTTP LANs. */
+export function actionId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+export function createRequirement(catalog: ActionCatalog): ActionRequirement | null {
+  if (catalog.stats.length) return { id: actionId(), target: 'actor', type: 'stat', stat: catalog.stats[0], op: 'ge', value: 0 }
+  if (catalog.conditions.length) return { id: actionId(), target: 'actor', type: 'condition', condition_id: catalog.conditions[0].name, present: true }
+  return null
+}
 
 /** Select only real catalog capabilities, including complete two-clip pairs. */
 export function presentations(catalog: ActionCatalog, ability: ActionDefinition['ability']) {

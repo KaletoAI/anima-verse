@@ -53,12 +53,17 @@ logger = get_logger("hub_ops")
 OP_DIRNAME = "hub_ops"
 RUNNING = "running"
 FAILED = "failed"
+DEFERRED = "deferred"
 # Same number as the gateway's job retention (``_gateway_job.ATTACH_MAX_AGE_S``).
 MAX_AGE_S = 24 * 3600
 
 
 class HubOpBusy(RuntimeError):
     """Another operation already runs on this target (the atomic claim)."""
+
+
+class HubOpDeferred(RuntimeError):
+    """Publication needs an explicit author decision; retain paid work intact."""
 
 
 # ---------------------------------------------------------------------------
@@ -631,6 +636,37 @@ def list_ops() -> List[Op]:
     return out
 
 
+def dismiss_deferred(op: Op) -> None:
+    """Retain a deferred result as a dismissed audit record, without file deletion."""
+    with op._lock():
+        op.reload()
+        if op.status != DEFERRED:
+            raise HubOpBusy("Only deferred work can be dismissed")
+        op.update_state(lambda state: state.update(dismissed_at=utc_now_iso()))
+
+
+def resume_deferred(op: Op, subject: str,
+                    bind: Callable[[Dict[str, Any]], None]) -> None:
+    """Atomically reclaim an explicitly repaired target without losing inputs."""
+    with op._lock():
+        op.reload()
+        if op.status != DEFERRED or op.state.get("dismissed_at"):
+            raise HubOpBusy("the operation is no longer awaiting repair")
+        state = json.loads(json.dumps(op.state))
+        bind(state)
+        try:
+            with _conn() as conn:
+                conn.execute(
+                    "UPDATE hub_ops SET status=?, subject=?, state=?, error='', "
+                    "owner_kind='thread', owner='', updated_at=? WHERE op_id=?",
+                    (RUNNING, subject, json.dumps(state, ensure_ascii=False),
+                     utc_now_iso(), op.op_id))
+        except sqlite3.IntegrityError as exc:
+            raise HubOpBusy("a hub job already holds the confirmed repair target") from exc
+        op.subject = subject
+        op.reload()
+
+
 def find_open(kind: str, match: Callable[[Dict[str, Any]], bool]) -> Optional[Op]:
     """The operation of ``kind`` that the CURRENT task left behind and whose
     frozen inputs satisfy ``match`` — running, or failed during the early
@@ -732,10 +768,17 @@ def settle(op: Op, result: Any) -> None:
 
 
 def settle_error(op: Op, exc: BaseException) -> None:
-    """The run of ``op`` raised. A task's lost job stays as a tombstone (see
-    ``raise_failed``); everything else is stored and deleted."""
+    """Defer author decisions without deleting paid work; otherwise record a
+    terminal failure (a task's lost job remains a tombstone)."""
     from app.imagegen.base import HubJobLost
     op.reload()
+    if isinstance(exc, HubOpDeferred):
+        error = str(exc) or "operation requires an explicit repair"
+        # Deferred records retain files and provider handles but release the
+        # running subject claim; an explicit repair reclaims its actual target.
+        op.set_fields(status=DEFERRED, error=error)
+        op.update_state(lambda state: state.update(deferred_error=error))
+        return
     lost = isinstance(exc, HubJobLost) or op.state.get("error_kind") == "lost"
     fail(op, str(exc) or type(exc).__name__, lost=lost,
          keep=lost and op.owner_kind == "task")
@@ -916,6 +959,10 @@ def release_task_ops(task_id: str, cancelled: bool = False) -> None:
             delete(op)
         elif cancelled:
             drop(op, "the owning task was cancelled")
+        elif op.state.get("deferred_error"):
+            # The task has reported the decision required. Keep the durable
+            # work for explicit repair, without starting another worker.
+            op.set_fields(owner_kind="thread", owner="")
         elif get_kind(op.kind) is None:
             drop(op, "resume operation unknown")
         else:
@@ -946,8 +993,12 @@ def start_resumer() -> Dict[str, int]:
 
 
 def _resume_one(op: Op, tq: Any) -> str:
+    if op.state.get("dismissed_at"):
+        return "skipped"
     task_status = tq.task_status(op.owner) if op.owner_kind == "task" else ""
     task_alive = task_status in ("pending", "running")
+    if op.state.get("deferred_error") and not (op.owner_kind == "task" and task_status == "cancelled"):
+        return "skipped"
     if op.status == FAILED:
         if task_alive:
             return "skipped"  # the handler reports it

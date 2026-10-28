@@ -119,13 +119,14 @@ export function PropDetail(props: PropDetailProps) {
         }}>{t(item.label)}</button>)}
     </nav>
     <div className="prop-workspace-context">
-      <label htmlFor="prop-workspace-variant">{t('Variante')} · {t('Geometrie')}</label>
-      <select id="prop-workspace-variant" className="ga-input" value={variant}
-        disabled={!variants.length || saving} onChange={(event) => setVariant(+event.target.value)}>
-        {variants.map((v) => <option key={v.uid} value={v.index}>
+      <span id="prop-workspace-variant-label">{t('Variante')} · {t('Geometrie')}</span>
+      <div className="prop-variant-buttons" role="group" aria-labelledby="prop-workspace-variant-label">
+        {variants.map((v) => <button key={v.uid} type="button"
+          className="ga-btn ga-btn-sm" aria-pressed={variant === v.index} disabled={saving}
+          onClick={() => setVariant(v.index)}>
           {v.label || `${t('Variant')} ${v.index + 1}`}{v.primary ? ` · ${t('Primary')}` : ''}{!v.active ? ` · ${t('inaktiv')}` : ''}
-        </option>)}
-      </select>
+        </button>)}
+      </div>
       <span className="ga-hint">{area === 'actions'
         ? t('Handlung gilt für das gesamte Prop')
         : t('Geometriefelder gelten für diese Variante.')}</span>

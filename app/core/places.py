@@ -122,6 +122,39 @@ def _compose(location_id: str) -> Dict[str, List[Place]]:
     return by_room
 
 
+class _GeometryQuery:
+    """Fresh read-only geometry reused only inside one synchronous query.
+
+    Deliberately explicit, not a thread/context-local or the TTL cache: an
+    offer/check may share its measured geometry, but execution, consent and
+    arrival create their own query. Never store profiles, occupancy or claims.
+    The owner does not share this object with another thread or a write path.
+    """
+
+    def __init__(self):
+        self._locations = {}
+        self._rooms = {}
+        self._documents = {}
+
+    def room_places(self, location_id: str, room_id: str) -> List[Place]:
+        if location_id not in self._locations:
+            self._locations[location_id] = _compose(location_id)
+        return self._locations[location_id].get(room_id, [])
+
+    def room_geometry(self, location_id: str, room_id: str):
+        from app.core.room_stand import room_geometry
+        key = (location_id, room_id)
+        if key not in self._rooms:
+            self._rooms[key] = room_geometry(location_id, room_id)
+        return self._rooms[key]
+
+    def prop_document(self, prop_id: str) -> dict:
+        from app.core.props import read_sidecar
+        if prop_id not in self._documents:
+            self._documents[prop_id] = read_sidecar(prop_id, read_only=True)
+        return self._documents[prop_id]
+
+
 def room_places(location_id: str, room_id: str) -> List[Place]:
     """Every place of one room (a copy of the cached list). Composes the
     location on a cache miss; a location the composer chokes on has no
@@ -246,12 +279,13 @@ def _held_slot(pl: Any, place: Place, room_id: str) -> Optional[Any]:
     return None
 
 
-def occupancy(location_id: str, room_id: str, exclude: str = "") -> Dict[str, List[Tuple[str, Any]]]:
+def occupancy(location_id: str, room_id: str, exclude: str = "", *,
+              _places: Optional[List[Place]] = None) -> Dict[str, List[Tuple[str, Any]]]:
     """``{place_id: [(name, slot), …]}`` of the room's present characters. A
     pair holds ``PAIR_SLOT`` and counts as ``pose_places`` slots. A held
     place that today's inventory does not know — unknown id, another
     room's id, a slot beyond the capacity — is no occupancy."""
-    known = {p["id"]: p for p in room_places(location_id, room_id)}
+    known = {p["id"]: p for p in (_places if _places is not None else room_places(location_id, room_id))}
     out: Dict[str, List[Tuple[str, Any]]] = {}
     for name, prof in _present(location_id, room_id):
         if name == exclude:
@@ -601,17 +635,17 @@ def release_pair(actor: str, partner: str) -> None:
     # release() emits each hook only after its own successful save.
 
 
-def place_of(name: str, profile: Optional[dict] = None) -> Optional[Place]:
+def place_of(name: str, profile: Optional[dict] = None, *, _places=None) -> Optional[Place]:
     """The place a character holds, validated against today's inventory —
     a marker that vanished, another room's id or a slot beyond the capacity
     reads as no place. The dict is the place plus ``slot`` and the ``x, z``
     of the held slot — for a pair the place's centre, its anchor."""
     from app.models.character import get_character_profile
     prof = profile if profile is not None else (get_character_profile(name) or {})
-    return resolve_place(name, prof.get("place"), profile=prof)
+    return resolve_place(name, prof.get("place"), profile=prof, _places=_places)
 
 
-def resolve_place(name: str, pl: Any, *, profile=None) -> Optional[Place]:
+def resolve_place(name: str, pl: Any, *, profile=None, _places=None) -> Optional[Place]:
     """A profile ``place`` field (``{"id", "slot", "room_id"}``) resolved
     against today's inventory of the room ``name`` is in — the body of
     :func:`place_of`, for a caller that holds the field but no longer the
@@ -621,7 +655,7 @@ def resolve_place(name: str, pl: Any, *, profile=None) -> Optional[Place]:
     if not isinstance(pl, dict) or not pl.get("id"):
         return None
     loc, room = where(name, profile=profile)
-    for p in room_places(loc, room):
+    for p in (_places if _places is not None else room_places(loc, room)):
         slot = _held_slot(pl, p, room)
         if slot is not None:
             if slot == PAIR_SLOT:

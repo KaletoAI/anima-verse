@@ -310,7 +310,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  Model mode only; refreshed live. */
     markers?: Array<{ at: [number, number, number]
       group?: string; capacity?: number; spacing_m?: number; facing?: number
-      slot_axis?: number
+      slot_axis?: number; assigned?: boolean; selected?: boolean
       previewKind?: string; previewYawOffset?: number; rootDrop?: number }>
     /** Object-local light dot, refreshed live independently of the scale kit. */
     lightPoint?: { at: [number, number, number]; color: string }
@@ -1585,6 +1585,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             // The model's box in WORLD space, after the orientation fix —
             // both the scale kit and the dims overlay below measure from it,
             // so the figure stands on the same lower edge the H label marks.
+            // setFromObject refreshes only `object` itself, never its parents:
+            // the framing just moved the pivot, and a stale pivot matrix put
+            // the ground at a bottom-origin mesh's half height.
+            previewRoot.updateMatrixWorld(true)
             const ob = new THREE.Box3().setFromObject(object)
             const accessMetre = figureHeightRef.current / FIGURE_HEIGHT_M
             if (accessMetre > 0 && spatialAuthoringRef.current) {
@@ -1838,13 +1842,22 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 rawBox.min.x + m.at[0] * rawSize.x,
                 rawBox.min.y + m.at[1] * rawSize.y,
                 rawBox.min.z + m.at[2] * rawSize.z)
+              // Optional body-marker state; callers without it retain their palette.
+              const color = m.assigned === undefined ? 0x3fb950
+                : m.assigned ? 0x3fb950 : 0x8b949e
               const dot = new THREE.Mesh(
-                new THREE.SphereGeometry(r, 10, 10),
-                new THREE.MeshBasicMaterial({ color: 0x3fb950, depthTest: false }))
+                new THREE.SphereGeometry(m.selected ? r * 1.35 : r, 10, 10),
+                new THREE.MeshBasicMaterial({ color, depthTest: false }))
               dot.renderOrder = 2
               dot.position.copy(local)
               markerGroup.add(dot)
-              const num = textSprite(String(i + 1), '#3fb950', rawMaxDim * 0.09)
+              if (m.selected) {
+                const halo = new THREE.Mesh(new THREE.SphereGeometry(r * 1.8, 10, 10),
+                  new THREE.MeshBasicMaterial({ color: 0xf0b35c, wireframe: true, depthTest: false }))
+                halo.position.copy(local); halo.renderOrder = 3
+                markerGroup.add(halo)
+              }
+              const num = textSprite(String(i + 1), `#${color.toString(16).padStart(6, '0')}`, rawMaxDim * 0.09)
               num.position.copy(local)
               num.position.y += r * 2.4
               markerGroup.add(num)
@@ -1852,7 +1865,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 const world = pivot.localToWorld(local.clone())
                 const yaw = m.facing * Math.PI / 180
                 const heading = new THREE.ArrowHelper(new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)),
-                  world, .4 * accessMetre, 0x3fb950)
+                  world, .4 * accessMetre, color)
                 figGroup.add(heading)
               }
               // Posed preview figures (1.7 m at the caller's mesh scale) —
@@ -1868,10 +1881,16 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 markerSlots([world.x, world.z], m.facing, m.capacity || 1,
                   (m.spacing_m || .6) * perMetre, m.slot_axis).forEach(([x, z], slot) => {
                   const dot = new THREE.Mesh(new THREE.SphereGeometry(.055 * perMetre, 8, 8),
-                    new THREE.MeshBasicMaterial({ color: 0xf0b35c, depthTest: false }))
+                    new THREE.MeshBasicMaterial({ color, depthTest: false }))
                   dot.position.set(x, world.y, z); dot.renderOrder = 4
                   figGroup.add(dot)
-                  const label = textSprite(`Slot ${slot + 1}`, '#f0b35c', .12 * perMetre)
+                  if (m.selected) {
+                    const halo = new THREE.Mesh(new THREE.SphereGeometry(.075 * perMetre, 10, 10),
+                      new THREE.MeshBasicMaterial({ color: 0xf0b35c, wireframe: true, depthTest: false }))
+                    halo.position.copy(dot.position); halo.renderOrder = 5
+                    figGroup.add(halo)
+                  }
+                  const label = textSprite(`Slot ${slot + 1}`, `#${color.toString(16).padStart(6, '0')}`, .12 * perMetre)
                   label.position.set(x, world.y + .12 * perMetre, z)
                   figGroup.add(label)
                 })

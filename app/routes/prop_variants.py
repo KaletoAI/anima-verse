@@ -470,6 +470,28 @@ def prop_variant_source_delete(prop_id: str, index: int,
     return result_payload
 
 
+@router.get("/props/{prop_id}/generation-repairs")
+def prop_generation_repairs(prop_id: str,
+                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Retained legacy paid work. Repair with the chosen variant's generate
+    route and ``{resume_op_id, variant_uid, base_revision}``; no source render
+    or new mesh submission is made by this repair."""
+    from app.core.props import generation_repairs
+    return {"repairs": generation_repairs(prop_id)}
+
+
+@router.post("/props/{prop_id}/generation-repairs/{op_id}/dismiss")
+def prop_dismiss_generation_repair(prop_id: str, op_id: str,
+                                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Hide a retained legacy result after an explicit admin decision."""
+    from app.core.props import dismiss_generation_repair, PropRevisionConflict
+    try:
+        dismiss_generation_repair(prop_id, op_id)
+    except PropRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"status": "dismissed"}
+
+
 @router.post("/props/{prop_id}/variants/{index}/generate")
 async def prop_variant_generate(prop_id: str, index: int,
                                 request: Request) -> Dict[str, Any]:
@@ -490,10 +512,13 @@ async def prop_variant_generate(prop_id: str, index: int,
     variant's own by default and ANOTHER variant's when a new version of the
     object is authored from the one before it — and ``views`` lists the extra
     views a MESH run sends along to the mesh alias.
+
+    ``resume_op_id`` explicitly binds a retained legacy paid mesh to this
+    variant. It requires its current ``variant_uid`` and ``base_revision``;
+    the operation's frozen images, backend, budgets and result are reused.
     """
-    from app.core.props import trigger_generation
     from app.routes.world import (_mesh_int, _mesh_lod, _require_prop_picks,
-                                  _tier, _view_args)
+                                  _tier, _view_args, _start_prop_generation)
     _variant(prop_id, index)
     data = await _body(request)
     if bool(data.get("mesh_only")) and bool(data.get("image_only")):
@@ -501,8 +526,8 @@ async def prop_variant_generate(prop_id: str, index: int,
                             detail="mesh_only and image_only are exclusive")
     view, front_reference, reference_variant, views = _view_args(data)
     await _require_prop_picks(data)
-    started = trigger_generation(
-        prop_id,
+    started = _start_prop_generation(
+        prop_id, data,
         prompt=str(data.get("prompt") or ""),
         negative=str(data.get("negative") or ""),
         image_backend_glob=str(data.get("image_backend") or "").strip(),

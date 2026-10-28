@@ -15,7 +15,7 @@ try {
   const source = await readFile(new URL('../frontend/src/tabs/props/spatialBindings.ts', import.meta.url), 'utf8');
   const file = join(dir, 'spatial.mjs');
   await writeFile(file, transpile(source).replace('../../../../packages/scene-render/src/placeTransform', './placeTransform.mjs'));
-  const { removeBoundMarker, bindingProblems, accessWorldPoint, accessLocalPoint, propMetresPerUnit } = await import(`file://${file}`);
+  const { removeBoundMarker, bindingProblems, editedBindingValidation, accessWorldPoint, accessLocalPoint, propMetresPerUnit } = await import(`file://${file}`);
   const { placeTransform } = await import(`file://${canonicalFile}`);
   const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`);
   const dimensions = { width_m: 2, depth_m: 1.5, height_m: 1 };
@@ -65,6 +65,24 @@ try {
   // Blank numeric edits stay invalid instead of turning into a plausible zero.
   assert.ok(bindingProblems({ ...binding, access_points: { ...binding.access_points, actor: { x: NaN, z: 2, yaw: 180 } } }, action, variant.markers, { width_m: 2, depth_m: 2 }).length > 0);
   assert.ok(bindingProblems({ ...binding, access_points: { ...binding.access_points, actor: { x: 0, z: 1.2, yaw: 180 } } }, action, variant.markers, { width_m: 2, depth_m: 2 }).length > 0);
+  const saved = { ...variant, dims: { width_m: 2, depth_m: 2, height_m: 1 },
+    action_bindings: [{ ...binding, validation: 'repair_required' }] };
+  const savedText = JSON.stringify(saved);
+  const definitions = [{ id: 'pair', participants: 2 }];
+  const edited = editedBindingValidation(saved, definitions);
+  assert.equal(edited[0].validation, 'local_valid');
+  assert.equal(JSON.stringify(saved), savedText, 'deriving validity never modifies the saved variant');
+  assert.equal(saved.action_bindings[0].validation, 'repair_required');
+  const accepted = { ...saved, action_bindings: edited };
+  assert.equal(editedBindingValidation(accepted, definitions), edited, 'unchanged validity keeps canonical references');
+  const proposed = { ...saved, action_bindings: [{ ...binding, validation: 'suggested' }] };
+  assert.equal(editedBindingValidation(proposed, definitions), proposed.action_bindings, 'legacy suggestions require explicit acceptance');
+  const unsupported = { ...saved, action_bindings: [{ ...binding, supported: false, validation: 'repair_required' }] };
+  editedBindingValidation(unsupported, definitions);
+  assert.equal(unsupported.action_bindings[0].validation, 'repair_required', 'reading an unsupported saved binding cannot dirty it');
+  const invalidEdit = { ...accepted, dims: { ...accepted.dims, depth_m: 5 } };
+  assert.equal(editedBindingValidation(invalidEdit, definitions)[0].validation, 'repair_required');
+  assert.equal(accepted.action_bindings[0].validation, 'local_valid');
   const frame = { centreX: 4, centreZ: -3, groundY: -2, unitsPerMetre: 2 };
   // Outside-box access is preserved, ground is fixed, and inverse picking agrees.
   assert.deepEqual(accessWorldPoint({ x: -4, z: 5, yaw: 90 }, frame), [-4, -2, 7]);

@@ -175,8 +175,9 @@ def _claim_transaction(run):
             yield conn
 
 
-def _definition(target, action_id, revision):
-    candidates = [p for p in places._compose(target["location_id"]).get(target["room_id"], [])
+def _definition(target, action_id, revision, *, _query=None):
+    query = _query if _query is not None else places._GeometryQuery()
+    candidates = [p for p in query.room_places(target["location_id"], target["room_id"])
                   if p.get("placement_id") == target["placement_id"]]
     if not candidates:
         return None, "placement_not_found"
@@ -184,7 +185,7 @@ def _definition(target, action_id, revision):
     if not candidates:
         return None, "stale_variant"
     # Author snapshot, not the rendering getter (which can demand media work).
-    prop = props.read_sidecar(candidates[0]["prop_id"], read_only=True)
+    prop = query.prop_document(candidates[0]["prop_id"])
     if props._document_revision(prop) != revision:
         return None, "stale_definition"
     action = next((a for a in prop.get("actions", []) if a["id"] == action_id), None)
@@ -259,8 +260,9 @@ def _requirements(run, profiles):
     return ""
 
 
-def _validate(run, *, conn=None, require_claims=False, presence=True):
-    definition, reason = _definition(run["target"], run["action_id"], run["definition_revision"])
+def _validate(run, *, conn=None, require_claims=False, presence=True, _query=None):
+    query = _query if _query is not None else places._GeometryQuery()
+    definition, reason = _definition(run["target"], run["action_id"], run["definition_revision"], _query=query)
     if reason:
         return reason
     if definition != run["definition"]:
@@ -311,11 +313,13 @@ def _validate(run, *, conn=None, require_claims=False, presence=True):
             key = store.slot_key(run["target"], anchor["marker_id"], anchor["slot"])
             if store.held(key, conn=conn) != run["execution_id"]:
                 return "slot_claim_lost"
-            place = next((p for p in places._compose(run["target"]["location_id"]).get(run["target"]["room_id"], [])
+            inventory = query.room_places(run["target"]["location_id"], run["target"]["room_id"])
+            place = next((p for p in inventory
                           if p["id"] == anchor["place_id"]), None)
             if not place:
                 return "placement_not_found"
-            taken = places.occupancy(run["target"]["location_id"], run["target"]["room_id"]).get(place["id"], [])
+            taken = places.occupancy(run["target"]["location_id"], run["target"]["room_id"],
+                                     _places=inventory).get(place["id"], [])
             if anchor["slot"] not in places.free_slots(place, [(n, s) for n, s in taken
                     if n not in profiles and n != "@prop:" + run["execution_id"]]):
                 return "slot_occupied"
@@ -341,13 +345,14 @@ def _validate(run, *, conn=None, require_claims=False, presence=True):
     return ""
 
 
-def _plan(run, *, conn):
+def _plan(run, *, conn, _query=None):
     from app.core.prop_action_paths import plan_approach
+    query = _query if _query is not None else places._GeometryQuery()
     target = dict(run["target"], action_id=run["action_id"], definition_revision=run["definition_revision"])
-    candidates = places._compose(target["location_id"]).get(target["room_id"], [])
+    candidates = query.room_places(target["location_id"], target["room_id"])
     choices = []
     last_reason = "no_free_slot"
-    occupancy = places.occupancy(target["location_id"], target["room_id"])
+    occupancy = places.occupancy(target["location_id"], target["room_id"], _places=candidates)
     for place in candidates:
         if place.get("placement_id") != target["placement_id"] or place.get("variant_uid") != target["variant_uid"]:
             continue
@@ -372,11 +377,17 @@ def _plan(run, *, conn):
                 continue
         else:
             allocation = dict(clip_roles={}, access_roles={"actor": "actor"}, slots={"actor": free[0]})
+        pose = (definition["phases"][0]["pose_key"] if definition["ability"] == "combined"
+                else definition["pose_key"])
+        _, entry_reason = _entry_capability(pose)
+        if entry_reason:
+            last_reason = entry_reason
+            continue
         plans = {}
         for role, name in _members(run):
             slot = allocation["slots"][role]
             plan = plan_approach(name, dict(target, marker_id=place["marker_id"], slot=slot),
-                                 allocation["access_roles"][role])
+                                 allocation["access_roles"][role], _query=query)
             if plan["status"] != "ok":
                 last_reason = plan["reason"]
                 break
@@ -386,10 +397,8 @@ def _plan(run, *, conn):
                 break
             plans[role] = plan
         if len(plans) == len(_members(run)):
-            pose = (definition["phases"][0]["pose_key"] if definition["ability"] == "combined"
-                    else definition["pose_key"])
             for role, name in _members(run):
-                _, last_reason = _entry_spec(name, plans[role], pose)
+                _, last_reason = _entry_spec(name, plans[role], pose, _query=query)
                 if last_reason:
                     break
             if last_reason:
@@ -743,10 +752,9 @@ def register_owner():
                                     arrived=_arrived_callback, cancelled=_cancelled)
 
 
-def _entry_spec(name, plan, pose):
-    from app.core.animation_clips import resolve_transition, clip_meta, clip_travel_m, clip_ref_height_m, _solo_kinds
-    from app.core.room_stand import bridge_offset, bridge_scale, room_geometry
-    from app.core.height import height_cm
+def _entry_capability(pose):
+    """The same static clip guard used before routing and at actual entry."""
+    from app.core.animation_clips import resolve_transition, clip_meta, _solo_kinds
     rule = resolve_transition("walking", pose)
     if not rule:
         return None, "missing_entry_transition"
@@ -760,13 +768,25 @@ def _entry_spec(name, plan, pose):
         return None, "missing_entry_transition"
     if not math.isfinite(duration) or duration <= 0:
         return None, "missing_entry_transition"
+    return (kind, meta), ""
+
+
+def _entry_spec(name, plan, pose, *, _query=None):
+    from app.core.animation_clips import clip_travel_m, clip_ref_height_m
+    from app.core.room_stand import bridge_offset, bridge_scale
+    from app.core.height import height_cm
+    capability, reason = _entry_capability(pose)
+    if reason:
+        return None, reason
+    kind, meta = capability
     anchor, access = plan["entry_anchor"], plan["access"]
     delta = bridge_offset(clip_travel_m(kind), float(access["yaw"]),
                           bridge_scale(height_cm(C.get_character_profile(name)), clip_ref_height_m(kind)))
     if math.dist((access["x"] + delta[0], access["z"] + delta[1]), (anchor["x"], anchor["z"])) > .05:
         return None, "entry_transition_mismatch"
     from app.core.prop_action_paths import _departure_walkable
-    geometry = room_geometry(anchor["location_id"], anchor["room_id"])
+    query = _query if _query is not None else places._GeometryQuery()
+    geometry = query.room_geometry(anchor["location_id"], anchor["room_id"])
     if not geometry or not _departure_walkable((anchor["x"], anchor["z"]), (access["x"], access["z"]),
                                                geometry, anchor["placement_id"]):
         return None, "entry_transition_blocked"
@@ -973,8 +993,8 @@ def _notify(run):
     _after_locks(lambda: avatars(names, ("self", "scene")))
 
 
-def check(actor: str, target: dict, action_id: str, revision: str, partner: str = "") -> dict:
-    """Read-only execution preflight. No transaction, claims, wake or journey."""
+def check(actor: str, target: dict, action_id: str, revision: str, partner: str = "", *, _query=None, include_plans: bool = False) -> dict:
+    """Read-only preflight; optional admin diagnostics reuse the actual successful plans."""
     if (not isinstance(target, dict) or set(target) != set(_TARGET)
             or any(not isinstance(target[k], str) or not target[k] for k in _TARGET)
             or not all(isinstance(v, str) and v for v in (actor, action_id, revision))
@@ -982,7 +1002,8 @@ def check(actor: str, target: dict, action_id: str, revision: str, partner: str 
         return dict(enabled=False, reason="invalid_request")
     if places.where(actor) != (target["location_id"], target["room_id"]):
         return dict(enabled=False, reason="target_not_in_actor_room")
-    definition, reason = _definition(target, action_id, revision)
+    query = _query if _query is not None else places._GeometryQuery()
+    definition, reason = _definition(target, action_id, revision, _query=query)
     if reason:
         return dict(enabled=False, reason=reason)
     if bool(partner) != (definition["participants"] == 2) or actor == partner:
@@ -991,10 +1012,14 @@ def check(actor: str, target: dict, action_id: str, revision: str, partner: str 
                definition_revision=revision, target=target, definition=definition,
                status="awaiting_consent" if partner else "approaching",
                data=dict(plans={}, journey_ids={}, access_roles={}))
-    reason = "world_frozen" if is_world_frozen() else _validate(run)
+    plans = {}
+    reason = "world_frozen" if is_world_frozen() else _validate(run, _query=query)
     if not reason:
-        plans, reason = _plan(run, conn=store.db.get_connection())
-    return dict(enabled=not reason, reason=reason)
+        plans, reason = _plan(run, conn=store.db.get_connection(), _query=query)
+    result = dict(enabled=not reason, reason=reason)
+    if include_plans:
+        result["plans"] = plans if not reason else {}
+    return result
 
 
 def state_for(actor: str) -> dict:

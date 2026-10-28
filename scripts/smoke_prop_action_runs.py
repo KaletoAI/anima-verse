@@ -134,6 +134,106 @@ class Runs(unittest.TestCase):
             A.cancel(run["actor"], run["execution_id"])
         F.assert_no_external_work()
 
+
+    def test_multi_action_partner_offers_share_geometry_but_not_later_state(self):
+        from copy import deepcopy
+        from app.core import prop_actions, room_stand
+        name, partner, target, pid = authored_pair()
+        available = F.actor(target["location_id"], at=(3, 5))
+        asleep = F.actor(target["location_id"], at=(4, 5))
+        F.C.set_is_sleeping(asleep, True)
+        doc = F.props.read_sidecar(pid)
+        for action_id in ("share-again", "share-third"):
+            action = deepcopy(doc["actions"][0])
+            action.update(id=action_id, name=action_id)
+            doc["actions"].append(action)
+            binding = deepcopy(doc["model_variants"][0]["action_bindings"][0])
+            binding["action_id"] = action_id
+            doc["model_variants"][0]["action_bindings"].append(binding)
+        F.props._write_sidecar(pid, doc)
+        revision = F.props._document_revision(doc)
+        exact = {k: target[k] for k in A._TARGET}
+        expected = {action_id: {
+            partner: dict(enabled=True, reason=""),
+            available: dict(enabled=True, reason=""),
+            asleep: dict(enabled=False, reason="participant_asleep")}
+            for action_id in ("rest", "share-again", "share-third")}
+        for action_id, checks in expected.items():
+            for who, wanted in checks.items():
+                self.assertEqual(A.check(name, exact, action_id, revision, who), wanted)
+        before = {who: F.C.get_character_profile(who) for who in (name, partner, available, asleep)}
+        with patch.object(F.places, "_compose", wraps=F.places._compose) as compose, \
+                patch.object(room_stand, "room_geometry", wraps=room_stand.room_geometry) as geometry:
+            rows = prop_actions.offers(name)
+        self.assertEqual(len(rows), 3)
+        for row in rows:
+            self.assertTrue(row["enabled"], row)
+            self.assertEqual({entry["partner"]: {k: entry[k] for k in ("enabled", "reason")}
+                              for entry in row["available_targets"]}, expected[row["action_id"]])
+        self.assertEqual(compose.call_count, 1, "one location composition per offers operation")
+        self.assertEqual(geometry.call_count, 1, "one collision geometry load per room")
+        self.assertEqual({who: F.C.get_character_profile(who) for who in before}, before)
+        self.assertFalse(R.claims())
+
+        # An offer is not authorization: occupancy and author edits are observed
+        # by the very next operation, without waiting for the places cache TTL.
+        occupied = next(p for p in F.places._compose(target["location_id"])[target["room_id"]]
+                        if p.get("placement_id") == target["placement_id"])
+        profile = F.C.get_character_profile(available)
+        profile["place"] = dict(id=occupied["id"], slot=0, room_id=target["room_id"])
+        F.C.save_character_profile(available, profile)
+        blocked = prop_actions.offers(name)
+        self.assertTrue(all(not row["enabled"] for row in blocked), blocked)
+        self.assertTrue(all(entry["reason"] == "no_free_slot" for row in blocked
+                            for entry in row["available_targets"] if entry["partner"] != asleep), blocked)
+        profile.pop("place")
+        F.C.save_character_profile(available, profile)
+        doc["actions"][0]["enabled"] = False
+        F.props._write_sidecar(pid, doc)
+        changed = {row["action_id"]: row for row in prop_actions.offers(name)}
+        self.assertFalse(changed["rest"]["enabled"], changed)
+        self.assertTrue(changed["share-again"]["enabled"], changed)
+        self.assertEqual(A.check(name, exact, "share-again", revision, partner)["reason"], "stale_definition")
+        location = F.W.get_location_by_id(target["location_id"])
+        room = next(room for room in location["rooms"] if room["id"] == target["room_id"])
+        room["layout"]["props"][0]["at"] = [40, 5]
+        F.W.upsert_location(location, sync_world=True)
+        moved = prop_actions.offers(name)
+        self.assertEqual(len(moved), 3)
+        self.assertTrue(all(not row["enabled"] for row in moved), moved)
+
+    def test_pair_preflight_routes_match_fresh_public_planner(self):
+        from app.core import prop_action_paths
+        name, partner, target, _ = authored_pair()
+        exact = {k: target[k] for k in A._TARGET}
+        definition, reason = A._definition(exact, target["action_id"], target["definition_revision"])
+        self.assertFalse(reason)
+        run = dict(execution_id="", actor=name, partner=partner, action_id=target["action_id"],
+                   definition_revision=target["definition_revision"], target=exact, definition=definition,
+                   data=dict(plans={}, access_roles={}))
+        plans, reason = A._plan(run, conn=R.db.get_connection())
+        self.assertFalse(reason, plans)
+        for role, who in (("actor", name), ("partner", partner)):
+            anchor = plans[role]["entry_anchor"]
+            fresh = prop_action_paths.plan_approach(who, dict(target, marker_id=anchor["marker_id"],
+                                                             slot=anchor["slot"]),
+                                                     run["data"]["access_roles"][role])
+            self.assertEqual(plans[role], fresh)
+            access_x = 7.7 if run["data"]["access_roles"][role] == "actor" else 8.3
+            self.assertEqual(fresh["waypoints"], [[1, 5] if role == "actor" else [2, 5],
+                                                 [access_x, 7]])
+
+    def test_missing_entry_capability_blocks_before_route_search(self):
+        from app.core import prop_actions, prop_action_paths
+        name, _, _ = setup_run()
+        clips._write_world_transitions([])
+        with patch.object(prop_action_paths, "plan_approach",
+                          wraps=prop_action_paths.plan_approach) as planner:
+            rows = prop_actions.offers(name)
+        self.assertEqual([(row["enabled"], row["reason"]) for row in rows],
+                         [(False, "missing_entry_transition")])
+        self.assertEqual(planner.call_count, 0)
+
     def test_exact_request_id_and_conflict_do_not_change_pose(self):
         name, target, _ = setup_run()
         one = request(name, target, request_id="retry")

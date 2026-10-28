@@ -6,15 +6,16 @@ import type { PropWorkspace } from './usePropWorkspace'
 export function PropOverview({ workspace }: { workspace: PropWorkspace }) {
   const { t, nameNow, queueGeneral, categoryNow, tagsNow, swayNow,
     mountSuggested, mountNow, prop, shownVariant, queueVariant, variant,
-    shownHasMesh, actions, navigate } = workspace
+    shownHasMesh, actions } = workspace
   const mountKnown = MOUNT_KINDS.some((mount) => mount.kind === mountNow)
   const mountInDraft = 'mount' in (workspace.buf.get(GENERAL_TARGET) || {})
   const bindings = shownVariant?.action_bindings || []
   const repair = actions.filter((action) => action.enabled && !bindings.some((binding) =>
     binding.action_id === action.id && (!binding.supported || binding.validation !== 'repair_required')))
   return <div className="ga-form prop-area-content">
-    <h3>{t('Übersicht')}</h3>
-    <p className="ga-hint">{t('Objektfelder und Geometriefelder werden gemeinsam mit Speichern übernommen.')}</p>
+    <h3>{t('Overview')}</h3>
+    <p className="ga-hint">{t('Save applies object fields and geometry fields together.')}</p>
+    <div className="prop-overview-short-fields">
     <Field label={t('Name')}>
       <input aria-label={t('Name')} className="ga-input" value={nameNow} onChange={(event) => queueGeneral({ name: event.target.value })} />
     </Field>
@@ -26,43 +27,42 @@ export function PropOverview({ workspace }: { workspace: PropWorkspace }) {
       tip={t('Tag "walkable" lets figures stand on this prop; its surface is baked from the mesh.')}>
       <input aria-label={t('Tags (comma-separated)')} className="ga-input" value={tagsNow} onChange={(event) => queueGeneral({ tags: event.target.value })} />
     </Field>
-    {shownVariant && <Field label={t('Beschreibung / Generierungsbeschreibung der ausgewählten Variante')}>
-      <textarea aria-label={t('Beschreibung / Generierungsbeschreibung der ausgewählten Variante')} className="ga-textarea" rows={5} value={shownVariant.description || ''}
+    </div>
+    {shownVariant && <Field label={t('Description / generation subject of the selected variant')}>
+      <textarea aria-label={t('Description / generation subject of the selected variant')} className="ga-textarea" rows={5} value={shownVariant.description || ''}
         onChange={(event) => queueVariant(variant, { description: event.target.value })} />
     </Field>}
     <section className="prop-inspector-group">
-      <h3>{t('Befestigung & Wind')}</h3>
-      <Field label={t('Mount')} hint={t(!mountNow ? 'Nicht klassifiziert'
-        : !mountKnown ? 'Unbekannter Befestigungswert — bitte zuordnen'
-          : mountSuggested ? 'LLM-Vorschlag — bestätigen oder ändern'
-            : mountInDraft ? 'Bestätigung im Entwurf — noch nicht gespeichert' : 'Bestätigt')}>
+      <h3>{t('Mount & wind')}</h3>
+      <div className="prop-overview-short-fields">
+      <Field label={t('Mount')} hint={t(!mountNow ? 'Unclassified'
+        : !mountKnown ? 'Unknown mount value — choose a mount'
+          : mountSuggested ? 'LLM suggestion — confirm or change'
+            : mountInDraft ? 'Confirmation in draft — not saved yet' : 'Confirmed')}>
         <select aria-label={t('Mount')} className="ga-input" value={mountNow} onChange={(event) => queueGeneral({ mount: event.target.value })}>
           <option value="">{t('— unclassified —')}</option>
-          {mountNow && !mountKnown && <option value={mountNow}>{t('Unbekannter Wert')}: {mountNow}</option>}
+          {mountNow && !mountKnown && <option value={mountNow}>{t('Unknown value')}: {mountNow}</option>}
           {MOUNT_KINDS.map((mount) => <option key={mount.kind} value={mount.kind}>{t(mount.label)}</option>)}
         </select>
       </Field>
       {mountSuggested && <button type="button" className="ga-btn ga-btn-sm"
         disabled={!mountKnown}
-        onClick={() => queueGeneral({ mount: mountNow })}>{t('Vorschlag im Entwurf bestätigen')}</button>}
+        onClick={() => queueGeneral({ mount: mountNow })}>{t('Confirm suggestion in draft')}</button>}
       <Field label={t('Sway factor')}
-        tip={t('1 = volle Windbewegung des Untergrunds; 0 = unbeweglich. Gilt für das gesamte Prop.')}>
+        tip={t('1 = full wind motion of the surface; 0 = fixed. Applies to the entire prop.')}>
         <input aria-label={t('Sway factor')} className="ga-input" type="number" min={0} max={1} step={0.05} value={swayNow}
           onChange={(event) => {
             const value = event.currentTarget.valueAsNumber
             if (Number.isFinite(value)) queueGeneral({ sway_factor: Math.max(0, Math.min(1, value)) })
           }} />
       </Field>
+      </div>
     </section>
     <section className="prop-inspector-group prop-overview-status">
-      <h3>{t('Modell & Handlungen')}</h3>
-      <span>{t(shownHasMesh ? 'Modell für diese Variante vorhanden' : 'Diese Variante hat noch kein Modell')}</span>
-      <button type="button" className="ga-btn ga-btn-sm" onClick={() => navigate('assets')}>{t('Modell & Varianten öffnen')}</button>
-      <span>{actions.length ? `${actions.length} ${t('definierte Handlungen')}` : t('Dekoratives Prop ohne Aktionen')}</span>
-      {repair.length > 0 && <span className="ga-hint">{repair.length} {t('aktive Handlungen ohne vollständige Bindung dieser Variante')}</span>}
-      <button type="button" className="ga-btn ga-btn-sm" onClick={() => navigate(repair.length ? 'places' : 'actions')}>
-        {t(repair.length ? 'Räumliche Bindung ansehen' : 'Aktionen ansehen')}
-      </button>
+      <h3>{t('Model & actions')}</h3>
+      <span>{t(shownHasMesh ? 'Model available for this variant' : 'This variant has no model yet')}</span>
+      <span>{actions.length ? `${actions.length} ${t('defined actions')}` : t('Decorative prop without actions')}</span>
+      {repair.length > 0 && <span className="ga-hint">{repair.length} {t('active actions without a complete binding for this variant')}</span>}
       {prop.measured?.tris ? <span className="ga-hint">
         {prop.measured.tris.toLocaleString()} {t('tris')}
         {prop.measured.uv_layers === 0 && (prop.measured.vertex_colors || 0) > 0 ? ` · ${t('no UVs, colour in the vertices')}` : ''}

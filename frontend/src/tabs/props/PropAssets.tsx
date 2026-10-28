@@ -1,12 +1,23 @@
+import { useState } from 'react'
 import { PropModelPanel } from './PropModelPanel'
 import { PropVariantStrip } from './PropVariantStrip'
+import { PropWorkspaceDialog } from './PropWorkspaceDialog'
 import { PROP_EXTRA_VIEWS } from './propTypes'
+import { propGenerationTarget } from './propOperations'
 import { SliderInput } from '../../components/SliderInput'
 import { DESC_ROWS_OPEN, DESC_ROWS_REST, DIM_FIELDS, SINK_LIMIT_M } from './variantFields'
 import { VIEW_LABEL } from './usePropWorkspace'
 import type { PropWorkspace } from './usePropWorkspace'
 
+const REPAIR_STATUS = {
+  ready: 'Mesh result retained; ready for assignment.',
+  collected: 'Provider result retained; processing and publication are still pending.',
+  waiting_provider: 'Provider result not yet collected. Only the existing paid job will be continued.',
+  unrecorded: 'No publishable result or provider job ID recorded. Retained files are kept.',
+}
+
 export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
+  const [discardId, setDiscardId] = useState('')
   const { variantBusy, t, pending, shownImage, srcOk, enc, variant, reloadKey,
     setSrcOk, enlarge, prop, imageTip, variants, openImageGeneration, shownVariant,
     sourceUploadRef, uploadSource, onRefresh, setUploadView, viewUploadRef,
@@ -17,29 +28,100 @@ export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
     removeArmed, removeSurface, setRemoveArmed, previewFile, showStoredFile,
     meshesChanged, commitFaces, backendFaces, onGenerating, openRegeneration,
     variantMax, setVariant, queueVariant, generatingVariants, worldSeasons,
-    currentSeason, onVariantDeleted, prepareVariantOperation } = workspace
+    currentSeason, onVariantDeleted, prepareVariantOperation,
+    generationRepairs, repairLoading, repairLoadError, repairError, repairBusy, repairRequest,
+    refreshGenerationRepairs, openGenerationRepair, cancelGenerationRepair, confirmGenerationRepair, dismissGenerationRepair } = workspace
+  let generationUnavailable = ''
+  try { propGenerationTarget(variants, variantMax, generatingVariants) }
+  catch (error) { generationUnavailable = (error as Error).message }
   return <div className="ga-form prop-area-content">
-    <h3>{t('Modell & Varianten')}</h3>
-    <p className="ga-hint">{t('Upload, Generierung, Orientierung und begehbare Oberfläche werden sofort angewendet. Beschreibung, Maße, Bodenausgleich und Budgets gehören zum Entwurf.')}</p>
-    <button type="button" className="ga-btn" disabled={pending}
+    <h3>{t('Model & variants')}</h3>
+    <p className="ga-hint">{t('Uploads, generation, orientation and walkable surfaces apply immediately. Description, dimensions, ground offset and budgets belong to the draft.')}</p>
+    <button type="button" className="ga-btn" disabled={variantBusy || !shownVariant}
+      title={variantBusy ? t('This variant is generating right now.') : undefined}
       onClick={() => { void openRegeneration() }}>
-      {t(pending ? 'Generating…' : 'Regenerate')} · {t('Ziel im Generierungsdialog prüfen')}
+      {t('Regenerate')}
     </button>
+    <button type="button" className="ga-btn" disabled={pending || !!generationUnavailable}
+      onClick={() => { void openRegeneration(true) }}>{t('+ Generate new variant')}</button>
+    {pending && <p className="ga-hint" role="status">{t(variantBusy
+      ? 'This variant is generating right now.'
+      : 'Another variant is generating — a new variant can be added once it has finished.')}</p>}
+    {!pending && generationUnavailable && <p className="ga-hint">{t(generationUnavailable)}</p>}
     <details className="prop-inspector-group" open>
-      <summary>{t('Aktivität & Jahreszeiten')}</summary>
+      <summary>{t('Activity & seasons')}</summary>
       <PropVariantStrip propId={prop.id} variants={variants} max={variantMax}
         selected={variant} onSelect={setVariant} onChanged={meshesChanged}
         onEditVariant={queueVariant} onDeleted={onVariantDeleted}
         generating={generatingVariants} worldSeasons={worldSeasons}
         currentSeason={currentSeason} prepareVariantOperation={prepareVariantOperation} />
     </details>
+    {(generationRepairs.length > 0 || repairLoading || repairLoadError) && <details className="prop-inspector-group">
+      <summary>{t('Older generation results')} ({generationRepairs.length})</summary>
+      <p className="ga-hint">{t('Result of an older paid job whose target variant is unknown — assign it to the selected variant or discard it.')}</p>
+      <p><strong>{t('Selected target')}: {shownVariant
+        ? shownVariant.label || `${t('Variant')} ${shownVariant.index + 1}`
+        : t('No variant selected')}</strong></p>
+      <button type="button" className="ga-btn ga-btn-sm" disabled={repairLoading || repairBusy}
+        onClick={refreshGenerationRepairs}>{t('Refresh retained jobs')}</button>
+      {repairLoading && <p className="ga-hint" role="status">{t('Loading retained jobs…')}</p>}
+      {repairLoadError && <p role="alert">{t('Could not refresh retained jobs.')}{' '}{repairLoadError}</p>}
+      {generationRepairs.map((entry) => <article key={entry.op_id} className="ga-form">
+        <strong>{entry.original_name || t('Older generation')}</strong>
+        <span className="ga-hint">{t('Backend')}: {entry.backend || t('Stored routing selection')}{' · '}
+          {t('Tier')}: {entry.tier}{' · '}{entry.created_at}</span>
+        <span className="ga-hint">{entry.original_variant === null
+          ? t('Original target was not recorded.')
+          : `${t('Originally requested')}: ${t('Variant')} ${entry.original_variant + 1}. ${t('Historical index, not a confirmed assignment.')}`}</span>
+        <p role="status">{t(REPAIR_STATUS[entry.status])}</p>
+        <details><summary>{t('Job details')}</summary>
+          <p className="ga-hint" style={{ overflowWrap: 'anywhere' }}>{entry.op_id}</p>
+          <p className="ga-hint">{entry.reason}</p>
+        </details>
+        <button type="button" className="ga-btn" disabled={!entry.can_resume || !shownVariant || variantBusy || repairBusy}
+          onClick={() => { void openGenerationRepair(entry.op_id) }}>
+          {t(entry.status === 'waiting_provider' ? 'Assign existing job…' : 'Assign retained result…')}
+        </button>
+        <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" disabled={repairBusy}
+          onClick={() => setDiscardId(entry.op_id)}>{t('Discard')}</button>
+        {discardId === entry.op_id && <div role="group" aria-label={t('Discard older generation result?')}>
+          <p>{t('Discard this result from the repair list? Stored files and gallery history are kept.')}</p>
+          <button type="button" className="ga-btn ga-btn-danger" disabled={repairBusy}
+            onClick={() => { void dismissGenerationRepair(entry.op_id).then(() => setDiscardId('')) }}>{t('Confirm discard')}</button>
+          <button type="button" className="ga-btn" disabled={repairBusy} onClick={() => setDiscardId('')}>{t('Cancel')}</button>
+        </div>}
+      </article>)}
+    </details>}
+    {repairError && <p role="alert">{t(repairError)}</p>}
+    {repairRequest && <PropWorkspaceDialog title={t('Explicitly assign retained result')}
+      onCancel={cancelGenerationRepair}>
+      <div className="ga-modal-body">
+        <p><strong>{t('Target')}: {repairRequest.target.label
+          || `${t('Variant')} ${repairRequest.target.index + 1}`}</strong></p>
+        <p className="ga-hint" style={{ overflowWrap: 'anywhere' }}>{t('Stable variant ID')}: {repairRequest.target.uid}</p>
+        <p>{t('Retained job')}: {repairRequest.repair.original_name}{' · '}
+          {repairRequest.repair.backend || t('Stored routing selection')}{' · '}
+          {t('Tier')}: {repairRequest.repair.tier}</p>
+        <p role="status">{t(REPAIR_STATUS[repairRequest.repair.status])}</p>
+        <p><strong>{t('The result replaces the target variant’s active file for the stored tier. Previous mesh files remain in the gallery.')}</strong></p>
+        {repairRequest.target.model_file && <p className="ga-hint">
+          {t('Current model preview')}: {repairRequest.target.model_file}</p>}
+        <p>{t('No new provider job, source image or generation fee. If the old job is still running, only its result is collected. The target variant’s source images are kept.')}</p>
+        {repairError && <p role="alert">{t(repairError)}</p>}
+      </div>
+      <div className="ga-modal-footer">
+        <button type="button" className="ga-btn" disabled={repairBusy}
+          onClick={cancelGenerationRepair}>{t('Cancel')}</button>
+        <button type="button" className="ga-btn ga-btn-primary" disabled={repairBusy}
+          onClick={() => { void confirmGenerationRepair() }}>{t('Confirm assignment and publish result')}</button>
+      </div>
+    </PropWorkspaceDialog>}
           {variantBusy ? (
             <span className="ga-hint">
               {t('Generating the model — this takes a few minutes.')}
             </span>
           ) : pending ? (
-            // Another variant of the same prop is busy — worth saying, but it
-            // blocks nothing here.
+            // The prop-wide generation gate also covers other variants.
             <span className="ga-hint">
               {t('Another variant of this prop is generating.')}
             </span>
@@ -276,7 +358,7 @@ export function PropAssets({ workspace }: { workspace: PropWorkspace }) {
           ) : null}
 
           
-    {previewFile && <p className="ga-hint">{t('Historische Vorschau: Orientierung und begehbare Oberfläche des veröffentlichten Modells sind gesperrt.')}</p>}
+    {previewFile && <p className="ga-hint">{t('Historical preview: orientation and walkable surface editing of the published model are locked.')}</p>}
     <fieldset className="prop-editor-fields" disabled={!!previewFile}>
           {shownHasMesh ? (
             <>

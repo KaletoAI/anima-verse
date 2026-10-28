@@ -10,7 +10,7 @@ never from what the code currently prints:
   - a prop without the variant key has exactly ONE variant, the primary one,
     and every unqualified read still resolves to it;
   - generating APPENDS: the first mesh fills the existing empty slot, the
-    second one a fresh variant, and at the cap the last variant takes it;
+    second one a fresh variant; at cap 4, zero targets or replacements are allowed;
   - the cap is on ACTIVE variants and comes from
     `image_generation.prop_variant_max` (default 4);
   - `variants == model_variants[0]` on every placement spec — the primary
@@ -1554,9 +1554,12 @@ def main() -> int:
     check("variant_max() is 4", store.variant_max() == 4, str(store.variant_max()))
     put_mesh(pine, store.target_variant(pine))          # fills variant 3
     check("four variants now", len(store.list_variants(pine)) == 4)
-    at_cap = store.target_variant(pine)
-    check("at the cap the target is the LAST variant, not a fifth one",
-          at_cap == 3, str(at_cap))
+    try:
+        store.target_variant(pine)
+    except store.PropGenerationUnavailable:
+        check("at cap 4, zero new targets and zero replacements are allowed", True)
+    else:
+        check("at cap 4, zero new targets and zero replacements are allowed", False)
     check("add_variant() refuses at the cap", store.add_variant(pine) == -1)
     check("...and no fifth variant was written",
           len(store.list_variants(pine)) == 4)

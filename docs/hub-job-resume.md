@@ -100,4 +100,31 @@ unchanged.
   the task runs (its job is collected right away, though). A manual start of the same work is
   refused meanwhile.
 
+## Retained legacy prop meshes
+
+Older persisted `prop_mesh` records may lack a stable variant UUID. They are
+not published into whichever variant happens to occupy the old numeric index.
+Already submitted provider results are collected where possible, and the
+operation, inputs, outputs and provider handle are retained for explicit repair.
+A deferred legacy operation releases its running subject claim without
+cancelling paid work.
+
+In Props → Modell & Varianten, inspect the retained job, select the intended
+current variant and explicitly confirm assignment. The save/cancel barrier and
+a fresh UUID/revision check apply before publication. This reuses the existing
+work: it does not submit another render, overwrite the target source image or
+charge for a new provider job. Existing mesh gallery history remains available.
+If collection/publication still fails, the legacy operation stays deferred for
+another manual attempt instead of being deleted. New UUID-bearing operations
+retain normal terminal error handling; explicit cancellation is unchanged.
+
 Check: `scripts/smoke_hub_job_resume.py` (fake hub, simulated restart).
+
+In Props → Model & Variants, **Older generation results** is collapsed by default.
+**Discard** asks for confirmation in the admin UI and calls the admin-only
+`POST /world/props/{id}/generation-repairs/{op_id}/dismiss` route. The existing
+journal marks the deferred record with `state.dismissed_at`; the repair listing
+excludes it, explicit reassignment refuses it, and restart recovery skips it.
+The operation record, staged inputs/results, provider handle and gallery files
+are retained for traceability. Discard does not submit or cancel a provider job.
+Check: `scripts/smoke_prop_generation_concurrency.py` (temporary storage).

@@ -209,7 +209,7 @@ def _blocked(reason: str) -> dict:
     return dict(status="blocked", reason=reason, waypoints=[], access=None, entry_anchor=None)
 
 
-def plan_approach(actor: str, target: dict, role: str) -> dict:
+def plan_approach(actor: str, target: dict, role: str, *, _query=None) -> dict:
     """Resolve current server geometry, never trust client-supplied access/route.
 
     target requires location_id, room_id, placement_id, variant_uid, action_id,
@@ -217,14 +217,14 @@ def plan_approach(actor: str, target: dict, role: str) -> dict:
     otherwise choose the shortest reachable alternative, ties by marker ID.
     role is actor or partner. This function reserves/writes/activates nothing.
     """
-    return _plan_approach(actor, target, role)
+    return _plan_approach(actor, target, role, _query=_query)
 
 
 def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
-                   departure_placement_id: str = "") -> dict:
+                   departure_placement_id: str = "", _query=None) -> dict:
     """Internal revalidation can reuse the persisted, measured seat exit."""
     from app.core import places
-    from app.core.room_stand import approach_departure, room_geometry
+    from app.core.room_stand import approach_departure
     from app.models.character import get_character_profile
 
     required = ("location_id", "room_id", "placement_id", "variant_uid", "action_id", "definition_revision")
@@ -238,28 +238,30 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
     location, room = places.where(actor, profile=profile)
     if (target["location_id"], target["room_id"]) != (location, room):
         return _blocked("target_not_in_actor_room")
-    # Fresh composition: a cached place must not keep an old published variant,
-    # revision, support chain or moved placement usable during an arrival check.
-    candidates = [p for p in places._compose(location).get(room, [])
-                  if p.get("placement_id") == target["placement_id"]]
+    # Explicit reuse is bounded to this read operation. Standalone arrival
+    # revalidation starts fresh, never from the shared places TTL cache.
+    query = _query if _query is not None else places._GeometryQuery()
+    inventory = query.room_places(location, room)
+    candidates = [p for p in inventory if p.get("placement_id") == target["placement_id"]]
     if not candidates:
         return _blocked("placement_not_found")
     candidates = [p for p in candidates if p.get("variant_uid") == target["variant_uid"]]
     if not candidates:
         return _blocked("stale_variant")
-    geometry = room_geometry(location, room)
+    geometry = query.room_geometry(location, room)
     if geometry is None:
         return _blocked("room_geometry_unavailable")
     space = _Space(*geometry)
     if not space.valid:
         return _blocked("invalid_room_geometry")
-    start, seat, departure_reason = departure if departure is not None else approach_departure(actor, profile=profile)
+    start, seat, departure_reason = departure if departure is not None else approach_departure(
+        actor, profile=profile, _places=inventory)
     if departure_reason:
         return _blocked(departure_reason)
     if not space.free(start):
         return _blocked("start_not_walkable")
     departing_placement = departure_placement_id if departure is not None else (
-        (places.place_of(actor, profile=profile) or {}).get("placement_id", "") if seat is not None else "")
+        (places.place_of(actor, profile=profile, _places=inventory) or {}).get("placement_id", "") if seat is not None else "")
     if seat is not None and not _departure_walkable(seat, start, geometry, departing_placement):
         return _blocked("departure_not_walkable")
     choices = []

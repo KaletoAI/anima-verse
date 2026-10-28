@@ -20,7 +20,7 @@ import {
 } from './variantFields'
 import type { DimKey } from './dims'
 import { editDimensionGesture, type DimensionGesture } from './dimensionGesture'
-import { removeBoundMarker, type AccessRole, type AccessPoint } from './spatialBindings'
+import { editedBindingValidation, removeBoundMarker, type AccessRole, type AccessPoint } from './spatialBindings'
 import { usePropActionCatalog } from './usePropActionCatalog'
 import { actionEditorIssues } from './propActionAuthoring'
 import type {
@@ -28,7 +28,8 @@ import type {
   PropVariant, PropView, PropWorkspaceArea, PropActionIssue, VariantBinding,
 } from './propTypes'
 import { resolveVariantAfterBarrier, propGenerationSubject, propGenerationTarget,
-  type PropGenerationTarget } from './propOperations'
+  propGenerationAuthor, resolvePropRepairAfterBarrier, type PropGenerationTarget,
+  type PropGenerationRepair, type PropRepairSnapshot, type PropRepairConfirmation } from './propOperations'
 
 // Starting values from the prop-lights spec, section 7.1.
 export const LIGHT_PRESETS: Array<{ name: string; light: Omit<PropLight, 'at'> }> = [
@@ -101,11 +102,13 @@ function authorSnapshot(prop: PropFull, variants: PropVariant[]): AuthorFields {
 export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   onChanged, onDelete, armedDelete, onRegenerate, onRegenerateMesh,
   onRegenerateImage, onRefresh, onGenerating, backendFaces = 0,
-  onDirtyChange }: {
+  onDirtyChange, area, onAreaChange }: {
   prop: PropFull
-  /** ANY variant of this prop is generating — the aggregate. Only the two
-   *  prop-level actions read it; everything variant-scoped asks
-   *  `generatingVariants` instead. */
+  /** Library-owned navigation preference; prop-specific state remains keyed by prop id. */
+  area: PropWorkspaceArea
+  onAreaChange: (area: PropWorkspaceArea) => void
+  /** ANY variant of this prop is generating — aggregate status. Target
+   *  availability and variant-scoped controls use `generatingVariants`. */
   pending: boolean
   /** STORE indices with a run in flight (server state, polled by the
    *  container). A variant switched off keeps its index, so these are matched
@@ -124,7 +127,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   onRegenerateMesh: (target: PropVariant, existingViews: PropView[]) => void
   /** Re-run the source→mesh chain with the stored description/name — this
    *  APPENDS another model variant. */
-  onRegenerate: (target: PropGenerationTarget) => void
+  onRegenerate: (target: PropGenerationTarget, author: PropVariant) => void
   /** Render a NEW source image for the SELECTED variant only — its mesh stays
    *  until re-meshed, and no other variant's image is touched. `view` says
    *  WHICH of the four pictures is being rendered, `image` is that view's own
@@ -152,7 +155,6 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   const enlarge = useEnlarge()
   const { toast } = useToast()
   const enc = encodeURIComponent(prop.id)
-  const [area, setArea] = useState<PropWorkspaceArea>('overview')
   const [mobilePane, setMobilePane] = useState<'editor' | 'preview'>('editor')
   // Which stored mesh the viewer shows ('' = the active one the clients get).
   // A filename is only valid inside ONE variant's gallery, so switching the
@@ -211,10 +213,10 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
         async () => (await apiGet<{ variants: PropVariant[] }>(
           `/world/props/${enc}/variants`)).variants)
     } catch (error) {
-      toast((error as Error).message, 'error')
+      toast(t((error as Error).message), 'error')
       return null
     }
-  }, [beforeImmediate, enc, toast])
+  }, [beforeImmediate, enc, toast, t])
   const [saving, setSaving] = useState(false)
   const [saveIssues, setSaveIssues] = useState<PropActionIssue[]>([])
   // Server issue paths index the validated snapshot, not a later edited/reloaded list.
@@ -225,21 +227,31 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   const [discardArmed, setDiscardArmed] = useState(false)
   const dirtyCount = pendingFieldCount(buf)
   useEffect(() => { if (!dirtyCount) setDiscardArmed(false) }, [dirtyCount])
-  const queueGeneral = useCallback((patch: Record<string, unknown>) => {
-    setBuf((b) => queueFields(b, GENERAL_TARGET, patch))
-  }, [])
   const [serverVariants, setServerVariants] = useState<PropVariant[]>([])
+  const queueGeneral = useCallback((patch: Record<string, unknown>) => {
+    setBuf(previous => {
+      let next = queueFields(previous, GENERAL_TARGET, patch)
+      if ('actions' in patch) {
+        const actions = draftValue(next, GENERAL_TARGET, 'actions', prop.actions || [])
+        for (const entry of applyVariantDraft(serverVariants, next)) {
+          const bindings = editedBindingValidation(entry, actions)
+          if (bindings !== entry.action_bindings) next = queueFields(next, variantTarget(entry.uid), { action_bindings: bindings })
+        }
+      }
+      return next
+    })
+  }, [serverVariants, prop.actions])
   const queueVariant = useCallback((index: number,
     patch: Record<string, unknown>) => {
     const row = serverVariants.find((v) => v.index === index)
     if (row) setBuf((b) => {
-      const draft = applyVariantDraft([row], b)[0]
-      const next = ('dims' in patch || 'ground_offset_m' in patch) && !('action_bindings' in patch)
-        ? { ...patch, action_bindings: (draft.action_bindings || []).map(binding => ({
-          ...binding, validation: 'repair_required' })) } : patch
-      return queueFields(b, variantTarget(row.uid), next)
+      const next = queueFields(b, variantTarget(row.uid), patch)
+      if (!['dims', 'ground_offset_m', 'markers', 'action_bindings'].some(key => key in patch)) return next
+      const edited = applyVariantDraft([row], next)[0]
+      const bindings = editedBindingValidation(edited, draftValue(next, GENERAL_TARGET, 'actions', prop.actions || []))
+      return bindings === edited.action_bindings ? next : queueFields(next, variantTarget(row.uid), { action_bindings: bindings })
     })
-  }, [serverVariants])
+  }, [serverVariants, prop.actions])
   const [variantMax, setVariantMax] = useState(1)
   // The world's season names + the one it is in now (E2c) — the season chips
   // are a pick from this list, and an empty list (a world without seasons)
@@ -251,7 +263,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   const [variant, setVariant] = useState(0)
   const selectedUid = useRef('')
   selectedUid.current = serverVariants.find((entry) => entry.index === variant)?.uid || ''
-  const onVariantDeleted = useCallback((_index: number) => {
+  const onVariantDeleted = useCallback(() => {
     // Selection follows the surviving UID when the fresh list arrives.
     setPreviewFile('')
     setPlacing(null)
@@ -1155,28 +1167,136 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     try {
       const [author, refs] = await Promise.all([
         apiGet<{ prop: PropFull }>(`/world/props/${enc}`),
-        apiGet<{ variants: PropVariant[] }>(`/world/props/${enc}/variants`),
+        apiGet<{ variants: PropVariant[]; revision: string; generating_variants: number[] }>(
+          `/world/props/${enc}/variants`),
       ])
-      onRegenerateImage(target, view, view === 'front' ? target.image : target.images?.[view],
-        propGenerationSubject(author.prop, target),
+      const current = refs.variants.find((entry) => entry.uid === target.uid)
+      if (!current) throw new Error(t('Die Zielvariante wurde entfernt. Die Operation wurde nicht ausgeführt.'))
+      if (refs.generating_variants.includes(current.index)) throw new Error(t('This variant is generating right now.'))
+      if (author.prop.revision !== refs.revision) throw new Error(t('Prop changed on the server; reopen the generation dialog.'))
+      onRegenerateImage(current, view, view === 'front' ? current.image : current.images?.[view],
+        propGenerationSubject(author.prop, current),
         refs.variants.filter((entry) => entry.has_source), author.prop)
-    } catch (error) { toast((error as Error).message, 'error') }
+    } catch (error) { toast(t((error as Error).message), 'error') }
   }
   const openMeshGeneration = async () => {
     const target = await prepareVariantOperation(shownVariant?.uid || '', t('3D from this image'))
     if (target) onRegenerateMesh(target,
       (['back', 'left', 'right'] as PropView[]).filter((view) => !!target.images?.[view]))
   }
-  const openRegeneration = async () => {
-    if (!await beforeImmediate(t('Regenerate'))) return
+  const openRegeneration = async (append = false) => {
+    const uid = shownVariant?.uid
+    // Choosing a NEW slot waits for the whole prop; a named variant only for itself.
+    if ((append ? pending : variantBusy)
+      || !await beforeImmediate(t(append ? '+ Generate new variant' : 'Regenerate'))) return
     try {
-      const current = await apiGet<{ variants: PropVariant[]; max: number }>(
+      const current = await apiGet<{ variants: PropVariant[]; max: number; generating_variants: number[] }>(
         `/world/props/${enc}/variants`)
-      onRegenerate(propGenerationTarget(current.variants, current.max))
-    } catch (error) { toast((error as Error).message, 'error') }
+      const target = current.variants.find(entry => entry.uid === uid)
+      if (!append && !target) throw new Error(t('The selected variant was removed.'))
+      if (!append && current.generating_variants.includes(target!.index)) {
+        throw new Error(t('This variant is generating right now.'))
+      }
+      const plan: PropGenerationTarget = append
+        ? propGenerationTarget(current.variants, current.max, current.generating_variants)
+        : { kind: 'existing', uid: target!.uid, index: target!.index }
+      onRegenerate(plan, propGenerationAuthor(current.variants, plan))
+    } catch (error) { toast(t((error as Error).message), 'error') }
+  }
+  const [generationRepairs, setGenerationRepairs] = useState<PropGenerationRepair[]>([])
+  const [repairLoading, setRepairLoading] = useState(false)
+  const [repairLoadError, setRepairLoadError] = useState('')
+  const [repairError, setRepairError] = useState('')
+  const [repairRefresh, setRepairRefresh] = useState(0)
+  const [repairBusy, setRepairBusy] = useState(false)
+  const repairAction = useRef(false)
+  const [repairRequest, setRepairRequest] = useState<PropRepairConfirmation | null>(null)
+  const refreshGenerationRepairs = () => setRepairRefresh((value) => value + 1)
+  useEffect(() => {
+    let cancelled = false
+    setRepairLoading(true)
+    void apiGet<{ repairs: PropGenerationRepair[] }>(`/world/props/${enc}/generation-repairs`)
+      .then((answer) => {
+        if (!cancelled) { setGenerationRepairs(answer.repairs); setRepairLoadError('') }
+      }, (error: Error) => {
+        if (!cancelled) setRepairLoadError(error.message)
+      }).finally(() => { if (!cancelled) setRepairLoading(false) })
+    return () => { cancelled = true }
+  }, [enc, reloadKey, pending, repairRefresh])
+  const readRepairSnapshot = async (): Promise<PropRepairSnapshot> => {
+    const [current, retained] = await Promise.all([
+      apiGet<Omit<PropRepairSnapshot, 'repairs'>>(`/world/props/${enc}/variants`),
+      apiGet<{ repairs: PropGenerationRepair[] }>(`/world/props/${enc}/generation-repairs`),
+    ])
+    return { ...current, repairs: retained.repairs }
+  }
+  const openGenerationRepair = async (opId: string) => {
+    if (repairAction.current || !shownVariant) return
+    const uid = shownVariant.uid
+    repairAction.current = true
+    setRepairBusy(true)
+    setRepairError('')
+    try {
+      const next = await resolvePropRepairAfterBarrier(opId, uid,
+        () => beforeImmediate(t('Gesicherte Generierung einer Variante zuordnen')), readRepairSnapshot)
+      if (next) setRepairRequest(next)
+    } catch (error) { setRepairError((error as Error).message) }
+    finally { repairAction.current = false; setRepairBusy(false) }
+  }
+  const dismissGenerationRepair = async (opId: string) => {
+    if (repairAction.current) return
+    repairAction.current = true
+    setRepairBusy(true); setRepairError('')
+    try {
+      await apiPost(`/world/props/${enc}/generation-repairs/${encodeURIComponent(opId)}/dismiss`, {})
+      setGenerationRepairs(entries => entries.filter(entry => entry.op_id !== opId))
+      refreshGenerationRepairs()
+    } catch (error) { setRepairError((error as Error).message) }
+    finally { repairAction.current = false; setRepairBusy(false) }
+  }
+  const cancelGenerationRepair = () => {
+    if (!repairAction.current) { setRepairRequest(null); setRepairError('') }
+  }
+  const confirmGenerationRepair = async () => {
+    const request = repairRequest
+    if (!request || repairAction.current) return
+    repairAction.current = true
+    setRepairBusy(true)
+    setRepairError('')
+    // Hide this decision while the shared save/cancel barrier is active.
+    setRepairRequest(null)
+    try {
+      const next = await resolvePropRepairAfterBarrier(request.repair.op_id, request.target.uid,
+        () => beforeImmediate(t('Gesichertes Ergebnis veröffentlichen')), readRepairSnapshot)
+      if (!next) return
+      if (next.target.index !== request.target.index
+          || next.target.model_file !== request.target.model_file
+          || next.body.base_revision !== request.body.base_revision) {
+        setRepairRequest(next)
+        setRepairError(t('Zielvariante, aktives Mesh oder Dokument wurden geändert. Die aktuelle Zuordnung erneut bestätigen.'))
+        return
+      }
+      const answer = await apiPost<{ status: string }>(
+        `/world/props/${enc}/variants/${next.target.index}/generate`, next.body)
+      if (answer.status !== 'generating') {
+        setRepairRequest(next)
+        setRepairError(t('Die Zielvariante ist bereits beschäftigt. Die gesicherte Arbeit bleibt erhalten.'))
+        return
+      }
+      refreshGenerationRepairs()
+      onGenerating()
+      void meshesChanged().catch((error: Error) => toast(error.message, 'error'))
+      toast(t(next.repair.status === 'waiting_provider'
+        ? 'Der bestehende Provider-Auftrag wird abgeholt und danach veröffentlicht. Kein neuer Renderauftrag.'
+        : 'Das gesicherte Ergebnis wird ohne neue Generierung veröffentlicht.'))
+    } catch (error) {
+      setRepairRequest(request)
+      setRepairError((error as Error).message)
+      refreshGenerationRepairs()
+    } finally { repairAction.current = false; setRepairBusy(false) }
   }
   const navigate = (next: PropWorkspaceArea) => {
-    setArea(next)
+    onAreaChange(next)
     setMobilePane('editor')
     setPlacing(null)
     setAccessPlacing(null)
@@ -1215,6 +1335,8 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     selectedActionId, setSelectedActionId, saveIssues, accessPlacing, armAccess, onPickAccess,
     patchBinding, markerRemoval, setMarkerRemoval, commitMarkerRemoval,
     catalog, reloadActionCatalog, authoringIssues,
+    generationRepairs, repairLoading, repairLoadError, repairError, repairBusy, repairRequest,
+    refreshGenerationRepairs, openGenerationRepair, cancelGenerationRepair, confirmGenerationRepair, dismissGenerationRepair,
   }
 }
 
