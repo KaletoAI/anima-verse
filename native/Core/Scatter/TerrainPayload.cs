@@ -10,7 +10,16 @@ namespace AnimaNative.Scatter;
 public sealed record ScatterEntry(
     double DensityPer100m2, string? Model, double? MinSpacingM, string? YawMode, double? YawDeg, string? Place,
     double? Variant, double? ReshuffleMin, double? PropHeightM, double? SwayFactor, double? GroundOffsetM,
-    Dictionary<string, string> Variants, List<Dictionary<string, string>>? ModelVariants);
+    Dictionary<string, string> Variants, List<Dictionary<string, string>>? ModelVariants)
+{
+    /// <summary>Task 39 (E4-T4): rim selection/jitter and the along-row recipe, passed verbatim to the samplers.</summary>
+    public double? OffsetM { get; init; }
+    public double? SpacingJitterM { get; init; }
+    public string? Sides { get; init; }
+    public double? SpacingM { get; init; }
+    public double? StartM { get; init; }
+    public string? Side { get; init; }
+}
 
 /// <summary>A type of the catalog; <c>Surface</c> = <c>surfaceOfType</c> (the library id it wears, trimmed + lower-cased, '' = none).</summary>
 public sealed record TerrainTypeInfo(string Kind, string Color, double Undergrowth, double SwayM, string Surface = "")
@@ -38,9 +47,15 @@ public readonly record struct TerrainPoint(string Kind, double SpeedFactor, stri
                                            double IdleSinkM, double SwimFromM, double? WaterLevel);
 
 /// <summary>A painted area: id, kind, the RAW polygon (junk corners as NaN — <c>cleanRing</c> drops them),
-/// its scatter rows, and how many rows of the kinds the spike does not port (along/edge/center).</summary>
+/// its scatter rows and the retained legacy row count (Task 39 ports all row kinds).</summary>
 public sealed record TerrainAreaInfo(string Id, string Kind, List<P2> Polygon, List<ScatterEntry> Scatter, int OtherRows)
 {
+    /// <summary>Task 39: meta.stroke and its own along list; polygons have no stroke axis.</summary>
+    public StrokeMath.Recipe? Stroke { get; init; }
+    public IReadOnlyList<ScatterEntry> Along { get; init; } = Array.Empty<ScatterEntry>();
+    public double StrokeWidthM { get; init; }
+    public IReadOnlyList<P2>? CentreLine => Stroke is not null && StrokeWidthM > 0 && Stroke.Points.Count >= 2
+        ? StrokeMath.CentreLine(Stroke) : null;
     /// <summary><c>meta.water_profile</c> is there — the bake carved a bed (<c>waterProfileOf</c>, W1).</summary>
     public bool WaterProfile { get; init; }
     /// <summary><c>meta.water_depth_effective</c> (null = the bake default).</summary>
@@ -110,7 +125,11 @@ public sealed class TerrainPayload
             StrOrNull(e, "yaw_mode"), NumOrNull(e, "yaw_deg"), StrOrNull(e, "place"), NumOrNull(e, "variant"),
             NumOrNull(e, "reshuffle_min"), NumOrNull(e, "prop_height_m"), NumOrNull(e, "sway_factor"),
             NumOrNull(e, "ground_offset_m"),
-            e.TryGetProperty("variants", out var v) ? Map(v) : new Dictionary<string, string>(), mv);
+            e.TryGetProperty("variants", out var v) ? Map(v) : new Dictionary<string, string>(), mv)
+        {
+            OffsetM = NumOrNull(e, "offset_m"), SpacingJitterM = NumOrNull(e, "spacing_jitter_m"), Sides = StrOrNull(e, "sides"),
+            SpacingM = NumOrNull(e, "spacing_m"), StartM = NumOrNull(e, "start_m"), Side = StrOrNull(e, "side"),
+        };
     }
 
     /// <summary>typeAt's <c>depth(raw)</c>: <c>Number(raw)</c>, finite and &gt; 0, else 0 (junk is no depth, never NaN).</summary>
@@ -194,21 +213,28 @@ public sealed class TerrainPayload
         {
             if (a.ValueKind != JsonValueKind.Object) continue;
             var rows = new List<ScatterEntry>();
-            int other = 0;
+            var along = new List<ScatterEntry>();
+            StrokeMath.Recipe? stroke = null;
+            double width = 0;
             if (a.TryGetProperty("meta", out var meta) && meta.ValueKind == JsonValueKind.Object)
             {
                 if (meta.TryGetProperty("scatter", out var sc) && sc.ValueKind == JsonValueKind.Array)
                     foreach (var e in sc.EnumerateArray())
                         if (e.ValueKind == JsonValueKind.Object) rows.Add(ParseEntry(e));
-                if (meta.TryGetProperty("stroke", out var st) && st.ValueKind == JsonValueKind.Object
-                    && st.TryGetProperty("along", out var al) && al.ValueKind == JsonValueKind.Array)
-                    other += al.EnumerateArray().Count(e => e.ValueKind == JsonValueKind.Object);
+                if (meta.TryGetProperty("stroke", out var st) && st.ValueKind == JsonValueKind.Object)
+                {
+                    if (st.TryGetProperty("points", out var pts) && pts.ValueKind == JsonValueKind.Array)
+                        stroke = new(Points(pts), StrOrNull(st, "style"), NumOrNull(st, "spacing_m"), NumOrNull(st, "amplitude_m"));
+                    width = st.TryGetProperty("width_m", out var w) ? Scene.Js.Number(w) : 0;
+                    if (st.TryGetProperty("along", out var al) && al.ValueKind == JsonValueKind.Array)
+                        along.AddRange(al.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object).Select(ParseEntry));
+                }
             }
-            other += rows.Count(r => r.Place is "edge" or "center");
             bool hasMeta = a.TryGetProperty("meta", out var am) && am.ValueKind == JsonValueKind.Object;
             t.Areas.Add(new TerrainAreaInfo(Json.Str(a, "id"), Json.Str(a, "kind"),
-                a.TryGetProperty("polygon", out var poly) ? Points(poly) : new List<P2>(), rows, other)
+                a.TryGetProperty("polygon", out var poly) ? Points(poly) : new List<P2>(), rows, 0)
             {
+                Stroke = stroke, StrokeWidthM = width, Along = along,
                 WaterProfile = hasMeta && am.TryGetProperty("water_profile", out var wp) && wp.ValueKind == JsonValueKind.Object,
                 // The browser hands the raw value to waterOpaqueDepthM, which reads it with Number(): a numeric
                 // string is a depth, junk is NaN (→ the default); absent stays null (undefined).
@@ -224,6 +250,32 @@ public sealed class TerrainPayload
                                         NumOrNull(b, "half_d") ?? double.NaN));
         return t;
     }
+
+    /// <summary>Task 39 D4: epoch signature includes list identity; a poll within the same epochs does no work.</summary>
+    public string EpochSignature(double seconds)
+    {
+        var parts = new List<string>();
+        foreach (var a in Areas)
+        {
+            void Rows(IEnumerable<ScatterEntry> rows, string list)
+            {
+                int i = 0;
+                foreach (var e in rows)
+                {
+                    var epoch = ScatterMath.ReshuffleEpoch(seconds, e.ReshuffleMin);
+                    if (epoch is double n) parts.Add($"{a.Id}/{list}{i}:{n.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+                    i++;
+                }
+            }
+            Rows(a.Along, "a"); Rows(a.Scatter, "s");
+        }
+        return string.Join("|", parts);
+    }
+
+    /// <summary>Task 39 D5: exact world-space footprint signature (position, yaw and boundary, including map3d fallback).
+    /// Unrelated location fields cannot trigger sampling; deletion and new outlines do.</summary>
+    public static string FootprintSignature(JsonElement worldmap)
+        => System.Text.Json.JsonSerializer.Serialize(LocationFootprints(worldmap));
 
     public TerrainTypeInfo? TypeOf(string kind) => Types.TryGetValue((kind ?? "").ToLowerInvariant(), out var t) ? t : null;
 

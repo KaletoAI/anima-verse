@@ -41,10 +41,8 @@ public readonly record struct LayerCounts(int Meshes, int Instances, long Triang
 /// <c>inline: true</c>) runs the very same <see cref="SampleWindow"/> inline — before the first picture.
 ///
 /// Task 38 (E4-T3): billboards beyond the cull line run FIRST in each LOD pass (ScatterField.Impostors.cs).
-/// NOT ported (each named in the S3 report with the side it favours): the along/edge/center
-/// rows (<c>strokeStations</c>, <c>scatterEdgeInstances</c>, <c>scatterCenterInstance</c> — skipped and
-/// counted); the <c>aligned</c> yaw's surface axis (the angle alone is used; position and count are
-/// unaffected).
+/// Task 39 (E4-T4): along, edge/center and spread rows share the browser's order and occupancy;
+/// aligned rows use the decorated stroke axis or the selected polygon edges.
 /// </summary>
 public partial class ScatterField : Node3D
 {
@@ -88,7 +86,20 @@ public partial class ScatterField : Node3D
     private int _pending;
 
     /// <summary>GAME clock of the worldmap (<c>game_time.total_seconds</c>) for reshuffling rows; NaN = none.</summary>
-    public double GameSeconds { get; set; } = double.NaN;
+    private double _gameSeconds = double.NaN;
+    private string _epochSig = "";
+    public double GameSeconds
+    {
+        get => _gameSeconds;
+        set
+        {
+            _gameSeconds = value;
+            string sig = _payload?.EpochSignature(value) ?? "";
+            if (sig == _epochSig) return;
+            _epochSig = sig;
+            if (_areas.Count > 0) RebuildScatter();
+        }
+    }
     public int Rebuilds { get; private set; }
     /// <summary>Worker builds that were thrown away because a newer terrain arrived while they ran.</summary>
     public int Discarded { get; private set; }
@@ -119,6 +130,8 @@ public partial class ScatterField : Node3D
     public sealed class Prop
     {
         public required int Row;
+        /// <summary>Task 39: the row's list identity, independent of its authoring index.</summary>
+        public string RowKind = "spread";
         public required int VariantPos;
         public required List<ScatterInstance> Points;
         public required MultiMeshInstance3D LowNode;
@@ -170,6 +183,7 @@ public partial class ScatterField : Node3D
     public void SetTerrain(TerrainPayload payload, IEnumerable<P2[]> locationFootprints, bool inline = false)
     {
         _payload = payload;
+        _epochSig = payload.EpochSignature(GameSeconds);
         _footprints = locationFootprints.Cast<IReadOnlyList<P2>>().Concat(payload.PropFootprints()).ToList();
         RebuildAreas(inline);
     }
@@ -216,10 +230,8 @@ public partial class ScatterField : Node3D
             if (ring is null) continue;
             var occluders = rings.Skip(i + 1).Where(r => r is not null).Cast<IReadOnlyList<P2>>().ToList();
             var a = new AreaScatter { Area = _payload.Areas[i], Ring = ring, Occluders = occluders };
-            SkippedRows += a.Area.OtherRows;
             _areas.Add(a);
         }
-        if (SkippedRows > 0) _log($"scatter: {SkippedRows} along/edge/center rows not ported (skipped)");
         if (inline)
         {
             var inputs = Inputs();
@@ -366,15 +378,34 @@ public partial class ScatterField : Node3D
         return best;
     }
 
-    /// <summary>Sampled instances of one row over the window (for the check): the spread rows only.</summary>
+    /// <summary>Task 39: one row over the window, with browser verdicts before the whole-row window filter.</summary>
     public static List<ScatterInstance> SampleRow(TerrainAreaInfo area, int index, ScatterEntry entry, IReadOnlyList<P2> ring,
                                                   IReadOnlyList<IReadOnlyList<P2>> occluders,
                                                   IReadOnlyList<IReadOnlyList<P2>> footprints,
                                                   IEnumerable<(int Cx, int Cz)> cells, CellOccupancy occ,
-                                                  int variantCount, double clearM, double gameSeconds)
+                                                  int variantCount, double clearM, double gameSeconds, bool along = false, IReadOnlyList<P2>? line = null)
     {
         var pts = new List<ScatterInstance>();
         double? epoch = ScatterMath.ReshuffleEpoch(gameSeconds, entry.ReshuffleMin);
+        line ??= area.CentreLine;
+        var axis = ScatterRows.AreaAxis(line, ring, entry.Sides);
+        if (along || entry.Place is "edge" or "center")
+        {
+            var options = new ScatterRows.Options
+            {
+                Seed = along ? StrokeMath.AlongSeed(area.Id, index, epoch) : ScatterMath.Seed(area.Id, index, epoch),
+                Line = line ?? Array.Empty<P2>(), SpacingM = (along ? entry.SpacingM : entry.MinSpacingM) ?? double.NaN,
+                OffsetM = entry.OffsetM, Side = entry.Side, StartM = entry.StartM, JitterM = entry.SpacingJitterM,
+                Sides = entry.Sides, Edges = !along && line is not null ? ScatterRows.RibbonSelectedEdges(ring, entry.Sides) : null,
+                Footprints = footprints, ClearM = clearM, Occluders = occluders, VariantCount = variantCount, Variant = entry.Variant,
+                YawMode = entry.YawMode, YawDeg = entry.YawDeg, AxisAt = axis, Occupied = occ, OccupyR = clearM,
+                OccupyTag = along ? StrokeMath.AlongSeed(area.Id, index) : ScatterMath.Seed(area.Id, index),
+            };
+            var points = along ? StrokeMath.Stations(options) : entry.Place == "edge"
+                ? ScatterRows.EdgeInstances(ring, options) : ScatterRows.CenterInstance(ring, options);
+            var window = cells.ToHashSet();
+            return points.Where(p => window.Contains((ScatterMath.CellAt(p.X), ScatterMath.CellAt(p.Z)))).ToList();
+        }
         foreach (var (cx, cz) in cells)
             pts.AddRange(ScatterMath.CellInstances(new ScatterMath.CellOptions
             {
@@ -384,7 +415,7 @@ public partial class ScatterField : Node3D
                 MinSpacingM = entry.MinSpacingM is double s && s > 0 ? s : null,
                 VariantCount = variantCount, Variant = entry.Variant,
                 YawMode = entry.YawMode, YawDeg = entry.YawDeg,
-                AxisAt = null,   // the aligned surface axis (scatterAxis.ts) is not ported: axis 0
+                AxisAt = axis,
                 Occupied = occ.GridOf(cx, cz), OccupyR = clearM, OccupyTag = ScatterMath.Seed(area.Id, index),
             }));
         return pts;
@@ -407,7 +438,11 @@ public partial class ScatterField : Node3D
     /// <summary>One (row, variant) of the window, sampled and draped, ready to be mounted.</summary>
     public sealed record PropSpec(int Row, int VariantPos, List<ScatterInstance> Points, double H, string Color, double Sway,
                                   string LoUrl, string HiUrl, double TargetH, float[] Src, float[] Pos,
-                                  (double X, double Y, double Z) Centre, double Radius);
+                                  (double X, double Y, double Z) Centre, double Radius)
+    {
+        /// <summary>Task 39: row list identity; along index zero and scatter index zero are separate rows.</summary>
+        public string RowKind { get; init; } = "spread";
+    }
 
     /// <summary>
     /// <c>buildScatter</c> for every area of the window, bottom to top with ONE occupancy grid per cell over the whole
@@ -436,10 +471,14 @@ public partial class ScatterField : Node3D
         if (cells.Count == 0) return outList;
         var occ = new CellOccupancy(grids);
         string color = payload.KindColor(a.Area.Kind);
-        for (int index = 0; index < a.Area.Scatter.Count; index++)
+        var line = a.Area.CentreLine;
+        var rows = new List<(ScatterEntry Entry, int Index, string Kind)>();
+        if (line is not null)
+            rows.AddRange(a.Area.Along.Select((e, i) => (e, i, "along")).Where(r => !string.IsNullOrEmpty(r.e.Model)));
+        rows.AddRange(a.Area.Scatter.Select((e, i) => (e, i, e.Place ?? "spread")).Where(r => r.Item3 is "edge" or "center"));
+        rows.AddRange(a.Area.Scatter.Select((e, i) => (e, i, "spread")).Where(r => r.e.Place is not ("edge" or "center")));
+        foreach (var (entry, index, kind) in rows)
         {
-            var entry = a.Area.Scatter[index];
-            if (entry.Place is "edge" or "center") continue;
             // JS truthiness: an empty model string is the built-in tuft too.
             double h = !string.IsNullOrEmpty(entry.Model) ? ScatterLod.TargetH(entry.PropHeightM) : TuftHeightM;
             var kinds = KindsOf(entry);
@@ -447,7 +486,7 @@ public partial class ScatterField : Node3D
             double clearM = ScatterMath.ClearM(h, spread is double s ? s * h : null);
             var buckets = kinds.Select(_ => new List<ScatterInstance>()).ToList();
             foreach (var p in SampleRow(a.Area, index, entry, a.Ring, a.Occluders, inputs.Footprints, cells, occ,
-                                        kinds.Count, clearM, inputs.GameSeconds))
+                                        kinds.Count, clearM, inputs.GameSeconds, kind == "along", line))
             {
                 int v = p.Variant ?? 0;
                 (v >= 0 && v < buckets.Count ? buckets[v] : buckets[0]).Add(p);
@@ -458,7 +497,7 @@ public partial class ScatterField : Node3D
             {
                 if (buckets[v].Count == 0) continue;
                 outList.Add(Drape(inputs.Ground, index, v, buckets[v], h, color, entrySway, sink, kinds[v].LoUrl,
-                                  kinds[v].HiUrl, ScatterLod.TargetH(entry.PropHeightM)));
+                                  kinds[v].HiUrl, ScatterLod.TargetH(entry.PropHeightM)) with { RowKind = kind });
             }
         }
         return outList;
@@ -513,7 +552,7 @@ public partial class ScatterField : Node3D
         AddChild(lowNode);
         return new Prop
         {
-            Row = row, VariantPos = variantPos, Points = points,
+            Row = row, RowKind = spec.RowKind, VariantPos = variantPos, Points = points,
             LowNode = lowNode, Low = low, BaseCount = n, Src = src, Pos = pos,
             Tiers = Enumerable.Repeat((byte)1, n).ToArray(),
             Slots = Enumerable.Repeat((byte)2, n).ToArray(),

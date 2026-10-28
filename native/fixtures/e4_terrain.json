@@ -35,23 +35,23 @@
             ]
           ],
           "width_m": 6,
-          "style": "straight"
+          "style": "straight",
+          "along": [
+            {
+              "model": "/assets/props/broadleaf/model.glb",
+              "variants": {
+                "full": "/assets/props/broadleaf/model.glb?tier=full",
+                "low": "/assets/props/broadleaf/model.glb?tier=low"
+              },
+              "prop_height_m": 2,
+              "spacing_m": 20,
+              "offset_m": 5,
+              "side": "both",
+              "yaw_mode": "aligned",
+              "yaw_deg": 90
+            }
+          ]
         },
-        "along": [
-          {
-            "model": "/assets/props/broadleaf/model.glb",
-            "variants": {
-              "full": "/assets/props/broadleaf/model.glb?tier=full",
-              "low": "/assets/props/broadleaf/model.glb?tier=low"
-            },
-            "prop_height_m": 2,
-            "spacing_m": 20,
-            "offset_m": 5,
-            "side": "both",
-            "yaw_mode": "aligned",
-            "yaw_deg": 90
-          }
-        ],
         "scatter": [
           {
             "place": "edge",

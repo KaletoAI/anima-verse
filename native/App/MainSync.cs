@@ -25,6 +25,8 @@ public partial class Main : Node3D
     /// </summary>
     private void StartSync()
     {
+        // Task 39 D6: use the world's loaded masks, and follow streamed windows/ground replacements.
+        _scatter?.BindGround(() => _builder?.Ground);
         if (_api is { } api)
         {
             _hub = new SyncStream(url => new HttpEventSource(api.OpenEventStreamAsync, url, Log), _timers);
@@ -117,6 +119,7 @@ public partial class Main : Node3D
         {
             if (_locSync is not null && _locSync.Differs(LocationsSync.MapRev(map))) _ = _locSync.SyncAsync();
             _figures.ApplyPolled(map);
+            _scatter?.SyncWorldMap(map); // Task 39 D4/D5: every accepted poll, including view switches.
             var clock = ConnectionState.ClockOf(map);
             if (_conn.Ok(clock))
             {
@@ -218,6 +221,7 @@ public partial class Main : Node3D
             }
             if (_stop.IsCancellationRequested) return;
             _figures.ApplyPolled(map);
+            _scatter?.SyncWorldMap(map); // Task 39 D4/D5: every accepted poll, including view switches.
             // main.ts syncs the ground right here with the switched view's frame (no three-second gap).
             _ = _streamer?.Sync(map);
             // …and with it the veil: the unfiltered view takes the haze away in the same frame.

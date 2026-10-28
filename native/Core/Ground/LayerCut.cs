@@ -34,6 +34,14 @@ public sealed class LayerMaskWindow
     public int IdSize, SdSize;
     public byte[] Id = Array.Empty<byte>();
     public byte[] Sd = Array.Empty<byte>();
+
+    /// <summary>Task 39 D6: freeze the scalar format and both byte arrays before dispatching a scatter worker.</summary>
+    public LayerMaskWindow Snapshot() => new()
+    {
+        OriginX = OriginX, OriginZ = OriginZ, IdStep = IdStep, SdStep = SdStep, SdZero = SdZero,
+        SdCodesPerM = SdCodesPerM, SdBandM = SdBandM, IdSize = IdSize, SdSize = SdSize,
+        Id = (byte[])Id.Clone(), Sd = (byte[])Sd.Clone(),
+    };
 }
 
 /// <summary>What the compositor reads at one world point — the CPU twin of <c>lcCompose</c>'s selection.</summary>

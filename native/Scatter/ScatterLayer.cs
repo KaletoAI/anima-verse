@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AnimaNative.Api;
+using AnimaNative.Ground;
 using AnimaNative.World;
 using Godot;
 
@@ -31,6 +32,11 @@ public partial class ScatterLayer : Node3D
     public ScatterField Field { get; }
     public UndergrowthField Undergrowth { get; }
     private readonly Func<Vector3> _anchor;
+    private TerrainPayload? _terrain;
+    private string _footprintSig = "";
+    private Func<GroundSurfaces?>? _ground;
+    private GroundSurfaces? _boundGround;
+    private LayerMaskWindow? _boundMask;
     private readonly Action<string> _log;
     private double _sinceTick = double.PositiveInfinity, _sinceLod = double.PositiveInfinity, _sinceLog;
     private Vector3 _lodPos = new(float.NaN, float.NaN, float.NaN);
@@ -57,6 +63,8 @@ public partial class ScatterLayer : Node3D
         var layer = new ScatterLayer(source, height, anchor, log);
         if (worldmap.TryGetProperty("game_time", out var gt) && TerrainPayload.NumOrNull(gt, "total_seconds") is double s)
             layer.Field.GameSeconds = s;
+        layer._terrain = terrain;
+        layer._footprintSig = TerrainPayload.FootprintSignature(worldmap);
         var locFp = TerrainPayload.LocationFootprints(worldmap);
         var a = anchor();
         layer.Field.SetAnchor(a.X, a.Z);
@@ -87,6 +95,8 @@ public partial class ScatterLayer : Node3D
     {
         using var doc = await source.GetTerrainAsync();
         var terrain = TerrainPayload.Parse(doc.RootElement);
+        _terrain = terrain;
+        _footprintSig = TerrainPayload.FootprintSignature(worldmap);
         var locFp = TerrainPayload.LocationFootprints(worldmap);
         Field.SetTerrain(terrain, locFp);
         var all = new List<IReadOnlyList<P2>>(locFp);
@@ -95,8 +105,40 @@ public partial class ScatterLayer : Node3D
         _log($"scatter: terrain reloaded ({terrain.Areas.Count} areas, {terrain.PropBoxes.Count} prop boxes)");
     }
 
+    /// <summary>Task 39 D4/D5: every accepted poll supplies the game clock and location outlines.
+    /// Only a changed epoch or footprint signature re-samples; both layers share the new footprints.</summary>
+    public void SyncWorldMap(JsonElement worldmap)
+    {
+        Field.GameSeconds = worldmap.TryGetProperty("game_time", out var gt)
+            ? TerrainPayload.NumOrNull(gt, "total_seconds") ?? double.NaN : double.NaN;
+        string sig = TerrainPayload.FootprintSignature(worldmap);
+        if (sig == _footprintSig || _terrain is null) return;
+        _footprintSig = sig;
+        var loc = TerrainPayload.LocationFootprints(worldmap);
+        Field.SetTerrain(_terrain, loc);
+        Undergrowth.SetAreas(UndergrowthField.AreasOf(_terrain), loc.Cast<IReadOnlyList<P2>>().Concat(_terrain.PropFootprints()));
+    }
+
+    /// <summary>Task 39 D6: bind the ground already loaded by the world; follow replacements and streamed
+    /// windows on the main thread, without fetching a second set of masks.</summary>
+    public void BindGround(Func<GroundSurfaces?> ground)
+    {
+        _ground = ground;
+        RefreshMask();
+    }
+
+    private void RefreshMask()
+    {
+        if (_ground is null) return;
+        var g = _ground();
+        if (ReferenceEquals(g, _boundGround) && ReferenceEquals(g?.Window, _boundMask)) return;
+        _boundGround = g; _boundMask = g?.Window;
+        Undergrowth.SetLayerMask(g?.Window, g?.Layers ?? Enumerable.Empty<TerrainLayer>());
+    }
+
     public override void _Process(double delta)
     {
+        RefreshMask();
         var cam = GetViewport().GetCamera3D();
         if (cam is null) return;
         _sinceTick += delta;

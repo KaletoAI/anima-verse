@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AnimaNative.Scatter;
+using AnimaNative.Ground;
 using AnimaNative.World;
 using Godot;
 
@@ -45,7 +46,140 @@ public static class ScatterCheck
         int cases = CheckCases(root);
         CheckPure(root);
         string fixture = await CheckFixture(root.GetProperty("fixture"), world, source, height);
-        return $"cases={cases} {fixture}";
+        string rows = CheckE4Rows(root.GetProperty("e4"), height, dir);
+        await CheckPlacementChanges(world, height, dir, root.GetProperty("e4"));
+        CheckMaskGate(height);
+        return $"cases={cases} {fixture} | {rows} D4/D5/D6=pass";
+    }
+
+    /// <summary>Task 39: the production worker sampler against both unchanged E4 epochs, with estimated
+    /// clearance. Same 1e-6 position/yaw tolerance and exact variants/counts as the original scatter check.</summary>
+    private static string CheckE4Rows(JsonElement e4, WorldHeight height, string dir)
+    {
+        using var doc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "e4_terrain.json")));
+        var terrain = TerrainPayload.Parse(doc.RootElement);
+        var areas = terrain.Areas.Select(a => new ScatterField.AreaScatterInput(a, ScatterMath.AreaRing(a.Polygon)!, new())).ToList();
+        var counts = new List<string>();
+        foreach (var epoch in e4.GetProperty("epochs").EnumerateArray())
+        {
+            var inputs = new ScatterField.WindowInputs(0, areas, terrain, Array.Empty<IReadOnlyList<P2>>(),
+                ScatterMath.WantedCells(0, 0, 120), epoch.GetProperty("gameSeconds").GetDouble(), new Dictionary<string, double>(), height.Snapshot());
+            var specs = ScatterField.SampleWindow(inputs);
+            var n = new List<int>();
+            foreach (var row in epoch.GetProperty("rows").EnumerateArray())
+            {
+                int areaIndex = terrain.Areas.FindIndex(a => a.Id == row.GetProperty("area").GetString());
+                var points = specs[areaIndex].Where(p => p.Row == row.GetProperty("index").GetInt32()
+                    && p.RowKind == row.GetProperty("kind").GetString()).SelectMany(p => p.Points).ToList();
+                ComparePoints($"E4 {inputs.GameSeconds} {row.GetProperty("kind")}", points, row.GetProperty("points"));
+                n.Add(points.Count);
+            }
+            counts.Add(string.Join("/", n));
+        }
+        return "e4[along/edge/center=" + string.Join(";", counts) + "]";
+    }
+
+    /// <summary>Task 39 D4/D5: exercise the mounted layers, including no-op polls, epoch rollover,
+    /// footprint-only movement and restore. These triggers must rebuild even with unchanged terrain_sig.</summary>
+    private static async Task CheckPlacementChanges(Node3D world, WorldHeight height, string dir, JsonElement e4)
+    {
+        // This regression owns its request journal; GroundCheck verifies the main world's mask requests later.
+        var source = new FixtureSource(dir);
+        async Task Settle(ScatterField field)
+        {
+            ulong start = Time.GetTicksMsec();
+            do await world.ToSignal(world.GetTree(), SceneTree.SignalName.ProcessFrame);
+            while (field.Busy && Time.GetTicksMsec() - start < 10000);
+            Expect("placement builds settle", !field.Busy, "still busy after 10 seconds");
+        }
+        using var rowsDoc = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(dir, "e4_terrain.json")));
+        var field = new ScatterField(source, height, _ => { }); world.AddChild(field);
+        field.GameSeconds = 14465;
+        field.SetTerrain(TerrainPayload.Parse(rowsDoc.RootElement), Array.Empty<P2[]>(), inline: true);
+        await Settle(field);
+        void Rows(JsonElement epoch)
+        {
+            foreach (var r in epoch.GetProperty("rows").EnumerateArray())
+                ComparePoints("runtime epoch " + epoch.GetProperty("gameSeconds"),
+                    field.Props.Where(p => p.RowKind == r.GetProperty("kind").GetString() && p.Row == r.GetProperty("index").GetInt32())
+                        .SelectMany(p => p.Points).ToList(), r.GetProperty("points"));
+        }
+        var epochs = e4.GetProperty("epochs"); Rows(epochs[0]);
+        int before = field.Rebuilds;
+        field.GameSeconds = 21599;
+        Expect("D4 same epoch no rebuild", !field.Building && field.Rebuilds == before, $"{before} -> {field.Rebuilds}");
+        field.GameSeconds = 21665;
+        await field.WhenBuiltAsync();
+        Expect("D4 epoch rebuild", field.Rebuilds > before, $"{before} -> {field.Rebuilds}"); Rows(epochs[1]);
+        field.QueueFree();
+
+        using var mapDoc = await source.GetWorldMapAsync();
+        var layer = await ScatterLayer.CreateAsync(source, height, mapDoc.RootElement, () => Vector3.Zero, _ => { });
+        world.AddChild(layer); layer.SetProcess(false); await Settle(layer.Field);
+        layer.SyncWorldMap(mapDoc.RootElement);
+        before = layer.Field.Rebuilds; int ugBefore = layer.Undergrowth.CellsBuilt;
+        layer.SyncWorldMap(mapDoc.RootElement);
+        Expect("D5 same footprint no rebuild", !layer.Field.Building && layer.Field.Rebuilds == before && !layer.Undergrowth.Building, "unchanged poll rebuilt");
+        var moved = System.Text.Json.Nodes.JsonNode.Parse(mapDoc.RootElement.GetRawText())!;
+        // Move every footprint outside the sampled window; keep terrain_sig unchanged.
+        foreach (var loc in moved["locations"]!.AsArray()) loc!["pos_x"] = 2000;
+        using var movedDoc = JsonDocument.Parse(moved.ToJsonString());
+        layer.SyncWorldMap(movedDoc.RootElement);
+        await layer.Field.WhenBuiltAsync(); await layer.Undergrowth.WhenBuiltAsync();
+        Expect("D5 footprint-only rebuilds both", layer.Field.Rebuilds > before && layer.Undergrowth.CellsBuilt > ugBefore, "one layer did not rebuild");
+        var changed = layer.Digest();
+        layer.SyncWorldMap(mapDoc.RootElement);
+        await layer.Field.WhenBuiltAsync(); await layer.Undergrowth.WhenBuiltAsync();
+        Expect("D5 footprint restore changes placement", layer.Digest() != changed, "footprint changes left placement unchanged");
+        // Follow the production BindGround -> RefreshMask -> SetLayerMask path, including windows
+        // received after binding. A uniform forest mask accepts the wood; a path mask rejects it.
+        var ground = await GroundSurfaces.LoadAsync(source, height, 0, 0, _ => { }, water: false);
+        LayerMaskWindow Uniform(byte layerIndex) => new() { IdSize = 1, SdSize = 1, IdStep = 1024, SdStep = 1024,
+            Id = new byte[] { layerIndex, layerIndex }, Sd = new byte[] { 0 }, SdCodesPerM = 1 };
+        var acceptedMask = Uniform(1);
+        ground.SetLayerWindow(acceptedMask, GroundSurfaces.WindowImages(acceptedMask));
+        layer.BindGround(() => ground);
+        await layer.Undergrowth.WhenBuiltAsync();
+        Expect("D6 bound live ground accepts matching kind", layer.Undergrowth.Counts().BaseInstances > 0, "matching mask grew nothing");
+        int builtBefore = layer.Undergrowth.CellsBuilt;
+        layer._Process(0);
+        Expect("D6 same window no rebuild", !layer.Undergrowth.Building && layer.Undergrowth.CellsBuilt == builtBefore, "unchanged mask rebuilt");
+        var deniedMask = Uniform(2);
+        ground.SetLayerWindow(deniedMask, GroundSurfaces.WindowImages(deniedMask));
+        layer._Process(0);
+        await layer.Undergrowth.WhenBuiltAsync();
+        Expect("D6 streamed window rebuilds", layer.Undergrowth.CellsBuilt > builtBefore && layer.Undergrowth.Counts().BaseInstances == 0, "live mask swap left tufts standing");
+        ground.SetLayerWindow(acceptedMask, GroundSurfaces.WindowImages(acceptedMask));
+        layer._Process(0);
+        await layer.Undergrowth.WhenBuiltAsync();
+        Expect("D6 restored mask regrows", layer.Undergrowth.Counts().BaseInstances > 0, "restored mask did not regrow");
+        var replacement = await GroundSurfaces.LoadAsync(source, height, 0, 0, _ => { }, water: false);
+        replacement.SetLayerWindow(acceptedMask, GroundSurfaces.WindowImages(acceptedMask));
+        builtBefore = layer.Undergrowth.CellsBuilt;
+        ground = replacement; // Same window reference: the ground/table identity must trigger this rebuild.
+        layer._Process(0);
+        await layer.Undergrowth.WhenBuiltAsync();
+        Expect("D6 replacement ground rebuilds", layer.Undergrowth.CellsBuilt > builtBefore, "replacement ground ignored");
+        layer.QueueFree();
+    }
+
+    /// <summary>Task 39 D6: a synthetic mask disagrees with the polygon on half a cell; the real worker
+    /// sampler must honor it. Mutating the live bytes afterwards cannot change frozen input results.</summary>
+    private static void CheckMaskGate(WorldHeight height)
+    {
+        var ring = ScatterMath.CellRing(0, 0).ToList();
+        var area = new UndergrowthArea("mask-probe", "grass", ring, (0, 0, 64, 64), 0.02, "#448844", 0) { Layer = 1 };
+        var mask = new LayerMaskWindow { IdSize = 2, SdSize = 1, IdStep = 32, SdStep = 64, SdCodesPerM = 1,
+            Id = new byte[] { 1, 1, 2, 2, 1, 1, 2, 2 }, Sd = new byte[] { 0 } };
+        var inputs = new UndergrowthField.CellInputs(0, 0, new[] { (0, 0) }, new[] { area },
+            Array.Empty<(IReadOnlyList<P2>, (double, double, double, double))>(), height.Snapshot(), mask.Snapshot());
+        var kept = UndergrowthField.SampleCells(inputs)[0].SelectMany(l => l.Points).ToList();
+        var all = UndergrowthField.SampleCell(new[] { area with { Layer = 0 } }, 0, 0, 0, Array.Empty<IReadOnlyList<P2>>());
+        Expect("D6 mask subtracts raster disagreement", kept.Count > 0 && kept.Count < all.Count && kept.All(p => p.X < 32), $"{kept.Count}/{all.Count}");
+        Array.Fill(mask.Id, (byte)2);
+        Expect("D6 frozen mask survives live mutation", kept.SequenceEqual(UndergrowthField.SampleCells(inputs)[0].SelectMany(l => l.Points)), "worker read live mask bytes");
+        Expect("D6 wrong layer grows nothing", UndergrowthField.SampleCell(new[] { area with { Layer = 3 } }, 0, 0, 0,
+            Array.Empty<IReadOnlyList<P2>>(), inputs.Mask).Count == 0, "wrong mask kind accepted");
     }
 
     /// <summary>Task 37 (E4-T2): observe the real glTF callbacks, so a main-thread parse regresses the check even
@@ -241,7 +375,6 @@ public static class ScatterCheck
         Eq("wanted trees per cell", ScatterMath.WantedCount(4096, 1.0, ScatterMath.MaxPerCell), ExpTreesPerCell);
         Eq("wanted tufts per cell", ScatterMath.WantedCount(4096, 1.5, ScatterMath.MaxPerCell), ExpTuftsPerCell);
         Eq("wanted undergrowth per cell", ScatterLod.UgCellCount(0.02), ExpUndergrowthPerCell);
-        Expect("no along/edge/center rows in the fixture", field.SkippedRows == 0, $"{field.SkippedRows}");
 
         // Before any mesh: the estimated clearance (h · 0.5), tufts on the cheap buffer.
         CompareRows("estimate", field, fx.GetProperty("estimate"));

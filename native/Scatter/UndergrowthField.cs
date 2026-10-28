@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using AnimaNative.Terrain;
+using AnimaNative.Ground;
 using AnimaNative.World;
 using Godot;
 
@@ -11,7 +12,11 @@ namespace AnimaNative.Scatter;
 
 /// <summary>One painted shape as the undergrowth reads it (<c>UndergrowthArea</c>).</summary>
 public sealed record UndergrowthArea(string Id, string Kind, List<P2> Ring, (double MinX, double MinZ, double MaxX, double MaxZ) Bounds,
-                                     double Value, string Color, double SwayM);
+                                     double Value, string Color, double SwayM)
+{
+    /// <summary>Task 39 D6: the layer table index of this kind (unknown kinds use zero, as the browser).</summary>
+    public int Layer { get; init; }
+}
 
 /// <summary>
 /// The layer nobody authored (§ A9) — port of <c>client3d/src/scene/undergrowth.ts</c>: a window of
@@ -21,10 +26,8 @@ public sealed record UndergrowthArea(string Id, string Kind, List<P2> Ring, (dou
 /// colour, the three-plane star tuft, the procedural blade texture with alpha cut, wind, and the per-instance
 /// LOD (cull at 60 m, hash thinning from 30 m).
 ///
-/// One gate differs: the browser keeps a point only where the baked layer MASK (<c>topLayerIndexAt</c>,
-/// the <c>/play/terrain-layers</c> tiles) names this area's kind as the top layer. The spike does not load
-/// the layer tiles; the occluders already drop every point an area painted later covers, so the kept set is
-/// "this area is the topmost painted shape here" — the mask's statement up to its raster at the borders.
+/// Task 39 D6: points must also pass the baked top-layer gate. The mask bytes are copied into
+/// each worker input, so a streamed replacement cannot change a build already running.
 ///
 /// THREADING (Task 26): the cells a moved anchor, a re-drape or new areas ask for are sampled on a worker (one
 /// <see cref="Coalescer"/> build at a time, from frozen areas, footprints and a <see cref="WorldHeight.Snapshot"/>);
@@ -36,6 +39,8 @@ public partial class UndergrowthField : Node3D
 {
     private readonly WorldHeight _height;
     private readonly Coalescer _build;
+    private LayerMaskWindow? _mask;
+    private Dictionary<string, int> _layerOf = new(StringComparer.OrdinalIgnoreCase);
     private Task _lastRequest = Task.CompletedTask;
     /// <summary>Counts every new set of areas: a build sampled for an older set is thrown away.</summary>
     private int _areasGen;
@@ -131,12 +136,22 @@ public partial class UndergrowthField : Node3D
     /// <summary>New painted shapes: every standing cell is outdated (drawn until its new layers stand).</summary>
     public void SetAreas(List<UndergrowthArea> areas, IEnumerable<IReadOnlyList<P2>> footprints)
     {
-        _areas = areas;
+        _areas = areas.Select(a => a with { Layer = _layerOf.GetValueOrDefault(a.Kind) }).ToList();
         _footprints = footprints.Select(f => (f, FootprintBox(f))).ToList();
         _areasGen++;
         foreach (var key in _cells.Keys) _staleAt[key] = ++_serial;
         _materials.Clear();
         if (_hasAnchor) RefreshCells(false);
+    }
+
+    /// <summary>Task 39 D6: a new mask or table invalidates every standing cell and any older worker.
+    /// A mask-less world reads layer zero, exactly as topLayerAt(null) does in the browser.</summary>
+    public void SetLayerMask(LayerMaskWindow? mask, IEnumerable<TerrainLayer> layers)
+    {
+        _mask = mask;
+        _layerOf = new(StringComparer.OrdinalIgnoreCase);
+        foreach (var l in layers) _layerOf[l.Kind] = l.Index;
+        SetAreas(_areas, _footprints.Select(f => f.Fp).ToList());
     }
 
     /// <summary>
@@ -197,14 +212,14 @@ public partial class UndergrowthField : Node3D
     /// <summary>What one cell build reads, frozen on the main thread.</summary>
     public sealed record CellInputs(int AreasGen, int Serial, IReadOnlyList<(int Cx, int Cz)> Keys, IReadOnlyList<UndergrowthArea> Areas,
                                     IReadOnlyList<(IReadOnlyList<P2> Fp, (double, double, double, double) Bounds)> Footprints,
-                                    WorldHeight Ground);
+                                    WorldHeight Ground, LayerMaskWindow? Mask = null);
 
     /// <summary>One (area, cell) layer, sampled and draped, ready to be mounted.</summary>
     public sealed record LayerSpec(int AreaIndex, List<ScatterInstance> Points, float[] Src, float[] Pos,
                                    (double X, double Y, double Z) Centre, double Radius);
 
     private CellInputs Inputs(List<(int Cx, int Cz)> keys)
-        => new(_areasGen, _serial, keys, _areas, _footprints, _height.Snapshot());
+        => new(_areasGen, _serial, keys, _areas, _footprints, _height.Snapshot(), _mask?.Snapshot());
 
     /// <summary>One build: the cells needed NOW, sampled on a worker, mounted here unless newer areas came.</summary>
     private async Task BuildOnceAsync()
@@ -260,7 +275,7 @@ public partial class UndergrowthField : Node3D
 
     /// <summary>The instances one (area, cell) grows — sampler + ring filter, no Godot objects.</summary>
     public static List<ScatterInstance> SampleCell(IReadOnlyList<UndergrowthArea> areas, int index, int cx, int cz,
-                                                   IReadOnlyList<IReadOnlyList<P2>> nearFootprints)
+                                                   IReadOnlyList<IReadOnlyList<P2>> nearFootprints, LayerMaskWindow? mask = null)
     {
         var area = areas[index];
         double cell = ScatterLod.UgCellM;
@@ -280,7 +295,8 @@ public partial class UndergrowthField : Node3D
             MaxPoints = ScatterLod.UgMaxPerCell,
             TriesPerPoint = 1,
         });
-        return points.FindAll(p => ScatterMath.PointInRing(p.X, p.Z, area.Ring));
+        return points.FindAll(p => ScatterMath.PointInRing(p.X, p.Z, area.Ring)
+            && LayerCut.TopLayerAt(mask, p.X, p.Z) == area.Layer);
     }
 
     /// <summary>Every (area, cell) layer of the cells in <paramref name="inputs"/> — pure (a worker runs it).</summary>
@@ -305,7 +321,7 @@ public partial class UndergrowthField : Node3D
             var area = areas[index];
             if (ScatterLod.UgCellCount(area.Value) < 1) continue;
             if (!Meets(area.Bounds)) continue;
-            var kept = SampleCell(areas, index, cx, cz, near);
+            var kept = SampleCell(areas, index, cx, cz, near, inputs.Mask);
             if (kept.Count == 0) continue;
             outList.Add(Drape(inputs.Ground, index, kept));
         }

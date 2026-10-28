@@ -371,7 +371,7 @@ async function main() {
         result.push({ area: area.id, index, kind, entry, ring, line, seed, occupyTag, epoch: epoch ?? null,
           clearM, points: pts(points) })
       }
-      ;(area.meta?.along ?? []).forEach((e, i) => sample(e, i, 'along'))
+      ;(area.meta?.stroke?.along ?? []).forEach((e, i) => sample(e, i, 'along'))
       ;(area.meta?.scatter ?? []).forEach((e, i) => {
         if (e.place === 'edge' || e.place === 'center') sample(e, i, e.place)
       })
