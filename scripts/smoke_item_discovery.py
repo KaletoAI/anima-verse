@@ -22,7 +22,15 @@ Hand-derived expectations:
     B gets both, no avatar gets only coin. Players get no difficulty/found_by.
 [n] Non-admin locations omit all hidden placements, including without avatar;
     admin retains them, storage is unchanged, and 3D room fields omit items.
+[o] First B discovery creates one named German notice, delivered only to B;
+    viewers below the threshold and visible placements produce no notice.
+[p] Inventory polls, room reentry and dismissed notices do not repeat a find;
+    A's later English notice does not replace B's remembered discovery.
+[q] Four simultaneous discoveries remember one find and produce one notice.
+[r] A first discovery during a refused pickup notifies after the world lock
+    and database transaction are released, only to the discovering avatar.
 """
+from concurrent.futures import ThreadPoolExecutor
 import io
 import json
 import os
@@ -30,6 +38,7 @@ from pathlib import Path
 import sys
 import tempfile
 import zipfile
+import threading
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -51,7 +60,8 @@ def main():
         from app.core.keyed_lock import keyed_lock
         from app.models.character import save_character_profile
         from app.models.world import (add_location, add_room, get_location, get_world_setting, world_generation)
-        from app.routes.play import _items_here
+        from app.routes.play import _items_here, play_notices
+        from app.models.notifications import get_notifications, mark_read
         from app.core.thought_context import _build_room_items_block
         init_schema()
         # This fixture tests base discovery and boosts; rule multipliers have
@@ -62,9 +72,9 @@ def main():
         set_game_factor(0)
         t = GameTime.parse("Y0001-D002T12:00:00")
         set_game_time(t)
-        profiles = {"A": {"status_effects": {"attention": 50}},
-                    "B": {"status_effects": {"attention": 80}},
-                    "C": {"status_effects": {}}}
+        profiles = {"A": {"language": "en", "status_effects": {"attention": 50}},
+                    "B": {"language": "de", "status_effects": {"attention": 80}},
+                    "C": {"language": "en", "status_effects": {}}}
         with transaction() as conn:
             for name in profiles:
                 conn.execute("INSERT INTO characters (name, created_at, updated_at) VALUES (?, '', '')", (name,))
@@ -78,7 +88,8 @@ def main():
         loc = add_location(name="Study", description="A quiet study")["id"]
         room = add_room(loc, "Desk", sync_world=True)["id"]
         other = add_room(loc, "Shelf", sync_world=True)["id"]
-        notebook = add_item(name="notebook", description="A plain notebook")["id"]
+        notebook = add_item(name="notebook", description="A plain notebook",
+                            extra_fields={"name_de": "Notizbuch"})["id"]
         coin = add_item(name="coin", description="A plain coin")["id"]
         def placement(iid=notebook, rid=room):
             return next(p for p in get_room_items(loc, rid) if p["item_id"] == iid)
@@ -92,6 +103,12 @@ def main():
         def here(name):
             with patch("app.models.character.get_character_current_location", return_value=loc), patch("app.models.character.get_character_current_room", return_value=room):
                 return {p["item_id"]: p for p in _items_here(name)}
+        def item_notices(name, iid=notebook):
+            return [n for n in get_notifications(character_whitelist=[name])
+                    if n["type"] == "item_discovered" and n["metadata"].get("item_id") == iid]
+        def banners(name):
+            with patch("app.models.account.get_active_character", return_value=name):
+                return play_notices(user={"role": "player", "id": "test"})
         add_item_to_room(loc, room, notebook, hidden=True, discovery_difficulty=1500)
         assert placement()["discovery_difficulty"] == 999
         add_item_to_room(loc, room, notebook, hidden=True, discovery_difficulty=-5)
@@ -100,19 +117,34 @@ def main():
         print("PASS [a]")
         add_item_to_room(loc, room, notebook, hidden=True, discovery_difficulty=70)
         generation = world_generation()
-        assert not sees("A") and sees("B") and not sees("C")
+        assert not sees("A") and item_notices("A") == []
+        assert sees("B") and not sees("C")
         assert world_generation() == generation
         assert discovered_by(loc, room, notebook) == ["B"]
         assert get_connection().execute("SELECT game_ts FROM item_discoveries").fetchone()[0] == t.canonical()
         print("PASS [b]")
+        found = item_notices("B")
+        assert len(found) == 1 and found[0]["content"] == "Du hast Notizbuch entdeckt."
+        assert found[0]["metadata"] == {"item_id": notebook, "location_id": loc, "room_id": room}
+        assert banners("B")["notifications"] == [{
+            "id": found[0]["id"], "kind": "item_discovered", "body": "Du hast Notizbuch entdeckt."}]
+        assert item_notices("A") == item_notices("C") == []
+        assert banners("A")["notifications"] == banners("C")["notifications"] == []
+        print("PASS [o]")
         add_item_to_room(loc, room, coin)
         assert all(sees(n, coin) for n in profiles)
         assert discovered_by(loc, room, coin) == []
+        assert item_notices("A", coin) == item_notices("B", coin) == item_notices("C", coin) == []
         print("PASS [d]")
         assert notebook not in here("A")
         assert here("B")[notebook]["discovered"] is True
         assert here("B")[coin]["discovered"] is False
         print("PASS [e]")
+        assert sees("B") and len(item_notices("B")) == 1
+        assert mark_read(found[0]["id"])
+        assert banners("B")["notifications"] == []
+        assert notebook in here("B") and sees("B")
+        assert len(item_notices("B")) == 1 and banners("B")["notifications"] == []
         block = _build_room_items_block(loc, room, "B", profile=profiles["B"])
         assert "notebook" in block and "(hidden — you noticed it)" in block
         assert "notebook" not in _build_room_items_block(loc, room, "A", profile=profiles["A"])
@@ -123,6 +155,12 @@ def main():
         assert discovered_by(loc, room, notebook) == ["A", "B"]
         boost(expired=True)
         assert discovery_value("A") == 50 and sees("A")
+        assert len(item_notices("A")) == 1
+        assert item_notices("A")[0]["content"] == "You discovered notebook."
+        assert len(item_notices("B")) == 1
+        assert len(banners("A")["notifications"]) == 1
+        assert banners("B")["notifications"] == []
+        print("PASS [p]")
         before = [tuple(row) for row in get_connection().execute(
             "SELECT * FROM item_discoveries ORDER BY character_name")]
         with patch("app.models.inventory.add_to_inventory", return_value=False):
@@ -222,7 +260,49 @@ def main():
         assert placement()["hidden"] is True
         assert "items" not in VIEW_3D_ROOM_FIELDS
         print("PASS [n]")
-        print("All item discovery checks passed (14/14).")
+        token = add_item(name="hidden token", category="decoration")["id"]
+        add_item_to_room(loc, other, token, hidden=True, discovery_difficulty=70)
+        token_placement = placement(token, other)
+        ready = threading.Barrier(4)
+        def discover_token(_):
+            ready.wait(timeout=5)
+            return placement_visible_to("B", loc, other, token_placement, profile=profiles["B"])
+        with ThreadPoolExecutor(max_workers=4) as workers:
+            assert all(workers.map(discover_token, range(4)))
+        assert discovered_by(loc, other, token) == ["B"]
+        assert len(item_notices("B", token)) == 1
+        assert item_notices("A", token) == item_notices("C", token) == []
+        print("PASS [q]")
+
+        from app.core import sync_topics
+        from app.models.world import world_write_lock
+        box = add_item(name="sealed box", category="decoration", portable=False)["id"]
+        add_item_to_room(loc, other, box, hidden=True, discovery_difficulty=70)
+        lock_observations = []
+        def observe_notice():
+            unlocked = threading.Event()
+            def acquire_world_lock():
+                with world_write_lock:
+                    unlocked.set()
+            threading.Thread(target=acquire_world_lock, daemon=True).start()
+            lock_observations.append((unlocked.wait(timeout=2), get_connection().in_transaction))
+        viewer_sync = sync_topics.register("demo", "demo", "B", loc, wake=observe_notice)
+        other_sync = sync_topics.register("demo", "demo", "A", loc)
+        viewer_sync.take()
+        other_sync.take()
+        try:
+            assert not pick_up_item("B", loc, other, box)["success"]
+            assert discovered_by(loc, other, box) == ["B"]
+            assert len(item_notices("B", box)) == 1
+            assert item_notices("A", box) == item_notices("C", box) == []
+            assert lock_observations == [(True, False)]
+            assert viewer_sync.take() == (["notices"], False)
+            assert other_sync.take() == ([], False)
+        finally:
+            sync_topics.unregister(viewer_sync)
+            sync_topics.unregister(other_sync)
+        print("PASS [r]")
+        print("All item discovery checks passed (18/18).")
 
 
 if __name__ == "__main__":

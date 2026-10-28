@@ -11,6 +11,8 @@ Hand-derived expectations, frozen clock T=Y0002-D109T12:00:00:
 [g] Config duration 3 at 12:30 gives 12:33.
 Additional checks: owner catch passes through before learning, including
 heartbeat/page turns; start callbacks execute outside locks/transactions.
+Close/reopen at the same frozen game timestamp creates a different immutable
+session_id; heartbeat keeps it. Migrating an old table preserves its live rows.
 """
 import os
 from pathlib import Path
@@ -33,7 +35,25 @@ def main():
         from app.core.timeutils import set_game_factor, set_game_time
         from app.models import character, inventory
         from app.models.world import add_location, add_room
+        # Exercise the real CREATE/ALTER migration against a pre-identity table.
+        with transaction() as conn:
+            conn.execute("CREATE TABLE item_reading_sessions (reader TEXT PRIMARY KEY, "
+                         "item_id TEXT, location_id TEXT, room_id TEXT, started_game_ts TEXT, "
+                         "until_game_ts TEXT, caught INTEGER DEFAULT 0, noticed_by TEXT DEFAULT '[]')")
+            conn.execute("INSERT INTO item_reading_sessions VALUES "
+                         "('Legacy','notebook','study','desk','Y0002-D109T11:00:00',"
+                         "'Y0002-D109T12:10:00',0,'[]')")
         init_schema()
+        migrated = dict(get_connection().execute(
+            "SELECT * FROM item_reading_sessions WHERE reader='Legacy'").fetchone())
+        assert migrated["session_id"] and migrated["item_id"] == "notebook"
+        assert migrated["started_game_ts"] == "Y0002-D109T11:00:00"
+        assert migrated["until_game_ts"] == "Y0002-D109T12:10:00" and migrated["noticed_by"] == "[]"
+        init_schema()
+        assert get_connection().execute(
+            "SELECT session_id FROM item_reading_sessions WHERE reader='Legacy'").fetchone()[0] == migrated["session_id"]
+        with transaction() as conn:
+            conn.execute("DELETE FROM item_reading_sessions WHERE reader='Legacy'")
         set_game_factor(0)
         def clock(time):
             set_game_time(GameTime.parse("Y0002-D109T" + time + ":00"))
@@ -59,6 +79,15 @@ def main():
         assert hasattr(r, "active_session"), "Reading session API is missing"
         assert until() == "Y0002-D109T12:10:00"
         assert r.active_session("A")["noticed_by"] == []
+        first = r.active_session("A")
+        assert first["session_id"]
+        r.end_session("A", "closed")
+        r.read_page("A", iid, 0, opening=True)
+        reopened = r.active_session("A")
+        assert reopened["started_game_ts"] == first["started_game_ts"]
+        assert reopened["session_id"] != first["session_id"]
+        assert r.heartbeat("A", iid) == {"caught_by": ""}
+        assert r.active_session("A")["session_id"] == reopened["session_id"]
         print("PASS [a]")
         clock("12:06")
         r.read_page("A", iid, 1)

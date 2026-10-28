@@ -567,6 +567,7 @@ SCHEMA_STATEMENTS = [
     )""",
     """CREATE TABLE IF NOT EXISTS item_reading_sessions (
         reader TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL DEFAULT '',
         item_id TEXT,
         location_id TEXT,
         room_id TEXT,
@@ -1036,6 +1037,7 @@ SCHEMA_STATEMENTS = [
 # ALTER TABLE migrations run idempotently after all CREATE statements.
 # Add missing columns per table; OperationalError means the column exists.
 ALTER_MIGRATIONS = [
+    ("item_reading_sessions", "session_id", "TEXT NOT NULL DEFAULT ''"),
     ("interaction_invites", "reason", "TEXT NOT NULL DEFAULT ''"),
     # improvements: the admin's "Run now" — the entry works off all its steps
     # past the idle window, the engine switch, a freeze and a queue pause, and
@@ -1192,6 +1194,7 @@ ALTER_MIGRATIONS = [
 # Indexes that touch migrated columns — they run AFTER ALTER_MIGRATIONS, or
 # CREATE INDEX fails on old DBs ("no such column: agent_name").
 POST_MIGRATION_STATEMENTS = [
+    "UPDATE item_reading_sessions SET session_id=lower(hex(randomblob(16))) WHERE session_id=''",
     "CREATE INDEX IF NOT EXISTS idx_llm_call_stats_agent_ts ON llm_call_stats (agent_name, ts DESC)",
     "CREATE INDEX IF NOT EXISTS idx_llm_call_stats_ts ON llm_call_stats (ts DESC)",
 ]

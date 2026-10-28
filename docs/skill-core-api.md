@@ -406,6 +406,39 @@ Images never reach NPC responses. Providers must not publish private images unde
 public static URLs. Neither `secret_id` nor `ref` is included in the public page.
 The shared reader keeps headings to one line (ellipsis with the full title on hover),
 renders date separately and scrolls image/text above fixed page controls.
+The image opens in the shared zoom lightbox. Sources may offer regeneration by
+registering `item_page_image.<source>` alongside their page provider. Each
+regenerable page supplies `image_ref` (an immutable identity, not an array index)
+and `image_regenerable: bool | Callable[[], bool]`. The selected human page exposes
+the token and resulting boolean; NPC responses contain neither these fields nor
+image bytes. Preparation must receive the token of the already displayed page.
+
+```python
+hooks.register_provider("item_page_image.<source>", provider)
+# provider(item, reader, page, *, action, page_ref="", prompt="", backend="",
+#          loras=None, negative_prompt="", publish=None) -> dict
+```
+
+For `action="prepare"`, return `{prompt, subjects, available, page_ref, backend_options}`;
+the core adds `avatar`. Resolve `backend_options` with the actual scene references,
+so Auto and its LoRA list match the render. For `action="regenerate"`, render without access/profile locks,
+then invoke the provided `publish` callback with a short atomic storage operation to recheck room visibility,
+reading session, owner-catching state and source identity immediately before
+storage. The operation must also guard the immutable page identity and atomically
+replace image bytes and generation metadata. A rejected publish does not replace
+the previous image. Return the callback's `{ok}` / `{error}` / `{caught_by}` result.
+The core checks access once more before sending the updated selected page.
+
+`POST /play/read/image-prepare {item_id, index, page_ref}` requires an active authorized
+reading session and returns the preparation above. `POST /play/read/image-regenerate`
+accepts `{item_id, index, page_ref, prompt, backend?, loras?, negative_prompt?}`
+and returns the usual reading response after successful replacement. Both execute
+blocking work off the event loop. Render/validation errors use HTTP errors so the
+dialog retains its previous image; access/catch results end the reading UI.
+The shared dialog offers backend-scoped LoRAs with global `scene_view` Auto routing;
+an explicit backend choice has no fallback. Existing person reference images stay
+part of the render, independently of changing the prompt or backend.
+
 
 
 | Function | Contract |
@@ -413,7 +446,7 @@ renders date separately and scrolls image/text above fixed page controls.
 | `has_pages(item: dict) -> bool` | A provider is registered for the item's `pages_source`; does not call it (used by the polled room listing). |
 | `pages_of(item: dict, reader: str) -> list[dict] \| None` | Get pages; None for absent source/provider or a logged provider failure. |
 | `readable_here(reader: str, item_id: str) -> bool` | Requires a placement in the reader's current room, `placement_visible_to` (stable above), and non-None pages. Carried items do not qualify. |
-| `read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict` | Returns `{item_name, index, total, page: {heading, date_label, text, image}}`, or `{error}` / `{caught_by}`. Index clamps to the book; an empty book has index 0 and page None. Learns the returned page. `opening=True` starts a session; later pages extend it. A pending owner catch returns no page and learns nothing. |
+| `read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict` | Returns `{item_name, index, total, page: {heading, date_label, text, image, image_regenerable, image_ref}}`, or `{error}` / `{caught_by}`. Index clamps to the book; an empty book has index 0 and page None. Learns the returned page. `opening=True` starts a session; later pages extend it. A pending owner catch returns no page and learns nothing. |
 | `npc_read(reader: str, item_id: str) -> dict` | Once daily, returns `{item_name, pages}` with up to two newest unknown linked secrets (newest first), otherwise the newest page; returned text is at most 600 characters per page. Invalid/missing secrets and pages without a secret ID are not unknown. Repeat calls that day return `{error}`. Starts a full-duration session without changing pose; a catch returns `{caught_by}` before learning. |
 | `npc_read_today(reader: str, item_id: str) -> bool` | Whether the NPC path was used on this GameTime day. |
 | `start_session(reader: str, item_id: str, location_id: str, room_id: str) -> dict` | Replaces this reader's session; started=now, until=now + world `inventory.reading_minutes` (int, default 10). Callers invoke `reading_watch.on_session_started` after return, outside locks. |
@@ -422,12 +455,22 @@ renders date separately and scrolls image/text above fixed page controls.
 | `sessions_in_room(location_id: str, room_id: str) -> list[dict]` | Live sessions only, with dead rows pruned. |
 | `end_session(reader: str, reason: str) -> None` | Deletes the reader's session. |
 | `heartbeat(reader: str, item_id: str) -> dict` | Returns `{caught_by: owner}` for a matching pending catch, otherwise `{caught_by: ""}` and extends a live matching session. Does not start a session. |
+| `prepare_page_image(reader: str, item_id: str, index: int, *, page_ref: str) -> dict` | Prepare a regenerable page only in the reader's current authorized session and with the displayed immutable page token. A shifted index never selects a different page. Does not load image bytes or learn another secret. |
+| `regenerate_page_image(reader: str, item_id: str, index: int, *, page_ref: str, prompt: str, backend: str = "", loras=None, negative_prompt: str = "") -> dict` | Render via the source provider and publish only under the original authorized session and immutable page identity; returns the refreshed page or an access/catch result. |
 
 Sessions persist in `item_reading_sessions(reader PRIMARY KEY, item_id,
-location_id, room_id, started_game_ts, until_game_ts, caught DEFAULT 0,
-noticed_by DEFAULT '[]')`. Returned dictionaries decode `noticed_by` to a list.
+location_id, room_id, started_game_ts, until_game_ts, session_id, caught DEFAULT 0,
+noticed_by DEFAULT '[]')`. Every start gets a fresh UUID `session_id`, including
+when the game clock is frozen; an old render/watcher cannot match a reopened
+session by timestamp. Returned dictionaries decode `noticed_by` to a list.
 Caught rows are inactive but remain available to heartbeat/page turns until
 `active_session` prunes them or they are replaced/closed. Room/tick scans leave caught rows available for heartbeat.
+
+`app.core.world_ops.build_imagegen_options(occasion: str = "", character: str = "", *, use_source_as_reference: bool = False, has_reference: Optional[bool] = None) -> dict`
+returns the existing backend/LoRA options and effective Auto resolution. A prepared
+historical scene supplies `has_reference` from its actual people rather than
+borrowing the avatar's photo routing or assuming no references.
+
 
 `app.core.reading_watch.on_session_started(session: dict) -> dict` is the
 watcher entry point called by both read paths after starting a session and before

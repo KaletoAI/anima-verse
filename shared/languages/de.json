@@ -2853,6 +2853,7 @@
     "{reader} secretly read {item}.": "{reader} hat heimlich in {item} gelesen.",
     "You catch {reader} reading {item}.": "Du ertappst {reader} beim Lesen in {item}.",
     "You notice {reader} secretly reading {item}.": "Du bemerkst, wie {reader} heimlich in {item} liest.",
+    "You discovered {item}.": "Du hast {item} entdeckt.",
     "{owner} is watching.": "{owner} schaut zu.",
     "{name} caught you reading.": "{name} hat dich beim Lesen ertappt.",
     "Part": "Teil",

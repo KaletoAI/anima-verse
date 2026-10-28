@@ -18,17 +18,21 @@ import { Icon } from './icons'
 import { useI18n } from './I18nProvider'
 import { openLightbox, type LightboxItem } from './Lightbox'
 
-/** Props for a purely presentational image: click / Enter / Space enlarge it. */
-export function useEnlarge() {
+/** Props for a presentational image; optionally retain its owned close handle. */
+export function useEnlarge(onOpen?: (dispose: () => void) => void) {
   const { t } = useI18n()
+  const open = (item: LightboxItem) => {
+    const dispose = openLightbox(item)
+    onOpen?.(dispose)
+  }
   return (item: LightboxItem, extraStyle?: CSSProperties) => ({
     role: 'button' as const,
     tabIndex: 0,
     title: t('Click to enlarge'),
     style: { cursor: 'zoom-in', ...extraStyle },
-    onClick: (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); openLightbox(item) },
+    onClick: (e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); open(item) },
     onKeyDown: (e: KeyboardEvent) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); openLightbox(item) }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); open(item) }
     },
   })
 }

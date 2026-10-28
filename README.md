@@ -220,6 +220,14 @@ stops acting autonomously).
   task queue and on-demand LLM tools live. Explicit pair invitations still receive a direct
   accept/decline answer; the game clock and clip progression remain frozen.
   **Sleep mode** puts every NPC to bed without stopping the clock.
+- **Hidden and readable room items:** the first discovery creates a private, localized HUD notice.
+  Readable documents open with a single-line title and a separate date; illustrations and long
+  text scroll while Previous/Next remain visible. Page images are delivered only with an authorized
+  read, never as public image URLs, and opening or flipping pages does not generate new images.
+  Page images use the shared zoom lightbox. Regenerate offers model/backend and backend-scoped
+  LoRA selection in both clients, starting from the stored scene prompt and keeping person-image
+  references. Auto uses the existing scene routing; an explicit backend has no fallback.
+  The previous image stays visible until a replacement succeeds.
 
 ### Image, video and 3D generation
 - One pool, three media types. Image backends: **Stable Diffusion WebUI (A1111/Forge)**, **CivitAI**,

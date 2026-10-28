@@ -972,6 +972,8 @@ def placement_visible_to(viewer: str, location_id: str, room_id: str,
 
     Serialize discovery with removal so a stale reader cannot recreate rows
     after a placement has gone. Only an existing placement can be discovered.
+    Notify only the successful inserter, after releasing the world lock and
+    committing discovery. Callers must not hold the world lock themselves.
     """
     from app.models.world import world_write_lock
     if not placement.get("hidden"):
@@ -988,14 +990,26 @@ def placement_visible_to(viewer: str, location_id: str, room_id: str,
             return True
         if viewer in discovered_by(location_id, room_id, item_id):
             return True
+        if profile is None:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(viewer) or {}
         if discovery_value(viewer, profile=profile) < int(current.get("discovery_difficulty", 0)):
             return False
         with transaction() as conn:
-            conn.execute(
+            inserted = conn.execute(
                 "INSERT OR IGNORE INTO item_discoveries "
                 "(location_id, room_id, item_id, character_name, game_ts) VALUES (?, ?, ?, ?, ?)",
-                (location_id, room_id, item_id, viewer, game_time().canonical()))
-        return True
+                (location_id, room_id, item_id, viewer, game_time().canonical())).rowcount == 1
+    if inserted:
+        from app.core.i18n import localized, t
+        from app.models.notifications import create_notification
+        lang = profile.get("language") or "de"
+        item_name = localized(get_item(item_id), "name", lang) or item_id
+        create_notification(
+            viewer, t("You discovered {item}.", lang).format(item=item_name),
+            notification_type="item_discovered",
+            metadata={"item_id": item_id, "location_id": location_id, "room_id": room_id})
+    return True
 
 
 def add_item_to_room(location_id: str,
@@ -1765,13 +1779,23 @@ def pick_up_item(character_name: str,
     except (TypeError, ValueError):
         return {"success": False, "error": "Invalid quantity"}
 
+    # Discover before the claim lock: notification delivery can take other
+    # locks. The claim below rechecks the remembered find against fresh room
+    # data so removing/replacing a placement cannot grant stale visibility.
+    in_room = next((ri for ri in get_room_items(location_id, room_id)
+                    if ri.get("item_id") == item_id), None)
+    if not in_room:
+        return {"success": False, "error": "That is not lying in this room"}
+    if not placement_visible_to(character_name, location_id, room_id, in_room):
+        return {"success": False, "error": "You cannot see that here"}
+
     # --- Room side: check and claim in ONE critical section ---------------
     with world_write_lock:
         room_items = get_room_items(location_id, room_id)
         in_room = next((ri for ri in room_items if ri.get("item_id") == item_id), None)
         if not in_room:
             return {"success": False, "error": "That is not lying in this room"}
-        if not placement_visible_to(character_name, location_id, room_id, in_room):
+        if in_room.get("hidden") and character_name not in discovered_by(location_id, room_id, item_id):
             return {"success": False, "error": "You cannot see that here"}
         if item.get("portable") is False:
             from app.core.i18n import t

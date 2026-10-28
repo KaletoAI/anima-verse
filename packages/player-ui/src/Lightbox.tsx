@@ -11,7 +11,7 @@
  * between fit and 2.5×. Videos are shown large with controls. Closes on ×, Esc
  * or a click on the dark margin.
  */
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from './icons'
 import { useI18n } from './I18nProvider'
@@ -25,9 +25,24 @@ export interface LightboxItem {
   caption?: string
 }
 
-// Module singleton: the mounted host registers its setter here.
-let _setItem: ((it: LightboxItem | null) => void) | null = null
-export function openLightbox(item: LightboxItem) { _setItem?.(item) }
+interface LightboxSession {
+  item: LightboxItem
+  source: HTMLElement | null
+}
+
+// Each opener gets a disposer that can close only its own image.
+let _setSession: Dispatch<SetStateAction<LightboxSession | null>> | null = null
+const noop = () => {}
+export function openLightbox(item: LightboxItem): () => void {
+  const setter = _setSession
+  if (!setter) return noop
+  const session = {
+    item,
+    source: document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  }
+  setter(session)
+  return () => setter((current) => current === session ? null : current)
+}
 const _api = { open: openLightbox }
 export const useLightbox = () => _api
 
@@ -36,22 +51,26 @@ export function LightboxProvider({ children }: { children: ReactNode }) {
 }
 
 function LightboxHost() {
-  const [item, setItem] = useState<LightboxItem | null>(null)
+  const [session, setSession] = useState<LightboxSession | null>(null)
   useEffect(() => {
-    _setItem = setItem
-    return () => { if (_setItem === setItem) _setItem = null }
+    _setSession = setSession
+    return () => { if (_setSession === setSession) _setSession = null }
   }, [])
-  if (!item) return null
+  if (!session) return null
   // Portal to document.body: that way the overlay (position:fixed) escapes any
   // transformed or clipping ancestor of the host panel.
-  return createPortal(<LightboxOverlay item={item} onClose={() => setItem(null)} />, document.body)
+  return createPortal(<LightboxOverlay item={session.item} source={session.source} onClose={() => setSession(null)} />, document.body)
 }
 
 const SCALE_MIN = 1
 const SCALE_MAX = 8
 const clampScale = (s: number) => Math.max(SCALE_MIN, Math.min(SCALE_MAX, s))
 
-function LightboxOverlay({ item, onClose }: { item: LightboxItem; onClose: () => void }) {
+function LightboxOverlay({ item, source, onClose }: {
+  item: LightboxItem
+  source: HTMLElement | null
+  onClose: () => void
+}) {
   const { t } = useI18n()
   const overlayRef = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(1)
@@ -65,11 +84,43 @@ function LightboxOverlay({ item, onClose }: { item: LightboxItem; onClose: () =>
 
   const reset = useCallback(() => { setScale(1); setTx(0); setTy(0) }, [])
 
-  // Esc closes.
+  useLayoutEffect(() => {
+    const overlay = overlayRef.current
+    overlay?.focus()
+    const containFocus = () => {
+      if (overlay && !overlay.contains(document.activeElement)) overlay.focus()
+    }
+    document.addEventListener('focusin', containFocus)
+    return () => {
+      document.removeEventListener('focusin', containFocus)
+      if (source?.isConnected) source.focus()
+    }
+  }, [source, item])
+
+  // Keep keyboard navigation and Escape inside this modal, not its source.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        onClose()
+      } else if (event.key === 'Tab') {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        const fields = overlayRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), video[controls], a[href], [tabindex]:not([tabindex="-1"])',
+        )
+        if (!fields?.length) { overlayRef.current?.focus(); return }
+        const index = Array.from(fields).findIndex((field) => field === document.activeElement)
+        const next = index < 0 ? (event.shiftKey ? fields.length - 1 : 0)
+          : (index + (event.shiftKey ? -1 : 1) + fields.length) % fields.length
+        fields[next].focus()
+      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.stopImmediatePropagation()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
   // Zoom towards the point (mx,my): the pixel under the cursor stays put.
@@ -135,7 +186,8 @@ function LightboxOverlay({ item, onClose }: { item: LightboxItem; onClose: () =>
   const zoomed = scale > 1.01
 
   return (
-    <div className="lb-overlay" ref={overlayRef}
+    <div className="lb-overlay" ref={overlayRef} role="dialog" aria-modal="true"
+      aria-label={item.alt || t('Enlarge')} tabIndex={-1}
       onClick={(e) => { if (e.target === e.currentTarget) onClose() }}>
       <button className="lb-close" onClick={onClose} title={t('Close')} aria-label={t('Close')}>
         <Icon name="close" size={20} />

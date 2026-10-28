@@ -123,7 +123,7 @@ def _caught_result(session, item):
         stored = item_reading._session_row(session["reader"])
         if (stored and stored["caught"] and item_reading._session_here(stored)
                 and all(stored[k] == session[k] for k in
-                        ("item_id", "started_game_ts", "location_id", "room_id"))):
+                        ("item_id", "session_id", "location_id", "room_id"))):
             return {"caught_by": item.get("owner", "")}
     return {}
 
@@ -146,10 +146,10 @@ def check_session(session: dict, watchers: list[str]) -> dict:
         owner = watcher == item.get("owner")
         with keyed_lock("reading_session", session["reader"]):
             stored = item_reading._session_row(session["reader"])
-            if stored and stored["caught"] and stored["item_id"] == session["item_id"]:
+            if stored and stored["caught"] and stored["session_id"] == session["session_id"]:
                 return {"caught_by": item.get("owner", "")}
             live = item_reading.active_session(session["reader"])
-            if not live or any(live[k] != session[k] for k in ("item_id", "started_game_ts", "location_id", "room_id")):
+            if not live or any(live[k] != session[k] for k in ("item_id", "session_id", "location_id", "room_id")):
                 return {}
             if watcher in live["noticed_by"]:
                 continue

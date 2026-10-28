@@ -72,11 +72,22 @@ const LORA_SLOTS = 4
 const emptySlots = (): LoraSlot[] =>
   Array.from({ length: LORA_SLOTS }, () => ({ name: '', strength: 1.0 }))
 
-interface BackendOptions {
+export interface BackendOptions {
   options?: BackendOption[]
-  /** What "Auto (routing)" resolves the "photo" occasion to right now. */
+  /** What "Auto (routing)" resolves this scene's occasion to right now. */
   resolved?: string | null
   media_generation_enabled?: boolean
+}
+
+interface PlayerPhotoDialogProps extends PhotoDialogControl {
+  title?: string
+  /** Non-photo occasions resolve globally, without the avatar's photo override. */
+  occasion?: 'photo' | 'scene_view'
+  /** Saved scenes keep their original people and reference policy. */
+  hideSceneControls?: boolean
+  error?: string
+  /** Prepared with the saved scene's actual references; do not re-resolve it. */
+  backendOptions?: BackendOptions
 }
 
 export function PlayerPhotoDialog({
@@ -86,29 +97,42 @@ export function PlayerPhotoDialog({
   avatar,
   onSubmit,
   onClose,
-}: PhotoDialogControl) {
+  title,
+  occasion = 'photo',
+  hideSceneControls = false,
+  error,
+  backendOptions,
+}: PlayerPhotoDialogProps) {
   const { t } = useI18n()
   const [prompt, setPrompt] = useState(initialPrompt)
   const [negative, setNegative] = useState('')
   const [selected, setSelected] = useState<string[]>(subjects)
   const [useRoom, setUseRoom] = useState(true)
   const [backend, setBackend] = useState('')  // '' = Auto (routing)
-  const [backends, setBackends] = useState<BackendOptions | null>(null)
+  const [backends, setBackends] = useState<BackendOptions | null>(backendOptions ?? null)
   const [loraSlots, setLoraSlots] = useState<LoraSlot[]>(emptySlots)
   const [busy, setBusy] = useState(false)
+  const dialog = useRef<HTMLDivElement>(null)
   // The host unmounts this dialog inside its own onSubmit (ScenePanel clears
   // the prepared payload first), so the promise usually resolves after unmount.
   const alive = useRef(true)
-  useEffect(() => () => { alive.current = false }, [])
+  useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
 
   useEffect(() => {
+    if (backendOptions !== undefined) {
+      setBackends(backendOptions)
+      return
+    }
     let stale = false
-    const q = `?occasion=photo${avatar ? `&character=${encodeURIComponent(avatar)}` : ''}`
+    const q = `?occasion=${occasion}${occasion === 'photo' && avatar ? `&character=${encodeURIComponent(avatar)}` : ''}`
     apiGet<BackendOptions>(`/world/imagegen-options${q}`)
       .then((d) => { if (!stale) setBackends(d || {}) })
       .catch(() => { if (!stale) setBackends({}) })
     return () => { stale = true }
-  }, [avatar])
+  }, [avatar, occasion, backendOptions])
   // Reachable backends first; offline ones keep the server's "(offline?)" label.
   const backendList = useMemo(() => {
     const list = backends?.options || []
@@ -145,7 +169,7 @@ export function PlayerPhotoDialog({
   // backend, not "nobody" — so it must not be sendable while there is anyone
   // to pick. With nobody offered at all the field carries no meaning and the
   // empty list is the honest payload.
-  const noneSelected = names.length > 0 && selected.length === 0
+  const noneSelected = !hideSceneControls && names.length > 0 && selected.length === 0
 
   const toggle = (name: string) =>
     setSelected((prev) => (prev.includes(name)
@@ -179,11 +203,42 @@ export function PlayerPhotoDialog({
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, busy])
 
+  useEffect(() => {
+    if (!hideSceneControls) return
+    function trapFocus(event: KeyboardEvent) {
+      if (event.key !== 'Tab' || document.querySelector('.lb-overlay')) return
+      const fields = dialog.current?.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+      )
+      if (!fields?.length) {
+        event.preventDefault()
+        dialog.current?.focus()
+        return
+      }
+      const first = fields[0]
+      const last = fields[fields.length - 1]
+      if (!dialog.current?.contains(document.activeElement)) {
+        event.preventDefault()
+        ;(event.shiftKey ? last : first).focus()
+      } else if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog.current)) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    window.addEventListener('keydown', trapFocus, true)
+    return () => window.removeEventListener('keydown', trapFocus, true)
+  }, [hideSceneControls])
+
   return createPortal(
     <div className="ga-modal-backdrop" onMouseDown={() => { if (!busy) onClose() }}>
-      <div className="ga-modal" style={{ maxWidth: 520 }} onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={dialog} className="ga-modal" role="dialog" aria-modal="true"
+        aria-label={title ? t(title) : t('Scene photo')} tabIndex={-1}
+        style={{ maxWidth: 520 }} onMouseDown={(e) => e.stopPropagation()}>
         <div className="ga-modal-header">
-          <span>{t('Scene photo')}</span>
+          <span>{title ? t(title) : t('Scene photo')}</span>
           <button className="ga-modal-close" onClick={onClose} disabled={busy}>×</button>
         </div>
         <div className="ga-modal-body">
@@ -196,7 +251,7 @@ export function PlayerPhotoDialog({
               onChange={(e) => setPrompt(e.target.value)} />
           </label>
 
-          <div className="ga-field" style={{ marginBottom: 10 }}>
+          {!hideSceneControls && <div className="ga-field" style={{ marginBottom: 10 }}>
             <span className="ga-field-caption">{t('Who is in the picture')}</span>
             {names.length === 0 ? (
               <div className="ga-placeholder">{t('Nobody to put in the picture.')}</div>
@@ -213,7 +268,7 @@ export function PlayerPhotoDialog({
             {noneSelected && (
               <div className="player-photo-hint">{t('Select at least one character.')}</div>
             )}
-          </div>
+          </div>}
 
           <label className="ga-field" style={{ marginBottom: 10 }}>
             <span className="ga-field-caption">{t('Backend')}</span>
@@ -260,17 +315,19 @@ export function PlayerPhotoDialog({
             </div>
           )}
 
-          <label className="player-photo-check">
+          {!hideSceneControls && <label className="player-photo-check">
             <input type="checkbox" checked={useRoom} disabled={busy}
               onChange={(e) => setUseRoom(e.target.checked)} />
             <span>{t('Show the room around it')}</span>
-          </label>
+          </label>}
 
           <label className="ga-field" style={{ marginTop: 10 }}>
             <span className="ga-field-caption">{t('Negative prompt')}</span>
             <input className="ga-input" type="text" value={negative} disabled={busy}
               onChange={(e) => setNegative(e.target.value)} />
           </label>
+
+          {error && <div className="player-photo-hint" role="alert">{error}</div>}
 
           <div className="player-photo-actions">
             <button type="button" className="ga-btn" onClick={onClose} disabled={busy}>

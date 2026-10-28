@@ -2925,7 +2925,8 @@ def build_gallery_payload(location_name: str) -> Dict[str, Any]:
 
 
 def build_imagegen_options(occasion: str = "", character: str = "", *,
-                           use_source_as_reference: bool = False) -> Dict[str, Any]:
+                           use_source_as_reference: bool = False,
+                           has_reference: Optional[bool] = None) -> Dict[str, Any]:
     """Returns the available image-generation backends (the dialogs' backend
     list).
 
@@ -2936,9 +2937,12 @@ def build_imagegen_options(occasion: str = "", character: str = "", *,
     front of a character-scoped chain (position 0), applies its backend
     switches and — like the render façade — the img2img preference of a
     render that slots the character's profile image. A profile render does
-    this only with ``use_source_as_reference``. The caller decides whether the
-    requesting user may see that character's routing. An unknown occasion
-    raises ``UnknownOccasionError`` (the route answers 400)."""
+    this only with ``use_source_as_reference``. ``has_reference`` overrides
+    that inference for callers with an already resolved reference context.
+    The caller decides whether the requesting user may see that character's
+    routing. An unknown occasion raises ``UnknownOccasionError`` (the route
+    answers 400).
+    """
     from app.core.prompt_adapters import get_target_model
 
     from app.imagegen.base import media_generation_enabled
@@ -3039,8 +3043,9 @@ def build_imagegen_options(occasion: str = "", character: str = "", *,
         from app.imagegen.service import render_has_reference_image
         # The same reference preference as the render: portraits opt in,
         # other character renders use their ordinary identity reference.
-        has_ref = bool(character) and render_has_reference_image(
+        has_ref = (bool(character) and render_has_reference_image(
             character, set_profile=occasion == "profile" and not use_source_as_reference)
+            if has_reference is None else bool(has_reference))
         row = explain_occasion(occasion, character=character, has_ref=has_ref)
         result.update({"occasion": occasion, "resolved": row["resolved"],
                        "via": row["via"], "reason": row["reason"],
