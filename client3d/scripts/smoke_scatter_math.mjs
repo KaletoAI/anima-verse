@@ -1155,7 +1155,7 @@
  *      inside its own cell:
  *        cull 120 → k = 2 → guaranteed  2·64      = 128 m
  *                           axis max    3·64      = 192 m
- *                           corner max  √2·3·64   = 271.5290566 m
+ *                           corner max  √2·3·64   = 271.5290039756343 m
  *      i.e. the "~130…270 m" of the diagnostics, against the 400 m the old
  *      span assumed. `impostorReachM` answers the CORNER, the supremum, so the
  *      line reaches its floor exactly where the last instance that can exist
@@ -1164,10 +1164,10 @@
  *
  * (W3) THE LINE ITSELF, `share(d) = 0.25 · (1 − t·0.75)`,
  *      `t = min((d − cullM)/(reach − cullM), 1)`:
- *        the midpoint (120 + 151.5290566/2 = 195.7645283 m) → t = 0.5
+ *        the midpoint (120 + 151.5290039756343/2 = 195.76450198781714 m) → t = 0.5
  *          → 0.25 · 0.625 = 0.15625, a hand-exact number at an irrational
  *            distance, which is the case that pins the SHAPE of the line.
- *        the corner (271.5290566 m) → t = 1 → 0.25 · 0.25 = 0.0625
+ *        the corner (271.5290039756343 m) → t = 1 → 0.25 · 0.25 = 0.0625
  *        400 m (past the corner, inside the stage) → clamped, 0.0625 as well
  *        120 m and nearer → 0, there is no billboard share at all there.
  *      MONOTONE NON-INCREASING over the whole walk: 0…400 m in 0.5 m steps of
@@ -1664,6 +1664,110 @@
  *                                                   = 0.653846153...
  *
  * ============================================================================
+ * E4-T1 EXTRA DERIVATIONS (2026-10-28)
+ * [G-tie1]/[G-tie2]: 0.05*0.5*100 = 2.5 and 0.25*0.5*100 = 12.5.
+ * JS Math.round rounds upward: 3/100 = 0.03 and 13/100 = 0.13.
+ * [K-want1..3]: k = clamp(ceil(cull/64),1,32); cell = floor(position/64).
+ * For (0,0,1), centre (0,0), k=1: x=-1..1 for each z=-1..1.
+ * For (-0.1,-64,64), centre (-1,-1), k=1: x=-2..0 for each z=-2..0.
+ * For (64,128,120), centre (1,2), k=2: x=-1..3 for each z=0..4.
+ * These are complete lists in z-major order, including all negative edges.
+ * [I-hash]: uint32 arithmetic at each multiply. At index 0 every stage is 0.
+ * Index 1: multiply by 2654435761 -> 2654435761; xor-shift15 and multiply
+ * 2246822507 -> 4068878901; xor-shift13 and multiply 3266489909 -> 2328563412;
+ * xor-shift16 -> 2328593439; /2^32 -> 0.5421679092105478.
+ * Index -1: the corresponding uint32 stages are 1640531535, 1587568586,
+ * 1993427816, 1993424313; /2^32 -> 0.4641302658710629.
+ * [V-radius]: occupyR ?? clearM chooses the explicit radius even at 0 or -1.
+ * A positive finite result survives; missing, 0 or negative becomes 0.
+ * Thus (2,3)->2, (null,3)->3, ()->0, (0,3)->0, (-1,3)->0,
+ * (null,-2)->0 and (0.25,0.5)->0.25.
+ * [W-suffix]: missing/null is not a finite number and adds ''. Finite values
+ * are spelled literally: 0 -> ':e0', 5 -> ':e5', -1.5 -> ':e-1.5'.
+ *
+ * scatter_rows.json uses these TS-shape adapters (e4VectorDispatch.mjs):
+ * areaAxis({line,ring,sides,at}) calls the returned axis at that point;
+ * axisFrom in sampler options builds that same callback. rng/jitterRng lists
+ * are consumed once, in order, with exhaustion throwing. In Q4 the horizontal
+ * line's heading pi/2 plus authored 90 degrees gives pi at both fed candidates
+ * (2,4) and (15,5). In Q5 a diagonal line's pi/4 plus 45 degrees gives pi/2
+ * at (6.4,12.8), the only candidate requested by round(40.96*0.025)=1.
+ * occupied lists add circles to a fresh grid. occupancy runs add/blocks/sample
+ * steps on ONE grid and returns each blocks answer or sample result in order.
+ * These exercise V3..V7's derivations above without recording a seeded run.
+ * FNV-1a('x') = (2166136261 xor 120)*16777619 modulo 2^32 = 4245442695;
+ * this is divisible by 3, so X2's ordinal variants are 0,1,2,0 and the blocked
+ * ordinal 0 leaves 1,2,0. X5 without a pin uses ordinal 0, hence variant 0.
+ * In U2/U4-clamp, s=14 is the start of the TOP edge: its axis is pi/2.
+ * [D1] decoration: on a 100 m line, jagged spacing 10 gives endpoints plus
+ * 5,15,...,95 = 12 points; spacing 30 gives 0,15,45,75,100. [D4] budget:
+ * room=1024-2=1022, spacing=10000/1022=9.784735812133073, 1024 total points,
+ * capped true. [D5] wavy: step=min(10/3,3)=3, x=0,3,...,99,100 = 35 points.
+ * decorateStroke's adapter adds pointCount and xs projections of its result;
+ * random amplitudes and their closed-form checks remain inline in stroke_styles.
+ * [S11] straight/unknown-style centre lines are the clicked points. A straight
+ * decoration returns those points, spacing 10 and capped false.
+ *
+ * [S] WHAT STANDS ALONG THE LINE — `strokeStations` (§ A9 addendum 2026-09-09)
+ * ---------------------------------------------------------------------------
+ * Hand-derived (see the plan, `plan-strassenrand-scatter.md`):
+ *   [S1] [(0,0),(100,0)], spacing 25, offset 3, right: stations at
+ *        s = 12.5, 37.5, 62.5, 87.5 (start = spacing/2, 87.5 + 25 > 100).
+ *        Direction (1,0): right normal (−dz, dx) = (0, 1) -> z = +3,
+ *        yaw = atan2(1, 0) = π/2, plus yaw_deg 0.
+ *   [S2] the same, `left`: normal (dz, −dx) = (0, −1) -> z = −3, and the
+ *        walking direction is reversed -> yaw = π/2 + π = 3π/2.
+ *   [S3] `alternate`: k even right, k odd left -> z = +3, −3, +3, −3 with
+ *        yaws π/2, 3π/2, π/2, 3π/2.
+ *   [S4] `both`: two per station, right then left -> 8 instances.
+ *   [S5] yaw_deg 90 on the right side: π/2 + π/2 = π; on the LEFT side
+ *        3π/2 + π/2 = 2π -> 0 (normalised). A bench "looking across" faces −z
+ *        from the right (yaw π faces (sin π, cos π) = (0, −1)) and +z from the
+ *        left (yaw 0 faces (0, 1)): both look at the line. That is the rule.
+ *   [S6] a corner [(0,0),(10,0),(10,10)], spacing 10, offset 2, right, start
+ *        5: s = 5 on the first segment -> (5, 2), yaw π/2; s = 15 on the
+ *        second (direction (0,1), right normal (−1, 0)) -> (8, 5), yaw
+ *        atan2(0, 1) = 0.
+ *   [S7] start_m 0 puts the first station on the start point; start_m past
+ *        the spacing is clamped to it: spacing 25, start 30 -> first at 25.
+ *   [S8] a footprint square over (37.5, 3) drops station 1 and keeps the
+ *        ORDINALS: with 3 variants and no pin the survivors keep the variant
+ *        they had without the footprint (2, 4 and 6 of 8 in `both` mode…);
+ *        simplest: right side only, variants over ordinal k, the survivors'
+ *        variants equal the unblocked run's at the same k.
+ *   [S9] a pinned variant 1 gives every instance 1; a pin past the count
+ *        clamps to n − 1; variantCount 1 carries no variant field at all.
+ *   [S10] `random` draws one number per instance from the row's seed and
+ *        the positions do not move: same x/z as [S1].
+ *   [S11] `strokeCentreLine` of a straight recipe is the clicked points;
+ *        of a wavy one it is `decorateStroke` with the toolbar defaults
+ *        (10 m, 2 m) when the recipe authors no numbers.
+ *   [S12] `occupied` (2026-09-10): a grid holding (37.5, 3) with radius 0.5
+ *        and `occupyR` 1 blocks station 1 alone (0 < 1.5; the next station
+ *        is 25 m away), the survivors keep the ordinals' variants exactly as
+ *        under the footprint of [S8], and they are FILED in turn:
+ *        blocks(12.5, 3, 0.1) is true afterwards (0 < 1.1). `occupyR` absent
+ *        = `clearM`: clearM 1 and a grid holding (37.9, 3) r 0.1 blocks the
+ *        station 0.4 m away (0.4 < 1.1); with neither, the radius is 0 and
+ *        0.4 < 0.1 is false — it stands.
+ *   [S13] `alongSeed` with an epoch: ('a', 2, 5) -> 'terrain:along:a:2:e5';
+ *        without one, or with undefined / NaN, the seed of [S] unchanged.
+ *   [S14] THE SPACING JITTER (Task 9, 2026-09-10): with `jitterM` > 0 every
+ *        station draws r_k from a SEPARATE stream (the row seed + ':jitter',
+ *        never the yaw stream) and j_k = (2·r_k − 1)·jitterM,
+ *        s_0 = start + j_0, s_k = s_{k−1} + spacing + j_k, s_k < 0 -> 0,
+ *        the walk ends at the first s_k past L (the ending candidate draws
+ *        too — its j is needed to know it ends). [S1]'s line, spacing 25,
+ *        jitter 5, stream [0, 1, 0.5, 0.25, 0.5]: j = [−5, +5, 0, −2.5, 0];
+ *        start 12.5 -> s = 7.5, 37.5, 62.5, 85, and the fifth candidate
+ *        110 > 100 ends it after five draws. z = +3 and yaw π/2 as in [S1].
+ *        A four-number stream is one short and throws. `random` yaw and
+ *        jitter together: the yaws are [S10]'s numbers exactly (the yaw
+ *        stream is untouched), the x are the jittered ones. Jitter 0 or
+ *        absent never opens the stream (a stream fed nothing stays silent)
+ *        and is [S1] byte for byte. The real stream: seed 'terrain:along:a:0'
+ *        with jitter 5 equals the run fed seededRandom('terrain:along:a:0:jitter').
+ *
  * SHARED VECTORS — `shared/test-vectors/scatter.json`
  * ============================================================================
  * Every case above whose function has a C# port in `native/Core/Scatter/`
@@ -1703,13 +1807,12 @@
  *   viewCone               ScatterLod.ViewCone
  *   inViewCone             ScatterLod.InViewCone
  *
- * Ported but without a case of their own here: `scatterPinnedVariant`
- * (PinnedVariant, reached through the `variant` option), `seedEpochSuffix`,
- * `scatterOccupyR`, `instanceHash`, `seededRandom` (returns a stream, never a
- * value), `wantedScatterCells` (WantedCells: the checks below compare only a
- * length or the first cell) and the `undergrowth*` / `Ug*` functions (their
- * cases live in `smoke_undergrowth.mjs`). `OccupancyGrid` is a class, not one
- * of the ported static functions, so section (V, occupancy) stays inline.
+ * E4 adds direct wantedScatterCells, instanceHash, scatterOccupyR and
+ * seedEpochSuffix cases. The four new files are scatter_rows (R/T/U/V/X/Q,
+ * plus the S/D derivations above), impostors (including W-seam), undergrowth
+ * and world_props. Their C# consumers arrive with the corresponding ports.
+ * scatterPinnedVariant is still exercised through sampler options; seededRandom
+ * remains a stream property. The Ug* cases now live in undergrowth.json.
  *
  * The JSON speaks the TypeScript shapes: a point is `[x, z]`, a footprint
  * `{points}`, a LOD cfg `{nearM, farM, cullM}`, a prop box `{x, z, yaw_deg,
@@ -1724,22 +1827,16 @@
  *     The one null in a middle position — the angle of (Q2) "aligned without
  *     an angle" — gives the answer `undefined` gives there.
  *
- * WHAT STAYS INLINE BELOW, and why: inputs or expectations JSON cannot carry
- * (NaN, Infinity, `undefined` as a RESULT, a non-number where the C# side has
- * a typed number, functions such as `axisAt` or an `OccupancyGrid`); the red
- * counter-checks against mutated sources; constants and source-text pins;
- * properties instead of values (determinism of the seeded path, prefixes,
- * lengths of seeded runs, sweeps over 1000 instances, "the key is ABSENT",
- * relations between two calls); inputs built by a smoke helper
- * (`localToWorld`, `at100`, `coneCos`); and every function without a C#
- * port (`propBoxFootprints`, `scatterCellsInBox`, impostors, `scatterAxis.ts`,
- * the edge / centre samplers, the stored prefs of J1/J2 — the typing of J3
- * runs from `overview_hud.json` via `smoke_walk_math.mjs`).
+ * WHAT STAYS INLINE: non-finite inputs, undefined results, source/constant
+ * pins, mutations, seeded determinism and relations between calls, instrumentation
+ * of callback positions/counts, and GPU/integration checks. Finite arithmetic
+ * and object/function inputs representable by the adapters run from vectors.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rowVectorDispatch } from './e4VectorDispatch.mjs';
 import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
@@ -2081,6 +2178,17 @@ async function main() {
   // (see "SHARED VECTORS" in the header). A sampler's `rng` list becomes the
   // throwing `stream()`; everything else is called as the JSON spells it.
   const lod = await loadTs(LOD_SRC);
+  const rowFns = rowVectorDispatch(
+    await loadTs(SRC), await loadBundled(AXIS_SRC), await loadBundled(OCCUPANCY_SRC),
+    await loadBundled(join(ROOT, 'packages/scene-render/src/stroke.ts')));
+  for (const name of ['scatter_rows', 'impostors']) {
+    const file = loadVectors(name);
+    // Impostor seam vectors also belong to this smoke's original section W.
+    const selected = name === 'impostors'
+      ? { ...file, cases: file.cases.filter((c) => c.label.startsWith('[W')) } : file;
+    const result = runVectors(selected, name === 'impostors' ? lod : rowFns);
+    passed += result.passed; failed += result.failed;
+  }
   const fed = (fn) => (opts) => fn(Array.isArray(opts?.rng)
     ? { ...opts, rng: stream(opts.rng) } : opts);
   console.log('\n(vectors) shared/test-vectors/scatter.json');
@@ -2090,6 +2198,8 @@ async function main() {
     scatterInstances: fed(scatterInstances), scatterCellInstances: fed(scatterCellInstances),
     scatterSeed, scatterCellSeed, reshuffleEpoch, scatterSeedHash, scatterVariantIndex,
     scatterYaw, scatterCellAt, scatterCellRing, scatterCellSpan,
+    wantedScatterCells, seedEpochSuffix: (await loadTs(SRC)).seedEpochSuffix,
+    scatterOccupyR: (await loadTs(SRC)).scatterOccupyR, instanceHash: lod.instanceHash,
     scatterTargetH: lod.scatterTargetH, scatterSway: lod.scatterSway,
     scatterGroundOffset: lod.scatterGroundOffset, instanceTier: lod.instanceTier,
     instanceShare: lod.instanceShare, instanceVisible: lod.instanceVisible,
@@ -2925,40 +3035,16 @@ async function main() {
   const JUST_PAST = 120.000001;
   // 'W1 the mesh line ends at a quarter' runs from the JSON.
   check('W1 …which is SCATTER_MIN_SHARE itself', MIN_SHARE, 0.25);
-  check('W1 …and the billboard line starts there', impostorShare(JUST_PAST, DEF),
-    0.25, 1e-6);
-  check('W1 the same continuity on a cfg of its own (cull 60) — the billboard side',
-    impostorShare(60.000001, CFG2), 0.25, 1e-6);
 
   // (W2) the real reach of the cell window
-  check('W2 cull 120 -> k = 2, so the corner is sqrt(2)*3*64',
-    [impostorWindowSpan(120), impostorReachM(120)],
-    [2, Math.SQRT2 * 3 * 64]);
-  check('W2 …i.e. 271.529 m, where the old span assumed 400',
-    Math.round(impostorReachM(120) * 1000) / 1000, 271.529);
+
   check('W2 the guaranteed and the axis reach of that window are 128 and 192',
     [2 * 64, 3 * 64], [128, 192]);
-  check('W2 cull 60 -> k = 1 -> sqrt(2)*2*64 = 181.019',
-    Math.round(impostorReachM(60) * 1000) / 1000,
-    Math.round(Math.SQRT2 * 2 * 64 * 1000) / 1000);
-  check('W2 cull 300 -> the corner is 543 m, so the stage\'s own end caps it',
-    [Math.round(Math.SQRT2 * 6 * 64), impostorReachM(300)],
-    [543, IMPOSTOR_FAR_M]);
 
   // (W3) the line itself
   const REACH = Math.SQRT2 * 3 * 64;
   check('W3 the tail keeps a quarter of the start', IMPOSTOR_TAIL_FACTOR, 0.25);
-  check('W3 the midpoint of the span -> 0.25 * 0.625 = 0.15625',
-    impostorShare((120 + REACH) / 2, DEF), 0.15625);
-  check('W3 the corner of the window -> 0.0625', impostorShare(REACH, DEF), 0.0625);
-  check('W3 …and past it the floor is HELD, not dropped to nothing',
-    [impostorShare(300, DEF), impostorShare(IMPOSTOR_FAR_M, DEF)],
-    [0.0625, 0.0625]);
-  check('W3 190 m -> 0.25 * (1 - (70/151.5290566) * 0.75)',
-    impostorShare(190, DEF), 0.25 * (1 - (70 / (REACH - 120)) * 0.75), 1e-9);
-  check('W3 the cull line itself has no billboard share',
-    [impostorShare(120, DEF), impostorShare(60, DEF), impostorShare(401, DEF)],
-    [0, 0, 0]);
+
   /** The combined line of both stages, sampled every half metre out to 400 m. */
   const walk = (share) => {
     const out = [];
@@ -3059,21 +3145,16 @@ async function main() {
   // undefined does); the NaN angle stays here.
   check('Q2 aligned without an angle is the axis alone — NaN',
     scatterYaw(0.7, 'aligned', NaN, Math.PI / 2), Math.PI / 2);
-  const turnCase = (mode, deg, axisAt) => scatterInstances({
-    ring: SQUARE, areaM2: 400, densityPer100m2: 0.25, seed: 'q',
-    rng: stream([0.5, 0.5, 0.25]), yawMode: mode, yawDeg: deg, axisAt,
-  });
+
   // Q4 without a mode and without axisAt run from the JSON; axisAt is a function.
-  check('Q4 aligned 90 on an axis of π/2: the same point, yaw π',
-    turnCase('aligned', 90, () => Math.PI / 2), [{ x: 10, z: 10, yaw: Math.PI }]);
+
   const cellYaws = scatterCellInstances({
     ring: SQUARE, cx: 0, cz: 0, densityPer100m2: 1,
     seed: scatterCellSeed('area', 0, 0, 0), yawMode: 'aligned', yawDeg: 45,
     axisAt: () => Math.PI / 4,
   }).map((p) => p.yaw);
   check('Q5 the cell sampler places something on the square', cellYaws.length > 0, true);
-  check('Q5 …and every instance reads π/4 + π/4 = π/2',
-    cellYaws.every((y) => Math.abs(y - Math.PI / 2) < 1e-9), true);
+
   const sided = scatterCellInstances({
     ring: SQUARE, cx: 0, cz: 0, densityPer100m2: 1,
     seed: scatterCellSeed('area', 0, 0, 0), yawMode: 'aligned', yawDeg: 0,
@@ -3098,12 +3179,7 @@ async function main() {
   const strokeToPolygon = await loadStrokeToPolygon();
   const RECT = [[0, 0], [10, 0], [10, 4], [0, 4]];
   const RECT_CW = [[0, 0], [0, 4], [10, 4], [10, 0]];
-  check('R1 (5, 0.5): the bottom edge, axis 3π/2', ringEdgeAxis(RECT, 5, 0.5),
-    3 * Math.PI / 2, 1e-12);
-  check('R2 (9.5, 2): the right edge, axis π', ringEdgeAxis(RECT, 9.5, 2), Math.PI, 1e-12);
-  check('R3 (5, 3.5): the top edge, axis π/2', ringEdgeAxis(RECT, 5, 3.5),
-    Math.PI / 2, 1e-12);
-  check('R3 (0.5, 2): the left edge, axis 0', ringEdgeAxis(RECT, 0.5, 2), 0, 1e-12);
+
   const AXIS_PTS = [[5, 0.5], [9.5, 2], [5, 3.5], [0.5, 2]];
   check('R3 axis + 90° faces INTO the rectangle at every one of the four',
     AXIS_PTS.every(([x, z]) => {
@@ -3113,45 +3189,20 @@ async function main() {
   check('R3 …and the opposite winding reads the same four',
     AXIS_PTS.map(([x, z]) => ringEdgeAxis(RECT_CW, x, z)),
     AXIS_PTS.map(([x, z]) => ringEdgeAxis(RECT, x, z)), 1e-12);
-  check('R4 the tie at the centre goes to the first edge: 3π/2',
-    ringEdgeAxis(RECT, 5, 2), 3 * Math.PI / 2, 1e-12);
-  check('R4 two points are no ring: 0', ringEdgeAxis([[0, 0], [10, 0]], 5, 1), 0);
+
   const CORNER = [[0, 0], [10, 0], [10, 10]];
-  check('R5 lineAxis at (9, 0.2): the first segment, π/2', lineAxis(CORNER, 9, 0.2),
-    Math.PI / 2, 1e-12);
-  check('R5 lineAxis at (10.3, 5): the second segment, 0', lineAxis(CORNER, 10.3, 5),
-    0, 1e-12);
-  check('R5 one point is no line: 0', lineAxis([[3, 3]], 0, 0), 0);
+
   // (R6) the edge selection
   const L_SHAPE = [[0, 0], [10, 0], [10, 4], [4, 4], [4, 10], [0, 10]];
-  check('R6 RECT: longest is [0] — edge 2 ties, the smaller index wins',
-    ringSelectedEdges(RECT, 'longest'), [0]);
-  check('R6 RECT: opposite is [0, 2]', ringSelectedEdges(RECT, 'opposite'), [0, 2]);
-  check('R6 RECT: absent, "all" and an unknown word are every edge',
-    [ringSelectedEdges(RECT), ringSelectedEdges(RECT, 'all'), ringSelectedEdges(RECT, 'sideways')],
-    [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]]);
-  check('R6 the L-shape: longest [0] (tie with 5), opposite [0, 5]',
-    [ringSelectedEdges(L_SHAPE, 'longest'), ringSelectedEdges(L_SHAPE, 'opposite')], [[0], [0, 5]]);
-  check('R6 two points are no ring', ringSelectedEdges([[0, 0], [10, 0]], 'longest'), []);
+
   // (R7) the axis over the selected edges
-  check('R7 (5, 3.5) over every edge: the top, π/2', ringEdgeAxis(RECT, 5, 3.5, [0, 1, 2, 3]),
-    Math.PI / 2, 1e-12);
-  check('R7 (5, 3.5) over [0]: the bottom edge alone, 3π/2', ringEdgeAxis(RECT, 5, 3.5, [0]),
-    3 * Math.PI / 2, 1e-12);
-  check('R7 (5, 3.5) over [0, 2]: the top, π/2', ringEdgeAxis(RECT, 5, 3.5, [0, 2]),
-    Math.PI / 2, 1e-12);
-  check('R7 an empty list measures nothing: 0', ringEdgeAxis(RECT, 5, 3.5, []), 0);
+
   check('R7 the tie at the centre under [0, 2] goes to edge 0: 3π/2',
     ringEdgeAxis(RECT, 5, 2, [0, 2]), 3 * Math.PI / 2, 1e-12);
   check('R7 absent edges are today\'s answer at the four points and the tie',
     [...AXIS_PTS, [5, 2]].map(([x, z]) => ringEdgeAxis(RECT, x, z)),
     [3 * Math.PI / 2, Math.PI, Math.PI / 2, 0, 3 * Math.PI / 2], 1e-12);
-  check('R7 areaAxis with "longest" answers the bottom edge at (5, 3.5)',
-    areaAxis(null, RECT, 'longest')(5, 3.5), 3 * Math.PI / 2, 1e-12);
-  check('R7 …without a sides word the area\'s own: π/2',
-    areaAxis(null, RECT)(5, 3.5), Math.PI / 2, 1e-12);
-  check('R7 …and a line ignores the word: the (R5) answer 0',
-    areaAxis(CORNER, RECT, 'longest')(10.3, 5), 0, 1e-12);
+
   // (R8) the road sides of a ribbon
   const ROAD = strokeToPolygon([[0, 0], [100, 0]], 6);
   check('R8 the straight road at width 6 is the band (0,−3) (100,−3) (100,3) (0,3)',
@@ -3160,26 +3211,14 @@ async function main() {
     [ribbonSelectedEdges(ROAD), ribbonSelectedEdges(ROAD, 'all'),
       ribbonSelectedEdges(ROAD, 'sideways')],
     [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 2, 3]]);
-  check('R8 longest: side A [0] — both sides are 100 m, the tie goes to A',
-    ribbonSelectedEdges(ROAD, 'longest'), [0]);
-  check('R8 opposite: both kerbs [0, 2], the two ends left out',
-    ribbonSelectedEdges(ROAD, 'opposite'), [0, 2]);
+
   const BEND = strokeToPolygon([[0, 0], [50, 0], [50, 50]], 6);
   check('R8 the bend miters to (0,−3) (53,−3) (53,50) (47,50) (47,3) (0,3)',
     BEND, [[0, -3], [53, -3], [53, 50], [47, 50], [47, 3], [0, 3]]);
-  check('R8 …its longer side is the OUTER kerb, 106 m against 94: [0, 1]',
-    ribbonSelectedEdges(BEND, 'longest'), [0, 1]);
-  check('R8 …and opposite is both kerbs, ends left out: [0, 1, 3, 4]',
-    ribbonSelectedEdges(BEND, 'opposite'), [0, 1, 3, 4]);
+
   const BEND_R = strokeToPolygon([[0, 0], [50, 0], [50, -50]], 6);
   check('R8 the mirrored bend: (0,−3) (47,−3) (47,−50) (53,−50) (53,3) (0,3)',
     BEND_R, [[0, -3], [47, -3], [47, -50], [53, -50], [53, 3], [0, 3]]);
-  check('R8 …so longest is side B [3, 4] — the answer is measured, not "always A"',
-    ribbonSelectedEdges(BEND_R, 'longest'), [3, 4]);
-  check('R8 an odd number of points is no band: every edge',
-    ribbonSelectedEdges([[0, 0], [10, 0], [10, 4]], 'longest'), [0, 1, 2]);
-  check('R8 fewer than three points are no ring',
-    ribbonSelectedEdges([[0, 0], [10, 0]], 'opposite'), []);
 
   // (T) THE POLE OF INACCESSIBILITY
   console.log('\n(T) the pole of inaccessibility — polylabel');
@@ -3198,7 +3237,7 @@ async function main() {
     return best;
   };
   const poleRect = polylabel(RECT);
-  check('T1 the rectangle: (5, 2) within the precision', [poleRect.x, poleRect.z], [5, 2], 0.5);
+
   check('T1 …with d in [1.5, 2] — 2 is the most any point can have',
     poleRect.d >= 1.5 && poleRect.d <= 2 + 1e-9, true);
   check('T1 …and d is the ring distance of the answered point',
@@ -3213,48 +3252,20 @@ async function main() {
   check('T2 …and the pole beats it by more than the precision',
     poleL.d >= edgeDistance(L_SHAPE, 4.5, 3.875) - 0.5, true);
   check('T2 a finer precision only gets closer to 2', polylabel(L_SHAPE, 0.05).d >= 1.95, true);
-  check('T3 fewer than three points', polylabel([[0, 0], [1, 1]]), { x: 0, z: 0, d: 0 });
 
   // (U) STATIONS ALONG THE RING
   console.log('\n(U) stations along the ring — ringStations');
   const U_OPTS = { spacingM: 7, offsetM: 1 };
   const u1 = ringStations(RECT, U_OPTS);
-  check('U1 four stations at the pushed points', u1.map((s) => [s.x, s.z]),
-    [[3.5, 1], [9, 0.5], [6.5, 3], [1, 3.5]], 1e-9);
-  check('U1 …with the axes 3π/2, π, π/2, 0', u1.map((s) => s.axis),
-    [3 * Math.PI / 2, Math.PI, Math.PI / 2, 0], 1e-12);
-  check('U1 …ordinals 0..3', u1.map((s) => s.ordinal), [0, 1, 2, 3]);
+
   check('U1 …all four in the ring', u1.every((s) => pointInRing(s.x, s.z, RECT)), true);
-  check('U2 startM 0: the corner first, then (7, 1), (10, 3), (3, 3)',
-    ringStations(RECT, { ...U_OPTS, startM: 0 }).map((s) => [s.x, s.z]),
-    [[0, 1], [7, 1], [10, 3], [3, 3]], 1e-9);
+
   check('U2 startM past the spacing clamps to it: three stations',
     ringStations(RECT, { ...U_OPTS, startM: 100 }).map((s) => [s.x, s.z, s.ordinal]),
     [[7, 1, 0], [10, 3, 1], [3, 3, 2]], 1e-9);
-  check('U3 a repeated closing point adds nothing',
-    ringStations([...RECT, [0, 0]], U_OPTS).map((s) => [s.x, s.z]),
-    u1.map((s) => [s.x, s.z]), 1e-9);
-  check('U3 spacing 0 places nothing', ringStations(RECT, { spacingM: 0, offsetM: 1 }), []);
-  check('U3 two points place nothing', ringStations([[0, 0], [10, 0]], U_OPTS), []);
-  check('U3 no offset: the stations sit on the ring',
-    ringStations(RECT, { spacingM: 7 }).map((s) => [s.x, s.z]),
-    [[3.5, 0], [10, 0.5], [6.5, 4], [0, 3.5]], 1e-9);
+
   // (U4) the spacing jitter — its own stream, one draw per candidate
-  const u4 = ringStations(RECT, { ...U_OPTS, jitterM: 2, jitterRng: stream([1, 0, 0.5, 1, 0.5]) });
-  check('U4 jitter 2, stream [1, 0, .5, 1, .5]: s = 5.5, 10.5, 17.5, 26.5',
-    u4.map((s) => [s.x, s.z]), [[5.5, 1], [9, 0.5], [6.5, 3], [1, 1.5]], 1e-9);
-  check('U4 …ordinals 0..3, axes as in U1',
-    u4.map((s) => [s.ordinal, s.axis]),
-    [[0, 3 * Math.PI / 2], [1, Math.PI], [2, Math.PI / 2], [3, 0]], 1e-12);
-  check('U4 the ending candidate draws too: a four-number stream is one short',
-    (() => { try { ringStations(RECT, { ...U_OPTS, jitterM: 2, jitterRng: stream([1, 0, 0.5, 1]) }); return 'no throw'; } catch (e) { return e.message; } })(),
-    'scatter drew more numbers than the case feeds');
-  check('U4 a negative first station clamps to 0: the corner, then the U2 points',
-    ringStations(RECT, { ...U_OPTS, jitterM: 5, jitterRng: stream([0, 0.5, 0.5, 0.5, 0.5]) })
-      .map((s) => [s.x, s.z]), [[0, 1], [7, 1], [10, 3], [3, 3]], 1e-9);
-  check('U4 jitter 0 never opens the stream and is U1 byte for byte',
-    ringStations(RECT, { ...U_OPTS, jitterM: 0, jitterRng: stream([]) }), u1);
-  check('U4 …and so is an absent jitter', ringStations(RECT, { ...U_OPTS, jitterRng: stream([]) }), u1);
+
   check('U4 the real stream is seededRandom(seed + \':jitter\')',
     ringStations(RECT, { ...U_OPTS, jitterM: 2, seed: 'r' }),
     ringStations(RECT, { ...U_OPTS, jitterM: 2, jitterRng: seededRandom('r:jitter') }));
@@ -3262,44 +3273,21 @@ async function main() {
     ringStations(RECT, { ...U_OPTS, jitterM: 2, seed: 'r' }).map((s) => s.x),
     ringStations(RECT, { ...U_OPTS, jitterM: 2, jitterRng: seededRandom('r') }).map((s) => s.x));
   // (U5) the sides
-  const u5 = (extra) => ringStations(RECT, { ...U_OPTS, ...extra })
-    .map((s) => [s.x, s.z, s.axis, s.ordinal]);
-  check('U5 longest: edge 0 alone, one station (3.5, 1), axis 3π/2, ordinal 0',
-    u5({ sides: 'longest' }), [[3.5, 1, 3 * Math.PI / 2, 0]], 1e-12);
-  check('U5 opposite: (3.5, 1) on edge 0, then (6.5, 3) on edge 2, ordinals 0 and 1',
-    u5({ sides: 'opposite' }), [[3.5, 1, 3 * Math.PI / 2, 0], [6.5, 3, Math.PI / 2, 1]], 1e-12);
-  check('U5 spacing 4, opposite: two per edge, ordinals counting on 0..3',
-    u5({ sides: 'opposite', spacingM: 4 }),
-    [[2, 1, 3 * Math.PI / 2, 0], [6, 1, 3 * Math.PI / 2, 1], [8, 3, Math.PI / 2, 2], [4, 3, Math.PI / 2, 3]], 1e-12);
-  check('U5 …and maxPoints 3 keeps the first three across the runs',
-    u5({ sides: 'opposite', spacingM: 4, maxPoints: 3 }).map((s) => s[3]), [0, 1, 2]);
-  check('U5 "all" is U1 byte for byte', ringStations(RECT, { ...U_OPTS, sides: 'all' }), u1);
+
   check('U5 …and so is an absent word', ringStations(RECT, { ...U_OPTS, sides: undefined }), u1);
-  check('U5 the jitter stream runs on across the edges: (5.5, 1), (6.5, 3)',
-    u5({ sides: 'opposite', jitterM: 2, jitterRng: stream([1, 0, 0.5, 1]) }),
-    [[5.5, 1, 3 * Math.PI / 2, 0], [6.5, 3, Math.PI / 2, 1]], 1e-12);
-  check('U5 …four draws for two stations — a three-number stream is one short',
-    (() => { try { u5({ sides: 'opposite', jitterM: 2, jitterRng: stream([1, 0, 0.5]) }); return 'no throw'; } catch (e) { return e.message; } })(),
-    'scatter drew more numbers than the case feeds');
+
   // (U6) the chain runs — `edges`, the road sides of (R8)
   const ROAD_OPTS = { spacingM: 25, offsetM: 1 };
   const road = (ring, sides) => ringStations(ring, {
     ...ROAD_OPTS, edges: ribbonSelectedEdges(ring, sides),
   }).map((s) => [s.x, s.z, s.axis, s.ordinal]);
-  const SIDE_A = [[12.5, -2], [37.5, -2], [62.5, -2], [87.5, -2]]
-    .map(([x, z], k) => [x, z, 3 * Math.PI / 2, k]);
-  const SIDE_B = [[87.5, 2], [62.5, 2], [37.5, 2], [12.5, 2]]
-    .map(([x, z], k) => [x, z, Math.PI / 2, k + 4]);
-  check('U6 opposite: four on side A, then four on side B, ordinals 0..7',
-    road(ROAD, 'opposite'), [...SIDE_A, ...SIDE_B], 1e-12);
-  check('U6 longest: side A alone', road(ROAD, 'longest'), SIDE_A, 1e-12);
+
   check('U6 no station stands on a road end',
     road(ROAD, 'opposite').every(([x]) => x > 0 && x < 100), true);
   const SPLIT = strokeToPolygon([[0, 0], [40, 0], [100, 0]], 6);
   check('U6 the road clicked at x = 40 is the six-point band',
     SPLIT, [[0, -3], [40, -3], [100, -3], [100, 3], [40, 3], [0, 3]]);
-  check('U6 …and its two-edge chains read THE SAME eight stations',
-    road(SPLIT, 'opposite'), [...SIDE_A, ...SIDE_B], 1e-12);
+
   check('U6 …which a run per edge would not: 52.5 and 77.5 on the second edge',
     ringStations(SPLIT, { ...ROAD_OPTS, edges: [1] }).map((s) => s.x),
     [52.5, 77.5], 1e-12);
@@ -3310,61 +3298,14 @@ async function main() {
       [93.5, 2, 4], [68.5, 2, 5], [43.5, 2, 6], [18.5, 2, 7]], 1e-12);
   check('U6 …and an `edges` list of every edge is that walk byte for byte',
     ringStations(ROAD, { ...ROAD_OPTS, edges: ribbonSelectedEdges(ROAD, 'all') }), rim);
-  check('U6 `edges` beats `sides`',
-    ringStations(ROAD, { ...ROAD_OPTS, edges: [2], sides: 'longest' }).map((s) => s.x),
-    [87.5, 62.5, 37.5, 12.5], 1e-12);
+
   check('U6 an index no edge carries is skipped, an empty list places nothing',
     [ringStations(ROAD, { ...ROAD_OPTS, edges: [0, 99] }).length,
       ringStations(ROAD, { ...ROAD_OPTS, edges: [] }).length], [4, 0]);
 
   // (V) THE OCCUPANCY GRID
   console.log('\n(V) the occupancy grid — OccupancyGrid and the fifth verdict');
-  const { OccupancyGrid, cellOccupancy } = await loadBundled(OCCUPANCY_SRC);
-  const grid = new OccupancyGrid();
-  check('V1 an empty grid blocks nothing', grid.blocks(0, 0, 1), false);
-  grid.add(0, 0, 1);
-  check('V1 1.5 < 1 + 1 blocks', grid.blocks(1.5, 0, 1), true);
-  check('V1 2 < 2 does not — strict', grid.blocks(2, 0, 1), false);
-  check('V1 20 m away does not', grid.blocks(0, 20, 1), false);
-  grid.add(50, 50, 30);
-  check('V2 a big occupant is found four buckets away: 30 < 31', grid.blocks(20, 50, 1), true);
-  check('V2 …and not from 31 m: 31 < 31 is false', grid.blocks(19, 50, 1), false);
-  const occupiedAt = (x, z, r) => { const g = new OccupancyGrid(); g.add(x, z, r); return g; };
-  const v3 = occupiedAt(2, 4, 0.5);
-  const v3Run = scatterInstances({
-    ...MIX, rng: stream(MIX_STREAM), occupied: v3, occupyR: 1,
-  });
-  check('V3 the occupied c0 falls, the rest keeps position and variant', v3Run,
-    [{ x: 5, z: 5, yaw: TAU * 0.25, variant: 1 },
-      { x: 10, z: 10, yaw: Math.PI, variant: 2 },
-      { x: 15, z: 6, yaw: 0, variant: 0 },
-      { x: 8, z: 16, yaw: 0, variant: 1 }]);
-  check('V3 …and the survivors are filed with occupyR', v3.blocks(5, 5, 0.1), true);
-  check('V3 occupyR absent = clearM: 0.4 < 1 + 0.1 blocks c0',
-    scatterInstances({
-      ...MIX, rng: stream(MIX_STREAM), occupied: occupiedAt(2.4, 4, 0.1), clearM: 1,
-    }).map((p) => p.x), [5, 10, 15, 8]);
-  check('V3 …with neither, the radius is 0 and c0 stands',
-    scatterInstances({
-      ...MIX, rng: stream(MIX_STREAM), occupied: occupiedAt(2.4, 4, 0.1),
-    }).map((p) => p.x), [2, 5, 10, 15, 8]);
-  const S_STREAM = [0.10, 0.10, 0.00, 0.30, 0.30, 0.00, 0.50, 0.10, 0.50,
-    0.80, 0.40, 0.25, 0.10, 0.50, 0.00];
-  const SQ10 = [[0, 0], [10, 0], [10, 10], [0, 10]];
-  check('V4 occupancy after min_spacing, and a removed candidate is not filed',
-    scatterInstances({
-      ring: SQ10, areaM2: 100, densityPer100m2: 5, seed: 's', triesPerPoint: 1,
-      minSpacingM: 4, rng: stream(S_STREAM), occupied: occupiedAt(1, 1, 0.5), occupyR: 1,
-    }), [{ x: 3, z: 3, yaw: 0 }, { x: 8, z: 4, yaw: TAU * 0.25 }], 1e-9);
-  const v5 = new OccupancyGrid();
-  const v5Run = scatterCellInstances({
-    ring: SQUARE, cx: 0, cz: 0, densityPer100m2: 0.05, seed: 'v5',
-    rng: stream([0.1, 0.1, 0, 0.5, 0.5, 0]), occupied: v5, occupyR: 1,
-  });
-  check('V5 the cell keeps the one point inside the square', v5Run.map((p) => [p.x, p.z]),
-    [[6.4, 6.4]], 1e-9);
-  check('V5 …files it', v5.blocks(6.4, 6.4, 0.1), true);
-  check('V5 …and not the phantom outside the painted shape', v5.blocks(32, 32, 0.1), false);
+  const { cellOccupancy } = await loadBundled(OCCUPANCY_SRC);
   // (V6) the routing adapter of a pass — see the header
   const v6Grids = new Map();
   const v6 = cellOccupancy(v6Grids);
@@ -3381,29 +3322,7 @@ async function main() {
   check('V6 gridOf hands the very grid the adapter filed into, and makes one on demand',
     [v6.gridOf(0, 0) === v6Grids.get('0,0'), v6Grids.has('1,0'),
       v6.gridOf(1, 0) === v6Grids.get('1,0'), v6Grids.size], [true, false, true, 2]);
-  // (V7) foreign only — see the header
-  const v7 = new OccupancyGrid();
-  v7.add(0, 0, 1, 'a');
-  check('V7 the own row does not block: (1, 0) under tag a is free',
-    v7.blocks(1, 0, 1, 'a'), false);
-  check('V7 …another row is blocked there, and so is an untagged query',
-    [v7.blocks(1, 0, 1, 'b'), v7.blocks(1, 0, 1)], [true, true]);
-  v7.add(5, 0, 1);
-  check('V7 an untagged entry counts against every row', v7.blocks(5.5, 0, 1, 'a'), true);
-  const v7Grid = new OccupancyGrid();
-  const sameRow = scatterInstances({
-    ring: SQ10, areaM2: 100, densityPer100m2: 2, seed: 'same', triesPerPoint: 1,
-    rng: stream([0.30, 0.30, 0, 0.35, 0.30, 0]), occupied: v7Grid, occupyR: 1,
-  });
-  check('V7 two candidates of one row 0.5 m apart both stand',
-    sameRow, [{ x: 3, z: 3, yaw: 0 }, { x: 3.5, z: 3, yaw: 0 }], 1e-9);
-  const otherRow = (occupyTag) => scatterInstances({
-    ring: SQ10, areaM2: 100, densityPer100m2: 1, seed: 'other', triesPerPoint: 1,
-    rng: stream([0.32, 0.30, 0]), occupied: v7Grid, occupyR: 1, occupyTag,
-  });
-  check('V7 …a candidate of ANOTHER row at the same spot is blocked', otherRow(), []);
-  check('V7 …unless it carries the first row\'s tag: the tag is the identity',
-    otherRow('same'), [{ x: 3.2, z: 3, yaw: 0 }], 1e-9);
+  // (V7) the routing adapter passes tags through to its cell grid.
   v6.grid.add(30, 30, 1, 'a');
   check('V7 the routing adapter passes the tag through on add and blocks',
     [v6.grid.blocks(30.5, 30, 1, 'a'), v6.grid.blocks(30.5, 30, 1, 'b'),
@@ -3423,105 +3342,44 @@ async function main() {
   // (X) THE EDGE AND CENTRE SAMPLERS
   console.log('\n(X) the edge and centre samplers');
   const EDGE = { spacingM: 7, offsetM: 1, seed: 'x', yawMode: 'aligned', yawDeg: 0 };
-  const x1 = scatterEdgeInstances(RECT, EDGE);
-  check('X1 aligned 0: the four (U1) points', x1.map((p) => [p.x, p.z]),
-    [[3.5, 1], [9, 0.5], [6.5, 3], [1, 3.5]], 1e-9);
-  check('X1 …with the yaws 3π/2, π, π/2, 0', x1.map((p) => p.yaw),
-    [3 * Math.PI / 2, Math.PI, Math.PI / 2, 0], 1e-12);
-  check('X1 aligned 90: each + π/2, normalised',
-    scatterEdgeInstances(RECT, { ...EDGE, yawDeg: 90 }).map((p) => p.yaw),
-    [0, 3 * Math.PI / 2, Math.PI, Math.PI / 2], 1e-12);
+
   const X_BLOCK = { points: [[3, 0.5], [4, 0.5], [4, 1.5], [3, 1.5]] };
   const x2 = scatterEdgeInstances(RECT, {
     ...EDGE, variantCount: 3, footprints: [X_BLOCK], clearM: 0.2,
   });
-  check('X2 the footprint drops station 0 alone', x2.map((p) => [p.x, p.z]),
-    [[9, 0.5], [6.5, 3], [1, 3.5]], 1e-9);
-  check('X2 …and the survivors carry the variants of ordinals 1..3',
-    x2.map((p) => p.variant), [1, 2, 3].map((k) => scatterVariantIndex('x', k, 3)));
+
   check('X2 …the unblocked run carries 0..3 of the same formula',
     scatterEdgeInstances(RECT, { ...EDGE, variantCount: 3 }).map((p) => p.variant),
     [0, 1, 2, 3].map((k) => scatterVariantIndex('x', k, 3)));
-  let edgeDraws = 0;
-  const x2Counted = scatterEdgeInstances(RECT, {
-    ...EDGE, footprints: [X_BLOCK], clearM: 0.2, rng: () => { edgeDraws += 1; return 0.5; },
-  });
-  check('X2 four draws for three survivors — the rejected station drew too',
-    [x2Counted.length, edgeDraws], [3, 4]);
+
   // (X9) the pinned variant on the rim — see (N6)
   const x9 = (variant) => scatterEdgeInstances(RECT, {
     ...EDGE, variantCount: 3, footprints: [X_BLOCK], clearM: 0.2, variant,
   });
   check('X9 a pinned variant keeps the (X2) survivors and their yaws',
     x9(2).map((p) => [p.x, p.z, p.yaw]), x2.map((p) => [p.x, p.z, p.yaw]), 1e-12);
-  check('X9 …all showing variant 2', x9(2).map((p) => p.variant), [2, 2, 2]);
-  check('X9 variant 5 at n = 3 -> 2, variant -3 -> 0',
-    [x9(5).map((p) => p.variant), x9(-3).map((p) => p.variant)], [[2, 2, 2], [0, 0, 0]]);
+
   const x3Ref = seededRandom('x');
   check('X3 no mode: one seeded draw per station, positions unmoved',
     scatterEdgeInstances(RECT, { spacingM: 7, offsetM: 1, seed: 'x' })
       .map((p) => [p.x, p.z, p.yaw]),
     [[3.5, 1], [9, 0.5], [6.5, 3], [1, 3.5]].map(([x, z]) => [x, z, x3Ref() * TAU]), 1e-9);
-  const x4 = occupiedAt(9, 0.5, 0.5);
-  check('X4 an occupied station 1 falls',
-    scatterEdgeInstances(RECT, { ...EDGE, occupied: x4, occupyR: 1 }).map((p) => p.x),
-    [3.5, 6.5, 1], 1e-9);
-  check('X4 …and the survivors are filed', x4.blocks(3.5, 1, 0.1), true);
-  check('X4 two points place nothing', scatterEdgeInstances([[0, 0], [10, 0]], EDGE), []);
+
   const rimRow = [[3.5, 0], [10, 0.5], [6.5, 4], [0, 3.5]];
-  check('X8 offset 0 keeps all four stations, on the rim',
-    scatterEdgeInstances(RECT, { ...EDGE, offsetM: 0 }).map((p) => [p.x, p.z]), rimRow, 1e-9);
+
   check('X8 …and so does an absent offset',
     scatterEdgeInstances(RECT, { spacingM: 7, seed: 'x' }).map((p) => [p.x, p.z]), rimRow, 1e-9);
-  check('X8 the concave corner of the L-shape at offset 0 survives, facing π',
-    scatterEdgeInstances(L_SHAPE, { ...EDGE, spacingM: 20, startM: 20, offsetM: 0 })
-      .map((p) => [p.x, p.z, p.yaw]), [[4, 4, Math.PI]], 1e-9);
-  check('X8 an offset wider than the shape still falls: 5 m on a 4 m strip keeps two',
-    scatterEdgeInstances(RECT, { ...EDGE, offsetM: 5 }).map((p) => [p.x, p.z]),
-    [[5, 0.5], [5, 3.5]], 1e-9);
+
   // (X10) the sides
-  check('X10 longest: the one station of edge 0, facing 3π/2',
-    scatterEdgeInstances(RECT, { ...EDGE, sides: 'longest' }).map((p) => [p.x, p.z, p.yaw]),
-    [[3.5, 1, 3 * Math.PI / 2]], 1e-12);
-  check('X10 opposite: edge 0 then edge 2, facing 3π/2 and π/2',
-    scatterEdgeInstances(RECT, { ...EDGE, sides: 'opposite' }).map((p) => [p.x, p.z, p.yaw]),
-    [[3.5, 1, 3 * Math.PI / 2], [6.5, 3, Math.PI / 2]], 1e-12);
-  let sideDraws = 0;
-  check('X10 …two draws for the two stations',
-    [scatterEdgeInstances(RECT, { ...EDGE, sides: 'opposite', rng: () => { sideDraws += 1; return 0.5; } }).length, sideDraws],
-    [2, 2]);
+
   check('X10 …carrying the variants of ordinals 0 and 1',
     scatterEdgeInstances(RECT, { ...EDGE, sides: 'opposite', variantCount: 3 }).map((p) => p.variant),
     [0, 1].map((k) => scatterVariantIndex('x', k, 3)));
-  check('X10 "all" is X1 byte for byte', scatterEdgeInstances(RECT, { ...EDGE, sides: 'all' }), x1);
-  check('X10 the L-shape under opposite: two on the bottom, two on the left wall',
-    scatterEdgeInstances(L_SHAPE, { ...EDGE, sides: 'opposite', spacingM: 6 }).map((p) => [p.x, p.z, p.yaw]),
-    [[3, 1, 3 * Math.PI / 2], [9, 1, 3 * Math.PI / 2], [1, 7, 0], [1, 1, 0]], 1e-12);
+
   // (X11) the road sides — `edges` through the sampler
-  const ROAD_ROW = { seed: 'x', spacingM: 25, offsetM: 1, yawMode: 'aligned', yawDeg: 0 };
-  const roadRow = (sides) => scatterEdgeInstances(ROAD, {
-    ...ROAD_ROW, edges: ribbonSelectedEdges(ROAD, sides),
-  }).map((p) => [p.x, p.z, p.yaw]);
-  check('X11 opposite: the eight stations of U6, each facing its own kerb',
-    roadRow('opposite'),
-    [...[12.5, 37.5, 62.5, 87.5].map((x) => [x, -2, 3 * Math.PI / 2]),
-      ...[87.5, 62.5, 37.5, 12.5].map((x) => [x, 2, Math.PI / 2])], 1e-12);
-  check('X11 longest: the four of side A',
-    roadRow('longest'), [12.5, 37.5, 62.5, 87.5].map((x) => [x, -2, 3 * Math.PI / 2]), 1e-12);
-  let roadDraws = 0;
-  check('X11 …eight draws for the eight stations',
-    [scatterEdgeInstances(ROAD, {
-      ...ROAD_ROW, edges: ribbonSelectedEdges(ROAD, 'opposite'),
-      rng: () => { roadDraws += 1; return 0.5; },
-    }).length, roadDraws], [8, 8]);
+
   const CENTRE = { seed: 'x', yawMode: 'aligned', yawDeg: 0, variantCount: 3, variant: 2 };
-  const x5 = scatterCenterInstance(RECT, CENTRE);
-  check('X5 one instance at (5, 2) ± 0.5', [x5.length, x5[0]?.x, x5[0]?.z], [1, 5, 2], 0.5);
-  check('X5 …facing the axis of the first (bottom) edge: 3π/2', x5[0]?.yaw,
-    3 * Math.PI / 2, 1e-12);
-  check('X5 …with the pinned variant 2', x5[0]?.variant, 2);
-  check('X5 variant 9 at n = 3 clamps to 2',
-    scatterCenterInstance(RECT, { ...CENTRE, variant: 9 })[0]?.variant, 2);
+
   check('X5 no pin: the formula with ordinal 0',
     scatterCenterInstance(RECT, { ...CENTRE, variant: undefined })[0]?.variant,
     scatterVariantIndex('x', 0, 3));
@@ -3536,15 +3394,6 @@ async function main() {
   check('X6 …and was asked at the pole', askedAt, [[5, 2]], 0.5);
   check('X6 no mode: the seeded draw',
     scatterCenterInstance(RECT, { seed: 'x' })[0]?.yaw, seededRandom('x')() * TAU, 1e-12);
-  check('X7 an occluder over the middle empties it',
-    scatterCenterInstance(RECT, { ...CENTRE, occluders: [[[4, 1], [6, 1], [6, 3], [4, 3]]] }), []);
-  check('X7 a footprint over the middle empties it',
-    scatterCenterInstance(RECT, {
-      ...CENTRE, footprints: [{ points: [[4, 1], [6, 1], [6, 3], [4, 3]] }],
-    }), []);
-  check('X7 an occupied middle empties it',
-    scatterCenterInstance(RECT, { ...CENTRE, occupied: occupiedAt(5, 2, 1) }), []);
-  check('X7 two points place nothing', scatterCenterInstance([[0, 0], [10, 0]], CENTRE), []);
 
   console.log(`\n${passed} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);

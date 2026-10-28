@@ -474,3 +474,31 @@ run `timeout 300 node client3d/scripts/smoke_figure_clips.mjs` for those cases.
 The new smoke additionally exercises the real Figure's bind restoration,
 parent-frame axis, walk/run phase update, bob/scale and no-leg idle fallback.
 Unknown dispatch functions fail through the common vector runner.
+
+## E4 scatter rows, impostors, undergrowth and world props
+
+| File | Canonical source | Consumer |
+|---|---|---|
+| `scatter_rows.json` | `client3d/scripts/smoke_scatter_math.mjs` | Scatter smoke; stroke smoke also runs its station/decoration subset |
+| `impostors.json` | `client3d/scripts/smoke_impostors.mjs` | Impostor smoke; scatter smoke also runs `[W...]` seam cases |
+| `undergrowth.json` | `client3d/scripts/smoke_undergrowth.mjs` | Undergrowth smoke |
+| `world_props.json` | `client3d/scripts/smoke_world_props.mjs` | World-prop smoke |
+
+`client3d/scripts/e4VectorDispatch.mjs` supplies the row shape adapters:
+`areaAxis({line,ring,sides,at})`, sampler `axisFrom:{line,ring,sides}`, finite
+`rng`/`jitterRng` lists that throw on exhaustion, and `occupied:[{x,z,r,tag?}]`.
+`occupancy(ops,routed=false)` runs `{op:'add'|'blocks',x,z,r,tag?}` or
+`{op:'sample',fn,options,ring?}` on one grid; its result lists block answers
+and sample arrays in order. `routed=true` uses the real `cellOccupancy` adapter.
+`decorateStroke` also exposes `pointCount` and `xs` projections, leaving random
+amplitudes to the original independent derivation checks.
+
+Undergrowth geometry becomes `{positions:[[x,y,z],...],normals:[[x,y,z],...],indices:[...]}`.
+`undergrowthTexel(row,column,channel?)` returns RGBA or one channel, and
+`undergrowthRowInk(row)` sums alpha/255. `worldPropTier(d,previous,baseCfg)` composes
+the scaled world-prop cfg and the existing tier function. These adapters call
+production functions and convert shapes; they contain no expected-value tables.
+
+New-file C# consumers arrive with E4 porting tasks. The existing scatter C#
+dispatch adds only the already-ported `WantedCells`, `InstanceHash`, `OccupyR`
+and `SeedEpochSuffix` functions. `scatter.json` also pins both JS sway ties.

@@ -13,6 +13,17 @@
  * from the current output. `scatterLod.ts` has no import (see its header), so a
  * plain esbuild transpile is enough — no bundler, no three.
  *
+ * SHARED VECTORS: impostors.json, including scatter_math's W seam.
+ * [W1] the line starts at 0.25 just beyond either cull 120 or cull 60.
+ * [W2] k=clamp(ceil(cull/64),1,32): culls 120/60/300/5/2000 yield
+ * k=2/1/5/1/32. Reach=min(sqrt(2)*(k+1)*64,400), hence
+ * 271.5290039756343 / 181.01933598375618 / 400 for culls 120/60/300.
+ * [W3] at d=190 the share is 0.25*(1-70/(sqrt(2)*192-120)*0.75)
+ * =0.163383 rounded to six decimals (eps 1e-6). Past the corner the share
+ * stays 0.0625; at 401 the window is closed and the share is 0.
+ * Cases use raw doubles with tolerances; mutant, wiring and relation checks
+ * remain inline. No frame, quad or corner is recorded from the implementation.
+ *
  * WHAT IS NOT CHECKED HERE, and it is a stated limit rather than an oversight:
  * the offscreen BAKE itself. It needs a GPU and a WebGL context; what a texture
  * looks like is a matter for the visual acceptance. What CAN be checked without
@@ -49,13 +60,13 @@
  * of `IMPOSTOR_FAR_M`, which no window ever fills:
  *
  *   cull 120 -> k = ceil(120/64) = 2 cells to each side
- *            -> the window's corner is √2 · (k+1) · 64 = 271.5290566 m
- *   share(d) = 0.25 · (1 − min((d − 120) / 151.5290566, 1) · 0.75)
+ *            -> the window's corner is √2 · (k+1) · 64 = 271.5290039756343 m
+ *   share(d) = 0.25 · (1 − min((d − 120) / 151.5290039756343, 1) · 0.75)
  *
  *   120 m and nearer:  0 — outside the window there is no share at all
  *   120⁺ m:            0.25    — the mesh line's own last value, no step
- *   195.7645283 m:     0.15625 (the midpoint of the span, t = 0.5)
- *   271.5290566 m:     0.0625  (the corner, t = 1)
+ *   195.76450198781714 m:     0.15625 (the midpoint of the span, t = 0.5)
+ *   271.5290039756343 m:     0.0625  (the corner, t = 1)
  *   400 m:             0.0625  — held at the floor past the corner
  *
  * The full derivation of the reach, the continuity of the two lines and the
@@ -67,7 +78,7 @@
  * way a walk outward should. Both thinnings pick by `instanceHash(index)`, so
  * the billboards just outside the line are a SUBSET of the meshes just inside
  * it: at 119 m the mesh share is 1 − (74/75)·0.75 = 0.26, at 121 m the
- * billboard share is 0.25 · (1 − (1/151.5290566)·0.75) = 0.2487, and every
+ * billboard share is 0.25 · (1 − (1/151.5290039756343)·0.75) = 0.2487, and every
  * index under the smaller number is under the bigger one. Checked over 1000
  * indices: impostor-visible at 121 m implies mesh-visible at 119 m, without
  * exception. Crossing the line outward the wood now only ever gets THINNER —
@@ -215,6 +226,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const LOD_SRC = join(ROOT, 'client3d/src/scene/scatterLod.ts');
 const GROUND_SRC = join(ROOT, 'client3d/src/scene/ground.ts');
@@ -285,48 +298,32 @@ async function main() {
     impostorInWindow, impostorQuad, impostorReachM, impostorShare,
     impostorVisible, impostorYaw,
     instanceTier, instanceVisible, SCATTER_LOD_DEFAULTS } = lod;
+  const vectors = runVectors(loadVectors('impostors'), lod);
+  passed += vectors.passed; failed += vectors.failed;
   const cfg = SCATTER_LOD_DEFAULTS;   // 35 / 45 / 120, the defaults a player never touches
 
   console.log('\n(A) the window — where the meshes stop, the billboards start');
   check('the stage ends at 400 m', IMPOSTOR_FAR_M, 400);
   check('…and the meshes end at 120 m', cfg.cullM, 120);
-  check('119.9 m is the mesh\'s', impostorInWindow(119.9, cfg), false);
-  check('120.0 m still is (the window is OPEN at the near end)',
-    impostorInWindow(120, cfg), false);
+
   check('…and instanceTier really still draws it there',
     instanceTier(120, 1, cfg), 1);
-  check('120.1 m is a billboard', impostorInWindow(120.1, cfg), true);
+
   check('…and instanceTier has let go of it', instanceTier(120.1, 1, cfg), 2);
-  check('400.0 m is the edge, and inside it', impostorInWindow(400, cfg), true);
-  check('400.1 m is nothing at all', impostorInWindow(400.1, cfg), false);
+
   check('a non-finite distance draws nothing',
     impostorInWindow(Number.NaN, cfg), false);
-  const farCull = { nearM: 35, farM: 45, cullM: 500 };
-  check('A5 a cull pushed past the stage empties the window',
-    [impostorInWindow(450, farCull), impostorInWindow(300, farCull)],
-    [false, false]);
-  check('A5 …and its share is 0, not a negative one',
-    impostorShare(450, farCull), 0);
 
   console.log('\n(B) the thinning — it continues the mesh line');
   const REACH = Math.SQRT2 * 3 * 64;   // k = 2 cells to each side, the corner
   check('the tail keeps a quarter of the start', IMPOSTOR_TAIL_FACTOR, 0.25);
   check('the window really reaches 271.529 m, not 400',
     um(impostorReachM(cfg.cullM)), um(REACH));
-  check('120.000001 m -> the mesh line\'s own last value',
-    um(impostorShare(120.000001, cfg)), 0.25);
-  check('the midpoint of the span -> 0.15625',
-    um(impostorShare((120 + REACH) / 2, cfg)), 0.15625);
-  check('the corner -> 0.0625', um(impostorShare(REACH, cfg)), 0.0625);
-  check('400 m -> the floor, held past the corner',
-    um(impostorShare(400, cfg)), 0.0625);
-  check('120 m -> nothing (outside the window)', impostorShare(120, cfg), 0);
-  check('60 m -> nothing either', impostorShare(60, cfg), 0);
+
   // instance 0 has hash 0 and therefore survives as long as anything does
-  check('instance 0 is drawn at the very edge', impostorVisible(0, 400, cfg), true);
-  check('…and nothing is drawn beyond it', impostorVisible(0, 401, cfg), false);
+
   let drawn = 0;
-  for (let i = 0; i < 1000; i += 1) if (impostorVisible(i, 195.7645283, cfg)) drawn += 1;
+  for (let i = 0; i < 1000; i += 1) if (impostorVisible(i, 195.76450198781714, cfg)) drawn += 1;
   // The hash is uniform to ~3.5 % over 1000 indices (`instanceHash`), so 0.15625
   // of 1000 must land near 156 — the band is three binomial sigmas
   // (sqrt(1000 · 0.15625 · 0.84375) = 11.5), which is what (I4) of
@@ -345,23 +342,15 @@ async function main() {
     um(IMPOSTOR_ELEV_RAD), um((10 * Math.PI) / 180));
   check('…and keeps 5 % of air', IMPOSTOR_BAKE_PAD, 1.05);
   const frame = impostorFrame(4, 1);
-  check('C1 spanH of a 4 m prop with a 1 m reach',
-    um(frame.spanH), um(1.125213433937957));
-  check('C1 …and its aspect', um(frame.aspect), um(0.46657814790091456));
+
   const quad = impostorQuad(8, frame);
-  check('C2 the quad of that prop scattered at 8 m', um(quad.h),
-    um(9.001707471503655));
-  check('C2 …its width, which is 2·halfW·(8/4)', um(quad.w), 4.2);
-  check('C2 …and its centre above the ground point', um(quad.centreY),
-    um(3.939231012048832));
+
   check('C3 the FOOT lands on the ground point',
     um(quad.centreY - (8 * Math.cos(IMPOSTOR_ELEV_RAD)) / 2), 0);
   check('C3 …while the quad\'s bottom edge hangs below it (the padding\'s air)',
     um(quad.centreY - quad.h / 2), um(-0.5616227237029956));
   const fatter = impostorQuad(8, { spanH: frame.spanH * 2, aspect: frame.aspect });
-  check('C4 twice the padding is twice the quad…', um(fatter.h),
-    um(2 * 9.001707471503655));
-  check('C4 …and the foot has not moved', um(fatter.centreY), um(quad.centreY));
+
   check('C5 a degenerate model gets no frame at all',
     [impostorFrame(0, 1), impostorFrame(4, 0), impostorFrame(Number.NaN, 1)],
     [null, null, null]);
@@ -372,22 +361,9 @@ async function main() {
     impostorCorners(0, centreY, 0, w, h, camX, camZ).map(um3);
   const BOTTOM = um(-0.5616227237029956);
   const TOP = um(8.44008474780066);
-  check('D1 camera due +X: yaw', um(impostorYaw(0, 0, 200, 0)), um(Math.PI / 2));
-  check('D1 …and the quad stands in the plane x = 0', corners(200, 60, 0), [
-    [0, BOTTOM, 2.1],
-    [0, BOTTOM, -2.1],
-    [0, TOP, -2.1],
-    [0, TOP, 2.1],
-  ]);
-  check('D2 camera on the diagonal: yaw',
-    um(impostorYaw(0, 0, 100, 100)), um(Math.PI / 4));
+
   const R = um(1.48492424049175);
-  check('D2 …and the corners turn with it', corners(100, 80, 100), [
-    [-R, BOTTOM, R],
-    [R, BOTTOM, -R],
-    [R, TOP, -R],
-    [-R, TOP, R],
-  ]);
+
   const diag = corners(100, 80, 100);
   // The quad's own edge must stand perpendicular to the HORIZONTAL line of
   // sight — that is what "faces the camera" means for a Y billboard.
@@ -434,13 +410,7 @@ async function main() {
     [instanceTier(60, 1, cfg) !== 2, impostorInWindow(60, cfg)], [true, false]);
 
   console.log('\n(G) what a failed bake is remembered as');
-  check('G a texture is stored', impostorBakeVerdict('baked'), 'store');
-  check('G a prop that cannot be baked is refused',
-    impostorBakeVerdict('unbakeable'), 'refuse');
-  check('G a file that did not arrive is tried again',
-    impostorBakeVerdict('load-failed'), 'retry');
-  check('G …and so is a tick that ran before the renderer',
-    impostorBakeVerdict('no-renderer'), 'retry');
+
   const harsh = await loadTs(LOD_SRC, refuseEveryFailure);
   check('G2 the "every failure is the prop\'s fault" mutant refuses a dropped download',
     harsh.impostorBakeVerdict('load-failed'), 'refuse');

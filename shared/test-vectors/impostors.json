@@ -1,0 +1,537 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_impostors.mjs",
+  "fixtures": {
+    "CFG": {
+      "nearM": 35,
+      "farM": 45,
+      "cullM": 120
+    },
+    "FRAME": {
+      "spanH": 1.125213433937957,
+      "aspect": 0.46657814790091456
+    }
+  },
+  "cases": [
+    {
+      "label": "[A] window 119.9",
+      "fn": "impostorInWindow",
+      "args": [
+        119.9,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": false
+    },
+    {
+      "label": "[A] window 120",
+      "fn": "impostorInWindow",
+      "args": [
+        120,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": false
+    },
+    {
+      "label": "[A] window 120.1",
+      "fn": "impostorInWindow",
+      "args": [
+        120.1,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": true
+    },
+    {
+      "label": "[A] window 400",
+      "fn": "impostorInWindow",
+      "args": [
+        400,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": true
+    },
+    {
+      "label": "[A] window 400.1",
+      "fn": "impostorInWindow",
+      "args": [
+        400.1,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": false
+    },
+    {
+      "label": "[A5] empty window 450",
+      "fn": "impostorInWindow",
+      "args": [
+        450,
+        {
+          "$fixture": "CFG",
+          "$with": {
+            "cullM": 500
+          }
+        }
+      ],
+      "expect": false
+    },
+    {
+      "label": "[A5] empty window 300",
+      "fn": "impostorInWindow",
+      "args": [
+        300,
+        {
+          "$fixture": "CFG",
+          "$with": {
+            "cullM": 500
+          }
+        }
+      ],
+      "expect": false
+    },
+    {
+      "label": "[A5] empty share",
+      "fn": "impostorShare",
+      "args": [
+        450,
+        {
+          "$fixture": "CFG",
+          "$with": {
+            "cullM": 500
+          }
+        }
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[B] start",
+      "fn": "impostorShare",
+      "args": [
+        120.000001,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0.25,
+      "eps": 1e-06
+    },
+    {
+      "label": "[B] midpoint",
+      "fn": "impostorShare",
+      "args": [
+        195.76450198781714,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0.15625
+    },
+    {
+      "label": "[B] corner",
+      "fn": "impostorShare",
+      "args": [
+        271.5290039756343,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0.0625
+    },
+    {
+      "label": "[B] tail",
+      "fn": "impostorShare",
+      "args": [
+        400,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0.0625
+    },
+    {
+      "label": "[B] line",
+      "fn": "impostorShare",
+      "args": [
+        120,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[B] near",
+      "fn": "impostorShare",
+      "args": [
+        60,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[B] instance zero 400",
+      "fn": "impostorVisible",
+      "args": [
+        0,
+        400,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": true
+    },
+    {
+      "label": "[B] instance zero 401",
+      "fn": "impostorVisible",
+      "args": [
+        0,
+        401,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": false
+    },
+    {
+      "label": "[C1] frame span",
+      "fn": "impostorFrame",
+      "args": [
+        4,
+        1
+      ],
+      "expect": {
+        "spanH": 1.125213433937957
+      }
+    },
+    {
+      "label": "[C1] frame aspect",
+      "fn": "impostorFrame",
+      "args": [
+        4,
+        1
+      ],
+      "expect": {
+        "aspect": 0.46657814790091456
+      }
+    },
+    {
+      "label": "[C2] quad h",
+      "fn": "impostorQuad",
+      "args": [
+        8,
+        {
+          "$fixture": "FRAME"
+        }
+      ],
+      "expect": {
+        "h": 9.001707471503655
+      }
+    },
+    {
+      "label": "[C2] quad w",
+      "fn": "impostorQuad",
+      "args": [
+        8,
+        {
+          "$fixture": "FRAME"
+        }
+      ],
+      "expect": {
+        "w": 4.2
+      }
+    },
+    {
+      "label": "[C2] quad centreY",
+      "fn": "impostorQuad",
+      "args": [
+        8,
+        {
+          "$fixture": "FRAME"
+        }
+      ],
+      "expect": {
+        "centreY": 3.939231012048832
+      }
+    },
+    {
+      "label": "[C4] twice the span",
+      "fn": "impostorQuad",
+      "args": [
+        8,
+        {
+          "$fixture": "FRAME",
+          "$with": {
+            "spanH": 2.250426867875914
+          }
+        }
+      ],
+      "expect": {
+        "h": 18.00341494300731,
+        "centreY": 3.939231012048832
+      }
+    },
+    {
+      "label": "[C5] degenerate [0, 1]",
+      "fn": "impostorFrame",
+      "args": [
+        0,
+        1
+      ],
+      "expect": null
+    },
+    {
+      "label": "[C5] degenerate [4, 0]",
+      "fn": "impostorFrame",
+      "args": [
+        4,
+        0
+      ],
+      "expect": null
+    },
+    {
+      "label": "[D1] east yaw",
+      "fn": "impostorYaw",
+      "args": [
+        0,
+        0,
+        200,
+        0
+      ],
+      "expect": 1.5707963267948966
+    },
+    {
+      "label": "[D2] diagonal yaw",
+      "fn": "impostorYaw",
+      "args": [
+        0,
+        0,
+        100,
+        100
+      ],
+      "expect": 0.7853981633974483
+    },
+    {
+      "label": "[D1] east corners",
+      "fn": "impostorCorners",
+      "args": [
+        0,
+        3.939231012048832,
+        0,
+        4.2,
+        9.001707471503655,
+        200,
+        0
+      ],
+      "expect": [
+        [
+          0,
+          -0.5616227237029956,
+          2.1
+        ],
+        [
+          0,
+          -0.5616227237029956,
+          -2.1
+        ],
+        [
+          0,
+          8.44008474780066,
+          -2.1
+        ],
+        [
+          0,
+          8.44008474780066,
+          2.1
+        ]
+      ]
+    },
+    {
+      "label": "[D2] diagonal corners",
+      "fn": "impostorCorners",
+      "args": [
+        0,
+        3.939231012048832,
+        0,
+        4.2,
+        9.001707471503655,
+        100,
+        100
+      ],
+      "expect": [
+        [
+          -1.48492424049175,
+          -0.5616227237029956,
+          1.48492424049175
+        ],
+        [
+          1.48492424049175,
+          -0.5616227237029956,
+          -1.48492424049175
+        ],
+        [
+          1.48492424049175,
+          8.44008474780066,
+          -1.48492424049175
+        ],
+        [
+          -1.48492424049175,
+          8.44008474780066,
+          1.48492424049175
+        ]
+      ]
+    },
+    {
+      "label": "[G] baked",
+      "fn": "impostorBakeVerdict",
+      "args": [
+        "baked"
+      ],
+      "expect": "store"
+    },
+    {
+      "label": "[G] unbakeable",
+      "fn": "impostorBakeVerdict",
+      "args": [
+        "unbakeable"
+      ],
+      "expect": "refuse"
+    },
+    {
+      "label": "[G] load-failed",
+      "fn": "impostorBakeVerdict",
+      "args": [
+        "load-failed"
+      ],
+      "expect": "retry"
+    },
+    {
+      "label": "[G] no-renderer",
+      "fn": "impostorBakeVerdict",
+      "args": [
+        "no-renderer"
+      ],
+      "expect": "retry"
+    },
+    {
+      "label": "[W2] span 120",
+      "fn": "impostorWindowSpan",
+      "args": [
+        120
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[W2] span 60",
+      "fn": "impostorWindowSpan",
+      "args": [
+        60
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[W2] span 300",
+      "fn": "impostorWindowSpan",
+      "args": [
+        300
+      ],
+      "expect": 5
+    },
+    {
+      "label": "[W2] span 5",
+      "fn": "impostorWindowSpan",
+      "args": [
+        5
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[W2] span 2000",
+      "fn": "impostorWindowSpan",
+      "args": [
+        2000
+      ],
+      "expect": 32
+    },
+    {
+      "label": "[W2] reach 120",
+      "fn": "impostorReachM",
+      "args": [
+        120
+      ],
+      "expect": 271.5290039756343
+    },
+    {
+      "label": "[W2] reach 60",
+      "fn": "impostorReachM",
+      "args": [
+        60
+      ],
+      "expect": 181.01933598375618
+    },
+    {
+      "label": "[W2] reach 300",
+      "fn": "impostorReachM",
+      "args": [
+        300
+      ],
+      "expect": 400
+    },
+    {
+      "label": "[W1] second cull seam",
+      "fn": "impostorShare",
+      "args": [
+        60.000001,
+        {
+          "nearM": 10,
+          "farM": 20,
+          "cullM": 60
+        }
+      ],
+      "expect": 0.25,
+      "eps": 1e-06
+    },
+    {
+      "label": "[W3] share 300",
+      "fn": "impostorShare",
+      "args": [
+        300,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0.0625
+    },
+    {
+      "label": "[W3] share 190",
+      "fn": "impostorShare",
+      "args": [
+        190,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0.163383,
+      "eps": 1e-06
+    },
+    {
+      "label": "[W3] share 401",
+      "fn": "impostorShare",
+      "args": [
+        401,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0
+    }
+  ]
+}

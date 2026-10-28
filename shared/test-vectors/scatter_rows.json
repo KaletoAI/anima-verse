@@ -1,0 +1,4751 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_scatter_math.mjs",
+  "fixtures": {
+    "RECT": [
+      [
+        0,
+        0
+      ],
+      [
+        10,
+        0
+      ],
+      [
+        10,
+        4
+      ],
+      [
+        0,
+        4
+      ]
+    ],
+    "L": [
+      [
+        0,
+        0
+      ],
+      [
+        10,
+        0
+      ],
+      [
+        10,
+        4
+      ],
+      [
+        4,
+        4
+      ],
+      [
+        4,
+        10
+      ],
+      [
+        0,
+        10
+      ]
+    ],
+    "ROAD": [
+      [
+        0,
+        -3
+      ],
+      [
+        100,
+        -3
+      ],
+      [
+        100,
+        3
+      ],
+      [
+        0,
+        3
+      ]
+    ],
+    "CORNER": [
+      [
+        0,
+        0
+      ],
+      [
+        10,
+        0
+      ],
+      [
+        10,
+        10
+      ]
+    ],
+    "U": {
+      "spacingM": 7,
+      "offsetM": 1
+    },
+    "EDGE": {
+      "spacingM": 7,
+      "offsetM": 1,
+      "seed": "x",
+      "yawMode": "aligned",
+      "yawDeg": 0
+    },
+    "CENTRE": {
+      "seed": "x",
+      "yawMode": "aligned",
+      "yawDeg": 0,
+      "variantCount": 3,
+      "variant": 2
+    },
+    "ALONG": {
+      "line": [
+        [
+          0,
+          0
+        ],
+        [
+          100,
+          0
+        ]
+      ],
+      "spacingM": 25,
+      "offsetM": 3,
+      "seed": "terrain:along:a:0"
+    },
+    "MIX": {
+      "ring": [
+        [
+          0,
+          0
+        ],
+        [
+          20,
+          0
+        ],
+        [
+          20,
+          20
+        ],
+        [
+          0,
+          20
+        ]
+      ],
+      "areaM2": 400,
+      "densityPer100m2": 1.25,
+      "seed": "A",
+      "triesPerPoint": 1,
+      "variantCount": 3,
+      "rng": [
+        0.1,
+        0.2,
+        0.0,
+        0.25,
+        0.25,
+        0.25,
+        0.5,
+        0.5,
+        0.5,
+        0.75,
+        0.3,
+        0.0,
+        0.4,
+        0.8,
+        0.0
+      ]
+    }
+  },
+  "cases": [
+    {
+      "label": "[R1-4] axis bottom",
+      "fn": "ringEdgeAxis",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        5,
+        0.5
+      ],
+      "expect": 4.71238898038469
+    },
+    {
+      "label": "[R3] reverse winding bottom",
+      "fn": "ringEdgeAxis",
+      "args": [
+        [
+          [
+            0,
+            4
+          ],
+          [
+            10,
+            4
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        5,
+        0.5
+      ],
+      "expect": 4.71238898038469
+    },
+    {
+      "label": "[R1-4] axis right",
+      "fn": "ringEdgeAxis",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        9.5,
+        2
+      ],
+      "expect": 3.141592653589793
+    },
+    {
+      "label": "[R3] reverse winding right",
+      "fn": "ringEdgeAxis",
+      "args": [
+        [
+          [
+            0,
+            4
+          ],
+          [
+            10,
+            4
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        9.5,
+        2
+      ],
+      "expect": 3.141592653589793
+    },
+    {
+      "label": "[R1-4] axis top",
+      "fn": "ringEdgeAxis",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        5,
+        3.5
+      ],
+      "expect": 1.5707963267948966
+    },
+    {
+      "label": "[R3] reverse winding top",
+      "fn": "ringEdgeAxis",
+      "args": [
+        [
+          [
+            0,
+            4
+          ],
+          [
+            10,
+            4
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        5,
+        3.5
+      ],
+      "expect": 1.5707963267948966
+    },
+    {
+      "label": "[R1-4] axis left",
+      "fn": "ringEdgeAxis",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        0.5,
+        2
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[R3] reverse winding left",
+      "fn": "ringEdgeAxis",
+      "args": [
+        [
+          [
+            0,
+            4
+          ],
+          [
+            10,
+            4
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        0.5,
+        2
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[R1-4] axis tie",
+      "fn": "ringEdgeAxis",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        5,
+        2
+      ],
+      "expect": 4.71238898038469
+    },
+    {
+      "label": "[R4] no ring",
+      "fn": "ringEdgeAxis",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0
+          ]
+        ],
+        5,
+        1
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[R5] line [{'$fixture': 'CORNER'}, 9, 0.2]",
+      "fn": "lineAxis",
+      "args": [
+        {
+          "$fixture": "CORNER"
+        },
+        9,
+        0.2
+      ],
+      "expect": 1.5707963267948966
+    },
+    {
+      "label": "[R5] line [{'$fixture': 'CORNER'}, 10.3, 5]",
+      "fn": "lineAxis",
+      "args": [
+        {
+          "$fixture": "CORNER"
+        },
+        10.3,
+        5
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[R5] line [[[3, 3]], 0, 0]",
+      "fn": "lineAxis",
+      "args": [
+        [
+          [
+            3,
+            3
+          ]
+        ],
+        0,
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[R6] rectangle longest",
+      "fn": "ringSelectedEdges",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        "longest"
+      ],
+      "expect": [
+        0
+      ]
+    },
+    {
+      "label": "[R6] rectangle opposite",
+      "fn": "ringSelectedEdges",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        "opposite"
+      ],
+      "expect": [
+        0,
+        2
+      ]
+    },
+    {
+      "label": "[R6] rectangle all",
+      "fn": "ringSelectedEdges",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        "all"
+      ],
+      "expect": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "[R6] rectangle bogus",
+      "fn": "ringSelectedEdges",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        "bogus"
+      ],
+      "expect": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "[R6] L longest",
+      "fn": "ringSelectedEdges",
+      "args": [
+        {
+          "$fixture": "L"
+        },
+        "longest"
+      ],
+      "expect": [
+        0
+      ]
+    },
+    {
+      "label": "[R6] L opposite",
+      "fn": "ringSelectedEdges",
+      "args": [
+        {
+          "$fixture": "L"
+        },
+        "opposite"
+      ],
+      "expect": [
+        0,
+        5
+      ]
+    },
+    {
+      "label": "[R6] no selected ring",
+      "fn": "ringSelectedEdges",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0
+          ]
+        ],
+        "longest"
+      ],
+      "expect": []
+    },
+    {
+      "label": "[R7] selected axis [0, 1, 2, 3]",
+      "fn": "ringEdgeAxis",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        5,
+        3.5,
+        [
+          0,
+          1,
+          2,
+          3
+        ]
+      ],
+      "expect": 1.5707963267948966
+    },
+    {
+      "label": "[R7] selected axis [0]",
+      "fn": "ringEdgeAxis",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        5,
+        3.5,
+        [
+          0
+        ]
+      ],
+      "expect": 4.71238898038469
+    },
+    {
+      "label": "[R7] selected axis [0, 2]",
+      "fn": "ringEdgeAxis",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        5,
+        3.5,
+        [
+          0,
+          2
+        ]
+      ],
+      "expect": 1.5707963267948966
+    },
+    {
+      "label": "[R7] selected axis []",
+      "fn": "ringEdgeAxis",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        5,
+        3.5,
+        []
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[R7] area axis longest",
+      "fn": "areaAxis",
+      "args": [
+        {
+          "ring": [
+            [
+              0,
+              0
+            ],
+            [
+              10,
+              0
+            ],
+            [
+              10,
+              4
+            ],
+            [
+              0,
+              4
+            ]
+          ],
+          "at": [
+            5,
+            3.5
+          ],
+          "sides": "longest"
+        }
+      ],
+      "expect": 4.71238898038469
+    },
+    {
+      "label": "[R7] area axis all",
+      "fn": "areaAxis",
+      "args": [
+        {
+          "ring": [
+            [
+              0,
+              0
+            ],
+            [
+              10,
+              0
+            ],
+            [
+              10,
+              4
+            ],
+            [
+              0,
+              4
+            ]
+          ],
+          "at": [
+            5,
+            3.5
+          ]
+        }
+      ],
+      "expect": 1.5707963267948966
+    },
+    {
+      "label": "[R7] area axis line",
+      "fn": "areaAxis",
+      "args": [
+        {
+          "ring": [
+            [
+              0,
+              0
+            ],
+            [
+              10,
+              0
+            ],
+            [
+              10,
+              4
+            ],
+            [
+              0,
+              4
+            ]
+          ],
+          "at": [
+            10.3,
+            5
+          ],
+          "line": [
+            [
+              0,
+              0
+            ],
+            [
+              10,
+              0
+            ],
+            [
+              10,
+              10
+            ]
+          ],
+          "sides": "longest"
+        }
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[R8] straight ribbon longest",
+      "fn": "ribbonSelectedEdges",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        "longest"
+      ],
+      "expect": [
+        0
+      ]
+    },
+    {
+      "label": "[R8] straight ribbon opposite",
+      "fn": "ribbonSelectedEdges",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        "opposite"
+      ],
+      "expect": [
+        0,
+        2
+      ]
+    },
+    {
+      "label": "[R8] straight ribbon all",
+      "fn": "ribbonSelectedEdges",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        "all"
+      ],
+      "expect": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "[R8] straight ribbon bogus",
+      "fn": "ribbonSelectedEdges",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        "bogus"
+      ],
+      "expect": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "label": "[R8] outer bend",
+      "fn": "ribbonSelectedEdges",
+      "args": [
+        [
+          [
+            0,
+            -3
+          ],
+          [
+            53,
+            -3
+          ],
+          [
+            53,
+            50
+          ],
+          [
+            47,
+            50
+          ],
+          [
+            47,
+            3
+          ],
+          [
+            0,
+            3
+          ]
+        ],
+        "longest"
+      ],
+      "expect": [
+        0,
+        1
+      ]
+    },
+    {
+      "label": "[R8] both bend kerbs",
+      "fn": "ribbonSelectedEdges",
+      "args": [
+        [
+          [
+            0,
+            -3
+          ],
+          [
+            53,
+            -3
+          ],
+          [
+            53,
+            50
+          ],
+          [
+            47,
+            50
+          ],
+          [
+            47,
+            3
+          ],
+          [
+            0,
+            3
+          ]
+        ],
+        "opposite"
+      ],
+      "expect": [
+        0,
+        1,
+        3,
+        4
+      ]
+    },
+    {
+      "label": "[R8] mirrored bend",
+      "fn": "ribbonSelectedEdges",
+      "args": [
+        [
+          [
+            0,
+            -3
+          ],
+          [
+            47,
+            -3
+          ],
+          [
+            47,
+            -50
+          ],
+          [
+            53,
+            -50
+          ],
+          [
+            53,
+            3
+          ],
+          [
+            0,
+            3
+          ]
+        ],
+        "longest"
+      ],
+      "expect": [
+        3,
+        4
+      ]
+    },
+    {
+      "label": "[R8] odd ring fallback",
+      "fn": "ribbonSelectedEdges",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            0,
+            10
+          ]
+        ],
+        "opposite"
+      ],
+      "expect": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "label": "[R8] too few points",
+      "fn": "ribbonSelectedEdges",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0
+          ]
+        ],
+        "opposite"
+      ],
+      "expect": []
+    },
+    {
+      "label": "[T1] rectangle pole",
+      "fn": "polylabel",
+      "args": [
+        {
+          "$fixture": "RECT"
+        }
+      ],
+      "expect": {
+        "x": 5,
+        "z": 2,
+        "d": 2
+      },
+      "eps": 0.5
+    },
+    {
+      "label": "[T3] no pole",
+      "fn": "polylabel",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      ],
+      "expect": {
+        "x": 0,
+        "z": 0,
+        "d": 0
+      }
+    },
+    {
+      "label": "[U1] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U"
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 9,
+          "z": 0.5,
+          "axis": 3.141592653589793,
+          "ordinal": 1
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "axis": 0,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U2 start zero] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "startM": 0
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 0,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 7,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 1
+        },
+        {
+          "x": 10,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 3,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U3 no offset] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "spacingM": 7
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 0,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 10,
+          "z": 0.5,
+          "axis": 3.141592653589793,
+          "ordinal": 1
+        },
+        {
+          "x": 6.5,
+          "z": 4,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 0,
+          "z": 3.5,
+          "axis": 0,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U3 zero spacing] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "spacingM": 0,
+          "offsetM": 1
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[U4 jitter] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "jitterM": 2,
+            "jitterRng": [
+              1,
+              0,
+              0.5,
+              1,
+              0.5
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 5.5,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 9,
+          "z": 0.5,
+          "axis": 3.141592653589793,
+          "ordinal": 1
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 1,
+          "z": 1.5,
+          "axis": 0,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U4 clamp first] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "jitterM": 5,
+            "jitterRng": [
+              0,
+              0.5,
+              0.5,
+              0.5,
+              0.5
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 0,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 7,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 1
+        },
+        {
+          "x": 10,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 3,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U4 zero jitter] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "jitterM": 0,
+            "jitterRng": []
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 9,
+          "z": 0.5,
+          "axis": 3.141592653589793,
+          "ordinal": 1
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "axis": 0,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U4 absent jitter] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "jitterRng": []
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 9,
+          "z": 0.5,
+          "axis": 3.141592653589793,
+          "ordinal": 1
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "axis": 0,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U5 all] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "sides": "all"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 9,
+          "z": 0.5,
+          "axis": 3.141592653589793,
+          "ordinal": 1
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "axis": 0,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U5 longest] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "sides": "longest"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        }
+      ]
+    },
+    {
+      "label": "[U5 opposite] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "sides": "opposite"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 1
+        }
+      ]
+    },
+    {
+      "label": "[U5 jitter across runs] stations",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "sides": "opposite",
+            "jitterM": 2,
+            "jitterRng": [
+              1,
+              0,
+              0.5,
+              1
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 5.5,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 1
+        }
+      ]
+    },
+    {
+      "label": "[U4] ending draw exhausts",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "jitterM": 2,
+            "jitterRng": [
+              1,
+              0,
+              0.5,
+              1
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "$throws": true
+      }
+    },
+    {
+      "label": "[U5] ending draw exhausts",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "sides": "opposite",
+            "jitterM": 2,
+            "jitterRng": [
+              1,
+              0,
+              0.5
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "$throws": true
+      }
+    },
+    {
+      "label": "[U3] repeated closing point",
+      "fn": "ringStations",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            10,
+            4
+          ],
+          [
+            0,
+            4
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        {
+          "$fixture": "U"
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 9,
+          "z": 0.5,
+          "axis": 3.141592653589793,
+          "ordinal": 1
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "axis": 0,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U3] no ring",
+      "fn": "ringStations",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0
+          ]
+        ],
+        {
+          "$fixture": "U"
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[U5] two per edge",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "sides": "opposite",
+            "spacingM": 4
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 2,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 6,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 1
+        },
+        {
+          "x": 8,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 4,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U5] max points across runs",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "U",
+          "$with": {
+            "sides": "opposite",
+            "spacingM": 4,
+            "maxPoints": 3
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 2,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 6,
+          "z": 1,
+          "axis": 4.71238898038469,
+          "ordinal": 1
+        },
+        {
+          "x": 8,
+          "z": 3,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        }
+      ]
+    },
+    {
+      "label": "[U6] both kerb chains",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        {
+          "spacingM": 25,
+          "offsetM": 1,
+          "edges": [
+            0,
+            2
+          ]
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 37.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 1
+        },
+        {
+          "x": 62.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 2
+        },
+        {
+          "x": 87.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 3
+        },
+        {
+          "x": 87.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 4
+        },
+        {
+          "x": 62.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 5
+        },
+        {
+          "x": 37.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 6
+        },
+        {
+          "x": 12.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 7
+        }
+      ]
+    },
+    {
+      "label": "[U6] longest kerb",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        {
+          "spacingM": 25,
+          "offsetM": 1,
+          "edges": [
+            0
+          ]
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 37.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 1
+        },
+        {
+          "x": 62.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 2
+        },
+        {
+          "x": 87.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U6] split kerb chains",
+      "fn": "ringStations",
+      "args": [
+        [
+          [
+            0,
+            -3
+          ],
+          [
+            40,
+            -3
+          ],
+          [
+            100,
+            -3
+          ],
+          [
+            100,
+            3
+          ],
+          [
+            40,
+            3
+          ],
+          [
+            0,
+            3
+          ]
+        ],
+        {
+          "spacingM": 25,
+          "offsetM": 1,
+          "edges": [
+            0,
+            1,
+            3,
+            4
+          ]
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 0
+        },
+        {
+          "x": 37.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 1
+        },
+        {
+          "x": 62.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 2
+        },
+        {
+          "x": 87.5,
+          "z": -2,
+          "axis": 4.71238898038469,
+          "ordinal": 3
+        },
+        {
+          "x": 87.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 4
+        },
+        {
+          "x": 62.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 5
+        },
+        {
+          "x": 37.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 6
+        },
+        {
+          "x": 12.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 7
+        }
+      ]
+    },
+    {
+      "label": "[U6] explicit edges beat sides",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        {
+          "spacingM": 25,
+          "offsetM": 1,
+          "edges": [
+            2
+          ],
+          "sides": "longest"
+        }
+      ],
+      "expect": [
+        {
+          "x": 87.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 0
+        },
+        {
+          "x": 62.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 1
+        },
+        {
+          "x": 37.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 2
+        },
+        {
+          "x": 12.5,
+          "z": 2,
+          "axis": 1.5707963267948966,
+          "ordinal": 3
+        }
+      ]
+    },
+    {
+      "label": "[U6] empty edges",
+      "fn": "ringStations",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        {
+          "spacingM": 25,
+          "offsetM": 1,
+          "edges": []
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[X1] aligned edge",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE"
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 9,
+          "z": 0.5,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "yaw": 0
+        }
+      ]
+    },
+    {
+      "label": "[X1] yaw ninety",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "yawDeg": 90
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "yaw": 0
+        },
+        {
+          "x": 9,
+          "z": 0.5,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[X2] ordinal variants after footprint",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "variantCount": 3,
+            "footprints": [
+              {
+                "points": [
+                  [
+                    3,
+                    0.5
+                  ],
+                  [
+                    4,
+                    0.5
+                  ],
+                  [
+                    4,
+                    1.5
+                  ],
+                  [
+                    3,
+                    1.5
+                  ]
+                ]
+              }
+            ],
+            "clearM": 0.2
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 9,
+          "z": 0.5,
+          "yaw": 3.141592653589793,
+          "variant": 1
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 2
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "yaw": 0,
+          "variant": 0
+        }
+      ]
+    },
+    {
+      "label": "[X2] finite yaw stream includes rejected station",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "footprints": [
+              {
+                "points": [
+                  [
+                    3,
+                    0.5
+                  ],
+                  [
+                    4,
+                    0.5
+                  ],
+                  [
+                    4,
+                    1.5
+                  ],
+                  [
+                    3,
+                    1.5
+                  ]
+                ]
+              }
+            ],
+            "clearM": 0.2,
+            "rng": [
+              0.5,
+              0.5,
+              0.5,
+              0.5
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 9,
+          "z": 0.5,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "yaw": 0
+        }
+      ]
+    },
+    {
+      "label": "[X2] rejected station consumes yaw",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "footprints": [
+              {
+                "points": [
+                  [
+                    3,
+                    0.5
+                  ],
+                  [
+                    4,
+                    0.5
+                  ],
+                  [
+                    4,
+                    1.5
+                  ],
+                  [
+                    3,
+                    1.5
+                  ]
+                ]
+              }
+            ],
+            "clearM": 0.2,
+            "rng": [
+              0.5,
+              0.5,
+              0.5
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "$throws": true
+      }
+    },
+    {
+      "label": "[X9] pinned 2",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "variantCount": 3,
+            "footprints": [
+              {
+                "points": [
+                  [
+                    3,
+                    0.5
+                  ],
+                  [
+                    4,
+                    0.5
+                  ],
+                  [
+                    4,
+                    1.5
+                  ],
+                  [
+                    3,
+                    1.5
+                  ]
+                ]
+              }
+            ],
+            "clearM": 0.2,
+            "variant": 2
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 9,
+          "z": 0.5,
+          "yaw": 3.141592653589793,
+          "variant": 2
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 2
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "yaw": 0,
+          "variant": 2
+        }
+      ]
+    },
+    {
+      "label": "[X9] pinned 5",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "variantCount": 3,
+            "footprints": [
+              {
+                "points": [
+                  [
+                    3,
+                    0.5
+                  ],
+                  [
+                    4,
+                    0.5
+                  ],
+                  [
+                    4,
+                    1.5
+                  ],
+                  [
+                    3,
+                    1.5
+                  ]
+                ]
+              }
+            ],
+            "clearM": 0.2,
+            "variant": 5
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 9,
+          "z": 0.5,
+          "yaw": 3.141592653589793,
+          "variant": 2
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 2
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "yaw": 0,
+          "variant": 2
+        }
+      ]
+    },
+    {
+      "label": "[X9] pinned -3",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "variantCount": 3,
+            "footprints": [
+              {
+                "points": [
+                  [
+                    3,
+                    0.5
+                  ],
+                  [
+                    4,
+                    0.5
+                  ],
+                  [
+                    4,
+                    1.5
+                  ],
+                  [
+                    3,
+                    1.5
+                  ]
+                ]
+              }
+            ],
+            "clearM": 0.2,
+            "variant": -3
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 9,
+          "z": 0.5,
+          "yaw": 3.141592653589793,
+          "variant": 0
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 0
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "yaw": 0,
+          "variant": 0
+        }
+      ]
+    },
+    {
+      "label": "[X3] fed random yaw",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "spacingM": 7,
+          "offsetM": 1,
+          "seed": "x",
+          "rng": [
+            0,
+            0.25,
+            0.5,
+            0.75
+          ]
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "yaw": 0
+        },
+        {
+          "x": 9,
+          "z": 0.5,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "yaw": 4.71238898038469
+        }
+      ]
+    },
+    {
+      "label": "[X4] occupied station",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "occupied": [
+              {
+                "x": 9,
+                "z": 0.5,
+                "r": 0.5
+              }
+            ],
+            "occupyR": 1
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "yaw": 0
+        }
+      ]
+    },
+    {
+      "label": "[X4] no ring",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0
+          ]
+        ],
+        {
+          "$fixture": "EDGE"
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[X8] rim offset zero",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "offsetM": 0
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 0,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 10,
+          "z": 0.5,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 6.5,
+          "z": 4,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 0,
+          "z": 3.5,
+          "yaw": 0
+        }
+      ]
+    },
+    {
+      "label": "[X8] concave corner",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "L"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "spacingM": 20,
+            "startM": 20,
+            "offsetM": 0
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 4,
+          "z": 4,
+          "yaw": 3.141592653589793
+        }
+      ]
+    },
+    {
+      "label": "[X8] excessive inset",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "offsetM": 5
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 5,
+          "z": 0.5,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 5,
+          "z": 3.5,
+          "yaw": 0
+        }
+      ]
+    },
+    {
+      "label": "[X10] sides longest",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "sides": "longest"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "yaw": 4.71238898038469
+        }
+      ]
+    },
+    {
+      "label": "[X10] sides opposite",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "sides": "opposite"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[X10] sides all",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "sides": "all"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 9,
+          "z": 0.5,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 1,
+          "z": 3.5,
+          "yaw": 0
+        }
+      ]
+    },
+    {
+      "label": "[X10] side yaw stream exhaustion",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "sides": "opposite",
+            "rng": [
+              0.5
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "$throws": true
+      }
+    },
+    {
+      "label": "[X10] L opposite",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "L"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "sides": "opposite",
+            "spacingM": 6
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3,
+          "z": 1,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 9,
+          "z": 1,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 1,
+          "z": 7,
+          "yaw": 0
+        },
+        {
+          "x": 1,
+          "z": 1,
+          "yaw": 0
+        }
+      ]
+    },
+    {
+      "label": "[X11] kerbs [0, 2]",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        {
+          "seed": "x",
+          "spacingM": 25,
+          "offsetM": 1,
+          "yawMode": "aligned",
+          "yawDeg": 0,
+          "edges": [
+            0,
+            2
+          ],
+          "rng": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": -2,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 37.5,
+          "z": -2,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 62.5,
+          "z": -2,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 87.5,
+          "z": -2,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 87.5,
+          "z": 2,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 62.5,
+          "z": 2,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 37.5,
+          "z": 2,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 12.5,
+          "z": 2,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[X11] kerbs [0]",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        {
+          "seed": "x",
+          "spacingM": 25,
+          "offsetM": 1,
+          "yawMode": "aligned",
+          "yawDeg": 0,
+          "edges": [
+            0
+          ],
+          "rng": [
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": -2,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 37.5,
+          "z": -2,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 62.5,
+          "z": -2,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 87.5,
+          "z": -2,
+          "yaw": 4.71238898038469
+        }
+      ]
+    },
+    {
+      "label": "[X11] yaw stream exhausts",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "ROAD"
+        },
+        {
+          "seed": "x",
+          "spacingM": 25,
+          "offsetM": 1,
+          "yawMode": "aligned",
+          "edges": [
+            0,
+            2
+          ],
+          "rng": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ],
+      "expect": {
+        "$throws": true
+      }
+    },
+    {
+      "label": "[X5-7] centre pin",
+      "fn": "scatterCenterInstance",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "CENTRE"
+        }
+      ],
+      "expect": [
+        {
+          "x": 5,
+          "z": 2,
+          "yaw": 4.71238898038469,
+          "variant": 2
+        }
+      ]
+    },
+    {
+      "label": "[X5-7] centre clamp",
+      "fn": "scatterCenterInstance",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "CENTRE",
+          "$with": {
+            "variant": 9
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 5,
+          "z": 2,
+          "yaw": 4.71238898038469,
+          "variant": 2
+        }
+      ]
+    },
+    {
+      "label": "[X5-7] centre no pin",
+      "fn": "scatterCenterInstance",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "seed": "x",
+          "yawMode": "aligned",
+          "variantCount": 3
+        }
+      ],
+      "expect": [
+        {
+          "x": 5,
+          "z": 2,
+          "yaw": 4.71238898038469,
+          "variant": 0
+        }
+      ]
+    },
+    {
+      "label": "[X5-7] centre axis line",
+      "fn": "scatterCenterInstance",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "CENTRE",
+          "$with": {
+            "axisFrom": {
+              "line": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ]
+              ],
+              "ring": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  4
+                ],
+                [
+                  0,
+                  4
+                ]
+              ]
+            }
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 5,
+          "z": 2,
+          "yaw": 1.5707963267948966,
+          "variant": 2
+        }
+      ]
+    },
+    {
+      "label": "[X5-7] centre occluded",
+      "fn": "scatterCenterInstance",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "CENTRE",
+          "$with": {
+            "occluders": [
+              [
+                [
+                  4,
+                  1
+                ],
+                [
+                  6,
+                  1
+                ],
+                [
+                  6,
+                  3
+                ],
+                [
+                  4,
+                  3
+                ]
+              ]
+            ]
+          }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[X5-7] centre footprint",
+      "fn": "scatterCenterInstance",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "CENTRE",
+          "$with": {
+            "footprints": [
+              {
+                "points": [
+                  [
+                    4,
+                    1
+                  ],
+                  [
+                    6,
+                    1
+                  ],
+                  [
+                    6,
+                    3
+                  ],
+                  [
+                    4,
+                    3
+                  ]
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[X5-7] centre occupied",
+      "fn": "scatterCenterInstance",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "CENTRE",
+          "$with": {
+            "occupied": [
+              {
+                "x": 5,
+                "z": 2,
+                "r": 1
+              }
+            ]
+          }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[X7] no ring",
+      "fn": "scatterCenterInstance",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0
+          ]
+        ],
+        {
+          "$fixture": "CENTRE"
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[V1-2] strict radius and distant buckets",
+      "fn": "occupancy",
+      "args": [
+        [
+          {
+            "op": "blocks",
+            "x": 0,
+            "z": 0,
+            "r": 1
+          },
+          {
+            "op": "add",
+            "x": 0,
+            "z": 0,
+            "r": 1
+          },
+          {
+            "op": "blocks",
+            "x": 1.5,
+            "z": 0,
+            "r": 1
+          },
+          {
+            "op": "blocks",
+            "x": 2,
+            "z": 0,
+            "r": 1
+          },
+          {
+            "op": "blocks",
+            "x": 0,
+            "z": 20,
+            "r": 1
+          },
+          {
+            "op": "add",
+            "x": 50,
+            "z": 50,
+            "r": 30
+          },
+          {
+            "op": "blocks",
+            "x": 20,
+            "z": 50,
+            "r": 1
+          },
+          {
+            "op": "blocks",
+            "x": 19,
+            "z": 50,
+            "r": 1
+          }
+        ]
+      ],
+      "expect": [
+        false,
+        true,
+        false,
+        false,
+        true,
+        false
+      ]
+    },
+    {
+      "label": "[V7] foreign tags only",
+      "fn": "occupancy",
+      "args": [
+        [
+          {
+            "op": "add",
+            "x": 0,
+            "z": 0,
+            "r": 1,
+            "tag": "a"
+          },
+          {
+            "op": "blocks",
+            "x": 1,
+            "z": 0,
+            "r": 1,
+            "tag": "a"
+          },
+          {
+            "op": "blocks",
+            "x": 1,
+            "z": 0,
+            "r": 1,
+            "tag": "b"
+          },
+          {
+            "op": "blocks",
+            "x": 1,
+            "z": 0,
+            "r": 1
+          },
+          {
+            "op": "add",
+            "x": 5,
+            "z": 0,
+            "r": 1
+          },
+          {
+            "op": "blocks",
+            "x": 5.5,
+            "z": 0,
+            "r": 1,
+            "tag": "a"
+          }
+        ]
+      ],
+      "expect": [
+        false,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "label": "[V6] route by query cell",
+      "fn": "occupancy",
+      "args": [
+        [
+          {
+            "op": "add",
+            "x": 63.5,
+            "z": 10,
+            "r": 1
+          },
+          {
+            "op": "blocks",
+            "x": 64.2,
+            "z": 10,
+            "r": 1
+          },
+          {
+            "op": "blocks",
+            "x": 63.6,
+            "z": 10,
+            "r": 1
+          }
+        ],
+        true
+      ],
+      "expect": [
+        false,
+        true
+      ]
+    },
+    {
+      "label": "[Q4] sampler axis from line",
+      "fn": "scatterInstances",
+      "args": [
+        {
+          "ring": [
+            [
+              0,
+              0
+            ],
+            [
+              20,
+              0
+            ],
+            [
+              20,
+              20
+            ],
+            [
+              0,
+              20
+            ]
+          ],
+          "areaM2": 400,
+          "densityPer100m2": 0.5,
+          "seed": "q",
+          "rng": [
+            0.1,
+            0.2,
+            0.5,
+            0.75,
+            0.25,
+            0
+          ],
+          "yawMode": "aligned",
+          "yawDeg": 90,
+          "axisFrom": {
+            "line": [
+              [
+                0,
+                0
+              ],
+              [
+                20,
+                0
+              ]
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 2,
+          "z": 4,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 15,
+          "z": 5,
+          "yaw": 3.141592653589793
+        }
+      ]
+    },
+    {
+      "label": "[Q5] cell axis from diagonal",
+      "fn": "scatterCellInstances",
+      "args": [
+        {
+          "ring": [
+            [
+              0,
+              0
+            ],
+            [
+              64,
+              0
+            ],
+            [
+              64,
+              64
+            ],
+            [
+              0,
+              64
+            ]
+          ],
+          "cx": 0,
+          "cz": 0,
+          "densityPer100m2": 0.025,
+          "seed": "q",
+          "rng": [
+            0.1,
+            0.2,
+            0.5
+          ],
+          "yawMode": "aligned",
+          "yawDeg": 45,
+          "axisFrom": {
+            "line": [
+              [
+                0,
+                0
+              ],
+              [
+                64,
+                64
+              ]
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 6.4,
+          "z": 12.8,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S1-4] along right",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "side": "right"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 37.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S1-4] along left",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "side": "left"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": -3,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 37.5,
+          "z": -3,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 62.5,
+          "z": -3,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 87.5,
+          "z": -3,
+          "yaw": 4.71238898038469
+        }
+      ]
+    },
+    {
+      "label": "[S1-4] along alternate",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "side": "alternate"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 37.5,
+          "z": -3,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 87.5,
+          "z": -3,
+          "yaw": 4.71238898038469
+        }
+      ]
+    },
+    {
+      "label": "[S1-4] along both",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "side": "both"
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 12.5,
+          "z": -3,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 37.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 37.5,
+          "z": -3,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 62.5,
+          "z": -3,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 87.5,
+          "z": -3,
+          "yaw": 4.71238898038469
+        }
+      ]
+    },
+    {
+      "label": "[S5] cross right",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "side": "right",
+            "yawDeg": 90
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 37.5,
+          "z": 3,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 3.141592653589793
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 3.141592653589793
+        }
+      ]
+    },
+    {
+      "label": "[S5] cross left",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "side": "left",
+            "yawDeg": 90
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": -3,
+          "yaw": 0
+        },
+        {
+          "x": 37.5,
+          "z": -3,
+          "yaw": 0
+        },
+        {
+          "x": 62.5,
+          "z": -3,
+          "yaw": 0
+        },
+        {
+          "x": 87.5,
+          "z": -3,
+          "yaw": 0
+        }
+      ]
+    },
+    {
+      "label": "[S6] corner",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "line": [
+            [
+              0,
+              0
+            ],
+            [
+              10,
+              0
+            ],
+            [
+              10,
+              10
+            ]
+          ],
+          "spacingM": 10,
+          "offsetM": 2,
+          "startM": 5,
+          "seed": "c"
+        }
+      ],
+      "expect": [
+        {
+          "x": 5,
+          "z": 2,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 8,
+          "z": 5,
+          "yaw": 0
+        }
+      ]
+    },
+    {
+      "label": "[S7] start 0",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "startM": 0
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 0,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 25,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 50,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 75,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 100,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S7] start 30",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "startM": 30
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 25,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 50,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 75,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 100,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S8] footprint station",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "footprints": [
+              {
+                "points": [
+                  [
+                    35.5,
+                    1
+                  ],
+                  [
+                    39.5,
+                    1
+                  ],
+                  [
+                    39.5,
+                    5
+                  ],
+                  [
+                    35.5,
+                    5
+                  ]
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S9] pin 1",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "variantCount": 3,
+            "variant": 1
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 1
+        },
+        {
+          "x": 37.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 1
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 1
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 1
+        }
+      ]
+    },
+    {
+      "label": "[S9] pin 7",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "variantCount": 3,
+            "variant": 7
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 2
+        },
+        {
+          "x": 37.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 2
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 2
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 1.5707963267948966,
+          "variant": 2
+        }
+      ]
+    },
+    {
+      "label": "[S12 occupied] along",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "occupied": [
+              {
+                "x": 37.5,
+                "z": 3,
+                "r": 0.5
+              }
+            ],
+            "occupyR": 1
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S12 clear fallback] along",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "occupied": [
+              {
+                "x": 37.9,
+                "z": 3,
+                "r": 0.1
+              }
+            ],
+            "clearM": 1
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S12 point fallback] along",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "occupied": [
+              {
+                "x": 37.9,
+                "z": 3,
+                "r": 0.1
+              }
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 37.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S14 jitter] along",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "jitterM": 5,
+            "jitterRng": [
+              0,
+              1,
+              0.5,
+              0.25,
+              0.5
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 7.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 37.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 85,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S14 zero jitter] along",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "jitterM": 0,
+            "jitterRng": []
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 37.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S14 absent jitter] along",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "jitterRng": []
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 12.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 37.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 62.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        },
+        {
+          "x": 87.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    },
+    {
+      "label": "[S14] ending jitter draw",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "jitterM": 5,
+            "jitterRng": [
+              0,
+              1,
+              0.5,
+              0.25
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "$throws": true
+      }
+    },
+    {
+      "label": "[S] zero length",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "line": [
+              [
+                5,
+                5
+              ],
+              [
+                5,
+                5
+              ]
+            ]
+          }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[S] negative offset",
+      "fn": "strokeStations",
+      "args": [
+        {
+          "$fixture": "ALONG",
+          "$with": {
+            "offsetM": -1
+          }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[S13] seed",
+      "fn": "alongSeed",
+      "args": [
+        "ta_1",
+        2
+      ],
+      "expect": "terrain:along:ta_1:2"
+    },
+    {
+      "label": "[S13] epoch seed",
+      "fn": "alongSeed",
+      "args": [
+        "a",
+        2,
+        5
+      ],
+      "expect": "terrain:along:a:2:e5"
+    },
+    {
+      "label": "[S13] absent epoch",
+      "fn": "alongSeed",
+      "args": [
+        "a",
+        2
+      ],
+      "expect": "terrain:along:a:2"
+    },
+    {
+      "label": "[S11] centre straight",
+      "fn": "strokeCentreLine",
+      "args": [
+        {
+          "points": [
+            [
+              0,
+              0
+            ],
+            [
+              100,
+              0
+            ]
+          ],
+          "style": "straight"
+        }
+      ],
+      "expect": [
+        [
+          0,
+          0
+        ],
+        [
+          100,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "[S11] centre zigzag",
+      "fn": "strokeCentreLine",
+      "args": [
+        {
+          "points": [
+            [
+              0,
+              0
+            ],
+            [
+              100,
+              0
+            ]
+          ],
+          "style": "zigzag"
+        }
+      ],
+      "expect": [
+        [
+          0,
+          0
+        ],
+        [
+          100,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "[2] straight decoration",
+      "fn": "decorateStroke",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            100,
+            0
+          ]
+        ],
+        "straight",
+        10,
+        2
+      ],
+      "expect": {
+        "points": [
+          [
+            0,
+            0
+          ],
+          [
+            100,
+            0
+          ]
+        ],
+        "capped": false,
+        "spacingM": 10
+      }
+    },
+    {
+      "label": "[V3] sample and file survivors",
+      "fn": "occupancy",
+      "args": [
+        [
+          {
+            "op": "add",
+            "x": 2,
+            "z": 4,
+            "r": 0.5
+          },
+          {
+            "op": "sample",
+            "fn": "scatterInstances",
+            "options": {
+              "$fixture": "MIX",
+              "$with": {
+                "occupyR": 1
+              }
+            }
+          },
+          {
+            "op": "blocks",
+            "x": 5,
+            "z": 5,
+            "r": 0.1
+          }
+        ]
+      ],
+      "expect": [
+        [
+          {
+            "x": 5,
+            "z": 5,
+            "yaw": 1.5707963267948966,
+            "variant": 1
+          },
+          {
+            "x": 10,
+            "z": 10,
+            "yaw": 3.141592653589793,
+            "variant": 2
+          },
+          {
+            "x": 15,
+            "z": 6,
+            "yaw": 0,
+            "variant": 0
+          },
+          {
+            "x": 8,
+            "z": 16,
+            "yaw": 0,
+            "variant": 1
+          }
+        ],
+        true
+      ]
+    },
+    {
+      "label": "[V3] clearance fallback",
+      "fn": "scatterInstances",
+      "args": [
+        {
+          "$fixture": "MIX",
+          "$with": {
+            "occupied": [
+              {
+                "x": 2.4,
+                "z": 4,
+                "r": 0.1
+              }
+            ],
+            "clearM": 1
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 5,
+          "z": 5,
+          "yaw": 1.5707963267948966,
+          "variant": 1
+        },
+        {
+          "x": 10,
+          "z": 10,
+          "yaw": 3.141592653589793,
+          "variant": 2
+        },
+        {
+          "x": 15,
+          "z": 6,
+          "yaw": 0,
+          "variant": 0
+        },
+        {
+          "x": 8,
+          "z": 16,
+          "yaw": 0,
+          "variant": 1
+        }
+      ]
+    },
+    {
+      "label": "[V3] point fallback",
+      "fn": "scatterInstances",
+      "args": [
+        {
+          "$fixture": "MIX",
+          "$with": {
+            "occupied": [
+              {
+                "x": 2.4,
+                "z": 4,
+                "r": 0.1
+              }
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 2,
+          "z": 4,
+          "yaw": 0,
+          "variant": 0
+        },
+        {
+          "x": 5,
+          "z": 5,
+          "yaw": 1.5707963267948966,
+          "variant": 1
+        },
+        {
+          "x": 10,
+          "z": 10,
+          "yaw": 3.141592653589793,
+          "variant": 2
+        },
+        {
+          "x": 15,
+          "z": 6,
+          "yaw": 0,
+          "variant": 0
+        },
+        {
+          "x": 8,
+          "z": 16,
+          "yaw": 0,
+          "variant": 1
+        }
+      ]
+    },
+    {
+      "label": "[V4] spacing precedes occupancy",
+      "fn": "occupancy",
+      "args": [
+        [
+          {
+            "op": "add",
+            "x": 1,
+            "z": 1,
+            "r": 0.5
+          },
+          {
+            "op": "sample",
+            "fn": "scatterInstances",
+            "options": {
+              "ring": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ]
+              ],
+              "areaM2": 100,
+              "densityPer100m2": 5,
+              "seed": "s",
+              "triesPerPoint": 1,
+              "minSpacingM": 4,
+              "occupyR": 1,
+              "rng": [
+                0.1,
+                0.1,
+                0,
+                0.3,
+                0.3,
+                0,
+                0.5,
+                0.1,
+                0.5,
+                0.8,
+                0.4,
+                0.25,
+                0.1,
+                0.5,
+                0
+              ]
+            }
+          },
+          {
+            "op": "blocks",
+            "x": 1,
+            "z": 1,
+            "r": 0.1
+          },
+          {
+            "op": "blocks",
+            "x": 3,
+            "z": 3,
+            "r": 0.1
+          }
+        ]
+      ],
+      "expect": [
+        [
+          {
+            "x": 3,
+            "z": 3,
+            "yaw": 0
+          },
+          {
+            "x": 8,
+            "z": 4,
+            "yaw": 1.5707963267948966
+          }
+        ],
+        true,
+        true
+      ]
+    },
+    {
+      "label": "[V5] only painted survivors occupy",
+      "fn": "occupancy",
+      "args": [
+        [
+          {
+            "op": "sample",
+            "fn": "scatterCellInstances",
+            "options": {
+              "ring": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  20,
+                  0
+                ],
+                [
+                  20,
+                  20
+                ],
+                [
+                  0,
+                  20
+                ]
+              ],
+              "cx": 0,
+              "cz": 0,
+              "densityPer100m2": 0.05,
+              "seed": "v5",
+              "rng": [
+                0.1,
+                0.1,
+                0,
+                0.5,
+                0.5,
+                0
+              ],
+              "occupyR": 1
+            }
+          },
+          {
+            "op": "blocks",
+            "x": 6.4,
+            "z": 6.4,
+            "r": 0.1
+          },
+          {
+            "op": "blocks",
+            "x": 32,
+            "z": 32,
+            "r": 0.1
+          }
+        ]
+      ],
+      "expect": [
+        [
+          {
+            "x": 6.4,
+            "z": 6.4,
+            "yaw": 0
+          }
+        ],
+        true,
+        false
+      ]
+    },
+    {
+      "label": "[V7] row identity through successive samplers",
+      "fn": "occupancy",
+      "args": [
+        [
+          {
+            "op": "sample",
+            "fn": "scatterInstances",
+            "options": {
+              "ring": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ]
+              ],
+              "areaM2": 100,
+              "densityPer100m2": 2,
+              "seed": "same",
+              "triesPerPoint": 1,
+              "rng": [
+                0.3,
+                0.3,
+                0,
+                0.35,
+                0.3,
+                0
+              ],
+              "occupyR": 1
+            }
+          },
+          {
+            "op": "sample",
+            "fn": "scatterInstances",
+            "options": {
+              "ring": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ]
+              ],
+              "areaM2": 100,
+              "densityPer100m2": 1,
+              "seed": "other",
+              "triesPerPoint": 1,
+              "rng": [
+                0.32,
+                0.3,
+                0
+              ],
+              "occupyR": 1
+            }
+          },
+          {
+            "op": "sample",
+            "fn": "scatterInstances",
+            "options": {
+              "ring": [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ]
+              ],
+              "areaM2": 100,
+              "densityPer100m2": 1,
+              "seed": "other",
+              "triesPerPoint": 1,
+              "rng": [
+                0.32,
+                0.3,
+                0
+              ],
+              "occupyR": 1,
+              "occupyTag": "same"
+            }
+          }
+        ]
+      ],
+      "expect": [
+        [
+          {
+            "x": 3,
+            "z": 3,
+            "yaw": 0
+          },
+          {
+            "x": 3.5,
+            "z": 3,
+            "yaw": 0
+          }
+        ],
+        [],
+        [
+          {
+            "x": 3.2,
+            "z": 3,
+            "yaw": 0
+          }
+        ]
+      ]
+    },
+    {
+      "label": "[X4] edge survivors are filed",
+      "fn": "occupancy",
+      "args": [
+        [
+          {
+            "op": "add",
+            "x": 9,
+            "z": 0.5,
+            "r": 0.5
+          },
+          {
+            "op": "sample",
+            "fn": "scatterEdgeInstances",
+            "options": {
+              "$fixture": "EDGE",
+              "$with": {
+                "occupyR": 1
+              }
+            },
+            "ring": {
+              "$fixture": "RECT"
+            }
+          },
+          {
+            "op": "blocks",
+            "x": 3.5,
+            "z": 1,
+            "r": 0.1
+          }
+        ]
+      ],
+      "expect": [
+        [
+          {
+            "x": 3.5,
+            "z": 1,
+            "yaw": 4.71238898038469
+          },
+          {
+            "x": 6.5,
+            "z": 3,
+            "yaw": 1.5707963267948966
+          },
+          {
+            "x": 1,
+            "z": 3.5,
+            "yaw": 0
+          }
+        ],
+        true
+      ]
+    },
+    {
+      "label": "[D1] jagged count and arc coordinates",
+      "fn": "decorateStroke",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            100,
+            0
+          ]
+        ],
+        "jagged",
+        10,
+        2
+      ],
+      "expect": {
+        "pointCount": 12,
+        "xs": [
+          0,
+          5,
+          15,
+          25,
+          35,
+          45,
+          55,
+          65,
+          75,
+          85,
+          95,
+          100
+        ],
+        "spacingM": 10,
+        "capped": false
+      }
+    },
+    {
+      "label": "[D1] jagged nonmultiple spacing",
+      "fn": "decorateStroke",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            100,
+            0
+          ]
+        ],
+        "jagged",
+        30,
+        2
+      ],
+      "expect": {
+        "xs": [
+          0,
+          15,
+          45,
+          75,
+          100
+        ]
+      }
+    },
+    {
+      "label": "[D4] decoration budget",
+      "fn": "decorateStroke",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10000,
+            0
+          ]
+        ],
+        "jagged",
+        2,
+        2
+      ],
+      "expect": {
+        "pointCount": 1024,
+        "spacingM": 9.784735812133073,
+        "capped": true
+      }
+    },
+    {
+      "label": "[D5] wavy sample coordinates",
+      "fn": "decorateStroke",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            100,
+            0
+          ]
+        ],
+        "wavy",
+        10,
+        2
+      ],
+      "expect": {
+        "pointCount": 35,
+        "xs": [
+          0,
+          3,
+          6,
+          9,
+          12,
+          15,
+          18,
+          21,
+          24,
+          27,
+          30,
+          33,
+          36,
+          39,
+          42,
+          45,
+          48,
+          51,
+          54,
+          57,
+          60,
+          63,
+          66,
+          69,
+          72,
+          75,
+          78,
+          81,
+          84,
+          87,
+          90,
+          93,
+          96,
+          99,
+          100
+        ],
+        "capped": false
+      }
+    },
+    {
+      "label": "[X10] exactly two yaw draws on opposite edges",
+      "fn": "scatterEdgeInstances",
+      "args": [
+        {
+          "$fixture": "RECT"
+        },
+        {
+          "$fixture": "EDGE",
+          "$with": {
+            "sides": "opposite",
+            "rng": [
+              0.5,
+              0.5
+            ]
+          }
+        }
+      ],
+      "expect": [
+        {
+          "x": 3.5,
+          "z": 1,
+          "yaw": 4.71238898038469
+        },
+        {
+          "x": 6.5,
+          "z": 3,
+          "yaw": 1.5707963267948966
+        }
+      ]
+    }
+  ]
+}

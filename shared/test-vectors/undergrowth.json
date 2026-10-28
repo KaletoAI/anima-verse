@@ -1,0 +1,769 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_undergrowth.mjs",
+  "fixtures": {},
+  "cases": [
+    {
+      "label": "[A] cells [0, 0, 0]",
+      "fn": "wantedUndergrowthCells",
+      "args": [
+        0,
+        0,
+        0
+      ],
+      "expect": [
+        "0,0"
+      ]
+    },
+    {
+      "label": "[A] cells [63.9, 64, 0]",
+      "fn": "wantedUndergrowthCells",
+      "args": [
+        63.9,
+        64,
+        0
+      ],
+      "expect": [
+        "0,1"
+      ]
+    },
+    {
+      "label": "[A] cells [-0.1, -64, 0]",
+      "fn": "wantedUndergrowthCells",
+      "args": [
+        -0.1,
+        -64,
+        0
+      ],
+      "expect": [
+        "-1,-1"
+      ]
+    },
+    {
+      "label": "[A] cells [32, 32, -1]",
+      "fn": "wantedUndergrowthCells",
+      "args": [
+        32,
+        32,
+        -1
+      ],
+      "expect": []
+    },
+    {
+      "label": "[A] cells [32, 32, 0]",
+      "fn": "wantedUndergrowthCells",
+      "args": [
+        32,
+        32,
+        0
+      ],
+      "expect": [
+        "0,0"
+      ]
+    },
+    {
+      "label": "[A1] nearest-first centre window",
+      "fn": "wantedUndergrowthCells",
+      "args": [
+        32,
+        32
+      ],
+      "expect": [
+        "0,0",
+        "-1,0",
+        "0,-1",
+        "0,1",
+        "1,0",
+        "-1,-1",
+        "-1,1",
+        "1,-1",
+        "1,1",
+        "-2,0",
+        "0,-2",
+        "0,2",
+        "2,0",
+        "-1,-2",
+        "-1,2",
+        "-2,-1",
+        "-2,1",
+        "1,-2",
+        "1,2",
+        "2,-1",
+        "2,1"
+      ]
+    },
+    {
+      "label": "[B1] area and cell seed",
+      "fn": "undergrowthCellSeed",
+      "args": [
+        "ta_1",
+        -2,
+        3
+      ],
+      "expect": "terrain:undergrowth:ta_1:-2,3"
+    },
+    {
+      "label": "[C1] density 0.6",
+      "fn": "undergrowthDensityPer100m2",
+      "args": [
+        0.6
+      ],
+      "expect": 48
+    },
+    {
+      "label": "[C1] density 0.3",
+      "fn": "undergrowthDensityPer100m2",
+      "args": [
+        0.3
+      ],
+      "expect": 24
+    },
+    {
+      "label": "[C1] density 1",
+      "fn": "undergrowthDensityPer100m2",
+      "args": [
+        1
+      ],
+      "expect": 80
+    },
+    {
+      "label": "[C1] density 0",
+      "fn": "undergrowthDensityPer100m2",
+      "args": [
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[C1] density -1",
+      "fn": "undergrowthDensityPer100m2",
+      "args": [
+        -1
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[C1] density 5",
+      "fn": "undergrowthDensityPer100m2",
+      "args": [
+        5
+      ],
+      "expect": 80
+    },
+    {
+      "label": "[C2] cell count 0.6",
+      "fn": "undergrowthCellCount",
+      "args": [
+        0.6
+      ],
+      "expect": 1966
+    },
+    {
+      "label": "[C2] cell count 0.3",
+      "fn": "undergrowthCellCount",
+      "args": [
+        0.3
+      ],
+      "expect": 983
+    },
+    {
+      "label": "[C2] cell count 1",
+      "fn": "undergrowthCellCount",
+      "args": [
+        1
+      ],
+      "expect": 3277
+    },
+    {
+      "label": "[C2] cell count 0",
+      "fn": "undergrowthCellCount",
+      "args": [
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[C2] cell count -1",
+      "fn": "undergrowthCellCount",
+      "args": [
+        -1
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[C2] cell count 5",
+      "fn": "undergrowthCellCount",
+      "args": [
+        5
+      ],
+      "expect": 3277
+    },
+    {
+      "label": "[E1] height 0",
+      "fn": "undergrowthHeight",
+      "args": [
+        0
+      ],
+      "expect": 0.24
+    },
+    {
+      "label": "[E1] height 3.141592653589793",
+      "fn": "undergrowthHeight",
+      "args": [
+        3.141592653589793
+      ],
+      "expect": 0.33
+    },
+    {
+      "label": "[E1] height 4.71238898038469",
+      "fn": "undergrowthHeight",
+      "args": [
+        4.71238898038469
+      ],
+      "expect": 0.375
+    },
+    {
+      "label": "[E1] height 6.283185307179586",
+      "fn": "undergrowthHeight",
+      "args": [
+        6.283185307179586
+      ],
+      "expect": 0.24
+    },
+    {
+      "label": "[E2] share 0",
+      "fn": "undergrowthShare",
+      "args": [
+        0
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[E2] share 30",
+      "fn": "undergrowthShare",
+      "args": [
+        30
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[E2] share 37.5",
+      "fn": "undergrowthShare",
+      "args": [
+        37.5
+      ],
+      "expect": 0.75
+    },
+    {
+      "label": "[E2] share 45",
+      "fn": "undergrowthShare",
+      "args": [
+        45
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[E2] share 52.5",
+      "fn": "undergrowthShare",
+      "args": [
+        52.5
+      ],
+      "expect": 0.25
+    },
+    {
+      "label": "[E2] share 60",
+      "fn": "undergrowthShare",
+      "args": [
+        60
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[E2] share 60.001",
+      "fn": "undergrowthShare",
+      "args": [
+        60.001
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[E3] instance zero 30",
+      "fn": "undergrowthVisible",
+      "args": [
+        0,
+        30
+      ],
+      "expect": true
+    },
+    {
+      "label": "[E3] instance zero 59.9",
+      "fn": "undergrowthVisible",
+      "args": [
+        0,
+        59.9
+      ],
+      "expect": true
+    },
+    {
+      "label": "[E3] instance zero 60",
+      "fn": "undergrowthVisible",
+      "args": [
+        0,
+        60
+      ],
+      "expect": false
+    },
+    {
+      "label": "[E3] instance zero 60.001",
+      "fn": "undergrowthVisible",
+      "args": [
+        0,
+        60.001
+      ],
+      "expect": false
+    },
+    {
+      "label": "[F6b] tint 0",
+      "fn": "undergrowthTint",
+      "args": [
+        0
+      ],
+      "expect": [
+        1.24,
+        0.9,
+        0.95
+      ]
+    },
+    {
+      "label": "[F6b] tint 1",
+      "fn": "undergrowthTint",
+      "args": [
+        1
+      ],
+      "expect": [
+        0.76,
+        1.1,
+        1.05
+      ]
+    },
+    {
+      "label": "[F6b] tint 0.5",
+      "fn": "undergrowthTint",
+      "args": [
+        0.5
+      ],
+      "expect": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "label": "[F6b] tint 0.25",
+      "fn": "undergrowthTint",
+      "args": [
+        0.25
+      ],
+      "expect": [
+        1.12,
+        0.95,
+        0.975
+      ]
+    },
+    {
+      "label": "[F6b] tint 0.75",
+      "fn": "undergrowthTint",
+      "args": [
+        0.75
+      ],
+      "expect": [
+        0.88,
+        1.05,
+        1.025
+      ]
+    },
+    {
+      "label": "[F6b] tint -1",
+      "fn": "undergrowthTint",
+      "args": [
+        -1
+      ],
+      "expect": [
+        1.24,
+        0.9,
+        0.95
+      ]
+    },
+    {
+      "label": "[F6b] tint 2",
+      "fn": "undergrowthTint",
+      "args": [
+        2
+      ],
+      "expect": [
+        0.76,
+        1.1,
+        1.05
+      ]
+    },
+    {
+      "label": "[F6d] origin hash is zero",
+      "fn": "undergrowthShade",
+      "args": [
+        0,
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[D] named texel [0, 31]",
+      "fn": "undergrowthTexel",
+      "args": [
+        0,
+        31
+      ],
+      "expect": [
+        108,
+        154,
+        139,
+        255
+      ]
+    },
+    {
+      "label": "[D] named texel [0, 32]",
+      "fn": "undergrowthTexel",
+      "args": [
+        0,
+        32
+      ],
+      "expect": [
+        108,
+        154,
+        139,
+        255
+      ]
+    },
+    {
+      "label": "[D] named texel [0, 35]",
+      "fn": "undergrowthTexel",
+      "args": [
+        0,
+        35
+      ],
+      "expect": [
+        142,
+        142,
+        142,
+        0
+      ]
+    },
+    {
+      "label": "[D] named texel [0, 29, 3]",
+      "fn": "undergrowthTexel",
+      "args": [
+        0,
+        29,
+        3
+      ],
+      "expect": 216
+    },
+    {
+      "label": "[D] named texel [0, 24]",
+      "fn": "undergrowthTexel",
+      "args": [
+        0,
+        24
+      ],
+      "expect": [
+        179,
+        128,
+        145,
+        255
+      ]
+    },
+    {
+      "label": "[D] named texel [0, 25]",
+      "fn": "undergrowthTexel",
+      "args": [
+        0,
+        25
+      ],
+      "expect": [
+        179,
+        128,
+        145,
+        255
+      ]
+    },
+    {
+      "label": "[D] named texel [63, 0]",
+      "fn": "undergrowthTexel",
+      "args": [
+        63,
+        0
+      ],
+      "expect": [
+        202,
+        202,
+        202,
+        0
+      ]
+    },
+    {
+      "label": "[D5] row ink 0",
+      "fn": "undergrowthRowInk",
+      "args": [
+        0
+      ],
+      "expect": 51.2583,
+      "eps": 0.15
+    },
+    {
+      "label": "[D5] row ink 46",
+      "fn": "undergrowthRowInk",
+      "args": [
+        46
+      ],
+      "expect": 2.22,
+      "eps": 0.05
+    },
+    {
+      "label": "[D5] row ink 58",
+      "fn": "undergrowthRowInk",
+      "args": [
+        58
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[D5] row ink 59",
+      "fn": "undergrowthRowInk",
+      "args": [
+        59
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[D5] row ink 60",
+      "fn": "undergrowthRowInk",
+      "args": [
+        60
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[D5] row ink 61",
+      "fn": "undergrowthRowInk",
+      "args": [
+        61
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[D5] row ink 62",
+      "fn": "undergrowthRowInk",
+      "args": [
+        62
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[D5] row ink 63",
+      "fn": "undergrowthRowInk",
+      "args": [
+        63
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[F1] star positions",
+      "fn": "undergrowthGeometry",
+      "args": [
+        0.33
+      ],
+      "expect": {
+        "positions": [
+          [
+            -0.20625,
+            0,
+            0
+          ],
+          [
+            0.20625,
+            0,
+            0
+          ],
+          [
+            0.20625,
+            0.33,
+            0
+          ],
+          [
+            -0.20625,
+            0.33,
+            0
+          ],
+          [
+            -0.1183001,
+            0,
+            0.1689501
+          ],
+          [
+            0.1183001,
+            0,
+            -0.1689501
+          ],
+          [
+            0.1183001,
+            0.33,
+            -0.1689501
+          ],
+          [
+            -0.1183001,
+            0.33,
+            0.1689501
+          ],
+          [
+            0.0968285,
+            0,
+            0.1821079
+          ],
+          [
+            -0.0968285,
+            0,
+            -0.1821079
+          ],
+          [
+            -0.0968285,
+            0.33,
+            -0.1821079
+          ],
+          [
+            0.0968285,
+            0.33,
+            0.1821079
+          ]
+        ]
+      },
+      "eps": 1e-06
+    },
+    {
+      "label": "[F1b] upward normals",
+      "fn": "undergrowthGeometry",
+      "args": [
+        0.33
+      ],
+      "expect": {
+        "normals": [
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ]
+        ]
+      }
+    },
+    {
+      "label": "[F1c] double winding",
+      "fn": "undergrowthGeometry",
+      "args": [
+        0.33
+      ],
+      "expect": {
+        "indices": [
+          0,
+          1,
+          2,
+          0,
+          2,
+          3,
+          4,
+          5,
+          6,
+          4,
+          6,
+          7,
+          8,
+          9,
+          10,
+          8,
+          10,
+          11,
+          0,
+          2,
+          1,
+          0,
+          3,
+          2,
+          4,
+          6,
+          5,
+          4,
+          7,
+          6,
+          8,
+          10,
+          9,
+          8,
+          11,
+          10
+        ]
+      }
+    }
+  ]
+}

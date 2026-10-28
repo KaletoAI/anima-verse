@@ -7,6 +7,22 @@
  * not a plain number in `client3d/src/scene/undergrowth.ts` — the cell raster,
  * the blade texture, the crossed quads and the field that grows them.
  *
+ * E4 SHARED VECTORS: undergrowth.json contains A/B/C/E and finite F/D
+ * arithmetic. The geometry adapter serializes positions/normals as triples
+ * and indices as integers; no Three resource appears in JSON. F1's half-width
+ * 0.33*1.25/2 = 0.20625 is turned by 0/55/118 degrees; the other three
+ * vertices follow by sign reversal and y=0.33. F1b has twelve (0,1,0) normals;
+ * F1c has six forward triangles followed by their six reversed windings.
+ * [F6d] at (0,0) the float32 centimetre coordinates are zero; the xor key
+ * and every instanceHash stage are zero, so the shade is exactly zero.
+ * [A1] full cell order at (32,32) follows squared square-to-point distances:
+ * 0, 32^2, 2*32^2, 96^2, 96^2+32^2. Sort ties lexically by key. The four
+ * (abs(cx),abs(cz))=(2,2) corners are 96*sqrt(2)>128 away and excluded.
+ * Named texels project RGBA or one channel from the real texture; row ink
+ * sums alpha/255 for that row. D2..D7/D10 derive the expected byte values;
+ * rows 58..63 are each empty by D6. Material, field, drift, non-finite and
+ * mutation checks stay inline.
+ *
  * Usage:  node client3d/scripts/smoke_undergrowth.mjs
  *
  * WHERE THESE CASES COME FROM. Sections (E) and part of (C) are the old
@@ -617,6 +633,8 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
 
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
 const LOD_SRC = join(ROOT, 'client3d/src/scene/scatterLod.ts');
 const UG_SRC = join(ROOT, 'client3d/src/scene/undergrowth.ts');
@@ -783,6 +801,30 @@ function offsets(points, cx, cz, cellM) {
 async function main() {
   const lod = await loadLod();
   const field = await loadField();
+  const pixels = field.undergrowthTexturePixels();
+  const geometry = (h) => {
+    const geo = field.undergrowthGeometry(h);
+    try {
+      const triples = (key) => {
+        const a = geo.getAttribute(key);
+        return Array.from({ length: a.count }, (_, i) => [a.getX(i), a.getY(i), a.getZ(i)]);
+      };
+      return { positions: triples('position'), normals: triples('normal'), indices: Array.from(geo.index.array) };
+    } finally { geo.dispose(); }
+  };
+  const vectors = runVectors(loadVectors('undergrowth'), {
+    ...lod, ...field, undergrowthGeometry: geometry,
+    undergrowthTexel: (r, c, channel) => {
+      const offset = (r * 64 + c) * 4;
+      return channel === undefined ? Array.from(pixels.slice(offset, offset + 4)) : pixels[offset + channel];
+    },
+    undergrowthRowInk: (r) => {
+      let ink = 0;
+      for (let c = 0; c < 64; c++) ink += pixels[(r * 64 + c) * 4 + 3] / 255;
+      return ink;
+    },
+  });
+  passed += vectors.passed; failed += vectors.failed;
   const {
     UNDERGROWTH_CELL_M, UNDERGROWTH_CELL_RADIUS_M, UNDERGROWTH_CULL_M,
     UNDERGROWTH_DENSITY_PER_M2, UNDERGROWTH_FADE_M, UNDERGROWTH_H_MAX,
@@ -809,10 +851,6 @@ async function main() {
   check('A the key is "cx,cz"', undergrowthCellKey(-2, 3), '-2,3');
   // A cell owns its LOWER edge (`Math.floor`), which a radius of 0 shows
   // directly: it answers with the anchor's own cell and nothing else.
-  check('A a point is in the cell that starts at its own floor',
-    [wantedUndergrowthCells(0, 0, 0), wantedUndergrowthCells(63.9, 64, 0),
-      wantedUndergrowthCells(-0.1, -64, 0)],
-    [['0,0'], ['0,1'], ['-1,-1']]);
 
   // (A1) the anchor in the middle of its cell
   const midCell = wantedUndergrowthCells(32, 32);
@@ -854,14 +892,9 @@ async function main() {
     [0, Infinity, 'an infinite anchor']]) {
     check(`A4 ${name} holds no cells`, wantedUndergrowthCells(x, z), []);
   }
-  check('A4 a negative radius holds no cells',
-    wantedUndergrowthCells(32, 32, -1), []);
-  check('A4 a radius of 0 is the anchor\'s own cell and nothing else',
-    wantedUndergrowthCells(32, 32, 0), ['0,0']);
 
   console.log('\n(B) the seed — one per (area, cell)');
-  check('B1 the seed names the area AND the cell',
-    undergrowthCellSeed('ta_1', -2, 3), 'terrain:undergrowth:ta_1:-2,3');
+
   check('B1 …and is not the authored scatter\'s',
     undergrowthCellSeed('ta_1', 0, 0) !== scatterSeed('ta_1', 0), true);
 
@@ -901,13 +934,7 @@ async function main() {
   console.log('\n(C) how many — the density, per cell');
   check('C1 the base density is 0.80 tufts per square metre',
     UNDERGROWTH_DENSITY_PER_M2, 0.80);
-  check('C1 the share becomes 80 * value per 100 m2',
-    [undergrowthDensityPer100m2(0.6), undergrowthDensityPer100m2(0.3),
-      undergrowthDensityPer100m2(1)], [48, 24, 80]);
-  check('C2 a full cell of the seeded forest carries 1966 tufts',
-    undergrowthCellCount(0.6), 1966);
-  check('C2 …of the seeded grass 983, at full value 3277',
-    [undergrowthCellCount(0.3), undergrowthCellCount(1)], [983, 3277]);
+
   check('C2 …and the sampler really places 1966 of them',
     cell00.length, 1966);
   check('C3 the ceiling is 8000 per cell', UNDERGROWTH_MAX_PER_CELL, 8000);
@@ -918,8 +945,6 @@ async function main() {
     check(`C4 a value of ${name} grows nothing`,
       [undergrowthCellCount(bad), undergrowthDensityPer100m2(bad)], [0, 0]);
   }
-  check('C4 a hand-edited 5 is clamped to full density, not multiplied',
-    undergrowthCellCount(5), 3277);
 
   console.log('\n(D) the blade texture — a pure pixel function');
   const N = UNDERGROWTH_TEX_SIZE;
@@ -929,27 +954,16 @@ async function main() {
     [N, UNDERGROWTH_BLADES], [64, 9]);
   check('D1 …and comes back as RGBA bytes',
     [tex.length, tex instanceof Uint8ClampedArray], [64 * 64 * 4, true]);
-  check('D2 a blade is opaque down its middle',
-    [tex[at(0, 31) + 3], tex[at(0, 32) + 3]], [255, 255]);
-  check('D3 …and there is nothing at all between two blades',
-    tex[at(0, 35) + 3], 0);
-  check('D4 the blade edge is antialiased, not a hard step',
-    tex[at(0, 29) + 3], 216);
+
   const rowInk = (r) => {
     let sum = 0;
     for (let c = 0; c < N; c += 1) sum += tex[at(r, c) + 3] / 255;
     return sum;
   };
-  check('D5 the foot row carries 51.26 texels of ink', rowInk(0), 51.2583, 0.15);
-  check('D5 …and the row at 46.5 only 2.22 — the taper, measured',
-    rowInk(46), 2.22, 0.05);
+
   let topInk = 0;
   for (let r = 58; r < N; r += 1) topInk += rowInk(r);
-  check('D6 the top tenth of the texture is empty', topInk, 0);
-  check('D7 where no blade stands the colour is the row\'s plain grey',
-    [tex[at(0, 35)], tex[at(0, 35) + 1], tex[at(0, 35) + 2],
-      tex[at(63, 0)], tex[at(63, 0) + 1], tex[at(63, 0) + 2]],
-    [142, 142, 142, 202, 202, 202]);
+
   let footInk = 0;
   for (let r = 0; r < 10; r += 1) footInk += rowInk(r);
   check('D8 the ten lowest rows carry exactly 460.23 texels of ink',
@@ -998,12 +1012,10 @@ async function main() {
       UNDERGROWTH_BLADE_TINTS[3][2] / 1.05 + UNDERGROWTH_BLADE_TINTS[4][2] / 0.95],
     [2, 2, 2], 1e-12);
   const rgb = (t, r, c) => [t[at(r, c)], t[at(r, c) + 1], t[at(r, c) + 2]];
-  check('D10 the brown blade\'s root texels really are brown (179/128/145)',
-    [rgb(tex, 0, 24), rgb(tex, 0, 25)], [[179, 128, 145], [179, 128, 145]]);
+
   check('D10 …i.e. red 51 above green, on an opaque texel',
     [rgb(tex, 0, 24)[0] - rgb(tex, 0, 24)[1], tex[at(0, 24) + 3]], [51, 255]);
-  check('D10 the green blade\'s root texels really are green (108/154/139)',
-    [rgb(tex, 0, 31), rgb(tex, 0, 32)], [[108, 154, 139], [108, 154, 139]]);
+
   check('D10 …i.e. green 46 above red, the other way round',
     [rgb(tex, 0, 31)[1] - rgb(tex, 0, 31)[0], tex[at(0, 31) + 3]], [46, 255]);
 
@@ -1064,28 +1076,17 @@ async function main() {
     [UNDERGROWTH_H_MIN, UNDERGROWTH_H_MAX], [0.24, 0.42]);
   check('E …which is exactly 60 % of the 0.4 .. 0.7 m of the round before',
     [UNDERGROWTH_H_MIN / 0.4, UNDERGROWTH_H_MAX / 0.7], [0.6, 0.6], 1e-12);
-  check('E1 yaw 0 is the shortest blade', undergrowthHeight(0), 0.24);
-  check('E1 yaw pi is the middle — the geometry\'s own height',
-    undergrowthHeight(Math.PI), 0.33);
-  check('E1 yaw 1.5pi', undergrowthHeight(1.5 * Math.PI), 0.375);
-  check('E1 a full turn is the same blade again', undergrowthHeight(TAU), 0.24);
+
   for (const [bad, name] of [[NaN, 'NaN'], ['x', 'a string'],
     [undefined, 'undefined']]) {
     check(`E1 a yaw of ${name} is the shortest blade, never a NaN scale`,
       undergrowthHeight(bad), 0.24);
   }
-  check('E2 share at 0 m is 1', undergrowthShare(0), 1);
-  check('E2 …at 30 m still 1', undergrowthShare(30), 1);
-  check('E2 …at 37.5 m 0.75', undergrowthShare(37.5), 0.75);
-  check('E2 …at 45 m half the carpet', undergrowthShare(45), 0.5);
-  check('E2 …at 52.5 m a quarter', undergrowthShare(52.5), 0.25);
-  check('E2 …and at 60 m nothing at all', undergrowthShare(60), 0);
-  check('E2 past the cull distance nothing', undergrowthShare(60.001), 0);
+
   check('E2 a NaN distance draws nothing', undergrowthShare(NaN), 0);
   check('E2 at 45 m the props draw everything while the carpet is halved',
     [instanceShare(45, SCATTER_LOD_DEFAULTS), undergrowthShare(45)], [1, 0.5]);
-  check('E2 …and at 60 m they are at 0.85 while it is gone',
-    [instanceShare(60, SCATTER_LOD_DEFAULTS), undergrowthShare(60)], [0.85, 0]);
+
   const grown = (d, n = 1000) => {
     const out = [];
     for (let i = 0; i < n; i += 1) if (undergrowthVisible(i, d)) out.push(i);
@@ -1104,24 +1105,13 @@ async function main() {
     check(`E3 ${d} m draws ${1000 * share} of 1000, within 5 % (got ${n})`,
       Math.abs(n - 1000 * share) <= 0.05 * 1000 * share, true);
   }
-  check('E3 tuft 0 survives as long as anything of the layer does',
-    [undergrowthVisible(0, 59.9), undergrowthVisible(0, 60)], [true, false]);
 
   console.log('\n(F) the look — a star of quads with an alpha cut');
   check('F the geometry stands at the middle of the height span',
     UNDERGROWTH_H_REF_M, 0.33);
   const geo = undergrowthGeometry(UNDERGROWTH_H_REF_M);
   const gp = geo.getAttribute('position');
-  check('F1 three cards: twelve vertices', gp.count, 12);
-  check('F1 card 0 spans +-0.20625 m at z = 0',
-    [gp.getX(0), gp.getY(0), gp.getZ(0), gp.getX(1)],
-    [-0.20625, 0, 0, 0.20625], 1e-6);
-  check('F1 …card 1 is it turned by 55 degrees',
-    [gp.getX(4), gp.getY(4), gp.getZ(4)],
-    [-0.1183001, 0, 0.1689501], 1e-6);
-  check('F1 …and card 2 by 118 — past the right angle, into the third plane',
-    [gp.getX(8), gp.getY(8), gp.getZ(8)],
-    [0.0968285, 0, 0.1821079], 1e-6);
+
   geo.computeBoundingBox();
   check('F1 the tuft STANDS on the ground (B16): y runs 0 .. 0.33',
     [geo.boundingBox.min.y, geo.boundingBox.max.y], [0, 0.33], 1e-6);
@@ -1142,11 +1132,9 @@ async function main() {
   for (let i = 0; i < gn.count; i += 1) {
     upNormals.push([gn.getX(i), gn.getY(i), gn.getZ(i)]);
   }
-  check('F1b every normal points STRAIGHT UP, not out of the card',
-    upNormals, new Array(12).fill([0, 1, 0]));
+
   const idx = geo.getIndex();
-  check('F1c …and every card is wound both ways: 36 indices, not 18',
-    idx.count, 36);
+
   const tri = (n) => [idx.getX(n * 3), idx.getX(n * 3 + 1), idx.getX(n * 3 + 2)];
   const rev = (t) => [t[0], t[2], t[1]];
   check('F1c …the second eighteen being the first six triangles reversed',
@@ -1220,23 +1208,12 @@ async function main() {
     [UNDERGROWTH_TINT_A[0] + UNDERGROWTH_TINT_B[0],
       UNDERGROWTH_TINT_A[1] + UNDERGROWTH_TINT_B[1],
       UNDERGROWTH_TINT_A[2] + UNDERGROWTH_TINT_B[2]], [2, 2, 2], 1e-12);
-  check('F6b h = 0 is the dark end', undergrowthTint(0), [...UNDERGROWTH_TINT_A],
-    1e-12);
-  check('F6b h = 1 is the bright end', undergrowthTint(1),
-    [...UNDERGROWTH_TINT_B], 1e-12);
-  check('F6b h = 0.5 is the kind\'s own colour, untouched',
-    undergrowthTint(0.5), [1, 1, 1], 1e-12);
-  check('F6b h = 0.25 and h = 0.75 sit on the same line',
-    [undergrowthTint(0.25), undergrowthTint(0.75)],
-    [[1.12, 0.95, 0.975], [0.88, 1.05, 1.025]], 1e-12);
+
   for (const [bad, name] of [[NaN, 'NaN'], ['x', 'a string'],
     [undefined, 'undefined']]) {
     check(`F6b a shade of ${name} is the middle, never a NaN colour`,
       undergrowthTint(bad), [1, 1, 1], 1e-12);
   }
-  check('F6b …and one outside [0, 1] is CLAMPED to an end, not extrapolated',
-    [undergrowthTint(-1), undergrowthTint(2)],
-    [[...UNDERGROWTH_TINT_A], [...UNDERGROWTH_TINT_B]], 1e-12);
 
   // (F6c) no drift — measured over a grid of a thousand standing places
   const meanTint = (tintOf, shadeOf) => {

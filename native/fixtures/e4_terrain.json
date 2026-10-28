@@ -1,0 +1,98 @@
+{
+  "areas": [
+    {
+      "id": "area-stroke",
+      "kind": "path",
+      "z_order": 2,
+      "polygon": [
+        [
+          16,
+          27
+        ],
+        [
+          96,
+          27
+        ],
+        [
+          96,
+          33
+        ],
+        [
+          16,
+          33
+        ]
+      ],
+      "meta": {
+        "stroke": {
+          "points": [
+            [
+              16,
+              30
+            ],
+            [
+              96,
+              30
+            ]
+          ],
+          "width_m": 6,
+          "style": "straight"
+        },
+        "along": [
+          {
+            "model": "/assets/props/broadleaf/model.glb",
+            "variants": {
+              "full": "/assets/props/broadleaf/model.glb?tier=full",
+              "low": "/assets/props/broadleaf/model.glb?tier=low"
+            },
+            "prop_height_m": 2,
+            "spacing_m": 20,
+            "offset_m": 5,
+            "side": "both",
+            "yaw_mode": "aligned",
+            "yaw_deg": 90
+          }
+        ],
+        "scatter": [
+          {
+            "place": "edge",
+            "model": "/assets/props/broadleaf/model.glb",
+            "model_variants": [
+              {
+                "full": "/assets/props/broadleaf/model.glb?tier=full",
+                "low": "/assets/props/broadleaf/model.glb?tier=low"
+              },
+              {
+                "full": "/assets/props/broadleaf/model.glb?tier=full",
+                "low": "/assets/props/broadleaf/model.glb?tier=low"
+              },
+              {
+                "full": "/assets/props/broadleaf/model.glb?tier=full",
+                "low": "/assets/props/broadleaf/model.glb?tier=low"
+              }
+            ],
+            "variant": 2,
+            "prop_height_m": 2,
+            "min_spacing_m": 16,
+            "offset_m": 0.8,
+            "spacing_jitter_m": 5,
+            "reshuffle_min": 120,
+            "sides": "opposite",
+            "yaw_mode": "aligned",
+            "yaw_deg": 0
+          },
+          {
+            "place": "center",
+            "model": "/assets/props/broadleaf/model.glb",
+            "variants": {
+              "full": "/assets/props/broadleaf/model.glb?tier=full",
+              "low": "/assets/props/broadleaf/model.glb?tier=low"
+            },
+            "prop_height_m": 2,
+            "yaw_mode": "aligned",
+            "yaw_deg": 0
+          }
+        ]
+      }
+    }
+  ]
+}

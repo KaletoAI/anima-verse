@@ -22,6 +22,10 @@
  *               clearance (no mesh landed yet) and once with the MEASURED one (the prop GLB's own
  *               bbox, both tiers, widest wins — `spreadOf`); plus the per-entry LOD bins of `binProp`
  *               at a fixed camera, and the undergrowth cells/instances/bins of `createUndergrowthField`;
+ *   e4          rows from e4_terrain.json at epochs 2 and 3 (14465/21665 game seconds),
+ *               plus near/far/culled world props from worldmap.json. Kept separate from
+ *               fixture.estimate/measured until the row port lands: current ScatterCheck
+ *               explicitly rejects non-spread rows in its baseline terrain.
  *   texture     sha256 of the procedural blade texture; a few shade/hash values.
  *
  * The orchestration lines below mirror ground.ts / undergrowth.ts; every number comes out of the
@@ -54,12 +58,9 @@ const SWAY_MAX_M = 0.5      // ground.ts SWAY_MAX_M
 async function main() {
   if (!process.env.SCATTER_REFERENCE_BUNDLED) {
     const bundlePath = '/tmp/anima_native_scatter_reference_bundled.mjs'
-    const bin = ['client3d/node_modules/.bin/esbuild', 'frontend/node_modules/.bin/esbuild', 'node_modules/.bin/esbuild']
-      .map((rel) => path.join(ROOT, rel)).find((p) => fs.existsSync(p))
-    if (!bin) { console.error('esbuild not found (npm install)'); process.exit(1) }
-    const built = spawnSync(bin, [__filename, '--bundle', '--platform=node', '--format=esm',
-      `--outfile=${bundlePath}`, '--log-level=warning'], { cwd: ROOT, stdio: 'inherit' })
-    if (built.status !== 0) process.exit(built.status ?? 1)
+    const { build } = await import('esbuild')
+    await build({ entryPoints: [__filename], bundle: true, platform: 'node', format: 'esm',
+      outfile: bundlePath, logLevel: 'warning', external: ['esbuild'] })
     const run = spawnSync('node', [bundlePath], {
       stdio: 'inherit', cwd: ROOT,
       env: { ...process.env, SCATTER_REFERENCE_BUNDLED: '1', SCATTER_REFERENCE_ROOT: ROOT },
@@ -72,6 +73,9 @@ async function main() {
   const { OccupancyGrid, cellOccupancy } = await import('../../packages/scene-render/src/occupancy.ts')
   const { cleanRing, polygonArea, buildAreaGeometry } = await import('../../packages/scene-render/src/groundAreas.ts')
   const { pickVariant } = await import('../../packages/scene-render/src/types.ts')
+  const A = await import('../../packages/scene-render/src/scatterAxis.ts')
+  const T = await import('../../packages/scene-render/src/stroke.ts')
+  const W = await import('../../client3d/src/scene/worldProps.ts')
   const L = await import('../../client3d/src/scene/scatterLod.ts')
   const U = await import('../../client3d/src/scene/undergrowth.ts')
   const THREE = await import('three')
@@ -134,6 +138,7 @@ async function main() {
   // ---- 2. the --check world --------------------------------------------------------------------
   const fixtures = path.join(root, 'native/fixtures')
   const terrain = JSON.parse(fs.readFileSync(path.join(fixtures, 'terrain.json'), 'utf8'))
+  const e4Terrain = JSON.parse(fs.readFileSync(path.join(fixtures, 'e4_terrain.json'), 'utf8'))
   const worldmap = JSON.parse(fs.readFileSync(path.join(fixtures, 'worldmap.json'), 'utf8'))
   const anchor = { x: 64, z: 128 }    // --goto=harbour → loc-house (fixtures/README.md "Anchor")
   // Fixture height: tile (0, 0) of tiles.json is h = 2·i + j at 64 m steps, i.e. x/32 + z/64 on
@@ -331,9 +336,60 @@ async function main() {
     return cellsOut
   }
 
+  // World props outside the fine tile stand on the overview. At z=128 its
+  // clamped east edge is (8+16)/2=12 m. All three authored props have z=128.
+  // E4-T1: rows use the same fixture window, footprints and pass-local occupancy.
+  // Along -> edge/center -> spread is the browser build order. The new stroke is
+  // disjoint from the original spread areas, preserving their S3 baseline.
+  const gameSeconds = 14465 // floor(14465/(120*60)) = 2; also sample the next epoch.
+  const rowReference = (clock) => {
+    const { grid } = cellOccupancy(new Map())
+    const result = []
+    for (const area of e4Terrain.areas) {
+      const ring = cleanRing(area.polygon)
+      const line = area.meta?.stroke ? T.strokeCentreLine(area.meta.stroke) : undefined
+      const windowed = (points) => points.filter(p => cells.some(([cx, cz]) =>
+        S.scatterCellAt(p.x) === cx && S.scatterCellAt(p.z) === cz))
+      const sample = (entry, index, kind) => {
+        const epoch = S.reshuffleEpoch(clock, entry.reshuffle_min)
+        const seed = kind === 'along' ? T.alongSeed(area.id, index, epoch) : S.scatterSeed(area.id, index, epoch)
+        const occupyTag = kind === 'along' ? T.alongSeed(area.id, index) : S.scatterSeed(area.id, index)
+        const variantCount = entry.model_variants?.length || 1
+        const h = L.scatterTargetH(entry.prop_height_m)
+        const clearM = S.scatterClearM(h)
+        const common = { seed, variantCount, variant: entry.variant, footprints, clearM,
+          occupied: grid, occupyR: clearM, occupyTag, yawMode: entry.yaw_mode, yawDeg: entry.yaw_deg,
+          jitterM: entry.spacing_jitter_m }
+        const args = kind === 'along'
+          ? { ...common, line, spacingM: entry.spacing_m, offsetM: entry.offset_m, side: entry.side, startM: entry.start_m }
+          : kind === 'edge'
+          ? { ...common, spacingM: entry.min_spacing_m, offsetM: entry.offset_m, sides: entry.sides,
+              edges: line ? A.ribbonSelectedEdges(ring, entry.sides) : undefined }
+          : { ...common, axisAt: A.areaAxis(line, ring, entry.sides) }
+        const points = windowed(kind === 'along' ? T.strokeStations(args)
+          : kind === 'edge' ? A.scatterEdgeInstances(ring, args) : A.scatterCenterInstance(ring, args))
+        result.push({ area: area.id, index, kind, entry, ring, line, seed, occupyTag, epoch: epoch ?? null,
+          clearM, points: pts(points) })
+      }
+      ;(area.meta?.along ?? []).forEach((e, i) => sample(e, i, 'along'))
+      ;(area.meta?.scatter ?? []).forEach((e, i) => {
+        if (e.place === 'edge' || e.place === 'center') sample(e, i, e.place)
+      })
+    }
+    return { gameSeconds: clock, rows: result }
+  }
+  const worldProps = (worldmap.world_props ?? []).map(spec => {
+    const distance = Math.hypot(spec.x - CAMERA.pos[0], spec.z - CAMERA.pos[2])
+    const lod = W.worldPropLodCfg(cfg)
+    return { id: spec.id, distance, lod, tier: L.instanceTier(distance, 1, lod),
+      spec: W.worldPropSceneSpec(spec, W.worldPropBottom(spec,
+        spec.x >= 0 && spec.x < 256 && spec.z >= 0 && spec.z < 256
+          ? heightAt(spec.x, spec.z) : 12)) }
+  })
+
   const tex = U.undergrowthTexturePixels()
   const out = {
-    generated_by: 'native/fixtures/scatter_reference.mjs (scatter.ts / occupancy.ts / scatterLod.ts / undergrowth.ts)',
+    generated_by: 'native/fixtures/scatter_reference.mjs (scatter.ts / scatterAxis.ts / stroke.ts / occupancy.ts / scatterLod.ts / undergrowth.ts / worldProps.ts)',
     cases,
     fixture: {
       anchor, camera: CAMERA, lod: cfg, cells, footprints: footprints.map((f) => f.points), measured_spread: measured,
@@ -341,6 +397,7 @@ async function main() {
       measured: sampleWorld('measured'),
       undergrowth: undergrowthOf(),
     },
+    e4: { epochs: [rowReference(gameSeconds), rowReference(gameSeconds + 7200)], worldProps },
     texture: { size: U.UNDERGROWTH_TEX_SIZE, bytes: tex.length,
                sha256: crypto.createHash('sha256').update(Buffer.from(tex.buffer, tex.byteOffset, tex.byteLength)).digest('hex'),
                samples: [[0, 0], [5, 3], [31, 20], [63, 63]].map(([r, c]) => [r, c, Array.from(tex.slice((r * 64 + c) * 4, (r * 64 + c) * 4 + 4))]) },
@@ -354,6 +411,7 @@ async function main() {
   console.log(`cases: ${cases.map((c) => `${c.name}=${c.points.length}`).join(' ')}`)
   console.log(`fixture cells=${cells.length} estimate: ${rowsOf('estimate')} | measured: ${rowsOf('measured')}`)
   console.log(`undergrowth cells=${out.fixture.undergrowth.length} instances=${out.fixture.undergrowth.reduce((s, c) => s + c.layers.reduce((t, l) => t + l.points.length, 0), 0)}`)
+  console.log(`E4 rows=${out.e4.epochs.map(e => e.rows.map(r => `${r.kind}=${r.points.length}`).join(' ')).join(' | ')} worldProps=${worldProps.map(p => `${p.id}:${p.tier}`).join(' ')}`)
   console.log(`wrote ${path.relative(root, file)}`)
 }
 

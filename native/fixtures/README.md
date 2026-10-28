@@ -435,6 +435,30 @@ variant) within **1e-6 m** of the TS output:
 Plus `instanceHash`, `undergrowthShade`, FNV-1a seed hashes and the sha256 of the
 64 × 64 blade texture (with four sample texels).
 
+### E4 rows and world props (Task 36)
+
+The same `node native/fixtures/scatter_reference.mjs` command writes an `e4`
+section in the reference. Its row input is `e4_terrain.json`: a straight fixture
+stroke from (16,30) to (96,30), width 6. Along rows run first, then edge and
+center rows, sharing real cell occupancy. The edge uses ribbon `opposite`,
+aligned yaw 0, offset **0.8 m**, jitter **5 m**, reshuffle **120 game minutes**
+and pinned variant 2. At 14465 and 21665 seconds its epochs are 2 and 3;
+the reference holds 8 along / 10 edge / 1 center and 8 / 9 / 1 respectively.
+
+This extension is separate from `terrain.json` because the current native
+`ScatterCheck` explicitly requires zero unported rows. The row-porting task can
+consume `e4.epochs` without rebasing the existing spread/undergrowth checks.
+The existing fixture baseline remains 453 scatter instances, 211 drawn, and
+370 undergrowth instances (52 drawn).
+
+`worldmap.json` adds three fixture props at (64,128), (264,128), (564,128).
+Against the reference camera (40,30,110), horizontal distances are
+`sqrt(24²+18²)=30`, `sqrt(224²+18²)≈224.722` and
+`sqrt(524²+18²)≈524.309` m: full, low, culled at 105/135/360 m.
+The near prop sits on the fine tile at 4 m; the other two use the overview's
+clamped east edge at z=128, `(8+16)/2=12` m. The reference serializes the
+world-prop scene specs, scaled cfg, distances and tiers under `e4.worldProps`.
+
 ### The fixture world (`terrain.json`, anchor of `--goto=harbour`)
 
 - **Areas**: `area-wood` (forest) `[[8,72],[200,72],[200,200],[8,200],[8,72]]` —

@@ -45,6 +45,14 @@
  *
  * An absent key is 0 — the server ships it only when it differs.
  *
+ * E4 SHARED VECTORS: world_props.json contains sections 1/2/2a.
+ * worldPropTier(d,prev,base) adapts only the composition
+ * instanceTier(d,prev,worldPropLodCfg(base)); all base tables are explicit.
+ * Finite bottom values compare at 1e-9 instead of pre-rounding. The variant
+ * fixture carries variant 1 and its two maps unchanged into the scene spec.
+ * Object-key absence, mount/ghost and lease lifecycle checks stay inline.
+ * Vectors load before bundling so their path is rooted at shared/test-vectors.
+ *
  * ── 3. The mount itself, measured ─────────────────────────────────────────
  * `placeModelSpec` is the shared routine; here it is fed a hand-built box so
  * the resulting world bounding box can be predicted exactly.
@@ -72,12 +80,15 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
 
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs'
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 async function main() {
   if (!globalThis.__worldPropsSmokeBundled) {
     await leaseCases()
+    globalThis.__worldPropsSmokeVectors = loadVectors('world_props')
     const { build } = await import('esbuild')
     const bundlePath = '/tmp/smoke_world_props_bundled.mjs'
     await build({ entryPoints: [__filename], bundle: true, platform: 'node', format: 'esm', outfile: bundlePath })
@@ -97,26 +108,24 @@ async function main() {
     WATER_GHOST_OPACITY } = await import('../src/scene/submergedGhost.ts')
   const { ghostCutY } = await import('../src/game/walk.ts')
 
-  const FAILED = []
+  const vectors = runVectors(globalThis.__worldPropsSmokeVectors, {
+    worldPropLodCfg, worldPropBottom, worldPropSceneSpec,
+    worldPropTier: (d, previous, cfg) => instanceTier(d, previous, worldPropLodCfg(cfg)),
+  })
+  const FAILED = vectors.failed ? ['shared world_props vectors'] : []
+  let passed = vectors.passed
   const r3 = (v) => Math.round(v * 1000) / 1000
   function check(label, got, want) {
     const ok = JSON.stringify(got) === JSON.stringify(want)
     console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}: ${JSON.stringify(got)}`
       + (ok ? '' : `  (expected ${JSON.stringify(want)})`))
     if (!ok) FAILED.push(label)
+    else passed++
   }
 
   console.log('\n[1] the LOD distances')
   check('scale factor', WORLD_PROP_LOD_SCALE, 3)
   const cfg = worldPropLodCfg(SCATTER_LOD_DEFAULTS)
-  check('scaled bands', [cfg.nearM, cfg.farM, cfg.cullM], [105, 135, 360])
-  check('100 m stays full', instanceTier(100, 0, cfg), 0)
-  check('120 m keeps what it has (full)', instanceTier(120, 0, cfg), 0)
-  check('120 m keeps what it has (low)', instanceTier(120, 1, cfg), 1)
-  check('140 m drops to low', instanceTier(140, 0, cfg), 1)
-  check('400 m is not drawn', instanceTier(400, 0, cfg), 2)
-  check('340 m stays hidden', instanceTier(340, 2, cfg), 2)
-  check('300 m comes back as low', instanceTier(300, 2, cfg), 1)
 
   console.log('\n[2] the placement spec')
   const PID = 'boulder-abc123'
@@ -128,10 +137,7 @@ async function main() {
     variants: { full: `${P}?tier=full` },
   }
   const spec = worldPropSceneSpec(row, 3.0)
-  check('role', spec.role, 'prop')
-  check('one scale law', [spec.measure, spec.max_m], ['xyz', 3])
-  check('anchor is the world point', spec.anchor, [10, -4])
-  check('bottom is the callers', spec.bottom_y, 3.0)
+
   check('no variant list for one variant',
     'model_variants' in spec, false)
 
@@ -145,7 +151,7 @@ async function main() {
     ],
   }
   const spec2 = worldPropSceneSpec(two, 0)
-  check('variant travels', spec2.variant, 1)
+
   check('full of variant 1', pickModelVariant(spec2, 'full'),
     `${P}?variant=1&tier=full`)
   // Variant 1 has no low mesh: the tier falls back INSIDE the chosen variant,
@@ -160,15 +166,10 @@ async function main() {
   //   offset_y 0.5, no ground_offset_m         -> 3.0
   //   the same row with ground_offset_m -0.2   -> 2.8
   //   a lift of +0.35 and no placement trim    -> 2.85
-  check('ground + the placement trim', worldPropBottom(row, 2.5), 3.0)
-  check('…plus the prop\'s own sink of -0.2',
-    r3(worldPropBottom({ ...row, ground_offset_m: -0.2 }, 2.5)), 2.8)
-  check('a lift with no trim', r3(worldPropBottom(
-    { ...row, offset_y: 0, ground_offset_m: 0.35 }, 2.5)), 2.85)
+
   check('an absent key is 0, not NaN',
     worldPropBottom({ ...row, ground_offset_m: undefined }, 2.5), 3.0)
-  check('and so is junk on the wire',
-    worldPropBottom({ ...row, ground_offset_m: 'x' }, 2.5), 3.0)
+
   // The RED probe: the sum before the field existed. A fir dialled 20 cm into
   // the soil would stand on the grass out here while it is correctly buried
   // in every room — the very split the field exists to close.
@@ -321,7 +322,7 @@ async function main() {
 
   console.log(FAILED.length
     ? `\nFAILED (${FAILED.length}): ${FAILED.join(', ')}`
-    : '\nsmoke_world_props: OK')
+    : `\nsmoke_world_props: OK (${passed} ok; lease cases passed)`)
   process.exit(FAILED.length ? 1 : 0)
 }
 
@@ -338,7 +339,8 @@ async function leaseCases() {
   const source = fs.readFileSync(path.join(__dirname, '../src/scene/worldProps.ts'), 'utf8')
   const drop = source.slice(source.indexOf('  function drop('), source.indexOf('  /** Request a tier.'))
   const mount = source.slice(source.indexOf('  function mount('), source.indexOf('  function sync('))
-  const code = transformSync(drop + mount + '\nreturn { mount, drop };', { loader: 'ts' }).code
+  const redrape = source.slice(source.indexOf('  function dropWater('), source.indexOf('  function redrape():'))
+  const code = transformSync(drop + mount + redrape + '\nreturn { mount, drop };', { loader: 'ts' }).code
   let held = 0, releases = 0
   const waiting = []
   const template = new THREE.Group(), geo = new THREE.BoxGeometry(), mat = new THREE.MeshBasicMaterial()

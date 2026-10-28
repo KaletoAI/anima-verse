@@ -666,6 +666,26 @@
     { "label": "[W2] the entry seed likewise — epoch 7", "fn": "scatterSeed",
       "args": ["a", 1, 7], "expect": "terrain:scatter:a:1:e7" },
     { "label": "[W2] an undefined (absent) epoch adds nothing", "fn": "scatterCellSeed",
-      "args": ["a", 1, 2, 3], "expect": "terrain:scatter:a:1:2,3" }
+      "args": ["a", 1, 2, 3], "expect": "terrain:scatter:a:1:2,3" },
+    {"label": "[G-tie1] JS rounds 2.5 upward", "fn": "scatterSway", "args": [0.05, 0.5], "expect": 0.03},
+    {"label": "[G-tie2] JS rounds 12.5 upward", "fn": "scatterSway", "args": [0.25, 0.5], "expect": 0.13},
+    {"label": "[K-want1] minimum window row-major", "fn": "wantedScatterCells", "args": [0, 0, 1], "expect": [[-1, -1], [0, -1], [1, -1], [-1, 0], [0, 0], [1, 0], [-1, 1], [0, 1], [1, 1]]},
+    {"label": "[K-want2] negative floor owns the lower edge", "fn": "wantedScatterCells", "args": [-0.1, -64, 64], "expect": [[-2, -2], [-1, -2], [0, -2], [-2, -1], [-1, -1], [0, -1], [-2, 0], [-1, 0], [0, 0]]},
+    {"label": "[K-want3] default 25 cells around fixture anchor", "fn": "wantedScatterCells", "args": [64, 128, 120], "expect": [[-1, 0], [0, 0], [1, 0], [2, 0], [3, 0], [-1, 1], [0, 1], [1, 1], [2, 1], [3, 1], [-1, 2], [0, 2], [1, 2], [2, 2], [3, 2], [-1, 3], [0, 3], [1, 3], [2, 3], [3, 3], [-1, 4], [0, 4], [1, 4], [2, 4], [3, 4]]},
+    {"label": "[I-hash] index 0", "fn": "instanceHash", "args": [0], "expect": 0},
+    {"label": "[I-hash] index 1", "fn": "instanceHash", "args": [1], "expect": 0.5421679092105478},
+    {"label": "[I-hash] index -1", "fn": "instanceHash", "args": [-1], "expect": 0.4641302658710629},
+    {"label": "[V-radius] explicit", "fn": "scatterOccupyR", "args": [2, 3], "expect": 2},
+    {"label": "[V-radius] clear fallback", "fn": "scatterOccupyR", "args": [null, 3], "expect": 3},
+    {"label": "[V-radius] no radius", "fn": "scatterOccupyR", "args": [], "expect": 0},
+    {"label": "[V-radius] zero overrides", "fn": "scatterOccupyR", "args": [0, 3], "expect": 0},
+    {"label": "[V-radius] negative overrides", "fn": "scatterOccupyR", "args": [-1, 3], "expect": 0},
+    {"label": "[V-radius] negative fallback", "fn": "scatterOccupyR", "args": [null, -2], "expect": 0},
+    {"label": "[V-radius] fraction", "fn": "scatterOccupyR", "args": [0.25, 0.5], "expect": 0.25},
+    {"label": "[W-suffix] absent", "fn": "seedEpochSuffix", "args": [], "expect": ""},
+    {"label": "[W-suffix] null", "fn": "seedEpochSuffix", "args": [null], "expect": ""},
+    {"label": "[W-suffix] zero", "fn": "seedEpochSuffix", "args": [0], "expect": ":e0"},
+    {"label": "[W-suffix] epoch five", "fn": "seedEpochSuffix", "args": [5], "expect": ":e5"},
+    {"label": "[W-suffix] fraction", "fn": "seedEpochSuffix", "args": [-1.5], "expect": ":e-1.5"}
   ]
 }

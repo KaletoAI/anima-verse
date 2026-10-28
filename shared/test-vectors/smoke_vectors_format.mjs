@@ -23,7 +23,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadVectorFile, near, parseVectors, resolveArgs, runVectors } from './vectors.mjs';
+import { loadVectors, loadVectorFile, near, parseVectors, resolveArgs, runVectors } from './vectors.mjs';
 
 let fails = 0;
 let oks = 0;
@@ -135,6 +135,12 @@ check(throws(() => parseVectors(JSON.stringify(file([{ label: 't', fn: 'f', args
 const t5 = runVectors(file([{ label: 'e', fn: 'f', args: [[1, 2], 3], expect: 6, eps: 0 }]),
   { f: (xs, k) => xs.length * k }, quiet);
 check(t5.passed === 1, 'args are spread into the call; eps 0 allowed');
+
+console.log('\n[11] E4 files obey the shared format');
+for (const name of ['scatter', 'scatter_rows', 'impostors', 'undergrowth', 'world_props']) {
+  const vectors = loadVectors(name);
+  check(vectors.cases.length > 0, `${name}: nonempty, validated labels, fixtures and finite numbers`);
+}
 
 console.log(fails ? `\n${fails} FAILED, ${oks} ok` : `\nall ok (${oks})`);
 process.exit(fails ? 1 : 0);

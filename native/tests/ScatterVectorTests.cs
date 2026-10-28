@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json.Nodes;
 using AnimaNative.Scatter;
 using AnimaNative.Tests.Vectors;
@@ -35,6 +36,10 @@ namespace AnimaNative.Tests;
 ///   scatterCellAt          ScatterMath.CellAt
 ///   scatterCellRing        ScatterMath.CellRing                 P2[] → [[x, z], …]
 ///   scatterCellSpan        ScatterMath.CellSpan
+///   wantedScatterCells     ScatterMath.WantedCells              tuple list → [[cx,cz], …]
+///   seedEpochSuffix        ScatterMath.SeedEpochSuffix
+///   scatterOccupyR         ScatterMath.OccupyR
+///   instanceHash           ScatterLod.InstanceHash
 ///   scatterTargetH         ScatterLod.TargetH
 ///   scatterSway            ScatterLod.Sway
 ///   scatterGroundOffset    ScatterLod.GroundOffset
@@ -47,8 +52,8 @@ namespace AnimaNative.Tests;
 /// </code>
 ///
 /// Ported but without a case in the file (see the smoke's header): PinnedVariant (reached through
-/// the samplers' <c>variant</c> option), SeedEpochSuffix (through the seeds' epoch), OccupyR,
-/// InstanceHash (through InstanceVisible), SeededRandom, WantedCells and the Ug* undergrowth functions.
+/// the samplers' <c>variant</c> option), SeededRandom and the Ug* undergrowth functions.
+/// The new E4 files get C# test classes with their respective porting tasks.
 /// </summary>
 public class ScatterVectorTests
 {
@@ -99,6 +104,15 @@ public class ScatterVectorTests
                 ? ScatterMath.Yaw(r, mode, deg)
                 : ScatterMath.Yaw(r, mode, deg, VectorCompare.Num(axis)));
         },
+
+        ["seedEpochSuffix"] = a => JsonValue.Create(ScatterMath.SeedEpochSuffix(
+            VectorCompare.NumOrNull(Arg(Arity(a, 0, 1), 0)))),
+        ["scatterOccupyR"] = a => JsonValue.Create(ScatterMath.OccupyR(
+            VectorCompare.NumOrNull(Arg(Arity(a, 0, 2), 0)), VectorCompare.NumOrNull(Arg(a, 1)))),
+        ["instanceHash"] = a => JsonValue.Create(ScatterLod.InstanceHash(Int(Arity(a, 1, 1)[0]))),
+        ["wantedScatterCells"] = a => new JsonArray(ScatterMath.WantedCells(
+            VectorCompare.Num(Arity(a, 3, 3)[0]), VectorCompare.Num(a[1]), VectorCompare.Num(a[2]))
+            .Select(c => (JsonNode?)new JsonArray(c.Cx, c.Cz)).ToArray()),
 
         // ---- scatter.ts: the cell raster ----
         ["scatterCellAt"] = a => JsonValue.Create(ScatterMath.CellAt(VectorCompare.Num(Arity(a, 1, 1)[0]))),

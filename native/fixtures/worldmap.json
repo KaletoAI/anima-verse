@@ -23,6 +23,63 @@
                   "progress_m": 137.0, "total_m": 200.0, "starts_in_s": null,
                   "speed_m_s_real": 1.4, "pace_m_s_real": 1.4, "paces_m_s_real": [1.4, 1.4], "journey_id": null } }
   ],
+  "world_props": [
+    {
+      "id": "wp-fixture-near",
+      "prop_id": "broadleaf",
+      "x": 64,
+      "z": 128,
+      "max_m": 3,
+      "offset_y": 0,
+      "yaw_deg": 0,
+      "fix_euler": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "variants": {
+        "full": "/assets/props/broadleaf/model.glb?tier=full",
+        "low": "/assets/props/broadleaf/model.glb?tier=low"
+      }
+    },
+    {
+      "id": "wp-fixture-far",
+      "prop_id": "broadleaf",
+      "x": 264,
+      "z": 128,
+      "max_m": 3,
+      "offset_y": 0,
+      "yaw_deg": 0,
+      "fix_euler": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "variants": {
+        "full": "/assets/props/broadleaf/model.glb?tier=full",
+        "low": "/assets/props/broadleaf/model.glb?tier=low"
+      }
+    },
+    {
+      "id": "wp-fixture-culled",
+      "prop_id": "broadleaf",
+      "x": 564,
+      "z": 128,
+      "max_m": 3,
+      "offset_y": 0,
+      "yaw_deg": 0,
+      "fix_euler": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "variants": {
+        "full": "/assets/props/broadleaf/model.glb?tier=full",
+        "low": "/assets/props/broadleaf/model.glb?tier=low"
+      }
+    }
+  ],
+  "world_props_sig": "fixture-e4",
   "events_by_location": {},
   "world_bounds": { "min_x": -104.0, "min_z": -203.0, "max_x": 300.0, "max_z": 134.0 },
   "height_sig": "fixture-s1a",

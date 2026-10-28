@@ -1,0 +1,298 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_world_props.mjs",
+  "fixtures": {
+    "ROW": {
+      "id": "wp_fixture",
+      "prop_id": "boulder-fixture",
+      "x": 10,
+      "z": -4,
+      "yaw_deg": 0,
+      "offset_y": 0.5,
+      "max_m": 3,
+      "fix_euler": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "variants": {
+        "full": "/assets/props/boulder-fixture/model?tier=full"
+      }
+    },
+    "CFG": {
+      "nearM": 35,
+      "farM": 45,
+      "cullM": 120
+    }
+  },
+  "cases": [
+    {
+      "label": "[1] scaled bands",
+      "fn": "worldPropLodCfg",
+      "args": [
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": {
+        "nearM": 105,
+        "farM": 135,
+        "cullM": 360
+      }
+    },
+    {
+      "label": "[1] tier 100 from 0",
+      "fn": "worldPropTier",
+      "args": [
+        100,
+        0,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[1] tier 120 from 0",
+      "fn": "worldPropTier",
+      "args": [
+        120,
+        0,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[1] tier 120 from 1",
+      "fn": "worldPropTier",
+      "args": [
+        120,
+        1,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[1] tier 140 from 0",
+      "fn": "worldPropTier",
+      "args": [
+        140,
+        0,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[1] tier 400 from 0",
+      "fn": "worldPropTier",
+      "args": [
+        400,
+        0,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[1] tier 340 from 2",
+      "fn": "worldPropTier",
+      "args": [
+        340,
+        2,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[1] tier 300 from 2",
+      "fn": "worldPropTier",
+      "args": [
+        300,
+        2,
+        {
+          "$fixture": "CFG"
+        }
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[2] spec role",
+      "fn": "worldPropSceneSpec",
+      "args": [
+        {
+          "$fixture": "ROW"
+        },
+        3
+      ],
+      "expect": {
+        "role": "prop"
+      }
+    },
+    {
+      "label": "[2] spec measure",
+      "fn": "worldPropSceneSpec",
+      "args": [
+        {
+          "$fixture": "ROW"
+        },
+        3
+      ],
+      "expect": {
+        "measure": "xyz"
+      }
+    },
+    {
+      "label": "[2] spec max_m",
+      "fn": "worldPropSceneSpec",
+      "args": [
+        {
+          "$fixture": "ROW"
+        },
+        3
+      ],
+      "expect": {
+        "max_m": 3
+      }
+    },
+    {
+      "label": "[2] spec anchor",
+      "fn": "worldPropSceneSpec",
+      "args": [
+        {
+          "$fixture": "ROW"
+        },
+        3
+      ],
+      "expect": {
+        "anchor": [
+          10,
+          -4
+        ]
+      }
+    },
+    {
+      "label": "[2] spec bottom_y",
+      "fn": "worldPropSceneSpec",
+      "args": [
+        {
+          "$fixture": "ROW"
+        },
+        3
+      ],
+      "expect": {
+        "bottom_y": 3
+      }
+    },
+    {
+      "label": "[2] variant travels",
+      "fn": "worldPropSceneSpec",
+      "args": [
+        {
+          "$fixture": "ROW",
+          "$with": {
+            "variant": 1,
+            "model_variants": [
+              {
+                "full": "/fixture/a",
+                "low": "/fixture/a-low"
+              },
+              {
+                "full": "/fixture/b"
+              }
+            ]
+          }
+        },
+        0
+      ],
+      "expect": {
+        "variant": 1,
+        "model_variants": [
+          {
+            "full": "/fixture/a",
+            "low": "/fixture/a-low"
+          },
+          {
+            "full": "/fixture/b"
+          }
+        ]
+      }
+    },
+    {
+      "label": "[2a] bottom placement",
+      "fn": "worldPropBottom",
+      "args": [
+        {
+          "$fixture": "ROW"
+        },
+        2.5
+      ],
+      "expect": 3
+    },
+    {
+      "label": "[2a] bottom sink",
+      "fn": "worldPropBottom",
+      "args": [
+        {
+          "$fixture": "ROW",
+          "$with": {
+            "ground_offset_m": -0.2
+          }
+        },
+        2.5
+      ],
+      "expect": 2.8
+    },
+    {
+      "label": "[2a] bottom lift",
+      "fn": "worldPropBottom",
+      "args": [
+        {
+          "$fixture": "ROW",
+          "$with": {
+            "offset_y": 0,
+            "ground_offset_m": 0.35
+          }
+        },
+        2.5
+      ],
+      "expect": 2.85
+    },
+    {
+      "label": "[2a] bottom junk",
+      "fn": "worldPropBottom",
+      "args": [
+        {
+          "$fixture": "ROW",
+          "$with": {
+            "ground_offset_m": "x"
+          }
+        },
+        2.5
+      ],
+      "expect": 3
+    },
+    {
+      "label": "[2a] bottom no offsets",
+      "fn": "worldPropBottom",
+      "args": [
+        {
+          "$fixture": "ROW",
+          "$with": {
+            "offset_y": 0
+          }
+        },
+        2.5
+      ],
+      "expect": 2.5
+    }
+  ]
+}

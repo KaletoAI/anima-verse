@@ -147,6 +147,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { loadVectors, runVectors } from '../shared/test-vectors/vectors.mjs';
+import { rowVectorDispatch } from '../client3d/scripts/e4VectorDispatch.mjs';
+
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SRC = join(ROOT, 'frontend/src/tabs/map/mapMath.ts');
 
@@ -290,24 +293,17 @@ const inBand = (v) => Math.abs(v) >= 0.4 * A - 1e-9 && Math.abs(v) <= A + 1e-9;
 
 console.log('[1] where the deflections sit');
 const jag = decorateStroke(LINE_100, 'jagged', 10, A);
-check('a 100 m line at 10 m spacing carries 10 deflections',
-  jag.points.length, 12);
-check('...the spacing is the one asked for', jag.spacingM, 10);
-check('...and nothing was thinned out', jag.capped, false);
+
 check('the clicked ends stand where they were clicked',
   [jag.points[0], jag.points[11]], [[0, 0], [100, 0]]);
-check('the deflections sit at 5, 15, … 95 (x is the arc position)',
-  jag.points.slice(1, 11).map((p) => p[0]),
-  [5, 15, 25, 35, 45, 55, 65, 75, 85, 95]);
+
 check('...every height inside [0.4·A, A]',
   jag.points.slice(1, 11).every((p) => inBand(p[1])), true);
 check('...and jagged alternates the sides, starting on side A (−z)',
   jag.points.slice(1, 11).map((p) => Math.sign(p[1])),
   [-1, 1, -1, 1, -1, 1, -1, 1, -1, 1]);
 // Not a multiple of the spacing: 100/30 = 3.33… -> 3, the "±1" the field means.
-check('a 30 m spacing on the same line carries 3',
-  decorateStroke(LINE_100, 'jagged', 30, A).points.map((p) => p[0]),
-  [0, 15, 45, 75, 100]);
+
 const corner = decorateStroke(CORNER, 'jagged', 10, A);
 check('the clicked corner survives between the two deflections',
   [corner.points.length, corner.points[0], corner.points[2], corner.points[4]],
@@ -520,55 +516,27 @@ check('...and the deflection inside the window rides it',
 //        absent never opens the stream (a stream fed nothing stays silent)
 //        and is [S1] byte for byte. The real stream: seed 'terrain:along:a:0'
 //        with jitter 5 equals the run fed seededRandom('terrain:along:a:0:jitter').
-console.log('\n[S] strokeStations');
+const rowFile = loadVectors('scatter_rows');
+const strokeFns = rowVectorDispatch({}, {}, { OccupancyGrid }, { strokeStations, alongSeed, strokeCentreLine, decorateStroke });
+const rowResult = runVectors({ ...rowFile,
+  cases: rowFile.cases.filter((c) => ['strokeStations', 'alongSeed', 'strokeCentreLine', 'decorateStroke'].includes(c.fn)),
+}, strokeFns);
+passed += rowResult.passed; failed += rowResult.failed;
+console.log('\n[S] strokeStations — invariants retained inline');
 const ROW = { line: [[0, 0], [100, 0]], spacingM: 25, offsetM: 3, seed: 'terrain:along:a:0' };
-const s1 = strokeStations(ROW);
-check('S1 four stations, right side, z = +3', s1.map((p) => [p.x, p.z]),
-  [[12.5, 3], [37.5, 3], [62.5, 3], [87.5, 3]]);
-check('S1 …every one facing along the line (π/2)', s1.map((p) => p.yaw),
-  [Math.PI / 2, Math.PI / 2, Math.PI / 2, Math.PI / 2]);
-const s2 = strokeStations({ ...ROW, side: 'left' });
-check('S2 left: z = −3 and the direction reversed (3π/2)',
-  s2.map((p) => [p.x, p.z, p.yaw]),
-  [[12.5, -3, 3 * Math.PI / 2], [37.5, -3, 3 * Math.PI / 2],
-    [62.5, -3, 3 * Math.PI / 2], [87.5, -3, 3 * Math.PI / 2]]);
-check('S3 alternate: right, left, right, left',
-  strokeStations({ ...ROW, side: 'alternate' }).map((p) => [p.z, p.yaw]),
-  [[3, Math.PI / 2], [-3, 3 * Math.PI / 2], [3, Math.PI / 2], [-3, 3 * Math.PI / 2]]);
-const s4 = strokeStations({ ...ROW, side: 'both' });
-check('S4 both: eight instances, right before left at each station',
-  s4.map((p) => [p.x, p.z]),
-  [[12.5, 3], [12.5, -3], [37.5, 3], [37.5, -3], [62.5, 3], [62.5, -3],
-    [87.5, 3], [87.5, -3]]);
-check('S5 yaw_deg 90 faces across the line from the right (π)…',
-  strokeStations({ ...ROW, yawDeg: 90 })[0].yaw, Math.PI);
-check('S5 …and from the left (0, normalised from 2π)',
-  strokeStations({ ...ROW, side: 'left', yawDeg: 90 })[0].yaw, 0);
-const cornerRow = strokeStations({ line: [[0, 0], [10, 0], [10, 10]], spacingM: 10,
-  offsetM: 2, startM: 5, seed: 'c' });
-check('S6 the corner: (5, 2) facing π/2, then (8, 5) facing 0',
-  cornerRow.map((p) => [p.x, p.z, p.yaw]), [[5, 2, Math.PI / 2], [8, 5, 0]]);
-check('S7 start_m 0 puts a station on the start point',
-  strokeStations({ ...ROW, startM: 0 }).map((p) => p.x), [0, 25, 50, 75, 100]);
-check('S7 start_m past the spacing is clamped to it',
-  strokeStations({ ...ROW, startM: 30 }).map((p) => p.x), [25, 50, 75, 100]);
+
 // [S8] a 4 m square around (37.5, 3) — `footprintBlocks` with no clearance
 // is the plain inside test.
 const BLOCK = { points: [[35.5, 1], [39.5, 1], [39.5, 5], [35.5, 5]] };
 const free = strokeStations({ ...ROW, variantCount: 3 });
 const blocked = strokeStations({ ...ROW, variantCount: 3, footprints: [BLOCK] });
-check('S8 the footprint drops exactly station 1', blocked.map((p) => p.x),
-  [12.5, 62.5, 87.5]);
+
 check('S8 …and the survivors keep the variant they had (ordinals, not survivors)',
   blocked.map((p) => p.variant), [free[0].variant, free[2].variant, free[3].variant]);
 check('S8 …which is the shared formula over the ordinal',
   free.map((p) => p.variant),
   [0, 1, 2, 3].map((k) => scatterVariantIndex('terrain:along:a:0', k, 3)));
-check('S9 a pinned variant is every instance\'s',
-  strokeStations({ ...ROW, variantCount: 3, variant: 1 }).map((p) => p.variant),
-  [1, 1, 1, 1]);
-check('S9 a pin past the count clamps to n − 1',
-  strokeStations({ ...ROW, variantCount: 3, variant: 7 })[0].variant, 2);
+
 check('S9 one variant carries no variant field',
   Object.keys(strokeStations({ ...ROW, variantCount: 1 })[0]), ['x', 'z', 'yaw']);
 const rndRow = strokeStations({ ...ROW, yawMode: 'random' });
@@ -576,54 +544,33 @@ const rndRef = seededRandom('terrain:along:a:0');
 check('S10 random: the seeded stream, one draw per instance, positions unmoved',
   rndRow.map((p) => [p.x, p.z, p.yaw]),
   [12.5, 37.5, 62.5, 87.5].map((x) => [x, 3, rndRef() * Math.PI * 2]));
-check('S11 a straight recipe is its clicked points',
-  strokeCentreLine({ points: [[0, 0], [100, 0]] }), [[0, 0], [100, 0]]);
+
 check('S11 a wavy recipe without numbers is decorateStroke at 10 m / 2 m',
   strokeCentreLine({ points: [[0, 0], [100, 0]], style: 'wavy' }),
   decorateStroke([[0, 0], [100, 0]], 'wavy', 10, 2).points);
-check('S11 an unknown style reads as straight',
-  strokeCentreLine({ points: [[0, 0], [100, 0]], style: 'zigzag' }), [[0, 0], [100, 0]]);
+
 const occupiedAt = (x, z, r) => { const g = new OccupancyGrid(); g.add(x, z, r); return g; };
 const s12 = occupiedAt(37.5, 3, 0.5);
 const s12Run = strokeStations({ ...ROW, variantCount: 3, occupied: s12, occupyR: 1 });
-check('S12 the occupied station 1 falls, the rest stands', s12Run.map((p) => p.x),
-  [12.5, 62.5, 87.5]);
+
 check('S12 …with the variants of the ordinals, as under the footprint of S8',
   s12Run.map((p) => p.variant), [free[0].variant, free[2].variant, free[3].variant]);
 check('S12 …and the survivors are filed', s12.blocks(12.5, 3, 0.1), true);
-check('S12 occupyR absent = clearM: 0.4 < 1 + 0.1 blocks',
-  strokeStations({ ...ROW, clearM: 1, occupied: occupiedAt(37.9, 3, 0.1) }).map((p) => p.x),
-  [12.5, 62.5, 87.5]);
-check('S12 …and with neither the radius is 0: the station stands',
-  strokeStations({ ...ROW, occupied: occupiedAt(37.9, 3, 0.1) }).map((p) => p.x),
-  [12.5, 37.5, 62.5, 87.5]);
-check('S the seed is area- and row-stable', alongSeed('ta_1', 2), 'terrain:along:ta_1:2');
-check('S13 …and carries the epoch when the row reshuffles',
-  alongSeed('a', 2, 5), 'terrain:along:a:2:e5');
+
 check('S13 …but nothing for undefined or NaN',
   [alongSeed('a', 2, undefined), alongSeed('a', 2, NaN)],
   ['terrain:along:a:2', 'terrain:along:a:2']);
-const s14 = strokeStations({ ...ROW, jitterM: 5, jitterRng: stream([0, 1, 0.5, 0.25, 0.5]) });
-check('S14 jitter 5, stream [0, 1, .5, .25, .5]: x = 7.5, 37.5, 62.5, 85',
-  s14.map((p) => [p.x, p.z, p.yaw]), [7.5, 37.5, 62.5, 85].map((x) => [x, 3, Math.PI / 2]));
-check('S14 the ending candidate draws too: a four-number stream is one short',
-  (() => { try { strokeStations({ ...ROW, jitterM: 5, jitterRng: stream([0, 1, 0.5, 0.25]) }); return 'no throw'; } catch (e) { return e.message; } })(),
-  'stations drew more numbers than the case feeds');
+
 check('S14 random yaw + jitter: S10\'s yaws on the jittered x',
   strokeStations({ ...ROW, yawMode: 'random', jitterM: 5, jitterRng: stream([0, 1, 0.5, 0.25, 0.5]) })
     .map((p) => [p.x, p.yaw]), [7.5, 37.5, 62.5, 85].map((x, k) => [x, rndRow[k].yaw]));
-check('S14 jitter 0 never opens the stream: S1 byte for byte',
-  strokeStations({ ...ROW, jitterM: 0, jitterRng: stream([]) }), s1);
-check('S14 …and so is an absent jitter', strokeStations({ ...ROW, jitterRng: stream([]) }), s1);
+
 check('S14 the real stream is seededRandom(seed + \':jitter\')',
   strokeStations({ ...ROW, jitterM: 5 }),
   strokeStations({ ...ROW, jitterM: 5, jitterRng: seededRandom('terrain:along:a:0:jitter') }));
 differs('S14 …and it is not the yaw stream of the seed',
   strokeStations({ ...ROW, jitterM: 5 }).map((p) => p.x),
   strokeStations({ ...ROW, jitterM: 5, jitterRng: seededRandom('terrain:along:a:0') }).map((p) => p.x));
-check('S a zero-length line places nothing',
-  strokeStations({ ...ROW, line: [[5, 5], [5, 5]] }), []);
-check('S a negative offset places nothing', strokeStations({ ...ROW, offsetM: -1 }), []);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
