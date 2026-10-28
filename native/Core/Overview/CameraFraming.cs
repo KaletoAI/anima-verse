@@ -1,10 +1,9 @@
 namespace AnimaNative.Overview;
 
 /// <summary>
-/// Port of the zoom range and the pitch curve of client3d/src/scene/cameraFraming.ts — what the
-/// camera FRAMES. The TS module keeps <c>basePitchDeg</c> apart from cameraMath.ts because the
-/// embodied framing shares it; the C# split follows it so the next port (eye height, the
-/// first-person lens) lands beside it. Vectors: shared/test-vectors/camera.json [3a..3h].
+/// Port of client3d/src/scene/cameraFraming.ts — zoom ranges, pitch curve, eye point and view/body yaw.
+/// Task 47 (E7-T2) completes the embodied framing beside the overview curve so both modes use the same
+/// arithmetic; the caller owns camera placement and the FirstPersonZoom instance. Vectors: camera.json.
 /// </summary>
 public static class CameraFraming
 {
@@ -31,5 +30,43 @@ public static class CameraFraming
     {
         double zoomK = Clamp((dist - MinDist) / (MaxDist - MinDist), 0, 1);
         return nearPitchDeg + (FarPitchDeg - nearPitchDeg) * System.Math.Sqrt(zoomK);
+    }
+    /// <summary>Task 47 (E7-T2): cameraFraming.ts embodied framing constants; camera.json.</summary>
+    public const double EmbodyMinDist = MinDist, ThirdPersonMinDist = 2, EyeFraction = 0.94,
+                        EyeHeadFraction = 0.45, EyeForwardFraction = 0.055, BodyTurnDeg = 60;
+
+    public static double EyeHeight(double heightM) => heightM * EyeFraction;
+
+    /// <summary>Rest eye point in the figure's own +Z frame; absent crown falls back to standing eye height.</summary>
+    public static Vec3 RestEyePoint(Vec3 head, Vec3? crown, double heightM)
+        => new(head.X, crown is Vec3 c ? head.Y + (c.Y - head.Y) * EyeHeadFraction : EyeHeight(heightM),
+               head.Z + heightM * EyeForwardFraction);
+
+    public static double ViewHeading(double cameraYaw) => System.Math.Atan2(-System.Math.Sin(cameraYaw), -System.Math.Cos(cameraYaw));
+
+    /// <summary>Strictly past the wrapped threshold, turn the standing body to the unwrapped view yaw.</summary>
+    public static double? BodyYawForView(double bodyYaw, double viewYaw, double thresholdDeg = BodyTurnDeg)
+    {
+        double d = (viewYaw - bodyYaw) % (System.Math.PI * 2);
+        if (d > System.Math.PI) d -= System.Math.PI * 2;
+        if (d < -System.Math.PI) d += System.Math.PI * 2;
+        return System.Math.Abs(d) > thresholdDeg * System.Math.PI / 180 ? viewYaw : null;
+    }
+}
+
+/// <summary>Task 47 (E7-T2): cameraFraming.ts continuous 180ms zoom hysteresis (1.2m enter, 1.8m leave), camera.json.</summary>
+public sealed class FirstPersonZoom
+{
+    public bool Active { get; private set; }
+    private double _pendingSeconds;
+
+    public bool Update(double distance, bool enabled, double dt)
+    {
+        if (!enabled) { Active = false; _pendingSeconds = 0; return false; }
+        bool switching = Active ? distance >= 1.8 : distance <= 1.2;
+        if (!switching) { _pendingSeconds = 0; return Active; }
+        _pendingSeconds += dt;
+        if (_pendingSeconds >= 0.18 - 1e-9) { Active = !Active; _pendingSeconds = 0; }
+        return Active;
     }
 }

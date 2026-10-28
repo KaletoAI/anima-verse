@@ -296,6 +296,8 @@ public sealed record SceneWall(int Level, (double X, double Z) From, (double X, 
     public string OpacityRole { get; init; } = "";
     /// <summary>The pane is filled by a window MODEL in <c>models[]</c> (Blender windows v16) — hidden inside like a door-prop leaf.</summary>
     public bool WindowModel { get; init; }
+    /// <summary>Task 47 (E7-T2): the wall above a doorway; excluded from floor-plan collision, collide.ts.</summary>
+    public bool Lintel { get; init; }
     /// <summary><c>outward_normal</c> (tile frame), (0, 0) when absent.</summary>
     public (double X, double Z) OutwardNormal { get; init; }
 }
@@ -447,7 +449,7 @@ public sealed class ScenePayload
                                       Json.Bool(w, "glass"), Json.Bool(w, "leaf"), Json.Bool(w, "door_prop"))
             {
                 RoomId = Json.Str(w, "room_id"), TextureKind = Json.Str(w, "texture_kind"),
-                OpacityRole = Json.Str(w, "opacity_role"), WindowModel = Json.Bool(w, "window_model"),
+                OpacityRole = Json.Str(w, "opacity_role"), WindowModel = Json.Bool(w, "window_model"), Lintel = Json.Bool(w, "lintel"),
                 OutwardNormal = n.Length >= 2 ? (n[0], n[1]) : (0, 0),
             });
         }

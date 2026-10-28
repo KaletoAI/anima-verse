@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using AnimaNative.Embody;
 using AnimaNative.Scatter;
 using AnimaNative.Scene;
 using AnimaNative.World;
@@ -147,22 +148,22 @@ public class StoreyViewTests
     {
         var locks = new Dictionary<string, string> { ["b"] = "Private", ["c"] = "" };
         // a open; b locked with words; c locked without words ("" ≠ null); the avatar's own room is left out.
-        Assert.Null(StoreyView.DoorwayLock(new[] { "a" }, locks));
-        Assert.Equal("Private", StoreyView.DoorwayLock(new[] { "a", "b" }, locks));
-        Assert.Equal("", StoreyView.DoorwayLock(new[] { "c", "b" }, locks));
-        Assert.Equal("Private", StoreyView.DoorwayLock(new[] { "c", "b" }, locks, "c"));
-        Assert.Null(StoreyView.DoorwayLock(new[] { "b" }, locks, "b"));
-        Assert.True(StoreyView.IsLocked(locks, "c"));
-        Assert.False(StoreyView.IsLocked(locks, ""));
-        Assert.False(StoreyView.IsLocked(null, "b"));
+        Assert.Null(Locks.DoorwayLock(new[] { "a" }, locks));
+        Assert.Equal("Private", Locks.DoorwayLock(new[] { "a", "b" }, locks));
+        Assert.Equal("", Locks.DoorwayLock(new[] { "c", "b" }, locks));
+        Assert.Equal("Private", Locks.DoorwayLock(new[] { "c", "b" }, locks, "c"));
+        Assert.Null(Locks.DoorwayLock(new[] { "b" }, locks, "b"));
+        Assert.True(Locks.IsLocked(locks, "c"));
+        Assert.False(Locks.IsLocked(locks, ""));
+        Assert.False(Locks.IsLocked(null, "b"));
     }
 
     [Fact]
     public void LocksArePaintedOnlyInTheAvatarsLocation()
     {
         var state = new LockState(new Dictionary<string, string> { ["b"] = "" }, "loc-1", new Dictionary<string, string>(), "a");
-        Assert.True(StoreyView.IsLocked(state.RoomsFor("loc-1"), "b"));
-        Assert.False(StoreyView.IsLocked(state.RoomsFor("loc-2"), "b"));
+        Assert.True(Locks.IsLocked(state.RoomsFor("loc-1"), "b"));
+        Assert.False(Locks.IsLocked(state.RoomsFor("loc-2"), "b"));
     }
 
     [Fact]

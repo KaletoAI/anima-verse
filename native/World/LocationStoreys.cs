@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using AnimaNative.Embody;
 using AnimaNative.Scatter;
 using AnimaNative.Scene;
 using AnimaNative.Ui;
@@ -156,10 +157,10 @@ public sealed class LocationStoreys
         var rooms = locks.RoomsFor(locationId);
         foreach (var (mesh, ids) in _doorMeshes)
         {
-            var mat = StoreyView.DoorwayLock(ids, rooms, locks.AvatarRoom) is not null ? MarkLooks.Locked : MarkLooks.Open;
+            var mat = Locks.DoorwayLock(ids, rooms, locks.AvatarRoom) is not null ? MarkLooks.Locked : MarkLooks.Open;
             if (mesh.MaterialOverride != mat) mesh.MaterialOverride = mat;
         }
-        if (BoundaryMarks is not null) BoundaryMarks.Visible = StoreyView.IsLocked(locks.Locations, locationId);
+        if (BoundaryMarks is not null) BoundaryMarks.Visible = Locks.IsLocked(locks.Locations, locationId);
     }
 
     /// <summary>The door-mark meshes and whether each wears the locked look (for the check).</summary>

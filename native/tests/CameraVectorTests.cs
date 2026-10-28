@@ -29,8 +29,9 @@ namespace AnimaNative.Tests;
 ///   cameraPose         CameraMath.CameraPose           Vec3 → {pos: [x, y, z]}
 /// </code>
 ///
-/// Ported without a case of their own (reached through the cases above): WheelFactor, ZoomFloorOf,
-/// ZoomCeiling, ClampZoom (inside WheelZoom), OrbitOffset (inside CameraPose).
+/// Task 47 (E7-T2) also dispatches every first-person sequence, rest eye point, eye height, view heading,
+/// body-turn threshold and zoom-bound case; no deferred functions remain. WheelFactor, ClampZoom and
+/// OrbitOffset are reached through WheelZoom and CameraPose.
 /// </summary>
 public class CameraVectorTests
 {
@@ -38,6 +39,19 @@ public class CameraVectorTests
 
     private static readonly Dictionary<string, Func<JsonArray, JsonNode?>> Dispatch = new()
     {
+        ["firstPersonZoomSequence"] = a =>
+        {
+            var zoom = new FirstPersonZoom();
+            return new JsonArray(((JsonArray)a[0]!).Select(step => (JsonNode?)JsonValue.Create(
+                zoom.Update(VectorCompare.Num(step![0]), BoolOrFalse(step[1]), VectorCompare.Num(step[2])))).ToArray());
+        },
+        ["restEyePoint"] = a => Vec3Json(CameraFraming.RestEyePoint(Vec(a[0]), a[1] is null ? null : Vec(a[1]), VectorCompare.Num(a[2]))),
+        ["eyeHeight"] = a => JsonValue.Create(CameraFraming.EyeHeight(VectorCompare.Num(a[0]))),
+        ["viewHeading"] = a => JsonValue.Create(CameraFraming.ViewHeading(VectorCompare.Num(a[0]))),
+        ["bodyYawForView"] = a => JsonValue.Create(CameraFraming.BodyYawForView(VectorCompare.Num(a[0]), VectorCompare.Num(a[1]),
+            a.Count > 2 ? VectorCompare.Num(a[2]) : CameraFraming.BodyTurnDeg)),
+        ["zoomFloorOf"] = a => JsonValue.Create(CameraMath.ZoomFloorOf(VectorCompare.NumOrNull(a[0]))),
+        ["zoomCeiling"] = a => JsonValue.Create(CameraMath.ZoomCeiling(VectorCompare.Num(a[0]), VectorCompare.NumOrNull(a[1]))),
         ["fitDistance"] = a => JsonValue.Create(CameraMath.FitDistance(BoundsOrNull(Arity(a, 1, 1)[0]))),
         ["worldCentreXZ"] = a =>
         {
@@ -113,20 +127,12 @@ public class CameraVectorTests
                 ? el.ValueKind == System.Text.Json.JsonValueKind.True
                 : throw new ArgumentException($"expected a boolean, got {VectorCompare.Show(node)}");
 
-    // Task 46 adds TS-first E7 cases; Task 47 removes this explicit deferral
-    // when their production ports arrive. Unknown functions still fail below.
-    private static readonly HashSet<string> DeferredE7Functions = new(StringComparer.Ordinal)
-    {
-        "firstPersonZoomSequence", "restEyePoint", "eyeHeight", "viewHeading",
-        "bodyYawForView", "zoomFloorOf", "zoomCeiling",
-    };
-
     public static TheoryData<string> Cases
     {
         get
         {
             var rows = new TheoryData<string>();
-            foreach (var c in File.Value.Cases.Where(c => !DeferredE7Functions.Contains(c.Fn)))
+            foreach (var c in File.Value.Cases)
                 rows.Add(c.Label);
             return rows;
         }
@@ -138,11 +144,7 @@ public class CameraVectorTests
 
     [Fact]
     public void EveryFunctionIsDispatched()
-        => Assert.Empty(File.Value.MissingFunctions(Dispatch).Except(DeferredE7Functions));
-
-    [Fact]
-    public void EveryDeferredE7FunctionHasVectors()
-        => Assert.Empty(DeferredE7Functions.Except(File.Value.Cases.Select(c => c.Fn)));
+        => Assert.Empty(File.Value.MissingFunctions(Dispatch));
 
     /// <summary>The constants the TS module exports, pinned to the same numbers.</summary>
     [Fact]

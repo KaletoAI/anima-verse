@@ -326,4 +326,53 @@ public static class SceneView
             best = Math.Min(best, PointSegmentDistance(x, z, pts[j].X, pts[j].Z, pts[i].X, pts[i].Z));
         return best;
     }
+    /// <summary>Task 47 (E7-T2): polygon.ts sanitized shoelace area, reusing the existing arithmetic; enter.json.</summary>
+    public static double PolygonSignedArea(IReadOnlyList<P2>? points)
+        => SanitizePolygon(points) is { } pts ? ScatterMath.SignedArea(pts) : 0;
+
+    public static double PolygonArea(IReadOnlyList<P2>? points) => Math.Abs(PolygonSignedArea(points));
+
+    /// <summary>Task 47 (E7-T2): polygon.ts bounds after the same sanitization as every other polygon query; enter.json.</summary>
+    public static PolygonExtent? PolygonBounds(IReadOnlyList<P2>? points)
+    {
+        var pts = SanitizePolygon(points);
+        if (pts is null) return null;
+        double minX = double.PositiveInfinity, minZ = double.PositiveInfinity,
+               maxX = double.NegativeInfinity, maxZ = double.NegativeInfinity;
+        foreach (var p in pts)
+        {
+            minX = Math.Min(minX, p.X); minZ = Math.Min(minZ, p.Z);
+            maxX = Math.Max(maxX, p.X); maxZ = Math.Max(maxZ, p.Z);
+        }
+        return new(minX, minZ, maxX, maxZ);
+    }
+
+    /// <summary>
+    /// Task 47 (E7-T2), polygon.ts nearestRimPoint: one nearest rim point and stored-winding inward normal.
+    /// Reuses the existing polygon sanitizer; skips zero-length edges, keeps the first edge on a tie (enter.json).
+    /// </summary>
+    public static RimPoint? NearestRimPoint(double x, double z, IReadOnlyList<P2>? points)
+    {
+        var pts = SanitizePolygon(points);
+        if (pts is null) return null;
+        RimPoint? best = null;
+        for (int i = 0, j = pts.Length - 1; i < pts.Length; j = i++)
+        {
+            double ax = pts[j].X, az = pts[j].Z, dx = pts[i].X - ax, dz = pts[i].Z - az;
+            double len2 = dx * dx + dz * dz;
+            if (len2 < 1e-18) continue;
+            double t = Math.Max(0, Math.Min(1, ((x - ax) * dx + (z - az) * dz) / len2));
+            double cx = ax + t * dx, cz = az + t * dz, dist = double.Hypot(x - cx, z - cz);
+            if (best is RimPoint b && dist >= b.Dist) continue;
+            double len = Math.Sqrt(len2);
+            best = new(new P2(cx, cz), new P2(-dz / len, dx / len), dist);
+        }
+        return best;
+    }
 }
+
+/// <summary>Task 47: polygon.ts rim projection, its inward unit normal and distance in the same frame.</summary>
+public readonly record struct RimPoint(P2 Point, P2 Inward, double Dist);
+
+/// <summary>Task 47: polygon.ts axis-aligned extent of a sanitized outline.</summary>
+public readonly record struct PolygonExtent(double MinX, double MinZ, double MaxX, double MaxZ);

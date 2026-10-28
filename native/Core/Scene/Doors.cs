@@ -71,6 +71,31 @@ public readonly record struct ElevatorRoom(string Id, int Level, P2 Center, bool
 /// </summary>
 public static class Elevator
 {
+    /// <summary>Task 47 (E7-T2): elevator.ts reach, strict at 1.5 figure metres; walk_control.json.</summary>
+    public const double ElevatorRange = 1.5;
+
+    public static ElevatorState? At(P2 pos, int level, IReadOnlyList<ElevatorStop> stops,
+                                    IReadOnlyList<ElevatorRoom> rooms, double scale)
+    {
+        var levels = Levels(stops, rooms);
+        if (levels.Count < 2 || !levels.Contains(level)) return null;
+        foreach (var stop in stops)
+        {
+            if (stop.Level != level) continue;
+            double dist = double.Hypot(stop.Pos.X - pos.X, stop.Pos.Z - pos.Z);
+            return dist >= ElevatorRange * scale ? null : new ElevatorState(levels, level, dist);
+        }
+        return null;
+    }
+
+    /// <summary>Task 47: only destinations other than the current storey are offered, in source order.</summary>
+    public static List<int> Options(ElevatorState state) => state.Levels.Where(l => l != state.Current).ToList();
+    public static int? SoleOption(ElevatorState state)
+    {
+        var options = Options(state);
+        return options.Count == 1 ? options[0] : null;
+    }
+
     /// <summary><c>elevatorLevels(stops, rooms)</c>: the storeys with a stop AND a room, ascending, each once.</summary>
     public static List<int> Levels(IEnumerable<ElevatorStop> stops, IEnumerable<ElevatorRoom> rooms)
     {
@@ -112,3 +137,6 @@ public static class Elevator
         return best;
     }
 }
+
+/// <summary>Task 47: elevator.ts published offer, including its measured distance.</summary>
+public sealed record ElevatorState(IReadOnlyList<int> Levels, int Current, double Dist);
