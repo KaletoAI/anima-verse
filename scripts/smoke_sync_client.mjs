@@ -46,7 +46,7 @@ import { createRequire } from "node:module";
 const unhandled = [];
 process.on("unhandledRejection", error => unhandled.push(error));
 const require_ = createRequire(import.meta.url);
-const esbuild = require_("../frontend/node_modules/esbuild");
+const esbuild = require_("esbuild");
 async function load(n) {
   const r = await esbuild.build({ entryPoints: [`packages/player-ui/src/${n}.ts`], bundle: true, write: false, format: "esm", platform: "neutral", logLevel: "silent" });
   return import(`data:text/javascript;base64,${Buffer.from(r.outputFiles[0].text).toString("base64")}`);
