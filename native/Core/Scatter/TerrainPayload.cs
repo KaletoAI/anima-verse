@@ -32,6 +32,8 @@ public sealed record TerrainTypeInfo(string Kind, string Color, double Undergrow
     /// <c>movementOf(meta.movement, 'wilderness')</c>, the two sinks (<c>meta.move_sink_m</c>/<c>idle_sink_m</c> read with
     /// <c>Number()</c>, only for a <c>swim</c> ground, ≤ 0 / junk = 0) and <c>swimFrom(meta.swim_from_m)</c>.
     /// </summary>
+    /// <summary>Task 49: only an explicit catalog false blocks wilderness walking.</summary>
+    public bool Passable { get; init; } = true;
     public double SpeedFactor { get; init; } = 1;
     public string Movement { get; init; } = Figures.FigureClips.WalkRun;
     public double MoveSinkM { get; init; }
@@ -186,6 +188,9 @@ public sealed class TerrainPayload
         return new TerrainPoint(kind, t.SpeedFactor, t.Movement, t.MoveSinkM, t.IdleSinkM, t.SwimFromM, level);
     }
 
+    /// <summary>Task 49 / ground.ts: painted topmost kind, default kind, unknown kind stays passable.</summary>
+    public bool PassableAt(double x, double z) => TypeOf(TypeAt(x,z).Kind)?.Passable ?? true;
+
     public static TerrainPayload Parse(JsonElement root)
     {
         var t = new TerrainPayload { DefaultKind = Json.Str(root, "default_kind"), Sig = Json.Str(root, "sig") };
@@ -202,6 +207,7 @@ public sealed class TerrainPayload
                 (ty.TryGetProperty("surface", out var sf) && sf.ValueKind == JsonValueKind.String ? sf.GetString() ?? "" : "")
                     .Trim().ToLowerInvariant())                                                          // surfaceOfType
             {
+                Passable = !ty.TryGetProperty("passable", out var passable) || passable.ValueKind != JsonValueKind.False,
                 SpeedFactor = NumOrNull(ty, "speed_factor") is { } spd && double.IsFinite(spd) ? spd : 1,
                 Movement = Figures.FigureClips.MovementOf(StrOrNull(meta, "movement"), Water.GroundScope.Wilderness),
                 MoveSinkM = StrOrNull(meta, "movement") == Figures.FigureClips.Swim ? Depth(meta, "move_sink_m") : 0,

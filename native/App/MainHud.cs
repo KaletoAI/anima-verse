@@ -189,7 +189,7 @@ public partial class Main : Node3D
         var figure = _figures.CharacterAt(o, d);
         // Asked only when no figure took the click, as engine.ts does.
         var location = figure is null ? _picking?.Pick(o, d) : null;
-        var outcome = PickChain.Resolve(figure?.Name, location?.Id);
+        var outcome = PickChain.Resolve(figure?.Name, location?.Id, () => _playerSteering?.OnGroundRay(o, d) == true);
         Log($"pick at ({click.X:0},{click.Y:0}): "
             + (figure is { } f ? $"figure {f.Name} at {f.Distance:0.##} m ({_figures.LastPickCandidates} near the ray, "
                                  + $"{_figures.LastPickSkinnedVertices} vertices skinned, {_figures.LastPickMs:0.##} ms)"

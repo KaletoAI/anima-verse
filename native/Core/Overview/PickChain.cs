@@ -1,3 +1,5 @@
+using System;
+
 namespace AnimaNative.Overview;
 
 /// <summary>What a click does to the HUD's <c>info</c> field.</summary>
@@ -32,10 +34,11 @@ public readonly record struct PickOutcome(string? Selected, InfoChange Info, str
 /// </summary>
 public static class PickChain
 {
-    public static PickOutcome Resolve(string? figureHit, string? locationHit)
+    public static PickOutcome Resolve(string? figureHit, string? locationHit, Func<bool>? onGroundClick = null)
     {
         if (figureHit is not null) return new PickOutcome(figureHit, InfoChange.Unchanged, null);
-        // (E2/E7: seat on a prop, place glyph, stair/lift, ground walk — each would return here.)
+        // Task 49 / E7-T4: later place/vertical stages precede this ground callback.
+        if (onGroundClick?.Invoke() == true) return new PickOutcome(null, InfoChange.Unchanged, null);
         return locationHit is null
             ? new PickOutcome(null, InfoChange.Clear, null)
             : new PickOutcome(null, InfoChange.Show, locationHit);

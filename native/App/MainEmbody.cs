@@ -12,11 +12,13 @@ namespace AnimaNative;
 
 /// <summary>
 /// Task 48 / E7-T3: embodied mode glue from main.ts. Boot/model waits and the Task 44 achieved near/ready
-/// gate precede the single mode transition. Walking and write APIs belong to Task 49; follow reads the live root.
+/// gate precede the single mode transition. Task 49 supplies local walking; write APIs and reconciliation follow in Task 50.
 /// </summary>
 public partial class Main
 {
     private EmbodyMode? _embody;
+    private PlayerSteering? _playerSteering;
+    private FigureManager? _steeringFigures;
     private bool _pendingTakeControl, _pendingArrivalTakeControl;
     private Figure? _embodiedBody;
     private bool Embodied => _embody?.Active == true;
@@ -59,6 +61,7 @@ public partial class Main
         _embody.Changed += () =>
         {
             hud.SetState("mode", Embodied ? "embodied" : "overview");
+            SyncPlayerSteering();
             PoseEmbody();
         };
         camera.Posed += PoseEmbody;
@@ -129,7 +132,8 @@ public partial class Main
     /// <summary>Resume pending requests only after their gate changes; no async continuation can revive cancelled control.</summary>
     private void TickEmbody()
     {
-        if (Leaving) { CancelPendingControl(); return; }
+        if (Leaving) { CancelPendingControl(); _playerSteering?.SetActive(false); return; }
+        SyncPlayerSteering();
         if ((_pendingTakeControl || _pendingArrivalTakeControl) && ControlBootReady && AvatarRow() is null)
             CancelPendingControl();
         if (_pendingTakeControl && ControlBootReady && AvatarFigure()?.Loading != true) TakeControl();
@@ -160,10 +164,40 @@ public partial class Main
         figure.FirstPersonViewYaw = firstPerson ? CameraFraming.ViewHeading(_camera!.Yaw) : null;
     }
 
+    /// <summary>Task 49: install once after world/figures arrive; steering precedes the single manager movement tick.</summary>
+    private void SyncPlayerSteering()
+    {
+        if (_figures is null || _builder is null) return;
+        if (_steeringFigures != _figures)
+        {
+            if (_steeringFigures is { } old && IsInstanceValid(old)) old.BeforeTick -= StepPlayerSteering;
+            _steeringFigures = _figures;
+            _playerSteering = new PlayerSteering(_figures, _builder)
+            { LoadingPlace = () => EmbodyToast("Loading this place…") };
+            _figures.BeforeTick += StepPlayerSteering;
+        }
+        _playerSteering!.SetActive(Embodied);
+    }
+
+    /// <summary>Task 49: browser key names come from the shared camera key set; HUD-owned typing/overlay releases them.</summary>
+    private void StepPlayerSteering(double dt)
+    {
+        if (_playerSteering is null || _camera is null) return;
+        _playerSteering.SetActive(Embodied && !Leaving);
+        _playerSteering.MovementLocked = _hud?.HudOwned("movementLocked")?.GetValue<bool>() == true;
+        _playerSteering.RoomId = AvatarRow() is { } row ? Str(row, "room_id") ?? "" : "";
+        if (_hud is { } hud && HudRouting.KeysToHud(hud.Ui)) _camera.Control.ReleaseKeys();
+        _playerSteering.Step(System.Math.Min(dt, CameraMath.MaxFrameDt),
+            (IReadOnlySet<string>)_camera.Control.KeysDown, _camera.Yaw);
+    }
+
     private void ReassertEmbodyLens() => _camera?.RefreshFirstPerson();
 
     private void DetachEmbody()
     {
+        _playerSteering?.SetActive(false);
+        if (_steeringFigures is { } manager && IsInstanceValid(manager)) manager.BeforeTick -= StepPlayerSteering;
+        _playerSteering = null; _steeringFigures = null;
         if (_hud is { } hud && IsInstanceValid(hud)) { hud.SceneEscape = null; hud.LockedEntry = null; }
         if (_camera is { } camera && IsInstanceValid(camera)) camera.Posed -= PoseEmbody;
         if (_embodiedBody is { } f && IsInstanceValid(f))

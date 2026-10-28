@@ -297,10 +297,11 @@ public partial class FigureManager : Node3D
             }
             if (row.HeightCm is > 30 and < 400) fig!.HeightM = row.HeightCm.Value / 100.0;
             if (row.AnimationSets.Count > 0) fig!.Sets = row.AnimationSets;   // setCharacterSets: only a non-empty chain
-            fig!.Activity = row.ActivityAnimation;
+            fig!.Activity = row.Name == PlayerDriven && _playerAnimation is { } animation ? animation : row.ActivityAnimation;
             fig.AvatarUrl = row.AvatarUrl;
             fig.IsAvatar = row.Name == AvatarName;
             ApplyPlan(fig, plan, fresh);
+            if (fresh && row.Name == PlayerDriven) TakeOver(fig);
             fig.WantedSig = row.ModelSig;
             fig.WantedRev = row.ModelRev;
             // refreshIfChanged(name, sig, rev, motion): a row's motion replaces the known payload, an absent one keeps it.
@@ -313,7 +314,7 @@ public partial class FigureManager : Node3D
             }
             else if (!fig.Loading && !fig.RetryPending && Changed(fig)) loads.Add(LoadModelAsync(fig));
         }
-        foreach (var gone in _figures.Keys.Where(n => !plans.ContainsKey(n)).ToList())
+        foreach (var gone in _figures.Keys.Where(n => !plans.ContainsKey(n) && n != PlayerDriven).ToList())
         {
             _figures[gone].DropTravelLine();
             _figures[gone].QueueFree();
@@ -375,6 +376,8 @@ public partial class FigureManager : Node3D
     /// </summary>
     private void ApplyPlan(Figure fig, FigurePlan plan, bool fresh)
     {
+        // Task 49: polls still refresh models/activity, but local root, goal, route, facing and visibility belong to input.
+        if (!fresh && fig.CharacterName == PlayerDriven) { AdoptInteraction(fig); return; }
         fig.Rule = plan.Rule;
         fig.SurfaceGroup = plan.SurfaceGroup;
         AdoptInteraction(fig);
@@ -553,6 +556,7 @@ public partial class FigureManager : Node3D
     public void Tick(double dt)
     {
         _clock += dt;
+        BeforeTick?.Invoke(dt);
         double camDist = CamDist?.Invoke() ?? DefaultCamDist;
         // npcs.ts facingTargets(): every figure's neighbours, measured before anybody steps this frame.
         var all = _figures.Values.ToList();
@@ -622,7 +626,7 @@ public partial class FigureManager : Node3D
         // BRIDGE TRAVEL WITHOUT A ROUTE (rule 4, figures.ts travelBase): the bridge has ended and its body stands where
         // the clip carried it — the root moves there now, the body on screen does not move. The GOAL does not move with
         // it: it is the server's stand point (seat + travel); near it the NPC keeps the spot it stands on.
-        if (fig.Player is not null && !fig.Bridging && fig.HoldsTravel && ApplyBridgeTravel(fig)) SettleAfterBridge(fig);
+        if (fig.CharacterName != PlayerDriven && fig.Player is not null && !fig.Bridging && fig.HoldsTravel && ApplyBridgeTravel(fig)) SettleAfterBridge(fig);
         var pos = V(fig.Position);
         // Where this frame starts, for the ride's swept test below: the walk retires a landing from HERE.
         var frameFrom = new P2(pos.X, pos.Z);
@@ -630,9 +634,10 @@ public partial class FigureManager : Node3D
                                 fig.Ride is not null ? Stairs.RideArriveM : NpcWalk.WaypointArriveM);
         fig.Waypoints.RemoveRange(0, plan.Retired);
         double rootYBefore = pos.Y;
-        bool reckoning = fig.Travelling;
+        bool reckoning = fig.Travelling && fig.CharacterName != PlayerDriven;
         var stepGround = WordAt(pos.X, pos.Z);
         var (running, _) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning, dt, fig.Pace, 1);
+        if (fig.CharacterName == PlayerDriven) running = false;
         // A BRIDGE CLIP HOLDS THE FIGURE at the step: asked for the clip this frame WILL ask for (paceLimitFor), because
         // the clip is played after the step — on the frame a bridge starts, paceLimit would still say "nothing holds you".
         double paceLimit = fig.Player is null ? 1
@@ -645,7 +650,7 @@ public partial class FigureManager : Node3D
             double? reckonedStep = reckoning && fig.Reckon?.RateMS is { } rate
                 ? TravelPath.DeadReckonStep(rate, WalkGround.TerrainPace(rawPace.Speed, rawPace.Scope), dt, plan.DistToGoal)
                 : null;
-            var (_, step) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning, dt, fig.Pace, paceLimit, reckonedStep);
+            var (_, step) = NpcWalk.Step(plan, stepGround.Word.Movement, reckoning || fig.CharacterName == PlayerDriven, dt, fig.Pace, paceLimit, reckonedStep);
             double len = plan.DistToGoal;
             double dx = plan.Delta.X / len, dz = plan.Delta.Z / len;
             pos = new Vec3(pos.X + dx * step, pos.Y, pos.Z + dz * step);
@@ -692,7 +697,7 @@ public partial class FigureManager : Node3D
             if (NpcWalk.StandingFacing(new Vec3(pos.X, y, pos.Z), marker, viewDriven ? null : neighbour, viewYaw) is { } dir && !fig.HoldsFacing)
                 fig.FaceTowards(new Vector3((float)dir.X, (float)dir.Y, (float)dir.Z));
         }
-        bool run = !reckoning && plan.Dist > NpcWalk.RunDistance;
+        bool run = !reckoning && fig.CharacterName != PlayerDriven && plan.Dist > NpcWalk.RunDistance;
         fig.SetMotion(plan.Moving, plan.Moving && run && FigureClips.CanRun(stand.Word.Movement), stand.Word.Movement);
         PlayLifting(fig, plan.Moving ? FigureClips.MoveClip(stand.Word.Movement, run, fig.Poses) : standingClip,
                     plan.Moving || standIdle.Length > 0, standSink, rootYBefore, goalY,

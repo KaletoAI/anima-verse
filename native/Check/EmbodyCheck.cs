@@ -169,7 +169,8 @@ public static class EmbodyCheck
             Near("drawn-height eye", fallback.Eye.Y, 1.128);
             fallback.SetFirstPerson(false);
             Is("no-head body restored", fallback.Body.Visible);
-            return $"embody cases={n} fly=7 cap=34 hints=1/session floor=0.8 first_person=180ms exit=70 menu_esc=only";
+            string walking = await EmbodyWalkCheck.RunAsync(host, fixtures);
+            return $"embody cases={n} {walking} fly=7 cap=34 hints=1/session floor=0.8 first_person=180ms exit=70 menu_esc=only";
         }
         finally { hud.Free(); vp.QueueFree(); }
     }
