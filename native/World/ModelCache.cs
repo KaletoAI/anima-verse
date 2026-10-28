@@ -53,7 +53,9 @@ public sealed class ModelCache
             var (doc, state, counts) = await Task.Run(() => GlbLoader.Parse(GlbLoader.Prepare(bytes), url));
             // Task 44: world disposal invalidates late imports before a detached template node is generated.
             if (generation != _generation) { doc.Dispose(); state.Dispose(); return null; }
-            var root = GlbLoader.Generate(doc, state, url);
+            Node3D root;
+            using (Ui.HitchLog.Time("model generate"))
+                root = GlbLoader.Generate(doc, state, url);
             Neutralized += NeutralizeMaterials(root);
             Loaded++;
             Bytes += bytes.Length;
@@ -107,7 +109,11 @@ public sealed class ModelCache
             yield return d;
     }
 
-    public static Node3D Instance(Template t) => (Node3D)t.Root.Duplicate();
+    public static Node3D Instance(Template t)
+    {
+        using var hitch = Ui.HitchLog.Time("model instance");
+        return (Node3D)t.Root.Duplicate();
+    }
 
     /// <summary>Free the templates (they never enter the tree); the placed duplicates go with their scene.</summary>
     public void FreeAll()

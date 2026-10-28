@@ -245,6 +245,7 @@ public partial class UndergrowthField : Node3D
     /// <param name="workerMs">The worker's time; null = the inline boot build (not counted into the runtime figures).</param>
     private void Apply(CellInputs inputs, List<List<LayerSpec>> specs, double? workerMs)
     {
+        using var hitch = Ui.HitchLog.Time("undergrowth apply");
         var clock = Stopwatch.StartNew();
         var want = UndergrowthMath.WantedCells(_anchorX, _anchorZ).ToHashSet();
         for (int i = 0; i < inputs.Keys.Count; i++)

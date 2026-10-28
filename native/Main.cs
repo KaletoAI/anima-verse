@@ -109,7 +109,11 @@ public partial class Main : Node3D
     /// <summary>The bench anchor of the current world (S2 drives its path relative to it).</summary>
     public AnchorInfo? Anchor { get; private set; }
 
-    public override void _Ready() => _ = RunAsync();
+    public override void _Ready()
+    {
+        Ui.HitchLog.Init();
+        _ = RunAsync();
+    }
 
     private async Task RunAsync()
     {
@@ -253,6 +257,8 @@ public partial class Main : Node3D
 
     public override void _Process(double delta)
     {
+        // delta is the frame that just ended: log it if it was a hitch, with what the heavy main-thread steps reported.
+        Ui.HitchLog.EndFrame(delta * 1000, Log);
         // The sync layer's clock: due timers (trailing polls, stream deadlines and retries, the 120-s location
         // re-sync), then the poll core's 1-s tick.
         _timers.Pump();

@@ -1152,7 +1152,8 @@ public partial class FigureManager : Node3D
             // 35–40 ms main-thread import); only the scene (nodes) is generated here.
             var (doc, state, _) = await Task.Run(() => GlbLoader.Parse(GlbLoader.Prepare(bytes), url));
             importWatch.Restart();
-            root = GlbLoader.Generate(doc, state, url);
+            using (Ui.HitchLog.Time("figure generate"))
+                root = GlbLoader.Generate(doc, state, url);
         }
         double importMs = importWatch.Elapsed.TotalMilliseconds;
         await NextFrame();   // the build's main-thread parts each in a frame of their own (Task 35b)
@@ -1745,7 +1746,9 @@ public partial class FigureManager : Node3D
     {
         if (!IsInstanceValid(t.Root)) return;   // retired meanwhile (RetireStaleTemplates): the next poll loads the new model
         var dupWatch = System.Diagnostics.Stopwatch.StartNew();
-        var inst = (Node3D)t.Root.Duplicate();
+        Node3D inst;
+        using (Ui.HitchLog.Time("figure instance"))
+            inst = (Node3D)t.Root.Duplicate();
         double scale = poolHeight is { } ph ? ph / t.RawHeight : info.Normalized ? 1.0 : fig.HeightM / t.RawHeight;
         var body = new Node3D { Name = "Body", Scale = Vector3.One * (float)scale };
         body.AddChild(inst);

@@ -320,6 +320,7 @@ public partial class ScatterField : Node3D
     /// here, before the first picture — not counted into the runtime figures).</param>
     private void Apply(WindowInputs inputs, List<List<PropSpec>> specs, double? workerMs)
     {
+        using var hitch = Ui.HitchLog.Time("scatter apply");
         var clock = Stopwatch.StartNew();
         DisposeProps(_retiring);
         for (int i = 0; i < _areas.Count; i++)

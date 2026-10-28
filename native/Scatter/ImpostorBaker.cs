@@ -73,7 +73,9 @@ public partial class ImpostorBaker : Node, IImpostorSource
             using var doc = parsed.Doc;
             using var state = parsed.State;
             if (_closed) return;
-            var root = GlbLoader.Generate(doc, state, url);
+            Node3D root;
+            using (Ui.HitchLog.Time("impostor generate"))
+                root = GlbLoader.Generate(doc, state, url);
             attempt = "unbakeable";
             bake = await RenderAsync(root);
             if (bake is not null) attempt = "baked";
@@ -160,6 +162,7 @@ public partial class ImpostorBaker : Node, IImpostorSource
             viewport.RenderTargetUpdateMode = SubViewport.UpdateMode.Once;
             await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
             if (_closed || !IsInstanceValid(viewport)) return null;
+            using var readback = Ui.HitchLog.Time("impostor readback");
             using var image = viewport.GetTexture().GetImage();
             if (image is null || image.IsEmpty()) throw new InvalidOperationException("empty impostor readback");
             image.Convert(Image.Format.Rgba8);
