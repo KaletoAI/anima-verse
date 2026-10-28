@@ -947,14 +947,18 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
             composed["capacity"] = int(marker.get("capacity") or 1)
             composed["spacing_m"] = float(marker.get("spacing_m") or 0.6)
             from app.core.prop_action_migration import compose_binding
+            from app.core.prop_actions import derive_bindings
             composed["placement_id"] = entry["id"]
             composed["prop_id"] = pid
             composed["variant_uid"] = entry["variant_uid"]
             composed["marker_id"] = composed["id"]
+            if marker.get("access"):
+                from app.core.prop_action_access import compose_access
+                composed["access"] = compose_access(marker["access"], entry)
             composed["action_bindings"] = [
                 compose_binding(binding, placement=entry,
-                                revision=entry["definition_revision"])
-                for binding in published.get("action_bindings", [])
+                                revision=entry["definition_revision"], marker_id=composed["id"])
+                for binding in derive_bindings(prop, published)
                 if marker.get("id") in binding.get("marker_ids", [])]
             if entry["action_dependency_invalid"] or entry["support_reason"]:
                 for binding in composed["action_bindings"]:
@@ -971,9 +975,8 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
                 composed["slot_axis"] = float(marker.get("slot_axis"))
             composed["placement"] = idx
             prop_markers.append(composed)
-    # A device-local proposal can be inside its supporting table. Keep that
-    # point visible, but block it; choosing a real room route is executor work.
-    from app.core.room_stand import BODY_R_M, _in_footprint
+    # Support dependency errors and cycles invalidate the binding itself.
+    # Floor clearance depends on a chosen slot/actor and is checked at runtime.
     by_id = {entry["id"]: entry for entry in placements if entry["id"]}
     for marker in prop_markers:
         child = placements[marker["placement"]]
@@ -981,20 +984,12 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         visited = {child["id"]}
         while support is not None and support["id"] not in visited:
             visited.add(support["id"])
-            dims = support.get("dims") or {}
-            box = dict(at=support["at"], yaw=support["yaw"],
-                       width_m=dims.get("width_m"), depth_m=dims.get("depth_m"))
             for binding in marker["action_bindings"]:
                 if support.get("action_dependency_invalid") or support.get("support_reason"):
                     binding.update(supported=False, validation="repair_required",
                                    reason=("incompatible_prop_dependency"
                                            if support.get("action_dependency_invalid")
                                            else "invalid_support_chain"))
-                elif binding["supported"] and (
-                        not dims or any(_in_footprint(point["x"], point["z"], box, BODY_R_M)
-                                        for point in binding["access_points"].values())):
-                    binding.update(supported=False, validation="repair_required",
-                                   reason="support_access_blocked")
             support = by_id.get(support.get("on"))
         if support is not None:
             for binding in marker["action_bindings"]:

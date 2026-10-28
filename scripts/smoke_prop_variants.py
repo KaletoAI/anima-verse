@@ -1591,23 +1591,20 @@ def main() -> int:
     # the fern was created without dims, so both variants are the 1 m
     # placeholder cube and neither overrides it.
     cube = {"width_m": 1.0, "depth_m": 1.0, "height_m": 1.0}
-    fern_uid = store.list_variants(fern)[0]["uid"]
-    authored_binding = dict(action_id="rest", variant_uid=fern_uid, supported=False,
-                            marker_ids=[], access_points={}, validation="suggested")
     store.bulk_update(fern, base_revision=store.get_prop(fern)["revision"],
                       actions=[dict(id="rest", name="Rest", description="", enabled=True,
                                     ability="pose", pose_key="", participants=1, presence="any",
                                     interrupt_on_presence_change=False, phases=[],
                                     requirements=[], effects=[])],
-                      variants={fern_uid: {"action_bindings": [authored_binding]}})
+                      variants={})
     tiers = store.get_prop(fern)["variant_tiers"]
     check("the record lists tiers per active variant, with its store index",
           [(v["variant"], v["tiers"], v["dims"]) for v in tiers]
           == [(0, ["full", "low"], cube), (1, ["full"], cube)])
     authored = store.list_variants(fern)
-    check("published variants retain stable identities and authored bindings",
-          [(v["uid"], v["action_bindings"]) for v in tiers]
-          == [(v["uid"], v["action_bindings"]) for v in authored])
+    check("published variants retain stable identities without stored bindings",
+          [v["uid"] for v in tiers] == [v["uid"] for v in authored]
+          and all("action_bindings" not in v for v in tiers + authored))
     spec = spec_of(fern)
     check("model_variants has one map per active variant",
           len(spec.get("model_variants") or []) == 2,

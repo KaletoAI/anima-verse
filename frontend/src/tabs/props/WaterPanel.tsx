@@ -121,7 +121,7 @@ export function WaterPanel({ controller: c, onPlace }: { controller: ReturnType<
   }, [setShape])
   return <section className="ga-form" style={{ width: '100%', gap: 8 }}>
     <div className="ga-form-section-label">{t('Water')}</div>
-    <p className="ga-hint">{t('Wird sofort angewendet. Verwerfen setzt Wasseränderungen nicht zurück.')}</p>
+    <p className="ga-hint">{t("Applies immediately. Discard does not undo water changes.")}</p>
     <div aria-live="polite">{t(c.status === 'valid' ? 'Water detected' : c.status === 'stale' ? 'Water is stale — detect again' : 'No water detected')}
       {c.water && <> · {t('Regions')}: {c.water.regions.length}</>}
     </div>

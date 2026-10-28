@@ -92,11 +92,11 @@ try {
   assert.equal(pair.participants, 2);
   assert.equal(pair.pose_key, 'embracing');
   const savedVariants = [
-    { uid: 'B', index: 4, stem: 'b', active: true, seasons: [], dims: { width_m: 2, depth_m: 3, height_m: 4 }, markers: [], action_bindings: [] },
-    { uid: 'A', index: 0, stem: 'a', active: false, seasons: [], dims: { width_m: 1, depth_m: 1, height_m: 1 }, markers: [], action_bindings: [] },
+    { uid: 'B', index: 4, stem: 'b', active: true, seasons: [], dims: { width_m: 2, depth_m: 3, height_m: 4 }, markers: [] },
+    { uid: 'A', index: 0, stem: 'a', active: false, seasons: [], dims: { width_m: 1, depth_m: 1, height_m: 1 }, markers: [] },
   ];
   let draft = queueFields(emptyFields(), 'general', { name: 'Unsaved name', tags: 'a, b', mount: { value: 'floor', suggested: false }, actions: [coffee] });
-  draft = queueFields(draft, 'v:A', { dims: { width_m: 9 }, action_bindings: [{ action_id: coffee.id, variant_uid: 'A', supported: false, marker_ids: [], access_points: {}, validation: 'repair_required' }] });
+  draft = queueFields(draft, 'v:A', { dims: { width_m: 9 }, markers: [{ id: 'place', group: 'stand', at: [.5, .5, .5], exclude_actions: [coffee.id] }] });
   const prop = { name: 'Saved', category: 'test', tags: [], actions: [] };
   const document = propActionCheckDocument(prop, applyVariantDraft(savedVariants, draft), draft);
   assert.equal(document.name, 'Unsaved name');
@@ -108,7 +108,7 @@ try {
   assert(!('dims' in document.model_variants[1]));
   assert.equal(document.actions[0].effects[0].stat, 'unknown');
   assert.equal(savedVariants[1].dims.width_m, 1);
-  assert.deepEqual(resolveCheckIssue({ path: 'model_variants.1.action_bindings.0.access_points.actor.x' }, document),
-    { variantUid: 'A', actionId: coffee.id, field: 'action_bindings.0.access_points.actor.x' });
+  assert.deepEqual(resolveCheckIssue({ path: 'model_variants.1.markers.0.access.actor.x' }, document),
+    { variantUid: 'A', field: 'markers.0.access.actor.x' });
   console.log('PASS: executable presets, immutable copy, unknown-ref repair and semantic timing');
 } finally { await rm(dir, { recursive: true, force: true }); }

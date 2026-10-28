@@ -17,7 +17,7 @@ try {
     fieldConflicts, dropPendingField } = await import(`file://${file}`);
   let draft = emptyFields();
   draft = queueFields(draft, variantTarget('uid-b'), { description: 'mine' });
-  draft = queueFields(draft, variantTarget('uid-b'), { dims: { height_m: 4 }, action_bindings: [] });
+  draft = queueFields(draft, variantTarget('uid-b'), { dims: { height_m: 4 }, markers: [{ id: 'seat', exclude_actions: ['rest'] }] });
   draft = queueFields(draft, GENERAL_TARGET, { actions: [], name: 'Bench' });
   assert.equal(pendingFieldCount(draft), 5);
   assert.equal(draftValue(draft, variantTarget('uid-b'), 'description', 'server'), 'mine');
@@ -31,7 +31,7 @@ try {
   draft = dropDeletedVariant(draft, 'uid-a');
   assert.deepEqual(toBulkFieldBody(draft, 'revision-1'), {
     base_revision: 'revision-1', actions: [], general: { name: 'Bench' },
-    variants: { 'uid-b': { description: 'mine', dims: { height_m: 4 }, action_bindings: [] } },
+    variants: { 'uid-b': { description: 'mine', dims: { height_m: 4 }, markers: [{ id: 'seat', exclude_actions: ['rest'] }] } },
   });
   draft = dropDeletedVariant(draft, 'uid-b');
   assert.equal(applyVariantDraft([row('uid-new', 0)], draft)[0].description, 'server');
@@ -91,5 +91,5 @@ try {
     ['dims', 'description', 'face_targets']);
   assert.deepEqual(toBulkFieldBody(typing, 'old-base').variants['uid-b'].dims,
     base.get(variantTarget('uid-b')).dims);
-  console.log('PASS: merged fields, actions/bindings, stable UUIDs, disjoint rebase and explicit overlap resolution');
+  console.log('PASS: merged fields, actions/exclusions, stable UUIDs, disjoint rebase and explicit overlap resolution');
 } finally { await rm(dir, { recursive: true, force: true }); }

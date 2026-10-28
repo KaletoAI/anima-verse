@@ -7547,8 +7547,8 @@ y = −2,96 + 1,46 − 0,0640394 = −1,5640394.
 
 `GET /world/props/{id}` returns `prop.revision` and `prop.actions`.
 `GET /world/props/{id}/variants` returns `revision` and variant rows with
-persisted UUID `uid` and `action_bindings`. Copying a variant mints a fresh UID
-and rebinds copied bindings; deleting/recreating a slot never reuses its UID.
+persisted UUID `uid` and body markers. Copying a variant mints a fresh UID
+and copies its markers and exclusions; deleting/recreating a slot never reuses its UID.
 Numeric asset-route indices and file stems remain asset addresses, not action
 or draft identities.
 
@@ -7559,7 +7559,7 @@ or draft identities.
   "base_revision": "<revision from the read>",
   "general": {"name": "Bench"},
   "actions": [],
-  "variants": {"<variant uid>": {"description": "A bench", "action_bindings": []}}
+  "variants": {"<variant uid>": {"description": "A bench", "markers": []}}
 }
 ```
 
@@ -7581,19 +7581,41 @@ a partner; only combined actions have named phases. Open pose/pair actions
 have no completion rewards; sleep permits a once-only success effect on the real
 awake-to-asleep transition, but no custom active regeneration rate.
 
-Bindings identify action and owning variant UID, supported state, alternative
-marker IDs, per-role `access_points` (`actor`, plus `partner` for pairs) and
-`validation` (`suggested`, `local_valid`, `repair_required`). Access points are
-`{x,z,yaw}`: oriented local metres relative to footprint centre and yaw in
-degrees, with no authored/support-mesh height. Author validation is the read-only
-`app.core.prop_actions.validate_document(prop)` contract. The HTTP/tool/Core
-interfaces below expose semantic actions; deployment still waits for all clients.
+Author documents and sidecars contain no `action_bindings`. The one server
+function `prop_actions.derive_bindings(document, variant)` matches every action
+to every body marker with the entry pose's catalog group and sufficient capacity.
+Sleep uses `lie`; combined actions use only the first phase pose; pairs require
+at least two slots. A marker's optional `exclude_actions: [action_id]` opts it
+out. Unknown excluded IDs are errors. Enabled actions with no matching marker
+on any active variant produce the warning "No matching place on any variant".
+Changes to actions, markers or exclusions change the author revision.
+
+The validate endpoint returns `derived_bindings` keyed by variant UUID, alongside
+`issues`, `valid` and `access_previews`. The editor renders these server results
+for its current draft; it never maintains another matching rule. Composed runtime
+bindings retain action ID, variant UID, marker ID, definition revision, supported,
+validation and reason. Invalid support chains and incompatible dependencies block
+these derived bindings with their existing reasons.
+
+A variant body marker may carry an optional `access` override with `actor` and,
+for markers with at least two slots, `partner` points. Each point is `{x,z,yaw}`:
+finite oriented local metres relative to footprint centre, floor height, and
+compass yaw in degrees. There is no binding-level access point. Author validation
+is the read-only `app.core.prop_actions.validate_document(prop)` contract.
+
+Access is automatic for each chosen marker slot and physical role, using the
+pose's entry transition root travel and the actual figure height. It shares the
+room-marker bridge offset/scale rule: subtract the rotated entry travel from
+the chosen body slot and keep the heading required to finish at marker facing.
+An authored marker role override replaces that point verbatim. Entry still
+checks its endpoint against the body slot within 5 cm, and unwalkable points
+refuse with `access_not_walkable`.
 
 `app.core.prop_action_migration.normalize_import(document)` is the one-way
 pack ingress: it returns a deep-copied canonical document and raises structured
 authoring issues for missing state/stat/marker/action dependencies before any
 destructive prop replacement. Both standalone prop and bundled-location packs
-use it. Canonical exports retain their original sidecar bytes, IDs, bindings and
+use it. Canonical exports retain their original sidecar bytes, IDs, marker exclusions and
 state references; collections and marketplace dispatch reuse those same paths.
 Prop pack preflight canonicalizes guarded relative destination paths before
 indexing or validating them. Duplicate canonical destinations—including repeated
@@ -7607,14 +7629,27 @@ and also block actions on dependent supported placements.
 Marker IDs must already have the store's canonical lowercase alphanumeric
 shape (1–16 characters) and be unique within their variant. Ingress rejects
 noncanonical or colliding IDs before replacement; it never lets the store
-rewrite a marker ID while retaining a binding to its former spelling.
+rewrite a marker ID behind an author or runtime reference.
 An existing local prop is never replaced by a bundled dependency. Incompatible
 full author revisions (including changed marker geometry) are returned as `action_dependency_issues`, mirrored
 in the existing import `warnings` UI channel, and the affected placement carries
 `action_dependency_invalid: true`; its composed bindings are blocked.
-Imported `repair_required` bindings also appear in the existing `warnings`
-channel. Their points/anchors are preserved for repair, but support is disabled;
-the normalizer does not relocate unsafe authored access into a guessed spot.
+Imported actions without matching places appear in the existing `warnings` channel;
+this does not reject an otherwise valid document.
+
+With the server stopped, run
+`./.venv/bin/python scripts/migrate_prop_actions.py --storage /path/to/world`
+for a dry report, then append `--apply` to rewrite sidecars. Existing binding
+access points are dropped: the old format cannot reliably distinguish authored
+points from generated points. Explicit marker `access` overrides are retained.
+All old `action_bindings` are removed. An explicitly `supported: false` binding
+becomes an exclusion on every otherwise matching marker of that variant only
+when its action ID is not the deterministic legacy UUID5
+(`NAMESPACE_URL`, `anima:prop-action:{prop_id}:{pose_key}`). Generated legacy IDs,
+bindings without matching markers and other old bindings are dropped silently.
+Legacy documents without an `actions` key still receive at most one action per
+marker group from that group's default solo pose. Explicit `actions: []` remains
+decorative.
 
 `migrate_actions(dry_run=True)` inventories raw sidecars without the UID-writing
 getter. Its report contains `props` (prop ID, changed flag, variant/action/offer
@@ -7622,7 +7657,10 @@ counts, repair count, proposed document), `changed`, structured `issues`,
 `runtime_activated: false` and per-prop `route_checked: false`. Explicit
 `dry_run=False` persists valid documents under the existing per-prop author lock;
 repeating it writes nothing. Startup calls `prepare_runtime()` after location
-preparation and before runtime jobs. It first runs stable marker/placement-ID
+preparation and before runtime jobs. It captures raw old binding decisions as
+migration input before prerequisite store reads can project them away. These
+captured lists are passed only to normalization, never runtime composition.
+It first runs stable marker/placement-ID
 migration, then prop fields-to-variants, then place-group renaming, and only then
 inventories/applies actions and registers their journey owner. Unreadable/invalid
 post-prerequisite data refuses startup; repairable legacy IDs are not rejected
@@ -7651,27 +7689,29 @@ a logging-only catalog lookup from creating a world DB during legacy dry
 normalization. No global DB replacement, mutable context override, second
 pose/state model or persistent compatibility reader is installed.
 
-Only legacy documents **without** `actions` derive group-compatible solo pose
-definitions, shared across variants with deterministic per-prop/pose IDs. Both
-live and explicit snapshot migration reuse `pose_catalog.activity_catalog`'s
-eligibility filter, excluding movement-only swimming/crawling poses.
-`sleeping` is displayed as `Schlafpose (ohne Schlafzustand)` and remains
-`ability: pose`, not a sleep signal. Explicit `actions: []`
+Only legacy documents **without** `actions` derive at most one solo action
+per marker group present, shared across variants with deterministic per-prop/group
+IDs. The group's configured representative/default pose supplies that action;
+a group without a default produces none. Explicit `actions: []`
 means decorative; creation writes that empty list. Autofurnish creates disabled,
 unsupported `suggested` actions only when its solver explicitly supplies a
-marker. Missing/ambiguous facing or dimensions yields blocked `repair_required`
-bindings. `local_valid` means only a footprint-local approach proposal, never a
-proof of room accessibility or a route. The executor independently checks the
+marker. `local_valid` requires at least one existing bound marker with the
+action pose group and enough slots (at least two for pairs); it does not depend
+on access and never proves room accessibility or a route. The executor independently checks the
 current room, supporters, obstacles, transitions and participants.
 
 Composed prop places retain `placement_id`, `prop_id`, `variant_uid`, `marker_id`
 and `action_bindings` with `definition_revision` and room/location provenance.
+Their optional marker-level `access` points carry the composed floor `y`;
+`floor_y` also supplies the floor height for automatically resolved access,
+independently of the body anchor `y_world` and supporting furniture height.
 The integer placement `variant` still indexes the **published** mesh list; it
 is not the persistent variant UUID or a store index. Stored UUID/revision
 provenance survives layout/building/ground sanitization; stale identity and
 invalid support chains block bindings rather than retargeting them. A locally
-valid device approach inside a supporting table's footprint is also blocked,
-not relocated. Scatter copies never acquire place markers or action targets.
+valid binding is not blocked merely because a shared approach point would lie
+inside a supporting table: the actual override or automatic point is checked
+against current walkability at runtime. Scatter copies never acquire place markers or action targets.
 Invalid parent provenance blocks descendants even when the parent has no
 actions and the child's approach lies outside its footprint. Layout sanitation
 retains `support_reason` (`unknown`, `self`, `cycle`, `depth`) when it removes
@@ -7838,7 +7878,7 @@ never complete the undertaking or stop a later replacement pair.
 `interaction_engine.plan_interaction_at(actor,partner,pose_key,place)` shares
 the existing gender-aware clip-role and marker geometry primitives. Before
 claims/approaches it resolves and persists `data.clip_roles` (`a`/`b`→person)
-and `data.access_roles` (semantic actor/partner→binding access key). Binding
+and `data.access_roles` (semantic actor/partner→physical access role). Marker
 access `actor` represents clip A and `partner` clip B; the corresponding exact
 slots come from the clip's measured anchor geometry, not participant order.
 Semantic `run.actor`/`run.partner` remain initiator/invitee for effects and
@@ -8002,10 +8042,15 @@ Player routes require the authenticated user's current authorized avatar:
   participants' `self`/`scene` topics, not a public invitation payload.
 
 All author routes below explicitly require admin. `POST /world/props/{id}/validate`
-takes `{document}` and returns issues plus `placement:"not_checked"`.
+takes `{document}` and returns issues plus `placement:"not_checked"`. Valid
+documents also return `access_previews`: action ID → variant UID → marker ID →
+slot index string → role → `{x,z,yaw,source:"auto"|"override"}`. The server
+computes every bound slot for the 1.70 m reference figure; invalid documents
+return an empty preview map. Missing entry transitions omit automatic role
+points rather than inventing access; runtime reports `missing_entry_transition`.
 The admin workspace submits its **entire unsaved canonical document**: top-level
 `actions`, every `model_variants` entry including its stable `uid`, body markers,
-action bindings and scalar `width_m/depth_m/height_m`. HTTP variant projections
+marker exclusions and scalar `width_m/depth_m/height_m`. HTTP variant projections
 with nested `dims` and UUID-keyed bulk patches are not author documents.
 `GET /world/props/{id}/check-targets?location_id=…` supplies only actual saved,
 marker-backed placements of this prop and the current room census:
@@ -8014,23 +8059,10 @@ It uses the same read-only scene composition and includes sleeping bystanders;
 it creates neither placements nor test people.
 `POST /world/props/{id}/check-placement` takes request fields plus an explicit
 `actor` and checks the saved exact placement/revision without executing.
-`POST /world/props/{id}/execute-test` is separate: same input plus
-`confirmed:true`, then the **same** normal executor/consent path. It may change
-world values; admin actor selection is never accepted by the player endpoints.
-
-The Game-Admin no longer starts `execute-test` (2026-10-28): the admin stays
-read-only — `validate` and `check-placement` only. The test-lifecycle routes
-below have no UI consumer left and are slated for removal.
-`check-placement` includes the actual successful Core plans for inspection;
-ordinary player offers do not expose those diagnostics. After explicit test
-execution, `test-state`, `test-respond`, `test-cancel` and `test-wake` under
-`/world/props/{id}/` require Admin authorization and the exact immutable test
-identity, including its execution ID and participants. Consent remains an
-explicit answer by the selected test partner; no automatic acceptance is added.
-`GET /world/prop-action-tests` restores all live Admin tests and up to twenty
-terminal tests from the last thirty system minutes across area/prop changes and
-reloads. Before/current snapshots show actual stats, mood, conditions and
-positions; a deleted participant is unavailable, never an invented empty actor.
+The admin remains read-only: `validate` and `check-placement` provide checks,
+and `check-placement` includes successful Core plans for inspection. Ordinary
+player offers do not expose these diagnostics. Live execution uses only the
+player endpoints and their session-avatar authorization.
 Refusals are HTTP 409 (or 403 for unauthorized recipient/participant); malformed
 input is 422. Checks are read-only even on uncached real scene composition.
 `compose_scene(...,read_only=True)`, `scene_inputs(...,read_only=True)`,
@@ -8038,10 +8070,18 @@ input is 422. Checks are read-only even on uncached real scene composition.
 preserve actual hulls, openings, surfaces and furniture dimensions while skipping
 lazy bbox persistence, LOD and visual door/window build queues.
 
+The actions inspector initially shows Name, Description, Enabled, Pose, Persons,
+presence and collapsed Effects with a plain summary of the effect rows. Two
+persons derives pair ability; solo lie poses offer "Really fall asleep". Coffee
+remains a preset whose phases appear under Advanced alongside requirements,
+presence interruption and independent copy/remove tools. "Applies to" counts
+come from the server's derived bindings for the selected variant. The Overview
+status reports "N actions · M places"; Places has no manual binding section.
+
 The actions inspector and places inspector use the same workspace field draft,
 global Save/Discard, selected action ID, variant UUID and mounted model viewer.
 Actions copied from another prop receive fresh action/phase/requirement/effect
-IDs and no inherited geometry bindings. Coffee exposes exactly preparation and
+IDs; matching geometry is derived for the destination prop. Coffee exposes exactly preparation and
 drinking phases with game-time durations; awake poses/pairs have no completion
 reward, and genuine sleep has no additional active regeneration. Effects and
 requirements select existing stat/condition references; unknown references stay
@@ -8049,10 +8089,9 @@ visible and repairable rather than disappearing. Mood suggestions use the
 existing catalog, while the backend mood remains free text.
 
 On HTTP LAN origins, authoring IDs use cryptographic `getRandomValues` when
-`randomUUID` is unavailable. Local binding validity is derived automatically;
-opening a prop or discarding edits does not create a new draft. User edits
-update canonical binding validity, while imported suggestions require explicit
-adoption. Variant selection is one nonwrapping button row, and the active
+`randomUUID` is unavailable. Bindings are derived on the server for each draft;
+opening a prop or discarding edits does not create a new draft. There are no
+manual binding validity or suggestion adoption controls. Variant selection is one nonwrapping button row, and the active
 workspace area survives prop changes without carrying over another prop's draft.
 Preparation independently selects an available `making-coffee` presentation,
 then `cooking`; drinking selects an available `drinking` presentation. Missing
@@ -8060,13 +8099,17 @@ phase capabilities stay empty repair errors, never unrelated fallback poses.
 The isolated viewer explicitly selects an actual configured phase; it does not
 read the unused top-level pose for combined actions.
 
-Access-point coordinates are oriented local ground metres relative to the
-footprint centre, not normalized body-marker coordinates. Viewer access picking
+The marker card exposes “Access override” per physical role, numeric x/z/yaw,
+“Set on floor” and “Use automatic access”. Access coordinates are oriented
+local ground metres relative to the footprint centre, not normalized body-marker
+coordinates. The selected action shows all bound marker-slot access rings,
+labelled automatic or override, from the server preview map. Viewer access picking
 uses the ground plane and allows points outside the model box. Overlays describe
 body/access positions and headings, not a claimed room route. Historical model
 previews and concurrent surface/water/light/marker tools cannot edit access
-points. Referenced marker removal requires a deliberate replacement or removal
-of dependent bindings in the same draft.
+points. Removing a marker simply removes that marker and its exclusions;
+no binding repair dialog is needed. The marker card shows derived action names
+and keeps exclusions and access overrides in a collapsed Advanced section.
 Metre conversion delegates to the renderer's canonical `placeTransform`
 measurement: 90-degree-snapped fix for scale, exact fix for orientation.
 Raw body-marker metre readbacks, access rendering/inverse picking, slot spacing

@@ -278,37 +278,47 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
             if not binding.get("supported") or binding.get("validation") != "local_valid":
                 reason = binding.get("reason") or "binding_not_supported"
                 continue
-            access = binding.get("access_points", {}).get(role)
-            if access is None:
+            document = query.prop_document(place["prop_id"])
+            action = next((a for a in document.get("actions", [])
+                           if a["id"] == target["action_id"]), None)
+            if not action:
+                reason = "binding_not_found"
+                continue
+            if role == "partner" and action.get("participants") != 2:
                 reason = "missing_role_access"
                 continue
-            try:
-                if not all(math.isfinite(float(access[k])) for k in ("x", "z", "y", "yaw")):
-                    raise ValueError("nonfinite access")
-                goal = (float(access["x"]), float(access["z"]))
-                slot = target.get("slot", 0 if role == "actor" else 1)
-                if isinstance(slot, bool) or not isinstance(slot, int) or not 0 <= slot < len(place["slots"]):
-                    reason = "invalid_entry_slot"
+            slots = [target["slot"]] if "slot" in target else range(len(place["slots"]))
+            for slot in slots:
+                try:
+                    if isinstance(slot, bool) or not isinstance(slot, int) or not 0 <= slot < len(place["slots"]):
+                        reason = "invalid_entry_slot"
+                        continue
+                    from app.core.prop_action_access import slot_access
+                    access, reason = slot_access(place, slot, role, action, profile)
+                    if reason:
+                        continue
+                    if not all(math.isfinite(float(access[k])) for k in ("x", "z", "y", "yaw")):
+                        raise ValueError("nonfinite access")
+                    goal = (float(access["x"]), float(access["z"]))
+                    sx, sz = place["slots"][slot]
+                except (KeyError, TypeError, ValueError, OverflowError):
+                    reason = "invalid_binding_geometry"
                     continue
-                sx, sz = place["slots"][slot]
-            except (KeyError, TypeError, ValueError, OverflowError):
-                reason = "invalid_binding_geometry"
-                continue
-            if not space.free(goal):
-                reason = "access_not_walkable"
-                continue
-            route = visibility_path(start, goal, *geometry)
-            if route is None:
-                reason = "no_route"
-                continue
-            length = sum(math.dist(a, b) for a, b in zip(route, route[1:]))
-            anchor = dict(location_id=location, room_id=room, placement_id=target["placement_id"],
-                          prop_id=place["prop_id"], variant_uid=place["variant_uid"],
-                          marker_id=place["marker_id"], place_id=place["id"], slot=slot,
-                          x=sx, z=sz, y=place["y_world"], yaw=place.get("facing"),
-                          root_offset=place.get("root_offset", 0))
-            choices.append((length, place["id"], dict(status="ok", reason="", waypoints=[list(p) for p in route],
-                                                     access=dict(access), entry_anchor=anchor,
-                                                     departure_seat=list(seat) if seat is not None else None,
-                                                     departure_placement_id=departing_placement)))
+                if not space.free(goal):
+                    reason = "access_not_walkable"
+                    continue
+                route = visibility_path(start, goal, *geometry)
+                if route is None:
+                    reason = "no_route"
+                    continue
+                length = sum(math.dist(a, b) for a, b in zip(route, route[1:]))
+                anchor = dict(location_id=location, room_id=room, placement_id=target["placement_id"],
+                              prop_id=place["prop_id"], variant_uid=place["variant_uid"],
+                              marker_id=place["marker_id"], place_id=place["id"], slot=slot,
+                              x=sx, z=sz, y=place["y_world"], yaw=place.get("facing"),
+                              root_offset=place.get("root_offset", 0))
+                choices.append((length, place["id"], dict(status="ok", reason="", waypoints=[list(p) for p in route],
+                                                         access=dict(access), entry_anchor=anchor,
+                                                         departure_seat=list(seat) if seat is not None else None,
+                                                         departure_placement_id=departing_placement)))
     return min(choices, key=lambda row: row[:2])[2] if choices else _blocked(reason)

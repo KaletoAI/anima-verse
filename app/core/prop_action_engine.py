@@ -327,7 +327,12 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
                             if b["action_id"] == run["action_id"]), None)
             if not binding or not binding.get("supported") or binding.get("validation") != "local_valid":
                 return "binding_not_supported"
-            current_access = binding.get("access_points", {}).get(run["data"]["access_roles"][role])
+            from app.core.prop_action_access import slot_access
+            current_access, access_reason = slot_access(
+                place, anchor["slot"], run["data"]["access_roles"][role],
+                definition, profiles[run[role]])
+            if access_reason:
+                return access_reason
             if current_access != plan["access"] or list(place["slots"][anchor["slot"]]) != [anchor["x"], anchor["z"]] or place["y_world"] != anchor["y"]:
                 return "approach_target_changed"
             if run["status"] == "approaching" and (run["phase"] == "entry" or run[role] in run["data"]["arrived"]):
@@ -383,28 +388,32 @@ def _plan(run, *, conn, _query=None):
         if entry_reason:
             last_reason = entry_reason
             continue
-        plans = {}
-        for role, name in _members(run):
-            slot = allocation["slots"][role]
-            plan = plan_approach(name, dict(target, marker_id=place["marker_id"], slot=slot),
-                                 allocation["access_roles"][role], _query=query)
-            if plan["status"] != "ok":
-                last_reason = plan["reason"]
-                break
-            anchor = plan["entry_anchor"]
-            if not places.inside(target["location_id"], anchor["x"], anchor["z"]):
-                last_reason = "entry_anchor_outside_location"
-                break
-            plans[role] = plan
-        if len(plans) == len(_members(run)):
+        allocations = ([allocation] if definition["ability"] == "pair" else
+                       [dict(clip_roles={}, access_roles={"actor": "actor"},
+                             slots={"actor": slot}) for slot in free])
+        for allocation in allocations:
+            plans = {}
             for role, name in _members(run):
-                _, last_reason = _entry_spec(name, plans[role], pose, _query=query)
-                if last_reason:
+                slot = allocation["slots"][role]
+                plan = plan_approach(name, dict(target, marker_id=place["marker_id"], slot=slot),
+                                     allocation["access_roles"][role], _query=query)
+                if plan["status"] != "ok":
+                    last_reason = plan["reason"]
                     break
-            if last_reason:
-                continue
-            distance = sum(sum(math.dist(a, b) for a, b in zip(p["waypoints"], p["waypoints"][1:])) for p in plans.values())
-            choices.append((distance, place["id"], plans, allocation))
+                anchor = plan["entry_anchor"]
+                if not places.inside(target["location_id"], anchor["x"], anchor["z"]):
+                    last_reason = "entry_anchor_outside_location"
+                    break
+                plans[role] = plan
+            if len(plans) == len(_members(run)):
+                for role, name in _members(run):
+                    _, last_reason = _entry_spec(name, plans[role], pose, _query=query)
+                    if last_reason:
+                        break
+                if last_reason:
+                    continue
+                distance = sum(sum(math.dist(a, b) for a, b in zip(p["waypoints"], p["waypoints"][1:])) for p in plans.values())
+                choices.append((distance, place["id"], plans, allocation))
     if not choices:
         return {}, last_reason
     _, _, plans, allocation = min(choices, key=lambda p: p[:2])

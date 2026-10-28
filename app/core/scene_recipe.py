@@ -3974,11 +3974,12 @@ def _markers(recipe: Dict[str, Any], room: Dict[str, Any], storey: float,
         # body anchor above intentionally includes the complete support chain.
         for key in ("placement_id", "prop_id", "variant_uid", "marker_id"):
             entry[key] = marker.get(key, "")
-        entry["action_bindings"] = [
-            {**binding, "room_id": room_id,
-             "access_points": {role: {**point, "y": _r(floor_y + _plate_top(recipe))}
-                               for role, point in binding["access_points"].items()}}
-            for binding in marker.get("action_bindings", [])]
+        entry["floor_y"] = _r(floor_y + _plate_top(recipe))
+        if marker.get("access"):
+            entry["access"] = {role: {**point, "y": entry["floor_y"]}
+                               for role, point in marker["access"].items()}
+        entry["action_bindings"] = [{**binding, "room_id": room_id}
+                                    for binding in marker.get("action_bindings", [])]
         if facing is not None:
             entry["facing"] = facing
         out.append(entry)

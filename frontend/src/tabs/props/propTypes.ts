@@ -40,6 +40,9 @@ export interface PropMarker {
   slot_axis?: number
   /** Facing in degrees (0 south / 90 east / 180 north / 270 west). */
   facing?: number
+  /** Floor access override in oriented local metres. */
+  exclude_actions?: string[]
+  access?: Partial<Record<'actor' | 'partner', { x: number; z: number; yaw: number }>>
 }
 
 /** What a texture slot can be filled WITH: a picture (a gallery image URL) or
@@ -90,6 +93,7 @@ export interface PropFull {
   id: string
   revision: string
   actions: ActionDefinition[]
+  unmatched_action_count?: number
   name: string
   category: string
   /** Real extent in metres AFTER the orientation fix (x/y/z) — of the PRIMARY
@@ -184,16 +188,9 @@ export interface PropFull {
 /** Direct workspace navigation; semantic editors use the same draft and viewer. */
 export type PropWorkspaceArea = 'overview' | 'actions' | 'places' | 'assets' | 'appearance'
 
-/** A deliberate unsupported variant is not broken; decoration needs no action. */
-export function hasIncompleteActionBindings(prop: PropFull): boolean {
-  const active = (prop.actions || []).filter((action) => action.enabled)
-  if (!active.length) return false
-  const variants = prop.variant_tiers || []
-  return !variants.length || variants.some((variant) => active.some((action) => {
-    const binding = (variant.action_bindings || []).find((item) => item.action_id === action.id)
-    return !binding || (binding.supported
-      && (binding.validation === 'repair_required' || !binding.marker_ids.length))
-  }))
+/** Library completeness is about models and places, never manual bindings. */
+export function hasUnmatchedActionPlaces(prop: PropFull): boolean {
+  return (prop.unmatched_action_count || 0) > 0
 }
 
 /** The four mount kinds, mirroring `props.MOUNT_KINDS`. `''` is not one of
@@ -234,7 +231,6 @@ export interface PropVariantTier {
    *  leaves a gap), and what every variant-scoped URL names. */
   variant: number
   uid: string
-  action_bindings: VariantBinding[]
   /** Resolution tiers this variant HAS (`full` / `low`). */
   tiers: string[]
   /** The three real metres THIS variant renders at (props.variant_dims). */
@@ -316,7 +312,6 @@ export interface PropSourceImage {
 export interface PropVariant {
   index: number
   uid: string
-  action_bindings: VariantBinding[]
   /** File stem this variant's meshes are stored under (informational). */
   stem: string
   /** Switched off variants keep their meshes but are not rendered. */
@@ -772,11 +767,15 @@ export interface ActionDefinition {
   requirements: ActionRequirement[]
   effects: ActionEffect[]
 }
+/** Server-resolved reference-height access: action, variant, marker, slot, role. */
+export type PropAccessPreviews = Record<string, Record<string, Record<string, Record<string,
+  Partial<Record<'actor' | 'partner', { x: number; z: number; yaw: number; source: 'auto' | 'override' }>>>>>>
+
 export interface VariantBinding {
   action_id: string
   variant_uid: string
   supported: boolean
   marker_ids: string[]
-  access_points: Partial<Record<'actor' | 'partner', { x: number; z: number; yaw: number }>>
-  validation: 'suggested' | 'local_valid' | 'repair_required'
+  validation: 'local_valid' | 'repair_required'
+  reason: string
 }

@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { runInNewContext } from 'node:vm';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const require = createRequire(new URL('../frontend/package.json', import.meta.url));
@@ -12,10 +13,10 @@ try {
   const canonicalFile = join(dir, 'placeTransform.mjs');
   const transpile = source => ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText;
   await writeFile(canonicalFile, transpile(canonicalSource));
-  const source = await readFile(new URL('../frontend/src/tabs/props/spatialBindings.ts', import.meta.url), 'utf8');
+  const source = await readFile(new URL('../frontend/src/tabs/props/accessGeometry.ts', import.meta.url), 'utf8');
   const file = join(dir, 'spatial.mjs');
   await writeFile(file, transpile(source).replace('../../../../packages/scene-render/src/placeTransform', './placeTransform.mjs'));
-  const { removeBoundMarker, bindingProblems, editedBindingValidation, accessWorldPoint, accessLocalPoint, propMetresPerUnit } = await import(`file://${file}`);
+  const { accessWorldPoint, accessLocalPoint, propMetresPerUnit } = await import(`file://${file}`);
   const { placeTransform } = await import(`file://${canonicalFile}`);
   const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-10, `${actual} != ${expected}`);
   const dimensions = { width_m: 2, depth_m: 1.5, height_m: 1 };
@@ -49,43 +50,49 @@ try {
   near(propMetresPerUnit([4, 4, 4], dimensions, { y: 45 }), .5);
   assert.ok(Math.abs(propMetresPerUnit([4, 4, 4], dimensions, { y: 45 }) - .5 / Math.sqrt(2)) > .1);
   const marker = id => ({ id, group: 'seat', at: [.5, 0, .5], capacity: 2 });
-  const binding = { action_id: 'pair', variant_uid: 'v', supported: true, marker_ids: ['a', 'b'], access_points: { actor: { x: 0, z: 2, yaw: 180 }, partner: { x: 1, z: 2, yaw: 180 } }, validation: 'local_valid' };
-  const variant = { uid: 'v', markers: [marker('a'), marker('b'), marker('c')], action_bindings: [binding] };
-  // Removing without a decision must never emit an orphaning patch.
-  assert.throws(() => removeBoundMarker(variant, 'a'), Error);
-  assert.deepEqual(removeBoundMarker(variant, 'a', { replaceWith: 'b' }).action_bindings[0].marker_ids, ['b']);
-  assert.deepEqual(removeBoundMarker(variant, 'a', { removeBindings: true }).action_bindings, []);
-  assert.throws(() => removeBoundMarker(variant, 'a', { replaceWith: 'missing' }), Error);
-  assert.deepEqual(variant.action_bindings[0].marker_ids, ['a', 'b']);
-  assert.equal(removeBoundMarker(variant, 'a', { replaceWith: 'c' }).action_bindings[0].validation, 'repair_required');
-  const action = { participants: 2 };
-  assert.deepEqual(bindingProblems(binding, action, variant.markers, { width_m: 2, depth_m: 2 }), []);
-  assert.ok(bindingProblems({ ...binding, access_points: { actor: binding.access_points.actor } }, action, variant.markers, { width_m: 2, depth_m: 2 }).length > 0);
-  assert.ok(bindingProblems(binding, action, [{ ...marker('a'), capacity: 1 }, marker('b')], { width_m: 2, depth_m: 2 }).length > 0);
-  // Blank numeric edits stay invalid instead of turning into a plausible zero.
-  assert.ok(bindingProblems({ ...binding, access_points: { ...binding.access_points, actor: { x: NaN, z: 2, yaw: 180 } } }, action, variant.markers, { width_m: 2, depth_m: 2 }).length > 0);
-  assert.ok(bindingProblems({ ...binding, access_points: { ...binding.access_points, actor: { x: 0, z: 1.2, yaw: 180 } } }, action, variant.markers, { width_m: 2, depth_m: 2 }).length > 0);
-  const saved = { ...variant, dims: { width_m: 2, depth_m: 2, height_m: 1 },
-    action_bindings: [{ ...binding, validation: 'repair_required' }] };
-  const savedText = JSON.stringify(saved);
-  const definitions = [{ id: 'pair', participants: 2 }];
-  const edited = editedBindingValidation(saved, definitions);
-  assert.equal(edited[0].validation, 'local_valid');
-  assert.equal(JSON.stringify(saved), savedText, 'deriving validity never modifies the saved variant');
-  assert.equal(saved.action_bindings[0].validation, 'repair_required');
-  const accepted = { ...saved, action_bindings: edited };
-  assert.equal(editedBindingValidation(accepted, definitions), edited, 'unchanged validity keeps canonical references');
-  const proposed = { ...saved, action_bindings: [{ ...binding, validation: 'suggested' }] };
-  assert.equal(editedBindingValidation(proposed, definitions), proposed.action_bindings, 'legacy suggestions require explicit acceptance');
-  const unsupported = { ...saved, action_bindings: [{ ...binding, supported: false, validation: 'repair_required' }] };
-  editedBindingValidation(unsupported, definitions);
-  assert.equal(unsupported.action_bindings[0].validation, 'repair_required', 'reading an unsupported saved binding cannot dirty it');
-  const invalidEdit = { ...accepted, dims: { ...accepted.dims, depth_m: 5 } };
-  assert.equal(editedBindingValidation(invalidEdit, definitions)[0].validation, 'repair_required');
-  assert.equal(accepted.action_bindings[0].validation, 'local_valid');
+  const binding = { action_id: 'pair', variant_uid: 'v', supported: true, marker_ids: ['a', 'b'], validation: 'local_valid' };
   const frame = { centreX: 4, centreZ: -3, groundY: -2, unitsPerMetre: 2 };
   // Outside-box access is preserved, ground is fixed, and inverse picking agrees.
   assert.deepEqual(accessWorldPoint({ x: -4, z: 5, yaw: 90 }, frame), [-4, -2, 7]);
   assert.deepEqual(accessLocalPoint([-4, -2, 7], frame), { x: -4, z: 5 });
-  console.log('PASS: explicit atomic marker reference repair, pair/access constraints and ground coordinates');
+  // The preview renders every server-provided marker/slot/role, preserving numbers.
+  // These arbitrary points deliberately cannot be inferred from body marker geometry.
+  const previewSource = await readFile(new URL('../frontend/src/tabs/props/PropPreview.tsx', import.meta.url), 'utf8');
+  const module = { exports: {} };
+  const jsx = (type, props) => ({ type, props });
+  const Viewer = () => null;
+  runInNewContext(ts.transpileModule(previewSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText,
+    { module, exports: module.exports, require: id => {
+      if (id === 'react') return { useMemo: fn => fn(), useState: initial => [initial, () => {}] };
+      if (id === 'react/jsx-runtime') return { jsx, jsxs: jsx };
+      if (id === '@anima/scene-render') return { FIGURE_HEIGHT_M: 1.70 };
+      if (id.includes('Model3DViewer')) return { Model3DViewer: Viewer };
+      if (id.includes('placeTypes')) return { previewEntry: () => undefined };
+      if (id.includes('usePropWorkspace')) return { saveScaleFigure() {} };
+      if (id.includes('accessGeometry')) return { propMetresPerUnit };
+      if (id.includes('propActionAuthoring')) return { actionPreviewPose: () => 'sit' };
+      throw new Error(id);
+    } });
+  const points = { a: { 0: { actor: { x: -1.2, z: 3.4, yaw: 7, source: 'auto' } },
+    1: { actor: { x: -.6, z: 3.4, yaw: 7, source: 'auto' } },
+    2: { actor: { x: 0, z: 3.4, yaw: 7, source: 'auto' } } },
+    b: { 0: { actor: { x: 9, z: -8, yaw: 270, source: 'override' } } } };
+  const tree = module.exports.PropPreview({ workspace: {
+    t: text => text, actions: [{ id: 'sit', participants: 1 }], selectedActionId: 'sit',
+    shownVariant: { uid: 'v' }, derivedBindings: { v: [binding] },
+    accessPreviews: { sit: { v: points } }, area: 'places', markers: [],
+    poseCatalog: { entries: [] }, groups: {}, shownDims: dimensions, prop: {},
+    variants: [], shownHasMesh: true, accessPlacing: null, waterController: {},
+  } });
+  function findViewer(node) {
+    if (!node || typeof node !== 'object') return undefined;
+    if (Array.isArray(node)) return node.map(findViewer).find(Boolean);
+    return node.type === Viewer ? node : findViewer(node.props?.children);
+  }
+  const rings = findViewer(tree).props.actionAccessPoints;
+  assert.equal(rings.length, 4);
+  assert.deepEqual(Array.from(rings, point => [point.x, point.z, point.yaw]), [[-1.2, 3.4, 7], [-.6, 3.4, 7], [0, 3.4, 7], [9, -8, 270]]);
+  assert(rings[0].label.includes('Automatic access'));
+  assert(rings[3].label.includes('Access override'));
+  console.log('PASS: derived binding preview, ground coordinates and all server access rings');
 } finally { await rm(dir, { recursive: true, force: true }); }

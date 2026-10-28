@@ -221,7 +221,7 @@ export function PropActionChecks({ workspace, onIssue }: {
           <button type="button" className="ga-btn ga-btn-sm" onClick={() => onIssue(issue)}>
             {t(issue.severity === 'error' ? 'Error' : 'Warning')}: {t(issue.message)}
             {action ? ` · ${action.name}` : ''}{variant ? ` · ${t('Variant')} ${variant.index + 1}` : ''}
-            {location.field ? ` · ${t(location.field.includes('access_points') ? 'Access' : location.field.includes('marker_ids') ? 'Body anchor' : location.field.includes('requirements') ? 'Requirement' : location.field.includes('effects') ? 'Effect' : location.field.includes('phases') ? 'Action flow' : 'Configuration')}` : ''}
+            {location.field ? ` · ${t(location.field.includes('.access.') ? 'Access' : location.field.includes('marker_ids') ? 'Body anchor' : location.field.includes('requirements') ? 'Requirement' : location.field.includes('effects') ? 'Effect' : location.field.includes('phases') ? 'Action flow' : 'Configuration')}` : ''}
           </button>
         </li>
       })}</ul>

@@ -107,11 +107,12 @@ def _compose(location_id: str) -> Dict[str, List[Place]]:
         by_room.setdefault(room_id, []).append({
             **{key: m[key] for key in
                ("placement_id", "prop_id", "variant_uid", "marker_id") if key in m},
-            **({"action_bindings": [
-                {**binding, "location_id": location_id,
-                 "access_points": {role: _world_access(point)
-                                   for role, point in binding["access_points"].items()}}
-                for binding in m["action_bindings"]]} if "action_bindings" in m else {}),
+            **({"action_bindings": [{**binding, "location_id": location_id}
+                                     for binding in m["action_bindings"]]}
+               if "action_bindings" in m else {}),
+            **({"access": {role: _world_access(point) for role, point in m["access"].items()}}
+               if "access" in m else {}),
+            "floor_y": m.get("floor_y", 0.0),
             "id": m["id"], "group": m["group"], "label": m.get("label") or m["group"],
             "capacity": int(m.get("capacity") or 1),
             "slots": [_world(pt) for pt in (m.get("slots") or [m["at_world"]])],

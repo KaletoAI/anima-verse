@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Isolated behavioral regressions for action migration, geometry and pack ingress.
 
-Run: ./.venv/bin/python scripts/smoke_prop_action_migration.py
+Usage: ./.venv/bin/python scripts/smoke_prop_action_migration.py
 No media generation, real instance, runtime activation or network is used.
 """
 import copy
@@ -27,7 +27,7 @@ from app.blender import runner
 runner.is_available = lambda: False
 db.init_schema()
 from app.core.prop_action_migration import migrate_actions, normalize_import
-from app.core.prop_actions import validate_document
+from app.core.prop_actions import validate_document, derive_bindings
 from app.core.content_io import export_prop_to_zip, import_prop_from_zip
 
 UID_A = "11111111-1111-4111-8111-111111111111"
@@ -96,8 +96,8 @@ class MigrationTests(unittest.TestCase):
                          ("sleeping", "pose", 1))
         for original, variant in zip(source["model_variants"], normalized["model_variants"]):
             self.assertEqual(variant["markers"], original["markers"])
-            self.assertEqual(variant["action_bindings"][0]["action_id"], action["id"])
-            self.assertEqual(variant["action_bindings"][0]["variant_uid"], variant["uid"])
+            self.assertEqual(derive_bindings(normalized, variant)[0]["action_id"], action["id"])
+            self.assertEqual(derive_bindings(normalized, variant)[0]["variant_uid"], variant["uid"])
         self.assertEqual(validate_document(normalized), [])
         self.assertEqual(normalize_import(normalized), normalized)
 
@@ -126,7 +126,6 @@ class MigrationTests(unittest.TestCase):
                 variant = document["model_variants"][0]
                 variant["markers"] = [{**variant["markers"][0], "id": identity}
                                       for identity in identities]
-                variant["action_bindings"][0]["marker_ids"] = [identities[0]]
                 with self.assertRaises(ValueError) as error:
                     normalize_import(document)
                 self.assertIn(code, {issue["code"] for issue in error.exception.issues})
@@ -138,21 +137,15 @@ class MigrationTests(unittest.TestCase):
                     import_prop_from_zip(out.getvalue(), overwrite=True)
                 self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir() if p.is_file()}, before)
 
-    def test_uncertain_access_is_blocked_not_claimed_as_route(self):
+    def test_missing_facing_does_not_affect_body_slot_local_validity(self):
         source = legacy()
-        source["model_variants"][0]["markers"][0].pop("facing")
+        source['model_variants'][0]['markers'][0].pop('facing')
         normalized = normalize_import(source)
-        bad, good = [v["action_bindings"][0] for v in normalized["model_variants"]]
-        self.assertEqual((bad["validation"], bad["supported"]), ("repair_required", False))
-        self.assertEqual(good["validation"], "local_valid")
-        self.assertNotIn("route_valid", good)
-        self.assertEqual(set(good["access_points"]["actor"]), {"x", "z", "yaw"})
-        pid = props.create_prop(name="Repair report")["id"]
-        props._write_sidecar(pid, normalized)
-        blob = export_prop_to_zip(pid)
-        props.delete_prop(pid)
-        imported = import_prop_from_zip(blob)
-        self.assertTrue(any("repair_required" in warning for warning in imported["warnings"]))
+        for variant in normalized['model_variants']:
+            binding = derive_bindings(normalized, variant)[0]
+            self.assertEqual((binding['validation'], binding['supported']), ('local_valid', True))
+            self.assertNotIn('access_points', binding)
+            self.assertNotIn('route_valid', binding)
 
     def test_decorative_creation_has_no_implicit_actions(self):
         prop = props.create_prop(name="Decorative cup")
@@ -160,15 +153,54 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(document["actions"], [])
         self.assertEqual(normalize_import(document)["actions"], [])
 
-    def test_authored_access_inside_footprint_is_preserved_but_blocked(self):
+    def test_ambiguous_shared_access_is_dropped_and_marker_override_retained(self):
         document = normalize_import(legacy())
-        point = {"x": 0, "z": 0, "yaw": 180}
-        document["model_variants"][0]["action_bindings"][0]["access_points"]["actor"] = point
+        variant = document['model_variants'][0]
+        point = {'x': 0, 'z': 0, 'yaw': 180}
+        variant['action_bindings'] = [dict(action_id=document['actions'][0]['id'],
+            supported=False, access_points={'actor': point})]
+        variant['markers'][0]['access'] = {'actor': point}
         normalized = normalize_import(document)
-        binding = normalized["model_variants"][0]["action_bindings"][0]
-        self.assertEqual(binding["access_points"]["actor"], point)
-        self.assertEqual((binding["supported"], binding["validation"]), (False, "repair_required"))
-        self.assertEqual(normalized["model_variants"][0]["markers"], document["model_variants"][0]["markers"])
+        binding = derive_bindings(normalized, normalized['model_variants'][0])[0]
+        self.assertNotIn('access_points', binding)
+        self.assertEqual((binding['supported'], binding['validation']), (True, 'local_valid'))
+        self.assertEqual(normalized['model_variants'][0]['markers'][0]['access'], {'actor': point})
+
+    def test_legacy_defaults_only_and_no_default_means_no_action(self):
+        catalogs = dict(poses={**CATALOG, 'resting': {'group': 'lie', 'solo': True}},
+                        groups=GROUPS, stats=set(), conditions=set())
+        normalized = normalize_import(legacy(), catalogs=catalogs)
+        self.assertEqual([a['pose_key'] for a in normalized['actions']], ['sleeping'])
+        catalogs['groups'] = {**GROUPS, 'lie': {'label': 'Lie'}}
+        self.assertEqual(normalize_import(legacy(), catalogs=catalogs)['actions'], [])
+
+    def test_marker_access_role_and_finite_validation(self):
+        document = normalize_import(legacy())
+        marker = document['model_variants'][0]['markers'][0]
+        marker['access'] = {'partner': {'x': 1, 'z': 2, 'yaw': 0}}
+        self.assertIn('invalid_access', {i['code'] for i in validate_document(document)})
+        marker['capacity'] = 2
+        self.assertEqual(validate_document(document), [])
+        marker['access']['partner']['x'] = float('nan')
+        self.assertIn('invalid_access_point', {i['code'] for i in validate_document(document)})
+
+    def test_entry_phase_group_and_pair_capacity_are_derived(self):
+        catalogs = dict(poses=CATALOG, groups=GROUPS, stats=set(), conditions=set())
+        document = normalize_import(legacy(), catalogs=catalogs)
+        action = document['actions'][0]
+        variant = document['model_variants'][0]
+        variant['markers'].append({**variant['markers'][0], 'id': 'other', 'group': 'sit'})
+        self.assertEqual(validate_document(document, catalogs=catalogs), [])
+        action.update(ability='combined', pose_key='', phases=[
+            dict(id='lie', label='Lie', duration_game_s=2, pose_key='sleeping'),
+            dict(id='sit', label='Sit', duration_game_s=2, pose_key='sitting')])
+        normalized = normalize_import(document, catalogs=catalogs)
+        self.assertTrue(all(derive_bindings(normalized, v, poses=CATALOG)[0]['supported'] for v in normalized['model_variants']))
+        action.update(ability='pair', participants=2, pose_key='embrace', phases=[])
+        self.assertTrue(all(not derive_bindings(document, v, poses=CATALOG)[0]['supported']
+                            for v in normalize_import(document, catalogs=catalogs)['model_variants']))
+        variant['markers'][0]['capacity'] = 2
+        self.assertTrue(derive_bindings(document, variant, poses=CATALOG)[0]['supported'])
 
     def test_autofurnish_marker_creates_disabled_suggestions_not_sleep(self):
         from app.core.room_furnish import _create_built_props
@@ -180,8 +212,7 @@ class MigrationTests(unittest.TestCase):
         bed = props.read_sidecar(rewrite["need:bed"])
         self.assertEqual([(a["pose_key"], a["ability"], a["enabled"]) for a in bed["actions"]],
                          [("sleeping", "pose", False)])
-        self.assertEqual(bed["model_variants"][0]["action_bindings"][0]["validation"], "suggested")
-        self.assertFalse(bed["model_variants"][0]["action_bindings"][0]["supported"])
+        self.assertNotIn("action_bindings", bed["model_variants"][0])
         self.assertEqual(props.read_sidecar(rewrite["need:vase"])["actions"], [])
 
     def test_migration_ids_use_store_identity_not_duplicate_names_or_stale_sidecar_id(self):
@@ -284,7 +315,8 @@ class MigrationTests(unittest.TestCase):
         connection.execute(f"CREATE TABLE {WORLD_TABLE}(axis,kind,key,doc)")
         connection.executemany(f"INSERT INTO {WORLD_TABLE} VALUES(?,?,?,?)", [
             ("pose", "entry", "sleeping", json.dumps({"solo": False, "group": "lie"})),
-            ("pose", "entry", "world-rest", json.dumps({"solo": True, "group": "lie", "label": "World rest"}))])
+            ("pose", "entry", "world-rest", json.dumps({"solo": True, "group": "lie", "label": "World rest"})),
+            ("pose", "group", "lie", json.dumps({**GROUPS["lie"], "default": "world-rest"}))])
         connection.execute("CREATE TABLE prompt_filters(id,enabled)")
         connection.execute("INSERT INTO prompt_filters VALUES('fixture-state',0)")
         connection.commit()
@@ -438,11 +470,9 @@ class MigrationTests(unittest.TestCase):
         from app.models.world import get_location_by_id
         support_document = legacy()
         support_document["actions"] = []
-        for variant in support_document["model_variants"]:
-            variant["action_bindings"] = []
         support = publish_fixture("Canonical dependency", support_document)
         machine_document = normalize_import(legacy())
-        machine_document["model_variants"][0]["action_bindings"][0]["access_points"]["actor"]["z"] = 1.6
+        machine_document["model_variants"][0]["markers"][0]["access"] = {"actor": {"x": 0, "z": 1.6, "yaw": 180}}
         machine = publish_fixture("Canonical dependent machine", machine_document)
         layout = {"x": 0, "y": 0, "w": 12, "d": 12, "props": [
             {"id": "support", "prop_id": support, "at": [3, 4]},
@@ -482,7 +512,7 @@ class MigrationTests(unittest.TestCase):
         folder = props._prop_dir(pid)
         before = {p.name: p.read_bytes() for p in folder.iterdir() if p.is_file()}
         document = normalize_import(legacy())
-        document["model_variants"][0]["action_bindings"][0]["marker_ids"] = ["missing"]
+        document["model_variants"][0]["markers"][0]["exclude_actions"] = ["missing"]
         out = io.BytesIO()
         with zipfile.ZipFile(out, "w") as archive:
             archive.writestr("manifest.json", json.dumps({"version": 1, "type": "prop", "prop_id": pid}))
@@ -592,7 +622,7 @@ class MigrationTests(unittest.TestCase):
         from app.core.content_io import export_location_to_zip, import_location_from_zip
         from app.core.world_ops import _sanitize_room_layout
         document = normalize_import(legacy())
-        document["model_variants"][0]["action_bindings"][0]["access_points"]["actor"]["z"] = 1.6
+        document["model_variants"][0]["markers"][0]["access"] = {"actor": {"x": 0, "z": 1.6, "yaw": 180}}
         pid = publish_fixture("Broken support fixture", document)
 
         def placement(identity, parent=""):
@@ -646,11 +676,11 @@ class MigrationTests(unittest.TestCase):
         table_document["actions"] = []
         table_document["bbox"] = [3, 1, 2]
         for variant in table_document["model_variants"]:
-            variant.update(width_m=3, depth_m=2, height_m=1, action_bindings=[])
+            variant.update(width_m=3, depth_m=2, height_m=1)
             variant.pop("markers")
         table = publish_fixture("Dependency table", table_document)
         machine_document = normalize_import(legacy())
-        machine_document["model_variants"][0]["action_bindings"][0]["access_points"]["actor"]["z"] = 1.6
+        machine_document["model_variants"][0]["markers"][0]["access"] = {"actor": {"x": 0, "z": 1.6, "yaw": 180}}
         machine = publish_fixture("Dependency machine", machine_document)
         location = add_location("Support dependency", "Isolated regression", rooms=[{"name": "A"}])
         room = next(r for r in location["rooms"] if r.get("name") == "A")
@@ -686,7 +716,7 @@ class MigrationTests(unittest.TestCase):
         from app.core.scene_recipe import _markers
         doc = normalize_import(legacy())
         variant = doc["model_variants"][1]
-        variant["action_bindings"][0]["access_points"]["actor"]["z"] = 1.6
+        variant["markers"][0]["access"] = {"actor": {"x": 0, "z": 1.6, "yaw": 180}}
         machine = {"name": "Coffee", "has_model": True, "bbox": [2, 1, 1],
                    "revision": "revision-coffee", "actions": doc["actions"],
                    "width_m": 2, "depth_m": 1, "height_m": 1,
@@ -705,9 +735,9 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(body["variant_uid"], UID_B)
         self.assertEqual(body["placement_id"], "coffee")
         binding = body["action_bindings"][0]
-        self.assertEqual(binding["access_points"]["actor"]["y"], 0)
+        self.assertEqual(body["access"]["actor"]["y"], 0)
         self.assertEqual(binding["definition_revision"], "revision-coffee")
-        self.assertNotEqual(binding["access_points"]["actor"]["x"], 3)
+        self.assertNotEqual(body["access"]["actor"]["x"], 3)
         self.assertTrue(binding["supported"])
         self.assertFalse(binding["route_checked"])
         from app.core.places import _compose
@@ -715,16 +745,16 @@ class MigrationTests(unittest.TestCase):
                    return_value={"id": "fixture-location", "pos_x": 100, "pos_z": 200, "yaw_deg": 90}), \
              patch("app.core.scene_recipe.scene_inputs", return_value=(10, {}, {})), \
              patch("app.core.scene_recipe.compose_scene", return_value={"markers": finished}):
-            world_binding = _compose("fixture-location")["kitchen"][0]["action_bindings"][0]
+            world_marker = _compose("fixture-location")["kitchen"][0]
+            world_binding = world_marker["action_bindings"][0]
         self.assertEqual(world_binding["location_id"], "fixture-location")
-        self.assertEqual(world_binding["access_points"]["actor"], {"x": 104, "z": 195.4, "y": 0, "yaw": 0})
-        # A locally safe machine approach can still stand inside its table.
-        variant["action_bindings"][0]["access_points"]["actor"]["z"] = .95
+        self.assertEqual(world_marker["access"]["actor"], {"x": 104, "z": 195.4, "y": 0, "yaw": 0})
+        # Walkability of overrides inside supports is now checked at runtime.
+        variant["markers"][0]["access"] = {"actor": {"x": 0, "z": .95, "yaw": 180}}
         with patch("app.core.props.get_prop", side_effect=lambda pid: {"table": table, "coffee": machine}[pid]):
             _, blocked = _join_placements(layout, lambda x, z: (x, z), 0, 0, 0)
-        self.assertFalse(blocked[0]["action_bindings"][0]["supported"])
-        self.assertEqual(blocked[0]["action_bindings"][0]["reason"], "support_access_blocked")
-        variant["action_bindings"][0]["access_points"]["actor"]["z"] = 1.6
+        self.assertTrue(blocked[0]["action_bindings"][0]["supported"])
+        variant["markers"][0]["access"] = {"actor": {"x": 0, "z": 1.6, "yaw": 180}}
         # A stale stable identity must not follow a reused published position.
         layout["props"][1]["variant_uid"] = UID_A
         with patch("app.core.props.get_prop", side_effect=lambda pid: {"table": table, "coffee": machine}[pid]):

@@ -9,9 +9,8 @@ export function PropOverview({ workspace }: { workspace: PropWorkspace }) {
     shownHasMesh, actions } = workspace
   const mountKnown = MOUNT_KINDS.some((mount) => mount.kind === mountNow)
   const mountInDraft = 'mount' in (workspace.buf.get(GENERAL_TARGET) || {})
-  const bindings = shownVariant?.action_bindings || []
-  const repair = actions.filter((action) => action.enabled && !bindings.some((binding) =>
-    binding.action_id === action.id && (!binding.supported || binding.validation !== 'repair_required')))
+  const bindings = workspace.derivedBindings[shownVariant?.uid || ''] || []
+  const places = new Set(bindings.flatMap(binding => binding.marker_ids)).size
   return <div className="ga-form prop-area-content">
     <h3>{t('Overview')}</h3>
     <p className="ga-hint">{t('Save applies object fields and geometry fields together.')}</p>
@@ -61,8 +60,7 @@ export function PropOverview({ workspace }: { workspace: PropWorkspace }) {
     <section className="prop-inspector-group prop-overview-status">
       <h3>{t('Model & actions')}</h3>
       <span>{t(shownHasMesh ? 'Model available for this variant' : 'This variant has no model yet')}</span>
-      <span>{actions.length ? `${actions.length} ${t('defined actions')}` : t('Decorative prop without actions')}</span>
-      {repair.length > 0 && <span className="ga-hint">{repair.length} {t('active actions without a complete binding for this variant')}</span>}
+      <span>{actions.length} {t('actions')} · {places} {t('places')}</span>
       {prop.measured?.tris ? <span className="ga-hint">
         {prop.measured.tris.toLocaleString()} {t('tris')}
         {prop.measured.uv_layers === 0 && (prop.measured.vertex_colors || 0) > 0 ? ` · ${t('no UVs, colour in the vertices')}` : ''}

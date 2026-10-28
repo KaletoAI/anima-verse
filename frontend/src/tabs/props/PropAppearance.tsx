@@ -12,8 +12,8 @@ export function PropAppearance({ workspace }: { workspace: PropWorkspace }) {
     reloadKey, variantAreas, areasFailed, areaTools, meshesChanged,
     beforeImmediate, prepareVariantOperation, setMobilePane, dirtyCount } = workspace
   return <div className="ga-form prop-area-content">
-    <h3>{t('Darstellung')}</h3>
-    <p className="ga-hint">{t('Licht gehört zum gemeinsamen Entwurf. Flächen und Wasser werden sofort angewendet.')}</p>
+    <h3>{t("Appearance")}</h3>
+    <p className="ga-hint">{t("Light belongs to the shared draft. Surfaces and water apply immediately.")}</p>
           {shownVariant && <fieldset className="prop-editor-fields" disabled={!!previewFile}>
             <div className="ga-form-section-label">{t('Prop light')}</div>
             <Field label={t('Light preset')}>
@@ -73,12 +73,12 @@ export function PropAppearance({ workspace }: { workspace: PropWorkspace }) {
               for (const v of variants) queueVariant(v.index, { light: light ? { ...light, at: [...light.at] } : null })
             }}>{t('Apply to all variants')}</button>
           </fieldset>}
-    {previewFile && <p role="status" className="ga-hint">{t('Historische Meshvorschau: Licht-, Flächen- und Wasserbearbeitung sind gesperrt. In der Vorschau zum veröffentlichten Modell zurückkehren.')}</p>}
+    {previewFile && <p role="status" className="ga-hint">{t("Historical mesh preview: light, surface and water editing are locked. Return to the published model in the preview.")}</p>}
     <fieldset className="prop-editor-fields" disabled={!!previewFile}>
 
     {dirtyCount > 0 && <button type="button" className="ga-btn" onClick={async () => {
-      if (await beforeImmediate(t('Wasserwerkzeuge verwenden'))) await meshesChanged()
-    }}>{t('Entwurf speichern & Wasserwerkzeuge verwenden')}</button>}
+      if (await beforeImmediate(t("Use water tools"))) await meshesChanged()
+    }}>{t("Save draft & use water tools")}</button>}
     <fieldset className="prop-editor-fields" disabled={dirtyCount > 0}>
           {shownVariant && shownHasMesh && <WaterPanel controller={waterController} onPlace={() => {
             setPlacing(null)
@@ -106,6 +106,6 @@ export function PropAppearance({ workspace }: { workspace: PropWorkspace }) {
             />
           ) : null}
     </fieldset>
-    {!shownHasMesh && <p className="ga-hint">{t('Flächen und Wasser benötigen ein Modell dieser Variante.')}</p>}
+    {!shownHasMesh && <p className="ga-hint">{t("Surfaces and water require a model of this variant.")}</p>}
   </div>
 }

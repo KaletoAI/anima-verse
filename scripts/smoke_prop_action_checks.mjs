@@ -41,8 +41,8 @@ try {
   const warned = composePropConfigurationResult(document, catalog, { ...accepted, issues: [warning] });
   assert.equal(warned.valid, true);
   assert.deepEqual(warned.issues, [warning]);
-  const serverError = { path: 'model_variants.0.action_bindings', code: 'invalid_binding',
-    message: 'Binding must be repaired', severity: 'error' };
+  const serverError = { path: 'model_variants.0.markers.0.exclude_actions', code: 'invalid_action_reference',
+    message: 'Unknown excluded action', severity: 'error' };
   const invalid = composePropConfigurationResult(document, catalog, { ...accepted, issues: [serverError] });
   assert.equal(invalid.valid, false);
   assert.deepEqual(invalid.issues, [serverError]);

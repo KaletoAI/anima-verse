@@ -513,7 +513,7 @@ def main() -> int:
     except store.PropRevisionConflict:
         check("stale reader preserves first save", store.read_sidecar(bench) == before)
     action = dict(id="rest", name="Rest", description="", enabled=True,
-                  ability="pose", pose_key="", participants=1, presence="any",
+                  ability="pose", pose_key="sitting", participants=1, presence="any",
                   interrupt_on_presence_change=False, phases=[], effects=[],
                   requirements=[])
     for label, actions in (
@@ -544,20 +544,18 @@ def main() -> int:
     check("delete/recreate never reuses UID",
           store.list_variants(bench)[replacement]["uid"] != old_uid)
     uid = store.list_variants(bench)[0]["uid"]
-    binding = dict(action_id="rest", variant_uid=uid, supported=True,
-                   marker_ids=["seat1"], access_points={
-                       "actor": dict(x=0, z=-1, yaw=0)}, validation="local_valid")
     with WriteCounter() as action_write:
         answer = store.bulk_update(bench, actions=[action],
-                                   variants={uid: {"action_bindings": [binding]}},
+                                   variants={uid: {"markers": [{"id": "seat1", "group": "seat", "at": [.5, .5, .5]}]}},
                                    base_revision=store.get_prop(bench)["revision"])
-    check("actions and bindings land in one write", action_write.n == 1)
+    check("actions and markers land in one write", action_write.n == 1)
     check("actions round-trip", store.get_prop(bench)["actions"] == [action])
-    check("bindings round-trip", store.list_variants(bench)[0]["action_bindings"] == [binding])
+    from app.core.prop_actions import derive_bindings
+    check("bindings derived", derive_bindings(store.read_sidecar(bench), store.read_sidecar(bench)["model_variants"][0])[0]["marker_ids"] == ["seat1"])
     copied = store.add_variant(bench, 0)
     copied_row = store.list_variants(bench)[copied]
-    check("copied bindings name only their new owning UID",
-          copied_row["action_bindings"] == [{**binding, "variant_uid": copied_row["uid"]}])
+    check("copied markers keep exclusions without stored bindings",
+          "action_bindings" not in copied_row and copied_row["markers"][0]["id"] == "seat1")
     from app.routes.world import _prop_bulk_update_sync
     from fastapi import HTTPException
     for label, body, expected_status in (

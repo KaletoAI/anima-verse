@@ -4,26 +4,27 @@ import { Model3DViewer } from '../characters/Model3DViewer'
 import { previewEntry } from '../world/placeTypes'
 import { saveScaleFigure } from './usePropWorkspace'
 import type { PropWorkspace } from './usePropWorkspace'
-import { propMetresPerUnit, type AccessRole } from './spatialBindings'
+import { propMetresPerUnit } from './accessGeometry'
 import { actionPreviewPose } from './propActionAuthoring'
 
 export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
   const { t, viewerRef, shownHasMesh, previewFile, enc, variant, reloadKey, prop, variantRotation, areaFrontal, setAreaView, areasOnView, areaOutlines, variantAreas, previewSlots, drawKind, onPolygonFaces, setShownBbox, light, waterController, markers, poseCatalog, previewPose, groups, shownDims, shownVariant, shownBbox, scaleFigure, placing, onPickPoint, variants, setScaleFigure } = workspace
   const { showStoredFile, saving } = workspace
   const action = workspace.actions.find(entry => entry.id === workspace.selectedActionId)
-  const binding = shownVariant?.action_bindings?.find(entry => entry.action_id === action?.id)
+  const binding = (workspace.derivedBindings[shownVariant?.uid || ''])?.find(entry => entry.action_id === action?.id)
   const [previewPhaseId, setPreviewPhaseId] = useState('')
   const previewPhase = action?.ability === 'combined'
     ? action.phases.find(phase => phase.id === previewPhaseId) || action.phases[0] : undefined
   const actionPoseKey = actionPreviewPose(action, previewPhase?.id)
   const spatialAuthoring = !previewFile && (workspace.area === 'places' || workspace.area === 'actions')
   const toolEnabled = !saving && !previewFile
-  const accessPoints = useMemo(() => spatialAuthoring && binding ? (['actor', 'partner'] as AccessRole[]).flatMap(role => {
-    const point = binding.access_points[role]
-    return point && [point.x, point.z, point.yaw].every(Number.isFinite)
-      ? [{ role, ...point, label: action?.participants === 2
-        ? role === 'actor' ? t('Zugang A') : t('Zugang B') : t('Zugang handelnde Person') }] : []
-  }) : [], [spatialAuthoring, binding, action?.participants, t])
+  const accessPoints = useMemo(() => {
+    if (!spatialAuthoring || !action || !shownVariant) return []
+    const previews = workspace.accessPreviews[action.id]?.[shownVariant.uid] || {}
+    return Object.entries(previews).flatMap(([markerId, slots]) => Object.entries(slots).flatMap(([slot, roles]) =>
+      Object.entries(roles).flatMap(([role, point]) => point ? [{ ...point, role: role as 'actor' | 'partner',
+        label: `${markerId} · ${t('Slot')} ${slot} · ${t(role === 'actor' ? 'Actor' : 'Partner')} · ${t(point.source === 'auto' ? 'Automatic access' : 'Access override')}` }] : [])))
+  }, [spatialAuthoring, action, shownVariant, workspace.accessPreviews, t])
   const markerOverlays = useMemo(() => markers.map((m, index) => {
     const boundToAction = !!binding?.marker_ids.includes(m.id || '')
     const entry = spatialAuthoring && boundToAction ? poseCatalog.entries.find(pose => pose.key === actionPoseKey)
@@ -38,20 +39,20 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
             {t('3D preview')}
           </div>
     {spatialAuthoring && <p className="ga-hint">
-      {t('Körperanker: Grün = der gewählten Handlung zugewiesen; Grau = nicht zugewiesen; goldener Rahmen = ausgewählt.')}
+      {t('Body anchors: green = assigned to the selected action; grey = unassigned; gold outline = selected.')}
     </p>}
     {spatialAuthoring && action?.ability === 'combined' && <label className="prop-action-field">
-      <span>{t('Vorschauphase (ohne Weltänderung)')}</span>
+      <span>{t('Preview phase (no world changes)')}</span>
       <select className="ga-input" value={previewPhase?.id || ''} onChange={event => setPreviewPhaseId(event.target.value)}>
         {action.phases.map((phase, index) => <option key={phase.id} value={phase.id}>{phase.label || `${t('Phase')} ${index + 1}`}</option>)}
       </select>
-      {!actionPoseKey && <span role="status">{t('Diese Phase hat keine Darstellung. In Aktionen eine passende Darstellung wählen.')}</span>}
+      {!actionPoseKey && <span role="status">{t('This phase has no presentation. Select a matching presentation in Actions.')}</span>}
     </label>}
     {previewFile && <div className="prop-history-notice" role="status">
-      <strong>{t('Historische / alternative Meshvorschau')}</strong>
+      <strong>{t('Historical / alternative mesh preview')}</strong>
       <span>{previewFile}</span>
-      <span>{t('Dateivorschau statt bearbeitbarer Full-Geometrie. Körperanker-, Zugangs-, Flächen-, Wasser- und Lichtwerkzeuge sind gesperrt.')}</span>
-      <button type="button" className="ga-btn ga-btn-sm" onClick={() => showStoredFile('')}>{t('Aktives Modell zeigen')}</button>
+      <span>{t('File preview instead of editable full geometry. Body anchor, access, surface, water and light tools are locked.')}</span>
+      <button type="button" className="ga-btn ga-btn-sm" onClick={() => showStoredFile('')}>{t('Show active model')}</button>
     </div>}
           <div ref={viewerRef}>
           {shownHasMesh || previewFile ? (
@@ -160,7 +161,7 @@ export function PropPreview({ workspace }: { workspace: PropWorkspace }) {
               .replace('{d}', shownDims.depth_m.toFixed(2))
               .replace('{h}', shownDims.height_m.toFixed(2))}
           </span>
-          {spatialAuthoring && <p className="ga-hint">{t('Grün: Körperanker, Slot-/Clipgeometrie und Facing. Blau/Violett: bodenseitige Zugänge und Heading. Keine Raumroute dargestellt oder geprüft.')}</p>}
+          {spatialAuthoring && <p className="ga-hint">{t('Green: body anchors, slot and clip geometry, and facing. Blue/purple: floor access and heading. No room route is displayed or checked.')}</p>}
           </div>
   </div>
 }

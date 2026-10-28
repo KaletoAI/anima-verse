@@ -183,6 +183,7 @@ The one-time move of the five fields out of the prop record lives in
 ``app/core/prop_field_migration.py`` (boot, guarded by ``world_kv``).
 """
 
+import copy
 import hashlib
 import json
 import math
@@ -802,7 +803,6 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
                 uid = str(uuid4())
             seen_uids.add(uid)
             rec["uid"] = uid
-            rec["action_bindings"] = entry.get("action_bindings", [])
             img = entry.get("image")
             if isinstance(img, dict):
                 rec["image"] = {k: str(img.get(k) or "") for k in IMAGE_META_KEYS}
@@ -862,7 +862,7 @@ def _new_variant_entry(stem: str) -> Dict[str, Any]:
     This is what a record WITHOUT the variants key answers with — a prop whose
     sidecar was hand-emptied — and the seed :func:`add_variant` copies over.
     """
-    return {"stem": stem, "uid": str(uuid4()), "action_bindings": [], "active": True,
+    return {"stem": stem, "uid": str(uuid4()), "active": True,
             **{k: DEFAULT_DIM_M for k in DIM_KEYS},
             DIMS_ESTIMATED_KEY: True}
 
@@ -1394,6 +1394,11 @@ def sanitize_markers(raw: Any, *, known_groups: Any = None) -> List[Dict[str, An
             continue
         entry: Dict[str, Any] = {"id": _place_id(m.get("id")), "group": group,
                                  "at": at3}
+        if "exclude_actions" in m:
+            entry["exclude_actions"] = copy.deepcopy(m["exclude_actions"])
+        if "access" in m:
+            # Author validation rejects malformed overrides before publication.
+            entry["access"] = copy.deepcopy(m["access"])
         cap = _capacity(m.get("capacity"))
         if cap > 1:
             entry["capacity"] = cap
@@ -3487,7 +3492,6 @@ def _published_entry(meta: Dict[str, Any], index: int,
                              "dims": variant_dims(meta, index)}
     authored = _variant_entry(meta, index)
     entry["uid"] = authored["uid"]
-    entry["action_bindings"] = authored.get("action_bindings", [])
     off = variant_ground_offset(meta, index)
     if off:
         entry[GROUND_OFFSET_KEY] = off
@@ -3660,7 +3664,6 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
         out.append({
             "index": i,
             "uid": entry["uid"],
-            "action_bindings": entry.get("action_bindings", []),
             "stem": entry["stem"],
             "active": bool(entry["active"]),
             "seasons": list(entry.get(SEASONS_KEY) or []),
@@ -3749,9 +3752,6 @@ def add_variant(prop_id: str, source: Any = None) -> int:
     src = _variant_entry(meta, source)
     entry: Dict[str, Any] = {"stem": stem, "active": True}
     entry["uid"] = str(uuid4())
-    entry["action_bindings"] = [
-        {**json.loads(json.dumps(binding)), "variant_uid": entry["uid"]}
-        for binding in src.get("action_bindings", [])]
     for key in _COPIED_ON_ADD:
         if key in src:
             entry[key] = json.loads(json.dumps(src[key]))
@@ -4402,20 +4402,17 @@ def bulk_update(prop_id: str, general: Any = None, variants: Any = None, *,
             raise ValueError(f"this prop has no variant UID {uid!r}")
         if not isinstance(patch, dict):
             raise ValueError("variant patch must be an object")
-        unknown = set(patch) - set(VARIANT_PATCH_APPLIERS) - {"action_bindings"}
+        unknown = set(patch) - set(VARIANT_PATCH_APPLIERS)
         if unknown:
             raise ValueError("unknown variant fields: " + ", ".join(sorted(unknown)))
         for field, value in patch.items():
-            if field == "action_bindings":
-                by_uid[uid][field] = value
-            else:
-                VARIANT_PATCH_APPLIERS[field](by_uid[uid], value)
+            VARIANT_PATCH_APPLIERS[field](by_uid[uid], value)
     _apply_prop_fields(meta, prop_patch)
     meta[VARIANTS_KEY] = entries
     if actions is not _KEEP:
         meta["actions"] = actions
     issues = validate_document(meta)
-    if issues:
+    if any(i["severity"] == "error" for i in issues):
         raise PropDocumentInvalid(issues)
     if prop_patch or variants or actions is not _KEEP:
         _write_sidecar(pid, meta)
@@ -5982,6 +5979,11 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
             rec["bbox"] = meta["bbox"]
     rec["revision"] = _document_revision(meta)
     rec["actions"] = meta.get("actions", [])
+    from app.core.prop_actions import derive_bindings
+    matched = {b["action_id"] for v in meta.get("model_variants", []) if v.get("active", True)
+               for b in derive_bindings(meta, v) if b["marker_ids"]}
+    rec["unmatched_action_count"] = sum(a.get("enabled", False) and a["id"] not in matched
+                                        for a in rec["actions"])
     return rec
 
 

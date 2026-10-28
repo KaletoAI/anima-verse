@@ -2,16 +2,15 @@ import { SliderInput } from '../../components/SliderInput'
 import { groupLabel } from '../world/placeTypes'
 import { AT_AXES, AT_MAX } from './usePropWorkspace'
 import type { PropWorkspace } from './usePropWorkspace'
-import { PropSpatialBindings } from './PropSpatialBindings'
-import { propMetresPerUnit } from './spatialBindings'
+import { propMetresPerUnit } from './accessGeometry'
 
 export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
   const { t, markers, selIdx, setSelectedMarker, placing, setPlacing, groups, addMarker, firstGroup, shownHasMesh, previewFile, drawKind, armPlacing, selMarker, patchMarker, groupOptions, removeMarker, shownDims, setMarkerAt, selCapacity, selPoses, setPreview, selPoseIdx } = workspace
   const rawBbox = workspace.shownBbox ?? (workspace.shownVariant?.primary ? workspace.prop.bbox : null)
   const metresPerUnit = rawBbox ? propMetresPerUnit(rawBbox, shownDims, workspace.variantRotation) : 0
+  const variantPosition = workspace.variants.findIndex(entry => entry.uid === workspace.shownVariant?.uid)
   return <div className="ga-form prop-area-content">
-          <PropSpatialBindings workspace={workspace} />
-          {previewFile && <p role="status" className="ga-hint">{t('Historische Meshvorschau: Körperanker und Zugänge sind gesperrt. Zum aktiven Modell zurückkehren, um zu bearbeiten.')}</p>}
+          {previewFile && <p role="status" className="ga-hint">{t('Historical mesh preview: body anchors and access are locked. Return to the active model to edit.')}</p>}
           <fieldset className="prop-editor-fields" disabled={workspace.saving || !!previewFile || !workspace.shownVariant}>
           <div className="ga-form-section-label">{t('Prop places')}</div>
           <span className="ga-hint">
@@ -82,9 +81,9 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
             
             {selMarker ? (
               <div id="prop-marker-card" className="ga-marker-card">
-                <p className="ga-hint">{t('Verwendende Aktionen dieses Körperankers')}: {(workspace.shownVariant?.action_bindings || [])
+                <p className="ga-hint">{t('Used by:')} {(workspace.derivedBindings[workspace.shownVariant?.uid || ''] || [])
                   .filter(b => !!selMarker.id && b.marker_ids.includes(selMarker.id))
-                  .map(b => workspace.actions.find(a => a.id === b.action_id)?.name || b.action_id).join(', ') || t('Keine')}</p>
+                  .map(b => workspace.actions.find(a => a.id === b.action_id)?.name || b.action_id).join(', ') || t('None')}</p>
                 <div className="ga-form-row">
                   <span className="ga-hint" style={{ minWidth: 20 }}>🎯 {selIdx + 1}</span>
                   <select
@@ -124,6 +123,42 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
                     ×
                   </button>
                 </div>
+                <details className="prop-inspector-group"><summary>{t('Advanced')}</summary>
+                  <fieldset><legend>{t('Not for these actions')}</legend>
+                    {workspace.actions.map(action => <label key={action.id} className="ga-form-row">
+                      <input type="checkbox" checked={selMarker.exclude_actions?.includes(action.id) || false}
+                        onChange={event => patchMarker(selIdx, { exclude_actions: event.target.checked
+                          ? [...(selMarker.exclude_actions || []), action.id]
+                          : (selMarker.exclude_actions || []).filter(id => id !== action.id) })} />{action.name}
+                    </label>)}
+                  </fieldset>
+                <section aria-label={t('Access override')}>
+                  <strong>{t('Access override')}</strong>
+                  <p className="ga-hint">{t('Leave access automatic for each slot, or override a role in local floor metres from the oriented footprint centre.')}</p>
+                  {(['actor', ...(selCapacity >= 2 ? ['partner'] : [])] as ('actor' | 'partner')[]).map(role => {
+                    const point = selMarker.access?.[role]
+                    const picking = workspace.accessPlacing?.markerId === selMarker.id && workspace.accessPlacing?.role === role
+                    return <div key={role}>
+                      <strong>{t(role === 'actor' ? 'Actor' : 'Partner')}</strong>
+                      <div className="ga-form-row">{(['x', 'z', 'yaw'] as const).map(key => <label key={key}>
+                        {key === 'yaw' ? t('Heading (degrees)') : `${key.toUpperCase()} (m)`}
+                        <input data-author-path={`model_variants.${variantPosition}.markers.${selIdx}.access.${role}.${key}`} className="ga-input" type="number" step={key === 'yaw' ? 1 : .01}
+                          value={point && Number.isFinite(point[key]) ? point[key] : ''}
+                          placeholder={t('Automatic')}
+                          onChange={event => patchMarker(selIdx, { access: { ...selMarker.access,
+                            [role]: { x: 0, z: 0, yaw: selMarker.facing ?? 0, ...point,
+                              [key]: event.target.value === '' ? Number.NaN : Number(event.target.value) } } })} />
+                      </label>)}</div>
+                      <button type="button" className={`ga-btn ga-btn-sm${picking ? ' ga-btn-primary' : ''}`}
+                        disabled={!shownHasMesh || !selMarker.id} onClick={() => workspace.armAccess(selMarker.id!, role)}>
+                        {t(picking ? 'Click the floor… (Esc cancels)' : 'Set on floor')}</button>
+                      <button type="button" className="ga-btn ga-btn-sm" disabled={!point} onClick={() => {
+                        const access = { ...selMarker.access }; delete access[role]
+                        patchMarker(selIdx, { access: Object.keys(access).length ? access : undefined })
+                      }}>{t('Use automatic access')}</button>
+                    </div>
+                  })}
+                </section></details>
                 {AT_AXES.map((axis, ax) => {
                   // Body coordinates remain fractions of the raw box even after an orientation fix.
                   const dimM = rawBbox ? rawBbox[ax] * metresPerUnit : shownDims[axis.dim]
@@ -148,7 +183,7 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
                       inputWidth={72}
                       readback={(
                         <span className="ga-hint" style={{ width: 58, flex: '0 0 auto', textAlign: 'right' }}
-                          title={t('Bruchteil der rohen Modell-Bounding-Box, in Meter derselben Viewer-Skalierung umgerechnet.')}>
+                          title={t('Fraction of the raw model bounding box, converted to metres at the viewer scale.')}>
                           {(selMarker.at[ax] * dimM).toFixed(2)} m
                         </span>
                       )}
@@ -204,7 +239,7 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
                     patchMarker(selIdx, cap > 1
                       ? { capacity: cap }
                       : { capacity: undefined, spacing_m: undefined,
-                          slot_axis: undefined })
+                          slot_axis: undefined, access: selMarker.access?.actor ? { actor: selMarker.access.actor } : undefined })
                   }}
                   sliderWidth="auto"
                   sliderStyle={{ flex: 1, minWidth: 60 }}

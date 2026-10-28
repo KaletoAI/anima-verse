@@ -51,12 +51,12 @@ export function createActionPreset(preset: ActionPreset, catalog: ActionCatalog)
       || (preset === 'pair' ? available[0] : undefined)
   const pose_key = preferred?.key || ''
   return {
-    id: actionId(), name: ({ sit: 'Sitzen / entspannen', lie: 'Hinlegen (wach)', sleep: 'Schlafen gehen', coffee: 'Kaffee machen und trinken', pair: 'Gemeinsame Paarhandlung' })[preset],
+    id: actionId(), name: ({ sit: "Sit / relax", lie: "Lie down (awake)", sleep: "Go to sleep", coffee: "Make and drink coffee", pair: "Pair action" })[preset],
     description: '', enabled: true, ability, pose_key, participants: ability === 'pair' ? 2 : 1,
     presence: 'any', interrupt_on_presence_change: false,
     phases: ability === 'combined' ? [
-      { id: actionId(), label: 'Zubereiten', duration_game_s: 120, pose_key: prepare?.key || '' },
-      { id: actionId(), label: 'Trinken', duration_game_s: 180, pose_key: drink?.key || '' },
+      { id: actionId(), label: "Prepare", duration_game_s: 120, pose_key: prepare?.key || '' },
+      { id: actionId(), label: "Drink", duration_game_s: 180, pose_key: drink?.key || '' },
     ] : [], requirements: [], effects: [],
   }
 }
@@ -68,7 +68,7 @@ export function actionPreviewPose(action: ActionDefinition | undefined, phaseId?
   return (action.phases.find(phase => phase.id === phaseId) || action.phases[0])?.pose_key || ''
 }
 
-/** No copied binding: the destination geometry must be deliberately assigned. */
+/** Independent identities; matching places are derived for the destination. */
 export function copyAction(source: ActionDefinition): ActionDefinition {
   return { ...source, id: actionId(),
     phases: source.phases.map(row => ({ ...row, id: actionId() })),
@@ -89,45 +89,45 @@ export function actionEditorIssues(actions: ActionDefinition[], catalog: ActionC
   const issues: PropActionIssue[] = []
   const add = (path: string, code: string, message: string) => issues.push({ path, code, message, severity: 'error' })
   if (actions.length && catalog.status !== 'ready') {
-    add('actions', 'catalog_unavailable', catalog.status === 'loading' ? 'Aktionskataloge werden geladen.' : 'Aktionskataloge konnten nicht geladen werden. Erneut laden, bevor du speicherst.')
+    add('actions', 'catalog_unavailable', catalog.status === 'loading' ? "Loading action catalogs." : "Could not load action catalogs. Reload before saving.")
     return issues
   }
   actions.forEach((action, i) => {
     const path = `actions.${i}`
-    if (!action.name.trim()) add(`${path}.name`, 'invalid_text', 'Bitte einen Namen eingeben.')
-    if (!['pose', 'combined', 'sleep', 'pair'].includes(action.ability)) add(`${path}.ability`, 'unsupported_ability', 'Unbekannte Fähigkeit. Eine ausführbare Fähigkeit wählen.')
-    if (action.participants !== (action.ability === 'pair' ? 2 : 1)) add(`${path}.participants`, 'unsupported_combination', 'Die Personenzahl passt nicht zur Fähigkeit.')
+    if (!action.name.trim()) add(`${path}.name`, 'invalid_text', "Enter a name.")
+    if (!['pose', 'combined', 'sleep', 'pair'].includes(action.ability)) add(`${path}.ability`, 'unsupported_ability', "Unknown ability. Choose an executable ability.")
+    if (action.participants !== (action.ability === 'pair' ? 2 : 1)) add(`${path}.participants`, 'unsupported_combination', "The number of persons does not match the ability.")
     const allowed = presentations(catalog, action.ability)
     const checkPose = (key: string, p: string) => {
-      if (!allowed.some(pose => pose.key === key)) add(p, 'unsupported_pose_capability', 'Darstellung fehlt oder passt nicht zur Fähigkeit. Eine verfügbare Darstellung wählen.')
+      if (!allowed.some(pose => pose.key === key)) add(p, 'unsupported_pose_capability', "Presentation is missing or incompatible with the ability. Choose an available presentation.")
     }
     if (action.ability === 'combined') {
-      if (action.phases.length !== 2) add(`${path}.phases`, 'unsupported_combination', 'Kaffee benötigt genau zwei Phasen: Zubereiten und Trinken. Ablauf ausdrücklich reparieren.')
+      if (action.phases.length !== 2) add(`${path}.phases`, 'unsupported_combination', "Coffee requires exactly two phases: preparation and drinking. Explicitly repair the flow.")
       action.phases.forEach((phase, j) => {
-        if (!(phase.duration_game_s > 0) || !Number.isFinite(phase.duration_game_s)) add(`${path}.phases.${j}.duration_game_s`, 'invalid_phase', 'Eine positive Dauer in Spielzeit ist erforderlich.')
+        if (!(phase.duration_game_s > 0) || !Number.isFinite(phase.duration_game_s)) add(`${path}.phases.${j}.duration_game_s`, 'invalid_phase', "A positive duration in game time is required.")
         checkPose(phase.pose_key, `${path}.phases.${j}.pose_key`)
       })
     } else checkPose(action.pose_key, `${path}.pose_key`)
     action.requirements.forEach((row, j) => {
       const p = `${path}.requirements.${j}`
-      if (action.participants === 1 && row.target !== 'actor') add(`${p}.target`, 'invalid_target', 'Diese Handlung hat keine Partnerperson.')
-      if (row.type === 'stat' && !catalog.stats.includes(row.stat)) add(`${p}.stat`, 'unknown_requirement_reference', 'Unbekannter Wert. Bestehenden Wert wählen oder Voraussetzung entfernen.')
-      if (row.type === 'stat' && !Number.isFinite(row.value)) add(`${p}.value`, 'invalid_number', 'Eine endliche Vergleichszahl ist erforderlich.')
-      if (row.type === 'condition' && !catalog.conditions.some(c => c.name === row.condition_id)) add(`${p}.condition_id`, 'unknown_requirement_reference', 'Unbekannter Zustand. Bestehenden Zustand wählen oder Voraussetzung entfernen.')
+      if (action.participants === 1 && row.target !== 'actor') add(`${p}.target`, 'invalid_target', "This action has no partner.")
+      if (row.type === 'stat' && !catalog.stats.includes(row.stat)) add(`${p}.stat`, 'unknown_requirement_reference', "Unknown stat. Choose an existing stat or remove the requirement.")
+      if (row.type === 'stat' && !Number.isFinite(row.value)) add(`${p}.value`, 'invalid_number', 'A finite comparison value is required.')
+      if (row.type === 'condition' && !catalog.conditions.some(c => c.name === row.condition_id)) add(`${p}.condition_id`, 'unknown_requirement_reference', "Unknown condition. Choose an existing condition or remove the requirement.")
     })
     action.effects.forEach((row, j) => {
       const p = `${path}.effects.${j}`
-      if (!effectTimings(action, row.type).includes(row.when)) add(`${p}.when`, 'unsupported_combination', 'Dieser Zeitpunkt ist für Wirkung und Fähigkeit nicht erlaubt. Bitte ausdrücklich ändern.')
-      if (action.participants === 1 && row.target !== 'actor') add(`${p}.target`, 'invalid_target', 'Diese Handlung hat keine Partnerperson.')
+      if (!effectTimings(action, row.type).includes(row.when)) add(`${p}.when`, 'unsupported_combination', "This timing is not allowed for the effect and ability. Change it explicitly.")
+      if (action.participants === 1 && row.target !== 'actor') add(`${p}.target`, 'invalid_target', "This action has no partner.")
       if (row.type === 'stat_delta') {
-        if (!catalog.stats.includes(row.stat)) add(`${p}.stat`, 'unknown_stat', 'Unbekannter Wert. Bestehenden Wert wählen oder Wirkung entfernen.')
-        if (!Number.isFinite(row.amount)) add(`${p}.amount`, 'invalid_number', 'Ein endlicher Betrag ist erforderlich.')
+        if (!catalog.stats.includes(row.stat)) add(`${p}.stat`, 'unknown_stat', "Unknown stat. Choose an existing stat or remove the effect.")
+        if (!Number.isFinite(row.amount)) add(`${p}.amount`, 'invalid_number', 'A finite amount is required.')
       }
-      if (row.type === 'mood' && !row.mood.trim()) add(`${p}.mood`, 'invalid_text', 'Bitte eine Stimmung eingeben oder auswählen.')
+      if (row.type === 'mood' && !row.mood.trim()) add(`${p}.mood`, 'invalid_text', "Enter or select a mood.")
       if (row.type === 'condition_add' || row.type === 'condition_remove') {
-        if (!catalog.conditions.some(c => c.name === row.condition_id)) add(`${p}.condition_id`, 'unknown_condition', 'Unbekannter Zustand. Bestehenden Zustand wählen oder Wirkung entfernen.')
+        if (!catalog.conditions.some(c => c.name === row.condition_id)) add(`${p}.condition_id`, 'unknown_condition', "Unknown condition. Choose an existing condition or remove the effect.")
       }
-      if (row.type === 'condition_add' && (!(row.duration_game_s > 0) || !Number.isFinite(row.duration_game_s))) add(`${p}.duration_game_s`, 'invalid_number', 'Eine positive Zustandsdauer ist erforderlich.')
+      if (row.type === 'condition_add' && (!(row.duration_game_s > 0) || !Number.isFinite(row.duration_game_s))) add(`${p}.duration_game_s`, 'invalid_number', 'A positive condition duration is required.')
     })
   })
   return issues

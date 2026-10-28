@@ -20,12 +20,13 @@ import {
 } from './variantFields'
 import type { DimKey } from './dims'
 import { editDimensionGesture, type DimensionGesture } from './dimensionGesture'
-import { editedBindingValidation, removeBoundMarker, type AccessRole, type AccessPoint } from './spatialBindings'
+import { type AccessRole, type AccessPoint } from './accessGeometry'
 import { usePropActionCatalog } from './usePropActionCatalog'
+import { propActionCheckDocument } from './propActionChecks'
 import { actionEditorIssues } from './propActionAuthoring'
 import type {
   PropAreasInfo, PropFull, PropLight, PropMarker, PropSlotValues, PropSourceImage,
-  PropVariant, PropView, PropWorkspaceArea, PropActionIssue, VariantBinding,
+  PropVariant, PropView, PropWorkspaceArea, PropActionIssue, VariantBinding, PropAccessPreviews,
 } from './propTypes'
 import { resolveVariantAfterBarrier, propGenerationSubject, propGenerationTarget,
   propGenerationAuthor, resolvePropRepairAfterBarrier, type PropGenerationTarget,
@@ -43,7 +44,7 @@ export const LIGHT_PRESETS: Array<{ name: string; light: Omit<PropLight, 'at'> }
 
 /**
  * The scale kit of the 3D preview — the 1.70 m reference figure beside the
- * prop plus the metre grid under both (rule "Kein Maß ohne Maßstab").
+ * prop plus the metre grid under both (rule "Always show a scale for dimensions").
  * Remembered per browser, ON until it is switched off: a mesh alone says
  * nothing about its size, so the first look should already carry the scale.
  */
@@ -92,7 +93,6 @@ function authorSnapshot(prop: PropFull, variants: PropVariant[]): AuthorFields {
       variantTarget(v.uid), { dims: v.dims, description: v.description,
         ground_offset_m: v.ground_offset_m, markers: v.markers,
         seasons: v.seasons, light: v.light ?? null,
-        action_bindings: v.action_bindings,
         face_targets: { target_faces_high: v.target_faces_high ?? null,
           target_faces_low: v.target_faces_low ?? null } },
     ]),
@@ -230,28 +230,13 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   const [serverVariants, setServerVariants] = useState<PropVariant[]>([])
   const queueGeneral = useCallback((patch: Record<string, unknown>) => {
     setBuf(previous => {
-      let next = queueFields(previous, GENERAL_TARGET, patch)
-      if ('actions' in patch) {
-        const actions = draftValue(next, GENERAL_TARGET, 'actions', prop.actions || [])
-        for (const entry of applyVariantDraft(serverVariants, next)) {
-          const bindings = editedBindingValidation(entry, actions)
-          if (bindings !== entry.action_bindings) next = queueFields(next, variantTarget(entry.uid), { action_bindings: bindings })
-        }
-      }
-      return next
+      return queueFields(previous, GENERAL_TARGET, patch)
     })
-  }, [serverVariants, prop.actions])
-  const queueVariant = useCallback((index: number,
-    patch: Record<string, unknown>) => {
-    const row = serverVariants.find((v) => v.index === index)
-    if (row) setBuf((b) => {
-      const next = queueFields(b, variantTarget(row.uid), patch)
-      if (!['dims', 'ground_offset_m', 'markers', 'action_bindings'].some(key => key in patch)) return next
-      const edited = applyVariantDraft([row], next)[0]
-      const bindings = editedBindingValidation(edited, draftValue(next, GENERAL_TARGET, 'actions', prop.actions || []))
-      return bindings === edited.action_bindings ? next : queueFields(next, variantTarget(row.uid), { action_bindings: bindings })
-    })
-  }, [serverVariants, prop.actions])
+  }, [])
+  const queueVariant = useCallback((index: number, patch: Record<string, unknown>) => {
+    const row = serverVariants.find(v => v.index === index)
+    if (row) setBuf(b => queueFields(b, variantTarget(row.uid), patch))
+  }, [serverVariants])
   const [variantMax, setVariantMax] = useState(1)
   // The world's season names + the one it is in now (E2c) — the season chips
   // are a pick from this list, and an empty list (a world without seasons)
@@ -441,8 +426,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
    *  ring that closes would hand the canvas back to a pick armed minutes
    *  ago, which then drops a marker on the next click. */
   const [placing, setPlacing] = useState<'add' | 'light' | number | null>(null)
-  const [accessPlacing, setAccessPlacing] = useState<{ actionId: string; role: AccessRole } | null>(null)
-  const [markerRemoval, setMarkerRemoval] = useState<{ uid: string; markerId: string } | null>(null)
+  const [accessPlacing, setAccessPlacing] = useState<{ markerId: string; role: AccessRole } | null>(null)
   useEffect(() => {
     if (waterController.shape) { setPlacing(null); setAccessPlacing(null); setDrawKind('') }
   }, [waterController.shape])
@@ -452,7 +436,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // else on the next prop.
   useEffect(() => {
     setAreaFrontal(false); setDrawKind(''); setAreaPreview(null)
-    setAccessPlacing(null); setMarkerRemoval(null)
+    setAccessPlacing(null)
   }, [prop.id, variant])
   /** THE COUPLING RULES, in one place because they are invariants of the one
    *  view: arming the ring turns the front view on and drops a stored gallery
@@ -503,9 +487,9 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setAccessPlacing(null)
     cancelWaterPlacement(null)
   }, [cancelWaterPlacement, saving, previewFile, shownHasMesh])
-  const armAccess = (actionId: string, role: AccessRole) => {
+  const armAccess = (markerId: string, role: AccessRole) => {
     if (saving || previewFile || !shownHasMesh) return
-    setAccessPlacing(cur => cur?.actionId === actionId && cur.role === role ? null : { actionId, role })
+    setAccessPlacing(cur => cur?.markerId === markerId && cur.role === role ? null : { markerId, role })
     setPlacing(null); setDrawKind(''); cancelWaterPlacement(null)
     setMobilePane('preview')
   }
@@ -524,7 +508,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
       }
       try {
         if (variantAreas && target.model_file !== variantAreas.model_file) {
-          throw new Error(t('Das Modell wurde geändert. Flächenwerkzeug neu öffnen.'))
+          throw new Error(t("The model changed. Reopen the surface tool."))
         }
         const answer = await call(target.index) as PropAreasInfo | undefined
         if (answer && Array.isArray(answer.areas)) onAreasInfo(answer)
@@ -1050,9 +1034,8 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   const selMarker: PropMarker | undefined = markers[selIdx]
 
   const saveMarkers = useCallback((next: PropMarker[]) => {
-    queueVariant(variant, { markers: next, action_bindings: (shownVariant?.action_bindings || [])
-      .map(binding => ({ ...binding, validation: 'repair_required' })) })
-  }, [queueVariant, variant, shownVariant])
+    queueVariant(variant, { markers: next })
+  }, [queueVariant, variant])
 
   const patchMarker = (i: number, patch: Partial<PropMarker>) =>
     saveMarkers(markers.map((m, idx) => (idx === i ? { ...m, ...patch } : m)))
@@ -1079,18 +1062,10 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   // Removing leaves the NEIGHBOUR selected: the place that slid into the gap,
   // or the new last one when the tail went. An armed pick would otherwise
   // point at an index that now means another place.
-  const commitMarkerRemoval = (markerId: string, choice?: { replaceWith: string } | { removeBindings: true }) => {
-    if (!shownVariant || saving || previewFile) return
-    queueVariant(variant, removeBoundMarker(shownVariant, markerId, choice))
-    setSelectedMarker(0); setPlacing(null); setMarkerRemoval(null)
-  }
   const removeMarker = (i: number) => {
-    const marker = markers[i]
-    if (!shownVariant || !marker?.id) return
-    setPlacing(null); setAccessPlacing(null)
-    if ((shownVariant.action_bindings || []).some(binding => binding.marker_ids.includes(marker.id!))) {
-      setMarkerRemoval({ uid: shownVariant.uid, markerId: marker.id })
-    } else commitMarkerRemoval(marker.id)
+    if (saving || previewFile) return
+    saveMarkers(markers.filter((_, index) => index !== i))
+    setSelectedMarker(0); setPlacing(null); setAccessPlacing(null)
   }
 
   // Capacity 1 is a single spot and carries no key — the shape the server
@@ -1139,24 +1114,29 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     }
     setPlacing(null)
   }, [placing, markers, firstGroup, saveMarkers, light, queueVariant, variant, saving, previewFile])
-  const patchBinding = (actionId: string, patch: Partial<VariantBinding>) => {
-    if (!shownVariant || saving || previewFile) return
-    const bindings = shownVariant.action_bindings || []
-    const existing = bindings.find(binding => binding.action_id === actionId)
-    const next: VariantBinding = { supported: true, marker_ids: [], access_points: {},
-      validation: 'repair_required', ...existing, ...patch, action_id: actionId, variant_uid: shownVariant.uid }
-    queueVariant(variant, { action_bindings: existing
-      ? bindings.map(binding => binding === existing ? next : binding) : [...bindings, next] })
-  }
   const onPickAccess = (point: Pick<AccessPoint, 'x' | 'z'>) => {
     if (!accessPlacing || saving || previewFile) return
-    const binding = shownVariant?.action_bindings?.find(b => b.action_id === accessPlacing.actionId)
-    patchBinding(accessPlacing.actionId, { access_points: { ...binding?.access_points,
-      [accessPlacing.role]: { yaw: binding?.access_points[accessPlacing.role]?.yaw ?? 0, ...point } },
-      validation: 'repair_required' })
+    const index = markers.findIndex(marker => marker.id === accessPlacing.markerId)
+    const marker = markers[index]
+    if (!marker) return
+    patchMarker(index, { access: { ...marker.access,
+      [accessPlacing.role]: { yaw: marker.access?.[accessPlacing.role]?.yaw ?? marker.facing ?? 0, ...point } } })
     setAccessPlacing(null)
   }
   const actions = draftValue(buf, GENERAL_TARGET, 'actions', prop.actions || [])
+  const accessDocument = useMemo(() => propActionCheckDocument(prop, variants, buf), [prop, variants, buf])
+  const [accessPreviewResult, setAccessPreviewResult] = useState<{ document: typeof accessDocument; points: PropAccessPreviews; bindings: Record<string, VariantBinding[]> } | null>(null)
+  const accessPreviews = accessPreviewResult?.document === accessDocument ? accessPreviewResult.points : {}
+  const derivedBindings = accessPreviewResult?.document === accessDocument ? accessPreviewResult.bindings : {}
+  useEffect(() => {
+    let current = true
+    const timer = setTimeout(() => {
+      void apiPost<{ access_previews: PropAccessPreviews; derived_bindings: Record<string, VariantBinding[]> }>(`/world/props/${enc}/validate`, { document: accessDocument })
+        .then(result => { if (current) setAccessPreviewResult({ document: accessDocument, points: result.access_previews || {}, bindings: result.derived_bindings || {} }) })
+        .catch(() => { if (current) setAccessPreviewResult(null) })
+    }, 250)
+    return () => { current = false; clearTimeout(timer) }
+  }, [accessDocument, enc])
   const authoringIssues = useMemo(() => actionEditorIssues(actions, catalog), [actions, catalog])
   useEffect(() => {
     if (!actions.some(action => action.id === selectedActionId)) setSelectedActionId(actions[0]?.id || '')
@@ -1171,7 +1151,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
           `/world/props/${enc}/variants`),
       ])
       const current = refs.variants.find((entry) => entry.uid === target.uid)
-      if (!current) throw new Error(t('Die Zielvariante wurde entfernt. Die Operation wurde nicht ausgeführt.'))
+      if (!current) throw new Error(t("The target variant was removed. The operation was not performed."))
       if (refs.generating_variants.includes(current.index)) throw new Error(t('This variant is generating right now.'))
       if (author.prop.revision !== refs.revision) throw new Error(t('Prop changed on the server; reopen the generation dialog.'))
       onRegenerateImage(current, view, view === 'front' ? current.image : current.images?.[view],
@@ -1238,7 +1218,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setRepairError('')
     try {
       const next = await resolvePropRepairAfterBarrier(opId, uid,
-        () => beforeImmediate(t('Gesicherte Generierung einer Variante zuordnen')), readRepairSnapshot)
+        () => beforeImmediate(t("Assign saved generation to a variant")), readRepairSnapshot)
       if (next) setRepairRequest(next)
     } catch (error) { setRepairError((error as Error).message) }
     finally { repairAction.current = false; setRepairBusy(false) }
@@ -1267,28 +1247,28 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     setRepairRequest(null)
     try {
       const next = await resolvePropRepairAfterBarrier(request.repair.op_id, request.target.uid,
-        () => beforeImmediate(t('Gesichertes Ergebnis veröffentlichen')), readRepairSnapshot)
+        () => beforeImmediate(t("Publish saved result")), readRepairSnapshot)
       if (!next) return
       if (next.target.index !== request.target.index
           || next.target.model_file !== request.target.model_file
           || next.body.base_revision !== request.body.base_revision) {
         setRepairRequest(next)
-        setRepairError(t('Zielvariante, aktives Mesh oder Dokument wurden geändert. Die aktuelle Zuordnung erneut bestätigen.'))
+        setRepairError(t("Target variant, active mesh or document changed. Confirm the current assignment again."))
         return
       }
       const answer = await apiPost<{ status: string }>(
         `/world/props/${enc}/variants/${next.target.index}/generate`, next.body)
       if (answer.status !== 'generating') {
         setRepairRequest(next)
-        setRepairError(t('Die Zielvariante ist bereits beschäftigt. Die gesicherte Arbeit bleibt erhalten.'))
+        setRepairError(t("The target variant is already busy. The saved work is retained."))
         return
       }
       refreshGenerationRepairs()
       onGenerating()
       void meshesChanged().catch((error: Error) => toast(error.message, 'error'))
       toast(t(next.repair.status === 'waiting_provider'
-        ? 'Der bestehende Provider-Auftrag wird abgeholt und danach veröffentlicht. Kein neuer Renderauftrag.'
-        : 'Das gesicherte Ergebnis wird ohne neue Generierung veröffentlicht.'))
+        ? "The existing provider job is retrieved and then published. No new render job."
+        : "The saved result is published without new generation."))
     } catch (error) {
       setRepairRequest(request)
       setRepairError((error as Error).message)
@@ -1332,8 +1312,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     area, navigate, mobilePane, setMobilePane,
     revisionReady, variantLoadError,
     prepareVariantOperation,
-    selectedActionId, setSelectedActionId, saveIssues, accessPlacing, armAccess, onPickAccess,
-    patchBinding, markerRemoval, setMarkerRemoval, commitMarkerRemoval,
+    selectedActionId, setSelectedActionId, saveIssues, derivedBindings, accessPreviews, accessPlacing, armAccess, onPickAccess,
     catalog, reloadActionCatalog, authoringIssues,
     generationRepairs, repairLoading, repairLoadError, repairError, repairBusy, repairRequest,
     refreshGenerationRepairs, openGenerationRepair, cancelGenerationRepair, confirmGenerationRepair, dismissGenerationRepair,

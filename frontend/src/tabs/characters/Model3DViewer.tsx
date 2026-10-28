@@ -1,6 +1,6 @@
 import type { ModelWater } from '../props/propTypes'
 import { applyPreviewTilt, rateLimitPreviewTilt } from './motionFieldPreview'
-import { accessWorldPoint, accessLocalPoint } from '../props/spatialBindings'
+import { accessWorldPoint, accessLocalPoint } from '../props/accessGeometry'
 /**
  * Model3DViewer — interactive preview of a generated character mesh.
  *

@@ -140,10 +140,9 @@ def fixture(*, yaw=0, support=False, floor_y=0):
         "phases": [], "requirements": [], "effects": []}], model_variants=[{
         "stem": "model", "uid": UID, "active": True,
         "width_m": 1, "depth_m": 1, "height_m": 1, "dims_estimated": False,
-        "markers": [{"id": "body", "group": "seat", "at": [.5, .5, .5], "facing": 0}],
-        "action_bindings": [{"action_id": "rest", "variant_uid": UID, "supported": True,
-                             "marker_ids": ["body"], "validation": "local_valid",
-                             "access_points": {"actor": {"x": 0, "z": 2, "yaw": 180}}}]}])
+        "markers": [{"id": "body", "group": "seat", "at": [.5, .5, .5], "facing": 0,
+                     "access": {"actor": {"x": 0, "z": 2, "yaw": 180}}}],
+    }])
     props._write_sidecar(pid, doc)
     directory = props._prop_dir(pid)
     (directory / "model_1.glb").write_bytes(b"opaque-fixture-no-processing")
@@ -279,7 +278,7 @@ class Paths(unittest.TestCase):
         self.assertEqual(N.plan_approach(name, target, "partner")["reason"], "missing_role_access")
         self.assertEqual(N.plan_approach("", {}, "actor")["status"], "blocked")
         doc = props.read_sidecar(pid)
-        doc["model_variants"][0]["action_bindings"][0]["access_points"]["actor"]["z"] = .6
+        doc["model_variants"][0]["markers"][0]["access"]["actor"]["z"] = .6
         props._write_sidecar(pid, doc)
         target["definition_revision"] = props.get_prop(pid)["revision"]
         self.assertEqual(N.plan_approach(name, target, "actor")["reason"], "access_not_walkable")

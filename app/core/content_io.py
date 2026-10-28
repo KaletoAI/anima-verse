@@ -1293,10 +1293,11 @@ def _normalize_prop_payload(payload: Dict[str, bytes], prop_id: str) -> List[str
         normalized.pop("id", None)
     if normalized != original:
         payload["sidecar.json"] = json.dumps(normalized, ensure_ascii=False, indent=2).encode()
+    from app.core.prop_actions import derive_bindings
     repairs = sum(binding["validation"] == "repair_required"
                   for variant in normalized["model_variants"]
-                  for binding in variant["action_bindings"])
-    return ([f"{prop_id}: {repairs} action binding(s) repair_required; actions blocked"]
+                  for binding in derive_bindings(normalized, variant))
+    return ([f"{prop_id}: {repairs} action(s) without matching places"]
             if repairs else [])
 
 

@@ -86,7 +86,7 @@ def authored_pair():
     doc["actions"][0].update(ability="pair", participants=2, pose_key="run-pair")
     variant = doc["model_variants"][0]
     variant["markers"][0].update(capacity=2, spacing_m=.6)
-    variant["action_bindings"][0]["access_points"] = dict(
+    variant["markers"][0]["access"] = dict(
         actor=dict(x=-.3, z=2, yaw=180), partner=dict(x=.3, z=2, yaw=180))
     F.props._write_sidecar(pid, doc)
     target["definition_revision"] = F.props.get_prop(pid)["revision"]
@@ -135,6 +135,104 @@ class Runs(unittest.TestCase):
         F.assert_no_external_work()
 
 
+    def test_automatic_access_recheck_detects_height_change(self):
+        name, target, pid = setup_run()
+        doc = F.props.read_sidecar(pid)
+        doc["model_variants"][0]["markers"][0].pop("access")
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        answer = request(name, target)
+        self.assertEqual(answer["status"], "approaching", answer)
+        row = R.get(answer["execution_id"])
+        profile = F.C.get_character_profile(name)
+        profile["height"] = 85
+        F.C.save_character_profile(name, profile)
+        self.assertEqual(A._validate(row, require_claims=True), "approach_target_changed")
+
+    def test_solo_tries_later_slot_when_first_access_is_blocked(self):
+        name, target, pid = setup_run()
+        doc = F.props.read_sidecar(pid)
+        marker = doc["model_variants"][0]["markers"][0]
+        marker.pop("access")
+        marker.update(capacity=3, spacing_m=.6)
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        # Entry travel +2 at facing0 starts at z3. The obstacle blocks only
+        # the left slot x7.4; the next point (8,3) remains walkable.
+        block = F.furniture_prop("First slot obstacle", width=.1, depth=.1, height=1)
+        location = F.W.get_location_by_id(target["location_id"])
+        location["rooms"][0]["layout"]["props"].append(
+            dict(id="obstruction", prop_id=block, at=[7.4, 3], yaw=0))
+        F.W.upsert_location(location, sync_world=True)
+        from app.core.prop_action_paths import plan_approach
+        planned = plan_approach(name, target, "actor")
+        self.assertEqual(planned["status"], "ok", planned)
+        self.assertEqual(planned["entry_anchor"]["slot"], 1)
+        answer = request(name, target)
+        self.assertEqual(answer["status"], "approaching", answer)
+        plan = R.get(answer["execution_id"])["data"]["plans"]["actor"]
+        self.assertEqual(plan["entry_anchor"]["slot"], 1)
+
+    def test_automatic_bench_and_opposite_bed_entries(self):
+        """Hand derivation for 170cm height / 1.7m reference, travel (0,-2):
+
+        At facing0, delta=(0,-2): bench slots x=7.4,8,8.6 at z5
+        start at z7. At facing90 delta=(-2,0), left bed slot x7.5
+        starts x9.5; facing270 delta=(2,0), right x8.5 starts x6.5.
+        Adding those deltas lands on every slot exactly (5cm guard passes).
+        """
+        name, target, pid = setup_run()
+        directory = F.ROOT / "clips"
+        metadata = directory / "run-enter.json"
+        raw = json.loads(metadata.read_text())
+        raw["geometry"]["root_motion"]["travel_m"] = [0, -2]
+        metadata.write_text(json.dumps(raw))
+        clips._clear_entries_cache()
+        doc = F.props.read_sidecar(pid)
+        marker = doc["model_variants"][0]["markers"][0]
+        marker.pop("access")
+        marker.update(capacity=3, spacing_m=.6)
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        from app.core.prop_action_paths import plan_approach
+        from app.core.prop_action_access import preview_access
+        previews = preview_access(doc, prop_id=pid)["rest"][target["variant_uid"]]["body"]
+        for slot, x in enumerate((-.6, 0, .6)):
+            point = previews[str(slot)]["actor"]
+            self.assertAlmostEqual(point["x"], x)
+            self.assertAlmostEqual(point["z"], 2)
+            self.assertEqual((point["yaw"], point["source"]), (0, "auto"))
+        for slot, x in enumerate((7.4, 8, 8.6)):
+            plan = plan_approach(name, dict(target, slot=slot), "actor")
+            self.assertEqual(plan["status"], "ok", plan)
+            self.assertAlmostEqual(plan["access"]["x"], x)
+            self.assertAlmostEqual(plan["access"]["z"], 7)
+            self.assertEqual(plan["access"]["yaw"], 0)
+            self.assertEqual(A._entry_spec(name, plan, "sitting")[1], "")
+        from copy import deepcopy
+        left, right = deepcopy(marker), deepcopy(marker)
+        left.update(id="left", at=[0, .5, .5], group="lie", facing=90, capacity=1)
+        right.update(id="right", at=[1, .5, .5], group="lie", facing=270, capacity=1)
+        variant = doc["model_variants"][0]
+        variant["markers"] = [left, right]
+        doc["actions"][0]["pose_key"] = "lying"
+        F.props._write_sidecar(pid, doc)
+        clips._write_world_transitions([{"from": "walking", "to": "lying", "kind": "run-enter", "accel": 0}])
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        for mid, x, yaw in (("left", 9.5, 90), ("right", 6.5, 270)):
+            plan = plan_approach(name, dict(target, marker_id=mid, slot=0), "actor")
+            self.assertEqual(plan["status"], "ok", plan)
+            self.assertAlmostEqual(plan["access"]["x"], x)
+            self.assertAlmostEqual(plan["access"]["z"], 5)
+            self.assertEqual(plan["access"]["yaw"], yaw)
+            self.assertEqual(A._entry_spec(name, plan, "lying")[1], "")
+        doc["model_variants"][0]["markers"][0]["access"] = {"actor": dict(x=2, z=2, yaw=41)}
+        F.props._write_sidecar(pid, doc)
+        target["definition_revision"] = F.props.get_prop(pid)["revision"]
+        plan = plan_approach(name, dict(target, marker_id="left", slot=0), "actor")
+        self.assertEqual(plan["access"], dict(x=10, z=7, yaw=41, y=0))
+        self.assertEqual(A._entry_spec(name, plan, "lying")[1], "entry_transition_mismatch")
+
     def test_multi_action_partner_offers_share_geometry_but_not_later_state(self):
         from copy import deepcopy
         from app.core import prop_actions, room_stand
@@ -147,9 +245,6 @@ class Runs(unittest.TestCase):
             action = deepcopy(doc["actions"][0])
             action.update(id=action_id, name=action_id)
             doc["actions"].append(action)
-            binding = deepcopy(doc["model_variants"][0]["action_bindings"][0])
-            binding["action_id"] = action_id
-            doc["model_variants"][0]["action_bindings"].append(binding)
         F.props._write_sidecar(pid, doc)
         revision = F.props._document_revision(doc)
         exact = {k: target[k] for k in A._TARGET}
@@ -317,7 +412,6 @@ class Runs(unittest.TestCase):
         result = request(name, target)
         doc = F.props.read_sidecar(pid)
         doc["actions"] = []
-        doc["model_variants"][0]["action_bindings"] = []
         F.props._write_sidecar(pid, doc)
         tick()
         self.assertEqual(R.get(result["execution_id"])["status"], "failed")
@@ -922,7 +1016,7 @@ class Runs(unittest.TestCase):
         tick(2)
         original = F.props.read_sidecar(pid)
         saved = F.props.bulk_update(pid, base_revision=F.props._document_revision(original),
-            variants={F.UID: {"markers": [], "action_bindings": []}}, actions=[])
+            variants={F.UID: {"markers": []}}, actions=[])
         self.assertTrue(saved)
         geometry = F.S.room_geometry(target["location_id"], target["room_id"])
         box = next(b for b in geometry[1] if b["placement_id"] == "device")
@@ -938,10 +1032,9 @@ class Runs(unittest.TestCase):
         self.assertFalse(F.S._in_footprint(after["x"], after["z"], box, F.S.BODY_R_M))
         variant = original["model_variants"][0]
         variant["markers"][0]["id"] = "replacement"
-        variant["action_bindings"][0]["marker_ids"] = ["replacement"]
         current = F.props.read_sidecar(pid)
         saved = F.props.bulk_update(pid, base_revision=F.props._document_revision(current),
-            variants={F.UID: {"markers": variant["markers"], "action_bindings": variant["action_bindings"]}},
+            variants={F.UID: {"markers": variant["markers"]}},
             actions=original["actions"])
         target["definition_revision"] = saved["revision"]
         restarted = request(name, target)

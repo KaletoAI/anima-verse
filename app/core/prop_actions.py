@@ -20,6 +20,39 @@ _TYPE_FIELDS = {
 }
 
 
+def derive_bindings(document: dict, variant: dict, *, poses: dict | None = None) -> list[dict]:
+    """Derive every action's eligible body markers from its entry presentation.
+
+    Empty bindings are useful to author previews; composition only publishes a
+    binding on its matching markers. No author-maintained references are read.
+    """
+    from app.core.pose_catalog import get_catalog
+    from app.core.prop_action_access import entry_pose
+    from app.core.world_ops import _capacity
+    poses = get_catalog('pose') if poses is None else poses
+    result = []
+    actions = document.get('actions', [])
+    markers = variant.get('markers', [])
+    if not isinstance(actions, list) or not isinstance(markers, list):
+        return []
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        key = entry_pose(action)
+        group = 'lie' if action.get('ability') == 'sleep' else poses.get(key if isinstance(key, str) else '', {}).get('group')
+        required = 2 if action.get('ability') == 'pair' else action.get('participants', 1)
+        mids = [m['id'] for m in markers
+                if isinstance(m, dict) and m.get('id') and group and m.get('group') == group
+                and type(required) is int and _capacity(m.get('capacity')) >= required
+                and isinstance(m.get('exclude_actions', []), list)
+                and action.get('id') not in m.get('exclude_actions', [])]
+        result.append(dict(action_id=action.get('id'), variant_uid=variant.get('uid'),
+                           marker_ids=mids, supported=bool(mids),
+                           validation='local_valid' if mids else 'repair_required',
+                           reason='' if mids else 'no_matching_place'))
+    return result
+
+
 def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue]:
     """Return issues; optional read-only catalog snapshot avoids world DB getters."""
     if not isinstance(prop, dict):
@@ -162,6 +195,8 @@ def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue
                         issue(q, 'invalid_effect', 'Condition addition requires duration and repeat policy')
                 else:
                     issue(q + '.type', 'invalid_effect', 'Unknown effect type')
+    from app.core.pose_catalog import get_catalog
+    pose_catalog = (get_catalog('pose') if catalogs is None else catalogs['poses']) if actions else {}
     seen_uids = set()
     for i, variant in enumerate(rows(prop.get('model_variants', []), 'model_variants')):
         p = f'model_variants.{i}'
@@ -175,48 +210,36 @@ def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue
             seen_uids.add(uid)
         except (ValueError, TypeError, AttributeError):
             issue(p + '.uid', 'invalid_variant_uid', 'Expected a unique canonical UUID')
-        markers = {m['id']: m for m in rows(variant.get('markers', []), p + '.markers')
-                   if isinstance(m, dict) and text(m.get('id'))}
-        bound = set()
-        for j, binding in enumerate(rows(variant.get('action_bindings', []), p + '.action_bindings')):
-            q = f'{p}.action_bindings.{j}'
-            if not isinstance(binding, dict):
-                issue(q, 'invalid_type', 'Expected an object')
+        if 'action_bindings' in variant:
+            issue(p + '.action_bindings', 'unknown_field', 'Unsupported author field')
+        marker_rows = rows(variant.get('markers', []), p + '.markers')
+        for marker_index, marker in enumerate(marker_rows):
+            if not isinstance(marker, dict):
                 continue
-            fields(binding, {'action_id', 'variant_uid', 'supported', 'marker_ids',
-                             'access_points', 'validation'}, q)
-            aid = binding.get('action_id')
-            action = action_map.get(aid) if isinstance(aid, str) else None
-            if not action or (isinstance(aid, str) and aid in bound):
-                issue(q + '.action_id', 'invalid_action_reference', 'Unknown or duplicate action binding')
-            if isinstance(aid, str):
-                bound.add(aid)
-            if binding.get('variant_uid') != uid:
-                issue(q + '.variant_uid', 'invalid_variant_reference', 'Binding must name its owning variant')
-            if not isinstance(binding.get('supported'), bool):
-                issue(q + '.supported', 'invalid_type', 'Expected boolean')
-            if binding.get('validation') not in ('suggested', 'local_valid', 'repair_required'):
-                issue(q + '.validation', 'invalid_validation', 'Unknown binding validation state')
-            mids = rows(binding.get('marker_ids'), q + '.marker_ids')
-            if any(not isinstance(mid, str) or mid not in markers for mid in mids) or len(set(str(m) for m in mids)) != len(mids):
-                issue(q + '.marker_ids', 'invalid_marker_reference', 'Markers must exist and be unique')
-            access = binding.get('access_points')
-            roles = ('actor', 'partner') if action and action.get('participants') == 2 else ('actor',)
-            if not isinstance(access, dict) or any(role not in roles for role in access):
-                issue(q + '.access_points', 'invalid_access_points', 'Expected role access points')
-            else:
-                for role, point in access.items():
-                    if (not isinstance(point, dict) or set(point) != {'x', 'z', 'yaw'}
-                            or not all(number(point.get(key)) for key in ('x', 'z', 'yaw'))):
-                        issue(q + '.access_points.' + role, 'invalid_access_point', 'Expected finite local x, z and yaw')
-                if binding.get('supported') and (not mids or any(role not in access for role in roles)):
-                    issue(q, 'incomplete_binding', 'Supported binding needs markers and every role access')
-                if binding.get('supported') and len(roles) == 2:
-                    from app.core.world_ops import _capacity
-                    if any(_capacity(markers[mid].get('capacity')) < 2
-                           for mid in mids if isinstance(mid, str) and mid in markers):
-                        issue(q + '.marker_ids', 'incompatible_marker',
-                              'Pair alternatives each need two slots on one shared marker')
+            exclusions = rows(marker.get('exclude_actions', []), f'{p}.markers.{marker_index}.exclude_actions')
+            if any(not isinstance(aid, str) or aid not in action_map for aid in exclusions):
+                issue(f'{p}.markers.{marker_index}.exclude_actions', 'invalid_action_reference', 'Unknown excluded action')
+            if 'access' not in marker:
+                continue
+            from app.core.world_ops import _capacity
+            access = marker['access']
+            marker_path = f'{p}.markers.{marker_index}.access'
+            roles = {'actor', 'partner'} if _capacity(marker.get('capacity')) >= 2 else {'actor'}
+            if not isinstance(access, dict) or set(access) - roles:
+                issue(marker_path, 'invalid_access', 'Expected role overrides; partner requires two slots')
+                continue
+            for role, point in access.items():
+                if (not isinstance(point, dict) or set(point) != {'x', 'z', 'yaw'}
+                        or not all(number(point.get(key)) for key in ('x', 'z', 'yaw'))):
+                    issue(marker_path + '.' + role, 'invalid_access_point', 'Expected finite local x, z and yaw')
+    if any(i['severity'] == 'error' for i in issues):
+        return issues
+    active = [v for v in prop.get('model_variants', []) if isinstance(v, dict) and v.get('active', True)]
+    matched = {b['action_id'] for v in active for b in derive_bindings(prop, v, poses=pose_catalog) if b['marker_ids']}
+    for i, action in enumerate(actions):
+        if isinstance(action, dict) and action.get('enabled') and action.get('id') not in matched:
+            issues.append(dict(path=f'actions.{i}', code='no_matching_place',
+                               message='No matching place on any variant', severity='warning'))
     return issues
 
 

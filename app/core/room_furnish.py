@@ -1294,11 +1294,6 @@ def _create_built_props(needs: List[Dict[str, Any]], placed_ids: set,
             suggested.pop("id", None)
             for action in suggested["actions"]:
                 action["enabled"] = False
-            for variant in suggested["model_variants"]:
-                for binding in variant["action_bindings"]:
-                    binding["supported"] = False
-                    if binding["validation"] == "local_valid":
-                        binding["validation"] = "suggested"
             _write_sidecar(prop["id"], suggested)
         # PERSIST AFTER EVERY PIECE, not after the loop: a create_prop that
         # raises halfway would otherwise leave the props already made without

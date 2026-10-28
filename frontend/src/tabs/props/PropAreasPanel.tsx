@@ -213,7 +213,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
       t('Save picture variant'))
     if (!target) return
     if (editing === null && !target.primary) {
-      toast(t('Die primäre Rahmenvariante wurde geändert. Bildeditor neu öffnen; Bildentwurf bleibt erhalten.'), 'error')
+      toast(t("The primary frame variant changed. Reopen the picture editor; the picture draft is retained."), 'error')
       return
     }
     setBusy('variant')
@@ -289,7 +289,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
         {t('Areas')}
         {shownVariant?.label ? ` · ${shownVariant.label}` : ''}
       </div>
-      <p className="ga-hint">{t('Flächen, Materialien und Bildvarianten werden sofort angewendet. Verwerfen setzt diese Änderungen nicht zurück.')}</p>
+      <p className="ga-hint">{t("Surfaces, materials and picture variants apply immediately. Discard does not undo these changes.")}</p>
       <span className="ga-hint" style={{ display: 'block' }}>
         {t('The key surfaces of THIS variant’s mesh — the panel a picture hangs on, the pane of a door. Each one is a material of that model file; a picture is hung on it as a variant of this prop.')}
       </span>
@@ -557,7 +557,7 @@ export function PropAreasPanel({ prop, variant, variants, variantMax, reloadKey,
         open={editing !== undefined}
         title={editing === null
           ? t('New picture variant')
-          : `${t('Picture variant')} · ${editingVariant ? variantName(editingVariant, t) : t('Variante entfernt')}`}
+          : `${t('Picture variant')} · ${editingVariant ? variantName(editingVariant, t) : t("Variant removed")}`}
         areas={dialogAreas}
         initial={editing !== null && editing !== undefined
           ? editingVariant?.slot_values

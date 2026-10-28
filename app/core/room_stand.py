@@ -389,6 +389,15 @@ def bridge_scale(height_cm: Optional[float], ref_height_m: Optional[float]) -> f
     return (float(height_cm) / 100.0) / float(ref_height_m)
 
 
+def bridge_start_point(slot: Sequence[float], travel_m: Sequence[float],
+                       facing_deg: float, actor_height_cm: Optional[float],
+                       ref_height_m: Optional[float]) -> Tuple[float, float]:
+    """Start of an entry bridge whose final point is the chosen body slot."""
+    dx, dz = bridge_offset(travel_m, facing_deg,
+                           bridge_scale(actor_height_cm, ref_height_m))
+    return float(slot[0]) - dx, float(slot[1]) - dz
+
+
 def bridge_stand_point(name: str, place: Dict[str, Any], pose_key: str,
                        profile: Optional[Dict[str, Any]] = None,
                        at: Optional[Sequence[float]] = None

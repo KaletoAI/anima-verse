@@ -223,7 +223,7 @@ export function PropModelPanel({ propId, variant, variantUid, reloadKey, preview
           after that question (2026-08-29) and no longer after the variant —
           the column it stands in is one variant's, said once at its top. */}
       <div className="ga-form-section-label">{t('Resolution tiers')}</div>
-      <p className="ga-hint">{t('Datei- und Detailstufenänderungen werden sofort angewendet. Die Budgets gehören zum Entwurf.')}</p>
+      <p className="ga-hint">{t("File and detail level changes apply immediately. Budgets belong to the draft.")}</p>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {/* The heading already says what these tags are. */}
         <TierSummary tiers={info?.tiers} showLabel={false} />
