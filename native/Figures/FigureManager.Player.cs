@@ -1,4 +1,5 @@
 using System;
+using System.Text.Json;
 using AnimaNative.Scatter;
 using Godot;
 
@@ -9,6 +10,28 @@ public partial class FigureManager
 {
     public string? PlayerDriven { get; private set; }
     private string? _playerAnimation;
+    /// <summary>Task 50: keep the controlled identity while E6 owns its movement; suppression survives cached placement.</summary>
+    public bool ServerDriven { get; private set; }
+    /// <summary>Task 50: preserve an owned route across polls requested before a local correction/seat write.</summary>
+    public bool HoldAvatarPlacement { get; set; }
+    public Func<string?, bool>? SuppressAvatarJourney { get; set; }
+    public event Action<JsonElement, double>? PositionMapApplying;
+    public event Action<JsonElement, double>? PositionMapApplied;
+    public event Action? AfterTick;
+    public bool IsPlayerDriven(string name) => name == PlayerDriven && !ServerDriven;
+
+    /// <summary>Task 50: SERVER keeps E6 routes; input takes over at the rendered point, arrival at the server point.</summary>
+    public void SetServerDriven(bool server, Vector3? arriveAt = null)
+    {
+        if (ServerDriven == server) return;
+        ServerDriven = server;
+        _playerAnimation = null;
+        if (PlayerDriven is { } name && _figures.TryGetValue(name, out var f))
+        {
+            if (!server) { TakeOver(f); if (arriveAt is { } at) SnapPlayerTo(name, at); }
+            else if (_lastPlans.TryGetValue(name, out var plan)) ApplyPlan(f, plan, false);
+        }
+    }
     /// <summary>Steering runs immediately before figures step, including manually advanced check frames.</summary>
     public event Action<double>? BeforeTick;
     public MeshInstance3D? WalkTarget { get; private set; }
@@ -18,6 +41,8 @@ public partial class FigureManager
     {
         if (name == PlayerDriven) return;
         PlayerDriven = name;
+        ServerDriven = false;
+        HoldAvatarPlacement = false;
         _playerAnimation = null;
         if (name is not null && _figures.TryGetValue(name, out var f)) TakeOver(f);
         if (name is null) SetWalkTarget(null);

@@ -170,7 +170,8 @@ public static class EmbodyCheck
             fallback.SetFirstPerson(false);
             Is("no-head body restored", fallback.Body.Visible);
             string walking = await EmbodyWalkCheck.RunAsync(host, fixtures);
-            return $"embody cases={n} {walking} fly=7 cap=34 hints=1/session floor=0.8 first_person=180ms exit=70 menu_esc=only";
+            string position = await EmbodyPositionCheck.RunAsync(host, fixtures);
+            return $"embody cases={n} {walking} {position} fly=7 cap=34 hints=1/session floor=0.8 first_person=180ms exit=70 menu_esc=only";
         }
         finally { hud.Free(); vp.QueueFree(); }
     }

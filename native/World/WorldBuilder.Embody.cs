@@ -90,13 +90,8 @@ public sealed partial class WorldBuilder
         return cache.Segments.Count == 0 ? null : (cache.Segments,Collide.BodyRadius(scene.K));
     }
 
-    /// <summary>Task 49: approach hold requests near detail; Task 50 generalizes the pin ownership adapter.</summary>
-    public bool HoldPlayerApproach(double x, double z)
-    {
-        var tile = FootprintAt(x,z);
-        bool hold = tile is not null && (tile.Ring != Ring.Near || !tile.Ready);
-        _streamPins["approach"] = hold ? tile!.Loc.Id : null;
-        return hold;
-    }
-    public void ClearPlayerApproach() => _streamPins.Remove("approach");
+    private readonly ReadinessState _playerReadiness = new();
+    /// <summary>Task 50: use the vectored readiness owner lifecycle over the residency pin map.</summary>
+    public bool HoldPlayerApproach(double x, double z) => Readiness.HoldFor(this, _playerReadiness, x, z);
+    public void ClearPlayerApproach() => Readiness.ClearApproach(this, _playerReadiness);
 }

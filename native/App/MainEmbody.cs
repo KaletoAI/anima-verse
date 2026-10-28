@@ -12,13 +12,24 @@ namespace AnimaNative;
 
 /// <summary>
 /// Task 48 / E7-T3: embodied mode glue from main.ts. Boot/model waits and the Task 44 achieved near/ready
-/// gate precede the single mode transition. Task 49 supplies local walking; write APIs and reconciliation follow in Task 50.
+/// gate precede the single mode transition. Tasks 49/50 supply walking, position writes and server reconciliation.
 /// </summary>
 public partial class Main
 {
     private EmbodyMode? _embody;
     private PlayerSteering? _playerSteering;
     private FigureManager? _steeringFigures;
+    private AvatarPositionController? _avatarPosition;
+    private string? _entryPin;
+
+    /// <summary>Task 50: entry waits own their pin independently of approach and teleport holds.</summary>
+    private void SetEntryPin(string? id)
+    {
+        if (_entryPin == id) return;
+        if (_entryPin is { } old) _builder?.Release(old, "entry");
+        _entryPin = id;
+        if (id is not null) _builder?.Pin(id, "entry");
+    }
     private bool _pendingTakeControl, _pendingArrivalTakeControl;
     private Figure? _embodiedBody;
     private bool Embodied => _embody?.Active == true;
@@ -78,6 +89,7 @@ public partial class Main
     {
         if (!_pendingTakeControl && !_pendingArrivalTakeControl) return;
         _pendingTakeControl = _pendingArrivalTakeControl = false;
+        SetEntryPin(null);
         _boot?.SetNote(null);
     }
 
@@ -97,9 +109,11 @@ public partial class Main
         {
             if (!_pendingArrivalTakeControl) EmbodyToast("Loading this place…");
             _pendingArrivalTakeControl = true;
+            SetEntryPin(AvatarRow() is { } me ? Str(me, "location_id") : null);
             return;
         }
         _pendingArrivalTakeControl = false;
+        SetEntryPin(null);
         _embody?.Enter();
     }
 
@@ -171,12 +185,19 @@ public partial class Main
         if (_steeringFigures != _figures)
         {
             if (_steeringFigures is { } old && IsInstanceValid(old)) old.BeforeTick -= StepPlayerSteering;
+            _avatarPosition?.Dispose();
             _steeringFigures = _figures;
             _playerSteering = new PlayerSteering(_figures, _builder)
             { LoadingPlace = () => EmbodyToast("Loading this place…") };
+            _avatarPosition = new AvatarPositionController(_figures, _builder, _playerSteering, _source!)
+            {
+                Toast = EmbodyToast,
+                FlyTo = point => { if (_camera is { } cam) cam.FlyTo(point, cam.Control.TargetDist); }
+            };
             _figures.BeforeTick += StepPlayerSteering;
         }
         _playerSteering!.SetActive(Embodied);
+        _avatarPosition?.SetActive(Embodied, _figures.LatestMap ?? _builder.FirstMap);
     }
 
     /// <summary>Task 49: browser key names come from the shared camera key set; HUD-owned typing/overlay releases them.</summary>
@@ -185,7 +206,7 @@ public partial class Main
         if (_playerSteering is null || _camera is null) return;
         _playerSteering.SetActive(Embodied && !Leaving);
         _playerSteering.MovementLocked = _hud?.HudOwned("movementLocked")?.GetValue<bool>() == true;
-        _playerSteering.RoomId = AvatarRow() is { } row ? Str(row, "room_id") ?? "" : "";
+        _avatarPosition?.BeforeSteering();
         if (_hud is { } hud && HudRouting.KeysToHud(hud.Ui)) _camera.Control.ReleaseKeys();
         _playerSteering.Step(System.Math.Min(dt, CameraMath.MaxFrameDt),
             (IReadOnlySet<string>)_camera.Control.KeysDown, _camera.Yaw);
@@ -195,6 +216,8 @@ public partial class Main
 
     private void DetachEmbody()
     {
+        SetEntryPin(null);
+        _avatarPosition?.Dispose(); _avatarPosition = null;
         _playerSteering?.SetActive(false);
         if (_steeringFigures is { } manager && IsInstanceValid(manager)) manager.BeforeTick -= StepPlayerSteering;
         _playerSteering = null; _steeringFigures = null;

@@ -35,6 +35,9 @@ public sealed class ApiException : Exception
 /// </summary>
 public interface IWorldSource
 {
+    /// <summary>Task 50 / E7-T5: the sole position write, including authoritative refusal bodies.</summary>
+    Task<PositionAnswer> ReportPositionAsync(PositionReport report, CancellationToken ct = default)
+        => Task.FromException<PositionAnswer>(new ApiException(404, "/play/pos", "not served by this source"));
     /// <summary><c>GET /play/worldmap</c> (§ A1.3) — authoritative for location placement (pos, yaw).</summary>
     Task<JsonDocument> GetWorldMapAsync();
     /// <summary>Task 42: metadata of this payload only; direct/synthetic Apply calls have no network age.</summary>
@@ -89,7 +92,7 @@ public interface IWorldSource
 /// Requests mirror the browser client (client3d/src/api.ts); no endpoint here is
 /// invented.
 /// </summary>
-public sealed class AnimaApi : IWorldSource, IDisposable
+public sealed partial class AnimaApi : IWorldSource, IDisposable
 {
     /// <summary>Server cap of <c>/play/heightfield/tiles</c> (§ A16.5, BATCH_MAX).</summary>
     public const int HeightTileBatchMax = Terrain.HeightTiles.BatchMax;

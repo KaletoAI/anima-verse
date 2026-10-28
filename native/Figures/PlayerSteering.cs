@@ -10,9 +10,9 @@ using Godot;
 namespace AnimaNative.Embody;
 
 /// <summary>
-/// Task 49 / E7-T4: main.ts steering steps 1–2, 5–22 without the position channel. The driver owns only
-/// targets: FigureManager remains the single movement/animation pipeline. Task 50 supplies corrections,
-/// server handoff and refusal answers; later room/offer tasks supply rides, walk-ins and activity writes.
+/// Tasks 49/50 / E7-T4/T5: main.ts steering targets; FigureManager remains the single movement/animation
+/// pipeline. AvatarPositionController supplies corrections, server handoff and refusal answers; later room/offer
+/// tasks supply rides, walk-ins and activity writes.
 /// </summary>
 public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
 {
@@ -20,6 +20,10 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
     public const int RefusedMax = 8;
     public bool Active { get; private set; }
     public bool MovementLocked { get; set; }
+    /// <summary>Task 50 / Task 57 hook: authoritative prop entry/approach forbids steering and position writes.</summary>
+    public bool PropActionDriven { get; set; }
+    public Action<P2>? SteeringInput { get; set; }
+    public double Clock => _clock;
     public bool PendingSnap { get; set; }
     public string RoomId { get; set; } = "";
     public P2? Route { get; private set; }
@@ -86,7 +90,7 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
 
     public bool OnGroundClick(P2 hit)
     {
-        if (!Active || MovementLocked || VerticalRide is not null || WalkIn is not null || PendingSnap || Avatar is not { } f)
+        if (!Active || MovementLocked || PropActionDriven || VerticalRide is not null || WalkIn is not null || PendingSnap || Avatar is not { } f)
         { if (PendingSnap) ToastLoading(); return false; }
         var pos=new P2(f.Position.X,f.Position.Z);
         var mine=world.FootprintAt(pos.X,pos.Z);
@@ -108,7 +112,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         _clock+=dt;
         if (!Active) { CancelRoute(); VerticalRide=WalkIn=Correction=null; return; }
         if (PendingSnap) { ToastLoading(); return; }
-        figures.TakePlayerTravel(figures.AvatarName);
+        if (PropActionDriven) { CancelRoute(); return; }
+        if (!figures.ServerDriven) figures.TakePlayerTravel(figures.AvatarName);
         if (Avatar is not { } f) return;
         if (MovementLocked) { CancelRoute(); f.Target=f.Position; return; }
         var pos=f.Position;
@@ -126,7 +131,7 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         }
         if (Correction is { } correction)
         {
-            if (!Arrived(correction,.2,false) && _clock<=correction.Until) return;
+            if (!Arrived(correction,PositionChannel.CorrectArriveM,false) && _clock<=correction.Until) return;
             Correction=null;
         }
         P2? dir=Walk.WalkDir(keys,yaw);
@@ -139,6 +144,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
             else if (ClickMove.GoalDir(from,goal) is { } to) { dir=new(to.X,to.Z); reach=to.Dist; }
             else CancelRoute();
         }
+        if (dir is not null) SteeringInput?.Invoke(from);
+        if (figures.ServerDriven) return;
         if (dir is not null && !_stoodUp && figures.LastPlans.GetValueOrDefault(f.CharacterName)?.Rule is "seat" or "pool")
         {
             _stoodUp=true; f.Face=null; f.Lean=null; f.SurfaceGroup="ground"; f.ApplyRotation();

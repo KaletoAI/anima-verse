@@ -32,7 +32,7 @@ namespace AnimaNative.Check;
 ///   explored.json              → GET /play/explored (absent = 404)
 ///   (tiles.json's per-tile <c>stats</c>) → GET /play/heightfield/stats (only the requested AND indexed keys)
 /// </summary>
-public sealed class FixtureSource : IWorldSource
+public sealed partial class FixtureSource : IWorldSource
 {
     private readonly string _dir;
     /// <summary>Where a file this directory does not hold is read from (the S3c world borrows the ground files).</summary>
