@@ -88,7 +88,11 @@ public sealed class WorldStats
 public sealed class LocationSlot
 {
     public required LocationInfo Loc { get; init; }
-    public required Ring Ring { get; init; }
+    public required Ring Ring { get; set; }
+    /// <summary>Task 44: true only after a committed near stage; never published by an invalidated mount.</summary>
+    public bool Ready { get; internal set; }
+    internal bool Promoting;
+    internal List<MeasuredPrimitive> Measured = new();
     /// <summary>The location group, (pos_x, ground datum, pos_z), turned by yaw (<c>tile.group</c>, <c>tile.center</c>).</summary>
     public required Node3D Group { get; set; }
     /// <summary><c>footprintWidth</c> (<c>tile.width</c>).</summary>
@@ -423,47 +427,20 @@ public sealed partial class WorldBuilder
         root.AddChild(Mirrors);
         var placed = locations.Where(l => l.IsPlaced).ToList();
         stats.Locations = placed.Count;
-        var jobs = new List<(LocationInfo Loc, Ring Ring, bool Pinned)>();
-        foreach (var loc in placed)
-        {
-            _known.Add(loc.Id);
-            bool pinned = loc.Id == avatar.LocationId;
-            var ring = LocationView.RingFor(LocationView.PlaceDistance(loc, points), pinned);
-            if (ring == Ring.Gone) { stats.LocationsGone++; continue; }
-            jobs.Add((loc, ring, pinned));
-        }
-        // main.ts: `scenes.prime(residentIds)` → 'scenes', then the tiles → 'tiles'. The recipes of the start ring
-        // first, all of them; then each location is built from its recipe.
-        var scenes = await PrimeScenes(jobs.Select(j => j.Loc), stats);
+        _residencyStats = stats;
+        InitResidency(mapRoot, stats.Anchor.LocationId);
+        root.TreeExiting += StopResidency;
+        foreach (var loc in placed) { _known.Add(loc.Id); _residentPlaces[loc.Id] = loc; }
+        SyncStreamPins();
+        var jobs = placed.Where(loc => SceneView.RingFor(LocationView.PlaceDistance(loc, _points), Ring.Gone,
+                                    IsPinned(loc.Id), LocationView.FogFarM) != Ring.Gone).ToList();
+        stats.LocationsGone = placed.Count - jobs.Count;
+        // Prime before scheduling mounts: failed fetches remain uncached for the driver's bounded retry.
+        await PrimeScenes(jobs, stats);
         hooks?.Stage?.Invoke("scenes");
-        using var gate = new SemaphoreSlim(SceneConcurrency);
-        var tasks = jobs.Select(async job =>
-        {
-            var (loc, ring, pinned) = job;
-            if (!scenes.TryGetValue(loc.Id, out var doc)) return;   // its fetch failed (counted there)
-            await gate.WaitAsync();
-            try
-            {
-                if (doc is null) return;   // 404: nothing to compose
-                // The avatar's location starts open (main.ts arrivalLocId / bootPin); every other one closed.
-                var built = await BuildFromScene(loc, doc.RootElement, height, stats, ring, pinned, camera);
-                places.AddChild(built.Group);
-                if (built.Storeys.BoundaryMarks is { } bm) places.AddChild(bm);
-                lock (_slots) _slots[loc.Id] = built;
-            }
-            catch (Exception e) when (!_strict)
-            {
-                stats.Failures++;
-                stats.Problems.Add($"{loc.Id}: {e.Message}");
-                _log($"location {loc.Id} ({loc.Name}) failed: {e.Message}");
-            }
-            finally
-            {
-                doc?.Dispose();
-                gate.Release();
-            }
-        }).ToList();
-        await Task.WhenAll(tasks);
+        TickStreamRings();
+        await WhenResidencyIdle();
+        await SnapshotLocationModels(stats);
 
         await BuildWorldProps(root, mapRoot, height, stats, camera);
         hooks?.Stage?.Invoke("tiles");
@@ -475,6 +452,7 @@ public sealed partial class WorldBuilder
              + $"{_models.Failed} failed, {_models.Neutralized} materials' metalness neutralised; {stats.CutSummary()}");
         (stats.PropWaterSheets, stats.WaterGhosts) = WaterParts;
         _log($"water: {stats.WaterSummary()} {stats.WaterExtrasSummary()}");
+        _residencyStats = new WorldStats(); // Boot accounting is a snapshot; live churn has its own ledger.
         return stats;
     }
 
@@ -560,19 +538,14 @@ public sealed partial class WorldBuilder
     /// The scene recipes of these locations, at most <see cref="SceneConcurrency"/> requests at a time: id → the
     /// payload (null for a 404). A failed request is counted and logged here (online) and has no entry.
     /// </summary>
-    private async Task<Dictionary<string, JsonDocument?>> PrimeScenes(IEnumerable<LocationInfo> locs, WorldStats stats)
+    private async Task PrimeScenes(IEnumerable<LocationInfo> locs, WorldStats stats)
     {
-        var scenes = new Dictionary<string, JsonDocument?>();
         using var gate = new SemaphoreSlim(SceneConcurrency);
         await Task.WhenAll(locs.Select(async loc =>
         {
             await gate.WaitAsync();
-            try
-            {
-                var doc = await _source.GetLocationSceneAsync(loc.Id);
-                lock (scenes) scenes[loc.Id] = doc;
-            }
-            catch (Exception e) when (!_strict)
+            try { await _scenes.Request(loc.Id); }
+            catch (Exception e)
             {
                 stats.Failures++;
                 stats.Problems.Add($"{loc.Id}: {e.Message}");
@@ -580,28 +553,19 @@ public sealed partial class WorldBuilder
             }
             finally { gate.Release(); }
         }));
-        return scenes;
     }
 
     /// <summary>
-    /// One location from its scene recipe, MOUNTED ONCE and built DETACHED (the caller hangs
-    /// <see cref="LocationSlot.Group"/> into the world) — sceneRecipe.ts <c>mountShell</c> + <c>mountDetail</c>:
-    ///
-    ///   • the shell layer: every building model (a fading one — display shell / shell_area / roof_only — is a roof
-    ///     part of the crossfade; its cutouts go on per fragment (CutMaterials)), the outdoor
-    ///     specs, the outdoor rooms' primitives and, for a place without a building model, the far-view shell;
-    ///   • the interior group <c>g</c> (hidden at fade 0): the interior primitives of every storey and — in the near
-    ///     ring only, like <c>mountDetail</c> — the indoor specs, each in its room's group.
-    /// <paramref name="wantOpen"/> sets the fade TARGET (the avatar's location at the boot) if it can be opened
-    /// (<c>openable(tile)</c>). EVERY storey is mounted (Task 16): room groups per declared room, the storey rules filed
-    /// in <see cref="LocationStoreys"/>, the door marks (near ring, buildings), the boundary marks (world frame) and the
-    /// room labels; the storey shown starts at 0 (buildTile). Every mount ends with its § B5a verify
-    /// (<see cref="SceneVerifier"/>) over all of it.
+    /// Task 44 gone→far: build a detached shell at low/low, including building and outdoor model records,
+    /// recipe primitives on every storey, room groups, labels and world-frame boundary marks. Indoor model
+    /// records and door overlays belong to MountDetailAsync. The caller checks alive before publishing this
+    /// shell and releases the entire ownership ledger on rollback; this method also releases a partial build
+    /// on exceptions. Opening only sets the crossfade target, while readiness belongs to the near commit.
     /// </summary>
-    private async Task<LocationSlot> BuildFromScene(LocationInfo loc, JsonElement sceneRoot, WorldHeight height,
-                                                    WorldStats stats, Ring ring, bool wantOpen, Vector3 camera)
+    private async Task<LocationSlot> BuildShellAsync(LocationInfo loc, ScenePayload scene, WorldHeight height,
+                                                    WorldStats stats, bool wantOpen, Func<bool> alive)
     {
-        var scene = ScenePayload.Parse(sceneRoot);
+        const Ring ring = Ring.Far;
         stats.Scenes++;
         if (Math.Abs(scene.K - 1) > 1e-9)
             _log($"location {loc.Id}: scene k={scene.K} (contract says 1) — drawn unscaled");
@@ -626,17 +590,11 @@ public sealed partial class WorldBuilder
         bool openable = SceneView.Openable(hasInterior, isBuilding, shellArea, groundModel);
         bool open = wantOpen && openable;
         if (open) stats.OpenLocation = loc.Id;
-        var roomLevel = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Level);
-        // buildTile: levelFilter 0 — the overview opens every location on the ground floor (the avatar's storey is
-        // followed only in the embodied mode, followAvatarStorey).
         const int levelFilter = 0;
         var outdoor = LocationView.OutdoorRoomIds(scene);
-        bool RoomShown(string roomId) => outdoor.Contains(roomId)
-            || !roomLevel.TryGetValue(roomId, out var lv) || SceneView.RoomVisible(false, lv, levelFilter);
 
         double width = LocationView.FootprintWidth(loc);
-        string buildingTier = LocationView.BuildingTier(ring, camera.DistanceTo(group.Position), width);
-        string interiorTier = LocationView.InteriorTier(ring, scene.AreaDetail, open);
+        const string buildingTier = "low", interiorTier = "low";
         var models = new ModelStats();
         var fade = new LocationFade { ShellArea = shellArea };
         var interior = hasInterior ? new Node3D { Name = "Interior" } : null;
@@ -652,203 +610,216 @@ public sealed partial class WorldBuilder
             FloorY = scene.FloorYOrNull,
             HasBasement = StoreyView.HasBasement(scene.Levels),
         };
-        foreach (var r in scene.Rooms)
-        {
-            if (storeys.Rooms.ContainsKey(r.RoomId)) continue;
-            bool od = outdoor.Contains(r.RoomId);
-            var parentNode = od ? group : interior;
-            if (parentNode is null) continue;   // no interior: nothing would ever hang in it
-            var node = new Node3D { Name = "Room_" + NodeName(r.RoomId) };
-            parentNode.AddChild(node);
-            storeys.Rooms[r.RoomId] = new LocationStoreys.RoomGroup(r.RoomId, node, r.Level, od);
-        }
-        // parentFor(room) of mountModels: the room's group, else the tile for an outdoor spec, else the interior.
-        Node3D? ParentFor(string roomId, bool isOut)
-            => roomId.Length > 0 && storeys.Rooms.TryGetValue(roomId, out var rg) ? rg.Node : isOut ? group : interior;
-        var verify = new SceneVerifier();
-
-        // ── Building model(s): all mounted; a fading one is a roof part, its cutouts (a kept plan hull / ground model,
-        //    or any building spec that carries them) open with the fade. ──
         var placements = new List<PlacedModel>();
-        bool solidBuildingPlaced = false;
-        Aabb? buildingBox = null;
-        foreach (var spec in buildings)
+        try
         {
-            var node = await SceneModels.PlaceAsync(_models, spec, buildingTier, "building", group, 0, models, _materials);
-            var rec = new PlacedModel
+            foreach (var r in scene.Rooms)
             {
-                Spec = spec, Parent = group, Node = node, Url = ModelVariants.PickModelVariant(spec, buildingTier),
-                Placeholder = node is not null && SceneModels.IsPlaceholder(node),
-            };
-            placements.Add(rec);
-            if (node is null) continue;
-            if (!spec.RoofOnly) solidBuildingPlaced = true;
-            var nb = ModelPlacement.Measure(node, Transform3D.Identity);
-            buildingBox = buildingBox is { } bb ? bb.Merge(nb) : nb;
-            ApplyBuildingModel(group, fade, rec);
-            if (spec.Display != "ground" && !spec.PlanHull && open) models.Faded++;
-            if (rec.Url.Length > 0 && (await _models.GetAsync(rec.Url)) is { } t)
-            {
-                stats.Buildings++;
-                if (t.Compressed) stats.BuildingsCompressed++;
-                stats.BuildingVertices += t.Counts.Vertices;
-                stats.BuildingIndices += t.Counts.Indices;
+                if (storeys.Rooms.ContainsKey(r.RoomId)) continue;
+                bool od = outdoor.Contains(r.RoomId);
+                var parentNode = od ? group : interior;
+                if (parentNode is null) continue;   // no interior: nothing would ever hang in it
+                var node = new Node3D { Name = "Room_" + NodeName(r.RoomId) };
+                parentNode.AddChild(node);
+                storeys.Rooms[r.RoomId] = new LocationStoreys.RoomGroup(r.RoomId, node, r.Level, od);
             }
-        }
+            // parentFor(room) of mountModels: the room's group, else the tile for an outdoor spec, else the interior.
+            Node3D? ParentFor(string roomId, bool isOut)
+                => roomId.Length > 0 && storeys.Rooms.TryGetValue(roomId, out var rg) ? rg.Node : isOut ? group : interior;
+            var verify = new SceneVerifier();
 
-        // ── The other specs: outdoor ones off the tile; indoor ones into their room groups (near ring, every storey). ──
-        var jobs = new List<Task>();
-        foreach (var spec in scene.Models.Where(m => m.Role != "building"))
-        {
-            bool isOut = LocationView.IsOutdoor(scene, spec.RoomId);
-            if (!isOut)
+            // ── Building model(s): all mounted; a fading one is a roof part, its cutouts (a kept plan hull / ground model,
+            //    or any building spec that carries them) open with the fade. ──
+            bool solidBuildingPlaced = false;
+            Aabb? buildingBox = null;
+            foreach (var spec in buildings)
             {
-                // mountDetail runs for the near ring only; its parentFor(room) is the room group or the interior.
-                if (ring != Ring.Near || interior is null) { models.Interior++; continue; }
-                // Mounted all the same: its room group hides it until the switch shows its storey.
-                if (!RoomShown(spec.RoomId)) models.Storey++;
-            }
-            var parent = ParentFor(spec.RoomId, isOut)!;
-            double lift = GroundLift(group, spec, height, datum);
-            var rec = new PlacedModel { Spec = spec, Parent = parent, Url = ModelVariants.PickModelVariant(spec, interiorTier), Lift = lift };
-            placements.Add(rec);
-            jobs.Add(PlaceAndRecord(rec));
-        }
-        await Task.WhenAll(jobs);
-
-        async Task PlaceAndRecord(PlacedModel rec)
-        {
-            var node = await SceneModels.PlaceAsync(_models, rec.Spec, interiorTier, SceneModels.KindOf(rec.Spec), rec.Parent,
-                                                    rec.Lift, models, _materials);
-            rec.Node = node;
-            rec.Placeholder = node is not null && SceneModels.IsPlaceholder(node);
-            if (node is not null && !rec.Placeholder)
-            {
-                // The texture slots FIRST (fillSlots): the cuts below clone what they find, slot materials included.
-                rec.Slots = FillSlots(node, rec.Spec);
-                // A door prop joins the swing list (registerDoorProp) — its leaf hangs in its pivot, shut.
-                rec.Door = DoorProps.Register(scene, rec.Spec, node);
-            }
-            // The depth cut (also on a stand-in box) and the room clip (meshes only), after the node hangs in place.
-            if (node is not null) rec.Cut = CutPlacement(group, rec);
-        }
-        // The prop lights (reliftPlacement): every non-building record with a light, whether a mesh stands or not, at its
-        // base anchor through its parent's frame plus the light's own offset; keyed to its room unless outdoors.
-        foreach (var rec in placements)
-            if (!rec.IsBuilding && rec.Spec.Light is { } light && PropLights is { } pool)
-            {
-                var roomKey = rec.Spec.RoomId.Length > 0 && !LocationView.IsOutdoor(scene, rec.Spec.RoomId) ? $"{loc.Id}:{rec.Spec.RoomId}" : "";
-                rec.LightId = pool.Register(light, LightPosition(group, rec), roomKey);
-            }
-        foreach (var rec in placements)
-            if (rec.Cut is { } h)
-            {
-                stats.CutPlacements++;
-                stats.CutSurfaces += h.Entries.Count;
-                stats.CutFallbacks += h.Fallbacks;
-            }
-
-        // ── Recipe primitives by layer: outdoor rooms, the interior, the far-view shell of a modelless place. ──
-        bool farShell = !solidBuildingPlaced
-                        && SceneView.FarShellSource(isBuilding, natureSite, scene.AreaDetail, false,
-                                                    scene.Plates.Count, scene.Walls.Count) == "recipe";
-        var kinds = scene.Plates.Select(p => p.TextureKind).Concat(scene.Walls.Select(w => w.TextureKind))
-                         .Concat(scene.Extras.Select(e => e.TextureKind)).Where(k => k.Length > 0).Append("floor");
-        await _library!.PreloadAsync(kinds);
-        var (layers, rs) = RecipeMeshes.Build(scene, new RecipeView(open, levelFilter, farShell), _materials, "Recipe");
-        foreach (var piece in layers.Pieces)
-        {
-            // Every non-outdoor piece implies an interior (hasInterior counts plates, walls and extras).
-            var parent = ParentFor(piece.Unit.Room, piece.Unit.Outdoor) ?? group;
-            parent.AddChild(piece.Mesh);
-            if (piece.Unit.Outdoor) fade.OutdoorCull.Add(piece.Mesh);
-            storeys.Add(piece);
-        }
-        foreach (var m in layers.Shell)
-        {
-            group.AddChild(m);
-            fade.RoofParts.Add(m);
-        }
-        // The overlays: door marks (a building's thresholds, near ring — buildDoorMarks), boundary marks (every
-        // resident, world frame — buildBoundaryMarks), the room names (not on an area location).
-        var frame0 = new TileFrame(new Overview.Vec3(x, datum, z), group.Rotation.Y);
-        if (isBuilding && ring == Ring.Near) storeys.BuildDoorMarks(group, scene);
-        storeys.BuildBoundaryMarks(loc.Id, frame0, scene, height.GroundAt);
-        if (!StoreyView.AreaLocation(natureSite, isBuilding, scene.AreaDetail, scene.Models))
-            AddRoomLabels(storeys, scene, DetailRooms(loc.Id));
-        // tile.height: the building model(s) measured (a roof-only part together with the rest, as
-        // `box.expandByObject(tile.shell)` reads it), else the far shell, else buildPlace's reading height.
-        double? measured = buildingBox is { } box && box.Size.Y > 0 ? box.Size.Y : null;
-        if (measured is null && farShell)
-        {
-            Aabb? shellBox = null;
-            foreach (var m in layers.Shell)
-                if (m.Mesh is { } mesh)
+                var node = await SceneModels.PlaceAsync(_models, spec, buildingTier, "building", group, 0, models, _materials, alive);
+                var rec = new PlacedModel
                 {
-                    var b = m.Transform * mesh.GetAabb();
-                    shellBox = shellBox is { } sb ? sb.Merge(b) : b;
+                    Spec = spec, Parent = group, Node = node, Url = ModelVariants.PickModelVariant(spec, buildingTier),
+                    Placeholder = node is not null && SceneModels.IsPlaceholder(node),
+                };
+                placements.Add(rec);
+                if (node is null) continue;
+                if (!spec.RoofOnly) solidBuildingPlaced = true;
+                var nb = ModelPlacement.Measure(node, Transform3D.Identity);
+                buildingBox = buildingBox is { } bb ? bb.Merge(nb) : nb;
+                ApplyBuildingModel(group, fade, rec);
+                if (spec.Display != "ground" && !spec.PlanHull && open) models.Faded++;
+                if (rec.Url.Length > 0 && (await _models.GetAsync(rec.Url)) is { } t)
+                {
+                    stats.Buildings++;
+                    if (t.Compressed) stats.BuildingsCompressed++;
+                    stats.BuildingVertices += t.Counts.Vertices;
+                    stats.BuildingIndices += t.Counts.Indices;
                 }
-            if (shellBox is { } sh && sh.Size.Y > 0) measured = sh.Size.Y;
-        }
+            }
 
-        // ── § B5a: every mounted primitive and placement against its spec, in the tile frame. ──
-        var frame = group.Transform;
-        var origin = new Overview.Vec3(group.Position.X, group.Position.Y, group.Position.Z);
-        double yaw = group.Rotation.Y;
-        foreach (var mp in layers.Measured)
-            verify.Primitive(mp.Name, WorldBox(mp.Local, frame), origin, yaw, mp.Targets);
-        verify.Total = placements.Count;
-        foreach (var rec in placements) VerifyPlacement(verify, rec.Spec, rec.Node, rec.Lift, group, origin, yaw);
-        var report = verify.Report(loc.Id);
-        LogVerify(report);
+            // ── The other specs: outdoor ones off the tile; indoor ones into their room groups (near ring, every storey). ──
+            var jobs = new List<Task>();
+            foreach (var spec in scene.Models.Where(m => m.Role != "building"))
+            {
+                bool isOut = LocationView.IsOutdoor(scene, spec.RoomId);
+                if (!isOut)
+                {
+                    // mountDetail runs for the near ring only; its parentFor(room) is the room group or the interior.
+                    models.Interior++;
+                    continue;
+                }
+                var parent = ParentFor(spec.RoomId, isOut)!;
+                double lift = GroundLift(group, spec, height, datum);
+                var rec = new PlacedModel { Spec = spec, Parent = parent, Url = ModelVariants.PickModelVariant(spec, interiorTier), Lift = lift };
+                placements.Add(rec);
+                jobs.Add(PlaceAndRecord(rec));
+            }
+            await Task.WhenAll(jobs);
 
-        fade.Collect(group);
-        // The placements' water LAST (sceneRecipe.ts: after the clip and the cut, which clone what they traverse): the
-        // sheets in their parents, the ghosts of whatever stands under a mirror.
-        var raster = height.WaterRaster();
-        foreach (var rec in placements) RefreshPlacementWater(group, rec, raster);
-        int sheets = placements.Sum(r => r.WaterSheets?.Count ?? 0), ghosts = placements.Count(r => r.Ghost is not null);
-        if (sheets > 0 || ghosts > 0)
-            _log($"location {loc.Id} ({loc.Name}): {sheets} prop water sheet(s) "
-                 + $"[{string.Join(", ", placements.Where(r => r.WaterSheets is { Count: > 0 }).Select(r => $"{r.Spec.Id} storey {r.Spec.Level}"))}], "
-                 + $"{ghosts} underwater ghost(s)");
-        storeys.Apply(levelFilter, 0, openable, fade);
-        storeys.ApplyLocks(_locks, loc.Id);
-        lock (stats)
-        {
-            stats.Recipe.Add(rs);
-            Merge(stats.Models, models);
-            stats.VerifyLocations++;
-            stats.VerifyChecked += report.Checked;
-            stats.VerifyRows += report.Rows.Count;
+            async Task PlaceAndRecord(PlacedModel rec)
+            {
+                var node = await SceneModels.PlaceAsync(_models, rec.Spec, interiorTier, SceneModels.KindOf(rec.Spec), rec.Parent,
+                                                        rec.Lift, models, _materials, alive);
+                rec.Node = node;
+                rec.Placeholder = node is not null && SceneModels.IsPlaceholder(node);
+                if (node is not null && !rec.Placeholder)
+                {
+                    // The texture slots FIRST (fillSlots): the cuts below clone what they find, slot materials included.
+                    rec.Slots = FillSlots(node, rec.Spec);
+                    // A door prop joins the swing list (registerDoorProp) — its leaf hangs in its pivot, shut.
+                    rec.Door = DoorProps.Register(scene, rec.Spec, node);
+                }
+                // The depth cut (also on a stand-in box) and the room clip (meshes only), after the node hangs in place.
+                if (node is not null) rec.Cut = CutPlacement(group, rec);
+            }
+            // The prop lights (reliftPlacement): every non-building record with a light, whether a mesh stands or not, at its
+            // base anchor through its parent's frame plus the light's own offset; keyed to its room unless outdoors.
+            foreach (var rec in placements)
+                if (!rec.IsBuilding && rec.Spec.Light is { } light && PropLights is { } pool)
+                {
+                    var roomKey = rec.Spec.RoomId.Length > 0 && !LocationView.IsOutdoor(scene, rec.Spec.RoomId) ? $"{loc.Id}:{rec.Spec.RoomId}" : "";
+                    rec.LightId = pool.Register(light, LightPosition(group, rec), roomKey);
+                }
+            foreach (var rec in placements)
+                if (rec.Cut is { } h)
+                {
+                    stats.CutPlacements++;
+                    stats.CutSurfaces += h.Entries.Count;
+                    stats.CutFallbacks += h.Fallbacks;
+                }
+
+            // ── Recipe primitives by layer: outdoor rooms, the interior, the far-view shell of a modelless place. ──
+            bool farShell = !solidBuildingPlaced
+                            && SceneView.FarShellSource(isBuilding, natureSite, scene.AreaDetail, false,
+                                                        scene.Plates.Count, scene.Walls.Count) == "recipe";
+            var kinds = scene.Plates.Select(p => p.TextureKind).Concat(scene.Walls.Select(w => w.TextureKind))
+                             .Concat(scene.Extras.Select(e => e.TextureKind)).Where(k => k.Length > 0).Append("floor");
+            await _library!.PreloadAsync(kinds);
+            if (!alive()) throw new OperationCanceledException("Residency shell invalidated");
+            var (layers, rs) = RecipeMeshes.Build(scene, new RecipeView(open, levelFilter, farShell), _materials, "Recipe");
+            foreach (var piece in layers.Pieces)
+            {
+                // Every non-outdoor piece implies an interior (hasInterior counts plates, walls and extras).
+                var parent = ParentFor(piece.Unit.Room, piece.Unit.Outdoor) ?? group;
+                parent.AddChild(piece.Mesh);
+                if (piece.Unit.Outdoor) fade.OutdoorCull.Add(piece.Mesh);
+                storeys.Add(piece);
+            }
+            foreach (var m in layers.Shell)
+            {
+                group.AddChild(m);
+                fade.RoofParts.Add(m);
+            }
+            // The overlays: door marks (a building's thresholds, near ring — buildDoorMarks), boundary marks (every
+            // resident, world frame — buildBoundaryMarks), the room names (not on an area location).
+            var frame0 = new TileFrame(new Overview.Vec3(x, datum, z), group.Rotation.Y);
+            storeys.BuildBoundaryMarks(loc.Id, frame0, scene, height.GroundAt);
+            if (!StoreyView.AreaLocation(natureSite, isBuilding, scene.AreaDetail, scene.Models))
+                AddRoomLabels(storeys, scene, DetailRooms(loc.Id));
+            // tile.height: the building model(s) measured (a roof-only part together with the rest, as
+            // `box.expandByObject(tile.shell)` reads it), else the far shell, else buildPlace's reading height.
+            double? measured = buildingBox is { } box && box.Size.Y > 0 ? box.Size.Y : null;
+            if (measured is null && farShell)
+            {
+                Aabb? shellBox = null;
+                foreach (var m in layers.Shell)
+                    if (m.Mesh is { } mesh)
+                    {
+                        var b = m.Transform * mesh.GetAabb();
+                        shellBox = shellBox is { } sb ? sb.Merge(b) : b;
+                    }
+                if (shellBox is { } sh && sh.Size.Y > 0) measured = sh.Size.Y;
+            }
+
+            // ── § B5a: every mounted primitive and placement against its spec, in the tile frame. ──
+            var frame = group.Transform;
+            var origin = new Overview.Vec3(group.Position.X, group.Position.Y, group.Position.Z);
+            double yaw = group.Rotation.Y;
+            foreach (var mp in layers.Measured)
+                verify.Primitive(mp.Name, WorldBox(mp.Local, frame), origin, yaw, mp.Targets);
+            verify.Total = placements.Count;
+            foreach (var rec in placements) VerifyPlacement(verify, rec.Spec, rec.Node, rec.Lift, group, origin, yaw);
+            var report = verify.Report(loc.Id);
+            LogVerify(report);
+
+            fade.Collect(group);
+            // The placements' water LAST (sceneRecipe.ts: after the clip and the cut, which clone what they traverse): the
+            // sheets in their parents, the ghosts of whatever stands under a mirror.
+            var raster = height.WaterRaster();
+            foreach (var rec in placements) RefreshPlacementWater(group, rec, raster);
+            int sheets = placements.Sum(r => r.WaterSheets?.Count ?? 0), ghosts = placements.Count(r => r.Ghost is not null);
+            if (sheets > 0 || ghosts > 0)
+                _log($"location {loc.Id} ({loc.Name}): {sheets} prop water sheet(s) "
+                     + $"[{string.Join(", ", placements.Where(r => r.WaterSheets is { Count: > 0 }).Select(r => $"{r.Spec.Id} storey {r.Spec.Level}"))}], "
+                     + $"{ghosts} underwater ghost(s)");
+            storeys.Apply(levelFilter, 0, openable, fade);
+            storeys.ApplyLocks(_locks, loc.Id);
+            lock (stats)
+            {
+                stats.Recipe.Add(rs);
+                Merge(stats.Models, models);
+                stats.VerifyLocations++;
+                stats.VerifyChecked += report.Checked;
+                stats.VerifyRows += report.Rows.Count;
+            }
+            var places = PlaceInventory.Compose(scene, frame0, DetailRooms(loc.Id), height.GroundAt);
+            if (VerifyFull) _log($"location {loc.Id} ({loc.Name}) {PlacesSummary(places, scene.Problems)}");
+            if (rs.Primitives > 0 || open)
+                _log($"location {loc.Id} ({loc.Name}): ring={ring.ToString().ToLowerInvariant()}{(open ? $" OPEN storey {levelFilter}" : "")}"
+                     + $"{(farShell ? " far-shell" : "")} — {rs.Primitives} primitives, skipped {rs.SkipSummary()}, "
+                     + $"interior mounted {rs.InteriorMounted}; {models.Summary()}");
+            var slot = new LocationSlot
+            {
+                Loc = loc, Ring = ring, Group = group, Width = width, Openable = openable, Open = open,
+                Scene = scene, IsBuilding = isBuilding, Measured = layers.Measured,
+                Height = measured ?? Overview.EventPinRule.DefaultPlaceHeight(isBuilding, natureSite, LocationView.DetectStyle(loc)),
+                HeightMeasured = measured is not null,
+                Fade = fade, LevelFilter = levelFilter, Verify = report, Storeys = storeys,
+                Signature = scene.Signature, AreaDetail = scene.AreaDetail, Placements = placements,
+                BuildingTier = buildingTier, InteriorTier = interiorTier, FarShell = layers.Shell.ToList(),
+                RoomRects = StoreyView.RoomHulls(scene).Select(h => (h.Key, Rect: Ambience.RoomRectOf(h.Value)))
+                                      .Where(r => r.Rect is not null).Select(r => new KeyValuePair<string, RoomRect>(r.Key, r.Rect!.Value)).ToList(),
+                Corridors = scene.Corridors.ToList(),
+                DetailRooms = DetailRooms(loc.Id),
+                RoomAmbience = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Ambience),
+                // mountShell's places part (markers, lift stops, flights, vertical targets, corridor stands) in the frame
+                // the group stands in now; the re-datum carries it (Redatum → PlaceInventory.Relift).
+                Places = places,
+                Problems = scene.Problems.ToList(),
+            };
+            DeriveStands(slot);
+            return slot;
         }
-        var places = PlaceInventory.Compose(scene, frame0, DetailRooms(loc.Id), height.GroundAt);
-        if (VerifyFull) _log($"location {loc.Id} ({loc.Name}) {PlacesSummary(places, scene.Problems)}");
-        if (rs.Primitives > 0 || open)
-            _log($"location {loc.Id} ({loc.Name}): ring={ring.ToString().ToLowerInvariant()}{(open ? $" OPEN storey {levelFilter}" : "")}"
-                 + $"{(farShell ? " far-shell" : "")} — {rs.Primitives} primitives, skipped {rs.SkipSummary()}, "
-                 + $"interior mounted {rs.InteriorMounted}; {models.Summary()}");
-        var slot = new LocationSlot
+        catch
         {
-            Loc = loc, Ring = ring, Group = group, Width = width, Openable = openable, Open = open,
-            Scene = scene, IsBuilding = isBuilding,
-            Height = measured ?? Overview.EventPinRule.DefaultPlaceHeight(isBuilding, natureSite, LocationView.DetectStyle(loc)),
-            HeightMeasured = measured is not null,
-            Fade = fade, LevelFilter = levelFilter, Verify = report, Storeys = storeys,
-            Signature = scene.Signature, AreaDetail = scene.AreaDetail, Placements = placements,
-            BuildingTier = buildingTier, InteriorTier = interiorTier, FarShell = layers.Shell.ToList(),
-            RoomRects = StoreyView.RoomHulls(scene).Select(h => (h.Key, Rect: Ambience.RoomRectOf(h.Value)))
-                                  .Where(r => r.Rect is not null).Select(r => new KeyValuePair<string, RoomRect>(r.Key, r.Rect!.Value)).ToList(),
-            Corridors = scene.Corridors.ToList(),
-            DetailRooms = DetailRooms(loc.Id),
-            RoomAmbience = scene.Rooms.GroupBy(r => r.RoomId).ToDictionary(g => g.Key, g => g.First().Ambience),
-            // mountShell's places part (markers, lift stops, flights, vertical targets, corridor stands) in the frame
-            // the group stands in now; the re-datum carries it (Redatum → PlaceInventory.Relift).
-            Places = places,
-            Problems = scene.Problems.ToList(),
-        };
-        DeriveStands(slot);
-        return slot;
+            foreach (var rec in placements) ReleasePlacement(rec);
+            if (GodotObject.IsInstanceValid(group))
+            {
+                if (Mirrors is { } mirrors && GodotObject.IsInstanceValid(mirrors)) mirrors.DetachUnder(group);
+                group.Free();
+            }
+            if (storeys.BoundaryMarks is { } marks && GodotObject.IsInstanceValid(marks)) marks.Free();
+            throw;
+        }
     }
 
     /// <summary>The places data of a mount in one line (the <c>--verify</c> / <c>--check</c> log).</summary>
@@ -970,8 +941,12 @@ public sealed partial class WorldBuilder
     /// </summary>
     public bool SetOpen(string id, bool open)
     {
+        // Desired open state outlives a resident slot while the driver rebuilds it.
+        if (!open && _openPin == id)
+            _openPin = _slots.Values.FirstOrDefault(s => s.Loc.Id != id && s.Open)?.Loc.Id;
         if (!_slots.TryGetValue(id, out var slot)) return false;
         if (open && !slot.Openable) return false;
+        if (open) _openPin = id;
         if (slot.Open == open) return true;
         slot.Open = open;
         _log($"location {id} ({slot.Loc.Name}) {(open ? "opens" : "closes")} (crossfade)");
@@ -1013,6 +988,7 @@ public sealed partial class WorldBuilder
                 new Neighbour(slot.Group.Position.X, slot.Group.Position.Z, slot.Width, slot.Height), slot == open);
             slot.Fade.StepOcclusion(slot.Group, hide, dt);
         }
+        _residencyTimers?.Pump();
         StepModelClock(dt, camera);
     }
 
@@ -1084,86 +1060,43 @@ public sealed partial class WorldBuilder
         => LocationInfo.ParseList(map).Where(l => l.IsPlaced && !_known.Contains(l.Id)).ToList();
 
     /// <summary>
-    /// <c>revealLocations(map)</c>: build the fresh locations of this snapshot the same way the boot built its own —
-    /// ring from the build's stream points (a place out of reach is only taken in), recipes first, then the
-    /// groups; <paramref name="stillValid"/> is asked before anything goes into the world (the client's view
-    /// revision: a reveal of the view one has just left must not mount). Returns how many groups went in.
+    /// Task 44 / revealLocations: register fresh places, then wish their rings through the driver using live
+    /// probes and pins. Out-of-reach places remain known. The view predicate guards only this reveal's queued
+    /// work, then expires; every awaited mount checks it before publication. Returns the net groups added.
     /// </summary>
     public async Task<int> RevealAsync(JsonElement map, Func<bool> stillValid)
     {
-        if (_places is null || Height is null || _library is null) return 0;
+        if (_places is null || Height is null || _library is null || _residencyStopped || !stillValid()) return 0;
         var fresh = FreshOf(map);
-        if (fresh.Count == 0) return 0;
-        var avatar = AvatarOf(map, LocationInfo.ParseList(map));
-        var stats = new WorldStats();
-        var jobs = new List<(LocationInfo Loc, Ring Ring, bool Pinned)>();
+        _streamMap = map.Clone();
+        int before = _slots.Count;
         foreach (var loc in fresh)
         {
-            bool pinned = loc.Id == avatar.LocationId;
-            var ring = LocationView.RingFor(LocationView.PlaceDistance(loc, _points), pinned);
-            if (ring != Ring.Gone) jobs.Add((loc, ring, pinned));
+            _known.Add(loc.Id);
+            _residentPlaces[loc.Id] = loc;
+            _revealValidity[loc.Id] = stillValid;
         }
-        var scenes = await PrimeScenes(jobs.Select(j => j.Loc), stats);
-        if (!stillValid())
-        {
-            foreach (var d in scenes.Values) d?.Dispose();
-            return 0;
-        }
-        int added = 0;
-        foreach (var (loc, ring, pinned) in jobs)
-        {
-            if (!scenes.TryGetValue(loc.Id, out var doc)) continue;
-            using (doc)
-            {
-                if (doc is null) { _known.Add(loc.Id); continue; }
-                LocationSlot built;
-                try
-                {
-                    built = await BuildFromScene(loc, doc.RootElement, Height, stats, ring, false, _tierCamera);
-                }
-                catch (Exception e) when (!_strict)
-                {
-                    _log($"location {loc.Id} ({loc.Name}) failed: {e.Message}");
-                    continue;
-                }
-                if (!stillValid() || !GodotObject.IsInstanceValid(_places))
-                {
-                    built.Group.Free();
-                    built.Storeys.BoundaryMarks?.Free();
-                    return added;
-                }
-                _places.AddChild(built.Group);
-                if (built.Storeys.BoundaryMarks is { } bm) _places.AddChild(bm);
-                _slots[loc.Id] = built;
-                _known.Add(loc.Id);
-                added++;
-            }
-        }
-        // Out of reach: taken in without a group, like the boot's 'gone' ring.
+        TickStreamRings();
+        await WhenResidencyIdle();
         foreach (var loc in fresh)
-            if (!jobs.Any(j => j.Loc.Id == loc.Id)) _known.Add(loc.Id);
-        if (added > 0) _log($"revealed {added} location(s): {string.Join(", ", fresh.Where(l => _slots.ContainsKey(l.Id)).Select(l => l.Id))}");
-        return added;
+            if (_revealValidity.TryGetValue(loc.Id, out var validity) && ReferenceEquals(validity, stillValid))
+                _revealValidity.Remove(loc.Id);
+        return Math.Max(0, _slots.Count - before);
     }
 
-    /// <summary>
-    /// <c>dropVanished(map)</c>: give back every location this snapshot no longer carries — except the avatar's own
-    /// (the ground it stands on). Returns the ids that went.
-    /// </summary>
+    /// <summary>Task 44: invalidate the driver before teardown; rediscovery waits for its whole previous lifecycle.</summary>
     public List<string> DropVanished(JsonElement map)
     {
         var keep = LocationInfo.ParseList(map).Where(l => l.IsPlaced).Select(l => l.Id).ToHashSet();
         if (AvatarOf(map, new List<LocationInfo>()).LocationId is { } here) keep.Add(here);
-        var gone = _known.Concat(_slots.Keys).Where(id => !keep.Contains(id)).Distinct().ToList();
+        _streamMap = map.Clone();
+        var gone = _known.Where(id => !keep.Contains(id)).ToList();
         foreach (var id in gone)
         {
-            _known.Remove(id);
-            if (!_slots.Remove(id, out var slot)) continue;
-            slot.Generation++;   // a rebuild in flight must not put it back
-            ReleaseProps(slot);
-            if (GodotObject.IsInstanceValid(slot.Group)) slot.Group.QueueFree();
-            if (slot.Storeys.BoundaryMarks is { } bm && GodotObject.IsInstanceValid(bm)) bm.QueueFree();
-            Dropped?.Invoke(slot);
+            _known.Remove(id); _residentPlaces.Remove(id); _revealValidity.Remove(id);
+            _rebuilding.Remove(id); _rebuildValidity.Remove(id);
+            Residency.Drop(id);
+            _scenes.Forget(id);
         }
         if (gone.Count > 0) _log($"dropped {gone.Count} location(s) the view no longer carries: {string.Join(", ", gone)}");
         return gone;

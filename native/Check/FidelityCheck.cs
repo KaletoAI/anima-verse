@@ -51,9 +51,10 @@ public static class FidelityCheck
             Near("datum loc-area", area.Group.Position.Y, 2.8125);   // 2·20/64 + 140/64
 
             // ---- F1 neutralisation ----
-            // hull_full.glb (one material, no metallicFactor → 1.0 → 0) is the only GLB whose metalness moves at the boot;
-            // box.glb has a metallicRoughnessTexture and keeps 1.0. hull_low.glb loads with the first swap (F5).
-            Eq("F1 neutralised at the boot", builder.Models!.Neutralized, 1);
+            // Task 44 / controller ruling: gone→far mounts hull_low, then far→near swaps to hull_full.
+            // Two loaded GLBs, each with one untextured material (no metallicFactor → 1.0 → 0),
+            // each neutralised once: 1 + 1 = 2. box.glb has a metallicRoughnessTexture and keeps 1.0.
+            Eq("F1 neutralised at the boot", builder.Models!.Neutralized, 2);
             var hullRec = hull.Placements.Single(r => r.IsBuilding);
             var roomRec = hull.Placements.Single(r => r.Spec.Id == "r-hall");
             var tableRec = prop.Placements.Single(r => r.Spec.Id == "table");

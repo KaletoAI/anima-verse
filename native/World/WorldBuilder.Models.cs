@@ -45,6 +45,7 @@ public sealed partial class WorldBuilder
         _modelClock += dt;
         if (_modelClock < ModelTickS) return;
         _modelClock = 0;
+        TickStreamRings();
         TickModels(camera);
     }
 
@@ -67,10 +68,11 @@ public sealed partial class WorldBuilder
             if (heightMoved)
             {
                 var (datumMoved, relifted, seats) = Redatum(slot);
-                if (datumMoved) result.Redatumed++;
+                if (datumMoved && slot.Scene is not null) result.Redatumed++;
                 result.Relifted += relifted;
                 if (seats) result.SeatsMoved++;
             }
+            if (slot.Promoting) continue;
             var b = LocationView.BuildingTier(slot.Ring, camera.DistanceTo(slot.Group.Position), slot.Width, slot.BuildingTier);
             if (b != slot.BuildingTier)
             {
@@ -114,6 +116,8 @@ public sealed partial class WorldBuilder
             var placed = ModelPlacement.Place(ModelCache.Instance(template), rec.Spec);
             if (!rec.IsBuilding) SceneModels.CastNone(placed);
             var old = rec.Node;
+            // Detach before installing so the replacement keeps its semantic name (no @Node3D rename).
+            if (old is not null && GodotObject.IsInstanceValid(old)) old.GetParent()?.RemoveChild(old);
             // A real mesh from here on (a stand-in box takes no cutouts and no clip, a mesh does).
             rec.Placeholder = false;
             rec.Url = url;
@@ -321,70 +325,26 @@ public sealed partial class WorldBuilder
     /// <c>SceneLibrary.sweep</c> over the mounted locations, then <c>driver.rebuild</c> for each whose scene signature
     /// moved: the location is mounted again from the fresh payload (same ring, the open target and the shown storey
     /// carried over — main.ts keeps the storey across a rebuild through <c>storeyByPlace</c>), the new group replaces the
-    /// old one, and the old slot's late work is thrown away (its generation). A failed request, a 404, an unchanged
-    /// signature or a sweep still running from the last interval change nothing. Returns the remounted ids.
+    /// old one, and the old slot's late work is thrown away (its generation). A failed request or an unchanged
+    /// signature or a sweep still running from the last interval changes nothing. A 404 rebuilds an empty tile. Returns the remounted ids.
     /// </summary>
     public async Task<List<string>> SweepAsync(Func<bool>? stillValid = null)
     {
         var remounted = new List<string>();
         if (_sweeping || _places is null || Height is null || _library is null) return remounted;
-        _sweeping = true;
+        _sweeping = true; _sweepValidity = stillValid;
         try
         {
-            foreach (var slot in _slots.Values.ToList())
-            {
-                if (!IsMounted(slot)) continue;
-                JsonDocument? doc;
-                try { doc = await _source.GetLocationSceneAsync(slot.Loc.Id); }
-                catch (Exception e) when (!_strict)
-                {
-                    _log($"scene sweep {slot.Loc.Id}: {e.Message}");
-                    continue;
-                }
-                using (doc)
-                {
-                    var fresh = doc is null ? null : Json.Str(doc.RootElement, "signature");
-                    if (!LocationView.SceneChanged(slot.Signature, fresh)) continue;
-                    if (doc is null)
-                    {
-                        // A deleted layout: the browser keeps only its procedural tile; this client has none to fall
-                        // back to, so the mounted scene stays until the place itself goes (dropVanished).
-                        _log($"location {slot.Loc.Id} ({slot.Loc.Name}): scene gone (404) — the mounted one stays");
-                        continue;
-                    }
-                    if (stillValid is not null && !stillValid()) return remounted;
-                    if (!IsMounted(slot)) continue;
-                    var stats = new WorldStats();
-                    var built = await BuildFromScene(slot.Loc, doc.RootElement, Height, stats, slot.Ring, slot.Open, _viewCamera);
-                    if ((stillValid is not null && !stillValid()) || !IsMounted(slot) || !GodotObject.IsInstanceValid(_places))
-                    {
-                        built.Group.Free();
-                        built.Storeys.BoundaryMarks?.Free();
-                        return remounted;
-                    }
-                    if (built.Storeys.Buttons.Count == 0 ? slot.LevelFilter == 0 : built.Storeys.Buttons.Any(b => b.Level == slot.LevelFilter))
-                        built.LevelFilter = slot.LevelFilter;
-                    Replace(slot, built);
-                    remounted.Add(slot.Loc.Id);
-                    _log($"location {slot.Loc.Id} ({slot.Loc.Name}): scene signature {slot.Signature} → {fresh}, remounted");
-                }
-            }
+            var before = _slots.ToDictionary(k => k.Key, k => k.Value);
+            // Epochs invalidate a forgotten sweep response; no per-id mount may bypass the driver.
+            await _scenes.Sweep(before.Keys);
+            if (stillValid is not null && !stillValid()) return remounted;
+            await WhenResidencyIdle();
+            foreach (var (id, old) in before)
+                if (_slots.TryGetValue(id, out var built) && !ReferenceEquals(old, built)) remounted.Add(id);
         }
-        finally { _sweeping = false; }
+        finally { _sweeping = false; _sweepValidity = null; }
         return remounted;
     }
 
-    /// <summary>The remount's hand-over: the new group in, the old group and its boundary marks out.</summary>
-    private void Replace(LocationSlot old, LocationSlot built)
-    {
-        old.Generation++;
-        ReleaseProps(old);
-        _places!.AddChild(built.Group);
-        if (built.Storeys.BoundaryMarks is { } bm) _places.AddChild(bm);
-        built.Storeys.ApplyLocks(_locks, built.Loc.Id);
-        _slots[old.Loc.Id] = built;
-        if (GodotObject.IsInstanceValid(old.Group)) old.Group.QueueFree();
-        if (old.Storeys.BoundaryMarks is { } obm && GodotObject.IsInstanceValid(obm)) obm.QueueFree();
-        Remounted?.Invoke(old, built);
-    }
 }

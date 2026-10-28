@@ -177,6 +177,18 @@ public sealed class LocationStoreys
     /// the storey's first non-pane wall, gold at 0.35 (locked: iron red at 0.6), drawn late, never picked, hidden
     /// until the interior has resolved. Built for a building only.
     /// </summary>
+    /// <summary>Task 44: only the near stage owns door overlays; shared mark meshes/materials stay alive.</summary>
+    public void DropDoorMarks()
+    {
+        if (DoorMarks is { } marks && GodotObject.IsInstanceValid(marks))
+        {
+            marks.GetParent()?.RemoveChild(marks);
+            marks.QueueFree();
+        }
+        DoorMarks = null;
+        _doorMeshes.Clear(); _doorStoreys.Clear(); _applied = null;
+    }
+
     public void BuildDoorMarks(Node3D tileGroup, ScenePayload scene)
     {
         var root = new Node3D { Name = "DoorMarks", Visible = false };

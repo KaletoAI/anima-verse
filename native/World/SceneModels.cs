@@ -70,10 +70,12 @@ public static class SceneModels
     /// <paramref name="lift"/> is the § A16.9 terrain lift already computed for it.
     /// </summary>
     public static async Task<Node3D?> PlaceAsync(ModelCache cache, SceneModelSpec spec, string tier, string kind,
-                                                 Node3D parent, double lift, ModelStats stats, RecipeMaterials? phMaterials)
+                                                 Node3D parent, double lift, ModelStats stats, RecipeMaterials? phMaterials, Func<bool>? alive = null)
     {
         var url = ModelVariants.PickModelVariant(spec, tier);
         ModelCache.Template? template = url.Length > 0 ? await cache.GetAsync(url) : null;
+        // Task 44: fetch may finish after a residency step was invalidated or its world was freed.
+        if (alive is not null && !alive()) throw new OperationCanceledException("Residency placement invalidated");
         if (template is null)
         {
             if (spec.PlaceholderDims is { } d && phMaterials is not null)

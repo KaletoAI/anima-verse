@@ -21,6 +21,7 @@ public sealed class ModelCache
     private readonly Dictionary<string, Task<Template?>> _loads = new();
     private readonly Action<string> _log;
 
+    private int _generation;
     public int Loaded { get; private set; }
     /// <summary>Template materials whose metalness <see cref="NeutralizeMaterials"/> took back to 0.</summary>
     public int Neutralized { get; private set; }
@@ -43,11 +44,15 @@ public sealed class ModelCache
 
     private async Task<Template?> Load(string url)
     {
+        int generation = _generation;
         try
         {
             var bytes = await _source.GetBytesAsync(url);
+            if (generation != _generation) return null;
             bool compressed = GlbMeshoptDecoder.IsCompressed(bytes);
             var (doc, state, counts) = await Task.Run(() => GlbLoader.Parse(GlbLoader.Prepare(bytes), url));
+            // Task 44: world disposal invalidates late imports before a detached template node is generated.
+            if (generation != _generation) { doc.Dispose(); state.Dispose(); return null; }
             var root = GlbLoader.Generate(doc, state, url);
             Neutralized += NeutralizeMaterials(root);
             Loaded++;
@@ -107,6 +112,7 @@ public sealed class ModelCache
     /// <summary>Free the templates (they never enter the tree); the placed duplicates go with their scene.</summary>
     public void FreeAll()
     {
+        _generation++;
         foreach (var task in _loads.Values)
             if (task.IsCompletedSuccessfully && task.Result is { } t && GodotObject.IsInstanceValid(t.Root))
                 t.Root.Free();

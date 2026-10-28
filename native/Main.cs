@@ -285,8 +285,8 @@ public partial class Main : Node3D
         {
             var slot = _builder?.Slots.GetValueOrDefault(open);
             var target = _camera.Target;
-            if (slot is null || !IsInstanceValid(slot.Group)
-                || OpenView.ShouldClose(_camera.Distance, target.X, target.Z, slot.Group.Position.X, slot.Group.Position.Z, slot.Width))
+            if (!ResidencyRebuildHoldsOpen(open) && (slot is null || !IsInstanceValid(slot.Group)
+                || OpenView.ShouldClose(_camera.Distance, target.X, target.Z, slot.Group.Position.X, slot.Group.Position.Z, slot.Width)))
             {
                 Log($"open view {open} closes (camera {_camera.Distance:0.#} m)");
                 CloseOpenLocation();

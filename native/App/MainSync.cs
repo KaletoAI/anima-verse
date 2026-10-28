@@ -25,6 +25,7 @@ public partial class Main : Node3D
     /// </summary>
     private void StartSync()
     {
+        StartResidency();
         _builder?.WorldProps?.SetLod(ScatterPrefs.LodCfgOf(_scatterPrefs));
         // Task 39 D6: use the world's loaded masks, and follow streamed windows/ground replacements.
         _scatter?.BindGround(() => _builder?.Ground);
@@ -71,6 +72,7 @@ public partial class Main : Node3D
     /// <summary>Back to the title, a lost session, the scene going: no poll, no stream, no timer survives.</summary>
     private void StopSync()
     {
+        _builder?.StopResidency();
         _pollSub?.Dispose();
         _pollSub = null;
         _poll = null;
