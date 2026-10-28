@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json.Nodes;
 using AnimaNative.Overview;
+using AnimaNative.Figures;
 using AnimaNative.Scatter;
 using Godot;
 
@@ -21,7 +22,7 @@ namespace AnimaNative.Ui;
 ///     (an invisible node drops its subtree) the vertex count of its mesh, once per node (a MultiMesh counts its
 ///     mesh once, like three's <c>InstancedMesh</c>).
 /// Not known natively, sent as 0: <c>geometries</c>/<c>textures</c> (Godot reports bytes, not counts), the model tier
-/// split and the movement-sync counters. Task 40 measures the scatter split and LOD-pass time.
+/// split. Task 40 measures scatter costs; Task 42 reads sync counters from the world's figure manager.
 /// </summary>
 public sealed class PerfProbe
 {
@@ -67,7 +68,21 @@ public sealed class PerfProbe
             _fps.Fps, _worst.WorstFrameMs,
             (long)Performance.GetMonitor(Performance.Monitor.RenderTotalPrimitivesInFrame),
             (long)Performance.GetMonitor(Performance.Monitor.RenderTotalDrawCallsInFrame),
-            _vertices, 0, 0, 0, 0, root is not null ? LodTime(root) : 0, _mesh, _impostor));
+            _vertices, 0, 0, 0, 0, root is not null ? LodTime(root) : 0, _mesh, _impostor, root is not null ? SyncSnapshot(root) : default));
+    }
+
+    /// <summary>Task 42: the world's manager owns lifetime counters; reading includes hidden figures and expires errors.</summary>
+    public static TravelCounters SyncSnapshot(Node root)
+    {
+        if (root is FigureManager manager) return manager.SyncCounters;
+        TravelCounters total = default;
+        foreach (var child in root.GetChildren())
+        {
+            var c = SyncSnapshot(child);
+            total = new TravelCounters(total.TravBack + c.TravBack, total.TravFwd + c.TravFwd,
+                System.Math.Max(total.TravErrMaxM, c.TravErrMaxM), total.Arrive + c.Arrive, total.Place + c.Place);
+        }
+        return total;
     }
 
     /// <summary>Task 40 D13: perfstats.ts scatterCosts over debugParts.scatter (authored scatter only); hidden ancestors

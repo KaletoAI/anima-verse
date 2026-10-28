@@ -115,6 +115,8 @@ public partial class Figure : Node3D
     public double Pace { get; set; } = 1;
     /// <summary>The payload says the character is under way (<c>npc.travelling</c>): it walks without the run boost.</summary>
     public bool Travelling { get; set; }
+    /// <summary>Task 42: server route; null for ordinary placement or a traveller whose route is withheld.</summary>
+    public JourneyRoute? Route { get; set; }
     /// <summary>The last frame moved the figure (<c>plan.moving</c>) and, moving, ran.</summary>
     public bool Moving { get; private set; }
     public bool Running { get; private set; }

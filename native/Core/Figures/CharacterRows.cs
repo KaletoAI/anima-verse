@@ -76,7 +76,16 @@ public sealed record CharacterRow(
             List<(double X, double Z)>? wp = null;
             if (tr.TryGetProperty("waypoints", out var w) && w.ValueKind == JsonValueKind.Array)
                 wp = Json.Ring(w).ToList();
-            travel = new TravelInfo(wp, Json.NumOrNull(tr, "progress_m"));
+            travel = new TravelInfo(wp, Json.NumOrNull(tr, "progress_m"))
+            {
+                TotalM = Json.NumOrNull(tr, "total_m"), StartsInS = Json.NumOrNull(tr, "starts_in_s"),
+                JourneyId = Text("journey_id"), TargetId = Text("target_id"), TargetName = Text("target_name"),
+                EtaGame = Text("eta_game"), EtaHhmm = Text("eta_hhmm"), EtaLabel = Text("eta_label"),
+                PaceMSReal = Json.NumOrNull(tr, "pace_m_s_real"), SpeedMSReal = Json.NumOrNull(tr, "speed_m_s_real"),
+                Paces = tr.TryGetProperty("paces_m_s_real", out var ps) && ps.ValueKind == JsonValueKind.Array
+                    ? ps.EnumerateArray().Select(p => p.ValueKind == JsonValueKind.Number ? (double?)p.GetDouble() : null).ToArray() : null,
+            };
+            string? Text(string key) => tr.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
         }
         string? sig = c.TryGetProperty("model_sig", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
         var sets = c.TryGetProperty("animation_sets", out var a) && a.ValueKind == JsonValueKind.Array
@@ -127,7 +136,21 @@ public sealed record CharacterRow(
 }
 
 /// <summary>§ A11 <c>travel</c>: the metre polyline and the distance already walked (both null under fog).</summary>
-public sealed record TravelInfo(List<(double X, double Z)>? Waypoints, double? ProgressM);
+public sealed record TravelInfo(List<(double X, double Z)>? Waypoints, double? ProgressM)
+{
+    /// <summary>Task 42 / A11: complete travel block; withheld values remain null, ETA strings are never parsed.</summary>
+    public double? TotalM { get; init; }
+    public double? StartsInS { get; init; }
+    public IReadOnlyList<double?>? Paces { get; init; }
+    public string? JourneyId { get; init; }
+    public string? TargetId { get; init; }
+    public string? TargetName { get; init; }
+    public string? EtaGame { get; init; }
+    public string? EtaHhmm { get; init; }
+    public string? EtaLabel { get; init; }
+    public double? PaceMSReal { get; init; }
+    public double? SpeedMSReal { get; init; }
+}
 
 /// <summary>
 /// The parts of a world-map LOCATION row the far-view huddle needs (the browser's
@@ -293,35 +316,10 @@ public static class FigurePlacement
         if (c.Travel is not { } tr) return null;
         if (tr.Waypoints is { Count: >= 2 } wp && tr.ProgressM is { } prog)
         {
-            var (x, z) = PointAtDistance(wp, Math.Clamp(prog, 0, PolylineLength(wp)));
+            var (x, z) = TravelPath.PointAtDistance(wp, prog)!.Value;
             return new FigureSpot(x, z, "journey");
         }
         return c.HasPos ? new FigureSpot(c.PosX!.Value, c.PosZ!.Value, "journey-pos") : null;
     }
 
-    public static double PolylineLength(IReadOnlyList<(double X, double Z)> wp)
-    {
-        double total = 0;
-        for (int i = 0; i + 1 < wp.Count; i++) total += Dist(wp[i], wp[i + 1]);
-        return total;
-    }
-
-    /// <summary>§ A11: walk <paramref name="d"/> metres down the polyline; past the end = the last point.</summary>
-    public static (double X, double Z) PointAtDistance(IReadOnlyList<(double X, double Z)> wp, double d)
-    {
-        for (int i = 0; i + 1 < wp.Count; i++)
-        {
-            double len = Dist(wp[i], wp[i + 1]);
-            if (d <= len)
-            {
-                double t = len > 0 ? d / len : 0;
-                return (wp[i].X + (wp[i + 1].X - wp[i].X) * t, wp[i].Z + (wp[i + 1].Z - wp[i].Z) * t);
-            }
-            d -= len;
-        }
-        return wp[^1];
-    }
-
-    private static double Dist((double X, double Z) a, (double X, double Z) b)
-        => Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Z - a.Z) * (b.Z - a.Z));
 }

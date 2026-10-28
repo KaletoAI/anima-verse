@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using AnimaNative.Figures;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -35,6 +37,9 @@ public interface IWorldSource
 {
     /// <summary><c>GET /play/worldmap</c> (§ A1.3) — authoritative for location placement (pos, yaw).</summary>
     Task<JsonDocument> GetWorldMapAsync();
+    /// <summary>Task 42: metadata of this payload only; direct/synthetic Apply calls have no network age.</summary>
+    MapReceipt? ReceiptOf(JsonElement root) => MapReceipt.FromMap(root);
+    double MonotonicMs => Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency;
     Task<JsonDocument> GetHeightfieldAsync();
     /// <summary>At most <see cref="AnimaApi.HeightTileBatchMax"/> keys; tiles not in the index are absent.</summary>
     Task<JsonDocument> GetHeightTilesAsync(IReadOnlyList<(int Tx, int Tz)> keys);
@@ -214,13 +219,24 @@ public sealed class AnimaApi : IWorldSource, IDisposable
         await EnsureOk(res, "/play/bench-result");
     }
 
-    public Task<JsonDocument> GetWorldMapAsync() => GetJson("/play/worldmap");
+    public Task<JsonDocument> GetWorldMapAsync() => GetWorldMapAsync(false);
 
     /// <summary>
     /// <c>getWorldMap(all)</c>: <c>all</c> asks for the UNFILTERED view (contract § A12) — the admin's switch; the
     /// server answers 403 for anybody else, so callers pass it only for role <c>admin</c>.
     /// </summary>
-    public Task<JsonDocument> GetWorldMapAsync(bool all) => GetJson(all ? "/play/worldmap?all=1" : "/play/worldmap");
+    public async Task<JsonDocument> GetWorldMapAsync(bool all)
+    {
+        var path = all ? "/play/worldmap?all=1" : "/play/worldmap";
+        double polledAt = MonotonicMs;
+        using var res = await _http.GetAsync(Relative(path), HttpCompletionOption.ResponseHeadersRead);
+        double headersAt = MonotonicMs;
+        using var doc = await ReadJson(res, path);
+        var receipt = new MapReceipt(polledAt, headersAt, MonotonicMs);
+        return await Task.Run(() => receipt.Attach(doc.RootElement));
+    }
+    public double MonotonicMs => Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency;
+    public MapReceipt? ReceiptOf(JsonElement root) => MapReceipt.FromMap(root);
     public Task<JsonDocument> GetHeightfieldAsync() => GetJson("/play/heightfield");
     public Task<JsonDocument> GetLocations3dAsync() => GetJson("/world/locations?view=3d");
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AnimaNative.Api;
@@ -24,6 +25,8 @@ public sealed class FigureStats
     public int Hidden, Seated, PoolFigures, Portraits;
     /// <summary>Task 30: snaps that moved a figure more than 0.5 m (npcs.ts <c>syncCounters.place</c>).</summary>
     public int PlaceSnaps;
+    /// <summary>Task 42: cumulative browser route snaps and arrival snaps.</summary>
+    public int TravBack, TravFwd, Arrive;
 
     public string Summary() =>
         $"figures={Figures} glb_figures={GlbFigures} placeholders={Placeholders} clips_loaded={ClipsLoaded} "
@@ -119,6 +122,10 @@ public partial class FigureManager : Node3D
     public ClipLibrary Clips { get; }
     public FigureStats Stats { get; } = new();
     public IReadOnlyDictionary<string, Figure> Figures => _figures;
+    private readonly TravelPath.ErrWindow _travelErrors = new();
+    /// <summary>Task 42: perfstats.ts counters, including route error expiry when no routes remain.</summary>
+    public TravelCounters SyncCounters => new(Stats.TravBack, Stats.TravFwd, _travelErrors.Max(_clock * 1000), Stats.Arrive, Stats.PlaceSnaps);
+    private double _ageAtAppliedS, _mapAppliedClock;
     /// <summary>The world map's <c>avatar</c> (the model queue serves it first).</summary>
     public string AvatarName { get; private set; } = "";
     /// <summary>The order the model jobs STARTED in (character names, a tier load included) — the queue's observable.</summary>
@@ -268,6 +275,9 @@ public partial class FigureManager : Node3D
     public Task Apply(JsonElement root)
     {
         Stats.Polls++;
+        _mapAppliedClock = _clock;
+        _ageAtAppliedS = _source.ReceiptOf(root) is { } receipt
+            ? TravelPath.AgeAtReceiptS(TravelSync.Parse(root), receipt) + (_source.MonotonicMs - receipt.ParsedAt) / 1000 : 0;
         AvatarName = Json.Str(root, "avatar");
         WorldFrozen = root.TryGetProperty("game_rate", out var rate) && rate.ValueKind == JsonValueKind.Number && rate.GetDouble() == 0;
         _rows = CharacterRow.ParseList(root);
@@ -367,6 +377,7 @@ public partial class FigureManager : Node3D
         fig.Rule = plan.Rule;
         fig.SurfaceGroup = plan.SurfaceGroup;
         AdoptInteraction(fig);
+        bool arrived = AdoptRoute(fig);
         // THE GOAL: the server's point — or, after a stand-up, the spot the bridge left the figure on, for as long as the
         // server sends the SAME point (settleOffset against the kept server point); a different one voids the spot.
         if (fig.Settle is { } kept)
@@ -382,7 +393,13 @@ public partial class FigureManager : Node3D
             // createNpc: the first sync puts the figure on its point — no walk across the whole map.
             fig.SnapTo(goal);
         }
-        else
+        else if (arrived)
+        {
+            // A11 arrival (also a route becoming withheld): no residual walk through arrival-room stations.
+            fig.SnapTo(goal);
+            Stats.Arrive++;
+        }
+        else if (fig.Route is null)
         {
             // main.ts: a routed room change ends whatever climb the figure was on (the avatar's own climb excepted), and
             // a climb over stairs becomes the ride — unarmed, the figure is still a room away.
@@ -406,6 +423,50 @@ public partial class FigureManager : Node3D
         fig.ApplyRotation();
         fig.SetHidden(plan.Hidden);
         fig.Travelling = _rowByName.TryGetValue(fig.CharacterName, out var row) && row.Travelling;
+    }
+
+    /// <summary>
+    /// Task 42: npcs.ts update route branch. Age is fixed at Apply plus elapsed frame time; repeated cached placement
+    /// cannot reconcile a payload twice. A back snap resets secondary motion; a forward snap keeps root catch-up.
+    /// </summary>
+    private bool AdoptRoute(Figure fig)
+    {
+        var tr = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.Travel : null;
+        if (tr?.Waypoints is not { Count: >= 2 } points || tr.ProgressM is not { } serverM)
+        {
+            bool arrived = fig.Route is not null;
+            fig.Route = null;
+            return arrived;
+        }
+        string key = (tr.JourneyId ?? "") + "|" + string.Join(";", points.Select(p =>
+            p.X.ToString("R", CultureInfo.InvariantCulture) + "," + p.Z.ToString("R", CultureInfo.InvariantCulture)));
+        double age = _ageAtAppliedS + _clock - _mapAppliedClock;
+        double target = TravelPath.AdvanceAlongPaces(points, tr.Paces, serverM, Math.Max(0, age - (tr.StartsInS ?? 0)));
+        if (fig.Route is not { } r || r.Key != key)
+            fig.Route = new JourneyRoute { Key = key, Points = points.ToArray(), TotalM = TravelPath.PolylineLength(points),
+                Paces = tr.Paces, TargetM = target, ShownM = target, Stamp = Stats.Polls };
+        else
+        {
+            r.Paces = tr.Paces;
+            if (r.Stamp != Stats.Polls)
+            {
+                r.TargetM = target;
+                r.Stamp = Stats.Polls;
+                var a = TravelPath.AdoptTarget(r.ShownM, target, TravelPath.RateAt(r.Points, r.Paces, target));
+                r.ShownM = a.ShownM;
+                if (a.Snap == "back")
+                {
+                    var at = TravelPath.PointAtDistance(r.Points, a.ShownM)!.Value;
+                    fig.Position = new Vector3((float)at.X, (float)GroundY(at.X, at.Z), (float)at.Z);
+                    fig.ResetSecondaryMotion();
+                    Stats.TravBack++;
+                }
+                else if (a.Snap == "fwd") Stats.TravFwd++;
+            }
+        }
+        fig.Waypoints.Clear();
+        fig.Settle = null;
+        return false;
     }
 
     /// <summary>
@@ -453,8 +514,8 @@ public partial class FigureManager : Node3D
         => fig.WantedSig != fig.LoadedSig || (fig.WantedRev is not null && fig.WantedRev != fig.LoadedRev);
 
     /// <summary>
-    /// The per-frame walk of every figure — npcs.ts <c>tick</c> without a server route (journeys follow their polled
-    /// point by reckoning until E6) and the player-driven figure (E7); the bridges hold the step (paceLimitFor) and hand the
+    /// The per-frame walk of every figure — npcs.ts <c>tick</c>, with Task 42 server routes dispatched before the
+    /// ordinary walk, and the player-driven figure deferred to E7; the bridges hold the step (paceLimitFor) and hand the
     /// travel and the height over (takeTravel + settle, beginBridgeLift / shiftBridgeLift):
     ///
     ///   1. the plan (<see cref="NpcWalk.Goal"/>): stations retire at 1.5 m (a stair ride at 0.4 m), the goal is the first
@@ -492,10 +553,51 @@ public partial class FigureManager : Node3D
     public GroundWord WordAt(double x, double z)
         => WalkGround.WordOf(GroundMoveAt?.Invoke(x, z) ?? GroundMove.Plain, GroundYAt?.Invoke(x, z) ?? _height.GroundAt(x, z));
 
+    private double GroundY(double x, double z) => GroundYAt?.Invoke(x, z) ?? _height.GroundAt(x, z);
+
+    /// <summary>
+    /// Task 42: npcs.ts route tick, ordinary travel only. Segment paces feed the tau smoother, the reached point
+    /// supplies the ground word and height, and catch-up uses max(3.4, segment pace) times the bridge pace limit.
+    /// A completed get-up hands its travel to the root once; journeys never settle or run.
+    /// </summary>
+    private void StepRoute(Figure fig, JourneyRoute r, double dt, double camDist)
+    {
+        if (fig.Travelling && fig.Player is not null && !fig.Bridging && fig.HoldsTravel) ApplyBridgeTravel(fig);
+        r.ShownM = TravelPath.StepShown(r.Points, r.Paces, r.ShownM, r.TargetM, dt);
+        r.TargetM = TravelPath.AdvanceAlongPaces(r.Points, r.Paces, r.TargetM, dt);
+        _travelErrors.Push(_clock * 1000, Math.Abs(r.TargetM - r.ShownM));
+        var at = TravelPath.PointAtDistance(r.Points, r.ShownM)!.Value;
+        double bedY = GroundY(at.X, at.Z), rootYBefore = fig.Position.Y;
+        double dx = at.X - fig.Position.X, dz = at.Z - fig.Position.Z, d = Math.Sqrt(dx * dx + dz * dz);
+        bool moving = d > .02 || (r.ShownM < r.TotalM && (TravelPath.RateAt(r.Points, r.Paces, r.ShownM) ?? 0) > 0);
+        var ground = WordAt(at.X, at.Z);
+        var raw = ground.Raw;
+        if (fig.Portrait is null) fig.SetSubmerged(WaterGates.GhostCutY(bedY, WaterGates.GroundWaterLevel(raw.Water, raw.Scope)));
+        string idle = FigureClips.IdleClip(ground.Word.Movement, fig.Poses);
+        double sink = WalkGround.GroundSink(WalkGround.SinkForState(moving, idle, ground.Word.Sink), WalkGround.SinkScope(raw));
+        double goalY = WalkGround.FloatRootY(bedY, ground.Word.Water, sink);
+        string clip = moving ? FigureClips.MoveClip(ground.Word.Movement, false, fig.Poses)
+            : idle.Length > 0 ? idle : FigureClips.PoseKind("standing", fig.Poses);
+        double limit = fig.Player is null ? 1 : fig.Bridging ? fig.PaceLimit : fig.PaceLimitFor(clip);
+        if (d > .05 && limit > 0)
+        {
+            double step = TravelPath.CatchUpStep(d, TravelPath.RateAt(r.Points, r.Paces, r.ShownM), dt, NpcWalk.WalkSpeed) * limit;
+            fig.Position += new Vector3((float)(dx / d * step), 0, (float)(dz / d * step));
+            if (!fig.HoldsFacing) fig.FaceTowards(new Vector3((float)(dx / d), 0, (float)(dz / d)));
+        }
+        fig.Position = new Vector3(fig.Position.X, (float)EaseRootY(fig, fig.Position.Y, goalY, dt), fig.Position.Z);
+        fig.SetMotion(moving, false, ground.Word.Movement);
+        PlayLifting(fig, clip, moving || idle.Length > 0, sink, rootYBefore, goalY, "ground");
+        fig.SecondaryFrozen = WorldFrozen;
+        fig.UpdateFigure(dt);
+        fig.Portrait?.Tick(dt, camDist, moving);
+    }
+
     private void StepFigure(Figure fig, double dt, Vec3? neighbour, double camDist)
     {
         // A running pair interaction places the figure and plays its half (npcs.ts: `tickInteraction` before anything).
         if (fig.Pair is not null && TickPair(fig, dt)) return;
+        if (fig.Route is { } route) { StepRoute(fig, route, dt, camDist); return; }
         // BRIDGE TRAVEL WITHOUT A ROUTE (rule 4, figures.ts travelBase): the bridge has ended and its body stands where
         // the clip carried it — the root moves there now, the body on screen does not move. The GOAL does not move with
         // it: it is the server's stand point (seat + travel); near it the NPC keeps the spot it stands on.

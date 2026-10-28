@@ -190,8 +190,8 @@ tread and the stringer + the level-1 plate (its storey's slab) = 9. With the hou
 
 The two root worldmaps now carry `sync: {clock_age_ms: 300, build_ms: 200}`.
 Cleo's same route in both polls has the stable id `fixture-cleo-route`. Their character
-lists, progress values and geometry are unchanged, preserving every historical `--check`
-section, including `ExpCleoStep1`. The route-following replacement belongs to Task 42.
+lists, progress values and geometry are unchanged. Task 42 replaces the historical
+poll-point chase and re-baselines `ExpCleoStep1` for route following below.
 
 The separate **hand-written** `travel/` world supplies the five new traveller cases for
 Tasks 42/43 without changing the old figure/model queue counts. Load it with
@@ -214,17 +214,32 @@ field: deterministic monotonic milliseconds for poll 1 `(0,500,540)` and poll 2
 | Timeless Traveller | (−10,−80) → (0,−80) → (0,−80) → (30,−80), paces [null,1.4,1.4], progress 0 → 17 | lengths **10,0,30**, total **40**; first 10 m timeless, duplicate costs no time. At dt 0 progress jumps to **10**; after 5 s progress **17**; parse targets **10.686** / **17.686**, points **(0.686,−80)** / **(7.686,−80)** |
 | Arrival Traveller | 20 m route (40,−80) → (60,−80), progress already 20 → `travel: null`, placement pos (62,−80) | a completed route may wait one server tick; dropping travel means arrival snap to **(62,−80)**, no residual walk from (60,−80) |
 
-Root Cleo's **future Task 42** route walk with the same deterministic stamps is derived
-here without changing the current check: poll 1 target 137 + 1.4·0.49 = **137.686**,
-point **(262.314,−100)**. At poll 2 target = 144 + 0.686 = **144.686**. From the first
-adopted shown value 137.686, the 7 m forward error exceeds hardSnapM(1.4) = max(6,2.8)
-= **6**, so new-stamp adoption snaps shown to 144.686 with `snap: fwd`. One 0.5 s
-route frame predicts both to **145.386** (no smoothing error), point **(254.614,−100)**;
-catch-up from the old root at x 262.314 is bounded by max(3.4,1.4)·0.5 = **1.7 m**,
-so the first root point is **(260.614,4.875,−100)**. If receipt age is zero instead,
-start shown 137, adopt 144 then advance to 144.7; the same catch-up bound yields the
-historical **(261.3,4.875,−100)**. These are conditional hand numbers, not a claim that
-the current native client has receipt-age reconciliation (Task 42 implements it).
+Task 42 uses these fixed receipts for the root world's `--check figures` as well.
+Poll 1 target/shown = 137 + 1.4·0.49 = **137.686**, but the first root placement
+is the server's **(263,4.875,−100)**, as in browser `createNpc`: adopting the display
+distance does not teleport the root. Poll 2 target = 144 + 0.686 = **144.686**.
+The 7 m display error exceeds hardSnapM(1.4) = max(6,2.8) = **6**, giving one
+forward snap while the root stays at x263. The first 0.5 s frame predicts target
+and shown to **145.386**, goal **(254.614,−100)**; catch-up is limited to
+max(3.4,1.4)·0.5 = **1.7 m**, so root x = **261.3**. Height comes from the
+reached route point, not the root or polled point. Here overview Y at (x,−100)
+is `4.875·(x+256)/512`, hence `ExpCleoStep1` changes from
+**(261.3,4.875,−100)** to **(261.3,4.86180322265625,−100)**. The .5 s height
+ease has factor min(1,4·.5)=1. After six frames, root x=263−6·1.7=**252.8**,
+shown=144.686+6·.7=**148.886**, route point x=**251.114**, and root Y=
+**4.82847802734375**. The route keeps moving beyond the stale polled point.
+
+`--check travel` independently checks the five-traveller world: adopted target
+**10.686**, 24 quarter-second frames `shown[i]=10.686+.35i`, ending at **19.086**.
+After poll 2 the next half-second display is
+`19.786−1.4·(1−exp(−.5))` = **19.23514292359769**. Once catch-up joins,
+rendered X/Z match the arc point within **.01 m** each frame; frozen and pending
+figures hold. Synthetic fresh polls exercise one back snap and one forward snap;
+arrival snaps to **(62,−80)**. A north-turning variant samples a rising bed at the
+reached point for 12 frames. The measured chair assets from `bridges/` exercise
+pending/early-start bridge holds, a zero-delta hand-over with ≤1 cm foot movement,
+and one-time travel consumption. Water checks mirror **1.5 m**, move sink **.35 m**,
+idle sink **1.3 m**, swimming without running, treading while frozen, and the ghost.
 
 `scatter_reference.json` was regenerated with its own `scatter_reference.mjs` after
 the root map additions; its output is unchanged (it consumes locations/world props,
@@ -365,9 +380,9 @@ Bram is gone → **figures = 2**. Ada moves to (−40, 30), her `model_sig` beco
 → `model3d` is asked again (2 requests), the GLB URL is unchanged → no second download (template cache per URL
 and set chain), clips not downloaded again. Cleo has no `model_sig` and no `model_rev` (absent both times) →
 not asked again. Cleo's `progress_m` 144 → (300 − 44, −100) = (256, −100). Ada's row now says
-`activity_animation: "reading"`. Cleo is TRAVELLING (`travel` without `starts_in_s`): she walks her 7 m without the
-run boost (npcs.ts `reckoning`), 1.7 m per frame — (261.3, 4.875, −100) after frame 1, (256, 4.875, −100) after
-frame 5 (y: the same clamped overview cell, 4.875).
+`activity_animation: "reading"`. Task 42 advances Cleo's route each frame, without a
+run boost; the new first-frame and sixth-frame root numbers are derived under
+"Travel additions" above. The old chase stopped at (256,4.875,−100); the route continues.
 
 The browser's NPC walk (Task 30, `npcWalk.ts`, vectors `npc_walk.json`), stepped by the check in frames of
 dt = 0.5 s. Nothing moves until the first frame: Ada still stands at (−50, 3.595947265625, 30). Her goal is the free

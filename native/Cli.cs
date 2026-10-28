@@ -225,11 +225,11 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
 
     private static bool IsSection(string v)
         => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
-             or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement" or "walk" or "bridges" or "pairs" or "clips" or "secondary" or "animals";
+             or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement" or "walk" or "bridges" or "pairs" or "clips" or "secondary" or "animals" or "travel";
 
     private static string CheckSection(string v) => IsSection(v)
         ? v : throw new ArgumentException("--check= knows only 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', "
-                                          + $"'terrain', 'stream', 'water', 'scatter', 'veil', 'matrix', 'figures', 'shadow', 'placement', 'walk', 'bridges', 'pairs', 'clips', 'secondary' and 'animals', got '{v}'");
+                                          + $"'terrain', 'stream', 'water', 'scatter', 'veil', 'matrix', 'figures', 'shadow', 'placement', 'walk', 'bridges', 'pairs', 'clips', 'secondary', 'animals' and 'travel', got '{v}'");
 
     public static Viewport.Msaa ParseMsaa(string v) => v switch
     {

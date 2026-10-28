@@ -64,10 +64,13 @@ public sealed class WorstFrame
 /// <summary>Task 40: browser ScatterCost, counting visible stage nodes, instances and triangles (before frustum culling).</summary>
 public readonly record struct ScatterCost(long Calls, long Instances, long Triangles);
 
+/// <summary>Task 42: cumulative browser sync counters and the maximum route error over the last 30 seconds.</summary>
+public readonly record struct TravelCounters(int TravBack, int TravFwd, double TravErrMaxM, int Arrive, int Place);
+
 /// <summary>One native readout, with measured scatter stages (Task 40); unsupported monitors stay zero.</summary>
 public readonly record struct PerfSample(
     double Fps, double WorstFrameMs, long Triangles, long Calls, long Vertices, long Geometries, long Textures,
-    int TiersFull, int TiersLow, double ScatterLodMs, ScatterCost Mesh = default, ScatterCost Impostor = default);
+    int TiersFull, int TiersLow, double ScatterLodMs, ScatterCost Mesh = default, ScatterCost Impostor = default, TravelCounters Sync = default);
 
 /// <summary>
 /// The HUD's performance readout (<c>{v:3, kind:'perf', value: PerfStats}</c>, client3d/src/hud/bus.ts /
@@ -76,8 +79,7 @@ public readonly record struct PerfSample(
 /// <see cref="PublishMs"/> — and nothing at all while <c>HudUiState.perfOn</c> is off; switching it off throws the
 /// window and the worst frame away, so switching on starts measuring anew.
 ///
-/// Every key of the TS <c>PerfStats</c> is sent (the HUD reads them all): Task 40 supplies the scatter split and LOD time; movement
-/// sync counters have no native source yet and go out as zeros.
+/// Every key of the TS <c>PerfStats</c> is sent (the HUD reads them all): Task 40 supplies the scatter split and LOD time; Task 42 supplies the journey and placement sync counters.
 /// </summary>
 public static class PerfReadout
 {
@@ -104,8 +106,8 @@ public static class PerfReadout
             ["scatterLodMs"] = s.ScatterLodMs,
             ["sync"] = new JsonObject
             {
-                ["posCorr"] = 0, ["pos409"] = 0, ["travBack"] = 0, ["travFwd"] = 0, ["travErrMaxM"] = 0,
-                ["arrive"] = 0, ["place"] = 0,
+                ["posCorr"] = 0, ["pos409"] = 0, ["travBack"] = s.Sync.TravBack, ["travFwd"] = s.Sync.TravFwd, ["travErrMaxM"] = s.Sync.TravErrMaxM,
+                ["arrive"] = s.Sync.Arrive, ["place"] = s.Sync.Place,
             },
         };
     }

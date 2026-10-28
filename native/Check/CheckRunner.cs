@@ -58,7 +58,9 @@ public static class CheckRunner
     // Poll 2 walked in 0.5 s frames (README "Second poll"): Ada runs 3.06 m twice, then walks 1.7 m twice and 0.48 m.
     private static readonly Vector3 ExpAdaRun1 = new(-46.94f, 3.7705078125f, 30f);
     private static readonly Vector3 ExpAdaWalk1 = new(-42.18f, 3.7705078125f, 30f);
-    private static readonly Vector3 ExpCleoStep1 = new(261.3f, 4.875f, -100f);
+    // Task 42: receipt age .49; shown 144.686+.7=145.386 gives goal x254.614.
+    // Root catches up 1.7 m to x261.3, but Y samples that reached arc point: 4.875*(254.614+256)/512.
+    private static readonly Vector3 ExpCleoStep1 = new(261.3f, 4.86180322265625f, -100f);
     private static readonly Vector3 ExpAdaEnd = new(-40f, 3.7705078125f, 30f);
     // movement_poses (README "Clips"): standing plays stand-relaxed (exact), walking names mob1-walk,
     // which the library lacks → its public kind walk.
@@ -72,6 +74,12 @@ public static class CheckRunner
         {
             var dir = Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures");
             MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
+            if (only == "travel")
+            {
+                var alone = await TravelCheck.RunAsync(host, dir);
+                GD.Print($"CHECK ok {alone}");
+                return 0;
+            }
             if (only == "verify")
             {
                 var alone = await VerifyCheck.RunAsync(host, dir);
@@ -295,6 +303,7 @@ public static class CheckRunner
             var storeys = await StoreysCheck.RunAsync(host, dir);
             var placement = await PlacementCheck.RunAsync(host, dir);
             var walk = await WalkCheck.RunAsync(host, dir);
+            var travel = await TravelCheck.RunAsync(host, dir);
             var bridges = await BridgeCheck.RunAsync(host, dir);
             var pairs = await PairCheck.RunAsync(host, dir);
             var clipFit = await ClipFitCheck.RunAsync(host, dir);
@@ -314,7 +323,7 @@ public static class CheckRunner
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {travel} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;
@@ -468,7 +477,7 @@ public static class CheckRunner
                string.Join(",", chain));
         Eq("each clip URL downloaded once", clips.Entries.Count(e => source.ByteRequests.Count(u => u == e.Url) == 1), 9);
 
-        using (var map = Load("worldmap.json")) await mgr.Apply(map.RootElement);
+        using (var map = await source.GetWorldMapAsync()) await mgr.Apply(map.RootElement);
         var st = mgr.Stats;
         Eq("figures", st.Figures, ExpFigures);
         Eq("glb_figures", st.GlbFigures, ExpGlbFigures);
@@ -530,7 +539,7 @@ public static class CheckRunner
         ada.Replay();
 
         // ---- poll 2 ----
-        using (var map = Load("worldmap_poll2.json")) await mgr.Apply(map.RootElement);
+        using (var map = await source.GetWorldMapFileAsync("worldmap_poll2.json")) await mgr.Apply(map.RootElement);
         st = mgr.Stats;
         Eq("poll2 figures", st.Figures, 2);
         Expect("Bram removed", !mgr.Figures.ContainsKey(Bram), "still there");
@@ -558,7 +567,9 @@ public static class CheckRunner
         NearV("Ada arrived", ada.Position, ExpAdaEnd);
         mgr.Tick(0.5);
         Expect("Ada stands after arriving", !ada.Moving, "moving");
-        NearV("Cleo at her polled point", cleo.Position, new Vector3(256f, 4.875f, -100f));
+        // Six half-second route frames: root x263-6*1.7=252.8, shown=144.686+6*.7=148.886;
+        // reached-point Y = 4.875*(251.114+256)/512. She keeps walking beyond the stale poll point.
+        NearV("Cleo follows the advancing route", cleo.Position, new Vector3(252.8f, 4.82847802734375f, -100f));
         Near("Ada keeps facing +x (no neighbour, no marker)", ada.Rotation.Y, Mathf.Pi / 2f);
         ExpectClip(ada, "poll 2 arrived: activity_animation", "reading", "reading", 1);
         CheckHoldsLastFrame(ada, "reading");

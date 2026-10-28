@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using AnimaNative.Api;
+using AnimaNative.Figures;
 using AnimaNative.World;
 
 namespace AnimaNative.Check;
@@ -78,7 +79,26 @@ public sealed class FixtureSource : IWorldSource
         return File.Exists(own) || _fallback is null ? own : Path.Combine(_fallback, file);
     }
 
-    public Task<JsonDocument> GetWorldMapAsync() => Doc("worldmap.json");
+    /// <summary>Task 42: fixed Task 41 receipts, including poll 2; no wall-clock or model-load time in a check.</summary>
+    public Task<JsonDocument> GetWorldMapAsync() => GetWorldMapFileAsync("worldmap.json");
+    public async Task<JsonDocument> GetWorldMapFileAsync(string file)
+    {
+        var doc = await Doc(file);
+        _receipt = null;
+        var path = PathOf("receipts.json");
+        if (!File.Exists(path)) path = Path.Combine(_dir, "travel", "receipts.json");
+        if (File.Exists(path))
+        {
+            using var stamps = JsonDocument.Parse(File.ReadAllBytes(path));
+            if (stamps.RootElement.TryGetProperty(file, out var m))
+                _receipt = new MapReceipt(Json.Num(m, "polledAt"), Json.Num(m, "headersAt"), Json.Num(m, "parsedAt"));
+        }
+        if (_receipt is not { } receipt) return doc;
+        using (doc) return receipt.Attach(doc.RootElement);
+    }
+    private MapReceipt? _receipt;
+    public MapReceipt? ReceiptOf(JsonElement root) => MapReceipt.FromMap(root);
+    public double MonotonicMs => _receipt?.ParsedAt ?? 0;
     public Task<JsonDocument> GetHeightfieldAsync() => Doc("heightfield.json");
     public Task<JsonDocument> GetLocations3dAsync() => Doc("locations.json");
 
