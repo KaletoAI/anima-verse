@@ -20,6 +20,10 @@ public static class HitchLog
     private static int _mainThread = -1, _lines;
     private static int _gc0, _gc1, _gc2;
 
+    /// <summary>Frames count only once the world is up: the login screen and the boot run throttled or busy on
+    /// purpose (the first field run spent all <see cref="MaxLines"/> lines on the ~7 fps login screen).</summary>
+    public static bool Armed { get; set; }
+
     /// <summary>Called once from the main thread before the first frame.</summary>
     public static void Init()
     {
@@ -47,7 +51,7 @@ public static class HitchLog
     public static void EndFrame(double frameMs, Action<string> log)
     {
         int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1), g2 = GC.CollectionCount(2);
-        if (frameMs > HitchMs && _lines < MaxLines)
+        if (Armed && frameMs > HitchMs && _lines < MaxLines)
         {
             _lines++;
             double marked = Marks.Sum(m => m.Ms);

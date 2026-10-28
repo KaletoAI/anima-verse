@@ -258,6 +258,7 @@ public partial class Main : Node3D
     public override void _Process(double delta)
     {
         // delta is the frame that just ended: log it if it was a hitch, with what the heavy main-thread steps reported.
+        if (!Ui.HitchLog.Armed && _figures?.FirstPollDone.IsCompleted == true) Ui.HitchLog.Armed = true;
         Ui.HitchLog.EndFrame(delta * 1000, Log);
         // The sync layer's clock: due timers (trailing polls, stream deadlines and retries, the 120-s location
         // re-sync), then the poll core's 1-s tick.
