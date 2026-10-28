@@ -89,6 +89,8 @@
  * (e) A line of fewer than two points, and a spacing of 0, are handed back
  *     unchanged.
  */
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+import { travelDispatch } from './travelVectorDispatch.mjs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -215,19 +217,13 @@ for (const [progress, expected] of [[0, 0], [2, 2.5], [4, 5], [6, 2.5], [8, 0]])
 
 // --- [6] the drawn line ----------------------------------------------------
 console.log('[6] densifyPolyline gives the line a point per ground sample');
-checkEq('spacing 4 over the peak', densifyPolyline(ROUTE, 4),
-  [[-4, 0], [0, 0], [4, 0]]);
+const file = loadVectors('travel');
+const result = runVectors({ ...file, cases: file.cases.filter(c => c.label.startsWith('[15]')) }, travelDispatch);
+passed += result.passed;
+failed += result.failed;
+// Integration with the real ground sampler remains local.
 checkEq('…their heights', densifyPolyline(ROUTE, 4).map(
   ([x, z]) => sampleWorldHeight(FIELD, x, z)), [0, 5, 0]);
-checkEq('spacing 2', densifyPolyline(ROUTE, 2).map(([x]) => x), [-4, -2, 0, 2, 4]);
-const corner = densifyPolyline([[0, 0], [10, 0], [10, 10]], 4);
-check('a corner route keeps its corners: point count', corner.length, 7);
-checkEq('…the corner itself is point 4', corner[3], [10, 0]);
-const capped = densifyPolyline([[0, 0], [100, 0]], 1, 11);
-check('the cap stretches the spacing: point count', capped.length, 11);
-checkEq('…ten metres apart', capped[1], [10, 0]);
-checkEq('a one-point line is handed back', densifyPolyline([[1, 2]], 4), [[1, 2]]);
-checkEq('spacing 0 densifies nothing', densifyPolyline(ROUTE, 0), ROUTE);
 
 console.log(`\n${passed + failed} checks, ${failed} failures`);
 process.exit(failed ? 1 : 0);

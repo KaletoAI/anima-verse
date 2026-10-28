@@ -316,6 +316,33 @@ public class VectorCompareTests
             "[{\"label\":\"a\",\"fn\":\"f\",\"args\":[{\"$fixture\":\"L\",\"$with\":{\"a\":1}}],\"expect\":1}]", "{\"L\":[1,2]}")));
     }
 
+    [Fact]
+    public void ArgumentSentinelsDecodeAfterFixtureCopyAndShallowOverride()
+    {
+        var f = VectorFile.Parse(FileText(
+            """[{"label":"sentinels","fn":"f","args":["$NaN","$Infinity","$-Infinity","$undefined",null,{"nested":["$NaN"]},{"$fixture":"P","$with":{"v":"$undefined"}},"x$NaN","$Inf","$Infinity suffix"," $undefined"],"expect":"$NaN"}]""",
+            """{"P":{"v":1,"nested":["$Infinity"]}}"""));
+        var a = f.ResolveArgs(f.Cases[0]);
+        Assert.True(double.IsNaN(VectorCompare.Num(a[0])));
+        Assert.Equal(double.PositiveInfinity, VectorCompare.Num(a[1]));
+        Assert.Equal(double.NegativeInfinity, VectorCompare.Num(a[2]));
+        Assert.NotNull(a[3]);
+        Assert.Equal(System.Text.Json.JsonValueKind.Undefined, a[3]!.GetValue<System.Text.Json.JsonElement>().ValueKind);
+        Assert.Null(a[4]);
+        Assert.True(double.IsNaN(VectorCompare.Num(a[5]!["nested"]![0])));
+        Assert.Equal(double.PositiveInfinity, VectorCompare.Num(a[6]!["nested"]![0]));
+        Assert.Equal(System.Text.Json.JsonValueKind.Undefined, a[6]!["v"]!.GetValue<System.Text.Json.JsonElement>().ValueKind);
+        Assert.Equal("$Infinity", f.Fixtures["P"]!["nested"]![0]!.GetValue<string>());
+        Assert.Equal(1, f.Fixtures["P"]!["v"]!.GetValue<int>());
+        Assert.Equal("$NaN", f.Cases[0].Expect!.GetValue<string>());
+        Assert.Equal("x$NaN", a[7]!.GetValue<string>());
+        Assert.Equal("$Inf", a[8]!.GetValue<string>());
+        Assert.Equal("$Infinity suffix", a[9]!.GetValue<string>());
+        Assert.Equal(" $undefined", a[10]!.GetValue<string>());
+        Assert.Null(f.Check(f.Cases[0], Table(("f", args =>
+            JsonValue.Create(double.IsNaN(VectorCompare.Num(args[0])) ? "$NaN" : "bad")))));
+    }
+
     // ---- [9] unknown fn -------------------------------------------------------------------
 
     [Fact]

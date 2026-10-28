@@ -186,6 +186,50 @@ tread and the stringer + the level-1 plate (its storey's slab) = 9. With the hou
 
 ## Figures (Task S1b)
 
+### Travel additions (Task 41, E6-T1)
+
+The two root worldmaps now carry `sync: {clock_age_ms: 300, build_ms: 200}`.
+Cleo's same route in both polls has the stable id `fixture-cleo-route`. Their character
+lists, progress values and geometry are unchanged, preserving every historical `--check`
+section, including `ExpCleoStep1`. The route-following replacement belongs to Task 42.
+
+The separate **hand-written** `travel/` world supplies the five new traveller cases for
+Tasks 42/43 without changing the old figure/model queue counts. Load it with
+`new FixtureSource(travelDir, rootFixturesDir)`; it borrows the root heightfield, tile,
+terrain and layer files. Its own `model3d.json` is `{}` (every new traveller gets a
+normal 404 model answer); model lookup does not use FixtureSource fallback.
+`travel/urls.json` maps the borrowed ground/scatter assets;
+no new model assets or real-world content are introduced. Its two worldmaps contain
+five synthetic travellers and the root world's location footprints. No scene file is
+needed for the free journey points. `receipts.json` is test input for Task 42, not an API
+field: deterministic monotonic milliseconds for poll 1 `(0,500,540)` and poll 2
+`(5000,5500,5540)`. Both have age
+`(300 + max(0,500-200)/2 + (540-500))/1000 = 0.49 s` at parse time.
+
+| Traveller | Poll 1 → poll 2 | Hand derivation |
+|---|---|---|
+| Fog Traveller | pos (−120,−80) → (−114,−80); route/pace/progress/target withheld (`null`) | 6 m / 5 real s = **1.2 m/s**; at terrain pace 0.7 and dt 0.5, step = 1.2·0.7·0.5 = **0.42 m**, capped by the remaining polled gap |
+| Pending Traveller | 30 m route (−80,−80) → (−50,−80); progress 0, `starts_in_s: 2`, paces null → progress 4.2, no delay, pace [1.4] | holds the first point in poll 1; 5−2 = 3 s at 1.4 gives **4.2 m** in poll 2; parse-age projection = 4.2 + 1.4·0.49 = **4.886 m**, point **(−75.114,−80)** |
+| Frozen Traveller | 30 m route (−40,−80) → (−10,−80), progress 10 and paces null in both | no extrapolation at any age; point **(−30,−80)** |
+| Timeless Traveller | (−10,−80) → (0,−80) → (0,−80) → (30,−80), paces [null,1.4,1.4], progress 0 → 17 | lengths **10,0,30**, total **40**; first 10 m timeless, duplicate costs no time. At dt 0 progress jumps to **10**; after 5 s progress **17**; parse targets **10.686** / **17.686**, points **(0.686,−80)** / **(7.686,−80)** |
+| Arrival Traveller | 20 m route (40,−80) → (60,−80), progress already 20 → `travel: null`, placement pos (62,−80) | a completed route may wait one server tick; dropping travel means arrival snap to **(62,−80)**, no residual walk from (60,−80) |
+
+Root Cleo's **future Task 42** route walk with the same deterministic stamps is derived
+here without changing the current check: poll 1 target 137 + 1.4·0.49 = **137.686**,
+point **(262.314,−100)**. At poll 2 target = 144 + 0.686 = **144.686**. From the first
+adopted shown value 137.686, the 7 m forward error exceeds hardSnapM(1.4) = max(6,2.8)
+= **6**, so new-stamp adoption snaps shown to 144.686 with `snap: fwd`. One 0.5 s
+route frame predicts both to **145.386** (no smoothing error), point **(254.614,−100)**;
+catch-up from the old root at x 262.314 is bounded by max(3.4,1.4)·0.5 = **1.7 m**,
+so the first root point is **(260.614,4.875,−100)**. If receipt age is zero instead,
+start shown 137, adopt 144 then advance to 144.7; the same catch-up bound yields the
+historical **(261.3,4.875,−100)**. These are conditional hand numbers, not a claim that
+the current native client has receipt-age reconciliation (Task 42 implements it).
+
+`scatter_reference.json` was regenerated with its own `scatter_reference.mjs` after
+the root map additions; its output is unchanged (it consumes locations/world props,
+not character routes or sync). No generated fixture was edited by hand.
+
 ### The three characters of `worldmap.json`
 
 | name | row | model3d answer | rule |

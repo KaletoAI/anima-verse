@@ -34,7 +34,7 @@ implementations: when both pass the same file, they compute the same numbers.
 | `cases` | yes | non-empty array of cases |
 | `cases[].label` | yes | non-empty string, unique within the file (it is the test's display name) |
 | `cases[].fn` | yes | name of the function under test, looked up in the runner's dispatch table |
-| `cases[].args` | yes | array; the call is `fn(...args)` after fixture resolution |
+| `cases[].args` | yes | array; the call is `fn(...args)` after fixture resolution and sentinel decoding |
 | `cases[].expect` | yes | expected return value (`null` is a valid expectation) or `{"$throws": true}` |
 | `cases[].eps` | no | absolute tolerance for every number in `expect`, `>= 0`, default `1e-9` |
 
@@ -46,6 +46,26 @@ implementations: when both pass the same file, they compute the same numbers.
 keys with those of `$with` (shallow: a key in `$with` replaces the fixture's value whole).
 `$with` on a non-object fixture, an unknown fixture name, or any other key next to
 `$fixture` is an error. References are not resolved inside `fixtures` or `expect`.
+
+### Argument sentinels (P3-R20)
+
+After fixture expansion and shallow `$with` overrides, both loaders recursively decode
+these **exact whole-string values in arguments only**:
+
+| JSON string | JavaScript | C# (`JsonArray` dispatch API) |
+|---|---|---|
+| `"$NaN"` | `NaN` | `JsonValue<double>(double.NaN)` |
+| `"$Infinity"` | `Infinity` | `JsonValue<double>(double.PositiveInfinity)` |
+| `"$-Infinity"` | `-Infinity` | `JsonValue<double>(double.NegativeInfinity)` |
+| `"$undefined"` | `undefined` | `JsonValue<JsonElement>` with `ValueKind.Undefined` |
+
+C# numeric adapters read the first three through `VectorCompare.Num`; undefined stays
+distinct from JSON null and can be detected with `GetValue<JsonElement>().ValueKind`.
+Undefined array entries and object keys remain present. Raw fixtures, case metadata and
+expectations stay unchanged; expectations use the existing finite-number/null/string rules.
+Strings such as `"x$NaN"`, `"$Inf"`, `"$Infinity suffix"` and `" $undefined"` stay strings.
+Exact sentinel spellings are reserved in arguments; there is no substring replacement.
+Fixture references inside fixtures remain data and are not expanded recursively.
 
 ### Throws
 
@@ -71,7 +91,7 @@ Loading throws (it never skips) when:
 
 - the file is not valid JSON (this includes literals like `NaN` / `Infinity`);
 - any number in the file is non-finite (JSON allows `1e400`, which parses to `Infinity`) —
-  `NaN`/`Infinity` are forbidden everywhere in the format;
+  raw non-finite numbers are forbidden everywhere (the string sentinels below are valid);
 - `format` is not `anima-test-vectors/1`, `source` is missing, `cases` is empty;
 - a case lacks `label`, `fn`, `args` (array) or `expect`, has a duplicate label, a bad `eps`,
   a malformed `$throws`, or a fixture reference that does not resolve.
@@ -502,3 +522,46 @@ production functions and convert shapes; they contain no expected-value tables.
 New-file C# consumers arrive with E4 porting tasks. The existing scatter C#
 dispatch adds only the already-ported `WantedCells`, `InstanceHash`, `OccupyR`
 and `SeedEpochSuffix` functions. `scatter.json` also pins both JS sway ties.
+
+## Travel and residency (Task 41, E6-T1)
+
+| File | Canonical source | Cases |
+|---|---|---:|
+| `travel.json` | `client3d/scripts/smoke_travel_math.mjs` | 134 |
+| `residency.json` | `client3d/scripts/smoke_residency_gen.mjs` | 18 |
+
+The travel source collects the reckon and relief/densify hand derivations in its opening
+docstring and runs every case. `smoke_travel_reckon.mjs` consumes the two dead-reckoning
+functions; `smoke_relief_math.mjs` consumes `[15]` (full densified point arrays and its
+midpoint). Their frame/ground integration checks remain inline. Source-import and copy
+identity guards remain in the canonical smoke. `travelVectorDispatch.mjs` transpiles the
+production import-free `travelPath.ts`; its only state adapter is
+`errWindowMax(samples, nowMs) -> number`, with samples `[[tMs, err], ...]` pushed in order
+through the production error-window functions. All other function names call production
+directly, using XZ point pairs, metres, real seconds, and monotonic milliseconds for ages
+and error-window stamps. No live server tables or world content are read.
+
+Residency is asynchronous and uses `residencyScenario(kind, steps)` in
+`residencyVectorDispatch.mjs`. The source smoke awaits each case and compares through
+`near` after `resolveArgs`; unknown function/operation names fail. `kind` is `"driver"`
+or `"library"`. Each step is an array of op tuples and yields one state snapshot. There is
+no implicit flush: `['flush']` drains microtasks; `['settled',id]` awaits lifecycle work.
+Op tuples (optional arguments shown with `?`):
+
+- Driver: `['want',id,version,ring,priority?]`, `['rebuild',id,version]`, `['drop',id]`,
+  `['gate',name]` (block the next up), `['release',name]`, `['fail']` (fail the next up),
+  `['retry']` (fire the first fake timer), `['watch',id]` (count resolved settled waiters).
+- Library: `['sweep',handle,ids]`, `['request',handle,id]`, `['forget',id]`,
+  `['reply',fetchIndex,signature]`, `['await',handle]`, `['samePromise',handleA,handleB]`.
+
+Driver snapshots expose `rings`, `targets`, `jobs` (maps by id), incremental `calls`
+(`['up'|'down',id,version,fromRing]`), `live` (`[[id,version],...]`), cumulative `max`
+concurrency/`rollback`/`resolved`, and pending timer delays. Library snapshots expose all
+requested `pending` ids, published `events`, cache signatures/null by id, and promise
+`results`. Expectations select keys but compare call order/array length exactly. The 18
+scenarios include the original 13 driver/queue/retry cases and five SceneLibrary epoch/
+dedup cases; renderer pins and real fetch/mount rollback stay integration checks in the
+source smoke. A blocked scenario fails after one second instead of hanging.
+
+C# travel/residency consumers arrive with Tasks 42/44. Task 41 changes only the common
+C# sentinel loader and its test; it adds no travel/residency C# test classes.

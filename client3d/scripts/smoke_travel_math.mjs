@@ -1,5 +1,18 @@
 #!/usr/bin/env node
 /**
+ * Canonical derivations for travel.json (metres, real seconds, monotonic ms).
+ * [1] advanceAlongPaces; [2] ageAtReceiptS; [3] stepShown; [4] rates/thresholds;
+ * [5] adoptTarget; [6] errWindowMax. Their hand calculations follow.
+ * [7] lengths; [8] points; [9] clamps; [10] catch-up; [11] buckets;
+ * [12] remaining points are derived in the named sections below.
+ * [13] deadReckonRate and [14] deadReckonStep: merged reckon header below.
+ * [15] densifyPolyline: merged relief [6] header below (full points, not
+ * only lengths/projections). Missing input yields []; a duplicate-only line
+ * has total zero and keeps both copies of (2,3). Thirds are 10/3 and 20/3 on each 10 m leg;
+ * the capped 100 m route has endpoints and every multiple of 10 m.
+ * [9] Additional clamps: -Infinity is before zero; undefined and a string
+ * are non-numbers, so all three become zero.
+ *
  * Task 3 hand calculations, in metres and real seconds:
  * L lengths 30,40 at 1,.5: from 28, 2 s reaches 30, 2 s adds 1 => 31.
  * From 69, 10 s clamps to 70. Null first segment crosses 30 instantly,
@@ -200,221 +213,158 @@
  *               -> [(4,0), (10,0)]   — the duplicate start is trimmed away
  *               with everything else behind the walker
  * On (S) = [[7,-2]] any d -> [(7,-2)]; on [] -> [].
+ *
+ * --- Merged source: smoke_travel_reckon.mjs ([13], [14]) -------------------
+
+ * Smoke check for the DEAD RECKONING of a fogged traveller (plan-npc-leben-bugs,
+ * task 3) — `deadReckonRate` and `deadReckonStep` in
+ * `client3d/src/scene/travelPath.ts`.
+ *
+ * Usage:  node client3d/scripts/smoke_travel_reckon.mjs
+ *
+ * Same discipline as `client3d/scripts/smoke_travel_math.mjs` and
+ * `smoke_walk_math.mjs`: every expected number below is derived BY HAND from
+ * the rule, written out in this header, and NEVER recorded from the current
+ * output. A check that only pins today's result proves nothing.
+ *
+ * `travelPath.ts` has NO import at all — not even a type-only one — so a plain
+ * esbuild transpile loads it here without a bundler, a DOM or three.
+ *
+ * ===========================================================================
+ * WHY THE CLIENT MEASURES INSTEAD OF ASKING
+ * ===========================================================================
+ * Under fog the worldmap deliberately thins a FOREIGN traveller's row down to
+ * its `pos` (decision `77dbdb61`): `waypoints`, `progress_m`, `total_m`,
+ * `speed_m_s_real` and `pace_m_s_real` are all null, because neither the goal
+ * nor the speed of someone else's journey is the avatar's to know. That
+ * decision stands, so the client may not ask for the missing numbers — it can
+ * only DERIVE the one it needs from what it already sees.
+ *
+ * What it sees is a fresh `pos` every worldmap poll (`WORLDMAP_POLL_MS` =
+ * 3000 ms, `main.ts`). Two consecutive polled points and the real time between
+ * them are a speed:
+ *
+ *     rate [m/s] = |cur - prev| / (t_cur - t_prev)
+ *
+ * and the figure walks at that rate — scaled by the pace of the ground it
+ * stands on (`walk.terrainPace`, the same helper the avatar uses) and capped
+ * by what is still left to the polled point, so it can never overshoot the
+ * only position the server actually vouched for.
+ *
+ * WHAT THIS REPLACES, and why the old numbers were wrong:
+ *   the generic catch-up branch of `npcs.ts` walked such a figure at
+ *   `WALK_SPEED (3.4) * dt * pace (1) * (dist > RUN_DISTANCE (6) ? 1.8 : 1)`
+ *   — up to 6.12 m/s. A wanderer's real pace is `game.travel_speed_m_s`
+ *   (default 1.4 m/s) times the terrain factor, so at ~2 m/s a 3.0 s poll gap
+ *   is 6.0 m — EXACTLY the run threshold. The figure therefore sprinted the
+ *   whole gap in about one second and stood for two: sprint, pause, sprint.
+ *
+ * ===========================================================================
+ * deadReckonRate(prev, prevAtS, cur, atS) -> m/s | null
+ * ===========================================================================
+ * `prevAtS`/`atS` are REAL seconds (the caller hands in `performance.now()`
+ * over 1000, taken when the payload stamp changed — `npcs.update()` runs at
+ * 1 Hz off the CACHED map, so the same poll is seen three times and only the
+ * stamp says which sighting is a new one).
+ *
+ * (A) THE PLAN'S CASE — polls 3.0 s apart, the figure 6.0 m further on:
+ *       prev = (0,0) at t = 0, cur = (6,0) at t = 3
+ *       gap  = sqrt(6^2 + 0^2) = 6
+ *       rate = 6 / 3 = 2 m/s
+ * (B) A DIAGONAL, so nothing passes by only ever moving on an axis:
+ *       prev = (10,10) at t = 12.0, cur = (13,14) at t = 14.5
+ *       gap  = sqrt(3^2 + 4^2) = 5      (the 3-4-5 triangle)
+ *       rate = 5 / 2.5 = 2 m/s
+ * (C) A SLOW ground — the same 3.0 s, but only 4.2 m of it:
+ *       rate = 4.2 / 3 = 1.4 m/s        (the demo's `travel_speed_m_s`)
+ * (D) NO HISTORY (the first sighting of a traveller): prev is null
+ *       -> null, and null is what the caller falls back on.
+ * (E) A DUPLICATE POLL — the same instant twice, which is what a repeated
+ *     payload would look like if the stamp guard ever failed:
+ *       t_cur - t_prev = 0  -> null, NEVER 6/0 = Infinity. The caller keeps
+ *       the rate it already had, so the figure walks on at the last measure.
+ *     Time running BACKWARDS (a clock reset) is the same answer.
+ * (F) A FIGURE THAT DID NOT MOVE between two polls:
+ *       gap 0 over 3.0 s -> rate 0, a HONEST measure and not null: the figure
+ *       stands until the next poll says otherwise.
+ * (G) NONSENSE IN, null OUT: a NaN coordinate or a NaN stamp gives null
+ *     rather than a NaN rate — one NaN in the step and the figure is gone
+ *     from the picture without a word.
+ *
+ * ===========================================================================
+ * deadReckonStep(rate, pace, dt, remainingM) -> metres
+ * ===========================================================================
+ *     step = min(remainingM, rate * pace * dt)
+ *
+ * THERE IS NO RUN FACTOR IN IT — that is the whole point. The old branch
+ * multiplied by 1.8 as soon as the goal was further than 6 m away, and 6 m is
+ * exactly one poll gap.
+ *
+ * (H) THE PLAN'S FRAME — rate 2.0 m/s, terrain pace 0.7, dt = 1/60 s, with
+ *     more than a step still to go:
+ *       2.0 * 0.7 = 1.4 m/s
+ *       1.4 / 60  = 0.023333333333333334 m
+ * (I) THE SAME FRAME ON PLAIN GROUND (pace 1): 2.0 / 60 = 0.03333333333333333
+ * (J) NO BOOST: the goal 100 m away — sixteen times `RUN_DISTANCE` — over a
+ *     full second still walks `2.0 * 1 * 1 = 2.0` m and not `3.4 * 1.8 = 6.12`.
+ * (K) THE CAP IS THE REMAINING DISTANCE: rate 2.0, pace 1, dt 1 s, 0.5 m left
+ *       -> 0.5, never past the point the server vouched for.
+ * (L) NOTHING LEFT (0 m, a negative rest, a NaN rest) -> 0.
+ * (M) A PACE THAT IS NOT A PACE (0, negative, NaN, missing) counts as 1 — the
+ *     ground rule already clamps a real pace at `walk.MIN_PACE` = 0.25, so
+ *     anything outside is a broken lookup and must not stop the figure dead.
+ * (N) NO RATE (null — the first sighting), a zero or negative rate, dt 0:
+ *       -> 0. The caller's fallback for "no rate yet" is the plain walk
+ *       WITHOUT the boost, and that lives in `npcs.ts`, not here.
+ *
+ * ===========================================================================
+ * (O) THREE SECONDS OF FRAMES — the regression, stated as a walk
+ * ===========================================================================
+ * The measured rate of case (A) is 2.0 m/s and the polled point is 6.0 m
+ * ahead. Walking 60 fps frames at pace 1:
+ *   - after 60 frames (1.0 s) the figure has covered 60 * (2/60) = 2.0 m and
+ *     is NOT standing at the goal — the old 6.12 m/s would have been there
+ *     after 0.98 s;
+ *   - after 180 frames (3.0 s) it has covered exactly 6.0 m: it arrives as the
+ *     next poll lands, which is what "no pause" means.
+ * Floating point adds up over 180 additions, so the sum is compared at 1e-9.
+
+ *
+ * --- Merged source: smoke_relief_math.mjs [6] ([15]) ----------------------
+ * [6] `densifyPolyline` — a drawn line that follows the ground
+ * ============================================================================
+ * (a) The journey above with spacing 4: the single 8 m segment is cut into
+ *     ceil(8/4) = 2 pieces -> 3 points (-4, 0), (0, 0), (4, 0), and their
+ *     heights are 0, 5, 0 — the line goes OVER the peak instead of through it.
+ * (b) Spacing 2 -> 4 pieces -> 5 points at x = -4, -2, 0, 2, 4.
+ * (c) CORNERS SURVIVE. (0,0) -> (10,0) -> (10,10) at spacing 4: each 10 m leg
+ *     becomes ceil(10/4) = 3 pieces, so the inserted points sit at 10/3 and
+ *     20/3 along it and both original corners are still in the list:
+ *     1 + 3 + 3 = 7 points, the 4th of them the corner (10, 0).
+ * (d) THE CAP DECIDES FIRST. (0,0) -> (100,0) with spacing 1 but at most 11
+ *     points: the spacing is stretched to 100/(11-1) = 10, giving 11 points
+ *     ten metres apart.
+ * (e) A line of fewer than two points, and a spacing of 0, are handed back
+ *     unchanged.
+
  */
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+import { travelDispatch } from './travelVectorDispatch.mjs';
 
-const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
-const SRC = join(ROOT, 'client3d/src/scene/travelPath.ts');
-
-async function loadTravelPath() {
-  const esbuild = await import('esbuild');
-  const dir = await mkdtemp(join(tmpdir(), 'travelmath-'));
-  try {
-    const source = await readFile(SRC, 'utf8');
-    const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
-    const file = join(dir, 'travelPath.mjs');
-    await writeFile(file, out.code, 'utf8');
-    return await import(`file://${file}`);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
-let failed = 0;
-let passed = 0;
-function check(label, actual, expected, eps = 1e-9) {
-  const ok = compare(actual, expected, eps);
-  if (ok) {
-    passed += 1;
-    console.log(`  ok   ${label}`);
-  } else {
-    failed += 1;
-    console.log(`  FAIL ${label}\n       expected ${JSON.stringify(expected)}`
-      + `\n       actual   ${JSON.stringify(actual)}`);
-  }
-}
-function compare(a, b, eps) {
-  if (a === null || b === null) return a === b;
-  if (typeof b === 'number') return typeof a === 'number' && Math.abs(a - b) <= eps;
-  if (Array.isArray(b)) {
-    return Array.isArray(a) && a.length === b.length
-      && b.every((v, i) => compare(a[i], v, eps));
-  }
-  if (b && typeof b === 'object') {
-    return a && typeof a === 'object'
-      && Object.keys(a).length === Object.keys(b).length
-      && Object.keys(b).every((key) => compare(a[key], b[key], eps));
-  }
-  return a === b;
-}
-
-// The polylines of the header, once, so every check reads against the same
-// geometry the derivation above is written for.
-const P = [[0, 0], [10, 0], [10, 20]];
-const Q = [[0, 0], [3, 4]];
-const R = [[0, 0], [3, 4], [-3, 4]];
-const D = [[0, 0], [0, 0], [10, 0]];
-const S = [[7, -2]];
-
-async function main() {
-  const t = await loadTravelPath();
-  {
-    const L = [[0,0],[30,0],[70,0]], P = [1.0, 0.5];
-    check('adv cross',      t.advanceAlongPaces(L, P, 28, 4), 31.0);
-    check('adv clamp',      t.advanceAlongPaces(L, P, 69, 10), 70.0);
-    check('adv null seg',   t.advanceAlongPaces(L, [null, 0.5], 0, 2), 31.0);
-    check('adv paces null', t.advanceAlongPaces(L, null, 12, 5), 12);
-    check('adv zero-length seg', t.advanceAlongPaces([[0,0],[30,0],[30,0],[70,0]], [1, 1, 0.5], 29, 3), 31.0);
-    // timeless segments are crossed even when the time budget is exactly used up (plan review 8):
-    const T = [[0,0],[30,0],[60,0]];
-    check('adv timeless after budget', t.advanceAlongPaces(T, [1, null], 0, 30), 60);
-    check('adv timeless at dt 0',      t.advanceAlongPaces(T, [1, null], 30, 0), 60);
-    check('adv dt 0 timed',            t.advanceAlongPaces(T, [1, 1], 10, 0), 10);
-    check('age',       t.ageAtReceiptS({clock_age_ms: 300, build_ms: 200}, {polledAt: 0, headersAt: 500, parsedAt: 540}), 0.49);
-    check('age net 0', t.ageAtReceiptS({clock_age_ms: 300, build_ms: 200}, {polledAt: 0, headersAt: 150, parsedAt: 190}), 0.34);
-    const S = [[0,0],[100,0]];
-    check('even',  t.stepShown(S, [1.0], 10.0, 10.0, 0.1), 10.1);
-    check('ahead', t.stepShown(S, [1.0], 11.5, 10.0, 0.1), 11.5);          // gap afterwards 1.4
-    check('cross', t.stepShown(L, P, 29.9, 30.5, 0.2), 30.149698, 1e-6);
-    check('freeze catch-up', t.stepShown(S, null, 19, 20, 0.1), 19.0951626, 1e-6);
-    check('freeze ahead',    t.stepShown(S, null, 21, 20, 0.1), 21);
-    check('long_dt', t.stepShown(S, [1.0], 98, 99, 5), 100);              // Review focus 3
-    check('snap 1.4', t.hardSnapM(1.4), 6); check('snap 4', t.hardSnapM(4), 8); check('snap null', t.hardSnapM(null), 6);
-    check('rateAt seg2', t.rateAt(L, P, 31), 0.5);
-    // adoption on a NEW payload (plan review 10): the snap decision itself
-    check('adopt none', t.adoptTarget(40, 45, 1.4), { shownM: 40, snap: 'none' });   // |5| <= 6
-    check('adopt fwd',  t.adoptTarget(40, 47, 1.4), { shownM: 47, snap: 'fwd' });    // 7 > 6
-    check('adopt back', t.adoptTarget(50, 40, 1.4), { shownM: 40, snap: 'back' });   // |-10| > 6
-    check('adopt fast', t.adoptTarget(40, 47, 4),   { shownM: 40, snap: 'none' });   // 7 <= 8
-    // Review focus 3 (pause/tab switch): a stale payload 5 s behind a figure that ran on
-    check('adopt after pause', t.adoptTarget(60, 52, 1.4), { shownM: 52, snap: 'back' });
-    // the 30-s maximum is over the LAST 30 s, not a fixed window (plan review 10)
-    const w = t.createErrWindow();
-    t.pushErr(w, 0, 0.8); t.pushErr(w, 10_000, 0.3); t.pushErr(w, 29_000, 0.2);
-    check('err max inside', t.maxErr(w, 29_500), 0.8);
-    check('err max slid',   t.maxErr(w, 30_500), 0.3);    // the 0.8 at t=0 is older than 30 s
-    check('err max empty',  t.maxErr(t.createErrWindow(), 0), 0);
-    const w2 = t.createErrWindow(); t.pushErr(w2, 999, 0.9);
-    check('err max keeps 29.001 s', t.maxErr(w2, 30_000), 0.9);   // plan review R2-3
-    check('err max expires',        t.maxErr(w2, 31_000), 0);
-    }
-  const { polylineLength, pointAtDistance, clampProgress,
-          catchUpStep,
-          trimBucket, remainingPoints, TRIM_BUCKET_M } = t;
-  // What `npcs.ts` hands in as its walking pace; kept as a literal because
-  // this module is pure and must not import the figure code.
-  const WALK = 3.4;
-
-  console.log('polylineLength — the sum of the segment lengths, in metres');
-  check('(P) 10 + 20', polylineLength(P), 30);
-  check('(Q) the 3-4-5 diagonal', polylineLength(Q), 5);
-  check('(R) 5 + 6', polylineLength(R), 11);
-  check('(D) a duplicate point adds nothing', polylineLength(D), 10);
-  check('(S) one point is no way at all', polylineLength(S), 0);
-  check('no points either', polylineLength([]), 0);
-  check('a missing polyline is 0, not a throw', polylineLength(null), 0);
-
-  console.log('\npointAtDistance on (P) — the § A11 walk');
-  check('d = 0 is the start', pointAtDistance(P, 0), [0, 0]);
-  check('d = 5 is halfway along the first leg', pointAtDistance(P, 5), [5, 0]);
-  check('d = 10 lands exactly on the corner', pointAtDistance(P, 10), [10, 0]);
-  check('d = 15 is a quarter up the second leg', pointAtDistance(P, 15), [10, 5]);
-  check('d = 22.5 is five eighths up it', pointAtDistance(P, 22.5), [10, 12.5]);
-  check('d = 30 is the end', pointAtDistance(P, 30), [10, 20]);
-  check('d = 42 cannot go past the end', pointAtDistance(P, 42), [10, 20]);
-  check('d = -3 cannot go before the start', pointAtDistance(P, -3), [0, 0]);
-  check('a NaN distance is treated as 0, never as a NaN point',
-    pointAtDistance(P, NaN), [0, 0]);
-
-  console.log('\npointAtDistance on the other shapes');
-  check('(Q) halfway down the diagonal', pointAtDistance(Q, 2.5), [1.5, 2]);
-  check('(Q) one metre along it', pointAtDistance(Q, 1), [0.6, 0.8]);
-  check('(R) exactly on the corner', pointAtDistance(R, 5), [3, 4]);
-  check('(R) three metres past it', pointAtDistance(R, 8), [0, 4]);
-  check('(R) the far end', pointAtDistance(R, 11), [-3, 4]);
-  check('(D) a zero-length segment does not make a NaN',
-    pointAtDistance(D, 0), [0, 0]);
-  check('(D) …and does not eat any distance either',
-    pointAtDistance(D, 4), [4, 0]);
-  check('(S) a one-point line is that point', pointAtDistance(S, 0), [7, -2]);
-  check('(S) …at any distance', pointAtDistance(S, 99), [7, -2]);
-  check('an empty polyline has no point', pointAtDistance([], 3), null);
-  check('and neither has a missing one', pointAtDistance(null, 3), null);
-
-  console.log('\nclampProgress — nothing outside the line, and never a NaN');
-  check('inside stays put', clampProgress(5, 30), 5);
-  check('below zero is the start', clampProgress(-4, 30), 0);
-  check('past the end is the end', clampProgress(41, 30), 30);
-  check('NaN is the start', clampProgress(NaN, 30), 0);
-  check('Infinity is the end', clampProgress(Infinity, 30), 30);
-  check('a zero-length line has only 0', clampProgress(5, 0), 0);
-
-  console.log('\ncatchUpStep — the walk towards the interpolated point');
-  check('a frozen journey still walks its correction off',
-    catchUpStep(10, null, 1, WALK), 3.4);
-  check('a journey slower than a walk does not slow the correction',
-    catchUpStep(10, 2, 1, WALK), 3.4);
-  check('1.4 m/s at time factor 4: the journey pace wins',
-    catchUpStep(10, 5.6, 1, WALK), 5.6);
-  check('…and it scales with dt like everything else',
-    catchUpStep(10, 5.6, 0.5, WALK), 2.8);
-  check('never past the point it corrects towards',
-    catchUpStep(1, 5.6, 1, WALK), 1);
-  check('a negative rate is junk, the walk stands',
-    catchUpStep(10, -5, 1, WALK), 3.4);
-  check('nothing to correct, no step', catchUpStep(0, 5.6, 1, WALK), 0);
-  check('no time passed, no step', catchUpStep(10, 5.6, 0, WALK), 0);
-  check('a NaN distance moves nothing', catchUpStep(NaN, 5.6, 1, WALK), 0);
-  // The regression this exists for, stated as the inequality it is: at the
-  // demo pace of 1.4 m/s the figure keeps up until the time factor pushes the
-  // journey past a walk, and from there the step must FOLLOW the journey.
-  check('below factor 3.4/1.4 the walk is still the bound',
-    catchUpStep(10, 1.4 * 2, 1, WALK), 3.4);
-  check('above it the journey pace is', catchUpStep(10, 1.4 * 3, 1, WALK), 4.2);
-
-  console.log('\ntrimBucket — the five metres a redrawn travel line costs');
-  check('the bucket is five metres', TRIM_BUCKET_M, 5);
-  check('nothing walked yet', trimBucket(0), 0);
-  check('just short of the first bucket', trimBucket(4.99), 0);
-  check('exactly on it', trimBucket(5), 1);
-  check('seven metres in', trimBucket(7), 1);
-  check('...and still at 9.99', trimBucket(9.99), 1);
-  check('ten metres is the next', trimBucket(10), 2);
-  check('a negative progress trims nothing', trimBucket(-3), 0);
-  check('...and neither does a NaN one', trimBucket(NaN), 0);
-
-  console.log('\nremainingPoints — the line ahead of the walker, nothing behind');
-  check('nothing walked: the whole line', remainingPoints(P, 0),
-    [[0, 0], [10, 0], [10, 20]]);
-  check('7 m in: the foot point, then the rest', remainingPoints(P, 7),
-    [[7, 0], [10, 0], [10, 20]]);
-  check('exactly on the corner: it is NOT repeated', remainingPoints(P, 10),
-    [[10, 0], [10, 20]]);
-  check('a quarter up the second leg', remainingPoints(P, 15), [[10, 5], [10, 20]]);
-  check('arrived: one point, so `npcs.ts` draws no line', remainingPoints(P, 30),
-    [[10, 20]]);
-  check('past the end clamps to the same', remainingPoints(P, 42), [[10, 20]]);
-  check('before the start clamps to the whole line', remainingPoints(P, -3),
-    [[0, 0], [10, 0], [10, 20]]);
-  check('the collapsed pair is skipped, not lerped', remainingPoints(D, 4),
-    [[4, 0], [10, 0]]);
-  check('a one-point journey stays one point', remainingPoints(S, 3), [[7, -2]]);
-  check('no line at all', remainingPoints([], 5), []);
-  check('...and none for a missing one', remainingPoints(null, 5), []);
-  // The trim must not alias the payload: `npcs.ts` builds Vector3s from these
-  // and the route keeps running on its own points.
-  const kept = remainingPoints(P, 15);
-  kept[1][0] = 999;
-  check('the tail is COPIED out of the polyline', P[2][0], 10);
-
-  console.log(`\n${passed} ok, ${failed} failed`);
-  process.exit(failed ? 1 : 0);
-}
-
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// Canonical consumer executes every shared travel case, including reckon/densify.
+const { passed, failed } = runVectors(loadVectors('travel'), travelDispatch);
+// Source/identity guards are intentionally not portable vector expectations.
+const source = await readFile(new URL('../src/scene/travelPath.ts', import.meta.url), 'utf8');
+const points = [[0, 0], [10, 0], [10, 20]];
+const tail = travelDispatch.remainingPoints(points, 15);
+tail[1][0] = 999;
+const guards = [
+  ['module has no imports', !/^\s*import\b/m.test(source)],
+  ['the tail is COPIED out of the polyline', points[2][0] === 10],
+  ['the bucket is five metres', travelDispatch.TRIM_BUCKET_M === 5],
+];
+for (const [label, ok] of guards) console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${label}`);
+const bad = guards.filter(([, ok]) => !ok).length;
+console.log(`\n${passed + guards.length - bad} ok, ${failed + bad} failed`);
+process.exit(failed + bad ? 1 : 0);

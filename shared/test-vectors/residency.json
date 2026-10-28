@@ -1,0 +1,1762 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_residency_gen.mjs",
+  "cases": [
+    {
+      "label": "[1] up_down",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "want",
+              "X",
+              1,
+              "near"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ],
+          [
+            [
+              "want",
+              "X",
+              1,
+              "gone"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "rings": {
+            "X": "near"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ],
+            [
+              "up",
+              "X",
+              1,
+              "far"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              1
+            ]
+          ],
+          "rollback": 0,
+          "timers": []
+        },
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "down",
+              "X",
+              1,
+              "near"
+            ],
+            [
+              "down",
+              "X",
+              1,
+              "far"
+            ]
+          ],
+          "live": [],
+          "rollback": 0,
+          "timers": []
+        }
+      ]
+    },
+    {
+      "label": "[2] retarget_mid_await",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "gate",
+              "g"
+            ],
+            [
+              "want",
+              "X",
+              1,
+              "near"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "want",
+              "X",
+              1,
+              "gone"
+            ],
+            [
+              "release",
+              "g"
+            ],
+            [
+              "flush"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": true
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ]
+          ],
+          "live": [],
+          "rollback": 0,
+          "timers": []
+        },
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [],
+          "live": [],
+          "rollback": 1,
+          "timers": []
+        }
+      ]
+    },
+    {
+      "label": "[3] flip_flop",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "gate",
+              "g"
+            ],
+            [
+              "want",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "want",
+              "X",
+              1,
+              "gone"
+            ],
+            [
+              "want",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "release",
+              "g"
+            ],
+            [
+              "flush"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": true
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ]
+          ],
+          "live": [],
+          "rollback": 0,
+          "timers": []
+        },
+        {
+          "rings": {
+            "X": "far"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              1
+            ]
+          ],
+          "rollback": 1,
+          "timers": []
+        }
+      ]
+    },
+    {
+      "label": "[4] rebuild_during_shell",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "gate",
+              "g"
+            ],
+            [
+              "want",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "rebuild",
+              "X",
+              2
+            ],
+            [
+              "release",
+              "g"
+            ],
+            [
+              "flush"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": true
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ]
+          ],
+          "live": [],
+          "rollback": 0,
+          "timers": []
+        },
+        {
+          "rings": {
+            "X": "far"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              2,
+              "gone"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              2
+            ]
+          ],
+          "rollback": 1,
+          "timers": []
+        }
+      ]
+    },
+    {
+      "label": "[5] rebuild_at_near",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "want",
+              "X",
+              1,
+              "near"
+            ]
+          ],
+          [
+            [
+              "settled",
+              "X"
+            ]
+          ],
+          [
+            [
+              "gate",
+              "g"
+            ],
+            [
+              "rebuild",
+              "X",
+              2
+            ],
+            [
+              "watch",
+              "X"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "release",
+              "g"
+            ],
+            [
+              "flush"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "jobs": {
+            "X": true
+          }
+        },
+        {
+          "rings": {
+            "X": "near"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ],
+            [
+              "up",
+              "X",
+              1,
+              "far"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              1
+            ]
+          ],
+          "rollback": 0,
+          "timers": []
+        },
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": true
+          },
+          "calls": [
+            [
+              "down",
+              "X",
+              1,
+              "near"
+            ],
+            [
+              "down",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "up",
+              "X",
+              2,
+              "gone"
+            ]
+          ],
+          "live": [],
+          "rollback": 0,
+          "timers": [],
+          "resolved": 0
+        },
+        {
+          "rings": {
+            "X": "near"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              2,
+              "far"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              2
+            ]
+          ],
+          "rollback": 0,
+          "timers": [],
+          "resolved": 1
+        }
+      ]
+    },
+    {
+      "label": "[6] drop_during_fetch",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "gate",
+              "g"
+            ],
+            [
+              "want",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "drop",
+              "X"
+            ],
+            [
+              "release",
+              "g"
+            ],
+            [
+              "flush"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": true
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ]
+          ],
+          "live": [],
+          "rollback": 0,
+          "timers": []
+        },
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [],
+          "live": [],
+          "rollback": 1,
+          "timers": []
+        }
+      ]
+    },
+    {
+      "label": "[7] drop_during_mount",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "gate",
+              "g"
+            ],
+            [
+              "want",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "drop",
+              "X"
+            ],
+            [
+              "release",
+              "g"
+            ],
+            [
+              "flush"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": true
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ]
+          ],
+          "live": [],
+          "rollback": 0,
+          "timers": []
+        },
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [],
+          "live": [],
+          "rollback": 1,
+          "timers": []
+        }
+      ]
+    },
+    {
+      "label": "[8] rediscover_after_drop",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "gate",
+              "g"
+            ],
+            [
+              "want",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "drop",
+              "X"
+            ],
+            [
+              "want",
+              "X",
+              2,
+              "far"
+            ],
+            [
+              "release",
+              "g"
+            ],
+            [
+              "flush"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": true
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ]
+          ],
+          "live": [],
+          "rollback": 0,
+          "timers": []
+        },
+        {
+          "rings": {
+            "X": "far"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              2,
+              "gone"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              2
+            ]
+          ],
+          "rollback": 1,
+          "timers": []
+        }
+      ]
+    },
+    {
+      "label": "[9] settled_waits_rebuild",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "want",
+              "X",
+              1,
+              "near"
+            ]
+          ],
+          [
+            [
+              "settled",
+              "X"
+            ]
+          ],
+          [
+            [
+              "gate",
+              "g"
+            ],
+            [
+              "rebuild",
+              "X",
+              2
+            ],
+            [
+              "watch",
+              "X"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "release",
+              "g"
+            ],
+            [
+              "flush"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "jobs": {
+            "X": true
+          }
+        },
+        {
+          "rings": {
+            "X": "near"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ],
+            [
+              "up",
+              "X",
+              1,
+              "far"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              1
+            ]
+          ],
+          "rollback": 0,
+          "timers": []
+        },
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": true
+          },
+          "calls": [
+            [
+              "down",
+              "X",
+              1,
+              "near"
+            ],
+            [
+              "down",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "up",
+              "X",
+              2,
+              "gone"
+            ]
+          ],
+          "live": [],
+          "rollback": 0,
+          "timers": [],
+          "resolved": 0
+        },
+        {
+          "rings": {
+            "X": "near"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              2,
+              "far"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              2
+            ]
+          ],
+          "rollback": 0,
+          "timers": [],
+          "resolved": 1
+        }
+      ]
+    },
+    {
+      "label": "[10] hasJob",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "want",
+              "X",
+              1,
+              "near"
+            ]
+          ],
+          [
+            [
+              "settled",
+              "X"
+            ]
+          ],
+          [
+            [
+              "gate",
+              "g"
+            ],
+            [
+              "rebuild",
+              "X",
+              2
+            ],
+            [
+              "watch",
+              "X"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "release",
+              "g"
+            ],
+            [
+              "flush"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "jobs": {
+            "X": true
+          }
+        },
+        {
+          "rings": {
+            "X": "near"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ],
+            [
+              "up",
+              "X",
+              1,
+              "far"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              1
+            ]
+          ],
+          "rollback": 0,
+          "timers": []
+        },
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": true
+          },
+          "calls": [
+            [
+              "down",
+              "X",
+              1,
+              "near"
+            ],
+            [
+              "down",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "up",
+              "X",
+              2,
+              "gone"
+            ]
+          ],
+          "live": [],
+          "rollback": 0,
+          "timers": [],
+          "resolved": 0
+        },
+        {
+          "rings": {
+            "X": "near"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              2,
+              "far"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              2
+            ]
+          ],
+          "rollback": 0,
+          "timers": [],
+          "resolved": 1
+        }
+      ]
+    },
+    {
+      "label": "[11] fetch_retry",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "fail"
+            ],
+            [
+              "want",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "retry"
+            ],
+            [
+              "settled",
+              "X"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ]
+          ],
+          "live": [],
+          "timers": [
+            5000
+          ]
+        },
+        {
+          "rings": {
+            "X": "far"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ]
+          ],
+          "live": [
+            [
+              "X",
+              1
+            ]
+          ],
+          "rollback": 0,
+          "timers": []
+        }
+      ]
+    },
+    {
+      "label": "[12] queue_max",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "gate",
+              "a"
+            ],
+            [
+              "want",
+              "0",
+              1,
+              "far",
+              0
+            ],
+            [
+              "gate",
+              "b"
+            ],
+            [
+              "want",
+              "1",
+              1,
+              "far",
+              1
+            ],
+            [
+              "gate",
+              "c"
+            ],
+            [
+              "want",
+              "2",
+              1,
+              "far",
+              2
+            ],
+            [
+              "gate",
+              "d"
+            ],
+            [
+              "want",
+              "3",
+              1,
+              "far",
+              3
+            ],
+            [
+              "gate",
+              "e"
+            ],
+            [
+              "want",
+              "4",
+              1,
+              "far",
+              4
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "release",
+              "a"
+            ],
+            [
+              "release",
+              "b"
+            ],
+            [
+              "release",
+              "c"
+            ],
+            [
+              "release",
+              "d"
+            ],
+            [
+              "release",
+              "e"
+            ],
+            [
+              "settled",
+              "0"
+            ],
+            [
+              "settled",
+              "1"
+            ],
+            [
+              "settled",
+              "2"
+            ],
+            [
+              "settled",
+              "3"
+            ],
+            [
+              "settled",
+              "4"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "max": 2,
+          "calls": [
+            [
+              "up",
+              "0",
+              1,
+              "gone"
+            ],
+            [
+              "up",
+              "1",
+              1,
+              "gone"
+            ]
+          ],
+          "live": []
+        },
+        {
+          "max": 2,
+          "calls": [
+            [
+              "up",
+              "2",
+              1,
+              "gone"
+            ],
+            [
+              "up",
+              "3",
+              1,
+              "gone"
+            ],
+            [
+              "up",
+              "4",
+              1,
+              "gone"
+            ]
+          ],
+          "live": [
+            [
+              "0",
+              1
+            ],
+            [
+              "1",
+              1
+            ],
+            [
+              "2",
+              1
+            ],
+            [
+              "3",
+              1
+            ],
+            [
+              "4",
+              1
+            ]
+          ],
+          "timers": [],
+          "jobs": {
+            "0": false,
+            "1": false,
+            "2": false,
+            "3": false,
+            "4": false
+          }
+        }
+      ]
+    },
+    {
+      "label": "[13] cancelled_retry_settled",
+      "fn": "residencyScenario",
+      "args": [
+        "driver",
+        [
+          [
+            [
+              "fail"
+            ],
+            [
+              "want",
+              "X",
+              1,
+              "far"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "watch",
+              "X"
+            ],
+            [
+              "watch",
+              "X"
+            ],
+            [
+              "want",
+              "X",
+              1,
+              "gone"
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "rebuild",
+              "X",
+              2
+            ],
+            [
+              "flush"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "calls": [
+            [
+              "up",
+              "X",
+              1,
+              "gone"
+            ]
+          ],
+          "timers": [
+            5000
+          ]
+        },
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [],
+          "live": [],
+          "rollback": 0,
+          "timers": [],
+          "resolved": 2
+        },
+        {
+          "rings": {
+            "X": "gone"
+          },
+          "jobs": {
+            "X": false
+          },
+          "calls": [],
+          "live": [],
+          "rollback": 0,
+          "timers": [],
+          "resolved": 2
+        }
+      ]
+    },
+    {
+      "label": "[14] sweep_forgotten",
+      "fn": "residencyScenario",
+      "args": [
+        "library",
+        [
+          [
+            [
+              "sweep",
+              "old",
+              [
+                "X"
+              ]
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "forget",
+              "X"
+            ],
+            [
+              "reply",
+              0,
+              "old"
+            ],
+            [
+              "await",
+              "old"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "pending": [
+            "X"
+          ],
+          "events": [],
+          "cache": {
+            "X": null
+          }
+        },
+        {
+          "pending": [
+            "X"
+          ],
+          "events": [],
+          "cache": {
+            "X": null
+          }
+        }
+      ]
+    },
+    {
+      "label": "[15] sweep_forget_unstarted",
+      "fn": "residencyScenario",
+      "args": [
+        "library",
+        [
+          [
+            [
+              "sweep",
+              "old",
+              [
+                "X",
+                "Y"
+              ]
+            ],
+            [
+              "flush"
+            ]
+          ],
+          [
+            [
+              "forget",
+              "Y"
+            ],
+            [
+              "reply",
+              0,
+              "old"
+            ],
+            [
+              "await",
+              "old"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "pending": [
+            "X"
+          ],
+          "events": [],
+          "cache": {
+            "X": null,
+            "Y": null
+          }
+        },
+        {
+          "pending": [
+            "X"
+          ],
+          "events": [
+            "X"
+          ],
+          "cache": {
+            "X": "old",
+            "Y": null
+          }
+        }
+      ]
+    },
+    {
+      "label": "[16] forget_then_request",
+      "fn": "residencyScenario",
+      "args": [
+        "library",
+        [
+          [
+            [
+              "sweep",
+              "old",
+              [
+                "X"
+              ]
+            ],
+            [
+              "flush"
+            ],
+            [
+              "forget",
+              "X"
+            ],
+            [
+              "request",
+              "new",
+              "X"
+            ]
+          ],
+          [
+            [
+              "reply",
+              0,
+              "old"
+            ],
+            [
+              "await",
+              "old"
+            ]
+          ],
+          [
+            [
+              "reply",
+              1,
+              "fresh"
+            ],
+            [
+              "await",
+              "new"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "pending": [
+            "X",
+            "X"
+          ],
+          "events": [],
+          "cache": {
+            "X": null
+          }
+        },
+        {
+          "pending": [
+            "X",
+            "X"
+          ],
+          "events": [],
+          "cache": {
+            "X": null
+          }
+        },
+        {
+          "pending": [
+            "X",
+            "X"
+          ],
+          "events": [
+            "X"
+          ],
+          "cache": {
+            "X": "fresh"
+          },
+          "results": {
+            "new": "fresh"
+          }
+        }
+      ]
+    },
+    {
+      "label": "[17] forget_then_request_reverse",
+      "fn": "residencyScenario",
+      "args": [
+        "library",
+        [
+          [
+            [
+              "sweep",
+              "old",
+              [
+                "X"
+              ]
+            ],
+            [
+              "flush"
+            ],
+            [
+              "forget",
+              "X"
+            ],
+            [
+              "request",
+              "new",
+              "X"
+            ]
+          ],
+          [
+            [
+              "reply",
+              1,
+              "fresh"
+            ],
+            [
+              "await",
+              "new"
+            ]
+          ],
+          [
+            [
+              "reply",
+              0,
+              "old"
+            ],
+            [
+              "await",
+              "old"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "pending": [
+            "X",
+            "X"
+          ],
+          "events": [],
+          "cache": {
+            "X": null
+          }
+        },
+        {
+          "pending": [
+            "X",
+            "X"
+          ],
+          "events": [
+            "X"
+          ],
+          "cache": {
+            "X": "fresh"
+          },
+          "results": {
+            "new": "fresh"
+          }
+        },
+        {
+          "pending": [
+            "X",
+            "X"
+          ],
+          "events": [
+            "X"
+          ],
+          "cache": {
+            "X": "fresh"
+          },
+          "results": {
+            "new": "fresh"
+          }
+        }
+      ]
+    },
+    {
+      "label": "[18] request_dedup",
+      "fn": "residencyScenario",
+      "args": [
+        "library",
+        [
+          [
+            [
+              "request",
+              "a",
+              "X"
+            ],
+            [
+              "request",
+              "b",
+              "X"
+            ],
+            [
+              "samePromise",
+              "a",
+              "b"
+            ]
+          ],
+          [
+            [
+              "reply",
+              0,
+              "new"
+            ],
+            [
+              "await",
+              "a"
+            ],
+            [
+              "await",
+              "b"
+            ]
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "pending": [
+            "X"
+          ],
+          "results": {
+            "samePromise": true
+          },
+          "cache": {
+            "X": null
+          }
+        },
+        {
+          "pending": [
+            "X"
+          ],
+          "events": [
+            "X"
+          ],
+          "results": {
+            "a": "new",
+            "b": "new",
+            "samePromise": true
+          },
+          "cache": {
+            "X": "new"
+          }
+        }
+      ]
+    }
+  ]
+}

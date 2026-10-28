@@ -99,7 +99,17 @@ export function resolveArgs(args, fixtures = {}) {
     }
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]));
   };
-  return walk(args);
+  // Decode after fixture expansion: fixture contents remain data, not references.
+  const decode = (v) => {
+    if (v === '$NaN') return NaN;
+    if (v === '$Infinity') return Infinity;
+    if (v === '$-Infinity') return -Infinity;
+    if (v === '$undefined') return undefined;
+    if (Array.isArray(v)) return v.map(decode);
+    if (isPlainObject(v)) return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, decode(x)]));
+    return v;
+  };
+  return decode(walk(args));
 }
 
 /**

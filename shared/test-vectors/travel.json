@@ -1,0 +1,2039 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_travel_math.mjs",
+  "cases": [
+    {
+      "label": "[1] adv cross",
+      "fn": "advanceAlongPaces",
+      "args": [
+        {
+          "$fixture": "L"
+        },
+        [
+          1,
+          0.5
+        ],
+        28,
+        4
+      ],
+      "expect": 31
+    },
+    {
+      "label": "[1] adv clamp",
+      "fn": "advanceAlongPaces",
+      "args": [
+        {
+          "$fixture": "L"
+        },
+        [
+          1,
+          0.5
+        ],
+        69,
+        10
+      ],
+      "expect": 70
+    },
+    {
+      "label": "[1] adv null seg",
+      "fn": "advanceAlongPaces",
+      "args": [
+        {
+          "$fixture": "L"
+        },
+        [
+          null,
+          0.5
+        ],
+        0,
+        2
+      ],
+      "expect": 31
+    },
+    {
+      "label": "[1] adv paces null",
+      "fn": "advanceAlongPaces",
+      "args": [
+        {
+          "$fixture": "L"
+        },
+        null,
+        12,
+        5
+      ],
+      "expect": 12
+    },
+    {
+      "label": "[1] adv zero-length seg",
+      "fn": "advanceAlongPaces",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            30,
+            0
+          ],
+          [
+            30,
+            0
+          ],
+          [
+            70,
+            0
+          ]
+        ],
+        [
+          1,
+          1,
+          0.5
+        ],
+        29,
+        3
+      ],
+      "expect": 31
+    },
+    {
+      "label": "[1] adv timeless after budget",
+      "fn": "advanceAlongPaces",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            30,
+            0
+          ],
+          [
+            60,
+            0
+          ]
+        ],
+        [
+          1,
+          null
+        ],
+        0,
+        30
+      ],
+      "expect": 60
+    },
+    {
+      "label": "[1] adv timeless at dt 0",
+      "fn": "advanceAlongPaces",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            30,
+            0
+          ],
+          [
+            60,
+            0
+          ]
+        ],
+        [
+          1,
+          null
+        ],
+        30,
+        0
+      ],
+      "expect": 60
+    },
+    {
+      "label": "[1] adv dt 0 timed",
+      "fn": "advanceAlongPaces",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            30,
+            0
+          ],
+          [
+            60,
+            0
+          ]
+        ],
+        [
+          1,
+          1
+        ],
+        10,
+        0
+      ],
+      "expect": 10
+    },
+    {
+      "label": "[2] age",
+      "fn": "ageAtReceiptS",
+      "args": [
+        {
+          "clock_age_ms": 300,
+          "build_ms": 200
+        },
+        {
+          "polledAt": 0,
+          "headersAt": 500,
+          "parsedAt": 540
+        }
+      ],
+      "expect": 0.49
+    },
+    {
+      "label": "[2] age net 0",
+      "fn": "ageAtReceiptS",
+      "args": [
+        {
+          "clock_age_ms": 300,
+          "build_ms": 200
+        },
+        {
+          "polledAt": 0,
+          "headersAt": 150,
+          "parsedAt": 190
+        }
+      ],
+      "expect": 0.34
+    },
+    {
+      "label": "[3] even",
+      "fn": "stepShown",
+      "args": [
+        {
+          "$fixture": "STRAIGHT"
+        },
+        [
+          1
+        ],
+        10,
+        10,
+        0.1
+      ],
+      "expect": 10.1
+    },
+    {
+      "label": "[3] ahead",
+      "fn": "stepShown",
+      "args": [
+        {
+          "$fixture": "STRAIGHT"
+        },
+        [
+          1
+        ],
+        11.5,
+        10,
+        0.1
+      ],
+      "expect": 11.5
+    },
+    {
+      "label": "[3] cross",
+      "fn": "stepShown",
+      "args": [
+        {
+          "$fixture": "L"
+        },
+        [
+          1,
+          0.5
+        ],
+        29.9,
+        30.5,
+        0.2
+      ],
+      "expect": 30.149698,
+      "eps": 1e-06
+    },
+    {
+      "label": "[3] freeze catch-up",
+      "fn": "stepShown",
+      "args": [
+        {
+          "$fixture": "STRAIGHT"
+        },
+        null,
+        19,
+        20,
+        0.1
+      ],
+      "expect": 19.0951626,
+      "eps": 1e-06
+    },
+    {
+      "label": "[3] freeze ahead",
+      "fn": "stepShown",
+      "args": [
+        {
+          "$fixture": "STRAIGHT"
+        },
+        null,
+        21,
+        20,
+        0.1
+      ],
+      "expect": 21
+    },
+    {
+      "label": "[3] long_dt",
+      "fn": "stepShown",
+      "args": [
+        {
+          "$fixture": "STRAIGHT"
+        },
+        [
+          1
+        ],
+        98,
+        99,
+        5
+      ],
+      "expect": 100
+    },
+    {
+      "label": "[4] snap 1.4",
+      "fn": "hardSnapM",
+      "args": [
+        1.4
+      ],
+      "expect": 6
+    },
+    {
+      "label": "[4] snap 4",
+      "fn": "hardSnapM",
+      "args": [
+        4
+      ],
+      "expect": 8
+    },
+    {
+      "label": "[4] snap null",
+      "fn": "hardSnapM",
+      "args": [
+        null
+      ],
+      "expect": 6
+    },
+    {
+      "label": "[4] rateAt seg2",
+      "fn": "rateAt",
+      "args": [
+        {
+          "$fixture": "L"
+        },
+        [
+          1,
+          0.5
+        ],
+        31
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[5] adopt none",
+      "fn": "adoptTarget",
+      "args": [
+        40,
+        45,
+        1.4
+      ],
+      "expect": {
+        "shownM": 40,
+        "snap": "none"
+      }
+    },
+    {
+      "label": "[5] adopt fwd",
+      "fn": "adoptTarget",
+      "args": [
+        40,
+        47,
+        1.4
+      ],
+      "expect": {
+        "shownM": 47,
+        "snap": "fwd"
+      }
+    },
+    {
+      "label": "[5] adopt back",
+      "fn": "adoptTarget",
+      "args": [
+        50,
+        40,
+        1.4
+      ],
+      "expect": {
+        "shownM": 40,
+        "snap": "back"
+      }
+    },
+    {
+      "label": "[5] adopt fast",
+      "fn": "adoptTarget",
+      "args": [
+        40,
+        47,
+        4
+      ],
+      "expect": {
+        "shownM": 40,
+        "snap": "none"
+      }
+    },
+    {
+      "label": "[5] adopt after pause",
+      "fn": "adoptTarget",
+      "args": [
+        60,
+        52,
+        1.4
+      ],
+      "expect": {
+        "shownM": 52,
+        "snap": "back"
+      }
+    },
+    {
+      "label": "[7] (P) 10 + 20",
+      "fn": "polylineLength",
+      "args": [
+        {
+          "$fixture": "P"
+        }
+      ],
+      "expect": 30
+    },
+    {
+      "label": "[7] (Q) the 3-4-5 diagonal",
+      "fn": "polylineLength",
+      "args": [
+        {
+          "$fixture": "Q"
+        }
+      ],
+      "expect": 5
+    },
+    {
+      "label": "[7] (R) 5 + 6",
+      "fn": "polylineLength",
+      "args": [
+        {
+          "$fixture": "R"
+        }
+      ],
+      "expect": 11
+    },
+    {
+      "label": "[7] (D) a duplicate point adds nothing",
+      "fn": "polylineLength",
+      "args": [
+        {
+          "$fixture": "D"
+        }
+      ],
+      "expect": 10
+    },
+    {
+      "label": "[7] (S) one point is no way at all",
+      "fn": "polylineLength",
+      "args": [
+        {
+          "$fixture": "S"
+        }
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[7] no points either",
+      "fn": "polylineLength",
+      "args": [
+        []
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[7] a missing polyline is 0, not a throw",
+      "fn": "polylineLength",
+      "args": [
+        null
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[8] d = 0 is the start",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        0
+      ],
+      "expect": [
+        0,
+        0
+      ]
+    },
+    {
+      "label": "[8] d = 5 is halfway along the first leg",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        5
+      ],
+      "expect": [
+        5,
+        0
+      ]
+    },
+    {
+      "label": "[8] d = 10 lands exactly on the corner",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        10
+      ],
+      "expect": [
+        10,
+        0
+      ]
+    },
+    {
+      "label": "[8] d = 15 is a quarter up the second leg",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        15
+      ],
+      "expect": [
+        10,
+        5
+      ]
+    },
+    {
+      "label": "[8] d = 22.5 is five eighths up it",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        22.5
+      ],
+      "expect": [
+        10,
+        12.5
+      ]
+    },
+    {
+      "label": "[8] d = 30 is the end",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        30
+      ],
+      "expect": [
+        10,
+        20
+      ]
+    },
+    {
+      "label": "[8] d = 42 cannot go past the end",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        42
+      ],
+      "expect": [
+        10,
+        20
+      ]
+    },
+    {
+      "label": "[8] d = -3 cannot go before the start",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        -3
+      ],
+      "expect": [
+        0,
+        0
+      ]
+    },
+    {
+      "label": "[8] a NaN distance is treated as 0, never as a NaN point",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        "$NaN"
+      ],
+      "expect": [
+        0,
+        0
+      ]
+    },
+    {
+      "label": "[8] (Q) halfway down the diagonal",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "Q"
+        },
+        2.5
+      ],
+      "expect": [
+        1.5,
+        2
+      ]
+    },
+    {
+      "label": "[8] (Q) one metre along it",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "Q"
+        },
+        1
+      ],
+      "expect": [
+        0.6,
+        0.8
+      ]
+    },
+    {
+      "label": "[8] (R) exactly on the corner",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "R"
+        },
+        5
+      ],
+      "expect": [
+        3,
+        4
+      ]
+    },
+    {
+      "label": "[8] (R) three metres past it",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "R"
+        },
+        8
+      ],
+      "expect": [
+        0,
+        4
+      ]
+    },
+    {
+      "label": "[8] (R) the far end",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "R"
+        },
+        11
+      ],
+      "expect": [
+        -3,
+        4
+      ]
+    },
+    {
+      "label": "[8] (D) a zero-length segment does not make a NaN",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        0
+      ],
+      "expect": [
+        0,
+        0
+      ]
+    },
+    {
+      "label": "[8] (D) \u2026and does not eat any distance either",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        4
+      ],
+      "expect": [
+        4,
+        0
+      ]
+    },
+    {
+      "label": "[8] (S) a one-point line is that point",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "S"
+        },
+        0
+      ],
+      "expect": [
+        7,
+        -2
+      ]
+    },
+    {
+      "label": "[8] (S) \u2026at any distance",
+      "fn": "pointAtDistance",
+      "args": [
+        {
+          "$fixture": "S"
+        },
+        99
+      ],
+      "expect": [
+        7,
+        -2
+      ]
+    },
+    {
+      "label": "[8] an empty polyline has no point",
+      "fn": "pointAtDistance",
+      "args": [
+        [],
+        3
+      ],
+      "expect": null
+    },
+    {
+      "label": "[8] and neither has a missing one",
+      "fn": "pointAtDistance",
+      "args": [
+        null,
+        3
+      ],
+      "expect": null
+    },
+    {
+      "label": "[9] inside stays put",
+      "fn": "clampProgress",
+      "args": [
+        5,
+        30
+      ],
+      "expect": 5
+    },
+    {
+      "label": "[9] below zero is the start",
+      "fn": "clampProgress",
+      "args": [
+        -4,
+        30
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[9] past the end is the end",
+      "fn": "clampProgress",
+      "args": [
+        41,
+        30
+      ],
+      "expect": 30
+    },
+    {
+      "label": "[9] NaN is the start",
+      "fn": "clampProgress",
+      "args": [
+        "$NaN",
+        30
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[9] Infinity is the end",
+      "fn": "clampProgress",
+      "args": [
+        "$Infinity",
+        30
+      ],
+      "expect": 30
+    },
+    {
+      "label": "[9] a zero-length line has only 0",
+      "fn": "clampProgress",
+      "args": [
+        5,
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[10] a frozen journey still walks its correction off",
+      "fn": "catchUpStep",
+      "args": [
+        10,
+        null,
+        1,
+        3.4
+      ],
+      "expect": 3.4
+    },
+    {
+      "label": "[10] a journey slower than a walk does not slow the correction",
+      "fn": "catchUpStep",
+      "args": [
+        10,
+        2,
+        1,
+        3.4
+      ],
+      "expect": 3.4
+    },
+    {
+      "label": "[10] 1.4 m/s at time factor 4: the journey pace wins",
+      "fn": "catchUpStep",
+      "args": [
+        10,
+        5.6,
+        1,
+        3.4
+      ],
+      "expect": 5.6
+    },
+    {
+      "label": "[10] \u2026and it scales with dt like everything else",
+      "fn": "catchUpStep",
+      "args": [
+        10,
+        5.6,
+        0.5,
+        3.4
+      ],
+      "expect": 2.8
+    },
+    {
+      "label": "[10] never past the point it corrects towards",
+      "fn": "catchUpStep",
+      "args": [
+        1,
+        5.6,
+        1,
+        3.4
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[10] a negative rate is junk, the walk stands",
+      "fn": "catchUpStep",
+      "args": [
+        10,
+        -5,
+        1,
+        3.4
+      ],
+      "expect": 3.4
+    },
+    {
+      "label": "[10] nothing to correct, no step",
+      "fn": "catchUpStep",
+      "args": [
+        0,
+        5.6,
+        1,
+        3.4
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[10] no time passed, no step",
+      "fn": "catchUpStep",
+      "args": [
+        10,
+        5.6,
+        0,
+        3.4
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[10] a NaN distance moves nothing",
+      "fn": "catchUpStep",
+      "args": [
+        "$NaN",
+        5.6,
+        1,
+        3.4
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[10] below factor 3.4/1.4 the walk is still the bound",
+      "fn": "catchUpStep",
+      "args": [
+        10,
+        2.8,
+        1,
+        3.4
+      ],
+      "expect": 3.4
+    },
+    {
+      "label": "[10] above it the journey pace is",
+      "fn": "catchUpStep",
+      "args": [
+        10,
+        4.199999999999999,
+        1,
+        3.4
+      ],
+      "expect": 4.2
+    },
+    {
+      "label": "[11] nothing walked yet",
+      "fn": "trimBucket",
+      "args": [
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[11] just short of the first bucket",
+      "fn": "trimBucket",
+      "args": [
+        4.99
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[11] exactly on it",
+      "fn": "trimBucket",
+      "args": [
+        5
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[11] seven metres in",
+      "fn": "trimBucket",
+      "args": [
+        7
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[11] ...and still at 9.99",
+      "fn": "trimBucket",
+      "args": [
+        9.99
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[11] ten metres is the next",
+      "fn": "trimBucket",
+      "args": [
+        10
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[11] a negative progress trims nothing",
+      "fn": "trimBucket",
+      "args": [
+        -3
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[11] ...and neither does a NaN one",
+      "fn": "trimBucket",
+      "args": [
+        "$NaN"
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[12] nothing walked: the whole line",
+      "fn": "remainingPoints",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        0
+      ],
+      "expect": [
+        [
+          0,
+          0
+        ],
+        [
+          10,
+          0
+        ],
+        [
+          10,
+          20
+        ]
+      ]
+    },
+    {
+      "label": "[12] 7 m in: the foot point, then the rest",
+      "fn": "remainingPoints",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        7
+      ],
+      "expect": [
+        [
+          7,
+          0
+        ],
+        [
+          10,
+          0
+        ],
+        [
+          10,
+          20
+        ]
+      ]
+    },
+    {
+      "label": "[12] exactly on the corner: it is NOT repeated",
+      "fn": "remainingPoints",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        10
+      ],
+      "expect": [
+        [
+          10,
+          0
+        ],
+        [
+          10,
+          20
+        ]
+      ]
+    },
+    {
+      "label": "[12] a quarter up the second leg",
+      "fn": "remainingPoints",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        15
+      ],
+      "expect": [
+        [
+          10,
+          5
+        ],
+        [
+          10,
+          20
+        ]
+      ]
+    },
+    {
+      "label": "[12] arrived: one point, so `npcs.ts` draws no line",
+      "fn": "remainingPoints",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        30
+      ],
+      "expect": [
+        [
+          10,
+          20
+        ]
+      ]
+    },
+    {
+      "label": "[12] past the end clamps to the same",
+      "fn": "remainingPoints",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        42
+      ],
+      "expect": [
+        [
+          10,
+          20
+        ]
+      ]
+    },
+    {
+      "label": "[12] before the start clamps to the whole line",
+      "fn": "remainingPoints",
+      "args": [
+        {
+          "$fixture": "P"
+        },
+        -3
+      ],
+      "expect": [
+        [
+          0,
+          0
+        ],
+        [
+          10,
+          0
+        ],
+        [
+          10,
+          20
+        ]
+      ]
+    },
+    {
+      "label": "[12] the collapsed pair is skipped, not lerped",
+      "fn": "remainingPoints",
+      "args": [
+        {
+          "$fixture": "D"
+        },
+        4
+      ],
+      "expect": [
+        [
+          4,
+          0
+        ],
+        [
+          10,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "[12] a one-point journey stays one point",
+      "fn": "remainingPoints",
+      "args": [
+        {
+          "$fixture": "S"
+        },
+        3
+      ],
+      "expect": [
+        [
+          7,
+          -2
+        ]
+      ]
+    },
+    {
+      "label": "[12] no line at all",
+      "fn": "remainingPoints",
+      "args": [
+        [],
+        5
+      ],
+      "expect": []
+    },
+    {
+      "label": "[12] ...and none for a missing one",
+      "fn": "remainingPoints",
+      "args": [
+        null,
+        5
+      ],
+      "expect": []
+    },
+    {
+      "label": "[13] (A) 6 m in one 3 s poll gap is 2 m/s",
+      "fn": "deadReckonRate",
+      "args": [
+        [
+          0,
+          0
+        ],
+        0,
+        [
+          6,
+          0
+        ],
+        3
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[13] (B) the 3-4-5 diagonal over 2.5 s",
+      "fn": "deadReckonRate",
+      "args": [
+        [
+          10,
+          10
+        ],
+        12,
+        [
+          13,
+          14
+        ],
+        14.5
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[13] (C) the demo pace: 4.2 m in 3 s",
+      "fn": "deadReckonRate",
+      "args": [
+        [
+          0,
+          0
+        ],
+        0,
+        [
+          0,
+          4.2
+        ],
+        3
+      ],
+      "expect": 1.4
+    },
+    {
+      "label": "[13] (D) no history at all \u2014 the first sighting",
+      "fn": "deadReckonRate",
+      "args": [
+        null,
+        0,
+        [
+          6,
+          0
+        ],
+        3
+      ],
+      "expect": null
+    },
+    {
+      "label": "[13] (D) \u2026and an undefined previous point is the same",
+      "fn": "deadReckonRate",
+      "args": [
+        "$undefined",
+        0,
+        [
+          6,
+          0
+        ],
+        3
+      ],
+      "expect": null
+    },
+    {
+      "label": "[13] (D) no current point either",
+      "fn": "deadReckonRate",
+      "args": [
+        [
+          0,
+          0
+        ],
+        0,
+        null,
+        3
+      ],
+      "expect": null
+    },
+    {
+      "label": "[13] (E) a duplicate poll: no divide by zero",
+      "fn": "deadReckonRate",
+      "args": [
+        [
+          0,
+          0
+        ],
+        3,
+        [
+          6,
+          0
+        ],
+        3
+      ],
+      "expect": null
+    },
+    {
+      "label": "[13] (E) time running backwards is refused too",
+      "fn": "deadReckonRate",
+      "args": [
+        [
+          0,
+          0
+        ],
+        3,
+        [
+          6,
+          0
+        ],
+        2.5
+      ],
+      "expect": null
+    },
+    {
+      "label": "[13] (F) the figure stood still: an honest 0, not null",
+      "fn": "deadReckonRate",
+      "args": [
+        [
+          7,
+          -2
+        ],
+        0,
+        [
+          7,
+          -2
+        ],
+        3
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[13] (G) a NaN coordinate gives null, never a NaN rate",
+      "fn": "deadReckonRate",
+      "args": [
+        [
+          "$NaN",
+          0
+        ],
+        0,
+        [
+          6,
+          0
+        ],
+        3
+      ],
+      "expect": null
+    },
+    {
+      "label": "[13] (G) \u2026and so does a NaN stamp",
+      "fn": "deadReckonRate",
+      "args": [
+        [
+          0,
+          0
+        ],
+        "$NaN",
+        [
+          6,
+          0
+        ],
+        3
+      ],
+      "expect": null
+    },
+    {
+      "label": "[13] (G) \u2026and an infinite one",
+      "fn": "deadReckonRate",
+      "args": [
+        [
+          0,
+          0
+        ],
+        0,
+        [
+          6,
+          0
+        ],
+        "$Infinity"
+      ],
+      "expect": null
+    },
+    {
+      "label": "[14] (H) rate 2.0, terrain pace 0.7, dt 1/60",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        0.7,
+        0.016666666666666666,
+        100
+      ],
+      "expect": 0.023333333333333334
+    },
+    {
+      "label": "[14] (I) the same frame on plain ground",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        1,
+        0.016666666666666666,
+        100
+      ],
+      "expect": 0.03333333333333333
+    },
+    {
+      "label": "[14] (J) NO run boost, however far the goal is",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        1,
+        1,
+        100
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[14] (K) the cap is what is left to the polled point",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        1,
+        1,
+        0.5
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[14] (K) \u2026and it holds under a slow pace as well",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        0.7,
+        1,
+        0.5
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[14] (L) nothing left to walk",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        1,
+        0.016666666666666666,
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] (L) a negative rest",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        1,
+        0.016666666666666666,
+        -3
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] (L) a NaN rest",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        1,
+        0.016666666666666666,
+        "$NaN"
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] (M) a pace of 0 is a broken lookup, not a stop",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        0,
+        1,
+        100
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[14] (M) \u2026a negative one too",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        -0.5,
+        1,
+        100
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[14] (M) \u2026a NaN one too",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        "$NaN",
+        1,
+        100
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[14] (M) \u2026and a missing one",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        "$undefined",
+        1,
+        100
+      ],
+      "expect": 2
+    },
+    {
+      "label": "[14] (N) no rate yet: the caller falls back, this walks nothing",
+      "fn": "deadReckonStep",
+      "args": [
+        null,
+        1,
+        1,
+        100
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] (N) a measured standstill walks nothing",
+      "fn": "deadReckonStep",
+      "args": [
+        0,
+        1,
+        1,
+        100
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] (N) a negative rate is not a walk backwards",
+      "fn": "deadReckonStep",
+      "args": [
+        -2,
+        1,
+        1,
+        100
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] (N) no time passed, no step",
+      "fn": "deadReckonStep",
+      "args": [
+        2,
+        1,
+        0,
+        100
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] (N) a NaN rate",
+      "fn": "deadReckonStep",
+      "args": [
+        "$NaN",
+        1,
+        1,
+        100
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[6] err max inside",
+      "fn": "errWindowMax",
+      "args": [
+        [
+          [
+            0,
+            0.8
+          ],
+          [
+            10000,
+            0.3
+          ],
+          [
+            29000,
+            0.2
+          ]
+        ],
+        29500
+      ],
+      "expect": 0.8
+    },
+    {
+      "label": "[6] err max slid",
+      "fn": "errWindowMax",
+      "args": [
+        [
+          [
+            0,
+            0.8
+          ],
+          [
+            10000,
+            0.3
+          ],
+          [
+            29000,
+            0.2
+          ]
+        ],
+        30500
+      ],
+      "expect": 0.3
+    },
+    {
+      "label": "[6] err max empty",
+      "fn": "errWindowMax",
+      "args": [
+        [],
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[6] err max keeps 29.001 s",
+      "fn": "errWindowMax",
+      "args": [
+        [
+          [
+            999,
+            0.9
+          ]
+        ],
+        30000
+      ],
+      "expect": 0.9
+    },
+    {
+      "label": "[6] err max expires",
+      "fn": "errWindowMax",
+      "args": [
+        [
+          [
+            999,
+            0.9
+          ]
+        ],
+        31000
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[15] spacing 4 over the peak",
+      "fn": "densifyPolyline",
+      "args": [
+        [
+          [
+            -4,
+            0
+          ],
+          [
+            4,
+            0
+          ]
+        ],
+        4
+      ],
+      "expect": [
+        [
+          -4,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          4,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "[15] spacing 2 over the peak",
+      "fn": "densifyPolyline",
+      "args": [
+        [
+          [
+            -4,
+            0
+          ],
+          [
+            4,
+            0
+          ]
+        ],
+        2
+      ],
+      "expect": [
+        [
+          -4,
+          0
+        ],
+        [
+          -2,
+          0
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          4,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "[15] corners survive thirds",
+      "fn": "densifyPolyline",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            10,
+            10
+          ]
+        ],
+        4
+      ],
+      "expect": [
+        [
+          0,
+          0
+        ],
+        [
+          3.3333333333333335,
+          0
+        ],
+        [
+          6.666666666666667,
+          0
+        ],
+        [
+          10,
+          0
+        ],
+        [
+          10,
+          3.3333333333333335
+        ],
+        [
+          10,
+          6.666666666666667
+        ],
+        [
+          10,
+          10
+        ]
+      ]
+    },
+    {
+      "label": "[15] cap stretches spacing to ten",
+      "fn": "densifyPolyline",
+      "args": [
+        {
+          "$fixture": "STRAIGHT"
+        },
+        1,
+        11
+      ],
+      "expect": [
+        [
+          0,
+          0
+        ],
+        [
+          10,
+          0
+        ],
+        [
+          20,
+          0
+        ],
+        [
+          30,
+          0
+        ],
+        [
+          40,
+          0
+        ],
+        [
+          50,
+          0
+        ],
+        [
+          60,
+          0
+        ],
+        [
+          70,
+          0
+        ],
+        [
+          80,
+          0
+        ],
+        [
+          90,
+          0
+        ],
+        [
+          100,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "[15] single point",
+      "fn": "densifyPolyline",
+      "args": [
+        [
+          [
+            1,
+            2
+          ]
+        ],
+        4
+      ],
+      "expect": [
+        [
+          1,
+          2
+        ]
+      ]
+    },
+    {
+      "label": "[15] spacing zero",
+      "fn": "densifyPolyline",
+      "args": [
+        [
+          [
+            -4,
+            0
+          ],
+          [
+            4,
+            0
+          ]
+        ],
+        0
+      ],
+      "expect": [
+        [
+          -4,
+          0
+        ],
+        [
+          4,
+          0
+        ]
+      ]
+    },
+    {
+      "label": "[15] midpoint for relief",
+      "fn": "pointAtDistance",
+      "args": [
+        [
+          [
+            -4,
+            0
+          ],
+          [
+            4,
+            0
+          ]
+        ],
+        4
+      ],
+      "expect": [
+        0,
+        0
+      ]
+    },
+    {
+      "label": "[9] negative infinity is the start",
+      "fn": "clampProgress",
+      "args": [
+        "$-Infinity",
+        30
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[9] undefined progress is the start",
+      "fn": "clampProgress",
+      "args": [
+        "$undefined",
+        30
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[9] a non-number progress is the start",
+      "fn": "clampProgress",
+      "args": [
+        "bad",
+        30
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[15] missing polyline is empty",
+      "fn": "densifyPolyline",
+      "args": [
+        null,
+        4
+      ],
+      "expect": []
+    },
+    {
+      "label": "[15] duplicate-only line is copied",
+      "fn": "densifyPolyline",
+      "args": [
+        [
+          [
+            2,
+            3
+          ],
+          [
+            2,
+            3
+          ]
+        ],
+        4
+      ],
+      "expect": [
+        [
+          2,
+          3
+        ],
+        [
+          2,
+          3
+        ]
+      ]
+    }
+  ],
+  "fixtures": {
+    "P": [
+      [
+        0,
+        0
+      ],
+      [
+        10,
+        0
+      ],
+      [
+        10,
+        20
+      ]
+    ],
+    "Q": [
+      [
+        0,
+        0
+      ],
+      [
+        3,
+        4
+      ]
+    ],
+    "R": [
+      [
+        0,
+        0
+      ],
+      [
+        3,
+        4
+      ],
+      [
+        -3,
+        4
+      ]
+    ],
+    "D": [
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ],
+      [
+        10,
+        0
+      ]
+    ],
+    "S": [
+      [
+        7,
+        -2
+      ]
+    ],
+    "L": [
+      [
+        0,
+        0
+      ],
+      [
+        30,
+        0
+      ],
+      [
+        70,
+        0
+      ]
+    ],
+    "STRAIGHT": [
+      [
+        0,
+        0
+      ],
+      [
+        100,
+        0
+      ]
+    ]
+  }
+}

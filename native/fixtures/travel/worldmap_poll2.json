@@ -1,0 +1,245 @@
+{
+  "sync": {
+    "clock_age_ms": 300,
+    "build_ms": 200
+  },
+  "avatar": null,
+  "current_location_id": null,
+  "locations": [
+    {
+      "id": "loc-house",
+      "name": "Harbour House",
+      "pos_x": 64.0,
+      "pos_z": 128.0,
+      "yaw_deg": 0.0,
+      "plan_width_m": 12.0,
+      "boundary": [
+        [
+          -6,
+          -6
+        ],
+        [
+          6,
+          -6
+        ],
+        [
+          6,
+          6
+        ],
+        [
+          -6,
+          6
+        ]
+      ],
+      "openings": []
+    },
+    {
+      "id": "loc-yard",
+      "name": "Stone Yard",
+      "pos_x": -100.0,
+      "pos_z": 50.0,
+      "yaw_deg": 30.0,
+      "plan_width_m": 8.0,
+      "boundary": [
+        [
+          -4,
+          -3
+        ],
+        [
+          4,
+          -3
+        ],
+        [
+          4,
+          3
+        ],
+        [
+          -4,
+          3
+        ]
+      ],
+      "openings": []
+    },
+    {
+      "id": "loc-template",
+      "name": "Template",
+      "pos_x": null,
+      "pos_z": null,
+      "yaw_deg": 0.0,
+      "plan_width_m": null,
+      "boundary": null,
+      "openings": []
+    },
+    {
+      "id": "loc-meadow",
+      "name": "Meadow",
+      "pos_x": 300.0,
+      "pos_z": -200.0,
+      "yaw_deg": 0.0,
+      "plan_width_m": null,
+      "boundary": null,
+      "openings": []
+    }
+  ],
+  "characters": [
+    {
+      "name": "Fog Traveller",
+      "location_id": "",
+      "room_id": "",
+      "pos": {
+        "x": -114,
+        "z": -80
+      },
+      "pos_origin": null,
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": {
+        "journey_id": null,
+        "target_id": null,
+        "target_name": null,
+        "waypoints": null,
+        "progress_m": null,
+        "total_m": null,
+        "starts_in_s": null,
+        "paces_m_s_real": null,
+        "pace_m_s_real": null,
+        "speed_m_s_real": null
+      }
+    },
+    {
+      "name": "Pending Traveller",
+      "location_id": "",
+      "room_id": "",
+      "pos": {
+        "x": -75.8,
+        "z": -80
+      },
+      "pos_origin": null,
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": {
+        "journey_id": "fixture-pending",
+        "target_id": "loc-yard",
+        "target_name": "Stone Yard",
+        "waypoints": [
+          [
+            -80,
+            -80
+          ],
+          [
+            -50,
+            -80
+          ]
+        ],
+        "progress_m": 4.2,
+        "total_m": 30,
+        "starts_in_s": null,
+        "paces_m_s_real": [
+          1.4
+        ],
+        "pace_m_s_real": 1.4,
+        "speed_m_s_real": 1.4
+      }
+    },
+    {
+      "name": "Frozen Traveller",
+      "location_id": "",
+      "room_id": "",
+      "pos": {
+        "x": -30,
+        "z": -80
+      },
+      "pos_origin": null,
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": {
+        "journey_id": "fixture-frozen",
+        "target_id": "loc-yard",
+        "target_name": "Stone Yard",
+        "waypoints": [
+          [
+            -40,
+            -80
+          ],
+          [
+            -10,
+            -80
+          ]
+        ],
+        "progress_m": 10,
+        "total_m": 30,
+        "starts_in_s": null,
+        "paces_m_s_real": null,
+        "pace_m_s_real": null,
+        "speed_m_s_real": null
+      }
+    },
+    {
+      "name": "Timeless Traveller",
+      "location_id": "",
+      "room_id": "",
+      "pos": {
+        "x": 7,
+        "z": -80
+      },
+      "pos_origin": null,
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": {
+        "journey_id": "fixture-timeless",
+        "target_id": "loc-yard",
+        "target_name": "Stone Yard",
+        "waypoints": [
+          [
+            -10,
+            -80
+          ],
+          [
+            0,
+            -80
+          ],
+          [
+            0,
+            -80
+          ],
+          [
+            30,
+            -80
+          ]
+        ],
+        "progress_m": 17,
+        "total_m": 40,
+        "starts_in_s": null,
+        "paces_m_s_real": [
+          null,
+          1.4,
+          1.4
+        ],
+        "pace_m_s_real": 1.4,
+        "speed_m_s_real": 1.4
+      }
+    },
+    {
+      "name": "Arrival Traveller",
+      "location_id": "",
+      "room_id": "",
+      "pos": {
+        "x": 62,
+        "z": -80
+      },
+      "pos_origin": null,
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": null
+    }
+  ],
+  "events_by_location": {},
+  "world_bounds": {
+    "min_x": -124,
+    "min_z": -203,
+    "max_x": 300,
+    "max_z": 134
+  },
+  "height_sig": "fixture-s1a",
+  "fogged": true
+}

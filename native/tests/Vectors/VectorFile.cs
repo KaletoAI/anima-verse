@@ -246,7 +246,32 @@ public sealed class VectorFile
     /// <paramref name="args"/> by a deep copy of <c>fixtures[NAME]</c>; <c>$with</c> overrides the
     /// top-level keys of an object fixture. Always returns a new tree.
     /// </summary>
-    public static JsonArray ResolveArgs(JsonArray args, JsonObject fixtures) => (JsonArray)Walk(args, fixtures)!;
+    public static JsonArray ResolveArgs(JsonArray args, JsonObject fixtures) => (JsonArray)DecodeSentinels(Walk(args, fixtures))!;
+
+    // Decode only arguments, after expansion; raw fixtures and expectations stay JSON.
+    // JsonElement.Undefined distinguishes JS undefined from JSON null without changing
+    // the JsonArray dispatch API. Numeric sentinels are ordinary CLR double JsonValues.
+    private static JsonNode? DecodeSentinels(JsonNode? node)
+    {
+        if (node is JsonArray a)
+            return new JsonArray(a.Select(DecodeSentinels).ToArray());
+        if (node is JsonObject o)
+        {
+            var result = new JsonObject();
+            foreach (var (k, v) in o) result[k] = DecodeSentinels(v);
+            return result;
+        }
+        if (IsString(node, out var s))
+            return s switch
+            {
+                "$NaN" => JsonValue.Create(double.NaN),
+                "$Infinity" => JsonValue.Create(double.PositiveInfinity),
+                "$-Infinity" => JsonValue.Create(double.NegativeInfinity),
+                "$undefined" => JsonValue.Create(default(JsonElement)),
+                _ => node?.DeepClone(),
+            };
+        return node?.DeepClone();
+    }
 
     private static JsonNode? Walk(JsonNode? node, JsonObject fixtures)
     {

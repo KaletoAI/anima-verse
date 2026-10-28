@@ -1,5 +1,40 @@
 #!/usr/bin/env node
 /** NEU: residency.ts and SceneLibrary.forget absent on a241a8aa.
+ * Canonical source for residency.json, op sequences [1]..[18].
+ * Each op group yields one snapshot; expectations select state fields and exact
+ * incremental up/down calls (mount/unmount decisions). No implicit flush occurs.
+ * [1] up_down: gone->far->near mounts twice; near->far->gone unmounts twice.
+ * [2] retarget_mid_await: near requested, gone before completion; one rollback,
+ * no published resident and no retry. [3] flip_flop: gone then far invalidates
+ * the first up; one rollback, one replacement up, final far/version 1.
+ * [4] rebuild_during_shell: invalidate version 1, replace with version 2 at far.
+ * [5], [9], [10] rebuild_at_near / settled_waits_rebuild / hasJob: initial
+ * want queues a job synchronously; settled leaves near/version 1 with no job.
+ * Rebuild downs near then far, awaits the new shell (gone, no live version,
+ * hasJob=true, settled waiter unresolved), then ups far->near at version 2;
+ * precisely one waiter resolves. No stale shell is kept.
+ * [6], [7] drop_during_fetch / drop_during_mount: the driver's opaque awaited
+ * up aborts once, ends gone with no live/timer. Real fetch/mount cleanup is
+ * distinguished separately in the main-adapter integration cases below.
+ * [8] rediscover_after_drop: aborted version 1 cleans up before version 2 up;
+ * final far/version 2, one resident, one rollback, no retry.
+ * [11] fetch_retry: failure leaves gone, hasJob=false and timer 5000 ms;
+ * firing that timer without another want performs one new up and reaches far.
+ * [12] queue_max: five far requests with ascending priorities, each gated;
+ * exactly ids 0/1 enter first, max concurrent mounts=2, release yields 2/3/4
+ * in order and five live residents, all jobs false.
+ * [13] cancelled_retry_settled: failed up arms 5000 ms; want gone cancels it,
+ * resolves both settled waiters, deletes the entry; rebuilding is then inert.
+ * [14] sweep_forgotten: forget X before reply -> no cache/publication.
+ * [15] sweep_forget_unstarted: while X awaits, forget Y; publish only X and
+ * never fetch Y. [16] forget_then_request: forgotten X's old reply cannot
+ * publish; fresh request publishes fresh once. [17] reverse reply order:
+ * fresh first remains fresh after the old reply; same one publication.
+ * [18] request_dedup: two requests share a promise and one fetch; both return
+ * the same new signature, published exactly once.
+ * Pins are renderer adapter state rather than driver state: the independent
+ * current/travel owners and boot release assertions stay inline below.
+ *
  * Hand oracles: gone->near needs two up steps; near->gone two down steps.
  * Invalidated steps roll back once, never publish ready. Five jobs on max=2
  * never exceed two mounts. Failed fetch retries at 5000 ms without retarget.
@@ -17,200 +52,33 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { build, transformSync } from 'esbuild';
-async function load(path) { const r = await build({ entryPoints: [path], bundle: true, write: false, format: 'esm', platform: 'node' }); return import(`data:text/javascript;base64,${Buffer.from(r.outputFiles[0].text).toString('base64')}`); }
-const { createResidencyDriver } = await load('client3d/src/game/residency.ts');
-const { createFocusQueue } = await load('client3d/src/game/focusQueue.ts');
-const flush = async () => { for (let i = 0; i < 100; i++)
-    await Promise.resolve(); };
-const deferred = () => { let resolve; const promise = new Promise(r => resolve = r); return { promise, resolve }; };
+import { loadVectors, near, resolveArgs } from '../../shared/test-vectors/vectors.mjs';
+import { load, createResidencyDriver, createFocusQueue, flush, deferred,
+  makeLibrary, residencyScenario } from './residencyVectorDispatch.mjs';
+const { buildingTier, interiorTier } = await load('client3d/src/scene/sceneView.ts');
 function assertBefore(source, first, second) {
     const firstIndex = source.indexOf(first), secondIndex = source.indexOf(second);
     assert.ok(firstIndex >= 0, `missing first marker: ${first}`);
     assert.ok(secondIndex >= 0, `missing second marker: ${second}`);
     assert.ok(firstIndex < secondIndex, `${first} must precede ${second}`);
 }
-function fixture() {
-    const calls = [], live = new Map(), wait = [], timers = [];
-    let active = 0, max = 0, rollback = 0, fail = false;
-    const driver = createResidencyDriver({ up: async (id, p, from, alive) => { calls.push(['up', id, p, from]); active++; max = Math.max(max, active); const gate = wait.shift(); if (gate)
-            await gate.promise; active--; if (!alive()) {
-            rollback++;
-            return 'aborted';
-        } if (fail) {
-            fail = false;
-            return 'failed';
-        } live.set(id, p); return 'ok'; }, down: (id, p, from) => { calls.push(['down', id, p, from]); if (from === 'far')
-            live.delete(id); } }, createFocusQueue({ max: 2 }), { setTimeout(fn, ms) { const t = { fn, ms }; timers.push(t); return t; }, clearTimeout(t) { const i = timers.indexOf(t); if (i >= 0)
-            timers.splice(i, 1); } });
-    return { driver, calls, live, wait, timers, get max() { return max; }, get rollback() { return rollback; }, fail() { fail = true; } };
-}
-for (const name of ['up_down', 'retarget_mid_await', 'flip_flop', 'rebuild_during_shell', 'rebuild_at_near', 'drop_during_fetch', 'drop_during_mount', 'rediscover_after_drop', 'settled_waits_rebuild', 'hasJob', 'fetch_retry']) {
-    const f = fixture(), d = f.driver;
-    if (name === 'up_down') {
-        d.want('X', 1, 'near', () => 0);
-        await d.settled('X');
-        assert.equal(d.ring('X'), 'near');
-        assert.equal(f.calls.length, 2);
-        d.want('X', 1, 'gone', () => 0);
-        await d.settled('X');
-        assert.equal(f.calls.length, 4);
-    }
-    else if (['rebuild_at_near', 'settled_waits_rebuild', 'hasJob'].includes(name)) {
-        d.want('X', 1, 'near', () => 0);
-        assert.equal(d.hasJob('X'), true);
-        await d.settled('X');
-        assert.equal(d.hasJob('X'), false);
-        d.rebuild('X', 2);
-        assert.equal(d.hasJob('X'), true);
-        let done = false;
-        const gate = deferred();
-        f.wait.push(gate);
-        const settled = d.settled('X').then(() => done = true);
-        await flush();
-        assert.equal(done, false);
-        gate.resolve();
-        await settled;
-        assert.equal(f.live.get('X'), 2);
-        assert.equal(d.ring('X'), 'near');
-        assert.deepEqual(f.calls.slice(2).map(c => [c[0], c[2], c[3]]), [['down', 1, 'near'], ['down', 1, 'far'], ['up', 2, 'gone'], ['up', 2, 'far']]);
-    }
-    else if (name === 'fetch_retry') {
-        f.fail();
-        d.want('X', 1, 'far', () => 0);
-        await flush();
-        assert.equal(d.ring('X'), 'gone');
-        assert.equal(d.hasJob('X'), false);
-        assert.equal(f.timers[0].ms, 5000);
-        f.timers.shift().fn();
-        await d.settled('X');
-        assert.equal(d.ring('X'), 'far');
-    }
-    else {
-        const gate = deferred();
-        f.wait.push(gate);
-        d.want('X', 1, name === 'retarget_mid_await' ? 'near' : 'far', () => 0);
-        await flush();
-        if (name === 'flip_flop') {
-            d.want('X', 1, 'gone', () => 0);
-            d.want('X', 1, 'far', () => 0);
-        }
-        else if (name === 'rebuild_during_shell')
-            d.rebuild('X', 2);
-        else if (name === 'rediscover_after_drop') {
-            d.drop('X');
-            d.want('X', 2, 'far', () => 0);
-        }
-        else if (name === 'retarget_mid_await')
-            d.want('X', 1, 'gone', () => 0);
-        else
-            d.drop('X');
-        gate.resolve();
-        await flush();
-        await d.settled('X');
-        assert.equal(f.rollback, 1);
-        assert.equal(d.ring('X'), ['flip_flop', 'rebuild_during_shell', 'rediscover_after_drop'].includes(name) ? 'far' : 'gone');
-        assert.equal(f.live.size, d.ring('X') === 'far' ? 1 : 0);
-        assert.equal(f.timers.length, 0);
-        if (name === 'rediscover_after_drop' || name === 'rebuild_during_shell')
-            assert.equal(f.live.get('X'), 2);
-    }
-    console.log('PASS', name);
-}
-{
-    const f = fixture(), gates = Array.from({ length: 5 }, deferred);
-    for (let i = 0; i < 5; i++) {
-        f.wait.push(gates[i]);
-        f.driver.want(String(i), 1, 'far', () => i);
-    }
-    await flush();
-    assert.equal(f.max, 2);
-    assert.equal(f.calls.length, 2);
-    for (const gate of gates)
-        gate.resolve();
-    await Promise.all(Array.from({ length: 5 }, (_, i) => f.driver.settled(String(i))));
-    assert.equal(f.max, 2);
-    assert.equal(f.live.size, 5);
-    console.log('PASS queue_max');
-}
-// NEU hand oracle (G1b): cancelling a failed gone->far retry satisfies gone.
-// Both waiters resolve; no timer/up remains; rebuild is inert after deletion.
-{
-    const f = fixture(), d = f.driver;
-    f.fail();
-    d.want('X', 1, 'far', () => 0);
-    await flush();
-    assert.equal(f.timers.length, 1);
-    let resolved = 0;
-    const waiters = [d.settled('X'), d.settled('X')].map(p => p.then(() => resolved++));
-    d.want('X', 1, 'gone', () => 0);
-    await flush();
-    assert.equal(resolved, 2, 'cancelled retry releases every settled waiter');
-    await Promise.all(waiters);
-    assert.equal(f.timers.length, 0);
-    assert.equal(d.ring('X'), 'gone');
-    assert.equal(d.hasJob('X'), false);
-    d.rebuild('X', 2);
-    assert.equal(d.hasJob('X'), false, 'gone entry was deleted');
-    await flush();
-    assert.deepEqual(f.calls, [['up', 'X', 1, 'gone']]);
-    assert.equal(f.live.size, 0);
-    console.log('PASS cancelled_retry_settled NEU');
-}
-// Extract the real library, avoiding unrelated renderer imports.
-const recipe = await readFile('client3d/src/scene/sceneRecipe.ts', 'utf8');
-const librarySource = recipe.slice(recipe.indexOf('export class SceneLibrary'), recipe.indexOf('// ── Verify'));
-const makeLibrary = (fetch) => new Function('getLocationScene', 'createFocusQueue', transformSync(librarySource.replace('export class', 'class') + '\nreturn SceneLibrary;', { loader: 'ts', format: 'cjs' }).code)(fetch, createFocusQueue);
-for (const name of ['sweep_forgotten', 'sweep_forget_unstarted', 'forget_then_request', 'forget_then_request_reverse', 'request_dedup']) {
-    const pending = [], events = [];
-    const C = makeLibrary(id => { const gate = deferred(); pending.push({ id, ...gate }); return gate.promise; });
-    const lib = new C();
-    lib.onScene = (id) => events.push(id);
-    if (name === 'request_dedup') {
-        const a = lib.request('X'), b = lib.request('X');
-        assert.equal(a, b);
-        assert.equal(pending.length, 1);
-        const scene = { signature: 'new' };
-        pending[0].resolve(scene);
-        assert.equal(await a, scene);
-        assert.equal(await b, scene);
-    }
-    else {
-        const sweep = lib.sweep(name === 'sweep_forget_unstarted' ? ['X', 'Y'] : ['X']);
-        await flush();
-        lib.forget(name === 'sweep_forget_unstarted' ? 'Y' : 'X');
-        let newer;
-        if (name.startsWith('forget_then_request'))
-            newer = lib.request('X');
-        const old = { signature: 'old' }, fresh = { signature: 'fresh' };
-        if (name.endsWith('reverse')) {
-            pending[1].resolve(fresh);
-            await newer;
-        }
-        pending[0].resolve(old);
-        await sweep;
-        if (newer) {
-            pending[1].resolve(fresh);
-            assert.equal(await newer, fresh);
-            assert.equal(lib.get('X'), fresh);
-        }
-        else if (name === 'sweep_forget_unstarted') {
-            assert.equal(pending.length, 1);
-            assert.equal(lib.has('Y'), false);
-            assert.deepEqual(events, ['X']);
-        }
-        else {
-            assert.equal(lib.has('X'), false);
-            assert.deepEqual(events, []);
-        }
-    }
-    console.log('PASS', name);
+// Every scenario produces one snapshot per op group. The shared expectations
+// compare only named state fields, but call arrays require exact order/length.
+const vectors = loadVectors('residency');
+const dispatch = { residencyScenario };
+for (const c of vectors.cases) assert.equal(typeof dispatch[c.fn], 'function', `unknown fn ${c.fn}`);
+for (const c of vectors.cases) {
+    const actual = await dispatch[c.fn](...resolveArgs(c.args, vectors.fixtures));
+    const result = near(c.expect, actual, c.eps);
+    assert.ok(result.ok, `${c.label}: ${result.diff}`);
+    console.log('PASS', c.label);
 }
 const main = await readFile('client3d/src/main.ts', 'utf8');
 const ts = await import('typescript');
 const ast = ts.createSourceFile('main.ts', main, ts.ScriptTarget.Latest, true);
 function fn(name) { let found; function visit(n) { if (ts.isFunctionDeclaration(n) && n.name?.text === name)
     found = n.getText(ast); ts.forEachChild(n, visit); } visit(ast); assert.ok(found, `main function ${name} exists`); return found; }
-function compile(names, deps, tail = '') { deps = { restoreStorey() {}, ...deps }; return new Function(...Object.keys(deps), transformSync(names.map(fn).join('\n') + '\n' + tail + '\nreturn {' + names.join(',') + '};', { loader: 'ts' }).code)(...Object.values(deps)); }
+function compile(names, deps, tail = '') { deps = { restoreStorey() {}, buildingTier, interiorTier, ...deps }; return new Function(...Object.keys(deps), transformSync(names.map(fn).join('\n') + '\n' + tail + '\nreturn {' + names.join(',') + '};', { loader: 'ts' }).code)(...Object.values(deps)); }
 for (const name of ['no_scene', 'retarget_far_near', 'open_arrival_tiers', 'tick_during_promotion']) {
     const residency = new Map(), promoting = new Set(), buildingTierByLoc = new Map(), interiorTierByLoc = new Map();
     const log = [];
@@ -492,7 +360,7 @@ for (const name of ['snap_superseded_free', 'snap_superseded_ready', 'snap_super
     const api = compile(['reconcileAvatarPos'], { getGameState: () => ({ mode: 'embodied' }), pollIsStale: () => false, ownSeatChangeAt: 0,
         isOwnEcho: () => false, sentSeqs: [], posSession: 'sessAAAA01', ownCorrectionAt: 0,
         syncCounters: { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 },
-        avatarDrive: { kind: 'PLAYER' }, avatarSeated: false, posInFlight: false, walkIn: null, verticalRide: null, correction: null, npcs: { positionOf: () => ({ x: 0, z: 0 }) },
+        avatarDrive: { kind: 'PLAYER' }, avatarSeated: false, posInFlight: false, walkIn: null, verticalRide: null, correction: null, npcs: { propEntryUnavailable: () => false, positionOf: () => ({ x: 0, z: 0 }) },
         avatarName: 'avatar', reportedPos: null, POS_SNAP_M: 1, CORRECT_WALK_M: 8, clearSnap: () => clearSnap(deps, state),
         holdSnap, readinessDeps: deps, readinessState: state, correctTo: p => corrected.push(p), THREE: { Vector3: class {
             } }, groundY: () => 0, engine: { flyTo() { } } }, 'let pendingSnap=readinessState.pendingSnap;');

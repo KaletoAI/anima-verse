@@ -113,28 +113,8 @@
  *     next poll lands, which is what "no pause" means.
  * Floating point adds up over 180 additions, so the sum is compared at 1e-9.
  */
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-// '../..' = the REPO root (this file lives in client3d/scripts/).
-const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../..');
-const SRC = join(ROOT, 'client3d/src/scene/travelPath.ts');
-
-async function loadTravelPath() {
-  const esbuild = await import('esbuild');
-  const dir = await mkdtemp(join(tmpdir(), 'travelreckon-'));
-  try {
-    const source = await readFile(SRC, 'utf8');
-    const out = esbuild.transformSync(source, { loader: 'ts', format: 'esm' });
-    const file = join(dir, 'travelPath.mjs');
-    await writeFile(file, out.code, 'utf8');
-    return await import(`file://${file}`);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
+import { travelDispatch } from './travelVectorDispatch.mjs';
 
 let failed = 0;
 let passed = 0;
@@ -164,64 +144,16 @@ const RUN_DISTANCE = 6;
 const POLL_S = 3;
 
 async function main() {
-  const { deadReckonRate, deadReckonStep } = await loadTravelPath();
+  const { deadReckonRate, deadReckonStep } = travelDispatch;
 
-  console.log('deadReckonRate — metres per real second between two polled points');
-  check('(A) 6 m in one 3 s poll gap is 2 m/s',
-    deadReckonRate([0, 0], 0, [6, 0], POLL_S), 2);
-  check('(B) the 3-4-5 diagonal over 2.5 s',
-    deadReckonRate([10, 10], 12, [13, 14], 14.5), 2);
-  check('(C) the demo pace: 4.2 m in 3 s',
-    deadReckonRate([0, 0], 0, [0, 4.2], POLL_S), 1.4);
-  check('(D) no history at all — the first sighting',
-    deadReckonRate(null, 0, [6, 0], POLL_S), null);
-  check('(D) …and an undefined previous point is the same',
-    deadReckonRate(undefined, 0, [6, 0], POLL_S), null);
-  check('(D) no current point either', deadReckonRate([0, 0], 0, null, POLL_S), null);
-  check('(E) a duplicate poll: no divide by zero',
-    deadReckonRate([0, 0], 3, [6, 0], 3), null);
-  check('(E) time running backwards is refused too',
-    deadReckonRate([0, 0], 3, [6, 0], 2.5), null);
-  check('(F) the figure stood still: an honest 0, not null',
-    deadReckonRate([7, -2], 0, [7, -2], POLL_S), 0);
-  check('(G) a NaN coordinate gives null, never a NaN rate',
-    deadReckonRate([NaN, 0], 0, [6, 0], POLL_S), null);
-  check('(G) …and so does a NaN stamp',
-    deadReckonRate([0, 0], NaN, [6, 0], POLL_S), null);
-  check('(G) …and an infinite one',
-    deadReckonRate([0, 0], 0, [6, 0], Infinity), null);
-
-  console.log('\ndeadReckonStep — one frame of that walk, in metres');
-  check('(H) rate 2.0, terrain pace 0.7, dt 1/60',
-    deadReckonStep(2, 0.7, 1 / 60, 100), 0.023333333333333334);
-  check('(I) the same frame on plain ground',
-    deadReckonStep(2, 1, 1 / 60, 100), 0.03333333333333333);
-  check('(J) NO run boost, however far the goal is',
-    deadReckonStep(2, 1, 1, 100), 2);
-  check('(J) …and the old branch would have run this far',
-    WALK_SPEED * RUN_FACTOR * 1, 6.12);
-  check('(J) …exactly one poll gap is the threshold it used',
-    2 * POLL_S, RUN_DISTANCE);
-  check('(K) the cap is what is left to the polled point',
-    deadReckonStep(2, 1, 1, 0.5), 0.5);
-  check('(K) …and it holds under a slow pace as well',
-    deadReckonStep(2, 0.7, 1, 0.5), 0.5);
-  check('(L) nothing left to walk', deadReckonStep(2, 1, 1 / 60, 0), 0);
-  check('(L) a negative rest', deadReckonStep(2, 1, 1 / 60, -3), 0);
-  check('(L) a NaN rest', deadReckonStep(2, 1, 1 / 60, NaN), 0);
-  check('(M) a pace of 0 is a broken lookup, not a stop',
-    deadReckonStep(2, 0, 1, 100), 2);
-  check('(M) …a negative one too', deadReckonStep(2, -0.5, 1, 100), 2);
-  check('(M) …a NaN one too', deadReckonStep(2, NaN, 1, 100), 2);
-  check('(M) …and a missing one', deadReckonStep(2, undefined, 1, 100), 2);
-  check('(N) no rate yet: the caller falls back, this walks nothing',
-    deadReckonStep(null, 1, 1, 100), 0);
-  check('(N) a measured standstill walks nothing',
-    deadReckonStep(0, 1, 1, 100), 0);
-  check('(N) a negative rate is not a walk backwards',
-    deadReckonStep(-2, 1, 1, 100), 0);
-  check('(N) no time passed, no step', deadReckonStep(2, 1, 0, 100), 0);
-  check('(N) a NaN rate', deadReckonStep(NaN, 1, 1, 100), 0);
+  const file = loadVectors('travel');
+  const result = runVectors({ ...file, cases: file.cases.filter(c =>
+    ['deadReckonRate', 'deadReckonStep'].includes(c.fn)) }, travelDispatch);
+  passed += result.passed;
+  failed += result.failed;
+  // Historical counter-probes and frame accumulation stay integration checks.
+  check('(J) the old branch would have run this far', WALK_SPEED * RUN_FACTOR, 6.12);
+  check('(J) exactly one poll gap was the run threshold', 2 * POLL_S, RUN_DISTANCE);
 
   console.log('\n(O) three seconds of 60 fps frames after ONE measured poll gap');
   const rate = deadReckonRate([0, 0], 0, [6, 0], POLL_S);

@@ -136,10 +136,41 @@ const t5 = runVectors(file([{ label: 'e', fn: 'f', args: [[1, 2], 3], expect: 6,
   { f: (xs, k) => xs.length * k }, quiet);
 check(t5.passed === 1, 'args are spread into the call; eps 0 allowed');
 
+console.log('\n[12] exact string sentinels in arguments only');
+const sentinels = ['$NaN', '$Infinity', '$-Infinity', '$undefined'];
+const decoded = resolveArgs(sentinels);
+check(Number.isNaN(decoded[0]), '$NaN decodes to NaN');
+check(decoded[1] === Infinity, '$Infinity decodes to positive Infinity');
+check(decoded[2] === -Infinity, '$-Infinity decodes to negative Infinity');
+check(decoded[3] === undefined && decoded.length === 4, '$undefined preserves an undefined array slot');
+check(near(['x$NaN', '$Inf', '$Infinity suffix', ' $undefined'],
+  resolveArgs(['x$NaN', '$Inf', '$Infinity suffix', ' $undefined'])).ok, 'non-exact strings stay strings');
+const sf = parseVectors(JSON.stringify(file([
+  {label: 'sentinels', fn: 'inspect', args: [{nested: sentinels},
+    {$fixture: 'P', $with: {v: '$undefined'}}], expect: '$NaN'},
+], {P: {v: 1, nested: ['$Infinity']}})));
+const sa = resolveArgs(sf.cases[0].args, sf.fixtures);
+check(Number.isNaN(sa[0].nested[0]) && sa[0].nested[3] === undefined, 'nested arguments decode');
+check(sa[1].nested[0] === Infinity && Object.hasOwn(sa[1], 'v') && sa[1].v === undefined,
+  'fixture copies and shallow overrides decode without losing undefined keys');
+check(sf.fixtures.P.nested[0] === '$Infinity' && sf.fixtures.P.v === 1, 'raw fixtures are unchanged');
+check(sf.cases[0].expect === '$NaN', 'expectations stay literal strings');
+check(runVectors(sf, {inspect: (a, b) => Number.isNaN(a.nested[0]) && b.v === undefined ? '$NaN' : 'bad'},
+  {log() {}}).passed === 1, 'runner receives decoded arguments');
+
 console.log('\n[11] E4 files obey the shared format');
 for (const name of ['scatter', 'scatter_rows', 'impostors', 'undergrowth', 'world_props']) {
   const vectors = loadVectors(name);
   check(vectors.cases.length > 0, `${name}: nonempty, validated labels, fixtures and finite numbers`);
+}
+
+console.log('\n[13] E6 files obey the shared format');
+for (const name of ['travel', 'residency']) {
+  const vectors = loadVectors(name);
+  check(vectors.cases.length > 0 && vectors.cases.every(c => /^\[\d+\]/.test(c.label)),
+    `${name}: validated numbered cases, fixtures and finite JSON numbers`);
+  if (name === 'residency') check(vectors.cases.length === 18 && vectors.cases.every(c =>
+    c.args[1].length === c.expect.length), '18 residency scenarios have one expected snapshot per step');
 }
 
 console.log(fails ? `\n${fails} FAILED, ${oks} ok` : `\nall ok (${oks})`);

@@ -1,4 +1,5 @@
 {
+  "sync": { "clock_age_ms": 300, "build_ms": 200 },
   "avatar": null,
   "current_location_id": null,
   "locations": [
@@ -21,7 +22,7 @@
       "room_id": "", "activity_animation": "",
       "travel": { "target_id": "loc-yard", "waypoints": [[300.0, -200.0], [300.0, -100.0], [200.0, -100.0]],
                   "progress_m": 137.0, "total_m": 200.0, "starts_in_s": null,
-                  "speed_m_s_real": 1.4, "pace_m_s_real": 1.4, "paces_m_s_real": [1.4, 1.4], "journey_id": null } }
+                  "speed_m_s_real": 1.4, "pace_m_s_real": 1.4, "paces_m_s_real": [1.4, 1.4], "journey_id": "fixture-cleo-route" } }
   ],
   "world_props": [
     {
