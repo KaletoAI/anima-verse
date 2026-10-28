@@ -54,6 +54,17 @@ public partial class OverviewCamera : Camera3D
     /// <summary>The eased yaw (radians, 0 = camera on +Z looking −Z).</summary>
     public double Yaw => Control.Yaw;
 
+    /// <summary>Task 48 / E7-T3: the mode's live eye and bounded zoom, delegated to the tested controller.</summary>
+    public Func<Vec3?>? Follow { get => Control.Follow; set => Control.Follow = value; }
+    public double? ZoomCap { get => Control.ZoomCap; set => Control.ZoomCap = value; }
+    public double? ZoomFloor { get => Control.ZoomFloor; set => Control.ZoomFloor = value; }
+    public double NearPitchDeg { get => Control.NearPitchDeg; set => Control.NearPitchDeg = value; }
+    public bool OrbitOnDrag { get => Control.OrbitOnDrag; set => Control.OrbitOnDrag = value; }
+    public bool FirstPerson => Control.FirstPerson;
+    public event Action? ZoomCapped { add => Control.ZoomCapped += value; remove => Control.ZoomCapped -= value; }
+    /// <summary>Task 48: pose hooks run after the camera zoom latch, before final first-person placement.</summary>
+    public event Action? Posed;
+
     private HudRect? _chatBox;
     private double _viewDx, _viewDy;
     private (double Dx, double Dy, float W, float H)? _viewApplied;
@@ -104,7 +115,15 @@ public partial class OverviewCamera : Camera3D
     public void Step(double delta)
     {
         ApplyPose(Control.Step(delta));
+        Posed?.Invoke();
+        RefreshFirstPerson();
         ApplyViewShift(Math.Min(delta, CameraMath.MaxFrameDt));
+    }
+
+    /// <summary>Task 48: skeleton/frame hooks reassert the current head lens without advancing camera state.</summary>
+    public void RefreshFirstPerson()
+    {
+        if (FirstPerson && Follow?.Invoke() is Vec3 eye) ApplyPose(Control.FirstPersonPose(eye));
     }
 
     private void ApplyPose(OverviewPose pose)

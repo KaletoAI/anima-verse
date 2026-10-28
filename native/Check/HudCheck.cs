@@ -112,13 +112,13 @@ public static class HudCheck
         Is("overlay open → keys to CEF", HudRouting.KeysToHud(Ui(overlay: true)), true);
         Is("menu open alone → keys to the scene (M/Esc close it)", HudRouting.KeysToHud(Ui(menu: true)), false);
         Is("nothing → keys to the scene", HudRouting.KeysToHud(Ui()), false);
-        Is("F → openChat", HudRouting.SceneKeyAction(Key.F, false, false), "openChat");
-        Is("Enter → openChat", HudRouting.SceneKeyAction(Key.Enter, false, false), "openChat");
-        Is("keypad Enter → openChat", HudRouting.SceneKeyAction(Key.KpEnter, false, false), "openChat");
+        Is("F → nearest offer", HudRouting.SceneKeyAction(Key.F, false, false), "interact");
+        Is("Enter → no scene binding", HudRouting.SceneKeyAction(Key.Enter, false, false), (string?)null);
+        Is("keypad Enter → no scene binding", HudRouting.SceneKeyAction(Key.KpEnter, false, false), (string?)null);
         Is("M → toggleMenu", HudRouting.SceneKeyAction(Key.M, false, false), "toggleMenu");
         Is("M with the menu open → toggleMenu (closes it)", HudRouting.SceneKeyAction(Key.M, true, false), "toggleMenu");
         Is("Esc, menu open → closeMenu", HudRouting.SceneKeyAction(Key.Escape, true, false), "closeMenu");
-        Is("Esc, menu closed → nothing", HudRouting.SceneKeyAction(Key.Escape, false, false), (string?)null);
+        Is("Esc, menu closed → mode", HudRouting.SceneKeyAction(Key.Escape, false, false), "exitEmbodied");
         Is("Ctrl+M → nothing (system)", HudRouting.SceneKeyAction(Key.M, false, true), (string?)null);
         Is("W → nothing (camera)", HudRouting.SceneKeyAction(Key.W, false, false), (string?)null);
         return n;

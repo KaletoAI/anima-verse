@@ -74,6 +74,11 @@ public static class CheckRunner
         {
             var dir = Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures");
             MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
+            if (only == "embody")
+            {
+                GD.Print($"CHECK ok {await EmbodyCheck.RunAsync(host, dir)}");
+                return 0;
+            }
             if (only == "residency")
             {
                 var alone = await ResidencyCheck.RunAsync(host, dir);
@@ -309,6 +314,7 @@ public static class CheckRunner
             var storeys = await StoreysCheck.RunAsync(host, dir);
             var placement = await PlacementCheck.RunAsync(host, dir);
             var walk = await WalkCheck.RunAsync(host, dir);
+            var embody = await EmbodyCheck.RunAsync(host, dir);
             var residency = await ResidencyCheck.RunAsync(host, dir);
             var travel = await TravelCheck.RunAsync(host, dir);
             var bridges = await BridgeCheck.RunAsync(host, dir);
@@ -330,7 +336,7 @@ public static class CheckRunner
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {travel} | {residency} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {travel} | {residency} | {embody} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

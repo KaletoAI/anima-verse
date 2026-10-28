@@ -27,7 +27,7 @@ namespace AnimaNative.Hud;
 ///   • INPUT — <see cref="HudRouting"/>/<see cref="MouseRouter"/>: pointer events go
 ///     to CEF over a HUD surface (or anywhere while an overlay is open) and to the
 ///     scene elsewhere; keys go to CEF while the HUD types, else the scene answers
-///     Enter/F/M/Esc with ui actions like main.ts.
+///     F/M/Esc with the browser scene rules (Task 48); Enter has no scene binding.
 ///   • LOGIN — ONE login: Godot logs in, then hands its session to CEF (see
 ///     <see cref="Start"/>): gdCEF exposes no cookie manager, so the cookie is
 ///     written by a script on a page of the server's origin.
@@ -569,16 +569,11 @@ public partial class HudOverlay : CanvasLayer
             {
                 // F11 is the window's (Main toggles full screen), never the page's — not even while it types.
                 if (k.Keycode == Key.F11) break;
+                if (k.Pressed && RouteSceneKey(k)) { Handled(); break; }
                 if (HudRouting.KeysToHud(Ui))
                 {
                     int code = k.Unicode != 0 ? (int)k.Unicode : (int)k.Keycode;
                     _cef.Key(code, k.Pressed, k.ShiftPressed, k.AltPressed, k.CtrlPressed || k.MetaPressed);
-                    Handled();
-                }
-                else if (k.Pressed && !k.Echo
-                         && HudRouting.SceneKeyAction(k.Keycode, Ui.MenuOpen, k.CtrlPressed || k.AltPressed || k.MetaPressed) is { } action)
-                {
-                    SendUi(action);
                     Handled();
                 }
                 break;

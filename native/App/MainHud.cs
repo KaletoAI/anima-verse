@@ -25,7 +25,7 @@ public partial class Main : Node3D
         hud.Handlers["zoomTo"] = args => ZoomTo(args.Count > 0 ? args[0]?.GetValue<string>() : null);
         // The chat panel's box (HUD CSS px) → the camera's view shift (viewport px).
         hud.Handlers["setChatBox"] = args => _camera?.SetChatBox(hud.ChatBoxInWindow(args));
-        hud.Handlers["clearSelection"] = _ => Select(null);
+        hud.Handlers["clearSelection"] = _ => SelectForInput(null);
         hud.Handlers["closeOpenView"] = _ => CloseOpenLocation();
         hud.Handlers["closeInfo"] = _ => SetInfo(null);
         hud.Handlers["infoAction"] = args => InfoAction(Arg(args, 0), Arg(args, 1));
@@ -47,6 +47,7 @@ public partial class Main : Node3D
         // page after its first load rebuilds the world with the live session, whichever arrives first (SessionFlow).
         hud.Handlers["markResume"] = _ => OnSession(SessionEvent.ResumeMarked);
         hud.PageLoaded = () => OnSession(SessionEvent.HudPageLoaded);
+        AttachEmbody(hud);
         // Scene-owned fields the chat, plaque and menu read (minimum viable set).
         hud.SetState("mode", "overview");
         hud.SetState("connection", "ok");
@@ -195,7 +196,7 @@ public partial class Main : Node3D
                : location is { } l ? $"location {l.Id} at {l.Distance:0.##} m ({_picking!.LastBoxTests} boxes, "
                                      + $"{_picking.LastTriangleQueries} meshes, {_picking.LastMs:0.##} ms)"
                : "nothing"));
-        Select(outcome.Selected);
+        SelectForInput(outcome.Selected);
         if (outcome.Info == InfoChange.Clear) SetInfo(null);
         else if (outcome.Info == InfoChange.Show) ShowInfo(outcome.InfoLocationId!);
     }
@@ -338,7 +339,7 @@ public partial class Main : Node3D
     /// <summary>The plaque's "Zoom to" (main.ts <c>zoomTo</c>): fly to the figure's root + 0.85 m at 4.5 m; no follow.</summary>
     private void ZoomTo(string? name)
     {
-        if (name is null || _figures is null || _camera is null) return;
+        if (name is null || _figures is null || _camera is null || _camera.Follow is not null) return;
         if (!_figures.Figures.TryGetValue(name, out var fig) || !IsInstanceValid(fig)) return;
         _camera.ZoomTo(fig.GlobalPosition);
         Log($"camera → {name} (HUD zoomTo)");

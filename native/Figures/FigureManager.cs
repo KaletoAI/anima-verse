@@ -685,7 +685,11 @@ public partial class FigureManager : Node3D
         {
             var marker = fig.Face is { } f ? new Vec3(f.X, f.Y, f.Z) : (Vec3?)null;
             // Not while a bridge holds the facing: the body getting up is the clip's.
-            if (NpcWalk.StandingFacing(new Vec3(pos.X, y, pos.Z), marker, neighbour, null) is { } dir && !fig.HoldsFacing)
+            // Task 48 / E7-T3: free standing first-person bodies hold within 60°; seats/activities keep their facing.
+            bool viewDriven = fig.HasFirstPersonBody && fig.FirstPersonViewYaw is not null && marker is null
+                && standingClip == FigureClips.PoseKind("standing", fig.Poses);
+            double? viewYaw = viewDriven ? CameraFraming.BodyYawForView(fig.Yaw, fig.FirstPersonViewYaw!.Value) : null;
+            if (NpcWalk.StandingFacing(new Vec3(pos.X, y, pos.Z), marker, viewDriven ? null : neighbour, viewYaw) is { } dir && !fig.HoldsFacing)
                 fig.FaceTowards(new Vector3((float)dir.X, (float)dir.Y, (float)dir.Z));
         }
         bool run = !reckoning && plan.Dist > NpcWalk.RunDistance;
@@ -1998,7 +2002,7 @@ public partial class FigureManager : Node3D
         double best = double.PositiveInfinity;
         foreach (var fig in _figures.Values)
         {
-            if (!IsInstanceValid(fig) || !fig.IsVisibleInTree() || fig.Body is not { } body) continue;
+            if (!IsInstanceValid(fig) || !fig.IsVisibleInTree() || fig.IsFirstPerson || fig.Body is not { } body) continue;
             double h = Math.Max(fig.HeightM, 1.0);
             var c = fig.GlobalPosition + new Vector3(0, (float)(fig.HeightM / 2), 0);
             if (!RayMath.RaySphere(origin, new Vec3(d.X, d.Y, d.Z), new Vec3(c.X, c.Y, c.Z), PickSphereFactor * h)) continue;

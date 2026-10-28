@@ -51,6 +51,8 @@ public partial class SecondaryMotionModifier : SkeletonModifier3D
     public string? Rev { get; private set; }
     /// <summary>Correct the skinned normals (<see cref="SkinNormalMaterial"/>); false = stock Godot normals.</summary>
     public bool CorrectNormals { get; }
+    /// <summary>Task 48: let the final head-shrink modifier own these skin binds.</summary>
+    public int FirstPersonHead { get; set; } = -1;
 
     public MotionRig Rig => _rig;
     public SecondaryMotion Motion => _motion;
@@ -258,7 +260,10 @@ public partial class SecondaryMotionModifier : SkeletonModifier3D
             for (int j = 0; j < mats.Length; j++)
             {
                 mats[j] = baseInv.Times(_rig.World[skin.Nodes[j]]).Times(skin.BindPoses[j]);
-                if (affected[skin.Nodes[j]] && IsInstanceValid(skin.Mesh) && skin.Mesh.GetSkinReference() is { } sr)
+                bool hiddenHead = false;
+                for (int b = skin.Nodes[j]; FirstPersonHead >= 0 && b >= 0; b = _rig.Parent(b))
+                    if (b == FirstPersonHead) { hiddenHead = true; break; }
+                if (!hiddenHead && affected[skin.Nodes[j]] && IsInstanceValid(skin.Mesh) && skin.Mesh.GetSkinReference() is { } sr)
                     _push.Add((sr.GetSkeleton(), j, ToTransform(mats[j])));
             }
             _lastSkins.Add((skin.Mesh, mats));

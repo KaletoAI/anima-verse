@@ -38,24 +38,14 @@ public static class HudRouting
     /// <summary>Keys go to CEF while the HUD owns the keyboard (<c>!keyForScene(ui)</c>: typing, or a modal overlay).</summary>
     public static bool KeysToHud(HudUi ui) => ui.Typing || ui.OverlayOpen;
 
-    /// <summary>
-    /// The ui action the SCENE answers a key with when the HUD does not own the
-    /// keyboard (main.ts: F opens the chat via <c>triggerOffer('talk')</c>, M
-    /// <c>toggleMenu</c>, Esc <c>closeMenu</c> while the menu is open; the native
-    /// spike adds Enter → chat). Modifier combinations belong to the system.
-    /// null = not a HUD key.
-    /// </summary>
+    /// <summary>Task 48: scene key intent; F resolves offers and Escape uses EscTarget in HudOverlay.</summary>
     public static string? SceneKeyAction(Key key, bool menuOpen, bool modifier)
     {
+        if (key == Key.Escape) return menuOpen ? "closeMenu" : "exitEmbodied";
         if (modifier) return null;
-        return key switch
-        {
-            Key.Enter or Key.KpEnter or Key.F => "openChat",
-            Key.M => "toggleMenu",
-            Key.Escape => menuOpen ? "closeMenu" : null,
-            _ => null,
-        };
+        return key switch { Key.F => "interact", Key.M => "toggleMenu", _ => null };
     }
+
 }
 
 /// <summary>

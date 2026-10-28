@@ -15,8 +15,8 @@ public readonly record struct OverviewPose(Vec3 Position, Vec3 Target, double Pi
 /// camera (<c>native/Ui/OverviewCamera.cs</c> feeds it events and ground hits and applies the pose).
 /// A line-for-line port of the camera part of <c>client3d/src/scene/engine.ts</c> (Engine: the
 /// fields <c>target/dist/targetDist/yaw/targetYaw/pitchOffset</c>, <c>flyTo</c>, <c>bindInput</c>,
-/// the camera half of <c>frame()</c>) in overview mode: no follow target, no first person,
-/// <c>zoomFloor</c>/<c>zoomCap</c> null, <c>orbitOnDrag</c> false, overview near pitch 18°.
+/// the camera half of <c>frame()</c>). Task 48 (E7-T3) adds follow, bounded zoom and first person;
+/// overview defaults remain unchanged.
 ///
 /// Every formula that cameraMath.ts / cameraFraming.ts own goes through <see cref="CameraMath"/> /
 /// <see cref="CameraFraming"/> (vector-checked). What engine.ts writes INLINE stays inline here,
@@ -49,10 +49,29 @@ public sealed class OverviewControl
     /// <summary>main.ts <c>ZOOM_TO_BASE_DIST</c> / <c>ZOOM_TO_MAX_DIST</c>.</summary>
     public const double ZoomToBaseDist = 4.5, ZoomToMaxDist = 12;
 
-    // ---- engine.ts mode fields, fixed for the overview -----------------------------------------
+    // ---- engine.ts mode fields (Task 48)               -----------------------------------------
 
     /// <summary>The mode's zoom floor and cap: both null in the overview (only the embodied mode sets them).</summary>
-    private static readonly double? ZoomFloor = null, ZoomCap = null;
+    public double? ZoomFloor { get; set; }
+    public double? ZoomCap { get; set; }
+    public double NearPitchDeg { get; set; } = CameraFraming.OverviewNearPitchDeg;
+    public bool OrbitOnDrag { get; set; }
+    /// <summary>Task 48: live eye callback; evaluated once after the fly per frame.</summary>
+    public Func<Vec3?>? Follow { get; set; }
+    public event Action? ZoomCapped;
+    private readonly FirstPersonZoom _firstPersonZoom = new();
+    public bool FirstPerson => _firstPersonZoom.Active;
+    private Vec3? _followAt;
+
+    private double ClampZoom(double distance)
+    {
+        if (ZoomCap is not null && distance > CameraMath.ZoomCeiling(CameraMath.ZoomFloorOf(ZoomFloor), ZoomCap) + 1e-6)
+            ZoomCapped?.Invoke();
+        return CameraMath.ClampZoom(distance, ZoomFloor, ZoomCap);
+    }
+
+    /// <summary>Task 48: release first person immediately on a mode edge, before the next frame.</summary>
+    public void ResetFirstPerson() { _firstPersonZoom.Update(Dist, false, 0); _followAt = null; }
 
     // ---- the camera state (engine.ts public fields) ----------------------------------------------
 
@@ -114,8 +133,11 @@ public sealed class OverviewControl
 
     /// <summary>main.ts <c>zoomTo</c>: fly to the figure's root lifted by 0.85 m at clamp(4.5, MIN_DIST, 12) = 4.5 m. No follow.</summary>
     public void ZoomTo(Vec3 figureRoot)
-        => FlyTo(new Vec3(figureRoot.X, figureRoot.Y + ZoomToLift, figureRoot.Z),
+    {
+        if (Follow is not null) return;
+        FlyTo(new Vec3(figureRoot.X, figureRoot.Y + ZoomToLift, figureRoot.Z),
                  Math.Max(CameraFraming.MinDist, Math.Min(ZoomToMaxDist, ZoomToBaseDist)));
+    }
 
     // ---- input (engine.ts bindInput) --------------------------------------------------------------
 
@@ -126,8 +148,8 @@ public sealed class OverviewControl
     public void Wheel(double deltaY, Func<Vec3?> cursorHit)
     {
         double before = TargetDist;
-        TargetDist = CameraMath.ClampZoom(before * CameraMath.WheelFactor(deltaY), ZoomFloor, ZoomCap);
-        if (TargetDist < before && cursorHit() is Vec3 p)
+        TargetDist = ClampZoom(before * CameraMath.WheelFactor(deltaY));
+        if (Follow is null && TargetDist < before && cursorHit() is Vec3 p)
             Target = CameraMath.ZoomTowardCursor(Target, (p.X, p.Z), before, TargetDist);
         _flyT = 1;
     }
@@ -139,7 +161,7 @@ public sealed class OverviewControl
     public void PointerDown(PointerButton button, bool shift, bool ctrl, bool alt, double x, double y, Func<Vec3?> groundHit)
     {
         bool orbit = button is PointerButton.Middle or PointerButton.Right
-                     || (button == PointerButton.Left && (shift || ctrl || alt));
+                     || (button == PointerButton.Left && (OrbitOnDrag || shift || ctrl || alt));
         if (orbit)
         {
             _orbiting = true;
@@ -168,7 +190,7 @@ public sealed class OverviewControl
             double dy = y - _orbitLast.Y;
             if (double.Hypot(x - _orbitStart.X, y - _orbitStart.Y) > OrbitDragPx) _moved = true;
             _orbitLast = (x, y);
-            var step = CameraMath.OrbitStep(TargetYaw, PitchOffset, dx, dy);
+            var step = CameraMath.OrbitStep(TargetYaw, PitchOffset, dx, dy, FirstPerson);
             TargetYaw = step.TargetYaw;
             PitchOffset = step.PitchOffset;
             _flyT = 1;
@@ -204,8 +226,8 @@ public sealed class OverviewControl
         _keys.Add(key);
         if (key == "q") TargetYaw += QuarterTurn;
         if (key == "e") TargetYaw -= QuarterTurn;
-        if (key == "+") TargetDist = CameraMath.ClampZoom(TargetDist * KeyZoomIn, ZoomFloor, ZoomCap);
-        if (key == "-") TargetDist = CameraMath.ClampZoom(TargetDist * KeyZoomOut, ZoomFloor, ZoomCap);
+        if (key == "+") TargetDist = ClampZoom(TargetDist * KeyZoomIn);
+        if (key == "-") TargetDist = ClampZoom(TargetDist * KeyZoomOut);
     }
 
     public void KeyUp(string key) => _keys.Remove(key);
@@ -224,7 +246,7 @@ public sealed class OverviewControl
         double dt = Math.Min(rawDt, CameraMath.MaxFrameDt);
 
         // WASD/arrows relative to the view direction, at the eased distance of the previous frame.
-        double panSpeed = Dist * KeyPanRate * dt;
+        double panSpeed = Follow is null ? Dist * KeyPanRate * dt : 0;
         double fx = -Math.Sin(Yaw), fz = -Math.Cos(Yaw);
         double rx = -fz, rz = fx;
         double tx = Target.X, ty = Target.Y, tz = Target.Z;
@@ -244,19 +266,40 @@ public sealed class OverviewControl
                               _flyFrom.Z + (_flyTo.Z - _flyFrom.Z) * k);
         }
 
+        _followAt = Follow?.Invoke();
+        if (_followAt is Vec3 at)
+        {
+            double k = 1 - Math.Exp(-6 * dt);
+            Target = new Vec3(Target.X + (at.X - Target.X) * k, Target.Y + (at.Y - Target.Y) * k,
+                              Target.Z + (at.Z - Target.Z) * k);
+        }
         double ease = CameraMath.Damp(dt);
         Dist = Lerp(Dist, TargetDist, ease);
         Yaw = Lerp(Yaw, TargetYaw, ease);
 
-        double pitch = CameraMath.ClampPitchDeg(CameraFraming.BasePitchDeg(Dist) + PitchOffset);
-        return new OverviewPose(CameraMath.CameraPose(Target, Dist, Yaw, pitch), Target, pitch);
+        double zoomDistance = FirstPerson ? TargetDist : Math.Max(Dist - 1e-6, TargetDist);
+        _firstPersonZoom.Update(zoomDistance, _followAt is not null, dt);
+        return Pose();
     }
 
-    /// <summary>The pose for the current state without advancing anything (a frame of dt = 0 changes nothing either).</summary>
+    /// <summary>Task 48: current pose; third person has a 2 m stand-off, first person has no chase lag.</summary>
     public OverviewPose Pose()
     {
-        double pitch = CameraMath.ClampPitchDeg(CameraFraming.BasePitchDeg(Dist) + PitchOffset);
-        return new OverviewPose(CameraMath.CameraPose(Target, Dist, Yaw, pitch), Target, pitch);
+        double orbitDist = _followAt is not null ? Math.Max(Dist, CameraFraming.ThirdPersonMinDist) : Dist;
+        double pitch = CameraMath.ClampPitchDeg((FirstPerson ? 0 : CameraFraming.BasePitchDeg(orbitDist, NearPitchDeg)) + PitchOffset, FirstPerson);
+        if (FirstPerson && _followAt is Vec3 eye) return FirstPersonPose(eye, pitch);
+        return new OverviewPose(CameraMath.CameraPose(Target, orbitDist, Yaw, pitch), Target, pitch);
+    }
+
+    /// <summary>Task 48: reassert the lens after figure/skeleton hooks without advancing the chase or zoom latch.</summary>
+    public OverviewPose FirstPersonPose(Vec3 eye)
+        => FirstPersonPose(eye, CameraMath.ClampPitchDeg(PitchOffset, true));
+
+    private OverviewPose FirstPersonPose(Vec3 eye, double pitch)
+    {
+        Target = eye; // engine.placeFirstPerson: all target-dependent systems see the posed eye as well.
+        var offset = CameraMath.CameraPose(new Vec3(0, 0, 0), 1, Yaw, pitch);
+        return new OverviewPose(eye, new Vec3(eye.X - offset.X, eye.Y - offset.Y, eye.Z - offset.Z), pitch);
     }
 
     /// <summary><c>THREE.MathUtils.lerp</c>: <c>(1 − t) · x + t · y</c>.</summary>

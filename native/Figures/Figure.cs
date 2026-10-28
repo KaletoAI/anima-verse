@@ -287,6 +287,7 @@ public partial class Figure : Node3D
         // figures.ts Figure constructor: createSecondaryMotion(THREE, this.root, this.motion, model.template).
         _secondaryRev = Motion?.Rev;
         if (isGlb && skeleton is not null) Secondary = SecondaryMotionModifier.TryCreate(body, skeleton, Motion);
+        InitFirstPersonBody();
     }
 
     // ---- secondary motion (figures.ts: secondary, secondaryRev, secondaryPlaced, resetSecondaryMotion) -------------

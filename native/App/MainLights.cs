@@ -61,19 +61,19 @@ public partial class Main : Node3D
     }
 
     /// <summary>
-    /// The frame's lights: the focus is the camera target (the overview — embodied it is the avatar, E7); the prop lights,
+    /// The frame's lights: the focus is the camera target (the overview — Task 48 embodied focus is the avatar root); the prop lights,
     /// mirrors and doors tick; the room under the focus in the open location gives the ambience target, eased with τ 0.5.
     /// </summary>
     private void TickLights(double delta)
     {
         if (_builder is null || _camera is null) return;
-        var focus = _camera.Target;
+        var focus = Embodied && AvatarFigure() is { } avatar ? avatar.GlobalPosition : _camera.Target;
         _builder.TickProps(delta, _camera, focus, _night);
         var target = Ambience.Target(_builder.AmbienceAt(_openView.OpenId, focus));
         _ambience = Ambience.Step(_ambience, target, delta);
         _stage?.Apply(_ambience);
         _stage?.Track(focus, _camera.Distance);
         // main.ts' frame hook: the backdrop rides on the camera target (position only).
-        if (_backdrop is not null && IsInstanceValid(_backdrop)) _backdrop.Follow(focus);
+        if (_backdrop is not null && IsInstanceValid(_backdrop)) _backdrop.Follow(_camera.Target);
     }
 }

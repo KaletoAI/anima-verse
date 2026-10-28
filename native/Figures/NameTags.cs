@@ -17,7 +17,7 @@ namespace AnimaNative.Figures;
 ///   • ANCHOR — the figure's root + <see cref="OverviewLabels.TagAnchorY"/> of <see cref="Figure.TagHeight"/> (a model's
 ///     height; a portrait has none, so its tag sits below the sprite).
 ///   • VISIBILITY per frame — <see cref="OverviewLabels.TagVisible"/> with the camera's eased distance; a hidden
-///     figure hides its tag; there is no first-person body in this client yet (E7).
+///     figure hides its tag; Task 48 also hides the avatar's own first-person tag.
 ///   • BUBBLE — <c>say(name, text)</c>: unknown names are ignored, a new line replaces the old one, the text is
 ///     <see cref="Bubble.Text"/>, it stays <see cref="Bubble.Ms"/> ms (checked every frame, <c>now ≥ until</c>
 ///     hides it). Box: padding 5/9 px, 1 px border, radius 10, 11 px text on 1.35 lines, centred, at most 22ch
@@ -81,7 +81,7 @@ public sealed class NameTags
         foreach (var (name, tag) in _tags)
         {
             if (!_figures.Figures.TryGetValue(name, out var fig) || !GodotObject.IsInstanceValid(fig) || !fig.IsInsideTree()) continue;
-            if (!OverviewLabels.TagVisible(camDist, hidden: !fig.IsVisibleInTree(), ownFirstPerson: false)) continue;
+            if (!OverviewLabels.TagVisible(camDist, hidden: !fig.IsVisibleInTree(), ownFirstPerson: fig.IsFirstPerson)) continue;
             tag.Anchor = fig.GlobalPosition + new Vector3(0, (float)OverviewLabels.TagAnchorY(fig.TagHeight), 0);
             yield return tag;
         }

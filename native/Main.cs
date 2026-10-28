@@ -240,6 +240,7 @@ public partial class Main : Node3D
 
     public override void _ExitTree()
     {
+        DetachEmbody();
         StopSync();
         _stop.Cancel();
         _shadowGate?.Detach();
@@ -282,13 +283,14 @@ public partial class Main : Node3D
         // with a world (the measuring runs too: the avatar's location fades in at their start, as in the browser).
         if (_builder is not null && _camera is not null && _world is not null)
         {
+            TickEmbody();
             SyncLocks();
             _builder.TickView(delta, _camera.GlobalPosition);
             TickLights(delta);
             TickVeil(delta);
         }
         // The overview auto-close of main.ts' frame hook (no auto-reopen). The measuring runs keep their world.
-        if (_interactive && _openView.OpenId is { } open && _camera is not null)
+        if (_interactive && !Embodied && _openView.OpenId is { } open && _camera is not null)
         {
             var slot = _builder?.Slots.GetValueOrDefault(open);
             var target = _camera.Target;
