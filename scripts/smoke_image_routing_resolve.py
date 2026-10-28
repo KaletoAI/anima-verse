@@ -135,6 +135,9 @@ EXPECTATIONS, DERIVED BY HAND
     is configured -> NoRouteError with chain statuses ["cooldown"], the row's
     backend "" and ZERO pick_lowest_cost calls on the pool — no other backend
     was chosen (no slide onto the cheapest / a paid one).
+25. With two equally priced img2img backends A/B, for both a "*" chain and
+    an empty chain: peek, peek, render, peek, render, peek selects A,A,A,B,B,A.
+    Peeks neither consume a round-robin turn nor reset the already-used index.
 """
 import atexit
 import os
@@ -465,6 +468,19 @@ check("20 intended_spec_for ignores the cooldown",
       routing.intended_spec_for("photo", pool=POOL), "Flux Big")
 B["Flux Big"]._cooldown_until = 0.0
 B["Flux Big"].available = True
+
+# 25: preflight peeks at the next turn without claiming it.
+CHAR_SPEC["value"] = ""
+for specs in (["*"], []):
+    RULES = {"scene_view": specs}
+    peek_pool = BackendPool([Fake("Equal A", category="img2img"),
+                             Fake("Equal B", category="img2img")])
+    sequence = [
+        routing.resolve_image_route("scene_view", has_ref=True, pool=peek_pool,
+                                    advance_rotation=advance).backend.name
+        for advance in (False, False, True, False, True, False)]
+    check(f"25 peek keeps the next turn for chain {specs}", sequence,
+          ["Equal A", "Equal A", "Equal A", "Equal B", "Equal B", "Equal A"])
 
 print()
 if FAILS:

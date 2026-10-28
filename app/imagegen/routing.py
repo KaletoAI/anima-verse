@@ -280,7 +280,8 @@ def _cheapest_no_rotation(live: List[Any]) -> Any:
 
 
 def _empty_chain_pick(occasion: str, backends: List[Any],
-                      exclude: set, has_ref: bool, pool: Any, rotate: bool) -> Any:
+                      exclude: set, has_ref: bool, pool: Any, rotate: bool,
+                      advance_rotation: bool = True) -> Any:
     if requires_chain(occasion):
         return None
     live = [b for b in backends
@@ -291,21 +292,25 @@ def _empty_chain_pick(occasion: str, backends: List[Any],
     if not live:
         return None
     if rotate:
-        return pool.pick_lowest_cost(live, rotation_key=f"route:{occasion}:*")
+        return pool.pick_lowest_cost(live, rotation_key=f"route:{occasion}:*",
+                                    advance_rotation=advance_rotation)
     return _cheapest_no_rotation(live)
 
 
 def resolve_image_route(occasion: str, *, character: str = "",
                         has_ref: bool = False, exclude: Iterable[str] = (),
                         probe: bool = False, pool: Any = None,
-                        not_applicable: Optional[Dict[str, str]] = None) -> Route:
+                        not_applicable: Optional[Dict[str, str]] = None,
+                        advance_rotation: bool = True) -> Route:
     """Resolve the chain of ``occasion`` to ONE backend (see module doc).
 
     ``exclude``: backend names that already failed in this routed call.
     ``probe``: run ``check_availability`` once on the INTENDED entry's
     candidates — the first entry that passes the configuration filters —
     except the ones in ``exclude`` or in a cooldown (a real render does; the
-    overview never does)."""
+    overview never does).
+    ``advance_rotation=False`` is a non-mutating preflight: choose the next
+    equal-cost backend without consuming its round-robin turn."""
     get_occasion(occasion)                       # UnknownOccasionError
     p = _pool(pool)
     rejected = not_applicable or {}
@@ -327,7 +332,8 @@ def resolve_image_route(occasion: str, *, character: str = "",
                 break
 
     if not entries:
-        b = _empty_chain_pick(occasion, backends, excl, has_ref, p, rotate=True)
+        b = _empty_chain_pick(occasion, backends, excl, has_ref, p, rotate=True,
+                              advance_rotation=advance_rotation)
         if b is None:
             raise NoRouteError(occasion, [])
         return Route(occasion, b, None, "", "", None, [])
@@ -340,7 +346,8 @@ def resolve_image_route(occasion: str, *, character: str = "",
                "backend": "", "matches": names}
         if status == STATUS_OK:
             if chosen is None:
-                b = p.pick_lowest_cost(live, rotation_key=f"route:{occasion}:{spec}")
+                b = p.pick_lowest_cost(live, rotation_key=f"route:{occasion}:{spec}",
+                                      advance_rotation=advance_rotation)
                 chosen = (b, pos, spec)
                 row["backend"] = b.name
             else:

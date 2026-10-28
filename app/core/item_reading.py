@@ -1,8 +1,8 @@
 """Provider-backed room reading and bounded memories, with no narration.
 
-Page providers and add_memory run without local locks/transactions. The image
-provider's short publication callback alone runs under access locks; rendering
-must finish before invoking it. Callers enter this module without locks.
+Page providers and add_memory run without local locks/transactions. Image jobs
+are admitted by their source and publish independently of the read session;
+only reading/status responses remain subject to the current access gates.
 """
 import json
 from uuid import uuid4
@@ -235,7 +235,8 @@ def read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -
     index = max(0, min(index, len(pages)-1))
     page = pages[index] if pages else None
     _learn(reader, item, [page] if page else [], game_time().day_key())
-    return {"item_name": localized(item, "name", character.get_character_language(reader)) or item_id,
+    return {"avatar": reader,
+            "item_name": localized(item, "name", character.get_character_language(reader)) or item_id,
             "index": index, "total": len(pages),
             "page": _public_page(page) if page is not None else None}
 
@@ -278,10 +279,10 @@ def prepare_page_image(reader: str, item_id: str, index: int, *, page_ref: str) 
     return {**prepared, "avatar": reader}
 
 
-def regenerate_page_image(reader: str, item_id: str, index: int, *,
-                          page_ref: str, prompt: str, backend: str = "",
-                          loras=None, negative_prompt: str = "") -> dict:
-    """Render outside locks, then publish only for the original authorized read."""
+def enqueue_page_image(reader: str, item_id: str, index: int, *,
+                       page_ref: str, prompt: str, backend: str = "",
+                       loras=None, negative_prompt: str = "") -> dict:
+    """Authorize the displayed page and persist its source-owned render job."""
     context = _image_context(reader, item_id, index)
     if isinstance(context, dict):
         return context
@@ -289,60 +290,72 @@ def regenerate_page_image(reader: str, item_id: str, index: int, *,
     if not page_ref or page.get("image_ref") != page_ref:
         return {"error": "That page has changed. Open it again."}
 
-    def access_error():
-        # No provider calls here: publication is serialized with room edits,
-        # reader movement and catches, never with a long-running render.
-        current = _item_here(reader, item_id)
-        if (not current or not has_pages(current) or current.get("owner") != item.get("owner")
-                or current.get("pages_source") != item.get("pages_source")
-                or hooks.get_provider(f"item_page_image.{current.get('pages_source', '')}") is not provider):
-            return {"error": "There is nothing like that to read here."}
-        session = _session_row(reader)
-        if (not session or session["item_id"] != item_id or not _session_here(session)
-                or any(session[k] != original_session[k] for k in
-                       ("session_id", "location_id", "room_id"))):
-            return {"error": "The reading session has ended."}
-        from app.core.reading_watch import watching_owner
-        if session["caught"] or watching_owner(reader, current):
-            return {"caught_by": current.get("owner", "")}
-        return None
-
-    def publish(operation):
-        """Run only a short, atomic storage operation after the final gate."""
+    def admit(operation):
+        """Recheck authority after preflight; operation may only persist a job."""
         from app.models.world import world_write_lock
         with world_write_lock, keyed_lock("character_profile", reader), keyed_lock("reading_session", reader):
-            denied = access_error()
-            if denied:
-                return denied
-            if not operation():
-                return {"error": "That page has changed. Open it again."}
-        return {"ok": True}
+            current = _item_here(reader, item_id)
+            session = _session_row(reader)
+            if (not current or not has_pages(current) or current.get("owner") != item.get("owner")
+                    or current.get("pages_source") != item.get("pages_source")
+                    or hooks.get_provider(f"item_page_image.{current.get('pages_source', '')}") is not provider):
+                return {"error": "There is nothing like that to read here."}
+            if (not session or session["session_id"] != original_session["session_id"]
+                    or not _session_here(session)):
+                return {"error": "The reading session has ended."}
+            from app.core.reading_watch import watching_owner
+            if session["caught"] or watching_owner(reader, current):
+                return {"caught_by": current.get("owner", "")}
+            return operation()
 
-    result = provider(item, reader, page, action="regenerate", page_ref=page_ref,
-                      prompt=prompt, backend=backend, loras=loras,
-                      negative_prompt=negative_prompt, publish=publish)
-    if result.get("error") or result.get("caught_by"):
+    return provider(item, reader, page, action="enqueue", page_ref=page_ref,
+                    prompt=prompt, backend=backend, loras=loras,
+                    negative_prompt=negative_prompt, admit=admit)
+
+
+def page_image_status(reader: str, item_id: str, index: int, *,
+                      page_ref: str, task_id: str) -> dict:
+    """Return only this reader's authorized job and matching selected page."""
+    context = _image_context(reader, item_id, index)
+    if isinstance(context, dict):
+        return context
+    item, _, page, provider, session = context
+    if not page_ref or page.get("image_ref") != page_ref:
+        return {"error": "That page has changed. Open it again."}
+    result = provider(item, reader, page, action="status", page_ref=page_ref,
+                      task_id=task_id)
+    if result.get("status") != "completed":
         return result
-    # Re-fetch the page list: deletion/reordering while the GPU ran must never
-    # return a different page at the old index. Identity, not index, selects it.
-    pages = pages_of(item, reader)
-    if pages is None:
-        return {"error": "That page is no longer available."}
-    selected = next(((i, p) for i, p in enumerate(pages)
-                     if p.get("image_ref") == page_ref), None)
-    if selected is None:
+    # Refresh after publication, then check the current session again before
+    # loading private bytes. An index shift must never expose its new occupant.
+    context = _image_context(reader, item_id, index)
+    if isinstance(context, dict):
+        return context
+    current, pages, selected, current_provider, current_session = context
+    if (selected.get("image_ref") != page_ref or current_provider is not provider
+            or current.get("owner") != item.get("owner")
+            or current_session["session_id"] != session["session_id"]):
         return {"error": "That page has changed. Open it again."}
     from app.models.world import world_write_lock
     with world_write_lock, keyed_lock("character_profile", reader), keyed_lock("reading_session", reader):
-        denied = access_error()
-        if denied:
-            return denied
-        selected_index, selected_page = selected
-        public = _public_page(selected_page)
-        if not public["image_regenerable"]:
+        live = _session_row(reader)
+        live_item = _item_here(reader, item_id)
+        if (not live or live["session_id"] != current_session["session_id"]
+                or not _session_here(live) or not live_item or not has_pages(live_item)
+                or live_item.get("owner") != current.get("owner")
+                or live_item.get("pages_source") != current.get("pages_source")
+                or hooks.get_provider(f"item_page_image.{current.get('pages_source', '')}") is not provider):
+            return {"error": "The reading session has ended."}
+        from app.core.reading_watch import watching_owner
+        if live["caught"] or watching_owner(reader, current):
+            return {"caught_by": current.get("owner", "")}
+        public = _public_page(selected)
+        if public["image_ref"] != page_ref or not public["image_regenerable"]:
             return {"error": "That page has changed. Open it again."}
-        return {"item_name": localized(item, "name", character.get_character_language(reader)) or item_id,
-                "index": selected_index, "total": len(pages), "page": public}
+        reading = {"avatar": reader,
+                   "item_name": localized(current, "name", character.get_character_language(reader)) or item_id,
+                   "index": index, "total": len(pages), "page": public}
+    return {**result, "reading": reading}
 
 
 def npc_read_today(reader: str, item_id: str) -> bool:

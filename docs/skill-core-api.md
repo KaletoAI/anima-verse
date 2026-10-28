@@ -416,25 +416,40 @@ image bytes. Preparation must receive the token of the already displayed page.
 ```python
 hooks.register_provider("item_page_image.<source>", provider)
 # provider(item, reader, page, *, action, page_ref="", prompt="", backend="",
-#          loras=None, negative_prompt="", publish=None) -> dict
+#          loras=None, negative_prompt="", task_id="", admit=None) -> dict
 ```
 
 For `action="prepare"`, return `{prompt, subjects, available, page_ref, backend_options}`;
 the core adds `avatar`. Resolve `backend_options` with the actual scene references,
-so Auto and its LoRA list match the render. For `action="regenerate"`, render without access/profile locks,
-then invoke the provided `publish` callback with a short atomic storage operation to recheck room visibility,
-reading session, owner-catching state and source identity immediately before
-storage. The operation must also guard the immutable page identity and atomically
-replace image bytes and generation metadata. A rejected publish does not replace
-the previous image. Return the callback's `{ok}` / `{error}` / `{caught_by}` result.
-The core checks access once more before sending the updated selected page.
+so Auto and its LoRA list match the render. For `action="enqueue"`, preflight
+outside access/profile locks, then invoke the provided `admit` callback with a
+short persistence operation. The core rechecks the original reader/session,
+item source and exact page before admission. Return `{task_id, page_ref,
+status: "queued"}` once the durable task exists; never render in that callback.
 
-`POST /play/read/image-prepare {item_id, index, page_ref}` requires an active authorized
-reading session and returns the preparation above. `POST /play/read/image-regenerate`
-accepts `{item_id, index, page_ref, prompt, backend?, loras?, negative_prompt?}`
-and returns the usual reading response after successful replacement. Both execute
-blocking work off the event loop. Render/validation errors use HTTP errors so the
-dialog retains its previous image; access/catch results end the reading UI.
+An admitted job is independent of the read session: closing the book, moving or
+reopening does not cancel its render or deny publication. The source-owned worker
+must still guard immutable entry identity, deletion/reset and atomic image/meta
+replacement, retaining the previous image on failure. Private scene/prompt
+snapshots belong in source-owned world storage, not globally visible queue
+payloads, labels, results or errors. Preserve the minimal submitter identity at
+the GPU handoff, so background work does not bypass the existing user limit.
+
+For `action="status"`, verify that the opaque `task_id` belongs to this reader,
+item and immutable page. Return `{status, detail?}`; the core supplies `reading`
+only after completion and a fresh authorized read. Pending/running/failed/
+cancelled status contains no image bytes.
+
+`POST /play/read/image-prepare {item_id, index, page_ref}` requires an active
+authorized session. `POST /play/read/image-regenerate` accepts
+`{item_id, index, page_ref, prompt, backend?, loras?, negative_prompt?}` and returns
+HTTP 202 `{task_id, page_ref, status: "queued"}` without waiting for generation.
+`POST /play/read/image-status {item_id, index, page_ref, task_id}` returns
+`{status, detail?, reading?}` only for the authorized reader/page/job. Its completed
+`reading` includes `avatar` and the selected page, never an image after closing,
+moving or being caught. Admission errors remain HTTP errors; background failures
+are reported by status while the existing image remains readable. Poll only
+while the reader is mounted and authorized; never block page or game controls.
 The shared dialog offers backend-scoped LoRAs with global `scene_view` Auto routing;
 an explicit backend choice has no fallback. Existing person reference images stay
 part of the render, independently of changing the prompt or backend.
@@ -446,7 +461,7 @@ part of the render, independently of changing the prompt or backend.
 | `has_pages(item: dict) -> bool` | A provider is registered for the item's `pages_source`; does not call it (used by the polled room listing). |
 | `pages_of(item: dict, reader: str) -> list[dict] \| None` | Get pages; None for absent source/provider or a logged provider failure. |
 | `readable_here(reader: str, item_id: str) -> bool` | Requires a placement in the reader's current room, `placement_visible_to` (stable above), and non-None pages. Carried items do not qualify. |
-| `read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict` | Returns `{item_name, index, total, page: {heading, date_label, text, image, image_regenerable, image_ref}}`, or `{error}` / `{caught_by}`. Index clamps to the book; an empty book has index 0 and page None. Learns the returned page. `opening=True` starts a session; later pages extend it. A pending owner catch returns no page and learns nothing. |
+| `read_page(reader: str, item_id: str, index: int, *, opening: bool = False) -> dict` | Returns `{avatar, item_name, index, total, page: {heading, date_label, text, image, image_regenerable, image_ref}}`, or `{error}` / `{caught_by}`. Index clamps to the book; an empty book has index 0 and page None. Learns the returned page. `opening=True` starts a session; later pages extend it. A pending owner catch returns no page and learns nothing. |
 | `npc_read(reader: str, item_id: str) -> dict` | Once daily, returns `{item_name, pages}` with up to two newest unknown linked secrets (newest first), otherwise the newest page; returned text is at most 600 characters per page. Invalid/missing secrets and pages without a secret ID are not unknown. Repeat calls that day return `{error}`. Starts a full-duration session without changing pose; a catch returns `{caught_by}` before learning. |
 | `npc_read_today(reader: str, item_id: str) -> bool` | Whether the NPC path was used on this GameTime day. |
 | `start_session(reader: str, item_id: str, location_id: str, room_id: str) -> dict` | Replaces this reader's session; started=now, until=now + world `inventory.reading_minutes` (int, default 10). Callers invoke `reading_watch.on_session_started` after return, outside locks. |
@@ -456,13 +471,15 @@ part of the render, independently of changing the prompt or backend.
 | `end_session(reader: str, reason: str) -> None` | Deletes the reader's session. |
 | `heartbeat(reader: str, item_id: str) -> dict` | Returns `{caught_by: owner}` for a matching pending catch, otherwise `{caught_by: ""}` and extends a live matching session. Does not start a session. |
 | `prepare_page_image(reader: str, item_id: str, index: int, *, page_ref: str) -> dict` | Prepare a regenerable page only in the reader's current authorized session and with the displayed immutable page token. A shifted index never selects a different page. Does not load image bytes or learn another secret. |
-| `regenerate_page_image(reader: str, item_id: str, index: int, *, page_ref: str, prompt: str, backend: str = "", loras=None, negative_prompt: str = "") -> dict` | Render via the source provider and publish only under the original authorized session and immutable page identity; returns the refreshed page or an access/catch result. |
+| `enqueue_page_image(reader: str, item_id: str, index: int, *, page_ref: str, prompt: str, backend: str = "", loras=None, negative_prompt: str = "") -> dict` | Validate current read authority and admit a durable, source-owned replacement. Returns `{task_id, page_ref, status: "queued"}` or an access/catch result; it never waits for the image. |
+| `page_image_status(reader: str, item_id: str, index: int, *, page_ref: str, task_id: str) -> dict` | Check reader/item/page/job ownership and current read permission, then return job status and, only on completed authorized reads, the refreshed selected page. |
 
 Sessions persist in `item_reading_sessions(reader PRIMARY KEY, item_id,
 location_id, room_id, started_game_ts, until_game_ts, session_id, caught DEFAULT 0,
 noticed_by DEFAULT '[]')`. Every start gets a fresh UUID `session_id`, including
-when the game clock is frozen; an old render/watcher cannot match a reopened
-session by timestamp. Returned dictionaries decode `noticed_by` to a list.
+when the game clock is frozen; old watcher callbacks cannot match a reopened
+session by timestamp. Admitted image jobs deliberately outlive that session.
+Returned dictionaries decode `noticed_by` to a list.
 Caught rows are inactive but remain available to heartbeat/page turns until
 `active_session` prunes them or they are replaced/closed. Room/tick scans leave caught rows available for heartbeat.
 
@@ -470,6 +487,12 @@ Caught rows are inactive but remain available to heartbeat/page turns until
 returns the existing backend/LoRA options and effective Auto resolution. A prepared
 historical scene supplies `has_reference` from its actual people rather than
 borrowing the avatar's photo routing or assuming no references.
+Queued user-initiated media may read the submitter through
+`app.core.auth_dependency.get_current_user_from_ctx()`. Persist only the minimal
+user identity/role needed for the GPU limit, not session tokens, profiles or
+permission lists. A worker restores that identity with the module's
+`current_user_ctx` ContextVar and resets its token in a finally block.
+
 
 
 `app.core.reading_watch.on_session_started(session: dict) -> dict` is the
@@ -919,7 +942,7 @@ mit `tpose_workflow` (falls leer: `workflow`) und `tpose_loras` (falls leer: nor
 
 | Funktion | Semantik |
 |---|---|
-| `resolve_image_route(occasion, *, character='', has_ref=False, exclude=(), probe=False, pool=None) -> Route` | Löst die Kette eines Anlasses auf EIN Backend auf (`Route.backend`, `.position`, `.spec`, `.is_fallback`); leere Kette = billigstes passendes Backend; eine gesetzte Kette ohne nutzbaren Eintrag → `NoRouteError`, nie ein Rückfall auf „billigstes“. **Vor** dem Komponieren des Prompts rufen — Stil, Negativ, Referenz-Slots und LoRAs hängen am aufgelösten Backend |
+| `resolve_image_route(occasion, *, character='', has_ref=False, exclude=(), probe=False, pool=None, not_applicable=None, advance_rotation=True) -> Route` | Resolve one backend before composing its prompt. Empty chain selects the cheapest eligible backend; a configured unusable chain raises `NoRouteError`. `advance_rotation=False` peeks at the current equal-cost round-robin choice without consuming it, for admission checks; actual renders keep the default rotation and normal fallback behavior. |
 | `explain_image_routing(character='', pool=None) -> Dict` | Je Anlass die Kette mit Status pro Eintrag und dem Backend, das ein Render nähme — reine Anzeige, prüft **nie** aktiv (kein Probe) |
 | `run_routed(occasion, render, *, character='', has_ref=False, pool=None, on_route=None) -> Tuple[Any, Route]` | Löst auf und ruft den Callback `render` mit dem Backend; läuft nur dann auf dem nächsten Ketteneintrag neu an, wenn `render` einen `BackendFailedError` **des gerouteten Backends** wirft (Last, 4xx, Abbruch, Hauptschalter: kein Neuanlauf), höchstens `MAX_REENTRIES` = 2 Mal. `render` baut alles Backend-Abhängige selbst. `on_route` (optional) bekommt jede Route direkt vor dem `render`-Aufruf — ein Hub-Vorgang speichert so die Routing-Meta mit dem Job, den er abschickt |
 | `route_meta(route)` | `{"routing": {...}, "fallback_from": {...}?}` — gehört in die Meta/Sidecar jedes gerouteten Ergebnisses; `fallback_from` nur, wenn ein Laufzeit-Ausfall (Cooldown/nicht erreichbar/Neuanlauf) den vorgesehenen Eintrag übersprang. Eine explizite Wahl schreibt keines der beiden |

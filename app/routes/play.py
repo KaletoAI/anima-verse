@@ -2845,17 +2845,28 @@ async def play_read_image_prepare(request: Request, user=Depends(get_current_use
 
 @router.post("/play/read/image-regenerate")
 async def play_read_image_regenerate(request: Request, user=Depends(get_current_user)):
-    """Wait off-loop for a private page replacement; keep old bytes on failure."""
+    """Admit a persistent image replacement without waiting for rendering."""
     import asyncio
-    return await asyncio.to_thread(_play_read_image_sync, await request.json(), regenerate=True)
+    result = await asyncio.to_thread(_play_read_image_sync, await request.json(), action="regenerate")
+    if result.get("status") == "queued":
+        return JSONResponse(result, status_code=202)
+    return result
 
 
-def _play_read_image_sync(body: Any, *, regenerate: bool = False):
+@router.post("/play/read/image-status")
+async def play_read_image_status(request: Request, user=Depends(get_current_user)):
+    """Poll only the active reader's matching, currently authorized page job."""
+    import asyncio
+    return await asyncio.to_thread(_play_read_image_sync, await request.json(), action="status")
+
+
+def _play_read_image_sync(body: Any, *, action: str = "prepare"):
     from app.models.account import get_active_character
-    from app.core.item_reading import prepare_page_image, regenerate_page_image
+    from app.core.item_reading import prepare_page_image, enqueue_page_image, page_image_status
     from app.core.lora_library import LoraNotAllowedError
     from app.imagegen.base import (BackendBusyError, GenerationCancelled,
                                   GpuTaskCancelled, MediaGenerationDisabled)
+    from app.imagegen.routing import NoRouteError
     avatar = (get_active_character() or "").strip()
     if not avatar:
         raise HTTPException(status_code=409, detail="no active avatar")
@@ -2867,13 +2878,18 @@ def _play_read_image_sync(body: Any, *, regenerate: bool = False):
     page_ref = body.get("page_ref")
     if not isinstance(page_ref, str) or not page_ref:
         raise HTTPException(status_code=400, detail="page_ref required")
-    if not regenerate:
+    if action == "prepare":
         return prepare_page_image(avatar, item_id, index, page_ref=page_ref)
+    if action == "status":
+        task_id = body.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            raise HTTPException(status_code=400, detail="task_id required")
+        return page_image_status(avatar, item_id, index, page_ref=page_ref, task_id=task_id)
     prompt = body.get("prompt")
-    backend, negative = body.get("backend") or "", body.get("negative_prompt") or ""
+    backend, negative = body.get("backend", ""), body.get("negative_prompt", "")
     loras = body.get("loras")
-    if not isinstance(page_ref, str) or not page_ref or not isinstance(prompt, str) or not prompt.strip():
-        raise HTTPException(status_code=400, detail="page_ref and a nonempty prompt required")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise HTTPException(status_code=400, detail="a nonempty prompt required")
     if not isinstance(backend, str) or not isinstance(negative, str):
         raise HTTPException(status_code=400, detail="backend and negative_prompt must be strings")
     if loras is not None:
@@ -2885,19 +2901,19 @@ def _play_read_image_sync(body: Any, *, regenerate: bool = False):
                 or not math.isfinite(v.get("strength", 1)) for v in loras):
             raise HTTPException(status_code=400, detail="loras must contain names and finite numeric strengths")
     try:
-        return regenerate_page_image(avatar, item_id, index, page_ref=page_ref,
+        return enqueue_page_image(avatar, item_id, index, page_ref=page_ref,
             prompt=prompt.strip(), backend=backend.strip(), loras=loras, negative_prompt=negative)
     except (HTTPException, MediaGenerationDisabled):
         raise
     except LoraNotAllowedError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except BackendBusyError as exc:
+    except (BackendBusyError, NoRouteError) as exc:
         raise HTTPException(status_code=503, detail=str(exc) or "The image backend is busy.") from exc
     except (GenerationCancelled, GpuTaskCancelled) as exc:
         raise HTTPException(status_code=409, detail=str(exc) or "Image generation was cancelled.") from exc
     except Exception as exc:
-        logger.exception("Private page image regeneration failed")
-        raise HTTPException(status_code=502, detail=str(exc) or "Image generation failed.") from exc
+        logger.exception("Private page image admission failed")
+        raise HTTPException(status_code=502, detail="Image generation could not be queued.") from exc
 
 
 @router.post("/play/read/heartbeat")

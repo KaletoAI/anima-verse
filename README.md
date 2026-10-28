@@ -224,10 +224,12 @@ stops acting autonomously).
   Readable documents open with a single-line title and a separate date; illustrations and long
   text scroll while Previous/Next remain visible. Page images are delivered only with an authorized
   read, never as public image URLs, and opening or flipping pages does not generate new images.
-  Page images use the shared zoom lightbox. Regenerate offers model/backend and backend-scoped
-  LoRA selection in both clients, starting from the stored scene prompt and keeping person-image
-  references. Auto uses the existing scene routing; an explicit backend has no fallback.
-  The previous image stays visible until a replacement succeeds.
+  Page images use the shared zoom lightbox. The in-image Regenerate action offers model/backend
+  and backend-scoped LoRA selection in both clients, starting from the stored scene prompt and
+  keeping person-image references. Auto uses the existing scene routing; an explicit backend
+  has no fallback. Admission closes the dialog immediately: generation runs in the persistent
+  background queue while the user can browse, close the diary and keep playing. The previous
+  image stays visible until a replacement succeeds and refreshes on an authorized read.
 
 ### Image, video and 3D generation
 - One pool, three media types. Image backends: **Stable Diffusion WebUI (A1111/Forge)**, **CivitAI**,

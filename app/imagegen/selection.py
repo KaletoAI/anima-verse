@@ -75,6 +75,8 @@ class BackendPool:
         self,
         candidates: List[ImageBackend],
         rotation_key: str = "default",
+        *,
+        advance_rotation: bool = True,
     ) -> Optional[ImageBackend]:
         """Picks the cheapest available backend from the candidates.
 
@@ -82,6 +84,8 @@ class BackendPool:
         cost=0) it distributes via round-robin — prevents all tasks always
         going to the same backend without a LOAD_COST_PENALTY.
         The counter is per ``rotation_key`` (typically: workflow_name).
+        ``advance_rotation=False`` peeks at the current turn without consuming
+        it, for admission checks that do not yet perform a render.
         """
         if not candidates:
             return None
@@ -94,7 +98,8 @@ class BackendPool:
         # Several equal-cost -> round-robin per rotation_key
         with self._round_robin_lock:
             idx = self._round_robin_counter.get(rotation_key, 0)
-            self._round_robin_counter[rotation_key] = idx + 1
+            if advance_rotation:
+                self._round_robin_counter[rotation_key] = idx + 1
         return tier[idx % len(tier)]
 
     @staticmethod

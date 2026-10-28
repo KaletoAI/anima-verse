@@ -8,6 +8,7 @@ import type { ScenePhotoSubmit } from './ScenePanel'
 import { useEnlarge } from './ZoomButton'
 
 interface Reading {
+  avatar: string
   item_name: string
   index: number
   total: number
@@ -33,6 +34,23 @@ interface PreparedImage {
   index: number
 }
 
+interface QueuedImage {
+  task_id: string
+  page_ref: string
+  status: 'queued'
+}
+
+interface ImageStatus {
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  detail?: string
+  reading?: Reading
+}
+
+// Retain only job IDs while the book is closed; never poll outside its read session.
+const admittedImageJobs = new Map<string, QueuedImage>()
+const imageJobKey = (avatar: string, itemId: string, pageRef: string) =>
+  JSON.stringify([avatar, itemId, pageRef])
+
 /** Shared by the 2D inventory and 3D HUD; escape transformed panel bounds. */
 export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () => void }) {
   const { t } = useI18n()
@@ -48,6 +66,13 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
   const [imagePreparing, setImagePreparing] = useState(false)
   const [preparedImage, setPreparedImage] = useState<PreparedImage | null>(null)
   const [imageError, setImageError] = useState('')
+  const [imageJob, setImageJob] = useState<QueuedImage | null>(null)
+  const imageStatusPoll = useRef<number | null>(null)
+  const pageRequestVersion = useRef(0)
+  const pageRef = reading?.page?.image_ref
+  const pageIndex = reading?.index
+  const avatar = reading?.avatar
+  const imagePending = imageJob !== null && imageJob.page_ref === pageRef
   const regenerateButton = useRef<HTMLButtonElement>(null)
   const pageLocked = busy || imagePreparing || preparedImage !== null
   const dialog = useRef<HTMLDivElement>(null)
@@ -75,6 +100,8 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
   const endSession = useCallback(() => {
     if (closed.current) return
     closed.current = true
+    if (imageStatusPoll.current !== null) window.clearTimeout(imageStatusPoll.current)
+    imageStatusPoll.current = null
     lightboxClose.current?.()
     lightboxClose.current = null
     // Wait for pending reads so an opening cannot recreate a closed session.
@@ -126,6 +153,9 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
         }
         if (!active || !('page' in result)) return
         setReading(result)
+        setImageJob(result.page?.image_ref
+          ? admittedImageJobs.get(imageJobKey(result.avatar, itemId, result.page.image_ref)) ?? null
+          : null)
         setBusy(false)
       })
       .catch((error: Error) => {
@@ -136,6 +166,64 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
       .finally(() => pending.current.delete(call))
     return () => { active = false }
   }, [itemId, request, toast, close, notify])
+
+  useEffect(() => {
+    if (busy || !imageJob || !pageRef || pageIndex === undefined || !avatar
+      || imageJob.page_ref !== pageRef || closed.current) return
+    const job = imageJob
+    let active = true
+    let errorReported = false
+    const version = pageRequestVersion.current
+    const key = imageJobKey(avatar, itemId, pageRef)
+    const current = () => active && mounted.current && !closed.current
+      && pageRequestVersion.current === version
+    async function poll() {
+      imageStatusPoll.current = null
+      if (!current()) return
+      try {
+        const result = await apiPost<ImageStatus | SessionResult>('/play/read/image-status', {
+          item_id: itemId, index: pageIndex, page_ref: pageRef, task_id: job.task_id,
+        })
+        if (!current()) return
+        if (('caught_by' in result || 'error' in result) && notify(result)) {
+          close()
+          return
+        }
+        if (!('status' in result)) return
+        errorReported = false
+        if (result.status === 'completed' || result.status === 'failed' || result.status === 'cancelled') {
+          admittedImageJobs.delete(key)
+          setImageJob((currentJob) => currentJob?.task_id === job.task_id ? null : currentJob)
+          if (result.status === 'completed') {
+            const refreshed = result.reading
+            if (refreshed && refreshed.avatar === avatar && refreshed.index === pageIndex
+              && refreshed.page?.image_ref === pageRef) {
+              setReading((page) => page && page.avatar === avatar && page.index === pageIndex
+                && page.page?.image_ref === pageRef ? refreshed : page)
+            }
+          } else {
+            toast(result.detail || translateRef.current(
+              result.status === 'cancelled' ? 'Cancelled' : 'Generation failed.',
+            ), 'error')
+          }
+          return
+        }
+      } catch (error) {
+        if (!current()) return
+        if (!errorReported) {
+          toast(error instanceof Error ? error.message : String(error), 'error')
+          errorReported = true
+        }
+      }
+      if (current()) imageStatusPoll.current = window.setTimeout(() => { void poll() }, 2000)
+    }
+    imageStatusPoll.current = window.setTimeout(() => { void poll() }, 0)
+    return () => {
+      active = false
+      if (imageStatusPoll.current !== null) window.clearTimeout(imageStatusPoll.current)
+      imageStatusPoll.current = null
+    }
+  }, [avatar, busy, close, imageJob, itemId, notify, pageIndex, pageRef, toast])
 
   useEffect(() => {
     if (content.current) content.current.scrollTop = 0
@@ -149,11 +237,14 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
 
   function closeImageDialog() {
     setPreparedImage(null)
-    requestAnimationFrame(() => regenerateButton.current?.focus())
+    requestAnimationFrame(() => {
+      if (regenerateButton.current && !regenerateButton.current.disabled) regenerateButton.current.focus()
+      else dialog.current?.focus()
+    })
   }
 
   async function prepareImage() {
-    if (closed.current || pageLocked || !reading?.page?.image_regenerable || !reading.page.image_ref) return
+    if (closed.current || pageLocked || imagePending || !reading?.page?.image_regenerable || !reading.page.image_ref) return
     const index = reading.index
     setImagePreparing(true)
     setImageError('')
@@ -182,7 +273,7 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
   async function regenerateImage(payload: ScenePhotoSubmit) {
     if (closed.current || !preparedImage) return
     setImageError('')
-    const call = apiPost<Reading | SessionResult>('/play/read/image-regenerate', {
+    const call = apiPost<QueuedImage | SessionResult>('/play/read/image-regenerate', {
       item_id: itemId,
       index: preparedImage.index,
       page_ref: preparedImage.page_ref,
@@ -191,16 +282,19 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
       loras: payload.loras,
       negative_prompt: payload.negative_prompt,
     })
-    // Rendering cannot reopen a session; closing must not wait for the GPU.
+    // Await only admission; the render outlives this dialog and read session.
     try {
       const result = await call
+      if ('task_id' in result && result.page_ref === preparedImage.page_ref) {
+        admittedImageJobs.set(imageJobKey(preparedImage.avatar, itemId, result.page_ref), result)
+      }
       if (!mounted.current || closed.current) return
       if (('caught_by' in result || 'error' in result) && notify(result)) {
         close()
         return
       }
-      if ('page' in result) {
-        setReading(result)
+      if ('task_id' in result && result.page_ref === preparedImage.page_ref) {
+        setImageJob(result)
         closeImageDialog()
       }
     } catch (error) {
@@ -212,6 +306,7 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
 
   function flip(index: number) {
     if (closed.current || pageLocked || !reading || index < 0 || index >= reading.total) return
+    pageRequestVersion.current += 1
     setBusy(true)
     setRequest({ index, opening: false })
   }
@@ -227,6 +322,7 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
         else if (!closed.current && !pageLocked && reading) {
           const index = reading.index + (event.key === 'ArrowLeft' ? -1 : 1)
           if (index >= 0 && index < reading.total) {
+            pageRequestVersion.current += 1
             setBusy(true)
             setRequest({ index, opening: false })
           }
@@ -287,15 +383,23 @@ export function ReadingModal({ itemId, onClose }: { itemId: string; onClose: () 
             <div ref={content} key={reading.index} className="reading-page"
               style={{ flex: '1 1 auto', minHeight: 0, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', lineHeight: 1.6 }}>
               {reading.total === 0 ? <p>{t('The pages are empty.')}</p> : reading.page && <>
-                {reading.page.image && <img src={reading.page.image} alt={reading.page.heading}
-                  {...enlarge({ src: reading.page.image, alt: reading.page.heading }, {
-                    display: 'block', width: '100%', maxWidth: '100%', height: 'auto', marginBottom: 16,
-                  })} />}
-                {reading.page.image_regenerable && <div style={{ marginBottom: 16 }}>
-                  <button ref={regenerateButton} className="ga-btn" disabled={pageLocked}
-                    onClick={() => { void prepareImage() }}>
-                    {imagePreparing ? t('Loading…') : t('Regenerate image')}
-                  </button>
+                {(reading.page.image || reading.page.image_regenerable) && <div style={{ position: 'relative', marginBottom: 16 }}>
+                  {reading.page.image ? <img src={reading.page.image} alt={reading.page.heading}
+                    {...enlarge({ src: reading.page.image, alt: reading.page.heading }, {
+                      display: 'block', width: '100%', maxWidth: '100%', height: 'auto',
+                    })} /> : <div aria-hidden="true" style={{ minHeight: 160, display: 'grid',
+                      placeItems: 'center', border: '1px dashed var(--border, #30363d)',
+                      borderRadius: 4, color: 'var(--text-muted, #8b949e)', fontSize: 32 }}>🖼</div>}
+                  {reading.page.image_regenerable && <button ref={regenerateButton} type="button"
+                    title={t('Regenerate image')} aria-label={t('Regenerate image')}
+                    aria-busy={imagePreparing || imagePending} disabled={pageLocked || imagePending}
+                    style={{ position: 'absolute', right: 8, bottom: 8, display: 'inline-flex',
+                      alignItems: 'center', justifyContent: 'center', border: 'none', borderRadius: 4,
+                      background: 'rgba(20,22,28,0.7)', color: '#fff', padding: 6, fontSize: '1em',
+                      lineHeight: 1, cursor: pageLocked || imagePending ? 'default' : 'pointer' }}
+                    onClick={(event) => { event.stopPropagation(); void prepareImage() }}>
+                    {imagePreparing || imagePending ? '⏳' : '🔄'}
+                  </button>}
                 </div>}
                 <div style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{reading.page.text}</div>
               </>}
