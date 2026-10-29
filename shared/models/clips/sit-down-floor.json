@@ -1,0 +1,50 @@
+{
+ "kind": "sit-down-floor",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 73,
+ "duration_s": 2.433,
+ "loop": false,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": 5.78,
+  "hips_scale": [
+   1.0
+  ],
+  "foot_plant": {
+   "LeftFoot": {
+    "frames": 73,
+    "max_cm": 0.04
+   },
+   "RightFoot": {
+    "frames": 73,
+    "max_cm": 0.04
+   }
+  },
+  "rig_floor_shift_cm": -5.85,
+  "rig_floor_min_cm": -1.86,
+  "root_motion": {
+   "mode": "keep",
+   "travel_m": [
+    -0.0,
+    -0.716
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     2.4
+    ]
+   ],
+   "max_drift_cm": 0.08
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/sit-down-floor.py",
+  "spec_sha": "203a873c62d372c5ec23bb46723b8a9ddecb8b167771fa25160a561ee807bc42"
+ }
+}
