@@ -284,6 +284,7 @@ public partial class Main : Node3D
         if (_builder is not null && _camera is not null && _world is not null)
         {
             TickEmbody();
+            TickMinimap(delta);
             SyncLocks();
             _builder.TickView(delta, _camera.GlobalPosition);
             TickLights(delta);

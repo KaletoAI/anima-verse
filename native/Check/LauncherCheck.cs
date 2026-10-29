@@ -130,6 +130,9 @@ public static class LauncherCheck
         // Task 18: the props section, both spellings.
         var props = new[] { CliOptions.Parse(new[] { "--check", "props" }), CliOptions.Parse(new[] { "--check=props" }) };
         Expect("props flags", props.All(o => o is { Check: true, CheckOnly: "props" }), string.Join(" | ", props.Select(o => o.ToString())));
+        // Task 55: the minimap check section, both spellings.
+        var minimap = new[] { CliOptions.Parse(new[] { "--check", "minimap" }), CliOptions.Parse(new[] { "--check=minimap" }) };
+        Expect("minimap flags", minimap.All(o => o is { Check: true, CheckOnly: "minimap" }), string.Join(" | ", minimap.Select(o => o.ToString())));
         threw = false;
         try { CliOptions.Parse(new[] { "--check=everything" }); }
         catch (ArgumentException) { threw = true; }

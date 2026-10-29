@@ -1,0 +1,1189 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_hillshade.mjs",
+  "fixtures": {
+    "flat": {
+      "origin_x": 0,
+      "origin_z": 0,
+      "step_m": 2,
+      "rows": 3,
+      "cols": 3,
+      "heights": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    "nw": {
+      "origin_x": 0,
+      "origin_z": 0,
+      "step_m": 2,
+      "rows": 3,
+      "cols": 3,
+      "heights": [
+        [
+          0,
+          1,
+          2
+        ],
+        [
+          1,
+          2,
+          3
+        ],
+        [
+          2,
+          3,
+          4
+        ]
+      ]
+    },
+    "se": {
+      "origin_x": 0,
+      "origin_z": 0,
+      "step_m": 2,
+      "rows": 3,
+      "cols": 3,
+      "heights": [
+        [
+          0,
+          -1,
+          -2
+        ],
+        [
+          -1,
+          -2,
+          -3
+        ],
+        [
+          -2,
+          -3,
+          -4
+        ]
+      ]
+    },
+    "peak": {
+      "origin_x": 0,
+      "origin_z": 0,
+      "step_m": 2,
+      "rows": 3,
+      "cols": 3,
+      "heights": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    "hollow": {
+      "origin_x": 0,
+      "origin_z": 0,
+      "step_m": 2,
+      "rows": 3,
+      "cols": 3,
+      "heights": [
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          -1,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    "steep": {
+      "origin_x": 0,
+      "origin_z": 0,
+      "step_m": 2,
+      "rows": 3,
+      "cols": 3,
+      "heights": [
+        [
+          0,
+          10,
+          20
+        ],
+        [
+          10,
+          20,
+          30
+        ],
+        [
+          20,
+          30,
+          40
+        ]
+      ]
+    },
+    "ragged": {
+      "origin_x": 0,
+      "origin_z": 0,
+      "step_m": 4,
+      "rows": 99,
+      "cols": 99,
+      "heights": [
+        [
+          0,
+          10
+        ],
+        [
+          0
+        ]
+      ]
+    },
+    "badHeight": {
+      "step_m": 4,
+      "heights": [
+        [
+          null,
+          10
+        ],
+        [
+          0,
+          "bad"
+        ]
+      ]
+    }
+  },
+  "cases": [
+    {
+      "label": "[1] flat 0,0",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        null,
+        0,
+        0
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[2] NW ramp including borders 0,0",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        null,
+        0,
+        0
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[3] flat 1,0",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        null,
+        1,
+        0
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[4] NW ramp including borders 1,0",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        null,
+        1,
+        0
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[5] flat 2,0",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        null,
+        2,
+        0
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[6] NW ramp including borders 2,0",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        null,
+        2,
+        0
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[7] flat 0,1",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        null,
+        0,
+        1
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[8] NW ramp including borders 0,1",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        null,
+        0,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[9] flat 1,1",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        null,
+        1,
+        1
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[10] NW ramp including borders 1,1",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        null,
+        1,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[11] flat 2,1",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        null,
+        2,
+        1
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[12] NW ramp including borders 2,1",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        null,
+        2,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[13] flat 0,2",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        null,
+        0,
+        2
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[14] NW ramp including borders 0,2",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        null,
+        0,
+        2
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[15] flat 1,2",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        null,
+        1,
+        2
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[16] NW ramp including borders 1,2",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        null,
+        1,
+        2
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[17] flat 2,2",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        null,
+        2,
+        2
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[18] NW ramp including borders 2,2",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        null,
+        2,
+        2
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[19] SE ramp",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "se"
+        },
+        null,
+        1,
+        1
+      ],
+      "expect": [
+        30,
+        30,
+        30,
+        52
+      ]
+    },
+    {
+      "label": "[20] steep Lambert",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "steep"
+        },
+        null,
+        1,
+        1
+      ],
+      "expect": [
+        144,
+        144,
+        144,
+        88
+      ]
+    },
+    {
+      "label": "[21] summit",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "peak"
+        },
+        null,
+        1,
+        1
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[22] north",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "peak"
+        },
+        null,
+        1,
+        0
+      ],
+      "expect": [
+        154,
+        154,
+        154,
+        40
+      ]
+    },
+    {
+      "label": "[23] west",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "peak"
+        },
+        null,
+        0,
+        1
+      ],
+      "expect": [
+        154,
+        154,
+        154,
+        40
+      ]
+    },
+    {
+      "label": "[24] east",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "peak"
+        },
+        null,
+        2,
+        1
+      ],
+      "expect": [
+        74,
+        74,
+        74,
+        40
+      ]
+    },
+    {
+      "label": "[25] south",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "peak"
+        },
+        null,
+        1,
+        2
+      ],
+      "expect": [
+        74,
+        74,
+        74,
+        40
+      ]
+    },
+    {
+      "label": "[26] SE lamp darkens NW",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        {
+          "azimuthDeg": 135
+        },
+        1,
+        1
+      ],
+      "expect": [
+        30,
+        30,
+        30,
+        52
+      ]
+    },
+    {
+      "label": "[27] SE lamp brightens SE",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "se"
+        },
+        {
+          "azimuthDeg": 135
+        },
+        1,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[28] hollow north",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "hollow"
+        },
+        null,
+        1,
+        0
+      ],
+      "expect": [
+        74,
+        74,
+        74,
+        40
+      ]
+    },
+    {
+      "label": "[29] hollow south",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "hollow"
+        },
+        null,
+        1,
+        2
+      ],
+      "expect": [
+        154,
+        154,
+        154,
+        40
+      ]
+    },
+    {
+      "label": "[30] map exaggeration ramp",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        {
+          "zFactor": 3
+        },
+        1,
+        1
+      ],
+      "expect": [
+        170,
+        170,
+        170,
+        81
+      ]
+    },
+    {
+      "label": "[31] map north",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "peak"
+        },
+        {
+          "zFactor": 3
+        },
+        1,
+        0
+      ],
+      "expect": [
+        146,
+        146,
+        146,
+        74
+      ]
+    },
+    {
+      "label": "[32] map south shadow",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "peak"
+        },
+        {
+          "zFactor": 3
+        },
+        1,
+        2
+      ],
+      "expect": [
+        0,
+        0,
+        0,
+        74
+      ]
+    },
+    {
+      "label": "[33] true relief",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        {
+          "zFactor": 1
+        },
+        1,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[34] zero factor",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "peak"
+        },
+        {
+          "zFactor": 0
+        },
+        1,
+        0
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[35] negative factor",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "peak"
+        },
+        {
+          "zFactor": -3
+        },
+        1,
+        0
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[36] alpha zero",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        {
+          "maxAlpha": 0
+        },
+        1,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        0
+      ]
+    },
+    {
+      "label": "[37] alpha full",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        {
+          "maxAlpha": 1
+        },
+        1,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        147
+      ]
+    },
+    {
+      "label": "[38] alpha below zero",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        {
+          "maxAlpha": -3
+        },
+        1,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        0
+      ]
+    },
+    {
+      "label": "[39] alpha above one",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        {
+          "maxAlpha": 3
+        },
+        1,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        147
+      ]
+    },
+    {
+      "label": "[40] azimuth negative",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        {
+          "azimuthDeg": -45
+        },
+        1,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[41] azimuth wrapped",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        {
+          "azimuthDeg": 675
+        },
+        1,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[42] altitude floor",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        {
+          "altitudeDeg": 0
+        },
+        1,
+        1
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[43] altitude ceiling",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "flat"
+        },
+        {
+          "altitudeDeg": 100
+        },
+        1,
+        1
+      ],
+      "expect": [
+        128,
+        128,
+        128,
+        0
+      ]
+    },
+    {
+      "label": "[44] invalid options",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "nw"
+        },
+        {
+          "azimuthDeg": "bad",
+          "maxAlpha": null,
+          "zFactor": "bad"
+        },
+        1,
+        1
+      ],
+      "expect": [
+        178,
+        178,
+        178,
+        52
+      ]
+    },
+    {
+      "label": "[45] ragged and lying counts",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "ragged"
+        },
+        null,
+        0,
+        0
+      ],
+      "expect": [
+        131,
+        131,
+        131,
+        83
+      ]
+    },
+    {
+      "label": "[46] invalid heights read zero",
+      "fn": "hillshadePixel",
+      "args": [
+        {
+          "$fixture": "badHeight"
+        },
+        null,
+        0,
+        0
+      ],
+      "expect": [
+        131,
+        131,
+        131,
+        83
+      ]
+    },
+    {
+      "label": "[47] absent",
+      "fn": "hillshadeImage",
+      "args": [
+        null
+      ],
+      "expect": null
+    },
+    {
+      "label": "[48] empty",
+      "fn": "hillshadeImage",
+      "args": [
+        {
+          "step_m": 4,
+          "heights": []
+        }
+      ],
+      "expect": null
+    },
+    {
+      "label": "[49] single row",
+      "fn": "hillshadeImage",
+      "args": [
+        {
+          "step_m": 4,
+          "heights": [
+            [
+              1,
+              2
+            ]
+          ]
+        }
+      ],
+      "expect": null
+    },
+    {
+      "label": "[50] single column",
+      "fn": "hillshadeImage",
+      "args": [
+        {
+          "step_m": 4,
+          "heights": [
+            [
+              1
+            ],
+            [
+              2
+            ]
+          ]
+        }
+      ],
+      "expect": null
+    },
+    {
+      "label": "[51] zero step",
+      "fn": "hillshadeImage",
+      "args": [
+        {
+          "step_m": 0,
+          "heights": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ]
+          ]
+        }
+      ],
+      "expect": null
+    },
+    {
+      "label": "[52] negative step",
+      "fn": "hillshadeImage",
+      "args": [
+        {
+          "step_m": -1,
+          "heights": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ]
+          ]
+        }
+      ],
+      "expect": null
+    },
+    {
+      "label": "[53] full shape and RGBA order",
+      "fn": "hillshadeImage",
+      "args": [
+        {
+          "$fixture": "flat"
+        }
+      ],
+      "expect": {
+        "cols": 3,
+        "rows": 3,
+        "data": [
+          128,
+          128,
+          128,
+          0,
+          128,
+          128,
+          128,
+          0,
+          128,
+          128,
+          128,
+          0,
+          128,
+          128,
+          128,
+          0,
+          128,
+          128,
+          128,
+          0,
+          128,
+          128,
+          128,
+          0,
+          128,
+          128,
+          128,
+          0,
+          128,
+          128,
+          128,
+          0,
+          128,
+          128,
+          128,
+          0
+        ]
+      }
+    }
+  ]
+}

@@ -391,6 +391,7 @@ public partial class HudOverlay : CanvasLayer
     /// <summary>Everything the scene owns, unconditionally — for a HUD that has just (re)connected.</summary>
     private void PublishAll()
     {
+        Send(_minimapWire);
         if (_boot is not null) Send(HudProtocol.Boot(_boot));
         if (_state.TakePatch(force: true) is { } patch) Send(HudProtocol.State(patch));
     }

@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -176,6 +178,42 @@ public static class HudProtocol
     /// <summary><c>{v:3, kind:'perf', value}</c> — the performance readout (<c>PerfStats</c> of bus.ts) or null.</summary>
     public static string Perf(JsonObject? value)
         => new JsonObject { ["v"] = Version, ["kind"] = "perf", ["value"] = value?.DeepClone() }.ToJsonString();
+
+    /// <summary>Task 55 / E7-T10: unchanged v3 minimap wire. Write the already-built relief fragment raw,
+    /// avoiding a parse, clone or byte-array serialization on every step. Full states still carry relief,
+    /// as the browser bridge expects; only building the numeric RGBA JSON is revision-gated.</summary>
+    public static string Minimap(MinimapState? state)
+    {
+        using var bytes = new MemoryStream();
+        using (var w = new Utf8JsonWriter(bytes))
+        {
+            w.WriteStartObject(); w.WriteNumber("v", Version); w.WriteString("kind", "minimap");
+            w.WritePropertyName("value");
+            if (state is null) w.WriteNullValue();
+            else
+            {
+                w.WriteStartObject();
+                w.WritePropertyName("areas"); state.Areas.WriteTo(w);
+                w.WritePropertyName("relief"); w.WriteRawValue(state.ReliefJson, skipInputValidation: true);
+                w.WritePropertyName("locations"); state.Locations.WriteTo(w);
+                w.WritePropertyName("avatar");
+                if (state.Avatar is { } a)
+                { w.WriteStartObject(); w.WriteNumber("x", a.X); w.WriteNumber("z", a.Z); w.WriteEndObject(); }
+                else w.WriteNullValue();
+                w.WriteNumber("yaw", state.Yaw);
+                w.WritePropertyName("bounds");
+                if (state.Bounds is { } b)
+                {
+                    w.WriteStartObject(); w.WriteNumber("min_x", b.MinX); w.WriteNumber("min_z", b.MinZ);
+                    w.WriteNumber("max_x", b.MaxX); w.WriteNumber("max_z", b.MaxZ); w.WriteEndObject();
+                }
+                else w.WriteNullValue();
+                w.WriteEndObject();
+            }
+            w.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(bytes.GetBuffer(), 0, (int)bytes.Length);
+    }
 
     /// <summary><c>{v:3, kind:'ui', name, args}</c>; only the declared ui actions.</summary>
     public static string Ui(string name, params JsonNode?[] args)

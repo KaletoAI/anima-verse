@@ -239,6 +239,7 @@ public partial class Main
 
     private void DetachEmbody()
     {
+        ResetMinimap();
         SetEntryPin(null);
         _avatarOffers?.Dispose(); _avatarOffers = null;
         _avatarRooms?.Dispose(); _avatarRooms = null;
