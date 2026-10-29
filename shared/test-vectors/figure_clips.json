@@ -133,6 +133,16 @@
     { "label": "[11f] below the floor", "fn": "bridgePace", "args": [2, 0.005], "expect": 0.02 },
     { "label": "[11g] full speed cap", "fn": "bridgePace", "args": [0.5, 4], "expect": 1 },
 
+    {"label": "[15a] walk stop cancels", "fn": "steerCancelsBridge", "args": ["mob1-walk", "mob1-walk"], "expect": true},
+    {"label": "[15b] case insensitive", "fn": "steerCancelsBridge", "args": ["MOB1-WALK", "mob1-walk"], "expect": true},
+    {"label": "[15c] no bridge", "fn": "steerCancelsBridge", "args": [null, "walk"], "expect": false},
+    {"label": "[15d] empty source", "fn": "steerCancelsBridge", "args": ["", "walk"], "expect": false},
+    {"label": "[15e] chair holds", "fn": "steerCancelsBridge", "args": ["sit", "walk"], "expect": false},
+    {"label": "[15f] bed holds", "fn": "steerCancelsBridge", "args": ["lie", "walk"], "expect": false},
+    {"label": "[15g] enter walk holds", "fn": "steerCancelsBridge", "args": ["idle", "walk"], "expect": false},
+    {"label": "[15h] exact kind only", "fn": "steerCancelsBridge", "args": ["walk-cmu", "walk"], "expect": false},
+    {"label": "[15i] no walking kind", "fn": "steerCancelsBridge", "args": ["walk", ""], "expect": false},
+
     { "label": "[12a] swim chain", "fn": "clipKindChain", "args": ["swim", { "$fixture": "POSES_DEFAULT" }], "expect": ["swim", "walk", "idle"] },
     { "label": "[12b] server walking chain", "fn": "clipKindChain", "args": ["mob1-walk", { "$fixture": "POSES_SERVER" }],
       "expect": ["mob1-walk", "walk", "mob1-stand-relaxed-idle-v2", "idle"] },

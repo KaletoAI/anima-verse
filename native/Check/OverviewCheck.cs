@@ -23,8 +23,8 @@ namespace AnimaNative.Check;
 ///      (the right vector is horizontal), so it meets y = 0 at depth 40 too: hit H = (40 · 40 · k, 0, 0)
 ///      = (1.4727593328821156, 0, 0). targetDist = 40 · e^−0.36 = 27.90705304284124; each notch pulls by
 ///      1 − e^−0.12 towards the SAME H, so target = H · (1 − e^−0.36) = (0.4452500123300986, 0, 0).
-///   B  left drag (800, 450) → (840, 450): the press grabs the target itself, the pointer then shows H,
-///      target += −H = (−1.4727593328821156, 0, 0); 1.47 m &gt; 0.15 m → a drag, no click.
+///   B  left drag (800, 450) → (840, 450): yaw = −40 · .005 = −.2 radians,
+///      target stays (0,0,0); 40 px &gt; 4 px → a drag, no click.
 ///   C  Q, then one frame of 0.05 s: targetYaw π/4, yaw = π/4 · (1 − e^−0.4) = 0.2589300303525642; base pitch
 ///      at 40 m = 18 + 44 · √(39.2 / 149.2) = 40.55336239889695°; the lens stands at CameraPose(…) and the
 ///      target projects to the middle (800, 450).
@@ -93,13 +93,14 @@ public static class OverviewCheck
             Near("A target.z", cam.Control.Target.Z, 0, MetresTol);
             Near("A target.y", cam.Control.Target.Y, 0, 1e-9);
 
-            // B — a 40 px pan drag.
+            // B — a 40 px bare-left orbit.
             Reset();
             int clicksBefore = clicks;
             Push(Button(MouseButton.Left, true, new Vector2(800, 450)));
             Push(Motion(new Vector2(840, 450), new Vector2(40, 0), MouseButtonMask.Left));
             Push(Button(MouseButton.Left, false, new Vector2(840, 450)));
-            Near("B target.x", cam.Control.Target.X, -Hx, MetresTol);
+            Near("B target.x", cam.Control.Target.X, 0, MetresTol);
+            Near("B targetYaw", cam.Control.TargetYaw, -.2, 1e-12);
             Near("B target.z", cam.Control.Target.Z, 0, MetresTol);
             Expect("B is a drag, not a click", clicks == clicksBefore, $"{clicks - clicksBefore} clicks");
 
@@ -186,7 +187,7 @@ public static class OverviewCheck
             Expect("H target", cam.Control.Target == new Vec3(98, height.GroundAt(98, -34.5), -34.5), $"{cam.Control.Target}");
             Near("H distance", cam.Distance, 150, 0);
 
-            return $"overview A..H ok (wheel {WheelTargetX:0.####}/{WheelDist:0.###}, drag {-Hx:0.####}, yaw {QYaw:0.####}, "
+            return $"overview A..H ok (wheel {WheelTargetX:0.####}/{WheelDist:0.###}, orbit {-.2:0.####}, yaw {QYaw:0.####}, "
                    + $"shift {dx:0.#}px, godot ray miss {godotMiss:0.##} m, frame y {cam.Control.Target.Y:0.###})";
         }
         finally

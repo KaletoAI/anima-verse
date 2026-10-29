@@ -18,7 +18,7 @@ namespace AnimaNative.Check;
 /// W at pi/4 is (-sqrt(.5),-sqrt(.5)); D is (+sqrt(.5),-sqrt(.5)). East wall X=6
 /// keeps the centre at X&lt;=5.75 while northward motion continues. The party door at Z=2 passes.
 /// The rock starts at X=8; its diagonal approach keeps Z motion. Height rises 1 m from X=9 to 10,
-/// so the 45 degree ramp fails the world's .4 m / 40 degree gate. A straight click into the north
+/// so the 45 degree ramp fails the world's .4 m / 40 degree gate. An object approach into the north
 /// wall has zero progress: frame 19 keeps the goal and frame 20 removes both goal and marker.
 /// Poll and cached placement tests deliberately supply the original avatar position after local walking.
 /// </summary>
@@ -83,20 +83,21 @@ public static class EmbodyWalkCheck
             Frame(d);
             Near("W5 metre step blocks", fig.Position.X, 9);
             At(-3,-3.75f); steering.RoomId = "r-a";
-            Is("W6 behind building accepted", steering.OnGroundClick(new(-3,-8)));
+            // Object actions retain their approach planner, route and marker.
+            Is("W6 object approach behind building accepted", steering.WalkTo(new(-3,-8)));
             Is("W6 marker visible", manager.WalkTarget is { Visible: true });
             for (int i=0; i<19; i++) Frame(none);
             Is("W6 frame19 retains route", steering.Route is not null);
             Frame(none);
             Is("W6 frame20 drops route and marker", steering.Route is null && manager.WalkTarget is not { Visible: true });
             At(7,9);
-            bool ground = steering.OnGroundClick(new(9,9));
-            var pick = PickChain.Resolve(null, "rock-info", () => ground);
-            Is("W7 blocked click info", !ground && pick.Info == InfoChange.Show && pick.InfoLocationId == "rock-info");
+            bool approach = steering.WalkTo(new(9,9));
+            var pick = PickChain.Resolve(null, "rock-info", () => approach);
+            Is("W7 blocked object approach info", !approach && pick.Info == InfoChange.Show && pick.InfoLocationId == "rock-info");
             int calls = 0;
             var figurePick = PickChain.Resolve("npc", "hall", () => { calls++; return true; });
-            Is("figure precedes ground", calls == 0 && figurePick.Selected == "npc");
-            Is("accepted ground preserves info", PickChain.Resolve(null,"hall", () => true).Info == InfoChange.Unchanged);
+            Is("figure precedes object action", calls == 0 && figurePick.Selected == "npc");
+            Is("object action preserves info", PickChain.Resolve(null,"hall", () => true).Info == InfoChange.Unchanged);
             At(-3,1);
             for (int i=0; i<30; i++) Frame(w);
             var walked = fig.Position;
@@ -110,32 +111,28 @@ public static class EmbodyWalkCheck
             for (int i=0; i<120; i++) { manager.TickPlacement(); Frame(none); }
             Is("cached placement does not rewind", fig.Position.Z < -.6 && fig.Position.Z > -1);
             Is("local avatar has no route or reckoning", fig.Route is null && fig.Reckon is null && !fig.Travelling);
-            Is("WASD overrides click", steering.OnGroundClick(new(-4,-2)));
+            Is("WASD overrides object approach", steering.WalkTo(new(-4,-2)));
             Frame(d);
             Is("key cancels route and marker", steering.Route is null && manager.WalkTarget is not { Visible: true });
             At(7,0);
-            Is("foreign authored footprint blocks", !steering.OnGroundClick(new(0,0)));
-            Is("free footprint boundary passes", steering.OnGroundClick(new(24,0)));
+            Is("foreign authored footprint blocks", !steering.WalkTo(new(0,0)));
+            Is("free footprint boundary passes", steering.WalkTo(new(24,0)));
             steering.CancelRoute();
             steering.RememberRefused(new(8,0),new P2(7,0));
-            Is("refused disc blocks", !steering.OnGroundClick(new(8,0)));
+            Is("refused disc blocks", !steering.WalkTo(new(8,0)));
             for (int i=0; i<241; i++) steering.Step(dt,none,0);
-            Is("refused disc expires after 4s", steering.OnGroundClick(new(8,0)));
+            Is("refused disc expires after 4s", steering.WalkTo(new(8,0)));
             steering.CancelRoute();
             steering.RememberRefused(new(7.5,0),new P2(7,0));
-            Is("refusal containing home is skipped", steering.OnGroundClick(new(7.5,0)));
+            Is("refusal containing home is skipped", steering.WalkTo(new(7.5,0)));
             steering.CancelRoute();
             for (int i=0; i<9; i++) steering.RememberRefused(new(10+i,6),new P2(7,0));
-            Is("refused memory keeps eight", steering.OnGroundClick(new(10,6)));
-            Is("newest refused disc blocks", !steering.OnGroundClick(new(18,6)));
+            Is("refused memory keeps eight", steering.WalkTo(new(10,6)));
+            Is("newest refused disc blocks", !steering.WalkTo(new(18,6)));
             steering.CancelRoute();
-            var groundHit=GroundRay.Hit(builder.Height!,new(11,5,0),new(0,-1,0));
-            Is("draped terrain ray hits plateau", groundHit is { } gh && Math.Abs(gh.Y-1)<1e-5);
-            Is("sky ray misses", GroundRay.Hit(builder.Height!,new(11,5,0),new(0,1,0)) is null);
-            Is("outdoor ray plans draped goal", steering.OnGroundRay(new(11,5,0),new(0,-1,0)) && steering.Route?.X==11);
             At(-3,1,3.01f); steering.RoomId="r-up";
-            Is("inside upper-floor ray uses avatar plane", steering.OnGroundRay(new(-4,5,0),new(1,-1,0)));
-            Near("inside plane X",steering.Route!.Value.X,-2.01);
+            Is("upper-floor object approach plans goal", steering.WalkTo(new(-2.01,0)));
+            Near("upper-floor object approach X",steering.Route!.Value.X,-2.01);
             Near("upper room floor",builder.PlayerFloorY(hall,"r-up",-3,1),3.03);
             Is("unknown room has no walls",builder.PlayerWalls(hall,"unknown") is null);
             hall.Fade.Snap(0);
@@ -184,9 +181,10 @@ public static class EmbodyWalkCheck
             var standClip=new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear };
             var walkClip=new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear };
             var bridgeClip=new Animation { Length=.2 };
-            library.AddAnimation(idle,standClip); library.AddAnimation(walking,walkClip); library.AddAnimation("get-up",bridgeClip);
+            var stopClip=new Animation { Length=1 };
+            library.AddAnimation(idle,standClip); library.AddAnimation(walking,walkClip); library.AddAnimation("get-up",bridgeClip); library.AddAnimation("stop",stopClip);
             player.AddAnimationLibrary("",library);
-            fig.SetBody(body,true,null,player,new[] {idle,walking,"get-up"},bodyHeight:1.7);
+            fig.SetBody(body,true,null,player,new[] {idle,walking,"get-up","stop"},bodyHeight:1.7);
             fig.BaseScale=1;
             fig.Clock=()=>manager.Clock;
             fig.Transitions=new[] { new ClipTransition(idle,walking,"get-up",0) };
@@ -195,6 +193,7 @@ public static class EmbodyWalkCheck
             Frame(d);
             Is("holding bridge opens before first step",fig.Bridging && new Vector2(fig.Position.X-heldStart.X,fig.Position.Z-heldStart.Z).Length()<1e-5);
             Near("holding bridge facing stays",fig.Yaw,0);
+            Is("standing source is held under renewed keys",fig.BridgeFrom==idle && !fig.CancelStopBridge(walking));
             Near("short stand-up tap grounds target before bridge hold",fig.Target.Y,.01);
             Frame(none);
             for (int i=0; i<40; i++) Frame(none);
@@ -212,8 +211,24 @@ public static class EmbodyWalkCheck
             Is("ramping bridge starts",fig.Bridging && fig.BridgePace>0);
             Frame(none);
             Is("release cancels ramping bridge",!fig.Bridging);
-            fig.Transitions=new[] { new ClipTransition(idle,walking,"get-up",0) };
+            // A stop bridge is the only holding bridge renewed keys may abandon.
+            // Include a holding start rule: cancellation must not open that rule again.
+            fig.Transitions=Array.Empty<ClipTransition>();
+            fig.Play(walking); fig.Target=fig.Position;
+            fig.Transitions=new[] { new ClipTransition(walking,idle,"stop",0), new ClipTransition(idle,walking,"get-up",0) };
             fig.Play(idle);
+            Is("stop remembers walking source",fig.Bridging && fig.BridgeFrom==walking);
+            var stopStart=fig.Position;
+            Is("object approach planned while stop holds",steering.WalkTo(new(fig.Position.X+1,fig.Position.Z)));
+            Frame(none);
+            Is("object approach does not cancel stop",fig.Bridging && fig.Position.DistanceTo(stopStart)<1e-5);
+            Frame(d);
+            Is("renewed keys cancel stop in same frame",!fig.Bridging && fig.Position.X>stopStart.X);
+            Is("stop source cleared and walk crossfades",fig.BridgeFrom is null && fig.CurrentKind==walking && fig.CurrentClip==walking);
+            Is("cancelled stop opens no start rule",fig.PaceLimitFor(walking)==1);
+            fig.Transitions=Array.Empty<ClipTransition>();
+            fig.Play(idle);
+            fig.Transitions=new[] { new ClipTransition(idle,walking,"get-up",0) };
             fig.Extras=new Dictionary<Animation,ClipExtras> { [bridgeClip]=new() { Path=new RootPath(new float[] {0,.2f},new float[] {0,0,0,.4f}) } };
             fig.Play(walking);
             fig.UpdateFigure(.2);

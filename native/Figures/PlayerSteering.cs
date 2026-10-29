@@ -83,21 +83,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
         return false;
     }
 
-    /// <summary>Task 49: draped terrain outdoors, the figure-height plane indoors; preserve the browser's plane fallback.</summary>
-    public bool OnGroundRay(Vec3 origin, Vec3 direction)
-    {
-        if (Avatar is not { } f) return false;
-        Vec3? hit=world.FootprintAt(f.Position.X,f.Position.Z) is null && world.Height is { } height
-            ? GroundRay.Hit(height,origin,direction) : null;
-        if (hit is null && Math.Abs(direction.Y)>1e-9)
-        {
-            double t=(f.Position.Y-origin.Y)/direction.Y;
-            if (t>=0) hit=new(origin.X+t*direction.X,f.Position.Y,origin.Z+t*direction.Z);
-        }
-        return hit is { } p && OnGroundClick(new(p.X,p.Z));
-    }
-
-    public bool OnGroundClick(P2 hit)
+    /// <summary>Plan an object action's approach walk (stairs, lifts or props).</summary>
+    public bool WalkTo(P2 hit)
     {
         if (Active && !MovementLocked && !PropPreparationPending && PropActionDriven) { ReleasePropAction?.Invoke(); return false; }
         if (!Active || MovementLocked || PropPreparationPending || VerticalRide is not null || WalkIn is not null || PendingSnap || Avatar is not { } f)
@@ -146,7 +133,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
             if (!Arrived(correction,PositionChannel.CorrectArriveM,false) && _clock<=correction.Until) return;
             Correction=null;
         }
-        P2? dir=Walk.WalkDir(keys,yaw);
+        var keyDir=Walk.WalkDir(keys,yaw);
+        P2? dir=keyDir;
         if (dir is not null) CancelRoute();
         double reach=double.PositiveInfinity;
         var from=new P2(pos.X,pos.Z);
@@ -167,6 +155,8 @@ public sealed class PlayerSteering(FigureManager figures, WorldBuilder world)
             StandUp?.Invoke();
         }
         string walking=FigureClips.PoseKind("walking",f.Poses);
+        // Renewed keys interrupt only a stop bridge, before PaceLimitFor can hold this frame.
+        if (keyDir is not null) f.CancelStopBridge(walking);
         if (dir is not null) { figures.SetPlayerAnimation(f.CharacterName,walking); _clipOverride=true; }
         else if (_clipOverride)
         {

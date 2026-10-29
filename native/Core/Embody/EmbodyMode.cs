@@ -36,7 +36,6 @@ public sealed class EmbodyMode
         _camera.ZoomCap = MaxDistance;
         _camera.ZoomFloor = CameraFraming.EmbodyMinDist;
         _camera.NearPitchDeg = CameraFraming.EmbodyNearPitchDeg;
-        _camera.OrbitOnDrag = true;
         _camera.FlyTo(_eye() ?? at, EnterDistance);
         _camera.Follow = _eye;
         Active = true;
@@ -47,7 +46,6 @@ public sealed class EmbodyMode
     public void Exit()
     {
         _camera.Follow = null;
-        _camera.OrbitOnDrag = false;
         _camera.ZoomCap = _camera.ZoomFloor = null;
         _camera.NearPitchDeg = CameraFraming.OverviewNearPitchDeg;
         _camera.ResetFirstPerson();

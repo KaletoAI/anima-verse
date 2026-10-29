@@ -73,58 +73,46 @@ public class OverviewControlTests
     }
 
     [Fact]
-    public void PanGrabsTheGroundAndCountsAsDragPastFifteenCentimetres()
+    public void BareLeftDragOrbitsWithoutPanningOrGroundHit()
     {
-        // Press grabs (5,0,5); the pointer then shows (5.1,0,5): target += (−0.1, 0, 0). 0.1 ≤ 0.15 → still a click.
-        var c = At(1, 0, 1, 20);
-        c.PointerDown(PointerButton.Left, false, false, false, 100, 100, () => new Vec3(5, 0, 5));
-        Assert.False(c.PointerMove(101, 100, () => new Vec3(5.1, 0, 5)));
-        Assert.Equal(1 - 0.1, c.Target.X, 12);
-        Assert.True(c.PointerUp(PointerButton.Left));
-
-        // Next gesture: (5,0,5) → (5,0,5.2): delta (0,0,−0.2), |0.2| > 0.15 → a drag, no click.
-        c.PointerDown(PointerButton.Left, false, false, false, 100, 100, () => new Vec3(5, 0, 5));
-        c.PointerMove(100, 104, () => new Vec3(5, 0, 5.2));
-        Assert.Equal(1 - 0.2, c.Target.Z, 12);
+        var c = At(1, 2, 3, 20);
+        c.PointerDown(PointerButton.Left, 100, 100);
+        Assert.False(c.PointerMove(104, 100));
+        Assert.Equal(-.02, c.TargetYaw, 12);
+        Assert.Equal(new Vec3(1, 2, 3), c.Target);
+        Assert.True(c.PointerUp(PointerButton.Left)); // exactly 4 px still picks
+        c.PointerDown(PointerButton.Left, 100, 100);
+        c.PointerMove(103, 104);
+        c.PointerMove(100, 100); // returning never turns a drag back into a click
+        Assert.Equal(new Vec3(1, 2, 3), c.Target);
         Assert.False(c.PointerUp(PointerButton.Left));
-    }
-
-    [Fact]
-    public void PressWithoutGroundHitStartsNoPanButReleaseStillClicks()
-    {
-        // engine.ts: pointerdown returns before dragging = true; pointerup with button 0 and no drag still picks.
-        var c = At(0, 0, 0, 20);
-        c.PointerDown(PointerButton.Left, false, false, false, 0, 0, () => null);
-        Assert.True(c.PointerMove(50, 50, () => new Vec3(9, 0, 9)));   // a hover: no gesture runs
-        Assert.Equal(new Vec3(0, 0, 0), c.Target);
-        Assert.True(c.PointerUp(PointerButton.Left));
     }
 
     [Fact]
     public void OrbitTurnsOnTheFirstPixelAndClicksUnderFourPixels()
     {
-        // Shift + left orbits: 3 px right → targetYaw −0.015 rad, 2 px down → pitchOffset +0.5°. hypot(3,2) ≤ 4 → click.
+        // Left orbits: 3 px right → targetYaw −0.015 rad, 2 px down → pitchOffset +0.5°. hypot(3,2) ≤ 4 → click.
         var c = At(0, 0, 0, 20);
-        c.PointerDown(PointerButton.Left, true, false, false, 10, 10, () => throw new InvalidOperationException("no ray for an orbit"));
-        Assert.False(c.PointerMove(13, 12, () => null));
+        c.PointerDown(PointerButton.Left, 10, 10);
+        Assert.False(c.PointerMove(13, 12));
         Assert.Equal(-0.015, c.TargetYaw, 12);
         Assert.Equal(0.5, c.PitchOffset, 12);
         Assert.True(c.PointerUp(PointerButton.Left));
 
         // Right button, 5 px: a drag (5 > 4), and a right release is never a click anyway.
         var r = At(0, 0, 0, 20);
-        r.PointerDown(PointerButton.Right, false, false, false, 0, 0, () => null);
-        r.PointerMove(5, 0, () => null);
+        r.PointerDown(PointerButton.Right, 0, 0);
+        r.PointerMove(5, 0);
         Assert.Equal(-0.025, r.TargetYaw, 12);
         Assert.False(r.PointerUp(PointerButton.Right));
-        r.PointerDown(PointerButton.Middle, false, false, false, 0, 0, () => null);
+        r.PointerDown(PointerButton.Middle, 0, 0);
         Assert.False(r.PointerUp(PointerButton.Middle));
 
         // The slop is measured from the START: 3 px out and 3 px back still moved 3 px → click.
         var b = At(0, 0, 0, 20);
-        b.PointerDown(PointerButton.Left, false, true, false, 0, 0, () => null);
-        b.PointerMove(3, 0, () => null);
-        b.PointerMove(0, 0, () => null);
+        b.PointerDown(PointerButton.Left, 0, 0);
+        b.PointerMove(3, 0);
+        b.PointerMove(0, 0);
         Assert.True(b.PointerUp(PointerButton.Left));
     }
 
@@ -133,8 +121,8 @@ public class OverviewControlTests
     {
         // 200 px down = +50° → clamped to 35.
         var c = At(0, 0, 0, 20);
-        c.PointerDown(PointerButton.Middle, false, false, false, 0, 0, () => null);
-        c.PointerMove(0, 200, () => null);
+        c.PointerDown(PointerButton.Middle, 0, 0);
+        c.PointerMove(0, 200);
         Assert.Equal(35, c.PitchOffset);
     }
 
@@ -221,8 +209,8 @@ public class OverviewControlTests
         c.Wheel(100, () => null);
         Assert.False(c.Flying);
         c.FlyTo(new Vec3(100, 0, 0), 10);
-        c.PointerDown(PointerButton.Right, false, false, false, 0, 0, () => null);
-        c.PointerMove(1, 0, () => null);
+        c.PointerDown(PointerButton.Right, 0, 0);
+        c.PointerMove(1, 0);
         Assert.False(c.Flying);
         // A fly's distance ignores the cap but not the lens: 500 → 150.
         c.FlyTo(new Vec3(0, 0, 0), 500);

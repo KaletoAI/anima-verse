@@ -30,6 +30,19 @@ public class PickChainTests
     }
 
     [Fact]
+    public void ObjectActionsConsumeClicksBeforeLocationInfo()
+    {
+        int actions = 0;
+        bool Action() { actions++; return true; }
+        Assert.Equal(new PickOutcome("Ada", InfoChange.Unchanged, null), PickChain.Resolve("Ada", "house", Action));
+        Assert.Equal(0, actions);
+        Assert.Equal(new PickOutcome(null, InfoChange.Unchanged, null), PickChain.Resolve(null, "house", Action));
+        Assert.Equal(1, actions);
+        Assert.Equal(new PickOutcome(null, InfoChange.Show, "house"), PickChain.Resolve(null, "house", () => false));
+        Assert.Equal(new PickOutcome(null, InfoChange.Clear, null), PickChain.Resolve(null, null, () => false));
+    }
+
+    [Fact]
     public void EmptyGroundClearsBoth()
     {
         // selected = null (pickFigure miss) and onPick(null) → info = null.

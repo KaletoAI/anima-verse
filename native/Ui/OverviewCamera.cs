@@ -59,7 +59,6 @@ public partial class OverviewCamera : Camera3D
     public double? ZoomCap { get => Control.ZoomCap; set => Control.ZoomCap = value; }
     public double? ZoomFloor { get => Control.ZoomFloor; set => Control.ZoomFloor = value; }
     public double NearPitchDeg { get => Control.NearPitchDeg; set => Control.NearPitchDeg = value; }
-    public bool OrbitOnDrag { get => Control.OrbitOnDrag; set => Control.OrbitOnDrag = value; }
     public bool FirstPerson => Control.FirstPerson;
     public event Action? ZoomCapped { add => Control.ZoomCapped += value; remove => Control.ZoomCapped -= value; }
     /// <summary>Task 48: pose hooks run after the camera zoom latch, before final first-person placement.</summary>
@@ -229,7 +228,7 @@ public partial class OverviewCamera : Camera3D
                 var at = mb.Position;
                 var button = ButtonOf(mb.ButtonIndex);
                 if (mb.Pressed)
-                    Control.PointerDown(button, mb.ShiftPressed, mb.CtrlPressed, mb.AltPressed, at.X, at.Y, () => GroundPoint(at));
+                    Control.PointerDown(button, at.X, at.Y);
                 else if (Control.PointerUp(button))
                     Clicked?.Invoke(at);
                 break;
@@ -237,7 +236,7 @@ public partial class OverviewCamera : Camera3D
             case InputEventMouseMotion mm:
             {
                 var at = mm.Position;
-                if (Control.PointerMove(at.X, at.Y, () => GroundPoint(at))) Hovered?.Invoke(at);
+                if (Control.PointerMove(at.X, at.Y)) Hovered?.Invoke(at);
                 break;
             }
             case InputEventKey k:

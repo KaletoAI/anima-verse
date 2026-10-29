@@ -160,10 +160,10 @@ public static class EmbodyOffersCheck
             Near("O8 tilt",f.Lean!.Value.Tilt,12); Near("O8 roll",f.Lean.Value.Roll,-7);
             source.SelectPlaceScenario("take-room-pose"); await offers.RefreshPlacesAsync();
             await offers.PickRoomPoseAsync("room-seat","sitting");
-            Is("O8 seated click creates route",steering.OnGroundClick(new(-2,2)));
+            Is("O8 seated object approach creates route",steering.WalkTo(new(-2,2)));
             steering.Step(.016,new HashSet<string>(),0); await offers.PendingActivity!;
             Is("O8 second seat stands up again",source.ActivityRequests.Count==2 && !steering.AvatarSeated);
-            Is("O8 stand-up preserves originating click route",steering.Route is not null);
+            Is("O8 stand-up preserves object approach route",steering.Route is not null);
             source.SelectPlaceScenario("places-refresh-race"); now=700;
             var firstGate=new TaskCompletionSource(); var secondGate=new TaskCompletionSource();
             source.PlacesBarrier=firstGate.Task; var first=offers.RefreshPlacesAsync();

@@ -342,6 +342,11 @@ export function clipTransition(from: string | null | undefined, to: string,
  *  apart at every point of the ramp. */
 const BRIDGE_MIN_PACE = 0.02;
 
+/** Steering may interrupt only a bridge opened out of the walking clip. */
+export function steerCancelsBridge(bridgeFrom: string | null, walkKind: string): boolean {
+  return !!bridgeFrom && bridgeFrom.toLowerCase() === walkKind.toLowerCase();
+}
+
 /**
  * HOW MUCH of its normal speed a figure has while a bridge clip plays —
  * `accel` seconds' worth per second, capped at its full speed.

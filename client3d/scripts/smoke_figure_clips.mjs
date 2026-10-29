@@ -102,6 +102,7 @@ const { passed, failed } = runVectors(file, {
   resolveClipTransitions: walk.resolveClipTransitions,
   clipTransition: walk.clipTransition,
   bridgePace: walk.bridgePace,
+  steerCancelsBridge: walk.steerCancelsBridge,
   clipKindChain: coverage.clipKindChain,
   resolveClipKind: coverage.resolveClipKind,
   proceduralGait: coverage.proceduralGait,

@@ -69,7 +69,7 @@ import * as THREE from 'three';
 import { markPhase } from '../game/boot';
 import { buildAreaGeometry,
   heightAt as worldHeightAt, pickVariant, pointInRing,
-  propBoxFootprints, propGroundFit, rayGroundHit,
+  propBoxFootprints, propGroundFit,
   scatterCellAt, scatterCellInstances, scatterCellSeed, scatterClearM,
   scatterSeed, scatterEdgeInstances, scatterCenterInstance,
   areaAxis, ribbonSelectedEdges, reshuffleEpoch, cellOccupancy,
@@ -77,8 +77,7 @@ import { buildAreaGeometry,
   alongSeed, strokeCentreLine, strokeStations,
   strokeWidthM,
   surfaceMaterial, surfaceTimeUniform, tileKeyAt, wantedScatterCells,
-  waterfallsFrom,
-  worldHeightRange } from '@anima/scene-render';
+  waterfallsFrom } from '@anima/scene-render';
 import type { CellGrids, Point2, ScatterFootprint, ScatterInstance,
   TerrainLayer, TerrainLayerBatch, TerrainLayerFormat,
   TerrainLayerIndex, TerrainLayerTile, WorldHeightField,
@@ -821,23 +820,6 @@ export interface Ground {
   // with them (`maxCompositeHeightIn`/`compositeHeightRangeIn` in
   // `@anima/scene-render`) rather than staying as dormant code; a future fog
   // round writes them against the field it actually needs.
-  /**
-   * Where a pointer ray meets the ground, or `null` when it misses.
-   *
-   * The click-to-walk goal used to be read against a horizontal plane at the
-   * figure's own height, which on a slope puts the goal metres away from the
-   * pointer (at 40° and a flat camera angle: 7-14 m). Then it was a raycast
-   * against the one big drawn plate — which since E2 does not exist, and could
-   * not be trusted if it did: the CDLOD terrain's triangles change with the
-   * camera, so the same pixel would answer a different goal at a different
-   * zoom. It is solved ANALYTICALLY against the field instead
-   * (`rayGroundHit`), which is the same surface `heightAt` describes and the
-   * same one the server will judge the walk on.
-   *
-   * Costs a march at the lattice step plus a bisection — a few hundred
-   * bilinear reads for a click, and nothing at all per frame.
-   */
-  groundPointAt(ray: THREE.Raycaster): THREE.Vector3 | null;
   /** Counts how often the RELIEF was taken over — a signature of its own,
    *  because the field arrives long after the first picture is built, and
    *  everything drawn off it (the minimap's shading, the travel line) has to
@@ -1204,19 +1186,6 @@ export function createGround(): Ground {
   /** The world frame of the last `sync`, so the tile loader can rebuild the
    *  plate without one being handed to it. */
   let lastBounds: WorldBounds | null = null;
-  /** `worldHeightRange` over EVERYTHING held — the overview when it arrives,
-   *  widened by each tile batch. Taken once per arrival: it walks every support
-   *  point (up to 120 000 of them, § A16) and both readers ask on the poll path
-   *  — the ray start when the field lands, the cell size on every single sync.
-   *
-   *  The tiles have to be in it. A coarsened overview can be missing the 22 m
-   *  hill entirely (seven of eight support points per axis are gone at 32 m),
-   *  and a ray started under that hill finds nothing — a figure falling back to
-   *  the flat world on the very ground it should stand on. It only ever GROWS
-   *  within one signature; an evicted tile does not shrink it back, because a
-   *  ray that starts too high costs nothing while one that starts too low is
-   *  the bug above. */
-  let fieldRange = { min: 0, max: 0 };
 
   /** Has any relief arrived at all — the overview, or at least one tile? */
   const hasRelief = (): boolean => !!relief.overview || relief.tiles.size > 0;
@@ -2965,7 +2934,6 @@ export function createGround(): Ground {
       anchorTile = null;   // …so the next anchor recomputes the want set
       loadedHeightSig = payload.sig || heightSig;
       heightRev += 1;
-      fieldRange = worldHeightRange(payload);
       // The relief reaches the ground SHADER here and nowhere else (§ A16, the
       // AO of `scene/naturalGround.ts`): the overview is packed into a data
       // texture once per signature, and every patched ground material reads it
@@ -3204,13 +3172,6 @@ export function createGround(): Ground {
         if (!takeTiles(payload)) continue;
         evictTiles(want);
         heightRev += 1;
-        // The tiles carry the relief the overview coarsened away, so the ray
-        // start has to grow with them — see `fieldRange`.
-        for (const tile of relief.tiles.values()) {
-          const r = worldHeightRange(tile);
-          if (r.max > fieldRange.max) fieldRange.max = r.max;
-          if (r.min < fieldRange.min) fieldRange.min = r.min;
-        }
         // The near pyramid is rebuilt from the tiles that now stand, through
         // `heightAt` itself — so the texture the vertex shader reads carries
         // the tile-first precedence and answers the same number every rule
@@ -3594,17 +3555,6 @@ export function createGround(): Ground {
       void refreshLayerTiles();
     },
     heightAt,
-    groundPointAt(ray) {
-      if (!hasRelief()) return null;
-      const o = ray.ray.origin;
-      const d = ray.ray.direction;
-      // The slab the march is clipped to is the field's own range, and it only
-      // ever grows within a signature, so a ray never starts inside a hill it
-      // cannot see.
-      const hit = rayGroundHit(relief, o.x, o.y, o.z, d.x, d.y, d.z,
-                               { minY: fieldRange.min, maxY: fieldRange.max });
-      return hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
-    },
     waterLevelAt: waterAt,
     waterGhostAt,
     heightRevision: () => heightRev,

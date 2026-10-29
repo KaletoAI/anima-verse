@@ -16,12 +16,12 @@ public readonly record struct OverviewPose(Vec3 Position, Vec3 Target, double Pi
 /// A line-for-line port of the camera part of <c>client3d/src/scene/engine.ts</c> (Engine: the
 /// fields <c>target/dist/targetDist/yaw/targetYaw/pitchOffset</c>, <c>flyTo</c>, <c>bindInput</c>,
 /// the camera half of <c>frame()</c>). Task 48 (E7-T3) adds follow, bounded zoom and first person;
-/// overview defaults remain unchanged.
+/// Task 73 makes every mouse drag orbit in both modes.
 ///
 /// Every formula that cameraMath.ts / cameraFraming.ts own goes through <see cref="CameraMath"/> /
 /// <see cref="CameraFraming"/> (vector-checked). What engine.ts writes INLINE stays inline here,
 /// with its constants named: the WASD pan step, the Q/E quarter turn, the +/− key factors, the
-/// grab pan and the two click slops, the <c>THREE.MathUtils.lerp</c> of the easing.
+/// orbit gesture and its click slop, the <c>THREE.MathUtils.lerp</c> of the easing.
 ///
 /// Ground hits are supplied by the caller as functions (<c>groundPoint</c> of engine.ts: the ray
 /// through the pointer meets the plane y = 0), evaluated lazily exactly where engine.ts raycasts.
@@ -32,8 +32,6 @@ public sealed class OverviewControl
 
     /// <summary>Click slop of an orbit gesture, CSS px (engine.ts <c>ORBIT_DRAG_PX</c>).</summary>
     public const double OrbitDragPx = 4;
-    /// <summary>Click slop of a pan gesture, metres on the ground plane (engine.ts pointermove: <c>delta.length() &gt; 0.15</c>).</summary>
-    public const double PanDragM = 0.15;
     /// <summary>WASD/arrow pan speed as a share of the eased distance per second (<c>this.dist * 0.9 * dt</c>).</summary>
     public const double KeyPanRate = 0.9;
     /// <summary>One Q/E step of the target yaw (radians, eased, no grid snap).</summary>
@@ -55,7 +53,6 @@ public sealed class OverviewControl
     public double? ZoomFloor { get; set; }
     public double? ZoomCap { get; set; }
     public double NearPitchDeg { get; set; } = CameraFraming.OverviewNearPitchDeg;
-    public bool OrbitOnDrag { get; set; }
     /// <summary>Task 48: live eye callback; evaluated once after the fly per frame.</summary>
     public Func<Vec3?>? Follow { get; set; }
     public event Action? ZoomCapped;
@@ -87,9 +84,8 @@ public sealed class OverviewControl
     private bool _hasFly;
     private double _flyT = 1;
 
-    private bool _dragging, _orbiting, _moved;
+    private bool _orbiting, _moved;
     private (double X, double Y) _orbitLast, _orbitStart;
-    private Vec3 _dragStart;
     private readonly HashSet<string> _keys = new();
 
     /// <summary>A fly-to is running.</summary>
@@ -154,65 +150,38 @@ public sealed class OverviewControl
         _flyT = 1;
     }
 
-    /// <summary>
-    /// pointerdown: middle/right, or left with Shift/Ctrl/Alt, starts an orbit; the bare left button grabs
-    /// the ground point under the pointer (none = no pan).
-    /// </summary>
-    public void PointerDown(PointerButton button, bool shift, bool ctrl, bool alt, double x, double y, Func<Vec3?> groundHit)
+    /// <summary>pointerdown: left, middle and right start the same orbit in every mode.</summary>
+    public void PointerDown(PointerButton button, double x, double y)
     {
-        bool orbit = button is PointerButton.Middle or PointerButton.Right
-                     || (button == PointerButton.Left && (OrbitOnDrag || shift || ctrl || alt));
-        if (orbit)
-        {
-            _orbiting = true;
-            _moved = false;
-            _orbitLast = (x, y);
-            _orbitStart = (x, y);
-            return;
-        }
-        if (button != PointerButton.Left) return;
-        if (groundHit() is not Vec3 p) return;
-        _dragging = true;
+        if (button is not (PointerButton.Left or PointerButton.Middle or PointerButton.Right)) return;
+        _orbiting = true;
         _moved = false;
-        _dragStart = p;
+        _orbitLast = (x, y);
+        _orbitStart = (x, y);
     }
 
     /// <summary>
-    /// pointermove. Orbit: turn on the first pixel, count as a drag only past <see cref="OrbitDragPx"/>.
-    /// Pan: the grabbed point goes back under the pointer (<c>target += dragStart − p</c>), a drag past
-    /// <see cref="PanDragM"/>. Both abort a fly. Returns true when the move is a HOVER (no gesture running).
+    /// pointermove: turn on the first pixel, count as a drag only past <see cref="OrbitDragPx"/>.
+    /// Aborts a fly. Returns true when the move is a HOVER (no gesture running).
     /// </summary>
-    public bool PointerMove(double x, double y, Func<Vec3?> groundHit)
+    public bool PointerMove(double x, double y)
     {
-        if (_orbiting)
-        {
-            double dx = x - _orbitLast.X;
-            double dy = y - _orbitLast.Y;
-            if (double.Hypot(x - _orbitStart.X, y - _orbitStart.Y) > OrbitDragPx) _moved = true;
-            _orbitLast = (x, y);
-            var step = CameraMath.OrbitStep(TargetYaw, PitchOffset, dx, dy, FirstPerson);
-            TargetYaw = step.TargetYaw;
-            PitchOffset = step.PitchOffset;
-            _flyT = 1;
-            return false;
-        }
-        if (_dragging)
-        {
-            if (groundHit() is not Vec3 p) return false;
-            var delta = new Vec3(_dragStart.X - p.X, _dragStart.Y - p.Y, _dragStart.Z - p.Z);
-            if (Math.Sqrt(delta.X * delta.X + delta.Y * delta.Y + delta.Z * delta.Z) > PanDragM) _moved = true;
-            Target = new Vec3(Target.X + delta.X, Target.Y + delta.Y, Target.Z + delta.Z);
-            _flyT = 1;
-            return false;
-        }
-        return true;
+        if (!_orbiting) return true;
+        double dx = x - _orbitLast.X;
+        double dy = y - _orbitLast.Y;
+        if (double.Hypot(x - _orbitStart.X, y - _orbitStart.Y) > OrbitDragPx) _moved = true;
+        _orbitLast = (x, y);
+        var step = CameraMath.OrbitStep(TargetYaw, PitchOffset, dx, dy, FirstPerson);
+        TargetYaw = step.TargetYaw;
+        PitchOffset = step.PitchOffset;
+        _flyT = 1;
+        return false;
     }
 
-    /// <summary>pointerup (any button) ends both gestures. Returns true when it is a CLICK: left button, no drag.</summary>
+    /// <summary>pointerup ends the orbit. Returns true for a left CLICK within the four-pixel slop.</summary>
     public bool PointerUp(PointerButton button)
     {
-        bool wasDrag = (_dragging || _orbiting) && _moved;
-        _dragging = false;
+        bool wasDrag = _orbiting && _moved;
         _orbiting = false;
         return !wasDrag && button == PointerButton.Left;
     }
@@ -318,7 +287,7 @@ public sealed class OverviewControl
     {
         (Target, Dist, TargetDist, Yaw, TargetYaw, PitchOffset) = (s.Target, s.Dist, s.TargetDist, s.Yaw, s.TargetYaw, s.PitchOffset);
         _flyT = 1;
-        _dragging = _orbiting = false;
+        _orbiting = false;
         _keys.Clear();
     }
 

@@ -4164,46 +4164,6 @@ async function startApp(username: string, role: string) {
     return tileGroundY(tile, groundProbe);
   }
 
-  engine.onGroundClick = (x, y) => {
-    const state = getGameState();
-    // Overview mode is untouched: there a click stays a tile pick. A running
-    // lift ride or walk-in owns the figure, so no new order is planned during
-    // those either — a goal planned from the old position would walk the
-    // figure back out of the opening it just came through.
-    if (state.mode !== 'embodied' || state.movementLocked
-      || verticalRide || walkIn || pendingSnap) {
-      if (pendingSnap) toastQuiet('Loading this place…');
-      return false;
-    }
-    const pos = npcs.positionOf(avatarName);
-    if (!pos) return false;
-    // OUT IN THE OPEN the click is read against the DRAPED GROUND itself
-    // (E8 task 3): a horizontal plane through the figure's feet meets a slope
-    // metres away from the pointer — at 40° and a flat camera angle 7-14 m,
-    // which is a walk order to somewhere the player did not click.
-    //
-    // INSIDE A FOOTPRINT the plane stays (parked review finding, E3): on an
-    // upper storey or a raised floor the world's ground is the wrong surface
-    // entirely — the ray would run past the floor down to the map. Same split
-    // as `groundY()`, and for the same reason.
-    const standingOn = tileAt(pos.x, pos.z);
-    const hit = (standingOn ? null : terrainGround.groundPointAt(engine.raycasterAt(x, y)))
-      ?? engine.groundPointAt(x, y, pos.y);
-    if (!hit) return false;
-    const goal = planClickWalk({ x: pos.x, z: pos.z }, { x: hit.x, z: hit.z },
-      (bx, bz) => blockedForAvatar(bx, bz));
-    // Nothing walkable under the pointer (a building, water, the point one
-    // already stands on): let the click fall through to the tile's info panel.
-    if (!goal) return false;
-    route = goal;
-    routeStalled = 0;
-    // Marker height from the same source the walking uses: the room floor
-    // where the avatar's room reaches, the ground skin everywhere else.
-    npcs.setWalkTarget(new THREE.Vector3(goal.x,
-      roomFloorY(tileAt(goal.x, goal.z), goal.x, goal.z) ?? groundY(goal.x, goal.z), goal.z));
-    return true;
-  };
-
   // The player drives the avatar for exactly as long as the mode is on. Hung
   // off the BUS, not off the enter/exit calls: zooming out leaves the mode
   // from inside embody.ts, and the figure has to be handed back then too.
@@ -4427,6 +4387,8 @@ async function startApp(username: string, role: string) {
     // while the figure stands still — the moving branch of `npcs.tick` asks
     // `moveClip` and never looks at this field — and the GROUND still wins
     // over it (`standingClipFor`), so wading is unaffected.
+    // A renewed key press interrupts only a stop bridge, before its pace hold.
+    if (keyDir) npcs.cancelStopBridge(avatarName, poseClip('walking'));
     const steering = !!dir;
     if (steering) {
       npcs.setPlayerAnimation(avatarName, poseClip('walking'));
@@ -5887,8 +5849,8 @@ async function startApp(username: string, role: string) {
       && offer.dest.x === far.pos.x && offer.dest.z === far.pos.z;
   }
 
-  /** A click order to a point — the tail of `engine.onGroundClick`, with the
-   *  same interlocks: no steering while a ride or a walk-in owns the figure. */
+  /** Approach an object action's landing; a ride or walk-in owns the figure
+   *  until it finishes, so a new approach cannot interrupt it. */
   function walkAvatarTo(x: number, z: number): void {
     const state = getGameState();
     if (state.mode !== 'embodied' || state.movementLocked

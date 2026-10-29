@@ -19,23 +19,26 @@ Recherche-Protokolle aus dem Juli 2026.
 
 ## Features (Prototyp)
 
-- **AoE-Kamera:** Pan (Ziehen/WASD), Zoom Richtung Mauszeiger (Rad), Drehen in
-  45°-Schritten (Q/E), frei drehen/neigen (mittlere Maustaste oder
-  Shift/Strg/Alt+Links; rechte Taste geht auch, kollidiert aber je nach
-  Browser mit Maus-Gesten). **Während man den Avatar steuert, dreht schon das
-  blanke Linksziehen** (`engine.orbitOnDrag`) — die Kamera hängt dort an der
-  Figur, ein Pan-Ziehen wäre wirkungslos; ein Klick bis 4 px Bewegung bleibt
-  ein Klick und damit der Geh-Befehl.
-- **Ich-Perspektive:** beim Steuern des Avatars weit genug heranzoomen.
-  Die Kamera wechselt nach 180 ms anhaltender Nähe bei ≤ 1,2 m virtueller
-  Zoomdistanz auf Augenhöhe. Der eigene Körper bleibt sichtbar, nur der Kopf
-  (samt Haaren) wird ausgeblendet, und die Kamera sitzt an den Augen des
-  Kopf-Bones — sie folgt also Sitzen, Liegen oder Tanzen. Im Stehen dreht der
-  Körper nach, sobald der Blick mehr als 60° von ihm abweicht; während einer
-  Animation bewegt sich nur der Blick. Labels der eigenen Figur bleiben aus;
-  ein Rig ohne Head-Bone wird wie früher ganz ausgeblendet. Herauszoomen ab ≥ 1,8 m wechselt ebenfalls nach 180 ms zurück. Der Bereich
-  dazwischen hält die Perspektive stabil. Mausdrehen, Q/E und Bewegung bleiben
-  verfügbar; Esc verlässt die Avatar-Steuerung wie bisher.
+Browser and native use the same controls in overview and avatar mode:
+
+| Input | Overview | Avatar mode |
+| --- | --- | --- |
+| Left, middle or right mouse drag | Orbit / tilt the view | Orbit / tilt the view |
+| WASD / arrow keys | Move the camera target relative to view yaw | Walk the avatar relative to view yaw |
+| Q / E | Turn the view by 45° | Turn the view by 45° |
+| Mouse wheel / + / − | Zoom (wheel zooms towards the cursor) | Zoom around the avatar |
+| Left click (within 4 px) | Select figures, use objects, show location info, or clear selection | Same object / selection actions; ground clicks never walk |
+| Esc | Close the current panel | Leave avatar control |
+
+Stairs, lifts and prop/seat actions retain their approach walks. Renewed movement keys
+interrupt a walk-to-stop transition immediately; getting up from a chair or bed still
+finishes its transition before walking.
+
+**First person:** while controlling the avatar, zoom to ≤ 1.2 m for 180 ms to move the
+camera to the eyes. The body stays visible and the head/hair are hidden. Zooming out
+to ≥ 1.8 m for 180 ms returns to third person. Mouse orbit, Q/E and movement remain
+available; Esc leaves avatar control.
+
 - **Keine Auswahl-/Identitätsringe:** Characters und Avatar haben keine
   Bodenringe mehr. Auswahl und Infotafeln bleiben erhalten; Gehziele und freie
   Sitzplätze behalten ihre eigenen Markierungen.

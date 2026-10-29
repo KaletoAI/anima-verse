@@ -67,7 +67,7 @@ public static class EmbodyCheck
             for (int i=0; i<200; i++) cam.Step(.05);
             Near("enter distance", cam.Distance, 7, 1e-9);
             Is("eye target", cam.Target.DistanceTo(eye) < 1e-5);
-            Is("mode camera fields", cam.Follow is not null && cam.ZoomCap == 34 && cam.ZoomFloor == .8 && cam.NearPitchDeg == 8 && cam.OrbitOnDrag);
+            Is("mode camera fields", cam.Follow is not null && cam.ZoomCap == 34 && cam.ZoomFloor == .8 && cam.NearPitchDeg == 8);
             cam.ZoomTo(new Vector3(90,0,90));
             Near("zoomTo ignored", cam.Control.TargetDist, 7);
             cam._UnhandledInput(new InputEventMouseButton { ButtonIndex = MouseButton.WheelDown, Pressed = true, Factor = 100 });
@@ -145,7 +145,7 @@ public static class EmbodyCheck
             for (int i=0; i<200; i++) cam.Step(.05);
             Near("exit distance", cam.Distance, 70, 1e-9);
             Is("exit at avatar", cam.Target.DistanceTo(root) < 1e-5);
-            Is("overview fields", cam.Follow is null && cam.ZoomCap is null && cam.ZoomFloor is null && cam.NearPitchDeg == 18 && !cam.OrbitOnDrag);
+            Is("overview fields", cam.Follow is null && cam.ZoomCap is null && cam.ZoomFloor is null && cam.NearPitchDeg == 18);
             hud.SetState("selected", new JsonObject { ["isAvatar"] = true });
             hud.RouteSceneKey(new InputEventKey { Keycode = Key.F, Pressed = true });
             Is("F selected avatar embodies", mode.Active);

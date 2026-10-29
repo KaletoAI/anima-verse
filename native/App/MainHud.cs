@@ -214,7 +214,7 @@ public partial class Main : Node3D
             if (_avatarOffers?.Pick(o, d, click) == true) return true;
             if (_avatarRooms?.Picking.Hit(o, d) is { } vertical)
             { _avatarRooms.UseVertical(vertical.Target); return true; }
-            return _playerSteering?.OnGroundRay(o, d) == true;
+            return false;
         });
         Log($"pick at ({click.X:0},{click.Y:0}): "
             + (figure is { } f ? $"figure {f.Name} at {f.Distance:0.##} m ({_figures.LastPickCandidates} near the ray, "

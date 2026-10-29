@@ -679,6 +679,11 @@ export class NpcManager {
     return { x: npc.root.position.x, z: npc.root.position.z };
   }
 
+  /** Player-only stop cancellation; NPC/traveller updates never call this. */
+  cancelStopBridge(name: string, walkKind: string): boolean {
+    return this.npcs.get(name)?.figure?.cancelStopBridge(walkKind) ?? false;
+  }
+
   /** Give a figure's running bridge up — see `Figure.cancelBridge`. */
   cancelBridge(name: string) {
     this.npcs.get(name)?.figure?.cancelBridge();

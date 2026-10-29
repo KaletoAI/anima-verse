@@ -225,7 +225,7 @@ public sealed class AvatarRoomsController : IDisposable
         }
         if(target.Kind=="stairs" && _stairs is { } s && Stairs.LegTo(new[]{tile.Places.Stairs[target.Flight]},s.Dest) is not null)
         { PendingRide=RideStairsAsync(); return; }
-        if(Stand(tile,Level(tile,room) ?? 0,target) is { } point) _steering.OnGroundClick(new(point.X,point.Z));
+        if(Stand(tile,Level(tile,room) ?? 0,target) is { } point) _steering.WalkTo(new(point.X,point.Z));
     }
     public void Dispose()
     {

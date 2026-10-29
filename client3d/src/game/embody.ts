@@ -8,7 +8,6 @@
  * - `engine.flyTo(eyes, EMBODY_DIST)` pulls the camera in,
  * - `engine.zoomFloor`/`engine.nearPitchDeg` make the close view a look over
  *   the avatar's shoulder rather than down at its feet (see below),
- * - `engine.orbitOnDrag` hands the bare left drag to the view (B19).
  * There is NO tween of our own: the existing fly and the soft follow lerp of
  * the engine together are the ride, in both directions.
  *
@@ -69,10 +68,6 @@ export function enterEmbodied(deps: EmbodyDeps): void {
   // …and so does the floor, before the fly it now binds as well.
   deps.engine.zoomFloor = EMBODY_MIN_DIST;
   deps.engine.nearPitchDeg = EMBODY_NEAR_PITCH_DEG;
-  // The mouse turns the view here (B19): with the camera on the figure a
-  // pan-drag is undone by the chase in the next frame anyway, so the bare
-  // button is free for the one thing one does want — looking around.
-  deps.engine.orbitOnDrag = true;
   deps.engine.flyTo(deps.avatarEye() ?? pos, EMBODY_DIST);
   deps.engine.follow = deps.avatarEye;
   setGameState({ mode: 'embodied' });
@@ -83,8 +78,6 @@ export function enterEmbodied(deps: EmbodyDeps): void {
 export function exitEmbodied(deps: EmbodyDeps): void {
   const { engine } = deps;
   engine.follow = null;
-  // Back to the overview controls: drag pans again, Shift+drag turns (B19).
-  engine.orbitOnDrag = false;
   // Before the fly, or the camera would be pulled back to the cap it has just
   // been released from.
   engine.zoomCap = null;

@@ -513,13 +513,14 @@ public partial class Figure : Node3D
             return;
         }
         double sinkM = terrainClip && double.IsFinite(sink) && sink > 0 ? sink : 0;
-        if (kind == CurrentKind && terrainClip == _terrainClip && sinkM == _sink)
+        if (!_bridgeResume && kind == CurrentKind && terrainClip == _terrainClip && sinkM == _sink)
         {
             SetHeightCorrection(CurrentClip, surfaceGroup);
             return;
         }
         if (Player is null)
         {
+            _bridgeResume = false;
             _terrainClip = terrainClip;
             _sink = sinkM;
             // No actions: `resolved` is undefined in the browser, so the drop is 0 (a static rig's height is its bob's).
@@ -537,6 +538,7 @@ public partial class Figure : Node3D
             return;
         }
         SetHeightCorrection(resolved, surfaceGroup);
+        _bridgeResume = false;
         _terrainClip = terrainClip;
         _sink = sinkM;
         // The drop belongs to the clip that ACTUALLY plays; the ground's sink comes on top, in world metres.
@@ -651,11 +653,17 @@ public partial class Figure : Node3D
     /// <summary>The time the figure's player stands at (the action's own clock), for the check; NaN without a clip.</summary>
     public double ClipTime => Player is { } p && CurrentClip.Length > 0 ? p.CurrentAnimationPosition : double.NaN;
 
+    /// <summary>The played kind a bridge left, cleared by the shared release path.</summary>
+    public string? BridgeFrom { get; private set; }
+    private bool _bridgeResume;
+
     /// <summary>The bridge branch of <c>play</c>: the gate, the deadline, the held facing, the travel and the turn.</summary>
     private void StartBridge(string via, double accel)
     {
         var anim = Player!.GetAnimation(via);
         var run = new BridgeRun { Kind = via, Length = anim.Length, Extras = Extras.TryGetValue(anim, out var x) ? x : null };
+        BridgeFrom = CurrentKind;
+        _bridgeResume = false;
         _transition = run;
         _runs.Add(run);
         double now = Clock();
@@ -715,6 +723,8 @@ public partial class Figure : Node3D
     private void ReleaseBridge()
     {
         _transition = null;
+        BridgeFrom = null;
+        _bridgeResume = false;
         _bridgeUntil = 0;
         _bridgeAccel = 0;
     }
@@ -724,6 +734,18 @@ public partial class Figure : Node3D
     {
         if (_transition is null) return;
         ReleaseBridge();
+    }
+
+    /// <summary>Player input resumes the source walk without opening a start-walk rule.</summary>
+    public bool CancelStopBridge(string walkKind)
+    {
+        if (!Bridging || !FigureClips.SteerCancelsBridge(BridgeFrom, walkKind)) return false;
+        var from = BridgeFrom!;
+        CancelBridge();
+        CurrentKind = from;
+        // The stop action is still on screen: bypass the same-kind shortcut so Play crossfades back.
+        _bridgeResume = true;
+        return true;
     }
 
     /// <summary><c>holdsFacing</c>: a HOLDING bridge plays — faceTowards/setYaw only remember what was asked for.</summary>
@@ -995,9 +1017,10 @@ public partial class Figure : Node3D
     /// <summary>Forget every bridge (a new body): gate, travel, turn and lift.</summary>
     private void ResetBridges()
     {
-        _transition = _currentRun = _travelAction = _turnAction = _liftAction = null;
+        ReleaseBridge();
+        _currentRun = _travelAction = _turnAction = _liftAction = null;
         _runs.Clear();
-        _bridgeUntil = _bridgeAccel = _bridgeStart = 0;
+        _bridgeStart = 0;
         _pendingYaw = null;
         _travelPath = null;
         _turn = null;

@@ -229,6 +229,10 @@ public static class FigureClips
         return Math.Min(1, Math.Max(BridgeMinPace, accel * e));
     }
 
+    /// <summary>Steering may interrupt only a bridge opened out of the walking clip.</summary>
+    public static bool SteerCancelsBridge(string? bridgeFrom, string walkKind)
+        => !string.IsNullOrEmpty(bridgeFrom) && string.Equals(bridgeFrom, walkKind, StringComparison.OrdinalIgnoreCase);
+
     // ---- kinds (clipCoverage.ts) ----------------------------------------------------------------
 
     /// <summary><c>animFamily(kind)</c>: everything before the first <c>-</c>, trimmed and lower-cased; <c>""</c> is idle.</summary>

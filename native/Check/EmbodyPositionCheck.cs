@@ -83,9 +83,9 @@ public static class EmbodyPositionCheck
             Frame(none); Is("P2 walks rather than snaps",fig.Position.X<1 && fig.Position.X>0);
             for(int i=0;i<150;i++) Frame(none);
             Near("P2 arrives home",fig.Position.X,-3,.2);
-            Is("P2 disc blocks",!steering.OnGroundClick(new(1,2)));
+            Is("P2 disc blocks",!steering.WalkTo(new(1,2)));
             for(int i=0;i<260;i++) Frame(none);
-            Is("P2 disc expires at four seconds",steering.OnGroundClick(new(1,2)));
+            Is("P2 disc expires at four seconds",steering.WalkTo(new(1,2)));
             steering.CancelRoute();
             controller.Dispose(); controller=null;
 

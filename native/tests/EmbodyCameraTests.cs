@@ -98,12 +98,13 @@ public class EmbodyCameraTests
     [Fact]
     public void BareLeftDragOrbitsWithFourPixelClickSlop()
     {
-        var c = new OverviewControl { OrbitOnDrag = true };
-        c.PointerDown(PointerButton.Left, false, false, false, 0, 0, () => throw new Exception("no pan ray"));
-        c.PointerMove(3, 0, () => null);
+        var c = new OverviewControl();
+        new EmbodyMode(c, () => new Vec3(0, 0, 0), () => new Vec3(0, 1.598, 0)).Enter();
+        c.PointerDown(PointerButton.Left, 0, 0);
+        c.PointerMove(3, 0);
         Assert.True(c.PointerUp(PointerButton.Left));
-        c.PointerDown(PointerButton.Left, false, false, false, 0, 0, () => null);
-        c.PointerMove(5, 0, () => null);
+        c.PointerDown(PointerButton.Left, 0, 0);
+        c.PointerMove(5, 0);
         Assert.False(c.PointerUp(PointerButton.Left));
     }
 

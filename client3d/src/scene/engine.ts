@@ -123,12 +123,10 @@ export class Engine {
     return this.follow !== null && this.firstPersonZoom.active;
   }
   private keys = new Set<string>();
-  private dragging = false;
-  private orbiting = false;              // right mouse button: free orbit
+  private orbiting = false;              // any mouse button: free orbit
   private orbitLast = { x: 0, y: 0 };
   private orbitStart = { x: 0, y: 0 };   // where the gesture began (click vs. drag)
   pitchOffset = 0;                       // free pitch share (degrees); public for the preview pages
-  private dragStart = new THREE.Vector3();
   private raycaster = new THREE.Raycaster();
   private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private pointer = new THREE.Vector2();
@@ -155,11 +153,6 @@ export class Engine {
   /** Asked BEFORE onPick on a left click (E3-T1): true = the click hit a figure
    *  and is used up, so no tile pick follows. */
   pickFigure: ((x: number, y: number) => boolean) | null = null;
-  /** Asked after `pickFigure` and BEFORE `onPick` on a left click (E3-T4):
-   *  true = the click became a walk target and must not also open the tile's
-   *  info panel. Only the embodied mode answers true — in the overview every
-   *  click still belongs to the tile. */
-  onGroundClick: ((x: number, y: number) => boolean) | null = null;
   /** Follow target (E3-T2): while set, the camera chases the point this getter
    *  returns per frame and the WASD pan is skipped — those keys then belong to
    *  the avatar (task 3). Wheel zoom, Q/E and orbit stay live. */
@@ -206,16 +199,6 @@ export class Engine {
   /** Fired when a zoom-out was STOPPED by `zoomCap` — the hint hangs off this,
    *  not off a distance the HUD would have to watch itself. */
   onZoomCapped: (() => void) | null = null;
-  /** Plain left drag turns the view instead of panning it (B19). The embodied
-   *  mode sets it: while one steers the avatar the camera hangs on the figure
-   *  (`follow`), so a pan-drag is pulled straight back by the chase in the very
-   *  next frame — dragging was a gesture without effect there, and the one
-   *  thing a player wants to do with the mouse in that mode, look around, cost
-   *  a modifier key. In the OVERVIEW the flag stays false and every control is
-   *  what it was: drag pans, Shift/Ctrl/Alt + drag or the middle button turns.
-   *  A CLICK keeps its meaning in both modes — see `ORBIT_DRAG_PX`. */
-  orbitOnDrag = false;
-
   /** The player's shadow setting (Graphics tab) and the isolation panel's
    *  "shadows off" toggle (`debug3d.ts`). TWO owners of one renderer flag, so
    *  neither writes it: both go through `applyShadowState`, which draws
@@ -415,35 +398,15 @@ export class Engine {
     this.labelRenderer.setSize(w, h);
   }
 
-  private groundPoint(clientX: number, clientY: number,
-                      planeY = 0): THREE.Vector3 | null {
+  private groundPoint(clientX: number, clientY: number): THREE.Vector3 | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1
     );
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    // The plane is horizontal, so `constant` is just its height, negated
-    // (normal . p + constant = 0 with normal = +y). Every caller passes what it
-    // wants, the default 0 being the map's own ground.
-    this.groundPlane.constant = -planeY;
     const hit = new THREE.Vector3();
     return this.raycaster.ray.intersectPlane(this.groundPlane, hit) ? hit : null;
-  }
-
-  /** Where the pointer meets a HORIZONTAL plane at `planeY` (default: the
-   *  ground at y = 0), for anything outside the engine that needs a world
-   *  position from a click (E3-T4: the walk target). Null when the ray runs
-   *  parallel to it.
-   *
-   *  `planeY` exists because y = 0 is the wrong plane wherever the player
-   *  actually stands higher — an upper storey, a raised floor: the click ray
-   *  then travels past the floor to the map's ground and the walk goal lands
-   *  metres behind the pointer (parked review finding, E3). Callers hand in
-   *  the height the figure stands at. */
-  groundPointAt(clientX: number, clientY: number,
-                planeY = 0): THREE.Vector3 | null {
-    return this.groundPoint(clientX, clientY, planeY);
   }
 
   /** Ray through the pointer position, for anything outside the engine that
@@ -493,11 +456,8 @@ export class Engine {
     }, { passive: false });
 
     el.addEventListener('pointerdown', (e) => {
-      // Free orbit/tilt: middle button, Shift/Ctrl/Alt + left button — or the
-      // bare left button while `orbitOnDrag` is set (B19, embodied mode). The
-      // right button stays, but collides with mouse gestures in some browsers.
-      const orbit = e.button === 1 || e.button === 2
-        || (e.button === 0 && (this.orbitOnDrag || e.shiftKey || e.ctrlKey || e.altKey));
+      // Every mode uses the same orbit gesture; a short left release still picks.
+      const orbit = e.button === 0 || e.button === 1 || e.button === 2;
       if (orbit) {
         e.preventDefault();
         this.orbiting = true;
@@ -507,13 +467,6 @@ export class Engine {
         el.setPointerCapture(e.pointerId);
         return;
       }
-      if (e.button !== 0) return;
-      const p = this.groundPoint(e.clientX, e.clientY);
-      if (!p) return;
-      this.dragging = true;
-      this.moved = false;
-      this.dragStart.copy(p);
-      el.setPointerCapture(e.pointerId);
     });
     // Prevent the browser's middle-click autoscroll.
     el.addEventListener('mousedown', (e) => {
@@ -526,9 +479,8 @@ export class Engine {
         const dx = e.clientX - this.orbitLast.x;
         const dy = e.clientY - this.orbitLast.y;
         // Turn on the FIRST pixel, but count as a drag only past the
-        // threshold: since B19 the bare left button orbits while embodied, and
-        // the same button is the walk order. One pixel of hand tremor between
-        // press and release must not swallow the click.
+        // threshold: hand tremor between press and release must not swallow
+        // an object pick or a location click.
         if (Math.hypot(e.clientX - this.orbitStart.x, e.clientY - this.orbitStart.y)
             > ORBIT_DRAG_PX) this.moved = true;
         this.orbitLast = { x: e.clientX, y: e.clientY };
@@ -538,28 +490,15 @@ export class Engine {
         this.flyT = 1;
         return;
       }
-      if (this.dragging) {
-        const p = this.groundPoint(e.clientX, e.clientY);
-        if (!p) return;
-        const delta = this.dragStart.clone().sub(p);
-        if (delta.length() > 0.15) this.moved = true;
-        this.target.add(delta);
-        this.flyT = 1;
-      } else {
-        this.onHover?.(this.pickLocation(e.clientX, e.clientY));
-      }
+      this.onHover?.(this.pickLocation(e.clientX, e.clientY));
     });
     el.addEventListener('pointerup', (e) => {
-      const wasDrag = (this.dragging || this.orbiting) && this.moved;
-      this.dragging = false;
+      const wasDrag = this.orbiting && this.moved;
       this.orbiting = false;
       if (wasDrag || e.button !== 0) return;
       // Figures first: a hit figure eats the click, so clicking a character
       // does not also open the tile's info panel.
       if (this.pickFigure?.(e.clientX, e.clientY)) return;
-      // Then the ground: while embodied, a click on walkable ground is a walk
-      // order and eats the click as well.
-      if (this.onGroundClick?.(e.clientX, e.clientY)) return;
       this.onPick?.(this.pickLocation(e.clientX, e.clientY));
     });
     el.addEventListener('contextmenu', (e) => e.preventDefault());

@@ -86,6 +86,7 @@ public class FigureClipsVectorTests
         ["resolveClipTransitions"] = a => new JsonArray(FigureClips.ResolveClipTransitions(Raw(Arity(a, 1, 1)[0]))
                                                                    .Select(r => (JsonNode?)RuleJson(r)).ToArray()),
         ["clipTransition"] = a => RuleJson(FigureClips.Transition(StrOrNull(Arity(a, 3, 3)[0]), Str(a[1]), Table(a[2]))),
+        ["steerCancelsBridge"] = a => FigureClips.SteerCancelsBridge(StrOrNull(Arity(a, 2, 2)[0]), Str(a[1])),
         ["bridgePace"] = a => FigureClips.BridgePace(Num(Arity(a, 2, 2)[0]), Num(a[1])),
         ["clipKindChain"] = a => StrsJson(FigureClips.ClipKindChain(Str(Arity(a, 2, 2)[0]), Poses(a[1]))),
         ["resolveClipKind"] = a => FigureClips.ResolveClipKind(Str(Arity(a, 3, 3)[0]), Strs(a[1]), Poses(a[2])),
@@ -102,7 +103,7 @@ public class FigureClipsVectorTests
     public void EveryFunctionIsDispatched() => Assert.Empty(File.Value.MissingFunctions(Dispatch));
 
     [Fact]
-    public void AllSixtyFourCasesAreConsumed() => Assert.Equal(64, File.Value.Cases.Count);
+    public void AllSeventyThreeCasesAreConsumed() => Assert.Equal(73, File.Value.Cases.Count);
 
     /// <summary>The resolved fixture tables are what <c>resolveMovementPoses</c> makes of the raw ones (smoke's tail).</summary>
     [Fact]

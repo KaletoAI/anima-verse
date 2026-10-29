@@ -3219,18 +3219,29 @@ jedem Prop-Schreibvorgang ohnehin neu.
 **Prüfungen (§ B5a):** `client3d/scripts/smoke_scatter_math.mjs` (P1)–(P6),
 `scripts/smoke_world_props.py` [9].
 
-## A10. Kamera & Steuerung (Referenz, unverändert)
+## A10. Camera & controls
 
-FOV 45°, near 0,5, far 800; Orbit um Bodenpunkt, dist 2,5..150,
-zoomgekoppelter Pitch `lerp(18°, 62°, sqrt(norm(dist)))` + Offset ±35°
-(gesamt 8..85°); exponentielle Glättung ~8/s. Links ziehen = bodenver-
-ankertes Pan, Mitte/Shift = Drehen/Neigen (0,005 rad bzw. 0,25°/px),
-Rad = Zoom auf Cursor (`dist *= exp(ΔY·0,0012)`), Klick = Auswahl bei
-< 0,15 Einheiten Bewegung. Q/E ±45°, +/− Zoom-Stufen, WASD Pan.
-Im **Avatar-Modus** (embodied) dreht bereits das blanke Linksziehen — die
-Kamera folgt dort der Figur, ein Pan hätte keine Wirkung; Klick bleibt Klick
-(Geh-Befehl) bis 4 px Zeigerweg. In der Übersicht gilt unverändert das obige.
-Raum-Vorschau-Start: dist 22, Pitch-Offset +28°, Target Kachelmitte.
+Browser and native share one controller design: FOV 45°, near 0.2, far 800;
+`MIN_DIST` 0.8 m, maximum distance 150 m. Pitch follows
+`lerp(18°, 62°, sqrt(norm(dist)))` plus a free ±35° offset (total 8..85°),
+with exponential easing at about 8/s. Avatar mode follows the figure instead
+of a ground target and uses a near pitch of 8°.
+
+| Input | Overview | Avatar mode |
+| --- | --- | --- |
+| Left / middle / right drag | Orbit / tilt (0.005 rad and 0.25° per px) | Same orbit / tilt |
+| WASD / arrows | Move the camera target relative to view yaw | Walk the avatar relative to view yaw |
+| Q / E | Turn by ±45° | Turn by ±45° |
+| Wheel / + / − | Zoom; wheel-in pulls towards the cursor (`dist *= exp(ΔY * 0.0012)`) | Zoom around the avatar |
+| Left release within 4 px | Pick figure → prop/place action → stair/lift → location info → clear selection | Same pick chain; ground clicks never walk |
+
+Mouse dragging never pans the ground. Object actions retain approach walks to
+stairs, lifts, props and seats. Pressing movement keys again cancels a bridge
+opened out of the walking clip and resumes walking in the same frame, without
+opening a start-walk bridge. Bridges out of other poses (chairs, beds, sitting
+down) keep their existing holds. NPC and traveller transitions are unchanged.
+
+Room preview starts at distance 22, pitch offset +28°, targeting the tile centre.
 
 ## A11. Reise-Payload — server-autoritative Bewegung als Meter-Polyline
 

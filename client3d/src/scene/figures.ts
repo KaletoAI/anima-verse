@@ -22,7 +22,7 @@ import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm } f
 import { SubmergedGhost } from './submergedGhost';
 import type { ApiModel } from '../api';
 import { getAnimationClips, getCharacterModel } from '../api';
-import { bridgePace, clipTransition, poseClip, setClipTransitions,
+import { bridgePace, steerCancelsBridge, clipTransition, poseClip, setClipTransitions,
   setMovementPoses } from '../game/walk';
 import { clipRootPath, clipRootTurn, rootPathAt, setClipRootPath, setClipRootTurn, toWorld, travelAt,
   turnAt } from './bridgeTravel';
@@ -1766,6 +1766,9 @@ export class Figure {
    *  this runs, `currentKind` IS the bridge — the target only arrives when it
    *  has finished. */
   private transition: THREE.AnimationAction | null = null;
+  /** The played kind a bridge left; only player steering may interrupt a stop. */
+  bridgeFrom: string | null = null;
+  private bridgeResume = false;
   /** How fast the running bridge lets the figure get going, and when it
    *  started — whoever steers reads both to ramp the speed. */
   private bridgeAccel = 0;
@@ -2076,6 +2079,8 @@ export class Figure {
     // figure does not have must cost nothing, not stall it between states.
     if (rule && via && via !== kind && this.actions.has(via)) {
       const bridge = this.actions.get(via)!;
+      this.bridgeFrom = this.currentKind;
+      this.bridgeResume = false;
       this.transition = bridge;
       bridge.reset();
       bridge.setLoop(THREE.LoopOnce, 1);
@@ -2141,8 +2146,9 @@ export class Figure {
     // hangs at no height for the rest of the session.
     const sinkM = terrainClip && Number.isFinite(sink) && sink > 0 ? sink : 0;
     const group = terrainClip ? 'ground' : clipHeightGroup(surfaceGroup);
-    if (this.currentKind === kind && this.terrainClip === terrainClip
+    if (!this.bridgeResume && this.currentKind === kind && this.terrainClip === terrainClip
         && this.sink === sinkM && this.heightGroup === group) return;
+    this.bridgeResume = false;
     this.terrainClip = terrainClip;
     this.sink = sinkM;
     this.heightGroup = group;
@@ -2219,6 +2225,8 @@ export class Figure {
    *  effective weight, exactly as after a clip that ran to its end. */
   private releaseBridge() {
     this.transition = null;
+    this.bridgeFrom = null;
+    this.bridgeResume = false;
     this.bridgeUntil = 0;
     this.bridgeAccel = 0;
   }
@@ -2234,6 +2242,18 @@ export class Figure {
   cancelBridge() {
     if (!this.transition) return;
     this.releaseBridge();
+  }
+
+  /** Player input resumes the source walk without opening a start-walk rule. */
+  cancelStopBridge(walkKind: string): boolean {
+    if (!this.bridging || !steerCancelsBridge(this.bridgeFrom, walkKind)) return false;
+    const from = this.bridgeFrom!;
+    this.cancelBridge();
+    this.currentKind = from;
+    // The kind is restored, but the stop action is still on screen: the next
+    // play must crossfade rather than take the same-kind early return.
+    this.bridgeResume = true;
+    return true;
   }
 
   /** Does the running bridge own the figure's FACING? True while a bridge
@@ -2490,7 +2510,7 @@ export class Figure {
     this.mixer.uncacheRoot(this.mixer.getRoot());
     this.actions.clear();
     this.current = null;
-    this.transition = null;
+    this.releaseBridge();
     // `SkeletonUtils.clone` builds a NEW THREE.Skeleton per figure, and the
     // renderer hangs a bone texture on it — per figure, not per model.
     // `Skeleton.dispose()` frees exactly that texture and nothing else (the
