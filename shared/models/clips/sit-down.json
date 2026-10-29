@@ -1,0 +1,40 @@
+{
+ "kind": "sit-down",
+ "pair": false,
+ "roles": [],
+ "fps": 30,
+ "source_fps": 30.0,
+ "frames": 61,
+ "duration_s": 2.033,
+ "loop": false,
+ "speed": 1.0,
+ "geometry": {
+  "floor_shift_cm": 0.01,
+  "hips_scale": [
+   1.0
+  ],
+  "rig_floor_shift_cm": -0.0,
+  "rig_floor_min_cm": -0.0,
+  "root_motion": {
+   "mode": "keep",
+   "travel_m": [
+    -0.0,
+    -0.457
+   ],
+   "ref_height_m": 2.011,
+   "contact_s": [
+    [
+     0.0,
+     2.0
+    ]
+   ],
+   "max_drift_cm": 0.0
+  }
+ },
+ "source": {
+  "format": "procedural",
+  "author": "animation-studio",
+  "spec": "animation-studio/anims/sit-down.py",
+  "spec_sha": "a5519d460cf7ff00edc313e6224121e571d3b169f8d2447b02a7072c08dfd357"
+ }
+}
