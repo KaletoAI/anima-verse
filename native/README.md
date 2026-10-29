@@ -1088,6 +1088,44 @@ Not drawn (this favours Godot): the impostor billboards beyond 120 m
 `aligned` yaw uses the angle without the surface axis; the undergrowth's layer
 mask gate is the geometric "topmost painted area" test.
 
+## Audio (Task 59 / E8-T2)
+
+Task 59 (E8-T2) owns native audio. `Music`, `Ambient` and `Voice` send to
+`Master`; all are non-positional linear-amplitude buses with a 50-ms volume
+ramp. `av3d.audio.v1` is read from the per-server HUD storage mirror before
+HUD handoff, including with `--no-hud`. Defaults match the browser:
+master .8, music .5, ambient .6, voices 1, music/ambient enabled, TTS auto.
+
+`App/Audio/AudioOut.PlayPlaylist(PlaylistBus.Music|Ambient, urls,
+crossfadeS: 3, seed: null)` is the Task 60 driver boundary. An identical URL
+list keeps playing; an empty list stops. Lists shuffle with the browser's
+seeded PRNG, preload six seconds before the seam, and crossfade through eight
+linear sin/cos segments. Fade is capped at one third of the decoded duration;
+the seam is begin + duration − fade. Playlist changes fade old sources out
+linearly. Godot starts at the first frame at/after the seam, so timing has
+frame jitter compared with Web Audio's scheduled clock.
+
+All formats are detected by signature and fetched through the current
+session's `IWorldSource.GetBytesAsync`, including `/tts/tmp/` URLs. Runtime
+MP3/Ogg/WAV decoding occurs on the Godot thread. Playlist streams cache per
+URL; speech streams release at end/stop and are never cached. Broken files
+are skipped with one application log line per failed attempt; an all-broken
+round becomes silence.
+
+Bridge v3 `speak(url)` queues one active line plus at most three waiting
+lines, dropping the oldest waiting line on overflow (P3-R30). `stopSpeech`
+stops now and clears the queue; a late download cannot restart it. HUD page
+reload also stops speech. `setVolumes` applies only changed volume targets;
+`applyAudioPrefs` updates music/ambient switches and raises `PrefsChanged`
+for Task 60. TTS selection, rendering and its switch remain in CEF.
+
+`--headless -- --check=audio` (also `--check audio`, included in full
+`--check`) loads `fixtures/audio/` and checks codec durations, real bus and
+player gains on a fake clock, capped fades, seams, stop ramps, queue overflow,
+handler wiring and broken-file skipping. It does not assert audible sound.
+Task 60 supplies the live day/night/terrain soundtrack driver; listening
+acceptance against real music and TTS remains Task 61.
+
 ## HUD (Task S4)
 
 The browser HUD itself — `client3d/hud.html`, served by the Anima server at
@@ -1110,7 +1148,7 @@ The browser HUD itself — `client3d/hud.html`, served by the Anima server at
   and menu read (`clock`, `connection`, `mode: overview`, `selected`,
   `openView`), and `ui` actions; it receives the HUD's ui state
   (`hitRects`, `typing`, `overlayOpen`, `menuOpen`) and game actions
-  (`zoomTo`, `clearSelection`, `closeOpenView`, `setVolumes` (no-op),
+  (`zoomTo`, `clearSelection`, `closeOpenView`, `setVolumes`, `applyAudioPrefs`, `speak`, `stopSpeech`,
   `backToTitle`, `setShowAll` (admin only), `applyScatterPrefs`, `markResume`
   (acknowledged; the page reload after it rebuilds the world, see "Taking over another character"); the others
   are logged once, and a player-triggered one answers with a toast "Not available in the native client yet").

@@ -109,6 +109,7 @@ public partial class Main : Node3D
     {
         if (_api is null) return;
         var stored = _hud?.StoredEntries(_api.BaseUri) ?? HudStorageStore.Load().EntriesFor(_api.BaseUri.ToString());
+        ReadStoredAudioStart(stored);
         _showAll = HudStorage.StartShowAll(stored, IsAdmin);
         _scatterPrefs = ScatterPrefs.Load(stored.GetValueOrDefault(HudStorage.ScatterPrefsKey));
         Log($"stored HUD settings: {stored.Count} entries; start view {(_showAll ? "show all locations" : "known locations")}, "
@@ -164,12 +165,12 @@ public partial class Main : Node3D
             _source = _api;
             // api.ts `auth:required`: any later 401 ends this session on the client too.
             _api.Unauthorized += () => Callable.From(OnUnauthorized).CallDeferred();
-            // ONE login: the HUD's browser gets this very session (HudOverlay.Start).
-            _hud?.Start(_api.BaseUri, _api.SessionToken());
             // The login screen stays as the loading screen until the world is visible (TitleScreen).
             _loading = login;
             _loadingLayer = layer;
             ReadStoredStart();
+            // ONE login: hand off only after native settings have read the HUD storage mirror (Task 59).
+            _hud?.Start(_api.BaseUri, _api.SessionToken());
             await LoadWorldAsync();
         };
     }

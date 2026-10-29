@@ -52,7 +52,7 @@ public partial class HudOverlay : CanvasLayer
 
     /// <summary>Declared game actions that are background chatter of the HUD (logged once, no toast).</summary>
     private static readonly HashSet<string> QuietActions = new()
-        { "closeInfo", "speak", "stopSpeech", "sayBubble", "applyAudioPrefs", "setChatBox" };
+        { "closeInfo", "sayBubble", "setChatBox" };
 
     public static HudOverlay? Instance { get; private set; }
 

@@ -29,7 +29,7 @@ public partial class Main : Node3D
         hud.Handlers["closeOpenView"] = _ => CloseOpenLocation();
         hud.Handlers["closeInfo"] = _ => SetInfo(null);
         hud.Handlers["infoAction"] = args => InfoAction(Arg(args, 0), Arg(args, 1));
-        hud.Handlers["setVolumes"] = _ => { };                                  // no audio in the spike
+        AttachAudioHandlers(hud);
         hud.Handlers["backToTitle"] = _ => OnSession(SessionEvent.BackToTitle);
         hud.Handlers["setShowAll"] = args =>
         {
@@ -46,7 +46,7 @@ public partial class Main : Node3D
         // character take-over reloads the page). Natively the marker is only acknowledged: any reload of the HUD
         // page after its first load rebuilds the world with the live session, whichever arrives first (SessionFlow).
         hud.Handlers["markResume"] = _ => OnSession(SessionEvent.ResumeMarked);
-        hud.PageLoaded = () => OnSession(SessionEvent.HudPageLoaded);
+        hud.PageLoaded = () => { _audio?.StopSpeech(); OnSession(SessionEvent.HudPageLoaded); };
         AttachEmbody(hud);
         // Scene-owned fields the chat, plaque and menu read (minimum viable set).
         hud.SetState("mode", "overview");
