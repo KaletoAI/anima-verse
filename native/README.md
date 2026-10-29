@@ -129,7 +129,7 @@ The figures of the browser, every number on the E5 vectors (`figure_clips`, `ret
   and its Linux export templates (`~/.local/share/godot/export_templates/4.7.2.stable.mono/`)
 - .NET **8** SDK (`dotnet` on PATH)
 - `g++` (compiles `third_party/meshoptimizer` into `bin/libmeshoptimizer.so`)
-- for the HUD: the **gdCEF 0.20.0** release artifacts (CEF 151, Linux; the
+- for the HUD: the **gdCEF 0.21.0** release artifacts (CEF 156, Linux; the
   `cef_artifacts/` folder of github.com/Lecrapouille/gdcef, ~560 MB — never
   committed). Without them everything builds and runs, just without the HUD.
 
@@ -138,7 +138,7 @@ The figures of the browser, every number on the E5 vectors (`figure_clips`, `ret
 ```bash
 cd native
 ./link_cef.sh [/path/to/gdcef/cef_artifacts]  # ONCE: links the gdCEF artifacts as res://cef_artifacts/
-                                              # (default source $GDCEF_DIR, else /home/dev/tools/gdcef/gdcef/cef_artifacts)
+                                              # (default source $GDCEF_DIR, else /home/dev/tools/gdcef-0.21.0/gdcef/cef_artifacts)
 dotnet build                                  # C# (+ Core/) + bin/libmeshoptimizer.so (csproj target)
 dotnet test tests                             # xUnit tests of the Godot-free core (no engine needed)
 $GODOT --headless --path . --import           # first import (creates .godot/)
@@ -165,7 +165,7 @@ export lacks `AnimaNative.Core.dll`.
 gdCEF artifacts are linked (build.sh runs `link_cef.sh` itself if
 `native/cef_artifacts/` is missing and the artifacts exist) — the CEF runtime
 next to them: `libgdcef.so`, `libcef.so` (1.4 GB), `gdCefRenderProcess`,
-`*.pak`, `icudtl.dat`, `v8_context_snapshot.bin`, `libEGL.so`, `libGLESv2.so`,
+`*.pak`, `icudtl.dat`, `v8_context_snapshot.bin` (ANGLE is linked into `libcef.so` since CEF 152),
 `libvk_swiftshader.so`, `libvulkan.so.1`, `vk_swiftshader_icd.json`, `locales/`
 (hard links into the artifact folder where possible, copies otherwise).
 Keep everything in one folder: gdCEF looks for its subprocess and resources

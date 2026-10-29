@@ -32,7 +32,7 @@ export DOTNET_CLI_TELEMETRY_OPTOUT=1
 
 cef="$here/cef_artifacts"
 if [ ! -f "$cef/gdcef.gdextension" ]; then
-  if [ -f "${GDCEF_DIR:-/home/dev/tools/gdcef/gdcef/cef_artifacts}/gdcef.gdextension" ]; then
+  if [ -f "${GDCEF_DIR:-/home/dev/tools/gdcef-0.21.0/gdcef/cef_artifacts}/gdcef.gdextension" ]; then
     echo "== link gdCEF artifacts"
     "$here/link_cef.sh"
   else
@@ -47,7 +47,7 @@ echo "== import"
 code=0
 "$godot" --headless --path "$here" --import || code=$?
 if [ "$code" -ne 0 ]; then
-  # Godot 4.7.2 + gdcef 0.20.0: the editor-mode import segfaults (139) while the
+  # Godot 4.7.2 + gdcef 0.20.0: the editor-mode import segfaulted (139) while the
   # process exits, AFTER the import is done — only with the extension linked. The
   # export below scans the project again and fails on its own if anything is missing.
   if [ "$code" -eq 139 ] && [ -f "$cef/gdcef.gdextension" ]; then
@@ -81,24 +81,6 @@ if [ -f "$cef/gdcef.gdextension" ]; then
   done
   [ -f "$out/gdCefRenderProcess" ] && [ -f "$out/libcef.so" ] && [ -f "$out/libgdcef.so" ] \
     || { echo "gdCEF artifacts incomplete in $out" >&2; exit 1; }
-  # CEF issue #3912: Chromium changes the stack canary in forked helpers, and gdCEF 0.20.0's helper main() still
-  # checks the old one on return, so every helper (e.g. a component-update utility) aborts with
-  # __stack_chk_fail after finishing its work — a crash report at each start, nothing lost. gdCEF exposes no
-  # Chromium switches, so the real helper becomes gdCefRenderProcess.bin behind a wrapper that appends
-  # --change-stack-guard-on-fork=disable (the last value of a Chromium switch wins). Upstream report:
-  # https://github.com/Lecrapouille/gdcef/issues/107 — drop the wrapper once a gdCEF
-  # release marks the helper's main() NO_STACK_PROTECTOR.
-  rm -f "$out/gdCefRenderProcess.bin"
-  # It may be hard-linked to the host's artifacts: detach (copy) before chmod, never chmod the host file.
-  cp "$out/gdCefRenderProcess" "$out/gdCefRenderProcess.bin"
-  chmod +x "$out/gdCefRenderProcess.bin"
-  rm -f "$out/gdCefRenderProcess"
-  cat > "$out/gdCefRenderProcess" <<'HELPER'
-#!/bin/sh
-# gdCEF helper wrapper (CEF issue #3912): see native/build.sh.
-exec "$(dirname "$0")/gdCefRenderProcess.bin" "$@" --change-stack-guard-on-fork=disable
-HELPER
-  chmod +x "$out/gdCefRenderProcess"
 fi
 
 chmod +x "$out/anima-native.x86_64"
@@ -115,7 +97,7 @@ cat > "$out/run.sh" <<'RUN'
 # server and user name of the last successful login (user://launcher.json).
 here="$(cd "$(dirname "$0")" && pwd)"
 if [ "$#" -eq 1 ] && [ "$1" = --version ]; then cat "$here/version.txt"; exit 0; fi
-chmod +x "$here/anima-native.x86_64" "$here/gdCefRenderProcess" "$here/gdCefRenderProcess.bin" 2>/dev/null
+chmod +x "$here/anima-native.x86_64" "$here/gdCefRenderProcess" 2>/dev/null
 mkdir -p "$here/logs"
 exec "$here/anima-native.x86_64" --log-file "$here/logs/native-$(date +%Y%m%d-%H%M%S).log" -- "$@"
 RUN

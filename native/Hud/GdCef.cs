@@ -5,8 +5,8 @@ using Godot;
 namespace AnimaNative.Hud;
 
 /// <summary>
-/// The ONE place that talks to gdCEF (github.com/Lecrapouille/gdcef, v0.20.0-godot4,
-/// CEF 151). gdCEF is a GDExtension without C# bindings, so every call goes
+/// The ONE place that talks to gdCEF (github.com/Lecrapouille/gdcef, v0.21.0-godot4,
+/// CEF 156). gdCEF is a GDExtension without C# bindings, so every call goes
 /// through <see cref="GodotObject.Call"/> on the two engine classes it
 /// registers: <c>GdCEF</c> (the CEF runtime, one per process — CEF cannot be
 /// initialised a second time after shutdown) and <c>GdBrowserView</c> (one

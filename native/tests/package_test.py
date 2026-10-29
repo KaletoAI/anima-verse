@@ -117,7 +117,7 @@ class PackagingTests(unittest.TestCase):
 set -eu
 out="$1"
 mkdir -p "$out/locales"
-for file in anima-native.x86_64 libgdcef.so libcef.so gdCefRenderProcess gdCefRenderProcess.bin libmeshoptimizer.so icudtl.dat extra.pak; do
+for file in anima-native.x86_64 libgdcef.so libcef.so gdCefRenderProcess libmeshoptimizer.so icudtl.dat extra.pak; do
   echo payload > "$out/$file"
 done
 bash "$(dirname "$0")/version.sh" > "$out/version.txt"
@@ -127,7 +127,7 @@ bash "$(dirname "$0")/version.sh" > "$out/version.txt"
             tool.write_text("""#!/usr/bin/env python3
 import os, pathlib, sys
 app, output = map(pathlib.Path, sys.argv[-2:])
-for name in ['AppRun', 'usr/bin/anima-native.x86_64', 'usr/bin/gdCefRenderProcess', 'usr/bin/gdCefRenderProcess.bin']:
+for name in ['AppRun', 'usr/bin/anima-native.x86_64', 'usr/bin/gdCefRenderProcess']:
     assert os.access(app / name, os.X_OK), name
 for name in ['anima-native.desktop', 'anima-native.svg', '.DirIcon', 'usr/bin/libmeshoptimizer.so', 'usr/bin/extra.pak', 'usr/bin/fixtures/fixture.json']:
     assert (app / name).is_file(), name

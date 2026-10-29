@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# One-time step: make the gdCEF artifacts (CEF 151 + the gdcef GDExtension,
+# One-time step: make the gdCEF artifacts (CEF 156 + the gdcef GDExtension,
 # ~560 MB, NOT committed) visible to the Godot project as res://cef_artifacts/.
 #
 #   native/link_cef.sh [gdcef_artifacts_dir]
 #
-# Source: the argument, else $GDCEF_DIR, else /home/dev/tools/gdcef/gdcef/cef_artifacts
-# — the cef_artifacts/ folder of a gdcef release (v0.20.0-godot4, the folder
+# Source: the argument, else $GDCEF_DIR, else /home/dev/tools/gdcef-0.21.0/gdcef/cef_artifacts
+# — the cef_artifacts/ folder of a gdcef release (v0.21.0-godot4, the folder
 # that holds gdcef.gdextension and linux/). Build tooling only, like $GODOT.
 #
 # Result (native/cef_artifacts/ is gitignored):
@@ -18,7 +18,7 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-src="${1:-${GDCEF_DIR:-/home/dev/tools/gdcef/gdcef/cef_artifacts}}"
+src="${1:-${GDCEF_DIR:-/home/dev/tools/gdcef-0.21.0/gdcef/cef_artifacts}}"
 [ -f "$src/gdcef.gdextension" ] && [ -f "$src/linux/libgdcef.so" ] && [ -x "$src/linux/gdCefRenderProcess" ] \
   || { echo "not a gdcef cef_artifacts folder: $src (needs gdcef.gdextension, linux/libgdcef.so, linux/gdCefRenderProcess)" >&2; exit 1; }
 src="$(cd "$src" && pwd)"
