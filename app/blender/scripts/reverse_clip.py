@@ -6,6 +6,7 @@ from pathlib import Path
 _SCRIPTS_DIR = str(Path(__file__).parent)
 sys.path.insert(0, _SCRIPTS_DIR)
 import _common
+from _clip_scene import sample, write_root
 from _action import curves
 import cmu_clip
 import clip_orient
@@ -14,6 +15,57 @@ import proc_clip
 sys.path.remove(_SCRIPTS_DIR)
 
 import bpy
+from mathutils import Matrix
+
+
+FLOOR_TARGET = 0.0  # cm, in the client's rendered space
+
+
+def lift_rendered_floor(arm, frames, hips, support):
+    """Smooth measured-head deficits; re-sample because lift also changes p."""
+    applied = [0.0] * len(frames)
+    rest = arm.data.bones[hips].matrix_local.copy()
+
+    def measure():
+        mats, joints = sample(arm, frames)
+        h0 = joints[frames[0]][hips][0].y
+        span = joints[frames[-1]][hips][0].y - h0
+        lows = []
+        for f in frames:
+            p = max(0.0, min(1.0, (joints[f][hips][0].y - h0) / span)) if span else 0.0
+            lows.append(min(joints[f][cmu_clip.PREFIX + name][0].y
+                            for name in proc_clip.MEASURED) + support * p)
+        return mats, lows
+
+    mats, lows = measure()
+    for attempt in range(3):
+        deficit = [max(0.0, FLOOR_TARGET - low) for low in lows]
+        # FBX float noise is sub-millimetre; endpoints must never be moved.
+        if max(deficit[0], deficit[-1]) > 1e-3:
+            raise ValueError('Rendered floor deficit at an immutable endpoint')
+        deficit[0] = deficit[-1] = 0.0
+        if not any(deficit):
+            break
+        radius = 6
+        envelope = [max(deficit[max(0, i-radius):i+radius+1])
+                    for i in range(len(frames))]
+        smooth = [sum(envelope[max(0, i-radius):i+radius+1]) /
+                  len(envelope[max(0, i-radius):i+radius+1])
+                  for i in range(len(frames))]
+        smooth[0] = smooth[-1] = 0.0
+        # Raising on retries compensates for the client's changed hips ratio.
+        smooth = [v * (attempt + 1) for v in smooth]
+        moved = {f: Matrix.Translation((0.0, smooth[i], 0.0)) @ mats[f][hips]
+                 for i, f in enumerate(frames)}
+        write_root(arm, hips, moved, rest)
+        applied = [a + d for a, d in zip(applied, smooth)]
+        mats, lows = measure()
+        if min(lows) >= -0.5:
+            break
+    if min(lows) < -0.5:
+        raise ValueError('Rendered floor remains below -0.5 cm after three lifts')
+    assert applied[0] == applied[-1] == 0.0
+    return max(applied)
 
 
 def run(job):
@@ -48,6 +100,28 @@ def run(job):
                           and fc.data_path.endswith('rotation_quaternion'))
     scene = bpy.context.scene
     scene.frame_start, scene.frame_end = f0, f1
+    frames = list(range(f0, f1 + 1))
+    mats, joints = sample(arm, frames)
+    hips = cmu_clip.PREFIX + 'Hips'
+    # Match proc_clip._measure: measured joint HEADS, armature +Y, cm.
+    support = -min(joints[f0][cmu_clip.PREFIX + name][0].y
+                   for name in proc_clip.MEASURED)
+    if support > 1.0:
+        first_y = mats[f0][hips].translation.y
+        last_y = mats[f1][hips].translation.y
+        span = first_y - last_y
+        if abs(span) < 1e-4:
+            raise ValueError('Cannot unbake support height: reversed hips start/end '
+                             'heights are equal (within 0.0001 cm)')
+        moved = {}
+        for f in frames:
+            ratio = max(0.0, min(1.0, (mats[f][hips].translation.y - last_y) / span))
+            moved[f] = Matrix.Translation((0.0, support * ratio, 0.0)) @ mats[f][hips]
+        # Convert armature +Y through the rest matrix into bone-local location.
+        write_root(arm, hips, moved, arm.data.bones[hips].matrix_local.copy())
+    else:
+        support = 0.0
+    floor_lift = lift_rendered_floor(arm, frames, hips, support)
     out = Path(job['out_dir'])
     kind = params['kind']
     dst = out / f'{kind}.fbx'
@@ -61,11 +135,13 @@ def run(job):
     motion = {'mode': 'keep', 'travel_m': [round((y-x)/100, 3) for x, y in zip(a, b)],
               'ref_height_m': root['ref_height_m'], 'contact_s': root['contact_s'],
               'max_drift_cm': root['max_drift_cm']}
-    # Reversal visits the identical poses: floor shifts, lift, scales and
-    # orientation stay valid. Contacts and travel depend on time and are new.
+    # Keep the uniform floor shift/orientation history. The time-varying
+    # support correction is separate; contacts and travel are re-measured.
     meta.update(kind=kind, loop=False, pair=False)
     geometry = meta.setdefault('geometry', {})
     geometry['root_motion'] = motion
+    geometry['support_unbaked_cm'] = round(support, 3)
+    geometry['floor_lift_max_cm'] = round(floor_lift, 3)
     if 'despiked' in geometry:
         geometry['despiked'] = {role: {bone: sorted(meta['frames'] - 1 - f for f in fixed)
                                      for bone, fixed in bones.items()}

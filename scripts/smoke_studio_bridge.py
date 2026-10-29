@@ -10,6 +10,19 @@ first joints equal the source last joints within 0.5 cm. Looped, pair
 and licensed sources are refused.
 FeetPlanted fixes both ankles in world space; a 10 cm hips drop provides
 leg reach while the hips move backwards. Blender E2E runs when available.
+Support hand case: copy the studio-built bridge and translate its whole body
+by -30*t cm along armature Y with sample/write_root. Its start feet remain
+at 0 and its last feet are -30 cm. Reversal must lift its first frame by
+30 cm, leave its last pose equal to the source start (0.5 cm), and retain
+[0, +0.25] m travel (0.5 cm). The midpoint correction is 15 cm because
+the fixture hips descend linearly; the sidecar must record 30 cm unbaked.
+Floor hand case: lower the whole source (including its planted toes) by
+2 cm only at middle samples 13..16 of 31. Endpoints remain at floor 0.
+Reversal preserves this -2 cm dip; H=0, so rendered_y=y_file. A radius-6
+maximum spreads the four-sample deficit to 16 samples; a radius-6 mean
+has a full 13-sample plateau window, hence maximum lift = 2 cm. Every dip
+sample still sees 13 maxima of 2, so its corrected floor is 0 cm.
+First/last correction is explicitly zero; expected endpoint error is 0 cm.
 All outputs and publication use temporary directories; no commit is made.
 """
 import json
@@ -123,6 +136,7 @@ ANIM = Animation(kind='smoke-bridge', duration_s=1, loop=False, bridge=True,
         assert reverse['ok'], reverse['checks']
         revside = json.loads(Path(reverse['sidecar']).read_text())
         revmeasure = json.loads((animstudio.OUT / 'smoke-reverse/measure.json').read_text())
+        assert revside['geometry']['support_unbaked_cm'] == 0
         assert all(revside[k] == side[k] for k in ('duration_s', 'frames', 'fps'))
         assert revside['source']['reversed_from'] == anim.kind
         assert all(revside['source'][k] == v for k, v in side['source'].items())
@@ -141,6 +155,98 @@ ANIM = Animation(kind='smoke-bridge', duration_s=1, loop=False, bridge=True,
         print('OK reversed build/travel/endpoint/duration/publish/sheet:',
               revside['geometry']['root_motion']['travel_m'],
               f'endpoint_error={endpoint_error:.6f} cm, duration={revside["duration_s"]} s')
+        # Author the below-floor exit directly: the studio floors authored takes.
+        fixture_script = tmp / 'fixture.py'
+        fixture_script.write_text("""
+import sys
+sys.path.insert(0, %r)
+import bpy
+import _common, clip_orient, cmu_clip
+from _clip_scene import sample, write_root
+from mathutils import Matrix
+from pathlib import Path
+
+def run(job):
+    _common.reset_scene()
+    arm = clip_orient._import_armature(job['inputs']['src'], 30)
+    f0, f1 = [int(round(f)) for f in arm.animation_data.action.frame_range]
+    bpy.context.scene.frame_start, bpy.context.scene.frame_end = f0, f1
+    frames = list(range(f0, f1 + 1))
+    mats, joints = sample(arm, frames)
+    hips = cmu_clip.PREFIX + 'Hips'
+    moved = {f: Matrix.Translation((0, -30 * (1 if job['params'].get('flat') else
+                                  (f-f0)/(f1-f0)), 0)) @ mats[f][hips]
+             for f in frames}
+    if job['params'].get('dip'):
+        moved = {f: Matrix.Translation((0, -2 if 13 <= f-f0 <= 16 else 0, 0))
+                 @ mats[f][hips] for f in frames}
+    write_root(arm, hips, moved, arm.data.bones[hips].matrix_local.copy())
+    cmu_clip.DRIVEN.update(b.name[len(cmu_clip.PREFIX):] for b in arm.pose.bones)
+    dst = Path(job['out_dir']) / 'smoke-sink.fbx'
+    cmu_clip._export(arm, dst)
+    return {}, {'clip': str(dst)}
+_common.main(run)
+""" % str(ROOT / 'app/blender/scripts'))
+        with patch.object(runner, 'SCRIPTS_DIR', tmp):
+            fixture = runner.run('fixture', inputs={'src': tmp / 'clips/smoke-bridge.fbx'},
+                                 out_dir=tmp / 'clips')
+        assert fixture['ok'], fixture
+        sinkside = copy.deepcopy(side)
+        sinkside['kind'] = 'smoke-sink'
+        (tmp / 'clips/smoke-sink.json').write_text(json.dumps(sinkside))
+        (animstudio.ANIMS / 'smoke-unsink.py').write_text(
+            "from animstudio.dsl import Reversed\n"
+            "ANIM = Reversed(kind='smoke-unsink', source='smoke-sink')\n")
+        unsink = build('smoke-unsink')
+        assert unsink['ok'], unsink['checks']
+        uside = json.loads(Path(unsink['sidecar']).read_text())
+        uframes = json.loads((animstudio.OUT / 'smoke-unsink/measure.json').read_text())['frames']
+        low = min(p[1] for p in uframes[0].values())
+        end_error = max(math.dist(p, measured['frames'][0][j]) for j, p in uframes[-1].items())
+        assert abs(low) <= 1, low
+        assert end_error <= .5, end_error
+        assert abs(uside['geometry']['support_unbaked_cm'] - 30) <= .5
+        assert math.dist(uside['geometry']['root_motion']['travel_m'], [0, .25]) <= .005
+        for i, row in enumerate(uframes):
+            expected_y = measured['frames'][-1-i]['Hips'][1]
+            assert abs(row['Hips'][1] - expected_y) <= .5
+        print(f'OK support unbake: first_floor={low:.6f} cm, last_error={end_error:.6f} cm, '
+              f'support={uside["geometry"]["support_unbaked_cm"]:.6f} cm, '
+              f'travel={uside["geometry"]["root_motion"]["travel_m"]}')
+        with patch.object(runner, 'SCRIPTS_DIR', tmp):
+            dip = runner.run('fixture', inputs={'src': tmp / 'clips/smoke-bridge.fbx'},
+                             params={'dip': True}, out_dir=tmp / 'clips')
+        assert dip['ok'], dip
+        # The fixture overwrites smoke-sink, retaining the same endpoint metadata.
+        dipped = build('smoke-unsink')
+        dside = json.loads(Path(dipped['sidecar']).read_text())
+        dframes = json.loads((animstudio.OUT / 'smoke-unsink/measure.json').read_text())['frames']
+        assert dside['geometry']['support_unbaked_cm'] == 0
+        # With H=0 the client lift H*p is zero in every frame.
+        for row, original in zip(dframes, reversed(measured['frames'])):
+            for joint, point in row.items():
+                assert math.dist([point[0], point[2]],
+                                 [original[joint][0], original[joint][2]]) <= .1
+        assert min(p[1] for row in dframes for p in row.values()) >= -.5
+        lift = dside['geometry']['floor_lift_max_cm']
+        assert abs(lift - 2) <= .5, lift
+        for actual, expected in ((dframes[0], measured['frames'][-1]),
+                                 (dframes[-1], measured['frames'][0])):
+            assert max(math.dist(p, expected[j]) for j, p in actual.items()) <= .1
+        assert math.dist(dside['geometry']['root_motion']['travel_m'], [0, .25]) <= .005
+        assert dipped['ok'], dipped['checks']
+        print(f'OK middle toe dip: floor_lift_max_cm={lift}, endpoints unchanged')
+        with patch.object(runner, 'SCRIPTS_DIR', tmp):
+            flat = runner.run('fixture', inputs={'src': tmp / 'clips/smoke-bridge.fbx'},
+                              params={'flat': True}, out_dir=tmp / 'clips')
+        assert flat['ok'], flat
+        try:
+            build('smoke-unsink')
+        except StudioError as exc:
+            assert 'hips start/end heights are equal' in str(exc), exc
+        else:
+            raise AssertionError('flat hips accepted for support unbaking')
+        print('OK flat hips support unbake refused')
         print('OK bridge build/check/publish/sheet:', rm)
         print('OK bridge source-only commit paths/trailer (mocked), slide/travel rejection')
     else:

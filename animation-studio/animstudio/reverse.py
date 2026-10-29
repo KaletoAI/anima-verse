@@ -56,14 +56,24 @@ def build_reversed(anim, sha):
         bad.append('duration_s != frames / fps')
     if meta.get('loop') is not False or meta.get('pair') is not False or meta.get('kind') != anim.kind:
         bad.append('kind/loop/pair')
-    low = min(p[1] for f in frames for p in f.values())
+    # Measured as the client renders an entry: it raises the root by the
+    # surface height in proportion to the hips' own descent (entrySupportLift,
+    # client3d/src/scene). The unbaked support is that surface, so frame i
+    # stands support * p(i) higher than the file says.
+    support = float(meta['geometry'].get('support_unbaked_cm') or 0.0)
+    h0, h1 = frames[0]['Hips'][1], frames[-1]['Hips'][1]
+    span = h1 - h0
+    low = min(min(p[1] for p in f.values())
+              + (support * min(1.0, max(0.0, (f['Hips'][1] - h0) / span)) if support and span else 0.0)
+              for f in frames)
     motion = meta['geometry']['root_motion']
     source_motion = original.get('geometry', {}).get('root_motion', {})
     expected = ([0, 0] if source_motion.get('mode', 'strip') == 'strip' else
                 [-v for v in source_motion['travel_m']])
     error = math.dist(motion['travel_m'], expected)
     checks = [Check('sidecar', not bad, len(bad), '0 mismatches', '; '.join(bad)),
-              Check('floor', low >= FLOOR_CM, round(low, 2), f'>= {FLOOR_CM} cm'),
+              Check('floor', low >= FLOOR_CM, round(low, 2), f'>= {FLOOR_CM} cm',
+                    f'with the client lift onto a {support:g} cm surface' if support else ''),
               Check('tracks', measure['tracks'] >= MIN_TRACKS, measure['tracks'], f'>= {MIN_TRACKS}'),
               Check('bridge_travel', motion['mode'] == 'keep' and error <= .01,
                     error, '<= 0.01 m', f'expected {expected}')]
