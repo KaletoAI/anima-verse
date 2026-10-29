@@ -249,12 +249,13 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
         double headersAt = MonotonicMs;
         Measurements.Add("JSON", "download", headersAt - polledAt, 1);
         using var doc = await ReadJson(res, path);
+        await ObserveWorldSignatures(doc.RootElement);
         var receipt = new MapReceipt(polledAt, headersAt, MonotonicMs);
         return await Task.Run(() => receipt.Attach(doc.RootElement));
     }
     public double MonotonicMs => Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency;
     public MapReceipt? ReceiptOf(JsonElement root) => MapReceipt.FromMap(root);
-    public Task<JsonDocument> GetHeightfieldAsync() => GetJson("/play/heightfield");
+    public Task<JsonDocument> GetHeightfieldAsync() => HeightIndex();
     public Task<JsonDocument> GetLocations3dAsync() => GetJson("/world/locations?view=3d");
 
     /// <summary>
@@ -301,8 +302,7 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
     {
         if (keys.Count == 0 || keys.Count > HeightTileBatchMax)
             throw new ArgumentOutOfRangeException(nameof(keys), $"1..{HeightTileBatchMax} keys per call");
-        var query = string.Join(",", keys.Select(k => $"{k.Tx}:{k.Tz}"));
-        return GetJson("/play/heightfield/tiles?keys=" + Uri.EscapeDataString(query));
+        return FetchSignatureJson("/play/heightfield/tiles", keys.Select(k => $"{k.Tx},{k.Tz}").Distinct().ToArray(), "tiles", HeightStamp);
     }
 
     /// <summary><c>GET /play/heightfield/stats?keys=tx:tz,…</c> — the same key spelling as the tile batch (<c>fetchHeightTileStats</c>).</summary>
@@ -310,28 +310,26 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
     {
         if (keys.Count == 0 || keys.Count > HeightTileBatchMax)
             throw new ArgumentOutOfRangeException(nameof(keys), $"1..{HeightTileBatchMax} keys per call");
-        var query = string.Join(",", keys.Select(k => $"{k.Tx}:{k.Tz}"));
-        return GetJson("/play/heightfield/stats?keys=" + Uri.EscapeDataString(query));
+        return FetchSignatureJson("/play/heightfield/stats", keys.Select(k => $"{k.Tx},{k.Tz}").Distinct().ToArray(), "tile_stats", HeightStamp);
     }
 
     public Task<JsonDocument?> GetLocationSceneAsync(string locationId)
-        => GetJsonOrNull($"/play/locations/{Uri.EscapeDataString(locationId)}/scene");
+        => FetchSceneJson($"/play/locations/{Uri.EscapeDataString(locationId)}/scene");
 
     public Task<JsonDocument?> GetCharacterModelAsync(string name)
         => GetJsonOrNull($"/characters/{Uri.EscapeDataString(name)}/model3d");
 
     public Task<JsonDocument> GetAnimationClipsAsync() => GetJson("/assets/animation-clips");
 
-    public Task<JsonDocument> GetTerrainAsync() => GetJson("/play/terrain");
+    public Task<JsonDocument> GetTerrainAsync() => FetchSignatureJson("/play/terrain", null, null, TerrainStamp);
 
     /// <summary>The wire wants <c>tx:tz</c> (the comma separates keys there), URI-encoded like the browser.</summary>
     public Task<JsonDocument> GetTerrainLayersAsync(IReadOnlyList<string> keys)
     {
-        if (keys.Count == 0) return GetJson("/play/terrain-layers");
+        if (keys.Count == 0) return LayerIndex();
         if (keys.Count > Ground.LayerCut.BatchMax)
             throw new ArgumentOutOfRangeException(nameof(keys), $"1..{Ground.LayerCut.BatchMax} keys per call");
-        var query = string.Join(",", keys.Select(k => ReplaceFirst(k, ',', ':')));
-        return GetJson("/play/terrain-layers?keys=" + Uri.EscapeDataString(query));
+        return FetchLayerMasks(keys.Distinct().ToArray());
     }
 
     public Task<JsonDocument> GetSurfaceTexturesAsync() => GetJson("/assets/surface-textures");

@@ -20,7 +20,7 @@ namespace AnimaNative.Check;
 /// Every run owns a temporary subtree, also when --cache-dir selects its parent.</summary>
 public static class CacheCheck
 {
-    private sealed class Transport(FixtureSource source) : HttpMessageHandler
+    private sealed class Transport(FixtureSource source, JsonCacheCheck json) : HttpMessageHandler
     {
         private readonly HashSet<string> _known = JsonSerializer.Deserialize<Dictionary<string, string>>(
             File.ReadAllText(Path.Combine(source.Dir, "urls.json")))!.Keys.ToHashSet(StringComparer.Ordinal);
@@ -30,7 +30,7 @@ public static class CacheCheck
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage req, CancellationToken ct)
         {
             string key = req.RequestUri!.PathAndQuery;
-            if (!_known.Contains(Aliases.GetValueOrDefault(key, key))) return new HttpResponseMessage(HttpStatusCode.NotFound);
+            if (!_known.Contains(Aliases.GetValueOrDefault(key, key))) return await json.AnswerAsync(req);
             string etag = key == Changed ? "\"changed\"" : "\"fixture\"";
             bool same = req.Headers.IfNoneMatch.Any(e => e.ToString() == etag);
             var res = new HttpResponseMessage(same ? HttpStatusCode.NotModified : HttpStatusCode.OK);
@@ -58,14 +58,20 @@ public static class CacheCheck
         var origin = new Uri("https://fixture.test");
         var raw = new FixtureSource(fixtures);
         var urls = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(Path.Combine(fixtures, "urls.json")))!.Keys.ToArray();
-        var transport = new Transport(raw);
+        var json = new JsonCacheCheck(raw);
+        var transport = new Transport(raw, json);
         try
         {
             int[] bodies = new int[2], revalidations = new int[2];
+            int[] jsonBodies = new int[2], jsonRequests = new int[2], scene304 = new int[2];
             for (int boot = 0; boot < 2; boot++)
             {
                 using var api = new AnimaApi(origin.ToString(), transport, new DiskCache(root, origin));
-                var source = new FixtureSource(fixtures) { ByteDownload = api.GetBytesAsync };
+                var source = new JsonCacheCheck.Source(api, new FixtureSource(fixtures));
+                json.Epoch = "boot" + (boot + 1);
+                int jsonBefore = json.Bodies("tiles") + json.Bodies("masks") + json.Bodies("terrain");
+                int requestsBefore = json.Requests("tiles") + json.Requests("masks") + json.Requests("terrain");
+                int conditionalBefore = json.Scene304;
                 var world = new Node3D(); host.AddChild(world);
                 var builder = new WorldBuilder(source, _ => { }, strict: true);
                 int before = transport.Bodies, conditional = transport.Revalidations;
@@ -80,6 +86,9 @@ public static class CacheCheck
                     }
                     bodies[boot] = transport.Bodies - before;
                     revalidations[boot] = transport.Revalidations - conditional;
+                    jsonBodies[boot] = json.Bodies("tiles") + json.Bodies("masks") + json.Bodies("terrain") - jsonBefore;
+                    jsonRequests[boot] = json.Requests("tiles") + json.Requests("masks") + json.Requests("terrain") - requestsBefore;
+                    scene304[boot] = json.Scene304 - conditionalBefore;
                 }
                 finally { builder.Models?.FreeAll(); world.Free(); }
             }
@@ -87,6 +96,10 @@ public static class CacheCheck
             Expect(bodies[1] == 0, "warm boot fetches zero bodies");
             Expect(revalidations[1] > 0, "warm no-cache bodies revalidate");
             Expect(raw.ByteRequests.Count == urls.Length, "ByteRequests counts bodies only");
+            Expect(jsonBodies[0] > 0 && jsonRequests[0] == jsonBodies[0], "cold world build downloads terrain JSON");
+            Expect(jsonRequests[1] == 0, "warm world build makes zero tile/mask/terrain requests");
+            Expect(json.Bodies("scenes") > 0 && scene304[1] == json.Bodies("scenes"), "warm scenes all revalidate with 304");
+            await json.ProveChanges(root, origin, transport, Expect);
             var store = new DiskCache(root, origin);
             using var next = new AnimaApi(origin.ToString(), transport, store);
             string model = urls.Single(u => u.StartsWith("/play/locations/", StringComparison.Ordinal));
@@ -120,7 +133,8 @@ public static class CacheCheck
             var bumped = new DiskCache(root, origin, formatVersion: DiskCache.FormatVersion + 1);
             Expect(!Directory.Exists(old) && bumped.Count == 0, "format bump discards old tree");
             GD.Print($"cache proof: boot1 bodies={bodies[0]} boot2 bodies={bodies[1]} boot2 304={revalidations[1]} ETag=1 v=1 corrupt=1 LRU=8->4 version=empty");
-            return $"cache checks={checks} boot1={bodies[0]} boot2={bodies[1]}";
+            GD.Print($"cache JSON proof: boot1 bodies={jsonBodies[0]} boot2 requests={jsonRequests[1]} scene304={scene304[1]}");
+            return $"cache checks={checks} boot1={bodies[0]} boot2={bodies[1]} JSON_boot2={jsonRequests[1]} scene304={scene304[1]}";
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

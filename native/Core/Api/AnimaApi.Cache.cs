@@ -9,7 +9,7 @@ using AnimaNative.Sync;
 
 namespace AnimaNative.Api;
 
-/// <summary>Task 62 / E10-T1: byte-only cache below IWorldSource; JSON and Task 63 payloads bypass it.
+/// <summary>Task 62 / E10-T1: binary cache below IWorldSource; Task 63 JSON uses the same store via AnimaApi.JsonCache.
 /// Keys are path + query within the configured origin. Request headers, cookies and credentials never enter
 /// the index or counters. A version query alone grants no freshness (inventory §2.3, R-2).</summary>
 public sealed partial class AnimaApi
