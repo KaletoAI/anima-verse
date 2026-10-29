@@ -8,4 +8,4 @@ export/
 *.csproj.user
 
 # gdCEF artifacts, linked by link_cef.sh (~560 MB, never committed)
-cef_artifacts/
+cef_artifacts
