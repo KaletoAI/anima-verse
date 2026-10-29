@@ -35,6 +35,24 @@
       "to": "walking",
       "kind": "walk",
       "accel": 1.0
+    },
+    {
+      "from": "walking",
+      "to": "@seat",
+      "kind": "sit-down",
+      "accel": 0.0
+    },
+    {
+      "from": "walking",
+      "to": "@stand",
+      "kind": "step-in",
+      "accel": 0.0
+    },
+    {
+      "from": "walking",
+      "to": "@ground",
+      "kind": "sit-down-floor",
+      "accel": 0.0
     }
   ]
 }
