@@ -1164,7 +1164,8 @@ public partial class FigureManager : Node3D
         Node3D root;
         if (IsFbx(info.Format, url))
         {
-            root = ClipLibrary.ImportFbxScene(bytes) as Node3D ?? throw new InvalidOperationException($"FBX {url}: the scene root is not a Node3D");
+            using ((_source as AnimaApi)?.Measurements.Time("character GLB", "parse"))
+                root = ClipLibrary.ImportFbxScene(bytes) as Node3D ?? throw new InvalidOperationException($"FBX {url}: the scene root is not a Node3D");
             if (info.TextureUrl is { } textureUrl) DressInTexture(root, await LoadTexture(textureUrl));
             else BrowserLook(root);
         }
@@ -1172,8 +1173,13 @@ public partial class FigureManager : Node3D
         {
             // Decoded and PARSED off the main thread (Task 35b: the parse — buffers, meshes, images — was most of a model's
             // 35–40 ms main-thread import); only the scene (nodes) is generated here.
-            var (doc, state, _) = await Task.Run(() => GlbLoader.Parse(GlbLoader.Prepare(bytes), url));
+            var (doc, state, _) = await Task.Run(() =>
+            {
+                using var parse = (_source as AnimaApi)?.Measurements.Time("character GLB", "parse");
+                return GlbLoader.Parse(GlbLoader.Prepare(bytes), url);
+            });
             importWatch.Restart();
+            using ((_source as AnimaApi)?.Measurements.Time("character GLB", "generate"))
             using (Ui.HitchLog.Time("figure generate"))
                 root = GlbLoader.Generate(doc, state, url);
         }
@@ -1187,14 +1193,22 @@ public partial class FigureManager : Node3D
         // and lying down by the plain AABB. The engine data is read here, the skinning runs on a worker.
         var gathered = BridgeFit.GatherBindBox(root);
         double boxMs = importWatch.Elapsed.TotalMilliseconds;
-        var box = await Task.Run(() => BridgeFit.ComputeBindBox(gathered));
+        var box = await Task.Run(() =>
+            {
+                using var fitting = Measurements?.Time("character GLB", "fitting");
+                return BridgeFit.ComputeBindBox(gathered);
+            });
         if (box.Size.Z > box.Size.Y * 1.5f)   // stand a Z-up export upright (buildModel)
         {
             importWatch.Restart();
             root.Rotation = new Vector3(-Mathf.Pi / 2f, 0, 0);
             gathered = BridgeFit.GatherBindBox(root);
             boxMs += importWatch.Elapsed.TotalMilliseconds;
-            box = await Task.Run(() => BridgeFit.ComputeBindBox(gathered));
+            box = await Task.Run(() =>
+            {
+                using var fitting = Measurements?.Time("character GLB", "fitting");
+                return BridgeFit.ComputeBindBox(gathered);
+            });
         }
         importWatch.Restart();
         var size = box.Size;
@@ -1208,6 +1222,7 @@ public partial class FigureManager : Node3D
         var own = TakeOwnClips(root, info.ClipLoops, IsFbx(info.Format, url));
         if (info.Rig == "none") own.Clear();
         boxMs += importWatch.Elapsed.TotalMilliseconds;
+        Measurements?.Add("character GLB", "fitting", boxMs);
         if (info.Rig != "mixamo" || skel is null || skel.GetBoneCount() == 0)
         {
             // Generic rigs keep their own takes (animals: idle, walk, run, sit …); a rig left without any action walks
@@ -1235,6 +1250,7 @@ public partial class FigureManager : Node3D
         // The browser's rest-pose correction against the reference rig (restCorrections, once per model).
         var fixes = Clips.DonorRest is { } donor ? RestAdapter.Build(donor, root, skel) : null;
         double restMs = sw.Elapsed.TotalMilliseconds;
+        Measurements?.Add("character GLB", "fitting", restMs);
         var (standRef, standSource) = Clips.StandingReference(candidates);
         bool rigKnown = standSource == "rig";
         var lib = new AnimationLibrary();
@@ -1249,6 +1265,7 @@ public partial class FigureManager : Node3D
         // The PLAN (Task 35b): which library clips bind on this rig and under which actions — no key is written yet.
         var lazy = new TemplateClips(this, _log, url, root, skel, fixes, standRef ?? 0, rigKnown, scale, lib);
         double planMs = planWatch.Elapsed.TotalMilliseconds;
+        Measurements?.Add("character GLB", "fitting", planMs);
         await lazy.PlanAsync(candidates, ownKinds);
         kinds.AddRange(lazy.Actions);
         var missing = FigureClips.MissingClipKinds(candidates.Select(c => c.Kind), kinds);
@@ -1368,7 +1385,12 @@ public partial class FigureManager : Node3D
     public List<ClipFitTime> ClipFits { get; } = new();
     public double LongestClipTurnMs { get; private set; }
 
-    internal void RecordFit(ClipFitTime t) => ClipFits.Add(t);
+    internal AnimaNative.Sync.BootMeasurements? Measurements => (_source as AnimaApi)?.Measurements;
+    internal void RecordFit(ClipFitTime t)
+    {
+        ClipFits.Add(t);
+        Measurements?.Add("character GLB", "fitting", t.MainMs + t.WorkerMs);
+    }
 
     /// <summary>
     /// A model file's own non-empty takes, lower-cased, taken out of the import's AnimationPlayer (which is freed: the
@@ -1704,6 +1726,7 @@ public partial class FigureManager : Node3D
     private async Task<ImageTexture> LoadTexture(string url)
     {
         var bytes = await _source.GetBytesAsync(url);
+        using var parse = (_source as AnimaApi)?.Measurements.Time("texture", "parse");
         var img = Portrait.Decode(bytes) ?? throw new InvalidOperationException($"texture {url}: not a PNG/JPEG/WebP");
         return FbxTexture(img);
     }

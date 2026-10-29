@@ -384,25 +384,28 @@ public sealed partial class WorldBuilder
         stats.Ground = await DressGround(null, height, stats.Anchor);
         stats.Tiles = height.Tiles.Count;
         var water = !NoWater && !PlainGround && Ground?.WaterMaterial is not null ? height.WaterRaster() : null;
-        var field = TerrainField.Build(height, stats.Anchor.X, stats.Anchor.Z, water,
-                                       TerrainField.ExtentOf(Overview.OverviewControl.WorldBoundsOf(mapRoot)),
-                                       rowOfKind: water is not null ? Ground!.WaterRowOfKind : null);
-        var terrain = Terrain = new TerrainLodNode(field, _log);
-        root.AddChild(terrain);
-        terrain.SetMaterials(Ground?.Material, Ground?.WaterMaterial);
-        var startEye = stats.Anchor.Position() + StartCameraOffset;
-        var first = field.Select(startEye.X, startEye.Y, startEye.Z, TerrainField.PixelScale(StatsViewportPx, Ui.OverviewCamera.FovDeg));
-        stats.TerrainPieces = first.Nodes;
-        stats.TerrainWet = first.Wet.Count;
-        stats.TerrainDraws = first.Draws;
-        stats.TerrainTriangles = first.Triangles;
-        stats.TerrainField = $"{field.Summary()} cover={field.Coverage(first):0.######}";
-        _log($"terrain: {stats.Tiles} tiles loaded; {stats.TerrainSummary()} (start camera, {StatsViewportPx} px)");
-        ApplyWaterOutcome(stats, height);
-        // The water beside the terrain's own (Task 25): the falls of the painted rivers; the ghosts follow the water switch.
-        SubmergedGhost.Off = NoWater;
-        stats.Waterfalls = RebuildWaterfalls(root);
+        using (var generation = (_source as AnimaApi)?.Measurements.Time("terrain", "generate"))
+        {
+            var field = TerrainField.Build(height, stats.Anchor.X, stats.Anchor.Z, water,
+                                           TerrainField.ExtentOf(Overview.OverviewControl.WorldBoundsOf(mapRoot)),
+                                           rowOfKind: water is not null ? Ground!.WaterRowOfKind : null);
+            var terrain = Terrain = new TerrainLodNode(field, _log);
+            root.AddChild(terrain);
+            terrain.SetMaterials(Ground?.Material, Ground?.WaterMaterial);
+            var startEye = stats.Anchor.Position() + StartCameraOffset;
+            var first = field.Select(startEye.X, startEye.Y, startEye.Z, TerrainField.PixelScale(StatsViewportPx, Ui.OverviewCamera.FovDeg));
+            stats.TerrainPieces = first.Nodes;
+            stats.TerrainWet = first.Wet.Count;
+            stats.TerrainDraws = first.Draws;
+            stats.TerrainTriangles = first.Triangles;
+            stats.TerrainField = $"{field.Summary()} cover={field.Coverage(first):0.######}";
+            _log($"terrain: {stats.Tiles} tiles loaded; {stats.TerrainSummary()} (start camera, {StatsViewportPx} px)");
+            ApplyWaterOutcome(stats, height);
+            // The water beside the terrain's own (Task 25): the falls of the painted rivers; the ghosts follow the water switch.
+            SubmergedGhost.Off = NoWater;
+            stats.Waterfalls = RebuildWaterfalls(root);
 
+        }
         _library = await SurfaceLibrary.LoadAsync(_source, _log);
         _models = new ModelCache(_source, _log);
         _materials = new RecipeMaterials(_library);

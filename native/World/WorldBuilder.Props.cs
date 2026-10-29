@@ -1,4 +1,5 @@
 using System;
+using AnimaNative.Api;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -42,7 +43,11 @@ public sealed partial class WorldBuilder
         try
         {
             var bytes = await _source.GetBytesAsync(url);
-            var img = await Task.Run(() => SurfaceLibrary.Decode(bytes));
+            var img = await Task.Run(() =>
+                {
+                    using var parse = (_source as AnimaApi)?.Measurements.Time("texture", "parse");
+                    return SurfaceLibrary.Decode(bytes);
+                });
             return ImageTexture.CreateFromImage(img);
         }
         catch (Exception e)

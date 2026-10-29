@@ -42,7 +42,11 @@ public static class PropMesh
     public static async Task<PropMeshData?> ParseAsync(IWorldSource source, string url)
     {
         var bytes = await source.GetBytesAsync(url);
-        return await Task.Run(() => Extract(GlbLoader.Prepare(bytes), url));
+        return await Task.Run(() =>
+                {
+                    using var parse = (source as AnimaApi)?.Measurements.Time("scene GLB", "parse");
+                    return Extract(GlbLoader.Prepare(bytes), url);
+                });
     }
 
     /// <summary>Task 37 (E4-T2): grounding and the <see cref="ArrayMesh"/> for one target height, on a worker.</summary>

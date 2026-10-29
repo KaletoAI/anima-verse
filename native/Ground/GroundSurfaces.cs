@@ -209,7 +209,11 @@ public sealed class GroundSurfaces
             {
                 var url = _library[key].Url!;
                 var bytes = await source.GetBytesAsync(url);
-                var (img, size) = await Task.Run(() => DecodeSlice(bytes));
+                var (img, size) = await Task.Run(() =>
+                {
+                    using var parse = (source as AnimaApi)?.Measurements.Time("texture", "parse");
+                    return DecodeSlice(bytes);
+                });
                 return (key, img, size, error: (string?)null);
             }
             catch (Exception e) { return (key, img: (Image?)null, size: default(Vector2I), error: e.Message); }

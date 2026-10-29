@@ -68,12 +68,17 @@ public static class CheckRunner
     private const string AdaUrl = "/characters/Ada%20Wren/model3d/file?v=fixtureada000001";
     private const string AdaLowUrl = "/characters/Ada%20Wren/model3d/file?tier=low&v=fixtureadalow01";
 
-    public static async Task<int> RunAsync(Node3D host, string? only = null)
+    public static async Task<int> RunAsync(Node3D host, string? only = null, string? cacheDir = null)
     {
         try
         {
             var dir = Path.Combine(ProjectSettings.GlobalizePath("res://"), "fixtures");
             MeshoptNative.EnsureLoaded(ProjectSettings.GlobalizePath("res://bin"));
+            if (only == "cache")
+            {
+                GD.Print($"CHECK ok {await CacheCheck.RunAsync(host, dir, cacheDir)}");
+                return 0;
+            }
             if (only == "audio")
             {
                 GD.Print($"CHECK ok {await AudioCheck.RunAsync(host, dir)}");
@@ -351,10 +356,11 @@ public static class CheckRunner
             var veilLine = await VeilCheck.RunAsync(host, dir);
             var matrixLine = await MatrixCheck.RunAsync(host, dir);
             var shadowLine = await ShadowCheck.RunAsync(host, dir);
+            var cacheLine = await CacheCheck.RunAsync(host, dir, cacheDir);
 
             GD.Print($"CHECK ok terrain_pieces={stats.TerrainPieces} tiles={stats.Tiles} buildings={stats.Buildings} "
                      + $"primitives={stats.Primitives} skipped={stats.Skipped} | {stats.Summary()} plate_area={area:0.###} "
-                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {travel} | {residency} | {embody} | {minimap} | {audio} | {propactions} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine}");
+                     + $"| meshopt {meshopt} | {figures} | bench {bench} | scatter {scatter} | hud {hud} | {ground} | {s3c} | {launcher} | {overview} | {pick} | {labels} | {sync} | {verify} | {storeys} | {placement} | {walk} | {travel} | {residency} | {embody} | {minimap} | {audio} | {propactions} | {bridges} | {pairs} | {clipFit} | {secondary} | {animals} | {fidelity} | {props} | {light} | {fogLine} | {backdrop} | {terrainLine} | {streamLine} | {waterLine} | {veilLine} | {matrixLine} | {shadowLine} | {cacheLine}");
             builder.Models?.FreeAll();
             world.QueueFree();
             return 0;

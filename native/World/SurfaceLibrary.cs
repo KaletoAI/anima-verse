@@ -77,7 +77,11 @@ public sealed class SurfaceLibrary
         try
         {
             var bytes = await _source.GetBytesAsync(Entry(kind)!.Url!);
-            var img = await Task.Run(() => Decode(bytes));
+            var img = await Task.Run(() =>
+                {
+                    using var parse = (_source as AnimaApi)?.Measurements.Time("texture", "parse");
+                    return Decode(bytes);
+                });
             return ImageTexture.CreateFromImage(img);
         }
         catch (Exception e)

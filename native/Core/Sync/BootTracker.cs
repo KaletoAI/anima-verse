@@ -45,6 +45,11 @@ public sealed class BootTracker
         "arrival:mount", "ground:fetch", "ground:build",
     });
 
+    /// <summary>Task 62: bound by the app to the current source; no ambient/static state.</summary>
+    public BootMeasurements? Measurements { get; set; }
+    public Func<string>? CacheSummary { get; set; }
+    private readonly Dictionary<string, string> _splits = new();
+    private int _measured;
     private readonly Func<double> _now;
     private readonly double _start;
     private readonly HashSet<string> _done = new(StringComparer.Ordinal);
@@ -73,7 +78,14 @@ public sealed class BootTracker
         if (!_times.ContainsKey(stage)) throw new ArgumentException($"'{stage}' is not a boot stage");
         if (!_done.Add(stage)) return;
         _times[stage] = _now() - _start;
+        if (Measurements is { } measurements)
+        {
+            var samples = measurements.Snapshot();
+            _splits[stage] = BootMeasurements.Split(samples.Skip(_measured));
+            _measured = samples.Length;
+        }
         Order.Add(stage);
+        if (_done.Count == BootProgress.Stages.Count) Measurements?.Stop();
         Changed?.Invoke();
     }
 
@@ -134,7 +146,9 @@ public sealed class BootTracker
 
     /// <summary>One line for the log: the stage times in report order.</summary>
     public string Describe()
-        => string.Join(", ", Order.Select(s => $"{s} {_times[s]:0} ms")) + (Note is { } n ? $" (note {n.Kind})" : "");
+        => string.Join(", ", Order.Select(s => $"{s} {_times[s]:0} ms" + (_splits.TryGetValue(s, out var split) ? $" [{split}]" : ""))) + (Note is { } n ? $" (note {n.Kind})" : "")
+           + (Measurements is { } m ? $"\nboot work: {m.Describe()}" : "")
+           + (CacheSummary is { } cache ? "\n" + cache() : "");
 }
 
 /// <summary>

@@ -128,6 +128,8 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
     public (double Distance, double HeadingDeg)? Fly { get; init; }
     /// <summary><c>--check verify</c>: run only that section of the self-test; null = all of it.</summary>
     public string? CheckOnly { get; init; }
+    /// <summary>Task 62: explicit cache root for tests/checks; online default is user://cache/.</summary>
+    public string? CacheDir { get; init; }
 
     public static CliOptions FromGodot() => Parse(OS.GetCmdlineUserArgs());
 
@@ -138,7 +140,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = true, noHud = false, plainGround = false;
         bool noWater = false, verify = false, fogCompute = true;
         string? matrix = null;
-        string? offline = null, checkOnly = null;
+        string? offline = null, checkOnly = null, cacheDir = null;
         Vector2I? size = null;
         Viewport.Msaa? msaa = null;
         (double, double)? fly = null;
@@ -148,6 +150,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             if (arg == "--check") check = true;
             else if (TryValue(arg, "--check", out var only)) { check = true; checkOnly = CheckSection(only); }
             else if (check && checkOnly is null && IsSection(arg)) checkOnly = arg;
+            else if (TryValue(arg, "--cache-dir", out var cachePath)) cacheDir = cachePath;
             else if (arg == "--verify") verify = true;
             else if (arg == "--bench") bench = true;
             else if (arg == "--bench-matrix") { bench = true; matrix = ""; }
@@ -208,6 +211,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             Size = size,
             Verify = verify,
             CheckOnly = checkOnly,
+            CacheDir = cacheDir,
             Msaa = msaa,
             Fly = fly,
         };
@@ -228,7 +232,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
     }
 
     private static bool IsSection(string v)
-        => v is "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
+        => v is "cache" or "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
              or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement" or "walk" or "bridges" or "pairs" or "clips" or "secondary" or "animals" or "travel" or "residency" or "embody" or "propactions" or "minimap" or "audio";
 
     private static string CheckSection(string v) => IsSection(v)

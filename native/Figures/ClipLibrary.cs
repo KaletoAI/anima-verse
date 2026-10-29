@@ -204,6 +204,7 @@ public sealed class ClipLibrary
             {
                 try
                 {
+                    using var import = (_source as AnimaApi)?.Measurements.Time("clip", "clip import");
                     results[i] = Import(bytes, Entries[i]);
                     ClipsLoaded++;
                 }
@@ -296,6 +297,7 @@ public sealed class ClipLibrary
         try
         {
             var bytes = await _source.GetBytesAsync(RigUrl);
+            using var import = (_source as AnimaApi)?.Measurements.Time("clip", "clip import");
             var root = ImportFbxScene(bytes);
             try
             {

@@ -132,8 +132,9 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
     public static bool IsAuthError(Exception? e) => e is ApiException { Status: 401 }
                                                      || (e is AggregateException a && IsAuthError(a.InnerException));
 
-    public AnimaApi(string server, HttpMessageHandler? transport = null)
+    public AnimaApi(string server, HttpMessageHandler? transport = null, Cache.DiskCache? cache = null)
     {
+        _byteCache = cache;
         BaseUri = new Uri(server.TrimEnd('/') + "/");
         var handler = transport ?? new HttpClientHandler
         {
@@ -246,6 +247,7 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
         double polledAt = MonotonicMs;
         using var res = await _http.GetAsync(Relative(path), HttpCompletionOption.ResponseHeadersRead);
         double headersAt = MonotonicMs;
+        Measurements.Add("JSON", "download", headersAt - polledAt, 1);
         using var doc = await ReadJson(res, path);
         var receipt = new MapReceipt(polledAt, headersAt, MonotonicMs);
         return await Task.Run(() => receipt.Attach(doc.RootElement));
@@ -265,10 +267,14 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
         const string path = "/world/locations?view=3d";
         using var req = new HttpRequestMessage(HttpMethod.Get, Relative(path));
         if (etag is not null) req.Headers.TryAddWithoutValidation("If-None-Match", etag);
+        double start = MonotonicMs;
         using var res = await _http.SendAsync(req);
+        Measurements.Add("JSON", "download", MonotonicMs - start, 1);
         if (res.StatusCode == HttpStatusCode.NotModified) return new ConditionalAnswer(304, res.Headers.ETag?.ToString() ?? "", null);
         await EnsureOk(res, path);
         var bytes = await res.Content.ReadAsByteArrayAsync();
+        Measurements.Add("JSON", "download", 0, bytes: bytes.Length);
+        using var parse = Measurements.Time("JSON", "parse");
         using var doc = JsonDocument.Parse(bytes);
         return new ConditionalAnswer((int)res.StatusCode, res.Headers.ETag?.ToString() ?? "", doc.RootElement.Clone());
     }
@@ -335,9 +341,14 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
     /// driver's empty-manifest fallback; only a new scene session fetches again.</summary>
     public async Task<JsonDocument> GetAudioManifestAsync()
     {
+        double start = MonotonicMs;
         using var res = await _http.GetAsync(Relative("/assets/audio"));
         res.EnsureSuccessStatusCode();
+        Measurements.Add("JSON", "download", MonotonicMs - start, 1);
+        start = MonotonicMs;
         var bytes = await res.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+        Measurements.Add("JSON", "download", MonotonicMs - start, bytes: bytes.Length);
+        using var parse = Measurements.Time("JSON", "parse");
         return JsonDocument.Parse(bytes);
     }
 
@@ -355,31 +366,24 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
         => GetJsonOrNull($"/play/locations/{Uri.EscapeDataString(locationId)}/model/meta");
 
     /// <summary>§ A7: the location GLB (Meshopt delivery copy), null on 404.</summary>
-    public async Task<byte[]?> GetLocationModelAsync(string locationId)
-    {
-        var path = $"/play/locations/{Uri.EscapeDataString(locationId)}/model";
-        using var res = await _http.GetAsync(Relative(path));
-        if (res.StatusCode == HttpStatusCode.NotFound) return null;
-        await EnsureOk(res, path);
-        return await res.Content.ReadAsByteArrayAsync();
-    }
+    public Task<byte[]?> GetLocationModelAsync(string locationId)
+        => FetchBytes($"/play/locations/{Uri.EscapeDataString(locationId)}/model", allowMissing: true);
 
-    public async Task<byte[]> GetBytesAsync(string url)
-    {
-        using var res = await _http.GetAsync(Relative(url));
-        await EnsureOk(res, url);
-        return await res.Content.ReadAsByteArrayAsync();
-    }
+    public async Task<byte[]> GetBytesAsync(string url) => (await FetchBytes(url))!;
 
     private async Task<JsonDocument> GetJson(string path)
     {
+        double start = MonotonicMs;
         using var res = await _http.GetAsync(Relative(path));
+        Measurements.Add("JSON", "download", MonotonicMs - start, 1);
         return await ReadJson(res, path);
     }
 
     private async Task<JsonDocument?> GetJsonOrNull(string path)
     {
+        double start = MonotonicMs;
         using var res = await _http.GetAsync(Relative(path));
+        Measurements.Add("JSON", "download", MonotonicMs - start, 1);
         if (res.StatusCode == HttpStatusCode.NotFound) return null;
         return await ReadJson(res, path);
     }
@@ -390,7 +394,10 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
         // The body and its parse leave the caller's context: a height tile batch is ~8 MB of JSON, and parsing it on
         // the Godot main thread was a frame-sized stall. EnsureOk (and with it the Unauthorized event) still runs on the
         // caller's context, and the caller's own await resumes there as before.
+        double start = MonotonicMs;
         var bytes = await res.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+        Measurements.Add("JSON", "download", MonotonicMs - start, bytes: bytes.Length);
+        using var parse = Measurements.Time("JSON", "parse");
         return JsonDocument.Parse(bytes);
     }
 

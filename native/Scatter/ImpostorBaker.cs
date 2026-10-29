@@ -69,11 +69,16 @@ public partial class ImpostorBaker : Node, IImpostorSource
             catch (Exception e) { _log($"impostor load {url}: {e.Message}"); return; }
             if (_closed) return;
             // Match Task 37: parse resources on a worker, generate and mount scene nodes on the main thread.
-            var parsed = await Task.Run(() => GlbLoader.Parse(GlbLoader.Prepare(bytes), url));
+            var parsed = await Task.Run(() =>
+            {
+                using var parse = (_source as AnimaApi)?.Measurements.Time("scene GLB", "parse");
+                return GlbLoader.Parse(GlbLoader.Prepare(bytes), url);
+            });
             using var doc = parsed.Doc;
             using var state = parsed.State;
             if (_closed) return;
             Node3D root;
+            using ((_source as AnimaApi)?.Measurements.Time("scene GLB", "generate"))
             using (Ui.HitchLog.Time("impostor generate"))
                 root = GlbLoader.Generate(doc, state, url);
             attempt = "unbakeable";

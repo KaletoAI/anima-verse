@@ -60,7 +60,22 @@ public partial class Main : Node3D
     private SyncStream? _hub;
     private PollScheduler? _poll;
     private IDisposable? _pollSub;
-    private BootTracker? _boot;
+    private BootTracker? _bootState;
+    /// <summary>Task 62: bind per-boot measurements without changing MainWorld's stage/report sequence.</summary>
+    private BootTracker? _boot
+    {
+        get => _bootState;
+        set
+        {
+            _bootState = value;
+            if (value is not null && _api is { } api)
+            {
+                api.Measurements.Reset();
+                value.Measurements = api.Measurements;
+                value.CacheSummary = api.CacheSummary;
+            }
+        }
+    }
     private readonly ConnectionState _conn = new();
     private LocationsCache? _locCache;
     private LocationsSync? _locSync;
@@ -129,7 +144,7 @@ public partial class Main : Node3D
         }
         if (_options.Check)
         {
-            int code = await CheckRunner.RunAsync(this, _options.CheckOnly);
+            int code = await CheckRunner.RunAsync(this, _options.CheckOnly, _options.CacheDir);
             GetTree().Quit(code);
             return;
         }

@@ -58,6 +58,8 @@ public sealed partial class FixtureSource : IWorldSource
     /// <summary>Every <c>/play/locations/{id}/scene</c> asked for.</summary>
     public List<string> SceneRequests { get; } = new();
     public List<string> ByteRequests { get; } = new();
+    /// <summary>Task 62: only the cache check opts into the real byte API over a fixture transport.</summary>
+    public Func<string, Task<byte[]>>? ByteDownload { get; init; }
     public List<string> ModelRequests { get; } = new();
     /// <summary>Every <c>/play/terrain-layers</c> call: "" for the index, else the keys joined by ';'.</summary>
     public List<string> LayerRequests { get; } = new();
@@ -158,6 +160,7 @@ public sealed partial class FixtureSource : IWorldSource
 
     public Task<byte[]> GetBytesAsync(string url)
     {
+        if (ByteDownload is { } download) return download(url);
         ByteRequests.Add(url);
         if (!_urls.TryGetValue(url, out var file))
             throw new ApiException(404, url.Split('?')[0], "no fixture for this URL");

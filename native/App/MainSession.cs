@@ -86,9 +86,13 @@ public partial class Main : Node3D
     /// The scene after a character switch: the carried session in a fresh API (no login request), the role it had,
     /// the loading screen at once, then the normal world load. The HUD page is already up on the same session.
     /// </summary>
+    private AnimaApi CreateCachedApi(string server)
+        => new(server, cache: new AnimaNative.Cache.DiskCache(
+            _options?.CacheDir ?? ProjectSettings.GlobalizePath("user://cache"), new Uri(server)));
+
     private async Task ResumeAsync(CarriedSession carried, LauncherSettings launch)
     {
-        _api = new AnimaApi(carried.Server);
+        _api = CreateCachedApi(carried.Server);
         _api.AdoptSession(carried.Token);
         _role = carried.Role;
         _source = _api;
@@ -156,7 +160,7 @@ public partial class Main : Node3D
         login.Submit = async (server, user, password) =>
         {
             _api?.Dispose();
-            _api = new AnimaApi(server);
+            _api = CreateCachedApi(server);
             using (var answer = await _api.LoginAsync(user, password)) _role = RoleOf(answer.RootElement);
             // Remembered only after the server accepted them; the password is not part of the file.
             LauncherStore.Update(s => s with { Server = server, User = user });

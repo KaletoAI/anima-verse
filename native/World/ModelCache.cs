@@ -50,10 +50,15 @@ public sealed class ModelCache
             var bytes = await _source.GetBytesAsync(url);
             if (generation != _generation) return null;
             bool compressed = GlbMeshoptDecoder.IsCompressed(bytes);
-            var (doc, state, counts) = await Task.Run(() => GlbLoader.Parse(GlbLoader.Prepare(bytes), url));
+            var (doc, state, counts) = await Task.Run(() =>
+            {
+                using var parse = (_source as AnimaApi)?.Measurements.Time("scene GLB", "parse");
+                return GlbLoader.Parse(GlbLoader.Prepare(bytes), url);
+            });
             // Task 44: world disposal invalidates late imports before a detached template node is generated.
             if (generation != _generation) { doc.Dispose(); state.Dispose(); return null; }
             Node3D root;
+            using ((_source as AnimaApi)?.Measurements.Time("scene GLB", "generate"))
             using (Ui.HitchLog.Time("model generate"))
                 root = GlbLoader.Generate(doc, state, url);
             Neutralized += NeutralizeMaterials(root);

@@ -133,8 +133,11 @@ public sealed class TemplateClips
         // Which candidates bind (the fit's own loop, counting only — on a worker), in candidate order.
         var (rig, fixes, standRef, rigKnown, probe, skins) = (_rig, _fixes, _standRef, _rigKnown, _probe, _skins!);
         var (counts, bindMinY, sampled) = await Task.Run(() =>
-            (candidates.Select(c => ClipLibrary.Compute(c, rig, fixes, standRef, rigKnown, countOnly: true)).ToList(),
-             ClipGround.BindMinY(probe, skins), ClipGround.SampledSkins(skins)));
+        {
+            using var fitting = _mgr.Measurements?.Time("character GLB", "fitting");
+            return (candidates.Select(c => ClipLibrary.Compute(c, rig, fixes, standRef, rigKnown, countOnly: true)).ToList(),
+             ClipGround.BindMinY(probe, skins), ClipGround.SampledSkins(skins));
+        });
         _bindMinY = bindMinY;
         _sampled = sampled;
         if (_mgr.ClipFit == ClipFitMode.Lazy) _skins = null;
