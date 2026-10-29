@@ -372,7 +372,9 @@ def _intent_setting(key: str, default: int) -> int:
 
 
 def _cap_victims(active: List[Dict[str, Any]], keep_ids=()) -> List[Dict[str, Any]]:
-    """Select cap evictions identically for enforcement and cleanup previews."""
+    """Select cap evictions for enforcement and previews: protected last,
+    then fixed-time last, then worst priority and oldest first.
+    """
     victims = []
     protected = set(keep_ids)
     for cap_class, default in (("self", 6), ("player", 4)):
@@ -381,13 +383,14 @@ def _cap_victims(active: List[Dict[str, Any]], keep_ids=()) -> List[Dict[str, An
             continue
         candidates = [it for it in active if _cap_class(it) == cap_class]
         candidates.sort(key=lambda it: (it["id"] in protected,
+                                        (it.get("trigger") or {}).get("kind") == "at_time",
                                         -it["priority"], it["created_at"], it["id"]))
         victims.extend(candidates[:max(0, len(candidates) - cap)])
     return victims
 
 
 def enforce_active_caps(owner: str, keep_ids=()) -> int:
-    """Expire excess owned plans, worst priority and oldest first.
+    """Expire excess owned plans, fixed-time last, then worst priority and oldest first.
 
     Protected ids are evicted only after all other candidates in their class.
     A zero cap leaves that class unlimited; package-managed plans are exempt.

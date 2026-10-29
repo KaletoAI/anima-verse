@@ -10,6 +10,11 @@ ten, tomorrow at/after ten; +2d is D003 08:30; a one-digit
 hour (at:9:30) is D001 09:30. A bump for an ended intent still completes the
 run so its one-time job is removed. Goal TTLs are 2/7/30 days;
 replacement retains three goals and expires only discarded package goals.
+At self cap six, create fixed-time F first, then priority-three standing
+S0..S6 (all priority three including F). Eight rows require two evictions:
+S0 and S1; F and S2..S6 survive. The rule also holds for daily F.
+With all eight rows at_time, priorities [5, 5, 4, 3, 3, 2, 1, 5] and the
+newest protected, indices 0 and 1 (oldest priority-five rows) are evicted.
 """
 import os
 import sys
@@ -77,6 +82,37 @@ def main():
             assert intents.get_intent(new["id"])["status"] == "active"
             assert intents.get_intent(previous["id"])["meta"]["expired_reason"] == "cap"
         print("PASS exemptions, player cap, periodic legacy trim, marker integration and prompt cap")
+
+        for daily in (False, True):
+            owner = "demo-daily" if daily else "demo-fixed"
+            trigger = {"kind": "at_time", "run_date": "Y0001-D002T09:00:00"}
+            if daily:
+                trigger.update(repeat="daily", at="09:00")
+            plans = []
+            for n in range(8):
+                with patch.object(intents, "utc_now_iso", return_value=f"2026-01-01T00:00:{n:02d}+00:00"):
+                    plans.append(intents.create_intent(
+                        owner=owner, title=f"Retention {n}", priority=3,
+                        trigger=trigger if n == 0 else {"kind": "standing"}))
+            assert [it["id"] for it in intents._cap_victims(plans, (plans[-1]["id"],))] == [
+                plans[1]["id"], plans[2]["id"]]
+            assert intents.enforce_active_caps(owner, keep_ids=(plans[-1]["id"],)) == 2
+            assert {it["id"] for it in intents.list_intents(owner=owner, status="expired")} == {
+                plans[1]["id"], plans[2]["id"]}
+            assert {it["id"] for it in intents.list_intents(owner=owner, status="active")} == {
+                plans[0]["id"], *(it["id"] for it in plans[3:])}
+        timed = []
+        for n, priority in enumerate([5, 5, 4, 3, 3, 2, 1, 5]):
+            with patch.object(intents, "utc_now_iso", return_value=f"2026-01-01T00:00:{n:02d}+00:00"):
+                timed.append(intents.create_intent(
+                    owner="demo-all-fixed", title=f"Fixed {n}", priority=priority,
+                    trigger={"kind": "at_time", "run_date": "Y0001-D002T09:00:00"}))
+        assert [it["id"] for it in intents._cap_victims(timed, (timed[-1]["id"],))] == [
+            timed[0]["id"], timed[1]["id"]]
+        assert intents.enforce_active_caps("demo-all-fixed", keep_ids=(timed[-1]["id"],)) == 2
+        assert {it["id"] for it in intents.list_intents(owner="demo-all-fixed", status="expired")} == {
+            timed[0]["id"], timed[1]["id"]}
+        print("PASS fixed-time/daily retention, exact standing evictions and all-fixed fallback")
 
         from app.core.game_time import GameTime
         fixed = GameTime.parse("Y0001-D001T09:00:00")
