@@ -2394,6 +2394,16 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   (`transition_clips`: gespielte und mitgelieferte Clip-Art beider Posen;
   `animation_clips.client_transition_rules`); `transitions` trägt die
   Pose-Regeln für den Editor. Fehlt der Brücken-Clip, gibt es keinen Übergang.
+  Entry bridges for prop actions additionally accept `walking -> @stand`,
+  `@seat`, `@ground` or `@lie` (only as `to`, only from `walking`). The server
+  first calls `resolve_transition('walking', pose)` with its existing precedence;
+  only if no rule matches does it resolve `walking -> @<group>`, using the
+  target pose's `group` in `pose_catalog.get_catalog('pose')`, including pair
+  poses. A pose rule therefore wins. Unknown groups are rejected on save and
+  ignored with a warning on shared-table load. Access preview and runtime use
+  the same `_entry_capability` guard and measured travel. The client resolver
+  is unchanged: pose keys never equal `@seat` etc., and these server entry
+  targets do not expand into client clip rules.
 - **Loop oder letztes Bild** (2026-09-13, E5): Jeder Clip der Auflistung trägt
   `loop` — `true` = wiederholen, `false` = letztes Bild halten (Three.js
   `LoopOnce` + `clampWhenFinished`). Das Kennzeichen setzt der Admin NACH dem
@@ -8040,6 +8050,15 @@ Player routes require the authenticated user's current authorized avatar:
   No foreign consent or overland destination is projected. Core equivalent:
   `prop_action_engine.state_for(actor)`. Sync invalidation targets only those
   participants' `self`/`scene` topics, not a public invitation payload.
+
+Prop-action entry bridges use the pose transition table described above:
+`walking -> @seat` covers every target pose whose catalog `group` is `seat`,
+including pair poses; `@stand`, `@ground`, and `@lie` work the same way.
+The normal `walking -> pose` lookup (including existing wildcard precedence)
+runs first; the group lookup happens only when it finds no rule. Both access
+preview and runtime use `_entry_capability`, with the existing solo-clip,
+metadata and positive finite duration guards. Group targets are valid only
+from `walking` and never on the `from` side.
 
 All author routes below explicitly require admin. `POST /world/props/{id}/validate`
 takes `{document}` and returns issues plus `placement:"not_checked"`. Valid

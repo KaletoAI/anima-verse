@@ -5366,6 +5366,15 @@ async function main() {
   check('a junk table leaves plain switching', setClipTransitions('nonsense').length, 0);
   check('…and then every lookup is empty again', via('sit', 'walk'), '');
 
+  // Place-group entry rules are server-only: real pose keys never equal @seat.
+  setClipTransitions([
+    { from: 'walking', to: '@seat', kind: 'idle' },
+    { from: 'walking', to: 'reading', kind: 'run' },
+  ]);
+  check('group target does not match a client pose', via('walking', 'sitting'), '');
+  check('explicit pose transition still matches', via('walking', 'reading'), 'run');
+  setClipTransitions([]);
+
   // --- how fast the figure gets going DURING the bridge ------------------
   // `accel` is the fraction of normal speed gained per second, and the client
   // normalises it exactly as the server does (scripts/smoke_locomotion_clips.py

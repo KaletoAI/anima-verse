@@ -81,6 +81,7 @@ export function ClipTransitions({ poses, onSaved }: {
     setDraft((d) => d.map((r, j) => {
       if (j !== i) return r
       const next = { ...r, ...part }
+      if (next.from !== 'walking' && next.to.startsWith('@')) next.to = TRANSITION_ANY
       if (!freeKinds.has(next.kind)) next.store = 'world'
       return next
     }))
@@ -193,9 +194,16 @@ export function ClipTransitions({ poses, onSaved }: {
                       value={rule.to} disabled={busy}
                       onChange={(e) => patch(i, { to: e.target.value })}>
                       <option value={TRANSITION_ANY}>{TRANSITION_ANY}</option>
-                      {rule.to !== TRANSITION_ANY && !poseKeys.includes(rule.to) ? (
+                      {rule.to !== TRANSITION_ANY && !poseKeys.includes(rule.to)
+                        && !(rule.from === 'walking' && ['@seat', '@lie', '@ground', '@stand'].includes(rule.to)) ? (
                         <option value={rule.to}>{rule.to} ({t('unknown pose')})</option>
                       ) : null}
+                      {rule.from === 'walking' ? <>
+                        <option value="@seat">{t('Any seat place (@seat)')}</option>
+                        <option value="@lie">{t('Any lie place (@lie)')}</option>
+                        <option value="@ground">{t('Any ground place (@ground)')}</option>
+                        <option value="@stand">{t('Any stand place (@stand)')}</option>
+                      </> : null}
                       {poseKeys.map((key) => <option key={key} value={key}>{key}</option>)}
                     </select>
                   </td>
@@ -259,6 +267,10 @@ export function ClipTransitions({ poses, onSaved }: {
             </tbody>
           </table>
         </div>
+
+        <p className="ga-form-hint" style={{ margin: 0 }}>
+          {t('Entry clips: a rule from walking to a place type applies to every pose of that type; a rule for one pose wins.')}
+        </p>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button

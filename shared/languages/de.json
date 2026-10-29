@@ -3536,6 +3536,11 @@
     "Applies immediately.": "Wird sofort angewendet.",
     "inactive": "inaktiv",
     "{n} unsaved fields": "{n} ungespeicherte Felder",
-    "Unknown excluded action": "Unbekannte ausgeschlossene Aktion"
+    "Unknown excluded action": "Unbekannte ausgeschlossene Aktion",
+    "Any seat place (@seat)": "Jeder Sitzplatz (@seat)",
+    "Any lie place (@lie)": "Jeder Liegeplatz (@lie)",
+    "Any ground place (@ground)": "Jeder Bodenplatz (@ground)",
+    "Any stand place (@stand)": "Jeder Stehplatz (@stand)",
+    "Entry clips: a rule from walking to a place type applies to every pose of that type; a rule for one pose wins.": "Eintrittsclips: Eine Regel von walking zu einem Platztyp gilt für jede Pose dieses Typs; eine Regel für eine einzelne Pose hat Vorrang."
   }
 }

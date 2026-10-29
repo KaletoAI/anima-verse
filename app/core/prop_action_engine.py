@@ -766,6 +766,14 @@ def _entry_capability(pose):
     from app.core.animation_clips import resolve_transition, clip_meta, _solo_kinds
     rule = resolve_transition("walking", pose)
     if not rule:
+        from app.core.pose_catalog import get_catalog
+        group = get_catalog("pose").get(pose, {}).get("group")
+        # Server-only entry fallback, including pair poses' catalog groups.
+        # A pose key never equals '@seat' etc.; client table matching stays
+        # identical, and resolve_transition keeps its existing precedence.
+        if group in ("stand", "seat", "ground", "lie"):
+            rule = resolve_transition("walking", "@" + group)
+    if not rule:
         return None, "missing_entry_transition"
     kind = rule["kind"]
     meta = clip_meta(kind)

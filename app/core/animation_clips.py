@@ -367,6 +367,17 @@ def _read_transitions_file(path: Path) -> List[Dict[str, Any]]:
     return rules if isinstance(rules, list) else []
 
 
+def _validate_transition_group(src: str, dst: str) -> None:
+    """Place groups are server entry targets, never general pose wildcards."""
+    if src.startswith("@"):
+        raise ClipLibraryError("place group allowed only as 'to' from 'walking'")
+    if dst.startswith("@"):
+        if dst[1:] not in ("stand", "seat", "ground", "lie"):
+            raise ClipLibraryError(f"unknown place group '{dst}'")
+        if src != "walking":
+            raise ClipLibraryError("place group target requires from == 'walking'")
+
+
 def load_shared_transitions(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     """The transition rules as ``[{from, to, kind}]``, junk entries dropped.
 
@@ -383,6 +394,11 @@ def load_shared_transitions(path: Optional[Path] = None) -> List[Dict[str, Any]]
         dst = str(raw.get("to") or "").strip().lower()
         kind = str(raw.get("kind") or "").strip().lower()
         if not src or not dst or not kind:
+            continue
+        try:
+            _validate_transition_group(src, dst)
+        except ClipLibraryError as exc:
+            logger.warning("clip transition ignored: %s", exc)
             continue
         if (src, dst) in seen:
             continue
@@ -552,6 +568,10 @@ def _validate_transitions(entries: Any, offset: int = 0,
         dst = str(raw.get("to") or "").strip().lower()
         if not src or not dst:
             raise ClipLibraryError(f"rule {i + 1}: 'from' and 'to' are required")
+        try:
+            _validate_transition_group(src, dst)
+        except ClipLibraryError as exc:
+            raise ClipLibraryError(f"rule {i + 1}: {exc}") from exc
         if src == TRANSITION_ANY and dst == TRANSITION_ANY:
             raise ClipLibraryError(
                 f"rule {i + 1}: '{TRANSITION_ANY}' on both sides would fire on "
