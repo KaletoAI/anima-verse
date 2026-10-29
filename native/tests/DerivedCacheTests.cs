@@ -16,11 +16,12 @@ public sealed class DerivedCacheTests : IDisposable
     [Fact]
     public void ResourcesAndSidecarsSurviveRestartAndShareTheByteBudget()
     {
-        var disk = Open();
+        using var disk = Open();
         var policy = new HttpCachePolicy(true, true, disk.Now, "immutable");
         disk.Store("res", new byte[30], null, policy, extension: ".res");
         disk.Store("meta", new byte[20], null, policy, extension: ".json");
-        var restarted = Open(50);
+        disk.Dispose(); // Shutdown publishes the batched index before restart.
+        using var restarted = Open(50);
         Assert.EndsWith(".res", restarted.Read("res")!.Value.Entry.File);
         Assert.EndsWith(".json", restarted.Read("meta")!.Value.Entry.File);
         restarted.Store("http", new byte[40], null, policy);
@@ -32,11 +33,14 @@ public sealed class DerivedCacheTests : IDisposable
     [Fact]
     public void SameLengthCorruptResourceIsAMiss()
     {
-        var disk = Open();
+        using var disk = Open();
         disk.Store("res", new byte[] { 1, 2 }, null, new(true, true, disk.Now, "immutable"), extension: ".res");
         var entry = disk.Read("res")!.Value.Entry;
         File.WriteAllBytes(Path.Combine(disk.DirectoryPath, entry.File), new byte[] { 2, 1 });
-        Assert.Null(Open().Read("res"));
+        disk.Dispose();
+        using var restarted = Open();
+        Assert.Equal(1, restarted.Count); // The persisted entry must reach digest validation.
+        Assert.Null(restarted.Read("res"));
     }
 
     [Fact]

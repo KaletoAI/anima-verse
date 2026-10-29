@@ -24,6 +24,9 @@ public sealed class DiskCache : IDisposable
     private sealed record Index(int Version, List<Entry> Entries);
     private readonly object _gate = new();
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
+    private readonly object _bodyGate = new();
+    // Each indexed entry and each pending publication owns a reference. Deletion cannot race a prepared body.
+    private readonly Dictionary<string, int> _bodyReferences = new(StringComparer.Ordinal);
     private readonly JsonSerializerOptions _json = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
     private readonly Func<DateTimeOffset> _now;
     private readonly int _version;
@@ -31,7 +34,8 @@ public sealed class DiskCache : IDisposable
     private const string ClearMarker = "pending_clear";
     public sealed record Stats(long Bytes, long LimitBytes, int Entries);
     private Stats _snapshot;
-    private bool _pendingClear, _dirty, _disposed;
+    private bool _pendingClear, _dirty;
+    private volatile bool _disposed;
     private Timer? _flushTimer;
     private readonly ConditionalWeakTable<byte[], Entry> _knownBodies = new();
     /// <summary>Task 67 #3: the frame thread reads one immutable snapshot, without locks, file IO or enumeration.</summary>
@@ -98,6 +102,7 @@ public sealed class DiskCache : IDisposable
                 }
                 catch (Exception e) when (e is JsonException or ArgumentException or NullReferenceException) { }
             }
+            foreach (var e in _entries.Values) RetainBody(e.File);
             // Unindexed bodies and interrupted writes cannot be resurrected after a crash.
             var kept = _entries.Values.Select(e => e.File).ToHashSet(StringComparer.Ordinal);
             foreach (var file in Directory.GetFiles(DirectoryPath))
@@ -148,24 +153,46 @@ public sealed class DiskCache : IDisposable
         _knownBodies.Remove(body); _knownBodies.Add(body, entry);
     }
 
+    /// <summary>
+    /// Publish <paramref name="body"/> for <paramref name="key"/>. Hashing and the body write run OUTSIDE the store lock
+    /// (temp + rename, no fsync: a torn body fails its digest on read and is a miss); the lock only updates the entry
+    /// and marks the index dirty. Holding the lock across hash + fsync + a full index rewrite serialised ~300
+    /// concurrent model downloads at boot and starved the thread pool (user boot 2026-10-29: scenes 6 → 30 s, tiles
+    /// 28 → 212 s).
+    /// </summary>
     public void Store(string key, byte[] body, string? etag, HttpCachePolicy policy, string extension = ".bin")
     {
         if (extension is not (".bin" or ".res" or ".json")) throw new ArgumentException("Unsupported cache extension", nameof(extension));
-        lock (_gate)
+        if (_disposed) return;
+        if (!policy.Store || body.LongLength > LimitBytes)
         {
-            try
+            lock (_gate) { if (!_disposed && _entries.ContainsKey(key)) { RemoveCore(key); PublishReadout(); MarkDirty(); } }
+            return;
+        }
+        string digest = Hash(body), file = Hash(key) + "-" + digest + extension;
+        RetainBody(file);
+        Entry? old = null;
+        bool published = false;
+        try
+        {
+            WriteBody(Path.Combine(DirectoryPath, file), body);
+            lock (_gate)
             {
-                if (!policy.Store || body.LongLength > LimitBytes) { RemoveCore(key); Save(); return; }
-                string digest = Hash(body), file = Hash(key) + "-" + digest + extension;
-                Atomic(Path.Combine(DirectoryPath, file), body);
-                _entries.TryGetValue(key, out var old);
+                if (_disposed) return;
+                _entries.TryGetValue(key, out old);
                 _entries[key] = new(key, file, body.LongLength, digest, etag, policy.CacheControl, policy.Immutable,
                     Now, policy.FreshUntil, Now);
-                Evict(); Save();
+                published = true; // The pending body reference now belongs to the indexed entry.
+                Evict(); PublishReadout(); MarkDirty();
                 if (_entries.TryGetValue(key, out var stored)) Remember(body, stored);
-                if (old is not null && old.File != file) System.IO.File.Delete(Path.Combine(DirectoryPath, old.File));
             }
-            catch (Exception ex) when (Io(ex)) { }
+        }
+        catch (Exception ex) when (Io(ex)) { }
+        finally
+        {
+            // Obsolete body cleanup stays outside the metadata lock. A newer or pending Store may own it now.
+            if (published) { if (old is not null) ReleaseBody(old.File); }
+            else ReleaseBody(file);
         }
     }
 
@@ -174,13 +201,14 @@ public sealed class DiskCache : IDisposable
     {
         lock (_gate)
         {
+            if (_disposed) return;
             try
             {
                 if (!policy.Store) RemoveCore(key);
                 else if (_entries.TryGetValue(key, out var e))
                     _entries[key] = e with { Etag = etag, CacheControl = policy.CacheControl,
                         Immutable = policy.Immutable, StoredAt = Now, FreshUntil = policy.FreshUntil, LastUsed = Now };
-                Save();
+                PublishReadout(); MarkDirty();   // batched like Store; ~300 revalidations at a warm boot
             }
             catch (Exception ex) when (Io(ex)) { }
         }
@@ -201,11 +229,25 @@ public sealed class DiskCache : IDisposable
     }
     private void RemoveCore(string key)
     {
-        if (_entries.Remove(key, out var e))
-            try { System.IO.File.Delete(Path.Combine(DirectoryPath, e.File)); } catch (Exception ex) when (Io(ex)) { }
+        if (_entries.Remove(key, out var e)) ReleaseBody(e.File);
     }
-    /// <summary>Task 67 #2: structural changes stay durable; touches use a five-second one-shot worker flush.
-    /// Every publication retains temp + fsync + rename. Losing an unflushed LastUsed is safe after a crash.</summary>
+    private void RetainBody(string file)
+    {
+        lock (_bodyGate) _bodyReferences[file] = _bodyReferences.GetValueOrDefault(file) + 1;
+    }
+    private void ReleaseBody(string file)
+    {
+        lock (_bodyGate)
+        {
+            int remaining = _bodyReferences[file] - 1;
+            if (remaining > 0) { _bodyReferences[file] = remaining; return; }
+            _bodyReferences.Remove(file);
+            try { System.IO.File.Delete(Path.Combine(DirectoryPath, file)); } catch (Exception ex) when (Io(ex)) { }
+        }
+    }
+    /// <summary>The index is written (temp + fsync + rename) by the five-second one-shot flush after any change and on
+    /// dispose — never per entry. A crash loses at most the last seconds of entries: their bodies are unindexed and
+    /// deleted at the next start, so they are fetched again; a stale or torn body never passes its digest.</summary>
     private void Save()
     {
         PublishReadout(); _dirty = true;
@@ -239,6 +281,18 @@ public sealed class DiskCache : IDisposable
             FlushIndex(); _disposed = true; _flushTimer?.Dispose();
         }
     }
+    /// <summary>A cache body: temp + rename without fsync (the digest check on read catches a torn write).</summary>
+    private static void WriteBody(string path, byte[] data)
+    {
+        string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            System.IO.File.WriteAllBytes(temp, data);
+            System.IO.File.Move(temp, path, true);
+        }
+        finally { if (System.IO.File.Exists(temp)) System.IO.File.Delete(temp); }
+    }
+
     private static void Atomic(string path, byte[] data)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);

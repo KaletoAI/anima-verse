@@ -129,6 +129,12 @@ internal static class FigureCacheCheck
                 GD.Print(cache?.Describe() ?? "figures cache: fresh reference");
                 return (mgr, cache);
             }
+            async Task RewriteJson<T>(string key, T value)
+            {
+                // Fault injection owns a live store and flushes before the next simulated boot.
+                using var disk = new DiskCache(root, origin);
+                await new FigureCache(disk).WriteJson(key, value);
+            }
             var cold = await Boot(true);
             expect(cold.Cache!.Imports == 8 && cold.Cache.Plans == 2 && cold.Cache.Fits == 11, "cold: rig + seven imports, two plans, eleven library fits (embedded takes win)");
             var warm = await Boot(true);
@@ -174,17 +180,17 @@ internal static class FigureCacheCheck
             // A valid JSON sidecar with a stale extraction version is still a miss.
             var sidecar = JsonNode.Parse(repaired.Cache.Disk.Read(importKey + ":json")!.Value.Body)!;
             sidecar["Data"]!["ImportVersion"] = 0;
-            await repaired.Cache.WriteJson(importKey + ":json", sidecar);
+            await RewriteJson(importKey + ":json", sidecar);
             var oldImport = await Boot(true);
             expect(oldImport.Cache!.Imports == 1 && oldImport.Cache.Fits == 0, "old import-code sidecar is a miss");
             // An old fit/plan version under a current key also cannot be resurrected.
             string planKey = KeysOf("derived:plan:")[0];
             var planData = await oldImport.Cache!.ReadJson<TemplateClips.PlanData>(planKey);
-            await oldImport.Cache.WriteJson(planKey, planData! with { FitVersion = 0 });
+            await RewriteJson(planKey, planData! with { FitVersion = 0 });
             string fitKey = KeysOf("derived:fit:").First(k => k.EndsWith(":json", StringComparison.Ordinal));
             var fitData = JsonNode.Parse(oldImport.Cache.Disk.Read(fitKey)!.Value.Body)!;
             fitData["Data"]!["FitVersion"] = 0;
-            await oldImport.Cache.WriteJson(fitKey, fitData);
+            await RewriteJson(fitKey, fitData);
             var oldFit = await Boot(true);
             expect(oldFit.Cache!.Imports == 0 && oldFit.Cache.Plans == 1 && oldFit.Cache.Fits == 1,
                 "old fit-code sidecars recompute exactly one plan and fit");
@@ -197,7 +203,7 @@ internal static class FigureCacheCheck
                 "corrupt fitted resource refits only that clip");
             var incomplete = JsonNode.Parse(corruptFit.Cache!.Disk.Read(planKey)!.Value.Body)!;
             incomplete.AsObject().Remove("Bindings");
-            await corruptFit.Cache.WriteJson(planKey, incomplete);
+            await RewriteJson(planKey, incomplete);
             var incompletePlan = await Boot(true);
             expect(incompletePlan.Cache!.Plans == 1 && incompletePlan.Cache.Fits == 0,
                 "a plan without persisted action bindings is a miss, with unchanged fits retained");

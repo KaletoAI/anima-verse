@@ -19,6 +19,12 @@ public sealed class JsonCacheTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "anima-json-cache-" + Guid.NewGuid().ToString("N"));
     private DiskCache Store() => new(_root, new Uri("https://fixture.test"));
+    private int CountAfterFlushAndRestart(AnimaApi api)
+    {
+        api.CacheStore!.FlushIndex();
+        using var restarted = Store();
+        return restarted.Count;
+    }
     private AnimaApi Api(Server server) => new("https://fixture.test", server, Store());
     public void Dispose() { if (Directory.Exists(_root)) Directory.Delete(_root, true); }
 
@@ -98,8 +104,9 @@ public sealed class JsonCacheTests : IDisposable
             using var changed = await api.GetLocationSceneAsync("a");
             Assert.Equal("s2", changed!.RootElement.GetProperty("revision").GetString());
         }
-        Assert.Equal(2, Store().Count);
-        Assert.DoesNotContain("SECRET_SESSION", File.ReadAllText(Path.Combine(Store().DirectoryPath, "index.json")));
+        using var restarted = Store();
+        Assert.Equal(2, restarted.Count);
+        Assert.DoesNotContain("SECRET_SESSION", File.ReadAllText(Path.Combine(restarted.DirectoryPath, "index.json")));
     }
 
     [Theory]
@@ -165,10 +172,10 @@ public sealed class JsonCacheTests : IDisposable
         await Index(api);
         using var newer = await Batch(api, kind, 0);
         Assert.Equal("newer", newer.RootElement.GetProperty("sig").GetString());
-        Assert.Equal(0, Store().Count);
+        Assert.Equal(0, CountAfterFlushAndRestart(api));
         server.BatchSig = "";
         using var missing = await Batch(api, kind, 0);
-        Assert.Equal(0, Store().Count);
+        Assert.Equal(0, CountAfterFlushAndRestart(api));
     }
 
     [Theory]
@@ -186,7 +193,7 @@ public sealed class JsonCacheTests : IDisposable
         await Index(api);
         server.Release.TrySetResult();
         using var old = await pending;
-        Assert.Equal(0, Store().Count);
+        Assert.Equal(0, CountAfterFlushAndRestart(api));
     }
 
     [Fact]
@@ -203,7 +210,7 @@ public sealed class JsonCacheTests : IDisposable
         server.Terrain = "newer";
         using var mismatch = await api.GetTerrainAsync();
         Assert.Equal("newer", mismatch.RootElement.GetProperty("sig").GetString());
-        Assert.Equal(1, Store().Count);
+        Assert.Equal(1, CountAfterFlushAndRestart(api));
         using var again = await api.GetTerrainAsync();
         Assert.Equal(3, server.Count("/play/terrain"));
     }
@@ -230,11 +237,11 @@ public sealed class JsonCacheTests : IDisposable
         using var api = Api(server);
         using var noIndex = await Batch(api, "tiles", 0);
         using var terrain = await api.GetTerrainAsync();
-        Assert.Equal(0, Store().Count);
+        Assert.Equal(0, CountAfterFlushAndRestart(api));
         await Index(api); server.Policy = "no-store";
         using var noStore = await Batch(api, "tiles", 0);
         using var scene = await api.GetLocationSceneAsync("a");
-        Assert.Equal(0, Store().Count);
+        Assert.Equal(0, CountAfterFlushAndRestart(api));
     }
 
     [Fact]
@@ -278,7 +285,7 @@ public sealed class JsonCacheTests : IDisposable
         Assert.Equal(2, mismatch.RootElement.GetProperty(field).EnumerateObject().Count());
         Assert.All(mismatch.RootElement.GetProperty(field).EnumerateObject(), p =>
             Assert.StartsWith("newer:", p.Value.GetProperty("marker").GetString()));
-        Assert.Equal(2, Store().Count);
+        Assert.Equal(2, CountAfterFlushAndRestart(api));
     }
 
     [Fact]
@@ -292,11 +299,11 @@ public sealed class JsonCacheTests : IDisposable
         using var map = await api.GetWorldMapAsync();
         using var moved = await Batch(api, "tiles", 0);
         Assert.Equal("h2", moved.RootElement.GetProperty("sig").GetString());
-        Assert.Equal(1, Store().Count);
+        Assert.Equal(1, CountAfterFlushAndRestart(api));
         using var overview = await api.GetHeightfieldAsync();
         using var nowCurrent = await Batch(api, "tiles", 0);
         Assert.Equal(3, server.Count("/play/heightfield/tiles"));
-        Assert.Equal(2, Store().Count);
+        Assert.Equal(2, CountAfterFlushAndRestart(api));
     }
 
     [Fact]
@@ -307,13 +314,13 @@ public sealed class JsonCacheTests : IDisposable
         using var first = await api.GetLocationSceneAsync("a");
         server.SceneEtag = false;
         using var unvalidated = await api.GetLocationSceneAsync("a");
-        Assert.Equal(0, Store().Count);
+        Assert.Equal(0, CountAfterFlushAndRestart(api));
         server.SceneEtag = true;
         using var restored = await api.GetLocationSceneAsync("a");
         server.Policy = "no-store";
         using var noStore304 = await api.GetLocationSceneAsync("a");
         Assert.Equal("s1", noStore304!.RootElement.GetProperty("revision").GetString());
-        Assert.Equal(0, Store().Count);
+        Assert.Equal(0, CountAfterFlushAndRestart(api));
     }
 
 

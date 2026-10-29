@@ -245,6 +245,8 @@ public sealed class ByteCacheTests : IDisposable
         Assert.Equal(0, cache.Bytes);
         server.Policy = "immutable";
         await Task.WhenAll(Enumerable.Range(0, 20).Select(i => api.GetBytesAsync($"/assets/props/{i}/model")));
-        Assert.Equal(80, Cache().Bytes);
+        cache.FlushIndex();
+        using var restarted = Cache();
+        Assert.Equal(80, restarted.Bytes);
     }
 }

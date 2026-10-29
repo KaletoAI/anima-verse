@@ -138,7 +138,9 @@ public static class CacheCheck
             tiny.Read("/a"); now = now.AddSeconds(1);
             tiny.Store("/c", new byte[4], "\"c\"", immutable);
             Expect(tiny.Read("/b") is null && tiny.Read("/a") is not null && tiny.Bytes == 8, "LRU evicts b after touching a");
-            Expect(new DiskCache(tinyRoot, origin, 4).Bytes == 4, "startup eviction");
+            tiny.Dispose(); // Restart observes only the flushed index.
+            using var restartedTiny = new DiskCache(tinyRoot, origin, 4);
+            Expect(restartedTiny.Bytes == 4, "startup eviction");
             await FigureCacheCheck.RunAsync(host, fixtures, Path.Combine(root, "figures"), Expect);
             string old = store.DirectoryPath;
             var bumped = new DiskCache(root, origin, formatVersion: DiskCache.FormatVersion + 1);

@@ -19,10 +19,11 @@ public sealed class CacheReviewTests : IDisposable
     public void WarmHitsBatchLastUsedUntilShutdownAndKeepAtomicIndex()
     {
         var now = DateTimeOffset.Parse("2026-10-29T12:00:00Z");
-        var cache = new DiskCache(_root, new Uri("https://fixture.test"), now: () => now);
+        using var cache = new DiskCache(_root, new Uri("https://fixture.test"), now: () => now);
         using (var api = new AnimaApi("https://fixture.test", cache: cache))
         {
             cache.Store("clip", new byte[] { 1, 2 }, "one", new(true, true, now, "immutable"));
+            cache.FlushIndex(); // Establish the durable baseline before testing memory-only touches.
             string index = Path.Combine(cache.DirectoryPath, "index.json");
             string initial = File.ReadAllText(index);
             now = now.AddSeconds(1);
@@ -41,7 +42,7 @@ public sealed class CacheReviewTests : IDisposable
         using var release = new ManualResetEventSlim();
         bool block = false;
         var now = DateTimeOffset.UtcNow;
-        var cache = new DiskCache(_root, new Uri("https://fixture.test"), now: () => {
+        using var cache = new DiskCache(_root, new Uri("https://fixture.test"), now: () => {
             if (block) { entered.Set(); release.Wait(); }
             return now;
         });
@@ -70,6 +71,7 @@ public sealed class CacheReviewTests : IDisposable
         var now = DateTimeOffset.Parse("2026-10-29T12:00:00Z");
         using var cache = new DiskCache(_root, new Uri("https://fixture.test"), now: () => now);
         cache.Store("clip", new byte[] { 1 }, null, new(true, true, now, "immutable"));
+        cache.FlushIndex(); // Only the subsequent read may trigger persistence in this test.
         now = now.AddSeconds(1);
         cache.Read("clip");
         var until = DateTime.UtcNow.AddSeconds(10);
