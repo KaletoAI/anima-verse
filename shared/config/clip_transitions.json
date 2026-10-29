@@ -53,6 +53,12 @@
       "to": "@ground",
       "kind": "sit-down-floor",
       "accel": 0.0
+    },
+    {
+      "from": "walking",
+      "to": "@lie",
+      "kind": "lie-down",
+      "accel": 0.0
     }
   ]
 }
