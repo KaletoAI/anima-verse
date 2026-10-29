@@ -45,6 +45,7 @@ namespace AnimaNative;
 ///                               run (bench reproducibility). Not given: the stored Graphics tab level (default 2x),
 ///                               a bench run 4x like before the setting existed
 ///   --check                     offline self-test from native/fixtures, then quit
+///   --version                   print the baked build version, then quit before login/cache setup
 ///   --check verify | --check=verify   only the § B5a section of the self-test (fixture world + S3c world)
 ///   --check storeys | --check=storeys only the storey section (fixtures/storeys: the switch at runtime, Task 16)
 ///   --check placement | --check=placement only the room placement section (fixtures/placement: seats, surfaces, storeys,
@@ -75,6 +76,7 @@ namespace AnimaNative;
 /// </summary>
 public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
 {
+    public bool ShowVersion { get; init; }
     public static readonly Vector2I DefaultBenchSize = new(1920, 1080);
 
     public bool Bench { get; init; }
@@ -140,7 +142,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         string? server = null;
         string? user = null, gotoQuery = null;
         bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = true, noHud = false, plainGround = false;
-        bool noWater = false, verify = false, fogCompute = true, clearCache = false;
+        bool noWater = false, verify = false, fogCompute = true, clearCache = false, showVersion = false;
         string? matrix = null;
         string? offline = null, checkOnly = null, cacheDir = null;
         Vector2I? size = null;
@@ -149,7 +151,8 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         foreach (var raw in args)
         {
             var arg = raw.Trim();
-            if (arg == "--check") check = true;
+            if (arg == "--version") showVersion = true;
+            else if (arg == "--check") check = true;
             else if (TryValue(arg, "--check", out var only)) { check = true; checkOnly = CheckSection(only); }
             else if (check && checkOnly is null && IsSection(arg)) checkOnly = arg;
             else if (arg == "--clear-cache") clearCache = true;
@@ -200,6 +203,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         return new CliOptions(server, string.IsNullOrWhiteSpace(user) ? null : user,
                               string.IsNullOrWhiteSpace(gotoQuery) ? null : gotoQuery, check)
         {
+            ShowVersion = showVersion,
             Bench = bench,
             BenchMatrix = matrix,
             FogCompute = fogCompute,

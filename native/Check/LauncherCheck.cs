@@ -103,7 +103,10 @@ public static class LauncherCheck
 
     private static int CheckFlags()
     {
+        var version = CliOptions.Parse(new[] { "--version" });
+        Expect("--version exits before launcher setup", version.ShowVersion && !version.Check && !version.Bench, version.ToString());
         var none = CliOptions.Parse(Array.Empty<string>());
+        Expect("version is opt-in", !none.ShowVersion, none.ToString());
         Expect("no flags: no server, no user", none.Server is null && none.User is null, none.ToString());
         var typed = CliOptions.Parse(new[] { "--server=192.168.8.244:8000/", "--user=demo" });
         Expect("--server in user form is normalised", typed.Server == "http://192.168.8.244:8000", typed.Server ?? "null");
@@ -137,7 +140,7 @@ public static class LauncherCheck
         try { CliOptions.Parse(new[] { "--check=everything" }); }
         catch (ArgumentException) { threw = true; }
         Expect("--check=everything is refused", threw, "no exception");
-        return 10;
+        return 12;
     }
 
     private static void Expect(string what, bool ok, string detail)

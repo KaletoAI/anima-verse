@@ -177,6 +177,64 @@ segfaults (exit 139) while the process exits, AFTER the import has finished
 that code in exactly that case. The export and the game itself are not
 affected (`--check` exits 0 with the extension loaded).
 
+## AppImage packaging and publication
+
+`package.sh` exports the Linux preset through `build.sh`, assembles an AppDir,
+and packs it using the official [AppImage/appimagetool](https://github.com/AppImage/appimagetool).
+It requires bash, Python 3, the build tools above, and the complete gdCEF artifacts.
+A missing appimagetool is downloaded from official release 1.9.1 into
+`/home/dev/tools/appimagetool/appimagetool-x86_64.AppImage` (curl required).
+`APPIMAGETOOL=/path/to/appimagetool` overrides this host tool; it never goes in
+this repository. The tool may download its AppImage runtime on first use;
+`APPIMAGETOOL_RUNTIME_FILE` can select a pre-downloaded runtime for offline CI.
+
+```bash
+# From the repository root, with dotnet on PATH and GODOT set as above:
+bash native/package.sh                         # native/export/appimage/
+bash native/package.sh /absolute/output/path
+bash native/package.sh --publish               # clean worktree required
+python3 native/tests/package_test.py           # packaging contracts, no engine required
+
+image="$PWD/native/export/appimage/AnimaNative-<version>-x86_64.AppImage"
+"$image" --version                             # only the baked version; no engine/display needed
+"$image" --headless -- --version                # read the version from the exported assembly
+"$image" --headless -- --check                  # from inside the repository, see offline checks below
+# Hosts without FUSE can use APPIMAGE_EXTRACT_AND_RUN=1 for these commands.
+```
+
+The version is `<UTC commit timestamp yyyyMMddHHmmss>-<short commit hash>`,
+with `-dirty` for tracked changes or untracked source files anywhere in the
+worktree. `build.sh` computes it before export; `ANIMA_BUILD_VERSION` becomes
+`AnimaNative.Version` assembly metadata, exposed by `BuildInfo.Version` to the
+launcher. `version.txt` beside the executable carries the identical value for
+AppRun and `run.sh --version`. Plain editor/dotnet builds report `development`.
+AppRun accepts client flags directly, or Godot flags followed by `--` and client
+flags; `--headless` also works without a separator. Bare `--version` is handled
+by AppRun because Godot reserves that engine flag for its own version.
+
+AppRun writes the console transcript to
+`${XDG_DATA_HOME:-$HOME/.local/share}/godot/app_userdata/Anima Native/logs/native-*.log`.
+Its first line is `Anima Native <version>`, followed by the engine output.
+Godot's separate `--log-file` also points into this directory (`*.engine.log`);
+its own engine banner is retained. Launching never writes into the mounted
+AppImage. The unpacked export's `run.sh` continues to repair executable bits
+and log next to the build.
+
+`--publish` refuses dirty sources, copies the image into `static/native/`, then
+atomically renames a temporary `version.json` containing `version`, `file`,
+`size` (bytes), `sha256` (lowercase hex), and `built_utc` (ISO 8601 UTC).
+The image itself is also staged and renamed before the manifest becomes
+visible; older `AnimaNative-*-x86_64.AppImage` files are deleted afterwards.
+Concurrent publishers are serialized by `.publish.lock`. `static/native/` is
+ignored by git and served by the existing static route.
+
+The AppDir root holds `AppRun`, `anima-native.desktop`, `anima-native.svg`, and
+`.DirIcon`. `usr/bin/` holds the Godot executable (embedded PCK), .NET data
+folder, `version.txt`, `libmeshoptimizer.so`, every gdCEF artifact including
+executable `gdCefRenderProcess`, and `fixtures/` for the offline check. No build
+tool or repository model library is shipped. The full `--check` still needs a
+repository working directory for its `repo:` references; normal play does not.
+
 ## Start
 
 ```bash

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# AppImage entry point. With a separator, preserve Godot's engine/client split.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bin="$here/usr/bin"
+version="$(cat "$bin/version.txt")"
+if [ "$#" -eq 1 ] && [ "$1" = --version ]; then
+  printf '%s\n' "$version"
+  exit 0
+fi
+engine=()
+client=()
+separated=false
+for arg in "$@"; do
+  [ "$arg" != -- ] || separated=true
+done
+if "$separated"; then
+  # Everything supplied by the caller already follows Godot's convention.
+  engine=("$@")
+else
+  for arg in "$@"; do
+    if [ "$arg" = --headless ]; then engine+=("$arg"); else client+=("$arg"); fi
+  done
+  engine+=(-- "${client[@]}")
+fi
+logs="${XDG_DATA_HOME:-$HOME/.local/share}/godot/app_userdata/Anima Native/logs"
+mkdir -p "$logs"
+log="$(mktemp "$logs/native-$(date -u +%Y%m%d-%H%M%S)-XXXXXX.log")"
+# Keep the complete console transcript (including the engine banner) after the
+# version header; Godot also writes its own log under the same writable root.
+printf 'Anima Native %s\n' "$version" | tee "$log"
+set +e
+"$bin/anima-native.x86_64" --log-file "${log%.log}.engine.log" "${engine[@]}" 2>&1 | tee -a "$log"
+result=("${PIPESTATUS[@]}")
+[ "${result[0]}" -eq 0 ] || exit "${result[0]}"
+exit "${result[1]}"

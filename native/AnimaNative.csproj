@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>12</LangVersion>
+    <ANIMA_BUILD_VERSION Condition="'$(ANIMA_BUILD_VERSION)' == ''">development</ANIMA_BUILD_VERSION>
   </PropertyGroup>
 
   <!-- The Godot-free core (payloads, HUD protocol, math ports, Meshopt decoder,
@@ -13,6 +14,7 @@
        in tests/. Both folders sit under this project directory, so keep their
        sources (and their obj/ leftovers) out of this project's default glob. -->
   <ItemGroup>
+    <AssemblyMetadata Include="AnimaNative.Version" Value="$(ANIMA_BUILD_VERSION)" />
     <Compile Remove="Core/**" />
     <Compile Remove="tests/**" />
     <ProjectReference Include="Core/AnimaNative.Core.csproj" />

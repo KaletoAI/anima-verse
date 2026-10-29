@@ -18,6 +18,10 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Exported by Godot's dotnet publish as well as the build below. The assembly
+# metadata and the launcher sidecar must describe the same source snapshot.
+ANIMA_BUILD_VERSION="$(bash "$here/version.sh")"
+export ANIMA_BUILD_VERSION
 out="${1:-$here/export}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
@@ -75,11 +79,19 @@ if [ -f "$cef/gdcef.gdextension" ]; then
       ln -f "$real" "$out/$name" 2>/dev/null || cp -f "$real" "$out/$name"
     fi
   done
-  [ -x "$out/gdCefRenderProcess" ] && [ -f "$out/libcef.so" ] && [ -f "$out/libgdcef.so" ] \
+  [ -f "$out/gdCefRenderProcess" ] && [ -f "$out/libcef.so" ] && [ -f "$out/libgdcef.so" ] \
     || { echo "gdCEF artifacts incomplete in $out" >&2; exit 1; }
+  if [ ! -x "$out/gdCefRenderProcess" ]; then
+    # It may be hard-linked to the host's artifacts: detach before chmod.
+    cp "$out/gdCefRenderProcess" "$out/.gdCefRenderProcess.tmp"
+    chmod +x "$out/.gdCefRenderProcess.tmp"
+    mv "$out/.gdCefRenderProcess.tmp" "$out/gdCefRenderProcess"
+  fi
 fi
 
+chmod +x "$out/anima-native.x86_64"
 [ -x "$out/anima-native.x86_64" ] || { echo "export did not produce $out/anima-native.x86_64" >&2; exit 1; }
+printf '%s\n' "$ANIMA_BUILD_VERSION" > "$out/version.txt"
 
 # run.sh: a network share may drop the executable bits (the binary AND gdCEF's
 # subprocess — without the latter the HUD silently never starts), and the
@@ -90,6 +102,7 @@ cat > "$out/run.sh" <<'RUN'
 # Every flag is optional: without --server/--user the login screen offers the
 # server and user name of the last successful login (user://launcher.json).
 here="$(cd "$(dirname "$0")" && pwd)"
+if [ "$#" -eq 1 ] && [ "$1" = --version ]; then cat "$here/version.txt"; exit 0; fi
 chmod +x "$here/anima-native.x86_64" "$here/gdCefRenderProcess" 2>/dev/null
 mkdir -p "$here/logs"
 exec "$here/anima-native.x86_64" --log-file "$here/logs/native-$(date +%Y%m%d-%H%M%S).log" -- "$@"

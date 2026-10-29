@@ -3,6 +3,7 @@
 #
 #   native/test.sh
 #
+#   0. python3 native/tests/package_test.py — packaging/launch/publication contracts
 #   1. dotnet test native/tests          — the xUnit tests of the Godot-free core
 #   2. dotnet build native/               — the Godot project (+ core), so Godot runs the current code
 #   3. godot --headless -- --check        — the offline self-test from native/fixtures
@@ -16,6 +17,9 @@ godot="${GODOT:-godot}"
 command -v "$godot" >/dev/null 2>&1 || { echo "Godot not found: set GODOT=/path/to/Godot_v4.7.2-stable_mono_linux.x86_64" >&2; exit 1; }
 command -v dotnet >/dev/null 2>&1 || { echo "dotnet (8.0 SDK) not found on PATH" >&2; exit 1; }
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
+
+echo "== packaging contracts"
+python3 "$here/tests/package_test.py"
 
 echo "== dotnet test native/tests"
 dotnet test "$here/tests" -nologo

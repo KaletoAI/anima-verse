@@ -244,3 +244,4 @@ docs/superpowers/
 
 # runtime/build artifacts
 *.pid
+static/native/

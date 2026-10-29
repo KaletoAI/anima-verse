@@ -128,6 +128,7 @@ public partial class Main : Node3D
 
     public override void _Ready()
     {
+        GD.Print($"Anima Native {BuildInfo.Version}");
         Ui.HitchLog.Init();
         _ = RunAsync();
     }
@@ -137,6 +138,12 @@ public partial class Main : Node3D
         try
         {
             _options = CliOptions.FromGodot();
+            if (_options.ShowVersion)
+            {
+                GD.Print(BuildInfo.Version);
+                GetTree().Quit();
+                return;
+            }
             if (!_options.Check && !_cacheStartupPrepared)
             {
                 _diskCacheEnabled = AnimaNative.Cache.DiskCache.PrepareRoot(CacheRoot, _options.ClearCache);
