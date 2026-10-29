@@ -720,6 +720,7 @@
 .ga-input {
   font: inherit;
   color: inherit;
+  color-scheme: dark;
   background: var(--bg, #0d1117);
   border: 1px solid var(--border, #30363d);
   border-radius: 6px;

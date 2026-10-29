@@ -34,6 +34,8 @@
 #hud,
 #hud-title,
 #hud ~ .ga-modal-backdrop {
+  /* Native widgets (a select's option list above all) follow the dark theme. */
+  color-scheme: dark;
   --bg: #15110d;
   --bg-alt: #1d1811;
   --bg-container: #231d15;
@@ -234,7 +236,9 @@
 #hud .player-composer-input,
 #hud .ga-input,
 #hud ~ .ga-modal-backdrop .ga-input {
-  background: linear-gradient(180deg, #100d09, #17130e);
+  /* A solid colour under the gradient: Chromium paints a select's open option
+     list in the background COLOUR, which a bare gradient leaves transparent (white). */
+  background: #17130e linear-gradient(180deg, #100d09, #17130e);
   border-color: rgba(242, 205, 110, 0.22);
   box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.6);
   color: var(--text);
