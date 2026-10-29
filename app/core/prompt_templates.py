@@ -15,6 +15,7 @@ Templates live under `shared/templates/llm/`:
 Public API:
     render_task(task, **vars)          -> (system_prompt, user_prompt)
     render(template_path, **vars)      -> str
+    await render_async(template_path, **vars) -> str (event-loop callers)
     load_skill_meta(skill_file)        -> {"name": str, "description": str}
 
 The loader is intentionally minimal: Jinja2 with autoescape disabled
@@ -37,6 +38,7 @@ persistent template stamps also fingerprint all world overrides.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from pathlib import Path
@@ -285,6 +287,11 @@ def render_task(task: str, **vars) -> Tuple[str, str]:
     rendered = _compile(path).render(**vars)
     system, user = _split_system_user(rendered)
     return _ensure_prop_actions(system, block, path), user
+
+
+async def render_async(template_path: str, **vars) -> str:
+    """Render off-loop: mandatory semantic action context may plan geometry."""
+    return await asyncio.to_thread(render, template_path, **vars)
 
 
 def render(template_path: str, **vars) -> str:

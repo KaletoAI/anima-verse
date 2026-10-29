@@ -1,4 +1,5 @@
 """World Development routes - Chat with LLM to create/edit world elements."""
+import asyncio
 import json
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
@@ -2429,7 +2430,7 @@ async def validate_json_route(request: Request):
     llm = instance.create_llm() if hasattr(instance, "create_llm") else instance
 
     from app.core.prompt_templates import render_task
-    system_prompt, user_message = render_task(
+    system_prompt, user_message = await asyncio.to_thread(render_task,
         "world_dev_validate",
         schema_text=schema_text,
         draft_json=json.dumps(data, ensure_ascii=False, indent=2),

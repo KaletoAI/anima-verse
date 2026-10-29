@@ -296,6 +296,14 @@ signatures. The old activity-marker enable flag only controls its marker syntax;
 it never disables semantic tool context. `set_pose` also supplies the executable
 `prop_action` capability, and NPC structured `prop_action` answers use that skill.
 
+Async thought callers use `build_thought_context_async` and `render_async`:
+semantic room offers can read and plan scene geometry, so neither operation
+may run synchronously on the server event loop. The AgentLoop reuses its
+already-built context for the same actor's thought turn.
+Geometry is shared only within one read-only offer/check operation; subsequent
+checks and execution re-read live occupancy, claims and definitions. No
+availability result is cached across operations.
+
 Shared/World resolution remains unchanged. A World override that omits this
 mandatory runtime block is retained, receives a visible repair log warning,
 and has the actual block appended by the renderer. Missing actor context raises.

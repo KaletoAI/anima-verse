@@ -7,10 +7,15 @@ its block is non-empty — so what we don't load here, the agent doesn't see.
 
 Public API:
     build_thought_context(character_name, tools_hint='') -> dict
+    await build_thought_context_async(character_name, tools_hint='') -> dict
+
+Async thought callers use the latter boundary: room offers include live
+semantic action checks and geometry reads, not just string formatting.
 
 Returns a kwargs dict that can be passed straight into
 ``render('chat/agent_thought.md', **ctx)``.
 """
+import asyncio
 import re
 from datetime import datetime, timedelta
 
@@ -63,6 +68,11 @@ THOUGHT_RECENT_TAIL_CHARS = 300
 # and joining newline. Kept as a constant because callers and checks assert
 # against the rendered block as a whole.
 THOUGHT_RECENT_CHARS = THOUGHT_RECENT_N * (THOUGHT_RECENT_TAIL_CHARS + 3)
+
+
+async def build_thought_context_async(character_name: str, tools_hint: str = "") -> Dict[str, Any]:
+    """Read fresh thought context off-loop, retaining the caller's ContextVars."""
+    return await asyncio.to_thread(build_thought_context, character_name, tools_hint)
 
 
 def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str, Any]:

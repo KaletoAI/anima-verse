@@ -253,7 +253,8 @@ class ThoughtRunner:
                                 suppress_notification: bool = False,
                                 llm_task: str = "thought",
                                 reply_only_to: str = "",
-                                system_prompt_override: str = ""):
+                                system_prompt_override: str = "",
+                                thought_context_override: Optional[Dict[str, Any]] = None):
         """Run a thought with the same StreamingAgent as chat.
 
         fast: Let the tool LLM narrate and invoke tools in one pass, useful
@@ -263,6 +264,8 @@ class ThoughtRunner:
             instead of journalling it, for passive observer turns.
         reply_only_to: Limit messaging tools to the original sender so an
             incoming DM cannot cause an unsolicited third-party cascade.
+        thought_context_override: The current turn's already-built context,
+            supplied with system_prompt_override to reuse its room offer.
         """
         from app.models.character import (
             get_character_profile,
@@ -276,7 +279,7 @@ class ThoughtRunner:
                                         ExtractionEvent, ToolResultEvent)
         from app.core.tool_formats import build_tool_instruction, get_format_for_model
 
-        profile = get_character_profile(character_name)
+        profile = await asyncio.to_thread(get_character_profile, character_name)
         config = get_character_config(character_name)
         from app.core.agent_inbox import load_unread_stat_sources
         stat_collector = get_stat_source_collector()
@@ -408,14 +411,17 @@ class ThoughtRunner:
         # endpoint) get the slim prompt built fresh here. Neither branch
         # touches it for a context_hint — the hint goes into the user turn
         # (``thought_user_input``) so the system prompt stays byte-stable.
-        ctx = None          # thought context, only built when we render ourselves
+        if (thought_context_override is not None
+                and thought_context_override.get("character_name") != character_name):
+            raise ValueError("Thought context actor does not match the current turn")
+        ctx = dict(thought_context_override) if thought_context_override is not None else None
         if system_prompt_override:
             system_prompt = system_prompt_override
         else:
-            from app.core.thought_context import build_thought_context
-            from app.core.prompt_templates import render
-            ctx = build_thought_context(character_name, tools_hint=tools_hint)
-            system_prompt = render("chat/agent_thought.md", **ctx)
+            from app.core.thought_context import build_thought_context_async
+            from app.core.prompt_templates import render_async
+            ctx = await build_thought_context_async(character_name, tools_hint=tools_hint)
+            system_prompt = await render_async("chat/agent_thought.md", **ctx)
         if context_hint:
             logger.info("Thought fuer %s mit context_hint: %s",
                         character_name, context_hint[:100])
@@ -444,7 +450,7 @@ class ThoughtRunner:
         tool_system_content = ""
         if mode == "rp_first" and tools_dict and agent_tools:
             from app.core.system_prompt_builder import load_prompt_data, THOUGHT_FULL
-            _td = load_prompt_data(character_name, THOUGHT_FULL)
+            _td = await asyncio.to_thread(load_prompt_data, character_name, THOUGHT_FULL)
 
             appearance = get_character_appearance(character_name)
             usage = sm.get_agent_usage_instructions(character_name, tool_format, turn="thought")
@@ -489,15 +495,16 @@ class ThoughtRunner:
                 if ctx is not None:
                     _offer = ctx.get("activity_hint_block") or ""
                 else:
-                    # AgentLoop path: the caller rendered the prompt itself,
-                    # so no context dict reached us — one builder, called once.
+                    # Render-only callers supplied no context snapshot.
+                    # Read their current offer without blocking the event loop.
                     from app.core.thought_context import _build_activity_hint_block
                     from app.models.character import (get_character_current_location,
                                                       get_character_current_room)
-                    _offer = _build_activity_hint_block(
+                    _offer = await asyncio.to_thread(
+                        _build_activity_hint_block,
                         character_name,
-                        get_character_current_location(character_name) or "",
-                        get_character_current_room(character_name) or "")
+                        await asyncio.to_thread(get_character_current_location, character_name) or "",
+                        await asyncio.to_thread(get_character_current_room, character_name) or "")
                 if _offer:
                     _cut = _offer[:900]
                     if len(_offer) > 900 and "\n" in _cut:
@@ -878,7 +885,7 @@ class ThoughtRunner:
             return _turn_info
 
         from app.core.thought_rut import record_turn
-        _final_profile = get_character_profile(character_name)
+        _final_profile = await asyncio.to_thread(get_character_profile, character_name)
         record_turn(character_name,
                     set(_tool_exec_counts) | set(_narrative_exec_counts),
                     (_final_profile.get("current_location", "") or "",

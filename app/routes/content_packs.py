@@ -977,7 +977,7 @@ async def character_intro_suggest(
     from app.models.world_setup import get_world_setup_text
     from app.core.paths import get_storage_dir
     try:
-        sys_p, user_p = render_task(
+        sys_p, user_p = await asyncio.to_thread(render_task,
             "intro_memory",
             character_name=char_name or "the character",
             character_personality=personality or "",

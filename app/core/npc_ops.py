@@ -21,6 +21,7 @@ generate → validate → repair → apply — with no human in the loop.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
@@ -932,7 +933,7 @@ async def _run_pipeline(llm, schema_text, briefing, location_id, room_id,
                         ) -> AsyncGenerator[Dict[str, Any], None]:
     """The four stages themselves — split out so the queue registration in
     ``generate_npc`` gets a single try/finally around all of them."""
-    system_prompt, user_prompt = render_task(
+    system_prompt, user_prompt = await asyncio.to_thread(render_task,
         "npc_generate", schema_text=schema_text, briefing=briefing.strip())
     try:
         raw = await _collect(llm, system_prompt, user_prompt)
@@ -959,7 +960,7 @@ async def _run_pipeline(llm, schema_text, briefing, location_id, room_id,
         v_llm, _ = _make_llm(v_model, v_provider, 1024)
         if v_llm:
             try:
-                v_system, v_user = render_task(
+                v_system, v_user = await asyncio.to_thread(render_task,
                     "world_dev_validate", schema_text=schema_text,
                     draft_json=json.dumps(data, ensure_ascii=False, indent=2))
                 verdict = await _collect(v_llm, v_system, v_user, max_lines=80)
@@ -977,7 +978,7 @@ async def _run_pipeline(llm, schema_text, briefing, location_id, room_id,
     # --- 3) repair ---------------------------------------------------------
     if gaps:
         yield {"stage": "repair", "status": "running"}
-        r_system, r_user = render_task(
+        r_system, r_user = await asyncio.to_thread(render_task,
             "npc_repair", schema_text=schema_text,
             draft_json=json.dumps(data, ensure_ascii=False, indent=2),
             gaps="\n".join(f"- {g}" for g in gaps))
@@ -1009,7 +1010,6 @@ async def _run_pipeline(llm, schema_text, briefing, location_id, room_id,
                "error": f"a character named '{name}' already exists"}
         return
     try:
-        import asyncio
         applied = await asyncio.to_thread(
             apply_npc, data, location_id, room_id, briefing, ttl_hours,
             created_by)

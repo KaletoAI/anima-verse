@@ -25,6 +25,7 @@ Pipeline:
 Input JSON (when called by tool-LLM):
   {"text": "...", "scope": "here|location"}
 """
+import asyncio
 import json
 import re
 import threading
@@ -318,7 +319,7 @@ async def _run_storyteller_agent(
     game_weather = _now.atmosphere(_lang)["label"]
 
     # ── Render the template ────────────────────────────────────────────
-    sys_prompt, user_prompt = render_task(
+    sys_prompt, user_prompt = await asyncio.to_thread(render_task,
         "storyteller_react",
         subject_name=actor,
         subject_profile=subject_profile,

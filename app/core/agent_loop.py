@@ -1853,8 +1853,8 @@ class AgentLoop:
                     outcome = "respond"
                     return
 
-                from app.core.thought_context import build_thought_context
-                from app.core.prompt_templates import render
+                from app.core.thought_context import build_thought_context_async
+                from app.core.prompt_templates import render_async
                 from app.core.thoughts import get_thought_runner
                 from app.core.agent_inbox import mark_thought_processed
 
@@ -1913,13 +1913,13 @@ class AgentLoop:
                 # template before render. Pop'd here so the choice stays
                 # visible in the same scope as the system_prompt build.
                 perception = self.pop_perception(character_name)
-                ctx = build_thought_context(character_name)
+                ctx = await build_thought_context_async(character_name)
                 if perception and perception.get("template"):
                     template_name = perception["template"]
                     extra_vars = perception.get("vars") or {}
                     if extra_vars:
                         ctx.update(extra_vars)
-                system_prompt = render(template_name, **ctx)
+                system_prompt = await render_async(template_name, **ctx)
 
                 thought_loop = get_thought_runner()
                 if thought_loop is None:
@@ -1962,7 +1962,8 @@ class AgentLoop:
                             character_name,
                             context_hint=hint,
                             tool_whitelist=_perception_whitelist,
-                            system_prompt_override=system_prompt),
+                            system_prompt_override=system_prompt,
+                            thought_context_override=ctx),
                         timeout=_TURN_TIMEOUT_SECONDS)
                     if isinstance(result, dict):
                         turn_info = result

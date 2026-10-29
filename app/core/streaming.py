@@ -2019,8 +2019,8 @@ class StreamingAgent:
                     "listener(s) present — targeted retry", len(quotes),
                     len(present))
         try:
-            system, user = self._render_speech_retry(
-                quotes, present, speech_tools)
+            system, user = await asyncio.to_thread(
+                self._render_speech_retry, quotes, present, speech_tools)
         except Exception as err:
             logger.error("B-lite: speech_retry template failed: %s", err)
             return
