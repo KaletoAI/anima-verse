@@ -40,6 +40,7 @@ export const LIGHT_PRESETS: Array<{ name: string; light: Omit<PropLight, 'at'> }
   { name: 'Ceiling lamp', light: { color: '#fff0d0', intensity: 6, range_m: 8, flicker: 'none', when: 'always', glow_m: 0.2 } },
   { name: 'Street lamp', light: { color: '#ffd9a0', intensity: 15, range_m: 14, flicker: 'none', when: 'night', glow_m: 0.3 } },
   { name: 'Crystal', light: { color: '#8fd8ff', intensity: 2, range_m: 4, flicker: 'none', when: 'always', glow_m: 0.25 } },
+  { name: 'Monitor', light: { color: '#b8d4ff', intensity: 1.2, range_m: 2.5, flicker: 'none', when: 'always', glow_m: 0.05 } },
 ]
 
 /**
