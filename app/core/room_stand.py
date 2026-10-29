@@ -53,6 +53,7 @@ STAND_GRID_M = 0.25
 WALL_CLEAR_M = 0.35
 #: The radius a standing body occupies — every prop footprint grows by it.
 BODY_R_M = 0.30
+ACCESS_BODY_R_M = 0.15
 #: How far two characters in one room keep apart, in metres.
 MATE_CLEAR_M = 0.70
 

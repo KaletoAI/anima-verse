@@ -1046,7 +1046,7 @@ def start_approach_journey(character_name: str, target: dict, role: str, *,
     chosen_target = {**target, "marker_id": plan["entry_anchor"]["marker_id"],
                      "slot": plan["entry_anchor"]["slot"]}
     journey = dict(target="", target_point=dict(plan["access"]), approach_target=chosen_target,
-                   approach_role=role, entry_anchor=plan["entry_anchor"],
+                   approach_role=role, entry_anchor=plan["entry_anchor"], entry_mode=plan["entry_mode"],
                    waypoints=_with_seat_leg(timed, plan.get("departure_seat")),
                    started_at_game=starts.canonical(), speed_m_s=speed,
                    journey_id=journey_id or uuid.uuid4().hex,
@@ -1143,7 +1143,7 @@ _approach_validation_lock = Lock()
 
 def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     """Recheck concrete provenance and the remaining floor path before movement."""
-    from app.core.prop_action_paths import _plan_approach, _Space, _departure_walkable
+    from app.core.prop_action_paths import _plan_approach, _Space, _departure_walkable, access_space
     from app.core import sync_topics
     from app.models.character import get_character_pos, get_character_profile
     from app.models.world import is_world_frozen
@@ -1175,7 +1175,7 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     else:
         plan = _plan_approach(name, target, journey["approach_role"], departure=departure,
                              departure_placement_id=journey.get("departure_placement_id", ""),
-                             _query=query)
+                             _query=query, route_start=journey.get("step_out") or journey["departure_point"])
         cached = (deepcopy(key), position, plan)
         with _approach_validation_lock:
             if len(_approach_validation_cache) >= 128:
@@ -1214,12 +1214,21 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
             return
         escaping = st["seg"] == 0 and not st["arrived"]
         route = route[1:]
-    if space is None or not space.valid or (not escaping and not space.free(tuple(st["pos"]))) or not all(space.free(p) for p in route) or not all(
-            space.visible(a, b) for a, b in zip(route, route[1:])):
+    final = (access_space(geometry, target["placement_id"])
+             if geometry and journey.get("entry_mode", "bridge") == "bridge" else space)
+    # The persisted segment index includes the seated exit / standing step-out.
+    on_final = st["arrived"] or st["seg"] == len(journey["waypoints"]) - 2
+    position_space = final if on_final else space
+    if (space is None or not space.valid or final is None or not route
+            or (not escaping and not position_space.free(tuple(st["pos"])))
+            or not all(space.free(p) for p in route[:-1]) or not final.free(route[-1])
+            or not all((final if i == len(route) - 2 else space).visible(a, b)
+                       for i, (a, b) in enumerate(zip(route, route[1:])))):
         cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
                        execution_ref=journey["execution_ref"], reason="approach_route_changed")
         return
-    if plan["status"] == "ok" and (plan["access"] != journey["target_point"]
+    if plan["status"] == "ok" and (plan.get("entry_mode", "bridge") != journey.get("entry_mode", "bridge")
+                                   or plan["access"] != journey["target_point"]
                                    or plan["entry_anchor"] != journey["entry_anchor"]):
         cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
                        execution_ref=journey["execution_ref"], reason="approach_target_changed")

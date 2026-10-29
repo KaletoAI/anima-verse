@@ -281,7 +281,8 @@ class Paths(unittest.TestCase):
         doc["model_variants"][0]["markers"][0]["access"]["actor"]["z"] = .6
         props._write_sidecar(pid, doc)
         target["definition_revision"] = props.get_prop(pid)["revision"]
-        self.assertEqual(N.plan_approach(name, target, "actor")["reason"], "access_not_walkable")
+        relaxed = N.plan_approach(name, target, "actor")
+        self.assertEqual((relaxed["status"], relaxed["entry_mode"]), ("ok", "bridge"))
 
     def test_real_unreachable_access_has_no_world_route_or_position_write(self):
         name, target, _ = fixture()
@@ -299,7 +300,12 @@ class Paths(unittest.TestCase):
         name, target, _ = fixture(yaw=90, support=True, floor_y=.4)
         result = N.plan_approach(name, target, "actor")
         self.assertEqual(result["status"], "ok", result)
-        self.assertEqual(result["access"], {"x": 10, "z": 5, "y": .4, "yaw": 270})
+        # The raised support table blocks the entry bridge: direct uses its
+        # full footprint (rotated depth 2 -> X halfwidth 1), grown by .3.
+        # Radius 1.30 touches; 1.35 at angle zero is the nearest free ring.
+        self.assertEqual(result["entry_mode"], "direct")
+        self.assertEqual(result["access"], {"x": 9.35, "z": 5, "y": .4, "yaw": 270})
+        self.assertEqual(result["bridge_access"], {"x": 10, "z": 5, "y": .4, "yaw": 270})
         self.assertGreater(result["entry_anchor"]["y"], 1.4)
         self.assertGreater(len(result["waypoints"]), 2, "support table must force a real detour")
         poly, boxes, zones = S.room_geometry(target["location_id"], "hall")

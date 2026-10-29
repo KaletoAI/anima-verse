@@ -10,7 +10,7 @@ import math
 from typing import Sequence
 
 from app.core import furnish_geometry as fg
-from app.core.room_stand import BODY_R_M, WALL_CLEAR_M, footprint_corners
+from app.core.room_stand import BODY_R_M, ACCESS_BODY_R_M, WALL_CLEAR_M, footprint_corners
 
 Point = tuple[float, float]
 _EPS = 1e-9
@@ -86,7 +86,7 @@ def _offset_vertices(poly: list[Point], distance: float) -> list[Point]:
 
 
 class _Space:
-    def __init__(self, polygon, blockers, zones):
+    def __init__(self, polygon, blockers, zones, *, furniture_radius=BODY_R_M):
         self.poly = _polygon(polygon)
         self.keepouts = []
         self.candidates = []
@@ -102,8 +102,8 @@ class _Space:
                 if any(not math.isfinite(v) for v in values) or min(values[:2]) <= 0 or len(box["at"]) != 2:
                     self.valid = False
                     return
-                self.keepouts.append(footprint_corners(box, BODY_R_M))
-                self.candidates.extend(footprint_corners(box, BODY_R_M + _VERTEX_SLACK_M))
+                self.keepouts.append(footprint_corners(box, furniture_radius))
+                self.candidates.extend(footprint_corners(box, furniture_radius + _VERTEX_SLACK_M))
             for zone in zones:
                 ring = _polygon(zone)
                 if ring is None:
@@ -134,7 +134,11 @@ class _Space:
         Candidates must also be free after centimetre-rounded persistence.
         Fixed .05 m rings and five-degree angles keep admission deterministic.
         """
-        candidates = list(self.candidates)
+        return next((p for p in self.nearby_free(start) if p != start and self.inside_segment(start, p)), None)
+
+    def nearby_free(self, start: Point):
+        """Free, centimetre-safe candidates within 1.5m, nearest then angle."""
+        candidates = [start, *self.candidates]
         for radius_step in range(1, 31):
             radius = radius_step * .05
             for degrees in range(0, 360, 5):
@@ -145,14 +149,13 @@ class _Space:
         for raw in candidates:
             p = (round(raw[0], 9), round(raw[1], 9))
             distance = math.dist(start, p)
-            if _EPS < distance <= 1.5 + _EPS:
+            if distance <= 1.5 + _EPS:
                 angle = math.atan2(p[1] - start[1], p[0] - start[0]) % math.tau
                 ranked.append((round(distance, 9), angle, p))
         for _, _, p in sorted(set(ranked)):
             persisted = (round(p[0], 2), round(p[1], 2))
-            if self.free(p) and self.free(persisted) and self.inside_segment(start, p):
-                return p
-        return None
+            if self.free(p) and self.free(persisted):
+                yield p
 
     def visible(self, a: Point, b: Point) -> bool:
         # Exact segment/edge checks, NOT sparse point sampling: even a very thin
@@ -188,16 +191,17 @@ class _VisibilityGraph:
                 if self.space.visible(a, b):
                     self.edges[a, b] = math.dist(a, b)
 
-    def route(self, start, goal):
+    def route(self, start, goal, *, final_space=None):
+        final = final_space or self.space
         try:
             start, goal = tuple(map(float, start)), tuple(map(float, goal))
-            if len(start) != 2 or len(goal) != 2 or not self.space.free(start) or not self.space.free(goal):
+            if len(start) != 2 or len(goal) != 2 or not self.space.free(start) or not final.free(goal):
                 return None
         except (TypeError, ValueError, OverflowError):
             return None
         if start == goal:
             return [start]
-        if self.space.visible(start, goal):
+        if final.visible(start, goal):
             return [start, goal]
         if self.nodes is None:
             self._build_graph()
@@ -206,7 +210,8 @@ class _VisibilityGraph:
         for i, a in enumerate(nodes):
             for j in range(i + 1, len(nodes)):
                 b = nodes[j]
-                cost = (math.dist(a, b) if self.space.visible(a, b) else None) if i < 2 else self.edges.get((a, b))
+                edge_space = final if i == 1 or j == 1 else self.space
+                cost = (math.dist(a, b) if edge_space.visible(a, b) else None) if i < 2 else self.edges.get((a, b))
                 if cost is not None:
                     graph[i].append((j, cost))
                     graph[j].append((i, cost))
@@ -231,6 +236,37 @@ def visibility_path(start: Sequence[float], goal: Sequence[float], polygon,
     """Shortest deterministic visibility path; reuse a graph only for its geometry."""
     graph = _graph if _graph is not None else _VisibilityGraph((polygon, blockers, door_zones))
     return graph.route(start, goal)
+
+
+def access_space(geometry, placement_id):
+    """Final approach/entry: exempt target, reduce OTHER furniture only."""
+    polygon, blockers, zones = geometry
+    return _Space(polygon, [b for b in blockers if not (
+        placement_id and b.get("placement_id") == placement_id)], zones,
+        furniture_radius=ACCESS_BODY_R_M)
+
+
+def slot_route(start, access, anchor, geometry, placement_id, *, graph=None):
+    """Shared runtime/report planner. Direct candidates use full walking rules."""
+    graph = graph or _VisibilityGraph(geometry)
+    final = access_space(geometry, placement_id)
+    goal = (access["x"], access["z"])
+    if not final.free(goal):
+        reason = "access_not_walkable"
+    elif not final.visible(goal, anchor):
+        reason = "entry_transition_blocked"
+    else:
+        route = graph.route(start, goal, final_space=final)
+        if route is not None:
+            return route, "bridge", ""
+        reason = "no_route"
+    found_free = False
+    for point in graph.space.nearby_free(anchor):
+        found_free = True
+        route = graph.route(start, point)
+        if route is not None:
+            return route, "direct", reason
+    return None, "blocked", "no_route" if found_free else "no_free_direct_point"
 
 
 def _departure_walkable(seat: Point, start: Point, geometry, placement_id: str) -> bool:
@@ -268,7 +304,7 @@ def plan_approach(actor: str, target: dict, role: str, *, _query=None) -> dict:
 
 
 def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
-                   departure_placement_id: str = "", _query=None) -> dict:
+                   departure_placement_id: str = "", _query=None, route_start=None) -> dict:
     """Internal revalidation can reuse the persisted, measured seat exit."""
     from app.core import places
     from app.core.room_stand import approach_departure
@@ -304,6 +340,8 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
         actor, profile=profile, _places=inventory)
     if departure_reason:
         return _blocked(departure_reason)
+    if route_start is not None:
+        start = tuple(route_start)
     real_start = start
     step_out = None
     if not space.free(start):
@@ -316,6 +354,7 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
     if seat is not None and not _departure_walkable(seat, start, geometry, departing_placement):
         return _blocked("departure_not_walkable")
     choices = []
+    graph = _VisibilityGraph(geometry)
     reason = "binding_not_found"
     for place in sorted(candidates, key=lambda p: p["id"]):
         if target.get("marker_id") and target["marker_id"] != place["marker_id"]:
@@ -350,18 +389,18 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
                         continue
                     if not all(math.isfinite(float(access[k])) for k in ("x", "z", "y", "yaw")):
                         raise ValueError("nonfinite access")
-                    goal = (float(access["x"]), float(access["z"]))
                     sx, sz = place["slots"][slot]
                 except (KeyError, TypeError, ValueError, OverflowError):
                     reason = "invalid_binding_geometry"
                     continue
-                if not space.free(goal):
-                    reason = "access_not_walkable"
-                    continue
-                route = query.route(start, goal, geometry)
+                route, mode, route_reason = slot_route(start, access, (sx, sz), geometry,
+                                                        target["placement_id"], graph=graph)
                 if route is None:
-                    reason = "no_route"
+                    reason = route_reason
                     continue
+                authored_access = dict(access)
+                if mode == "direct":
+                    access = dict(access, x=route[-1][0], z=route[-1][1])
                 if step_out is not None:
                     route = [real_start] + route
                 length = sum(math.dist(a, b) for a, b in zip(route, route[1:]))
@@ -370,9 +409,56 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
                               marker_id=place["marker_id"], place_id=place["id"], slot=slot,
                               x=sx, z=sz, y=place["y_world"], yaw=place.get("facing"),
                               root_offset=place.get("root_offset", 0))
-                choices.append((length, place["id"], dict(status="ok", reason="", waypoints=[list(p) for p in route],
+                choices.append((mode == "direct", length, place["id"], dict(status="ok", entry_mode=mode,
+                                                         bridge_access=authored_access, bridge_reason=route_reason, reason="", waypoints=[list(p) for p in route],
                                                          access=dict(access), entry_anchor=anchor,
                                                          step_out=list(step_out) if step_out is not None else None,
                                                          departure_seat=list(seat) if seat is not None else None,
                                                          departure_placement_id=departing_placement)))
-    return min(choices, key=lambda row: row[:2])[2] if choices else _blocked(reason)
+    return min(choices, key=lambda row: row[:3])[3] if choices else _blocked(reason)
+
+
+def access_obstructions(access, anchor, geometry, placement_id, *, final_rules=True):
+    """Explain final-space collisions using the planner's actual boundaries.
+
+    Deficit is the displacement to leave a grown keepout (or reach the wall
+    margin), in metres. For a bridge we report the deepest penetration sampled
+    at <=1mm intervals; this diagnostic sampling NEVER decides admission.
+    The exempt own footprint is included as context, explicitly marked exempt.
+    """
+    polygon, blockers, zones = geometry
+    final = access_space(geometry, placement_id) if final_rules else _Space(*geometry)
+    if not final.valid:
+        return [dict(kind="invalid_room_geometry", missing_m=None)]
+    a = (access["x"], access["z"])
+    points = [a]
+    if not final.visible(a, anchor):
+        steps = max(1, math.ceil(math.dist(a, anchor) / .001))
+        points += [(a[0] + (anchor[0] - a[0]) * i / steps,
+                    a[1] + (anchor[1] - a[1]) * i / steps) for i in range(1, steps + 1)]
+
+    def gap(p, ring):
+        distance = min(fg.point_segment_distance(p, u, v) for u, v in _edges(ring))
+        return -distance if fg.point_in_poly(p, ring) else distance
+
+    result = []
+    wall_missing = max(WALL_CLEAR_M + gap(p, final.poly) for p in points)
+    if wall_missing > _EPS:
+        result.append(dict(kind="wall", missing_m=max(0, wall_missing)))
+    other_boxes = [box for box in blockers if not final_rules or box.get("placement_id") != placement_id or not placement_id]
+    for box, ring in zip(other_boxes, final.keepouts):
+        missing = max(-gap(p, ring) for p in points)
+        if missing >= -_EPS:
+            result.append(dict(kind="own footprint" if box.get("placement_id") == placement_id else "furniture",
+                               placement_id=box.get("placement_id", ""),
+                               missing_m=max(0, missing)))
+    for ring in final.keepouts[len(other_boxes):]:
+        missing = max(-gap(p, ring) for p in points)
+        if missing >= -_EPS:
+            result.append(dict(kind="door zone", missing_m=max(0, missing)))
+    for box in blockers:
+        if final_rules and placement_id and box.get("placement_id") == placement_id:
+            missing = -gap(a, footprint_corners(box, BODY_R_M))
+            if missing >= -_EPS:
+                result.append(dict(kind="own footprint (exempt)", missing_m=max(0, missing)))
+    return result

@@ -333,7 +333,7 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
                 definition, profiles[run[role]])
             if access_reason:
                 return access_reason
-            if current_access != plan["access"] or list(place["slots"][anchor["slot"]]) != [anchor["x"], anchor["z"]] or place["y_world"] != anchor["y"]:
+            if current_access != plan.get("bridge_access", plan["access"]) or list(place["slots"][anchor["slot"]]) != [anchor["x"], anchor["z"]] or place["y_world"] != anchor["y"]:
                 return "approach_target_changed"
             if run["status"] == "approaching" and (run["phase"] == "entry" or run[role] in run["data"]["arrived"]):
                 pos = C.get_character_pos(run[role])
@@ -415,10 +415,10 @@ def _plan(run, *, conn, _query=None):
                 if last_reason:
                     continue
                 distance = sum(sum(math.dist(a, b) for a, b in zip(p["waypoints"], p["waypoints"][1:])) for p in plans.values())
-                choices.append((distance, place["id"], plans, allocation))
+                choices.append((sum(p.get("entry_mode") == "direct" for p in plans.values()), distance, place["id"], plans, allocation))
     if not choices:
         return {}, last_reason
-    _, _, plans, allocation = min(choices, key=lambda p: p[:2])
+    _, _, _, plans, allocation = min(choices, key=lambda p: p[:3])
     run["data"].update(clip_roles=allocation["clip_roles"], access_roles=allocation["access_roles"])
     return plans, ""
 
@@ -838,6 +838,8 @@ def _entry_capability(pose):
 
 
 def _entry_spec(name, plan, pose, *, _query=None):
+    if plan.get("entry_mode") == "direct":
+        return dict(kind="", duration_game_s=0.0, pose_key=pose), ""
     from app.core.animation_clips import clip_travel_m, clip_ref_height_m
     from app.core.room_stand import bridge_offset, bridge_scale
     from app.core.height import height_cm
@@ -851,10 +853,10 @@ def _entry_spec(name, plan, pose, *, _query=None):
                           bridge_scale(height_cm(query.profile(name)), clip_ref_height_m(kind)))
     if math.dist((access["x"] + delta[0], access["z"] + delta[1]), (anchor["x"], anchor["z"])) > .05:
         return None, "entry_transition_mismatch"
-    from app.core.prop_action_paths import _departure_walkable
+    from app.core.prop_action_paths import access_space
     geometry = query.room_geometry(anchor["location_id"], anchor["room_id"])
-    if not geometry or not _departure_walkable((anchor["x"], anchor["z"]), (access["x"], access["z"]),
-                                               geometry, anchor["placement_id"]):
+    if not geometry or not access_space(geometry, anchor["placement_id"]).visible(
+            (access["x"], access["z"]), (anchor["x"], anchor["z"])):
         return None, "entry_transition_blocked"
     return dict(kind=kind, duration_game_s=float(meta["duration_s"]) * max(1, game_speed_factor()), pose_key=pose), ""
 
@@ -883,9 +885,14 @@ def _begin_entry(run):
     for role, name in _members(run):
         with keyed_lock("character_profile", name):
             profile = C.get_character_profile(name)
-            profile["prop_action_entry"] = dict(execution_id=run["execution_id"], **entries[name],
-                access=run["data"]["plans"][role]["access"], anchor=run["data"]["plans"][role]["entry_anchor"])
+            if run["data"]["plans"][role].get("entry_mode") == "direct":
+                profile.pop("prop_action_entry", None)
+            else:
+                profile["prop_action_entry"] = dict(execution_id=run["execution_id"], **entries[name],
+                    access=run["data"]["plans"][role]["access"], anchor=run["data"]["plans"][role]["entry_anchor"])
             C.save_character_profile(name, profile)
+    if not any(e["duration_game_s"] for e in entries.values()):
+        _activate(run)
 
 
 def _activate(run):

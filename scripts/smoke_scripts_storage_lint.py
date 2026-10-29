@@ -150,6 +150,8 @@ PERSISTING_MODULES = {
 # Scripts that operate on a REAL world by design — CLI tools, not checks.
 # Listing them here is the point: they are exempt, not overlooked.
 INTENTIONAL_REAL_WORLD = {
+    # Explicit --storage census; stopped-server guard and mode=ro/query_only DB.
+    "report_prop_access.py",
     # Reads a live world and writes an export next to it.
     "export_world_content.py",
     # One-off migration: rewrites rows of an existing world in place.
