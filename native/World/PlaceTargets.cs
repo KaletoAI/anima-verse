@@ -113,8 +113,13 @@ public partial class PlaceTargets : Node3D
     {
         ClearHover(); HasHover=hit is not null;
         if(hit is not { Diorama:true }) return;
-        SpotMaterial.SetShaderParameter("spot",hit.Slot); SpotMaterial.SetShaderParameter("enabled",true);
-        foreach(var mesh in _diorama)
+        HoverMeshes(_diorama,hit.Slot);
+    }
+    public void HoverMeshes(IEnumerable<MeshInstance3D> meshes,Vector3 spot)
+    {
+        ClearHover(); HasHover=true;
+        SpotMaterial.SetShaderParameter("spot",spot); SpotMaterial.SetShaderParameter("enabled",true);
+        foreach(var mesh in meshes)
         {
             if(!GodotObject.IsInstanceValid(mesh)) continue;
             _overlays.Add((mesh,mesh.MaterialOverlay)); mesh.MaterialOverlay=SpotMaterial;

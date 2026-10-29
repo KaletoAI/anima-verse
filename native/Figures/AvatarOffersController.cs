@@ -108,6 +108,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     private void MapApplied(JsonElement map,double polledAt)
     {
         if(FigureGround.PollIsStale(polledAt,_position.OwnSeatChangeAt)) return;
+        ClearHover();
         _seatMap=map.Clone(); _seatMapAt=polledAt;
         ReconcilePlace(map,polledAt);
         if(_active) { PendingPlaces=RefreshPlacesAsync(); if(PropActions is not null) _=RefreshSemanticOffersAsync(); }
@@ -115,6 +116,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     public void Tick()
     {
         TickProps();
+        if(_hud.Ui.MenuOpen || _hud.Ui.OverlayOpen || _hud.SceneOwned("placeMenu") is not null) ClearHover();
         if(!_active || _disposed) return;
         // Rebuilds also follow tier swaps, re-lifts, and streamed room mounts without another server poll.
         RebuildPlaces();

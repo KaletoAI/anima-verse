@@ -134,7 +134,7 @@ public sealed partial class AvatarOffersController
         _hud.SetState("placeMenu",menu); return true;
     }
     private static JsonObject SemanticOffer(string id,IEnumerable<JsonObject> actions) =>new() {
-        ["id"]=id,["label"]=actions.First()["label"]?.DeepClone(),["group"]="",["capacity"]=1,["free"]=0,
+        ["id"]=id,["label"]=(PropActionMotion.Text(actions.First()["prop_label"]) is { Length: >0 } title ? JsonValue.Create(title) : actions.First()["label"]?.DeepClone()),["group"]="",["capacity"]=1,["free"]=0,
         ["free_slots"]=new JsonArray(),["poses"]=new JsonArray(),["prop_actions"]=new JsonArray(actions.Select(a=>(JsonNode?)a.DeepClone()).ToArray()) };
     private IEnumerable<(PlacedModel Placement,JsonObject[] Actions)> SemanticMeshes()
     {
@@ -153,19 +153,19 @@ public sealed partial class AvatarOffersController
     }
     private static IEnumerable<MeshInstance3D> PropMeshes(Node node)
     { if(node is MeshInstance3D mesh) yield return mesh; foreach(var child in node.GetChildren()) foreach(var m in PropMeshes(child)) yield return m; }
-    private JsonObject? HitSemanticProp(Vec3 origin,Vec3 direction)
+    private (JsonObject Offer,Node3D Node,Vector3 Point)? HitSemanticProp(Vec3 origin,Vec3 direction)
     {
         var o=new Vector3((float)origin.X,(float)origin.Y,(float)origin.Z); var d=new Vector3((float)direction.X,(float)direction.Y,(float)direction.Z).Normalized();
-        double best=double.PositiveInfinity; JsonObject? offer=null;
+        double best=double.PositiveInfinity; (JsonObject Offer,Node3D Node,Vector3 Point)? hit=null;
         foreach(var (rec,actions) in SemanticMeshes()) foreach(var mesh in PropMeshes(rec.Node!))
-            if(mesh.IsVisibleInTree() && MeshRay.Static(mesh,o,d) is double t && t<best) { best=t; offer=SemanticOffer("prop-action:"+rec.Spec.PlacementId,actions); }
-        return offer;
+            if(mesh.IsVisibleInTree() && MeshRay.Static(mesh,o,d) is double t && t<best) { best=t; hit=(SemanticOffer("prop-action:"+rec.Spec.PlacementId,actions),rec.Node!,o+d*(float)t); }
+        return hit;
     }
     private bool PickSemanticProp(Vec3 origin,Vec3 direction,Vector2 viewport)
     {
-        if(HitSemanticProp(origin,direction) is not { } offer) return false;
+        if(HitSemanticProp(origin,direction) is not { } hit) return false;
         var css=_hud.ViewportToCss(viewport);
-        _hud.SetState("placeMenu",new JsonObject { ["x"]=(double)css.X,["y"]=(double)css.Y,["offer"]=offer }); return true;
+        _hud.SetState("placeMenu",new JsonObject { ["x"]=(double)css.X,["y"]=(double)css.Y,["offer"]=hit.Offer }); ClearHover(); return true;
     }
     private void TickProps()
     {

@@ -168,8 +168,39 @@ public static class PropActionsCheck
             offers.SetActive(true); if(offers.PendingPropAction is { } initial) await initial;
             await offers.RefreshSemanticOffersAsync();
             var origin=new AnimaNative.Overview.Vec3(3,2,0); var direction=new AnimaNative.Overview.Vec3(0,-1,0);
+            var prop=builder.Slots["loc-props"].Placements.Single(p=>p.Spec.PlacementId=="bench-56").Node!;
+            static System.Collections.Generic.IEnumerable<MeshInstance3D> Meshes(Node node) {
+                if(node is MeshInstance3D mesh) yield return mesh;
+                foreach(var child in node.GetChildren()) foreach(var m in Meshes(child)) yield return m;
+            }
+            var meshes=Meshes(prop).ToArray();
+            using var prior=new StandardMaterial3D();
+            meshes[0].MaterialOverlay=prior;
+            var old=meshes.Select(m=>m.MaterialOverlay).ToArray();
+            void Restored(string why)=>Is(why,meshes.Select((m,i)=>ReferenceEquals(m.MaterialOverlay,old[i])).All(x=>x));
+            Is("enabled semantic hover",offers.Hover(origin,direction) && meshes.Length>0
+                && meshes.All(m=>ReferenceEquals(m.MaterialOverlay,PlaceTargets.SharedSpotMaterial)));
+            offers.Hover(new(300,2,300),direction); Restored("leaving restores exact overlays");
+            foreach(var row in source.Offers) row!["enabled"]=false;
+            await offers.RefreshSemanticOffersAsync(); offers.Hover(origin,direction); Restored("all disabled has no overlay");
+            Is("all disabled remains clickable",offers.Pick(origin,direction,new Vector2(100,120)));
+            hud.Handlers["closePlaceMenu"](new());
+            source.Offers[1]!["enabled"]=true;
+            source.Offers[0]!["prop_label"]="Fixture bench";
+            await offers.RefreshSemanticOffersAsync();
+            offers.Hover(origin,direction); offers.Hover(origin,direction);
+            offers.SetActive(false); Restored("deactivation restores after repeated hover");
+            offers.SetActive(true); if(offers.PendingPropAction is { } reactivated) await reactivated;
+            offers.Hover(origin,direction);
             Is("blocked mesh opens",offers.Pick(origin,direction,new Vector2(100,120)));
-            Is("blocked prop hover uses the shared cursor hook",offers.Hover(origin,direction) && offers.HasHover);
+            Restored("opening menu restores exact overlays");
+            Is("furniture title",PropActionMotion.Text(hud.SceneOwned("placeMenu")?["offer"]?["label"])=="Fixture bench");
+            foreach(string? label in new string?[]{"",null}) {
+                source.Offers[0]!["prop_label"]=label; await offers.RefreshSemanticOffersAsync();
+                Is("action title fallback",PropActionMotion.Text(hud.SceneOwned("placeMenu")?["offer"]?["label"])=="Fixture solo pose");
+            }
+
+            Is("menu suppresses hover",!offers.Hover(origin,direction) && !offers.HasHover);
             offers.Tick(); Is("semantic menu survives the next frame",hud.SceneOwned("placeMenu") is not null);
             var menu=hud.SceneOwned("placeMenu")!["offer"]!;
             Is("exact actions including blocked",menu["prop_actions"]!.AsArray().Count==2 && menu["prop_actions"]![0]!["enabled"]!.GetValue<bool>()==false);
@@ -183,7 +214,12 @@ public static class PropActionsCheck
             foreach(var row in source.Offers) row!["target"]!["variant_uid"]="wrong";
             await offers.RefreshSemanticOffersAsync();
             Is("stale variant is unpickable",!offers.Pick(origin,direction,new Vector2(100,120)));
-            offers.Dispose(); offers=null;
+            foreach(var row in source.Offers) row!["target"]!["variant_uid"]="variant-56";
+            await offers.RefreshSemanticOffersAsync();
+            offers.Hover(origin,direction);
+            Is("hover before disposal",meshes.All(m=>ReferenceEquals(m.MaterialOverlay,PlaceTargets.SharedSpotMaterial)));
+            offers.Dispose(); offers=null; Restored("disposal restores exact overlays");
+            meshes[0].MaterialOverlay=null;
             Is("teardown detaches bridge and commands",hud.PropActionPrepare is null && hud.PropActionsChanged is null && !hud.Handlers.ContainsKey("pickPropAction")
                 && steering.ReleasePropAction is null && manager.OwnedPropApproaching is null);
             return n;

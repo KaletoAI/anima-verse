@@ -102,12 +102,21 @@ public sealed partial class AvatarOffersController
         _hud.SetState("placeMenu",new JsonObject { ["x"]=(double)css.X,["y"]=(double)css.Y,["offer"]=offer.DeepClone() });
         return true;
     }
+    private void ClearHover() { HasPropHover=false; Places.ClearHover(); }
     public bool HasPropHover { get; private set; }
     public bool HasHover=>HasPropHover || Places.HasHover;
     public bool Hover(Vec3 origin,Vec3 direction)
     {
-        HasPropHover=HitSemanticProp(origin,direction) is not null;
-        if(HasPropHover) { Places.ClearHover(); return true; }
+        if(_hud.Ui.MenuOpen || _hud.Ui.OverlayOpen || _hud.SceneOwned("placeMenu") is not null)
+        { ClearHover(); return false; }
+        var prop=HitSemanticProp(origin,direction);
+        HasPropHover=prop is not null;
+        if(prop is { } semantic) {
+            Places.ClearHover();
+            if(semantic.Offer["prop_actions"]!.AsArray().Any(a=>a?["enabled"] is JsonValue v && v.TryGetValue<bool>(out var enabled) && enabled))
+                Places.HoverMeshes(PropMeshes(semantic.Node),semantic.Point);
+            return true;
+        }
         var hit=CanUse ? Places.Hit(origin,direction) : null;
         Places.Hover(hit); return hit is not null;
     }
