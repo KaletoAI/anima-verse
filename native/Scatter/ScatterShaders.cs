@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using Godot;
+using AnimaNative.Scene;
 
 namespace AnimaNative.Scatter;
 
@@ -21,8 +22,9 @@ namespace AnimaNative.Scatter;
 ///
 /// Fragment side, kept to what three's MeshStandardMaterial does with these inputs: albedo map × colour
 /// (× instance colour for the undergrowth), roughness/metallic, alpha cut, Lambert diffuse + GGX, and no received
-/// shadows (the browser's scatter and undergrowth meshes keep three's <c>receiveShadow = false</c>). Not ported: the camera-avatar
-/// corridor fade (<c>applyOcclusionFade</c>) and the ground hole patch.
+/// shadows (the browser's scatter and undergrowth meshes keep three's <c>receiveShadow = false</c>).
+/// Task 53 / E7-T8 chains the shared per-fragment corridor after wind, including instanced undergrowth.
+/// The ground hole patch remains separate.
 ///
 /// The hemisphere pair as a shader term (Task 26c, like the terrain's in Task 26b — <see cref="World.HemiUniforms"/>): the
 /// scatter and undergrowth nodes sit on <see cref="World.HemiUniforms.Layer"/>, which the two pair lights skip, and the
@@ -47,11 +49,11 @@ public static class ScatterShaders
     {
         string key = $"{amp:0.00}|{textured}|{instanceColor}|{alphaCut}|{cullDisabled}";
         if (Cache.TryGetValue(key, out var s)) return s;
-        s = new Shader { Code = Code(amp, textured, instanceColor, alphaCut, cullDisabled) };
+        s = new Shader { Code = OcclusionShader.Inject(Code(amp, textured, instanceColor, alphaCut, cullDisabled)) };
         // Shader safety (Task S3c): a sway shader that does not compile falls back to the same material without
         // the wind (same uniform names, so every SetShaderParameter still lands) instead of the error colour.
         if (!World.ShaderSafety.Ok(s, $"scatter[sway={amp:0.00}{(textured ? ",tex" : "")}{(instanceColor ? ",inst" : "")}{(alphaCut ? ",cut" : "")}{(cullDisabled ? ",both" : "")}]"))
-            s = new Shader { Code = Code(0, textured, instanceColor, alphaCut, cullDisabled) };
+            s = new Shader { Code = OcclusionShader.Inject(Code(0, textured, instanceColor, alphaCut, cullDisabled)) };
         Cache[key] = s;
         return s;
     }
@@ -183,7 +185,7 @@ void fragment() {{
     public static ShaderMaterial Impostor(Texture2D texture)
         => ImpostorMaterials.GetValue(texture, t =>
         {
-            _impostorShader ??= new Shader { Code = @"shader_type spatial;
+            _impostorShader ??= new Shader { Code = OcclusionShader.Inject(@"shader_type spatial;
 render_mode unshaded, cull_back, depth_draw_opaque, shadows_disabled;
 uniform sampler2D albedo_tex : source_color, filter_linear_mipmap, repeat_disable;
 void fragment() {
@@ -191,7 +193,7 @@ void fragment() {
     ALBEDO = c.rgb;
     ALPHA = c.a;
     ALPHA_SCISSOR_THRESHOLD = 0.5;
-}" };
+}") };
             var m = new ShaderMaterial { Shader = _impostorShader };
             m.SetShaderParameter("albedo_tex", t);
             return m;

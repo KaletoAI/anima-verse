@@ -14,7 +14,7 @@
  * are INSTANCED, so there is no per-instance opacity to turn down and no honest
  * way to pick them by raycast without a ledger and a hysteresis per instance.
  * Instead every affected material carries a patch: fragments whose WORLD
- * position lies within a metre of the segment camera→avatar-chest are thinned
+ * position lies within 1.5 metres of the segment camera→avatar-chest are thinned
  * out by an ordered dither and discarded (`client3d/src/scene/occlusion.ts`).
  *
  * Two things can silently break, and both are checked here without a GPU:
@@ -95,7 +95,7 @@
  *                                            guard then discards nothing: an
  *                                            overview client draws exactly the
  *                                            picture it drew before.
- * The radius is 1.0 m throughout — a shoulder's worth either side of the line
+ * The radius is 1.5 m throughout — a shoulder's worth either side of the line
  * of sight.
  *
  * ---------------------------------------------------------------------------
@@ -113,7 +113,23 @@
  *     that only reads 0 would pass just as well if the function always returned
  *     0. The mutant drops `embodied` from the gate: it then answers a real
  *     strength for an unembodied client, while the truth answers 0.
+ *
+ * [4] Additional segment derivations (Task 53 / E7-T8): d <= .5 collapses
+ * a onto b. Camera (3,5.2,0) minus chest (0,1.2,0) is the 3/4/5 triangle:
+ * clearance .5 moves a by (-.3,-.4,0) to (2.7,4.8,0). Translating feet to
+ * (10,2,20) translates chest to (10,3.2,20) and start to (10,3.2,29.5).
+ * [6] Shader CPU probe: distance to the CLAMPED segment; radius 1.5,
+ * smoothstep from .75 to 1.5. At .75 hide=1, at 1.125 t=.5 so 1-t*t*(3-2*t)
+ * = .5, at 1.5 hide=0. A 2 m point beyond either end is outside; 1.125 m
+ * beyond the chest is the round cap's half rim. Gate 0 and strength 0
+ * hide nothing; strength .5 times rim .5 = .25. Collapsed segments use the
+ * same max(length squared,1e-6) denominator and become point distance.
+ * [7] The shader Bayer formula gives rows [0,8,2,10], [12,4,14,6],
+ * [3,11,1,9], [15,7,13,5], divided by 16. Discard is STRICT hide > threshold:
+ * zero never discards, .5 equals pixel (1,0), exceeds (1,1)=.25,
+ * 1 exceeds the maximum .9375; (5,4) repeats (1,0).
  */
+import { loadVectors, runVectors } from '../../shared/test-vectors/vectors.mjs';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -248,7 +264,12 @@ const allOf = (marks) => marks.map(([, text]) => text);
 /** Metres to the millimetre — the corridor is a view effect, and comparing
  *  raw doubles would only measure the square root. */
 const mm = (v) => Math.round(v * 1000) / 1000;
-const mm3 = (v) => v.map(mm);
+
+function occlusionThreshold(x, y) {
+  x = Math.floor(x) % 4; y = Math.floor(y) % 4;
+  return (Math.abs(y % 2 - x % 2) * 8 + y % 2 * 4
+    + Math.abs(Math.floor(y / 2) - Math.floor(x / 2)) * 2 + Math.floor(y / 2)) / 16;
+}
 
 async function main() {
   const THREE = await import('three');
@@ -382,32 +403,24 @@ async function main() {
   check('only helper calls cutout setEnabled', ((recipe + tiles).match(/cutouts\??\.setEnabled\(/g) || []).length, 1);
   check('helper keeps gate inverse to cutouts', /cutoutOccGate\.value = on \? 0 : 1/.test(tiles), true);
 
-  console.log('\n[4] the arithmetic — occlusionUniforms, by hand');
+  console.log('\n[4,6,7] shared corridor arithmetic and shader probes, by hand');
+  const vectors = runVectors(loadVectors('occlusion'), {
+    occlusionUniforms,
+    occlusionHide: (st, p, gate) => {
+      const ab = st.b.map((v, i) => v - st.a[i]);
+      const dot = (a, b) => a.reduce((sum, v, i) => sum + v * b[i], 0);
+      const t = Math.min(1, Math.max(0, dot(p.map((v, i) => v - st.a[i]), ab) / Math.max(dot(ab, ab), 1e-6)));
+      const d = Math.hypot(...p.map((v, i) => v - st.a[i] - ab[i] * t));
+      const rim = Math.min(1, Math.max(0, (d - st.radius * .5) / (st.radius * .5)));
+      return st.strength * gate * (1 - rim * rim * (3 - 2 * rim));
+    },
+    occlusionThreshold,
+    occlusionDiscard: (hide, x, y) => hide > occlusionThreshold(x, y),
+  });
+  passed += vectors.passed;
+  failed += vectors.failed;
   const feet = { x: 0, y: 0, z: 0 };
-  const gate = occlusionUniforms({ x: 0, y: 1.2, z: 25 }, feet, true);
-  check('the corridor ends at the avatar\'s chest, 1.2 m up', mm3(gate.b), [0, 1.2, 0]);
-  check('the radius rides the constant', gate.radius, OCC_RADIUS_M);
-  check('…and that is 1.5 (sight run 2026-08-16: 1.0 was too narrow)', OCC_RADIUS_M, 1.5);
-  check('at exactly 25 m the gate is shut', mm(gate.strength), 0);
-  check('…and the corridor still starts 0.5 m in front of the lens',
-    mm3(gate.a), [0, 1.2, 24.5]);
-  check('halfway through the 20..25 m blend the strength is halved',
-    mm(occlusionUniforms({ x: 0, y: 1.2, z: 22.5 }, feet, true).strength), 0.5);
-  check('at 20 m it is fully open',
-    mm(occlusionUniforms({ x: 0, y: 1.2, z: 20 }, feet, true).strength), 1);
-  check('…and stays open closer in',
-    mm(occlusionUniforms({ x: 0, y: 1.2, z: 5 }, feet, true).strength), 1);
-  check('beyond the gate nothing is thinned at all',
-    mm(occlusionUniforms({ x: 0, y: 1.2, z: 30 }, feet, true).strength), 0);
-  const above = occlusionUniforms({ x: 0, y: 11.2, z: 0 }, feet, true);
-  check('the 0.5 m clearance follows the line of sight, not an axis',
-    [mm3(above.a), mm(above.strength)], [[0, 10.7, 0], 1]);
-  const overview = occlusionUniforms({ x: 0, y: 1.2, z: 5 }, feet, false);
-  check('an unembodied client is neutral', overview.strength, 0);
-  check('…and so is one whose figure is not on the map yet',
-    occlusionUniforms({ x: 0, y: 1.2, z: 5 }, null, true).strength, 0);
-  check('…while the corridor collapses to a point instead of turning round',
-    mm3(overview.a), mm3(overview.b));
+  check('radius is the hand-derived 1.5 m constant', OCC_RADIUS_M, 1.5);
 
   console.log('\n[5] the RED counter-checks — the chain, and the neutrality');
   const flat = await loadClient(assignInsteadOfChain);

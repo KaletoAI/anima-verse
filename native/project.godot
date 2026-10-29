@@ -27,3 +27,22 @@ renderer/rendering_method="forward_plus"
 ; (2.6 MB at N = 32); the always-cleared cluster buffer drops from 3.8 to 2.6 MB. The world has at most the six prop
 ; lamps (PropLights.PoolSize) and no spot lights, decals or probes, so 32 (Godot's minimum) clusters every one of them.
 limits/cluster_builder/max_clustered_elements=32
+
+[shader_globals]
+
+av_occ_a={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+av_occ_b={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+av_occ_radius={
+"type": "float",
+"value": 1.5
+}
+av_occ_strength={
+"type": "float",
+"value": 0.0
+}

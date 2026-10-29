@@ -822,7 +822,7 @@ vertex stage (Task 23); the table's points inside the s3c frame (z ≥ 36) are c
 Every spatial shader goes through the headless front end once and logs one line; the check requires
 `ground`, `ground-water`, `terrain-plain` (Task 23), `recipe[opaque]`, `recipe[translucent]` and `recipe[opaque,both-sides]` to be
 `compiled (N uniforms)` with N = the shader's own uniform count, and the plan hull's cut shader
-`cut[std+cutouts]` with **18**: the generator's 14 uniforms of a glTF material without emission/normal/AO/alpha
+`cut[std+corridor+cutouts]` with **19** (Task 53: +1 material `occ_gate`; four corridor globals do not count): the generator's 14 uniforms of a glTF material without emission/normal/AO/alpha
 (albedo, texture_albedo, albedo_texture_size, point_size, roughness, texture_metallic, metallic_texture_channel,
 texture_roughness, specular, metallic, uv1_scale, uv1_offset, uv2_scale, uv2_offset) + cut_pts, cut_off, cut_len,
 cut_on.
@@ -980,7 +980,7 @@ files come from this directory (heightfield, tile (0,0) with h[j][i] = 2i + j at
 
 - **F1** hull_full's material had no metallicFactor (glTF 1.0, untextured) → **0**; box keeps **1** (textured) →
   1 neutralised at the boot, **2** once hull_low is loaded by the first swap.
-- **F2** cut shaders: `cut[std+cutouts+pad]` **18** (14 + 4, padding is a define), `cut[std+clip]` **15**,
+- **F2** cut shaders: `cut[std+corridor+cutouts+pad]` **19** (14 + 4 + Task 53 corridor gate, padding is a define), `cut[std+clip]` **15**,
   `cut[std+plane]` **15**, the placeholder `cut[shaderN+plane]` **N + 1** with N = the recipe placeholder shader's
   count. 5 cut placements (hull, diorama, table, crate, area), one surface each, the stone none.
 - **F3** hull: scale 10 / 10 = 1 → padding 0.25 (square 0.0625); world cutout x 61…67, z 117…123: (64, 120) inside,

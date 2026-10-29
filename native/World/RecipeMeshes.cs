@@ -264,6 +264,8 @@ public static class RecipeMeshes
             Shell = shellB.Commit(materials, name + "Shell").Select(x => x.Mesh).ToList(),
             Measured = measured,
         };
+        // Task 53: only far-shell copies take the corridor; interior/outdoor recipe pieces retain their look.
+        foreach (var shell in layers.Shell) OcclusionMaterials.Apply(shell);
         return (layers, stats);
     }
 

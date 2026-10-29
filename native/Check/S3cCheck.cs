@@ -150,11 +150,15 @@ public static class S3cCheck
                        got.ToString());
                 Expect($"s3c cutout off keeps ({px},{pz})", !Scene.CutShader.Discards(u0, new Overview.Vec3(px, 5, pz), false), "");
             }
-            Expect("s3c shader cut[std+cutouts]", ShaderSafety.Lines.Contains("shader cut[std+cutouts]: compiled (18 uniforms)"),
+            // Task 53: the plan-hull clone adds occ_gate; four corridor globals are not material uniforms.
+            Expect("s3c shader cut[std+corridor+cutouts]", ShaderSafety.Lines.Contains("shader cut[std+corridor+cutouts]: compiled (19 uniforms)"),
                    string.Join(" | ", ShaderSafety.Lines));
+            Expect("s3c closed hull corridor gate", handle.Corridor
+                   && handle.Entries.All(e => e.Material.GetShaderParameter("occ_gate").AsDouble() == 1), "");
             // The crossfade opens them at f > 0.03: loc-open is the open location; 1 frame at 1/60 s gives f = 1 − e^(−1/15)
             // = 0.0645 > 0.03.
             builder.TickView(1.0 / 60, new Vector3(64, 30, 160));
+            Expect("s3c open hull corridor gate", handle.Entries.All(e => e.Material.GetShaderParameter("occ_gate").AsDouble() == 0), "");
             Expect("s3c cutouts open with the fade", handle.CutoutsOn
                    && handle.Entries.All(e => (float)e.Material.GetShaderParameter("cut_on") == 1f), $"fade {openSlot.Fade.Fade}");
 

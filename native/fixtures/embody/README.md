@@ -90,3 +90,21 @@ from an explicit worldmap row carrying its `place`; a successful activity
 answer alone does not synthesize a row. `hud_scene.json` is an explicit HUD bus snapshot (`lockedRooms`,
 `lockedLocations`, `lockedLoc`, `movementLocked`, `partyLeader`), ready for
 the later check to inject. It is not an API response or a new worldmap protocol.
+
+## Corridor check (Task 53 / E7-T8)
+
+`--check=embody` also builds these unchanged fixtures for `OcclusionCheck`.
+Feet (-3,.01,1) give chest (-3,1.21,1). A camera at (-3,1.21,8)
+starts its corridor at Z=7.5; distance 7 gives strength 1. The south wall
+from (2.4,4) to (-6,4), Y=0..3, contains (-3,1.21,4), so that fragment
+has segment distance 0 and hide 1. The fragment at (0,1.21,4) is 3 m
+away, beyond radius 1.5, and stays whole. Moving the camera to
+(-3,1.21,-6) puts the original wall fragment 3 m beyond the chest;
+its hide returns to 0. First person, overview and absent avatars always
+have strength 0. These are shader-binding and CPU discard probes; the
+headless renderer does not verify pixels.
+
+The check also proves shell clones leave interior materials alone, wind and
+instance color survive on scatter/undergrowth, impostors carry the corridor
+while their bake does not, and plan-hull cut clones toggle their corridor gate
+1 → 0 → 1 as cutouts open/close while sharing their shader program.

@@ -168,6 +168,9 @@ public partial class Main
     private void PoseEmbody()
     {
         var figure = Embodied ? AvatarFigure() : null;
+        // Task 53: camera has its final third-person pose; first person and overview clear the shared corridor.
+        OcclusionMaterials.Update(_camera?.GlobalPosition ?? Vector3.Zero, figure?.GlobalPosition,
+            Embodied && !Leaving, _camera?.FirstPerson == true);
         if (_embodiedBody != figure)
         {
             if (_embodiedBody is { } old && IsInstanceValid(old))
@@ -239,6 +242,7 @@ public partial class Main
 
     private void DetachEmbody()
     {
+        OcclusionMaterials.Update(Vector3.Zero, null, false, false);
         ResetMinimap();
         SetEntryPin(null);
         _avatarOffers?.Dispose(); _avatarOffers = null;

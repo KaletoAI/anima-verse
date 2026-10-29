@@ -69,9 +69,10 @@ public static class FidelityCheck
             // Generator uniforms of a glTF material without emission/normal/AO/alpha: albedo, texture_albedo,
             // albedo_texture_size, point_size, roughness, texture_metallic, metallic_texture_channel, texture_roughness,
             // specular, metallic, uv1_scale, uv1_offset, uv2_scale, uv2_offset = 14; cutouts +4 (cut_pts, cut_off, cut_len,
-            // cut_on), clip +1 (clip_pts), plane +1 (cut_plane). The placeholder's source is the recipe placeholder shader.
+            // cut_on), clip +1 (clip_pts), plane +1 (cut_plane). Task 53 adds occ_gate +1 to the hull; its four
+            // globals are shared, not material uniforms. The placeholder's source is the recipe placeholder shader.
             var placeholderSrc = RecipeMaterials.ShaderFor(true, false).GetShaderUniformList().Count;
-            foreach (var (name, count) in new[] { ("cut[std+cutouts+pad]", 18), ("cut[std+clip]", 15), ("cut[std+plane]", 15),
+            foreach (var (name, count) in new[] { ("cut[std+corridor+cutouts+pad]", 19), ("cut[std+clip]", 15), ("cut[std+plane]", 15),
                                                   ($"cut[shader{placeholderSrc}+plane]", placeholderSrc + 1) })
                 Expect($"F2 shader {name}", ShaderSafety.Lines.Contains($"shader {name}: compiled ({count} uniforms)"),
                        string.Join(" | ", ShaderSafety.Lines.Where(l => l.Contains("cut["))));

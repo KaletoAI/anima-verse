@@ -233,7 +233,11 @@ public sealed partial class WorldBuilder
         var spec = rec.Spec;
         var node = rec.Node!;
         bool keep = spec.Display == "ground" || spec.PlanHull;
-        if (!keep) fade.RoofParts.Add(node);
+        if (!keep)
+        {
+            fade.RoofParts.Add(node);
+            if (!rec.Placeholder) OcclusionMaterials.Apply(node);
+        }
         if (spec.Display == "ground") fade.GroundModels.Add(node);
         if (!rec.Placeholder && spec.Cutouts.Length > 0)
         {
@@ -268,7 +272,8 @@ public sealed partial class WorldBuilder
             if (!rec.Placeholder && spec.ClipOutline.Length >= 3)
                 clip = spec.ClipOutline.Take(ClipMath.ClipPointLimit).Select(p => W(p.X, p.Z)).ToList();
         }
-        return CutMaterials.Apply(node, clip, cutouts, plane, n => group.Transform * ChainTo(n, group));
+        return CutMaterials.Apply(node, clip, cutouts, plane, n => group.Transform * ChainTo(n, group),
+            corridor: spec.Role == "building" && spec.PlanHull && spec.Display != "ground");
     }
 
     /// <summary><c>cutPlaneFor</c>: the payload plane through the frame of the node the placement hangs in.</summary>

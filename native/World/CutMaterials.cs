@@ -25,6 +25,8 @@ public sealed class CutHandle
     public bool HasPlane => Entries.Any(e => e.Uniforms.HasPlane);
     /// <summary>The cutout switch (<c>uCutOn</c>): starts OFF, like the browser's — a tile is built in the far view.</summary>
     public bool CutoutsOn { get; private set; }
+    /// <summary>Task 53: plan-hull clones gate the corridor inversely to their cutout switch.</summary>
+    public bool Corridor { get; internal set; }
 
     /// <summary><c>setEnabled(on)</c>: holes on (interior view) or off (far view) — a uniform, never a recompile.</summary>
     public void SetCutoutsEnabled(bool on)
@@ -32,7 +34,11 @@ public sealed class CutHandle
         if (CutoutsOn == on) return;
         CutoutsOn = on;
         foreach (var e in Entries)
-            if (e.Uniforms.HasCutouts) e.Material.SetShaderParameter("cut_on", on ? 1f : 0f);
+            if (e.Uniforms.HasCutouts)
+            {
+                e.Material.SetShaderParameter("cut_on", on ? 1f : 0f);
+                if (Corridor) e.Material.SetShaderParameter("occ_gate", on ? 0f : 1f);
+            }
     }
 
     /// <summary>The depth cut's world plane moved with its frame (a re-datum): write it again.</summary>
@@ -75,11 +81,11 @@ public static class CutMaterials
     /// world plane. Null when there is nothing to cut.
     /// </summary>
     public static CutHandle? Apply(Node3D placed, IReadOnlyList<P2>? clipWorld, IReadOnlyList<IReadOnlyList<P2>>? cutoutsWorld,
-                                   CutPlaneData? plane, Func<Node3D, Transform3D> frame)
+                                   CutPlaneData? plane, Func<Node3D, Transform3D> frame, bool corridor = false)
     {
         var probe = CutShader.Pack(clipWorld, cutoutsWorld, 0, plane);
         if (!probe.Any) return null;
-        var handle = new CutHandle();
+        var handle = new CutHandle { Corridor = corridor };
         // One clone per (source material, padding) within the placement: meshes sharing a material share its cut twin.
         var converted = new Dictionary<(Material, double), ShaderMaterial?>();
         foreach (var mi in Walk(placed).OfType<MeshInstance3D>())
@@ -96,7 +102,7 @@ public static class CutMaterials
             {
                 var src = mi.GetSurfaceOverrideMaterial(s) ?? mi.Mesh.SurfaceGetMaterial(s)
                           ?? new StandardMaterial3D { DiffuseMode = BaseMaterial3D.DiffuseModeEnum.Lambert, DisableReceiveShadows = true };
-                if (!converted.TryGetValue((src, padding), out var mat)) converted[(src, padding)] = mat = Convert(src, u);
+                if (!converted.TryGetValue((src, padding), out var mat)) converted[(src, padding)] = mat = Convert(src, u, corridor);
                 if (mat is null) { handle.Fallbacks++; TotalFallbacks++; continue; }
                 var before = mi.GetSurfaceOverrideMaterial(s);
                 mi.SetSurfaceOverrideMaterial(s, Plain ? before : mat);
@@ -178,7 +184,7 @@ public static class CutMaterials
     /// own code; null when it cannot be (unsupported feature, a shader that does not compile) — the surface then keeps its
     /// own material, uncut, and the reason is logged once.
     /// </summary>
-    public static ShaderMaterial? Convert(Material src, CutUniforms u)
+    public static ShaderMaterial? Convert(Material src, CutUniforms u, bool corridor = false)
     {
         string? baseCode;
         string kind;
@@ -203,23 +209,30 @@ public static class CutMaterials
                 return null;
         }
         string code;
-        try { code = CutShader.Inject(baseCode, u); }
+        try
+        {
+            code = u.Any ? CutShader.Inject(baseCode, u) : baseCode;
+            if (corridor) code = OcclusionShader.Inject(code);
+        }
         catch (ArgumentException e) { LogOnce($"cut: {kind} keeps its look uncut ({e.Message})"); return null; }
         if (!Shaders.TryGetValue(code, out var shader))
         {
             shader = new Shader { Code = code };
             Shaders[code] = shader;
         }
-        if (!ShaderSafety.Ok(shader, ShaderName(kind, u))) return null;
+        if (!ShaderSafety.Ok(shader, ShaderName(kind + (corridor ? "+corridor" : ""), u))) return null;
         var mat = new ShaderMaterial { Shader = shader, RenderPriority = src.RenderPriority, NextPass = src.NextPass };
         if (src is StandardMaterial3D s3 && spec is not null) FeedStandard(mat, s3, spec);
         else if (src is ShaderMaterial sm2)
             foreach (var p in sm2.Shader.GetShaderUniformList())
             {
                 var name = p.AsGodotDictionary()["name"].AsString();
-                mat.SetShaderParameter(name, sm2.GetShaderParameter(name));
+                if (!name.StartsWith("av_occ_", StringComparison.Ordinal))
+                    mat.SetShaderParameter(name, sm2.GetShaderParameter(name));
             }
         FeedCut(mat, u);
+        // Task 53: make the closed hull gate explicit (GetShaderParameter does not expose shader defaults).
+        if (corridor) mat.SetShaderParameter("occ_gate", 1f);
         return mat;
     }
 
