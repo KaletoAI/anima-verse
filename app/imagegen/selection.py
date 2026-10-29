@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from app.core.log import get_logger
 from app.core.provider_queue import TooManyJobsError
-from app.imagegen.base import (BackendBusyError, BackendFailedError,
+from app.imagegen.base import (BackendBusyError, BackendFailedError, ChannelOverflow,
                                GatewayRejectedError, GpuTaskCancelled, GenerationCancelled,
                                HubJobLost, ImageBackend, MediaGenerationDisabled,
                                BackendNotApplicableError)
@@ -261,6 +261,8 @@ class BackendPool:
         2026-07-18 on user decision — the old fallback chain was no longer
         surfaced anywhere in the UI). Error semantics stay:
 
+        - ChannelOverflow = pending work moved to another channel: no cooldown,
+          re-raised typed for the routing caller.
         - BackendBusyError = load, not a defect: NO cooldown, re-raised
           typed so the queue boundary can retry (see base.BackendBusyError).
         - 4xx payload errors and GatewayRejectedError (the gateway refused
@@ -303,6 +305,9 @@ class BackendPool:
                     backend.name, backend.cost, character_name or "-")
         try:
             result = op(backend)
+        except ChannelOverflow:
+            # Pending work moved channels; the backend is still healthy.
+            raise
         except BackendBusyError:
             # Busy is not broken: a timeout / 429 / 503 / gateway queue wait
             # says the GPU is working. No cooldown, no other backend — the

@@ -552,6 +552,27 @@ class ProviderQueue:
             return self._submit_gpu_task(task_type, priority, callable_fn,
                                          agent_name=agent_name, label=label)
 
+    def free_gpu_slots(self) -> int:
+        """Unreserved GPU capacity, including pending work on this channel."""
+        with self._lock:
+            pending = sum(t._gpu_callable is not None and t.status == "pending"
+                          for t in self._pending_tasks)
+            return max(0, self._semaphore.limit - self._semaphore.held() - pending)
+
+    def _withdraw_gpu_task(self, task: LLMTask) -> bool:
+        """Withdraw pending GPU work atomically against worker claim and cancel."""
+        with self._lock:
+            if (task._gpu_callable is None or task.status != "pending"
+                    or task._cancelled or task not in self._pending_tasks):
+                return False
+            task._withdrawn = True
+            task.status = "overflow"
+            self._pending_tasks.remove(task)
+            self._history.append(task)
+            if len(self._history) > self._history_limit:
+                self._history = self._history[-self._history_limit:]
+            return True
+
     def _submit_gpu_task(
         self,
         task_type: str,
@@ -569,6 +590,7 @@ class ProviderQueue:
             model=label)
         task.trace_id, task.trace_kind = _trace_fields()
         task._gpu_callable = callable_fn
+        task._withdrawn = False
 
         with self._lock:
             self._seq_counter += 1
@@ -581,8 +603,26 @@ class ProviderQueue:
 
         self._ensure_workers()
 
-        # Block until worker sets the result
-        task._done_event.wait()
+        # Only the routed backend named by the caller may be withdrawn.
+        from app.imagegen.base import ChannelOverflow, OVERFLOW_WATCH
+        watch = OVERFLOW_WATCH.get()
+        if (watch is not None and watch.backend_name == self.provider.name
+                and watch.after_s > 0):
+            started = time.monotonic()
+            wait_slice = min(1.0, watch.after_s)
+            while not task._done_event.wait(wait_slice):
+                waited = time.monotonic() - started
+                if waited >= watch.after_s:
+                    with self._lock:
+                        pending = task.status == "pending" and not task._cancelled
+                    if pending:
+                        target = watch.pick()
+                        if target is not None and self._withdraw_gpu_task(task):
+                            raise ChannelOverflow(self.provider.name, waited, target)
+                wait_slice = 1.0
+        else:
+            # Block until worker sets the result (unchanged without a watch).
+            task._done_event.wait()
 
         # Remove from pending
         with self._lock:
@@ -1421,8 +1461,8 @@ class ProviderQueue:
                         return
                 continue
 
-            # Skip cancelled tasks
-            if task._cancelled:
+            # Skip cancelled or withdrawn tasks before taking a permit.
+            if task._cancelled or (task._gpu_callable is not None and task._withdrawn):
                 self._queue.task_done()
                 continue
 
@@ -1499,8 +1539,8 @@ class ProviderQueue:
                 self._requeue(prio, seq, task)
                 continue
 
-            # Re-check cancelled after taking the slot
-            if task._cancelled:
+            # Re-check cancelled or withdrawn after taking the slot.
+            if task._cancelled or (task._gpu_callable is not None and task._withdrawn):
                 self._release_slot(task)
                 self._queue.task_done()
                 continue
@@ -1521,9 +1561,20 @@ class ProviderQueue:
                     self._requeue(prio, seq, task)
                     continue
 
+            # Claim and withdrawal decide under the same lock, even after a
+            # long wait on the serialize gate. Only the winner owns execution.
             with self._lock:
-                self._current_tasks.append(task)
-            task.status = "running"
+                skipped = task._cancelled or (
+                    task._gpu_callable is not None and task._withdrawn)
+                if not skipped:
+                    self._current_tasks.append(task)
+                    task.status = "running"
+            if skipped:
+                if self._serialize_gate is not None:
+                    self._serialize_gate.release()
+                self._release_slot(task)
+                self._queue.task_done()
+                continue
             task.started_at = utc_now_iso()
             _attach_duration_estimate(task)
             logger.info("[%s] Verarbeite: %s (%s) agent=%s",
