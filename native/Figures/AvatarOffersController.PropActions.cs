@@ -44,6 +44,7 @@ public sealed partial class AvatarOffersController
         _figures.PropEntryError=message=>Toast?.Invoke(message);
         props.PauseChanged+=PropPauseChanged;
         props.NotifyChanged+=PropNotifyChanged;
+        props.RefreshFailed+=PropRefreshFailed;
         _hud.PropActionPrepare=props.PrepareAsync;
         _hud.PropActionsChanged=id=> { _propBurstUntil=_clock()+5000; PendingPropAction=ObservePropAsync(()=>props.ChangedAsync(id)); };
         _hud.Handlers["pickPropAction"]=args=> {
@@ -77,6 +78,7 @@ public sealed partial class AvatarOffersController
         _position.Channel.ReportsPaused=props.Paused;
         _steering.PropPreparationPending=props.Paused;
     }
+    private void PropRefreshFailed(string message) { if(!_disposed) Toast?.Invoke(message); }
     private void PropNotifyChanged(string? id) { _hud.NotifyPropActionsChanged(id); _propBurstUntil=_clock()+5000; }
     private async Task ObservePropAsync(Func<Task> work)
     {
@@ -177,7 +179,7 @@ public sealed partial class AvatarOffersController
     private void DetachProps()
     {
         if(PropActions is not { } props) return;
-        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.Dispose();
+        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.Dispose();
         _hud.PropActionPrepare=null; _hud.PropActionsChanged=null;
         foreach(string name in new[]{"pickPropAction","respondPropAction","cancelPropAction"}) _hud.Handlers.Remove(name);
         _figures.OwnedPropApproaching=null; _figures.SuppressAvatarPropEntry=null; _figures.PropEntryError=null; _position.PropMotionOwned=null; _position.ManualPropWithdrawn=null;

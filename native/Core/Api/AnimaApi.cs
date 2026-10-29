@@ -426,5 +426,6 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
     {
         _streams.Dispose();
         _http.Dispose();
+        _byteCache?.FlushIndex();
     }
 }

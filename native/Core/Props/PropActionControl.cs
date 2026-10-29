@@ -32,6 +32,8 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     public Func<Task> RefreshWorld { get; set; }=()=>Task.CompletedTask;
     public event Action? PauseChanged;
     public event Action<string?>? NotifyChanged;
+    /// <summary>Task 67 #5: reconciliation errors are observable without replacing the mutation verdict.</summary>
+    public event Action<string>? RefreshFailed;
     public JsonObject? OwnedRun => (_state["current"] as JsonArray ?? new()).OfType<JsonObject>()
         .FirstOrDefault(r=>!_released.Contains(PropActionMotion.Text(r["execution_id"])) && PropActionMotion.Text(r["status"]) is "approaching" or "active")
         ?? (_state["outgoing"] as JsonArray ?? new()).OfType<JsonObject>()
@@ -67,7 +69,11 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
         try { await PrepareAsync(id); return await mutation(); }
         finally
         {
-            if(!_disposed) { NotifyChanged?.Invoke(id); await ChangedAsync(id); }
+            if(!_disposed)
+            {
+                try { NotifyChanged?.Invoke(id); await ChangedAsync(id); }
+                catch(Exception e) { RefreshFailed?.Invoke(e.Message); }
+            }
         }
     }
     /// <summary>Task 57: success alone tombstones the captured journey; refusal leaves it retriable.</summary>

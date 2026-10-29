@@ -77,6 +77,18 @@ internal static class FigureCacheCheck
     {
         string dir = Path.Combine(fixtures, "bridges");
         var origin = new Uri("https://figure.fixture.test");
+        // Task 67 #2: identity reuses the validated byte instance, even after its file is unavailable.
+        var identityDisk = new DiskCache(Path.Combine(root, "identity"), origin);
+        var identityCache = new FigureCache(identityDisk);
+        const string identityUrl = "/assets/animation-clips/task67.fbx";
+        var identityBody = new byte[] { 6, 7 };
+        identityDisk.Store(identityUrl, identityBody, "one", new(true, true, identityDisk.Now, "immutable"));
+        var known = identityDisk.Read(identityUrl)!.Value;
+        File.Delete(Path.Combine(identityDisk.DirectoryPath, known.Entry.File));
+        expect(await identityCache.IdentityAsync(identityUrl, known.Body) == DerivedKeys.Of(identityUrl, "one", known.Entry.Digest),
+            "Task 67 identity uses known digest without reopening or hashing the body");
+        expect(await identityCache.IdentityAsync(identityUrl, new byte[] { 6, 7 }) is null,
+            "Task 67 unknown byte instance cannot borrow an identity");
         var raw = new FixtureSource(dir, fixtures);
         var transport = new Transport(raw);
         transport.Aliases[ClipNew] = "/assets/animation-clips/get-up-bed.fbx?v=bridgegetupbed";

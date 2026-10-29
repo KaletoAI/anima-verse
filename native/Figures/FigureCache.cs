@@ -40,12 +40,12 @@ public sealed class FigureCache(DiskCache disk)
     private static string EngineVersion() => Godot.Engine.GetVersionInfo()["string"].AsString();
     /// <summary>Only reuse validated HTTP input. no-store, foreign origins and credential URLs never produce an
     /// identity here. Content SHA supplements ETag, covering a stale-v response and validators reused by a server.</summary>
-    public async Task<string?> IdentityAsync(string url, byte[] bytes)
+    public Task<string?> IdentityAsync(string url, byte[] bytes) => Task.Run(() =>
     {
-        var hit = await Task.Run(() => Disk.Read(url));
-        return hit is { } h && h.Entry.Digest.Equals(DerivedKeys.Hash(bytes), StringComparison.OrdinalIgnoreCase)
-            ? DerivedKeys.Of(url, h.Entry.Etag, h.Entry.Digest) : null;
-    }
+        // Task 67 #2: keep worker-lock contention off the engine thread; reuse this validated input's digest.
+        var entry = Disk.KnownEntry(url, bytes);
+        return entry is not null ? DerivedKeys.Of(url, entry.Etag, entry.Digest) : null;
+    });
     public string ImportKey(string url, string identity)
         => "derived:import:" + DerivedKeys.Of(url, identity, DerivedKeys.ClipImportVersion, Engine);
 

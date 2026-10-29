@@ -61,6 +61,7 @@ public sealed class AvatarPositionController : IDisposable
         _clock = clock ?? (() => source.MonotonicMs);
         Channel = channel ?? new PositionChannel(source.ReportPositionAsync, _clock);
         Channel.CanReport = () => CanReport;
+        Channel.CanPrepareReport = () => _active && !_disposed && _readiness.PendingSnap is null && _steering.Correction is null;
         Channel.Adopted += answer => { RoomId = answer.RoomId; LocationId=Text(answer.Body,"location_id"); _steering.RoomId = RoomId; };
         Channel.Refused += (point, home) => steering.RememberRefused(point, home ?? CurrentPoint());
         Channel.Corrected += CorrectTo;

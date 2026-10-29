@@ -34,23 +34,25 @@ public class PropActionControlTests
         world.SetResult(); await refresh; Assert.False(control.Paused);
     }
     [Fact]
-    public async Task PreparationAwaitsRealAndFinalWritesAndFailsClosed()
+    public async Task PreparationAwaitsRealAndFinalWritesAndAllowsHttpRefusal()
     {
         var writes=new List<TaskCompletionSource<PositionAnswer>>(); var points=new List<PositionReport>();
-        using var channel=new PositionChannel((r,_)=>{ points.Add(r); var t=new TaskCompletionSource<PositionAnswer>(); writes.Add(t); return t.Task; },()=>1000,"fixture");
+        var finalStarted = new TaskCompletionSource();
+        double now = 1000;
+        using var channel=new PositionChannel((r,_)=>{ points.Add(r); var t=new TaskCompletionSource<PositionAnswer>(); writes.Add(t); if(writes.Count==2) finalStarted.TrySetResult(); return t.Task; },()=>now,"fixture");
         channel.Tick(new P2(0,0),true);
         channel.Tick(new P2(1,0),true);
         var preparing=channel.PreparePropActionAsync(new P2(1,0),false);
         Assert.True(channel.ReportsPaused); Assert.False(preparing.IsCompleted);
-        writes[0].SetResult(Answer()); await Task.Yield();
+        writes[0].SetResult(Answer()); await finalStarted.Task.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(2,points.Count); Assert.Equal(1,points[1].x); Assert.False(preparing.IsCompleted);
         writes[1].SetResult(Answer()); await preparing;
         Assert.True(channel.ReportsPaused);
-        channel.ReportsPaused=false;
+        channel.ReportsPaused=false; now = 2000;
         channel.Tick(new P2(2,0),true);
         var refused=channel.PreparePropActionAsync(new P2(2,0),false);
         writes[^1].SetResult(Answer(409));
-        await Assert.ThrowsAsync<InvalidOperationException>(()=>refused);
+        await refused;
     }
     private static PositionAnswer Answer(int status=200) =>new(status,System.Text.Json.JsonSerializer.SerializeToElement(new { ok=status==200 }));
     [Fact]
@@ -78,5 +80,42 @@ public class PropActionControlTests
         await control.PrepareAsync("a"); var changed=control.ChangedAsync("a"); await control.PrepareAsync("b");
         state.SetResult("{\"current\":[],\"outgoing\":[]}"); await changed; Assert.True(control.Paused);
         await control.ChangedAsync("b"); Assert.False(control.Paused);
+    }
+    /// <summary>Task 67 #5: failed reconciliation cannot undo an accepted cancel or its local tombstone/reset.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AcceptedReleaseSurvivesStateOrWorldRefreshFailure(bool failWorld)
+    {
+        var transport = new Transport();
+        transport.Reply = req => req.Method == HttpMethod.Post ? Task.FromResult("{\"status\":\"cancelled\"}")
+            : failWorld ? Task.FromResult("{\"current\":[],\"outgoing\":[]}")
+            : Task.FromException<string>(new InvalidOperationException("state offline"));
+        using var api = new AnimaApi("http://fixture/", transport);
+        using var control = new PropActionControl(api, () => 0)
+            { RefreshWorld = () => Task.FromException(new InvalidOperationException("view changed")) };
+        var errors = new List<string>(); control.RefreshFailed += errors.Add;
+        int resets = 0;
+        await control.ReleaseAsync("run", "journey", () => resets++);
+        Assert.Equal(1, resets);
+        Assert.Equal(new[] { failWorld ? "view changed" : "state offline" }, errors);
+        Assert.True(control.ManualGate.Withdrawn("journey"));
+        Assert.True(control.Paused);
+        transport.Reply = _ => Task.FromResult("{\"current\":[],\"outgoing\":[]}");
+        control.RefreshWorld = () => Task.CompletedTask;
+        await control.RefreshAsync();
+        Assert.False(control.Paused);
+    }
+
+    [Fact]
+    public async Task MutationFailureSurvivesRefreshFailure()
+    {
+        var transport = new Transport { Reply = _ => Task.FromException<string>(new InvalidOperationException("refresh failed")) };
+        using var api = new AnimaApi("http://fixture/", transport);
+        using var control = new PropActionControl(api, () => 0);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => control.MutateAsync(
+            () => Task.FromException<System.Text.Json.JsonDocument>(new InvalidOperationException("mutation failed"))));
+        Assert.Equal("mutation failed", error.Message);
+        Assert.True(control.Paused);
     }
 }

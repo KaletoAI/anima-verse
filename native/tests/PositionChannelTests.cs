@@ -69,4 +69,70 @@ public sealed class PositionChannelTests
         var broken = new PositionChannel((_, _) => Task.FromException<PositionAnswer>(new InvalidOperationException()), () => now);
         broken.Tick(new P2(1,0),true); Assert.True(broken.Dirty);
     }
+    /// <summary>Task 67 #1: HTTP refusals/throttles finish preparation; transport failure alone aborts it.</summary>
+    [Theory]
+    [InlineData(200, "{\"ok\":false,\"throttled\":true}")]
+    [InlineData(200, "{\"ok\":false,\"stale\":true}")]
+    [InlineData(409, "{\"detail\":{\"reason\":\"too_far\",\"pos\":{\"x\":0,\"z\":0}}}")]
+    [InlineData(403, "{\"detail\":{\"reason\":\"locked\",\"pos\":{\"x\":0,\"z\":0}}}")]
+    public async Task PropPreparationAllowsHttpAnswersAndAppliesCorrections(int status, string body)
+    {
+        int calls = 0, corrections = 0;
+        using var channel = new PositionChannel((_, _) => Task.FromResult(++calls == 1
+            ? Answer("{\"ok\":false,\"throttled\":true}") : Answer(body, status)), () => 1000);
+        channel.Corrected += p => { Assert.Equal(new P2(0, 0), p); corrections++; };
+        channel.Tick(new P2(1, 0), true);
+        await channel.PreparePropActionAsync(new P2(1, 0), false);
+        Assert.Equal(2, calls);
+        Assert.Equal(status >= 400 ? 1 : 0, corrections);
+        Assert.Equal(status < 400, channel.Dirty);
+    }
+
+    /// <summary>Task 67 #1: pace the final report after the previous answer, including a slow flight.</summary>
+    [Fact]
+    public async Task PropPreparationWaitsOutServerThrottleAfterInFlightAnswer()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var first = new TaskCompletionSource<PositionAnswer>();
+        var sent = new List<double>();
+        using var channel = new PositionChannel((_, _) => {
+            sent.Add(watch.Elapsed.TotalMilliseconds);
+            return sent.Count == 1 ? first.Task : Task.FromResult(Answer("{\"ok\":true}"));
+        }, () => 1000 + watch.Elapsed.TotalMilliseconds);
+        channel.Tick(new P2(0, 0), true);
+        channel.Tick(new P2(1, 0), true);
+        var preparing = channel.PreparePropActionAsync(new P2(1, 0), false);
+        double repliedAt = watch.Elapsed.TotalMilliseconds;
+        first.SetResult(Answer("{\"ok\":true}"));
+        await preparing;
+        Assert.Equal(2, sent.Count);
+        Assert.True(sent[1] - repliedAt >= 245, $"final report followed answer by {sent[1] - repliedAt}ms");
+    }
+
+    /// <summary>Task 67 #4: a safety gate raised during the current flight also fences the reserved final point.</summary>
+    [Fact]
+    public async Task PropPreparationKeepsSafetyGateWhileDraining()
+    {
+        var first = new TaskCompletionSource<PositionAnswer>();
+        int calls = 0;
+        bool safe = true;
+        using var channel = new PositionChannel((_, _) => { calls++; return first.Task; }, () => 1000)
+            { CanReport = () => safe };
+        channel.Tick(new P2(0, 0), true);
+        channel.Tick(new P2(1, 0), true);
+        var preparing = channel.PreparePropActionAsync(new P2(1, 0), false);
+        safe = false;
+        first.SetResult(Answer("{\"ok\":true}"));
+        await preparing;
+        Assert.Equal(1, calls);
+        Assert.True(channel.Dirty);
+    }
+
+    [Fact]
+    public async Task PropPreparationStillFailsOnTransportError()
+    {
+        using var channel = new PositionChannel((_, _) => Task.FromException<PositionAnswer>(new InvalidOperationException("offline")), () => 1000);
+        channel.Tick(new P2(1, 0), true);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => channel.PreparePropActionAsync(new P2(1, 0), false));
+    }
 }

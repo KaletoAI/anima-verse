@@ -16,7 +16,7 @@ namespace AnimaNative.Embody;
 public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task<PositionAnswer>> write,
     Func<double> clock, string? session = null) : IDisposable
 {
-    public const int ReportMs = 330, TimeoutMs = 8000, RefusalQuietMs = 4000;
+    public const int ReportMs = 330, ServerThrottleMs = 250, TimeoutMs = 8000, RefusalQuietMs = 4000;
     public const double SnapM = 2, CorrectWalkM = 8, CorrectSeconds = 3, CorrectArriveM = .2;
     public string Session { get; } = session ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
     public DriverState Driver { get; private set; } = new(DriverKind.PLAYER);
@@ -28,6 +28,10 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     public Func<bool> CanReport { get; set; } = () => true;
     /// <summary>Task 57: synchronously pause manual writes until fresh prop state and world adoption.</summary>
     public bool ReportsPaused { get; set; }
+    /// <summary>Task 67 #4: preparation bypasses prop ownership gates, but retains snap/correction safety.
+    /// Standalone channels default to CanReport; the renderer supplies its independent safety predicate.</summary>
+    public Func<bool>? CanPrepareReport { get; set; }
+    private bool PreparationSafe => (CanPrepareReport ?? CanReport)();
     private bool _propDraining, _propDrainFailed;
     /// <summary>Task 57: flush the rendered final point, then await both current and queued real HTTP writes.</summary>
     public async Task PreparePropActionAsync(P2? point, bool serverOwned)
@@ -60,6 +64,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     private (P2 Point, long Seq)? _pending;
     private P2? _reported;
     private double _lastReport, _quietUntil;
+    private double? _lastAnswerAt;
     private string _quietReason = "";
     private bool _disposed;
 
@@ -104,22 +109,30 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     {
         if (InFlight || _pending is not { } p) return;
         _pending = null;
-        if (_disposed || Driver.Kind == DriverKind.SERVER || (!_propDraining && (ReportsPaused || !CanReport()))) { Dirty = true; return; }
+        if (_disposed || Driver.Kind == DriverKind.SERVER || (_propDraining ? !PreparationSafe : ReportsPaused || !CanReport())) { Dirty = true; return; }
         InFlight = true;
         _idle ??= new TaskCompletionSource();
-        _lastReport = clock();
-        PosEcho.PushSeq(_sent, p.Seq);
-        _ = Send(p.Point, p.Seq, _lastReport);
+        _ = Send(p.Point, p.Seq);
     }
 
-    private async Task Send(P2 point, long seq, double sentAt)
+    private async Task Send(P2 point, long seq)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         deadline.CancelAfter(TimeoutMs);
         try
         {
-            var answer = await write(new(point.X, point.Z, seq, sentAt, Session), deadline.Token).WaitAsync(deadline.Token);
-            if (_propDraining && !answer.Ok) _propDrainFailed = true;
+            // Task 67 #1/#4: wait from receipt, so even a slow accepted flight cannot throttle the final point.
+            if (_propDraining && _lastAnswerAt is { } answeredAt)
+            {
+                double remaining = ServerThrottleMs - (clock() - answeredAt);
+                if (remaining > 0) await Task.Delay(TimeSpan.FromMilliseconds(Math.Ceiling(remaining)), deadline.Token);
+            }
+            if (_disposed || Driver.Kind == DriverKind.SERVER || (_propDraining && !PreparationSafe))
+            { Dirty = true; return; }
+            _lastReport = clock();
+            PosEcho.PushSeq(_sent, seq);
+            var answer = await write(new(point.X, point.Z, seq, _lastReport, Session), deadline.Token).WaitAsync(deadline.Token);
+            _lastAnswerAt = clock();
             if (_disposed || !PosEcho.AnswerApplies(Driver, seq, AnswerFloor)) return;
             if (answer.Status is >= 200 and < 300)
             {
