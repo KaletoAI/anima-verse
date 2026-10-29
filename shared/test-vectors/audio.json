@@ -1,0 +1,2420 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_audio_math.mjs",
+  "fixtures": {
+    "MANIFEST": {
+      "music": {
+        "day": [
+          "day-a",
+          "day-b"
+        ],
+        "night": [
+          "night-a"
+        ]
+      },
+      "ambient": {
+        "grass": [
+          "grass-a",
+          "grass-b"
+        ],
+        "Forest": [
+          "forest-a"
+        ]
+      }
+    }
+  },
+  "cases": [
+    {
+      "label": "[1] key and defaults",
+      "fn": "audioPrefsConstants",
+      "args": [],
+      "expect": {
+        "key": "av3d.audio.v1",
+        "defaults": {
+          "master": 0.8,
+          "music": 0.5,
+          "ambient": 0.6,
+          "tts": 1,
+          "musicOn": true,
+          "ambientOn": true,
+          "ttsOn": "auto"
+        }
+      }
+    },
+    {
+      "label": "[1] missing",
+      "fn": "loadAudioPrefs",
+      "args": [
+        null
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] empty",
+      "fn": "loadAudioPrefs",
+      "args": [
+        ""
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] invalid",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "oops"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] array",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "[]"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] null",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "null"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] number",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "7"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] boolean",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "true"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] string",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "\"on\""
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] empty object",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] negative master",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"master\":-1}"
+      ],
+      "expect": {
+        "master": 0
+      }
+    },
+    {
+      "label": "[1] high music",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"music\":2}"
+      ],
+      "expect": {
+        "music": 1
+      }
+    },
+    {
+      "label": "[1] ambient zero",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"ambient\":0}"
+      ],
+      "expect": {
+        "ambient": 0
+      }
+    },
+    {
+      "label": "[1] tts zero",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"tts\":0}"
+      ],
+      "expect": {
+        "tts": 0
+      }
+    },
+    {
+      "label": "[1] fraction",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"master\":0.25}"
+      ],
+      "expect": {
+        "master": 0.25
+      }
+    },
+    {
+      "label": "[1] numeric string",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"master\":\"0.2\"}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] null volume",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"music\":null}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] boolean volume",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"ambient\":false}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] array volume",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"tts\":[]}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] object volume",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"master\":{}}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] overflow volume",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"master\":1e400}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] negative overflow",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"music\":-1e400}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] NaN JSON invalid",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"tts\":NaN}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] switches false",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"musicOn\":false,\"ambientOn\":false}"
+      ],
+      "expect": {
+        "musicOn": false,
+        "ambientOn": false
+      }
+    },
+    {
+      "label": "[1] string switch",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"musicOn\":\"false\"}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] numeric switch",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"ambientOn\":0}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] null switch",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"ambientOn\":null}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] speech on",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"ttsOn\":\"on\"}"
+      ],
+      "expect": {
+        "ttsOn": "on"
+      }
+    },
+    {
+      "label": "[1] speech off",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"ttsOn\":\"off\"}"
+      ],
+      "expect": {
+        "ttsOn": "off"
+      }
+    },
+    {
+      "label": "[1] speech auto",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"ttsOn\":\"auto\"}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] speech uppercase invalid",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"ttsOn\":\"ON\"}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] speech bool invalid",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"ttsOn\":false}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0.5,
+        "ambient": 0.6,
+        "tts": 1,
+        "musicOn": true,
+        "ambientOn": true,
+        "ttsOn": "auto"
+      }
+    },
+    {
+      "label": "[1] mixed fields remain independent",
+      "fn": "loadAudioPrefs",
+      "args": [
+        "{\"master\":\"bad\",\"music\":0,\"ambient\":2,\"tts\":-1,\"musicOn\":false,\"ambientOn\":true,\"ttsOn\":\"off\"}"
+      ],
+      "expect": {
+        "master": 0.8,
+        "music": 0,
+        "ambient": 1,
+        "tts": 0,
+        "musicOn": false,
+        "ambientOn": true,
+        "ttsOn": "off"
+      }
+    },
+    {
+      "label": "[1] save exact ordered JSON",
+      "fn": "saveAudioPrefs",
+      "args": [
+        {
+          "master": 0.8,
+          "music": 0.5,
+          "ambient": 0.6,
+          "tts": 1,
+          "musicOn": true,
+          "ambientOn": true,
+          "ttsOn": "auto"
+        }
+      ],
+      "expect": "{\"master\":0.8,\"music\":0.5,\"ambient\":0.6,\"tts\":1,\"musicOn\":true,\"ambientOn\":true,\"ttsOn\":\"auto\"}"
+    },
+    {
+      "label": "[1] round trip all fields",
+      "fn": "audioPrefsRoundTrip",
+      "args": [
+        {
+          "master": 0,
+          "music": 1,
+          "ambient": 0.25,
+          "tts": 0.75,
+          "musicOn": false,
+          "ambientOn": false,
+          "ttsOn": "on"
+        }
+      ],
+      "expect": {
+        "master": 0,
+        "music": 1,
+        "ambient": 0.25,
+        "tts": 0.75,
+        "musicOn": false,
+        "ambientOn": false,
+        "ttsOn": "on"
+      }
+    },
+    {
+      "label": "[2] soundtrack thresholds",
+      "fn": "soundtrackConstants",
+      "args": [],
+      "expect": {
+        "nightOn": 0.8,
+        "nightOff": 0.2,
+        "holdMs": 5000
+      }
+    },
+    {
+      "label": "[2] null manifest",
+      "fn": "readManifest",
+      "args": [
+        null
+      ],
+      "expect": {
+        "music": {
+          "day": [],
+          "night": []
+        },
+        "ambient": {}
+      }
+    },
+    {
+      "label": "[2] scalar manifest",
+      "fn": "readManifest",
+      "args": [
+        3
+      ],
+      "expect": {
+        "music": {
+          "day": [],
+          "night": []
+        },
+        "ambient": {}
+      }
+    },
+    {
+      "label": "[2] empty manifest",
+      "fn": "readManifest",
+      "args": [
+        {}
+      ],
+      "expect": {
+        "music": {
+          "day": [],
+          "night": []
+        },
+        "ambient": {}
+      }
+    },
+    {
+      "label": "[2] music null",
+      "fn": "readManifest",
+      "args": [
+        {
+          "music": null
+        }
+      ],
+      "expect": {
+        "music": {
+          "day": [],
+          "night": []
+        },
+        "ambient": {}
+      }
+    },
+    {
+      "label": "[2] array ambient",
+      "fn": "readManifest",
+      "args": [
+        {
+          "ambient": [
+            [
+              "a"
+            ]
+          ]
+        }
+      ],
+      "expect": {
+        "music": {
+          "day": [],
+          "night": []
+        },
+        "ambient": {}
+      }
+    },
+    {
+      "label": "[2] filter entries",
+      "fn": "readManifest",
+      "args": [
+        {
+          "music": {
+            "day": [
+              "a",
+              "",
+              false,
+              3,
+              null,
+              "b"
+            ],
+            "night": "x"
+          },
+          "ambient": {
+            "grass": [
+              "g",
+              0,
+              ""
+            ],
+            "empty": [],
+            "bad": false
+          }
+        }
+      ],
+      "expect": {
+        "music": {
+          "day": [
+            "a",
+            "b"
+          ],
+          "night": []
+        },
+        "ambient": {
+          "grass": [
+            "g"
+          ]
+        }
+      }
+    },
+    {
+      "label": "[2] whitespace and duplicates",
+      "fn": "readManifest",
+      "args": [
+        {
+          "music": {
+            "day": [
+              " ",
+              "a",
+              "a"
+            ]
+          },
+          "ambient": {
+            "Forest": [
+              "f"
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "music": {
+          "day": [
+            " ",
+            "a",
+            "a"
+          ],
+          "night": []
+        },
+        "ambient": {
+          "Forest": [
+            "f"
+          ]
+        }
+      }
+    },
+    {
+      "label": "[2] complete manifest",
+      "fn": "readManifest",
+      "args": [
+        {
+          "music": {
+            "day": [
+              "day-a",
+              "day-b"
+            ],
+            "night": [
+              "night-a"
+            ]
+          },
+          "ambient": {
+            "grass": [
+              "grass-a",
+              "grass-b"
+            ],
+            "Forest": [
+              "forest-a"
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "music": {
+          "day": [
+            "day-a",
+            "day-b"
+          ],
+          "night": [
+            "night-a"
+          ]
+        },
+        "ambient": {
+          "grass": [
+            "grass-a",
+            "grass-b"
+          ],
+          "Forest": [
+            "forest-a"
+          ]
+        }
+      }
+    },
+    {
+      "label": "[3] day below low",
+      "fn": "nightForMusic",
+      "args": [
+        false,
+        0
+      ],
+      "expect": false
+    },
+    {
+      "label": "[3] day at high",
+      "fn": "nightForMusic",
+      "args": [
+        false,
+        0.8
+      ],
+      "expect": false
+    },
+    {
+      "label": "[3] day above high",
+      "fn": "nightForMusic",
+      "args": [
+        false,
+        0.81
+      ],
+      "expect": true
+    },
+    {
+      "label": "[3] night at low",
+      "fn": "nightForMusic",
+      "args": [
+        true,
+        0.2
+      ],
+      "expect": true
+    },
+    {
+      "label": "[3] night below low",
+      "fn": "nightForMusic",
+      "args": [
+        true,
+        0.19
+      ],
+      "expect": false
+    },
+    {
+      "label": "[3] night middle",
+      "fn": "nightForMusic",
+      "args": [
+        true,
+        0.5
+      ],
+      "expect": true
+    },
+    {
+      "label": "[3] day middle",
+      "fn": "nightForMusic",
+      "args": [
+        false,
+        0.5
+      ],
+      "expect": false
+    },
+    {
+      "label": "[3] day NaN",
+      "fn": "nightForMusic",
+      "args": [
+        false,
+        "$NaN"
+      ],
+      "expect": false
+    },
+    {
+      "label": "[3] night NaN",
+      "fn": "nightForMusic",
+      "args": [
+        true,
+        "$NaN"
+      ],
+      "expect": true
+    },
+    {
+      "label": "[3] positive infinity",
+      "fn": "nightForMusic",
+      "args": [
+        false,
+        "$Infinity"
+      ],
+      "expect": true
+    },
+    {
+      "label": "[3] negative infinity",
+      "fn": "nightForMusic",
+      "args": [
+        true,
+        "$-Infinity"
+      ],
+      "expect": false
+    },
+    {
+      "label": "[3] dusk ramp",
+      "fn": "nightForMusicSeq",
+      "args": [
+        false,
+        [
+          0,
+          0.2,
+          0.5,
+          0.8,
+          0.81,
+          0.5
+        ]
+      ],
+      "expect": [
+        false,
+        false,
+        false,
+        false,
+        true,
+        true
+      ]
+    },
+    {
+      "label": "[3] dawn ramp",
+      "fn": "nightForMusicSeq",
+      "args": [
+        true,
+        [
+          0.8,
+          0.21,
+          0.2,
+          0.19,
+          0.21,
+          0.19
+        ]
+      ],
+      "expect": [
+        true,
+        true,
+        true,
+        false,
+        false,
+        false
+      ]
+    },
+    {
+      "label": "[4] day list",
+      "fn": "pickMusic",
+      "args": [
+        {
+          "$fixture": "MANIFEST"
+        },
+        false
+      ],
+      "expect": [
+        "day-a",
+        "day-b"
+      ]
+    },
+    {
+      "label": "[4] night list",
+      "fn": "pickMusic",
+      "args": [
+        {
+          "$fixture": "MANIFEST"
+        },
+        true
+      ],
+      "expect": [
+        "night-a"
+      ]
+    },
+    {
+      "label": "[4] night silence no substitution",
+      "fn": "pickMusic",
+      "args": [
+        {
+          "$fixture": "MANIFEST",
+          "$with": {
+            "music": {
+              "day": [
+                "day-a"
+              ],
+              "night": []
+            }
+          }
+        },
+        true
+      ],
+      "expect": []
+    },
+    {
+      "label": "[4] exact terrain",
+      "fn": "pickAmbient",
+      "args": [
+        {
+          "$fixture": "MANIFEST"
+        },
+        "grass"
+      ],
+      "expect": [
+        "grass-a",
+        "grass-b"
+      ]
+    },
+    {
+      "label": "[4] case insensitive",
+      "fn": "pickAmbient",
+      "args": [
+        {
+          "$fixture": "MANIFEST"
+        },
+        "forest"
+      ],
+      "expect": [
+        "forest-a"
+      ]
+    },
+    {
+      "label": "[4] uppercase",
+      "fn": "pickAmbient",
+      "args": [
+        {
+          "$fixture": "MANIFEST"
+        },
+        "FOREST"
+      ],
+      "expect": [
+        "forest-a"
+      ]
+    },
+    {
+      "label": "[4] unknown",
+      "fn": "pickAmbient",
+      "args": [
+        {
+          "$fixture": "MANIFEST"
+        },
+        "water"
+      ],
+      "expect": []
+    },
+    {
+      "label": "[4] empty terrain",
+      "fn": "pickAmbient",
+      "args": [
+        {
+          "$fixture": "MANIFEST"
+        },
+        ""
+      ],
+      "expect": []
+    },
+    {
+      "label": "[4] exact beats insensitive",
+      "fn": "pickAmbient",
+      "args": [
+        {
+          "music": {
+            "day": [],
+            "night": []
+          },
+          "ambient": {
+            "Forest": [
+              "upper"
+            ],
+            "forest": [
+              "lower"
+            ]
+          }
+        },
+        "forest"
+      ],
+      "expect": [
+        "lower"
+      ]
+    },
+    {
+      "label": "[5] embodied avatar",
+      "fn": "ambientTerrainFor",
+      "args": [
+        "embodied",
+        {
+          "x": 1,
+          "z": 2
+        },
+        {
+          "x": 3,
+          "z": 4
+        },
+        [
+          [
+            1,
+            2,
+            " Forest "
+          ],
+          [
+            3,
+            4,
+            "GRASS"
+          ]
+        ]
+      ],
+      "expect": "forest"
+    },
+    {
+      "label": "[5] overview camera",
+      "fn": "ambientTerrainFor",
+      "args": [
+        "overview",
+        {
+          "x": 1,
+          "z": 2
+        },
+        {
+          "x": 3,
+          "z": 4
+        },
+        [
+          [
+            1,
+            2,
+            " Forest "
+          ],
+          [
+            3,
+            4,
+            "GRASS"
+          ]
+        ]
+      ],
+      "expect": "grass"
+    },
+    {
+      "label": "[5] missing avatar",
+      "fn": "ambientTerrainFor",
+      "args": [
+        "embodied",
+        null,
+        {
+          "x": 3,
+          "z": 4
+        },
+        [
+          [
+            1,
+            2,
+            " Forest "
+          ],
+          [
+            3,
+            4,
+            "GRASS"
+          ]
+        ]
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[5] missing camera",
+      "fn": "ambientTerrainFor",
+      "args": [
+        "overview",
+        {
+          "x": 1,
+          "z": 2
+        },
+        null,
+        [
+          [
+            1,
+            2,
+            " Forest "
+          ],
+          [
+            3,
+            4,
+            "GRASS"
+          ]
+        ]
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[5] no terrain at point",
+      "fn": "ambientTerrainFor",
+      "args": [
+        "overview",
+        null,
+        {
+          "x": 0,
+          "z": 0
+        },
+        [
+          [
+            1,
+            2,
+            " Forest "
+          ],
+          [
+            3,
+            4,
+            "GRASS"
+          ]
+        ]
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[5] whitespace terrain",
+      "fn": "ambientTerrainFor",
+      "args": [
+        "overview",
+        null,
+        {
+          "x": 0,
+          "z": 0
+        },
+        [
+          [
+            0,
+            0,
+            " \t "
+          ]
+        ]
+      ],
+      "expect": ""
+    },
+    {
+      "label": "[6] initial silence then first terrain",
+      "fn": "terrainSwitchSeq",
+      "args": [
+        [
+          [
+            "",
+            0
+          ],
+          [
+            "grass",
+            1000
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "applied": "",
+          "pending": "",
+          "since": 0,
+          "started": false
+        },
+        {
+          "applied": "grass",
+          "pending": "grass",
+          "since": 1000,
+          "started": true
+        }
+      ]
+    },
+    {
+      "label": "[6] hold exact boundary",
+      "fn": "terrainSwitchSeq",
+      "args": [
+        [
+          [
+            "grass",
+            1000
+          ],
+          [
+            "grass",
+            2000
+          ],
+          [
+            "water",
+            3000
+          ],
+          [
+            "water",
+            7999
+          ],
+          [
+            "water",
+            8000
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "applied": "grass",
+          "pending": "grass",
+          "since": 1000,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "grass",
+          "since": 2000,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "water",
+          "since": 3000,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "water",
+          "since": 3000,
+          "started": true
+        },
+        {
+          "applied": "water",
+          "pending": "water",
+          "since": 8000,
+          "started": true
+        }
+      ]
+    },
+    {
+      "label": "[6] flap cancels hold",
+      "fn": "terrainSwitchSeq",
+      "args": [
+        [
+          [
+            "grass",
+            1000
+          ],
+          [
+            "water",
+            2000
+          ],
+          [
+            "grass",
+            3000
+          ],
+          [
+            "grass",
+            9000
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "applied": "grass",
+          "pending": "grass",
+          "since": 1000,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "water",
+          "since": 2000,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "grass",
+          "since": 3000,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "grass",
+          "since": 9000,
+          "started": true
+        }
+      ]
+    },
+    {
+      "label": "[6] silence and return both hold",
+      "fn": "terrainSwitchSeq",
+      "args": [
+        [
+          [
+            "grass",
+            1000
+          ],
+          [
+            "",
+            2000
+          ],
+          [
+            "",
+            6999
+          ],
+          [
+            "",
+            7000
+          ],
+          [
+            "water",
+            8000
+          ],
+          [
+            "water",
+            12999
+          ],
+          [
+            "water",
+            13000
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "applied": "grass",
+          "pending": "grass",
+          "since": 1000,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "",
+          "since": 2000,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "",
+          "since": 2000,
+          "started": true
+        },
+        {
+          "applied": "",
+          "pending": "",
+          "since": 7000,
+          "started": true
+        },
+        {
+          "applied": "",
+          "pending": "water",
+          "since": 8000,
+          "started": true
+        },
+        {
+          "applied": "",
+          "pending": "water",
+          "since": 8000,
+          "started": true
+        },
+        {
+          "applied": "water",
+          "pending": "water",
+          "since": 13000,
+          "started": true
+        }
+      ]
+    },
+    {
+      "label": "[6] new pending restarts hold",
+      "fn": "terrainSwitchSeq",
+      "args": [
+        [
+          [
+            "grass",
+            0
+          ],
+          [
+            "water",
+            1000
+          ],
+          [
+            "forest",
+            2000
+          ],
+          [
+            "forest",
+            6000
+          ],
+          [
+            "forest",
+            7000
+          ]
+        ]
+      ],
+      "expect": [
+        {
+          "applied": "grass",
+          "pending": "grass",
+          "since": 0,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "water",
+          "since": 1000,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "forest",
+          "since": 2000,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "forest",
+          "since": 2000,
+          "started": true
+        },
+        {
+          "applied": "forest",
+          "pending": "forest",
+          "since": 7000,
+          "started": true
+        }
+      ]
+    },
+    {
+      "label": "[6] custom hold",
+      "fn": "terrainSwitchSeq",
+      "args": [
+        [
+          [
+            "grass",
+            0
+          ],
+          [
+            "water",
+            100
+          ],
+          [
+            "water",
+            199
+          ],
+          [
+            "water",
+            200
+          ]
+        ],
+        100
+      ],
+      "expect": [
+        {
+          "applied": "grass",
+          "pending": "grass",
+          "since": 0,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "water",
+          "since": 100,
+          "started": true
+        },
+        {
+          "applied": "grass",
+          "pending": "water",
+          "since": 100,
+          "started": true
+        },
+        {
+          "applied": "water",
+          "pending": "water",
+          "since": 200,
+          "started": true
+        }
+      ]
+    },
+    {
+      "label": "[7] up before",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        9
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[7] up start",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        10
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[7] up half first segment",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        10.5
+      ],
+      "expect": 0.09754516100806412
+    },
+    {
+      "label": "[7] up knot 1",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        11
+      ],
+      "expect": 0.19509032201612825
+    },
+    {
+      "label": "[7] up knot 2",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        12
+      ],
+      "expect": 0.3826834323650898
+    },
+    {
+      "label": "[7] up knot 3",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        13
+      ],
+      "expect": 0.5555702330196022
+    },
+    {
+      "label": "[7] up interior midpoint",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        13.5
+      ],
+      "expect": 0.6313385071030749
+    },
+    {
+      "label": "[7] up knot 4",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        14
+      ],
+      "expect": 0.7071067811865476
+    },
+    {
+      "label": "[7] up knot 5",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        15
+      ],
+      "expect": 0.8314696123025452
+    },
+    {
+      "label": "[7] up knot 6",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        16
+      ],
+      "expect": 0.9238795325112867
+    },
+    {
+      "label": "[7] up knot 7",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        17
+      ],
+      "expect": 0.9807852804032304
+    },
+    {
+      "label": "[7] up end",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        18
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[7] up after",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        true,
+        19
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[7] down before",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        false,
+        9
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[7] down start",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        false,
+        10
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[7] down knot 1",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        false,
+        11
+      ],
+      "expect": 0.9807852804032304
+    },
+    {
+      "label": "[7] down interior midpoint",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        false,
+        13.5
+      ],
+      "expect": 0.7692881967445464
+    },
+    {
+      "label": "[7] down middle",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        false,
+        14
+      ],
+      "expect": 0.7071067811865476
+    },
+    {
+      "label": "[7] down end",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        false,
+        18
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[7] down after",
+      "fn": "equalPowerGainAt",
+      "args": [
+        10,
+        8,
+        false,
+        19
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[7] shifted scaled half segment",
+      "fn": "equalPowerGainAt",
+      "args": [
+        2,
+        4,
+        true,
+        2.25
+      ],
+      "expect": 0.09754516100806412
+    },
+    {
+      "label": "[7] shifted scaled middle",
+      "fn": "equalPowerGainAt",
+      "args": [
+        2,
+        4,
+        true,
+        4
+      ],
+      "expect": 0.7071067811865476
+    },
+    {
+      "label": "[8] short track fade cap",
+      "fn": "playlistSchedule",
+      "args": [
+        10,
+        10,
+        9,
+        4
+      ],
+      "expect": {
+        "begin": 10,
+        "fade": 3,
+        "seam": 16,
+        "wakeInS": 0
+      }
+    },
+    {
+      "label": "[8] at one third cap",
+      "fn": "playlistSchedule",
+      "args": [
+        10,
+        10,
+        12,
+        4
+      ],
+      "expect": {
+        "begin": 10,
+        "fade": 4,
+        "seam": 18,
+        "wakeInS": 2
+      }
+    },
+    {
+      "label": "[8] long track",
+      "fn": "playlistSchedule",
+      "args": [
+        10,
+        10,
+        18,
+        4
+      ],
+      "expect": {
+        "begin": 10,
+        "fade": 4,
+        "seam": 24,
+        "wakeInS": 8
+      }
+    },
+    {
+      "label": "[8] ambient crossfade",
+      "fn": "playlistSchedule",
+      "args": [
+        10,
+        10,
+        9,
+        3
+      ],
+      "expect": {
+        "begin": 10,
+        "fade": 3,
+        "seam": 16,
+        "wakeInS": 0
+      }
+    },
+    {
+      "label": "[8] future requested start",
+      "fn": "playlistSchedule",
+      "args": [
+        20,
+        10,
+        9,
+        4
+      ],
+      "expect": {
+        "begin": 20,
+        "fade": 3,
+        "seam": 26,
+        "wakeInS": 10
+      }
+    },
+    {
+      "label": "[8] late decode clamps begin",
+      "fn": "playlistSchedule",
+      "args": [
+        5,
+        10,
+        9,
+        4
+      ],
+      "expect": {
+        "begin": 10,
+        "fade": 3,
+        "seam": 16,
+        "wakeInS": 0
+      }
+    },
+    {
+      "label": "[8] tiny track",
+      "fn": "playlistSchedule",
+      "args": [
+        10,
+        10,
+        3,
+        4
+      ],
+      "expect": {
+        "begin": 10,
+        "fade": 1,
+        "seam": 12,
+        "wakeInS": 0
+      }
+    },
+    {
+      "label": "[8] zero duration",
+      "fn": "playlistSchedule",
+      "args": [
+        10,
+        10,
+        0,
+        4
+      ],
+      "expect": {
+        "begin": 10,
+        "fade": 0,
+        "seam": 10,
+        "wakeInS": 0
+      }
+    },
+    {
+      "label": "[8] zero crossfade",
+      "fn": "playlistSchedule",
+      "args": [
+        10,
+        10,
+        9,
+        0
+      ],
+      "expect": {
+        "begin": 10,
+        "fade": 0,
+        "seam": 19,
+        "wakeInS": 3
+      }
+    },
+    {
+      "label": "[8] negative crossfade",
+      "fn": "playlistSchedule",
+      "args": [
+        10,
+        10,
+        9,
+        -2
+      ],
+      "expect": {
+        "begin": 10,
+        "fade": 0,
+        "seam": 19,
+        "wakeInS": 3
+      }
+    },
+    {
+      "label": "[8] default crossfade",
+      "fn": "playlistSchedule",
+      "args": [
+        10,
+        10,
+        18
+      ],
+      "expect": {
+        "begin": 10,
+        "fade": 3,
+        "seam": 25,
+        "wakeInS": 9
+      }
+    },
+    {
+      "label": "[9] stop before",
+      "fn": "stopRamp",
+      "args": [
+        0.8,
+        10,
+        4,
+        9
+      ],
+      "expect": {
+        "gain": 0.8,
+        "end": 14
+      }
+    },
+    {
+      "label": "[9] stop start",
+      "fn": "stopRamp",
+      "args": [
+        0.8,
+        10,
+        4,
+        10
+      ],
+      "expect": {
+        "gain": 0.8,
+        "end": 14
+      }
+    },
+    {
+      "label": "[9] stop middle",
+      "fn": "stopRamp",
+      "args": [
+        0.8,
+        10,
+        4,
+        12
+      ],
+      "expect": {
+        "gain": 0.4,
+        "end": 14
+      }
+    },
+    {
+      "label": "[9] stop end",
+      "fn": "stopRamp",
+      "args": [
+        0.8,
+        10,
+        4,
+        14
+      ],
+      "expect": {
+        "gain": 0,
+        "end": 14
+      }
+    },
+    {
+      "label": "[9] stop after",
+      "fn": "stopRamp",
+      "args": [
+        0.8,
+        10,
+        4,
+        15
+      ],
+      "expect": {
+        "gain": 0,
+        "end": 14
+      }
+    },
+    {
+      "label": "[9] stop zero floor",
+      "fn": "stopRamp",
+      "args": [
+        1,
+        2,
+        0,
+        2.025
+      ],
+      "expect": {
+        "gain": 0.5,
+        "end": 2.05
+      }
+    },
+    {
+      "label": "[9] stop negative floor",
+      "fn": "stopRamp",
+      "args": [
+        1,
+        2,
+        -1,
+        2.025
+      ],
+      "expect": {
+        "gain": 0.5,
+        "end": 2.05
+      }
+    },
+    {
+      "label": "[9] already silent",
+      "fn": "stopRamp",
+      "args": [
+        0,
+        10,
+        4,
+        12
+      ],
+      "expect": {
+        "gain": 0,
+        "end": 14
+      }
+    },
+    {
+      "label": "[10] volume before",
+      "fn": "volumeRamp",
+      "args": [
+        0.8,
+        0.2,
+        2,
+        1
+      ],
+      "expect": 0.8
+    },
+    {
+      "label": "[10] volume start",
+      "fn": "volumeRamp",
+      "args": [
+        0.8,
+        0.2,
+        2,
+        2
+      ],
+      "expect": 0.8
+    },
+    {
+      "label": "[10] volume quarter",
+      "fn": "volumeRamp",
+      "args": [
+        0.8,
+        0.2,
+        2,
+        2.0125
+      ],
+      "expect": 0.65
+    },
+    {
+      "label": "[10] volume middle",
+      "fn": "volumeRamp",
+      "args": [
+        0.8,
+        0.2,
+        2,
+        2.025
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[10] volume end",
+      "fn": "volumeRamp",
+      "args": [
+        0.8,
+        0.2,
+        2,
+        2.05
+      ],
+      "expect": 0.2
+    },
+    {
+      "label": "[10] volume after",
+      "fn": "volumeRamp",
+      "args": [
+        0.8,
+        0.2,
+        2,
+        3
+      ],
+      "expect": 0.2
+    },
+    {
+      "label": "[10] music clamps high",
+      "fn": "volumeRamp",
+      "args": [
+        0,
+        2,
+        2,
+        2.025,
+        "music"
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[10] ambient clamps low",
+      "fn": "volumeRamp",
+      "args": [
+        1,
+        -2,
+        2,
+        2.025,
+        "ambient"
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[10] tts target",
+      "fn": "volumeRamp",
+      "args": [
+        0.8,
+        0.2,
+        2,
+        2.05,
+        "tts"
+      ],
+      "expect": 0.2
+    },
+    {
+      "label": "[10] volume unchanged",
+      "fn": "volumeRamp",
+      "args": [
+        0.6,
+        0.6,
+        2,
+        2.025
+      ],
+      "expect": 0.6
+    },
+    {
+      "label": "[11] shuffle empty",
+      "fn": "shuffle",
+      "args": [
+        [],
+        ""
+      ],
+      "expect": []
+    },
+    {
+      "label": "[11] shuffle single",
+      "fn": "shuffle",
+      "args": [
+        [
+          "A"
+        ],
+        "a"
+      ],
+      "expect": [
+        "A"
+      ]
+    },
+    {
+      "label": "[11] shuffle four empty seed",
+      "fn": "shuffle",
+      "args": [
+        [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        ""
+      ],
+      "expect": [
+        "A",
+        "C",
+        "D",
+        "B"
+      ]
+    },
+    {
+      "label": "[11] shuffle four a seed",
+      "fn": "shuffle",
+      "args": [
+        [
+          "A",
+          "B",
+          "C",
+          "D"
+        ],
+        "a"
+      ],
+      "expect": [
+        "A",
+        "D",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "label": "[11] shuffle three",
+      "fn": "shuffle",
+      "args": [
+        [
+          "A",
+          "B",
+          "C"
+        ],
+        "a"
+      ],
+      "expect": [
+        "A",
+        "C",
+        "B"
+      ]
+    },
+    {
+      "label": "[11] shuffle two a",
+      "fn": "shuffle",
+      "args": [
+        [
+          "A",
+          "B"
+        ],
+        "a"
+      ],
+      "expect": [
+        "A",
+        "B"
+      ]
+    },
+    {
+      "label": "[11] shuffle two empty seed",
+      "fn": "shuffle",
+      "args": [
+        [
+          "A",
+          "B"
+        ],
+        ""
+      ],
+      "expect": [
+        "B",
+        "A"
+      ]
+    },
+    {
+      "label": "[11] shuffle duplicates",
+      "fn": "shuffle",
+      "args": [
+        [
+          "a",
+          "a",
+          "b",
+          "c"
+        ],
+        ""
+      ],
+      "expect": [
+        "a",
+        "b",
+        "c",
+        "a"
+      ]
+    },
+    {
+      "label": "[12] queue empty",
+      "fn": "enqueueSpeech",
+      "args": [
+        [],
+        []
+      ],
+      "expect": []
+    },
+    {
+      "label": "[12] queue one",
+      "fn": "enqueueSpeech",
+      "args": [
+        [],
+        [
+          "a"
+        ]
+      ],
+      "expect": [
+        "a"
+      ]
+    },
+    {
+      "label": "[12] queue FIFO below cap",
+      "fn": "enqueueSpeech",
+      "args": [
+        [
+          "a"
+        ],
+        [
+          "b"
+        ]
+      ],
+      "expect": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "label": "[12] queue exact cap",
+      "fn": "enqueueSpeech",
+      "args": [
+        [
+          "a",
+          "b"
+        ],
+        [
+          "c"
+        ]
+      ],
+      "expect": [
+        "a",
+        "b",
+        "c"
+      ]
+    },
+    {
+      "label": "[12] queue oldest dropped",
+      "fn": "enqueueSpeech",
+      "args": [
+        [
+          "a",
+          "b",
+          "c"
+        ],
+        [
+          "d"
+        ]
+      ],
+      "expect": [
+        "b",
+        "c",
+        "d"
+      ]
+    },
+    {
+      "label": "[12] queue incoming burst",
+      "fn": "enqueueSpeech",
+      "args": [
+        [
+          "a"
+        ],
+        [
+          "b",
+          "c",
+          "d",
+          "e"
+        ]
+      ],
+      "expect": [
+        "c",
+        "d",
+        "e"
+      ]
+    },
+    {
+      "label": "[12] queue oversized trims",
+      "fn": "enqueueSpeech",
+      "args": [
+        [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        []
+      ],
+      "expect": [
+        "b",
+        "c",
+        "d"
+      ]
+    },
+    {
+      "label": "[12] queue duplicates preserved",
+      "fn": "enqueueSpeech",
+      "args": [
+        [
+          "a",
+          "a"
+        ],
+        [
+          "a",
+          "b"
+        ]
+      ],
+      "expect": [
+        "a",
+        "a",
+        "b"
+      ]
+    }
+  ]
+}

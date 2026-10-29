@@ -1,0 +1,6 @@
+{
+  "locations": [
+    {"id":"audio-grass","name":"Fixture grass","description":"","rooms":[],"entry_room":null,"terrain":"grass","surface_kind":null,"map3d":{"boundary":[[-5,-5],[5,-5],[5,5],[-5,5]]}},
+    {"id":"audio-forest","name":"Fixture forest","description":"","rooms":[],"entry_room":null,"terrain":"forest","surface_kind":null,"map3d":{"boundary":[[-5,-5],[5,-5],[5,5],[-5,5]]}}
+  ]
+}

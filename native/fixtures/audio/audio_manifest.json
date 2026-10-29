@@ -1,0 +1,10 @@
+{
+  "music": {
+    "day": ["/assets/audio/music/day/day-a.mp3", "/assets/audio/music/day/day-b.ogg"],
+    "night": ["/assets/audio/music/night/night.wav"]
+  },
+  "ambient": {
+    "Forest": ["/assets/audio/ambient/Forest/forest.ogg"],
+    "grass": ["/assets/audio/ambient/grass/broken.mp3", "/assets/audio/ambient/grass/grass-a.mp3", "/assets/audio/ambient/grass/grass-b.wav"]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "sig":"audio-terrain","default_kind":"grass",
+  "types":[
+    {"kind":"grass","name":"Fixture grass","color":"#6f9a4a","passable":true,"speed_factor":1,"meta":{}},
+    {"kind":"forest","name":"Fixture forest","color":"#345c30","passable":true,"speed_factor":1,"meta":{}}
+  ],
+  "areas":[],"strokes":[]
+}

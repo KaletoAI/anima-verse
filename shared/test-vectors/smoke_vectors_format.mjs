@@ -180,5 +180,11 @@ for (const name of ['walk_control', 'collide', 'enter', 'embody', 'camera', 'pro
     `${name}: numbered cases, unique labels, resolved fixtures and finite JSON`);
 }
 
+console.log('\n[15] E8 audio obeys the shared format');
+const audio = loadVectors('audio');
+check(audio.source === 'client3d/scripts/smoke_audio_math.mjs'
+  && audio.cases.length >= 120 && audio.cases.every(c => /^\[\d+\]/.test(c.label)),
+  'audio: single canonical source, numbered cases, fixtures and finite JSON');
+
 console.log(fails ? `\n${fails} FAILED, ${oks} ok` : `\nall ok (${oks})`);
 process.exit(fails ? 1 : 0);

@@ -151,6 +151,7 @@ table `fn → Func<JsonArray, JsonNode?>` that fails a case whose `fn` it does n
 | `figure_clips.json` | `client3d/scripts/smoke_figure_clips.mjs` | `resolveMovementPoses`, `moveClip`, `idleClip`, `standingClipFor` (`null` animation = none), `movementOf`, `canRun`, `movementPoseOf`, `resolveClipTransitions`, `clipTransition`, `bridgePace` (`client3d/src/game/walk.ts`), `clipKindChain`, `resolveClipKind`, `proceduralGait` (`client3d/src/scene/clipCoverage.ts`). The server tables are explicit arguments: a pose table is the resolved `{pose: {kind, publicKind}}` form, a transition table the resolved rule list |
 | `prop_water.json` | `client3d/scripts/smoke_prop_water.mjs` | `waterRegionAt`, `pointInRegion` (`client3d/src/scene/propWaterMath.ts`), `propWaterWord`, `propWaterCarry`, `groundWaterLevel` (`client3d/src/game/walk.ts`); `waterRegionAt(specs, x, z, lift=0)` takes a numeric lift wrapped as `() => lift` (mirrored by C#) |
 | `graphics_prefs.json` | `client3d/scripts/smoke_graphics_prefs.mjs` | `loadGraphicsPrefs` (stored string or `null`), `checkGraphicsPrefs`, `saveGraphicsPrefs` (exact string), `msaaSamplesOf`, `browserAntialias`, `pickBrowserAntiAliasing` (`client3d/src/game/prefs.ts`); `graphicsPrefsConstants()` is a smoke adapter → `{key, levels, defaults}` |
+| `audio.json` | `client3d/scripts/smoke_audio_math.mjs` | Task 58 / E8-T1: 145 cases for audio prefs, soundtrack decisions, eight-segment equal-power gains, playlist scheduling, stop/volume ramps, seeded shuffle and the browser's waiting-speech queue. Adapter signatures below. |
 
 ## E3 terrain, water and atmosphere
 
@@ -695,3 +696,47 @@ The separate synthetic world and route answer table are documented in
 `node client3d/scripts/smoke_prop_action_fixture.mjs` verifies their consistency
 and hand arithmetic against production motion helpers; the embody inputs stay
 unchanged.
+
+## Audio (Task 58 / E8-T1)
+
+Run `node client3d/scripts/smoke_audio_math.mjs`. All 145 cases have one canonical
+source: that smoke's numbered hand derivations. The existing walk, voiceover
+and bridge smokes keep their checks. C# consumers arrive in Task 59.
+P3-R31 keeps `client3d/src` and `packages/` unchanged: the smoke transforms the
+original modules in a sandbox and exposes private engine functions there.
+It reads the production PRNG functions from `scatter.ts`, without importing
+the renderer. There are no expected-value tables in the dispatch adapters.
+
+Native-facing signatures (times are seconds except the terrain hold):
+
+- `audioPrefsConstants()` → `{key,defaults}`; `loadAudioPrefs(rawStringOrNull)`;
+  `saveAudioPrefs(prefs)` → ordered JSON string; `audioPrefsRoundTrip(prefs)`.
+- `soundtrackConstants()` → `{nightOn,nightOff,holdMs}`; `readManifest(raw)`;
+  `nightForMusic(wasNight,factor)`; `nightForMusicSeq(start,factors)` → states.
+- `pickMusic(manifest,night)`; `pickAmbient(manifest,terrain)` → URL arrays.
+- `ambientTerrainFor(mode,avatar,camera,rows)` takes points `{x,z}` or null;
+  rows are `[x,z,terrain]` for exact-point lookup, absent point → empty terrain.
+- `terrainSwitchSeq(steps,holdMs=5000)` starts with `newTerrainSwitch()` and
+  returns every full state `{applied,pending,since,started}`. Steps are
+  `[candidate,nowMs]`; `since` and `holdMs` are milliseconds.
+- `equalPowerGainAt(t0,duration,up,time)` samples the actual scheduled
+  eight-segment linear ramps, holding the first/last value outside the fade.
+- `playlistSchedule(requested,now,duration,crossfadeS=3)` returns
+  `{begin,fade,seam,wakeInS}`. The sandbox observes the production locals after
+  calculation; the real `Playlist.play` applies crossfade defaults/clamping,
+  and its real `startTrack` runs against a fake decoder and audio clock.
+  The wake value comes from the engine's captured timer, which never fires.
+- `stopRamp(g0,now,fadeS,time)` → `{gain,end}`; `volumeRamp(g0,target,now,time,bus)`
+  → gain, with optional bus defaulting to `master`. Both sample the production
+  AudioParam events; the latter exercises the actual `AudioEngine.setVolume`.
+- `shuffle(urls,seed)` → a new array, using the browser's seeded Fisher-Yates.
+- `enqueueSpeech(waiting,incoming)` → FIFO waiting entries capped at three,
+  dropping the oldest on overflow. Entries are opaque strings in these cases.
+  This is `voiceover.ts`'s waiting queue, not the engine's unbounded Promise
+  chain. P3-R30 carries that waiting-queue rule into the native implementation;
+  Bridge v3 remains fire-and-forget.
+
+The smoke also checks the synthetic manifest, worldmap/detail terrain consistency,
+camera/avatar terrain choice, URL mappings, file size cap and codec signatures in
+[`native/fixtures/audio/`](../../native/fixtures/audio/README.md).
+The fixture README derives decoded lengths, seams and terrain transitions.

@@ -1,0 +1,15 @@
+{
+  "avatar":"fixture-audio-avatar",
+  "current_location_id":"audio-forest",
+  "locations":[
+    {"id":"audio-grass","name":"Fixture grass","terrain":"grass","pos_x":0,"pos_z":0,"yaw_deg":0,"plan_width_m":10,"boundary":[[-5,-5],[5,-5],[5,5],[-5,5]],"openings":[]},
+    {"id":"audio-forest","name":"Fixture forest","terrain":"forest","pos_x":20,"pos_z":0,"yaw_deg":0,"plan_width_m":10,"boundary":[[-5,-5],[5,-5],[5,5],[-5,5]],"openings":[]}
+  ],
+  "characters":[{"name":"fixture-audio-avatar","location_id":"audio-forest","room_id":"","pos":{"x":20,"z":0},"height_cm":170,"activity_animation":"","travel":null}],
+  "world_props":[],
+  "world_props_sig":"audio-empty",
+  "events_by_location":{},
+  "world_bounds":{"min_x":-5,"min_z":-5,"max_x":25,"max_z":5},
+  "height_sig":"audio-flat",
+  "fogged":false
+}

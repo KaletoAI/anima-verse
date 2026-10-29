@@ -1,0 +1,5 @@
+{
+  "origin_x":-8,"origin_z":-8,"step_m":16,"rows":3,"cols":3,
+  "heights":[[0,0,0],[0,0,0],[0,0,0]],"sig":"audio-flat",
+  "tile_m":256,"tile_step_m":2,"tiles":[],"mip_levels_m":[]
+}
