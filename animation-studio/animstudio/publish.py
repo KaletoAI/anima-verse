@@ -88,7 +88,8 @@ def _own_existing(kind: str) -> bool:
             src = json.loads(side.read_text(encoding="utf-8")).get("source") or {}
         except (OSError, ValueError):
             return False
-        return src.get("author") == "animation-studio"
+        return (src.get("author") == "animation-studio"
+                or src.get("studio") == "animation-studio")
     return False
 
 
@@ -187,9 +188,12 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
         raise StudioError("the last build did not pass its checks")
     if built.get("spec_sha") != spec_sha(kind):
         raise StudioError("the source changed after the last build - build again")
-    from animstudio.dsl import validate, PairAnimation
+    from animstudio.dsl import validate, PairAnimation, Reversed
     bridge = not isinstance(anim, PairAnimation) and anim.bridge
-    if not isinstance(anim, PairAnimation):
+    if isinstance(anim, Reversed):
+        from animstudio.reverse import source_clip
+        source_clip(anim)
+    elif not isinstance(anim, PairAnimation):
         validate(anim)
     if not bridge:
         pc.reload_catalogs()
@@ -290,6 +294,8 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
                f"'{result['repointed_from']}' (animation-studio)")
         if bridge:
             msg = f"feat(clips): {kind} — procedural bridge (animation-studio)"
+        if isinstance(anim, Reversed):
+            msg = f"feat(clips): {kind} — {anim.source} reversed as a bridge (animation-studio)"
         if trailer:
             msg += "\n\n" + trailer
         res = commit_with_entry(repo, "" if bridge else commit_paths[0], key, entry,

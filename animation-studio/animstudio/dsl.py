@@ -178,6 +178,16 @@ class Animation:
     bridge: bool = False
 
 
+@dataclass(frozen=True)
+class Reversed:
+    """An existing license-free, non-looping solo clip reversed as a bridge."""
+    kind: str
+    source: str
+    bridge: bool = field(default=True, init=False)
+    loop: bool = field(default=False, init=False)
+    catalog: None = field(default=None, init=False)
+
+
 @dataclass
 class Role:
     """One half of a pair, authored in its OWN clip space (front +Z) like a

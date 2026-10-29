@@ -5,6 +5,9 @@ Hand derivation: a 1 s bridge keys root_z 0 -> -25 cm. The importer
 multiplies horizontal travel by rig_leg / actor_leg. take_document sets
 lhipjoint = rig_leg - lfemur - ltibia, hence actor_leg = rig_leg and the
 ratio is 1. Expected published travel is [0, -0.25] m, within 1 cm.
+The reversed fixture must travel [0, +0.25] m with equal duration; its
+first joints equal the source last joints within 0.5 cm. Looped, pair
+and licensed sources are refused.
 FeetPlanted fixes both ankles in world space; a 10 cm hips drop provides
 leg reach while the hips move backwards. Blender E2E runs when available.
 All outputs and publication use temporary directories; no commit is made.
@@ -41,6 +44,24 @@ ANIM = Animation(kind='smoke-bridge', duration_s=1, loop=False, bridge=True,
 """
     (animstudio.ANIMS / 'smoke-bridge.py').write_text(source)
     from animstudio.build import load_anim, build
+    from animstudio.dsl import Reversed
+    from animstudio.reverse import source_clip
+    for name, meta in [('looped', {'loop': True}), ('paired', {'pair': True}),
+                       ('licensed', {})]:
+        directory = tmp / ('licensed' if name == 'licensed' else 'clips')
+        directory.mkdir(exist_ok=True)
+        (directory / f'{name}.fbx').write_bytes(b'fixture')
+        (directory / f'{name}.json').write_text(json.dumps(meta))
+        try:
+            source_clip(Reversed(kind='smoke-reverse', source=name))
+        except StudioError:
+            pass
+        else:
+            raise AssertionError(f'{name} source accepted')
+    (animstudio.ANIMS / 'smoke-reverse.py').write_text(
+        "from animstudio.dsl import Reversed\n"
+        "ANIM = Reversed(kind='smoke-reverse', source='smoke-bridge')\n")
+    print('OK reversed loop/pair/license refusal')
     anim = load_anim('smoke-bridge')
     validate(anim)
     for bad in (replace(anim, loop=True), replace(anim, catalog=Catalog('x','stand','x')),
@@ -96,6 +117,30 @@ ANIM = Animation(kind='smoke-bridge', duration_s=1, loop=False, bridge=True,
         from animstudio.sheet import sheet
         image = sheet(anim.kind, columns=2)
         assert image.is_file()
+        side['source']['credit'] = 'Fixture credit retained verbatim.'
+        (tmp / 'clips/smoke-bridge.json').write_text(json.dumps(side))
+        reverse = build('smoke-reverse')
+        assert reverse['ok'], reverse['checks']
+        revside = json.loads(Path(reverse['sidecar']).read_text())
+        revmeasure = json.loads((animstudio.OUT / 'smoke-reverse/measure.json').read_text())
+        assert all(revside[k] == side[k] for k in ('duration_s', 'frames', 'fps'))
+        assert revside['source']['reversed_from'] == anim.kind
+        assert all(revside['source'][k] == v for k, v in side['source'].items())
+        import math
+        assert math.dist(revside['geometry']['root_motion']['travel_m'], [0, .25]) <= .01
+        endpoint_error = max(math.dist(p, measured['frames'][-1][j])
+                             for j, p in revmeasure['frames'][0].items())
+        assert endpoint_error <= .5
+        with patch.object(pc, 'catalog_file_lock', side_effect=AssertionError('catalog touched')):
+            publish('smoke-reverse', commit=False)
+        with patch('animstudio.gitops.commit_with_entry', return_value=CommitResult('fake', True)) as commit:
+            publish('smoke-reverse', replace=True, repo=tmp)
+        assert commit.call_args.args[5] == (
+            'feat(clips): smoke-reverse — smoke-bridge reversed as a bridge (animation-studio)')
+        assert sheet('smoke-reverse', columns=2).is_file()
+        print('OK reversed build/travel/endpoint/duration/publish/sheet:',
+              revside['geometry']['root_motion']['travel_m'],
+              f'endpoint_error={endpoint_error:.6f} cm, duration={revside["duration_s"]} s')
         print('OK bridge build/check/publish/sheet:', rm)
         print('OK bridge source-only commit paths/trailer (mocked), slide/travel rejection')
     else:

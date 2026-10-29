@@ -14,7 +14,7 @@ import animstudio
 from animstudio import StudioError
 from animstudio.checks import Check, pair_checks, run_checks
 from animstudio.compile import compile_anim, compile_pair, take_document
-from animstudio.dsl import Animation, PairAnimation
+from animstudio.dsl import Animation, PairAnimation, Reversed
 from animstudio.rig import load_rest
 
 
@@ -26,7 +26,7 @@ def spec_sha(kind: str) -> str:
     return hashlib.sha256(source_path(kind).read_bytes()).hexdigest()
 
 
-def load_anim(kind: str) -> Union[Animation, PairAnimation]:
+def load_anim(kind: str) -> Union[Animation, PairAnimation, Reversed]:
     path = source_path(kind)
     if not path.is_file():
         raise StudioError(f"no source {path}")
@@ -34,14 +34,14 @@ def load_anim(kind: str) -> Union[Animation, PairAnimation]:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     anim = getattr(mod, "ANIM", None)
-    if not isinstance(anim, (Animation, PairAnimation)):
-        raise StudioError(f"{path.name} defines no ANIM = Animation(...) or PairAnimation(...)")
+    if not isinstance(anim, (Animation, PairAnimation, Reversed)):
+        raise StudioError(f"{path.name} defines no ANIM = Animation(...) or PairAnimation(...) or Reversed(...)")
     if anim.kind != kind:
         raise StudioError(f"ANIM.kind {anim.kind!r} != file name {kind!r}")
     return anim
 
 
-def build(kind: str, *, anim: Optional[Animation] = None) -> dict:
+def build(kind: str, *, anim: Optional[Union[Animation, PairAnimation, Reversed]] = None) -> dict:
     """Compiles and bakes one animation. ``anim`` bypasses the source file
     (smokes); a real build always reads anims/<kind>.py."""
     from app.blender import runner
@@ -51,6 +51,9 @@ def build(kind: str, *, anim: Optional[Animation] = None) -> dict:
         sha = spec_sha(kind)
     else:
         sha = ""
+    if isinstance(anim, Reversed):
+        from animstudio.reverse import build_reversed
+        return build_reversed(anim, sha)
     if isinstance(anim, PairAnimation):
         return _build_pair(kind, anim, sha)
     compiled = compile_anim(anim, load_rest())
