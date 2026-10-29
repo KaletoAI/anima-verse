@@ -243,7 +243,7 @@ def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue
     return issues
 
 
-def offers(actor: str) -> list[dict]:
+def offers(actor: str, *, lang: str = "en") -> list[dict]:
     """Actual same-room actions, including blocked entries and partner checks.
 
     Read only: use published geometry without bbox/LOD/door generation. Never
@@ -251,6 +251,7 @@ def offers(actor: str) -> list[dict]:
     """
     from app.core import places, props, prop_action_engine as engine
     from app.core.room_recipe import compose_recipe
+    from app.core.i18n import localized
     from app.models.world import get_location_by_id
     query = places._GeometryQuery(cache_profiles=True)
     location_id, room_id = places.where(actor, profile=query.profile(actor))
@@ -282,6 +283,7 @@ def offers(actor: str) -> list[dict]:
                 checked = engine.check(actor, target, action["id"], revision, _query=query)
             result.append(dict(action_id=action["id"], definition_revision=revision,
                                placement_id=target["placement_id"], variant_uid=target["variant_uid"],
+                               prop_label=localized(document, "name", lang) or pid,
                                target=target, label=action["name"], description=action.get("description", ""),
                                enabled=checked["enabled"], reason=checked["reason"], required_partner=pair,
                                available_targets=targets, effects=action.get("effects", [])))

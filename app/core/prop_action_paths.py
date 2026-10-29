@@ -123,6 +123,37 @@ class _Space:
         return not any(fg.point_in_poly(p, ring) or any(fg.point_segment_distance(p, a, b) <= _EPS
                                                        for a, b in _edges(ring)) for ring in self.keepouts)
 
+    def inside_segment(self, a: Point, b: Point) -> bool:
+        """Room-only check for an escape leg; keepouts may be crossed."""
+        return bool(self.valid and fg.point_in_poly(a, self.poly) and fg.point_in_poly(b, self.poly)
+                    and not any(_intersects(a, b, c, d) for c, d in _edges(self.poly)))
+
+    def step_out(self, start: Point) -> Point | None:
+        """Nearest sampled free point within 1.5 m, ties by polar angle.
+
+        Candidates must also be free after centimetre-rounded persistence.
+        Fixed .05 m rings and five-degree angles keep admission deterministic.
+        """
+        candidates = list(self.candidates)
+        for radius_step in range(1, 31):
+            radius = radius_step * .05
+            for degrees in range(0, 360, 5):
+                angle = math.radians(degrees)
+                candidates.append((start[0] + radius * math.cos(angle),
+                                   start[1] + radius * math.sin(angle)))
+        ranked = []
+        for raw in candidates:
+            p = (round(raw[0], 9), round(raw[1], 9))
+            distance = math.dist(start, p)
+            if _EPS < distance <= 1.5 + _EPS:
+                angle = math.atan2(p[1] - start[1], p[0] - start[0]) % math.tau
+                ranked.append((round(distance, 9), angle, p))
+        for _, _, p in sorted(set(ranked)):
+            persisted = (round(p[0], 2), round(p[1], 2))
+            if self.free(p) and self.free(persisted) and self.inside_segment(start, p):
+                return p
+        return None
+
     def visible(self, a: Point, b: Point) -> bool:
         # Exact segment/edge checks, NOT sparse point sampling: even a very thin
         # barrier or a concave wall crossing between samples invalidates a leg.
@@ -273,8 +304,13 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
         actor, profile=profile, _places=inventory)
     if departure_reason:
         return _blocked(departure_reason)
+    real_start = start
+    step_out = None
     if not space.free(start):
-        return _blocked("start_not_walkable")
+        step_out = space.step_out(start) if seat is None else None
+        if step_out is None:
+            return _blocked("start_not_walkable")
+        start = step_out
     departing_placement = departure_placement_id if departure is not None else (
         (places.place_of(actor, profile=profile, _places=inventory) or {}).get("placement_id", "") if seat is not None else "")
     if seat is not None and not _departure_walkable(seat, start, geometry, departing_placement):
@@ -326,6 +362,8 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
                 if route is None:
                     reason = "no_route"
                     continue
+                if step_out is not None:
+                    route = [real_start] + route
                 length = sum(math.dist(a, b) for a, b in zip(route, route[1:]))
                 anchor = dict(location_id=location, room_id=room, placement_id=target["placement_id"],
                               prop_id=place["prop_id"], variant_uid=place["variant_uid"],
@@ -334,6 +372,7 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
                               root_offset=place.get("root_offset", 0))
                 choices.append((length, place["id"], dict(status="ok", reason="", waypoints=[list(p) for p in route],
                                                          access=dict(access), entry_anchor=anchor,
+                                                         step_out=list(step_out) if step_out is not None else None,
                                                          departure_seat=list(seat) if seat is not None else None,
                                                          departure_placement_id=departing_placement)))
     return min(choices, key=lambda row: row[:2])[2] if choices else _blocked(reason)

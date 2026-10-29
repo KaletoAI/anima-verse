@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { apiPost } from './api'
 import { useI18n } from './I18nProvider'
+import { propActionReason } from './propActionReasons'
 import { usePropActions } from './usePropActions'
-import { cancelPropAction, notifyPropActionChanged, propActionChoices, requestPropAction, respondPropAction,
+import { cancelPropAction, notifyPropActionChanged, requestPropAction, respondPropAction,
   type PropActionExecution, type PropActionOffer } from './propActions'
 
 /** Shared presentation for canvas menus and panels; verdicts are Core's, not UI rules. */
@@ -13,24 +14,36 @@ export function PropActionOffers({ offers, partner, busy = false, onPick }: {
   onPick: (offer: PropActionOffer, partner?: string) => void
 }) {
   const { t } = useI18n()
+  const [partners, setPartners] = useState<Record<string, string>>({})
   return <div className="player-prop-offers" style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
     {offers.map(offer => {
       if (partner && !offer.required_partner) return null
-      const choices = propActionChoices(offer).filter(choice => !partner || choice.partner === partner)
-      if (!choices.length) return null
-      return <div key={JSON.stringify([offer.target, offer.action_id])}>
+      const key = JSON.stringify([offer.target, offer.action_id])
+      const selectedPartner = partner || partners[key] || ''
+      const choice = !offer.required_partner ? offer
+        : offer.available_targets.find(candidate => candidate.partner === selectedPartner)
+          || { enabled: false, reason: offer.available_targets.length ? 'partner_required' : offer.reason }
+      return <div key={key}>
         {offer.description && <div style={{ opacity: 0.7, fontSize: '0.8em' }}>{offer.description}</div>}
-        {choices.map(choice => <div key={choice.partner || 'solo'} style={{ marginTop: 3 }}>
+        {offer.required_partner && !partner && offer.available_targets.length > 0 &&
+          <select aria-label={t('Choose partner')} value={selectedPartner} disabled={busy}
+            onChange={event => setPartners(previous => ({ ...previous, [key]: event.target.value }))}>
+            <option value="">{t('Choose partner')}</option>
+            {offer.available_targets.map(candidate => <option key={candidate.partner} value={candidate.partner}>
+              {candidate.partner}
+            </option>)}
+          </select>}
+        <div style={{ marginTop: 3 }}>
           <button type="button" className="player-chip" disabled={busy || !choice.enabled}
             title={choice.reason || offer.description}
-            onClick={() => onPick(offer, choice.partner)}>
-            {offer.label} · {t(offer.required_partner ? '2 people' : '1 person')}
-            {choice.partner ? ` · ${choice.partner}` : ''}
+            onClick={() => onPick(offer, offer.required_partner ? selectedPartner : undefined)}>
+            {offer.label}{offer.required_partner ? ` · ${t('with partner')}` : ''}
+            {offer.required_partner && selectedPartner ? ` · ${selectedPartner}` : ''}
           </button>
-          {!choice.enabled && <div role="note" style={{ opacity: 0.75, fontSize: '0.8em' }}>
-            {t('Unavailable')}: {choice.reason}
+          {!choice.enabled && <div role="note" title={choice.reason} style={{ opacity: 0.75, fontSize: '0.8em' }}>
+            {propActionReason(choice.reason, t)}
           </div>}
-        </div>)}
+        </div>
         {offer.effects.length > 0 && <div style={{ opacity: 0.65, fontSize: '0.75em' }}>
           {offer.effects.map(effect => [effect.when, effect.target,
             effect.stat ? `${effect.stat} ${effect.amount ?? ''}` : effect.mood || effect.condition_id || effect.type].join(' · ')).join('; ')}

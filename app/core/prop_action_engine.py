@@ -365,7 +365,8 @@ def _plan(run, *, conn, _query=None):
         definition = run["definition"]
         keys = [p["pose_key"] for p in definition["phases"]] if definition["ability"] == "combined" else [definition["pose_key"]]
         if any(group_of(key) != place["group"] for key in keys):
-            last_reason = "incompatible_pose_marker"
+            if last_reason == "no_free_slot":
+                last_reason = "incompatible_pose_marker"
             continue
         free = [s for s in places.free_slots(place, occupancy.get(place["id"], []))
                 if not store.held(store.slot_key(target, place["marker_id"], s), conn=conn)]

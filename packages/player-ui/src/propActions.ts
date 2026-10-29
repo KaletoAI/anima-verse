@@ -25,6 +25,7 @@ export interface PropActionEffect {
   repeat?: string
 }
 export interface PropActionOffer {
+  prop_label: string
   action_id: string
   definition_revision: string
   placement_id: string

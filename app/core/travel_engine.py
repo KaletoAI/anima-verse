@@ -1052,6 +1052,7 @@ def start_approach_journey(character_name: str, target: dict, role: str, *,
                    journey_id=journey_id or uuid.uuid4().hex,
                    execution_kind=execution_kind, execution_ref=execution_ref,
                    floor_y=plan["access"]["y"], departure_seat=plan.get("departure_seat"),
+                   step_out=plan.get("step_out"),
                    departure_point=points[0], departure_placement_id=plan["departure_placement_id"],
                    position_checkpoint_game=game_time().canonical())
     if exit_clip:
@@ -1200,7 +1201,20 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     # checking only the new position/remaining suffix could jump a new blocker.
     walking = journey["waypoints"][1:] if journey.get("departure_seat") else journey["waypoints"]
     route = [tuple(p[:2]) for p in walking]
-    if space is None or not space.valid or not space.free(tuple(st["pos"])) or not all(space.free(p) for p in route) or not all(
+    # Only the explicitly planned standing escape may cross keepouts. Preserve
+    # its original endpoints during revalidation, including after a partial tick.
+    step_out = journey.get("step_out")
+    escaping = False
+    if step_out is not None:
+        if (space is None or len(route) < 2 or list(route[1]) != step_out
+                or math.dist(route[0], route[1]) > 1.5 + 1e-9
+                or not space.inside_segment(route[0], route[1]) or not space.free(route[1])):
+            cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
+                           execution_ref=journey["execution_ref"], reason="approach_route_changed")
+            return
+        escaping = st["seg"] == 0 and not st["arrived"]
+        route = route[1:]
+    if space is None or not space.valid or (not escaping and not space.free(tuple(st["pos"]))) or not all(space.free(p) for p in route) or not all(
             space.visible(a, b) for a, b in zip(route, route[1:])):
         cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
                        execution_ref=journey["execution_ref"], reason="approach_route_changed")

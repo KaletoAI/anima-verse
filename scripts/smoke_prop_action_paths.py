@@ -408,6 +408,8 @@ class Ownership(unittest.TestCase):
         from app.core import animation_clips as A
         clip_dir = ROOT / "clips"
         clip_dir.mkdir(exist_ok=True)
+        (clip_dir / "path-rise.fbx").write_bytes(b"private deterministic exit fixture")
+        A._clear_entries_cache()
         (clip_dir / "path-rise.json").write_text(json.dumps({
             "kind": "path-rise", "duration_s": 2, "loop": False,
             "geometry": {"root_motion": {"mode": "foot_lock", "travel_m": [0, 1], "ref_height_m": 1.7}}}))

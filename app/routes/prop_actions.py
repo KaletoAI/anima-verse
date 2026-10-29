@@ -66,7 +66,9 @@ def _request(actor, body):
 
 @router.get("/play/prop-actions")
 def offers(user=Depends(get_current_user)):
-    return prop_actions.offers(_avatar(user))
+    from app.models.character import get_character_language
+    actor = _avatar(user)
+    return prop_actions.offers(actor, lang=get_character_language(actor))
 
 
 @router.get("/play/prop-actions/state")

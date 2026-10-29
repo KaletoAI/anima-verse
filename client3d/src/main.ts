@@ -4953,7 +4953,7 @@ async function startApp(username: string, role: string) {
       entries.set(id, { slots: [at], roomId: placeOffersRoom, group: '', drop: 0, offsetY: 0,
         fixed: true, diorama: false, level: 0, lift: 0, liftAt: { x: at.x, z: at.z }, anchor: spec.anchor,
         placementId: spec.placement_id, variantUid: spec.variant_uid });
-      placeOffers.push({ id, label: actions[0].label, group: '', capacity: 1, free: 0,
+      placeOffers.push({ id, label: actions[0].prop_label || actions[0].label, group: '', capacity: 1, free: 0,
         free_slots: [], poses: [], prop_actions: actions });
     }
     // The rings go to the places that have NO mesh target: neither a prop of
