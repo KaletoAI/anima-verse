@@ -84,7 +84,7 @@ def run(job):
     fx, fz = _cmu.forward_xz(take.poses[0])
     fps = int(doc["fps"])
     args = {"kind": params["kind"], "rig": inputs["rig"], "out_dir": job["out_dir"],
-            "fps": fps, "source_fps": float(fps), "root_motion": "strip",
+            "fps": fps, "source_fps": float(fps), "root_motion": "keep" if doc.get("bridge") else "strip",
             "loops": bool(doc["loop"]), "yaw_deg": math.degrees(math.atan2(fx, fz))}
     sidecar, outputs = cmu_clip.run_takes([take], args, fps, params["source"])
     sidecar, outputs = _finish(sidecar, outputs, params["kind"], fps,

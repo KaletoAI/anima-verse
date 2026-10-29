@@ -79,10 +79,12 @@ def commit_with_entry(repo: Path, catalog_rel: str, key: str, entry: dict,
     key -> synonyms removed from HEAD's version of that entry (a take_over:
     the owner's OTHER working-tree edits stay uncommitted).
 
+    An empty ``catalog_rel`` publishes only ``add_paths`` (a bridge).
+
     When the resulting tree equals HEAD's, no commit is made (a rerun after a
     landed commit is harmless). Raises StudioError when no commit landed;
     once one is on HEAD it never raises — see ``CommitResult.warning``."""
-    paths = [catalog_rel, *add_paths]
+    paths = ([catalog_rel] if catalog_rel else []) + add_paths
     last_err = ""
     for attempt in range(1, 4):
         if attempt > 1:
@@ -94,17 +96,18 @@ def commit_with_entry(repo: Path, catalog_rel: str, key: str, entry: dict,
         env = {**os.environ, "GIT_INDEX_FILE": idx}
         try:
             _git(repo, "read-tree", head, env=env)
-            doc = json.loads(_git(repo, "show", f"{head}:{catalog_rel}"))
-            entries = doc.setdefault("entries", {})
-            entries[key] = entry
-            for owner, gone in (strip or {}).items():
-                if owner in entries:
-                    entries[owner]["synonyms"] = [x for x in entries[owner].get("synonyms", [])
-                                                  if x not in gone]
-            blob = _git(repo, "hash-object", "-w", "--stdin",
-                        input_text=json.dumps(doc, ensure_ascii=False, indent=2)).strip()
-            _git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{catalog_rel}",
-                 env=env)
+            if catalog_rel:
+                doc = json.loads(_git(repo, "show", f"{head}:{catalog_rel}"))
+                entries = doc.setdefault("entries", {})
+                entries[key] = entry
+                for owner, gone in (strip or {}).items():
+                    if owner in entries:
+                        entries[owner]["synonyms"] = [x for x in entries[owner].get("synonyms", [])
+                                                      if x not in gone]
+                blob = _git(repo, "hash-object", "-w", "--stdin",
+                            input_text=json.dumps(doc, ensure_ascii=False, indent=2)).strip()
+                _git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{catalog_rel}",
+                     env=env)
             for p in add_paths:
                 _git(repo, "update-index", "--add", "--", p, env=env)
             tree = _git(repo, "write-tree", env=env).strip()

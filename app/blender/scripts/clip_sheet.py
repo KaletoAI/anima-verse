@@ -138,7 +138,7 @@ def _bbox(arms, frames):
 
 def _import(path):
     before = set(bpy.data.objects)
-    bpy.ops.wm.fbx_import(filepath=path, global_scale=1.0)
+    bpy.ops.wm.fbx_import(filepath=path, global_scale=1.0, anim_offset=0.0)
     return next(o for o in bpy.data.objects if o.type == "ARMATURE" and o not in before)
 
 
@@ -146,6 +146,7 @@ def run(job):
     params = dict(job.get("params") or {})
     engine = params.get("engine", "BLENDER_WORKBENCH")
     bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.context.scene.render.fps = 30
     arms = [_import(job["inputs"]["clip"])]
     _mannequin(arms[0], engine)
     if job["inputs"].get("clip_b"):

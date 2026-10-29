@@ -1,6 +1,7 @@
 """The authoring language: one module per animation defines ``ANIM``.
 
-Values are degrees per DOF (see rig.DRIVES) plus ``hips_drop_cm``. A Key
+Values are degrees per DOF (see rig.DRIVES), or centimetres for
+``hips_drop_cm`` and bridge-only ``root_x_cm`` / ``root_z_cm``. A Key
 states only what CHANGES: every key is laid over ``base`` and all earlier
 keys (carry-forward). ``loop=True`` closes the cycle itself — the first key
 is repeated at t = duration, so keys must lie in [0, duration).
@@ -24,7 +25,7 @@ EASES: Dict[str, Callable[[float], float]] = {
 
 
 class Pose(dict):
-    """DOF name -> degrees (``hips_drop_cm`` in cm)."""
+    """DOF name -> degrees; hips drop and bridge root translation use cm."""
 
     def __init__(self, **values: float):
         super().__init__({k: float(v) for k, v in values.items()})
@@ -157,7 +158,7 @@ class Animation:
     kind: str
     duration_s: float
     loop: bool
-    catalog: Catalog
+    catalog: Optional[Catalog] = None
     base: Pose = field(default_factory=Pose)
     keys: List[Key] = field(default_factory=list)
     layers: List = field(default_factory=list)
@@ -174,6 +175,7 @@ class Animation:
     #: the foot_slide check measures it against a floor running back at this
     #: speed instead of a still one. 0 = the floor stands still.
     treadmill_mps: float = 0.0
+    bridge: bool = False
 
 
 @dataclass
@@ -244,7 +246,7 @@ def _layers(anim: Animation) -> List[Oscillator]:
 
 
 def _known(dof: str) -> bool:
-    return dof in rig.DRIVES or dof == "hips_drop_cm"
+    return dof in rig.DRIVES or dof in ("hips_drop_cm", "root_x_cm", "root_z_cm")
 
 
 def validate(anim: Animation) -> None:
@@ -257,10 +259,29 @@ def validate(anim: Animation) -> None:
     if anim.loop and abs(frames - round(frames)) > 1e-9:
         raise StudioError(f"loop: duration_s * fps = {frames:g} is no whole frame count "
                           "- the last frame would miss the closing key")
-    if anim.catalog.group not in GROUPS:
-        raise StudioError(f"catalog.group must be one of {GROUPS}")
-    if "/" in anim.catalog.key:
-        raise StudioError("catalog.key must not contain '/'")
+    if anim.bridge:
+        if anim.loop:
+            raise StudioError("bridge clips require loop=False")
+        if anim.catalog is not None:
+            raise StudioError("bridge clips must not have a Catalog")
+        if anim.treadmill_mps:
+            raise StudioError("bridge clips require a stationary floor")
+    elif anim.catalog is None:
+        raise StudioError("non-bridge clips require a Catalog")
+    if anim.catalog is not None:
+        if anim.catalog.group not in GROUPS:
+            raise StudioError(f"catalog.group must be one of {GROUPS}")
+        if "/" in anim.catalog.key:
+            raise StudioError("catalog.key must not contain '/'")
+    root_dofs = {"root_x_cm", "root_z_cm"}
+    named = set(anim.base).union(*(k.pose for k in anim.keys))
+    named.update(o.dof for o in _layers(anim))
+    if not anim.bridge and named & root_dofs:
+        raise StudioError("horizontal root DOFs are allowed only on bridges")
+    for dof in named & root_dofs:
+        vals = [anim.base.get(dof, 0), *(k.pose[dof] for k in anim.keys if dof in k.pose)]
+        if not all(math.isfinite(v) for v in vals):
+            raise StudioError(f"{dof} must be finite")
     if not 0.0 <= anim.lift_cm <= 40.0:
         raise StudioError("lift_cm must be within 0..40")
     if not 0.0 <= anim.treadmill_mps <= 8.0:

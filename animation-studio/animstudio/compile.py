@@ -113,6 +113,7 @@ class Compiled:
     max_step_deg: float = 0.0
     loop_problems: List[str] = field(default_factory=list)
     lift_cm: float = 0.0
+    bridge: bool = False
 
 
 def local_rotations(values: Dict[str, float]) -> Dict[str, np.ndarray]:
@@ -178,6 +179,10 @@ def compile_anim(anim: Animation, rest: rig.Rest, partner: Optional[PartnerFn] =
                 used.add(dof)
         rots = local_rotations(values)
         D, pos = fk(rest, rots, values.get("hips_drop_cm", 0.0))
+        # Translate the entire FK skeleton before solving world-space goals.
+        travel = np.array([values.get("root_x_cm", 0.0), 0.0,
+                           values.get("root_z_cm", 0.0)])
+        pos = {b: p + travel for b, p in pos.items()}
         for goal in anim.ik:
             if type(goal).__name__ == "FeetPlanted":
                 for s in goal.sides:
@@ -250,7 +255,7 @@ def compile_anim(anim: Animation, rest: rig.Rest, partner: Optional[PartnerFn] =
         frames.append(Frame(D, pos))
     compiled = Compiled(frames=frames, fps=anim.fps, loop=anim.loop,
                         fingers=any(d.endswith(("_fingers_curl", "_thumb_curl")) for d in used),
-                        extrema=extrema, lift_cm=anim.lift_cm,
+                        extrema=extrema, lift_cm=anim.lift_cm, bridge=anim.bridge,
                         ik_error_cm=ik_err, max_bend_deg=max_bend)
     if anim.loop:
         for o in _layers(anim):
@@ -345,6 +350,7 @@ def take_document(rest: rig.Rest, compiled: Compiled,
     return {
         "fps": compiled.fps,
         "loop": compiled.loop,
+        "bridge": compiled.bridge,
         "lift_cm": compiled.lift_cm,
         "bones": bones,
         "lhipjoint_cm": lhip,

@@ -187,12 +187,18 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
         raise StudioError("the last build did not pass its checks")
     if built.get("spec_sha") != spec_sha(kind):
         raise StudioError("the source changed after the last build - build again")
-    pc.reload_catalogs()
+    from animstudio.dsl import validate, PairAnimation
+    bridge = not isinstance(anim, PairAnimation) and anim.bridge
+    if not isinstance(anim, PairAnimation):
+        validate(anim)
+    if not bridge:
+        pc.reload_catalogs()
     reload_clip_caches()
     _check_kind(anim, replace)    # early, before anything is written
-    _check_catalog(anim, replace)
+    if not bridge:
+        _check_catalog(anim, replace)
     lib = paths.get_animation_clips_dir()
-    cat_path = pc.catalog_path("pose")
+    cat_path = None if bridge else pc.catalog_path("pose")
     commit_paths: List[str] = []
     if commit:
         # Before anything is written: every path the commit names must lie
@@ -203,13 +209,13 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
             except ValueError:
                 raise StudioError(f"{p} lies outside the repository {repo} - "
                                   "cannot commit it (publish with --no-commit?)")
-        commit_paths = ([rel(cat_path)] + [rel(lib / f) for f in clip_files(anim)]
+        commit_paths = (([rel(cat_path)] if cat_path else []) + [rel(lib / f) for f in clip_files(anim)]
                         + [rel(animstudio.ANIMS / f"{kind}.py")])
     lib.mkdir(parents=True, exist_ok=True)
     written: List[Path] = []
     backups: Dict[Path, bytes] = {}
-    key = anim.catalog.key.strip().lower()
-    entry = catalog_entry(anim)
+    key = "" if bridge else anim.catalog.key.strip().lower()
+    entry = {} if bridge else catalog_entry(anim)
     old_clip = ""
     cat_undo = None               # (before, written, old entries) once we wrote
     moves: Dict[str, List[str]] = {}
@@ -224,34 +230,35 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
                 atomic_replace(tmp, dst)
             written.append(dst)
         reload_clip_caches()
-        with pc.catalog_file_lock("pose"):
-            # The critical section is read -> alias check -> write: the
-            # names are checked AGAIN under the lock (the Poses tab may have
-            # written in between; get_catalog sees it through the file stamp).
-            # Only the catalog half: the clip files are already ours here,
-            # the kind check would now find them.
-            moves = _check_catalog(anim, replace)
-            before = cat_path.read_bytes()
-            doc = json.loads(before.decode("utf-8"))
-            entries = doc.setdefault("entries", {})
-            olds = {k: (json.loads(json.dumps(entries[k])) if k in entries else None)
-                    for k in [key, *moves]}
-            if anim.catalog.repoint:
-                if key not in entries:
-                    raise StudioError(f"repoint: pose {key!r} is not in the shared catalog")
-                old_clip = str(entries[key].get("animation") or "")
-                entry = repointed_entry(anim, entries[key])
-            entries[key] = entry
-            for owner, gone in moves.items():
-                if owner in entries:
-                    entries[owner]["synonyms"] = [x for x in entries[owner].get("synonyms", [])
-                                                  if x not in gone]
-            pc.write_shared_document("pose", doc)
-            cat_undo = (before, cat_path.read_bytes(), olds)
-        pc.reload_catalogs()
-        problems = pc.validate_catalog("pose")
-        if problems:
-            raise StudioError("catalog invalid after publish: " + "; ".join(problems))
+        if not bridge:
+            with pc.catalog_file_lock("pose"):
+                # The critical section is read -> alias check -> write: the
+                # names are checked AGAIN under the lock (the Poses tab may have
+                # written in between; get_catalog sees it through the file stamp).
+                # Only the catalog half: the clip files are already ours here,
+                # the kind check would now find them.
+                moves = _check_catalog(anim, replace)
+                before = cat_path.read_bytes()
+                doc = json.loads(before.decode("utf-8"))
+                entries = doc.setdefault("entries", {})
+                olds = {k: (json.loads(json.dumps(entries[k])) if k in entries else None)
+                        for k in [key, *moves]}
+                if anim.catalog.repoint:
+                    if key not in entries:
+                        raise StudioError(f"repoint: pose {key!r} is not in the shared catalog")
+                    old_clip = str(entries[key].get("animation") or "")
+                    entry = repointed_entry(anim, entries[key])
+                entries[key] = entry
+                for owner, gone in moves.items():
+                    if owner in entries:
+                        entries[owner]["synonyms"] = [x for x in entries[owner].get("synonyms", [])
+                                                      if x not in gone]
+                pc.write_shared_document("pose", doc)
+                cat_undo = (before, cat_path.read_bytes(), olds)
+            pc.reload_catalogs()
+            problems = pc.validate_catalog("pose")
+            if problems:
+                raise StudioError("catalog invalid after publish: " + "; ".join(problems))
     except Exception:
         for p in written:
             if p in backups:
@@ -269,7 +276,8 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
         raise
     files = [str(p) for p in written]
     result = {"kind": kind, "key": key, "files": files, "commit": "", "commit_created": False,
-              "warning": "", "note": WORLD_NOTE.format(key=key), "moved": moves,
+              "warning": "", "note": ("bridge published; caller supplies clip_transitions.json rules" if bridge
+                                      else WORLD_NOTE.format(key=key)), "moved": moves,
               "repointed_from": old_clip if old_clip != kind else "",
               # the replaced clip's remaining users (empty: no pose plays it now)
               "old_clip_users": (clip_users(pc.get_catalog("pose"), old_clip)
@@ -280,9 +288,12 @@ def publish(kind: str, *, replace: bool = False, commit: bool = True, trailer: s
                if not result["repointed_from"] else
                f"feat(clips): {kind} — procedural clip, pose '{key}' re-pointed from "
                f"'{result['repointed_from']}' (animation-studio)")
+        if bridge:
+            msg = f"feat(clips): {kind} — procedural bridge (animation-studio)"
         if trailer:
             msg += "\n\n" + trailer
-        res = commit_with_entry(repo, commit_paths[0], key, entry, commit_paths[1:], msg,
+        res = commit_with_entry(repo, "" if bridge else commit_paths[0], key, entry,
+                                commit_paths if bridge else commit_paths[1:], msg,
                                 strip=moves)
         result.update(commit=res.sha, commit_created=res.created, warning=res.warning)
     return result

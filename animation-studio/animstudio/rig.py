@@ -41,6 +41,7 @@ is the mirror image, so + means the same movement on both sides):
   s_knee_flex       SLeg·x·+1           bend the knee (shin backwards; 90 = seated)
   s_ankle_flex      SFoot·x·-1          toes up
   s_toes_flex       SToeBase·x·-1       toes up (toe joint)
+  root_x_cm/root_z_cm —                 bridge-only translation: +X left, +Z forward
   hips_drop_cm      —                   the hips sink by that many cm
 
 Rotation order per bone (``ORDER``): Arm "yzx", UpLeg "xzy", Hand "zyx",

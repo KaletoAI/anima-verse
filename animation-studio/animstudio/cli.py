@@ -89,7 +89,8 @@ def main(argv=None) -> int:
                 tail = f", commit {r['commit']}"
             else:
                 tail = f", nothing new to commit - HEAD {r['commit']} already has it"
-            print(f"published {r['kind']} as pose '{r['key']}'{tail}")
+            label = f"as pose {r['key']!r}" if r["key"] else "as bridge"
+            print(f"published {r['kind']} {label}{tail}")
             for owner, gone in r.get("moved", {}).items():
                 print(f"moved from '{owner}': {', '.join(gone)}")
             if r.get("repointed_from"):

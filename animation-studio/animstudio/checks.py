@@ -120,7 +120,7 @@ def run_checks(anim: Animation, compiled: Compiled, measure: Dict,
     out.append(Check("foot_slide", worst <= SLIDE_CM, round(worst, 2), f"<= {SLIDE_CM} cm",
                      f"against a floor running back at {anim.treadmill_mps:g} m/s"
                      if anim.treadmill_mps else ""))
-    group = anim.catalog.group
+    group = anim.catalog.group if anim.catalog else None
     if group == "stand":
         gap = max(min(f["LeftToeBase"][1], f["RightToeBase"][1],
                       f["LeftFoot"][1], f["RightFoot"][1]) for f in frames)
@@ -139,6 +139,15 @@ def run_checks(anim: Animation, compiled: Compiled, measure: Dict,
                      f">= {MIN_TRACKS}"))
     if sidecar is not None:
         out.append(_sidecar_check(anim, frames, sidecar))
+    if anim.bridge and sidecar is not None:
+        rm = sidecar.get("geometry", {}).get("root_motion", {})
+        # Authored takes use the reference rig itself: importer leg ratio = 1.
+        a, b = compiled.frames[0].pos["Hips"], compiled.frames[-1].pos["Hips"]
+        expected = [(b[i] - a[i]) / 100 for i in (0, 2)]
+        travel = rm.get("travel_m", [])
+        error = (math.dist(travel, expected) if len(travel) == 2 else float("inf"))
+        out.append(Check("bridge_travel", rm.get("mode") == "keep" and error <= .01,
+                         error, "<= 0.01 m", f"expected {expected}"))
     hips = statistics.median(f["Hips"][1] for f in frames)
     if group == "seat":
         thigh = statistics.median(
