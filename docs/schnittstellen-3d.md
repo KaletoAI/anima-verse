@@ -8213,9 +8213,12 @@ support-height cases (including nonzero marker root offsets). Runtime
 client acceptance is separate from these mathematical/protocol regressions;
 see the Task9 handoff for actual browser scenario requirements.
 
-The unfinished native client is explicitly excluded from this prop-action
-cutover and its acceptance. Its native-specific implementation remains
-unchanged; this section does not claim native HUD v3 or prop-action parity.
+The native client implements prop-action parity (Task 57 / E7-T12): the same
+semantic routes, exact placement/variant offers, HUD bridge v3 preparation and
+invalidation, authoritative approach paths and measured entry playback. Native
+acceptance uses the shared motion vectors and the six offline prop-action
+scenarios in `native/fixtures/propactions/` (`--check=propactions`); unavailable
+measured clip/support readiness is reported explicitly.
 
 Controller commands (private fixtures only):
 `./.venv/bin/python scripts/smoke_prop_action_api.py` and

@@ -4,7 +4,7 @@ using Xunit;
 namespace AnimaNative.Tests;
 
 /// <summary>
-/// Bridge v3 (bridge.ts after the browser prop-action cutover): the native client speaks the wire without prop actions.
+/// Bridge v3 (bridge.ts after the browser prop-action cutover): the native client speaks the wire with Task 57 prop actions.
 /// Expectations from bridge.ts by hand: <c>valid()</c> needs <c>v === 3</c>; <c>prop-action-prepare</c> needs a string
 /// <c>request_id</c>; <c>prop-actions-changed</c> takes an optional string <c>request_id</c>; the scene answers a preparation
 /// with <c>{v:3, kind:'prop-action-prepared', request_id, error?}</c>.
@@ -39,6 +39,13 @@ public class HudProtocolV3Tests
         Assert.NotNull(HudProtocol.Parse("""{"v":3,"kind":"action","name":"pickPropAction","args":[]}""", out _));
         Assert.NotNull(HudProtocol.Parse("""{"v":3,"kind":"action","name":"cancelPropAction","args":["e1"]}""", out _));
         Assert.Null(HudProtocol.Parse("""{"v":3,"kind":"action","name":"pickPlacePose","args":[null]}""", out _));
+    }
+
+    [Fact]
+    public void SceneInvalidationPreservesCorrelationOrOmitsIt()
+    {
+        Assert.Equal("""{"v":3,"kind":"prop-actions-changed","request_id":"native:1"}""", HudProtocol.PropActionsChanged("native:1"));
+        Assert.Equal("""{"v":3,"kind":"prop-actions-changed"}""", HudProtocol.PropActionsChanged());
     }
 
     [Fact]

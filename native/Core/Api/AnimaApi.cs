@@ -33,7 +33,7 @@ public sealed class ApiException : Exception
 /// and by the fixture source of the <c>--check</c> mode (offline), so both paths
 /// build the very same nodes.
 /// </summary>
-public interface IWorldSource
+public partial interface IWorldSource
 {
     /// <summary>Task 52 / E7-T7: authoritative room-marker availability, labels, capacities and pose keys.</summary>
     Task<JsonDocument> GetPlacesAsync()
@@ -129,10 +129,10 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
     public static bool IsAuthError(Exception? e) => e is ApiException { Status: 401 }
                                                      || (e is AggregateException a && IsAuthError(a.InnerException));
 
-    public AnimaApi(string server)
+    public AnimaApi(string server, HttpMessageHandler? transport = null)
     {
         BaseUri = new Uri(server.TrimEnd('/') + "/");
-        var handler = new HttpClientHandler
+        var handler = transport ?? new HttpClientHandler
         {
             CookieContainer = _cookies,
             UseCookies = true,

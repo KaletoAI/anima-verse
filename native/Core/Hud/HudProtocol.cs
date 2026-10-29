@@ -72,8 +72,7 @@ public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, Js
 ///   - v2 (Task 26d): game action <c>applyGraphicsPrefs(prefs)</c>, the menu's Graphics tab.
 ///   - v3 (browser prop-action cutover): the semantic prop-action commands replace <c>pickPlacePose</c>, plus the kinds
 ///     <c>prop-action-prepare</c> / <c>prop-action-prepared</c> / <c>prop-actions-changed</c>. The native client speaks the
-///     wire but has no prop actions (excluded from that cutover by the user): it answers every preparation with an error
-///     and ignores the invalidations.
+///     wire with Task 57 prop-action preparation, real mutations and correlated invalidations.
 /// </summary>
 public static class HudProtocol
 {
@@ -192,6 +191,14 @@ public static class HudProtocol
     {
         var msg = new JsonObject { ["v"] = Version, ["kind"] = "prop-action-prepared", ["request_id"] = requestId };
         if (error is not null) msg["error"] = error;
+        return msg.ToJsonString();
+    }
+
+    /// <summary>Task 57: scene-to-HUD invalidation, also emitted after refused semantic mutations.</summary>
+    public static string PropActionsChanged(string? requestId = null)
+    {
+        var msg = new JsonObject { ["v"] = Version, ["kind"] = "prop-actions-changed" };
+        if (requestId is not null) msg["request_id"] = requestId;
         return msg.ToJsonString();
     }
 

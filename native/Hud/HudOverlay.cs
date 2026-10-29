@@ -100,6 +100,23 @@ public partial class HudOverlay : CanvasLayer
 
     /// <summary>The HUD page (<c>hud.html</c>) finished loading — the handoff's load or a reload (Main sets and clears it).</summary>
     public Action? PageLoaded { get; set; }
+    /// <summary>Task 57: scene-owned position barrier; completion is acknowledged with the same request ID.</summary>
+    public Func<string, Task>? PropActionPrepare { get; set; }
+    /// <summary>Task 57: HUD mutation finally notification, including refusal, requests fresh state/world adoption.</summary>
+    public Action<string?>? PropActionsChanged { get; set; }
+    public Task? PendingPropPreparation { get; private set; }
+    public void NotifyPropActionsChanged(string? requestId = null) => Send(HudProtocol.PropActionsChanged(requestId));
+    private async Task PreparePropAction(string requestId)
+    {
+        string? error = null;
+        try
+        {
+            if (PropActionPrepare is not { } prepare) throw new InvalidOperationException("Furniture action host is not ready");
+            await prepare(requestId);
+        }
+        catch (Exception e) { error = e.Message; }
+        Send(HudProtocol.PropActionPrepared(requestId, error));
+    }
 
     /// <summary>
     /// The overlay, created once per process; null when gdCEF is not linked
@@ -420,10 +437,10 @@ public partial class HudOverlay : CanvasLayer
                 Dispatch(msg.Name!, msg.Args!);
                 break;
             case "prop-action-prepare":
-                // No prop actions natively (excluded from the v3 cutover): fail fast instead of the HUD's 10 s timeout.
-                Send(HudProtocol.PropActionPrepared(msg.RequestId!, "Prop actions are not available in the native client"));
+                PendingPropPreparation = PreparePropAction(msg.RequestId!);
                 break;
             case "prop-actions-changed":
+                PropActionsChanged?.Invoke(msg.RequestId);
                 break;
         }
     }

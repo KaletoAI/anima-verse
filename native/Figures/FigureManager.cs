@@ -383,9 +383,10 @@ public partial class FigureManager : Node3D
         if (!fresh && fig.CharacterName == PlayerDriven && HoldAvatarPlacement) return;
         // Task 49: polls still refresh models/activity, but local root, goal, route, facing and visibility belong to input.
         if (!fresh && IsPlayerDriven(fig.CharacterName)) { AdoptInteraction(fig); return; }
+        AdoptInteraction(fig);
+        if (AdoptPropEntry(fig, plan)) return;
         fig.Rule = plan.Rule;
         fig.SurfaceGroup = plan.SurfaceGroup;
-        AdoptInteraction(fig);
         bool arrived = AdoptRoute(fig);
         // THE GOAL: the server's point — or, after a stand-up, the spot the bridge left the figure on, for as long as the
         // server sends the SAME point (settleOffset against the kept server point); a different one voids the spot.
@@ -459,9 +460,10 @@ public partial class FigureManager : Node3D
     /// </summary>
     private bool AdoptRoute(Figure fig)
     {
+        if (_rowByName.TryGetValue(fig.CharacterName, out var propRow) && AdoptExactPropRoute(fig, propRow)) return false;
         var tr = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.Travel : null;
         // Task 50: cancellation suppresses this journey in the E6 route branch, including cached placement.
-        if (fig.CharacterName == PlayerDriven && SuppressAvatarJourney?.Invoke(tr?.JourneyId) == true) tr = null;
+        if (fig.CharacterName == AvatarName && SuppressAvatarJourney?.Invoke(tr?.JourneyId) == true) tr = null;
         if (tr?.Waypoints is not { Count: >= 2 } points || tr.ProgressM is not { } serverM)
         {
             bool arrived = fig.Route is not null;
@@ -594,6 +596,7 @@ public partial class FigureManager : Node3D
     /// </summary>
     private void StepRoute(Figure fig, JourneyRoute r, double dt, double camDist)
     {
+        if (r.ExactPath is not null) { StepExactPropRoute(fig, r, dt, camDist); return; }
         if (fig.Travelling && fig.Player is not null && !fig.Bridging && fig.HoldsTravel) ApplyBridgeTravel(fig);
         r.ShownM = TravelPath.StepShown(r.Points, r.Paces, r.ShownM, r.TargetM, dt);
         r.TargetM = TravelPath.AdvanceAlongPaces(r.Points, r.Paces, r.TargetM, dt);
@@ -628,6 +631,8 @@ public partial class FigureManager : Node3D
 
     private void StepFigure(Figure fig, double dt, Vec3? neighbour, double camDist)
     {
+        if (fig.PropEntryBlocked) return;
+        if (fig.PropEntry is not null) { TickPropEntry(fig); return; }
         // A running pair interaction places the figure and plays its half (npcs.ts: `tickInteraction` before anything).
         if (fig.Pair is not null && TickPair(fig, dt)) return;
         if (fig.Route is { } route) { StepRoute(fig, route, dt, camDist); return; }

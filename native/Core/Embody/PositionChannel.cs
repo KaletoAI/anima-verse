@@ -26,6 +26,28 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     public bool Dirty { get; private set; }
     public bool InFlight { get; private set; }
     public Func<bool> CanReport { get; set; } = () => true;
+    /// <summary>Task 57: synchronously pause manual writes until fresh prop state and world adoption.</summary>
+    public bool ReportsPaused { get; set; }
+    private bool _propDraining, _propDrainFailed;
+    /// <summary>Task 57: flush the rendered final point, then await both current and queued real HTTP writes.</summary>
+    public async Task PreparePropActionAsync(P2? point, bool serverOwned)
+    {
+        ReportsPaused = true;
+        if (serverOwned) _pending = null;
+        else if (Dirty && point is { } p)
+        {
+            _pending = (new(Math.Floor(p.X*100+.5)/100, Math.Floor(p.Z*100+.5)/100), ++Seq);
+            Dirty = false;
+        }
+        _propDraining = true; _propDrainFailed = false;
+        try
+        {
+            Flush();
+            await WhenIdle;
+            if (_propDrainFailed) throw new InvalidOperationException("Position synchronization failed; furniture action was not sent.");
+        }
+        finally { _propDraining = false; }
+    }
     public event Action<PositionAnswer>? Adopted;
     public event Action<P2, P2?>? Refused;
     public event Action<P2>? Corrected;
@@ -57,7 +79,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     /// <summary>Reserve before notifying takeover; a previous flight must finish before cancellation is sent.</summary>
     public void Input(P2 point)
     {
-        if (Driver.Kind != DriverKind.SERVER || _disposed || !CanReport()) return;
+        if (Driver.Kind != DriverKind.SERVER || _disposed || ReportsPaused || !CanReport()) return;
         long seq = ++Seq;
         _pending = (point, seq);
         Apply(PosEcho.AvatarDriver(Driver, new DriverInput(seq), Cancelled));
@@ -70,7 +92,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     public void CorrectBaseline(P2 point) { _reported = point; Dirty = false; }
     public void Tick(P2 point, bool moved)
     {
-        if (_disposed || !CanReport() || Driver.Kind == DriverKind.SERVER) return;
+        if (_disposed || ReportsPaused || !CanReport() || Driver.Kind == DriverKind.SERVER) return;
         if (moved && (_reported is not { } p || Math.Abs(p.X-point.X) >= .01 || Math.Abs(p.Z-point.Z) >= .01)) Dirty = true;
         if (InFlight || !Dirty || clock() - _lastReport < ReportMs) return;
         Dirty = false;
@@ -82,7 +104,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
     {
         if (InFlight || _pending is not { } p) return;
         _pending = null;
-        if (_disposed || Driver.Kind == DriverKind.SERVER || !CanReport()) { Dirty = true; return; }
+        if (_disposed || Driver.Kind == DriverKind.SERVER || (!_propDraining && (ReportsPaused || !CanReport()))) { Dirty = true; return; }
         InFlight = true;
         _idle ??= new TaskCompletionSource();
         _lastReport = clock();
@@ -97,6 +119,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
         try
         {
             var answer = await write(new(point.X, point.Z, seq, sentAt, Session), deadline.Token).WaitAsync(deadline.Token);
+            if (_propDraining && !answer.Ok) _propDrainFailed = true;
             if (_disposed || !PosEcho.AnswerApplies(Driver, seq, AnswerFloor)) return;
             if (answer.Status is >= 200 and < 300)
             {
@@ -113,6 +136,7 @@ public sealed class PositionChannel(Func<PositionReport, CancellationToken, Task
         }
         catch (Exception)
         {
+            if (_propDraining) _propDrainFailed = true;
             if (!_disposed && PosEcho.AnswerApplies(Driver, seq, AnswerFloor)) Dirty = true;
         }
         finally

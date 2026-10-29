@@ -74,6 +74,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
         steering.StandUp=StandUp;
         figures.PositionMapApplied+=MapApplied;
         world.Dropped+=Dropped;
+        AttachProps();
     }
     private void EntryAction(JsonArray _) => PendingEntry=EnterAsync();
     private void PoseAction(JsonArray args)
@@ -97,7 +98,9 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
         {
             _seatMap=map.Clone(); _seatMapAt=MapReceiptTime(map);
             ReconcilePlace(map,_seatMapAt);
-            PendingPlaces=RefreshPlacesAsync(); UpdateOffers();
+            PendingPlaces=RefreshPlacesAsync();
+            if(PropActions is not null) PendingPropAction=ObservePropAsync(async ()=> { await PropActions.RefreshAsync(); await RefreshSemanticOffersAsync(); });
+            UpdateOffers();
         }
     }
     private double MapReceiptTime(JsonElement map) => _source.ReceiptOf(map)?.PolledAt ?? _clock();
@@ -107,10 +110,11 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
         if(FigureGround.PollIsStale(polledAt,_position.OwnSeatChangeAt)) return;
         _seatMap=map.Clone(); _seatMapAt=polledAt;
         ReconcilePlace(map,polledAt);
-        if(_active) PendingPlaces=RefreshPlacesAsync();
+        if(_active) { PendingPlaces=RefreshPlacesAsync(); if(PropActions is not null) _=RefreshSemanticOffersAsync(); }
     }
     public void Tick()
     {
+        TickProps();
         if(!_active || _disposed) return;
         // Rebuilds also follow tier swaps, re-lifts, and streamed room mounts without another server poll.
         RebuildPlaces();
@@ -205,7 +209,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     public void Dispose()
     {
         if(_disposed) return;
-        SetActive(false); _disposed=true; _lifetime.Cancel();
+        SetActive(false); DetachProps(); _disposed=true; _lifetime.Cancel();
         _figures.PositionMapApplied-=MapApplied; _world.Dropped-=Dropped; _steering.StandUp=null; _hud.LockedEntry=null;
         _hud.Handlers.Remove("enterLocation"); _hud.Handlers.Remove("pickRoomPose"); _hud.Handlers.Remove("closePlaceMenu");
         Places.Clear(); Places.QueueFree(); _lifetime.Dispose();

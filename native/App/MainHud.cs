@@ -287,7 +287,7 @@ public partial class Main : Node3D
         if (at is { } p && _hud?.Active == true && _picking is not null && _camera is not null)
         {
             var (o, d) = _camera.RayAt(p);
-            if (_avatarOffers?.Places.HasHover == true || _avatarRooms?.Picking.HasHover == true || _picking.Pick(o, d) is not null) shape = Input.CursorShape.PointingHand;
+            if (_avatarOffers?.HasHover == true || _avatarRooms?.Picking.HasHover == true || _picking.Pick(o, d) is not null) shape = Input.CursorShape.PointingHand;
         }
         if (_hud is not null) _hud.SceneCursor = shape;
         if (_hud?.PointerOverHud == true) return;   // the page owns the cursor there

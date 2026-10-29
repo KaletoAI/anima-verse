@@ -214,6 +214,7 @@ public partial class Main
                     Toast = EmbodyToast,
                     OpenLocation = OpenLocation,
                     RefreshMap = RefreshOffersMap,
+                    RefreshPropWorld = RefreshPropWorldAsync,
                     RoomRequestInFlight = () => _avatarRooms?.Channel.InFlight == true
                 };
             _figures.BeforeTick += StepPlayerSteering;

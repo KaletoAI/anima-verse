@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AnimaNative.Overview;
 using AnimaNative.Scatter;
 using AnimaNative.World;
@@ -16,6 +17,9 @@ public sealed record CharacterRow(
     string Name, string LocationId, double? PosX, double? PosZ, double? HeightCm, string? ModelSig,
     TravelInfo? Travel)
 {
+    /// <summary>Task 57: public geometry only; absent projections clear on the next poll.</summary>
+    public JsonObject? LocalApproach { get; init; }
+    public JsonObject? PropActionEntry { get; init; }
     public bool HasPos => PosX.HasValue && PosZ.HasValue;
 
     /// <summary><c>activity_animation</c>: THE clip kind of a standing figure (npcs.ts → <c>standingClipFor</c>); "" = none.</summary>
@@ -103,6 +107,8 @@ public sealed record CharacterRow(
         return new CharacterRow(Json.Str(c, "name"), Json.Str(c, "location_id"), px, pz,
                                 Json.NumOrNull(c, "height_cm"), sig, travel)
         {
+            LocalApproach = c.TryGetProperty("local_approach",out var la) && la.ValueKind==JsonValueKind.Object ? JsonNode.Parse(la.GetRawText())!.AsObject() : null,
+            PropActionEntry = c.TryGetProperty("prop_action_entry",out var pe) && pe.ValueKind==JsonValueKind.Object ? JsonNode.Parse(pe.GetRawText())!.AsObject() : null,
             ActivityAnimation = Json.Str(c, "activity_animation"),
             AnimationSets = sets,
             ModelRev = rev,

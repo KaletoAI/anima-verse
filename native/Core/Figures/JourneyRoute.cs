@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json.Nodes;
 
 namespace AnimaNative.Figures;
 
@@ -15,6 +16,9 @@ public sealed class JourneyRoute
     public double TargetM { get; set; }
     public double ShownM { get; set; }
     public int Stamp { get; set; }
+    /// <summary>Task 57: exact public local/owned prop route uses its receipt clock and unsmoothed sampled path.</summary>
+    public JsonObject? ExactPath { get; set; }
+    public double ReceivedAt { get; set; }
 }
 
 /// <summary>

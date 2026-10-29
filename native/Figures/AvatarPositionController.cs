@@ -12,7 +12,7 @@ namespace AnimaNative.Embody;
 /// <summary>
 /// Task 50 / E7-T5: main.ts driver, report and reconciliation glue. Poll ownership is decided BEFORE E6
 /// placement; foreign positions are reconciled AFTER it. Reports sample the actual root after the single
-/// FigureManager tick. Task 57 replaces PropActionDriven's guard with the complete prop-action lifecycle.
+/// FigureManager tick. Task 57 connects PropActionDriven to private lifecycle ownership, entry playback and manual release.
 /// </summary>
 public sealed class AvatarPositionController : IDisposable
 {
@@ -47,6 +47,10 @@ public sealed class AvatarPositionController : IDisposable
     private bool InPair => Avatar?.Pair is not null;
     private bool Seated => _steering.AvatarSeated || (_row is { } row && HasObject(row, "place")
         && OwnSeatChangeAt==0 && _steering.Correction is null);
+    /// <summary>Task 57: private lifecycle and successful manual-cancel tombstones participate in driver selection.</summary>
+    public string? OwnedPropJourney { get; private set; }
+    public Func<bool>? PropMotionOwned { get; set; }
+    public Func<string?,bool>? ManualPropWithdrawn { get; set; }
     private bool CanReport => _active && !_disposed && !_steering.MovementLocked && !_steering.PropActionDriven
         && !InPair && !Seated && !_steering.SeatWritePending && _readiness.PendingSnap is null && _steering.Correction is null;
 
@@ -62,7 +66,7 @@ public sealed class AvatarPositionController : IDisposable
         Channel.Corrected += CorrectTo;
         Channel.Toast += message => Toast?.Invoke(message);
         Channel.DriverChanged += DriverChanged;
-        figures.SuppressAvatarJourney = Channel.Suppressed;
+        figures.SuppressAvatarJourney = journey => Channel.Suppressed(journey) || ManualPropWithdrawn?.Invoke(journey)==true;
         figures.PositionMapApplying += Applying;
         figures.PositionMapApplied += Applied;
         figures.AfterTick += AfterTick;
@@ -107,18 +111,20 @@ public sealed class AvatarPositionController : IDisposable
         if (_row is not { } me) return;
         RoomId = Text(me,"room_id"); _steering.RoomId = RoomId;
         LocationId = Text(me,"location_id");
-        // Task 57 hook: a browser-started prop entry/approach remains entirely server driven here.
+        // Task 57: semantic state owns approach/active motion, including the avatar travel route and measured entry.
         bool wasPropDriven = _steering.PropActionDriven;
-        _steering.PropActionDriven = HasObject(me,"prop_action_entry") || HasObject(me,"local_approach");
+        _steering.PropActionDriven = PropMotionOwned?.Invoke()==true || HasObject(me,"prop_action_entry") || HasObject(me,"local_approach");
         if (_steering.PropActionDriven)
         {
+            if (me.TryGetProperty("travel",out var propTravel) && propTravel.ValueKind==JsonValueKind.Object
+                && Text(propTravel,"journey_id") is { Length:>0 } propJourney) OwnedPropJourney=propJourney;
             if (!wasPropDriven) Channel.DiscardPendingAnswers();
             ClearOwnedMovement();
             _figures.SetServerDriven(true);
             return;
         }
         bool route = me.TryGetProperty("travel",out var tr) && tr.ValueKind == JsonValueKind.Object
-            && tr.TryGetProperty("waypoints",out var points) && points.ValueKind == JsonValueKind.Array && points.GetArrayLength() >= 2;
+            && tr.TryGetProperty("waypoints",out var points) && points.ValueKind == JsonValueKind.Array && points.GetArrayLength() >= 2 && ManualPropWithdrawn?.Invoke(Text(tr,"journey_id"))!=true;
         var origin = Origin(me);
         Channel.ApplyDriver(new(route, route ? Text(tr,"journey_id") is { Length: > 0 } j ? j : null : null,
             origin?.Session == Channel.Session ? origin.Seq : null));

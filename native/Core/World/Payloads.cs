@@ -331,6 +331,10 @@ public sealed record SceneModelSpec(
     double FixX, double FixY, double FixZ, double YawDeg, double MaxM, string Measure,
     double[]? SizeM, double AnchorX, double AnchorZ, double BottomY)
 {
+    /// <summary>Task 57: stable semantic placement provenance; never infer this identity from prop ID or anchor.</summary>
+    public string PlacementId { get; init; } = "";
+    public string VariantUid { get; init; } = "";
+
     public string RoomId { get; init; } = "";
     public int Level { get; init; }
     public bool PlanHull { get; init; }
@@ -536,6 +540,7 @@ public sealed class ScenePayload
             Json.Num(m, "bottom_y"))
         {
             RoomId = Json.Str(m, "room_id"),
+            PlacementId = Json.Str(m, "placement_id"), VariantUid = Json.Str(m, "variant_uid"),
             Level = (int)Json.Num(m, "level"),
             PlanHull = Json.Bool(m, "plan_hull"),
             PlaceholderDims = ph,

@@ -85,13 +85,14 @@ public partial class Main : Node3D
     }
 
     /// <summary>A polled map with the view revision it was asked under (main.ts <c>PolledMap</c>).</summary>
-    private sealed record PolledMap(JsonElement Map, int ViewRev);
+    private sealed record PolledMap(JsonElement Map, int ViewRev, int PropGeneration = 0);
 
     private async Task<PolledMap> FetchWorldMapAsync()
     {
         int rev = _viewRev;
+        int propGeneration = _avatarOffers?.PropActions?.Generation ?? 0;
         using var doc = _api is { } api ? await api.GetWorldMapAsync(_showAll) : await _source!.GetWorldMapAsync();
-        return new PolledMap(doc.RootElement.Clone(), rev);
+        return new PolledMap(doc.RootElement.Clone(), rev, propGeneration);
     }
 
     /// <summary>The poll's callback: an error that is not a lost session marks the connection lost.</summary>
@@ -116,7 +117,8 @@ public partial class Main : Node3D
     /// </summary>
     private void ApplyWorldMap(PolledMap p)
     {
-        if (p.ViewRev != _viewRev || _viewSwitchBusy || _figures is null) return;
+        if (p.ViewRev != _viewRev || _viewSwitchBusy || _figures is null
+            || p.PropGeneration != (_avatarOffers?.PropActions?.Generation ?? 0)) return;
         var map = p.Map;
         try
         {

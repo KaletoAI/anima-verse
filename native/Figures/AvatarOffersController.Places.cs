@@ -69,13 +69,14 @@ public sealed partial class AvatarOffersController
         var tile=_world.Slots.GetValueOrDefault(_offersLoc);
         if(!CanUse || tile is null || tile.Ring!=Ring.Near || !tile.Ready || Map is not { } map || Self(map) is not { } me
             || Text(me,"location_id")!=_offersLoc || Text(me,"room_id")!=_offersRoom)
-        { Places.Clear(); _placeTile=null; CloseMenu(new()); return; }
+        { Places.Clear(); _placeTile=null; if(!RefreshOpenSemanticMenu()) CloseMenu(new()); return; }
         _placeTile=tile;
         var offers=_placeOffers.Where(o=>RoomOffer(o["id"]?.GetValue<string>() ?? "") is not null)
             .Select(o=>new PlaceOffer(o["id"]!.GetValue<string>(),o["group"]?.GetValue<string>() ?? "",
                 o["free"]?.GetValue<double>() ?? 0,FreeSlots(o))).ToArray();
         string skip=me.TryGetProperty("place",out var place) && place.ValueKind==JsonValueKind.Object ? Text(place,"id") : "";
         Places.Sync(tile,_offersRoom,offers,skip);
+        if(RefreshOpenSemanticMenu()) return;
         if(_hud.SceneOwned("placeMenu")?["offer"]?["id"]?.GetValue<string>() is { } id)
         {
             if(RoomOffer(id) is not { } fresh) CloseMenu(new());
@@ -88,20 +89,25 @@ public sealed partial class AvatarOffersController
     }
     private void ClearPlaces()
     {
+        HasPropHover=false;
         _placesEpoch++; _offersGeneration++; _placeOffers.Clear(); _offersRoom=_offersLoc=""; _placeTile=null;
         Places.Clear(); CloseMenu(new());
     }
     public bool Pick(Vec3 origin,Vec3 direction,Vector2 viewport)
     {
-        if(!CanUse) return false;
         if(PickPropAction?.Invoke(origin,direction,viewport)==true) return true;
+        if(!CanUse) return false;
         if(Places.Hit(origin,direction) is not { } hit || RoomOffer(hit.Id) is not { } offer) return false;
         var css=_hud.ViewportToCss(viewport);
         _hud.SetState("placeMenu",new JsonObject { ["x"]=(double)css.X,["y"]=(double)css.Y,["offer"]=offer.DeepClone() });
         return true;
     }
+    public bool HasPropHover { get; private set; }
+    public bool HasHover=>HasPropHover || Places.HasHover;
     public bool Hover(Vec3 origin,Vec3 direction)
     {
+        HasPropHover=HitSemanticProp(origin,direction) is not null;
+        if(HasPropHover) { Places.ClearHover(); return true; }
         var hit=CanUse ? Places.Hit(origin,direction) : null;
         Places.Hover(hit); return hit is not null;
     }

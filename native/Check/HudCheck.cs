@@ -192,6 +192,14 @@ public static class HudCheck
         try { HudProtocol.Ui("zoomTo"); } catch (ArgumentException) { threw = true; }
         Expect("ui refuses a game action name", threw, "sent");
 
+        // Task 57 bridge v3: real preparation succeeds without an error; invalidations carry correlation both ways.
+        n += 5;
+        Expect("prepare accepted", HudProtocol.Parse("{\"v\":3,\"kind\":\"prop-action-prepare\",\"request_id\":\"r57\"}", out _)?.RequestId == "r57", "rejected");
+        Expect("preparation success", HudProtocol.PropActionPrepared("r57", null) == "{\"v\":3,\"kind\":\"prop-action-prepared\",\"request_id\":\"r57\"}", "differs");
+        Expect("preparation failure correlated", HudProtocol.PropActionPrepared("r57", "failed") == "{\"v\":3,\"kind\":\"prop-action-prepared\",\"request_id\":\"r57\",\"error\":\"failed\"}", "differs");
+        Expect("invalidation correlation", HudProtocol.Parse(HudProtocol.PropActionsChanged("r57"), out _)?.RequestId == "r57", "differs");
+        Expect("invalidation optional ID", HudProtocol.PropActionsChanged() == "{\"v\":3,\"kind\":\"prop-actions-changed\"}", "differs");
+
         // statePublisher: deltas only, force repeats everything, HUD-owned fields cannot be set.
         var pub = new ScenePublisher();
         pub.Set("clock", "Day 1, 08:00");
