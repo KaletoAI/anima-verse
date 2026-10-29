@@ -128,6 +128,7 @@ WHITELIST_C_SYSTEM_TTL = {
     "app/core/sessions.py",
     "app/models/events.py",
     "scripts/test_session_sliding.py",
+    "scripts/smoke_session_remember.py",
 }
 
 # ── rule D ──────────────────────────────────────────────────────────────

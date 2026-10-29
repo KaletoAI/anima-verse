@@ -75,6 +75,7 @@ def _get_session_user(request: Request) -> Optional[Dict[str, Any]]:
     sess, refreshed = sessions.get_session(token)
     if refreshed:
         request.state.session_refresh_token = token
+        request.state.session_refresh_ttl_hours = sess["ttl_hours"]
     if not sess:
         if path.startswith("/world-dev/") or path.startswith("/admin/"):
             logger.warning("auth: session token unknown/expired at %s (token=%s...)",
@@ -179,13 +180,14 @@ async def user_context_middleware(request: Request, call_next):
         response = await call_next(request)
         # Sliding sessions have two halves: the DB row (done in get_session) and
         # the browser cookie. Without re-issuing it, the browser drops the cookie
-        # exactly SESSION_TTL_HOURS after login — mid-session. Authenticated
+        # exactly one session TTL after login — mid-session. Authenticated
         # requests only; an anonymous request never gets a cookie.
         refresh_token = getattr(request.state, "session_refresh_token", "")
         if user and refresh_token and not _sets_session_cookie(response):
             sessions.set_session_cookie(
                 response, refresh_token,
-                secure=sessions.request_is_secure(request))
+                secure=sessions.request_is_secure(request),
+                ttl_hours=request.state.session_refresh_ttl_hours)
         return response
     finally:
         current_user_ctx.reset(token)

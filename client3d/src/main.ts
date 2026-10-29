@@ -412,9 +412,9 @@ function installReloginGate(username: string): void {
     reloginOpen = true;
     mountTitle({
       needsLogin: true,
-      onLogin: async (u, p) => {
+      onLogin: async (u, p, remember) => {
         void getAudio().unlock();
-        const user = await api.login(u, p);
+        const user = await api.login(u, p, remember);
         reloginOpen = false;
         if (user.username !== username) {
           markResume();
@@ -475,9 +475,9 @@ async function boot() {
     // The login click is the guaranteed user gesture — the one moment a
     // browser lets an AudioContext start. Nothing plays here; audio output is
     // merely no longer blocked afterwards.
-    onLogin: async (u, p) => {
+    onLogin: async (u, p, remember) => {
       void getAudio().unlock();
-      const user = await api.login(u, p);
+      const user = await api.login(u, p, remember);
       start(user.username, user.role);
     },
     // Same gesture for the session that is already signed in. This case used

@@ -144,7 +144,8 @@ sessions.clear_session_cookie(logout)
 check("after clear_session_cookie (logout)", _sets_session_cookie(logout), True)
 
 login = Response()
-sessions.set_session_cookie(login, "some-token")
+sessions.set_session_cookie(login, "some-token", secure=False,
+                            ttl_hours=sessions.SESSION_TTL_HOURS)
 check("after set_session_cookie", _sets_session_cookie(login), True)
 
 other = Response()

@@ -50,7 +50,7 @@ export interface TitleScreenProps {
   /** no valid session — show the login form instead of the "Enter world" button */
   needsLogin: boolean;
   /** sign in and start the app; a rejection puts the form back with an error */
-  onLogin: (username: string, password: string) => Promise<void>;
+  onLogin: (username: string, password: string, remember: boolean) => Promise<void>;
   /** the player wants in: start the app (and unlock the audio) */
   onEnter: () => void;
   /** the fade is over — the host may unmount and drop the node */
@@ -82,6 +82,7 @@ export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScree
   const [leaving, setLeaving] = useState(false);
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(true);
   /** `onDone` in a ref: the fade timer is started once and must not be
    *  restarted because the host handed down a fresh closure. */
   const doneRef = useRef(onDone);
@@ -154,7 +155,7 @@ export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScree
     setBusy(true);
     setError('');
     try {
-      await onLogin(username, password);
+      await onLogin(username, password, remember);
       setEntered(true);
     } catch (ex) {
       // One message for every way this fails, and a translated one. The API
@@ -165,7 +166,7 @@ export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScree
       setError(t('Sign-in failed — check name and passphrase.'));
       setBusy(false);
     }
-  }, [busy, onLogin, username, password, t]);
+  }, [busy, onLogin, username, password, remember, t]);
 
   return (
     <div className={`title-screen${leaving ? ' leaving' : ''}`}>
@@ -184,6 +185,11 @@ export function TitleScreen({ needsLogin, onLogin, onEnter, onDone }: TitleScree
               <span>{t('Passphrase')}</span>
               <input name="password" type="password" autoComplete="current-password"
                      value={password} onChange={(e) => setPassword(e.target.value)} />
+            </label>
+            <label className="title-remember">
+              <input name="remember" type="checkbox" checked={remember}
+                     onChange={(e) => setRemember(e.target.checked)} />
+              <span>{t('Stay signed in')}</span>
             </label>
             {error && <div className="title-error" role="alert">{error}</div>}
             <button className="title-btn" type="submit" disabled={busy}>

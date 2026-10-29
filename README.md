@@ -405,6 +405,7 @@ stops acting autonomously).
   Password**, admins under `/admin/users` → **Change my password**. A change ends every OTHER
   session of that account and keeps the one doing it; an admin password reset under `/admin/users`
   signs the target out everywhere.
+  Sessions slide by 24 hours by default, or 30 days with **Stay signed in** (checked by default on the 3D client's login form).
 - **Logging & monitoring:** LLM call log (`/logs/llm`), image-prompt log (`/logs/image-prompts`),
   LLM stats, dashboard, `GET /health`, and a task queue inspectable from the CLI.
 - **i18n:** all UI strings are English at the source; the player UI, the Game-Admin and the strings

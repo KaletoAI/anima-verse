@@ -1072,6 +1072,22 @@
   outline: none;
   border-color: var(--accent, #6aa9ff);
 }
+#hud-title .title-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+#hud-title .title-remember input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: inherit;
+}
+#hud-title .title-remember span {
+  font-size: 0.75em;
+  letter-spacing: 0.4px;
+}
 #hud-title .title-error {
   color: var(--danger, #f85149);
   font-size: 0.9em;

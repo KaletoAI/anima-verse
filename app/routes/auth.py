@@ -121,9 +121,11 @@ def _login_sync(response: Response, data: Any, client_ip: str = "",
         raise HTTPException(status_code=401, detail="Invalid credentials")
     _clear_failures(key)
 
-    token = sessions.create_session(user["id"])
+    remember = data.get("remember") is True
+    token = sessions.create_session(user["id"], remember=remember)
     users.touch_last_login(user["id"])
-    sessions.set_session_cookie(response, token, secure=secure)
+    ttl_hours = sessions.REMEMBER_TTL_DAYS * 24 if remember else sessions.SESSION_TTL_HOURS
+    sessions.set_session_cookie(response, token, secure=secure, ttl_hours=ttl_hours)
     logger.info("Login: %s (role=%s)", user["username"], user["role"])
 
     # Avatar-only presence: materialize the avatar and (if offmap) bring it back,

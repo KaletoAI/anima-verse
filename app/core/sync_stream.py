@@ -94,7 +94,8 @@ async def _serve(scope, receive, send) -> None:
         from starlette.responses import Response
         helper = Response()
         sessions.set_session_cookie(helper, token, secure=sessions.is_secure_request(
-            scope.get("scheme", "http"), _header(scope, b"x-forwarded-proto")))
+            scope.get("scheme", "http"), _header(scope, b"x-forwarded-proto")),
+            ttl_hours=sess["ttl_hours"])
         headers += [(k, v) for k, v in helper.raw_headers if k == b"set-cookie"]
 
     user_id = user["id"]          # key name per Step 0

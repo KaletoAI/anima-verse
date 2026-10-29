@@ -55,11 +55,11 @@ export async function authStatus(): Promise<{ authenticated: boolean; user?: Aut
   return json(await fetch('/auth/status'));
 }
 
-export async function login(username: string, password: string): Promise<AuthUser> {
+export async function login(username: string, password: string, remember: boolean): Promise<AuthUser> {
   const res = await fetch('/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, remember }),
   });
   // Console/diagnostics only — the title screen shows its own translated line
   // (the raw text of a proxy error page would be neither).

@@ -505,13 +505,17 @@
   opacity: 1;
 }
 
-#hud-title .title-field span {
+#hud-title .title-field span,
+#hud-title .title-remember span {
   font-family: Georgia, "Times New Roman", serif;
   font-variant: small-caps;
   text-transform: none;
   letter-spacing: 0.09em;
   color: rgba(242, 205, 110, 0.62);
   opacity: 1;
+}
+#hud-title .title-remember input {
+  accent-color: var(--hud-gold);
 }
 #hud-title .title-field input {
   background: rgba(0, 0, 0, 0.32);

@@ -699,6 +699,7 @@ SCHEMA_STATEMENTS = [
         created_at    TEXT NOT NULL,
         expires_at    TEXT NOT NULL,
         last_activity TEXT NOT NULL,
+        ttl_hours     INTEGER,                        -- NULL: default 24 hours
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )""",
     "CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions (user_id)",
@@ -1037,6 +1038,7 @@ SCHEMA_STATEMENTS = [
 # ALTER TABLE migrations run idempotently after all CREATE statements.
 # Add missing columns per table; OperationalError means the column exists.
 ALTER_MIGRATIONS = [
+    ("user_sessions", "ttl_hours", "INTEGER"),
     ("item_reading_sessions", "session_id", "TEXT NOT NULL DEFAULT ''"),
     ("interaction_invites", "reason", "TEXT NOT NULL DEFAULT ''"),
     # improvements: the admin's "Run now" — the entry works off all its steps

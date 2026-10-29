@@ -32,8 +32,8 @@ function loginGate(): void {
   setHudUiState({ overlayOpen: true });
   mountTitle({
     needsLogin: true,
-    onLogin: async (username, password) => {
-      await start(await api.login(username, password));
+    onLogin: async (username, password, remember) => {
+      await start(await api.login(username, password, remember));
       setHudUiState({ overlayOpen: false });
     },
     onEnter: () => {},
