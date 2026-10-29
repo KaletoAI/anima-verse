@@ -20,7 +20,7 @@ public partial class LoginScreen
         var backdrop = new ColorRect
         {
             Name = "TitleBackdrop", MouseFilter = MouseFilterEnum.Ignore,
-            Material = new ShaderMaterial { Shader = GD.Load<Shader>("res://Ui/LoginBackdrop.gdshader") },
+            Material = _backdropWash = new ShaderMaterial { Shader = GD.Load<Shader>("res://Ui/LoginBackdrop.gdshader") },
         };
         AddChild(backdrop);
         backdrop.SetAnchorsAndOffsetsPreset(LayoutPreset.FullRect);
@@ -97,11 +97,24 @@ public partial class LoginScreen
         _fields.AddThemeConstantOverride("separation", 12);
         box.AddChild(_fields);
         _serverField = Field("Server", _server);
-        _fields.AddChild(_serverField);
-        _fields.AddChild(Field("Name", _user));
-        _fields.AddChild(Field("Passphrase", _password));
+        _credentials.AddThemeConstantOverride("separation", 12);
+        _fields.AddChild(_credentials);
+        _credentials.AddChild(_serverField);
+        _credentials.AddChild(Field("Name", _user));
+        _credentials.AddChild(Field("Passphrase", _password));
+        TextStyle(_remember, _caps, 12, Gold);
+        _remember.AddThemeColorOverride("font_focus_color", Gold);
+        _remember.AddThemeColorOverride("font_hover_color", Gold);
+        _remember.AddThemeStyleboxOverride("focus", FocusFrame());
+        _remember.AddThemeIconOverride("checked", CheckIcon(true));
+        _remember.AddThemeIconOverride("unchecked", CheckIcon(false));
+        _credentials.AddChild(_remember);
+        TextStyle(_gateUser, _italic, 13, Muted);
+        _fields.AddChild(_gateUser);
         StyleButton(_button);
         _fields.AddChild(_button);
+        Link(_signOut);
+        _fields.AddChild(_signOut);
 
         _serverLine.AddThemeConstantOverride("separation", 5);
         TextStyle(_serverSummary, ThemeDB.FallbackFont, 12, Muted);
@@ -198,6 +211,20 @@ public partial class LoginScreen
         margin.AddChild(_updatePanel);
         box.AddChild(margin);
         _updateBox.VisibilityChanged += () => margin.Visible = _updateBox.Visible;
+    }
+
+    private static Texture2D CheckIcon(bool check)
+    {
+        using var image = Image.CreateEmpty(18, 18, false, Image.Format.Rgba8);
+        image.Fill(Colors.Transparent);
+        for (var y = 2; y < 16; y++)
+        for (var x = 2; x < 16; x++)
+        {
+            if (x == 2 || x == 15 || y == 2 || y == 15) image.SetPixel(x, y, new Color(BrassGold, 0.55f));
+            if (check && ((x >= 5 && x <= 8 && Math.Abs(y - x - 4) <= 1)
+                || (x >= 8 && x <= 13 && Math.Abs(y + x - 20) <= 1))) image.SetPixel(x, y, Gold);
+        }
+        return ImageTexture.CreateFromImage(image);
     }
 
     private static FontVariation Serif(int size, bool italic = false, bool smallCaps = false) => new()

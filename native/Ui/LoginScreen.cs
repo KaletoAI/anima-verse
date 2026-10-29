@@ -30,6 +30,11 @@ public partial class LoginScreen : Control
     private readonly Label _stage = new() { Visible = false, HorizontalAlignment = HorizontalAlignment.Center, AutowrapMode = TextServer.AutowrapMode.WordSmart };
     private readonly Button _back = new() { Text = "Back to the title", Visible = false };
     private readonly VBoxContainer _fields = new();
+    private readonly VBoxContainer _credentials = new();
+    private readonly CheckBox _remember = new() { Text = "Stay signed in", ButtonPressed = true };
+    private readonly Label _gateUser = new() { Visible = false, HorizontalAlignment = HorizontalAlignment.Center };
+    private readonly Button _signOut = new() { Text = "Sign out", Visible = false };
+    private bool _gate;
     private readonly HBoxContainer _serverLine = new();
     private readonly Label _serverSummary = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill, AutowrapMode = TextServer.AutowrapMode.WordSmart };
     private readonly Button _changeServer = new() { Text = "Change" };
@@ -41,13 +46,13 @@ public partial class LoginScreen : Control
     /// <summary>The failed start's button (Main goes back to the title).</summary>
     public Action? Back { get; set; }
 
-    /// <summary>(normalised server URL, user, password) → task; an exception's message lands in the status label.</summary>
-    public Func<string, string, string, Task>? Submit { get; set; }
+    /// <summary>(normalised server URL, user, password, remember) → task; an exception's message lands in the status label.</summary>
+    public Func<string, string, string, bool, Task>? Submit { get; set; }
 
     /// <summary>Godot script classes need a parameterless constructor; call <see cref="Setup"/> after it.</summary>
     public LoginScreen() { }
 
-    public LoginScreen Setup(string? server, string? user)
+    public LoginScreen Setup(string? server, string? user, string? backdropRoot = null)
     {
         SetAnchorsPreset(LayoutPreset.FullRect);
         BuildPlate();
@@ -57,6 +62,15 @@ public partial class LoginScreen : Control
         _serverField.Visible = string.IsNullOrWhiteSpace(server);
         _serverLine.Visible = !_serverField.Visible;
         _serverSummary.Text = $"Server  {ServerAddress(_server.Text)} ·";
+        _backdropRoot = backdropRoot ?? ProjectSettings.GlobalizePath("user://backdrop");
+        _ = LoadBackdropAsync();
+        _server.TextChanged += text =>
+        {
+            CancelSessionCheck();
+            if (_gate) ShowForm(_user.Text);
+            _ = LoadBackdropAsync();
+        };
+        _signOut.Pressed += () => _ = SignOutAsync();
         _changeServer.Pressed += RevealServer;
         _button.Pressed += () => _ = OnSubmit();
         _server.TextSubmitted += text => (_user.Text.Length > 0 ? _password : _user).GrabFocus();
@@ -74,7 +88,8 @@ public partial class LoginScreen : Control
         _plate.Modulate = new Color(1, 1, 1, 0);
         _entrance = CreateTween();
         _entrance.TweenProperty(_plate, "modulate:a", 1.0f, 0.35).SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.Out);
-        if (_server.Text.Length == 0) _server.GrabFocus();
+        if (_gate) _button.GrabFocus();
+        else if (_server.Text.Length == 0) _server.GrabFocus();
         else if (_user.Text.Length > 0) _password.GrabFocus();
         else _user.GrabFocus();
     }
@@ -131,7 +146,7 @@ public partial class LoginScreen : Control
 
     private async Task OnSubmit()
     {
-        if (Submit is null || _button.Disabled) return;
+        if ((!_gate && Submit is null) || _button.Disabled || _checkingSession || _installing || _signingOut) return;
         var server = LauncherSettings.NormalizeServer(_server.Text);
         var user = _user.Text.Trim();
         var password = _password.Text;
@@ -144,13 +159,14 @@ public partial class LoginScreen : Control
             RevealServer();
             return;
         }
-        _server.Text = server;
-        if (user.Length == 0 || password.Length == 0)
+        if (!_gate) _server.Text = server;
+        if (!_gate && (user.Length == 0 || password.Length == 0))
         {
             ShowStatus("User and password are required.", true);
             return;
         }
-        _button.Disabled = true;
+        var remember = _remember.ButtonPressed;
+        _button.Disabled = _remember.Disabled = _signOut.Disabled = true;
         _button.Text = "Opening the gate…";
         _changeServer.Disabled = true;
         _server.Editable = false;
@@ -159,7 +175,8 @@ public partial class LoginScreen : Control
         {
             await FinishUpdateCheckAsync();
             EndUpdateChecks();
-            await Submit(server, user, password);
+            if (_gate) await EnterRememberedAsync();
+            else await Submit!(server, user, password, remember);
         }
         catch (Exception e)
         {
@@ -181,7 +198,7 @@ public partial class LoginScreen : Control
             // The submit runs the whole start; the screen may have faded out and been freed meanwhile.
             if (IsInstanceValid(this))
             {
-                _button.Disabled = _changeServer.Disabled = false;
+                _button.Disabled = _remember.Disabled = _signOut.Disabled = _changeServer.Disabled = false;
                 _button.Text = "Enter world";
             }
         }
@@ -190,6 +207,7 @@ public partial class LoginScreen : Control
     private void RevealServer()
     {
         if (_booting) return;
+        if (_gate) ShowForm(_user.Text);
         _serverLine.Visible = false;
         _serverField.Visible = true;
         _server.GrabFocus();

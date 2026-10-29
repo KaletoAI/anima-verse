@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text.Json;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -26,6 +28,7 @@ public class AnimaApiSessionTests
         public bool SessionAlive { get; private set; }
         public int LogoutStatus { get; set; } = 200;
         public List<string> Requests { get; } = new();
+        public string? LoginBody { get; private set; }
 
         public FakeAuthServer()
         {
@@ -52,6 +55,7 @@ public class AnimaApiSessionTests
                 string body;
                 if (path == "/auth/login")
                 {
+                    LoginBody = await new StreamReader(ctx.Request.InputStream).ReadToEndAsync();
                     SessionAlive = true;
                     ctx.Response.AddHeader("Set-Cookie", "av_session=tok; HttpOnly; Path=/; SameSite=lax");
                     body = "{\"status\":\"success\",\"user\":{\"username\":\"demo\"}}";
@@ -88,6 +92,20 @@ public class AnimaApiSessionTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LoginSendsTheRememberChoice(bool remember)
+    {
+        using var server = new FakeAuthServer();
+        using var api = new AnimaApi(server.Url);
+        using (await api.LoginAsync("demo", "pw", remember)) { }
+        using var body = JsonDocument.Parse(server.LoginBody!);
+        Assert.Equal("demo", body.RootElement.GetProperty("username").GetString());
+        Assert.Equal("pw", body.RootElement.GetProperty("password").GetString());
+        Assert.Equal(remember, body.RootElement.GetProperty("remember").GetBoolean());
+    }
+
     [Fact]
     public async Task LogoutEndsTheSessionAndEmptiesTheContainer()
     {
@@ -96,6 +114,8 @@ public class AnimaApiSessionTests
         Assert.False(await api.IsAuthenticatedAsync());
         using (await api.LoginAsync("demo", "pw")) { }
         Assert.Equal("tok", api.SessionToken());
+        using (var body = JsonDocument.Parse(server.LoginBody!))
+            Assert.False(body.RootElement.GetProperty("remember").GetBoolean());
         Assert.True(await api.IsAuthenticatedAsync());
 
         await api.LogoutAsync();

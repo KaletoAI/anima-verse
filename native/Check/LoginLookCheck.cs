@@ -2,6 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.IO;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 using AnimaNative.Api;
@@ -40,10 +44,10 @@ public static class LoginLookCheck
 
             var pending = new TaskCompletionSource();
             var submissions = 0;
-            screen.Submit = (s, u, p) =>
+            screen.Submit = (s, u, p, remember) =>
             {
                 submissions++;
-                Expect("normalised credentials", s == "http://192.168.8.244:8000" && u == "Ada" && p == "one-use passphrase");
+                Expect("normalised credentials", s == "http://192.168.8.244:8000" && u == "Ada" && p == "one-use passphrase" && remember);
                 return pending.Task;
             };
             user.Text = " Ada ";
@@ -69,7 +73,7 @@ public static class LoginLookCheck
                 (new InvalidOperationException("Keep this message."), "Keep this message.")
             })
             {
-                screen.Submit = (_, _, _) => Task.FromException(exception);
+                screen.Submit = (_, _, _, _) => Task.FromException(exception);
                 password.Text = "retry";
                 enter.EmitSignal(BaseButton.SignalName.Pressed);
                 await Frame(host);
@@ -103,7 +107,7 @@ public static class LoginLookCheck
             {
                 var server = Descendants(fresh).OfType<LineEdit>().Single(i => i.PlaceholderText.StartsWith("Server"));
                 if (address == "") Expect("no server starts with focused field", server.IsVisibleInTree() && server.HasFocus());
-                fresh.Submit = (_, _, _) => throw new InvalidOperationException("validation must prevent submit");
+                fresh.Submit = (_, _, _, _) => throw new InvalidOperationException("validation must prevent submit");
                 Descendants(fresh).OfType<Button>().Single(b => b.Text == "Enter world").EmitSignal(BaseButton.SignalName.Pressed);
                 Expect("invalid server revealed and focused", server.IsVisibleInTree() && server.HasFocus());
                 Expect("local validation retained", HasText(fresh, address == "" ? "The server address is required."
@@ -111,8 +115,243 @@ public static class LoginLookCheck
             }
             finally { fresh.Free(); }
         }
+        await CheckRememberedAsync(host);
+        await CheckSnapshotAsync(host);
         await CheckLayoutAsync(host);
-        return "loginlook title=ok server=ok focus=ok submit=ok errors=7 boot=ok layout=900p/4K/narrow";
+        return "loginlook title=ok server=ok focus=ok submit=ok errors=7 boot=ok layout=900p/4K/narrow session=ok backdrop=ok";
+    }
+
+    private sealed class AuthFixture : HttpMessageHandler
+    {
+        public bool Valid = true, Unreachable;
+        public int StatusCalls, LoginCalls, LogoutCalls;
+        public bool? Remember;
+        public TaskCompletionSource? PauseLogout;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (Unreachable) throw new HttpRequestException("fixture unavailable");
+            string body;
+            switch (path)
+            {
+                case "/auth/status":
+                    StatusCalls++;
+                    body = Valid ? "{\"authenticated\":true,\"user\":{\"username\":\"Ada\",\"role\":\"admin\",\"settings\":{\"active_character\":\"Ada Wren\"}}}"
+                        : "{\"authenticated\":false,\"user\":null}";
+                    break;
+                case "/auth/login":
+                    LoginCalls++;
+                    using (var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)))
+                        Remember = json.RootElement.GetProperty("remember").GetBoolean();
+                    body = "{\"user\":{\"username\":\"Ada\",\"role\":\"admin\"}}";
+                    break;
+                case "/auth/logout":
+                    LogoutCalls++;
+                    if (PauseLogout is { } paused) await paused.Task.WaitAsync(ct);
+                    body = "{}";
+                    break;
+                default: throw new InvalidOperationException("unexpected pre-login request: " + path);
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        }
+    }
+
+    private static async Task CheckRememberedAsync(Node host)
+    {
+        var dir = ProjectSettings.GlobalizePath("user://task75-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var store = new SessionStore(Path.Combine(dir, "session.json"));
+        var fixture = new AuthFixture();
+        var accepted = 0;
+        const string server = "http://fixture.invalid:8000";
+        AnimaApi Api(string url)
+        {
+            var api = new AnimaApi(url, fixture);
+            // A transport fixture has no CookieContainer; simulate the cookie set by /auth/login.
+            api.AdoptSession("fixture-token");
+            return api;
+        }
+        LoginScreen Screen()
+        {
+            var screen = new LoginScreen().Setup(server, "Prefilled", dir);
+            host.AddChild(screen);
+            return screen;
+        }
+        async Task Bind(LoginScreen screen)
+        {
+            await screen.BindSessionAsync(store, Api, (api, answer, fallbackRole) =>
+            {
+                accepted++;
+                Expect("entry has adopted token", api.SessionToken() == "fixture-token");
+                Expect("entry receives authoritative user", answer.GetProperty("user").GetProperty("username").GetString() == "Ada");
+                screen.ShowBoot(1, "Starting…", null, false);
+                api.Dispose();
+                return Task.CompletedTask;
+            }, Path.Combine(dir, "launcher.json"));
+        }
+        void Save() => store.Save(new RememberedSession(server, "Old name", "fixture-token", "user"));
+        try
+        {
+            Save();
+            var gate = Screen();
+            try
+            {
+                await Bind(gate);
+                Expect("valid token gate", HasText(gate, "Signed in as Ada"));
+                Expect("gate hides passphrase", !Descendants(gate).OfType<LineEdit>().Single(i => i.Secret).IsVisibleInTree());
+                var enter = Descendants(gate).OfType<Button>().Single(b => b.Text == "Enter world");
+                Expect("gate enter has default focus", enter.HasFocus());
+                Input.ParseInputEvent(new InputEventKey { Keycode = Key.Enter, PhysicalKeycode = Key.Enter, Pressed = true });
+                await Frame(host); await Frame(host);
+                Input.ParseInputEvent(new InputEventKey { Keycode = Key.Enter, PhysicalKeycode = Key.Enter, Pressed = false });
+                await Frame(host); await Frame(host);
+                Expect("keyboard enters via shared callback without login", accepted == 1 && fixture.LoginCalls == 0);
+                Expect("gate entry becomes loading", HasText(gate, "Starting…") && !HasText(gate, "Signed in as Ada"));
+            }
+            finally { gate.Free(); }
+
+            Save();
+            var signout = Screen();
+            try
+            {
+                await Bind(signout);
+                Descendants(signout).OfType<Button>().Single(b => b.Text == "Sign out").EmitSignal(BaseButton.SignalName.Pressed);
+                await Frame(host);
+                Expect("signout clears store", store.LoadFor(server) is null && fixture.LogoutCalls == 1);
+                Expect("signout restores prefilled form", Descendants(signout).OfType<LineEdit>().Any(i => i.IsVisibleInTree() && i.Text == "Ada"));
+            }
+            finally { signout.Free(); }
+
+            foreach (var unreachable in new[] { false, true })
+            {
+                Save(); fixture.Valid = false; fixture.Unreachable = unreachable;
+                var invalid = Screen();
+                try
+                {
+                    await Bind(invalid);
+                    Expect("invalid/unreachable token clears store", store.LoadFor(server) is null);
+                    Expect("invalid token shows form", Descendants(invalid).OfType<LineEdit>().Single(i => i.Secret).IsVisibleInTree());
+                    if (unreachable) Expect("unreachable notice", HasText(invalid, "The server at fixture.invalid:8000 is not answering."));
+                }
+                finally { invalid.Free(); }
+            }
+            fixture.Unreachable = false; fixture.Valid = true;
+            Save();
+            var form = Screen();
+            try
+            {
+                // A server mismatch must not send any authenticated request.
+                store.Save(new RememberedSession("http://other.invalid", "Other", "other-token", "user"));
+                var statusCalls = fixture.StatusCalls;
+                await Bind(form);
+                Expect("server mismatch never checks token", fixture.StatusCalls == statusCalls);
+                var remember = Descendants(form).OfType<CheckBox>().Single();
+                Expect("remember defaults on", remember.ButtonPressed && remember.Text == "Stay signed in");
+                store.Save(new RememberedSession(server, "Ada", "fixture-token", "admin"));
+                remember.ButtonPressed = false;
+                var inputs = Descendants(form).OfType<LineEdit>().ToArray();
+                inputs.Single(i => !i.Secret && !i.PlaceholderText.StartsWith("Server")).Text = "Ada";
+                inputs.Single(i => i.Secret).Text = "one-use";
+                Descendants(form).OfType<Button>().Single(b => b.Text == "Enter world").EmitSignal(BaseButton.SignalName.Pressed);
+                await Frame(host);
+                Expect("form uses same entry callback", accepted == 2 && fixture.LoginCalls == 1);
+                Expect("unchecked sends false and deletes existing entry", fixture.Remember == false && store.LoadFor(server) is null);
+            }
+            finally { form.Free(); }
+
+            var rememberForm = Screen();
+            try
+            {
+                await Bind(rememberForm);
+                Descendants(rememberForm).OfType<LineEdit>().Single(i => i.Secret).Text = "never-store-this";
+                Descendants(rememberForm).OfType<Button>().Single(b => b.Text == "Enter world").EmitSignal(BaseButton.SignalName.Pressed);
+                await Frame(host);
+                Expect("checked login enters and persists token", accepted == 3 && fixture.Remember == true
+                    && store.LoadFor(server) is { User: "Ada", Role: "admin", Token: "fixture-token" });
+                Expect("password absent from store", !File.ReadAllText(store.Path).Contains("never-store-this"));
+            }
+            finally { rememberForm.Free(); }
+
+            var offlineSignout = Screen();
+            try
+            {
+                await Bind(offlineSignout);
+                fixture.Unreachable = true;
+                Descendants(offlineSignout).OfType<Button>().Single(b => b.Text == "Sign out").EmitSignal(BaseButton.SignalName.Pressed);
+                await Frame(host);
+                Expect("offline signout clears store and restores form", store.LoadFor(server) is null
+                    && Descendants(offlineSignout).OfType<LineEdit>().Single(i => i.Secret).IsVisibleInTree());
+            }
+            finally { offlineSignout.Free(); }
+
+            fixture.Unreachable = false;
+            Save();
+            var delayedSignout = Screen();
+            try
+            {
+                await Bind(delayedSignout);
+                fixture.PauseLogout = new TaskCompletionSource();
+                Descendants(delayedSignout).OfType<Button>().Single(b => b.Text == "Sign out").EmitSignal(BaseButton.SignalName.Pressed);
+                await Frame(host);
+                var enter = Descendants(delayedSignout).OfType<Button>().Single(b => b.Text == "Enter world");
+                var loginsBefore = fixture.LoginCalls;
+                Descendants(delayedSignout).OfType<LineEdit>().Single(i => i.Secret).Text = "new-login";
+                Expect("signout form waits for account-wide release", enter.Disabled);
+                enter.EmitSignal(BaseButton.SignalName.Pressed);
+                await Frame(host);
+                Expect("no login races pending logout", fixture.LoginCalls == loginsBefore);
+                fixture.PauseLogout.SetResult();
+                for (var i = 0; i < 100 && enter.Disabled; i++)
+                    await host.ToSignal(host.GetTree().CreateTimer(0.01), SceneTreeTimer.SignalName.Timeout);
+                Expect("form becomes usable after logout", !enter.Disabled && store.LoadFor(server) is null);
+            }
+            finally
+            {
+                fixture.PauseLogout?.TrySetResult();
+                delayedSignout.Free();
+            }
+        }
+        finally { Directory.Delete(dir, true); fixture.Dispose(); }
+    }
+
+    private static async Task CheckSnapshotAsync(Node host)
+    {
+        var dir = ProjectSettings.GlobalizePath("user://task75-backdrop-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = TitleBackdropMath.PathFor(dir, "http://image.invalid")!;
+        using (var image = Image.CreateEmpty(80, 40, false, Image.Format.Rgb8))
+        {
+            image.Fill(Colors.Beige);
+            Expect("fixture image saved", image.SaveJpg(path, 0.85f) == Error.Ok);
+        }
+        var viewport = new SubViewport { Size = new Vector2I(400, 600) };
+        host.AddChild(viewport);
+        var screen = new LoginScreen().Setup("http://image.invalid", "Ada", dir);
+        viewport.AddChild(screen);
+        try
+        {
+            for (var i = 0; i < 100 && !Descendants(screen).OfType<TextureRect>().Any(t => t.Name == "WorldSnapshot"); i++)
+                await host.ToSignal(host.GetTree().CreateTimer(0.01), SceneTreeTimer.SignalName.Timeout);
+            await Frame(host); await Frame(host);
+            var texture = Descendants(screen).OfType<TextureRect>().Single(t => t.Name == "WorldSnapshot");
+            Expect("snapshot cover", texture.Position.X <= 0 && texture.Position.Y <= 0
+                && texture.Position.X + texture.Size.X >= 400 && texture.Position.Y + texture.Size.Y >= 600);
+            screen.ShowBoot(50, "Loading…", null, false);
+            Expect("loading keeps image", texture.IsVisibleInTree());
+            screen.ShowBoot(50, "Failed", "failure", true);
+            Expect("failure keeps image", texture.IsVisibleInTree());
+            // Change server through the same field as the Change link.
+            screen.ShowForm("Ada");
+            var address = Descendants(screen).OfType<LineEdit>().Single(i => i.PlaceholderText.StartsWith("Server"));
+            address.Text = "http://missing.invalid";
+            address.EmitSignal(LineEdit.SignalName.TextChanged, address.Text);
+            await Frame(host);
+            Expect("missing image has no snapshot TextureRect", !Descendants(screen).OfType<TextureRect>().Any(t => t.Name == "WorldSnapshot"));
+            var capture = Path.Combine(dir, "must-not-capture.jpg");
+            Expect("check run never captures", !await TitleSnapshotCapture.CaptureAsync(host, capture, check: true, bench: false, _ => { }));
+            Expect("check capture writes nothing", !File.Exists(capture));
+        }
+        finally { viewport.Free(); Directory.Delete(dir, true); }
     }
 
     private static async Task CheckLayoutAsync(Node host)

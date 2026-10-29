@@ -115,7 +115,7 @@ public partial class LoginScreen
             return;
         }
         _installing = true;
-        _updateNow.Disabled = _updateLater.Disabled = _button.Disabled = _changeServer.Disabled = true;
+        _remember.Disabled = _signOut.Disabled = _updateNow.Disabled = _updateLater.Disabled = _button.Disabled = _changeServer.Disabled = true;
         _server.Editable = _user.Editable = _password.Editable = false;
         _updateBar.Visible = true;
         _downloadProgress = 0;
@@ -128,7 +128,8 @@ public partial class LoginScreen
         if (result.Success) { GetTree().Quit(); return; }
         _updateNotice.Text = $"Update failed: {result.Reason} You can log in and try again later.";
         _updateBar.Visible = false;
-        _updateNow.Disabled = _updateLater.Disabled = _button.Disabled = _changeServer.Disabled = false;
+        _remember.Disabled = _signOut.Disabled = _updateNow.Disabled = _updateLater.Disabled = _button.Disabled = _changeServer.Disabled = false;
+        _button.Disabled = _checkingSession || _signingOut;
         _server.Editable = _user.Editable = _password.Editable = true;
     }
 
@@ -144,11 +145,15 @@ public partial class LoginScreen
 
     public override void _Process(double delta)
     {
+        TickBackdrop(delta);
         if (_installing) _updateBar.Value = Volatile.Read(ref _downloadProgress) * 100;
     }
 
     public override void _ExitTree()
     {
+        CancelSessionCheck();
+        _backdropGeneration++;
+        RemoveSnapshot();
         _updateGeneration++;
         _updateStop?.Cancel();
         _updateStop?.Dispose();

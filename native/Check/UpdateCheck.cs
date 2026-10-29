@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AnimaNative.Api;
 using AnimaNative.Ui;
 using AnimaNative.Update;
 using Godot;
@@ -111,7 +112,25 @@ public static class UpdateCheck
         finally { skipped.Free(); }
         Expect("newer than skip returns", !LauncherStore.Load(launcher).IsUpdateSkipped("https://fixture.invalid", "20261029110000-90abcdef"));
         File.Delete(launcher);
-        return 4;
+        var gateStore = new SessionStore(Path.Combine(dir, "session.json"));
+        gateStore.Save(new RememberedSession("https://fixture.invalid", "Ada", "fixture-token", "user"));
+        var gate = new LoginScreen().Setup("https://fixture.invalid", "Ada");
+        host.AddChild(gate);
+        try
+        {
+            await gate.BindSessionAsync(gateStore, server => new AnimaApi(server, new FixtureTransport(request =>
+            {
+                Expect("gate only asks status", request.RequestUri!.AbsolutePath == "/auth/status");
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                    { Content = new StringContent("{\"authenticated\":true,\"user\":null}") };
+            })), (_, _, _) => throw new InvalidOperationException("gate must wait for Enter"), launcher);
+            gate.EnableUpdates(Local, _ => { }, Updater(Newer), launcher);
+            await host.ToSignal(host.GetTree().CreateTimer(0.05), SceneTreeTimer.SignalName.Timeout);
+            Expect("gate signed in", Descendants(gate).OfType<Label>().Any(l => l.IsVisibleInTree() && l.Text == "Signed in as Ada"));
+            Expect("gate update notice", Descendants(gate).OfType<Label>().Any(l => l.IsVisibleInTree() && l.Text.Contains($"A new version is available ({Newer})")));
+        }
+        finally { gate.Free(); }
+        return 6;
     }
 
     private static IEnumerable<Node> Descendants(Node parent)

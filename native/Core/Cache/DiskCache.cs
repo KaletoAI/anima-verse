@@ -81,7 +81,7 @@ public sealed class DiskCache : IDisposable
         LimitBytes = Math.Max(0, limitBytes); _version = formatVersion; _now = now ?? (() => DateTimeOffset.UtcNow);
         _snapshot = new(0, LimitBytes, 0);
         root = _root = Path.GetFullPath(root);
-        DirectoryPath = Path.Combine(root, "v" + formatVersion, Hash(origin.GetLeftPart(UriPartial.Authority)));
+        DirectoryPath = Path.Combine(root, "v" + formatVersion, OriginHash(origin));
         try
         {
             Directory.CreateDirectory(root);
@@ -306,6 +306,9 @@ public sealed class DiskCache : IDisposable
         finally { if (System.IO.File.Exists(temp)) System.IO.File.Delete(temp); }
     }
     private static bool Io(Exception e) => e is IOException or UnauthorizedAccessException;
+    /// <summary>Stable origin directory key, shared with local title snapshots.</summary>
+    public static string OriginHash(Uri origin) => Hash(origin.GetLeftPart(UriPartial.Authority));
+
     private static string Hash(string text) => Hash(Encoding.UTF8.GetBytes(text));
     private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }

@@ -150,16 +150,17 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
     }
 
     /// <summary>
-    /// <c>POST /auth/login</c> with the JSON body <c>{username, password}</c>.
+    /// <c>POST /auth/login</c> with the JSON body <c>{username, password, remember}</c>.
     /// Returns the <c>user</c> object of the answer. 400/401/429 surface as
     /// <see cref="ApiException"/> with the server's <c>detail</c> text.
     /// </summary>
-    public async Task<JsonDocument> LoginAsync(string user, string password)
+    public async Task<JsonDocument> LoginAsync(string user, string password, bool remember = false)
     {
-        var body = JsonSerializer.Serialize(new Dictionary<string, string>
+        var body = JsonSerializer.Serialize(new Dictionary<string, object>
         {
             ["username"] = user,
             ["password"] = password,
+            ["remember"] = remember,
         });
         using var content = new StringContent(body, Encoding.UTF8, "application/json");
         using var res = await _http.PostAsync("auth/login", content);
@@ -197,12 +198,14 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
     /// (<see cref="IsAuthenticatedAsync"/>): an anonymous logout is not a no-op on the
     /// server (<c>release_active_character</c> falls back to the legacy account row).
     /// </summary>
-    public async Task LogoutAsync()
+    public Task LogoutAsync() => LogoutAsync(default);
+
+    public async Task LogoutAsync(CancellationToken ct)
     {
         try
         {
             using var content = new StringContent("{}", Encoding.UTF8, "application/json");
-            using var res = await _http.PostAsync("auth/logout", content);
+            using var res = await _http.PostAsync("auth/logout", content, ct);
             await EnsureOk(res, "/auth/logout");
         }
         finally
@@ -212,12 +215,21 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
     }
 
     /// <summary><c>GET /auth/status</c> → <c>authenticated</c>: whether this container's session is alive.</summary>
-    public async Task<bool> IsAuthenticatedAsync()
+    public Task<bool> IsAuthenticatedAsync() => IsAuthenticatedAsync(default);
+
+    public async Task<bool> IsAuthenticatedAsync(CancellationToken ct)
     {
-        using var doc = await GetJson("/auth/status");
+        using var doc = await GetAuthStatusAsync(ct);
         return doc.RootElement.ValueKind == JsonValueKind.Object
                && doc.RootElement.TryGetProperty("authenticated", out var a)
                && a.ValueKind == JsonValueKind.True;
+    }
+
+    /// <summary>The anonymous-safe status answer, including user/settings when supplied by the server.</summary>
+    public async Task<JsonDocument> GetAuthStatusAsync(CancellationToken ct = default)
+    {
+        using var res = await _http.GetAsync("auth/status", ct);
+        return await ReadJson(res, "/auth/status");
     }
 
     /// <summary>Expires every cookie this container holds for the server (the session copy of this process).</summary>

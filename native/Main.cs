@@ -310,6 +310,7 @@ public partial class Main : Node3D
         // npcs.tick: a bubble whose reading time is up goes.
         _tags?.Expire();
         PublishClientCache();
+        TickTitleBackdrop(delta);
         // The performance readout: measured and sent only while the HUD shows it (HudUiState.perfOn).
         if (_hud is { } hudNow && _perf.Frame(hudNow.Active && hudNow.Ui.PerfOn, delta, _world) is { } perf) hudNow.SendPerf(perf);
         // main.ts' frame hook: the crossfade of every openable location and the neighbour occlusion — in every run

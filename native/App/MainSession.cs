@@ -17,7 +17,7 @@ namespace AnimaNative;
 public partial class Main : Node3D
 {
     /// <summary>The session a rebuild hands to the next scene (survives the scene reload, taken once).</summary>
-    private sealed record CarriedSession(string Server, string Token, string Role);
+    private sealed record CarriedSession(string Server, string Token, string Role, bool BackdropCaptured);
     private static CarriedSession? _carried;
 
     /// <summary>
@@ -73,7 +73,7 @@ public partial class Main : Node3D
             return;
         }
         Log("character switch: the HUD page reloaded — rebuilding the world with the live session (no login)");
-        _carried = new CarriedSession(_api.BaseUri.ToString(), token, _role);
+        _carried = new CarriedSession(_api.BaseUri.ToString(), token, _role, _backdropCaptured);
         StopSync();
         _stop.Cancel();
         _api.Dispose();
@@ -95,6 +95,7 @@ public partial class Main : Node3D
         _api = CreateCachedApi(carried.Server);
         _api.AdoptSession(carried.Token);
         _role = carried.Role;
+        _backdropCaptured = carried.BackdropCaptured;
         _source = _api;
         _api.Unauthorized += () => Callable.From(OnUnauthorized).CallDeferred();
         Log($"session carried over (role '{_role}') on {_api.BaseUri} — rebuilding the world without a login");
@@ -158,31 +159,33 @@ public partial class Main : Node3D
             login.ShowStatus(notice, true);
             _loginNotice = null;
         }
-        login.Submit = async (server, user, password) =>
-        {
-            _api?.Dispose();
-            _api = CreateCachedApi(server);
-            using (var answer = await _api.LoginAsync(user, password))
-            {
-                _role = RoleOf(answer.RootElement);
-                _source = _api;
-                SessionAvatar().RememberLogin(answer.RootElement);
-            }
-            // Remembered only after the server accepted them; the password is not part of the file.
-            LauncherStore.Update(s => s with { Server = server, User = user });
-            Log($"logged in as '{user}' (role '{_role}') on {server} (server and user remembered)");
-            OnSession(SessionEvent.LoggedIn);
-            _source = _api;
-            // api.ts `auth:required`: any later 401 ends this session on the client too.
-            _api.Unauthorized += () => Callable.From(OnUnauthorized).CallDeferred();
-            // The login screen stays as the loading screen until the world is visible (TitleScreen).
-            _loading = login;
-            _loadingLayer = layer;
-            ReadStoredStart();
-            // ONE login: hand off only after native settings have read the HUD storage mirror (Task 59).
-            _hud?.Start(_api.BaseUri, _api.SessionToken());
-            await LoadWorldAsync();
-        };
+        _ = login.BindSessionAsync(SavedSessionStore(), CreateCachedApi,
+            (api, answer, fallbackRole) => EnterWorldAsync(api, answer, fallbackRole, login, layer));
+    }
+
+    private static SessionStore SavedSessionStore() => new(ProjectSettings.GlobalizePath(LoginScreen.SessionPath));
+
+    private static void DeleteSavedSession()
+    {
+        if (!SavedSessionStore().Delete()) GD.PushWarning("[native] session: cannot delete remembered session");
+    }
+
+    /// <summary>One world-entry tail for a fresh password login and a validated remembered session.</summary>
+    private async Task EnterWorldAsync(AnimaApi api, JsonElement answer, string fallbackRole, LoginScreen login, CanvasLayer layer)
+    {
+        _api?.Dispose();
+        _api = api;
+        _role = RoleOf(answer) is { Length: > 0 } role ? role : fallbackRole;
+        _source = api;
+        SessionAvatar().RememberLogin(answer);
+        Log($"session accepted (role '{_role}') on {api.BaseUri}");
+        OnSession(SessionEvent.LoggedIn);
+        api.Unauthorized += () => Callable.From(OnUnauthorized).CallDeferred();
+        _loading = login;
+        _loadingLayer = layer;
+        ReadStoredStart();
+        _hud?.Start(api.BaseUri, api.SessionToken());
+        await LoadWorldAsync();
     }
 
     /// <summary><c>user.role</c> of the login answer (app/routes/auth.py), "" when absent.</summary>
@@ -199,6 +202,7 @@ public partial class Main : Node3D
     /// </summary>
     private void ExpireSession()
     {
+        DeleteSavedSession();
         Log("session ended (HTTP 401) — back to the login screen, no logout call");
         StopSync();
         _stop.Cancel();
@@ -226,6 +230,7 @@ public partial class Main : Node3D
     /// </summary>
     private async Task BackToTitleAsync()
     {
+        DeleteSavedSession();
         Log("back to title");
         StopSync();
         _stop.Cancel();
