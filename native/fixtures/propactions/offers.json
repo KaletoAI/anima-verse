@@ -1,0 +1,46 @@
+[
+  {
+    "action_id": "pose-56",
+    "definition_revision": "revision-56",
+    "placement_id": "bench-56",
+    "variant_uid": "variant-56",
+    "target": {
+      "location_id": "loc-props",
+      "room_id": "r-props",
+      "placement_id": "bench-56",
+      "variant_uid": "variant-56"
+    },
+    "label": "Fixture solo pose",
+    "description": "Take the measured fixture seat.",
+    "enabled": true,
+    "reason": "",
+    "required_partner": false,
+    "available_targets": [],
+    "effects": []
+  },
+  {
+    "action_id": "pair-56",
+    "definition_revision": "revision-56",
+    "placement_id": "bench-56",
+    "variant_uid": "variant-56",
+    "target": {
+      "location_id": "loc-props",
+      "room_id": "r-props",
+      "placement_id": "bench-56",
+      "variant_uid": "variant-56"
+    },
+    "label": "Fixture paired pose",
+    "description": "Invite the exact fixture partner.",
+    "enabled": true,
+    "reason": "",
+    "required_partner": true,
+    "available_targets": [
+      {
+        "partner": "fixture-npc",
+        "enabled": true,
+        "reason": ""
+      }
+    ],
+    "effects": []
+  }
+]

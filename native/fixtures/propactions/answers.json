@@ -1,0 +1,577 @@
+{
+  "format": "anima-prop-action-answers/1",
+  "selection": "Choose one independent scenario. Consume ordered steps; match exact method/path/request. Exactly one of body or body_file supplies the response. body_file is relative to this directory; resolve it before serving. Unknown, exhausted or mismatched steps fail; no implicit mutation, clock or replay.",
+  "scenarios": {
+    "solo": [
+      {
+        "method": "GET",
+        "path": "/play/prop-actions",
+        "request": null,
+        "status": 200,
+        "body_file": "offers.json"
+      },
+      {
+        "method": "POST",
+        "path": "/play/prop-actions/request",
+        "request": {
+          "action_id": "pose-56",
+          "target": {
+            "location_id": "loc-props",
+            "room_id": "r-props",
+            "placement_id": "bench-56",
+            "variant_uid": "variant-56"
+          },
+          "revision": "revision-56"
+        },
+        "status": 200,
+        "body": {
+          "execution_id": "execution-56-solo",
+          "status": "approaching",
+          "reason": ""
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/prop-actions/state",
+        "request": null,
+        "status": 200,
+        "body": {
+          "incoming": [],
+          "outgoing": [],
+          "current": [
+            {
+              "execution_id": "execution-56-solo",
+              "status": "approaching",
+              "reason": "",
+              "action_id": "pose-56",
+              "definition_revision": "revision-56",
+              "target": {
+                "location_id": "loc-props",
+                "room_id": "r-props",
+                "placement_id": "bench-56",
+                "variant_uid": "variant-56"
+              },
+              "actor": "fixture-avatar",
+              "partner": "",
+              "phase": "",
+              "phase_label": "",
+              "label": "Fixture solo pose",
+              "roles": {
+                "actor": "fixture-avatar",
+                "clip": {},
+                "access": {
+                  "actor": "actor"
+                }
+              },
+              "can_respond": false,
+              "can_cancel": true
+            }
+          ],
+          "recent_results": []
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/worldmap",
+        "request": null,
+        "status": 200,
+        "body_file": "worldmap_approach.json"
+      },
+      {
+        "method": "GET",
+        "path": "/play/worldmap",
+        "request": null,
+        "status": 200,
+        "body_file": "worldmap_entry.json"
+      },
+      {
+        "method": "GET",
+        "path": "/play/prop-actions/state",
+        "request": null,
+        "status": 200,
+        "body": {
+          "incoming": [],
+          "outgoing": [],
+          "current": [
+            {
+              "execution_id": "execution-56-solo",
+              "status": "approaching",
+              "reason": "",
+              "action_id": "pose-56",
+              "definition_revision": "revision-56",
+              "target": {
+                "location_id": "loc-props",
+                "room_id": "r-props",
+                "placement_id": "bench-56",
+                "variant_uid": "variant-56"
+              },
+              "actor": "fixture-avatar",
+              "partner": "",
+              "phase": "entry",
+              "phase_label": "",
+              "label": "Fixture solo pose",
+              "roles": {
+                "actor": "fixture-avatar",
+                "clip": {},
+                "access": {
+                  "actor": "actor"
+                }
+              },
+              "can_respond": false,
+              "can_cancel": true
+            }
+          ],
+          "recent_results": []
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/worldmap",
+        "request": null,
+        "status": 200,
+        "body_file": "worldmap_active.json"
+      },
+      {
+        "method": "GET",
+        "path": "/play/prop-actions/state",
+        "request": null,
+        "status": 200,
+        "body": {
+          "incoming": [],
+          "outgoing": [],
+          "current": [
+            {
+              "execution_id": "execution-56-solo",
+              "status": "active",
+              "reason": "",
+              "action_id": "pose-56",
+              "definition_revision": "revision-56",
+              "target": {
+                "location_id": "loc-props",
+                "room_id": "r-props",
+                "placement_id": "bench-56",
+                "variant_uid": "variant-56"
+              },
+              "actor": "fixture-avatar",
+              "partner": "",
+              "phase": "active",
+              "phase_label": "",
+              "label": "Fixture solo pose",
+              "roles": {
+                "actor": "fixture-avatar",
+                "clip": {},
+                "access": {
+                  "actor": "actor"
+                }
+              },
+              "can_respond": false,
+              "can_cancel": true
+            }
+          ],
+          "recent_results": []
+        }
+      }
+    ],
+    "pair-request": [
+      {
+        "method": "POST",
+        "path": "/play/prop-actions/request",
+        "request": {
+          "action_id": "pair-56",
+          "target": {
+            "location_id": "loc-props",
+            "room_id": "r-props",
+            "placement_id": "bench-56",
+            "variant_uid": "variant-56"
+          },
+          "revision": "revision-56",
+          "partner": "fixture-npc"
+        },
+        "status": 200,
+        "body": {
+          "execution_id": "execution-56-outgoing",
+          "status": "awaiting_consent",
+          "reason": ""
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/prop-actions/state",
+        "request": null,
+        "status": 200,
+        "body": {
+          "incoming": [],
+          "outgoing": [
+            {
+              "execution_id": "execution-56-outgoing",
+              "status": "awaiting_consent",
+              "reason": "",
+              "action_id": "pair-56",
+              "definition_revision": "revision-56",
+              "target": {
+                "location_id": "loc-props",
+                "room_id": "r-props",
+                "placement_id": "bench-56",
+                "variant_uid": "variant-56"
+              },
+              "actor": "fixture-avatar",
+              "partner": "fixture-npc",
+              "phase": "",
+              "phase_label": "",
+              "label": "Fixture paired pose",
+              "roles": {
+                "actor": "fixture-avatar",
+                "partner": "fixture-npc",
+                "clip": {
+                  "a": "fixture-avatar",
+                  "b": "fixture-npc"
+                },
+                "access": {
+                  "actor": "actor",
+                  "partner": "partner"
+                }
+              },
+              "can_respond": false,
+              "can_cancel": true
+            }
+          ],
+          "current": [],
+          "recent_results": []
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/worldmap",
+        "request": null,
+        "status": 200,
+        "body_file": "worldmap.json"
+      }
+    ],
+    "pair-accept": [
+      {
+        "method": "GET",
+        "path": "/play/prop-actions/state",
+        "request": null,
+        "status": 200,
+        "body": {
+          "incoming": [
+            {
+              "execution_id": "execution-56-invite",
+              "status": "awaiting_consent",
+              "reason": "",
+              "action_id": "pair-56",
+              "definition_revision": "revision-56",
+              "target": {
+                "location_id": "loc-props",
+                "room_id": "r-props",
+                "placement_id": "bench-56",
+                "variant_uid": "variant-56"
+              },
+              "actor": "fixture-npc",
+              "partner": "fixture-avatar",
+              "phase": "",
+              "phase_label": "",
+              "label": "Fixture paired pose",
+              "roles": {
+                "actor": "fixture-npc",
+                "partner": "fixture-avatar",
+                "clip": {
+                  "a": "fixture-avatar",
+                  "b": "fixture-npc"
+                },
+                "access": {
+                  "actor": "partner",
+                  "partner": "actor"
+                }
+              },
+              "can_respond": true,
+              "can_cancel": true
+            }
+          ],
+          "outgoing": [],
+          "current": [],
+          "recent_results": []
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/play/prop-actions/respond",
+        "request": {
+          "execution_id": "execution-56-invite",
+          "accept": true
+        },
+        "status": 200,
+        "body": {
+          "execution_id": "execution-56-invite",
+          "status": "approaching",
+          "reason": ""
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/prop-actions/state",
+        "request": null,
+        "status": 200,
+        "body": {
+          "incoming": [],
+          "outgoing": [],
+          "current": [
+            {
+              "execution_id": "execution-56-invite",
+              "status": "approaching",
+              "reason": "",
+              "action_id": "pair-56",
+              "definition_revision": "revision-56",
+              "target": {
+                "location_id": "loc-props",
+                "room_id": "r-props",
+                "placement_id": "bench-56",
+                "variant_uid": "variant-56"
+              },
+              "actor": "fixture-npc",
+              "partner": "fixture-avatar",
+              "phase": "",
+              "phase_label": "",
+              "label": "Fixture paired pose",
+              "roles": {
+                "actor": "fixture-npc",
+                "partner": "fixture-avatar",
+                "clip": {
+                  "a": "fixture-avatar",
+                  "b": "fixture-npc"
+                },
+                "access": {
+                  "actor": "partner",
+                  "partner": "actor"
+                }
+              },
+              "can_respond": false,
+              "can_cancel": true
+            }
+          ],
+          "recent_results": []
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/worldmap",
+        "request": null,
+        "status": 200,
+        "body_file": "worldmap_pair.json"
+      }
+    ],
+    "pair-decline": [
+      {
+        "method": "GET",
+        "path": "/play/prop-actions/state",
+        "request": null,
+        "status": 200,
+        "body": {
+          "incoming": [
+            {
+              "execution_id": "execution-56-invite",
+              "status": "awaiting_consent",
+              "reason": "",
+              "action_id": "pair-56",
+              "definition_revision": "revision-56",
+              "target": {
+                "location_id": "loc-props",
+                "room_id": "r-props",
+                "placement_id": "bench-56",
+                "variant_uid": "variant-56"
+              },
+              "actor": "fixture-npc",
+              "partner": "fixture-avatar",
+              "phase": "",
+              "phase_label": "",
+              "label": "Fixture paired pose",
+              "roles": {
+                "actor": "fixture-npc",
+                "partner": "fixture-avatar",
+                "clip": {
+                  "a": "fixture-avatar",
+                  "b": "fixture-npc"
+                },
+                "access": {
+                  "actor": "partner",
+                  "partner": "actor"
+                }
+              },
+              "can_respond": true,
+              "can_cancel": true
+            }
+          ],
+          "outgoing": [],
+          "current": [],
+          "recent_results": []
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/play/prop-actions/respond",
+        "request": {
+          "execution_id": "execution-56-invite",
+          "accept": false
+        },
+        "status": 200,
+        "body": {
+          "execution_id": "execution-56-invite",
+          "status": "cancelled",
+          "reason": "consent_declined"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/prop-actions/state",
+        "request": null,
+        "status": 200,
+        "body": {
+          "incoming": [],
+          "outgoing": [],
+          "current": [],
+          "recent_results": [
+            {
+              "execution_id": "execution-56-invite",
+              "status": "cancelled",
+              "reason": "consent_declined",
+              "action_id": "pair-56",
+              "definition_revision": "revision-56",
+              "target": {
+                "location_id": "loc-props",
+                "room_id": "r-props",
+                "placement_id": "bench-56",
+                "variant_uid": "variant-56"
+              },
+              "actor": "fixture-npc",
+              "partner": "fixture-avatar",
+              "phase": "",
+              "phase_label": "",
+              "label": "Fixture paired pose",
+              "roles": {
+                "actor": "fixture-npc",
+                "partner": "fixture-avatar",
+                "clip": {
+                  "a": "fixture-avatar",
+                  "b": "fixture-npc"
+                },
+                "access": {
+                  "actor": "partner",
+                  "partner": "actor"
+                }
+              },
+              "can_respond": false,
+              "can_cancel": false,
+              "effects": {}
+            }
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/worldmap",
+        "request": null,
+        "status": 200,
+        "body_file": "worldmap.json"
+      }
+    ],
+    "cancel": [
+      {
+        "method": "POST",
+        "path": "/play/prop-actions/cancel",
+        "request": {
+          "execution_id": "execution-56-solo"
+        },
+        "status": 200,
+        "body": {
+          "execution_id": "execution-56-solo",
+          "status": "cancelled",
+          "reason": "cancelled"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/prop-actions/state",
+        "request": null,
+        "status": 200,
+        "body": {
+          "incoming": [],
+          "outgoing": [],
+          "current": [],
+          "recent_results": [
+            {
+              "execution_id": "execution-56-solo",
+              "status": "cancelled",
+              "reason": "cancelled",
+              "action_id": "pose-56",
+              "definition_revision": "revision-56",
+              "target": {
+                "location_id": "loc-props",
+                "room_id": "r-props",
+                "placement_id": "bench-56",
+                "variant_uid": "variant-56"
+              },
+              "actor": "fixture-avatar",
+              "partner": "",
+              "phase": "",
+              "phase_label": "",
+              "label": "Fixture solo pose",
+              "roles": {
+                "actor": "fixture-avatar",
+                "clip": {},
+                "access": {
+                  "actor": "actor"
+                }
+              },
+              "can_respond": false,
+              "can_cancel": false,
+              "effects": {}
+            }
+          ]
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/worldmap",
+        "request": null,
+        "status": 200,
+        "body_file": "worldmap_cancelled.json"
+      }
+    ],
+    "stale-revision": [
+      {
+        "method": "POST",
+        "path": "/play/prop-actions/request",
+        "request": {
+          "action_id": "pose-56",
+          "target": {
+            "location_id": "loc-props",
+            "room_id": "r-props",
+            "placement_id": "bench-56",
+            "variant_uid": "variant-56"
+          },
+          "revision": "stale"
+        },
+        "status": 409,
+        "body": {
+          "detail": {
+            "execution_id": "",
+            "status": "refused",
+            "reason": "stale_definition"
+          }
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/play/prop-actions/state",
+        "request": null,
+        "status": 200,
+        "body": {
+          "incoming": [],
+          "outgoing": [],
+          "current": [],
+          "recent_results": []
+        }
+      }
+    ]
+  }
+}

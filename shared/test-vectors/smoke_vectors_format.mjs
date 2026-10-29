@@ -174,7 +174,7 @@ for (const name of ['travel', 'residency']) {
 }
 
 console.log('\n[14] E7 files obey the shared format');
-for (const name of ['walk_control', 'collide', 'enter', 'embody', 'camera']) {
+for (const name of ['walk_control', 'collide', 'enter', 'embody', 'camera', 'prop_action_motion']) {
   const vectors = loadVectors(name);
   check(vectors.cases.every(c => /^\[\d+[a-z]?\]/.test(c.label)),
     `${name}: numbered cases, unique labels, resolved fixtures and finite JSON`);

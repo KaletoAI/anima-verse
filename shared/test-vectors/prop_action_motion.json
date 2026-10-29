@@ -1,34 +1,2050 @@
 {
   "format": "anima-test-vectors/1",
-  "description": "Hand-derived public prop motion cases. Distances follow segments, never the straight line between endpoints. Entry game progress maps to measured clip time independently of avatar height.",
-  "local_cases": [
-    {"label":"first segment before two bends","waypoints":[[0,0],[2,0],[2,3],[5,3]],"paces_m_s_real":[1,1,1],"progress_m":0,"starts_in_s":0,"age_s":1,"expect_xz":[1,0]},
-    {"label":"first corner exact","waypoints":[[0,0],[2,0],[2,3],[5,3]],"paces_m_s_real":[1,1,1],"progress_m":0,"starts_in_s":0,"age_s":2,"expect_xz":[2,0]},
-    {"label":"between two corners never diagonal","waypoints":[[0,0],[2,0],[2,3],[5,3]],"paces_m_s_real":[1,1,1],"progress_m":0,"starts_in_s":0,"age_s":3,"expect_xz":[2,1]},
-    {"label":"past second corner","waypoints":[[0,0],[2,0],[2,3],[5,3]],"paces_m_s_real":[1,1,1],"progress_m":0,"starts_in_s":0,"age_s":6,"expect_xz":[3,3]},
-    {"label":"per segment pace not first pace extrapolation","waypoints":[[0,0],[2,0],[2,3],[5,3]],"paces_m_s_real":[2,1,3],"progress_m":0,"starts_in_s":0,"age_s":4.5,"expect_xz":[3.5,3]},
-    {"label":"frozen pace holds access position","waypoints":[[0,0],[2,0],[2,3],[5,3]],"paces_m_s_real":[null,null,null],"progress_m":0,"starts_in_s":0,"age_s":20,"expect_xz":[0,0]},
-    {"label":"pending start does not advance early","waypoints":[[0,0],[2,0],[2,3],[5,3]],"paces_m_s_real":[1,1,1],"progress_m":0,"starts_in_s":2,"age_s":1,"expect_xz":[0,0]},
-    {"label":"pending start subtracts delay","waypoints":[[0,0],[2,0],[2,3],[5,3]],"paces_m_s_real":[1,1,1],"progress_m":0,"starts_in_s":2,"age_s":5,"expect_xz":[2,1]},
-    {"label":"trimmed projection restarts relative distance","waypoints":[[2,1],[2,3],[5,3]],"paces_m_s_real":[1,1],"progress_m":0,"starts_in_s":0,"age_s":3,"expect_xz":[3,3]},
-    {"label":"projection clamps to vouched endpoint","waypoints":[[0,0],[2,0],[2,3],[5,3]],"paces_m_s_real":[1,1,1],"progress_m":0,"starts_in_s":0,"age_s":100,"expect_xz":[5,3]}
-  ],
-  "entry_cases": [
-    {"label":"entry halfway at receipt","elapsed_game_s":2,"duration_game_s":4,"game_seconds_per_real_second":1,"age_s":0,"clip_duration_s":2,"height_cm":200,"expect_phase":0.5,"expect_clip_s":1},
-    {"label":"entry normal real progression","elapsed_game_s":1,"duration_game_s":4,"game_seconds_per_real_second":1,"age_s":1,"clip_duration_s":2,"height_cm":200,"expect_phase":0.5,"expect_clip_s":1},
-    {"label":"entry accelerated clock","elapsed_game_s":1,"duration_game_s":8,"game_seconds_per_real_second":2,"age_s":1.5,"clip_duration_s":4,"height_cm":140,"expect_phase":0.5,"expect_clip_s":2},
-    {"label":"entry frozen clock","elapsed_game_s":1,"duration_game_s":4,"game_seconds_per_real_second":0,"age_s":50,"clip_duration_s":2,"height_cm":200,"expect_phase":0.25,"expect_clip_s":0.5},
-    {"label":"entry clamps at authoritative interval","elapsed_game_s":3,"duration_game_s":4,"game_seconds_per_real_second":1,"age_s":20,"clip_duration_s":2,"height_cm":200,"expect_phase":1,"expect_clip_s":2},
-    {"label":"height changes geometry not time","elapsed_game_s":2,"duration_game_s":4,"game_seconds_per_real_second":1,"age_s":0,"clip_duration_s":2,"height_cm":100,"expect_phase":0.5,"expect_clip_s":1}
-  ],
-  "support_cases": [
-    {"label":"stool entry starts on floor","first_hips_y":1,"last_hips_y":0.5,"hips_y":1,"support_y":0.527,"root_offset":0.398,"access_y":0,"anchor_y":0.129,"expect_supported":true,"expect_lift":0},
-    {"label":"stool measured hips halfway","first_hips_y":1,"last_hips_y":0.5,"hips_y":0.75,"support_y":0.527,"root_offset":0.398,"access_y":0,"anchor_y":0.129,"expect_supported":true,"expect_lift":0.0645},
-    {"label":"stool finishes at corrected body root","first_hips_y":1,"last_hips_y":0.5,"hips_y":0.5,"support_y":0.527,"root_offset":0.398,"access_y":0,"anchor_y":0.129,"expect_supported":true,"expect_lift":0.129},
-    {"label":"bed root offset is not support height","first_hips_y":1,"last_hips_y":0.2,"hips_y":0.6,"support_y":0.49,"root_offset":0.002,"access_y":0,"anchor_y":0.488,"expect_supported":true,"expect_lift":0.244},
-    {"label":"upper floor entry subtracts actual access floor","first_hips_y":1,"last_hips_y":0.5,"hips_y":0.75,"support_y":3.527,"root_offset":0.398,"access_y":3,"anchor_y":3.129,"expect_supported":true,"expect_lift":0.0645},
-    {"label":"measured root overshoot clamps to body anchor","first_hips_y":1,"last_hips_y":0.5,"hips_y":0.4,"support_y":0.527,"root_offset":0.398,"access_y":0,"anchor_y":0.129,"expect_supported":true,"expect_lift":0.129},
-    {"label":"flat measured root cannot fake support rise","first_hips_y":1,"last_hips_y":1,"hips_y":1,"support_y":0.527,"root_offset":0.398,"access_y":0,"anchor_y":0.129,"expect_supported":false,"expect_lift":null},
-    {"label":"flat measured root on same floor needs no correction","first_hips_y":1,"last_hips_y":1,"hips_y":1,"support_y":0.398,"root_offset":0.398,"access_y":0,"anchor_y":0,"expect_supported":true,"expect_lift":0}
+  "source": "client3d/scripts/smoke_prop_action_motion.mjs",
+  "fixtures": {
+    "ENTRY": {
+      "kind": "sit-down",
+      "started_game_s": 5,
+      "access": {
+        "x": 0,
+        "y": 0,
+        "z": 0,
+        "yaw": 90
+      },
+      "anchor": {
+        "x": 1,
+        "y": 0.4,
+        "z": 0,
+        "yaw": 90
+      }
+    },
+    "PIN": {
+      "props": [
+        {
+          "id": "exact",
+          "role": "prop",
+          "roomId": "room",
+          "anchor": [
+            0,
+            0
+          ],
+          "placementId": "chair-1",
+          "variantUid": "variant-1",
+          "mounted": true
+        },
+        {
+          "id": "overlap",
+          "role": "prop",
+          "roomId": "room",
+          "anchor": [
+            0,
+            0
+          ],
+          "placementId": "chair-2",
+          "variantUid": "variant-1",
+          "mounted": true
+        }
+      ],
+      "entries": [
+        [
+          "blocked",
+          {
+            "roomId": "room",
+            "anchor": [
+              0,
+              0
+            ],
+            "slots": [
+              [
+                1,
+                0,
+                2
+              ]
+            ],
+            "placementId": "chair-1",
+            "variantUid": "variant-1"
+          }
+        ]
+      ],
+      "offers": [
+        {
+          "id": "blocked",
+          "free": 0,
+          "free_slots": [],
+          "prop_actions": [
+            {
+              "enabled": false,
+              "reason": "claimed"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "label": "[1] first segment before two bends",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            1,
+            1,
+            1
+          ],
+          "progress_m": 0,
+          "starts_in_s": 0
+        },
+        1
+      ],
+      "expect": [
+        1,
+        0
+      ]
+    },
+    {
+      "label": "[1] first corner exact",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            1,
+            1,
+            1
+          ],
+          "progress_m": 0,
+          "starts_in_s": 0
+        },
+        2
+      ],
+      "expect": [
+        2,
+        0
+      ]
+    },
+    {
+      "label": "[1] between two corners never diagonal",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            1,
+            1,
+            1
+          ],
+          "progress_m": 0,
+          "starts_in_s": 0
+        },
+        3
+      ],
+      "expect": [
+        2,
+        1
+      ]
+    },
+    {
+      "label": "[1] past second corner",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            1,
+            1,
+            1
+          ],
+          "progress_m": 0,
+          "starts_in_s": 0
+        },
+        6
+      ],
+      "expect": [
+        3,
+        3
+      ]
+    },
+    {
+      "label": "[1] per segment pace not first pace extrapolation",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            2,
+            1,
+            3
+          ],
+          "progress_m": 0,
+          "starts_in_s": 0
+        },
+        4.5
+      ],
+      "expect": [
+        3.5,
+        3
+      ]
+    },
+    {
+      "label": "[1] frozen pace holds access position",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            null,
+            null,
+            null
+          ],
+          "progress_m": 0,
+          "starts_in_s": 0
+        },
+        20
+      ],
+      "expect": [
+        0,
+        0
+      ]
+    },
+    {
+      "label": "[1] pending start does not advance early",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            1,
+            1,
+            1
+          ],
+          "progress_m": 0,
+          "starts_in_s": 2
+        },
+        1
+      ],
+      "expect": [
+        0,
+        0
+      ]
+    },
+    {
+      "label": "[1] pending start subtracts delay",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            1,
+            1,
+            1
+          ],
+          "progress_m": 0,
+          "starts_in_s": 2
+        },
+        5
+      ],
+      "expect": [
+        2,
+        1
+      ]
+    },
+    {
+      "label": "[1] trimmed projection restarts relative distance",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              2,
+              1
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            1,
+            1
+          ],
+          "progress_m": 0,
+          "starts_in_s": 0
+        },
+        3
+      ],
+      "expect": [
+        3,
+        3
+      ]
+    },
+    {
+      "label": "[1] projection clamps to vouched endpoint",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            1,
+            1,
+            1
+          ],
+          "progress_m": 0,
+          "starts_in_s": 0
+        },
+        100
+      ],
+      "expect": [
+        5,
+        3
+      ]
+    },
+    {
+      "label": "[2] entry halfway at receipt",
+      "fn": "entryClipSample",
+      "args": [
+        {
+          "elapsed_game_s": 2,
+          "duration_game_s": 4,
+          "game_seconds_per_real_second": 1,
+          "clip_duration_s": 2,
+          "height_cm": 200
+        },
+        0
+      ],
+      "expect": {
+        "phase": 0.5,
+        "clip_s": 1
+      }
+    },
+    {
+      "label": "[2] entry normal real progression",
+      "fn": "entryClipSample",
+      "args": [
+        {
+          "elapsed_game_s": 1,
+          "duration_game_s": 4,
+          "game_seconds_per_real_second": 1,
+          "clip_duration_s": 2,
+          "height_cm": 200
+        },
+        1
+      ],
+      "expect": {
+        "phase": 0.5,
+        "clip_s": 1
+      }
+    },
+    {
+      "label": "[2] entry accelerated clock",
+      "fn": "entryClipSample",
+      "args": [
+        {
+          "elapsed_game_s": 1,
+          "duration_game_s": 8,
+          "game_seconds_per_real_second": 2,
+          "clip_duration_s": 4,
+          "height_cm": 140
+        },
+        1.5
+      ],
+      "expect": {
+        "phase": 0.5,
+        "clip_s": 2
+      }
+    },
+    {
+      "label": "[2] entry frozen clock",
+      "fn": "entryClipSample",
+      "args": [
+        {
+          "elapsed_game_s": 1,
+          "duration_game_s": 4,
+          "game_seconds_per_real_second": 0,
+          "clip_duration_s": 2,
+          "height_cm": 200
+        },
+        50
+      ],
+      "expect": {
+        "phase": 0.25,
+        "clip_s": 0.5
+      }
+    },
+    {
+      "label": "[2] entry clamps at authoritative interval",
+      "fn": "entryClipSample",
+      "args": [
+        {
+          "elapsed_game_s": 3,
+          "duration_game_s": 4,
+          "game_seconds_per_real_second": 1,
+          "clip_duration_s": 2,
+          "height_cm": 200
+        },
+        20
+      ],
+      "expect": {
+        "phase": 1,
+        "clip_s": 2
+      }
+    },
+    {
+      "label": "[2] height changes geometry not time",
+      "fn": "entryClipSample",
+      "args": [
+        {
+          "elapsed_game_s": 2,
+          "duration_game_s": 4,
+          "game_seconds_per_real_second": 1,
+          "clip_duration_s": 2,
+          "height_cm": 100
+        },
+        0
+      ],
+      "expect": {
+        "phase": 0.5,
+        "clip_s": 1
+      }
+    },
+    {
+      "label": "[3] stool entry starts on floor",
+      "fn": "entrySupportSample",
+      "args": [
+        {
+          "first_hips_y": 1,
+          "last_hips_y": 0.5,
+          "hips_y": 1,
+          "support_y": 0.527,
+          "root_offset": 0.398,
+          "access_y": 0,
+          "anchor_y": 0.129
+        }
+      ],
+      "expect": {
+        "supported": true,
+        "lift": 0
+      }
+    },
+    {
+      "label": "[3] stool measured hips halfway",
+      "fn": "entrySupportSample",
+      "args": [
+        {
+          "first_hips_y": 1,
+          "last_hips_y": 0.5,
+          "hips_y": 0.75,
+          "support_y": 0.527,
+          "root_offset": 0.398,
+          "access_y": 0,
+          "anchor_y": 0.129
+        }
+      ],
+      "expect": {
+        "supported": true,
+        "lift": 0.0645
+      }
+    },
+    {
+      "label": "[3] stool finishes at corrected body root",
+      "fn": "entrySupportSample",
+      "args": [
+        {
+          "first_hips_y": 1,
+          "last_hips_y": 0.5,
+          "hips_y": 0.5,
+          "support_y": 0.527,
+          "root_offset": 0.398,
+          "access_y": 0,
+          "anchor_y": 0.129
+        }
+      ],
+      "expect": {
+        "supported": true,
+        "lift": 0.129
+      }
+    },
+    {
+      "label": "[3] bed root offset is not support height",
+      "fn": "entrySupportSample",
+      "args": [
+        {
+          "first_hips_y": 1,
+          "last_hips_y": 0.2,
+          "hips_y": 0.6,
+          "support_y": 0.49,
+          "root_offset": 0.002,
+          "access_y": 0,
+          "anchor_y": 0.488
+        }
+      ],
+      "expect": {
+        "supported": true,
+        "lift": 0.244
+      }
+    },
+    {
+      "label": "[3] upper floor entry subtracts actual access floor",
+      "fn": "entrySupportSample",
+      "args": [
+        {
+          "first_hips_y": 1,
+          "last_hips_y": 0.5,
+          "hips_y": 0.75,
+          "support_y": 3.527,
+          "root_offset": 0.398,
+          "access_y": 3,
+          "anchor_y": 3.129
+        }
+      ],
+      "expect": {
+        "supported": true,
+        "lift": 0.0645
+      }
+    },
+    {
+      "label": "[3] measured root overshoot clamps to body anchor",
+      "fn": "entrySupportSample",
+      "args": [
+        {
+          "first_hips_y": 1,
+          "last_hips_y": 0.5,
+          "hips_y": 0.4,
+          "support_y": 0.527,
+          "root_offset": 0.398,
+          "access_y": 0,
+          "anchor_y": 0.129
+        }
+      ],
+      "expect": {
+        "supported": true,
+        "lift": 0.129
+      }
+    },
+    {
+      "label": "[3] flat measured root cannot fake support rise",
+      "fn": "entrySupportSample",
+      "args": [
+        {
+          "first_hips_y": 1,
+          "last_hips_y": 1,
+          "hips_y": 1,
+          "support_y": 0.527,
+          "root_offset": 0.398,
+          "access_y": 0,
+          "anchor_y": 0.129
+        }
+      ],
+      "expect": {
+        "supported": false,
+        "lift": null
+      }
+    },
+    {
+      "label": "[3] flat measured root on same floor needs no correction",
+      "fn": "entrySupportSample",
+      "args": [
+        {
+          "first_hips_y": 1,
+          "last_hips_y": 1,
+          "hips_y": 1,
+          "support_y": 0.398,
+          "root_offset": 0.398,
+          "access_y": 0,
+          "anchor_y": 0
+        }
+      ],
+      "expect": {
+        "supported": true,
+        "lift": 0
+      }
+    },
+    {
+      "label": "[4] progress skips first segment",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            1,
+            1
+          ],
+          "progress_m": 3
+        },
+        1
+      ],
+      "expect": [
+        2,
+        2
+      ]
+    },
+    {
+      "label": "[4] progress on exact corner",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            2,
+            1
+          ],
+          "progress_m": 2
+        },
+        1
+      ],
+      "expect": [
+        2,
+        1
+      ]
+    },
+    {
+      "label": "[4] progress beyond route clamps",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ]
+          ],
+          "paces_m_s_real": [
+            1
+          ],
+          "progress_m": 4
+        },
+        0
+      ],
+      "expect": [
+        2,
+        0
+      ]
+    },
+    {
+      "label": "[4] negative progress and age clamp",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ]
+          ],
+          "paces_m_s_real": [
+            1
+          ],
+          "progress_m": -2
+        },
+        -1
+      ],
+      "expect": [
+        0,
+        0
+      ]
+    },
+    {
+      "label": "[4] negative delay means no wait",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ]
+          ],
+          "paces_m_s_real": [
+            1
+          ],
+          "progress_m": 0,
+          "starts_in_s": -2
+        },
+        1
+      ],
+      "expect": [
+        1,
+        0
+      ]
+    },
+    {
+      "label": "[4] zero segment retains segment pace index",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ]
+          ],
+          "paces_m_s_real": [
+            9,
+            2
+          ],
+          "progress_m": 0
+        },
+        0.5
+      ],
+      "expect": [
+        1,
+        0
+      ]
+    },
+    {
+      "label": "[4] missing paces freeze at progress",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ]
+          ],
+          "paces_m_s_real": null,
+          "progress_m": 1
+        },
+        100
+      ],
+      "expect": [
+        1,
+        0
+      ]
+    },
+    {
+      "label": "[4] negative pace freezes",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ]
+          ],
+          "paces_m_s_real": [
+            -1
+          ],
+          "progress_m": 1
+        },
+        100
+      ],
+      "expect": [
+        1,
+        0
+      ]
+    },
+    {
+      "label": "[4] short pace list freezes second segment",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            1
+          ],
+          "progress_m": 0
+        },
+        10
+      ],
+      "expect": [
+        2,
+        0
+      ]
+    },
+    {
+      "label": "[4] empty route has origin fallback",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [],
+          "paces_m_s_real": null,
+          "progress_m": 0
+        },
+        10
+      ],
+      "expect": [
+        0,
+        0
+      ]
+    },
+    {
+      "label": "[4] single waypoint is terminal",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              4,
+              5
+            ]
+          ],
+          "paces_m_s_real": null,
+          "progress_m": 0
+        },
+        10
+      ],
+      "expect": [
+        4,
+        5
+      ]
+    },
+    {
+      "label": "[4] diagonal uses three four five length",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              3,
+              4
+            ]
+          ],
+          "paces_m_s_real": [
+            2
+          ],
+          "progress_m": 0
+        },
+        1.25
+      ],
+      "expect": [
+        1.5,
+        2
+      ]
+    },
+    {
+      "label": "[4] remaining distance changes segment time",
+      "fn": "localApproachPoint",
+      "args": [
+        {
+          "waypoints": [
+            [
+              0,
+              0
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              2,
+              3
+            ]
+          ],
+          "paces_m_s_real": [
+            2,
+            1
+          ],
+          "progress_m": 1
+        },
+        1.5
+      ],
+      "expect": [
+        2,
+        1
+      ]
+    },
+    {
+      "label": "[5] negative age holds received phase",
+      "fn": "entryPhase",
+      "args": [
+        {
+          "elapsed_game_s": 1,
+          "duration_game_s": 4,
+          "game_seconds_per_real_second": 2
+        },
+        -3
+      ],
+      "expect": 0.25
+    },
+    {
+      "label": "[5] negative rate freezes",
+      "fn": "entryPhase",
+      "args": [
+        {
+          "elapsed_game_s": 1,
+          "duration_game_s": 4,
+          "game_seconds_per_real_second": -2
+        },
+        3
+      ],
+      "expect": 0.25
+    },
+    {
+      "label": "[5] negative elapsed clamps lower bound",
+      "fn": "entryPhase",
+      "args": [
+        {
+          "elapsed_game_s": -2,
+          "duration_game_s": 4,
+          "game_seconds_per_real_second": 1
+        },
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[5] exact entry end",
+      "fn": "entryPhase",
+      "args": [
+        {
+          "elapsed_game_s": 1,
+          "duration_game_s": 4,
+          "game_seconds_per_real_second": 2
+        },
+        1.5
+      ],
+      "expect": 1
+    },
+    {
+      "label": "[6] ascending measured hips halfway",
+      "fn": "entrySupportLift",
+      "args": [
+        0,
+        2,
+        1,
+        0,
+        0.4,
+        0.1
+      ],
+      "expect": 0.2
+    },
+    {
+      "label": "[6] before measured motion clamps zero",
+      "fn": "entrySupportLift",
+      "args": [
+        1,
+        0.5,
+        1.2,
+        0,
+        0.129,
+        0.398
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[6] negative correction follows body motion",
+      "fn": "entrySupportLift",
+      "args": [
+        1,
+        0.5,
+        0.75,
+        1,
+        0.5,
+        0.4
+      ],
+      "expect": -0.25
+    },
+    {
+      "label": "[6] near flat span cannot support rise",
+      "fn": "entrySupportLift",
+      "args": [
+        1,
+        1.0000005,
+        1,
+        0,
+        0.129,
+        0.398
+      ],
+      "expect": null
+    },
+    {
+      "label": "[6] near zero correction with flat span",
+      "fn": "entrySupportLift",
+      "args": [
+        1,
+        1,
+        1,
+        0,
+        5e-07,
+        0.398
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[7] identity ignores elapsed polls",
+      "fn": "entryIdentity",
+      "args": [
+        {
+          "$fixture": "ENTRY",
+          "$with": {
+            "elapsed_game_s": 3
+          }
+        }
+      ],
+      "expect": "sit-down|5|0,0,0,90|1,0.4,0,90"
+    },
+    {
+      "label": "[7] new authoritative start changes identity",
+      "fn": "entryIdentity",
+      "args": [
+        {
+          "$fixture": "ENTRY",
+          "$with": {
+            "started_game_s": 6
+          }
+        }
+      ],
+      "expect": "sit-down|6|0,0,0,90|1,0.4,0,90"
+    },
+    {
+      "label": "[7] changed access changes identity",
+      "fn": "entryIdentity",
+      "args": [
+        {
+          "$fixture": "ENTRY",
+          "$with": {
+            "access": {
+              "x": 0,
+              "y": 3,
+              "z": 0,
+              "yaw": 90
+            }
+          }
+        }
+      ],
+      "expect": "sit-down|5|0,3,0,90|1,0.4,0,90"
+    },
+    {
+      "label": "[7] changed anchor changes identity",
+      "fn": "entryIdentity",
+      "args": [
+        {
+          "$fixture": "ENTRY",
+          "$with": {
+            "anchor": {
+              "x": 2,
+              "y": 0.4,
+              "z": 0,
+              "yaw": 90
+            }
+          }
+        }
+      ],
+      "expect": "sit-down|5|0,0,0,90|2,0.4,0,90"
+    },
+    {
+      "label": "[7] changed clip kind changes identity",
+      "fn": "entryIdentity",
+      "args": [
+        {
+          "$fixture": "ENTRY",
+          "$with": {
+            "kind": "lie-down"
+          }
+        }
+      ],
+      "expect": "lie-down|5|0,0,0,90|1,0.4,0,90"
+    },
+    {
+      "label": "[8] blocked offer pins exact overlapping mesh",
+      "fn": "pickablePropRows",
+      "args": [
+        {
+          "$fixture": "PIN"
+        }
+      ],
+      "expect": [
+        {
+          "id": "exact",
+          "role": "prop",
+          "places": [
+            {
+              "id": "blocked",
+              "free": [
+                {
+                  "x": 1,
+                  "z": 2
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "[8] stale variant cannot borrow binding",
+      "fn": "pickablePropRows",
+      "args": [
+        {
+          "$fixture": "PIN",
+          "$with": {
+            "props": [
+              {
+                "id": "stale",
+                "role": "prop",
+                "roomId": "room",
+                "anchor": [
+                  0,
+                  0
+                ],
+                "placementId": "chair-1",
+                "variantUid": "stale",
+                "mounted": true
+              }
+            ]
+          }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[8] wrong room cannot borrow binding",
+      "fn": "pickablePropRows",
+      "args": [
+        {
+          "$fixture": "PIN",
+          "$with": {
+            "props": [
+              {
+                "id": "other-room",
+                "role": "prop",
+                "roomId": "other",
+                "anchor": [
+                  0,
+                  0
+                ],
+                "placementId": "chair-1",
+                "variantUid": "variant-1",
+                "mounted": true
+              }
+            ]
+          }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[8] unmounted mesh cannot take action",
+      "fn": "pickablePropRows",
+      "args": [
+        {
+          "$fixture": "PIN",
+          "$with": {
+            "props": [
+              {
+                "id": "unmounted",
+                "role": "prop",
+                "roomId": "room",
+                "anchor": [
+                  0,
+                  0
+                ],
+                "placementId": "chair-1",
+                "variantUid": "variant-1",
+                "mounted": false
+              }
+            ]
+          }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[8] moved anchor cannot take action",
+      "fn": "pickablePropRows",
+      "args": [
+        {
+          "$fixture": "PIN",
+          "$with": {
+            "props": [
+              {
+                "id": "moved",
+                "role": "prop",
+                "roomId": "room",
+                "anchor": [
+                  1,
+                  0
+                ],
+                "placementId": "chair-1",
+                "variantUid": "variant-1",
+                "mounted": true
+              }
+            ]
+          }
+        }
+      ],
+      "expect": []
+    },
+    {
+      "label": "[9] cancel waits then withdraws only its journey",
+      "fn": "manualGateTrace",
+      "args": [
+        [
+          {
+            "op": "cancel",
+            "id": "a",
+            "execution": "run-1",
+            "journey": "j1"
+          },
+          {
+            "op": "settle",
+            "id": "a",
+            "accept": true
+          }
+        ],
+        [
+          "j1",
+          "j2",
+          null
+        ]
+      ],
+      "expect": [
+        {
+          "pending": true,
+          "calls": 1,
+          "withdrawn": [
+            false,
+            false,
+            false
+          ]
+        },
+        {
+          "pending": false,
+          "calls": 1,
+          "withdrawn": [
+            true,
+            false,
+            false
+          ],
+          "result": "resolved"
+        }
+      ]
+    },
+    {
+      "label": "[9] failed cancel retains ownership",
+      "fn": "manualGateTrace",
+      "args": [
+        [
+          {
+            "op": "cancel",
+            "id": "a",
+            "execution": "run-1",
+            "journey": "j1"
+          },
+          {
+            "op": "settle",
+            "id": "a",
+            "accept": false
+          }
+        ],
+        [
+          "j1"
+        ]
+      ],
+      "expect": [
+        {
+          "pending": true,
+          "calls": 1,
+          "withdrawn": [
+            false
+          ]
+        },
+        {
+          "pending": false,
+          "calls": 1,
+          "withdrawn": [
+            false
+          ],
+          "result": "rejected"
+        }
+      ]
+    },
+    {
+      "label": "[9] concurrent cancel shares pending mutation",
+      "fn": "manualGateTrace",
+      "args": [
+        [
+          {
+            "op": "cancel",
+            "id": "a",
+            "execution": "run-1",
+            "journey": "j1"
+          },
+          {
+            "op": "cancel",
+            "id": "b",
+            "execution": "run-2",
+            "journey": "j2",
+            "same_as": "a"
+          },
+          {
+            "op": "settle",
+            "id": "a",
+            "accept": true
+          }
+        ],
+        [
+          "j1",
+          "j2"
+        ]
+      ],
+      "expect": [
+        {
+          "pending": true,
+          "calls": 1,
+          "withdrawn": [
+            false,
+            false
+          ]
+        },
+        {
+          "pending": true,
+          "calls": 1,
+          "withdrawn": [
+            false,
+            false
+          ],
+          "samePromise": true
+        },
+        {
+          "pending": false,
+          "calls": 1,
+          "withdrawn": [
+            true,
+            false
+          ],
+          "result": "resolved"
+        }
+      ]
+    },
+    {
+      "label": "[9] retry after rejection can withdraw journey",
+      "fn": "manualGateTrace",
+      "args": [
+        [
+          {
+            "op": "cancel",
+            "id": "a",
+            "execution": "run-1",
+            "journey": "j1"
+          },
+          {
+            "op": "settle",
+            "id": "a",
+            "accept": false
+          },
+          {
+            "op": "cancel",
+            "id": "b",
+            "execution": "run-1",
+            "journey": "j1"
+          },
+          {
+            "op": "settle",
+            "id": "b",
+            "accept": true
+          }
+        ],
+        [
+          "j1"
+        ]
+      ],
+      "expect": [
+        {
+          "pending": true,
+          "calls": 1,
+          "withdrawn": [
+            false
+          ]
+        },
+        {
+          "pending": false,
+          "calls": 1,
+          "withdrawn": [
+            false
+          ],
+          "result": "rejected"
+        },
+        {
+          "pending": true,
+          "calls": 2,
+          "withdrawn": [
+            false
+          ]
+        },
+        {
+          "pending": false,
+          "calls": 2,
+          "withdrawn": [
+            true
+          ],
+          "result": "resolved"
+        }
+      ]
+    },
+    {
+      "label": "[9] null journey still awaits cancellation",
+      "fn": "manualGateTrace",
+      "args": [
+        [
+          {
+            "op": "cancel",
+            "id": "a",
+            "execution": "run-1",
+            "journey": null
+          },
+          {
+            "op": "settle",
+            "id": "a",
+            "accept": true
+          }
+        ],
+        [
+          null,
+          ""
+        ]
+      ],
+      "expect": [
+        {
+          "pending": true,
+          "calls": 1,
+          "withdrawn": [
+            false,
+            false
+          ]
+        },
+        {
+          "pending": false,
+          "calls": 1,
+          "withdrawn": [
+            false,
+            false
+          ],
+          "result": "resolved"
+        }
+      ]
+    },
+    {
+      "label": "[10] only correlated completion plus adoption releases",
+      "fn": "preparationTrace",
+      "args": [
+        [
+          {
+            "op": "begin",
+            "id": "a",
+            "now": 0
+          },
+          {
+            "op": "changed"
+          },
+          {
+            "op": "adopt"
+          },
+          {
+            "op": "changed",
+            "id": "other"
+          },
+          {
+            "op": "adopt"
+          },
+          {
+            "op": "changed",
+            "id": "a"
+          },
+          {
+            "op": "adopt"
+          }
+        ]
+      ],
+      "expect": [
+        {
+          "pending": true
+        },
+        {
+          "pending": true
+        },
+        {
+          "pending": true
+        },
+        {
+          "pending": true
+        },
+        {
+          "pending": true
+        },
+        {
+          "pending": true
+        },
+        {
+          "pending": false
+        }
+      ]
+    },
+    {
+      "label": "[10] concurrent preparations retain own pause",
+      "fn": "preparationTrace",
+      "args": [
+        [
+          {
+            "op": "begin",
+            "id": "a"
+          },
+          {
+            "op": "begin",
+            "id": "b"
+          },
+          {
+            "op": "changed",
+            "id": "a"
+          },
+          {
+            "op": "adopt"
+          },
+          {
+            "op": "changed",
+            "id": "b"
+          },
+          {
+            "op": "adopt"
+          }
+        ]
+      ],
+      "expect": [
+        {
+          "pending": true
+        },
+        {
+          "pending": true
+        },
+        {
+          "pending": true
+        },
+        {
+          "pending": true
+        },
+        {
+          "pending": true
+        },
+        {
+          "pending": false
+        }
+      ]
+    },
+    {
+      "label": "[10] exact ten second lease needs fresh adoption",
+      "fn": "preparationTrace",
+      "args": [
+        [
+          {
+            "op": "begin",
+            "id": "a",
+            "now": 100
+          },
+          {
+            "op": "expire",
+            "now": 10099
+          },
+          {
+            "op": "adopt"
+          },
+          {
+            "op": "expire",
+            "now": 10100
+          },
+          {
+            "op": "expire",
+            "now": 10101
+          },
+          {
+            "op": "adopt"
+          }
+        ]
+      ],
+      "expect": [
+        {
+          "pending": true
+        },
+        {
+          "pending": true,
+          "expired": false
+        },
+        {
+          "pending": true
+        },
+        {
+          "pending": true,
+          "expired": true
+        },
+        {
+          "pending": true,
+          "expired": false
+        },
+        {
+          "pending": false
+        }
+      ]
+    },
+    {
+      "label": "[11] queued final report and all waiters drain",
+      "fn": "positionDrainTrace",
+      "args": [
+        [
+          {
+            "op": "begin",
+            "id": "a"
+          },
+          {
+            "op": "wait",
+            "id": "w1"
+          },
+          {
+            "op": "begin",
+            "id": "b"
+          },
+          {
+            "op": "wait",
+            "id": "w2"
+          },
+          {
+            "op": "finish",
+            "id": "a"
+          },
+          {
+            "op": "finish",
+            "id": "b"
+          }
+        ],
+        [
+          "w1",
+          "w2"
+        ]
+      ],
+      "expect": [
+        {
+          "drained": [
+            false,
+            false
+          ]
+        },
+        {
+          "drained": [
+            false,
+            false
+          ]
+        },
+        {
+          "drained": [
+            false,
+            false
+          ]
+        },
+        {
+          "drained": [
+            false,
+            false
+          ]
+        },
+        {
+          "drained": [
+            false,
+            false
+          ]
+        },
+        {
+          "drained": [
+            true,
+            true
+          ]
+        }
+      ]
+    },
+    {
+      "label": "[11] idle drain resolves and new write blocks new waiter",
+      "fn": "positionDrainTrace",
+      "args": [
+        [
+          {
+            "op": "wait",
+            "id": "w1"
+          },
+          {
+            "op": "begin",
+            "id": "a"
+          },
+          {
+            "op": "wait",
+            "id": "w2"
+          },
+          {
+            "op": "finish",
+            "id": "a"
+          }
+        ],
+        [
+          "w1",
+          "w2"
+        ]
+      ],
+      "expect": [
+        {
+          "drained": [
+            true,
+            false
+          ]
+        },
+        {
+          "drained": [
+            true,
+            false
+          ]
+        },
+        {
+          "drained": [
+            true,
+            false
+          ]
+        },
+        {
+          "drained": [
+            true,
+            true
+          ]
+        }
+      ]
+    },
+    {
+      "label": "[12] solo preserves blocked verdict",
+      "fn": "propActionChoices",
+      "args": [
+        {
+          "required_partner": false,
+          "enabled": false,
+          "reason": "claimed"
+        }
+      ],
+      "expect": [
+        {
+          "enabled": false,
+          "reason": "claimed"
+        }
+      ]
+    },
+    {
+      "label": "[12] solo requires no partner choice",
+      "fn": "propActionChoices",
+      "args": [
+        {
+          "required_partner": false,
+          "enabled": true,
+          "reason": ""
+        }
+      ],
+      "expect": [
+        {
+          "enabled": true,
+          "reason": ""
+        }
+      ]
+    },
+    {
+      "label": "[12] pair preserves every exact partner verdict",
+      "fn": "propActionChoices",
+      "args": [
+        {
+          "required_partner": true,
+          "enabled": true,
+          "reason": "",
+          "available_targets": [
+            {
+              "partner": "fixture-npc",
+              "enabled": false,
+              "reason": "busy"
+            },
+            {
+              "partner": "fixture-other",
+              "enabled": true,
+              "reason": ""
+            }
+          ]
+        }
+      ],
+      "expect": [
+        {
+          "partner": "fixture-npc",
+          "enabled": false,
+          "reason": "busy"
+        },
+        {
+          "partner": "fixture-other",
+          "enabled": true,
+          "reason": ""
+        }
+      ]
+    },
+    {
+      "label": "[12] empty pair list never fabricates partner",
+      "fn": "propActionChoices",
+      "args": [
+        {
+          "required_partner": true,
+          "enabled": false,
+          "reason": "partner_required",
+          "available_targets": []
+        }
+      ],
+      "expect": [
+        {
+          "enabled": false,
+          "reason": "partner_required"
+        }
+      ]
+    },
+    {
+      "label": "[6] exact one micrometre span is measured",
+      "fn": "entrySupportLift",
+      "args": [
+        0,
+        1e-06,
+        5e-07,
+        0,
+        0.2,
+        0.4
+      ],
+      "expect": 0.1
+    },
+    {
+      "label": "[6] exact one micrometre flat correction is unsupported",
+      "fn": "entrySupportLift",
+      "args": [
+        1,
+        1,
+        1,
+        0,
+        1e-06,
+        0
+      ],
+      "expect": null
+    }
   ]
 }

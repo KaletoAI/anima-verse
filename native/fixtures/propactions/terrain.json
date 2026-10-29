@@ -1,0 +1,16 @@
+{
+  "sig": "propactions-terrain",
+  "default_kind": "grass",
+  "types": [
+    {
+      "kind": "grass",
+      "name": "Fixture ground",
+      "color": "#6f9a4a",
+      "passable": true,
+      "speed_factor": 1,
+      "meta": {}
+    }
+  ],
+  "areas": [],
+  "strokes": []
+}

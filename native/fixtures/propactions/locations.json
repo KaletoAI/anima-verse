@@ -1,0 +1,16 @@
+{
+  "locations": [
+    {
+      "id": "loc-props",
+      "name": "Fixture Prop Room",
+      "terrain": null,
+      "map3d": null,
+      "rooms": [
+        {
+          "id": "r-props",
+          "name": "Fixture Prop Room"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,96 @@
+{
+  "avatar": "fixture-avatar",
+  "current_location_id": "loc-props",
+  "locations": [
+    {
+      "id": "loc-props",
+      "name": "Fixture Prop Room",
+      "pos_x": 0,
+      "pos_z": 0,
+      "yaw_deg": 0,
+      "plan_width_m": 12,
+      "boundary": [
+        [
+          -6,
+          -4
+        ],
+        [
+          6,
+          -4
+        ],
+        [
+          6,
+          4
+        ],
+        [
+          -6,
+          4
+        ]
+      ],
+      "openings": []
+    }
+  ],
+  "world_props": [],
+  "world_props_sig": "propactions-none",
+  "events_by_location": {},
+  "world_bounds": {
+    "min_x": -6,
+    "min_z": -4,
+    "max_x": 6,
+    "max_z": 4
+  },
+  "height_sig": "propactions-flat",
+  "fogged": false,
+  "characters": [
+    {
+      "name": "fixture-avatar",
+      "location_id": "loc-props",
+      "room_id": "r-props",
+      "pos": {
+        "x": 2,
+        "z": -1
+      },
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": null,
+      "local_approach": null,
+      "prop_action_entry": {
+        "kind": "fixture-sit-down",
+        "pose_key": "sitting",
+        "access": {
+          "x": 2,
+          "y": 0,
+          "z": -1,
+          "yaw": 180
+        },
+        "anchor": {
+          "x": 2,
+          "y": 0.129,
+          "z": 0,
+          "yaw": 180
+        },
+        "duration_game_s": 4,
+        "elapsed_game_s": 2,
+        "game_seconds_per_real_second": 1,
+        "height_cm": 170,
+        "root_offset": 0.398,
+        "role": null,
+        "started_game_s": 43206
+      }
+    },
+    {
+      "name": "fixture-npc",
+      "location_id": "loc-props",
+      "room_id": "r-props",
+      "pos": {
+        "x": 4,
+        "z": 2
+      },
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": null,
+      "local_approach": null,
+      "prop_action_entry": null
+    }
+  ]
+}

@@ -1,0 +1,209 @@
+{
+  "signature": "propactions-56",
+  "k": 1,
+  "extent_m": 12,
+  "storey_m": 3,
+  "boundary": [
+    [
+      -6,
+      -4
+    ],
+    [
+      6,
+      -4
+    ],
+    [
+      6,
+      4
+    ],
+    [
+      -6,
+      4
+    ]
+  ],
+  "levels": [
+    {
+      "level": 0,
+      "floor_y": 0
+    }
+  ],
+  "style": {},
+  "rooms": [
+    {
+      "room_id": "r-props",
+      "level": 0,
+      "always_visible": false,
+      "outline": [
+        [
+          -6,
+          -4
+        ],
+        [
+          6,
+          -4
+        ],
+        [
+          6,
+          4
+        ],
+        [
+          -6,
+          4
+        ]
+      ],
+      "openings": []
+    }
+  ],
+  "outdoor_rooms": [],
+  "floor_plan": [
+    {
+      "room_id": "r-props",
+      "polygon_world": [
+        [
+          -6,
+          -4
+        ],
+        [
+          6,
+          -4
+        ],
+        [
+          6,
+          4
+        ],
+        [
+          -6,
+          4
+        ]
+      ],
+      "floor_kind": "planks",
+      "closed": true
+    }
+  ],
+  "plates": [],
+  "walls": [],
+  "extras": [],
+  "stairs": [],
+  "markers": [
+    {
+      "room_id": "r-props",
+      "id": "prop-bench-56-seat56",
+      "marker_id": "seat56",
+      "group": "seat",
+      "label": "Fixture bench",
+      "capacity": 2,
+      "at_world": [
+        3,
+        0
+      ],
+      "slots": [
+        [
+          2,
+          0
+        ],
+        [
+          4,
+          0
+        ]
+      ],
+      "y_world": 0.527,
+      "root_offset": 0.398,
+      "facing": 180,
+      "source": "prop",
+      "anchor": [
+        3,
+        0
+      ],
+      "placement_id": "bench-56",
+      "prop_id": "fixture-bench",
+      "variant_uid": "variant-56",
+      "floor_y": 0,
+      "access": {
+        "actor": {
+          "x": 2,
+          "y": 0,
+          "z": -1,
+          "yaw": 180
+        },
+        "partner": {
+          "x": 4,
+          "y": 0,
+          "z": -1,
+          "yaw": 180
+        }
+      },
+      "action_bindings": [
+        {
+          "action_id": "pose-56",
+          "variant_uid": "variant-56",
+          "marker_ids": [
+            "seat56"
+          ],
+          "supported": true,
+          "validation": "local_valid",
+          "reason": "",
+          "placement_id": "bench-56",
+          "prop_id": "fixture-bench",
+          "definition_revision": "revision-56",
+          "marker_id": "seat56",
+          "route_checked": false,
+          "room_id": "r-props"
+        },
+        {
+          "action_id": "pair-56",
+          "variant_uid": "variant-56",
+          "marker_ids": [
+            "seat56"
+          ],
+          "supported": true,
+          "validation": "local_valid",
+          "reason": "",
+          "placement_id": "bench-56",
+          "prop_id": "fixture-bench",
+          "definition_revision": "revision-56",
+          "marker_id": "seat56",
+          "route_checked": false,
+          "room_id": "r-props"
+        }
+      ]
+    }
+  ],
+  "doorways": [],
+  "problems": [],
+  "corridors": [],
+  "boundary_openings": [],
+  "models": [
+    {
+      "role": "prop",
+      "id": "fixture-bench",
+      "room_id": "r-props",
+      "placement_id": "bench-56",
+      "variant_uid": "variant-56",
+      "definition_revision": "revision-56",
+      "level": 0,
+      "fix_euler": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "yaw_deg": 0,
+      "max_m": 2.4,
+      "measure": "xyz",
+      "anchor": [
+        3,
+        0
+      ],
+      "bottom_y": 0,
+      "variants": {},
+      "placeholder_dims": {
+        "w": 2.4,
+        "d": 0.8,
+        "h": 0.527
+      }
+    }
+  ],
+  "figures": {
+    "base_height_m_world": 1.7,
+    "stand_clearance": 0.12
+  }
+}

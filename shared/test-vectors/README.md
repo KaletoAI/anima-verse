@@ -643,3 +643,54 @@ The capsule-clamp invariant based on the source smoke's independent
 `minWallDistance`, room/ride hook simulations, source pins and Figure rig
 checks stay inline. Prop integration references in the position harness are
 inert stubs only: no prop-action API or native prop behavior was added.
+
+## Prop actions (Task 56 / E7-T11, TypeScript side)
+
+Run `node client3d/scripts/smoke_prop_action_motion.mjs`. The 72 cases in
+`prop_action_motion.json` use `anima-test-vectors/1`; their single canonical
+source is that smoke's opening docstring. All 24 original local-route,
+entry-clock and support cases retain their hand-derived inputs and values.
+The format guard includes this file. The smoke retains 27 inline lifecycle
+and mesh assertions, for 99 checks versus the original 75 assertions.
+
+`client3d/scripts/propActionVectorDispatch.mjs` calls the production exports
+without changing `client3d/src` or `packages/`. Native-facing signatures:
+
+- `localApproachPoint(path, ageS)` → `[x,z]`; path has `waypoints`, nullable
+  segment `paces_m_s_real`, `progress_m`, optional `starts_in_s`.
+- `entryPhase(entry, ageS)` → fraction; `entryClipSample(entry, ageS)` →
+  `{phase,clip_s}`, multiplying by the entry argument's `clip_duration_s`.
+  The original `height_cm` input remains to document that timing is independent.
+- `entrySupportLift(firstY,lastY,currentY,accessY,anchorY,rootOffset)` → number
+  or null. `entrySupportSample(v)` adapts the legacy named fields to that
+  export and returns `{supported,lift}`; the original support-height datum
+  stays in the argument. `anchorY` already includes the root-offset correction.
+- `entryIdentity(entry)` → stable kind/start/access/anchor string.
+- `pickablePropRows({props,entries,offers})` → `{id,role,places}[]`; props use
+  JSON `id` and `mounted` in place of a Three object. Entries are `[id,entry]`
+  pairs with `slots:[[x,y,z]]`. The adapter creates object identities/vectors,
+  calls `pickableProps`, then returns the matching prop IDs and place rows.
+- `propActionChoices(offer)` → Core's exact enabled/reason/partner choices,
+  preserving blocked offers and never selecting a partner implicitly.
+- `manualGateTrace(steps,journeys)` → snapshots `{pending,calls,withdrawn}`.
+  `cancel` takes `id,execution,journey` and optional `same_as` (snapshot adds
+  `samePromise`); `settle` takes the first caller's `id` and `accept` boolean
+  (snapshot adds `result:resolved|rejected`). These use real deferred Promises.
+- `preparationTrace(steps)` → `{pending,expired?}[]`; operations are
+  `begin(id,now?)`, `changed(id?)`, `adopt`, `expire(now)`. Times are milliseconds.
+- `positionDrainTrace(steps,waiters)` → `{drained:boolean[]}[]`, probing the
+  supplied waiter IDs in order after each microtask. Operations are
+  `begin(id)`, `finish(id)`, `wait(id)`; both preceding and queued writes drain.
+
+The last three adapters exercise fresh instances of the exported browser
+state machines; they contain no copied state-transition rules. Because the
+common runner is synchronous, the smoke awaits each actual result first,
+then passes it (or its error) through `runVectors`. Shared fixture/sentinel
+resolution, expectation comparison and failure accounting apply unchanged;
+unknown functions fail before cases run. No C# consumer is added before Task 57.
+
+The separate synthetic world and route answer table are documented in
+[`native/fixtures/propactions/README.md`](../../native/fixtures/propactions/README.md).
+`node client3d/scripts/smoke_prop_action_fixture.mjs` verifies their consistency
+and hand arithmetic against production motion helpers; the embody inputs stay
+unchanged.

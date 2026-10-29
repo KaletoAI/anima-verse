@@ -1,0 +1,29 @@
+{
+  "origin_x": -6,
+  "origin_z": -6,
+  "step_m": 6,
+  "rows": 3,
+  "cols": 3,
+  "heights": [
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0
+    ]
+  ],
+  "sig": "propactions-flat",
+  "tile_m": 256,
+  "tile_step_m": 2,
+  "tiles": [],
+  "mip_levels_m": []
+}

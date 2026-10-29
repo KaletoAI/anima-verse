@@ -1,0 +1,30 @@
+[
+  {
+    "id": "pose-56",
+    "name": "Fixture solo pose",
+    "description": "Take the measured fixture seat.",
+    "enabled": true,
+    "ability": "pose",
+    "pose_key": "sitting",
+    "participants": 1,
+    "presence": "any",
+    "interrupt_on_presence_change": true,
+    "phases": [],
+    "requirements": [],
+    "effects": []
+  },
+  {
+    "id": "pair-56",
+    "name": "Fixture paired pose",
+    "description": "Invite the exact fixture partner.",
+    "enabled": true,
+    "ability": "pair",
+    "pose_key": "fixture-pair",
+    "participants": 2,
+    "presence": "participants_only",
+    "interrupt_on_presence_change": true,
+    "phases": [],
+    "requirements": [],
+    "effects": []
+  }
+]

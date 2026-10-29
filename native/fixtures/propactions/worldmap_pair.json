@@ -1,0 +1,138 @@
+{
+  "avatar": "fixture-avatar",
+  "current_location_id": "loc-props",
+  "locations": [
+    {
+      "id": "loc-props",
+      "name": "Fixture Prop Room",
+      "pos_x": 0,
+      "pos_z": 0,
+      "yaw_deg": 0,
+      "plan_width_m": 12,
+      "boundary": [
+        [
+          -6,
+          -4
+        ],
+        [
+          6,
+          -4
+        ],
+        [
+          6,
+          4
+        ],
+        [
+          -6,
+          4
+        ]
+      ],
+      "openings": []
+    }
+  ],
+  "world_props": [],
+  "world_props_sig": "propactions-none",
+  "events_by_location": {},
+  "world_bounds": {
+    "min_x": -6,
+    "min_z": -4,
+    "max_x": 6,
+    "max_z": 4
+  },
+  "height_sig": "propactions-flat",
+  "fogged": false,
+  "characters": [
+    {
+      "name": "fixture-avatar",
+      "location_id": "loc-props",
+      "room_id": "r-props",
+      "pos": {
+        "x": -3,
+        "z": -2
+      },
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": {
+        "target_id": "",
+        "journey_id": "journey-56-invite-avatar",
+        "paces_m_s_real": [
+          1,
+          1,
+          1
+        ],
+        "waypoints": [
+          [
+            -3,
+            -2
+          ],
+          [
+            0,
+            -2
+          ],
+          [
+            0,
+            -1
+          ],
+          [
+            2,
+            -1
+          ]
+        ],
+        "progress_m": 0,
+        "total_m": 6,
+        "eta_game": "Y0001-D001T12:00:06",
+        "eta_hhmm": "12:00",
+        "eta_label": "Fixture noon",
+        "starts_in_s": null,
+        "speed_m_s_real": 1,
+        "pace_m_s_real": 1
+      },
+      "local_approach": null,
+      "prop_action_entry": null
+    },
+    {
+      "name": "fixture-npc",
+      "location_id": "loc-props",
+      "room_id": "r-props",
+      "pos": {
+        "x": 4,
+        "z": 2
+      },
+      "height_cm": 170,
+      "activity_animation": "",
+      "travel": null,
+      "local_approach": {
+        "journey_id": "journey-56-invite-npc",
+        "room_id": "r-props",
+        "waypoints": [
+          [
+            4,
+            2
+          ],
+          [
+            5,
+            2
+          ],
+          [
+            5,
+            -1
+          ],
+          [
+            4,
+            -1
+          ]
+        ],
+        "progress_m": 0,
+        "walked_m": 0,
+        "remaining_m": 5,
+        "paces_m_s_real": [
+          1,
+          1,
+          1
+        ],
+        "starts_in_s": null
+      },
+      "prop_action_entry": null
+    }
+  ]
+}
