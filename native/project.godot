@@ -6,6 +6,9 @@ config_version=5
 [application]
 
 config/name="Anima Native"
+config/icon="res://icon.svg"
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0.043137256, 0.03529412, 0.023529412, 1)
 run/main_scene="res://Main.tscn"
 config/features=PackedStringArray("4.7", "C#", "Forward Plus")
 
@@ -20,6 +23,7 @@ project/assembly_name="AnimaNative"
 
 [rendering]
 
+environment/defaults/default_clear_color=Color(0.043137256, 0.03529412, 0.023529412, 1)
 renderer/rendering_method="forward_plus"
 ; Task 26c: the clustered-element budget per type (Godot 4.7.2 cluster_builder_rd.cpp). The cluster render buffer is
 ; clusters × (5·N/32 + 5·N) × 4 bytes and is cleared, rasterised into and packed every frame in which ANY omni light is

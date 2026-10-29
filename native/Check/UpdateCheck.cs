@@ -94,7 +94,7 @@ public static class UpdateCheck
         {
             screen.EnableUpdates(Local, logs.Add, Updater(Newer), launcher);
             await host.ToSignal(host.GetTree().CreateTimer(0.05), SceneTreeTimer.SignalName.Timeout);
-            Expect("notice before login", Descendants(screen).OfType<Label>().Any(l => l.IsVisibleInTree() && l.Text.Contains($"Update available ({Newer})")));
+            Expect("notice before login", Descendants(screen).OfType<Label>().Any(l => l.IsVisibleInTree() && l.Text.Contains($"A new version is available ({Newer})")));
             Expect("one check log", logs.Count == 1);
             Descendants(screen).OfType<Button>().Single(b => b.Text == "Later").EmitSignal(BaseButton.SignalName.Pressed);
             Expect("skip persisted", LauncherStore.Load(launcher).IsUpdateSkipped("https://fixture.invalid", Newer));
@@ -106,7 +106,7 @@ public static class UpdateCheck
         {
             skipped.EnableUpdates(Local, _ => { }, Updater(Newer), launcher);
             await host.ToSignal(host.GetTree().CreateTimer(0.05), SceneTreeTimer.SignalName.Timeout);
-            Expect("skip hides notice", !Descendants(skipped).OfType<Label>().Any(l => l.IsVisibleInTree() && l.Text.Contains("Update available")));
+            Expect("skip hides notice", !Descendants(skipped).OfType<Label>().Any(l => l.IsVisibleInTree() && l.Text.Contains("A new version is available")));
         }
         finally { skipped.Free(); }
         Expect("newer than skip returns", !LauncherStore.Load(launcher).IsUpdateSkipped("https://fixture.invalid", "20261029110000-90abcdef"));

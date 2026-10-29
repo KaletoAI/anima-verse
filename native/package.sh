@@ -67,9 +67,7 @@ Icon=anima-native
 Categories=Game;
 Terminal=false
 DESKTOP
-cat > "$appdir/anima-native.svg" <<'SVG'
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><rect width="128" height="128" rx="28" fill="#172d3a"/><path d="M24 100 56 24h16l32 76H84l-6-16H49l-6 16zm32-34h15l-8-22z" fill="#8fdbbd"/></svg>
-SVG
+cp "$here/icon.svg" "$appdir/anima-native.svg"
 ln -s anima-native.svg "$appdir/.DirIcon"
 file="AnimaNative-$version-x86_64.AppImage"
 ARCH=x86_64 VERSION="$version" APPIMAGE_EXTRACT_AND_RUN=1 "$tool" --no-appstream --comp zstd "$appdir" "$work/$file"

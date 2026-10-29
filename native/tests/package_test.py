@@ -108,7 +108,7 @@ class PackagingTests(unittest.TestCase):
             root = Path(temp)
             native = root / "native"
             native.mkdir()
-            for name in ["package.sh", "version.sh", "AppRun"]:
+            for name in ["package.sh", "version.sh", "AppRun", "icon.svg"]:
                 shutil.copyfile(NATIVE / name, native / name)
             (native / "fixtures").mkdir()
             (native / "fixtures/fixture.json").write_text("{}")

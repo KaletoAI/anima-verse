@@ -73,6 +73,7 @@ namespace AnimaNative;
 ///   --check propactions            the six prop-action scenarios of fixtures/propactions (Task 57)
 ///   --check residency              live location rings, pins and rollback (Task 44)
 ///   --check update                 anonymous version check and verified AppImage swap on temporary files (Task 69)
+///   --check loginlook              native title layout, focus, login errors and boot states (Task 74)
 ///   --check-bench               offline bench smoke: fixture world + a 2 s drive, then quit
 /// </summary>
 public sealed record CliOptions(string? Server, string? User, string? Goto, bool Check)
@@ -241,11 +242,11 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
     }
 
     private static bool IsSection(string v)
-        => v is "update" or "cache" or "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
+        => v is "loginlook" or "update" or "cache" or "verify" or "storeys" or "fidelity" or "props" or "light" or "fog" or "backdrop" or "terrain" or "stream" or "water"
              or "scatter" or "veil" or "matrix" or "figures" or "shadow" or "placement" or "walk" or "bridges" or "pairs" or "clips" or "secondary" or "animals" or "travel" or "residency" or "embody" or "propactions" or "minimap" or "audio";
 
     private static string CheckSection(string v) => IsSection(v)
-        ? v : throw new ArgumentException("--check= knows only 'update', 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', "
+        ? v : throw new ArgumentException("--check= knows only 'loginlook', 'update', 'verify', 'storeys', 'fidelity', 'props', 'light', 'fog', 'backdrop', "
                                           + $"'terrain', 'stream', 'water', 'scatter', 'veil', 'matrix', 'figures', 'shadow', 'placement', 'walk', 'bridges', 'pairs', 'clips', 'secondary', 'animals', 'travel', 'residency', 'propactions', 'embody', 'minimap' and 'audio', got '{v}'");
 
     public static Viewport.Msaa ParseMsaa(string v) => v switch

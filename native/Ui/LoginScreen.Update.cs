@@ -10,6 +10,7 @@ namespace AnimaNative.Ui;
 public partial class LoginScreen
 {
     private readonly VBoxContainer _updateBox = new() { Visible = false };
+    private readonly PanelContainer _updatePanel = new();
     private readonly Label _updateNotice = new() { AutowrapMode = TextServer.AutowrapMode.WordSmart, CustomMinimumSize = new Vector2(280, 0) };
     private readonly Button _updateNow = new() { Text = "Update now" };
     private readonly Button _updateLater = new() { Text = "Later" };
@@ -33,11 +34,6 @@ public partial class LoginScreen
         _localVersion = localVersion;
         _updateLog = log;
         _updater = updater ?? new ClientUpdater();
-        _updateBox.AddChild(_updateNotice);
-        _updateBox.AddChild(_updateNow);
-        _updateBox.AddChild(_updateLater);
-        _updateBox.AddChild(_updateBar);
-        ((VBoxContainer)_button.GetParent()).AddChild(_updateBox);
         _updateNow.Pressed += () => _ = InstallUpdateAsync();
         _updateLater.Pressed += () =>
         {
@@ -69,12 +65,12 @@ public partial class LoginScreen
         _updateStop?.Dispose();
         _updateStop = new CancellationTokenSource();
         var result = await _updater.CheckAsync(server, _localVersion, _updateStop.Token);
-        if (!IsInstanceValid(this) || !IsInsideTree() || generation != _updateGeneration || _loginStarted) return;
+        if (!IsInstanceValid(this) || !IsInsideTree() || generation != _updateGeneration || _loginStarted || _booting) return;
         _updateLog?.Invoke($"update: {result.Reason}");
         if (result.Release is not { } release || LauncherStore.Load(_launcherPath).IsUpdateSkipped(server, release.Version)) return;
         _release = release;
         _updateNow.Visible = ClientUpdater.CanReplace(System.Environment.GetEnvironmentVariable("APPIMAGE"));
-        _updateNotice.Text = $"Update available ({release.Version})"
+        _updateNotice.Text = $"A new version is available ({release.Version})"
             + (_updateNow.Visible ? "" : $" — download from {release.DownloadUrl}");
         _updateLater.Visible = true;
         _updateBox.Visible = true;
@@ -83,7 +79,7 @@ public partial class LoginScreen
     private async Task FinishUpdateCheckAsync()
     {
         if (_updater is null) return;
-        // A click on Log in flushes the typing debounce, so the anonymous check always precedes login.
+        // Enter world flushes the typing debounce, so the anonymous check always precedes login.
         if (_updateDebounce is { } timer && !timer.IsStopped())
         {
             timer.Stop();
@@ -107,7 +103,7 @@ public partial class LoginScreen
         var image = System.Environment.GetEnvironmentVariable("APPIMAGE");
         if (!ClientUpdater.CanReplace(image))
         {
-            _updateNotice.Text = $"Update available ({release.Version}) — download from {release.DownloadUrl}";
+            _updateNotice.Text = $"A new version is available ({release.Version}) — download from {release.DownloadUrl}";
             _updateNow.Visible = false;
             return;
         }
@@ -119,7 +115,7 @@ public partial class LoginScreen
             return;
         }
         _installing = true;
-        _updateNow.Disabled = _updateLater.Disabled = _button.Disabled = true;
+        _updateNow.Disabled = _updateLater.Disabled = _button.Disabled = _changeServer.Disabled = true;
         _server.Editable = _user.Editable = _password.Editable = false;
         _updateBar.Visible = true;
         _downloadProgress = 0;
@@ -132,7 +128,7 @@ public partial class LoginScreen
         if (result.Success) { GetTree().Quit(); return; }
         _updateNotice.Text = $"Update failed: {result.Reason} You can log in and try again later.";
         _updateBar.Visible = false;
-        _updateNow.Disabled = _updateLater.Disabled = _button.Disabled = false;
+        _updateNow.Disabled = _updateLater.Disabled = _button.Disabled = _changeServer.Disabled = false;
         _server.Editable = _user.Editable = _password.Editable = true;
     }
 

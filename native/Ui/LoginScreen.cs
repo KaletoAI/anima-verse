@@ -1,11 +1,13 @@
 using System;
+using System.Net.Http;
 using System.Threading.Tasks;
+using AnimaNative.Api;
 using Godot;
 
 namespace AnimaNative.Ui;
 
 /// <summary>
-/// Minimal login: server address, user, password, button, error/status label.
+/// Native port of the browser title plate: server address, name, passphrase and the gate.
 /// Server and user are pre-filled from the launcher file or the command line
 /// (<see cref="LauncherStore"/>); the address is normalised as typed
 /// (<see cref="LauncherSettings.NormalizeServer"/>). The submit callback gets the
@@ -20,13 +22,19 @@ namespace AnimaNative.Ui;
 public partial class LoginScreen : Control
 {
     private readonly LineEdit _server = new() { PlaceholderText = "Server (host:port or http(s)://host:port)", CustomMinimumSize = new Vector2(280, 0) };
-    private readonly LineEdit _user = new() { PlaceholderText = "User", CustomMinimumSize = new Vector2(280, 0) };
+    private readonly LineEdit _user = new();
     private readonly LineEdit _password = new() { PlaceholderText = "Password", Secret = true };
-    private readonly Button _button = new() { Text = "Log in" };
-    private readonly Label _status = new() { AutowrapMode = TextServer.AutowrapMode.WordSmart, CustomMinimumSize = new Vector2(280, 0) };
-    private readonly ProgressBar _bar = new() { MinValue = 0, MaxValue = 100, ShowPercentage = true, CustomMinimumSize = new Vector2(280, 0), Visible = false };
-    private readonly Label _stage = new() { Visible = false, HorizontalAlignment = HorizontalAlignment.Center };
+    private readonly Button _button = new() { Text = "Enter world" };
+    private readonly Label _status = new() { AutowrapMode = TextServer.AutowrapMode.WordSmart, Visible = false };
+    private readonly ProgressBar _bar = new() { MinValue = 0, MaxValue = 100, ShowPercentage = false, CustomMinimumSize = new Vector2(0, 8), Visible = false };
+    private readonly Label _stage = new() { Visible = false, HorizontalAlignment = HorizontalAlignment.Center, AutowrapMode = TextServer.AutowrapMode.WordSmart };
     private readonly Button _back = new() { Text = "Back to the title", Visible = false };
+    private readonly VBoxContainer _fields = new();
+    private readonly HBoxContainer _serverLine = new();
+    private readonly Label _serverSummary = new() { SizeFlagsHorizontal = SizeFlags.ExpandFill, AutowrapMode = TextServer.AutowrapMode.WordSmart };
+    private readonly Button _changeServer = new() { Text = "Change" };
+    private Control _serverField = null!;
+    private bool _booting;
     private bool _fading;
     private Tween? _fade;
 
@@ -42,24 +50,14 @@ public partial class LoginScreen : Control
     public LoginScreen Setup(string? server, string? user)
     {
         SetAnchorsPreset(LayoutPreset.FullRect);
-        var center = new CenterContainer();
-        center.SetAnchorsPreset(LayoutPreset.FullRect);
-        AddChild(center);
-        var box = new VBoxContainer();
-        box.AddThemeConstantOverride("separation", 8);
-        center.AddChild(box);
-        box.AddChild(new Label { Text = "Anima Verse — native client (spike)" });
-        box.AddChild(_server);
-        box.AddChild(_user);
-        box.AddChild(_password);
-        box.AddChild(_button);
-        box.AddChild(_bar);
-        box.AddChild(_stage);
-        box.AddChild(_status);
-        box.AddChild(_back);
+        BuildPlate();
         _back.Pressed += () => Back?.Invoke();
         _server.Text = server ?? "";
         _user.Text = user ?? "";
+        _serverField.Visible = string.IsNullOrWhiteSpace(server);
+        _serverLine.Visible = !_serverField.Visible;
+        _serverSummary.Text = $"Server  {ServerAddress(_server.Text)} ·";
+        _changeServer.Pressed += RevealServer;
         _button.Pressed += () => _ = OnSubmit();
         _server.TextSubmitted += text => (_user.Text.Length > 0 ? _password : _user).GrabFocus();
         _password.TextSubmitted += text => _ = OnSubmit();
@@ -69,6 +67,13 @@ public partial class LoginScreen : Control
 
     public override void _Ready()
     {
+        GetWindow().Title = "Anima Verse";
+        ResizePlate();
+        Resized += ResizePlate;
+        _plate.MinimumSizeChanged += ResizePlate;
+        _plate.Modulate = new Color(1, 1, 1, 0);
+        _entrance = CreateTween();
+        _entrance.TweenProperty(_plate, "modulate:a", 1.0f, 0.35).SetTrans(Tween.TransitionType.Sine).SetEase(Tween.EaseType.Out);
         if (_server.Text.Length == 0) _server.GrabFocus();
         else if (_user.Text.Length > 0) _password.GrabFocus();
         else _user.GrabFocus();
@@ -77,7 +82,9 @@ public partial class LoginScreen : Control
     public void ShowStatus(string text, bool error)
     {
         _status.Text = text;
-        _status.Modulate = error ? new Color(1f, 0.45f, 0.4f) : Colors.White;
+        _status.Visible = text.Length > 0;
+        _status.AddThemeColorOverride("font_color", error ? new Color("e0765f") : Muted);
+        _status.AddThemeFontOverride("font", error ? ThemeDB.FallbackFont : _italic);
     }
 
     /// <summary>
@@ -86,11 +93,13 @@ public partial class LoginScreen : Control
     /// </summary>
     public void ShowBoot(int percent, string stage, string? note, bool failed)
     {
-        foreach (var c in new Control[] { _server, _user, _password, _button }) c.Visible = false;
+        _booting = true;
+        _fields.Visible = _serverLine.Visible = _updateBox.Visible = false;
         _bar.Visible = _stage.Visible = true;
         _bar.Value = percent;
         _stage.Text = stage;
         ShowStatus(note ?? "", failed);
+        _status.AddThemeColorOverride("font_color", new Color("dc8a6e"));
         _back.Visible = failed;
         if (failed && _fading)
         {
@@ -99,6 +108,11 @@ public partial class LoginScreen : Control
             _fade?.Kill();
             _fade = null;
             Modulate = Colors.White;
+        }
+        if (failed)
+        {
+            _entrance?.Kill();
+            _plate.Modulate = Colors.White;
         }
     }
 
@@ -127,7 +141,7 @@ public partial class LoginScreen : Control
             ShowStatus(_server.Text.Trim().Length == 0
                 ? "The server address is required."
                 : $"Not a server address: '{_server.Text.Trim()}' (expected host:port or http(s)://host:port).", true);
-            _server.GrabFocus();
+            RevealServer();
             return;
         }
         _server.Text = server;
@@ -137,8 +151,10 @@ public partial class LoginScreen : Control
             return;
         }
         _button.Disabled = true;
+        _button.Text = "Opening the gate…";
+        _changeServer.Disabled = true;
         _server.Editable = false;
-        ShowStatus("Logging in…", false);
+        ShowStatus("", false);
         try
         {
             await FinishUpdateCheckAsync();
@@ -152,13 +168,34 @@ public partial class LoginScreen : Control
                 _loginStarted = false;
                 _server.Editable = true;
                 _updateCheck = CheckServerAsync();
-                ShowStatus(e.Message, true);
+                ShowStatus(e switch
+                {
+                    ApiException { Status: 401 or 403, Path: "/auth/login" } => "Sign-in failed — check name and passphrase.",
+                    HttpRequestException or TimeoutException or OperationCanceledException => $"The server at {ServerAddress(server)} is not answering.",
+                    _ => e.Message,
+                }, true);
             }
         }
         finally
         {
             // The submit runs the whole start; the screen may have faded out and been freed meanwhile.
-            if (IsInstanceValid(this)) _button.Disabled = false;
+            if (IsInstanceValid(this))
+            {
+                _button.Disabled = _changeServer.Disabled = false;
+                _button.Text = "Enter world";
+            }
         }
     }
+
+    private void RevealServer()
+    {
+        if (_booting) return;
+        _serverLine.Visible = false;
+        _serverField.Visible = true;
+        _server.GrabFocus();
+    }
+
+    private static string ServerAddress(string server)
+        => Uri.TryCreate(LauncherSettings.NormalizeServer(server), UriKind.Absolute, out var uri)
+            ? uri.Authority + uri.AbsolutePath.TrimEnd('/') : server.Trim();
 }
