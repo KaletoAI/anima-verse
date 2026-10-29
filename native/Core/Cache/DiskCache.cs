@@ -25,6 +25,41 @@ public sealed class DiskCache
     private readonly JsonSerializerOptions _json = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
     private readonly Func<DateTimeOffset> _now;
     private readonly int _version;
+    private readonly string _root;
+    private const string ClearMarker = "pending_clear";
+    public sealed record Stats(long Bytes, long LimitBytes, int Entries);
+    /// <summary>Only the readout is zeroed while clearing is pending; live entries remain usable.</summary>
+    public Stats Readout
+    {
+        get
+        {
+            lock (_gate) return System.IO.File.Exists(Path.Combine(_root, ClearMarker))
+                ? new(0, LimitBytes, 0) : new(_entries.Values.Sum(e => e.Bytes), LimitBytes, _entries.Count);
+        }
+    }
+    /// <summary>Persist before acknowledging the menu action; no active cache files are removed.</summary>
+    public void RequestClear()
+    {
+        lock (_gate) Atomic(Path.Combine(_root, ClearMarker), new byte[] { 1 });
+    }
+    /// <summary>Call once per process, before creating stores or starting worker loads.
+    /// Only owned version trees are removed; the marker survives an interrupted/failed clear.
+    /// False disables disk caching for this process, preserving a usable cold-start path on IO failure.</summary>
+    public static bool PrepareRoot(string root, bool clear = false)
+    {
+        root = Path.GetFullPath(root);
+        string marker = Path.Combine(root, ClearMarker);
+        try
+        {
+            if (clear) Atomic(marker, new byte[] { 1 });
+            if (!System.IO.File.Exists(marker)) return true;
+            foreach (var dir in Directory.GetDirectories(root, "v*"))
+                if (int.TryParse(Path.GetFileName(dir).AsSpan(1), out _)) Directory.Delete(dir, true);
+            System.IO.File.Delete(marker);
+            return true;
+        }
+        catch (Exception e) when (Io(e)) { return false; }
+    }
     public string DirectoryPath { get; }
     public long LimitBytes { get; }
     public long Bytes { get { lock (_gate) return _entries.Values.Sum(e => e.Bytes); } }
@@ -35,7 +70,7 @@ public sealed class DiskCache
                      Func<DateTimeOffset>? now = null)
     {
         LimitBytes = Math.Max(0, limitBytes); _version = formatVersion; _now = now ?? (() => DateTimeOffset.UtcNow);
-        root = Path.GetFullPath(root);
+        root = _root = Path.GetFullPath(root);
         DirectoryPath = Path.Combine(root, "v" + formatVersion, Hash(origin.GetLeftPart(UriPartial.Authority)));
         try
         {

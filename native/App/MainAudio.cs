@@ -55,7 +55,12 @@ public partial class Main : Node3D
         AddChild(_audio);
         return _audio;
     }
-    private void AttachAudioHandlers(HudOverlay hud) => EnsureAudio().AttachHandlers(hud.Handlers);
+    private void AttachAudioHandlers(HudOverlay hud)
+    {
+        var output = EnsureAudio();
+        output.AttachHandlers(hud.Handlers);
+        hud.Speak = output.Speak;
+    }
     private void ReadStoredAudioStart(IReadOnlyDictionary<string, string> stored)
         => EnsureAudio().InitializePrefs(stored.GetValueOrDefault(AudioPrefs.Key));
 }

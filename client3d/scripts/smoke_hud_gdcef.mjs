@@ -66,23 +66,38 @@ assert.deepEqual(zoomed, [['Kira']]);
 // HUD -> scene: a HUD-owned field
 hud.setGameState({ partyLeader: 'Ari "the bold" Ünal' });
 assert.equal(scene.getGameState().partyLeader, 'Ari "the bold" Ünal', 'quotes and non-ASCII survive the string wire');
-// The last HUD -> Godot payload is exactly the JSON of a protocol v3 message.
+// The last HUD -> Godot payload is exactly the JSON of a protocol v4 message.
 const last = JSON.parse(toGodot.at(-1));
-assert.deepEqual(last, { v: 3, kind: 'state', patch: { partyLeader: 'Ari "the bold" Ünal' } });
+assert.deepEqual(last, { v: 4, kind: 'state', patch: { partyLeader: 'Ari "the bold" Ünal' } });
 
 // Unrelated graphics preferences survive the semantic action clean cutover.
 // This is the actual JSON string wire the native HudProtocol accepts.
 const graphics = [];
 scene.gameActions.applyGraphicsPrefs = (...args) => graphics.push(args);
 hud.gameActions.applyGraphicsPrefs({ antiAliasing: 'off', shadows: true });
-assert.equal(toGodot.at(-1), '{"v":3,"kind":"action","name":"applyGraphicsPrefs","args":[{"antiAliasing":"off","shadows":true}]}');
+assert.equal(toGodot.at(-1), '{"v":4,"kind":"action","name":"applyGraphicsPrefs","args":[{"antiAliasing":"off","shadows":true}]}');
 assert.deepEqual(graphics, [[{ antiAliasing: 'off', shadows: true }]]);
 const semantic = [];
 scene.gameActions.pickPropAction = (...args) => semantic.push(args);
 const target = { location_id: 'home', room_id: 'room-a', placement_id: 'bed-1', variant_uid: 'ecfa003d-309a-4ce2-8c9b-29944ddae093' };
 hud.gameActions.pickPropAction('paired-rest', target, 'saved-revision', 'Ari "the bold" Ünal');
-assert.deepEqual(JSON.parse(toGodot.at(-1)), { v: 3, kind: 'action', name: 'pickPropAction', args: ['paired-rest', target, 'saved-revision', 'Ari "the bold" Ünal'] });
+assert.deepEqual(JSON.parse(toGodot.at(-1)), { v: 4, kind: 'action', name: 'pickPropAction', args: ['paired-rest', target, 'saved-revision', 'Ari "the bold" Ünal'] });
 assert.deepEqual(semantic, [['paired-rest', target, 'saved-revision', 'Ari "the bold" Ünal']]);
+
+// v4 completion and cache messages cross the exact native JSON string wire.
+scene.setGameState({ clientCache: { bytes: 1024, limitBytes: 4294967296, entries: 1 } });
+assert.deepEqual(hud.getGameState().clientCache, { bytes: 1024, limitBytes: 4294967296, entries: 1 });
+let clears = 0; scene.gameActions.clearClientCache = () => clears++;
+hud.gameActions.clearClientCache();
+assert.equal(toGodot.at(-1), '{"v":4,"kind":"action","name":"clearClientCache","args":[]}');
+assert.equal(clears, 1);
+let finishLine; scene.gameActions.speak = () => new Promise(resolve => { finishLine = resolve; });
+let done = false; const line = hud.gameActions.speak('/voice.wav').then(() => { done = true; });
+const speechRequest = JSON.parse(toGodot.at(-1));
+assert.equal(speechRequest.kind, 'speech'); assert.equal(speechRequest.url, '/voice.wav');
+await Promise.resolve(); assert.equal(done, false);
+finishLine(); await line;
+assert.deepEqual(JSON.parse(fromGodot.at(-1)), { v: 4, kind: 'speech-done', request_id: speechRequest.request_id });
 
 // Invalid JSON, replaced v2 host and unknown kind each reject without changing state.
 const warnings = [];
@@ -91,12 +106,12 @@ console.warn = (...args) => warnings.push(args);
 try {
   host.godotEvents.emit('hud_bridge', '{not json');
   host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 2, kind: 'state', patch: { clock: 'wrong' } }));
-  host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 3, kind: 'bogus' }));
+  host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 4, kind: 'bogus' }));
 } finally { console.warn = warn; }
 assert.equal(warnings.length, 3);
 assert.equal(hud.getGameState().clock, 'Day 3, 14:05');
 // An already-parsed object (a host that emitted a Dictionary) is accepted as it is.
-host.godotEvents.emit('hud_bridge', { v: 3, kind: 'state', patch: { clock: 'Day 3, 14:06' } });
+host.godotEvents.emit('hud_bridge', { v: 4, kind: 'state', patch: { clock: 'Day 3, 14:06' } });
 assert.equal(hud.getGameState().clock, 'Day 3, 14:06');
 
 // Without the binding (page opened in a normal browser with ?bridge=gdcef): one warning, no throw.
@@ -104,8 +119,8 @@ const bare = hud.gdcefTransport({});
 const bareWarnings = [];
 console.warn = (...args) => bareWarnings.push(args);
 try {
-  bare.send({ v: 3, kind: 'hud', patch: {} });
-  bare.send({ v: 3, kind: 'hud', patch: {} });
+  bare.send({ v: 4, kind: 'hud', patch: {} });
+  bare.send({ v: 4, kind: 'hud', patch: {} });
   const off = bare.onMessage(() => {});
   off();
 } finally { console.warn = warn; }
@@ -123,14 +138,14 @@ const lateListeners = new Set();
 lateHost.godotEvents = { on: (event, fn) => { assert.equal(event, 'hud_bridge'); lateListeners.add(fn); } };
 await new Promise(resolve => setTimeout(resolve, 120));
 assert.equal(lateListeners.size, 1, 'late binding found by the retry');
-for (const fn of lateListeners) fn(JSON.stringify({ v: 3, kind: 'ui', name: 'toast', args: ['late'] }));
-assert.deepEqual(lateGot, [{ v: 3, kind: 'ui', name: 'toast', args: ['late'] }]);
+for (const fn of lateListeners) fn(JSON.stringify({ v: 4, kind: 'ui', name: 'toast', args: ['late'] }));
+assert.deepEqual(lateGot, [{ v: 4, kind: 'ui', name: 'toast', args: ['late'] }]);
 offLate();
 
 // Cleanup: after disconnect the HUD no longer reacts, even though gdCEF keeps its listener.
 stopHud();
 const before = hud.getGameState().clock;
-host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 3, kind: 'state', patch: { clock: 'after disconnect' } }));
+host.godotEvents.emit('hud_bridge', JSON.stringify({ v: 4, kind: 'state', patch: { clock: 'after disconnect' } }));
 assert.equal(hud.getGameState().clock, before);
 assert.equal(hud.gameActions.zoomTo, undefined);
 stopScene();

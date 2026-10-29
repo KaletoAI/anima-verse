@@ -102,6 +102,14 @@ public partial class HudOverlay : CanvasLayer
     public Action? PageLoaded { get; set; }
     /// <summary>Task 57: scene-owned position barrier; completion is acknowledged with the same request ID.</summary>
     public Func<string, Task>? PropActionPrepare { get; set; }
+    /// <summary>Task 65: completion includes failed, stopped and safety-cap-dropped lines.</summary>
+    public Func<string, Task>? Speak { get; set; }
+    private async Task SpeakLine(string requestId, string url)
+    {
+        try { if (Speak is { } speak) await speak(url); }
+        catch (Exception e) { Log($"hud: speech skipped: {e.Message}"); }
+        finally { Send(HudProtocol.SpeechDone(requestId)); }
+    }
     /// <summary>Task 57: HUD mutation finally notification, including refusal, requests fresh state/world adoption.</summary>
     public Action<string?>? PropActionsChanged { get; set; }
     public Task? PendingPropPreparation { get; private set; }
@@ -436,6 +444,9 @@ public partial class HudOverlay : CanvasLayer
                 break;
             case "action":
                 Dispatch(msg.Name!, msg.Args!);
+                break;
+            case "speech":
+                _ = SpeakLine(msg.RequestId!, msg.Url!);
                 break;
             case "prop-action-prepare":
                 PendingPropPreparation = PreparePropAction(msg.RequestId!);

@@ -31,6 +31,30 @@ public class AudioScheduleTests
         public SpeechQueue Speech() => new(() => Now, Load, Player, Logs.Add);
     }
     [Fact]
+    public void SpeechCompletionWaitsForEndAndSettlesAllDroppedOrStoppedLines()
+    {
+        var r = new Rig { Fetch = _ => Task.FromResult<IAudioClip>(new Clip(1)) };
+        var s = r.Speech();
+        var first = s.Speak("first"); var dropped = s.Speak("oldest");
+        var a = s.Speak("a"); var b = s.Speak("b"); var c = s.Speak("c");
+        Assert.True(dropped.IsCompletedSuccessfully);
+        Assert.False(first.IsCompleted); s.Tick(); Assert.False(first.IsCompleted);
+        r.Now = 11; s.Tick(); Assert.True(first.IsCompletedSuccessfully); Assert.False(a.IsCompleted);
+        s.Stop(); Assert.All(new[] { a, b, c }, t => Assert.True(t.IsCompletedSuccessfully));
+        Assert.True(s.Speak("").IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public void FailedAndAbandonedSpeechCompletesWithoutWaitingForDownload()
+    {
+        var late = new TaskCompletionSource<IAudioClip>();
+        var r = new Rig { Fetch = url => url == "late" ? late.Task : Task.FromException<IAudioClip>(new Exception("bad")) };
+        var s = r.Speech(); var bad = s.Speak("bad"); s.Tick(); Assert.True(bad.IsCompletedSuccessfully);
+        var pending = s.Speak("late"); s.Stop(); Assert.True(pending.IsCompletedSuccessfully);
+        late.SetResult(new Clip(1)); s.Tick(); Assert.Empty(r.Players);
+    }
+
+    [Fact]
     public void PlaylistUsesCappedFadePiecewiseGainsAndStartsNextAtSeam()
     {
         var r = new Rig(); var p = r.Playlist(); p.Play(["a"], 4); p.Tick();

@@ -141,10 +141,10 @@ public static class PropActionsCheck
         // Real bridge callback: the host cannot acknowledge a preparation while a position promise is outstanding.
         var hud=new HudOverlay(); var write=new TaskCompletionSource(); int changed=0;
         hud.PropActionPrepare=_=>write.Task; hud.PropActionsChanged=id=>{ if(id=="hud:57") changed++; };
-        hud.hud_bridge("""{"v":3,"kind":"prop-action-prepare","request_id":"hud:57"}""");
+        hud.hud_bridge("""{"v":4,"kind":"prop-action-prepare","request_id":"hud:57"}""");
         Is("bridge awaits position preparation",hud.PendingPropPreparation is { IsCompleted:false });
         write.SetResult(); await hud.PendingPropPreparation!;
-        hud.hud_bridge("""{"v":3,"kind":"prop-actions-changed","request_id":"hud:57"}"""); Is("bridge invalidates correlated",changed==1); hud.Free();
+        hud.hud_bridge("""{"v":4,"kind":"prop-actions-changed","request_id":"hud:57"}"""); Is("bridge invalidates correlated",changed==1); hud.Free();
         return $"propactions scenarios=6 checks={checks} solo=pass pair-request=pass pair-accept=pass pair-decline=pass cancel=pass stale-revision=pass route=6m npc=5m clip=1s lift=.0645 root=.129";
     }
     /// <summary>Task 57: actual streamed prop mesh, exact semantic offer join, HUD dispatch, disposal and manual release.</summary>

@@ -120,6 +120,8 @@ public partial class Main : Node3D
     private bool Leaving => _session.Phase == SessionPhase.Leaving;
     /// <summary>The window is set up once per PROCESS: back to the title reloads this scene and must not undo F11.</summary>
     private static bool _windowApplied;
+    private static bool _cacheStartupPrepared;
+    private static bool _diskCacheEnabled = true;
 
     /// <summary>The bench anchor of the current world (S2 drives its path relative to it).</summary>
     public AnchorInfo? Anchor { get; private set; }
@@ -135,6 +137,12 @@ public partial class Main : Node3D
         try
         {
             _options = CliOptions.FromGodot();
+            if (!_options.Check && !_cacheStartupPrepared)
+            {
+                _diskCacheEnabled = AnimaNative.Cache.DiskCache.PrepareRoot(CacheRoot, _options.ClearCache);
+                if (!_diskCacheEnabled) Log("cache: clear failed; keeping the pending flag and running without disk caching until restart");
+                _cacheStartupPrepared = true;
+            }
         }
         catch (Exception e)
         {
@@ -268,6 +276,7 @@ public partial class Main : Node3D
             // The overlay outlives this scene.
             _hud.Handlers.Clear();
             _hud.PageLoaded = null;
+            _hud.Speak = null;
         }
         _api?.Dispose();
     }
@@ -293,6 +302,7 @@ public partial class Main : Node3D
         }
         // npcs.tick: a bubble whose reading time is up goes.
         _tags?.Expire();
+        PublishClientCache();
         // The performance readout: measured and sent only while the HUD shows it (HudUiState.perfOn).
         if (_hud is { } hudNow && _perf.Frame(hudNow.Active && hudNow.Ui.PerfOn, delta, _world) is { } perf) hudNow.SendPerf(perf);
         // main.ts' frame hook: the crossfade of every openable location and the neighbour occlusion — in every run

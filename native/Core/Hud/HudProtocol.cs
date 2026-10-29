@@ -13,7 +13,7 @@ public readonly record struct HudRect(double X, double Y, double W, double H);
 
 /// <summary>
 /// The scene's copy of <c>HudUiState</c> (bus.ts) — written ONLY by the HUD
-/// (<c>{v:3, kind:'hud', patch}</c>), read by the input routing.
+/// (<c>{v:4, kind:'hud', patch}</c>), read by the input routing.
 /// </summary>
 public sealed class HudUi
 {
@@ -57,12 +57,12 @@ public sealed class HudUi
         => o[key] is JsonValue v && v.GetValueKind() == JsonValueKind.Number ? v.GetValue<double>() : null;
 }
 
-/// <summary>A message from the HUD that passed validation (<paramref name="RequestId"/>: the prop-action kinds of v3).</summary>
-public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, JsonArray? Args, string? RequestId = null);
+/// <summary>A message from the HUD that passed validation (<paramref name="RequestId"/>: prop-action and speech correlation).</summary>
+public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, JsonArray? Args, string? RequestId = null, string? Url = null);
 
 /// <summary>
-/// Protocol v3 of client3d/src/hud/bridge.ts (<c>HUD_BRIDGE_VERSION</c>), scene side, as pure functions:
-/// the same validation (<c>valid()</c>: an object, <c>v === 3</c>, a <c>kind</c>),
+/// Protocol v4 of client3d/src/hud/bridge.ts (<c>HUD_BRIDGE_VERSION</c>), scene side, as pure functions:
+/// the same validation (<c>valid()</c>: an object, <c>v === 4</c>, a <c>kind</c>),
 /// the same name lists (<c>gameNames</c>, <c>uiNames</c>) and the same field
 /// ownership (<c>HUD_OWNED_FIELDS</c>). On the gdCEF wire each message is ONE
 /// JSON string. Keep the lists in step with bridge.ts/bus.ts — <c>--check</c>
@@ -75,10 +75,12 @@ public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, Js
 ///   - v3 (browser prop-action cutover): the semantic prop-action commands replace <c>pickPlacePose</c>, plus the kinds
 ///     <c>prop-action-prepare</c> / <c>prop-action-prepared</c> / <c>prop-actions-changed</c>. The native client speaks the
 ///     wire with Task 57 prop-action preparation, real mutations and correlated invalidations.
+///   - v4 (Task 65): clientCache, clearClientCache, speech / speech-done completion.
 /// </summary>
 public static class HudProtocol
 {
-    public const int Version = 3;
+    // v4 (Task 65): clientCache / clearClientCache and correlated speech / speech-done.
+    public const int Version = 4;
 
     /// <summary><c>gameNames</c> of bridge.ts — actions HUD → scene.</summary>
     public static readonly string[] GameActions =
@@ -86,7 +88,7 @@ public static class HudProtocol
         "infoAction", "closeInfo", "closeOpenView", "pickPropAction", "pickRoomPose", "closePlaceMenu", "respondPropAction",
         "cancelPropAction", "clearSelection", "setVolumes", "speak", "stopSpeech",
         "markResume", "zoomTo", "sayBubble", "enterEmbodied", "takeControl", "exitEmbodied", "rideElevator", "rideStairs",
-        "enterLocation", "backToTitle", "setShowAll", "applyAudioPrefs", "applyScatterPrefs", "applyGraphicsPrefs", "setChatBox",
+        "enterLocation", "backToTitle", "setShowAll", "applyAudioPrefs", "applyScatterPrefs", "applyGraphicsPrefs", "clearClientCache", "setChatBox",
     };
 
     /// <summary><c>uiNames</c> of bridge.ts — actions scene → HUD.</summary>
@@ -100,7 +102,7 @@ public static class HudProtocol
     public static readonly string[] SceneFields =
     {
         "clock", "connection", "info", "openView", "placeMenu", "mode", "selected", "talkTarget",
-        "elevator", "elevatorOpen", "stairs", "enterOffer",
+        "elevator", "elevatorOpen", "stairs", "enterOffer", "clientCache",
     };
 
     /// <summary>
@@ -136,6 +138,11 @@ public static class HudProtocol
                 if (!GameActions.Contains(name)) { reason = $"undeclared action '{name}'"; return null; }
                 if (msg["args"] is not JsonArray args) { reason = $"action '{name}' without an args array"; return null; }
                 return new HudInbound(kind, null, name, args);
+            case "speech":
+                if (msg["request_id"] is not JsonValue id || !id.TryGetValue<string>(out var speechId)
+                    || msg["url"] is not JsonValue u || !u.TryGetValue<string>(out var url))
+                { reason = "speech without string request_id and url"; return null; }
+                return new HudInbound(kind, null, null, null, speechId, url);
             case "prop-action-prepare":
                 if (msg["request_id"] is not JsonValue r || r.GetValueKind() != JsonValueKind.String)
                 { reason = "prop-action-prepare without a string request_id"; return null; }
@@ -167,15 +174,15 @@ public static class HudProtocol
         return (accepted, dropped);
     }
 
-    /// <summary><c>{v:3, kind:'state', patch}</c></summary>
+    /// <summary><c>{v:4, kind:'state', patch}</c></summary>
     public static string State(JsonObject patch)
         => new JsonObject { ["v"] = Version, ["kind"] = "state", ["patch"] = patch.DeepClone() }.ToJsonString();
 
-    /// <summary><c>{v:3, kind:'boot', value}</c></summary>
+    /// <summary><c>{v:4, kind:'boot', value}</c></summary>
     public static string Boot(JsonObject value)
         => new JsonObject { ["v"] = Version, ["kind"] = "boot", ["value"] = value.DeepClone() }.ToJsonString();
 
-    /// <summary><c>{v:3, kind:'perf', value}</c> — the performance readout (<c>PerfStats</c> of bus.ts) or null.</summary>
+    /// <summary><c>{v:4, kind:'perf', value}</c> — the performance readout (<c>PerfStats</c> of bus.ts) or null.</summary>
     public static string Perf(JsonObject? value)
         => new JsonObject { ["v"] = Version, ["kind"] = "perf", ["value"] = value?.DeepClone() }.ToJsonString();
 
@@ -215,7 +222,7 @@ public static class HudProtocol
         return Encoding.UTF8.GetString(bytes.GetBuffer(), 0, (int)bytes.Length);
     }
 
-    /// <summary><c>{v:3, kind:'ui', name, args}</c>; only the declared ui actions.</summary>
+    /// <summary><c>{v:4, kind:'ui', name, args}</c>; only the declared ui actions.</summary>
     public static string Ui(string name, params JsonNode?[] args)
     {
         if (!UiActions.Contains(name)) throw new ArgumentException($"undeclared ui action '{name}'");
@@ -224,13 +231,16 @@ public static class HudProtocol
         return new JsonObject { ["v"] = Version, ["kind"] = "ui", ["name"] = name, ["args"] = arr }.ToJsonString();
     }
 
-    /// <summary><c>{v:3, kind:'prop-action-prepared', request_id, error?}</c> — the answer to a preparation request.</summary>
+    /// <summary><c>{v:4, kind:'prop-action-prepared', request_id, error?}</c> — the answer to a preparation request.</summary>
     public static string PropActionPrepared(string requestId, string? error)
     {
         var msg = new JsonObject { ["v"] = Version, ["kind"] = "prop-action-prepared", ["request_id"] = requestId };
         if (error is not null) msg["error"] = error;
         return msg.ToJsonString();
     }
+
+    public static string SpeechDone(string requestId)
+        => new JsonObject { ["v"] = Version, ["kind"] = "speech-done", ["request_id"] = requestId }.ToJsonString();
 
     /// <summary>Task 57: scene-to-HUD invalidation, also emitted after refused semantic mutations.</summary>
     public static string PropActionsChanged(string? requestId = null)

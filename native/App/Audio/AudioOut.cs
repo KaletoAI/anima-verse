@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
+using System.Threading.Tasks;
 using AnimaNative.Api;
 using Godot;
 
@@ -56,17 +57,17 @@ public partial class AudioOut : Node
     }
     public void PlayPlaylist(PlaylistBus bus, IEnumerable<string> urls, double crossfadeS = AudioMath.DefaultCrossfadeS, string? seed = null)
         => (bus == PlaylistBus.Music ? Music : Ambient).Play(urls, crossfadeS, seed);
-    public void Speak(string url) => Speech.Speak(url);
+    public Task Speak(string url) => Speech.Speak(url);
     public void StopSpeech() => Speech.Stop();
 
-    /// <summary>Task 59: shared handler registration for Main and offline checks, retaining bridge v3 fire-and-forget.</summary>
+    /// <summary>Task 59: shared handler registration for Main and offline checks, with correlated completion handled by HudOverlay.</summary>
     public void AttachHandlers(IDictionary<string, Action<JsonArray>> handlers)
     {
         handlers["setVolumes"] = a => { if (a.Count > 0 && a[0] is JsonObject p) SetVolumes(p); };
         handlers["applyAudioPrefs"] = a => { if (a.Count > 0 && a[0] is JsonObject p) ApplyAudioPrefs(p); };
         handlers["speak"] = a =>
         {
-            if (a.Count > 0 && a[0] is JsonValue v && v.TryGetValue<string>(out var url)) Speak(url);
+            if (a.Count > 0 && a[0] is JsonValue v && v.TryGetValue<string>(out var url)) _ = Speak(url);
         };
         handlers["stopSpeech"] = _ => StopSpeech();
     }

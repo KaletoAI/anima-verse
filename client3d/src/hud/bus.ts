@@ -29,6 +29,8 @@ import type { MapCharacter, PlaceOffer, PropActionTarget } from '../types';
 export type GameMode = 'overview' | 'embodied';
 
 export interface HudGameState {
+  /** null for hosts without a persistent client cache (the browser). */
+  clientCache: { bytes: number; limitBytes: number; entries: number } | null;
   clock: string;
   connection: 'ok' | 'lost';
   info: InfoPanelData | null;
@@ -172,6 +174,8 @@ export interface HudGameActions {
    *  scene reads for itself (`loadGraphicsPrefs`), like the scatter. Added in
    *  bridge protocol v2. */
   applyGraphicsPrefs?: (prefs: GraphicsPrefs) => void;
+  /** Clear persistent data at the next native start; publish zero immediately. */
+  clearClientCache?: () => void;
   /** How much of the picture the chat window covers, as a rectangle in WINDOW
    *  coordinates, or null while it is closed. The scene answers it by aiming
    *  beside the panel instead of straight through it (`scene/viewShift.ts`):
@@ -198,7 +202,7 @@ export interface HudUiActions {
 }
 
 const state: HudGameState = {
-  clock: '', connection: 'ok', info: null, openView: null, placeMenu: null,
+  clientCache: null, clock: '', connection: 'ok', info: null, openView: null, placeMenu: null,
   mode: 'overview', selected: null, talkTarget: null,
   movementLocked: false, partyLeader: '', groundRoomId: '', floorRoomIds: {},
   lockedRooms: {}, lockedLocations: {}, lockedLoc: '',

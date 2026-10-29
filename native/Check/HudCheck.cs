@@ -27,10 +27,44 @@ public static class HudCheck
         int messages = CheckMessages();
         CheckCookieScript();
         int seeds = CheckStorageSeed();
+        int cache = CheckClientCache();
         CheckNameLists(source);
         var gdcef = CheckBinding();
         return $"rect_cases={rects} route_cases={routes} key_cases={keys} message_cases={messages} "
-               + $"storage_seed_cases={seeds} name_lists=4 gdcef={gdcef}";
+               + $"storage_seed_cases={seeds} cache_cases={cache} name_lists=4 gdcef={gdcef}";
+    }
+
+    private static int CheckClientCache()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "anima-hud-cache-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var cache = new Cache.DiskCache(root, new Uri("https://fixture.test"));
+            cache.Store("test", new byte[4], null, new Cache.HttpCachePolicy(true, true, DateTimeOffset.UtcNow, "immutable"));
+            var state = new ScenePublisher();
+            void Publish()
+            {
+                var readout = cache.Readout;
+                state.Set("clientCache", new JsonObject { ["bytes"] = readout.Bytes,
+                    ["limitBytes"] = readout.LimitBytes, ["entries"] = readout.Entries });
+            }
+            var action = HudProtocol.Parse("""{"v":4,"kind":"action","name":"clearClientCache","args":[]}""", out _)!;
+            var handlers = new Dictionary<string, Action<System.Text.Json.Nodes.JsonArray>>
+                { ["clearClientCache"] = _ => { cache.RequestClear(); Publish(); } };
+            Publish();
+            var first = state.TakePatch()!["clientCache"]!;
+            Expect("cache readout", first["bytes"]!.GetValue<long>() == 4 && first["entries"]!.GetValue<int>() == 1
+                && first["limitBytes"]!.GetValue<long>() == 4294967296L, first.ToJsonString());
+            handlers[action.Name!](action.Args!);
+            var cleared = state.TakePatch()!["clientCache"]!;
+            Expect("clear readout zero, files retained", cleared["bytes"]!.GetValue<long>() == 0
+                && cleared["entries"]!.GetValue<int>() == 0 && cache.Count == 1 && File.Exists(Path.Combine(root, "pending_clear")), cleared.ToJsonString());
+            Expect("cache readout change only", state.TakePatch() is null, "repeated patch");
+            Cache.DiskCache.PrepareRoot(root);
+            Expect("cache next start empty", new Cache.DiskCache(root, new Uri("https://fixture.test")).Count == 0, "not cleared");
+            return 4;
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
 
     // Two surfaces: A = chat panel x∈[10,310) y∈[20,220); B = rail x∈[1500,1600) y∈[0,900).
@@ -139,31 +173,39 @@ public static class HudCheck
         Rejects("{\"v\":1,\"kind\":\"hud\",\"patch\":{}}", "v = 1 (the old protocol; bridge.ts drops it too)");
         Rejects("{\"v\":1,\"kind\":\"action\",\"name\":\"zoomTo\",\"args\":[\"Kira\"]}", "a v1 action");
         Rejects("{\"v\":2,\"kind\":\"hud\",\"patch\":{}}", "v = 2 (before the prop-action cutover)");
-        Rejects("{\"v\":4,\"kind\":\"hud\",\"patch\":{}}", "v = 4");
+        Rejects("{\"v\":3,\"kind\":\"hud\",\"patch\":{}}", "v = 3 (before speech completion)");
         Rejects("{\"v\":\"3\",\"kind\":\"hud\",\"patch\":{}}", "v = \"3\" (bridge.ts compares with ===)");
-        Rejects("{\"v\":3,\"patch\":{}}", "a missing kind");
-        Rejects("{\"v\":3,\"kind\":\"nope\"}", "an unknown kind");
-        Rejects("{\"v\":3,\"kind\":\"hud\",\"patch\":[1]}", "a non-object patch");
-        Rejects("{\"v\":3,\"kind\":\"action\",\"name\":\"nope\",\"args\":[]}", "an undeclared action");
-        Rejects("{\"v\":3,\"kind\":\"action\",\"name\":\"toString\",\"args\":[]}", "an inherited property name");
-        Rejects("{\"v\":3,\"kind\":\"action\",\"name\":\"zoomTo\",\"args\":\"Kira\"}", "args that are not an array");
-        Rejects("{\"v\":3,\"kind\":\"ui\",\"name\":\"openChat\",\"args\":[]}", "a scene → HUD kind sent by the HUD");
+        Rejects("{\"v\":4,\"patch\":{}}", "a missing kind");
+        Rejects("{\"v\":4,\"kind\":\"nope\"}", "an unknown kind");
+        Rejects("{\"v\":4,\"kind\":\"hud\",\"patch\":[1]}", "a non-object patch");
+        Rejects("{\"v\":4,\"kind\":\"action\",\"name\":\"nope\",\"args\":[]}", "an undeclared action");
+        Rejects("{\"v\":4,\"kind\":\"action\",\"name\":\"toString\",\"args\":[]}", "an inherited property name");
+        Rejects("{\"v\":4,\"kind\":\"action\",\"name\":\"zoomTo\",\"args\":\"Kira\"}", "args that are not an array");
+        Rejects("{\"v\":4,\"kind\":\"ui\",\"name\":\"openChat\",\"args\":[]}", "a scene → HUD kind sent by the HUD");
 
-        // Accepted: v as 3.0 is still === 3 in JS.
-        var action = HudProtocol.Parse("{\"v\":3.0,\"kind\":\"action\",\"name\":\"zoomTo\",\"args\":[\"Kira\"]}", out _);
+        // Accepted: v as 4.0 is still === 4 in JS.
+        var action = HudProtocol.Parse("{\"v\":4.0,\"kind\":\"action\",\"name\":\"zoomTo\",\"args\":[\"Kira\"]}", out _);
         n++;
         Expect("zoomTo accepted", action is { Kind: "action", Name: "zoomTo" } && action.Args!.Count == 1
                                   && action.Args[0]!.GetValue<string>() == "Kira", "rejected");
 
         // v2 (Task 26d): the Graphics tab's action, the exact wire string smoke_hud_gdcef.mjs pins.
-        var gfx = HudProtocol.Parse("{\"v\":3,\"kind\":\"action\",\"name\":\"applyGraphicsPrefs\","
+        var gfx = HudProtocol.Parse("{\"v\":4,\"kind\":\"action\",\"name\":\"applyGraphicsPrefs\","
                                     + "\"args\":[{\"antiAliasing\":\"off\",\"shadows\":true}]}", out _);
         n++;
         Expect("applyGraphicsPrefs accepted", gfx is { Kind: "action", Name: "applyGraphicsPrefs" } && gfx.Args!.Count == 1
                                               && gfx.Args[0] is JsonObject, "rejected");
 
+        n += 5;
+        Expect("clear cache action", HudProtocol.Parse("""{"v":4,"kind":"action","name":"clearClientCache","args":[]}""", out _)?.Name == "clearClientCache", "rejected");
+        Expect("CLI clear cache", CliOptions.Parse(new[] { "--clear-cache", "--cache-dir=/tmp/test-cache" }) is { ClearCache: true, CacheDir: "/tmp/test-cache" }, "differs");
+        var speech = HudProtocol.Parse("""{"v":4,"kind":"speech","request_id":"s65","url":"/voice.wav"}""", out _);
+        Expect("speech accepted", speech is { RequestId: "s65", Url: "/voice.wav" }, "rejected");
+        Expect("speech done correlated", HudProtocol.SpeechDone("s65") == """{"v":4,"kind":"speech-done","request_id":"s65"}""", "differs");
+        Expect("speech URL required", HudProtocol.Parse("""{"v":4,"kind":"speech","request_id":"s65"}""", out _) is null, "accepted");
+
         // The HUD patch updates the routing state (hand: one rect, typing on, menu untouched).
-        var hud = HudProtocol.Parse("{\"v\":3,\"kind\":\"hud\",\"patch\":{\"typing\":true,\"overlayOpen\":false,"
+        var hud = HudProtocol.Parse("{\"v\":4,\"kind\":\"hud\",\"patch\":{\"typing\":true,\"overlayOpen\":false,"
                                     + "\"hitRects\":[{\"x\":10,\"y\":20,\"w\":300,\"h\":200},{\"x\":\"bad\"}]}}", out _);
         var ui = new HudUi();
         ui.Apply(hud!.Patch!);
@@ -175,7 +217,7 @@ public static class HudCheck
         Expect("shallow merge, wrong types ignored", ui.MenuOpen && ui.Typing && ui.HitRects.Count == 1, "merge broke");
 
         // receiveState(patch, HUD_OWNED_FIELDS): a mixed patch keeps the owned key, drops the rest.
-        var state = HudProtocol.Parse("{\"v\":3,\"kind\":\"state\",\"patch\":{\"movementLocked\":true,\"mode\":\"embodied\"}}", out _);
+        var state = HudProtocol.Parse("{\"v\":4,\"kind\":\"state\",\"patch\":{\"movementLocked\":true,\"mode\":\"embodied\"}}", out _);
         var (accepted, dropped) = HudProtocol.SplitOwned(state!.Patch!);
         n++;
         Expect("owned field kept, scene field dropped",
@@ -184,21 +226,21 @@ public static class HudCheck
 
         // Outgoing wire strings, written out by hand.
         n += 3;
-        Expect("ui openChat", HudProtocol.Ui("openChat") == "{\"v\":3,\"kind\":\"ui\",\"name\":\"openChat\",\"args\":[]}",
+        Expect("ui openChat", HudProtocol.Ui("openChat") == "{\"v\":4,\"kind\":\"ui\",\"name\":\"openChat\",\"args\":[]}",
                HudProtocol.Ui("openChat"));
         Expect("ui toast", HudProtocol.Ui("toast", JsonValue.Create("Hi"), JsonValue.Create(false))
-                           == "{\"v\":3,\"kind\":\"ui\",\"name\":\"toast\",\"args\":[\"Hi\",false]}", "toast differs");
+                           == "{\"v\":4,\"kind\":\"ui\",\"name\":\"toast\",\"args\":[\"Hi\",false]}", "toast differs");
         bool threw = false;
         try { HudProtocol.Ui("zoomTo"); } catch (ArgumentException) { threw = true; }
         Expect("ui refuses a game action name", threw, "sent");
 
         // Task 57 bridge v3: real preparation succeeds without an error; invalidations carry correlation both ways.
         n += 5;
-        Expect("prepare accepted", HudProtocol.Parse("{\"v\":3,\"kind\":\"prop-action-prepare\",\"request_id\":\"r57\"}", out _)?.RequestId == "r57", "rejected");
-        Expect("preparation success", HudProtocol.PropActionPrepared("r57", null) == "{\"v\":3,\"kind\":\"prop-action-prepared\",\"request_id\":\"r57\"}", "differs");
-        Expect("preparation failure correlated", HudProtocol.PropActionPrepared("r57", "failed") == "{\"v\":3,\"kind\":\"prop-action-prepared\",\"request_id\":\"r57\",\"error\":\"failed\"}", "differs");
+        Expect("prepare accepted", HudProtocol.Parse("{\"v\":4,\"kind\":\"prop-action-prepare\",\"request_id\":\"r57\"}", out _)?.RequestId == "r57", "rejected");
+        Expect("preparation success", HudProtocol.PropActionPrepared("r57", null) == "{\"v\":4,\"kind\":\"prop-action-prepared\",\"request_id\":\"r57\"}", "differs");
+        Expect("preparation failure correlated", HudProtocol.PropActionPrepared("r57", "failed") == "{\"v\":4,\"kind\":\"prop-action-prepared\",\"request_id\":\"r57\",\"error\":\"failed\"}", "differs");
         Expect("invalidation correlation", HudProtocol.Parse(HudProtocol.PropActionsChanged("r57"), out _)?.RequestId == "r57", "differs");
-        Expect("invalidation optional ID", HudProtocol.PropActionsChanged() == "{\"v\":3,\"kind\":\"prop-actions-changed\"}", "differs");
+        Expect("invalidation optional ID", HudProtocol.PropActionsChanged() == "{\"v\":4,\"kind\":\"prop-actions-changed\"}", "differs");
 
         // statePublisher: deltas only, force repeats everything, HUD-owned fields cannot be set.
         var pub = new ScenePublisher();
@@ -219,7 +261,7 @@ public static class HudCheck
 
         n++;
         Expect("state message", HudProtocol.State(JsonNode.Parse("{\"mode\":\"overview\"}")!.AsObject())
-                                == "{\"v\":3,\"kind\":\"state\",\"patch\":{\"mode\":\"overview\"}}", "differs");
+                                == "{\"v\":4,\"kind\":\"state\",\"patch\":{\"mode\":\"overview\"}}", "differs");
         var boot = HudProtocol.BootReady();
         n++;
         Expect("boot ready: 100 %, 6 stages incl. visible",

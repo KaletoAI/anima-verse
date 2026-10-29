@@ -35,7 +35,7 @@ public class MinimapTests
         Assert.True(p.Tick(.25, true, Terrain, Heights, Map, new(0, 0), Math.PI / 2));
         using var d = JsonDocument.Parse(HudProtocol.Minimap(p.State));
         var root = d.RootElement;
-        Assert.Equal(3, root.GetProperty("v").GetInt32());
+        Assert.Equal(4, root.GetProperty("v").GetInt32());
         Assert.Equal("minimap", root.GetProperty("kind").GetString());
         var s = root.GetProperty("value");
         int fields = 0; foreach (var _ in s.EnumerateObject()) fields++;
@@ -80,7 +80,7 @@ public class MinimapTests
         var changedRelief = p.State.ReliefJson;
         Assert.True(p.Tick(.25, false, terrain, height, map, null, 0));
         Assert.Null(p.State);
-        Assert.Equal("{\"v\":3,\"kind\":\"minimap\",\"value\":null}", HudProtocol.Minimap(null));
+        Assert.Equal("{\"v\":4,\"kind\":\"minimap\",\"value\":null}", HudProtocol.Minimap(null));
         Assert.False(p.Tick(.25, false, terrain, height, map, null, 0));
         Assert.True(p.Tick(.25, true, terrain, height, map, new(5, 5), 0));
         Assert.Equal(5, p.State!.Avatar!.Value.X);

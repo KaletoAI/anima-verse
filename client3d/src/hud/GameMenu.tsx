@@ -37,9 +37,9 @@
  * `location.reload()`. No in-place rebuild, and nothing is lost: the world
  * comes back without the title gate.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useI18n } from '@anima/player-ui';
-import { gameActions } from './bus';
+import { gameActions, getGameState, subscribeGameState } from './bus';
 import { isNativeHud } from './bridge';
 import { listPlayableCharacters, switchCharacter } from '../api';
 import { browserAntialias, checkScatterPrefs, DEFAULT_SCATTER_PREFS,
@@ -47,6 +47,13 @@ import { browserAntialias, checkScatterPrefs, DEFAULT_SCATTER_PREFS,
 import { CHAT_ALPHA_MIN } from './chatPanel';
 import type { AntiAliasing, GraphicsPrefs, Prefs, ScatterPrefs,
   TtsMode } from '../game/prefs';
+
+/** Binary units match the cache's 4 GiB limit and retain small entry sizes. */
+function cacheSize(bytes: number): string {
+  const unit = bytes >= 1073741824 ? 'GiB' : bytes >= 1048576 ? 'MiB' : bytes >= 1024 ? 'KiB' : 'B';
+  const divisor = { GiB: 1073741824, MiB: 1048576, KiB: 1024, B: 1 }[unit];
+  return `${Number((bytes / divisor).toFixed(2))} ${unit}`;
+}
 
 /** The two tabs of the menu, in order. */
 type MenuTab = 'general' | 'graphics';
@@ -167,6 +174,7 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
                            isAdmin, showAll, onShowAllChange,
                            onBackToTitle }: GameMenuProps) {
   const { t } = useI18n();
+  const { clientCache } = useSyncExternalStore(subscribeGameState, getGameState);
   const [tab, setTab] = useState<MenuTab>('general');
   /** The native client draws with Godot, which takes 2× and 4× MSAA at
    *  runtime; the browser's WebGL knows only on/off, fixed at context
@@ -361,6 +369,23 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
           </p>
         </section>
         {detailDistances}
+        {clientCache !== null && (
+          <section className="hud-menu-section">
+            <h3 className="hud-menu-head">{t('Local cache')}</h3>
+            <p className="hud-menu-hint" aria-live="polite">
+              {t('{size} of {limit} used · {entries} entries')
+                .replace('{size}', cacheSize(clientCache.bytes))
+                .replace('{limit}', cacheSize(clientCache.limitBytes))
+                .replace('{entries}', String(clientCache.entries))}
+            </p>
+            <button type="button" className="hud-menu-btn" onClick={() => gameActions.clearClientCache?.()}>
+              {t('Clear cache')}
+            </button>
+            <p className="hud-menu-hint">
+              {t('Models, animations and terrain this computer keeps between starts. Clearing takes effect at the next start; the readout shows zero immediately.')}
+            </p>
+          </section>
+        )}
       </>
     );
   }

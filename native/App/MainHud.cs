@@ -12,6 +12,19 @@ namespace AnimaNative;
 /// <summary>Main, HUD wiring: the game actions the HUD sends, selection, picking, the info panel and the open view.</summary>
 public partial class Main : Node3D
 {
+    private string CacheRoot => _options?.CacheDir ?? ProjectSettings.GlobalizePath("user://cache");
+    private ulong _nextCacheReadout;
+    private void PublishClientCache(bool force = false)
+    {
+        if (_hud is not { } hud || !IsInstanceValid(hud)) return;
+        ulong now = Time.GetTicksMsec();
+        if (!force && now < _nextCacheReadout) return;
+        _nextCacheReadout = now + 1000;
+        var stats = _api?.CacheStore?.Readout;
+        hud.SetState("clientCache", stats is null ? null : new JsonObject
+            { ["bytes"] = stats.Bytes, ["limitBytes"] = stats.LimitBytes, ["entries"] = stats.Entries });
+    }
+
     // ---- HUD scene side (Task S4) ---------------------------------------------------
 
     /// <summary>The overlay (once per process) + the game actions this spike answers.</summary>
@@ -37,6 +50,12 @@ public partial class Main : Node3D
         };
         hud.Handlers["applyScatterPrefs"] = ApplyScatterPrefs;
         hud.Handlers["applyGraphicsPrefs"] = ApplyGraphicsPrefs;
+        hud.Handlers["clearClientCache"] = _ =>
+        {
+            _api?.CacheStore?.RequestClear();
+            PublishClientCache(force: true);
+        };
+        PublishClientCache(force: true);
         // Hud.tsx: a new speakable line of this room → npcs.say(speaker, text); unknown names are ignored.
         hud.Handlers["sayBubble"] = args =>
         {

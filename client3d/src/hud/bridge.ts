@@ -7,9 +7,8 @@
  * from overwriting the independent writer. HudUiState belongs entirely to the
  * HUD, including input ownership and the performance measurement switch.
  *
- * gameActions travel HUD -> scene, uiActions scene -> HUD. Speech is explicitly
- * fire-and-forget here: the sender returns undefined, so the voiceover queue
- * cannot await playback as it does with the in-process speech handler.
+ * gameActions travel HUD -> scene, uiActions scene -> HUD. Speech requests
+ * await a correlated completion, pacing voiceover like the in-process path.
  */
 import * as bus from './bus';
 import type { HudGameState, HudUiState, HudBoot, HudGameActions, HudUiActions, HudRect } from './bus';
@@ -22,11 +21,13 @@ import { onPropActionChanged, notifyPropActionChanged, setPropActionPreparation 
  *  - v1: the first wire (native spike S4).
  *  - v2 (Task 26d): game action `applyGraphicsPrefs(prefs: GraphicsPrefs)`,
  *    the menu's Graphics tab. No other message changed shape.
- *  - v3: exact semantic prop-action commands and mutation invalidation. */
-export const HUD_BRIDGE_VERSION = 3;
+ *  - v3: exact semantic prop-action commands and mutation invalidation.
+ *  - v4 (Task 65): clientCache, clearClientCache and speech/speech-done completion. */
+export const HUD_BRIDGE_VERSION = 4;
 type V = typeof HUD_BRIDGE_VERSION;
 export type ToHud =
   | { v: V; kind: 'state'; patch: Partial<HudGameState> }
+  | { v: V; kind: 'speech-done'; request_id: string }
   | { v: V; kind: 'minimap'; value: MinimapState | null }
   | { v: V; kind: 'perf'; value: PerfStats | null }
   | { v: V; kind: 'boot'; value: HudBoot }
@@ -34,6 +35,7 @@ export type ToHud =
   | { v: V; kind: 'prop-action-prepared'; request_id: string; error?: string }
   | { v: V; kind: 'ui'; name: keyof HudUiActions; args: unknown[] };
 export type FromHud =
+  | { v: V; kind: 'speech'; request_id: string; url: string }
   | { v: V; kind: 'state'; patch: Partial<HudGameState> }
   | { v: V; kind: 'action'; name: keyof HudGameActions; args: unknown[] }
   | { v: V; kind: 'prop-actions-changed'; request_id?: string }
@@ -46,7 +48,7 @@ export interface BridgeTransport {
 const gameNames = ['infoAction', 'closeInfo', 'closeOpenView', 'pickPropAction', 'pickRoomPose', 'closePlaceMenu', 'respondPropAction', 'cancelPropAction', 'clearSelection', 'setVolumes', 'speak', 'stopSpeech', 'markResume', 'zoomTo', 'sayBubble',
   'enterEmbodied', 'takeControl', 'exitEmbodied', 'rideElevator', 'rideStairs',
   'enterLocation', 'backToTitle', 'setShowAll', 'applyAudioPrefs', 'applyScatterPrefs',
-  'applyGraphicsPrefs', 'setChatBox'] as const satisfies readonly (keyof HudGameActions)[];
+  'applyGraphicsPrefs', 'clearClientCache', 'setChatBox'] as const satisfies readonly (keyof HudGameActions)[];
 const uiNames = ['openChat', 'toast', 'toggleMenu', 'closeMenu'] as const satisfies readonly (keyof HudUiActions)[];
 function reject(msg: unknown): void { console.warn('[hud bridge] Dropped invalid message', msg); }
 function valid(msg: unknown): msg is ToHud | FromHud {
@@ -105,9 +107,33 @@ function receiveState(patch: Partial<HudGameState>, fields: readonly (keyof HudG
   if (Object.keys(accepted).length) bus.setGameState(accepted);
 }
 
+let speechSerial = 0;
 /** HUD endpoint: local writers publish independently of incoming scene state. */
 export function connectHudSide(t: BridgeTransport): () => void {
   const restore = senders(bus.gameActions, gameNames, (name, args) => t.send({ v: HUD_BRIDGE_VERSION, kind: 'action', name, args }));
+  const speechSession = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
+  const pendingSpeech = new Map<string, { resolve: () => void; timer: number }>();
+  const finishSpeech = (request_id: string) => {
+    const pending = pendingSpeech.get(request_id);
+    if (!pending) return;
+    pendingSpeech.delete(request_id); window.clearTimeout(pending.timer); pending.resolve();
+  };
+  const previousSpeak = bus.gameActions.speak;
+  const speak = (url: string) => new Promise<void>(resolve => {
+    const request_id = `speech:${speechSession}:${++speechSerial}`;
+    // A lost host/acknowledgement must not wedge the voiceover driver forever.
+    const timer = window.setTimeout(() => finishSpeech(request_id), 300_000);
+    pendingSpeech.set(request_id, { resolve, timer });
+    try { t.send({ v: HUD_BRIDGE_VERSION, kind: 'speech', request_id, url }); }
+    catch { finishSpeech(request_id); }
+  });
+  bus.gameActions.speak = speak;
+  const previousStop = bus.gameActions.stopSpeech;
+  const stopSpeech = () => {
+    try { previousStop?.(); }
+    finally { for (const id of pendingSpeech.keys()) finishSpeech(id); }
+  };
+  bus.gameActions.stopSpeech = stopSpeech;
   const pendingPreparations = new Map<string, {
     resolve: () => void; reject: (error: Error) => void; timer: number;
   }>();
@@ -149,6 +175,9 @@ export function connectHudSide(t: BridgeTransport): () => void {
       publishState(true);
     }
     switch (msg.kind) {
+      case 'speech-done':
+        if (typeof msg.request_id !== 'string') { reject(msg); break; }
+        finishSpeech(msg.request_id); break;
       case 'state': receiveState(msg.patch, sceneFields); break;
       case 'minimap': bus.setMinimap(msg.value); break;
       case 'perf': bus.setPerfStats(msg.value); break;
@@ -178,7 +207,11 @@ export function connectHudSide(t: BridgeTransport): () => void {
   const unsubscribeState = bus.subscribeGameState(() => publishState());
   publish(); publishState();
   return () => {
-    off(); offPreparation(); offPropActionChange(); unsubscribe(); unsubscribeState(); restore();
+    off(); offPreparation(); offPropActionChange(); unsubscribe(); unsubscribeState();
+    for (const id of pendingSpeech.keys()) finishSpeech(id);
+    if (bus.gameActions.speak === speak) bus.gameActions.speak = previousSpeak;
+    if (bus.gameActions.stopSpeech === stopSpeech) bus.gameActions.stopSpeech = previousStop;
+    restore();
     for (const pending of pendingPreparations.values()) {
       window.clearTimeout(pending.timer);
       pending.reject(new Error('HUD bridge disconnected during prop action preparation'));
@@ -188,6 +221,7 @@ export function connectHudSide(t: BridgeTransport): () => void {
 }
 /** Scene endpoint: HUD patches update the local bus used by scene handlers. */
 export function connectSceneSide(t: BridgeTransport): () => void {
+  let connected = true;
   const restore = senders(bus.uiActions, uiNames, (name, args) => t.send({ v: HUD_BRIDGE_VERSION, kind: 'ui', name, args }));
   let receivingPropActionChange = false;
   const offPropActionChange = onPropActionChanged(request_id => {
@@ -196,6 +230,14 @@ export function connectSceneSide(t: BridgeTransport): () => void {
   const off = t.onMessage(msg => {
     if (!valid(msg)) return reject(msg);
     switch (msg.kind) {
+      case 'speech':
+        if (typeof msg.request_id !== 'string' || typeof msg.url !== 'string') { reject(msg); break; }
+        void (async () => {
+          try { await bus.gameActions.speak?.(msg.url); }
+          catch { /* Failed lines are skipped just like the in-process voiceover. */ }
+          finally { if (connected) t.send({ v: HUD_BRIDGE_VERSION, kind: 'speech-done', request_id: msg.request_id }); }
+        })();
+        break;
       case 'state': receiveState(msg.patch, bus.HUD_OWNED_FIELDS); break;
       case 'action': if (!invoke(bus.gameActions, gameNames, msg.name, msg.args)) reject(msg); break;
       case 'hud': bus.setHudUiState(msg.patch); break;
@@ -229,7 +271,7 @@ export function connectSceneSide(t: BridgeTransport): () => void {
     [bus.subscribeBoot, () => t.send({ v: HUD_BRIDGE_VERSION, kind: 'boot', value: bus.getBoot() })],
   ] as const;
   const unsubscribes = stores.map(([subscribe, publish]) => { const unsubscribe = subscribe(publish); publish(); return unsubscribe; });
-  return () => { off(); offPropActionChange(); unsubscribes.forEach(fn => fn()); restore(); };
+  return () => { connected = false; off(); offPropActionChange(); unsubscribes.forEach(fn => fn()); restore(); };
 }
 /** Pin both origin and source; other same-origin frames are not this peer. */
 export function postMessageTransport(target: Window, origin: string): BridgeTransport {

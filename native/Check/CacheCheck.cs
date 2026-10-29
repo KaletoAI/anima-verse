@@ -62,16 +62,23 @@ public static class CacheCheck
         var transport = new Transport(raw, json);
         try
         {
-            int[] bodies = new int[2], revalidations = new int[2];
-            int[] jsonBodies = new int[2], jsonRequests = new int[2], scene304 = new int[2];
-            for (int boot = 0; boot < 2; boot++)
+            int[] bodies = new int[3], revalidations = new int[3];
+            int[] jsonBodies = new int[3], jsonRequests = new int[3], scene304 = new int[3], sceneBodies = new int[3];
+            for (int boot = 0; boot < 3; boot++)
             {
+                if (boot == 2)
+                {
+                    var warm = new DiskCache(root, origin);
+                    warm.RequestClear();
+                    Expect(warm.Readout.Bytes == 0 && warm.Count > 0, "clear immediately zeroes readout without deleting live bodies");
+                    DiskCache.PrepareRoot(root);
+                }
                 using var api = new AnimaApi(origin.ToString(), transport, new DiskCache(root, origin));
                 var source = new JsonCacheCheck.Source(api, new FixtureSource(fixtures));
                 json.Epoch = "boot" + (boot + 1);
                 int jsonBefore = json.Bodies("tiles") + json.Bodies("masks") + json.Bodies("terrain");
                 int requestsBefore = json.Requests("tiles") + json.Requests("masks") + json.Requests("terrain");
-                int conditionalBefore = json.Scene304;
+                int conditionalBefore = json.Scene304, sceneBefore = json.Bodies("scenes");
                 var world = new Node3D(); host.AddChild(world);
                 var builder = new WorldBuilder(source, _ => { }, strict: true);
                 int before = transport.Bodies, conditional = transport.Revalidations;
@@ -89,16 +96,19 @@ public static class CacheCheck
                     jsonBodies[boot] = json.Bodies("tiles") + json.Bodies("masks") + json.Bodies("terrain") - jsonBefore;
                     jsonRequests[boot] = json.Requests("tiles") + json.Requests("masks") + json.Requests("terrain") - requestsBefore;
                     scene304[boot] = json.Scene304 - conditionalBefore;
+                    sceneBodies[boot] = json.Bodies("scenes") - sceneBefore;
                 }
                 finally { builder.Models?.FreeAll(); world.Free(); }
             }
             Expect(bodies[0] == urls.Length, "cold boot fetches N fixture bodies");
             Expect(bodies[1] == 0, "warm boot fetches zero bodies");
             Expect(revalidations[1] > 0, "warm no-cache bodies revalidate");
-            Expect(raw.ByteRequests.Count == urls.Length, "ByteRequests counts bodies only");
+            Expect(bodies[2] == bodies[0], "boot3 after clear downloads every cold body again");
+            Expect(raw.ByteRequests.Count == urls.Length * 2, "ByteRequests counts cold bodies twice");
+            Expect(jsonBodies[2] == jsonBodies[0] && jsonRequests[2] == jsonRequests[0], "boot3 refetches all terrain JSON");
             Expect(jsonBodies[0] > 0 && jsonRequests[0] == jsonBodies[0], "cold world build downloads terrain JSON");
             Expect(jsonRequests[1] == 0, "warm world build makes zero tile/mask/terrain requests");
-            Expect(json.Bodies("scenes") > 0 && scene304[1] == json.Bodies("scenes"), "warm scenes all revalidate with 304");
+            Expect(sceneBodies[0] > 0 && scene304[1] == sceneBodies[0], "warm scenes all revalidate with 304");
             await json.ProveChanges(root, origin, transport, Expect);
             var store = new DiskCache(root, origin);
             using var next = new AnimaApi(origin.ToString(), transport, store);
@@ -133,9 +143,9 @@ public static class CacheCheck
             string old = store.DirectoryPath;
             var bumped = new DiskCache(root, origin, formatVersion: DiskCache.FormatVersion + 1);
             Expect(!Directory.Exists(old) && bumped.Count == 0, "format bump discards old tree");
-            GD.Print($"cache proof: boot1 bodies={bodies[0]} boot2 bodies={bodies[1]} boot2 304={revalidations[1]} ETag=1 v=1 corrupt=1 LRU=8->4 version=empty");
+            GD.Print($"cache proof: boot1 bodies={bodies[0]} boot2 bodies={bodies[1]} boot3 bodies={bodies[2]} boot2 304={revalidations[1]} ETag=1 v=1 corrupt=1 LRU=8->4 version=empty");
             GD.Print($"cache JSON proof: boot1 bodies={jsonBodies[0]} boot2 requests={jsonRequests[1]} scene304={scene304[1]}");
-            return $"cache checks={checks} boot1={bodies[0]} boot2={bodies[1]} JSON_boot2={jsonRequests[1]} scene304={scene304[1]}";
+            return $"cache checks={checks} boot1={bodies[0]} boot2={bodies[1]} boot3={bodies[2]} JSON_boot2={jsonRequests[1]} scene304={scene304[1]}";
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

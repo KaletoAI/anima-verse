@@ -8,6 +8,10 @@
     }
   },
   "translations": {
+    "Local cache": "Lokaler Cache",
+    "{size} of {limit} used · {entries} entries": "{size} von {limit} belegt · {entries} Einträge",
+    "Clear cache": "Cache leeren",
+    "Models, animations and terrain this computer keeps between starts. Clearing takes effect at the next start; the readout shows zero immediately.": "Modelle, Animationen und Gelände, die dieser Computer zwischen Starts speichert. Das Leeren wirkt beim nächsten Start; die Anzeige zeigt sofort null.",
     "Memory partially wiped: {n} reset errors": "Gedächtnis teilweise gelöscht: {n} Reset-Fehler",
     "World map": "Weltkarte",
     "Connection": "Verbindung",

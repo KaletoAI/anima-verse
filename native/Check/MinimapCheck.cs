@@ -52,7 +52,7 @@ public static class MinimapCheck
             string first = HudProtocol.Minimap(minimap.State);
             using var d = JsonDocument.Parse(first);
             var value = d.RootElement.GetProperty("value");
-            Is("v3 minimap", d.RootElement.GetProperty("v").GetInt32() == 3 && d.RootElement.GetProperty("kind").GetString() == "minimap");
+            Is("v4 minimap", d.RootElement.GetProperty("v").GetInt32() == 4 && d.RootElement.GetProperty("kind").GetString() == "minimap");
             int fields = 0; foreach (var _ in value.EnumerateObject()) fields++;
             Is("six fields", fields == 6);
             Is("first avatar -3,1", value.GetProperty("avatar").GetProperty("x").GetDouble() == -3 && value.GetProperty("avatar").GetProperty("z").GetDouble() == 1);

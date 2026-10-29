@@ -39,6 +39,51 @@ public sealed class ByteCacheTests : IDisposable
         }
     }
 
+    [Fact]
+    public void FailedClearRetainsMarkerWithoutPreventingStartup()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root") return;
+        var cache = Cache();
+        cache.Store("body", new byte[4], null, new HttpCachePolicy(true, true, _now, "immutable"));
+        cache.RequestClear();
+        var original = File.GetUnixFileMode(cache.DirectoryPath);
+        try
+        {
+            File.SetUnixFileMode(cache.DirectoryPath, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            bool enabled = true;
+            Assert.Null(Record.Exception(() => enabled = DiskCache.PrepareRoot(_root)));
+            Assert.False(enabled);
+            Assert.True(File.Exists(Path.Combine(_root, "pending_clear")));
+        }
+        finally { File.SetUnixFileMode(cache.DirectoryPath, original); }
+    }
+
+    [Fact]
+    public async Task ClearIsDeferredAcrossReloadAndNextBootRefetchesEverything()
+    {
+        var server = new Server { Policy = "public, immutable" };
+        var cache = Cache();
+        using (var api = new AnimaApi("https://fixture.test", server, cache))
+            await api.GetBytesAsync("/assets/animation-clips/a.fbx?v=a");
+        string body = Path.Combine(cache.DirectoryPath, cache.Read("/assets/animation-clips/a.fbx?v=a")!.Value.Entry.File);
+        cache.RequestClear(); cache.RequestClear();
+        Assert.True(File.Exists(body)); Assert.Equal(0, cache.Readout.Bytes); Assert.Equal(0, cache.Readout.Entries);
+        Assert.Equal(DiskCache.DefaultLimitBytes, cache.Readout.LimitBytes);
+        var reload = Cache(); Assert.Equal(0, reload.Readout.Bytes); Assert.Equal(1, reload.Count);
+        reload.Store("derived", new byte[3], null, new HttpCachePolicy(true, true, _now, "immutable"));
+        Assert.Equal(0, reload.Readout.Bytes);
+        Directory.CreateDirectory(Path.Combine(_root, "v99")); File.WriteAllText(Path.Combine(_root, "keep.txt"), "keep");
+        DiskCache.PrepareRoot(_root);
+        Assert.False(File.Exists(body)); Assert.False(Directory.Exists(Path.Combine(_root, "v99")));
+        Assert.True(File.Exists(Path.Combine(_root, "keep.txt")));
+        var cold = Cache(); Assert.Equal(0, cold.Count);
+        using (var api = new AnimaApi("https://fixture.test", server, cold))
+            await api.GetBytesAsync("/assets/animation-clips/a.fbx?v=a");
+        Assert.Equal(2, server.Bodies); Assert.Equal(4, cold.Readout.Bytes);
+        DiskCache.PrepareRoot(_root); Assert.Equal(1, Cache().Count);
+        DiskCache.PrepareRoot(_root, clear: true); Assert.Equal(0, Cache().Count);
+    }
+
     [Theory]
     [InlineData("/assets/animation-clips/a.fbx?v=one", "public, max-age=31536000, immutable", 0)]
     [InlineData("/characters/A/model3d/file?v=one", "public, max-age=31536000, immutable", 0)]

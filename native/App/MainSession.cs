@@ -87,8 +87,8 @@ public partial class Main : Node3D
     /// the loading screen at once, then the normal world load. The HUD page is already up on the same session.
     /// </summary>
     private AnimaApi CreateCachedApi(string server)
-        => new(server, cache: new AnimaNative.Cache.DiskCache(
-            _options?.CacheDir ?? ProjectSettings.GlobalizePath("user://cache"), new Uri(server)));
+        => new(server, cache: _diskCacheEnabled ? new AnimaNative.Cache.DiskCache(
+            CacheRoot, new Uri(server)) : null);
 
     private async Task ResumeAsync(CarriedSession carried, LauncherSettings launch)
     {

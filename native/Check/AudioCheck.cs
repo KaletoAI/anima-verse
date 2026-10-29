@@ -93,14 +93,19 @@ public static class AudioCheck
             now = 30; output.PlayPlaylist(PlaylistBus.Ambient, [Broken, Forest], 3, "a"); Step(30);
             Expect("broken file skipped", output.Ambient.Live.Single().Url == Forest);
             Expect("one broken-file log", logs.Count == 1 && logs[0].Contains(Broken));
-            handlers["speak"](new JsonArray(Speech)); Step(30);
+            var completedSpeech = output.Speak(Speech); Step(30);
+            Expect("speech completion waits for end", !completedSpeech.IsCompleted);
             foreach (var url in new[] { Day, DayB, Night, Grass }) handlers["speak"](new JsonArray(url));
             Expect("three waiting, oldest dropped", output.Speech.Pending.SequenceEqual(new[] { DayB, Night, Grass }));
             Expect("one sounding voice", Players(AudioOut.VoiceBus) == 1 && output.Speech.CurrentUrl == Speech);
-            Step(31); Expect("speech FIFO", output.Speech.CurrentUrl == DayB && Players(AudioOut.VoiceBus) == 1);
+            Step(31); Expect("speech end completes", completedSpeech.IsCompletedSuccessfully); Expect("speech FIFO", output.Speech.CurrentUrl == DayB && Players(AudioOut.VoiceBus) == 1);
             handlers["stopSpeech"](new JsonArray());
             Expect("stop immediate and clears queue", output.Speech.CurrentUrl is null && output.Speech.Pending.Count == 0 && Players(AudioOut.VoiceBus) == 0);
             Expect("stop speech leaves playlists", output.Music.Key.Length > 0 && output.Ambient.Key.Length > 0);
+            var stoppedSpeech = output.Speak(Speech); handlers["stopSpeech"](new JsonArray());
+            Expect("stopped line completes", stoppedSpeech.IsCompletedSuccessfully);
+            var failedSpeech = output.Speak(Broken); Step(31);
+            Expect("failed line completes", failedSpeech.IsCompletedSuccessfully);
             // Stop before the Godot loader pumps a finished fetch: no late voice source may be created.
             handlers["speak"](new JsonArray(Speech)); handlers["stopSpeech"](new JsonArray()); Step(31);
             Expect("late speech load never starts", Players(AudioOut.VoiceBus) == 0);

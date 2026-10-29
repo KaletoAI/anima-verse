@@ -31,7 +31,7 @@ hudMessages.length = 0;
 hud.setGameState({ groundRoomId: 'g1' });
 assert.equal(hudMessages.filter(msg => msg.kind === 'state').length, 0);
 hud.setGameState({ groundRoomId: 'g2' });
-assert.deepEqual(hudMessages.filter(msg => msg.kind === 'state'), [{ v: 3, kind: 'state', patch: { groundRoomId: 'g2' } }]);
+assert.deepEqual(hudMessages.filter(msg => msg.kind === 'state'), [{ v: 4, kind: 'state', patch: { groundRoomId: 'g2' } }]);
 const info = { id: 'loc1', name: 'Home', description: '', rooms: [], present: [], events: [], view: { openable: true, open: false } };
 scene.setGameState({ info });
 assert.deepEqual(hud.getGameState().info, info);
@@ -45,13 +45,13 @@ hud.gameActions.clearSelection();
 assert.deepEqual(cleared, [[]]);
 hud.setHudUiState({ perfOn: true });
 assert.equal(scene.getHudUiState().perfOn, true);
-// Protocol v3 preserves unrelated graphics arguments across the clean cutover.
-assert.equal(scene.HUD_BRIDGE_VERSION, 3);
+// Protocol v4 preserves unrelated graphics arguments across the clean cutover.
+assert.equal(scene.HUD_BRIDGE_VERSION, 4);
 const graphics = [];
 scene.gameActions.applyGraphicsPrefs = (...args) => graphics.push(args);
 hud.gameActions.applyGraphicsPrefs({ antiAliasing: '4x', shadows: false });
 assert.deepEqual(graphics, [[{ antiAliasing: '4x', shadows: false }]]);
-assert.deepEqual(hudMessages.at(-1), { v: 3, kind: 'action', name: 'applyGraphicsPrefs', args: [{ antiAliasing: '4x', shadows: false }] });
+assert.deepEqual(hudMessages.at(-1), { v: 4, kind: 'action', name: 'applyGraphicsPrefs', args: [{ antiAliasing: '4x', shadows: false }] });
 const exactTarget = { location_id: 'home', room_id: 'workshop', placement_id: 'coffee-2', variant_uid: 'ecfa003d-309a-4ce2-8c9b-29944ddae093' };
 const semanticCalls = [];
 for (const name of ['pickPropAction', 'respondPropAction', 'cancelPropAction', 'pickRoomPose', 'closePlaceMenu']) {
@@ -135,18 +135,68 @@ scene.setPerfStats(null);
 assert.equal(hud.getPerfStats(), null);
 scene.setMinimap(null);
 assert.deepEqual(hud.getMinimap(), scene.getMinimap());
-scene.gameActions.speak = () => Promise.resolve();
-assert.equal(hud.gameActions.speak('voice.wav'), undefined);
+// v4: cache state is scene-owned, and clearing is an ordinary command.
+assert.equal(hud.getGameState().clientCache, null);
+let cacheClears = 0;
+scene.gameActions.clearClientCache = () => cacheClears++;
+scene.setGameState({ clientCache: { bytes: 12, limitBytes: 4294967296, entries: 2 } });
+assert.deepEqual(hud.getGameState().clientCache, { bytes: 12, limitBytes: 4294967296, entries: 2 });
+hud.gameActions.clearClientCache(); assert.equal(cacheClears, 1);
+// A line stays pending until its exact acknowledgement, including failure/stop.
+let finishSpeech;
+scene.gameActions.speak = () => new Promise(resolve => { finishSpeech = resolve; });
+let speechDone = false;
+const speech = hud.gameActions.speak('voice.wav').then(() => { speechDone = true; });
+await Promise.resolve(); assert.equal(speechDone, false);
+const speechRequest = hudMessages.at(-1);
+assert.equal(speechRequest.kind, 'speech'); assert.equal(speechRequest.url, 'voice.wav');
+a.send({ v: 4, kind: 'speech-done', request_id: 'unrelated' });
+await Promise.resolve(); assert.equal(speechDone, false);
+finishSpeech(); await speech;
+assert.equal(speechDone, true);
+assert.deepEqual(sceneMessages.at(-1), { v: 4, kind: 'speech-done', request_id: speechRequest.request_id });
+scene.gameActions.speak = () => { throw new Error('broken voice'); };
+await hud.gameActions.speak('broken.wav');
+scene.gameActions.speak = () => new Promise(resolve => { finishSpeech = resolve; });
+scene.gameActions.stopSpeech = () => finishSpeech();
+const stoppedSpeech = hud.gameActions.speak('stopped.wav'); hud.gameActions.stopSpeech(); await stoppedSpeech;
+// A lost acknowledgement resolves after a bounded timeout; disconnect also releases the driver.
+const realTimeout = globalThis.setTimeout;
+let timeoutRelease;
+globalThis.setTimeout = fn => { timeoutRelease = fn; return 123; };
+const timedSpeech = hud.gameActions.speak('lost.wav');
+globalThis.setTimeout = realTimeout;
+timeoutRelease(); await timedSpeech;
+
+// The actual HUD driver renders the next line only after playback completes.
+const { createVoiceover } = hud.load('client3d/src/game/voiceover.ts');
+const rendered = [], played = [];
+const releases = [];
+scene.gameActions.speak = url => { played.push(url); return new Promise(resolve => releases.push(resolve)); };
+scene.gameActions.stopSpeech = () => { for (const resolve of releases.splice(0)) resolve(); };
+const voice = createVoiceover({
+  synth: async line => { rendered.push(line.text); return line.text; },
+  play: async url => { await hud.gameActions.speak(url); },
+  stop: () => hud.gameActions.stopSpeech(),
+});
+const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+voice.push([{ speaker: 'A', text: 'one' }, { speaker: 'B', text: 'two' }, { speaker: 'C', text: 'three' }]);
+await flush(); assert.deepEqual(rendered, ['one']); assert.deepEqual(played, ['one']);
+releases.shift()(); await flush(); assert.deepEqual(rendered, ['one', 'two']);
+releases.shift()(); await flush(); assert.deepEqual(played, ['one', 'two', 'three']);
+voice.clear(); await flush(); assert.equal(voice.pending.length, 0);
+voice.push([{ speaker: 'A', text: 'fresh' }]); await flush();
+assert.equal(played.at(-1), 'fresh'); voice.clear(); await flush();
 const warnings = [];
 const warn = console.warn;
 console.warn = (...args) => warnings.push(args);
 try {
-  b.send({ v: 2, kind: 'action', name: 'zoomTo', args: ['wrong'] });   // the replaced v2 peer is refused
-  b.send({ v: 3, kind: 'action', name: 'nope', args: [] });
-  b.send({ v: 3, kind: 'action', name: 'toString', args: [] });
-  a.send({ v: 3, kind: 'unknown' });
-  a.send({ v: 3, kind: 'state', patch: { groundRoomId: 'x', partyLeader: 'wrong', movementLocked: true, elevatorOpen: true } });
-  b.send({ v: 3, kind: 'state', patch: { mode: 'overview', selected: null, lockedLoc: 'valid HUD field' } });
+  b.send({ v: 3, kind: 'action', name: 'zoomTo', args: ['wrong'] });   // the replaced v3 peer is refused
+  b.send({ v: 4, kind: 'action', name: 'nope', args: [] });
+  b.send({ v: 4, kind: 'action', name: 'toString', args: [] });
+  a.send({ v: 4, kind: 'unknown' });
+  a.send({ v: 4, kind: 'state', patch: { groundRoomId: 'x', partyLeader: 'wrong', movementLocked: true, elevatorOpen: true } });
+  b.send({ v: 4, kind: 'state', patch: { mode: 'overview', selected: null, clientCache: null, lockedLoc: 'valid HUD field' } });
 } finally { console.warn = warn; }
 assert.equal(warnings.length, 6);
 assert.equal(hud.getGameState().groundRoomId, 'g2');
@@ -154,6 +204,7 @@ assert.equal(scene.getGameState().mode, 'embodied');
 assert.equal(hud.getGameState().elevatorOpen, true);
 assert.equal(hud.getGameState().movementLocked, false);
 assert.equal(scene.getGameState().lockedLoc, 'valid HUD field');
+assert.equal(scene.getGameState().clientCache.bytes, 12, 'HUD cannot overwrite the cache readout');
 assert.deepEqual(received, [['Kira']]);
 const rects = [{ x: 0, y: 0, w: 10, h: 10 }, { x: 5, y: 5, w: 10, h: 10 }];
 assert.deepEqual(scene.mergeRects(rects), rects);
@@ -170,7 +221,7 @@ const target = { postMessage: (...args) => sent.push(args) };
 const transport = scene.postMessageTransport(target, 'https://hud.test');
 let deliveries = 0;
 const off = transport.onMessage(() => deliveries++);
-const message = { v: 3, kind: 'hud', patch: {} };
+const message = { v: 4, kind: 'hud', patch: {} };
 transport.send(message);
 assert.deepEqual(sent, [[message, 'https://hud.test']]);
 for (const fn of handlers) {
@@ -181,7 +232,8 @@ for (const fn of handlers) {
 assert.equal(deliveries, 1);
 off(); assert.equal(handlers.size, 0);
 delete globalThis.window;
-stopScene(); stopHud();
+const disconnectedSpeech = hud.gameActions.speak('disconnect.wav');
+stopScene(); stopHud(); await disconnectedSpeech;
 assert.equal(hud.gameActions.zoomTo, undefined);
 assert.equal(scene.uiActions.openChat, undefined);
 scene.setGameState({ mode: 'overview' });

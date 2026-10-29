@@ -130,6 +130,8 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
     public string? CheckOnly { get; init; }
     /// <summary>Task 62: explicit cache root for tests/checks; online default is user://cache/.</summary>
     public string? CacheDir { get; init; }
+    /// <summary>Task 65: cold start, before any cache-backed worker is created.</summary>
+    public bool ClearCache { get; init; }
 
     public static CliOptions FromGodot() => Parse(OS.GetCmdlineUserArgs());
 
@@ -138,7 +140,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
         string? server = null;
         string? user = null, gotoQuery = null;
         bool check = false, bench = false, checkBench = false, quit = false, vsync = false, scatter = true, noHud = false, plainGround = false;
-        bool noWater = false, verify = false, fogCompute = true;
+        bool noWater = false, verify = false, fogCompute = true, clearCache = false;
         string? matrix = null;
         string? offline = null, checkOnly = null, cacheDir = null;
         Vector2I? size = null;
@@ -150,6 +152,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             if (arg == "--check") check = true;
             else if (TryValue(arg, "--check", out var only)) { check = true; checkOnly = CheckSection(only); }
             else if (check && checkOnly is null && IsSection(arg)) checkOnly = arg;
+            else if (arg == "--clear-cache") clearCache = true;
             else if (TryValue(arg, "--cache-dir", out var cachePath)) cacheDir = cachePath;
             else if (arg == "--verify") verify = true;
             else if (arg == "--bench") bench = true;
@@ -212,6 +215,7 @@ public sealed record CliOptions(string? Server, string? User, string? Goto, bool
             Verify = verify,
             CheckOnly = checkOnly,
             CacheDir = cacheDir,
+            ClearCache = clearCache,
             Msaa = msaa,
             Fly = fly,
         };

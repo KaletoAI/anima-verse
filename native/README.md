@@ -1112,8 +1112,20 @@ URL; speech streams release at end/stop and are never cached. Broken files
 are skipped with one application log line per failed attempt; an all-broken
 round becomes silence.
 
-Bridge v3 `speak(url)` queues one active line plus at most three waiting
-lines, dropping the oldest waiting line on overflow (P3-R30). `stopSpeech`
+The Graphics tab shows a Local cache section when the host publishes
+`clientCache {bytes, limitBytes, entries}` (the browser publishes null).
+Clear cache writes `pending_clear` under `--cache-dir` (default
+`user://cache`), shows zero immediately and leaves all active files usable.
+The next process start removes the cache's version trees before any worker
+loads. `--clear-cache` performs the same cold start without the HUD; scene
+and character reloads do not consume the flag. If clearing fails, that process
+runs without disk caching, logs the failure and retains the flag for a later
+restart. The limit is 4 GiB.
+
+Bridge v4 `speak(url)` waits for a correlated `speech-done` acknowledgement
+on playback end, failure, stop or overflow (Task 65 / P3-R38). The HUD renders
+and plays one line at a time, as in the browser. The native cap of three
+waiting lines remains as a safety net. `stopSpeech`
 stops now and clears the queue; a late download cannot restart it. HUD page
 reload also stops speech. `setVolumes` applies only changed volume targets;
 `applyAudioPrefs` updates music/ambient switches and raises `PrefsChanged`
@@ -1139,8 +1151,8 @@ The browser HUD itself — `client3d/hud.html`, served by the Anima server at
   premultiplied, so the rect blends premultiplied. 3 s after the page loaded a
   log line `hud: transparency probe: … alpha=…` reports the painted alpha
   outside every HUD surface (0 = transparent) and inside the first one.
-- **Bridge**: protocol v3 of `client3d/src/hud/bridge.ts` (no prop actions natively: a
-  `prop-action-prepare` is answered with an error, `prop-actions-changed` is ignored), one JSON string per
+- **Bridge**: protocol v4 of `client3d/src/hud/bridge.ts` (prop-action preparation and
+  correlated mutation invalidation, plus speech completion), one JSON string per
   message over gdCEF's JS binding (`window.godotMethods.hud_bridge(json)` →
   `HudOverlay.hud_bridge`, Godot's `js_emit("hud_bridge", json)` →
   `window.godotEvents`); the page picks `gdcefTransport` by `?bridge=gdcef`.
@@ -1221,7 +1233,7 @@ works the same way.
 | `Gltf/` | runtime GLB import (the Meshopt decode is in `Core/Gltf/`) |
 | `Figures/` | world-map characters: figures (fed by Main's poll, placed by the room ladder once a second), portrait sprite, fallback pool, clip library (import, pick, retarget), rest-pose correction |
 | `Ui/` | login screen (server, user, password), `LauncherStore` (`user://launcher.json`), `HudStorageStore` (`user://hud_storage.json`), the overview camera, the label overlay (`LabelOverlay.cs`: projection, order, the label CSS in `LabelStyle`), the performance probe (`PerfProbe.cs`) |
-| `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v3 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
+| `Hud/` | gdCEF wrapper (`GdCef.cs`, the one class that calls the extension), protocol v4 scene side (`Core/Hud/HudProtocol.cs`), input routing + figure picking (`HudRouting.cs`), the overlay node (`HudOverlay.cs`) |
 | `link_cef.sh`, `cef_artifacts/` | the one-time gdCEF link; the linked folder is gitignored |
 | `Ground/` | Task S3b: the layer-cut port + payload (`Core/Ground/LayerCut.cs`, incl. `wantedTiles` and the natural-ground maths), the shading-normal twin (`Core/Ground/TerrainNormal.cs`), the ground shader (`GroundShader.cs`, + its water variant), the loader that builds slices/masks/material (`GroundSurfaces.cs`); the water numbers are `Core/Water/` (the tile field `Core/Ground/WaterTileField.cs`), the water's fields ride on the terrain's near lattice (`Core/Terrain/TerrainField.cs`) |
 | `Scatter/` | (payload, sampler and LOD/undergrowth maths are in `Core/Scatter/`) prop GLB → grounded mesh, the two MultiMesh layers, the sway shaders, the cadence driver |
