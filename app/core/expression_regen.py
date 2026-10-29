@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Any, Dict, Optional, Set
 import uuid
 
+from app.imagegen.routing import ROUTE_META_KEYS
 from app.core.config_schema import field_default
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
@@ -910,7 +911,7 @@ def render_character_image(character_name: str, *, output_stem: Path,
         }
         # The routing record of the render — a fallback variant stays
         # recognisable (plan-image-routing.md, meta at every writer).
-        for _rk in ("routing", "fallback_from"):
+        for _rk in ROUTE_META_KEYS:
             if _gen_meta.get(_rk):
                 _expr_meta[_rk] = _gen_meta[_rk]
         if record_provenance:

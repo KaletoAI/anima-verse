@@ -36,6 +36,9 @@ from app.imagegen.occasions import (backend_fits, catalog_payload, get_occasion,
 
 logger = get_logger("image_routing")
 
+ROUTE_META_KEYS = ("routing", "fallback_from", "overflow_from")
+MAX_OVERFLOWS = 2
+
 STATUS_OK = "ok"
 STATUS_COOLDOWN = "cooldown"
 STATUS_UNAVAILABLE = "unavailable"
@@ -90,10 +93,16 @@ class Route:
     first_position: Optional[int]
     chain: List[Dict[str, Any]] = field(default_factory=list)
 
+    overflow_from: str = ""
+    overflow_waited_s: float = 0.0
+    fallback_position: Optional[int] = None
+
     @property
     def is_fallback(self) -> bool:
-        return (self.position is not None and self.first_position is not None
-                and self.position != self.first_position)
+        position = (self.fallback_position if self.fallback_position is not None
+                    else self.position)
+        return (position is not None and self.first_position is not None
+                and position != self.first_position)
 
 
 def normalize_spec(spec: Any) -> str:
@@ -365,6 +374,44 @@ def resolve_image_route(occasion: str, *, character: str = "",
                  intended["position"] if intended else None, chain)
 
 
+def _channel_room(name: str) -> bool:
+    """Only an existing channel with an unreserved GPU slot accepts overflow."""
+    from app.core.provider_manager import get_provider_manager
+    queue = get_provider_manager().get_queue_for_provider(name)
+    return queue is not None and queue.free_gpu_slots() > 0
+
+
+def overflow_target(route: Route, *, left: Iterable[str], character: str = "",
+                    has_ref: bool = False, pool: Any = None,
+                    channel_room: Optional[Callable[[str], bool]] = None) -> Optional[Route]:
+    """Pick an accepting backend at the current chain entry or a later one."""
+    if route.position is None:
+        return None
+    p = _pool(pool)
+    room = channel_room if channel_room is not None else _channel_room
+    excluded = set(left)
+    for spec, _source, pos in chain_for(route.occasion, character):
+        if pos < route.position:
+            continue
+        _skip, allowed, _names = _config_filter(route.occasion, spec, list(p.backends))
+        live = [b for b in allowed if b.name not in excluded
+                and not b.in_cooldown() and b.available
+                and getattr(b, "accepts_overflow", False) and room(b.name)]
+        if any(ch in spec for ch in "*?["):
+            live = _prefer_img2img(live, has_ref)
+        if not live:
+            continue
+        backend = p.pick_lowest_cost(live, rotation_key=f"route:{route.occasion}:{spec}")
+        return Route(route.occasion, backend, pos, spec, route.intended_spec,
+                     route.first_position, route.chain,
+                     overflow_from=route.overflow_from or route.backend.name,
+                     overflow_waited_s=route.overflow_waited_s,
+                     fallback_position=(route.fallback_position
+                                        if route.fallback_position is not None
+                                        else route.position))
+    return None
+
+
 def chain_candidates(occasion: str, pool: Any = None) -> List[Tuple[Any, int, str]]:
     """Every backend the chain of ``occasion`` could run, in chain order:
     ``[(backend, position, spec)]`` after the CONFIGURATION filters (match,
@@ -411,9 +458,12 @@ def _explain_one(row: Dict[str, Any], character: str, backends: List[Any],
     for spec, source, pos in entries:
         status, live, names = _evaluate(oid, spec, backends, set(), has_ref)
         b = _cheapest_no_rotation(live) if status == STATUS_OK else None
+        _skip, allowed, _names = _config_filter(oid, spec, backends)
         chain.append({"spec": spec, "source": source, "position": pos,
                       "status": status, "status_text": STATUS_TEXT[status],
-                      "backend": b.name if b else "", "matches": names})
+                      "backend": b.name if b else "", "matches": names,
+                      "overflow_targets": [b.name for b in allowed
+                                           if getattr(b, "accepts_overflow", False)]})
         if b is not None and resolved is None:
             resolved, position = b.name, pos
     if not entries:
@@ -481,6 +531,9 @@ def route_meta(route: Optional[Route]) -> Dict[str, Any]:
         meta["fallback_from"] = {"occasion": route.occasion,
                                  "intended_spec": route.intended_spec,
                                  "position": route.first_position}
+    if route.overflow_from:
+        meta["overflow_from"] = {"backend": route.overflow_from,
+                                 "waited_s": int(route.overflow_waited_s)}
     return meta
 
 
@@ -490,7 +543,8 @@ MAX_REENTRIES = 2
 def run_routed(occasion: str, render: Callable[[Any], Any], *,
                character: str = "", has_ref: bool = False,
                pool: Any = None,
-               on_route: Optional[Callable[[Route], None]] = None) -> Tuple[Any, Route]:
+               on_route: Optional[Callable[[Route], None]] = None,
+               channel_room: Optional[Callable[[str], bool]] = None) -> Tuple[Any, Route]:
     """Resolve the occasion's chain and run ``render(backend)``; when the
     render FAILS on that backend (``BackendFailedError`` — raised only after
     ``run_on_backend`` cooled the backend down, or a delivery rig mismatch
@@ -500,7 +554,13 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
     slots, LoRA filter, model name, rig), so a re-run never reuses a prompt
     built for another backend.
 
-    At most ``MAX_REENTRIES`` re-runs (3 backends) per call. No re-run on
+    Waiting image renders may overflow to an accepting backend at the same
+    or a later entry, up to ``MAX_OVERFLOWS`` times independently of failure
+    re-runs. Each render gets its own watch, restored even on exceptions.
+    Overflow preserves the pre-overflow fallback status and records the first
+    backend left plus the accumulated queue wait in ``overflow_from``.
+
+    At most ``MAX_REENTRIES`` failure re-runs per call. No failure re-run on
     load (``BackendBusyError``, incl. ``GpuTaskTimeout``), on a rejected input
     (4xx / ``GatewayRejectedError``), a user cancel (``GpuTaskCancelled``),
     the media master switch, a per-user quota or a missing channel — those
@@ -521,16 +581,49 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
     so a result collected after a restart carries the same marks.
 
     Returns ``(render result, the Route that produced it)``."""
-    from app.imagegen.base import BackendFailedError, BackendNotApplicableError
+    from app.imagegen.base import (BackendFailedError, BackendNotApplicableError,
+                                   ChannelOverflow, OverflowWatch, OVERFLOW_WATCH,
+                                   image_overflow_after_seconds)
     route = resolve_image_route(occasion, character=character, has_ref=has_ref,
                                 probe=True, pool=pool)
     failed: List[str] = []
     rejected: Dict[str, str] = {}
+    left: set = set()
+    hops = 0
+    overflow_from = ""
+    waited_s = 0.0
     while True:
+        if overflow_from:
+            route.overflow_from = overflow_from
+            route.overflow_waited_s = waited_s
         if on_route is not None:
             on_route(route)
+        after_s = image_overflow_after_seconds()
+        watch = None
+        if (route.position is not None
+                and getattr(route.backend, "MEDIA_TYPE", "image") == "image"
+                and after_s > 0 and hops < MAX_OVERFLOWS):
+            watch = OverflowWatch(route.backend.name, after_s,
+                                  lambda: overflow_target(
+                                      route, left=left | {route.backend.name},
+                                      character=character, has_ref=has_ref,
+                                      pool=pool, channel_room=channel_room))
+        token = OVERFLOW_WATCH.set(watch)
         try:
             result = render(route.backend)
+        except ChannelOverflow as e:
+            if e.backend_name != route.backend.name:
+                raise
+            left.add(route.backend.name)
+            overflow_from = overflow_from or route.backend.name
+            waited_s += e.waited_s
+            hops += 1
+            logger.info("Image routing %s: %s full for %ds — overflow to %s",
+                        occasion, route.backend.name, e.waited_s, e.target.backend.name)
+            route = e.target
+            route.overflow_from = overflow_from
+            route.overflow_waited_s = waited_s
+            continue
         except BackendNotApplicableError as e:
             if route.position is None or e.backend_name != route.backend.name:
                 raise
@@ -563,7 +656,14 @@ def run_routed(occasion: str, render: Callable[[Any], Any], *,
                                             pool=pool, not_applicable=rejected)
             except NoRouteError as nr:
                 raise nr from e
+            if route.backend.name in left:
+                # A full backend is still a healthy one: after the overflow
+                # target failed, the re-run may land back where the render
+                # started, and then it is no overflow any more.
+                overflow_from, waited_s = "", 0.0
             continue
+        finally:
+            OVERFLOW_WATCH.reset(token)
         if failed:
             logger.info("Image routing %s: rendered on %s (%s) after %s failed",
                         occasion, route.backend.name, _pos_label(route.position),

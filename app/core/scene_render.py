@@ -146,7 +146,7 @@ def _write_scene_meta(sig: str, location: str, room: str,
     """Sidecar next to the rendered image — lets the stale-image fallbacks
     filter by location (a render for the kitchen must never stand in for
     the beach), and records which backend / chain entry rendered it
-    (``extra``: backend, backend_type, routing, fallback_from)."""
+    (``extra``: backend, backend_type and routing.ROUTE_META_KEYS)."""
     try:
         _scene_meta_path(sig).write_text(
             json.dumps({"location": location, "room": room, **(extra or {})}),

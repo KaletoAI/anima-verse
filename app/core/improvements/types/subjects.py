@@ -20,6 +20,7 @@ engine calls them synchronously in a queue worker:
   simply saturated — raises :class:`CandidateBusy` instead: that is load, not a
   defect, and the engine leaves the step pending without counting an attempt.
 """
+from app.imagegen.routing import ROUTE_META_KEYS
 from app.imagegen.selection import is_generator_backend
 
 from pathlib import Path
@@ -401,7 +402,7 @@ def generate_expression(name: str) -> None:
 
 def character_profile(name: str) -> Optional[Dict[str, Any]]:
     """The character's CURRENT profile image as
-    ``{filename, path, backend, prompt, fallback_from, source_file}``, or
+    ``{filename, path, backend, prompt, routing meta (ROUTE_META_KEYS), source_file}``, or
     None when there is none.
 
     "Current" is what the profile field says — the same resolution
@@ -430,7 +431,7 @@ def character_profile(name: str) -> Optional[Dict[str, Any]]:
         "path": str(path),
         "backend": str(meta.get("backend") or ""),
         "prompt": str(get_character_image_prompts(name).get(filename) or ""),
-        "fallback_from": meta.get("fallback_from") or None,
+        **{k: meta.get(k) or None for k in ROUTE_META_KEYS},
         "source_file": str(meta.get("source_file") or ""),
     }
 
@@ -502,7 +503,7 @@ def character_gallery_images(name: str) -> List[Dict[str, Any]]:
             continue
         out.append({"filename": filename, "path": str(images_dir / filename),
                     "backend": str(meta.get("backend") or ""), "prompt": prompt,
-                    "fallback_from": meta.get("fallback_from") or None,
+                    **{k: meta.get(k) or None for k in ROUTE_META_KEYS},
                     "source_file": str(meta.get("source_file") or ""),
                     "room_id": str(meta.get("room_id") or ""),
                     "location": str(meta.get("location") or ""),
@@ -555,7 +556,7 @@ def regenerate_character_gallery_image(name: str, filename: str, backend: str) -
 def gallery_images(location_id: str) -> List[Dict[str, Any]]:
     """Every gallery image of a location that CAN be rendered again, as
     ``{filename, backend, prompt, room_id, prompt_type, source_file,
-    fallback_from}``.
+    routing meta (ROUTE_META_KEYS)}``.
 
     Three conditions, all from the image's own bookkeeping: the file has to
     exist (``delete_gallery_image`` drops the room/type/background entries but
@@ -589,7 +590,7 @@ def gallery_images(location_id: str) -> List[Dict[str, Any]]:
                     "room_id": str(rooms.get(filename) or ""),
                     "prompt_type": str(types.get(filename) or ""),
                     "source_file": str((meta or {}).get("source_file") or ""),
-                    "fallback_from": (meta or {}).get("fallback_from") or None})
+                    **{k: (meta or {}).get(k) or None for k in ROUTE_META_KEYS}})
     return out
 
 

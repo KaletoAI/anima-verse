@@ -115,8 +115,9 @@ C2b. (binding review C1) The four request handlers that used to pass a
     860a57de^ (before the gallery was routed) it finds
     `data.get("workflow")` and `body["workflow"]` (>= 2 hits).
 C3. Every meta writer of the spec's review list either calls route_meta( or
-    copies the routing fields (the string literal "fallback_from" in its
-    code) — by AST, so a comment or docstring does not count:
+    copies the routing fields (the string literal "fallback_from" or the name
+    ROUTE_META_KEYS in its code) — by AST, so a comment or docstring does not
+    count:
     service.py, expression_regen.py, world_ops.py, image_regenerate.py,
     describe_room_skill.py, routes/inventory.py, surface_textures.py,
     props.py, model3d.py, location_model3d.py, video_generation_skill.py,
@@ -411,15 +412,17 @@ def _soft_glob_reads(source):
 
 
 def _writes_routing_record(tree):
-    """C3 by AST: a call of `route_meta(...)` or the string literal
-    "fallback_from" in code (a comment never counts, and a docstring is never
-    exactly that string)."""
+    """C3 by AST: a call of `route_meta(...)`, the string literal
+    "fallback_from" or a use of the name `ROUTE_META_KEYS` in code (a comment
+    never counts, and a docstring is never exactly that string)."""
     import ast
     for node in ast.walk(tree):
         if (isinstance(node, ast.Call)
                 and getattr(node.func, "id", getattr(node.func, "attr", "")) == "route_meta"):
             return True
         if isinstance(node, ast.Constant) and node.value == "fallback_from":
+            return True
+        if isinstance(node, ast.Name) and node.id == "ROUTE_META_KEYS":
             return True
     return False
 

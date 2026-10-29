@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
+from app.imagegen.routing import ROUTE_META_KEYS
 from app.core.log import get_logger
 from app.core.model_refs import current_outfit_state, find_ref_image
 from app.core.timeutils import utc_now_iso
@@ -1972,7 +1973,7 @@ def _store_unrigged_model(character_name: str, signature: str, result: Dict[str,
     source_meta = {
         **manifest, "created_at": utc_now_iso(), "rig": "none", "signature": signature,
         "mesh_backend": result.get("backend", ""),
-        "mesh_route_meta": {k: result[k] for k in ("routing", "fallback_from") if k in result},
+        "mesh_route_meta": {k: result[k] for k in ROUTE_META_KEYS if k in result},
         "source_filename": result.get("filename", ""),
     }
     if result.get("single_view"):
@@ -2383,8 +2384,8 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
                   "mesh_backend": mesh_res.get("backend", ""),
                   "rig_backend": res.get("backend", ""),
                   **_rig_result_validation_meta(res),
-                  "mesh_route_meta": {k: mesh_res[k] for k in ("routing", "fallback_from") if k in mesh_res},
-                  "rig_route_meta": {k: res[k] for k in ("routing", "fallback_from") if k in res}}
+                  "mesh_route_meta": {k: mesh_res[k] for k in ROUTE_META_KEYS if k in mesh_res},
+                  "rig_route_meta": {k: res[k] for k in ROUTE_META_KEYS if k in res}}
     (out_dir / "raw").mkdir(parents=True, exist_ok=True)
     _publish_model_bytes(out_dir / "raw" / path.name, blob)
     _publish_model_bytes(path, blob)
@@ -2404,7 +2405,7 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
         "signature": signature,
         "character": character_name,
     }
-    for _rk in ("routing", "fallback_from"):
+    for _rk in ROUTE_META_KEYS:
         if res.get(_rk):
             meta[_rk] = res[_rk]
     if inputs.get("view_images"):
@@ -2604,13 +2605,13 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),
                     backend=res.get("backend", ""), rig_backend=res.get("backend", ""),
                     **_rig_result_validation_meta(res),
-                    rig_route_meta={k: res[k] for k in ("routing", "fallback_from") if k in res},
+                    rig_route_meta={k: res[k] for k in ROUTE_META_KEYS if k in res},
                     has_texture=texture is not None,
                     source_filename=res.get("filename", ""))
         if (out_dir / "facefix" / f"{signature}.glb").is_file():
             meta["face_retexture"] = {**(face_meta or previous_meta.get("face_retexture", {})),
                                       "face_texture_lost": face_texture_lost}
-        for key in ("routing", "fallback_from"):
+        for key in ROUTE_META_KEYS:
             if key in res:
                 meta[key] = res[key]
         try:
@@ -3142,7 +3143,7 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
                         if inputs.get('photo_mode', 'local') == 'local' else {}),
                      **({'photo_reason': inputs['photo_reason']} if inputs.get('photo_reason') else {}), 'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
                      'result_url': result.get('result_url', ''),
-                     'route_meta': {k: result[k] for k in ('routing', 'fallback_from') if k in result}}
+                     'route_meta': {k: result[k] for k in ROUTE_META_KEYS if k in result}}
         if result.get('compare_path'):
             comparison = Path(result['compare_path']).read_bytes()
             from PIL import Image
