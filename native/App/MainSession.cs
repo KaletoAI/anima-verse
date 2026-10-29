@@ -152,6 +152,7 @@ public partial class Main : Node3D
     private void ShowLogin(LauncherSettings launch)
     {
         var login = AddLoginScreen(launch, out var layer);
+        login.EnableUpdates(BuildInfo.Version, Log);
         if (_loginNotice is { } notice)
         {
             login.ShowStatus(notice, true);

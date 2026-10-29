@@ -7,7 +7,7 @@ namespace AnimaNative.Ui;
 /// The file side of <see cref="LauncherSettings"/>: <c>user://launcher.json</c>
 /// (Linux: <c>~/.local/share/godot/app_userdata/Anima Native/launcher.json</c>),
 /// read and written through Godot's <see cref="FileAccess"/>. Holds server, user
-/// name and window mode — never the password. A missing or unreadable file reads
+/// name, window mode and per-server skipped updates — never the password. A missing or unreadable file reads
 /// as the defaults; a write goes to a temporary file first and is then renamed
 /// over the old one, so a crash mid-write cannot leave half a file.
 /// </summary>

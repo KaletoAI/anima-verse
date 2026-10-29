@@ -137,14 +137,23 @@ public partial class LoginScreen : Control
             return;
         }
         _button.Disabled = true;
+        _server.Editable = false;
         ShowStatus("Logging in…", false);
         try
         {
+            await FinishUpdateCheckAsync();
+            EndUpdateChecks();
             await Submit(server, user, password);
         }
         catch (Exception e)
         {
-            if (IsInstanceValid(this)) ShowStatus(e.Message, true);
+            if (IsInstanceValid(this))
+            {
+                _loginStarted = false;
+                _server.Editable = true;
+                _updateCheck = CheckServerAsync();
+                ShowStatus(e.Message, true);
+            }
         }
         finally
         {
