@@ -40,6 +40,7 @@ public partial class Main : Node3D
                 + $"fill {f.Fill.Energy:0.###} (Godot energy = three intensity / π)");
         }
         _night = night;
+        _soundtrack?.Tick(); // Task 60: engine.onDayNight re-ticks from the GAME clock, not wall time.
         // engine.onDayNight → backdrop.setDayNight(night, scene.background): the rings take the clock's sky.
         if (_stage is not null && _backdrop is not null && IsInstanceValid(_backdrop))
             _backdrop.SetDayNight(_stage.Frame.Night, _stage.Frame.Background.Linear);

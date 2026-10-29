@@ -1229,3 +1229,32 @@ works the same way.
 | `Check/` | `--check`: fixture source and expectations, the S3c world (`S3cCheck.cs`: view rules, models, world props, water, shaders), § B5a (`VerifyCheck.cs`), the crossfade and occlusion (`PickCheck.cs` G), bench maths, scatter (`ScatterCheck.cs`, incl. the Task 26 worker build), the exploration veil (`VeilCheck.cs`), ground surfaces (`GroundCheck.cs`: requests, window bytes and probes vs. the TS functions, slices, shader parameters and its front-end compile, AO and normal by hand, the fallbacks), HUD (`HudCheck.cs`: rects incl. the CSS/window scale, routing table, message validation, outgoing strings, picking, cookie script, name lists vs. the TS sources, every gdCEF method this client calls when the extension is linked); `--check-bench [--scatter]`: offline bench smoke |
 | `fixtures/` | offline payloads (incl. `terrain.json`, the scatter reference vectors, the cut-down layer bake + surface library + the ground reference values) + a real Meshopt GLB pair + character/clip answers (hand-derived numbers in its README) |
 | `third_party/meshoptimizer/` | meshoptimizer v1.3 sources (MIT, `src/*.cpp`, `meshoptimizer.h`, LICENSE) |
+
+
+### Soundtrack driver (Task 60 / E8-T3)
+
+The mounted world starts one session-authenticated `GET /assets/audio` through
+`IWorldSource.GetAudioManifestAsync`. Each scene session fetches once, including
+a failed request; a world reload (including a character switch) starts a fresh
+fetch. Errors or malformed data become an empty manifest, with no retries. An
+audio-only HTTP 401 also stays silent without expiring the game session.
+
+Selection runs every second and immediately on manifest arrival, GAME-clock
+updates and changes to `musicOn`/`ambientOn`. Music becomes night above 0.8 and
+day below 0.2; values on or between those thresholds preserve the previous
+choice. Music uses a 4-second list-change fade, ambience 3 seconds. Missing
+buckets stay silent. Task 59 still owns shuffle, track seams and stop ramps.
+
+Ambience reads the smallest mounted footprint under the overview camera target,
+or under the rendered avatar in embodied mode. Missing positions/footprints
+mean silence. Terrain is trimmed and lowercased; manifest keys prefer an exact
+match, then a case-insensitive match. The first nonempty terrain applies
+immediately. Later changes (including silence and returns from silence) must
+hold for 5000 ms. Switches apply immediately from stored/live preferences;
+terrain tracking continues while ambience is disabled. Volume changes alone
+do not re-tick the driver.
+
+`--check audio`, `--check=audio` and the full `--check` include the fixture-world
+driver cases: day/night hysteresis, terrain hold, rendered-avatar selection,
+missing matching playlists, one-fetch lifetime and the 4-second music stop.
+Headless checks verify state and routing; real device listening is Task 61.

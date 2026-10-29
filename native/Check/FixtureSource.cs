@@ -208,6 +208,14 @@ public sealed partial class FixtureSource : IWorldSource
 
     public Task<JsonDocument> GetSurfaceTexturesAsync() => Doc("surface_textures.json");
 
+    /// <summary>Task 60: one manifest per driver session; expose request count for offline lifetime checks.</summary>
+    public int AudioManifestRequests { get; private set; }
+    public Task<JsonDocument> GetAudioManifestAsync()
+    {
+        AudioManifestRequests++;
+        return Doc("audio_manifest.json");
+    }
+
     /// <summary>Every <c>/play/explored</c> call.</summary>
     public int ExploredRequests { get; private set; }
 

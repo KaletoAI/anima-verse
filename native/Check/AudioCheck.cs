@@ -113,6 +113,7 @@ public static class AudioCheck
             output.Free();
             await host.ToSignal(host.GetTree(), SceneTree.SignalName.ProcessFrame);
         }
-        return $"audio assertions={assertions} codecs=7 buses=3 ramp=0.05 fade_steps=8 speech_pending_cap=3 broken_logs={logs.Count}";
+        int driverAssertions = await SoundtrackCheck.RunAsync(host, fixtures);
+        return $"audio driver_assertions={driverAssertions} assertions={assertions} codecs=7 buses=3 ramp=0.05 fade_steps=8 speech_pending_cap=3 broken_logs={logs.Count}";
     }
 }

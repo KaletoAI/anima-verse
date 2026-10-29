@@ -82,6 +82,9 @@ public partial interface IWorldSource
     Task<JsonDocument> GetTerrainLayersAsync(IReadOnlyList<string> keys);
     /// <summary><c>GET /assets/surface-textures</c> (§ A7/§ A9): the bare array <c>[{kind, name, url, size_m, material?} | {kind, name, blend}]</c>.</summary>
     Task<JsonDocument> GetSurfaceTexturesAsync();
+    /// <summary>Task 60 / E8-T3: session-authenticated audio listing; unsupported sources become driver silence.</summary>
+    Task<JsonDocument> GetAudioManifestAsync()
+        => Task.FromException<JsonDocument>(new ApiException(404, "/assets/audio", "not served by this source"));
     /// <summary>
     /// <c>GET /play/explored</c> (§ A12): the avatar's exploration memory <c>{cells: ["cx,cz", …], sig}</c> — the veil's
     /// cells, fetched on <c>explored_sig</c> only. A source that does not serve it answers 404 (the veil keeps standing).
@@ -326,6 +329,17 @@ public sealed partial class AnimaApi : IWorldSource, IDisposable
     }
 
     public Task<JsonDocument> GetSurfaceTexturesAsync() => GetJson("/assets/surface-textures");
+
+    /// <summary>Task 60: same cookie-bearing client, with api.ts getAudioManifest's optional-asset failure semantics.
+    /// Unlike world JSON calls, an audio-only 401 must not expire the game session. Every failure reaches the
+    /// driver's empty-manifest fallback; only a new scene session fetches again.</summary>
+    public async Task<JsonDocument> GetAudioManifestAsync()
+    {
+        using var res = await _http.GetAsync(Relative("/assets/audio"));
+        res.EnsureSuccessStatusCode();
+        var bytes = await res.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+        return JsonDocument.Parse(bytes);
+    }
 
     public Task<JsonDocument> GetExploredAsync() => GetJson("/play/explored");
 

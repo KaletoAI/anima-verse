@@ -240,6 +240,7 @@ public partial class Main : Node3D
 
     public override void _ExitTree()
     {
+        StopSoundtrack();
         DetachEmbody();
         StopSync();
         _stop.Cancel();
@@ -288,6 +289,7 @@ public partial class Main : Node3D
             SyncLocks();
             _builder.TickView(delta, _camera.GlobalPosition);
             TickLights(delta);
+            TickSoundtrackFrame();
             TickVeil(delta);
         }
         // The overview auto-close of main.ts' frame hook (no auto-reopen). The measuring runs keep their world.
