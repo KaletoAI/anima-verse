@@ -81,12 +81,23 @@ if [ -f "$cef/gdcef.gdextension" ]; then
   done
   [ -f "$out/gdCefRenderProcess" ] && [ -f "$out/libcef.so" ] && [ -f "$out/libgdcef.so" ] \
     || { echo "gdCEF artifacts incomplete in $out" >&2; exit 1; }
-  if [ ! -x "$out/gdCefRenderProcess" ]; then
-    # It may be hard-linked to the host's artifacts: detach before chmod.
-    cp "$out/gdCefRenderProcess" "$out/.gdCefRenderProcess.tmp"
-    chmod +x "$out/.gdCefRenderProcess.tmp"
-    mv "$out/.gdCefRenderProcess.tmp" "$out/gdCefRenderProcess"
-  fi
+  # CEF issue #3912: Chromium changes the stack canary in forked helpers, and gdCEF 0.20.0's helper main() still
+  # checks the old one on return, so every helper (e.g. a component-update utility) aborts with
+  # __stack_chk_fail after finishing its work — a crash report at each start, nothing lost. gdCEF exposes no
+  # Chromium switches, so the real helper becomes gdCefRenderProcess.bin behind a wrapper that appends
+  # --change-stack-guard-on-fork=disable (the last value of a Chromium switch wins). Drop the wrapper once a gdCEF
+  # release marks the helper's main() NO_STACK_PROTECTOR.
+  rm -f "$out/gdCefRenderProcess.bin"
+  # It may be hard-linked to the host's artifacts: detach (copy) before chmod, never chmod the host file.
+  cp "$out/gdCefRenderProcess" "$out/gdCefRenderProcess.bin"
+  chmod +x "$out/gdCefRenderProcess.bin"
+  rm -f "$out/gdCefRenderProcess"
+  cat > "$out/gdCefRenderProcess" <<'HELPER'
+#!/bin/sh
+# gdCEF helper wrapper (CEF issue #3912): see native/build.sh.
+exec "$(dirname "$0")/gdCefRenderProcess.bin" "$@" --change-stack-guard-on-fork=disable
+HELPER
+  chmod +x "$out/gdCefRenderProcess"
 fi
 
 chmod +x "$out/anima-native.x86_64"
@@ -103,7 +114,7 @@ cat > "$out/run.sh" <<'RUN'
 # server and user name of the last successful login (user://launcher.json).
 here="$(cd "$(dirname "$0")" && pwd)"
 if [ "$#" -eq 1 ] && [ "$1" = --version ]; then cat "$here/version.txt"; exit 0; fi
-chmod +x "$here/anima-native.x86_64" "$here/gdCefRenderProcess" 2>/dev/null
+chmod +x "$here/anima-native.x86_64" "$here/gdCefRenderProcess" "$here/gdCefRenderProcess.bin" 2>/dev/null
 mkdir -p "$here/logs"
 exec "$here/anima-native.x86_64" --log-file "$here/logs/native-$(date +%Y%m%d-%H%M%S).log" -- "$@"
 RUN

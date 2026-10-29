@@ -43,12 +43,12 @@ appdir="$work/AnimaNative.AppDir"
 mkdir -p "$appdir/usr/bin"
 bash "$here/build.sh" "$appdir/usr/bin"
 [ "$(cat "$appdir/usr/bin/version.txt")" = "$version" ] || { echo 'Source version changed during export' >&2; exit 1; }
-for file in libgdcef.so libcef.so gdCefRenderProcess libmeshoptimizer.so icudtl.dat; do
+for file in libgdcef.so libcef.so gdCefRenderProcess gdCefRenderProcess.bin libmeshoptimizer.so icudtl.dat; do
   [ -s "$appdir/usr/bin/$file" ] || { echo "AppImage requires gdCEF and meshoptimizer: missing $file" >&2; exit 1; }
 done
 [ -d "$appdir/usr/bin/locales" ] || { echo 'AppImage requires gdCEF locales/' >&2; exit 1; }
 # Avoid chmod on build.sh's hard links: do not mutate the host's CEF artifacts.
-for file in anima-native.x86_64 gdCefRenderProcess; do
+for file in anima-native.x86_64 gdCefRenderProcess gdCefRenderProcess.bin; do
   cp --remove-destination "$appdir/usr/bin/$file" "$work/$file"
   chmod +x "$work/$file"
   mv "$work/$file" "$appdir/usr/bin/$file"
