@@ -1,18 +1,55 @@
 """Image Generation Backends - various API types for image generation"""
 import base64
+import contextvars
 import json
 import os
 import random
 import re
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 
 from app.core.log import get_logger
 
 logger = get_logger("image_backends")
+
+
+class ChannelOverflow(Exception):
+    """A queued image render was withdrawn to move to an opaque target."""
+
+    def __init__(self, backend_name: str, waited_s: float, target: Any):
+        self.backend_name = backend_name
+        self.waited_s = waited_s
+        self.target = target
+        super().__init__(f"{backend_name}: overflow after {waited_s}s")
+
+
+@dataclass
+class OverflowWatch:
+    """Watch one backend's queue; pick may repeatedly return a target or None."""
+
+    backend_name: str
+    after_s: float
+    pick: Callable[[], Any]
+
+
+OVERFLOW_WATCH: contextvars.ContextVar[Optional[OverflowWatch]] = contextvars.ContextVar(
+    "image_overflow_watch", default=None,
+)
+
+
+def image_overflow_after_seconds() -> float:
+    """Read the live image overflow threshold; zero disables overflow."""
+    from app.core import config
+
+    value = config.get("image_generation.overflow_after_seconds", 90)
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 90.0
 
 
 class BackendBusyError(Exception):
@@ -275,6 +312,10 @@ class ImageBackend(ABC):
 
         # Instance-enabled from .env (global default)
         self.instance_enabled = os.environ.get(f"{env_prefix}ENABLED", "true").strip().lower() in ("true", "1", "yes")
+
+        self.accepts_overflow: bool = os.environ.get(
+            f"{env_prefix}ACCEPTS_OVERFLOW", "false"
+        ).strip().lower() in ("true", "1", "yes")
 
         # Image family (natural/keywords) — how the model wants its prompts.
         # Style/negative belong to the use cases, not to the backend.

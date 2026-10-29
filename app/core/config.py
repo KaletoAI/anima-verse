@@ -2506,7 +2506,7 @@ def _flatten_to_env(config: dict) -> None:
                      "disable_safety",
                      "scheduler", "clip_skip", "image_family",
                      "supports_negative_prompt", "timeout",
-                     "max_concurrent", "serialize_group",
+                     "max_concurrent", "serialize_group", "accepts_overflow",
                      "response_format", "extra_params", "category", "prompt",
                      "ref_slot_count",
                      "full_mask", "mask_grow", "inner_crop",

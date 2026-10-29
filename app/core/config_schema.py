@@ -587,6 +587,7 @@ SECTIONS = {
                 "description": "Master switch and post-processing hand-off.",
                 "fields": [
                     "enabled",
+                    "overflow_after_seconds",
                     "postprocess_enabled",
                     "postprocess_trigger_url",
                     "prop_variant_max",
@@ -706,6 +707,8 @@ SECTIONS = {
         ],
         "fields": {
             "enabled": {"type": "bool", "label": "Media generation enabled", "default": True, "description": "Master switch for every image, video and 3D-mesh generation of this world. Off: requests are refused with a clear message and no task is queued; existing media stay served. Per-backend switches still apply when on."},
+
+            "overflow_after_seconds": {"type": "int", "label": "Overflow after (s)", "default": 90, "min": 0, "max": 3600, "description": "How long a routed image render waits for a slot on its backend before it moves to a later chain backend with 'Accepts Overflow' and a free slot. 0 = never."},
 
             # --- Post-Processing Hand-off ---
             "postprocess_enabled": {"type": "bool", "label": "Post-processing enabled", "default": False, "description": "Notify an external post-processing service after generating an eligible image. The service reads the image itself (gallery API / filesystem) and writes the result back through the API endpoint. This application does not process images itself or send image bytes."},
@@ -997,6 +1000,7 @@ SECTIONS = {
                     "max_queue_wait": {"half": True, "type": "int", "label": "Max Queue Wait (s)", "default": 1200, "min": 30, "description": "Maximum time an async gateway job may sit QUEUED (GPU busy elsewhere) before it is abandoned as busy — separate from Max Wait, which budgets the RUNNING time only. Deliberately generous. Empty = 4× Max Wait (gateway) / 600 s (civitai) / 1800 s (civitai_video). CivitAI: a job abandoned while still queued is deleted, which refunds it. SYSTEM time.", "applicable_for": ["openai_video", "openai_mesh", "civitai", "civitai_video", "openai_mesh_animation", "openai_upscale"]},
                     "timeout": {"type": "int", "label": "Timeout (s)", "default": 120, "min": 10, "min_by_api_type": {"local_quadruped_rig": 40}, "max": 3600, "description": "Request timeout for the generation (HTTP). Raise it for slow models/large images/video/mesh — be generous with the synchronous gateway (e.g. 300). Applies to together/openai_diffusion/localai/openai_chat + video/mesh backends.", "applicable_for": ["together", "openai_diffusion", "localai", "openai_chat", "localai_video", "together_video", "openai_video", "openai_mesh", "openai_mesh_animation", "openai_upscale", "local_quadruped_rig"]},
                     "max_concurrent": {"half": True, "type": "int", "label": "Max Concurrent", "default": 1, "min": 1, "max": 50, "description": "Parallel jobs on this backend queue. Additional concurrent requests wait until a slot frees up. Applies to all backend types (including cloud/OpenAI)."},
+                    "accepts_overflow": {"half": True, "type": "bool", "label": "Accepts Overflow", "default": False, "description": "Routed image renders that wait longer than 'Overflow after' for a slot on an earlier backend of the same routing chain may move here. Only image backends; switch on only where extra (possibly paid) renders are fine."},
                     "serialize_group": {"half": True, "type": "str", "label": "Serialize Group", "description": "Channels with the same group run strictly one at a time (e.g. LLM + image backend sharing one GPU). Empty = no serialization."},
                 },
             },
