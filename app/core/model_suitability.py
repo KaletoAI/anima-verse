@@ -1,29 +1,22 @@
-"""Model Suitability Test — measures a specific model's tool/helper fitness.
+"""Versioned model suitability evidence from frozen logs and synthetic cases.
 
-LOG-DERIVED: cases come from real calls in ``logs/llm_calls.jsonl`` (the
-``prompt`` {system, user} and actual response as the golden). The test thus
-measures what the application actually needs instead of toy prompts.
+Tool format, catalog availability, arguments and curated semantics are scored
+separately. Log goldens are examples only. Helper scores measure format, never
+semantic quality. Invalid/missing/truncated inputs are excluded. Raw responses
+and every repetition remain in the local gitignored sidecar.
 
-Workflow:
-1. Extract a FROZEN fixture set once into ``storage/suitability_cases.json``:
-   real {system, user} prompts per task with valid logged responses, both
-   positive (golden invokes a tool) and negative/abstain (golden = NONE).
-   Frozen cases make scores comparable across models.
-2. Replay those prompts against a candidate model and validate them with
-   production-like parsers for each format (actual ``<tool name="X">…</tool>``
-   tags, JSON schema, abstention and text). Tool cases run repeatedly to
-   measure consistency.
-
-Key signal (calibrated against a real RP model): RP models emit tool calls
-in the WRONG format (``**SetActivity: …**`` rather than
-``<tool name="SetActivity">…</tool>``), buried in prose. The application
-parser then executes NOTHING, so such calls fail here.
-
-Results go to ``shared/config/model_capabilities.json`` (``tested_*`` +
-``tested_suitability`` + ``tested_verdict``), shown on the Model Capabilities
-page. Shared across all worlds and tracked in git; the models' RAW answers go to
-the gitignored ``model_capabilities_outputs.json`` next to it, because the test
-replays real logged prompts and the answers quote the world.
+Verdict policy: each repetition passes only if every checked format, availability,
+argument and semantic dimension passes and no refusal is detected. Uncurated
+semantics remain not_tested. Case verdicts require a strict majority; invalid input
+(missing image, invalid fixture, infrastructure error) excludes the case from score
+denominators. A truncated answer (finish_reason=length) FAILS without being called a
+refusal or hallucination. A prompt conflict (a JSON-contract tool whose example in the
+same prompt is not JSON) is flagged and suspends only that tool's argument check. The
+aggregate tool threshold remains 85% with no invented tools, and requires at
+least one curated semantic case with evidence; otherwise it is not_tested.
+Helper threshold remains 70% and is explicitly format-only. Individual dimensions
+and every repetition remain visible even when an aggregate says mixed. Historical
+records are archived unchanged before a future result replaces the latest view.
 """
 import json
 import re
@@ -35,18 +28,15 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 from app.core.log import get_logger
 from app.core.paths import get_storage_dir
 from app.core.timeutils import utc_now
+from app.core.suitability_scoring import (SCORER_VERSION, DIMENSIONS, prepare_case,
+                                          score_case, semantic_cases, fixture_version)
 
 logger = get_logger("model_suitability")
 
-Verdict = Tuple[bool, bool, str]  # (ok, hallucinated, detail)
+Verdict = Tuple[Optional[bool], bool, str]  # (ok, hallucinated, detail)
 
 _LOG_PATH = Path("./logs/llm_calls.jsonl")
 _TAG_RE = re.compile(r'<tool\s+name="(\w+)">([\s\S]*?)</tool>')
-# Pseudo-tool markers used by RP models instead of the actual tool format.
-_PSEUDO_RE = re.compile(r'(?im)(?:^|\n)\s*(?:\*\*|\[|#+\s*)?\s*'
-                        r'(SetActivity|SetPose|SetLocation|Act|ChangeOutfit|TalkTo|'
-                        r'SendMessage|ImageGenerator|Instagram|Retrospect)\s*[:=]')
-
 # Tool tasks (tool-LLM decisions) vs. helper tasks.
 _TOOL_TASKS = {"thought", "intent"}
 # Case counts per task, and whether the case runs repeatedly for consistency.
@@ -143,9 +133,6 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
             except Exception:
                 continue
 
-    allowed = sorted({m.group(1) for e in rows if e.get("task") == "thought"
-                      for m in _TAG_RE.finditer(e.get("response") or "")})
-
     # Pass 1: gather more than n candidates per task to skip invalid goldens.
     pool: Dict[str, List[tuple]] = {}
     for task, n in _SELECT:
@@ -164,8 +151,6 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
             if key in seen:
                 continue
             fmt = _detect_fmt(golden)
-            if task == "thought" and fmt != "tool":
-                continue
             seen.add(key)
             cand.append((system, user, golden, fmt))
         pool[task] = cand
@@ -184,8 +169,8 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
             inter = set.intersection(*keysets) if len(keysets) > 1 else keysets[0]
             task_keys[task] = sorted(inter)
 
-    # Pass 2: keep only goldens accepted by their OWN validator,
-    # filtering prose, garbage and ambiguous golden responses.
+    # Tool goldens are examples, never semantic truth. Helpers retain format
+    # filtering only; per-case catalogs always come from frozen prompts.
     cases: List[Dict[str, Any]] = []
     skipped = 0
     for task, n in _SELECT:
@@ -197,13 +182,12 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
             expect = _build_expect(fmt, golden)
             if fmt == "json" and task in task_keys:
                 expect["keys"] = task_keys[task]
-            validator = _VALIDATORS.get(fmt, _v_text)
-            g_ok, _gh, _gd = validator(golden, expect, allowed)
+            g_ok = True if category == "tool" else (_v_json(golden, expect, [])[0] if fmt == "json" else bool(golden.strip()))
             if not g_ok:
                 skipped += 1
                 continue
             picked += 1
-            cases.append({
+            cases.append(prepare_case({
                 "id": f"{task}_{picked}",
                 "task": task,
                 "label": f"{task} #{picked} ({fmt})",
@@ -211,14 +195,14 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
                 "fmt": fmt,
                 "system": system,
                 "user": user,
-                "golden": golden[:400],
+                "golden": golden,
                 "expect": expect,
                 "repeats": _TOOL_REPEATS if category == "tool" else 1,
-            })
+            }))
 
     data = {
         "built_at": utc_now().isoformat(timespec="seconds"),
-        "allowed_tools": allowed,
+        "fixture_version": fixture_version(cases),
         "cases": cases,
     }
     p = _cases_path()
@@ -230,7 +214,7 @@ def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
     logger.info("Built %d suitability cases from log (%s); %d invalid goldens skipped",
                 len(cases), by_task, skipped)
     return {"total": len(cases), "by_task": by_task, "skipped": skipped,
-            "allowed_tools": allowed, "built_at": data["built_at"]}
+            "built_at": data["built_at"]}
 
 
 def load_cases(auto_build: bool = True) -> Dict[str, Any]:
@@ -241,7 +225,13 @@ def load_cases(auto_build: bool = True) -> Dict[str, Any]:
         else:
             return {"allowed_tools": [], "cases": []}
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(p.read_text(encoding="utf-8"))
+        data.pop("allowed_tools", None)
+        prepared = [prepare_case(c) for c in data.get("cases", [])]
+        ids = {c["id"] for c in prepared}
+        data["cases"] = prepared + [c for c in semantic_cases() if c["id"] not in ids]
+        data["fixture_version"] = fixture_version(data["cases"])
+        return data
     except Exception as e:
         logger.error("Failed to load suitability cases: %s", e)
         return {"allowed_tools": [], "cases": []}
@@ -262,42 +252,6 @@ def cases_info() -> Dict[str, Any]:
 # Validators by format
 # ---------------------------------------------------------------------------
 
-def _strip_tool_noise(text: str) -> str:
-    s = _TAG_RE.sub("", text)
-    s = re.sub(r"\*\*[^*\n]+\*\*", "", s)  # **I feel ...**-Marker entfernen
-    return s.strip()
-
-
-def _v_tool(out: str, expect: dict, allowed: List[str]) -> Verdict:
-    tags = _TAG_RE.findall(out or "")
-    if not tags:
-        if _PSEUDO_RE.search(out or ""):
-            return False, True, ("tool call in WRONG format (** **/markdown) — the "
-                                 "project parser would execute NOTHING")
-        return False, False, "no tool call emitted"
-    names = [n for n, _ in tags]
-    unknown = [n for n in names if allowed and n not in allowed]
-    if unknown:
-        return False, True, f"unknown/invented tool(s): {sorted(set(unknown))}"
-    for n, inp in tags:
-        if n == "Act":
-            if _first_json(inp, array=False) is None:
-                return False, False, "Act tool input is not valid JSON"
-    prose = _strip_tool_noise(out)
-    if len(prose) > 400:
-        return False, True, f"tool call buried in {len(prose)} chars of narrative prose"
-    return True, False, f"clean tool call(s): {names}"
-
-
-def _v_abstain(out: str, expect: dict, allowed: List[str]) -> Verdict:
-    tags = _TAG_RE.findall(out or "")
-    if tags:
-        return False, True, f"emitted tool(s) {[n for n, _ in tags]} though NONE was correct"
-    if _PSEUDO_RE.search(out or ""):
-        return False, True, "attempted a (malformed) tool though NONE was correct"
-    return True, False, "correctly abstained (no tool)"
-
-
 def _v_json(out: str, expect: dict, allowed: List[str]) -> Verdict:
     arr = expect.get("array")
     obj = _first_json(out, array=bool(arr))
@@ -316,36 +270,6 @@ def _v_json(out: str, expect: dict, allowed: List[str]) -> Verdict:
     return True, False, "valid JSON with expected keys"
 
 
-def _v_text(out: str, expect: dict, allowed: List[str]) -> Verdict:
-    s = (out or "").strip()
-    if not s:
-        return False, False, "empty"
-    if _TAG_RE.search(s):
-        return False, False, "contains tool tags (misread the task)"
-    low = s.lower()
-    if any(p in low for p in ("as an ai", "i cannot", "i can't", "language model",
-                              "i'm sorry, but")):
-        return False, True, "refusal/meta text"
-    mx = int(expect.get("max", 1200))
-    if len(s) > mx * 3:
-        return False, False, f"far too long ({len(s)} chars, golden ~{mx})"
-    return True, False, f"plain text, {len(s)} chars"
-
-
-_VALIDATORS = {"tool": _v_tool, "abstain": _v_abstain, "json": _v_json, "text": _v_text}
-
-# Infrastructure/availability errors are NOT evidence about the model;
-# do not save results for those runs.
-_INFRA_MARKERS = ("call error", "unable to access", "connection", "timeout",
-                  "service unavailable", "bad gateway", "error code: 5",
-                  "error code: 4", "non-serverless", "remote end closed")
-
-
-def _is_infra_error(detail: str) -> bool:
-    d = (detail or "").lower()
-    return any(mk in d for mk in _INFRA_MARKERS)
-
-
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -358,7 +282,6 @@ def iter_suitability_results(
     from app.core.llm_router import create_llm_instance
     data = load_cases(auto_build=True)
     cases = data.get("cases", [])
-    allowed = data.get("allowed_tools", [])
     if not cases:
         yield {"type": "error", "message": "No test cases — is logs/llm_calls.jsonl present?"}
         return
@@ -379,7 +302,7 @@ def iter_suitability_results(
         return
 
     def ask(system: str, user: str):
-        """Return (text, duration_s, completion_tokens)."""
+        """Return full local response metadata, duration and token count."""
         t0 = time.monotonic()
         resp = client.invoke([
             {"role": "system", "content": system},
@@ -388,37 +311,51 @@ def iter_suitability_results(
         dt = time.monotonic() - t0
         usage = getattr(resp, "usage", None) or {}
         ctok = int(usage.get("completion_tokens") or 0)
-        return (getattr(resp, "content", "") or "").strip(), dt, ctok
+        raw = {"content": getattr(resp, "content", "") or "",
+               "reasoning": getattr(resp, "reasoning", None),
+               "finish_reason": getattr(resp, "finish_reason", None),
+               "usage": usage, "duration_s": dt}
+        return raw, dt, ctok
 
     yield {"type": "start", "model": model_full, "total": len(cases)}
 
     results: List[Dict[str, Any]] = []
     for idx, case in enumerate(cases):
-        validator = _VALIDATORS.get(case["fmt"], _v_text)
         repeats = int(case.get("repeats", 1)) or 1
         runs: List[Verdict] = []
         durs: List[float] = []
         toks: List[int] = []
-        outputs: List[str] = []
+        outputs: List[dict] = []
+        dimensions = []
         for _ in range(repeats):
+            attempt_start = time.monotonic()
             try:
-                out, dt, ctok = ask(case["system"], case["user"])
-                runs.append(validator(out, case.get("expect", {}), allowed))
+                if case.get("task") == "image_analysis" or case.get("fixture_error"):
+                    raw, dt, ctok = {"content": "", "reasoning": None, "finish_reason": None, "usage": {}, "duration_s": 0}, 0, 0
+                else:
+                    raw, dt, ctok = ask(case["system"], case["user"])
+                evidence = score_case(case, raw["content"], finish_reason=raw.get("finish_reason"))
+                dimensions.append(evidence)
+                runs.append((evidence["ok"], evidence["hallucinated"], evidence["detail"]))
                 durs.append(dt)
                 toks.append(ctok)
-                outputs.append(out)
+                outputs.append(raw)
             except Exception as e:
-                runs.append((False, False, f"call error: {str(e)[:120]}"))
-                durs.append(0.0)
+                evidence = score_case(case, "", infra_error=True)
+                dimensions.append(evidence)
+                runs.append((None, False, "infra_error"))
+                failed_duration = time.monotonic() - attempt_start
+                durs.append(failed_duration)
                 toks.append(0)
-                outputs.append("")
+                outputs.append({"content": "", "reasoning": None, "finish_reason": None,
+                                "usage": {}, "duration_s": failed_duration, "error": str(e)})
         # Pass and hallucination need a majority across repeats.
         npass = sum(1 for r in runs if r[0])
         nhall = sum(1 for r in runs if r[1])
         need = (repeats // 2) + 1
-        ok = npass >= need
+        ok = npass >= need if all(r[0] is not None for r in runs) else None
         hall = nhall >= need
-        infra = any(_is_infra_error(r[2]) for r in runs)
+        infra = any(r.get("infra") for r in dimensions)
         # Take detail and output from the first failure, otherwise the first run.
         rep_idx = next((i for i, r in enumerate(runs) if not r[0]), 0)
         detail = runs[rep_idx][2]
@@ -430,24 +367,29 @@ def iter_suitability_results(
         tot_tok = sum(toks)
         tps = round(tot_tok / sum(valid_durs), 1) if valid_durs and tot_tok else 0.0
         rec = {"id": case["id"], "label": case["label"], "category": case["category"],
-               "ok": bool(ok), "hallucinated": bool(hall), "detail": detail,
+               "ok": ok, "hallucinated": bool(hall), "detail": detail,
                "infra": bool(infra), "duration_s": avg_dt, "tok_s": tps,
                "tok": tot_tok, "dur_total": round(sum(valid_durs), 2),
-               # Truncated raw output for prompt-template diagnosis.
-               "output": (outputs[rep_idx] or "")[:600]}
+               "runs": outputs,
+               "dimensions": {k: (dimensions[0][k] if all(d[k] == dimensions[0][k] for d in dimensions) else "mixed") for k in DIMENSIONS},
+               "run_checks": dimensions}
+        rec["invalid_input"] = rec["dimensions"]["invalid_input"]
         results.append(rec)
         yield {"type": "check", "index": idx, **{k: rec[k] for k in
                ("id", "label", "category", "ok", "hallucinated", "detail",
-                "infra", "duration_s", "tok_s")}}
+                "infra", "duration_s", "tok_s", "dimensions", "run_checks")}}
 
     summary = _summarize(model_full, results)
+    summary.update(scorer_version=SCORER_VERSION,
+                   fixture_version=data.get("fixture_version") or fixture_version(cases))
     summary["saved"] = _persist(model_full, summary, results)
     yield {"type": "done", "summary": summary}
 
 
 def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]:
-    tool = [r for r in results if r["category"] == "tool"]
-    helper = [r for r in results if r["category"] == "helper"]
+    eligible = [r for r in results if r.get("ok") is not None]
+    tool = [r for r in eligible if r["category"] == "tool"]
+    helper = [r for r in eligible if r["category"] == "helper"]
     tp = sum(1 for r in tool if r["ok"])
     hp = sum(1 for r in helper if r["ok"])
     passed = sum(1 for r in results if r["ok"])
@@ -455,8 +397,9 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
     tool_rate = (tp / len(tool)) if tool else 0.0
     helper_rate = (hp / len(helper)) if helper else 0.0
     tool_hall = sum(1 for r in tool if r["hallucinated"])
-    tool_ok = bool(tool_rate >= 0.85 and tool_hall == 0)
-    helper_ok = bool(helper_rate >= 0.70)
+    semantic_tool = [r for r in tool if any(isinstance(d.get("decision_correct"), bool) for d in r.get("run_checks", [r.get("dimensions", {})]))]
+    tool_ok = bool(tool_rate >= 0.85 and tool_hall == 0) if semantic_tool else "not_tested"
+    helper_ok = bool(helper_rate >= 0.70) if helper else "not_tested"
     # Aggregate speed.
     total_tok = sum(int(r.get("tok") or 0) for r in results)
     total_dur = sum(float(r.get("dur_total") or 0.0) for r in results)
@@ -471,11 +414,13 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
     return {
         "model": model_full,
         "date": utc_now().date().isoformat(),
-        "score": f"{passed}/{len(results)}",
+        "score": f"{passed}/{len(eligible)}",
         "tool": f"{tp}/{len(tool)}",
         "helper": f"{hp}/{len(helper)}",
         "hallucinations": halluc,
         "verdict": {"tool": tool_ok, "helper": helper_ok},
+        "helper_evidence": "format only; semantic not_tested",
+        "tool_evidence": "conjunction of checked dimensions; uncurated decisions not_tested",
         "speed": speed,
         "infra": infra,
         "checks": results,
@@ -485,10 +430,6 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
 def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, Any]]) -> bool:
     """Persist results only when no infrastructure errors occurred:
     provider outages and timeouts do not say anything about model quality."""
-    if summary.get("infra") or any(r.get("infra") for r in results):
-        logger.info("Suitability NOT saved for %s — infrastructure error (provider "
-                    "unreachable/non-serverless)", model_full)
-        return False
     from app.core.model_capabilities import save_raw_outputs, save_suitability
     # Stored checks: verdict, detail and timing only. The raw answer goes into
     # the local sidecar file — the test replays REAL logged prompts, so it
@@ -496,8 +437,18 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
     # committed results file.
     stored_checks = [{k: r.get(k) for k in
                       ("id", "label", "category", "ok", "hallucinated", "detail",
-                       "duration_s", "tok_s")} for r in results]
-    raw_outputs = {r["id"]: r.get("output") or "" for r in results if r.get("output")}
+                       "duration_s", "tok_s", "dimensions", "run_checks")} for r in results]
+    raw_outputs = {"scorer_version": summary.get("scorer_version"),
+                   "fixture_version": summary.get("fixture_version"),
+                   "cases": {r["id"]: r.get("runs", []) for r in results}}
+    # Preserve diagnostics even when infrastructure prevents a quality record.
+    try:
+        save_raw_outputs(model_full, raw_outputs)
+    except Exception as exc:
+        logger.error("Failed to persist local suitability diagnostics: %s", exc)
+        return False
+    if summary.get("infra") or any(r.get("infra") for r in results):
+        return False
     # Keyed by full Provider::Model; identical models on different hardware
     # do not overwrite one another.
     record = {
@@ -510,6 +461,9 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
         "tested_speed": summary.get("speed"),
         "tested_suitability": {
             "model": model_full,
+            "scorer_version": summary.get("scorer_version"),
+            "fixture_version": summary.get("fixture_version"),
+            "helper_evidence": "format only; semantic not_tested",
             "tool": summary["tool"],
             "helper": summary["helper"],
             "verdict": summary["verdict"],
@@ -519,7 +473,6 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
     }
     try:
         save_suitability(model_full, record)
-        save_raw_outputs(model_full, raw_outputs)
         logger.info("Suitability saved for %s: %s (tool_ok=%s, %.1f tok/s)",
                     model_full, summary["score"], summary["verdict"]["tool"],
                     (summary.get("speed") or {}).get("tok_per_s", 0))
@@ -556,7 +509,7 @@ def _run_job(model_full: str, extra_params: Optional[Dict[str, Any]] = None,
                     job["checks"].append({k: ev.get(k) for k in
                                           ("id", "label", "category", "ok",
                                            "hallucinated", "detail", "infra",
-                                           "duration_s", "tok_s")})
+                                           "duration_s", "tok_s", "dimensions", "run_checks")})
                     job["done"] = len(job["checks"])
                 elif t == "done":
                     job["summary"] = ev.get("summary")

@@ -183,7 +183,7 @@ def _build_models_html() -> str:
 <div class="content">
     <div id="suitBox" style="border:1px solid #30363d; border-radius:8px; padding:12px; margin-bottom:18px; background:#0d1117;">
         <h2 style="margin:0 0 6px;">🧪 Tool / Helper Suitability Test</h2>
-        <p class="info-text" style="margin:0 0 8px;">Replays REAL logged prompts (logs/llm_calls.jsonl) against one model and validates with production-style parsers — real tool-call format, JSON schema, abstain (no over-eager tools), consistency repeats. <b>Runs in the background</b> — you can leave the page; the result is saved to the table below.</p>
+        <p class="info-text" style="margin:0 0 8px;">Replays frozen logged prompts plus synthetic semantic cases. Reports format, offered tools, arguments and curated decisions separately. Helper scores measure format only; uncurated semantics remain not_tested. Missing images and invalid or truncated inputs are excluded. <b>Runs in the background</b> — you can leave the page; the result is saved to the table below.</p>
         <div id="suitCases" class="info-text" style="margin-bottom:8px;">Loading test cases…</div>
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <select id="suitProvider" onchange="suitLoadModels()"><option value="">Provider…</option></select>

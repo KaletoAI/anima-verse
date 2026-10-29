@@ -238,11 +238,12 @@ function testBadge(caps, modelName) {
     const testedBare = testedFull.indexOf('::') >= 0 ? testedFull.split('::').pop() : testedFull;
     const inherited = !!(testedBare && modelName && testedBare.toLowerCase() !== modelName.toLowerCase());
 
-    let tooltip = 'Score: ' + score;
+    const scorerLabel = suit && suit.scorer_version ? suit.scorer_version + ' / fixture ' + (suit.fixture_version || 'unknown') : 'legacy scorer';
+    let tooltip = 'Score: ' + score + '\n' + scorerLabel + '\nHelper evidence: format only; semantic not_tested';
     if (testedFull) tooltip += '\nTested as: ' + testedFull
         + (inherited ? '  \u26a0 INHERITED — this model was NOT tested itself' : '');
-    if (verdict) tooltip += '\nVerdict tool: ' + (verdict.tool ? 'SUITABLE' : 'not suitable') +
-        ' / helper: ' + (verdict.helper ? 'suitable' : 'not suitable');
+    if (verdict) tooltip += '\nVerdict tool: ' + suitabilityVerdict(verdict.tool, 'checked dimensions') +
+        ' / helper: ' + suitabilityVerdict(verdict.helper, 'format only');
     if (toolScore) tooltip += '\nTool: ' + toolScore;
     if (helperScore) tooltip += '\nHelper: ' + helperScore;
     const sp = caps.tested_speed || null;
@@ -257,8 +258,8 @@ function testBadge(caps, modelName) {
     if (suit && Array.isArray(suit.checks)) {
         tooltip += '\n———';
         suit.checks.forEach(function(c){
-            const mark = c.ok ? '\u2713' : (c.hallucinated ? '!' : '\u2717');
-            tooltip += '\n' + mark + ' ' + c.label + ' \u2014 ' + (c.detail || '');
+            const mark = c.ok == null ? '—' : c.ok ? '\u2713' : (c.hallucinated ? '!' : '\u2717');
+            tooltip += '\n' + mark + ' ' + c.label + ' \u2014 ' + (c.detail || '') + ' ' + suitabilityDimensions(c);
         });
     }
 
@@ -268,12 +269,13 @@ function testBadge(caps, modelName) {
     html += '</span>';
     if (inherited) html += '<span class="test-date" style="color:#d29922;" title="' + esc(testedFull) + '">\u21aa inherited: ' + esc(testedBare) + '</span>';
     if (verdict) {
-        const tcol = verdict.tool ? '#3fb950' : '#f85149';
-        const tlab = verdict.tool ? 'TOOL \u2713' : 'TOOL \u2717';
+        const tcol = verdict.tool === 'not_tested' ? '#8b949e' : verdict.tool === true ? '#3fb950' : '#f85149';
+        const tlab = suitabilityVerdict(verdict.tool, 'TOOL checks');
         html += '<span class="test-date" style="color:' + tcol + ';">' + tlab + '</span>';
     }
     if (toolScore || helperScore) html += '<span class="test-date">T ' + esc(toolScore) + ' \u00b7 H ' + esc(helperScore) + '</span>';
     if (sp && sp.tok_per_s) html += '<span class="test-date">\u26a1 ' + esc(sp.tok_per_s) + ' tok/s</span>';
+    html += '<span class="test-date">' + esc(scorerLabel) + '</span>';
     if (date) html += '<span class="test-date">' + esc(date) + '</span>';
     return html;
 }
@@ -468,7 +470,7 @@ async function suitJobsRefresh() {
                 let st, col;
                 if (j.status === 'running') { st = (j.done || 0) + '/' + (j.total || '?'); col = '#58a6ff'; }
                 else if (j.status === 'done') {
-                    st = (j.score || '') + (v.tool ? ' · TOOL ✓' : ' · TOOL ✗'); col = v.tool ? '#3fb950' : '#d29922';
+                    st = (j.score || '') + ' · ' + suitabilityVerdict(v.tool, 'TOOL checks'); col = v.tool === true ? '#3fb950' : '#d29922';
                 } else if (j.status === 'error') { st = 'Error'; col = '#f85149'; }
                 else { st = j.status || ''; col = '#8b949e'; }
                 const dot = j.status === 'running' ? '⏳' : (j.status === 'error' ? '❌' : '✔');
@@ -500,7 +502,7 @@ async function suitCasesInfo() {
         const i = await r.json();
         const bt = i.by_task || {};
         const parts = Object.keys(bt).map(k => k + ':' + bt[k]);
-        el.innerHTML = esc(i.total || 0) + ' frozen test cases from log'
+        el.innerHTML = esc(i.total || 0) + ' frozen log + synthetic test cases'
             + (parts.length ? ' (' + esc(parts.join(', ')) + ')' : '')
             + (i.built_at ? ' · built ' + esc(i.built_at) : '')
             + ' <button class="btn" style="margin-left:6px;" onclick="suitRebuild()">Rebuild from log</button>';
@@ -650,6 +652,13 @@ async function suitStart() {
         document.getElementById('suitStartBtn').disabled = false;
     }
 }
+function suitabilityVerdict(value, label) {
+    if (value === 'not_tested' || value == null) return label + ': not_tested';
+    return label + ': ' + (value === true ? 'checks passed' : 'checks failed');
+}
+function suitabilityDimensions(c) {
+    return c.dimensions ? Object.entries(c.dimensions).map(([k, v]) => k + '=' + v).join('; ') : 'legacy scorer';
+}
 function suitRenderJob(job) {
     const status = document.getElementById('suitStatus');
     const prog = document.getElementById('suitProgress');
@@ -663,11 +672,12 @@ function suitRenderJob(job) {
         const speedTxt = (sp.tok_per_s ? ' · ⚡ ' + esc(sp.tok_per_s) + ' tok/s' : '')
             + (sp.avg_latency_s ? ' · Ø ' + esc(sp.avg_latency_s) + 's/Call' : '');
         const infraTxt = (s.infra || s.saved === false)
-            ? ' <span style="color:#d29922;">⚠ NOT saved (infrastructure error — provider unreachable)</span>'
+            ? ' <span style="color:#d29922;">⚠ Quality result not saved; inspect local diagnostics</span>'
             : '';
         status.innerHTML = 'Finished ✔' + (job.entry_name ? ' (' + esc(job.entry_name) + ')' : '') + ' — Tool: '
-            + (v.tool ? '<span style="color:#3fb950;">SUITABLE</span>' : '<span style="color:#f85149;">not suitable</span>')
-            + ' · Helper: ' + (v.helper ? '<span style="color:#3fb950;">suitable</span>' : '<span style="color:#f85149;">not suitable</span>')
+            + esc(suitabilityVerdict(v.tool, 'checked dimensions'))
+            + ' · Helper: ' + esc(suitabilityVerdict(v.helper, 'format only; semantic not_tested'))
+            + ' · ' + esc(s.scorer_version || 'legacy scorer') + ' / fixture ' + esc(s.fixture_version || 'unknown')
             + ' · Score ' + esc(s.score || '') + ' (Tool ' + esc(s.tool || '') + ', Helper ' + esc(s.helper || '')
             + ', Hallucinations ' + esc(s.hallucinations || 0) + ')' + speedTxt + infraTxt;
     } else if (job.status === 'error') {
@@ -676,14 +686,14 @@ function suitRenderJob(job) {
         status.textContent = '';
     }
     prog.innerHTML = checks.map(c => {
-        const icon = c.infra ? '🔌' : (c.ok ? '✅' : (c.hallucinated ? '⚠️' : '❌'));
-        const color = c.infra ? '#8b949e' : (c.ok ? '#3fb950' : (c.hallucinated ? '#d29922' : '#f85149'));
+        const icon = c.ok == null ? '➖' : c.infra ? '🔌' : (c.ok ? '✅' : (c.hallucinated ? '⚠️' : '❌'));
+        const color = c.ok == null ? '#8b949e' : c.infra ? '#8b949e' : (c.ok ? '#3fb950' : (c.hallucinated ? '#d29922' : '#f85149'));
         const spd = (c.duration_s ? ' <span style="opacity:.5;">' + esc(c.duration_s) + 's'
             + (c.tok_s ? ', ' + esc(c.tok_s) + ' tok/s' : '') + '</span>' : '');
         return '<div style="padding:2px 0; border-bottom:1px solid #21262d; font-size:13px;">'
             + '<span style="color:' + color + ';">' + icon + '</span> '
             + '<span style="opacity:.6;">[' + esc(c.category) + ']</span> '
-            + '<b>' + esc(c.label) + '</b> <span style="opacity:.7;">— ' + esc(c.detail || '') + '</span>'
+            + '<b>' + esc(c.label) + '</b> <span style="opacity:.7;">— ' + esc(c.detail || '') + ' ' + esc(suitabilityDimensions(c)) + '</span>'
             + spd + '</div>';
     }).join('');
 }

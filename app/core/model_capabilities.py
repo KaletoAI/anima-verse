@@ -101,7 +101,11 @@ def save_suitability(model_full: str, result: Dict[str, Any]) -> None:
     """
     with _write_lock:
         data = _load_full_file()
-        data.setdefault("suitability", {})[(model_full or "").lower()] = result
+        key = (model_full or "").lower()
+        previous = data.setdefault("suitability", {}).get(key)
+        if previous is not None:
+            data.setdefault("suitability_history", {}).setdefault(key, []).append(previous)
+        data["suitability"][key] = result
         _save_full_file(data)
 
 
@@ -123,13 +127,17 @@ def _load_outputs_file() -> Dict[str, Any]:
         return {"_comment": "Raw suitability test answers — local only.", "outputs": {}}
 
 
-def save_raw_outputs(model_full: str, outputs: Dict[str, str]) -> None:
+def save_raw_outputs(model_full: str, outputs: Dict[str, Any]) -> None:
     """Stores the raw answers of one test run in the local sidecar file."""
     if not outputs:
         return
     with _write_lock:
         data = _load_outputs_file()
-        data.setdefault("outputs", {})[(model_full or "").lower()] = outputs
+        key = (model_full or "").lower()
+        previous = data.setdefault("outputs", {}).get(key)
+        if previous is not None:
+            data.setdefault("history", {}).setdefault(key, []).append(previous)
+        data["outputs"][key] = outputs
         _outputs_path().parent.mkdir(parents=True, exist_ok=True)
         with open(_outputs_path(), "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)

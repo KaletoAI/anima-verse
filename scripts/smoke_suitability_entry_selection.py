@@ -8,12 +8,17 @@ writes world/config/model-capability data.
 """
 import json
 import math
+import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
 import openai
 from fastapi import HTTPException
+
+from app.core import paths
+_test_storage = tempfile.TemporaryDirectory()
+paths.init(_test_storage.name)
 
 from app.core import llm_router, model_suitability
 from app.routes import admin
@@ -185,4 +190,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        _test_storage.cleanup()

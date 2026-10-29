@@ -1,0 +1,264 @@
+{
+  "version": 1,
+  "prompt_design": "Minimal synthetic prompts mirror catalog, tags and allowed markers; no world data or production templates are copied.",
+  "cases": [
+    {
+      "id": "semantic_toes",
+      "task": "intent",
+      "category": "tool",
+      "fmt": "tool",
+      "label": "toes",
+      "system": "You are demo. Extract only completed own actions. Respect negation and future intent.\n=== AVAILABLE TOOLS ===\n- SetActivity: Pass JSON: {\"pose\":\"pose key\", \"detail\":\"visible body action\"}. Only own body pose; detail may be empty.\n- ChangeOutfit: Input: plain text outfit. Only actual clothing changes.\n- UseItem: Input: plain text consumed item. Only completed own actions.\n- TalkTo: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Active chat: only third characters; autonomous: every spoken line to someone present.\n- SendMessage: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Remote recipients only.\n- GoToCharacter: Input: plain text character.\n- InteractWith: Input: plain text interaction.\n- Act: Input JSON: {\"text\":\"action\"}\n=== HOW TO USE TOOLS ===\nEmit <tool name=\"ToolName\">input</tool>, optional **I feel ...**, **I do pose: ...**, [INTENT: ...]. No explanation. NONE only without tools.",
+      "user": "demo wippt leicht auf den Fußballen.",
+      "expect": {
+        "semantic": {
+          "required": [
+            {
+              "tool": "SetActivity",
+              "args_match": {
+                "pose": "^standing$",
+                "detail": [
+                  "rock.*toes",
+                  "wipp.*Fußballen"
+                ]
+              }
+            }
+          ],
+          "forbidden": [],
+          "allow_extra": []
+        }
+      },
+      "repeats": 3,
+      "test_good": "<tool name=\"SetActivity\">{\"pose\":\"standing\",\"detail\":\"rocking on toes\"}</tool>",
+      "test_bad": "<tool name=\"SetActivity\">{\"pose\":\"standing\",\"detail\":\"wiping feet\"}</tool>"
+    },
+    {
+      "id": "semantic_sleeve",
+      "task": "intent",
+      "category": "tool",
+      "fmt": "tool",
+      "label": "sleeve",
+      "system": "You are demo. Extract only completed own actions. Respect negation and future intent.\n=== AVAILABLE TOOLS ===\n- SetActivity: Pass JSON: {\"pose\":\"pose key\", \"detail\":\"visible body action\"}. Only own body pose; detail may be empty.\n- ChangeOutfit: Input: plain text outfit. Only actual clothing changes.\n- UseItem: Input: plain text consumed item. Only completed own actions.\n- TalkTo: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Active chat: only third characters; autonomous: every spoken line to someone present.\n- SendMessage: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Remote recipients only.\n- GoToCharacter: Input: plain text character.\n- InteractWith: Input: plain text interaction.\n- Act: Input JSON: {\"text\":\"action\"}\n=== HOW TO USE TOOLS ===\nEmit <tool name=\"ToolName\">input</tool>, optional **I feel ...**, **I do pose: ...**, [INTENT: ...]. No explanation. NONE only without tools.",
+      "user": "demo zieht den Ärmel zurecht.",
+      "expect": {
+        "semantic": {
+          "required": [],
+          "forbidden": [
+            {
+              "tool": "ChangeOutfit",
+              "args_match": {}
+            }
+          ],
+          "allow_extra": []
+        }
+      },
+      "repeats": 3,
+      "test_good": "NONE",
+      "test_bad": "<tool name=\"ChangeOutfit\">new shirt</tool>"
+    },
+    {
+      "id": "semantic_potion_question",
+      "task": "intent",
+      "category": "tool",
+      "fmt": "tool",
+      "label": "potion_question",
+      "system": "You are demo. Extract only completed own actions. Respect negation and future intent.\n=== AVAILABLE TOOLS ===\n- SetActivity: Pass JSON: {\"pose\":\"pose key\", \"detail\":\"visible body action\"}. Only own body pose; detail may be empty.\n- ChangeOutfit: Input: plain text outfit. Only actual clothing changes.\n- UseItem: Input: plain text consumed item. Only completed own actions.\n- TalkTo: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Active chat: only third characters; autonomous: every spoken line to someone present.\n- SendMessage: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Remote recipients only.\n- GoToCharacter: Input: plain text character.\n- InteractWith: Input: plain text interaction.\n- Act: Input JSON: {\"text\":\"action\"}\n=== HOW TO USE TOOLS ===\nEmit <tool name=\"ToolName\">input</tool>, optional **I feel ...**, **I do pose: ...**, [INTENT: ...]. No explanation. NONE only without tools.",
+      "user": "demo fragt: Ist das ein Trank?",
+      "expect": {
+        "semantic": {
+          "required": [],
+          "forbidden": [
+            {
+              "tool": "UseItem",
+              "args_match": {}
+            }
+          ],
+          "allow_extra": []
+        }
+      },
+      "repeats": 3,
+      "test_good": "NONE",
+      "test_bad": "<tool name=\"UseItem\">potion</tool>"
+    },
+    {
+      "id": "semantic_other_actor",
+      "task": "intent",
+      "category": "tool",
+      "fmt": "tool",
+      "label": "other_actor",
+      "system": "You are demo. Extract only completed own actions. Respect negation and future intent.\n=== AVAILABLE TOOLS ===\n- SetActivity: Pass JSON: {\"pose\":\"pose key\", \"detail\":\"visible body action\"}. Only own body pose; detail may be empty.\n- ChangeOutfit: Input: plain text outfit. Only actual clothing changes.\n- UseItem: Input: plain text consumed item. Only completed own actions.\n- TalkTo: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Active chat: only third characters; autonomous: every spoken line to someone present.\n- SendMessage: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Remote recipients only.\n- GoToCharacter: Input: plain text character.\n- InteractWith: Input: plain text interaction.\n- Act: Input JSON: {\"text\":\"action\"}\n=== HOW TO USE TOOLS ===\nEmit <tool name=\"ToolName\">input</tool>, optional **I feel ...**, **I do pose: ...**, [INTENT: ...]. No explanation. NONE only without tools.",
+      "user": "Alex trinkt einen Trank. demo schaut zu.",
+      "expect": {
+        "semantic": {
+          "required": [],
+          "forbidden": [
+            {
+              "tool": "UseItem",
+              "args_match": {}
+            }
+          ],
+          "allow_extra": []
+        }
+      },
+      "repeats": 3,
+      "test_good": "NONE",
+      "test_bad": "<tool name=\"UseItem\">potion</tool>"
+    },
+    {
+      "id": "semantic_future",
+      "task": "intent",
+      "category": "tool",
+      "fmt": "tool",
+      "label": "future",
+      "system": "You are demo. Extract only completed own actions. Respect negation and future intent.\n=== AVAILABLE TOOLS ===\n- SetActivity: Pass JSON: {\"pose\":\"pose key\", \"detail\":\"visible body action\"}. Only own body pose; detail may be empty.\n- ChangeOutfit: Input: plain text outfit. Only actual clothing changes.\n- UseItem: Input: plain text consumed item. Only completed own actions.\n- TalkTo: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Active chat: only third characters; autonomous: every spoken line to someone present.\n- SendMessage: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Remote recipients only.\n- GoToCharacter: Input: plain text character.\n- InteractWith: Input: plain text interaction.\n- Act: Input JSON: {\"text\":\"action\"}\n=== HOW TO USE TOOLS ===\nEmit <tool name=\"ToolName\">input</tool>, optional **I feel ...**, **I do pose: ...**, [INTENT: ...]. No explanation. NONE only without tools.",
+      "user": "demo: Ich werde morgen den Trank trinken.",
+      "expect": {
+        "semantic": {
+          "required": [],
+          "forbidden": [
+            {
+              "tool": "UseItem",
+              "args_match": {}
+            }
+          ],
+          "allow_extra": []
+        }
+      },
+      "repeats": 3,
+      "test_good": "[INTENT: drink tomorrow]\nNONE",
+      "test_bad": "<tool name=\"UseItem\">potion</tool>"
+    },
+    {
+      "id": "semantic_negation",
+      "task": "intent",
+      "category": "tool",
+      "fmt": "tool",
+      "label": "negation",
+      "system": "You are demo. Extract only completed own actions. Respect negation and future intent.\n=== AVAILABLE TOOLS ===\n- SetActivity: Pass JSON: {\"pose\":\"pose key\", \"detail\":\"visible body action\"}. Only own body pose; detail may be empty.\n- ChangeOutfit: Input: plain text outfit. Only actual clothing changes.\n- UseItem: Input: plain text consumed item. Only completed own actions.\n- TalkTo: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Active chat: only third characters; autonomous: every spoken line to someone present.\n- SendMessage: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Remote recipients only.\n- GoToCharacter: Input: plain text character.\n- InteractWith: Input: plain text interaction.\n- Act: Input JSON: {\"text\":\"action\"}\n=== HOW TO USE TOOLS ===\nEmit <tool name=\"ToolName\">input</tool>, optional **I feel ...**, **I do pose: ...**, [INTENT: ...]. No explanation. NONE only without tools.",
+      "user": "demo: Ich setze mich nicht.",
+      "expect": {
+        "semantic": {
+          "required": [],
+          "forbidden": [
+            {
+              "tool": "SetActivity",
+              "args_match": {}
+            }
+          ],
+          "allow_extra": []
+        }
+      },
+      "repeats": 3,
+      "test_good": "NONE",
+      "test_bad": "<tool name=\"SetActivity\">{\"pose\":\"sitting\",\"detail\":\"\"}</tool>"
+    },
+    {
+      "id": "semantic_active_chat",
+      "task": "intent",
+      "category": "tool",
+      "fmt": "tool",
+      "label": "active_chat",
+      "system": "You are demo. Extract only completed own actions. Respect negation and future intent.\n=== AVAILABLE TOOLS ===\n- SetActivity: Pass JSON: {\"pose\":\"pose key\", \"detail\":\"visible body action\"}. Only own body pose; detail may be empty.\n- ChangeOutfit: Input: plain text outfit. Only actual clothing changes.\n- UseItem: Input: plain text consumed item. Only completed own actions.\n- TalkTo: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Active chat: only third characters; autonomous: every spoken line to someone present.\n- SendMessage: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Remote recipients only.\n- GoToCharacter: Input: plain text character.\n- InteractWith: Input: plain text interaction.\n- Act: Input JSON: {\"text\":\"action\"}\n=== HOW TO USE TOOLS ===\nEmit <tool name=\"ToolName\">input</tool>, optional **I feel ...**, **I do pose: ...**, [INTENT: ...]. No explanation. NONE only without tools.",
+      "user": "Active chat with Alex here. demo says hello to Alex.",
+      "expect": {
+        "semantic": {
+          "required": [],
+          "forbidden": [
+            {
+              "tool": "TalkTo",
+              "args_match": {}
+            },
+            {
+              "tool": "SendMessage",
+              "args_match": {}
+            }
+          ],
+          "allow_extra": []
+        }
+      },
+      "repeats": 3,
+      "test_good": "NONE",
+      "test_bad": "<tool name=\"TalkTo\">{\"name\":\"Alex\",\"message\":\"hello\"}</tool>"
+    },
+    {
+      "id": "semantic_autonomous",
+      "task": "intent",
+      "category": "tool",
+      "fmt": "tool",
+      "label": "autonomous",
+      "system": "You are demo. Extract only completed own actions. Respect negation and future intent.\n=== AVAILABLE TOOLS ===\n- SetActivity: Pass JSON: {\"pose\":\"pose key\", \"detail\":\"visible body action\"}. Only own body pose; detail may be empty.\n- ChangeOutfit: Input: plain text outfit. Only actual clothing changes.\n- UseItem: Input: plain text consumed item. Only completed own actions.\n- TalkTo: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Active chat: only third characters; autonomous: every spoken line to someone present.\n- SendMessage: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Remote recipients only.\n- GoToCharacter: Input: plain text character.\n- InteractWith: Input: plain text interaction.\n- Act: Input JSON: {\"text\":\"action\"}\n=== HOW TO USE TOOLS ===\nEmit <tool name=\"ToolName\">input</tool>, optional **I feel ...**, **I do pose: ...**, [INTENT: ...]. No explanation. NONE only without tools.",
+      "user": "Autonomous turn, no active chat. Alex is here. demo says hello to Alex.",
+      "expect": {
+        "semantic": {
+          "required": [
+            {
+              "tool": "TalkTo",
+              "args_match": {
+                "name": "^Alex$",
+                "message": "hello|hallo"
+              }
+            }
+          ],
+          "forbidden": [],
+          "allow_extra": []
+        }
+      },
+      "repeats": 3,
+      "test_good": "<tool name=\"TalkTo\">{\"name\":\"Alex\",\"message\":\"hello\"}</tool>",
+      "test_bad": "<tool name=\"SendMessage\">{\"name\":\"Alex\",\"message\":\"hello\"}</tool>"
+    },
+    {
+      "id": "semantic_remote",
+      "task": "intent",
+      "category": "tool",
+      "fmt": "tool",
+      "label": "remote",
+      "system": "You are demo. Extract only completed own actions. Respect negation and future intent.\n=== AVAILABLE TOOLS ===\n- SetActivity: Pass JSON: {\"pose\":\"pose key\", \"detail\":\"visible body action\"}. Only own body pose; detail may be empty.\n- ChangeOutfit: Input: plain text outfit. Only actual clothing changes.\n- UseItem: Input: plain text consumed item. Only completed own actions.\n- TalkTo: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Active chat: only third characters; autonomous: every spoken line to someone present.\n- SendMessage: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Remote recipients only.\n- GoToCharacter: Input: plain text character.\n- InteractWith: Input: plain text interaction.\n- Act: Input JSON: {\"text\":\"action\"}\n=== HOW TO USE TOOLS ===\nEmit <tool name=\"ToolName\">input</tool>, optional **I feel ...**, **I do pose: ...**, [INTENT: ...]. No explanation. NONE only without tools.",
+      "user": "Autonomous turn. Alex is far away. demo sends Alex a hello.",
+      "expect": {
+        "semantic": {
+          "required": [
+            {
+              "tool": "SendMessage",
+              "args_match": {
+                "name": "^Alex$",
+                "message": "hello|hallo"
+              }
+            }
+          ],
+          "forbidden": [],
+          "allow_extra": []
+        }
+      },
+      "repeats": 3,
+      "test_good": "<tool name=\"SendMessage\">{\"name\":\"Alex\",\"message\":\"hello\"}</tool>",
+      "test_bad": "<tool name=\"TalkTo\">{\"name\":\"Alex\",\"message\":\"hello\"}</tool>"
+    },
+    {
+      "id": "semantic_consumption",
+      "task": "intent",
+      "category": "tool",
+      "fmt": "tool",
+      "label": "consumption",
+      "system": "You are demo. Extract only completed own actions. Respect negation and future intent.\n=== AVAILABLE TOOLS ===\n- SetActivity: Pass JSON: {\"pose\":\"pose key\", \"detail\":\"visible body action\"}. Only own body pose; detail may be empty.\n- ChangeOutfit: Input: plain text outfit. Only actual clothing changes.\n- UseItem: Input: plain text consumed item. Only completed own actions.\n- TalkTo: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Active chat: only third characters; autonomous: every spoken line to someone present.\n- SendMessage: Input: JSON {\"name\":\"recipient\", \"message\":\"words\"}. Remote recipients only.\n- GoToCharacter: Input: plain text character.\n- InteractWith: Input: plain text interaction.\n- Act: Input JSON: {\"text\":\"action\"}\n=== HOW TO USE TOOLS ===\nEmit <tool name=\"ToolName\">input</tool>, optional **I feel ...**, **I do pose: ...**, [INTENT: ...]. No explanation. NONE only without tools.",
+      "user": "demo drinks the potion now.",
+      "expect": {
+        "semantic": {
+          "required": [
+            {
+              "tool": "UseItem",
+              "args_match": {
+                "$text": "potion|Trank"
+              }
+            }
+          ],
+          "forbidden": [],
+          "allow_extra": []
+        }
+      },
+      "repeats": 3,
+      "test_good": "<tool name=\"UseItem\">potion</tool>",
+      "test_bad": "[INTENT: drink]\nNONE"
+    }
+  ]
+}
