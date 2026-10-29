@@ -25,6 +25,8 @@ public partial class Main : Node3D
     /// </summary>
     private void StartSync()
     {
+        if (_builder?.FirstMap is { } firstMap)
+            _avatarIdentity = SessionAvatar().RememberFirstMapAsync(firstMap);
         StartResidency();
         _builder?.WorldProps?.SetLod(ScatterPrefs.LodCfgOf(_scatterPrefs));
         // Task 39 D6: use the world's loaded masks, and follow streamed windows/ground replacements.
@@ -85,14 +87,24 @@ public partial class Main : Node3D
     }
 
     /// <summary>A polled map with the view revision it was asked under (main.ts <c>PolledMap</c>).</summary>
-    private sealed record PolledMap(JsonElement Map, int ViewRev, int PropGeneration = 0);
+    private int _avatarMapRevision;
+    private sealed record PolledMap(JsonElement Map, int ViewRev, int PropGeneration = 0, int AvatarRevision = 0);
 
     private async Task<PolledMap> FetchWorldMapAsync()
     {
         int rev = _viewRev;
+        int avatarRevision = _avatarMapRevision;
         int propGeneration = _avatarOffers?.PropActions?.Generation ?? 0;
         using var doc = _api is { } api ? await api.GetWorldMapAsync(_showAll) : await _source!.GetWorldMapAsync();
-        return new PolledMap(doc.RootElement.Clone(), rev, propGeneration);
+        return new PolledMap(doc.RootElement.Clone(), rev, propGeneration, avatarRevision);
+    }
+
+    /// <summary>Recovery bypasses push spacing/backoff; a pre-switch poll can no longer replace this map.</summary>
+    private async Task RefreshAvatarMapAsync()
+    {
+        _avatarMapRevision++;
+        try { OnWorldMap(await FetchWorldMapAsync(), null); }
+        catch (Exception e) { OnWorldMap(null, e); }
     }
 
     /// <summary>The poll's callback: an error that is not a lost session marks the connection lost.</summary>
@@ -118,6 +130,7 @@ public partial class Main : Node3D
     private void ApplyWorldMap(PolledMap p)
     {
         if (p.ViewRev != _viewRev || _viewSwitchBusy || _figures is null
+            || p.AvatarRevision != _avatarMapRevision
             || p.PropGeneration != (_avatarOffers?.PropActions?.Generation ?? 0)) return;
         var map = p.Map;
         try

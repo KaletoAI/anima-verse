@@ -82,7 +82,7 @@ public sealed partial class FixtureSource : IWorldSource
     }
 
     /// <summary>Task 42: fixed Task 41 receipts, including poll 2; no wall-clock or model-load time in a check.</summary>
-    public Task<JsonDocument> GetWorldMapAsync() => _propSteps.ValueKind == JsonValueKind.Array
+    public Task<JsonDocument> GetWorldMapAsync() => AvatarMaps.Count > 0 ? AvatarMap() : _propSteps.ValueKind == JsonValueKind.Array
         ? Task.FromResult(PropStep("GET", "/play/worldmap")) : GetWorldMapFileAsync("worldmap.json");
     public async Task<JsonDocument> GetWorldMapFileAsync(string file)
     {

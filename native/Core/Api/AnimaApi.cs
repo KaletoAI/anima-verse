@@ -19,12 +19,14 @@ public sealed class ApiException : Exception
 {
     public int Status { get; }
     public string Path { get; }
+    public string? Detail { get; }
 
     public ApiException(int status, string path, string? detail = null)
         : base($"HTTP {status} on {path}" + (string.IsNullOrWhiteSpace(detail) ? "" : $": {detail}"))
     {
         Status = status;
         Path = path;
+        Detail = detail;
     }
 }
 

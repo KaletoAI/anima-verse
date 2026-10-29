@@ -162,7 +162,12 @@ public partial class Main : Node3D
         {
             _api?.Dispose();
             _api = CreateCachedApi(server);
-            using (var answer = await _api.LoginAsync(user, password)) _role = RoleOf(answer.RootElement);
+            using (var answer = await _api.LoginAsync(user, password))
+            {
+                _role = RoleOf(answer.RootElement);
+                _source = _api;
+                SessionAvatar().RememberLogin(answer.RootElement);
+            }
             // Remembered only after the server accepted them; the password is not part of the file.
             LauncherStore.Update(s => s with { Server = server, User = user });
             Log($"logged in as '{user}' (role '{_role}') on {server} (server and user remembered)");

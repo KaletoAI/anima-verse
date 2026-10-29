@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 using AnimaNative.Embody;
 using AnimaNative.Figures;
 using AnimaNative.Hud;
@@ -33,6 +34,16 @@ public partial class Main
         if (id is not null) _builder?.Pin(id, "entry");
     }
     private bool _pendingTakeControl, _pendingArrivalTakeControl;
+    private AvatarRecovery? _avatarRecovery;
+    private Task _avatarIdentity = Task.CompletedTask;
+
+    private AvatarRecovery SessionAvatar()
+    {
+        if (_avatarRecovery is not null) return _avatarRecovery;
+        _avatarRecovery = new AvatarRecovery(_source!, RefreshAvatarMapAsync);
+        _avatarRecovery.Remembered += name => Log($"session avatar: '{name}'");
+        return _avatarRecovery;
+    }
     private Figure? _embodiedBody;
     private bool Embodied => _embody?.Active == true;
     private bool ControlBootReady => _boot?.Progress.Label == BootProgress.Ready && _figures?.FirstPollDone.IsCompleted == true;
@@ -81,7 +92,7 @@ public partial class Main
         };
         camera.Posed += PoseEmbody;
         hud.SceneEscape = CancelPendingControl;
-        hud.Handlers["enterEmbodied"] = _ => EnterEmbodied();
+        hud.Handlers["enterEmbodied"] = _ => TakeControl();
         hud.Handlers["exitEmbodied"] = _ => { CancelPendingControl(); _embody.Exit(); };
         hud.Handlers["takeControl"] = _ => TakeControl();
     }
@@ -92,6 +103,7 @@ public partial class Main
     {
         if (!_pendingTakeControl && !_pendingArrivalTakeControl) return;
         _pendingTakeControl = _pendingArrivalTakeControl = false;
+        _avatarRecovery?.Cancel();
         SetEntryPin(null);
         _boot?.SetNote(null);
     }
@@ -123,10 +135,33 @@ public partial class Main
     /// <summary>Self panel path: wait, fly to the map point (or tile centre) at min(distance,15), open, enter.</summary>
     private void TakeControl()
     {
-        if (Embodied || Leaving) return;
-        if (!ControlBootReady || AvatarFigure()?.Loading == true)
+        if (Embodied || Leaving || _pendingTakeControl || _pendingArrivalTakeControl) return;
+        _avatarRecovery?.Cancel();
+        _pendingTakeControl = true;
+        ContinueTakeControl();
+    }
+
+    private void ContinueTakeControl()
+    {
+        var recovery = _avatarRecovery;
+        var map = _figures?.LatestMap ?? _builder?.FirstMap;
+        recovery?.Tick(map, AvatarFigure() is { Loading: false });
+        if (recovery?.Failure is { } failure)
         {
-            _pendingTakeControl = true;
+            CancelPendingControl();
+            EmbodyToast(failure);
+            return;
+        }
+        if (!ControlBootReady || !_avatarIdentity.IsCompleted)
+        {
+            _boot?.SetNote(BootNote.Characters);
+            return;
+        }
+        if (recovery is not null && !recovery.Waiting && recovery.TryBegin(map, _stop.Token))
+            EmbodyToast("Bringing your avatar back…");
+        if (recovery?.Waiting == true || recovery?.Failure is not null) return;
+        if (AvatarFigure()?.Loading == true)
+        {
             _boot?.SetNote(BootNote.Characters);
             return;
         }
@@ -153,9 +188,15 @@ public partial class Main
         SyncPlayerSteering();
         TickAvatarRooms();
         TickAvatarOffers();
-        if ((_pendingTakeControl || _pendingArrivalTakeControl) && ControlBootReady && AvatarRow() is null)
+        if (_pendingArrivalTakeControl && _avatarRecovery?.NeedsRecovery(_figures?.LatestMap ?? _builder?.FirstMap) == true)
+        {
+            _pendingArrivalTakeControl = false;
+            _pendingTakeControl = true;
+            SetEntryPin(null);
+        }
+        if (_pendingArrivalTakeControl && ControlBootReady && AvatarRow() is null)
             CancelPendingControl();
-        if (_pendingTakeControl && ControlBootReady && AvatarFigure()?.Loading != true) TakeControl();
+        if (_pendingTakeControl) ContinueTakeControl();
         if (_pendingArrivalTakeControl && ControlBootReady && AvatarFigure() is not null && !AvatarWaitsForPlace())
         {
             // Reopen after the mount commits: takeControl may have requested a view before a slot existed.
@@ -242,6 +283,8 @@ public partial class Main
 
     private void DetachEmbody()
     {
+        CancelPendingControl();
+        _avatarRecovery?.Dispose(); _avatarRecovery = null;
         OcclusionMaterials.Update(Vector3.Zero, null, false, false);
         ResetMinimap();
         SetEntryPin(null);

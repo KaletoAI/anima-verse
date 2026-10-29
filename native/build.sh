@@ -85,7 +85,8 @@ if [ -f "$cef/gdcef.gdextension" ]; then
   # checks the old one on return, so every helper (e.g. a component-update utility) aborts with
   # __stack_chk_fail after finishing its work — a crash report at each start, nothing lost. gdCEF exposes no
   # Chromium switches, so the real helper becomes gdCefRenderProcess.bin behind a wrapper that appends
-  # --change-stack-guard-on-fork=disable (the last value of a Chromium switch wins). Drop the wrapper once a gdCEF
+  # --change-stack-guard-on-fork=disable (the last value of a Chromium switch wins). Upstream report:
+  # https://github.com/Lecrapouille/gdcef/issues/107 — drop the wrapper once a gdCEF
   # release marks the helper's main() NO_STACK_PROTECTOR.
   rm -f "$out/gdCefRenderProcess.bin"
   # It may be hard-linked to the host's artifacts: detach (copy) before chmod, never chmod the host file.
