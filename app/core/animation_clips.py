@@ -445,7 +445,11 @@ def replace_world_transitions(rules: Any) -> List[Dict[str, Any]]:
 
 
 def load_transitions(path: Optional[Path] = None) -> List[Dict[str, Any]]:
-    """Shared file order, world replacements in place, world-only rows last."""
+    """Full editor/storage table, including unavailable world bridges.
+
+    Shared file order, world replacements in place, world-only rows last.
+    Runtime callers use :func:`effective_transitions` for availability fallback.
+    """
     world = {(r["from"], r["to"]): r for r in world_transitions()}
     out = []
     for rule in load_shared_transitions(path):
@@ -453,6 +457,25 @@ def load_transitions(path: Optional[Path] = None) -> List[Dict[str, Any]]:
         out.append(dict(replacement if replacement is not None else rule,
                         store="world" if replacement is not None else "shared"))
     out.extend(dict(rule, store="world") for rule in world.values())
+    return out
+
+
+def effective_transitions(path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Runtime table: unavailable world bridges leave shared rules in place.
+
+    World-only rules with unavailable kinds are dropped; shared rules are
+    retained regardless of clip availability.
+    """
+    solo = _solo_kinds()
+    shared = {(r["from"], r["to"]): r for r in load_shared_transitions(path)}
+    out = []
+    for rule in load_transitions(path):
+        if rule.get("store", "shared") == "world" and rule["kind"] not in solo:
+            fallback = shared.get((rule["from"], rule["to"]))
+            if fallback is not None:
+                out.append(dict(fallback, store="shared"))
+        else:
+            out.append(rule)
     return out
 
 
@@ -484,6 +507,10 @@ def resolve_transition(from_pose: Any, to_pose: Any,
     on ``accel`` as much as on ``kind``, and two lookups for one answer is how
     the two start to disagree.
 
+    With no explicit rules, use the effective runtime table: unavailable
+    world bridges fall back to shared rules. Explicit rules are used as given;
+    :func:`load_transitions` retains the full table for editing and storage.
+
     Most specific rule wins, and the order is fixed rather than the file's:
 
     1. both named — the transition between exactly these two,
@@ -498,7 +525,7 @@ def resolve_transition(from_pose: Any, to_pose: Any,
     dst = str(to_pose or "").strip().lower()
     if not src or not dst or src == dst:
         return None
-    table = load_transitions() if rules is None else rules
+    table = effective_transitions() if rules is None else rules
     exact = wild_to = wild_from = None
     for r in table:
         rs, rd = r.get("from", ""), r.get("to", "")
@@ -637,7 +664,7 @@ def client_transition_rules(rules=None) -> List[Dict[str, Any]]:
     maps = _pose_kind_maps()
     out = []
     seen = set()
-    for rule in load_transitions() if rules is None else rules:
+    for rule in effective_transitions() if rules is None else rules:
         for src, dst in _transition_pairs(rule, maps):
             if (src, dst) in seen:
                 continue

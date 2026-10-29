@@ -225,7 +225,7 @@ export function ClipTransitions({ poses, onSaved }: {
                         .replace('{from_public_kind}', rule.from_public_kind || '—')
                         .replace('{to_public_kind}', rule.to_public_kind || '—')}
                     </div>
-                    {rule.bridge_public === false ? <div className="ga-field-warn">{t('Bridge clip missing publicly')}</div> : null}
+                    {rule.bridge_public === false ? <div className="ga-field-warn">{t('Licensed clip — only on this installation')}</div> : null}
                     {rule.conflict ? <div className="ga-field-warn">{t('Overlaps an earlier rule')}</div> : null}
                   </td>
                   <td>

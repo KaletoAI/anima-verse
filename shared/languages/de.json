@@ -2907,7 +2907,7 @@
     "Also removes {n} transition rule(s).": "Entfernt außerdem {n} Übergangsregel(n).",
     "unknown pose": "unbekannte Pose",
     "local: {from_kind} → {to_kind} · public: {from_public_kind} → {to_public_kind}": "lokal: {from_kind} → {to_kind} · öffentlich: {from_public_kind} → {to_public_kind}",
-    "Bridge clip missing publicly": "Brücken-Clip fehlt öffentlich",
+    "Licensed clip — only on this installation": "Lizenzierter Clip – nur auf dieser Installation",
     "Overlaps an earlier rule": "Überschneidet sich mit einer früheren Regel",
     "The clip that has to play BETWEEN two poses, so a figure does not jump from one state into the next. Write \"*\" for \"anything\" — on the To side that makes an exit clip, on the From side an enter clip, and the more precise rule wins.": "Der Clip, der ZWISCHEN zwei Posen abgespielt wird, damit eine Figur nicht zwischen Zuständen springt. „*“ steht für „beliebig“ — bei Nach für einen Austritt, bei Von für einen Eintritt. Die genauere Regel gewinnt.",
     "No rules — every pose change is instant.": "Keine Regeln — jeder Posenwechsel erfolgt sofort.",
