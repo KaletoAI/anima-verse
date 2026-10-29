@@ -114,7 +114,8 @@ def _messages_from_room_stream(responder: str,
 
 def _build_rp_tool_system(character_name: str, agent_tools: list,
                           tool_format: str, tool_model_name: str,
-                          partner_name: str, in_person: bool = False) -> str:
+                          partner_name: str, in_person: bool = False,
+                          room_offer: str | None = None) -> str:
     """Builds the system prompt of the rp_first tool phase (the non-streaming
     variant of the block in routes/chat.py). With it the tool LLM spots
     narrative actions (ChangeOutfit, SetActivity, …) and calls the tools.
@@ -159,8 +160,9 @@ def _build_rp_tool_system(character_name: str, agent_tools: list,
     from app.models.character import get_character_current_room
     # Semantic actions remain available independently of the old pose-marker
     # switch, with exact targets and effects rather than global pose guesses.
-    act_list = places.room_offer(character_name, loc_id,
-                                 get_character_current_room(character_name) or "")
+    act_list = (room_offer if room_offer is not None else
+                places.room_offer(character_name, loc_id,
+                                  get_character_current_room(character_name) or ""))
     self_outfit = (undressed_line(character_name)
                    or render_outfit(character_name=character_name).get("full", "")
                    or "(nothing equipped)")
@@ -607,7 +609,7 @@ def build_chat_context(
             tool_system_content = _build_rp_tool_system(
                 character_name, agent_tools, tool_format, tool_model_name,
                 partner_name=(speaker if speaker != "user" else ""),
-                in_person=(medium == "in_person"))
+                in_person=(medium == "in_person"), room_offer=_prompt.room_offer)
         except Exception as _e:
             logger.debug("tool_system_content build failed: %s", _e)
         for _t in agent_tools:

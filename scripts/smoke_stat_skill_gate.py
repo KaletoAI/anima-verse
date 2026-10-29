@@ -53,6 +53,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         sm = setup(tmp)
         from app.core import skill_gate
+        from app.core.stat_sources import bind_stat_sources
         from app.models import character, rules
         from app.routes import play
         rule = {'id': 'fake_block', 'name': 'Test gate', 'type': 'block',
@@ -84,7 +85,8 @@ def main():
                 node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == factory)
                 context = dict(t=sm.skills[0].as_tool(), character_name='Tester', owner_id='',
                                _tool_initiator='', actor='Tester', sid='fake_move', json=json,
-                               _json=json, _coerce_to_dict=lambda raw: {})
+                               _json=json, _coerce_to_dict=lambda raw: {},
+                               bind_stat_sources=bind_stat_sources, stat_collector=None)
                 exec(compile(ast.Module(body=[node], type_ignores=[]), filename, 'exec'), context)
                 wrapper = context[factory](sm.skills[0].execute)
                 assert wrapper('{}') == 'Error: Rest first', filename

@@ -11,6 +11,12 @@ from app.core.game_time import GameTime
 from app.core.stat_rules import round_half_away
 
 
+def merge_changes(aggregate: dict, changes: dict) -> None:
+    """Retain the first old value and the last new value across effects/phases."""
+    for key, change in changes.items():
+        aggregate[key] = dict(change, old=aggregate.get(key, change)['old'])
+
+
 def _expired(entry: dict, now: GameTime) -> bool:
     duration = entry.get('duration_hours', 0)
     if duration:
@@ -227,7 +233,7 @@ def _apply_on_connection(conn, run, phase, now, profiles, catalogs):
                                old=previous.get('old', applied.get('old')))
             receipt['targets'][name] = applied
             aggregate = changed.setdefault(name, dict(changes={}, results={}))
-            aggregate['changes'].update(transformed['changes'])
+            merge_changes(aggregate['changes'], transformed['changes'])
             aggregate['results'].update(transformed['results'])
         receipt['active_game_s'] = seconds if phase == 'active' else 0
         conn.execute('INSERT INTO prop_action_effect_receipts (execution_id,effect_id,phase,result,applied_at) VALUES (?,?,?,?,?) '

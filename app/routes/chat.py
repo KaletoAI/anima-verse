@@ -957,6 +957,7 @@ class ChatPrompt(NamedTuple):
     """
     system: str
     moment: str
+    room_offer: str = ""
 
 
 def _build_chat_prompt(character_name: str,
@@ -1641,4 +1642,4 @@ def _build_chat_prompt(character_name: str,
         moment += "\n\n" + render(
             "chat/npc_reply_cue.md",
             skip_allowed=respond_opportunity or winding_down)
-    return ChatPrompt(system=system, moment=moment)
+    return ChatPrompt(system=system, moment=moment, room_offer=known_activities)

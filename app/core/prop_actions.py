@@ -252,7 +252,8 @@ def offers(actor: str) -> list[dict]:
     from app.core import places, props, prop_action_engine as engine
     from app.core.room_recipe import compose_recipe
     from app.models.world import get_location_by_id
-    location_id, room_id = places.where(actor)
+    query = places._GeometryQuery(cache_profiles=True)
+    location_id, room_id = places.where(actor, profile=query.profile(actor))
     loc = get_location_by_id(location_id) if location_id else None
     room = next((r for r in (loc or {}).get("rooms", []) if r.get("id") == room_id), None)
     if not room:
@@ -261,7 +262,6 @@ def offers(actor: str) -> list[dict]:
                             map3d=loc.get("map3d") or {}, read_only=True)
     present = sorted(name for name, _ in places._present(location_id, room_id) if name != actor)
     result = []
-    query = places._GeometryQuery()
     for placement in (recipe or {}).get("placements", []):
         pid = placement.get("prop_id", "")
         document = query.prop_document(pid)
@@ -343,5 +343,24 @@ def execute(actor: str, payload: dict) -> dict:
     if operation != "request" or set(payload) - {
             "operation", "action_id", "revision", "target", "partner", "request_id"}:
         return refused
-    return engine.request(actor, payload.get("target"), payload.get("action_id"),
-                          payload.get("revision"), payload.get("partner", ""), payload.get("request_id", ""))
+    from app.core.skill_gate import blocked_reason, charge
+    request_id = payload.get("request_id", "")
+    with engine.request_guard(actor, request_id):
+        # The engine resolves replay identity/conflicts before current-world
+        # eligibility. Exhaustion must not hide an already admitted request.
+        previous = (engine.store.by_request(actor, request_id)
+                    if isinstance(actor, str) and isinstance(request_id, str) else None)
+        if not previous:
+            reason = blocked_reason(actor, "prop_action")
+            if reason:
+                return dict(status="refused", execution_id="", reason=reason)
+        result, created = engine.request_with_creation(
+            actor, payload.get("target"), payload.get("action_id"),
+            payload.get("revision"), payload.get("partner", ""), request_id)
+        if created and result["status"] not in ("failed", "cancelled"):
+            charge(actor, "prop_action")
+    if created:
+        # Invitation callbacks deferred by the outer guard may have advanced
+        # the run. Return the same current projection as the HTTP adapter.
+        result = engine._result(engine.store.get(result["execution_id"]))
+    return result

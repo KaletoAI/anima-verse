@@ -136,7 +136,7 @@ def _commit(run, phases=(), *, runtime=None, now=None, catalogs=None):
                     run["data"].setdefault("effect_results", {})[phase] = result["effects"]
                 for name, update in result["changed"].items():
                     aggregate = changed.setdefault(name, dict(changes={}, results={}))
-                    aggregate["changes"].update(update["changes"])
+                    effects.merge_changes(aggregate["changes"], update["changes"])
                     aggregate["results"].update(update["results"])
             for name in profiles:
                 if name in changed or (runtime and name in runtime):
@@ -279,7 +279,7 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
             return "participant_claimed"
         if require_claims and held != run["execution_id"]:
             return "participant_claim_lost"
-        profile = profiles[name] = C.get_character_profile(name)
+        profile = profiles[name] = query.profile(name)
         if places.where(name, profile=profile) != (run["target"]["location_id"], run["target"]["room_id"]):
             return "target_not_in_actor_room"
         owned_sleep_transition = (run["status"] == "active" and definition["ability"] == "sleep"
@@ -374,7 +374,8 @@ def _plan(run, *, conn, _query=None):
         if definition["ability"] == "pair":
             from app.core.interaction_engine import plan_interaction_at
             try:
-                allocation = plan_interaction_at(run["actor"], run["partner"], definition["pose_key"], place)
+                allocation = plan_interaction_at(run["actor"], run["partner"], definition["pose_key"], place,
+                                                 profiles={name: query.profile(name) for _, name in _members(run)})
             except ValueError as exc:
                 last_reason = str(exc)
                 continue
@@ -421,6 +422,36 @@ def _plan(run, *, conn, _query=None):
     return plans, ""
 
 
+def _planning_state(run, query):
+    """Inputs whose change invalidates an already calculated admission plan."""
+    target = run["target"]
+    inventory = query.room_places(target["location_id"], target["room_id"])
+    return dict(profiles={name: query.profile(name) for _, name in _members(run)},
+                positions={name: C.get_character_pos(name) for _, name in _members(run)},
+                inventory=inventory, geometry=query.room_geometry(target["location_id"], target["room_id"]),
+                documents={p["prop_id"]: query.prop_document(p["prop_id"]) for p in inventory})
+
+
+def _revalidate_admission(run, conn, planned_state):
+    """No routing under the write lock: compare inputs and check chosen slots."""
+    query = places._GeometryQuery()
+    reason = "world_frozen" if is_world_frozen() else _validate(run, conn=conn, _query=query)
+    if reason:
+        return reason
+    if _planning_state(run, query) != planned_state:
+        return "approach_target_changed"
+    target = run["target"]
+    inventory = query.room_places(target["location_id"], target["room_id"])
+    taken = places.occupancy(target["location_id"], target["room_id"], _places=inventory)
+    for plan in run["data"]["plans"].values():
+        anchor = plan["entry_anchor"]
+        place = next((p for p in inventory if p["id"] == anchor["place_id"]), None)
+        if (not place or anchor["slot"] not in places.free_slots(place, taken.get(place["id"], []))
+                or store.held(store.slot_key(target, anchor["marker_id"], anchor["slot"]), conn=conn)):
+            return "no_free_slot"
+    return ""
+
+
 def request(actor: str, target: dict, action_id: str, revision: str, partner: str = "", request_id: str = "") -> dict:
     """Public Core result remains unchanged; admission metadata stays internal."""
     return request_with_creation(actor, target, action_id, revision, partner, request_id)[0]
@@ -459,18 +490,26 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
                definition=definition, data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
                                                 last_game=now, elapsed=0.0, consent_elapsed=0.0))
     with _lock(run["execution_id"]):
+        query = places._GeometryQuery(cache_profiles=True)
+        reason = _validate(run, _query=query)
+        planned_state = _planning_state(run, query)
+        plans, plan_reason = _plan(run, conn=store.db.get_connection(), _query=query) if not reason else ({}, "")
+        reason = reason or plan_reason
+        if reason:
+            previous = store.by_request(actor, request_id)
+            if previous:
+                return (_result(previous) if previous["request_fingerprint"] == fingerprint
+                        else _refused("request_id_conflict")), False
+            return _refused(reason), False
+        run["data"]["plans"] = plans
         with _claim_transaction(run) as conn:
             previous = store.by_request(actor, request_id, conn=conn)
             if previous:
                 return (_result(previous) if previous["request_fingerprint"] == fingerprint
                         else _refused("request_id_conflict")), False
-            reason = _validate(run, conn=conn)
+            reason = _revalidate_admission(run, conn, planned_state)
             if reason:
                 return _refused(reason), False
-            plans, reason = _plan(run, conn=conn)
-            if reason:
-                return _refused(reason), False
-            run["data"]["plans"] = plans
             store.insert(conn, run)
             if not partner:
                 store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
@@ -499,6 +538,17 @@ def _respond(actor: str, execution_id: str, accept: bool) -> dict:
             return _finish(run, "cancelled", "consent_declined")
         if is_world_frozen():
             return _refused("world_frozen")
+        query = places._GeometryQuery(cache_profiles=True)
+        reason = _validate(run, _query=query)
+        planned_state = _planning_state(run, query)
+        agreed_roles = dict(run["data"]["clip_roles"])
+        agreed_access = dict(run["data"]["access_roles"])
+        plans, plan_reason = _plan(run, conn=store.db.get_connection(), _query=query) if not reason else ({}, "")
+        reason = reason or plan_reason
+        planned_roles = dict(run["data"]["clip_roles"])
+        planned_access = dict(run["data"]["access_roles"])
+        if not reason and planned_roles != agreed_roles:
+            reason = "pair_roles_changed"
         with _claim_transaction(run) as conn:
             run = store.get(execution_id, conn=conn)
             if run["status"] != "awaiting_consent":
@@ -512,14 +562,11 @@ def _respond(actor: str, execution_id: str, accept: bool) -> dict:
                 run.update(status="cancelled", reason="consent_expired")
                 store.save(conn, run)
                 return _result(run)
-            reason = _validate(run, conn=conn)
-            agreed_roles = dict(data["clip_roles"])
-            agreed_access = dict(data["access_roles"])
-            plans, plan_reason = _plan(run, conn=conn) if not reason else ({}, "")
-            reason = reason or plan_reason
-            if not reason and data["clip_roles"] != agreed_roles:
+            if not reason:
+                data.update(plans=plans, clip_roles=planned_roles, access_roles=planned_access)
+                reason = _revalidate_admission(run, conn, planned_state)
+            if reason == "pair_roles_changed":
                 data.update(clip_roles=agreed_roles, access_roles=agreed_access)
-                reason = "pair_roles_changed"
             if reason:
                 run.update(status="failed", reason=reason)
                 store.save(conn, run)
@@ -683,7 +730,8 @@ def _clock(run, now):
                     shift = max(0, (now - max(checkpoint, anchored)).total_seconds)
                     journey["started_at_game"] = (GameTime.parse(journey["started_at_game"]) + GameDuration.of(seconds=shift)).canonical()
                     journey["prop_action_reanchored_at"] = now.canonical()
-                    C.save_character_profile(name, profile)
+                    if not C.save_character_profile(name, profile):
+                        raise RuntimeError("prop_action_reanchor_write_failed")
         data["process"] = _PROCESS
     data["last_game"] = now.canonical()
     return 0.0 if restarted or is_world_frozen() else float(gap)
@@ -797,12 +845,12 @@ def _entry_spec(name, plan, pose, *, _query=None):
         return None, reason
     kind, meta = capability
     anchor, access = plan["entry_anchor"], plan["access"]
+    query = _query if _query is not None else places._GeometryQuery()
     delta = bridge_offset(clip_travel_m(kind), float(access["yaw"]),
-                          bridge_scale(height_cm(C.get_character_profile(name)), clip_ref_height_m(kind)))
+                          bridge_scale(height_cm(query.profile(name)), clip_ref_height_m(kind)))
     if math.dist((access["x"] + delta[0], access["z"] + delta[1]), (anchor["x"], anchor["z"])) > .05:
         return None, "entry_transition_mismatch"
     from app.core.prop_action_paths import _departure_walkable
-    query = _query if _query is not None else places._GeometryQuery()
     geometry = query.room_geometry(anchor["location_id"], anchor["room_id"])
     if not geometry or not _departure_walkable((anchor["x"], anchor["z"]), (access["x"], access["z"]),
                                                geometry, anchor["placement_id"]):
@@ -1017,9 +1065,9 @@ def check(actor: str, target: dict, action_id: str, revision: str, partner: str 
             or not all(isinstance(v, str) and v for v in (actor, action_id, revision))
             or not isinstance(partner, str)):
         return dict(enabled=False, reason="invalid_request")
-    if places.where(actor) != (target["location_id"], target["room_id"]):
-        return dict(enabled=False, reason="target_not_in_actor_room")
     query = _query if _query is not None else places._GeometryQuery()
+    if places.where(actor, profile=query.profile(actor)) != (target["location_id"], target["room_id"]):
+        return dict(enabled=False, reason="target_not_in_actor_room")
     definition, reason = _definition(target, action_id, revision, _query=query)
     if reason:
         return dict(enabled=False, reason=reason)
@@ -1050,14 +1098,14 @@ def state_for(actor: str) -> dict:
         "SELECT * FROM prop_action_runs WHERE actor=? OR partner=? ORDER BY created_at,execution_id",
         (actor, actor))
     for raw in rows:
-        run = store._decode(raw)
-        terminal = run["status"] in store.TERMINAL
+        terminal = raw["status"] in store.TERMINAL
         if terminal:
             try:
-                if datetime.fromisoformat(run["updated_at"].replace("Z", "+00:00")) < cutoff:
+                if datetime.fromisoformat(raw["updated_at"].replace("Z", "+00:00")) < cutoff:
                     continue
             except (ValueError, TypeError):
                 continue
+        run = store._decode(raw)
         pending = run["status"] == "awaiting_consent"
         row = {k: run[k] for k in ("execution_id", "action_id", "definition_revision",
                                   "target", "actor", "partner", "status", "phase", "reason")}

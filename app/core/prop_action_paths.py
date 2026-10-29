@@ -141,49 +141,65 @@ class _Space:
         return True
 
 
-def visibility_path(start: Sequence[float], goal: Sequence[float], polygon,
-                    blockers, door_zones=()) -> list[Point] | None:
-    """Shortest deterministic visibility-graph path, or None; no fallback.
+class _VisibilityGraph:
+    """Lazy static corner graph; endpoints keep the original ordering/tie rules."""
 
-    Graph vertices are safe centimetre-rounded inset room and grown furniture/
-    opening-zone corners. Equal-length routes break ties by lexicographic node
-    sequence, independent of footprint enumeration and polygon winding.
-    """
-    space = _Space(polygon, blockers, door_zones)
-    try:
-        start, goal = tuple(map(float, start)), tuple(map(float, goal))
-        if len(start) != 2 or len(goal) != 2 or not space.free(start) or not space.free(goal):
+    def __init__(self, geometry):
+        self.space = _Space(*geometry)
+        self.nodes = None
+        self.edges = {}
+
+    def _build_graph(self):
+        candidates = {(round(p[0], 2), round(p[1], 2)) for p in self.space.candidates}
+        self.nodes = sorted(p for p in candidates if self.space.free(p))
+        for i, a in enumerate(self.nodes):
+            for b in self.nodes[i + 1:]:
+                if self.space.visible(a, b):
+                    self.edges[a, b] = math.dist(a, b)
+
+    def route(self, start, goal):
+        try:
+            start, goal = tuple(map(float, start)), tuple(map(float, goal))
+            if len(start) != 2 or len(goal) != 2 or not self.space.free(start) or not self.space.free(goal):
+                return None
+        except (TypeError, ValueError, OverflowError):
             return None
-    except (TypeError, ValueError, OverflowError):
+        if start == goal:
+            return [start]
+        if self.space.visible(start, goal):
+            return [start, goal]
+        if self.nodes is None:
+            self._build_graph()
+        nodes = [start, goal] + [p for p in self.nodes if p not in (start, goal)]
+        graph = [[] for _ in nodes]
+        for i, a in enumerate(nodes):
+            for j in range(i + 1, len(nodes)):
+                b = nodes[j]
+                cost = (math.dist(a, b) if self.space.visible(a, b) else None) if i < 2 else self.edges.get((a, b))
+                if cost is not None:
+                    graph[i].append((j, cost))
+                    graph[j].append((i, cost))
+        best = {0: (0.0, (start,))}
+        queue = [(0.0, (start,), 0)]
+        while queue:
+            distance, path, i = heapq.heappop(queue)
+            if best.get(i) != (distance, path):
+                continue
+            if i == 1:
+                return list(path)
+            for j, cost in graph[i]:
+                candidate = (distance + cost, path + (nodes[j],))
+                if j not in best or candidate < best[j]:
+                    best[j] = candidate
+                    heapq.heappush(queue, (*candidate, j))
         return None
-    if start == goal:
-        return [start]
-    if space.visible(start, goal):
-        return [start, goal]
-    candidates = {(round(p[0], 2), round(p[1], 2)) for p in space.candidates}
-    nodes = [start, goal] + sorted(p for p in candidates if p not in (start, goal) and space.free(p))
-    graph = [[] for _ in nodes]
-    for i, a in enumerate(nodes):
-        for j in range(i + 1, len(nodes)):
-            b = nodes[j]
-            if space.visible(a, b):
-                cost = math.dist(a, b)
-                graph[i].append((j, cost))
-                graph[j].append((i, cost))
-    best = {0: (0.0, (start,))}
-    queue = [(0.0, (start,), 0)]
-    while queue:
-        distance, path, i = heapq.heappop(queue)
-        if best.get(i) != (distance, path):
-            continue
-        if i == 1:
-            return list(path)
-        for j, cost in graph[i]:
-            candidate = (distance + cost, path + (nodes[j],))
-            if j not in best or candidate < best[j]:
-                best[j] = candidate
-                heapq.heappush(queue, (*candidate, j))
-    return None
+
+
+def visibility_path(start: Sequence[float], goal: Sequence[float], polygon,
+                    blockers, door_zones=(), *, _graph=None) -> list[Point] | None:
+    """Shortest deterministic visibility path; reuse a graph only for its geometry."""
+    graph = _graph if _graph is not None else _VisibilityGraph((polygon, blockers, door_zones))
+    return graph.route(start, goal)
 
 
 def _departure_walkable(seat: Point, start: Point, geometry, placement_id: str) -> bool:
@@ -225,14 +241,14 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
     """Internal revalidation can reuse the persisted, measured seat exit."""
     from app.core import places
     from app.core.room_stand import approach_departure
-    from app.models.character import get_character_profile
 
     required = ("location_id", "room_id", "placement_id", "variant_uid", "action_id", "definition_revision")
     if not actor or not isinstance(target, dict) or any(not isinstance(target.get(k), str) or not target[k] for k in required):
         return _blocked("invalid_target")
     if role not in ("actor", "partner"):
         return _blocked("invalid_role")
-    profile = get_character_profile(actor)
+    query = _query if _query is not None else places._GeometryQuery()
+    profile = query.profile(actor)
     if not profile:
         return _blocked("unknown_actor")
     location, room = places.where(actor, profile=profile)
@@ -240,7 +256,6 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
         return _blocked("target_not_in_actor_room")
     # Explicit reuse is bounded to this read operation. Standalone arrival
     # revalidation starts fresh, never from the shared places TTL cache.
-    query = _query if _query is not None else places._GeometryQuery()
     inventory = query.room_places(location, room)
     candidates = [p for p in inventory if p.get("placement_id") == target["placement_id"]]
     if not candidates:
@@ -307,7 +322,7 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
                 if not space.free(goal):
                     reason = "access_not_walkable"
                     continue
-                route = visibility_path(start, goal, *geometry)
+                route = query.route(start, goal, geometry)
                 if route is None:
                     reason = "no_route"
                     continue

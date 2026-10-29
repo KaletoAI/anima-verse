@@ -1136,12 +1136,15 @@ def _commit_approach_position(name: str, journey: dict, pos: Point, *, arrived: 
     return True
 
 
+_approach_validation_cache: dict = {}
+_approach_validation_lock = Lock()
+
+
 def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     """Recheck concrete provenance and the remaining floor path before movement."""
     from app.core.prop_action_paths import _plan_approach, _Space, _departure_walkable
-    from app.core.room_stand import room_geometry
     from app.core import sync_topics
-    from app.models.character import get_character_pos
+    from app.models.character import get_character_pos, get_character_profile
     from app.models.world import is_world_frozen
     if is_world_frozen():
         return
@@ -1151,8 +1154,32 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     if journey.get("departure_seat") and pos is not None and (
             pos["x"], pos["z"]) == tuple(journey["departure_seat"]):
         departure = (tuple(journey["departure_point"]), tuple(journey["departure_seat"]), "")
-    plan = _plan_approach(name, target, journey["approach_role"], departure=departure,
-                          departure_placement_id=journey.get("departure_placement_id", ""))
+    from app.core import places
+    from copy import deepcopy
+    query = places._GeometryQuery()
+    inventory = query.room_places(target["location_id"], target["room_id"])
+    geometry = query.room_geometry(target["location_id"], target["room_id"])
+    profile = get_character_profile(name) or {}
+    # Fresh authored inputs invalidate immediately. Normal movement changes
+    # only its checkpoint and expected position, never the promised route.
+    key = ({k: v for k, v in journey.items() if k != "position_checkpoint_game"},
+           {k: v for k, v in profile.items() if k != "journey"},
+           places.where(name, profile=profile), inventory, geometry,
+           [query.prop_document(pid) for pid in sorted({p["prop_id"] for p in inventory})])
+    position = (pos["x"], pos["z"]) if pos is not None else None
+    with _approach_validation_lock:
+        cached = _approach_validation_cache.get(name)
+    if cached and cached[0] == key and cached[1] == position:
+        plan = cached[2]
+    else:
+        plan = _plan_approach(name, target, journey["approach_role"], departure=departure,
+                             departure_placement_id=journey.get("departure_placement_id", ""),
+                             _query=query)
+        cached = (deepcopy(key), position, plan)
+        with _approach_validation_lock:
+            if len(_approach_validation_cache) >= 128:
+                _approach_validation_cache.pop(next(iter(_approach_validation_cache)))
+            _approach_validation_cache[name] = cached
     before_start = now < GameTime.parse(journey["started_at_game"])
     if plan["status"] != "ok":
         cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
@@ -1161,7 +1188,6 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     st = journey_state(journey["waypoints"], journey["started_at_game"], now)
     if before_start:
         return
-    geometry = room_geometry(target["location_id"], target["room_id"])
     space = _Space(*geometry) if geometry else None
     if journey.get("departure_seat") and (geometry is None or not _departure_walkable(
             tuple(journey["departure_seat"]), tuple(journey["departure_point"]), geometry,
@@ -1185,7 +1211,15 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
                        execution_ref=journey["execution_ref"], reason="approach_target_changed")
         return
     if not st["arrived"]:
-        _commit_approach_position(name, journey, st["pos"], now=now)
+        if _commit_approach_position(name, journey, st["pos"], now=now):
+            with _approach_validation_lock:
+                if _approach_validation_cache.get(name) is cached:
+                    _approach_validation_cache[name] = (
+                        cached[0], tuple(round(v, 2) for v in st["pos"]), cached[2])
+        else:
+            with _approach_validation_lock:
+                if _approach_validation_cache.get(name) is cached:
+                    _approach_validation_cache.pop(name, None)
         return
     allowed, reason = _validate_owned_arrival(name, journey, target["room_id"])
     if not allowed:

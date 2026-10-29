@@ -104,6 +104,10 @@ def run_gated(name: str, skill_id: str, call: Callable[[], _Result]) -> _Result 
     spans a skill call, which may make network requests.
     """
     from app.core.streaming import is_error_result
+    # PropAction owns its admission boundary: replays and cancellation are free,
+    # and only the engine's authoritative creation flag permits a deduction.
+    if skill_id == 'prop_action':
+        return call()
     key = (name, skill_id)
     if key in _running.get():
         return call()

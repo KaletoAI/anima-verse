@@ -296,7 +296,7 @@ def assign_roles(actor: str, partner: str, actor_gender: str,
     return (partner, actor) if swap else (actor, partner)
 
 
-def plan_interaction_at(actor: str, partner: str, pose_key: str, place: dict) -> dict:
+def plan_interaction_at(actor: str, partner: str, pose_key: str, place: dict, *, profiles=None) -> dict:
     """Shared clip-role allocation BEFORE a prop owner claims access/slots.
 
     Binding access `actor` is clip A, `partner` is clip B. Semantic actor and
@@ -307,9 +307,10 @@ def plan_interaction_at(actor: str, partner: str, pose_key: str, place: dict) ->
     from app.models.character import get_character_profile
     kind = pair_kind_for_pose(pose_key)
     meta = clip_meta(kind) or {}
+    profiles = profiles if profiles is not None else {n: get_character_profile(n) for n in (actor, partner)}
     a, b = assign_roles(actor, partner,
-        str(get_character_profile(actor).get("gender") or ""),
-        str(get_character_profile(partner).get("gender") or ""), clip_role_gender(meta))
+        str(profiles[actor].get("gender") or ""),
+        str(profiles[partner].get("gender") or ""), clip_role_gender(meta))
     clip_roles = {"a": a, "b": b}
     yaw = places.pair_yaw(place, pose_key)
     cx, cz = places.centre_of(place)

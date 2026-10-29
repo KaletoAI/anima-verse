@@ -128,14 +128,36 @@ class _GeometryQuery:
 
     Deliberately explicit, not a thread/context-local or the TTL cache: an
     offer/check may share its measured geometry, but execution, consent and
-    arrival create their own query. Never store profiles, occupancy or claims.
+    arrival create their own query. Profile snapshots are opt-in for offers only;
+    occupancy and claims always stay fresh.
     The owner does not share this object with another thread or a write path.
     """
 
-    def __init__(self):
+    def __init__(self, *, cache_profiles=False):
+        self._profiles = {} if cache_profiles else None
+        self._route_graphs = {}
+        self._routes = {}
         self._locations = {}
         self._rooms = {}
         self._documents = {}
+
+    def profile(self, name):
+        from app.models.character import get_character_profile
+        if self._profiles is None:
+            return get_character_profile(name)
+        if name not in self._profiles:
+            self._profiles[name] = get_character_profile(name)
+        return self._profiles[name]
+
+    def route(self, start, goal, geometry):
+        from app.core.prop_action_paths import _VisibilityGraph, visibility_path
+        key = id(geometry)
+        route_key = (key, tuple(start), tuple(goal))
+        if route_key not in self._routes:
+            if key not in self._route_graphs:
+                self._route_graphs[key] = _VisibilityGraph(geometry)
+            self._routes[route_key] = visibility_path(start, goal, *geometry, _graph=self._route_graphs[key])
+        return self._routes[route_key]
 
     def room_places(self, location_id: str, room_id: str) -> List[Place]:
         if location_id not in self._locations:
