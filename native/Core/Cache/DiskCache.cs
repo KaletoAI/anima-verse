@@ -81,14 +81,15 @@ public sealed class DiskCache
         }
     }
 
-    public void Store(string key, byte[] body, string? etag, HttpCachePolicy policy)
+    public void Store(string key, byte[] body, string? etag, HttpCachePolicy policy, string extension = ".bin")
     {
+        if (extension is not (".bin" or ".res" or ".json")) throw new ArgumentException("Unsupported cache extension", nameof(extension));
         lock (_gate)
         {
             try
             {
                 if (!policy.Store || body.LongLength > LimitBytes) { RemoveCore(key); Save(); return; }
-                string digest = Hash(body), file = Hash(key) + "-" + digest + ".bin";
+                string digest = Hash(body), file = Hash(key) + "-" + digest + extension;
                 Atomic(Path.Combine(DirectoryPath, file), body);
                 _entries.TryGetValue(key, out var old);
                 _entries[key] = new(key, file, body.LongLength, digest, etag, policy.CacheControl, policy.Immutable,
@@ -119,7 +120,7 @@ public sealed class DiskCache
 
     private bool Valid(Entry e)
         => e is not null && e.Key is not null && e.Digest is not null && e.Digest.Length == 64
-           && e.Bytes >= 0 && e.File == Hash(e.Key) + "-" + e.Digest + ".bin"
+           && e.Bytes >= 0 && new[] { ".bin", ".res", ".json" }.Any(ext => e.File == Hash(e.Key) + "-" + e.Digest + ext)
            && e.Digest.All(Uri.IsHexDigit) && System.IO.File.Exists(Path.Combine(DirectoryPath, e.File));
     private void Evict()
     {

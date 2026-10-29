@@ -191,14 +191,14 @@ public partial class FigureManager : Node3D
     /// <summary>The world map's <c>game_rate === 0</c>: the world is frozen (the secondary motion stops its dynamics).</summary>
     public bool WorldFrozen { get; private set; }
 
-    public FigureManager(IWorldSource source, WorldHeight height, Action<string> log, bool strict)
+    public FigureManager(IWorldSource source, WorldHeight height, Action<string> log, bool strict, FigureCache? cache = null)
     {
         Name = "Figures";
         _source = source;
         _height = height;
         _log = log;
         _strict = strict;
-        Clips = new ClipLibrary(source, log) { NextFrame = NextFrame };
+        Clips = new ClipLibrary(source, log, cache) { NextFrame = NextFrame };
     }
 
     /// <summary>One frame later (inside the tree), else at once.</summary>
@@ -1261,9 +1261,14 @@ public partial class FigureManager : Node3D
         var ownKinds = own.Select(o => o.Kind).ToHashSet();
         double scale = info.Normalized ? 1 : heightM / raw;
         await NextFrame();
-        var planWatch = System.Diagnostics.Stopwatch.StartNew();
         // The PLAN (Task 35b): which library clips bind on this rig and under which actions — no key is written yet.
-        var lazy = new TemplateClips(this, _log, url, root, skel, fixes, standRef ?? 0, rigKnown, scale, lib);
+        string? modelIdentity = Clips.Cache is { } cache ? await cache.IdentityAsync(url, bytes) : null;
+        string? cacheKey = modelIdentity is not null && Clips.RigIdentity is { } rigIdentity
+            ? AnimaNative.Cache.DerivedKeys.Of(
+                AnimaNative.Cache.DerivedKeys.Template(url, sets, heightM, rigIdentity, modelIdentity),
+                Clips.Cache!.Engine, info.Format, info.Rig, info.Normalized, info.ClipLoops) : null;
+        var planWatch = System.Diagnostics.Stopwatch.StartNew();
+        var lazy = new TemplateClips(this, _log, url, root, skel, fixes, standRef ?? 0, rigKnown, scale, lib, cacheKey);
         double planMs = planWatch.Elapsed.TotalMilliseconds;
         Measurements?.Add("character GLB", "fitting", planMs);
         await lazy.PlanAsync(candidates, ownKinds);
@@ -1275,6 +1280,7 @@ public partial class FigureManager : Node3D
         if (ClipFit == ClipFitMode.Eager) await lazy.EnsureAllAsync();
         else await lazy.EnsureAsync(movement);
         lazy.Built = true;
+        if (Clips.Cache is { } figureCache) _log(figureCache.Describe());
         double fitMs = sw.Elapsed.TotalMilliseconds;
         if (missing.Count > 0)
             _log($"model {url}: {missing.Count} of {candidates.Count} library clip kinds NOT bound — {string.Join(", ", missing)}");

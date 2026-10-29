@@ -15,6 +15,8 @@ namespace AnimaNative.Api;
 public sealed partial class AnimaApi
 {
     private readonly DiskCache? _byteCache;
+    /// <summary>Task 64: derived animations use this SAME versioned origin store and LRU budget.</summary>
+    public DiskCache? CacheStore => _byteCache;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _byteLocks = new(StringComparer.Ordinal);
     public BootMeasurements Measurements { get; } = new();
     private long _cacheHits, _revalidated, _fetched, _saved;

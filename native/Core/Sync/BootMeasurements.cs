@@ -31,7 +31,7 @@ public sealed class BootMeasurements
         var list = samples.ToList();
         double Sum(string work) => list.Where(s => s.Work == work).Sum(s => s.Ms);
         return $"download={Sum("download"):0} parse={Sum("parse"):0} CPU={list.Where(s => s.Work is not ("download" or "parse")).Sum(s => s.Ms):0} ms "
-            + $"(clip import={Sum("clip import"):0} fitting={Sum("fitting"):0} generate={Sum("generate"):0})";
+            + $"(clip import={Sum("clip import"):0} fitting={Sum("fitting"):0} cached={Sum("cached"):0} generate={Sum("generate"):0})";
     }
     public string Describe() => string.Join("; ", Snapshot().GroupBy(s => s.Category).OrderBy(g => g.Key)
         .Select(g => $"{g.Key}: requests={g.Sum(s => s.Requests)} bytes={g.Sum(s => s.Bytes)} {Split(g)}"));

@@ -52,6 +52,18 @@ public sealed record ClipFitTime(string Url, string Kind, bool OnDemand, double 
 public sealed class TemplateClips
 {
     private readonly FigureManager _mgr;
+    private readonly string? _cacheKey;
+    private FigureCache? Cache => _mgr.Clips.Cache;
+    public Dictionary<Animation, string> Digests { get; } = new();
+    public sealed record PlannedCount(bool Binds, int Tracks, long Keys);
+    public sealed record ActionBinding(string Action, int Candidate);
+    public sealed record PlanData(PlannedCount[] Counts, double BindMinY, int FitVersion,
+        ActionBinding[]? Bindings = null, Dictionary<string, string>? Sets = null,
+        int Clips = 0, int Tracks = 0, long Keys = 0);
+    private static string SourceDependency(ClipSource source) => AnimaNative.Cache.DerivedKeys.Of(
+        source.Kind, source.Set, source.Url, source.CacheIdentity, source.Loop, source.RootMotion, source.HeightOffsets);
+    private string? FitKey(ClipSource source) => _cacheKey is not null && source.CacheIdentity is not null
+        ? "derived:fit:" + AnimaNative.Cache.DerivedKeys.Of(_cacheKey, SourceDependency(source), _standRef, _rigKnown, _scale) : null;
     private readonly Action<string> _log;
     private readonly RetargetRig _rig;
     private readonly IReadOnlyDictionary<string, RestFix>? _fixes;
@@ -109,9 +121,10 @@ public sealed class TemplateClips
     /// <param name="library">the template's library, holding the own takes already.</param>
     public TemplateClips(FigureManager mgr, Action<string> log, string url, Node3D root, Skeleton3D skel,
                          IReadOnlyDictionary<string, RestFix>? fixes, double standRef, bool rigKnown, double scale,
-                         AnimationLibrary library)
+                         AnimationLibrary library, string? cacheKey = null)
     {
         _mgr = mgr;
+        _cacheKey = cacheKey;
         _log = log;
         Url = url;
         _fixes = fixes;
@@ -132,14 +145,51 @@ public sealed class TemplateClips
     {
         // Which candidates bind (the fit's own loop, counting only — on a worker), in candidate order.
         var (rig, fixes, standRef, rigKnown, probe, skins) = (_rig, _fixes, _standRef, _rigKnown, _probe, _skins!);
-        var (counts, bindMinY, sampled) = await Task.Run(() =>
+        string? planKey = _cacheKey is not null && candidates.All(c => c.CacheIdentity is not null)
+            ? "derived:plan:" + AnimaNative.Cache.DerivedKeys.Of(_cacheKey, candidates.Select(SourceDependency).ToArray(),
+                _mgr.Clips.PolicyDigest, ownKinds.ToArray(), _standRef, _rigKnown, _scale) : null;
+        var saved = planKey is not null ? await Cache!.ReadJson<PlanData>(planKey) : null;
+        PlannedCount[] counts;
+        if (saved is not null && saved.FitVersion == AnimaNative.Cache.DerivedKeys.FitCodeVersion && saved.Counts is { } cachedCounts && cachedCounts.Length == candidates.Count
+            && cachedCounts.All(c => c is not null && c.Tracks >= 0 && c.Keys >= 0) && double.IsFinite(saved.BindMinY)
+            && saved.Bindings is { } bindings && saved.Sets is not null && saved.Clips >= 0 && saved.Tracks >= 0 && saved.Keys >= 0
+            && bindings.All(b => b is not null && b.Candidate >= 0 && b.Candidate < candidates.Count && ValidActionName(b.Action))
+            && bindings.Select(b => b.Action).Distinct(StringComparer.Ordinal).Count() == bindings.Length)
         {
-            using var fitting = _mgr.Measurements?.Time("character GLB", "fitting");
-            return (candidates.Select(c => ClipLibrary.Compute(c, rig, fixes, standRef, rigKnown, countOnly: true)).ToList(),
-             ClipGround.BindMinY(probe, skins), ClipGround.SampledSkins(skins));
-        });
-        _bindMinY = bindMinY;
-        _sampled = sampled;
+            counts = cachedCounts;
+            _bindMinY = saved.BindMinY;
+            _sampled = await Task.Run(() => ClipGround.SampledSkins(skins));
+            if (_mgr.ClipFit == ClipFitMode.Lazy) _skins = null;
+            PlannedClips = saved.Clips; PlannedTracks = saved.Tracks; PlannedKeys = saved.Keys;
+            ClipSets = saved.Sets;
+            foreach (var binding in bindings)
+            {
+                var source = candidates[binding.Candidate];
+                _clipOf[binding.Action] = source;
+                if (!_actionsOf.TryGetValue(source, out var list)) _actionsOf[source] = list = new List<string>();
+                list.Add(binding.Action);
+            }
+            Actions = bindings.Select(b => b.Action).ToArray();
+            Cache!.PlanHits++;
+            return;
+        }
+        else
+        {
+            var planWatch = Stopwatch.StartNew();
+            var plan = await Task.Run(() =>
+            {
+                using var fitting = _mgr.Measurements?.Time("character GLB", "fitting");
+                return new PlanData(candidates.Select(c =>
+                {
+                    var count = ClipLibrary.Compute(c, rig, fixes, standRef, rigKnown, countOnly: true);
+                    return new PlannedCount(count.Binds, count.TrackCount, count.Keys);
+                }).ToArray(), ClipGround.BindMinY(probe, skins), AnimaNative.Cache.DerivedKeys.FitCodeVersion);
+            });
+            counts = plan.Counts;
+            _bindMinY = plan.BindMinY;
+            _sampled = await Task.Run(() => ClipGround.SampledSkins(skins));
+            if (Cache is not null) { Cache.Plans++; Cache.FitMs += planWatch.Elapsed.TotalMilliseconds; }
+        }
         if (_mgr.ClipFit == ClipFitMode.Lazy) _skins = null;
         var bound = new List<ClipSource>();
         var sets = new Dictionary<string, string>();
@@ -150,7 +200,7 @@ public sealed class TemplateClips
             if (!counts[i].Binds) continue;
             bound.Add(candidates[i]);
             sets[candidates[i].Kind] = candidates[i].Set;
-            tracks += counts[i].TrackCount;
+            tracks += counts[i].Tracks;
             keys += counts[i].Keys;
         }
         PlannedClips = bound.Count;
@@ -180,6 +230,13 @@ public sealed class TemplateClips
             actions.Add(action);
         }
         Actions = actions;
+        if (planKey is not null)
+        {
+            var sources = candidates.ToArray();
+            var actionBindings = actions.Select(a => new ActionBinding(a, Array.IndexOf(sources, _clipOf[a]))).ToArray();
+            await Cache!.WriteJson(planKey, new PlanData(counts, _bindMinY, AnimaNative.Cache.DerivedKeys.FitCodeVersion,
+                actionBindings, sets, PlannedClips, PlannedTracks, PlannedKeys));
+        }
     }
 
     /// <summary>Godot's <c>AnimationLibrary::is_valid_animation_name</c>: not empty, none of <c>/ : , [</c>.</summary>
@@ -217,9 +274,44 @@ public sealed class TemplateClips
     {
         if (_fits.TryGetValue(src, out var running)) return running;
         // The manager's mode NOW (the offline walk probe drives its frames synchronously and switches to OnDemandSync).
-        var task = _mgr.ClipFit == ClipFitMode.Lazy ? FitAsync(src) : Task.FromResult(FitInline(src));
+        var task = FitKey(src) is { } key ? FitCachedAsync(src, key)
+            : _mgr.ClipFit == ClipFitMode.Lazy ? FitAsync(src) : Task.FromResult(FitInline(src));
         _fits[src] = task;
         return task;
+    }
+
+    /// <summary>Task 64: final rewritten animation + extras; never rerun key math, relock or ground on a hit.
+    /// BoundClip.Digest remains the pre-relock digest, exactly as for a fresh fit; the resource has its own final
+    /// engine-content digest. Missing/evicted/corrupt sidecars fall through to the existing fit path.</summary>
+    private async Task<Animation?> FitCachedAsync(ClipSource src, string key)
+    {
+        var watch = Stopwatch.StartNew();
+        bool synchronous = _mgr.ClipFit != ClipFitMode.Lazy;
+        var saved = await Cache!.ReadAnimation<FigureCache.FitData>(key, synchronous);
+        if (_dead) { saved?.Animation.Dispose(); return null; }
+        if (saved is { } hit && hit.Data.BoundDigest is { Length: 64 } && hit.Data.Keys >= 0 && hit.Data.FitVersion == AnimaNative.Cache.DerivedKeys.FitCodeVersion)
+        {
+            var anim = hit.Animation;
+            bool shared = false;
+            if (!src.RootMotion)
+                anim = _mgr.ShareIdentical(new BoundClip(src.Kind, anim, anim.GetTrackCount(), hit.Data.Keys, null, hit.Data.BoundDigest), ref shared).Anim!;
+            if (shared) SharedClips++;
+            else OwnKeys += hit.Data.Keys;
+            AnimKeys[anim] = hit.Data.Keys;
+            Digests[anim] = hit.Data.BoundDigest;
+            if (hit.Data.Extras is { } extras) Extras[anim] = extras;
+            AddActions(src, anim);
+            FittedClips++;
+            Cache.FitHits++;
+            _mgr.Measurements?.Add("character GLB", "cached", watch.Elapsed.TotalMilliseconds);
+            _log(Cache.Describe());
+            return anim;
+        }
+        saved?.Animation.Dispose();
+        var fitted = _mgr.ClipFit == ClipFitMode.Lazy ? await FitAsync(src) : FitInline(src);
+        if (fitted is not null && Digests.TryGetValue(fitted, out var digest))
+            await Cache.WriteAnimation(key, fitted, new FigureCache.FitData(digest, AnimKeys[fitted], Extras.GetValueOrDefault(fitted), AnimaNative.Cache.DerivedKeys.FitCodeVersion), synchronous);
+        return fitted;
     }
 
     // ---- the inline fit: the eager fit's arithmetic on the calling (main) thread ----------------------------------
@@ -344,6 +436,7 @@ public sealed class TemplateClips
         if (shared) SharedClips++;
         else OwnKeys += b.Keys;
         AnimKeys[b.Anim!] = b.Keys;
+        if (b.Digest is { } digest) Digests[b.Anim!] = digest;
         return b.Anim;
     }
 
@@ -378,6 +471,7 @@ public sealed class TemplateClips
     private void Done(ClipSource src, ClipFitTime time, string extraLog)
     {
         FittedClips++;
+        if (Cache is not null) { Cache.Fits++; Cache.FitMs += time.MainMs + time.WorkerMs; }
         _mgr.RecordFit(time);
         if (time.OnDemand || extraLog.Length > 0)
             _log($"model {Url}: clip {src.Kind} fitted{(time.OnDemand ? " on first use" : "")} in {time.WallMs:0.0} ms "

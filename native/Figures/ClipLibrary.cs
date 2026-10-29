@@ -17,6 +17,8 @@ namespace AnimaNative.Figures;
 /// </summary>
 public sealed record ClipSource
 {
+    /// <summary>Task 64: validated input identity; null disables persistent dependants.</summary>
+    public string? CacheIdentity { get; init; }
     public required string Kind { get; init; }
     public required string Set { get; init; }
     public required string Url { get; init; }
@@ -107,14 +109,19 @@ public sealed class ClipLibrary
     public long SourceKeys => Index.BySet.Values.SelectMany(b => b.Values)
                                    .Sum(c => Enumerable.Range(0, c.Anim.GetTrackCount()).Sum(t => (long)c.Anim.TrackGetKeyCount(t)));
     public int ClipsFailed { get; private set; }
-    /// <summary>Wall time of the downloads and of the imports (ms), for the log.</summary>
+    /// <summary>Download/prefetch phase wall time, and actual FBX import CPU time (ms), for the log.</summary>
     public double DownloadMs { get; private set; }
     public double ImportMs { get; private set; }
 
-    public ClipLibrary(IWorldSource source, Action<string> log)
+    public FigureCache? Cache { get; }
+    public string? RigIdentity { get; private set; }
+    public string PolicyDigest { get; private set; } = "";
+
+    public ClipLibrary(IWorldSource source, Action<string> log, FigureCache? cache = null)
     {
         _source = source;
         _log = log;
+        Cache = cache ?? ((source as AnimaApi)?.CacheStore is { } disk ? new FigureCache(disk) : null);
     }
 
     /// <summary>What a standing figure without an activity plays: <c>standingClipFor(none, none)</c>.</summary>
@@ -132,6 +139,9 @@ public sealed class ClipLibrary
 
     public void Parse(JsonElement root)
     {
+        PolicyDigest = AnimaNative.Cache.DerivedKeys.Of(
+            root.TryGetProperty("movement_poses", out var poses) ? poses.GetRawText() : "",
+            root.TryGetProperty("transition_clips", out var transitions) ? transitions.GetRawText() : "");
         Entries.Clear();
         foreach (var c in Json.Arr(root, "clips"))
         {
@@ -189,10 +199,21 @@ public sealed class ClipLibrary
         finally { _listing.TrySetResult(); }
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var buffers = new byte[]?[Entries.Count];
+        var identities = new string?[Entries.Count];
+        var prepared = new FigureCache.PreparedResource<FigureCache.SourceData>?[Entries.Count];
         var queue = new FocusQueue(DownloadWidth);
         await Task.WhenAll(Entries.Select((e, i) => queue.Push(new FocusJob(() => i, async () =>
         {
-            try { buffers[i] = await _source.GetBytesAsync(e.Url); }
+            try
+            {
+                buffers[i] = await _source.GetBytesAsync(e.Url);
+                if (Cache is { } cache)
+                {
+                    identities[i] = await cache.IdentityAsync(e.Url, buffers[i]!);
+                    if (identities[i] is { } identity)
+                        prepared[i] = await cache.PrepareAnimation<FigureCache.SourceData>(cache.ImportKey(e.Url, identity));
+                }
+            }
             catch (Exception ex) { _log($"clip not loadable: {e.Url} ({ex.Message})"); }
         }))));
         DownloadMs = sw.Elapsed.TotalMilliseconds;
@@ -204,17 +225,39 @@ public sealed class ClipLibrary
             {
                 try
                 {
-                    using var import = (_source as AnimaApi)?.Measurements.Time("clip", "clip import");
-                    results[i] = Import(bytes, Entries[i]);
+                    var entry = Entries[i];
+                    string? identity = identities[i];
+                    string? key = identity is not null ? Cache!.ImportKey(entry.Url, identity) : null;
+                    var cacheWatch = System.Diagnostics.Stopwatch.StartNew();
+                    var saved = prepared[i] is { } resource ? Cache!.LoadPrepared(resource) : null;
+                    if (saved is not null) (_source as AnimaApi)?.Measurements.Add("clip", "cached", cacheWatch.Elapsed.TotalMilliseconds);
+                    if (saved is { } hit && hit.Data.Url == entry.Url && hit.Data.Validator == identity
+                        && hit.Data.ImportVersion == AnimaNative.Cache.DerivedKeys.ClipImportVersion)
+                    {
+                        try { results[i] = FigureCache.Restore(hit.Animation, hit.Data, entry); }
+                        catch (Exception e) when (e is NullReferenceException or ArgumentException or IndexOutOfRangeException)
+                        { hit.Animation.Dispose(); }
+                        if (results[i] is not null) Cache!.ImportedHits++;
+                    }
+                    else saved?.Animation.Dispose();
+                    if (results[i] is null)
+                    {
+                        var importWatch = System.Diagnostics.Stopwatch.StartNew();
+                        using ((_source as AnimaApi)?.Measurements.Time("clip", "clip import"))
+                            results[i] = Import(bytes, entry) with { CacheIdentity = identity };
+                        ImportMs += importWatch.Elapsed.TotalMilliseconds;
+                        if (Cache is not null) { Cache.Imports++; Cache.ImportMs += importWatch.Elapsed.TotalMilliseconds; }
+                        if (key is not null) await Cache!.WriteAnimation(key, results[i]!.Anim, FigureCache.DataOf(results[i]!, identity!));
+                        if (NextFrame is { } next) await next();
+                    }
                     ClipsLoaded++;
                 }
                 catch (Exception ex) { _log($"clip not parsable: {Entries[i].Url} ({ex.Message})"); }
                 buffers[i] = null;
-                if (NextFrame is { } next) await next();
             }
             if (results[i] is null) ClipsFailed++;
         }
-        ImportMs = sw.Elapsed.TotalMilliseconds;
+
         Index = ClipLibraryRules.CommitInListOrder(Entries, results, new CommitOps());
         // A file that lost its (kind, set) slot to an earlier one is never played: give its keys back.
         var kept = new HashSet<Animation>(Index.BySet.Values.SelectMany(s => s.Values).Select(c => c.Anim));
@@ -223,8 +266,9 @@ public sealed class ClipLibrary
         await rig;
         var oneShots = Entries.Where(e => e.Loop == false).Select(e => e.Set.Length > 0 ? $"{e.Set}/{e.Kind}" : e.Kind)
                               .OrderBy(s => s, StringComparer.Ordinal).ToList();
+        if (Cache is not null) _log(Cache.Describe());
         _log($"clips: {Entries.Count} listed, {ClipsLoaded} imported, {ClipsFailed} failed, {Index.Kinds.Count} kinds "
-             + $"(download {DownloadMs:0} ms, import {ImportMs:0} ms); one-shot: {(oneShots.Count > 0 ? string.Join(", ", oneShots) : "none")}");
+             + $"(download/cache-read {DownloadMs:0} ms, import {ImportMs:0} ms, cached {Cache?.CachedMs ?? 0:0} ms); one-shot: {(oneShots.Count > 0 ? string.Join(", ", oneShots) : "none")}");
     }
 
     /// <summary>The commit operations of the browser's library: rename to the kind, carry the file's flags.</summary>
@@ -297,15 +341,31 @@ public sealed class ClipLibrary
         try
         {
             var bytes = await _source.GetBytesAsync(RigUrl);
+            RigIdentity = Cache is { } cache ? await cache.IdentityAsync(RigUrl, bytes) : null;
+            string? key = RigIdentity is not null ? Cache!.ImportKey(RigUrl, RigIdentity) : null;
+            var saved = key is not null ? await Cache!.ReadJson<FigureCache.RigData>(key) : null;
+            if (saved?.Bones is { Count: > 0 } bones && bones.All(b => b is not null && !string.IsNullOrEmpty(b.Key)))
+            {
+                DonorRest = new RestPoseData();
+                foreach (var bone in saved.Bones) DonorRest.Add(bone.Key, bone.World, bone.Parent, bone.ParentBone, bone.Position);
+                DonorHipsY = saved.Hips;
+                Cache!.ImportedHits++;
+                return;
+            }
             using var import = (_source as AnimaApi)?.Measurements.Time("clip", "clip import");
+            if (Cache is not null) Cache.Imports++;
+            var rigWatch = System.Diagnostics.Stopwatch.StartNew();
             var root = ImportFbxScene(bytes);
             try
             {
                 var skel = Find<Skeleton3D>(root) ?? throw new InvalidOperationException("rig has no skeleton");
                 var root3 = root as Node3D ?? throw new InvalidOperationException("rig root is not a Node3D");
                 DonorRest = RestAdapter.Of(root3, skel);
-                var key = DonorRest.Order.FirstOrDefault(k => k.EndsWith("hips", StringComparison.Ordinal));
-                if (key is not null) DonorHipsY = DonorRest.Position[key].Y;
+                var hipsKey = DonorRest.Order.FirstOrDefault(k => k.EndsWith("hips", StringComparison.Ordinal));
+                if (hipsKey is not null) DonorHipsY = DonorRest.Position[hipsKey].Y;
+                if (Cache is not null) Cache.ImportMs += rigWatch.Elapsed.TotalMilliseconds;
+                if (key is not null) await Cache!.WriteJson(key, new FigureCache.RigData(DonorRest.Order.Select(k =>
+                    new FigureCache.RigBone(k, DonorRest.World[k], DonorRest.Parent[k], DonorRest.ParentBone[k], DonorRest.Position[k])).ToList(), DonorHipsY));
                 _log($"rig: {DonorRest.World.Count} bones, rest hips height {DonorHipsY:0.####}");
             }
             finally { root.Free(); }

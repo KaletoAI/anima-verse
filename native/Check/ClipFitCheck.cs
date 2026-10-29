@@ -322,7 +322,7 @@ public static class ClipFitCheck
     private static bool Same(Vector3 a, Vector3 b) => a == b;
 
     /// <summary>Two animations with the same tracks and keys, bit for bit (times, transitions, values), loop mode and length.</summary>
-    private static bool SameKeys(Animation a, Animation b, out string why, ref int tracks, ref long keys)
+    internal static bool SameKeys(Animation a, Animation b, out string why, ref int tracks, ref long keys)
     {
         why = "";
         if (a.GetTrackCount() != b.GetTrackCount() || BitConverter.DoubleToInt64Bits(a.Length) != BitConverter.DoubleToInt64Bits(b.Length)
@@ -359,7 +359,7 @@ public static class ClipFitCheck
     private static string Hex(params double[] d) => string.Join(",", d.Select(x => BitConverter.DoubleToInt64Bits(x).ToString("x16")));
 
     /// <summary>Every number of a clip's extras by its bits.</summary>
-    private static string Bits(ClipExtras x)
+    internal static string Bits(ClipExtras x)
     {
         var sb = new StringBuilder();
         sb.Append("g:").Append(Hex(x.GroundOffset));
