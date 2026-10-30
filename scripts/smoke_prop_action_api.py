@@ -903,7 +903,9 @@ class ApiContracts(unittest.TestCase):
                 {name} if visible is None else visible, F.game_time(), 0, 1)
         local = view()
         self.assertTrue(local['waypoints'])
-        self.assertTrue(set(local) <= {'journey_id', 'room_id', 'waypoints', 'progress_m', 'walked_m', 'remaining_m', 'paces_m_s_real', 'starts_in_s'})
+        self.assertTrue(set(local) <= {'journey_id', 'room_id', 'floor_y', 'waypoints', 'progress_m', 'walked_m', 'remaining_m', 'paces_m_s_real', 'starts_in_s'})
+        # The walked floor travels with the motion so a client never guesses the storey.
+        self.assertEqual(local['floor_y'], journey['floor_y'])
         self.assertIsNone(view(visible=set()))
         own = dict(F.C.get_character_profile(observer), current_room='adjacent')
         self.assertIsNone(view(own=own))

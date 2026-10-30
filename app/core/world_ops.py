@@ -417,7 +417,7 @@ def _local_prop_approach(name, observer, profile, observer_profile, journey, vis
     from app.core.game_time import GameTime
     pending = max(0, (GameTime.parse(journey["started_at_game"]) - now).seconds - fraction)
     paces = segment_paces_m_s_real(journey["waypoints"], factor) if factor > 0 and not pending else None
-    return dict(journey_id=journey.get("journey_id"), room_id=room[1],
+    return dict(journey_id=journey.get("journey_id"), room_id=room[1], floor_y=journey.get("floor_y"),
                 waypoints=remaining, progress_m=0, walked_m=state["progress_m"],
                 remaining_m=round(max(0, state["total_m"] - state["progress_m"]), 2),
                 paces_m_s_real=paces[state["seg"]:] if paces else None,
@@ -914,6 +914,9 @@ def build_worldmap_payload(avatar_name: Optional[str] = None,
                                    for w in _j["waypoints"]]),
                     "progress_m": None if _thin else _st["progress_m"],
                     "total_m": None if _thin else _st["total_m"],
+                    # World Y of the floor an indoor approach walks on (an
+                    # upper storey); null outdoors, where the terrain decides.
+                    "floor_y": None if _thin else _j.get("floor_y"),
                     # Arrival on the WORLD CALENDAR (§ A11): the canonical
                     # stamp `Y0002-D109T14:00:00` — there is no world
                     # timezone any more. Clients never slice it: the two
