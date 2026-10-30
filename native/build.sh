@@ -85,6 +85,7 @@ if [ -f "$cef/gdcef.gdextension" ]; then
   # CEF's browser process — passes 2 GiB of heap. The export gets a PRIVATE copy of libcef.so whose `mallinfo` import
   # is renamed to `mallinf_`, answered by libanima_mallinfo.so (cef_shim/), which run.sh / AppRun preload. A plain
   # LD_PRELOAD of `mallinfo` cannot work: gdCEF is loaded with RTLD_DEEPBIND and binds libc's symbol first.
+  # Upstream: https://github.com/Lecrapouille/gdcef/issues/108 — drop the patch once gdCEF/CEF fixes it.
   echo "== libcef.so: private copy with the mallinfo import redirected"
   cp --remove-destination "$(readlink -f "$cef/linux/libcef.so")" "$out/libcef.so.tmp"
   python3 "$here/tools/patch_cef_mallinfo.py" "$out/libcef.so.tmp"
