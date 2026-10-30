@@ -217,6 +217,7 @@ const IR_TEXT = {
 };
 
 let IR_OCCASIONS = null;   // catalog rows (GET …/occasions)
+let IR_EFFECTIVE = null;   // saved explain rows for Rules page markers
 let IR_BACKENDS = null;    // backend rows (GET …/backends)
 let IR_OV_CHARACTER = '';
 let IR_CHARACTERS = null;
@@ -302,6 +303,9 @@ async function renderImageRoutingPage(pageId) {
     // The user may have navigated away while the catalog loaded.
     if (ACTIVE_SECTION !== 'image_generation' || ACTIVE_PAGE !== pageId) return;
     if (pageId === 'routing_overview') return renderImageRoutingOverview(content);
+    try { IR_EFFECTIVE = await irFetchJson('/admin/settings/image-routing/effective'); }
+    catch (e) { IR_EFFECTIVE = null; }
+    if (ACTIVE_SECTION !== 'image_generation' || ACTIVE_PAGE !== pageId) return;
     return renderImageRoutingRules(content);
 }
 
@@ -406,7 +410,7 @@ function renderImageRoutingRules(content) {
             continue;
         }
         if (!Object.prototype.hasOwnProperty.call(routing, o.id) && (o.default_chain || []).length) {
-            html += '<div class="desc rt-muted">(default chain): ' + irEsc(o.default_chain.join(' → ')) + '</div>';
+            html += '<div class="desc rt-muted">(default chain): ' + o.default_chain.map(spec => irEsc(spec) + ' ' + irRulesOverflowMarker(o, spec)).join(' → ') + '</div>';
             html += '<button class="btn btn-sm" onclick="irCustomDefault(\'' + sJs(o.id) + '\', false)">Customize chain</button> '
                   + '<button class="btn btn-sm" onclick="irCustomDefault(\'' + sJs(o.id) + '\', true)">Use cheapest backend</button>';
         } else {
@@ -426,6 +430,17 @@ function irCustomDefault(occ, cheapest) {
     r[occ] = cheapest ? [] : [...(definition.default_chain || [])];
     touchPath('image_generation.routing');
     irRerender();
+}
+
+function irOverflowMarker(targets) {
+    if (!targets || !targets.length) return '';
+    return '<span class="rt-taskchip" title="' + irEsc(targets.join(', ')) + '">accepts overflow</span>';
+}
+
+function irRulesOverflowMarker(o, spec) {
+    const occasion = ((IR_EFFECTIVE || {}).occasions || []).find(row => row.id === o.id);
+    const row = occasion && (occasion.chain || []).find(row => row.position !== 0 && row.spec === spec);
+    return irOverflowMarker(row && row.overflow_targets);
 }
 
 function irChainHtml(o, chain) {
@@ -452,6 +467,7 @@ function irChainHtml(o, chain) {
                 html += '<span class="rt-muted">' + irEsc(irFmt(IR_TEXT.matches, { names: shown })) + '</span>';
             }
         }
+        html += irRulesOverflowMarker(o, spec);
         html += '<span style="margin-left:auto; display:inline-flex; gap:4px;">';
         html += '<button class="btn btn-sm" title="' + irEsc(IR_TEXT.moveUp) + '"' + (i === 0 ? ' disabled' : '')
              + ' onclick="irMoveEntry(\'' + sJs(o.id) + '\', ' + i + ', -1)">↑</button>';
@@ -583,9 +599,17 @@ function irOverviewBody(data) {
             html += '<div class="rt-chain-row">'
                  + '<span class="rt-muted" style="min-width:20px;">' + irEsc(pos) + '.</span>'
                  + '<span>' + irEsc(row.spec) + '</span>'
+                 + irOverflowMarker(row.overflow_targets)
                  + '<span class="' + cls + '">' + irEsc(row.status_text || row.status) + '</span>'
                  + (row.backend ? '<span class="rt-muted">→ ' + irEsc(row.backend) + '</span>' : '')
                  + '</div>';
+        }
+        const targets = [...new Set((o.chain || []).flatMap(row => row.overflow_targets || []))];
+        if (targets.length) {
+            const configured = (CONFIG.image_generation || {}).overflow_after_seconds;
+            const after = configured == null ? 90 : Math.max(0, Number(configured));
+            html += '<div class="desc rt-muted">Overflow after ' + irEsc(after === 0 ? 'off' : after + ' s')
+                 + ' → ' + irEsc(targets.join(', ')) + '</div>';
         }
         html += '</div>';
     }

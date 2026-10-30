@@ -64,9 +64,10 @@ class BackendBusyError(Exception):
     pushes the load onto another alias of the SAME GPU and, in a busy phase,
     walks the whole pool into cooldown.
 
-    Backends raise this instead of returning an empty result; the fallback
-    engine catches it and retries elsewhere WITHOUT a cooldown. Only real
-    defects (connection refused, auth, malformed request, empty result) still
+    Backends raise this instead of returning an empty result; it is re-raised
+    typed and retried on the SAME backend by the retry layer, never re-routed.
+    Overflow is a separate mechanism for a render still waiting for a slot. Only
+    real defects (connection refused, auth, malformed request, empty result) still
     put a backend to sleep. The signal travels WITH the failure — deliberately
     an exception, not backend state: the provider queue re-raises the worker
     thread's original exception in the caller (see ProviderQueue
