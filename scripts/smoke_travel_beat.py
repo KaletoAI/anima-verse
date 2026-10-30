@@ -13,6 +13,20 @@ Hand-derived expectations (fixed tick 5 s, early beat +0.1 s):
 - an overland journey 1 s from arrival           -> 5.0 (fixed beat only)
 - an approach already arrived but not settled    -> 0.1 once, then 5.0
 - a frozen world (factor 0)                      -> 5.0
+- a run's entry clip ends in 2 game s, factor 1  -> 2 + 0.1 = 2.1
+- the same at factor 2                           -> 2/2 + 0.1 = 1.1
+- an entry already overdue                       -> 0.1
+The ticker advances the runs only when a step is due (due <= 0).
+due_in_game_s, now = last stamp + 1 s:
+- entry clips 2 s and 3 s, 1 s elapsed           -> max(2, 3) - 1 - 1 = 1
+- combined phase 5 s, 2 s elapsed                -> 5 - 2 - 1 = 2
+- the earliest wins                              -> 1; nothing timed -> None
+An approach starts on the first WHOLE game second >= exact now + max(exit
+clip, 0.75 s lead) x factor (game time 1000, fraction 0.4 unless stated):
+- no exit clip, factor 1     -> ceil(1000.4 + 0.75) = 1002
+- exit 2.23 s, factor 10     -> ceil(1000.4 + 22.3) = 1023
+- fraction -0.3, factor 1    -> ceil(999.7 + 0.75)  = 1001
+- frozen (factor 0)          -> lead unscaled: ceil(1000.4 + 0.75) = 1002
 A woken ticker starts its next pass at once instead of after its 5 s sleep.
 places._compose and room_stand.room_geometry compose once per scene
 fingerprint, recompose when it moves, and hand out private copies.
@@ -52,10 +66,24 @@ def row(journey_id, *, approach=True, started=NOW):
     return dict(name=journey_id, journey=journey)
 
 
-def beat(rows, *, factor=1.0, now=NOW):
+class Engine:
+    """Stand-in for the prop-action engine the ticker finds in sys.modules."""
+
+    def __init__(self, due):
+        self.due, self.advanced = due, []
+
+    def due_in_game_s(self, now):
+        return self.due
+
+    def advance(self, now):
+        self.advanced.append(now)
+
+
+def beat(rows, *, factor=1.0, now=NOW, engine=None):
     with patch("app.models.character.list_active_journeys", return_value=rows), \
             patch.object(T, "game_speed_factor", return_value=factor), \
-            patch.object(T, "game_time", return_value=now):
+            patch.object(T, "game_time", return_value=now), \
+            patch.object(T, "_prop_action_engine", return_value=engine):
         return T._next_beat_s()
 
 
@@ -78,6 +106,50 @@ def beats():
     check("finished journeys leave the early-beat set", not T._early_beats, T._early_beats)
 
 
+def entry_beats():
+    got = beat([], engine=Engine(2.0))
+    check("entry ends in 2 game s, factor 1 -> 2.1 s", abs(got - 2.1) < 1e-9, got)
+    got = beat([], factor=2.0, engine=Engine(2.0))
+    check("entry ends in 2 game s, factor 2 -> 1.1 s", abs(got - 1.1) < 1e-9, got)
+    got = beat([], engine=Engine(-0.5))
+    check("an overdue entry -> 0.1 s", got == 0.1, got)
+    check("no timed run keeps the fixed beat", beat([], engine=Engine(None)) == 5.0)
+    for due, expected in ((0.0, 1), (-1.0, 1), (0.5, 0), (None, 0)):
+        engine = Engine(due)
+        with patch.object(T, "_prop_action_engine", return_value=engine), \
+                patch.object(T, "game_time", return_value=NOW):
+            T._advance_due_prop_actions()
+        check(f"due {due} -> {expected} advance call(s)", len(engine.advanced) == expected, engine.advanced)
+
+
+def due_steps():
+    from app.core import prop_action_engine as A
+    stamp = NOW.canonical()
+    entry = dict(status="approaching", phase="entry", definition=dict(ability="pose"),
+                 data=dict(last_game=stamp, entry_elapsed=1.0,
+                           entries={"a": dict(duration_game_s=2), "b": dict(duration_game_s=3)}))
+    combined = dict(status="active", phase="drink",
+                    definition=dict(ability="combined", phases=[dict(id="prepare", duration_game_s=1),
+                                                               dict(id="drink", duration_game_s=5)]),
+                    data=dict(last_game=stamp, phase_elapsed=2.0))
+    walking = dict(status="approaching", phase="", definition=dict(ability="pose"),
+                   data=dict(last_game=stamp, elapsed=0.0))
+    for runs, expected in (([entry], 1), ([combined], 2), ([combined, entry, walking], 1), ([walking], None)):
+        with patch.object(A.store, "live_runs", return_value=runs):
+            got = A.due_in_game_s(LATER)
+        check(f"due_in_game_s -> {expected}", got == expected, got)
+
+
+def approach_start():
+    for fraction, exit_s, factor, expected in ((0.4, 0.0, 1.0, 1002), (0.4, 2.23, 10.0, 1023),
+                                               (-0.3, 0.0, 1.0, 1001), (0.4, 0.0, 0.0, 1002)):
+        with patch("app.core.timeutils.game_time_exact", return_value=(GameTime(1000), fraction)), \
+                patch.object(T, "game_speed_factor", return_value=factor):
+            got = T._approach_start(exit_s).total_seconds
+        check(f"approach start fraction {fraction} exit {exit_s} factor {factor} -> {expected}",
+              got == expected, got)
+
+
 def wake():
     passes = []
 
@@ -85,6 +157,7 @@ def wake():
         ticker = T.TravelTicker()
         with patch.object(T, "advance_all_journeys", lambda: passes.append(time.monotonic())), \
                 patch("app.core.interaction_engine.settle_approaches", lambda: None), \
+                patch.object(T, "_advance_due_prop_actions", lambda: None), \
                 patch.object(T, "_next_beat_s", return_value=5.0):
             await ticker.start()
             for _ in range(50):
@@ -154,6 +227,9 @@ def memos():
 
 def main():
     beats()
+    entry_beats()
+    due_steps()
+    approach_start()
     wake()
     memos()
     if failures:

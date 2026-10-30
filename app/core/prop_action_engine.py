@@ -260,7 +260,9 @@ def _requirements(run, profiles):
     return ""
 
 
-def _validate(run, *, conn=None, require_claims=False, presence=True, _query=None):
+def _validate(run, *, conn=None, require_claims=False, presence=True, _query=None, replaces=""):
+    """``replaces``: the actor's own live run this request ends first — its
+    claims, journey and interaction do not count as busy (see _replaceable)."""
     query = _query if _query is not None else places._GeometryQuery()
     definition, reason = _definition(run["target"], run["action_id"], run["definition_revision"], _query=query)
     if reason:
@@ -275,7 +277,7 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
         if row is None or row[0]:
             return "participant_unavailable"
         held = store.held(store.person_key(name), conn=conn)
-        if held and held != run["execution_id"]:
+        if held and held not in (run["execution_id"], replaces):
             return "participant_claimed"
         if require_claims and held != run["execution_id"]:
             return "participant_claim_lost"
@@ -287,9 +289,11 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
         if profile.get("is_sleeping") and run["status"] != "sleeping" and not owned_sleep_transition:
             return "participant_asleep"
         journey = profile.get("journey")
-        if journey and not _own_journey(run, name, journey):
+        if journey and not _own_journey(run, name, journey) and not (
+                replaces and journey.get("execution_ref") == replaces):
             return "journey_already_active"
-        if profile.get("interaction") and profile["interaction"].get("execution_ref") != run["execution_id"]:
+        ref = (profile.get("interaction") or {}).get("execution_ref")
+        if profile.get("interaction") and ref != run["execution_id"] and not (replaces and ref == replaces):
             return "interaction_active"
         targeted = [effect for effect in definition["effects"]
                     if effect["target"] in (role, "both")]
@@ -350,7 +354,7 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
     return ""
 
 
-def _plan(run, *, conn, _query=None):
+def _plan(run, *, conn, _query=None, replaces=""):
     from app.core.prop_action_paths import plan_approach
     query = _query if _query is not None else places._GeometryQuery()
     target = dict(run["target"], action_id=run["action_id"], definition_revision=run["definition_revision"])
@@ -358,6 +362,9 @@ def _plan(run, *, conn, _query=None):
     choices = []
     last_reason = "no_free_slot"
     occupancy = places.occupancy(target["location_id"], target["room_id"], _places=candidates)
+    # The actor leaves its own seat as part of the departure, and the run this
+    # request replaces gives up its slots: neither blocks the new plan.
+    own = {run["actor"]} | ({"@prop:" + replaces} if replaces else set())
     for place in candidates:
         if place.get("placement_id") != target["placement_id"] or place.get("variant_uid") != target["variant_uid"]:
             continue
@@ -368,8 +375,8 @@ def _plan(run, *, conn, _query=None):
             if last_reason == "no_free_slot":
                 last_reason = "incompatible_pose_marker"
             continue
-        free = [s for s in places.free_slots(place, occupancy.get(place["id"], []))
-                if not store.held(store.slot_key(target, place["marker_id"], s), conn=conn)]
+        free = [s for s in places.free_slots(place, [t for t in occupancy.get(place["id"], []) if t[0] not in own])
+                if store.held(store.slot_key(target, place["marker_id"], s), conn=conn) in (None, "", replaces or None)]
         if len(free) < len(_members(run)):
             continue
         if definition["ability"] == "pair":
@@ -430,7 +437,8 @@ def _planning_state(run, query):
     return dict(profiles={name: query.profile(name) for _, name in _members(run)},
                 positions={name: C.get_character_pos(name) for _, name in _members(run)},
                 inventory=inventory, geometry=query.room_geometry(target["location_id"], target["room_id"]),
-                documents={p["prop_id"]: query.prop_document(p["prop_id"]) for p in inventory})
+                documents={p["prop_id"]: query.prop_document(p["prop_id"])
+                           for p in inventory if p.get("prop_id")})
 
 
 def _revalidate_admission(run, conn, planned_state):
@@ -447,7 +455,8 @@ def _revalidate_admission(run, conn, planned_state):
     for plan in run["data"]["plans"].values():
         anchor = plan["entry_anchor"]
         place = next((p for p in inventory if p["id"] == anchor["place_id"]), None)
-        if (not place or anchor["slot"] not in places.free_slots(place, taken.get(place["id"], []))
+        if (not place or anchor["slot"] not in places.free_slots(
+                place, [t for t in taken.get(place["id"], []) if t[0] != run["actor"]])
                 or store.held(store.slot_key(target, anchor["marker_id"], anchor["slot"]), conn=conn)):
             return "no_free_slot"
     return ""
@@ -490,6 +499,26 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
                status="awaiting_consent" if partner else "approaching", phase="", reason="", target=target,
                definition=definition, data=dict(plans={}, journey_ids={}, arrived=[], process=_PROCESS,
                                                 last_game=now, elapsed=0.0, consent_elapsed=0.0))
+    replaces = _replaceable(actor, target, action_id)
+    if not replaces:
+        return _admit(run, fingerprint)
+    # Another action while seated: stand up and go there. Refusals that need
+    # no route keep the current action; a failed plan after that has ended
+    # it, and the actor stands up instead (a no-op once the new approach
+    # has taken the place over).
+    reason = _validate(run, replaces=replaces)
+    if reason:
+        return _refused(reason), False
+    _replace(actor, replaces)
+    try:
+        return _admit(run, fingerprint)
+    finally:
+        C.release_prop_action_state(actor, replaces)
+
+
+def _admit(run, fingerprint):
+    """Validate, plan, claim and start one new run (request_with_creation)."""
+    actor, partner, request_id = run["actor"], run["partner"], run["request_id"] or ""
     with _lock(run["execution_id"]):
         query = places._GeometryQuery(cache_profiles=True)
         reason = _validate(run, _query=query)
@@ -624,7 +653,7 @@ def _own_journey(run, name, journey):
 
 
 @_internal_mutation()
-def _finish(run, status, reason):
+def _finish(run, status, reason, *, keep_seated=""):
     if run["status"] in store.TERMINAL:
         return _result(run)
     phases = []
@@ -643,12 +672,14 @@ def _finish(run, status, reason):
     run.update(status=status, reason=reason)
     run["data"]["cleanup_pending"] = True
     _commit(run, phases)  # Terminal, effects and claim release precede cleanup.
-    _cleanup(run)
+    _cleanup(run, keep_seated=keep_seated)
     return _result(run)
 
 
 @_internal_mutation()
-def _cleanup(run):
+def _cleanup(run, keep_seated=""):
+    """``keep_seated``: a member whose place stays for the departure of the
+    run replacing this one (_replace); everyone else stands up here."""
     reason = run["reason"]
     for role, name in _members(run):
         jid = run["data"]["journey_ids"].get(name)
@@ -659,7 +690,8 @@ def _cleanup(run):
         if inter.get("execution_ref") == run["execution_id"]:
             from app.core.interaction_engine import end_interaction
             end_interaction(name, reason=reason, interaction_id=inter["id"])
-        C.release_prop_action_state(name, run["execution_id"])
+        if name != keep_seated:
+            C.release_prop_action_state(name, run["execution_id"])
     store.cleanup_finished(run["execution_id"])
 
 
@@ -674,6 +706,39 @@ def cancel(actor: str, execution_id: str) -> dict:
             return _result(run)
         normal = run["status"] == "active" and run["definition"]["ability"] in ("pose", "pair")
         return _finish(run, "completed" if normal else "cancelled", "ended" if normal else "cancelled")
+
+
+def _replaceable(actor, target, action_id):
+    """The actor's own live run a new request ends first ("" = none).
+
+    Choosing another action while seated means: stand up and go there. A
+    sleeping run wakes through its own path, and asking again for the very
+    action already running stays a refusal (participant_claimed).
+    """
+    held = store.held(store.person_key(actor))
+    old = store.get(held) if held else None
+    if (not old or old["status"] in store.TERMINAL or old["status"] == "sleeping"
+            or (old["target"]["placement_id"] == target["placement_id"] and old["action_id"] == action_id)):
+        return ""
+    return held
+
+
+def _replace(actor, execution_id):
+    """End the actor's own run for a new request, with cancel()'s outcome.
+
+    A solo actor already seated keeps its place: the new approach departs
+    from the seat through the pose's exit clip, and start_approach_journey
+    clears the place in its own write. The request stands it up if no new
+    approach starts.
+    """
+    with _lock(execution_id):
+        run = store.get(execution_id)
+        if not run or run["status"] in store.TERMINAL:
+            return
+        normal = run["status"] == "active" and run["definition"]["ability"] in ("pose", "pair")
+        seated = run["status"] == "active" and run["definition"]["ability"] in ("pose", "combined")
+        _finish(run, "completed" if normal else "cancelled", "ended" if normal else "cancelled",
+                keep_seated=actor if seated else "")
 
 
 def interrupt_after_locks(actor, reason, *, execution_id=""):
@@ -1058,6 +1123,30 @@ def advance(now: GameTime) -> int:
     return advanced
 
 
+def due_in_game_s(now: GameTime):
+    """Game seconds until a live run's next timed step — an entry clip or a
+    combined phase ending — or None when no run waits on the clock.
+
+    The travel ticker beats on it (travel_engine._next_beat_s), so a sitter
+    sits when the clip ends instead of on the next world-admin tick.
+    """
+    soonest = None
+    for run in store.live_runs():
+        data = run["data"]
+        if run["status"] == "approaching" and run["phase"] == "entry" and data.get("entries"):
+            left = max(e["duration_game_s"] for e in data["entries"].values()) - data.get("entry_elapsed", 0.0)
+        elif run["status"] == "active" and run["definition"]["ability"] == "combined":
+            phase = next((p for p in run["definition"]["phases"] if p["id"] == run["phase"]), None)
+            if phase is None:
+                continue
+            left = phase["duration_game_s"] - data.get("phase_elapsed", 0.0)
+        else:
+            continue
+        left -= max(0, (now - GameTime.parse(data["last_game"])).total_seconds)
+        soonest = left if soonest is None else min(soonest, left)
+    return soonest
+
+
 def _notify(run):
     """Private invalidation only, never broadcast invitation/target payloads."""
     from app.core.keyed_lock import _after_locks
@@ -1088,9 +1177,11 @@ def check(actor: str, target: dict, action_id: str, revision: str, partner: str 
     plans = {}
     # Preserve definition/partner/freeze/participant/requirement precedence.
     # Never build a route for an already refused offer.
-    reason = "world_frozen" if is_world_frozen() else _validate(run, _query=query)
+    # The actor's own running action is ended by the request, not a block.
+    replaces = _replaceable(actor, target, action_id)
+    reason = "world_frozen" if is_world_frozen() else _validate(run, _query=query, replaces=replaces)
     if not reason:
-        plans, reason = _plan(run, conn=store.db.get_connection(), _query=query)
+        plans, reason = _plan(run, conn=store.db.get_connection(), _query=query, replaces=replaces)
     result = dict(enabled=not reason, reason=reason)
     if include_plans:
         result["plans"] = plans if not reason else {}

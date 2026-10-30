@@ -92,7 +92,10 @@ class Relax(unittest.TestCase):
         self.assertEqual(result['status'], 'approaching', result)
         journey = F.E.get_journey(name)
         duration = journey['waypoints'][-1][2]
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=int(duration) - 1))
+        # The approach starts after a poll lead (travel_engine._approach_start);
+        # count the legs from that start, not from the request.
+        lead = (F.GameTime.parse(journey['started_at_game']) - F.game_time()).total_seconds
+        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=lead + int(duration) - 1))
         F.E.advance_all_journeys()
         self.assertIsNotNone(F.E.get_journey(name))
         F.E._approach_validation_cache.clear()

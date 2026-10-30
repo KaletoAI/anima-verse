@@ -1004,6 +1004,23 @@ def start_journey_to_point(character_name: str, x: float,
     return journey, "ok"
 
 
+#: Real seconds an in-room approach waits before it walks off. The client
+#: learns of it from its next worldmap poll (about every half second); a walk
+#: already under way by then has the figure chase its own position.
+_APPROACH_LEAD_S = 0.75
+
+
+def _approach_start(exit_s: float) -> GameTime:
+    """The first WHOLE game second at least the exit clip, and at least the
+    poll lead, after the EXACT now. ``game_time()`` rounds to the nearest
+    second, so a start stamped from it began up to half a second ago."""
+    from app.core.timeutils import game_time_exact
+    now, fraction = game_time_exact()
+    factor = game_speed_factor()
+    lead = max(float(exit_s or 0.0), _APPROACH_LEAD_S) * (factor if factor > 0 else 1.0)
+    return GameTime(math.ceil(now.total_seconds + fraction + lead))
+
+
 def start_approach_journey(character_name: str, target: dict, role: str, *,
                            execution_kind: str, execution_ref: str,
                            journey_id: str = "") -> Tuple[Dict[str, Any] | None, str]:
@@ -1042,7 +1059,7 @@ def start_approach_journey(character_name: str, target: dict, role: str, *,
         elapsed += math.dist(a, b) / speed
         timed.append([*b, elapsed])
     exit_clip, exit_s = departure_bridge(character_name)
-    starts = game_time() + GameDuration.of(seconds=_exit_delay(exit_s, game_speed_factor()))
+    starts = _approach_start(exit_s)
     chosen_target = {**target, "marker_id": plan["entry_anchor"]["marker_id"],
                      "slot": plan["entry_anchor"]["slot"]}
     journey = dict(target="", target_point=dict(plan["access"]), approach_target=chosen_target,
@@ -2170,6 +2187,12 @@ class TravelTicker:
             except Exception:
                 logger.exception("interaction settle failed")
             try:
+                # An entry clip or a phase that has run out moves its run on
+                # now; the world-admin tick would take up to a minute.
+                await asyncio.to_thread(_advance_due_prop_actions)
+            except Exception:
+                logger.exception("prop action advance failed")
+            try:
                 delay = await asyncio.to_thread(_next_beat_s)
             except Exception:
                 logger.exception("travel tick planning failed")
@@ -2194,8 +2217,10 @@ def _next_beat_s() -> float:
     in-room approach (a walk to a seat, about a second long) arrives first.
 
     Its arrival is what starts the sit; waiting for the fixed 5 s tick left the
-    figure walking on the spot at the seat. Overland journeys keep the fixed
-    beat — their arrival is minutes away and a few seconds do not show.
+    figure walking on the spot at the seat. The end of the entry clip that
+    follows (and of a combined action's phase) gets a beat as well. Overland
+    journeys keep the fixed beat — their arrival is minutes away and a few
+    seconds do not show.
     """
     from app.models.character import list_active_journeys
     factor = game_speed_factor()
@@ -2220,7 +2245,29 @@ def _next_beat_s() -> float:
         remaining = (GameTime.parse(st["eta_game"]) - now).total_seconds / factor
         soonest = min(soonest, remaining + _MIN_BEAT_S)
     _early_beats.intersection_update(live)
+    engine = _prop_action_engine()
+    due = engine.due_in_game_s(now) if engine is not None else None
+    if due is not None:
+        soonest = min(soonest, max(0.0, due) / factor + _MIN_BEAT_S)
     return max(_MIN_BEAT_S, soonest)
+
+
+def _prop_action_engine():
+    """The prop-action engine when it is loaded — opt-in like the periodic
+    job (periodic_jobs._sub_prop_action_runs); never imported from here."""
+    import sys
+    return sys.modules.get("app.core.prop_action_engine")
+
+
+def _advance_due_prop_actions() -> None:
+    """Run the prop-action clock once a timed step of a run is due."""
+    engine = _prop_action_engine()
+    if engine is None:
+        return
+    now = game_time()
+    due = engine.due_in_game_s(now)
+    if due is not None and due <= 0:
+        engine.advance(now)
 
 
 _ticker: TravelTicker | None = None

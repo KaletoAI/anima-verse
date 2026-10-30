@@ -103,7 +103,10 @@ class StepOut(unittest.TestCase):
         self.assertAlmostEqual(journey['waypoints'][1][2], .55 / journey['speed_m_s'])
         length = sum(math.dist(a, b) for a, b in zip(plan['waypoints'], plan['waypoints'][1:]))
         self.assertAlmostEqual(journey['waypoints'][-1][2], length / journey['speed_m_s'])
-        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=1))
+        # The approach starts after a poll lead (travel_engine._approach_start);
+        # the legs count from that start.
+        lead = (F.GameTime.parse(journey['started_at_game']) - F.game_time()).total_seconds
+        F.set_game_time(F.game_time() + F.GameDuration.of(seconds=lead + 1))
         F.E.advance_all_journeys()
         self.assertIsNotNone(F.E.get_journey(name), F.C.get_character_profile(name))
         self.assertEqual(F.C.get_character_pos(name)['x'], 8.4)
@@ -149,7 +152,8 @@ def old_code_proof():
         observed = F.N.plan_approach(name, target, 'actor')
         assert observed['reason'] == 'start_not_walkable', observed
     name, target, _ = two_markers()
-    with patch.object(A, '_plan', old_plan):
+    # The old _plan predates the replaces argument check() now passes.
+    with patch.object(A, '_plan', lambda run, *, replaces='', **kw: old_plan(run, **kw)):
         observed = A.check(name, {k: target[k] for k in ('location_id', 'room_id', 'placement_id', 'variant_uid')},
                            target['action_id'], target['definition_revision'], _query=blocked_query(name, target))
         assert observed['reason'] == 'incompatible_pose_marker', observed

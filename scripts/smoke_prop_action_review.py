@@ -7,6 +7,7 @@ A 50 -> 55 -> 62 effect sequence must notify old=50,new=62. Planning must
 permit an independent SQLite writer; restart failure must retain its old clock.
 """
 from copy import deepcopy
+import json
 import time
 import unittest
 from unittest.mock import patch
@@ -16,7 +17,7 @@ from app.core import paths
 # The imported fixture already initialized this private root; make the direct
 # DB-import boundary explicit for the repository storage guard as well.
 paths.init(F.ROOT / "world")
-from app.core import prop_actions, prop_action_paths as P, effect_application as E
+from app.core import places, prop_actions, prop_action_paths as P, effect_application as E
 from app.core.game_time import GameDuration
 
 
@@ -207,6 +208,79 @@ class Review(unittest.TestCase):
             S.tick(2)
         self.assertEqual(F.C.get_character_profile(name)['status_effects']['run_energy'], 62)
         self.assertEqual(notify.call_args.args[0][name]['changes']['run_energy'], dict(old=50, new=62))
+
+    def test_room_marker_without_prop_shares_the_room(self):
+        # A room-level marker (source "room") carries no prop_id; a request
+        # for furniture in the same room must still plan (it used to 500).
+        name, target, _ = S.setup_run()
+        own = places._GeometryQuery.room_places
+
+        def with_room_marker(query, location_id, room_id):
+            return own(query, location_id, room_id) + [dict(
+                id='room:rug', group='ground', label='rug', capacity=1, slots=[[9.0, 9.0]],
+                facing=None, y_world=0.0, root_offset=0.0, source='room', room_id=room_id, floor_y=0.0)]
+        with patch.object(places._GeometryQuery, 'room_places', with_room_marker):
+            result = S.request(name, target)
+        self.assertEqual(result['status'], 'approaching', result)
+
+    def test_other_action_while_seated_stands_up_and_goes(self):
+        # Seated in one action, choosing another one: the offer is open, the
+        # request ends the first action and the new approach departs from the
+        # seat through the exit clip (no stand-up jump before it).
+        name, target, pid = S.setup_run()
+        doc = F.props.read_sidecar(pid)
+        doc['actions'].append(dict(deepcopy(doc['actions'][0]), id='rest-2', name='Rest 2'))
+        F.props._write_sidecar(pid, doc)
+        target['definition_revision'] = F.props.get_prop(pid)['revision']
+        directory = F.ROOT / 'clips'
+        (directory / 'run-exit.fbx').write_bytes(b'private deterministic asset fixture')
+        (directory / 'run-exit.json').write_text(json.dumps(dict(
+            kind='run-exit', duration_s=1, loop=False,
+            geometry=dict(root_motion=dict(mode='foot_lock', travel_m=[0, 2], ref_height_m=1.7)))))
+        S.clips._clear_entries_cache()
+        S.clips._write_world_transitions([
+            {'from': 'walking', 'to': 'sitting', 'kind': 'run-enter', 'accel': 0},
+            {'from': 'sitting', 'to': 'walking', 'kind': 'run-exit', 'accel': 0}])
+        first = S.request(name, target)
+        S.tick(30)
+        S.tick(2)
+        self.assertEqual(R.get(first['execution_id'])['status'], 'active')
+        seat = F.C.get_character_pos(name)
+        prop_actions.invalidate_offers_cache()
+        rows = {row['action_id']: row for row in prop_actions.offers(name)}
+        self.assertEqual((rows['rest-2']['enabled'], rows['rest-2']['reason']), (True, ''), rows['rest-2'])
+        self.assertEqual(rows[target['action_id']]['reason'], 'participant_claimed')
+        other = dict(target, action_id='rest-2')
+        second = S.request(name, other)
+        self.assertEqual(second['status'], 'approaching', second)
+        self.assertEqual(R.get(first['execution_id'])['status'], 'completed')
+        profile = F.C.get_character_profile(name)
+        self.assertFalse(profile.get('place'))
+        self.assertEqual(F.C.get_character_pos(name), seat)
+        self.assertEqual(profile['journey']['execution_ref'], second['execution_id'])
+        self.assertEqual(profile['journey']['exit_clip'], 'run-exit')
+        self.assertEqual(profile['journey']['waypoints'][0][:2], [seat['x'], seat['z']])
+        self.assertEqual({c['execution_id'] for c in R.claims()}, {second['execution_id']})
+        self.assertEqual(S.request(name, other)['reason'], 'participant_claimed')
+
+    def test_failed_replacement_stands_the_actor_up(self):
+        # The plan fails after the first action has ended (no exit clip to
+        # leave the seat): the actor stands up instead of keeping a place
+        # nobody owns any more.
+        name, target, pid = S.setup_run()
+        doc = F.props.read_sidecar(pid)
+        doc['actions'].append(dict(deepcopy(doc['actions'][0]), id='rest-2', name='Rest 2'))
+        F.props._write_sidecar(pid, doc)
+        target['definition_revision'] = F.props.get_prop(pid)['revision']
+        first = S.request(name, target)
+        S.tick(30)
+        S.tick(2)
+        self.assertEqual(R.get(first['execution_id'])['status'], 'active')
+        second = S.request(name, dict(target, action_id='rest-2'))
+        self.assertEqual((second['status'], second['reason']), ('refused', 'missing_exit_transition'), second)
+        self.assertEqual(R.get(first['execution_id'])['status'], 'completed')
+        self.assertFalse(F.C.get_character_profile(name).get('place'))
+        self.assertFalse(R.claims())
 
 
 if __name__ == '__main__':
