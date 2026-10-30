@@ -215,7 +215,7 @@ public partial class Main : Node3D
             if (_avatarRooms?.Picking.Hit(o, d) is { } vertical)
             { _avatarRooms.UseVertical(vertical.Target); return true; }
             return false;
-        });
+        }, embodied: Embodied);
         Log($"pick at ({click.X:0},{click.Y:0}): "
             + (figure is { } f ? $"figure {f.Name} at {f.Distance:0.##} m ({_figures.LastPickCandidates} near the ray, "
                                  + $"{_figures.LastPickSkinnedVertices} vertices skinned, {_figures.LastPickMs:0.##} ms)"

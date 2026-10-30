@@ -631,6 +631,13 @@ public partial class FigureManager : Node3D
 
     private void StepFigure(Figure fig, double dt, Vec3? neighbour, double camDist)
     {
+        if (fig.PropCommitPending && !IsPlayerDriven(fig.CharacterName) && _lastPlans.TryGetValue(fig.CharacterName,out var held))
+        {
+            // Retry lazy held-pose fitting without ever opening an ordinary entry bridge at the anchor.
+            AdoptPropEntry(fig,held);
+            fig.UpdateFigure(dt);
+            return;
+        }
         if (fig.PropEntryBlocked) return;
         if (fig.PropEntry is not null) { TickPropEntry(fig); return; }
         // A running pair interaction places the figure and plays its half (npcs.ts: `tickInteraction` before anything).

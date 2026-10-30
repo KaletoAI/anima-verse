@@ -82,7 +82,7 @@ public sealed record CharacterRow(
                 wp = Json.Ring(w).ToList();
             travel = new TravelInfo(wp, Json.NumOrNull(tr, "progress_m"))
             {
-                TotalM = Json.NumOrNull(tr, "total_m"), StartsInS = Json.NumOrNull(tr, "starts_in_s"),
+                FloorY = Json.NumOrNull(tr, "floor_y"), TotalM = Json.NumOrNull(tr, "total_m"), StartsInS = Json.NumOrNull(tr, "starts_in_s"),
                 JourneyId = Text("journey_id"), TargetId = Text("target_id"), TargetName = Text("target_name"),
                 EtaGame = Text("eta_game"), EtaHhmm = Text("eta_hhmm"), EtaLabel = Text("eta_label"),
                 PaceMSReal = Json.NumOrNull(tr, "pace_m_s_real"), SpeedMSReal = Json.NumOrNull(tr, "speed_m_s_real"),
@@ -145,6 +145,7 @@ public sealed record CharacterRow(
 public sealed record TravelInfo(List<(double X, double Z)>? Waypoints, double? ProgressM)
 {
     /// <summary>Task 42 / A11: complete travel block; withheld values remain null, ETA strings are never parsed.</summary>
+    public double? FloorY { get; init; }
     public double? TotalM { get; init; }
     public double? StartsInS { get; init; }
     public IReadOnlyList<double?>? Paces { get; init; }

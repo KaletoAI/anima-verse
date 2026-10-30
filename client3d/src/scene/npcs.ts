@@ -192,6 +192,7 @@ export interface IncomingRoute {
   journeyId: string | null;
   stamp: number;
   exact?: boolean;
+  floorY?: number;
   startsInS?: number;
 }
 
@@ -205,6 +206,7 @@ export interface TravelRoute {
   shownM: number;
   stamp: number;
   exact?: boolean;
+  floorY?: number;
   serverM?: number;
   receivedAt?: number;
   startsInS?: number;
@@ -901,12 +903,13 @@ export class NpcManager {
           npc.route = {
             key, points: inc.points.map((p) => [p[0], p[1]] as MetrePoint),
             totalM: inc.totalM, paces: inc.paces, targetM: target, shownM: target,
-            stamp: inc.stamp, exact: inc.exact, serverM: inc.serverM,
+            stamp: inc.stamp, exact: inc.exact, floorY: inc.floorY, serverM: inc.serverM,
             receivedAt: performance.now() - age * 1000, startsInS: inc.startsInS,
           };
         } else {
           npc.route.paces = inc.paces;
           npc.route.exact = inc.exact;
+          npc.route.floorY = inc.floorY;
           if (npc.route.stamp !== inc.stamp) {
             npc.route.targetM = target;
             npc.route.stamp = inc.stamp;
@@ -917,7 +920,8 @@ export class NpcManager {
             npc.route.shownM = a.shownM;
             if (a.snap === 'back') {
               const at = pointAtDistance(npc.route.points, a.shownM)!;
-              npc.root.position.set(at[0], this.groundY(at[0], at[1]), at[1]);
+              npc.root.position.set(at[0], (npc.route.exact ? npc.route.floorY ?? this.roomStandAt(npc.name, at[0], at[1]) : null)
+                ?? this.groundY(at[0], at[1]), at[1]);
               npc.figure?.resetSecondaryMotion();
               this.syncCounters.travBack += 1;
             } else if (a.snap === 'fwd') {
@@ -1328,24 +1332,17 @@ export class NpcManager {
   private adoptPropEntry(npc: Npc, st: NpcState): void {
     const spec = !st.hidden ? st.char.prop_action_entry : null;
     if (!spec) {
+      npc.entryBlocked = false;
       if (!npc.entry) return;
       const previous = npc.entry.spec;
       if (st.char.place || st.char.interaction) {
-        const played = npc.entry.played && npc.figure?.playPropEntry(previous.kind, 1, previous.height_cm,
+        if (npc.entry.played) npc.figure?.playPropEntry(previous.kind, 1, previous.height_cm,
           THREE.MathUtils.degToRad(previous.access.yaw), previous.access.y, previous.anchor.y,
           previous.root_offset, previous.game_seconds_per_real_second <= 0);
-        if (!played) {
-          if (!npc.entry.failed) this.onPropEntryError?.(`${npc.name}: entry ${previous.kind} was not rendered; representation unavailable`);
-          // Missing readiness never becomes an access-to-anchor teleport.
-          // Keep this representation unavailable for the held action.
-          npc.entryBlocked = true;
-          npc.root.visible = false;
-          npc.entry = null;
-          npc.route = null;
-          return;
-        }
-        npc.root.position.set(previous.anchor.x, previous.anchor.y, previous.anchor.z);
-        npc.target.copy(npc.root.position);
+        // The held placement ends entry even if its live clip was missed or unavailable.
+        npc.root.position.copy(st.pos);
+        npc.target.copy(st.pos);
+        npc.root.visible = !st.hidden;
         npc.figure?.setYaw(THREE.MathUtils.degToRad(previous.anchor.yaw));
       }
       npc.figure?.finishPropEntry(st.char.activity_animation || poseClip('standing'));
@@ -1441,7 +1438,8 @@ export class NpcManager {
             progress_m: r.serverM ?? 0, starts_in_s: r.startsInS },
             (performance.now() - (r.receivedAt ?? performance.now())) / 1000);
           const previousX = npc.root.position.x, previousZ = npc.root.position.z;
-          npc.root.position.set(at[0], this.groundY(at[0], at[1]), at[1]);
+          npc.root.position.set(at[0], r.floorY ?? this.roomStandAt(npc.name, at[0], at[1])
+            ?? this.groundY(at[0], at[1]), at[1]);
           npc.target.copy(npc.root.position);
           const moving = Math.hypot(at[0] - previousX, at[1] - previousZ) > 1e-6;
           if (moving) {

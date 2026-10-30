@@ -43,6 +43,15 @@ public class PickChainTests
     }
 
     [Fact]
+    public void EmbodiedLocationClearsPanelButPropConsumesClick()
+    {
+        Assert.Equal(new PickOutcome(null, InfoChange.Clear, null), PickChain.Resolve(null, "house", embodied: true));
+        Assert.Equal(new PickOutcome(null, InfoChange.Clear, null), PickChain.Resolve(null, null, embodied: true));
+        Assert.Equal(new PickOutcome(null, InfoChange.Unchanged, null), PickChain.Resolve(null, "house", () => true, embodied: true));
+        Assert.Equal(new PickOutcome("Kai", InfoChange.Unchanged, null), PickChain.Resolve("Kai", "house", embodied: true));
+    }
+
+    [Fact]
     public void EmptyGroundClearsBoth()
     {
         // selected = null (pickFigure miss) and onPick(null) → info = null.

@@ -63,7 +63,8 @@ public sealed partial class AvatarOffersController
             PendingPropAction=PropActionMotion.Text(props.OwnedRun?["execution_id"])==id ? ReleaseOwnedPropAsync()
                 : MutatePropAsync(()=>_source.CancelPropActionAsync(id,_lifetime.Token));
         };
-        _figures.OwnedPropApproaching=()=>PropActionMotion.Text(props.OwnedRun?["status"])=="approaching";
+        // Private state can become active before the world-map response drops its approach.
+        _figures.OwnedPropApproaching=()=>props.OwnedRun is not null;
         _position.PropMotionOwned=()=>props.OwnedRun is not null;
         _position.ManualPropWithdrawn=props.ManualGate.Withdrawn;
         _steering.ReleasePropAction=()=> { if(!props.Paused && !props.ManualGate.Pending) PendingPropAction=ReleaseOwnedPropAsync(); };

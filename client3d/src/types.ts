@@ -192,6 +192,8 @@ export interface MapLocation {
  *  The client walks the line by DISTANCE (`progress_m`), never by re-deriving
  *  the timing: the baked cumulative game seconds stay server-internal. */
 export interface MapTravel {
+  /** Indoor approach floor; older payloads resolve it from the room. */
+  floor_y?: number | null;
   target_id: string;
   /** The route as world points `[x, z]`, start to goal. `null` under the fog
    *  (§ A12): a metre-exact line to a place the avatar may not know would
@@ -233,6 +235,7 @@ export interface MapTravel {
 
 /** Visibility-filtered remaining motion, never another character's full journey. */
 export interface MapLocalApproach {
+  floor_y?: number | null;
   journey_id: string;
   room_id: string;
   waypoints: [number, number][];

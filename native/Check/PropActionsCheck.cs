@@ -88,9 +88,9 @@ public static class PropActionsCheck
                     mgr.Tick(0); mgr.Tick(0);
                     Is("missing measured readiness reported once",unavailable==1 && avatar.PropEntry?.Played==false);
                     await mgr.Apply(active.RootElement);
-                    Is("missing readiness cannot teleport to held anchor",avatar.PropEntryBlocked && avatar.Hidden && Math.Abs(avatar.Position.Z+1)<1e-5);
+                    Is("authoritative place releases failed entry",!avatar.PropEntryBlocked && !avatar.Hidden && avatar.PropEntry is null && avatar.CurrentClip=="sitting");
                     await mgr.Apply(active.RootElement); mgr.Tick(0);
-                    Is("later held poll keeps failed representation unavailable",avatar.PropEntryBlocked && avatar.Hidden && Math.Abs(avatar.Position.Z+1)<1e-5);
+                    Is("later held poll keeps representation available",!avatar.PropEntryBlocked && !avatar.Hidden && avatar.PropEntry is null);
                 }
                 else if(scenario=="pair-request") {
                     using var result=await control.MutateAsync(()=>source.RequestPropActionAsync("pair-56",target.RootElement,"revision-56","fixture-npc"));
@@ -138,6 +138,7 @@ public static class PropActionsCheck
             finally { mgr.QueueFree(); }
         }
         checks += await CheckMenus(host,fixtures);
+        checks += await CheckUpperStorey(host,fixtures);
         // Real bridge callback: the host cannot acknowledge a preparation while a position promise is outstanding.
         var hud=new HudOverlay(); var write=new TaskCompletionSource(); int changed=0;
         hud.PropActionPrepare=_=>write.Task; hud.PropActionsChanged=id=>{ if(id=="hud:57") changed++; };
@@ -145,7 +146,84 @@ public static class PropActionsCheck
         Is("bridge awaits position preparation",hud.PendingPropPreparation is { IsCompleted:false });
         write.SetResult(); await hud.PendingPropPreparation!;
         hud.hud_bridge("""{"v":4,"kind":"prop-actions-changed","request_id":"hud:57"}"""); Is("bridge invalidates correlated",changed==1); hud.Free();
-        return $"propactions scenarios=6 checks={checks} solo=pass pair-request=pass pair-accept=pass pair-decline=pass cancel=pass stale-revision=pass route=6m npc=5m clip=1s lift=.0645 root=.129";
+        return $"propactions scenarios=8 checks={checks} solo=pass pair-request=pass pair-accept=pass pair-decline=pass cancel=pass stale-revision=pass upper-direct=pass upper-bridge=pass route=6m npc=5m clip=1s lift=.0645 root=.129";
+    }
+    private static async Task<int> CheckUpperStorey(Node3D host,string fixtures)
+    {
+        int n=0;
+        void Is(string label,bool ok) { n++; if(!ok) throw new InvalidOperationException("propactions upper "+label); }
+        void Near(string label,double got,double want) => Is($"{label}: {got} expected {want}",Math.Abs(got-want)<.0002);
+        var fixture=new FixtureSource(Path.Combine(fixtures,"propactions"),fixtures);
+        JsonObject Read(string file)=>JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.Dir,file)))!.AsObject();
+        var scene=Read("scene_loc-props.json");
+        scene["levels"]![0]!["level"]=1; scene["levels"]![0]!["floor_y"]=9.4;
+        scene["rooms"]![0]!["level"]=1; scene["models"]![0]!["level"]=1;
+        scene["models"]![0]!["bottom_y"]=9.4;
+        scene["plates"]=new JsonArray(new JsonObject { ["level"]=1,["room_id"]="r-props",
+            ["outline"]=scene["rooms"]![0]!["outline"]!.DeepClone(),["holes"]=new JsonArray(),
+            ["top_y"]=9.4,["thickness"]=.02,["opacity_role"]="upper" });
+        scene["markers"]![0]!["y_world"]=9.927; scene["markers"]![0]!["floor_y"]=9.4;
+        var source=new MenuSource(fixture) { SceneOverride=scene };
+        var world=new Node3D(); host.AddChild(world);
+        var builder=new WorldBuilder(source,_=>{},strict:true); var hud=new HudOverlay();
+        AvatarPositionController? position=null; AvatarOffersController? offers=null;
+        try {
+            await builder.BuildAsync(world,"Fixture Prop Room"); builder.SetOpen("loc-props",true);
+            var tile=builder.Slots["loc-props"]; tile.Fade.Snap(1); builder.SetLevel("loc-props",1);
+            var mgr=new FigureManager(source,builder.Height!,_=>{},strict:true) { AutoTick=false,Slots=()=>builder.Slots,GroundYAt=builder.FigureGroundY };
+            world.AddChild(mgr); using(var map=await source.GetWorldMapAsync()) await mgr.Apply(map.RootElement);
+            var avatar=mgr.Figures["fixture-avatar"]; InstallMeasuredRig(avatar);
+            var steering=new PlayerSteering(mgr,builder); steering.SetActive(true);
+            position=new(mgr,builder,steering,source); using(var map=await source.GetWorldMapAsync()) position.SetActive(true,map.RootElement);
+            offers=new(mgr,builder,steering,source,hud,position); offers.SetActive(true); await offers.PendingPropAction!;
+            foreach(bool explicitFloor in new[]{true,false}) {
+                source.StateOverride=new JsonObject { ["current"]=new JsonArray(new JsonObject { ["execution_id"]="upper-"+explicitFloor,["status"]="approaching" }),["outgoing"]=new JsonArray() };
+                source.MapOverride=Read("worldmap_approach.json");
+                source.MapOverride["characters"]![0]!["travel"]!["journey_id"]="upper-"+explicitFloor;
+                if(explicitFloor) source.MapOverride["characters"]![0]!["travel"]!["floor_y"]=9.4;
+                await offers.PropActions!.RefreshAsync(); mgr.Tick(1);
+                Near("approach uses upper floor "+explicitFloor,avatar.Position.Y,explicitFloor ? 9.4 : 9.41);
+                Is("owned approach suppresses reports",!position.Channel.CanReport());
+                source.StateOverride["current"]![0]!["status"]="active";
+                await offers.PropActions.RefreshAsync();
+                Is("private active state retains older exact approach",avatar.Route?.ExactPath is not null);
+                source.StateOverride["current"]![0]!["status"]="approaching";
+                if(!explicitFloor) {
+                    source.MapOverride=Read("worldmap_entry.json");
+                    var spec=source.MapOverride["characters"]![0]!["prop_action_entry"]!;
+                    spec["access"]!["y"]=9.4; spec["anchor"]!["y"]=9.529;
+                    await offers.PropActions.RefreshAsync(); mgr.Tick(0);
+                    Near("upper bridge access",avatar.Position.Y,9.4);
+                    Near("upper bridge clip clock",avatar.ClipTime,1);
+                    Near("upper bridge support",avatar.PropEntryLift,.0645);
+                }
+                // Direct arrival has no bridge projection. It must play the held pose immediately.
+                Animation? delayedPose=null;
+                if(explicitFloor) {
+                    var library=avatar.Player!.GetAnimationLibrary("");
+                    delayedPose=library.GetAnimation("sitting"); library.RemoveAnimation("sitting");
+                    avatar.Transitions=new[]{new ClipTransition("*","sitting","fixture-sit-down",0)};
+                    avatar.FitClip=_=>false;
+                }
+                source.StateOverride["current"]![0]!["status"]="active";
+                source.MapOverride=Read("worldmap_active.json");
+                await offers.PropActions.RefreshAsync(); mgr.Tick(0);
+                if(delayedPose is { } heldClip) {
+                    Is("unfitted direct pose never starts bridge",!avatar.Bridging);
+                    avatar.FitClip=kind=> { if(kind!="sitting") return false; avatar.Player!.GetAnimationLibrary("").AddAnimation(kind,heldClip); return true; };
+                    mgr.Tick(0);
+                    Is("direct retries lazy pose without another poll",avatar.CurrentClip=="sitting" && !avatar.Bridging);
+                    InstallMeasuredRig(avatar); mgr.Tick(0);
+                    Is("direct model swap retains held pose without bridge",avatar.CurrentClip=="sitting" && !avatar.Bridging);
+                }
+                Near("direct anchor",avatar.Position.Y,9.529);
+                Is("direct seated clip without bridge",avatar.CurrentClip=="sitting" && avatar.PropEntry is null && !avatar.Bridging);
+                steering.Step(.016,new HashSet<string>{"w"},0); await offers.PendingPropAction!;
+                Is("keys await explicit cancellation",source.CancelRequests==(explicitFloor ? 1 : 2) && !steering.PropActionDriven && !steering.PropPreparationPending);
+                Near("release correction stays on upper floor",avatar.Target.Y,9.41);
+            }
+            return n;
+        } finally { offers?.Dispose(); position?.Dispose(); hud.Free(); builder.StopResidency(); builder.Models?.FreeAll(); world.QueueFree(); }
     }
     /// <summary>Task 57: actual streamed prop mesh, exact semantic offer join, HUD dispatch, disposal and manual release.</summary>
     private static async Task<int> CheckMenus(Node3D host,string fixtures)
@@ -192,7 +270,9 @@ public static class PropActionsCheck
             offers.SetActive(false); Restored("deactivation restores after repeated hover");
             offers.SetActive(true); if(offers.PendingPropAction is { } reactivated) await reactivated;
             offers.Hover(origin,direction);
-            Is("blocked mesh opens",offers.Pick(origin,direction,new Vector2(100,120)));
+            var picked=AnimaNative.Overview.PickChain.Resolve(null,"loc-props",
+                ()=>offers.Pick(origin,direction,new Vector2(100,120)),embodied:true);
+            Is("blocked mesh consumes before location info",picked.Info==AnimaNative.Overview.InfoChange.Unchanged);
             Restored("opening menu restores exact overlays");
             Is("furniture title",PropActionMotion.Text(hud.SceneOwned("placeMenu")?["offer"]?["label"])=="Fixture bench");
             foreach(string? label in new string?[]{"",null}) {
@@ -231,18 +311,26 @@ public static class PropActionsCheck
         private readonly FixtureSource _fixture;
         public JsonArray Offers { get; }
         public JsonNode? Request;
+        public JsonObject? MapOverride,StateOverride,SceneOverride;
+        public int CancelRequests;
+        public Task<JsonDocument> CancelPropActionAsync(string executionId,System.Threading.CancellationToken ct=default)
+        {
+            CancelRequests++; MapOverride=JsonNode.Parse(File.ReadAllText(Path.Combine(_fixture.Dir,"worldmap_cancelled.json")))!.AsObject();
+            StateOverride=new JsonObject { ["current"]=new JsonArray(),["outgoing"]=new JsonArray() };
+            return Task.FromResult(JsonDocument.Parse("{\"status\":\"cancelled\"}"));
+        }
         public bool SupportsPropActions=>true;
         public MenuSource(FixtureSource fixture) { _fixture=fixture; Offers=JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.Dir,"offers.json")))!.AsArray(); Offers[0]!["enabled"]=false; Offers[0]!["reason"]="claimed"; }
         public Task<JsonDocument> GetPropActionsAsync()=>Task.FromResult(JsonDocument.Parse(Offers.ToJsonString()));
-        public Task<JsonDocument> GetPropActionStateAsync()=>Task.FromResult(JsonDocument.Parse("{\"current\":[],\"outgoing\":[],\"incoming\":[],\"recent_results\":[]}"));
+        public Task<JsonDocument> GetPropActionStateAsync()=>Task.FromResult(JsonDocument.Parse(StateOverride?.ToJsonString() ?? "{\"current\":[],\"outgoing\":[],\"incoming\":[],\"recent_results\":[]}"));
         public Task<JsonDocument> GetPlacesAsync()=>Task.FromResult(JsonDocument.Parse("{\"room_id\":\"r-props\",\"places\":[]}"));
         public Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,string? partner=null,System.Threading.CancellationToken ct=default)
         { Request=JsonNode.Parse(PropActionRequest.Request(actionId,target,revision,partner).GetRawText()); return Task.FromResult(JsonDocument.Parse("{\"execution_id\":\"\",\"status\":\"refused\",\"reason\":\"claimed\"}")); }
-        public Task<JsonDocument> GetWorldMapAsync()=>_fixture.GetWorldMapFileAsync("worldmap.json");
+        public Task<JsonDocument> GetWorldMapAsync()=>MapOverride is { } map ? Task.FromResult(JsonDocument.Parse(map.ToJsonString())) : _fixture.GetWorldMapFileAsync("worldmap.json");
         public Task<JsonDocument> GetHeightfieldAsync()=>_fixture.GetHeightfieldAsync();
         public Task<JsonDocument> GetHeightTilesAsync(IReadOnlyList<(int Tx,int Tz)> keys)=>_fixture.GetHeightTilesAsync(keys);
         public Task<JsonDocument> GetLocations3dAsync()=>_fixture.GetLocations3dAsync();
-        public Task<JsonDocument?> GetLocationSceneAsync(string id)=>_fixture.GetLocationSceneAsync(id);
+        public Task<JsonDocument?> GetLocationSceneAsync(string id)=>SceneOverride is { } scene ? Task.FromResult<JsonDocument?>(JsonDocument.Parse(scene.ToJsonString())) : _fixture.GetLocationSceneAsync(id);
         public Task<byte[]> GetBytesAsync(string url)=>_fixture.GetBytesAsync(url);
         public Task<JsonDocument?> GetCharacterModelAsync(string name)=>_fixture.GetCharacterModelAsync(name);
         public Task<JsonDocument> GetAnimationClipsAsync()=>_fixture.GetAnimationClipsAsync();
@@ -258,9 +346,10 @@ public static class PropActionsCheck
         var library=new AnimationLibrary(); var clip=new Animation { Length=2 };
         int hips=clip.AddTrack(Animation.TrackType.Position3D); clip.TrackSetPath(hips,"Rig:Hips");
         clip.PositionTrackInsertKey(hips,0,new Vector3(0,1,0)); clip.PositionTrackInsertKey(hips,2,new Vector3(0,.5f,0));
+        library.AddAnimation("walk",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
         if(!deferred) library.AddAnimation("fixture-sit-down",clip); library.AddAnimation("sitting",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
         player.AddAnimationLibrary("",library);
-        fig.SetBody(body,true,skeleton,player,new[]{"fixture-sit-down","sitting"},bodyHeight:1.7); fig.BaseScale=1;
+        fig.SetBody(body,true,skeleton,player,new[]{"fixture-sit-down","sitting","walk"},bodyHeight:1.7); fig.BaseScale=1;
         fig.Extras=new Dictionary<Animation,ClipExtras> { [clip]=new() { Path=new RootPath(new float[]{0,2},new float[]{0,0,0,-1}) } };
         bool ready=!deferred; int requests=0;
         fig.FitClip=kind=> { requests++; if(!ready || kind!="fixture-sit-down") return false; library.AddAnimation(kind,clip); return true; };

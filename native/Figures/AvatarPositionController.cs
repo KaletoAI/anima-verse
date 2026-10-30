@@ -98,7 +98,7 @@ public sealed class AvatarPositionController : IDisposable
         && double.IsFinite(x) && double.IsFinite(z) ? new(x,z) : null;
     private static PositionOrigin? Origin(JsonElement row) => row.TryGetProperty("pos_origin",out var p) && p.ValueKind == JsonValueKind.Object
         && p.TryGetProperty("seq",out var s) && s.TryGetInt64(out long seq) ? new(Text(p,"session"),seq) : null;
-    private Vector3 GroundPoint(P2 p) => new((float)p.X,(float)_world.FigureGroundY(p.X,p.Z),(float)p.Z);
+    private Vector3 GroundPoint(P2 p) => new((float)p.X,(float)_world.PlayerFloorY(_world.FootprintAt(p.X,p.Z),RoomId,p.X,p.Z),(float)p.Z);
 
     private void Applying(JsonElement root, double polledAt)
     {

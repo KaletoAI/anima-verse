@@ -92,8 +92,10 @@ public static class EmbodyWalkCheck
             Is("W6 frame20 drops route and marker", steering.Route is null && manager.WalkTarget is not { Visible: true });
             At(7,9);
             bool approach = steering.WalkTo(new(9,9));
-            var pick = PickChain.Resolve(null, "rock-info", () => approach);
-            Is("W7 blocked object approach info", !approach && pick.Info == InfoChange.Show && pick.InfoLocationId == "rock-info");
+            var pick = PickChain.Resolve(null, "rock-info", () => approach, embodied: true);
+            Is("W7 blocked object approach clears info", !approach && pick.Info == InfoChange.Clear && pick.InfoLocationId is null);
+            Is("empty embodied ground clears info",PickChain.Resolve(null,null,embodied:true).Info==InfoChange.Clear);
+            Is("overview still opens location info",PickChain.Resolve(null,"hall").Info==InfoChange.Show);
             int calls = 0;
             var figurePick = PickChain.Resolve("npc", "hall", () => { calls++; return true; });
             Is("figure precedes object action", calls == 0 && figurePick.Selected == "npc");

@@ -10,6 +10,8 @@ public partial class Figure
 {
     public PropEntryPlayback? PropEntry { get; internal set; }
     public bool PropEntryBlocked { get; internal set; }
+    internal bool PropCommitPending { get; set; }
+    internal string PropCommitKey { get; set; } = "";
     public double PropEntryLift { get; private set; }
     /// <summary>
     /// Task 57: playPropEntry uses the installed measured root path and fitted hips track. Phase seeks the actual
@@ -51,11 +53,14 @@ public partial class Figure
         UpdateFigure(0); return true;
     }
     /// <summary>Task 57: commit the played entry once, drop travel/lift, then play the direct pose without a bridge.</summary>
-    public void FinishPropEntry(string clip)
+    public bool FinishPropEntry(string clip)
     {
         ReleaseBridge(); TakeTravel(); _travelPath=null; _travelAction=null; _turn=null; _turnAction=null;
         _lift=PropEntryLift=0; ApplyBody();
         if(Player is { } player) player.SpeedScale=1;
-        if(EnsureClip(clip)) PlayPair(clip,0,false,true);
+        if(!EnsureClip(clip) || !PlayPair(clip,0,false,true)) return false;
+        // A body replacement replays WantedClip before the next placement tick.
+        WantedClip=(clip,false,0,"ground");
+        return true;
     }
 }

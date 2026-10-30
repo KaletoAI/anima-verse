@@ -26,19 +26,19 @@ public readonly record struct PickOutcome(string? Selected, InfoChange Info, str
 ///   1. a FIGURE under the pointer eats the click: <c>selected = it</c>, the info panel stays;
 ///   2. no figure: <c>selected = null</c>. The browser then asks, in this order, a seatable prop or a
 ///      free place glyph (→ place menu), then a stair or lift (→ climb). Each action can end the chain;
-///   3. the LOCATION under the pointer: <c>info = infoPanelData(it)</c>; nothing → <c>info = null</c>.
+///   3. embodied: clear selection and panel; overview: the LOCATION under the pointer: <c>info = infoPanelData(it)</c>; nothing → <c>info = null</c>.
 ///
 /// So a click on empty ground clears both the selection and the panel, a click on a figure inside a
 /// location never opens that location's panel.
 /// </summary>
 public static class PickChain
 {
-    public static PickOutcome Resolve(string? figureHit, string? locationHit, Func<bool>? pickAction = null)
+    public static PickOutcome Resolve(string? figureHit, string? locationHit, Func<bool>? pickAction = null, bool embodied = false)
     {
         if (figureHit is not null) return new PickOutcome(figureHit, InfoChange.Unchanged, null);
-        // Object actions precede the location panel; empty ground never issues a walk.
+        // Object actions consume the click in either mode; only overview opens location info.
         if (pickAction?.Invoke() == true) return new PickOutcome(null, InfoChange.Unchanged, null);
-        return locationHit is null
+        return embodied || locationHit is null
             ? new PickOutcome(null, InfoChange.Clear, null)
             : new PickOutcome(null, InfoChange.Show, locationHit);
     }

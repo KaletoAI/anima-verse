@@ -2031,7 +2031,7 @@ async function startApp(username: string, role: string) {
       ? 'pointer' : 'default';
   }
   engine.onPick = (id) => {
-    if (!id) {
+    if (getGameState().mode === 'embodied' || !id) {
       setGameState({ info: null });
       return;
     }
@@ -2644,17 +2644,19 @@ async function startApp(username: string, role: string) {
       const totalM = polylineLength(points);
       const progressM = clampProgress(tr.progress_m, totalM);
       const at = pointAtDistance(points, progressM)!;
+      const exact = !!local || (c.name === avatarName && !!ownedPropRun());
+      const tile = exact ? tileAt(at[0], at[1]) : null;
+      const localAt = tile ? worldToTile(tile, at[0], at[1]) : null;
+      const floorY = exact ? tr.floor_y ?? (tile && localAt
+        ? roomStandY(tile, c.room_id ?? '', localAt.x, localAt.z) : null) ?? undefined : undefined;
       return {
         char: c,
-        // THE WORLD RELIEF, not a tile's baked ground skin: a journey runs
-        // over the open terrain between the locations, where the heightfield
-        // is the only surface there is (`ground_y` discipline, § A16). The
-        // figure keeps sampling it while it walks the polyline between polls —
-        // that half lives in `npcs.ts`, on the same sampler.
-        pos: new THREE.Vector3(at[0], local ? groundY(at[0], at[1]) : terrainGround.heightAt(at[0], at[1]), at[1]),
+        // Overland journeys sample world relief. Owned indoor motion stays on its
+        // journey/room floor, including when private state advances before this map.
+        pos: new THREE.Vector3(at[0], floorY ?? (local ? groundY(at[0], at[1]) : terrainGround.heightAt(at[0], at[1])), at[1]),
         route: { points, totalM, paces: tr.paces_m_s_real, serverM: progressM,
                  ageAtParsedS: ageAtReceiptS(map.sync, meta), parsedAt: meta.parsedAt,
-                 journeyId: tr.journey_id ?? null, stamp, exact: !!local || (c.name === avatarName && ownedPropRun()?.status === 'approaching'),
+                 journeyId: tr.journey_id ?? null, stamp, exact, floorY,
                  startsInS: tr.starts_in_s ?? 0 },
       };
     }
@@ -3916,7 +3918,7 @@ async function startApp(username: string, role: string) {
     clearApproach(readinessDeps, readinessState);
     const pos = npcs.positionOf(avatarName);
     if (!pos) return;
-    const target = new THREE.Vector3(point.x, groundY(point.x, point.z), point.z);
+    const target = new THREE.Vector3(point.x, roomFloorY(tileAt(point.x, point.z), point.x, point.z) ?? groundY(point.x, point.z), point.z);
     if (Math.hypot(point.x - pos.x, point.z - pos.z) > CORRECT_WALK_M) {
       npcs.snapPlayerTo(avatarName, target);
       correction = null;
@@ -3940,6 +3942,11 @@ async function startApp(username: string, role: string) {
     const me = map.characters.find((c) => c.name === avatarName);
     const tr = manualPropGate.withdrawn(me?.travel?.journey_id) ? null : me?.travel ?? null;
     if (tr?.journey_id && ownedPropRun()?.status === 'approaching') ownedPropJourney = tr.journey_id;
+    if (ownedPropRun()) {
+      if (avatarDrive.kind !== 'SERVER') enterServerDrive();
+      avatarDrive = { kind: 'SERVER', j: tr?.journey_id ?? ownedPropJourney };
+      return;
+    }
     const prev = avatarDrive;
     const r = avatarDriver(avatarDrive, { kind: 'payload',
       hasRoute: !!(tr && tr.waypoints && tr.waypoints.length >= 2),
@@ -3949,7 +3956,7 @@ async function startApp(username: string, role: string) {
     if (prev.kind !== 'SERVER' && avatarDrive.kind === 'SERVER') enterServerDrive();
     else if (prev.kind === 'SERVER' && avatarDrive.kind === 'PLAYER') {
       const at = me?.pos
-        ? new THREE.Vector3(me.pos.x, groundY(me.pos.x, me.pos.z), me.pos.z) : undefined;
+        ? new THREE.Vector3(me.pos.x, roomFloorY(tileAt(me.pos.x, me.pos.z), me.pos.x, me.pos.z) ?? groundY(me.pos.x, me.pos.z), me.pos.z) : undefined;
       if (at) ownCorrectionAt = performance.now();
       npcs.setServerDriven(avatarName, false, at ? { arriveAt: at } : undefined);
     }

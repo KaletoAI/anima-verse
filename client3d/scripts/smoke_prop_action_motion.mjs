@@ -155,3 +155,5 @@ assert.equal(glyphs.pickableProps([{role:'prop',roomId:'room',anchor:[0,0],
   placementId:'chair-1',variantUid:'stale',object:furniture}], geometry, [blockedOffer]).length, 0,
   'stale variant cannot borrow another binding');
 console.log(`prop action motion: ${passed} vectors + 27 inline assertions = ${passed + 27} checks, all ok`);
+
+await import('./smoke_prop_action_storey.mjs');

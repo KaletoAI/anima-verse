@@ -2,20 +2,23 @@
 /** Task 73: real Engine event handlers without WebGL, and Figure bridge resumption without a rig asset. */
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
+import { mainFunction } from './mainFunction.mjs';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const bundled = await build({
   stdin: { contents: `export { Engine } from './client3d/src/scene/engine.ts';
     export { Figure } from './client3d/src/scene/figures.ts';
+    export { hitProp } from './client3d/src/scene/placeGlyphs.ts';
+    export { pickablePlaceFor } from './client3d/src/game/placement.ts';
     export * as walk from './client3d/src/game/walk.ts';
     export * as THREE from 'three';`, resolveDir: root, loader: 'ts' },
   bundle: true, write: false, platform: 'node', format: 'esm',
 });
-const { Engine, Figure, walk, THREE } = await import(
+const { Engine, Figure, walk, THREE, hitProp, pickablePlaceFor } = await import(
   `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
 
-function camera() {
+async function camera() {
   const listeners = new Map();
   const el = { addEventListener: (name, fn) => listeners.set(name, fn), setPointerCapture() {} };
   globalThis.window = { addEventListener() {} };
@@ -28,7 +31,14 @@ function camera() {
   const picked = [];
   engine.pickFigure = () => { picked.push('figure'); return false; };
   engine.pickLocation = () => { picked.push('location'); return 'hall'; };
-  engine.onPick = id => picked.push(id);
+  const panel = { mode: 'overview', info: null };
+  const pickPanel = await mainFunction('engine.onPick', {
+    getGameState: () => panel, setGameState: patch => Object.assign(panel, patch),
+    places: new Map([['hall', { loc: { id: 'hall' } }]]), lastMap: null, avatarName: 'Kai',
+    residency: new Map(), openable: () => true, openLocationId: null, roomOf: new Map(),
+    infoPanelData: loc => ({ id: loc.id }),
+  });
+  engine.onPick = id => { picked.push(id); pickPanel(id); };
   engine.bindInput(el);
   const emit = (name, x, y, button = 0) => listeners.get(name)({
     clientX: x, clientY: y, button, pointerId: 1, preventDefault() {},
@@ -47,10 +57,34 @@ function camera() {
   emit('pointerup', 100, 100);
   assert.deepEqual(picked, []);
   assert.deepEqual(engine.target.toArray(), [1, 2, 3]);
-  engine.pickFigure = () => { picked.push('object'); return true; };
+  panel.mode = 'embodied';
+  for (const hit of [null, 'hall']) {
+    panel.info = { id: 'old' };
+    engine.pickLocation = () => hit;
+    emit('pointerdown', 0, 0); emit('pointerup', 0, 0);
+    assert.equal(panel.info, null, 'embodied ground/building clears panel');
+  }
+  panel.mode = 'overview';
+  engine.pickLocation = () => 'hall';
+  emit('pointerdown', 0, 0); emit('pointerup', 0, 0);
+  assert.deepEqual(panel.info, { id: 'hall' }, 'overview still opens location');
+  panel.mode = 'embodied'; panel.info = null; picked.length = 0;
+  const prop = new THREE.Mesh(new THREE.BoxGeometry(2, 1, 1), new THREE.MeshBasicMaterial());
+  prop.updateMatrixWorld(true);
+  let menu = null;
+  const pickProp = await mainFunction('engine.pickFigure', {
+    engine: { raycasterAt: () => new THREE.Raycaster(new THREE.Vector3(0, 2, 0), new THREE.Vector3(0, -1, 0)) },
+    npcs: { characterAt: () => null }, setGameState: patch => Object.assign(panel, patch),
+    placeProps: [{ object: prop, role: 'prop', places: [{ id: 'sofa-action', free: [{ x: 0, z: 0 }] }] }],
+    hitProp, pickablePlaceFor, PLACE_PICK_RADIUS_M: 1,
+    openPlaceMenuFor: id => { menu = id; },
+  });
+  engine.pickFigure = (x, y) => { picked.push('object'); return pickProp(x, y); };
   emit('pointerdown', 0, 0);
   emit('pointerup', 0, 0);
   assert.deepEqual(picked, ['object']); // figure/prop/vertical action consumes the click
+  assert.equal(menu, 'sofa-action', 'real prop pick opens only the action menu');
+  assert.equal(panel.info, null, 'prop consumes before location panel');
   for (const button of [1, 2]) {
     emit('pointerdown', 0, 0, button);
     emit('pointermove', 10, 8, button);
@@ -133,5 +167,5 @@ function bridges() {
 }
 
 const only = process.argv[2];
-if (!only || only === 'camera') camera();
+if (!only || only === 'camera') await camera();
 if (!only || only === 'bridges') bridges();
