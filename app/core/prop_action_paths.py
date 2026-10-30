@@ -7,7 +7,7 @@ permission to cross the room boundary. There is no world-navigation fallback.
 """
 import heapq
 import math
-from typing import Sequence
+from typing import Optional, Sequence
 
 from app.core import furnish_geometry as fg
 from app.core.room_stand import BODY_R_M, ACCESS_BODY_R_M, WALL_CLEAR_M, footprint_corners
@@ -424,6 +424,41 @@ def _departure_walkable(seat: Point, start: Point, geometry, placement_id: str) 
         return False
 
 
+def seat_escape_ok(seat: Point, stand: Point, out: Point, geometry, placement_id: str) -> bool:
+    """A seated actor's walk from where its exit clip set it down (``stand``)
+    to the free standing point ``out``: only the furniture it is leaving may
+    hold ``stand`` (exempt as in :func:`_departure_walkable`), and with that
+    furniture exempt the walk must be clear. Planner and arrival revalidation
+    share it."""
+    from app.core.room_stand import _in_footprint
+    polygon, blockers, zones = geometry
+    try:
+        others = [box for box in blockers if not (
+            placement_id and box.get("placement_id") == placement_id
+            and _in_footprint(seat[0], seat[1], box, BODY_R_M))]
+        own = _Space(polygon, others, zones)
+        return len(others) < len(blockers) and own.free(stand) and own.visible(stand, out)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _seat_step_out(actor: str, location: str, room: str, seat: Point, stand: Point,
+                   space, geometry, placement_id: str) -> Optional[Point]:
+    """Where a seated actor walks after its exit clip when the clip sets it
+    down inside the keepout of the furniture it is leaving (a sofa's stand
+    point lies ~0.5 m in front of the seat, its keepout reaches further, and
+    a coffee table can close the gap): the free standing point a plain
+    stand-up picks near the clip's end (``room_stand.pick_stand``), so
+    leaving for another action ends where standing up would. None when that
+    point is not free for the planner or the walk there is blocked."""
+    from app.core.room_stand import _mates, pick_stand
+    polygon, blockers, zones = geometry
+    out = pick_stand(polygon, blockers, zones, _mates(location, room, actor), stand)
+    if out is None or not space.free(out) or not space.free((round(out[0], 2), round(out[1], 2))):
+        return None
+    return out if seat_escape_ok(seat, stand, out, geometry, placement_id) else None
+
+
 def _blocked(reason: str) -> dict:
     return dict(status="blocked", reason=reason, waypoints=[], access=None, entry_anchor=None)
 
@@ -502,13 +537,15 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
             start = tuple(route_start)
         real_start = start
         step_out = None
+        departing_placement = departure_placement_id if departure is not None else (
+            (places.place_of(actor, profile=profile, _places=inventory) or {}).get("placement_id", "") if seat is not None else "")
         if not space.free(start):
-            step_out = space.step_out(start) if seat is None else None
+            step_out = (space.step_out(start) if seat is None
+                        else _seat_step_out(actor, location, room, seat, start, space, geometry,
+                                            departing_placement))
             if step_out is None:
                 return blocked_start("start_not_walkable")
             start = step_out
-        departing_placement = departure_placement_id if departure is not None else (
-            (places.place_of(actor, profile=profile, _places=inventory) or {}).get("placement_id", "") if seat is not None else "")
         if seat is not None and not _departure_walkable(seat, start, geometry, departing_placement):
             return blocked_start("departure_not_walkable")
         if reusable:

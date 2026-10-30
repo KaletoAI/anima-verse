@@ -1178,7 +1178,8 @@ _approach_validation_lock = Lock()
 
 def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     """Recheck concrete provenance and the remaining floor path before movement."""
-    from app.core.prop_action_paths import _plan_approach, _Space, _departure_walkable, access_space
+    from app.core.prop_action_paths import (_plan_approach, _Space, _departure_walkable, access_space,
+                                            seat_escape_ok)
     from app.core import sync_topics
     from app.models.character import get_character_pos, get_character_profile
     from app.models.world import is_world_frozen
@@ -1242,13 +1243,21 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     step_out = journey.get("step_out")
     escaping = False
     if step_out is not None:
-        if (space is None or len(route) < 2 or list(route[1]) != step_out
-                or math.dist(route[0], route[1]) > 1.5 + 1e-9
-                or not space.inside_segment(route[0], route[1]) or not space.free(route[1])):
+        seat = journey.get("departure_seat")
+        if (space is None or len(route) < 2 or list(route[1]) != step_out or not space.free(route[1])
+                # A standing escape: 1.5 m at most, inside the hull. A seated
+                # one: from the exit clip's end to the stand-up point, clear
+                # of everything but the furniture being left.
+                or (not seat and (math.dist(route[0], route[1]) > 1.5 + 1e-9
+                                  or not space.inside_segment(route[0], route[1])))
+                or (seat and not seat_escape_ok(tuple(seat), route[0], route[1], geometry,
+                                                journey.get("departure_placement_id", "")))):
             cancel_journey(name, journey_id=journey["journey_id"], execution_kind=journey["execution_kind"],
                            execution_ref=journey["execution_ref"], reason="approach_route_changed")
             return
-        escaping = st["seg"] == 0 and not st["arrived"]
+        # The escape is the first WALKING leg: behind a seated exit leg
+        # (zero-time seat -> stand) that is segment 1.
+        escaping = st["seg"] == (1 if journey.get("departure_seat") else 0) and not st["arrived"]
         route = route[1:]
     final = (access_space(geometry, target["placement_id"])
              if geometry and journey.get("entry_mode", "bridge") == "bridge" else space)

@@ -8136,6 +8136,12 @@ preview and runtime use `_entry_capability`, with the existing solo-clip,
 metadata and positive finite duration guards. Group targets are valid only
 from `walking`; on the `from` side a group is valid only towards `*` — the
 exit clip a seat or lie pose without its own exit rule gets up with.
+When that clip sets a seated actor down inside the keepout of the furniture it
+is leaving (sofa + coffee table), the approach walks on from the clip's end to
+the point a plain stand-up picks there (`room_stand.pick_stand`) — waypoints
+seat, clip end, stand-up point, … with `step_out` = the stand-up point —
+instead of refusing with `start_not_walkable`; only that furniture may hold
+the clip's end (`prop_action_paths.seat_escape_ok`, also on revalidation).
 
 **The room hears it** (2026-10-30): every run tells its room through one
 storyteller line (`source "prop_action"`, in the actor's language, in the
