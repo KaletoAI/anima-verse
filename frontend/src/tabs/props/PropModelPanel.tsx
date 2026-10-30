@@ -30,6 +30,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { FACE_FIELDS, FACE_TARGET_MAX, FACE_TARGET_MIN } from './variantFields'
+import { HouseBuildPanel } from './HouseBuildPanel'
 import type { PreparePropVariantOperation } from './propOperations'
 
 interface PropModelInfo {
@@ -202,6 +203,8 @@ export function PropModelPanel({ propId, variant, variantUid, reloadKey, preview
 
   return (
     <>
+      <HouseBuildPanel key={`${propId}:${variantUid}:${variant}`} base={base} prepareBase={prepareBase}
+        onChanged={onChanged} onBuilt={async () => { onPreview(''); await onChanged(); await load() }} />
       <MeshBackendDialog
         open={shrinkFile !== null}
         title={t('Create low variant')}

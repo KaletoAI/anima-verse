@@ -779,3 +779,20 @@ export interface VariantBinding {
   validation: 'local_valid' | 'repair_required'
   reason: string
 }
+
+export interface HouseSpec {
+  style: string
+  storeys: number
+  storey_m: number
+  units: number
+  seed?: number
+  wall: string
+  door: { style: string; at: number }
+  unit_overrides: Partial<Record<'tint' | 'roof_tint' | 'door_color', string>>[]
+  balconies: null | { edge: 'front'; storeys: number[]; layout: string; depth_m: number; railing: string }
+  overrides: {
+    roof_form?: string; pitch_deg?: number; tint?: string; roof_tint?: string
+    frame_color?: string; door_color?: string; frames?: string; shutters?: number
+    shopfront?: boolean; ornament_density?: number
+  }
+}

@@ -49,10 +49,11 @@ router = APIRouter(prefix="/world", tags=["world"])
 
 def _variant(prop_id: str, index: int) -> int:
     """Validate prop + variant index, or raise the 404. Returns the index."""
-    from app.core.props import get_prop, list_variants
-    if not get_prop(prop_id):
+    from app.core.props import read_sidecar, _variant_list
+    meta = read_sidecar(prop_id, read_only=True)
+    if not meta:
         raise HTTPException(status_code=404, detail="Prop not found")
-    if not 0 <= index < len(list_variants(prop_id)):
+    if not 0 <= index < len(_variant_list(meta)):
         raise HTTPException(status_code=404, detail="Variant not found")
     return index
 
@@ -587,3 +588,111 @@ async def prop_variant_water_patch(prop_id: str, index: int, request: Request,
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     return {"status": "valid", "water": water}
+
+
+# House builds use the same variant galleries as uploaded/generated models.
+def _house_footprint(prop_id: str, entry: dict):
+    """Read authored size without repairing missing dimensions on disk."""
+    import json
+    import math
+    from app.core import props
+    house = entry.get('house') or {}
+    if house.get('footprint_m'):
+        return house['footprint_m']
+    path = props._sidecar_path(prop_id)
+    raw = json.loads(path.read_text(encoding='utf-8')) if path and path.is_file() else {}
+    stored = next((item for item in raw.get(props.VARIANTS_KEY, [])
+                   if isinstance(item, dict) and item.get('stem') == entry['stem']), {})
+    try:
+        footprint = [float(stored[key]) for key in ('width_m', 'depth_m')]
+        return footprint if all(math.isfinite(v) and v > 0 for v in footprint) else None
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+@router.get('/props/{prop_id}/variants/{index}/house')
+def prop_variant_house(prop_id: str, index: int) -> Dict[str, Any]:
+    from copy import deepcopy
+    from app.core import props, house_props, hull_styles, door_styles
+    from app.routes.assets import list_surface_textures
+    _variant(prop_id, index)
+    entry = props._variant_list(props.read_sidecar(prop_id, read_only=True))[index]
+    house = entry.get('house') or {}
+    footprint = _house_footprint(prop_id, entry)
+    gallery = props.ModelGallery(props._prop_dir(prop_id), entry['stem'], ('.glb',))
+    with house_props._running_lock:
+        running = props.safe_prop_id(prop_id) in house_props._running
+    return {'spec': deepcopy(house.get('spec', house_props.HOUSE_DEFAULTS)),
+            'footprint_m': footprint,
+            'built': any(props.read_model_sidecar(file).get('source') == 'house_build'
+                         for file in gallery.files()),
+            'running': running,
+            'styles': [{'id': key, 'name': value.get('name') or key}
+                       for key, value in hull_styles.load_styles().items()],
+            'door_styles': [{'id': key, 'name': value.get('name') or key}
+                            for key, value in door_styles.load_door_styles().items()],
+            'wall_kinds': list_surface_textures()}
+
+
+@router.put('/props/{prop_id}/variants/{index}/house')
+async def put_prop_variant_house(prop_id: str, index: int, request: Request,
+                                 _admin: dict = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core.house_props import set_house_spec
+    _variant(prop_id, index)
+    try:
+        house = set_house_spec(prop_id, index, await _body(request))
+    except ValueError as error:
+        raise HTTPException(400, detail=str(error)) from error
+    invalidate_prop_lib_token()
+    return house['spec']
+
+
+@router.post('/props/{prop_id}/variants/{index}/house/build')
+def build_prop_variant_house(prop_id: str, index: int,
+                             _admin: dict = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import house_props, props
+    _variant(prop_id, index)
+    if not props._variant_list(props.read_sidecar(prop_id, read_only=True))[index].get('house'):
+        raise HTTPException(400, detail='save the house spec first')
+    try:
+        started = house_props.trigger_house_build(prop_id, index)
+    except ValueError as error:
+        raise HTTPException(400, detail=str(error)) from error
+    return {'status': 'building' if started else 'already_running'}
+
+
+@router.post('/props/{prop_id}/house/copy-layout')
+async def copy_prop_house_layout(prop_id: str, request: Request,
+                                _admin: dict = Depends(require_admin)) -> Dict[str, Any]:
+    from copy import deepcopy
+    from app.core import props, house_props
+    try:
+        body = await _body(request)
+    except ValueError as error:
+        raise HTTPException(400, detail=str(error)) from error
+    source = body.get('from')
+    if type(source) is not int:
+        raise HTTPException(400, detail='from must be a variant index')
+    _variant(prop_id, source)
+    record = props.get_prop(prop_id, read_only=True)
+    entries = props._variant_list(props.read_sidecar(prop_id, read_only=True))
+    spec = (entries[source].get('house') or {}).get('spec', house_props.HOUSE_DEFAULTS)
+    patches = {}
+    try:
+        for index, entry in enumerate(entries):
+            if index == source:
+                continue
+            house = entry.get('house') or {}
+            footprint = _house_footprint(prop_id, entry)
+            if footprint is None:
+                raise ValueError("set the prop's size first")
+            raw = deepcopy(house.get('spec', house_props.HOUSE_DEFAULTS))
+            raw.update({key: spec[key] for key in ('units', 'storeys', 'storey_m')})
+            patches[entry['uid']] = {'house': {
+                'spec': house_props.validate_house_spec(raw, footprint), 'footprint_m': footprint}}
+        if patches:
+            props.bulk_update(prop_id, variants=patches, base_revision=record['revision'])
+    except ValueError as error:
+        raise HTTPException(400, detail=str(error)) from error
+    invalidate_prop_lib_token()
+    return {'status': 'copied'}
