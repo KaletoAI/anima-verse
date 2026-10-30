@@ -106,6 +106,10 @@ const hostedPanel = render(PropActionsPanel, {});
 assert.match(hostedPanel, /Furniture actions/);
 assert.match(hostedPanel, /Active/);
 assert.match(hostedPanel, /Stop/);
+// Finished runs are not listed (the storyteller narrates them): only results -> no panel at all.
+propApi.publishHostedPropActions({ offers: [], state: { incoming: [], outgoing: [], current: [],
+  recent_results: [{ ...execution, status: 'completed', can_respond: false, can_cancel: false }] } });
+assert.equal(render(PropActionsPanel, {}), '', 'finished runs are not listed');
 propApi.publishHostedPropActions(null);
 assert.equal(render(PropActionsPanel, {}), '', 'reconnecting host clears old private snapshot');
 propApi.setPropActionHost(false);

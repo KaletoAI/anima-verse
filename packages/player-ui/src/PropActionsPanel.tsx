@@ -83,8 +83,9 @@ export function PropActionsPanel({ partner, showOffers = true, showState = true 
   const hasOffers = data?.offers.some(offer => !partner || (offer.required_partner && offer.available_targets.some(choice => choice.partner === partner)))
   const groups = data && showState ? [
     ['incoming', ownRuns(data.state.incoming)], ['outgoing', ownRuns(data.state.outgoing)],
-    ['current', ownRuns(data.state.current)], ['result', ownRuns(data.state.recent_results)],
+    ['current', ownRuns(data.state.current)],
   ] as const : []
+  // Finished runs are not listed: the room's storyteller line already told the player.
   if (!note && !error && !hasOffers && !groups.some(([, runs]) => runs.length)) return null
   return <section aria-label={t('Furniture actions')} style={{ flex: '0 0 auto', maxHeight: 230, overflow: 'auto', padding: 6, fontSize: '0.85em', borderTop: '1px solid var(--border, #30363d)' }}>
     <strong>{t('Furniture actions')}</strong>
