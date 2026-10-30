@@ -3719,7 +3719,7 @@ def list_variants(prop_id: str) -> List[Dict[str, Any]]:
 #: the same object costs the same, so the field opens FILLED and is edited.
 _COPIED_ON_ADD = (*DIM_KEYS, DIMS_ESTIMATED_KEY, DESCRIPTION_KEY,
                   GROUND_OFFSET_KEY, MARKERS_KEY, AREA_DEFAULTS_KEY,
-                  TARGET_FACES_HIGH_KEY, TARGET_FACES_LOW_KEY)
+                  TARGET_FACES_HIGH_KEY, TARGET_FACES_LOW_KEY, "house")
 
 
 @_author_transaction
@@ -4004,17 +4004,66 @@ def set_variant_house(prop_id: str, variant: int, raw: Any) -> dict:
     if not footprint:
         stored = next((record for record in stored_meta.get(VARIANTS_KEY, [])
                        if isinstance(record, dict) and record.get("stem") == entries[i]["stem"]), {})
-        footprint = [stored.get("width_m"), stored.get("depth_m")]
+        footprint = next(((entry.get("house") or {}).get("footprint_m")
+                          for entry in entries if (entry.get("house") or {}).get("footprint_m")),
+                         [stored.get("width_m"), stored.get("depth_m")])
         from app.core.house_props import validate_house_spec
         try:
             validate_house_spec({}, [float(v) for v in footprint])
         except (TypeError, ValueError, OverflowError) as error:
             raise ValueError("set the prop's size first") from error
+    entries[i]["house"] = {"footprint_m": footprint}
     _apply_variant_house(entries[i], {"spec": raw if isinstance(raw, dict) else {},
                                      "footprint_m": footprint})
     meta[VARIANTS_KEY] = entries
     _write_sidecar(pid, meta)
     return copy.deepcopy(entries[i]["house"])
+
+
+@_author_transaction
+def reset_house_footprint(prop_id: str, variant: int) -> dict:
+    """Explicitly replace the saved outline from authored, un-repaired size."""
+    from app.core.house_props import HOUSE_DEFAULTS
+    path = _sidecar_path(prop_id)
+    stored = json.loads(path.read_text(encoding="utf-8")) if path and path.is_file() else {}
+    meta = read_sidecar(prop_id, read_only=True)
+    entries = _variant_list(meta)
+    if not 0 <= variant < len(entries):
+        raise ValueError("prop variant not found")
+    entry = entries[variant]
+    raw = next((item for item in stored.get(VARIANTS_KEY, [])
+                if item.get("stem") == entry["stem"]), {})
+    spec = copy.deepcopy((entry.get("house") or {}).get("spec", HOUSE_DEFAULTS))
+    entry["house"] = {"footprint_m": [raw.get("width_m"), raw.get("depth_m")]}
+    _apply_variant_house(entry, {"spec": spec})
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(prop_id, meta)
+    return copy.deepcopy(entry["house"])
+
+
+@_author_transaction
+def copy_house_layout(prop_id: str, source: int) -> None:
+    """Copy the shared outline and floor layout in one author transaction."""
+    from app.core.house_props import HOUSE_DEFAULTS
+    # Same repairing read as bulk_update: legacy identities are persisted once.
+    meta = read_sidecar(prop_id)
+    entries = _variant_list(meta)
+    if not 0 <= source < len(entries):
+        raise ValueError("prop variant not found")
+    source_house = entries[source].get("house") or {}
+    if not source_house:
+        source_house = set_variant_house(prop_id, source, HOUSE_DEFAULTS)
+        meta = read_sidecar(prop_id)
+        entries = _variant_list(meta)
+    for index, entry in enumerate(entries):
+        if index == source:
+            continue
+        spec = copy.deepcopy((entry.get("house") or {}).get("spec", HOUSE_DEFAULTS))
+        spec.update({key: source_house['spec'][key] for key in ('units', 'storeys', 'storey_m')})
+        entry['house'] = {'footprint_m': copy.deepcopy(source_house['footprint_m'])}
+        _apply_variant_house(entry, {'spec': spec})
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(prop_id, meta)
 
 
 VARIANT_PATCH_APPLIERS = {
@@ -6159,6 +6208,10 @@ def variant_delete_blocked(prop_id: str, variant: Any) -> bool:
         idx = int(variant)
     except (TypeError, ValueError):
         return False
+    from app.core import house_props
+    with house_props._running_lock:
+        if pid in house_props._running:
+            return True
     return any(j >= idx for j in pending_variants(pid).get(pid, []))
 
 
@@ -7287,6 +7340,11 @@ def save_house_models(prop_id: str, variant: int, blobs: Dict[str, bytes],
     gallery = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
     if not gallery:
         raise ValueError("prop variant not found")
+    selected = gallery.find("full", fallback=False)
+    selected_meta = model_sidecar(selected) if selected else {}
+    rotation = (copy.deepcopy(selected_meta.get("rotation"))
+                if selected_meta.get("source") == "house_build" else None)
+    rotation = rotation or {"x": 0, "y": 0, "z": 0}
     previous = [p for p in gallery.files() if model_sidecar(p).get("source") == "house_build"]
     targets = {}
     for tier in ("full", "low"):
@@ -7295,7 +7353,7 @@ def save_house_models(prop_id: str, variant: int, blobs: Dict[str, bytes],
         write_model_sidecar(target, {
             "created_at": utc_now_iso(), "source": "house_build", "format": "glb",
             "rig": "none", "tier": tier, "house": spec, "fingerprint": fingerprint,
-            "rotation": {"x": 0, "y": 0, "z": 0},
+            "rotation": rotation,
         })
         targets[tier] = target
     for tier, target in targets.items():

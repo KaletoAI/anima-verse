@@ -622,11 +622,12 @@ def prop_variant_house(prop_id: str, index: int) -> Dict[str, Any]:
     gallery = props.ModelGallery(props._prop_dir(prop_id), entry['stem'], ('.glb',))
     with house_props._running_lock:
         running = props.safe_prop_id(prop_id) in house_props._running
+        error = house_props._errors.get((props.safe_prop_id(prop_id), entry['uid']), '')
     return {'spec': deepcopy(house.get('spec', house_props.HOUSE_DEFAULTS)),
             'footprint_m': footprint,
             'built': any(props.read_model_sidecar(file).get('source') == 'house_build'
                          for file in gallery.files()),
-            'running': running,
+            'running': running, 'error': error,
             'styles': [{'id': key, 'name': value.get('name') or key}
                        for key, value in hull_styles.load_styles().items()],
             'door_styles': [{'id': key, 'name': value.get('name') or key}
@@ -664,8 +665,7 @@ def build_prop_variant_house(prop_id: str, index: int,
 @router.post('/props/{prop_id}/house/copy-layout')
 async def copy_prop_house_layout(prop_id: str, request: Request,
                                 _admin: dict = Depends(require_admin)) -> Dict[str, Any]:
-    from copy import deepcopy
-    from app.core import props, house_props
+    from app.core import props
     try:
         body = await _body(request)
     except ValueError as error:
@@ -674,25 +674,22 @@ async def copy_prop_house_layout(prop_id: str, request: Request,
     if type(source) is not int:
         raise HTTPException(400, detail='from must be a variant index')
     _variant(prop_id, source)
-    record = props.get_prop(prop_id, read_only=True)
-    entries = props._variant_list(props.read_sidecar(prop_id, read_only=True))
-    spec = (entries[source].get('house') or {}).get('spec', house_props.HOUSE_DEFAULTS)
-    patches = {}
     try:
-        for index, entry in enumerate(entries):
-            if index == source:
-                continue
-            house = entry.get('house') or {}
-            footprint = _house_footprint(prop_id, entry)
-            if footprint is None:
-                raise ValueError("set the prop's size first")
-            raw = deepcopy(house.get('spec', house_props.HOUSE_DEFAULTS))
-            raw.update({key: spec[key] for key in ('units', 'storeys', 'storey_m')})
-            patches[entry['uid']] = {'house': {
-                'spec': house_props.validate_house_spec(raw, footprint), 'footprint_m': footprint}}
-        if patches:
-            props.bulk_update(prop_id, variants=patches, base_revision=record['revision'])
+        props.copy_house_layout(prop_id, source)
     except ValueError as error:
         raise HTTPException(400, detail=str(error)) from error
     invalidate_prop_lib_token()
     return {'status': 'copied'}
+
+
+@router.post('/props/{prop_id}/variants/{index}/house/reset-footprint')
+def reset_prop_house_footprint(prop_id: str, index: int,
+                              _admin: dict = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import props
+    _variant(prop_id, index)
+    try:
+        house = props.reset_house_footprint(prop_id, index)
+    except ValueError as error:
+        raise HTTPException(400, detail=str(error)) from error
+    invalidate_prop_lib_token()
+    return house

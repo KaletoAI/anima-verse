@@ -108,7 +108,8 @@ def unit_description(spec: dict, index: int) -> dict:
     overrides = deepcopy(spec['overrides'])
     # One seed for the whole row: the hull draws the roof overhang from it,
     # so per-unit seeds would give a jagged eaves line; tints vary the units.
-    roof = hull_styles.get_style(spec['style'])['roof']
+    style = hull_styles.validate_description(spec, hull_styles.load_styles())['style']
+    roof = hull_styles.get_style(style)['roof']
     overrides.setdefault('roof_form', roof['forms'][0])
     overrides.setdefault('pitch_deg', sum(roof['pitch_deg']) / 2)
     overrides.update(storeys_total=spec['storeys'], blind_windows=True, blind_recess=True)
@@ -120,11 +121,12 @@ def unit_description(spec: dict, index: int) -> dict:
         overrides['ridge'] = 'width'
     if spec['balconies'] is not None:
         overrides['balconies'] = deepcopy(spec['balconies'])
-    return dict(style=spec['style'], seed=spec.get('seed', 0), overrides=overrides)
+    return dict(style=style, seed=spec.get('seed', 0), overrides=overrides)
 
 
 # The guard covers the whole prop, including builds of different variants.
 _running: set[str] = set()
+_errors: dict[tuple[str, str], str] = {}
 _running_lock = threading.Lock()
 
 
@@ -159,28 +161,44 @@ def house_job(prop_id: str, variant: int, *, tex_dir: Path) -> dict:
     if not ctx or not ctx[2][ctx[3]].get('house'):
         raise ValueError('save the house spec first')
     house = ctx[2][ctx[3]]['house']
-    spec, footprint = house['spec'], house['footprint_m']
+    footprint = house['footprint_m']
+    spec = validate_house_spec(house['spec'], footprint)
     job = {'kind': 'house', 'tiers': {t: {'meshes': []} for t in ('full', 'low')},
            'materials': [], 'textures': {}, 'extras': {},
            'export': {'full': 'house_full.glb', 'low': 'house_low.glb'},
            'description': deepcopy(spec)}
+    material_by_content = {}
     for i, loc in enumerate(_build_locations(spec, footprint)):
         unit = hull_model.build_job(f'house-unit-{i}', unit_description(spec, i),
                                     location=loc, tex_dir=Path(tex_dir) / f'u{i}')
         if not unit.get('ok', True):
             raise ValueError(unit.get('error') or 'unit build failed')
-        for mat in unit['materials']:
-            mat = deepcopy(mat)
-            mat['name'] = f'u{i}/' + mat['name']
-            if mat.get('texture'):
-                mat['texture'] = f'u{i}_' + mat['texture']
-            job['materials'].append(mat)
-        job['textures'].update({f'u{i}_{key}': path for key, path in unit['textures'].items()})
+        material_names = {}
+        for original in unit['materials']:
+            mat = deepcopy(original)
+            content = {key: value for key, value in mat.items() if key not in ('name', 'texture')}
+            texture = mat.get('texture')
+            texture_path = Path(unit['textures'][texture]) if texture else None
+            content['texture_hash'] = hashlib.sha256(texture_path.read_bytes()).hexdigest() if texture_path else None
+            signature = json.dumps(content, sort_keys=True)
+            if signature not in material_by_content:
+                slot = original['name']
+                name = 'row/' + slot
+                if any(item['name'] == name for item in job['materials']):
+                    name = f'u{i}/' + slot
+                mat['name'] = name
+                if texture:
+                    texture_key = f'u{i}_' + texture
+                    mat['texture'] = texture_key
+                    job['textures'][texture_key] = unit['textures'][texture]
+                material_by_content[signature] = name
+                job['materials'].append(mat)
+            material_names[original['name']] = material_by_content[signature]
         for tier in job['tiers']:
             for mesh in unit['tiers'][tier]['meshes']:
                 mesh = deepcopy(mesh)
                 mesh['name'] = f'u{i}/' + mesh['name']
-                mesh['material'] = f'u{i}/' + mesh['material']
+                mesh['material'] = material_names[mesh['material']]
                 job['tiers'][tier]['meshes'].append(mesh)
     for tier, payload in job['tiers'].items():
         points = [p for mesh in payload['meshes'] for p in mesh['vertices']]
@@ -202,7 +220,7 @@ def house_job(prop_id: str, variant: int, *, tex_dir: Path) -> dict:
     return job
 
 
-def build_house_variant(prop_id: str, variant: int) -> dict:
+def build_house_variant(prop_id: str, variant: int, variant_uid: str = "") -> dict:
     """Run the generic hull executor and land both tiers as one house model."""
     import json
     import tempfile
@@ -216,7 +234,12 @@ def build_house_variant(prop_id: str, variant: int) -> dict:
     try:
         with tempfile.TemporaryDirectory(prefix='av-house-') as temporary:
             directory = Path(temporary)
-            job = house_job(prop_id, variant, tex_dir=directory / 'textures')
+            with props._author_mutex(prop_id):
+                entries = props._variant_list(props.read_sidecar(prop_id))
+                if not variant_uid:
+                    variant_uid = entries[variant]['uid']
+                variant = _uid_index(entries, variant_uid)
+                job = house_job(prop_id, variant, tex_dir=directory / 'textures')
             job_file = directory / 'job.json'
             job_file.write_text(json.dumps(job, sort_keys=True), encoding='utf-8')
             out = directory / 'out'
@@ -237,23 +260,38 @@ def build_house_variant(prop_id: str, variant: int) -> dict:
                             (b-a for a, b in zip(*bounds))))
             if any(v <= 0 for v in dims.values()):
                 return {**failure, 'error': 'empty glb bounds'}
-            filename = props.save_house_models(prop_id, variant, blobs, job['description'], job['fingerprint'])
-            props.set_variant_dims(prop_id, variant, dims)
-        props._store_bbox(prop_id, variant, landing=True)
+            with props._author_mutex(prop_id):
+                variant = _uid_index(props._variant_list(props.read_sidecar(prop_id)), variant_uid)
+                filename = props.save_house_models(prop_id, variant, blobs, job['description'], job['fingerprint'])
+                props.set_variant_dims(prop_id, variant, dims)
+                props._store_bbox(prop_id, variant, landing=True)
         invalidate_prop_lib_token()
         return {'ok': True, 'error': '', 'file': filename}
     except Exception as error:
         return {**failure, 'error': str(error)}
 
 
+def _uid_index(entries: list[dict], uid: str) -> int:
+    for index, entry in enumerate(entries):
+        if entry['uid'] == uid:
+            return index
+    raise ValueError('variant_changed')
+
+
 def trigger_house_build(prop_id: str, variant: int) -> bool:
     """Start one tracked daemon build per prop, releasing the guard on failure."""
     from app.core import props
     prop_id = props.safe_prop_id(prop_id)
-    with _running_lock:
-        if prop_id in _running:
-            return False
-        _running.add(prop_id)
+    with props._author_mutex(prop_id):
+        with _running_lock:
+            if prop_id in _running:
+                return False
+            entries = props._variant_list(props.read_sidecar(prop_id))
+            if not 0 <= variant < len(entries):
+                raise ValueError('variant_changed')
+            variant_uid = entries[variant]['uid']
+            _running.add(prop_id)
+            _errors.pop((prop_id, variant_uid), None)
 
     def run():
         from app.core.task_queue import get_task_queue
@@ -265,12 +303,16 @@ def trigger_house_build(prop_id: str, variant: int) -> bool:
                     'model3d_generation', f'House: {name} v{variant}', start_running=True)
             except Exception:
                 pass
-            result = build_house_variant(prop_id, variant)
+            result = build_house_variant(prop_id, variant, variant_uid)
             error = '' if result.get('ok') else str(result.get('error') or 'failed')
         except Exception as exc:
             error = str(exc)
         finally:
             with _running_lock:
+                if error:
+                    _errors[(prop_id, variant_uid)] = error
+                else:
+                    _errors.pop((prop_id, variant_uid), None)
                 _running.discard(prop_id)
             if task_id:
                 try:

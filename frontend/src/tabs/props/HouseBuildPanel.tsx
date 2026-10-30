@@ -10,6 +10,7 @@ import type { HouseSpec } from './propTypes'
 interface HouseStatus {
   spec: HouseSpec
   footprint_m: [number, number] | null
+  error: string
   built: boolean
   running: boolean
   styles: { id: string; name: string }[]
@@ -62,7 +63,7 @@ export function HouseBuildPanel({ base, prepareBase, onBuilt, onChanged }: {
     return () => { cancelled = true; clearTimeout(timer) }
   }, [base, running])
 
-  const action = async (kind: 'save' | 'build' | 'copy') => {
+  const action = async (kind: 'save' | 'build' | 'copy' | 'reset') => {
     if (!spec || busy || running) return
     setBusy(true); setError('')
     try {
@@ -73,7 +74,10 @@ export function HouseBuildPanel({ base, prepareBase, onBuilt, onChanged }: {
       setSpec(saved)
       if (kind === 'build') {
         await apiPost(`${target}/house/build`, {})
-        if (alive.current) setStatus(current => current ? { ...current, running: true } : current)
+        if (alive.current) setStatus(current => current ? { ...current, running: true, error: '' } : current)
+      } else if (kind === 'reset') {
+        const reset = await apiPost<{ spec: HouseSpec }>(`${target}/house/reset-footprint`, {})
+        if (alive.current) setSpec(reset.spec)
       } else if (kind === 'copy') {
         const index = Number(target.substring(target.lastIndexOf('/') + 1))
         await apiPost(`${target.substring(0, target.lastIndexOf('/variants/'))}/house/copy-layout`, { from: index })
@@ -89,14 +93,14 @@ export function HouseBuildPanel({ base, prepareBase, onBuilt, onChanged }: {
   const patch = (values: Partial<HouseSpec['overrides']>) => setSpec({ ...spec, overrides: { ...overrides, ...values } })
   const balcony = spec.balconies ?? { edge: 'front' as const, storeys: [], layout: 'per_window', depth_m: .9, railing: 'iron' }
   // Collapsed on ordinary props; open once the variant is a house or building.
-  return <details className="ga-form" style={{ gap: 8 }} open={status.built || running}>
+  return <details className="ga-form" style={{ gap: 8 }} open={status.built || running || !!status.error || !!error}>
     <summary className="ga-form-section-label">{t('Build from Blender')}</summary>
     <p className="ga-hint">{t('House changes apply immediately after saving.')}</p>
     <div role="status">{running ? t('Building…') : status.built ? t('Built') : t('No house built')}</div>
     <div className="ga-hint">{status.footprint_m
       ? t('Footprint: {w} × {d} m').replace('{w}', status.footprint_m[0].toFixed(2)).replace('{d}', status.footprint_m[1].toFixed(2))
       : t("Set the prop's size first")}</div>
-    {error && <p role="alert">{error}</p>}
+    {(error || status.error) && <p role="alert">{error || status.error}</p>}
     <fieldset disabled={busy || running} className="ga-fieldset">
       <div className="ga-form-row">
         <Field label={t('Style')}><select aria-label={t('Style')} className="ga-input" value={spec.style} onChange={e => setSpec({ ...spec, style: e.target.value })}>
@@ -156,6 +160,7 @@ export function HouseBuildPanel({ base, prepareBase, onBuilt, onChanged }: {
       <div className="ga-form-row">
         <button type="button" className="ga-btn" onClick={() => { void action('save') }}>{t('Save')}</button>
         <button type="button" className="ga-btn" onClick={() => { void action('build') }}>{t('Build')}</button>
+        <button type="button" className="ga-btn ga-btn-sm" onClick={() => { void action('reset') }}>{t('Reset footprint from size')}</button>
         <button type="button" className="ga-btn" onClick={() => { void action('copy') }}>{t('Copy layout to all variants')}</button>
       </div>
     </fieldset>

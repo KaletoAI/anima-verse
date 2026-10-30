@@ -5,7 +5,14 @@ A 6 x 9 m authored size supplies a 6 x 9 m footprint. Three storeys at
 3.2 m and two units fit because each unit is 3 m wide (minimum 2.5 m).
 Missing authored dimensions must return 400. The second build is busy. A saved 6 m width allows only floor(6/2.5) = 2
 units; 99 storeys and 9 m height clamp to 12 and 4.5 m.
-Copying layout changes only units, storeys and storey_m; player writes are 403.
+[F3] Resetting authored 6x9 to stored 8x12 yields 8x12; copying that
+footprint to a sibling previously at 6x9 yields 8x12 on both. Missing
+stored width/depth returns 400 repeatedly without repairing the missing
+size on disk, and player reset returns 403.
+[F7] Removing saved UIDs simulates legacy JSON: copy-layout must still
+return 200 because its read and bulk_update must share persisted identities.
+[F3-UI/F5-UI] The reset action is wired to its endpoint and translated;
+server errors are rendered in an alert even on a newly opened panel.
 """
 import os
 from pathlib import Path
@@ -73,6 +80,51 @@ def main():
                 assert client.get(base).json()['running'] is True
             finally:
                 hp._running.discard(pid)
+            # Run independent final regressions before the older route checks.
+            failures = []
+            def check(number, fn):
+                try:
+                    fn(); print(number, 'PASS')
+                except Exception as exc:
+                    failures.append((number, repr(exc))); print(number, 'FAIL', repr(exc))
+            def reset():
+                props.set_variant_dims(pid, 0, dict(width_m=8, depth_m=12, height_m=10))
+                response = client.post(base + '/reset-footprint')
+                assert response.status_code == 200, response.text
+                assert client.get(base).json()['footprint_m'] == [8, 12]
+                missing_path = props._sidecar_path(missing)
+                before = missing_path.read_bytes()
+                assert client.post(f'/world/props/{missing}/variants/0/house/reset-footprint').status_code == 400
+                assert missing_path.read_bytes() == before, 'failed reset repaired missing size'
+                assert client.post(f'/world/props/{missing}/variants/0/house/reset-footprint').status_code == 400
+                assert client.post(base + '/reset-footprint', headers={'x-role': 'user'}).status_code == 403
+            check('F3-reset', reset)
+            def copy_footprint(legacy=False):
+                other_pid = props.create_prop(name='Copy regression', width_m=6, depth_m=9, height_m=8)['id']
+                hp.set_house_spec(other_pid, 0, {})
+                other_index = props.add_variant(other_pid)
+                meta = props.read_sidecar(other_pid)
+                meta[props.VARIANTS_KEY][other_index]['house'] = {'footprint_m': [4, 5], 'spec': saved}
+                if legacy:
+                    for entry in meta[props.VARIANTS_KEY]: entry.pop('uid', None)
+                props._sidecar_path(other_pid).write_text(__import__('json').dumps(meta))
+                response = client.post(f'/world/props/{other_pid}/house/copy-layout', json={'from': 0})
+                assert response.status_code == 200, response.text
+                assert client.get(f'/world/props/{other_pid}/variants/{other_index}/house').json()['footprint_m'] == [6, 9]
+            check('F3-copy', copy_footprint)
+            check('F7-legacy', lambda: copy_footprint(True))
+            def ui():
+                panel = (Path(__file__).resolve().parents[1] / 'frontend/src/tabs/props/HouseBuildPanel.tsx').read_text()
+                assert '/house/reset-footprint' in panel
+                assert "t('Reset footprint from size')" in panel
+                assert 'status.error' in panel and 'role="alert"' in panel
+                assert 'open={status.built || running || !!status.error || !!error}' in panel
+            check('F3/F5-UI', ui)
+            assert not failures, failures
+            # Restore the older cases' initial footprint.
+            meta = props.read_sidecar(pid)
+            meta[props.VARIANTS_KEY][0]['house']['footprint_m'] = [6, 9]
+            props._write_sidecar(pid, meta)
             other = props.add_variant(pid)
             props.set_variant_dims(pid, other, {'width_m': 6, 'depth_m': 9, 'height_m': 8})
             hp.set_house_spec(pid, other, {'style': 'modern', 'overrides': {'tint': '#112233'}})
