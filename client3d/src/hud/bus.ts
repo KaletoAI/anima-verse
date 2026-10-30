@@ -17,6 +17,7 @@
  * says: `movementLocked` + `partyLeader` (E3-T3), `groundRoomId`,
  * `floorRoomIds` and the two lock maps of task C2).
  */
+import type { PropActionSnapshot } from '@anima/player-ui/propActions';
 import type { BootState, bootReport } from '../game/boot';
 import type { ElevatorState } from '../game/elevator';
 import type { MinimapState } from '../game/minimap';
@@ -31,6 +32,7 @@ export type GameMode = 'overview' | 'embodied';
 export interface HudGameState {
   /** null for hosts without a persistent client cache (the browser). */
   clientCache: { bytes: number; limitBytes: number; entries: number } | null;
+  propActionSnapshot: PropActionSnapshot | null;
   clock: string;
   connection: 'ok' | 'lost';
   info: InfoPanelData | null;
@@ -202,7 +204,7 @@ export interface HudUiActions {
 }
 
 const state: HudGameState = {
-  clientCache: null, clock: '', connection: 'ok', info: null, openView: null, placeMenu: null,
+  propActionSnapshot: null, clientCache: null, clock: '', connection: 'ok', info: null, openView: null, placeMenu: null,
   mode: 'overview', selected: null, talkTarget: null,
   movementLocked: false, partyLeader: '', groundRoomId: '', floorRoomIds: {},
   lockedRooms: {}, lockedLocations: {}, lockedLoc: '',

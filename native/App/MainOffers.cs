@@ -20,5 +20,6 @@ public partial class Main
         }
         else offers.Places.ClearHover();
     }
+    private double PropPollPeriod() => _poll?.IntervalMs(WorldmapKey) ?? AnimaNative.Sync.PollSpec.Worldmap3d.IntervalMs;
     private void RefreshOffersMap() => _poll?.Signal(WorldmapKey);
 }

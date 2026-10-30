@@ -259,6 +259,7 @@ public partial class Main
                     OpenLocation = OpenLocation,
                     RefreshMap = RefreshOffersMap,
                     RefreshPropWorld = RefreshPropWorldAsync,
+                    PropPollPeriod = PropPollPeriod,
                     RoomRequestInFlight = () => _avatarRooms?.Channel.InFlight == true
                 };
             _figures.BeforeTick += StepPlayerSteering;

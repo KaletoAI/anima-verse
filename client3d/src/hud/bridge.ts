@@ -14,7 +14,7 @@ import * as bus from './bus';
 import type { HudGameState, HudUiState, HudBoot, HudGameActions, HudUiActions, HudRect } from './bus';
 import type { MinimapState } from '../game/minimap';
 import type { PerfStats } from '../game/perfstats';
-import { onPropActionChanged, notifyPropActionChanged, setPropActionPreparation } from '@anima/player-ui/propActions';
+import { onPropActionChanged, notifyPropActionChanged, setPropActionPreparation, setPropActionHost, publishHostedPropActions } from '@anima/player-ui/propActions';
 
 /** Protocol history — both hosts must speak the SAME number, a message with
  *  another `v` is dropped with a warning (no negotiation, no fallback reader):
@@ -112,6 +112,10 @@ function receiveState(patch: Partial<HudGameState>, fields: readonly (keyof HudG
 let speechSerial = 0;
 /** HUD endpoint: local writers publish independently of incoming scene state. */
 export function connectHudSide(t: BridgeTransport): () => void {
+  setPropActionHost(true);
+  const publishPropSnapshot = () => publishHostedPropActions(bus.getGameState().propActionSnapshot);
+  const offPropSnapshot = bus.subscribeGameState(publishPropSnapshot);
+  publishPropSnapshot();
   const restore = senders(bus.gameActions, gameNames, (name, args) => t.send({ v: HUD_BRIDGE_VERSION, kind: 'action', name, args }));
   const speechSession = `${Date.now()}:${Math.random().toString(36).slice(2)}`;
   const pendingSpeech = new Map<string, { resolve: () => void; timer: number }>();
@@ -209,7 +213,7 @@ export function connectHudSide(t: BridgeTransport): () => void {
   const unsubscribeState = bus.subscribeGameState(() => publishState());
   publish(); publishState();
   return () => {
-    off(); offPreparation(); offPropActionChange(); unsubscribe(); unsubscribeState();
+    off(); offPreparation(); offPropActionChange(); offPropSnapshot(); setPropActionHost(false); unsubscribe(); unsubscribeState();
     for (const id of pendingSpeech.keys()) finishSpeech(id);
     if (bus.gameActions.speak === speak) bus.gameActions.speak = previousSpeak;
     if (bus.gameActions.stopSpeech === stopSpeech) bus.gameActions.stopSpeech = previousStop;

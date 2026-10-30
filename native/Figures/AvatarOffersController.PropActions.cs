@@ -28,12 +28,13 @@ public sealed partial class AvatarOffersController
     private string? _preparedPropJourney,_preparedPropSeatExecution;
     private bool _propPrepared;
     private static void LogProp(string message)=>GD.Print("[native] [prop] "+message);
-    private double _nextPropPoll,_propBurstUntil;
+    private double _nextPropPoll,_propBurstUntil,_lastSemanticPoll=double.NegativeInfinity,_lastStatePoll=double.NegativeInfinity;
+    private Task? _semanticRefresh,_stateRefresh;
     private bool _propPollBusy,_propMutationBusy,_manualPropRelease;
     private void AttachProps()
     {
         if(!_source.SupportsPropActions) return;
-        var props=PropActions=new(_source,_clock) { RefreshOffers=RefreshSemanticOffersAsync,Log=LogProp };
+        var props=PropActions=new(_source,_clock) { RefreshOffers=()=>RefreshSemanticOffersAsync(),Log=LogProp };
         props.PrepareWrites=async ()=> {
             _propPrepared=true;
             _preparedPropSeatExecution=_steering.AvatarSeated || (Map is { } seatedMap && Self(seatedMap) is { } seated
@@ -64,8 +65,11 @@ public sealed partial class AvatarOffersController
         props.NotifyChanged+=PropNotifyChanged;
         props.RefreshFailed+=PropRefreshFailed;
         props.RunEnded+=PropRunEnded;
-        _hud.PropActionPrepare=props.PrepareAsync;
-        _hud.PropActionsChanged=id=> { _propBurstUntil=_clock()+5000; PendingPropAction=ObservePropAsync(()=>props.ChangedAsync(id)); };
+        _hud.PropActionPrepare=id=> { BeginPropBurst(); return props.PrepareAsync(id); };
+        _hud.PropActionsChanged=id=> {
+            if(id is not null) { BeginPropBurst(); InvalidatePropOffers(); }
+            PendingPropAction=ObservePropAsync(async ()=> { await props.ChangedAsync(id); await RefreshSemanticOffersAsync(false); PublishPropSnapshot(); });
+        };
         _hud.Handlers["pickPropAction"]=args=> {
             CloseMenu(new());
             if(args.Count<3 || args[1] is not JsonObject target) return;
@@ -89,7 +93,7 @@ public sealed partial class AvatarOffersController
         _steering.ReleasePropAction=()=> { if(!props.Paused && !props.ManualGate.Pending) PendingPropAction=ReleaseOwnedPropAsync(); };
         PickPropAction=PickSemanticProp;
         PropPauseChanged();
-        PendingPropAction=ObservePropAsync(async ()=> { await props.RefreshAsync(); await RefreshSemanticOffersAsync(); });
+        PendingPropAction=ObservePropAsync(async ()=> { await RefreshPropStateAsync(); await RefreshSemanticOffersAsync(false); PublishPropSnapshot(); });
     }
     private void ReleaseSwitchedPropSeat()
     {
@@ -106,12 +110,19 @@ public sealed partial class AvatarOffersController
     private void PropPauseChanged()
     {
         if(_disposed || PropActions is not { } props) return;
+        PublishPropSnapshot();
         if(props.OwnedRun is not null && !props.ManualGate.Pending) _manualPropRelease=false;
         _position.Channel.ReportsPaused=props.Paused;
         _steering.PropPreparationPending=props.Paused;
     }
     private void PropRefreshFailed(string message) { if(!_disposed) Toast?.Invoke(message); }
-    private void PropNotifyChanged(string? id) { _hud.NotifyPropActionsChanged(id); _propBurstUntil=_clock()+5000; }
+    private void PropNotifyChanged(string? id) { if(id is not null) { BeginPropBurst(); InvalidatePropOffers(); } _hud.NotifyPropActionsChanged(id); }
+    // Persistent seats and public NPC motion never extend this own-operation deadline.
+    private void BeginPropBurst() { if(_clock()>=_propBurstUntil) _propBurstUntil=_clock()+5000; }
+    private void InvalidatePropOffers() { _semanticGeneration++; _lastSemanticPoll=double.NegativeInfinity; _lastStatePoll=_clock(); _nextPropPoll=_clock()+500; }
+    public Func<double> PropPollPeriod { get; set; }=()=>AnimaNative.Sync.PollSpec.Worldmap3d.IntervalMs;
+    private double PropPollInterval=>_clock()<_propBurstUntil ? 500 : PropPollPeriod();
+    private void PublishPropSnapshot() { if(!_disposed && PropActions is { } props) _hud.SetState("propActionSnapshot",new JsonObject { ["offers"]=_semanticOffers.DeepClone(),["state"]=props.State }); }
     private async Task<JsonDocument> RequestLoggedAsync(string action,JsonObject target,string revision,string? partner)
     {
         var timer=System.Diagnostics.Stopwatch.StartNew();
@@ -132,10 +143,11 @@ public sealed partial class AvatarOffersController
         if(_propMutationBusy || _disposed || PropActions is not { } props) return;
         _propMutationBusy=true;
         try {
+            BeginPropBurst();
             using var answer=await props.MutateAsync(operation);
             if(answer.RootElement.TryGetProperty("status",out var s) && s.GetString() is "refused" or "failed")
                 throw new InvalidOperationException(answer.RootElement.GetProperty("reason").GetString());
-            await RefreshSemanticOffersAsync();
+            await RefreshSemanticOffersAsync(false);
         } catch(Exception e) { if(!_disposed) Toast?.Invoke(e.Message); }
         finally { _propMutationBusy=false; }
     }
@@ -143,11 +155,12 @@ public sealed partial class AvatarOffersController
     {
         if(_disposed || PropActions is not { OwnedRun: { } run } props) return;
         string? journey=Self(Map!.Value) is { } me && me.TryGetProperty("travel",out var tr) && tr.ValueKind==JsonValueKind.Object ? Text(tr,"journey_id") : _position.OwnedPropJourney;
+        BeginPropBurst();
         await ObservePropAsync(async ()=> {
             try { await props.ReleaseAsync(PropActionMotion.Text(run["execution_id"]),journey,()=> {
                 ReleaseLocalProp();
             });
-                await RefreshSemanticOffersAsync();
+                await RefreshSemanticOffersAsync(false);
             }
             finally { PropPauseChanged(); }
         });
@@ -155,7 +168,7 @@ public sealed partial class AvatarOffersController
     private void PropRunEnded(string status,string reason)
     {
         if(_disposed) return;
-        _propBurstUntil=0;
+        _propBurstUntil=0; _nextPropPoll=_clock()+PropPollPeriod();
         ReleaseLocalProp();
     }
     private void ReleaseLocalProp()
@@ -177,10 +190,34 @@ public sealed partial class AvatarOffersController
         bool Physical(string key)=>me.TryGetProperty(key,out var value) && value.ValueKind==JsonValueKind.Object;
         props.ObserveWorld(journey,Physical("place") || Physical("prop_action_entry") || Physical("interaction"));
     }
-    public async Task RefreshSemanticOffersAsync()
+    // Startup, mode changes and the timer share one normal read budget.
+    private Task RefreshPropStateAsync()
     {
-        if(_disposed || PropActions is null) return;
-        long generation=++_semanticGeneration;
+        if(_disposed || PropActions is not { } props) return Task.CompletedTask;
+        if(_stateRefresh is { IsCompleted:false }) return _stateRefresh;
+        if(_clock()-_lastStatePoll<PropPollInterval) return Task.CompletedTask;
+        _lastStatePoll=_clock();
+        return _stateRefresh=props.RefreshAsync();
+    }
+    public Task RefreshSemanticOffersAsync(bool force=true)
+    {
+        if(_disposed || PropActions is null) return Task.CompletedTask;
+        if(_semanticRefresh is { IsCompleted:false }) return _semanticRefresh;
+        if(!force && _clock()-_lastSemanticPoll<PropPollInterval) return Task.CompletedTask;
+        _lastSemanticPoll=_clock();
+        return _semanticRefresh=ReadSemanticOffersAsync();
+    }
+    private async Task ReadSemanticOffersAsync()
+    {
+        long generation; string room,loc;
+        do {
+            generation=_semanticGeneration; room=_position.RoomId; loc=_position.LocationId;
+            await ReadSemanticOffersOnceAsync();
+        } while(!_disposed && (generation!=_semanticGeneration || room!=_position.RoomId || loc!=_position.LocationId));
+    }
+    private async Task ReadSemanticOffersOnceAsync()
+    {
+        long generation=_semanticGeneration;
         string room=_position.RoomId,loc=_position.LocationId;
         try {
             using var doc=await _source.GetPropActionsAsync();
@@ -189,7 +226,7 @@ public sealed partial class AvatarOffersController
             var rows=_semanticOffers.OfType<JsonObject>().ToArray();
             string summary=$"n={rows.Length} enabled={rows.Count(a=>a["enabled"]?.GetValue<bool>()==true)} reasons={JsonSerializer.Serialize(rows.Select(a=>PropActionMotion.Text(a["reason"])).Where(r=>r.Length>0).Distinct().Order().ToArray())}";
             if(summary!=_semanticLog) { _semanticLog=summary; LogProp("offers refreshed "+summary); }
-            RefreshOpenSemanticMenu();
+            RefreshOpenSemanticMenu(); PublishPropSnapshot();
         } catch(Exception e) { if(!_disposed && generation==_semanticGeneration) Toast?.Invoke("Furniture actions unavailable: "+e.Message); }
     }
     private bool RefreshOpenSemanticMenu()
@@ -238,11 +275,13 @@ public sealed partial class AvatarOffersController
     private void TickProps()
     {
         if(_disposed || PropActions is not { } props || _propPollBusy || _clock()<_nextPropPoll) return;
-        _nextPropPoll=_clock()+150;
-        bool moving=_figures.HasPropMotion || props.OwnedRun is not null || _clock()<_propBurstUntil;
-        if(!moving && !props.Paused) return;
+        _nextPropPoll=_clock()+PropPollInterval;
         _propPollBusy=true;
-        PendingPropAction=ObservePropAsync(async ()=> { try { await props.ExpireAsync(); if(moving || props.Paused) await props.RefreshAsync(); } finally { _propPollBusy=false; } });
+        PendingPropAction=ObservePropAsync(async ()=> { try {
+            if(await props.ExpireAsync()) _lastStatePoll=_clock();
+            else await RefreshPropStateAsync();
+            await RefreshSemanticOffersAsync(false); PublishPropSnapshot();
+        } finally { _propPollBusy=false; } });
     }
     private void DetachProps()
     {

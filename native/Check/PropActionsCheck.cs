@@ -26,7 +26,8 @@ public static partial class PropActionsCheck
 {
     public static async Task<string> RunAsync(Node3D host,string fixtures)
     {
-        string dir=Path.Combine(fixtures,"propactions"); int checks=0;
+        int polling=await CheckPolling(host,fixtures);
+        string dir=Path.Combine(fixtures,"propactions"); int checks=polling;
         void Is(string name,bool value) { checks++; if(!value) throw new InvalidOperationException("propactions "+name); }
         void Near(string name,double got,double want,double eps=1e-5)=>Is($"{name}: {got:R} expected {want:R}",Math.Abs(got-want)<=eps);
         using var target=JsonDocument.Parse("""{"location_id":"loc-props","room_id":"r-props","placement_id":"bench-56","variant_uid":"variant-56"}""");

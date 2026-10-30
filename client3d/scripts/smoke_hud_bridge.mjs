@@ -14,6 +14,21 @@ const sceneMessages = [];
 const sceneTransport = { ...a, send: msg => { sceneMessages.push(structuredClone(msg)); a.send(msg); } };
 const stopScene = scene.connectSceneSide(sceneTransport);
 assert.equal(hud.getGameState().talkTarget.name, 'initial snapshot');
+const hudPropApi = hud.load('packages/player-ui/src/propActions.ts');
+assert.equal(hudPropApi.isPropActionHosted(), true, 'embedded HUD disables its independent prop polling');
+let propHttpReads = 0;
+const savedFetch = globalThis.fetch;
+globalThis.fetch = async () => { propHttpReads++; throw new Error('HUD must read host snapshots'); };
+const propSnapshot = { offers: [], state: { incoming: [], outgoing: [], current: [{ execution_id: 'seat', status: 'active' }], recent_results: [] } };
+scene.setGameState({ propActionSnapshot: propSnapshot });
+for (let i = 0; i < 1200; i++) {
+  assert.deepEqual(await hudPropApi.getPropActionState(), propSnapshot.state);
+  assert.deepEqual(await hudPropApi.getPropActions(), []);
+}
+assert.deepEqual(hudPropApi.getHostedPropActions(), propSnapshot);
+assert.equal(propHttpReads, 0, '60s seated/walking HUD consumers add no HTTP reads');
+globalThis.fetch = savedFetch;
+
 assert.equal(scene.getGameState().partyLeader, 'HUD initial');
 hud.setGameState({ groundRoomId: 'g1' });
 assert.equal(scene.getGameState().groundRoomId, 'g1');

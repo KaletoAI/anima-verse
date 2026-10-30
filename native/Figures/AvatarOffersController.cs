@@ -99,7 +99,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
             _seatMap=map.Clone(); _seatMapAt=MapReceiptTime(map);
             ReconcilePlace(map,_seatMapAt);
             PendingPlaces=RefreshPlacesAsync();
-            if(PropActions is not null) PendingPropAction=ObservePropAsync(async ()=> { await PropActions.RefreshAsync(); await RefreshSemanticOffersAsync(); });
+            if(PropActions is not null) PendingPropAction=ObservePropAsync(async ()=> { await RefreshPropStateAsync(); await RefreshSemanticOffersAsync(false); });
             UpdateOffers();
         }
     }
@@ -112,7 +112,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
         ReconcilePropWorld(map);
         _seatMap=map.Clone(); _seatMapAt=polledAt;
         ReconcilePlace(map,polledAt);
-        if(_active) { PendingPlaces=RefreshPlacesAsync(); if(PropActions is not null) _=RefreshSemanticOffersAsync(); }
+        if(_active) { PendingPlaces=RefreshPlacesAsync(); if(PropActions is { Paused:false }) _=RefreshSemanticOffersAsync(false); }
     }
     public void Tick()
     {

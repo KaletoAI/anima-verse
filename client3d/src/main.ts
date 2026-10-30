@@ -19,7 +19,7 @@ import { installSkinnedNormalCorrection } from '@anima/scene-render';
 import * as THREE from 'three';
 installSkinnedNormalCorrection(THREE);
 import * as api from './api';
-import { pollCore, syncHub, SYNC_ENDPOINTS, onPropActionChanged } from '@anima/player-ui';
+import { pollCore, syncHub, SYNC_ENDPOINTS, onPropActionChanged, setPropActionPollPeriod } from '@anima/player-ui';
 import { initDebug3d, initIsolation } from './debug3d';
 import { Engine, MIN_DIST } from './scene/engine';
 import { fitDistance, worldCentreXZ } from './scene/cameraMath';
@@ -2549,6 +2549,10 @@ async function startApp(username: string, role: string) {
   }
   takeRoomsFrom(firstMap);
   updatePins(firstMap);
+  const updatePropPollPeriod = () => setPropActionPollPeriod(syncHub().connected()
+    ? SYNC_ENDPOINTS.worldmap3d.pushedIntervalMs : SYNC_ENDPOINTS.worldmap3d.intervalMs);
+  syncHub().onState(updatePropPollPeriod);
+  updatePropPollPeriod();
   // One subscription for the page lifetime; cadence and budget live in the table.
   pollCore().subscribe('c3d-worldmap', fetchWorldMap, { ...SYNC_ENDPOINTS.worldmap3d, minSpacingMs: 150 },
     (data, error) => {
@@ -4763,6 +4767,7 @@ async function startApp(username: string, role: string) {
       placeOffers = places.places;
       placeOffersRoom = me?.room_id ?? places.room_id;
       semanticOffers = actions;
+      setGameState({ propActionSnapshot: { offers: actions, state } });
       logPropOffers(actions);
       adoptPropState(state);
       releaseSwitchedPropSeat();
@@ -4924,7 +4929,7 @@ async function startApp(username: string, role: string) {
   // Short entries must be sampled while live, never replayed after commit.
   let propPollBusy = false;
   let propPollUntil = 0;
-  onPropActionChanged(() => { propPollUntil = performance.now() + 5000; });
+  onPropActionChanged(requestId => { if (requestId !== undefined && performance.now() >= propPollUntil) propPollUntil = performance.now() + 5000; });
   function pollPropMotion(): void {
     if (propPreparation.expire(performance.now())) {
       // A disconnected HUD cannot strand control. Expiry only makes its
@@ -4933,13 +4938,12 @@ async function startApp(username: string, role: string) {
       propStateEpoch++;
       void refreshPropMotion().catch(e => uiActions.toast?.(String(e)));
     }
-    const moving = lastMap?.characters.some(c => (c.name !== avatarName || !manualPropRelease) && (c.local_approach || c.prop_action_entry))
-      || !!ownedPropRun() || performance.now() < propPollUntil;
+    const moving = performance.now() < propPollUntil;
     if (!moving || propPollBusy) return;
     propPollBusy = true;
     void pollCore().refresh('c3d-worldmap').finally(() => { propPollBusy = false; });
   }
-  setInterval(pollPropMotion, 150);
+  setInterval(pollPropMotion, 500);
 
   async function releaseOwnedProp(): Promise<void> {
     const run = ownedPropRun();

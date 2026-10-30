@@ -78,6 +78,62 @@ export function propActionChoices(offer: PropActionOffer): PropActionChoice[] {
     : [{ enabled: false, reason: offer.reason }]
 }
 
+export interface PropActionSnapshot { offers: PropActionOffer[]; state: PropActionState }
+let hosted = false
+let hostSnapshot: PropActionSnapshot | null = null
+const hostListeners = new Set<() => void>()
+/** The scene owns reads in an embedded HUD; snapshots cross the existing state bridge. */
+export function setPropActionHost(on: boolean): void {
+  hosted = on; hostSnapshot = null
+  for (const listener of hostListeners) listener()
+}
+export function isPropActionHosted(): boolean { return hosted }
+export function getHostedPropActions(): PropActionSnapshot | null { return hostSnapshot }
+export function publishHostedPropActions(snapshot: PropActionSnapshot | null): void {
+  hostSnapshot = snapshot
+  for (const listener of hostListeners) listener()
+}
+export function subscribeHostedPropActions(listener: () => void): () => void {
+  hostListeners.add(listener)
+  return () => { hostListeners.delete(listener) }
+}
+
+let burstUntil = 0
+let pollPeriodMs = 3000
+export function setPropActionPollPeriod(ms: number): void { pollPeriodMs = Math.max(3000, ms) }
+function cachedRead<T>(load: () => Promise<T>) {
+  let pending: Promise<T> | null = null, value: T, hasValue = false
+  let started = -Infinity, generation = 0, failed = false, failure: unknown
+  return {
+    invalidate() { generation++; hasValue = false; failed = false },
+    async read(): Promise<T> {
+      const epoch = generation
+      if (pending) {
+        const answer = await pending
+        return epoch === generation && hasValue ? answer : this.read()
+      }
+      const now = Date.now()
+      if (now - started < (now < burstUntil ? 500 : pollPeriodMs)) {
+        if (hasValue) return value
+        if (failed) throw failure
+      }
+      started = now
+      const request = load()
+      pending = request
+      try {
+        const answer = await request
+        if (epoch === generation) { value = answer; hasValue = true; failed = false }
+        return answer
+      } catch (error) {
+        if (epoch === generation) { failed = true; failure = error; hasValue = false }
+        throw error
+      } finally { if (pending === request) pending = null }
+    },
+  }
+}
+const offersRead = cachedRead(() => apiGet<PropActionOffer[]>('/play/prop-actions'))
+const stateRead = cachedRead(() => apiGet<PropActionState>('/play/prop-actions/state'))
+
 const CHANGED = 'prop-actions:changed'
 /** Hosts subscribe here to force a world poll before short approaches disappear. */
 export function onPropActionChanged(listener: (requestId?: string) => void): () => void {
@@ -86,13 +142,17 @@ export function onPropActionChanged(listener: (requestId?: string) => void): () 
   return () => window.removeEventListener(CHANGED, changed)
 }
 export function notifyPropActionChanged(requestId?: string): void {
+  if (requestId !== undefined) {
+    offersRead.invalidate(); stateRead.invalidate()
+    if (Date.now() >= burstUntil) burstUntil = Date.now() + 5000
+  }
   window.dispatchEvent(new CustomEvent(CHANGED, { detail: requestId === undefined ? undefined : { request_id: requestId } }))
 }
 export function getPropActions(): Promise<PropActionOffer[]> {
-  return apiGet<PropActionOffer[]>('/play/prop-actions')
+  return hosted ? Promise.resolve(hostSnapshot?.offers ?? []) : offersRead.read()
 }
 export function getPropActionState(): Promise<PropActionState> {
-  return apiGet<PropActionState>('/play/prop-actions/state')
+  return hosted ? Promise.resolve(hostSnapshot?.state ?? { incoming: [], outgoing: [], current: [], recent_results: [] }) : stateRead.read()
 }
 let preparation: ((requestId: string) => Promise<void>) | null = null
 // Transport correlation only, not an execution identity or server request nonce.

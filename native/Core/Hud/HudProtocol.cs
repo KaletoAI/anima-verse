@@ -103,7 +103,7 @@ public static class HudProtocol
     public static readonly string[] SceneFields =
     {
         "clock", "connection", "info", "openView", "placeMenu", "mode", "selected", "talkTarget",
-        "elevator", "elevatorOpen", "stairs", "enterOffer", "clientCache",
+        "elevator", "elevatorOpen", "stairs", "enterOffer", "clientCache", "propActionSnapshot",
     };
 
     /// <summary>

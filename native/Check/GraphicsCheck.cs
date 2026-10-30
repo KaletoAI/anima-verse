@@ -17,7 +17,7 @@ public static class GraphicsCheck
         var path = Path.Combine(ProjectSettings.GlobalizePath("res://"), "../shared/test-vectors/graphics_prefs.json");
         var vectors = JsonNode.Parse(File.ReadAllText(path))!["cases"]!.AsArray();
         JsonNode Prefs(GraphicsPrefs p) => JsonNode.Parse(GraphicsPrefs.Save(p))!;
-        int count = 0;
+        int count = HitchCheck.Run(host.GetViewport());
         foreach (var c in vectors)
         {
             var a = c!["args"]!.AsArray();

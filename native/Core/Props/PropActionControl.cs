@@ -19,10 +19,11 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     public PropPreparationBarrier Preparation { get; }=new();
     public ManualPropGate ManualGate { get; }=new();
     private readonly HashSet<string> _released=new(StringComparer.Ordinal);
-    private JsonObject _state=new() { ["current"]=new JsonArray(),["outgoing"]=new JsonArray() };
+    private JsonObject _state=new() { ["incoming"]=new JsonArray(),["current"]=new JsonArray(),["outgoing"]=new JsonArray(),["recent_results"]=new JsonArray() };
     private int _epoch;
     public int Generation=>_epoch;
     private long _refreshSerial;
+    private Task? _refreshTask;
     private bool _uncertain=true,_disposed;
     private long _sequence;
     private readonly string _session=Guid.NewGuid().ToString("N");
@@ -57,7 +58,34 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
         Preparation.Changed(id); _uncertain=true; _epoch++; PauseChanged?.Invoke();
         return RefreshAsync(immediateWorld);
     }
-    public async Task RefreshAsync(bool immediateWorld=false)
+    public Task RefreshAsync(bool immediateWorld=false)
+    {
+        if(_disposed) return Task.CompletedTask;
+        if(_refreshTask is { IsCompleted:false } pending) return immediateWorld ? JoinImmediateWorldAsync(pending) : pending;
+        var completion=new TaskCompletionSource();
+        _refreshTask=completion.Task;
+        _=ReadFreshAsync(completion,immediateWorld);
+        return completion.Task;
+    }
+    private async Task JoinImmediateWorldAsync(Task pending)
+    {
+        // A slow periodic state read must not consume an own approach's lead time.
+        Log?.Invoke("approaching answer: immediate worldmap poll");
+        var world=ObserveWorldRefreshAsync();
+        await pending;
+        if(await world is { } error) throw error;
+    }
+    private async Task ReadFreshAsync(TaskCompletionSource completion,bool immediateWorld)
+    {
+        try {
+            // A joined mutation still needs a state fetched after its preparation epoch.
+            int epoch;
+            do { epoch=_epoch; await RefreshCoreAsync(immediateWorld); }
+            while(!_disposed && epoch!=_epoch);
+            completion.SetResult();
+        } catch(Exception error) { completion.SetException(error); }
+    }
+    private async Task RefreshCoreAsync(bool immediateWorld)
     {
         if(_disposed) return;
         int epoch=_epoch; long serial=++_refreshSerial;
@@ -72,11 +100,11 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
         _trackedRun ??= OwnedRun?.DeepClone().AsObject();
         _state=fresh; _requestedRun=null;
         ReconcileRun(); PauseChanged?.Invoke();
+        string key=OwnStateKey;
+        if(key!=_offeredOwnKey && RefreshOffers is { } refresh) { await refresh(); _offeredOwnKey=key; }
         if(world is not null) { if(await world is { } error) throw error; } else await RefreshWorld();
         if(_disposed || epoch!=_epoch || serial!=_refreshSerial) return;
         _uncertain=false; Preparation.AdoptFreshState(); PauseChanged?.Invoke();
-        string key=OwnStateKey;
-        if(key!=_offeredOwnKey && RefreshOffers is { } refresh) { await refresh(); _offeredOwnKey=key; }
     }
     // Observe the parallel map failure immediately, including superseded or failed state reads.
     private async Task<Exception?> ObserveWorldRefreshAsync()
@@ -153,6 +181,11 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
             _trackedRun=_requestedRun=null; _adoptedJourney=null;
             release();
         });
-    public Task ExpireAsync() => Preparation.Expire(clock()) ? ChangedAsync(null) : Task.CompletedTask;
+    public async Task<bool> ExpireAsync()
+    {
+        if(!Preparation.Expire(clock())) return false;
+        await ChangedAsync(null);
+        return true;
+    }
     public void Dispose() { _disposed=true; _epoch++; }
 }

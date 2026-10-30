@@ -29,22 +29,12 @@ function moduleUrl(file) {
 }
 const { I18nProvider } = await import(moduleUrl(new URL('./src/I18nProvider.tsx', import.meta.url)));
 const { propActionReason } = await import(moduleUrl(new URL('./src/propActionReasons.ts', import.meta.url)));
-const { PropActionOffers, PropActionExecutionRow } = await import(moduleUrl(new URL('./src/PropActionsPanel.tsx', import.meta.url)));
+const { PropActionsPanel, PropActionOffers, PropActionExecutionRow } = await import(moduleUrl(new URL('./src/PropActionsPanel.tsx', import.meta.url)));
 const de = JSON.parse(readFileSync(new URL('../../shared/languages/de.json', import.meta.url), 'utf8')).translations;
 const translate = source => de[source] || source;
 assert.equal(propActionReason('start_not_walkable', translate), 'Geh zuerst etwas vom Möbelstück weg');
 assert.equal(propActionReason('future_code', translate), 'Zurzeit nicht möglich');
 assert.equal(propActionReason('constructor', translate), 'Zurzeit nicht möglich');
-// Collect literal runtime reasons, excluding author-validation issue codes.
-for (const file of ['prop_action_paths.py', 'prop_action_engine.py', 'prop_action_access.py']) {
-  const source = readFileSync(new URL(`../../app/core/${file}`, import.meta.url), 'utf8');
-  const patterns = [/_blocked\(["']([^"']+)["']\)/g, /last_reason = ["']([^"']+)["']/g,
-    /return (?:None, )?["']([a-z_]+)["']/g, /_refused\(["']([^"']+)["']\)/g];
-  for (const pattern of patterns) for (const [, code] of source.matchAll(pattern)) {
-    assert.notEqual(propActionReason(code, text => text), 'Not possible right now', `missing player reason: ${code}`);
-    assert.notEqual(propActionReason(code, translate), propActionReason(code, text => text), `missing German reason: ${code}`);
-  }
-}
 const render = (Component, props) => renderToStaticMarkup(React.createElement(I18nProvider, null, React.createElement(Component, props)));
 const target = { location_id: 'house', room_id: 'lounge', placement_id: 'sofa-2', variant_uid: 'green' };
 const offer = { action_id: 'rest', definition_revision: 'rev-7', placement_id: 'sofa-2', variant_uid: 'green', target, label: 'Rest', description: 'On the sofa', enabled: true, reason: '', required_partner: true, available_targets: [{ partner: 'Kira', enabled: false, reason: 'slot_occupied' }, { partner: 'Mira', enabled: true, reason: '' }], effects: [] };
@@ -100,3 +90,27 @@ const result = row({ status: 'completed', can_respond: false, can_cancel: false,
 assert.match(result, /Results/);
 assert.match(result, /energy/);
 console.log('PASS semantic shared offers and private lifecycle components');
+
+// The embedded panel renders the scene snapshot through the actual hook.
+const propApi = await import(moduleUrl(new URL('./src/propActions.ts', import.meta.url)));
+propApi.setPropActionHost(true);
+propApi.publishHostedPropActions({ offers: [offer], state: { incoming: [], outgoing: [], current: [{ ...execution, status: 'active' }], recent_results: [] } });
+const hostedPanel = render(PropActionsPanel, {});
+assert.match(hostedPanel, /Furniture actions/);
+assert.match(hostedPanel, /Active/);
+assert.match(hostedPanel, /Stop/);
+propApi.publishHostedPropActions(null);
+assert.equal(render(PropActionsPanel, {}), '', 'reconnecting host clears old private snapshot');
+propApi.setPropActionHost(false);
+console.log('PASS hosted prop panel snapshot through actual usePropActions hook');
+
+// Collect literal runtime reasons, excluding author-validation issue codes.
+for (const file of ['prop_action_paths.py', 'prop_action_engine.py', 'prop_action_access.py']) {
+  const source = readFileSync(new URL(`../../app/core/${file}`, import.meta.url), 'utf8');
+  const patterns = [/_blocked\(["']([^"']+)["']\)/g, /last_reason = ["']([^"']+)["']/g,
+    /return (?:None, )?["']([a-z_]+)["']/g, /_refused\(["']([^"']+)["']\)/g];
+  for (const pattern of patterns) for (const [, code] of source.matchAll(pattern)) {
+    assert.notEqual(propActionReason(code, text => text), 'Not possible right now', `missing player reason: ${code}`);
+    assert.notEqual(propActionReason(code, translate), propActionReason(code, text => text), `missing German reason: ${code}`);
+  }
+}

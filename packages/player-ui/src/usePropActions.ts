@@ -1,18 +1,16 @@
-import { useEffect } from 'react'
-import { getPropActions, getPropActionState, notifyPropActionChanged, onPropActionChanged, type PropActionOffer, type PropActionState } from './propActions'
+import { useEffect, useSyncExternalStore } from 'react'
+import { getPropActions, getPropActionState, onPropActionChanged, isPropActionHosted, getHostedPropActions, subscribeHostedPropActions, type PropActionSnapshot } from './propActions'
 import { pollCore, usePoll } from './usePolling'
 
-interface PropActionSnapshot { offers: PropActionOffer[]; state: PropActionState }
-const SPEC = { intervalMs: 1000, pushedIntervalMs: 1000, minSpacingMs: 0,
+const SPEC = { intervalMs: 3000, pushedIntervalMs: 6000, minSpacingMs: 3000,
   topics: ['presence', 'scene', 'self', 'world'] as ('presence' | 'scene' | 'self' | 'world')[] }
 let users = 0
 let offChanged: (() => void) | null = null
-let lastLifecycle: string | null = null
 function subscribeRefresh(): () => void {
   if (users++ === 0) offChanged = onPropActionChanged(() => {
     // refresh, not signal: an own mutation bypasses normal push spacing and
     // queues a trailing read when an older poll is still in flight.
-    for (const key of ['play-prop-actions', 'play-self']) {
+    for (const key of (isPropActionHosted() ? ['play-self'] : ['play-prop-actions', 'play-self'])) {
       void pollCore().refresh(key)
     }
   })
@@ -21,16 +19,11 @@ function subscribeRefresh(): () => void {
 /** One deduplicated live feed across Self, Scene and every partner card. */
 export function usePropActions() {
   useEffect(subscribeRefresh, [])
-  return usePoll<PropActionSnapshot>('play-prop-actions', async () => {
+  const hosted = useSyncExternalStore(subscribeHostedPropActions, isPropActionHosted, isPropActionHosted)
+  const snapshot = useSyncExternalStore(subscribeHostedPropActions, getHostedPropActions, getHostedPropActions)
+  const polled = usePoll<PropActionSnapshot>('play-prop-actions', async () => {
     const [offers, state] = await Promise.all([getPropActions(), getPropActionState()])
-    const lifecycle = JSON.stringify(state)
-    if (lifecycle !== lastLifecycle) {
-      const hadLifecycle = lastLifecycle !== null
-      lastLifecycle = lifecycle
-      if (hadLifecycle || state.incoming.length || state.outgoing.length || state.current.length) {
-        notifyPropActionChanged()
-      }
-    }
     return { offers, state }
-  }, SPEC)
+  }, { ...SPEC, enabled: !hosted })
+  return hosted ? { data: snapshot, error: null, refresh: async () => {} } : polled
 }
