@@ -215,7 +215,7 @@ async function mutate(path: string, body: unknown): Promise<PropActionResult> {
   } finally {
     // Invalidation releases the host's position barrier even after a refusal.
     // It is never a statement that a request adopted a place or succeeded.
-    notifyPropActionChanged(requestId, result, path.split('/').at(-1) as PropActionSource)
+    notifyPropActionChanged(requestId, result, path.slice(path.lastIndexOf('/') + 1) as PropActionSource)
   }
 }
 export function requestPropAction(actionId: string, target: PropActionTarget, revision: string, partner?: string): Promise<PropActionResult> {

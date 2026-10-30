@@ -374,3 +374,12 @@
 .ig-comment-form { display: flex; gap: 6px; padding: 6px 10px 10px; }
 .ig-comment-form input { flex: 1; background: var(--bg, #0d1117); color: var(--text, #e6edf3); border: 1px solid var(--border, #30363d); border-radius: 6px; padding: 5px 8px; font-size: 12px; }
 .ig-comment-form button { background: var(--accent, #2f81f7); color: #fff; border: 0; border-radius: 6px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+
+/* HoverHint (HoverHint.tsx): a mouse-over hint the page draws itself — the native
+   client's embedded browser draws no `title` tooltips. Fixed + portalled to the body,
+   so no scrolling panel clips it; it never takes the pointer. */
+.player-hover-hint { display: inline-flex; }
+.player-hover-hint-bubble { position: fixed; z-index: 10000; max-width: 280px; padding: 4px 8px;
+  border: 1px solid var(--border, #30363d); border-radius: 6px; background: var(--bg, #0d1117);
+  color: var(--text, #e6edf3); font-size: 12px; line-height: 1.35; pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35); }

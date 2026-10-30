@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { apiPost } from './api'
+import { HoverHint } from './HoverHint'
 import { useI18n } from './I18nProvider'
 import { propActionReason } from './propActionReasons'
 import { usePropActions } from './usePropActions'
@@ -20,13 +21,18 @@ export function PropActionOffers({ offers, partner, busy = false, onPick }: {
       const choices = !offer.required_partner ? [{ enabled: offer.enabled, reason: offer.reason, partner: undefined }]
         : offer.available_targets.length ? offer.available_targets.filter(choice => !partner || choice.partner === partner)
           : partner ? [] : [{ enabled: false, reason: offer.reason, partner: undefined }]
-      return choices.map(choice => <button key={JSON.stringify([offer.target, offer.action_id, choice.partner])}
-        type="button" className="player-chip" disabled={busy || !choice.enabled} aria-disabled={busy || !choice.enabled ? true : undefined}
-        style={{ opacity: busy || !choice.enabled ? 0.5 : undefined }}
-        title={!choice.enabled ? propActionReason(choice.reason, t) : undefined}
-        onClick={() => onPick(offer, choice.partner)}>
-        {offer.label}{choice.partner ? ` · ${choice.partner}` : ''}
-      </button>)
+      // A blocked choice says why on mouse-over (HoverHint: drawn by the page, so
+      // the native client shows it too).
+      return choices.map(choice => <HoverHint key={JSON.stringify([offer.target, offer.action_id, choice.partner])}
+        text={!choice.enabled ? propActionReason(choice.reason, t) : undefined}>
+        <button type="button" className="player-chip" disabled={busy || !choice.enabled}
+          aria-disabled={busy || !choice.enabled ? true : undefined}
+          style={{ opacity: busy || !choice.enabled ? 0.5 : undefined,
+            pointerEvents: !choice.enabled ? 'none' : undefined }}
+          onClick={() => onPick(offer, choice.partner)}>
+          {offer.label}{choice.partner ? ` · ${choice.partner}` : ''}
+        </button>
+      </HoverHint>)
     })}
   </div>
 }
