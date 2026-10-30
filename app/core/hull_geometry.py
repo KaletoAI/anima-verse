@@ -3,7 +3,7 @@ from copy import deepcopy
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.core import hull_facades, hull_facts, hull_mesh, hull_ornaments, hull_roofs, hull_walls
+from app.core import hull_balconies, hull_facades, hull_facts, hull_mesh, hull_ornaments, hull_roofs, hull_walls
 from app.core.hull_mesh import Part
 from app.core.world_geometry import polygon_distance
 
@@ -22,6 +22,14 @@ def cutout_padding_m(style: Dict) -> float:
 def prepare_facts(facts: Dict, style: Dict, desc: Dict, resolved: frozenset[str]) -> Dict:
     """Copy facts, extend storeys and share blind openings with every builder."""
     prepared = hull_facts.with_storeys(facts, desc.get("overrides", {}).get("storeys_total", 0))
+    balcony = desc.get("overrides", {}).get("balconies")
+    if balcony:
+        for level in prepared["levels"]:
+            if level["level"] in balcony["storeys"]:
+                for edge in level["edges"]:
+                    if (edge["index"] in hull_balconies.front_edges(prepared, level)
+                            and edge not in hull_walls.party_edges(level, desc)):
+                        edge["balcony_openings"] = True
     for level in prepared["levels"]:
         for edge in hull_walls.party_edges(level, desc):
             edge["openings"] = []
@@ -33,7 +41,8 @@ def prepare_facts(facts: Dict, style: Dict, desc: Dict, resolved: frozenset[str]
             if edge in hull_walls.party_edges(level, desc):
                 continue
             lo, hi = hull_walls._span(ring, edge, outer)
-            module = hull_facades.module_count(level, style, resolved, hi-lo, prepared["storey_m"])
+            module = (0 if edge.get("balcony_openings") else hull_facades.module_count(
+                level, style, resolved, hi-lo, prepared["storey_m"]))
             edge["openings"] = ([] if module else
                                 hull_facades.blind_windows(level, edge, style, desc.get("seed", 0), lo, hi))
     if desc.get("overrides", {}).get("blind_windows", False):
@@ -61,6 +70,17 @@ def prepare_facts(facts: Dict, style: Dict, desc: Dict, resolved: frozenset[str]
 
                 edge["openings"].extend(hull_facades.wall_blind_windows(
                     level, edge, dims, fallback["bay"], lo, hi, roof_tops))
+    if balcony:
+        for level in prepared["levels"]:
+            for edge in level["edges"]:
+                if (edge["index"] not in hull_balconies.front_edges(prepared, level)
+                        or edge in hull_walls.party_edges(level, desc)):
+                    continue
+                bays = hull_balconies.balcony_bays(level, edge, balcony, 0, edge["length"])
+                for opening in edge["openings"]:
+                    if opening["kind"] == "window" and any(
+                            lo <= (opening["s0"]+opening["s1"])/2 <= hi for lo, hi in bays):
+                        opening["y0"] = level["floor_y"]
     return prepared
 
 
@@ -76,6 +96,7 @@ def _build_parts(facts: Dict, style: Dict, desc: Dict, tier: str,
         ornaments = hull_walls.clip_party_parts(
             ornaments, hull_walls.party_edges(level, desc), ornaments=True)
     parts.extend(ornaments)
+    parts.extend(hull_balconies.build_balconies(facts, style, desc, tier=tier, uv_sizes=uv_sizes))
     return parts, roof_info
 
 

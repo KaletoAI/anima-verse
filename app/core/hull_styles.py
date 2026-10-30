@@ -190,6 +190,18 @@ def validate_description(raw: Any, styles: Dict[str, Dict[str, Any]]) -> Dict[st
         total = 0
     if total > 0:
         overrides["storeys_total"] = total
+    balcony = _doc(source.get("balconies"))
+    if balcony and balcony.get("edge", "front") == "front":
+        levels = balcony.get("storeys")
+        levels = levels if isinstance(levels, list) else []
+        overrides["balconies"] = {
+            "edge": "front",
+            "storeys": sorted({lv for lv in levels if type(lv) is int
+                               and 1 <= lv < min(total or 2, 12)}),
+            "layout": _choice(balcony.get("layout"), ("per_window", "continuous"), "per_window"),
+            "depth_m": _number(balcony.get("depth_m"), .5, 1.6, .9),
+            "railing": _choice(balcony.get("railing"), ("iron", "solid", "glass"), "iron"),
+        }
     if isinstance(source.get("roof_form"), str) and source["roof_form"] in ROOF_FORMS:
         overrides["roof_form"] = source["roof_form"]
     if "max_rise_m" in source:

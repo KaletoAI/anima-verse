@@ -232,7 +232,9 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 if clipped['s1']-clipped['s0'] > 1e-5 and clipped['y1']-clipped['y0'] > 1e-5:
                     holes.append(clipped)
             real_holes = [h for h in holes if not h.get('blind') or recessed]
-            bays = module_count(level, style, resolved, hi-lo, facts.get('storey_m'))
+            # Balcony doors need actual cut openings instead of a facade texture.
+            bays = (0 if edge.get('balcony_openings') else
+                    module_count(level, style, resolved, hi-lo, facts.get('storey_m')))
             if bays:
                 start = max(floor,plinth) if number == 0 else floor
                 build = builder('facade_module','facade_module')
