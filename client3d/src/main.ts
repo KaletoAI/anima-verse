@@ -2647,7 +2647,8 @@ async function startApp(username: string, role: string) {
       const exact = !!local || (c.name === avatarName && !!ownedPropRun());
       const tile = exact ? tileAt(at[0], at[1]) : null;
       const localAt = tile ? worldToTile(tile, at[0], at[1]) : null;
-      const floorY = exact ? tr.floor_y ?? (tile && localAt
+      // The server's floor_y is the bare floor; the walking clearance comes on top, as for every room floor.
+      const floorY = exact ? (tr.floor_y != null ? tr.floor_y + WALK_CLEARANCE_M : null) ?? (tile && localAt
         ? roomStandY(tile, c.room_id ?? '', localAt.x, localAt.z) : null) ?? undefined : undefined;
       return {
         char: c,

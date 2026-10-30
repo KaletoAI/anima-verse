@@ -182,7 +182,7 @@ public static class PropActionsCheck
                 source.MapOverride["characters"]![0]!["travel"]!["journey_id"]="upper-"+explicitFloor;
                 if(explicitFloor) source.MapOverride["characters"]![0]!["travel"]!["floor_y"]=9.4;
                 await offers.PropActions!.RefreshAsync(); mgr.Tick(1);
-                Near("approach uses upper floor "+explicitFloor,avatar.Position.Y,explicitFloor ? 9.4 : 9.41);
+                Near("approach uses upper floor "+explicitFloor,avatar.Position.Y,9.41);
                 Is("owned approach suppresses reports",!position.Channel.CanReport());
                 source.StateOverride["current"]![0]!["status"]="active";
                 await offers.PropActions.RefreshAsync();

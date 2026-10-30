@@ -23,13 +23,13 @@ const routeFor = await mainFunction('travellerState', {
   ...path, ageAtReceiptS: () => 0, THREE,
   groundY: () => 0, terrainGround: { heightAt: () => 0 },
   residency: new Map(), roomOf: new Map([[char.name, 'r-props']]),
-  tileAt: () => ({}), worldToTile: (_tile, x, z) => ({ x, z }), roomStandY: () => 9.4,
+  tileAt: () => ({}), worldToTile: (_tile, x, z) => ({ x, z }), roomStandY: () => 9.4, WALK_CLEARANCE_M: 0.01,
 });
 for (const floor of [9.4, undefined, 0]) {
   char.travel.floor_y = floor;
   const state = routeFor(char, 1, map);
-  assert.equal(state.pos.y, floor ?? 9.4, 'initial placement uses journey floor or room floor');
-  assert.equal(state.route.floorY, floor ?? 9.4, 'route carries floor to frame ticks');
+  assert.equal(state.pos.y, floor === undefined ? 9.4 : floor + 0.01, 'initial placement uses journey floor (+ walking clearance) or room floor');
+  assert.equal(state.route.floorY, floor === undefined ? 9.4 : floor + 0.01, 'route carries floor to frame ticks');
   const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });
   const root = new THREE.Group();
   const npc = { name: char.name, root, target: new THREE.Vector3(), figure: null,
@@ -39,12 +39,12 @@ for (const floor of [9.4, undefined, 0]) {
   npc.route.receivedAt = performance.now() - 5000;
   mgr.setGroundHeight(() => 0); mgr.setRoomStandAt(() => 9.4);
   mgr.tick(0, 10);
-  assert.equal(root.position.y, floor ?? 9.4, 'exact route never falls to terrain');
+  assert.equal(root.position.y, floor === undefined ? 9.4 : floor + 0.01, 'exact route never falls to terrain');
   assert.ok(root.position.x > .9 && root.position.x < 1.1, 'walk advances on the polyline');
 }
 motionStatus = 'active'; char.travel.floor_y = 9.4;
 assert.equal(routeFor(char, 2, map).route.exact, true, 'active private state cannot turn the older owned approach into an overland journey');
-assert.equal(routeFor(char, 2, map).pos.y, 9.4);
+assert.equal(routeFor(char, 2, map).pos.y, 9.4 + 0.01);
 // Arrival bypasses any ordinary walk-to-sit bridge. A failed live entry also
 // yields to authoritative place state rather than permanently hiding the avatar.
 const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });

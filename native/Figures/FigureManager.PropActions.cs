@@ -108,7 +108,8 @@ public partial class FigureManager
     }
     private double PropApproachFloor(Figure fig,JourneyRoute route,double x,double z)
     {
-        if(route.ExactPath?["floor_y"]?.GetValue<double>() is { } floor && double.IsFinite(floor)) return floor;
+        // The server's floor_y is the bare floor; the walking clearance comes on top, as for every room floor.
+        if(route.ExactPath?["floor_y"]?.GetValue<double>() is { } floor && double.IsFinite(floor)) return floor+AnimaNative.Figures.FigureGround.WalkClearanceM;
         if(_rowByName.TryGetValue(fig.CharacterName,out var row)
             && Slots?.Invoke().GetValueOrDefault(row.LocationId) is { } tile) {
             var local=AnimaNative.Scene.SceneView.WorldToTile(tile.Stands.Frame,x,z);
