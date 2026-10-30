@@ -197,7 +197,16 @@ def validate_description(raw: Any, styles: Dict[str, Dict[str, Any]]) -> Dict[st
     if "pitch_deg" in source:
         overrides["pitch_deg"] = _number(source["pitch_deg"], 5, 60, 30)
     overrides["ornament_density"] = _number(source.get("ornament_density"), 0, 1, 0.5)
-    for key in ("blind_windows", "shopfront"):
+    if isinstance(source.get("party_edges"), list):
+        overrides["party_edges"] = sorted({i for i in source["party_edges"]
+                                           if type(i) is int and i >= 0})
+    if source.get("ridge") in ("width", "depth"):
+        overrides["ridge"] = source["ridge"]
+    if "frames" in source:
+        overrides["frames"] = _choice(source["frames"], ("none", "timber", "stone", "metal"), "timber")
+    if "shutters" in source:
+        overrides["shutters"] = _number(source["shutters"], 0, 1, 0)
+    for key in ("blind_windows", "shopfront", "blind_recess"):
         if source.get(key) is True:
             overrides[key] = True
     for key in ("tint", "roof_tint", "frame_color", "shop_color", "awning_color", "door_color"):

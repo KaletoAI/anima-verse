@@ -23,11 +23,15 @@ def prepare_facts(facts: Dict, style: Dict, desc: Dict, resolved: frozenset[str]
     """Copy facts, extend storeys and share blind openings with every builder."""
     prepared = hull_facts.with_storeys(facts, desc.get("overrides", {}).get("storeys_total", 0))
     for level in prepared["levels"]:
+        for edge in hull_walls.party_edges(level, desc):
+            edge["openings"] = []
         if not level.get("filler", False):
             continue
         outer = hull_walls.wall_offsets(style, level["level"])[1]
         ring = hull_mesh.offset_ring(level["outline"], level["ccw"], outer)
         for edge in level["edges"]:
+            if edge in hull_walls.party_edges(level, desc):
+                continue
             lo, hi = hull_walls._span(ring, edge, outer)
             module = hull_facades.module_count(level, style, resolved, hi-lo, prepared["storey_m"])
             edge["openings"] = ([] if module else
@@ -46,7 +50,7 @@ def prepare_facts(facts: Dict, style: Dict, desc: Dict, resolved: frozenset[str]
             streets = (hull_facades.street_edges(level)
                        if desc.get("overrides", {}).get("shopfront") else set())
             for edge in level["edges"]:
-                if edge["index"] in streets:
+                if edge["index"] in streets or edge in hull_walls.party_edges(level, desc):
                     continue
                 lo, hi = hull_walls._span(ring, edge, outer)
                 u, n = hull_walls._axes(edge)
@@ -66,8 +70,12 @@ def _build_parts(facts: Dict, style: Dict, desc: Dict, tier: str,
     roofs, roof_info = hull_roofs.build_roofs(facts, style, desc, tier=tier, uv_sizes=uv_sizes)
     parts = hull_walls.build_walls(facts, style, desc, tier=tier, uv_sizes=uv_sizes, roof_info=roof_info, resolved=resolved)
     parts.extend(roofs)
-    parts.extend(hull_ornaments.build_ornaments(
-        facts, style, desc, roof_info, tier=tier, uv_sizes=uv_sizes, resolved=resolved))
+    ornaments = hull_ornaments.build_ornaments(
+        facts, style, desc, roof_info, tier=tier, uv_sizes=uv_sizes, resolved=resolved)
+    for level in facts['levels']:
+        ornaments = hull_walls.clip_party_parts(
+            ornaments, hull_walls.party_edges(level, desc), ornaments=True)
+    parts.extend(ornaments)
     return parts, roof_info
 
 

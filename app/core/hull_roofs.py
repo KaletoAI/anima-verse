@@ -227,7 +227,11 @@ def _wing_axes(rect, covered_sides, form):
     result = dict(rect)
     side = covered_sides[0] if covered_sides else "z_max"
     turn = (side.startswith("x") if form == "shed" and covered_sides
-            else rect["depth"] > rect["length"])
+            else (abs(math.sin(math.radians(rect["angle_deg"]))) > .5
+                  if rect.get("ridge") == "width" else
+                  abs(math.cos(math.radians(rect["angle_deg"]))) > .5
+                  if rect.get("ridge") == "depth" else
+                  rect["depth"] > rect["length"]))
     if turn:
         result.update(length=rect["depth"], depth=rect["length"],
                       angle_deg=rect["angle_deg"] + 90)
@@ -1048,6 +1052,22 @@ def _fully_covered(outline, covered):
     return True
 
 
+def _party_seams(rect, level, desc):
+    """Represent party boundaries as the same zero-extension wing seams."""
+    from app.core.hull_walls import party_edges
+    seams = []
+    for edge in party_edges(level, desc):
+        local = [_rotate([p[k]-rect["center"][k] for k in (0,1)],
+                         -rect["angle_deg"]) for p in (edge['a'],edge['b'])]
+        for axis, dimension in ((0, 'length'), (1, 'depth')):
+            half = rect[dimension]/2
+            for sign, suffix in ((-1,'min'), (1,'max')):
+                if all(abs(p[axis]-sign*half)<1e-6 for p in local):
+                    seams.append(dict(side=('x' if axis==0 else 'z')+'_'+suffix,
+                                      rect=rect, extension=0))
+    return seams
+
+
 def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 uv_sizes: Optional[Dict[str, float]] = None) -> Tuple[List[Part], Dict[str, Any]]:
     """Build roofs and shared ornament metadata exclusively from supplied facts.
@@ -1081,7 +1101,8 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
         covered = None if topmost else levels[i + 1]["outline"]
         outline, number = level["outline"], level["level"]
         base = facts["eaves_y"] if topmost else level["top_y"]
-        if topmost and form == "flat":
+        from app.core.hull_walls import party_edges
+        if topmost and form == "flat" and not party_edges(level, desc):
             _flat(outline, number, base, style, overhang, uv_sizes, info, parts)
             continue
         if covered and _fully_covered(outline, covered):
@@ -1094,6 +1115,9 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 _flat(outline, number, base, style, overhang, uv_sizes, info, parts)
             continue
         wings = decompose(outline, covered, angle)
+        if "ridge" in overrides:
+            for wing in wings:
+                wing["rect"]["ridge"] = overrides["ridge"]
         rises = []
         for wing in wings:
             wf = "shed" if not topmost and wing["covered_sides"] and form != "flat" else form
@@ -1106,6 +1130,8 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
             rect, sides = wing["rect"], wing["covered_sides"]
             wing_form = "shed" if not topmost and sides and form != "flat" else form
             if wing_form == "flat":
+                party_sides = [seam['side'] for seam in _party_seams(rect, level, desc)]
+                sides = list(dict.fromkeys([*sides, *party_sides]))
                 half_length, half_span = rect["length"] / 2, rect["depth"] / 2
                 ring = [[point[0], point[2]] for point in (
                     _at(rect, x, base, z) for x, z in ((-half_length, -half_span),
@@ -1117,12 +1143,18 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                     for side in sides:
                         index = (0 if side.startswith("x") else 2) + (1 if side.endswith("max") else 0)
                         half = half_length if index < 2 else half_span
-                        limits[index] = (1 if index % 2 else -1)*(half-wall_offsets(style, number+1)[0]-.01)
+                        limits[index] = (1 if index % 2 else -1)*(half if side in party_sides else half-wall_offsets(style, number+1)[0]-.01)
                     a,b,c,d = limits
                     ring = [[_at(rect,x,base,z)[k] for k in (0,2)] for x,z in ((a,c),(b,c),(b,d),(a,d))]
                     # The ring is already expanded on exposed sides and trimmed on covered sides.
                     first_part = len(parts)
                     _flat(ring, number, base, style, 0, uv_sizes, info, parts, expanded=True)
+                    from app.core.hull_walls import clip_party_parts
+                    generated = parts[first_part:]
+                    caps = [p for p in generated if p['tag'] == 'roof']
+                    parapets = [p for p in generated if p['tag'] != 'roof']
+                    parapets = clip_party_parts(parapets, party_edges(level, desc), ornaments=True)
+                    parts[first_part:] = caps + parapets
                     for part in parts[first_part:]:
                         part["roof_level"] = number
                 else:
@@ -1147,6 +1179,7 @@ def build_roofs(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                     extension = wings[neighbor]["rect"][dimension]/2 if extends else 0
                     seams.append(dict(seam, extension=extension, rect=wings[neighbor]["rect"],
                                       higher=rises[wing_index] > rises[neighbor] + 1e-6))
+                seams.extend(_party_seams(rect, level, desc))
                 info["wings"].append(_pitched(rect, sides, wing_form, number, base,
                                               wing_pitch, overhang, style, uv_sizes, parts,
                                               explicit_pitch=explicit_pitch, max_rise=max_rise, seams=seams, details=details))

@@ -79,12 +79,59 @@ def _span(ring, edge, distance):
     return min(ss),max(ss)
 
 
+def party_edges(level, desc):
+    """Resolve validated indices against this storey's actual outline."""
+    indices = desc.get('overrides', {}).get('party_edges', [])
+    return [edge for edge in level.get('edges', []) if edge['index'] in indices] if indices else []
+
+
+def clip_party_parts(parts, edges, *, ornaments=False):
+    """Clip facades to party half-planes; omit ornaments touching the join.
+
+    Interpolate UVs at intersections so adjacent free facades retain their scale.
+    Party walls themselves are emitted at zero offset before this clipping.
+    """
+    for edge in edges:
+        _, normal = _axes(edge)
+        def distance(v):
+            return (v[0]-edge['a'][0])*normal[0]+(v[2]-edge['a'][1])*normal[1]
+        result = []
+        for part in parts:
+            if ornaments and any(distance(v) >= -1e-6 for v in part['vertices']):
+                continue
+            if all(distance(v) <= 1e-8 for v in part['vertices']):
+                result.append(part)
+                continue
+            build = PartBuilder(part['tag'], part['material'], protrudes=part['protrudes'])
+            for face, uvs in zip(part['faces'], part['uvs']):
+                points = [(part['vertices'][i], uv) for i, uv in zip(face, uvs)]
+                clipped = []
+                for (a, au), (b, bu) in zip(points, points[1:]+points[:1]):
+                    da, db = distance(a), distance(b)
+                    if da <= 1e-8:
+                        clipped.append((a, au))
+                    if da < -1e-8 and db > 1e-8 or da > 1e-8 and db < -1e-8:
+                        t = da/(da-db)
+                        clipped.append(([a[k]+t*(b[k]-a[k]) for k in range(3)],
+                                        [au[k]+t*(bu[k]-au[k]) for k in range(2)]))
+                if len(clipped) >= 3:
+                    build.poly([v for v, uv in clipped], [uv for v, uv in clipped])
+            rebuilt = build.part()
+            if rebuilt['faces']:
+                result.append({**part, **rebuilt})
+        parts = result
+    return parts
+
+
 def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                 uv_sizes: Optional[Dict[str, float]] = None, roof_info: Optional[Dict] = None,
                 resolved: frozenset[str] = frozenset()) -> List[Part]:
-    """Build full or low shells; real apertures cut shells while blind panes sit outside."""
+    """Build shells with real apertures and opt-in recessed blind panes."""
     if tier not in ('full','low'):
         raise ValueError('tier must be full or low')
+    overrides = desc.get('overrides', {})
+    style = {**style, **{k: overrides[k] for k in ('frames', 'shutters') if k in overrides}}
+    recessed = overrides.get('blind_recess', False)
     parts = []
     uv_sizes = uv_sizes or {}
 
@@ -166,6 +213,16 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                         if clipped is not None:
                             parts.append(clipped)
 
+            if edge in party_edges(level, desc):
+                left, right = _span(rings[outer], edge, outer)
+                face('wall', material, left, right, bottom, top, 0)
+                if full and not filler:
+                    back = -style['wall_thickness_m']
+                    face('interior', 'interior', left, right, bottom, top, back, True)
+                    for y, sign in ((bottom,-1),(top,1)):
+                        emit('interior','interior',[point(left,y,back),point(right,y,back),
+                             point(right,y,0),point(left,y,0)],[0,sign,0])
+                continue
             lo,hi = _span(rings[outer],edge,outer)
             holes = []
             for index,h in enumerate(edge['openings']):
@@ -174,7 +231,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                                y0=max(bottom,h['y0']),y1=min(top,h['y1']),index=index)
                 if clipped['s1']-clipped['s0'] > 1e-5 and clipped['y1']-clipped['y0'] > 1e-5:
                     holes.append(clipped)
-            real_holes = [h for h in holes if not h.get('blind')]
+            real_holes = [h for h in holes if not h.get('blind') or recessed]
             bays = module_count(level, style, resolved, hi-lo, facts.get('storey_m'))
             if bays:
                 start = max(floor,plinth) if number == 0 else floor
@@ -266,12 +323,12 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                                 part['uvs'] = [uv[::-1] for uv in part['uvs']]
                             parts.append(part)
                 if kind == 'window':
-                    depth = -.02 if h.get('blind') else (0 if not full else .10)
+                    depth = (.10 if recessed else -.02) if h.get('blind') else (0 if not full else .10)
                     if casement and not h.get('blind'):
                         depth = .12
                     face('glass','blind' if h.get('blind') else 'glass',s0,s1,y0,y1,outer-depth)
                 if casement:
-                    d0,d1 = (outer+.02,outer+.06) if h.get('blind') else (outer-.14,outer-.08)
+                    d0,d1 = (outer+.02,outer+.06) if h.get('blind') and not recessed else (outer-.14,outer-.08)
                     for c,d,e,f in ((s0,s0+.06,y0,y1),(s1-.06,s1,y0,y1),
                                     (s0+.06,s1-.06,y0,y0+.06),(s0+.06,s1-.06,y1-.06,y1)):
                         block('casement','window_frame',c,d,e,f,d0,d1)
@@ -283,9 +340,10 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                             centre = transom
                             block('casement','window_frame',s0+.06,s1-.06,centre-bar_width/2,centre+bar_width/2,d0,d1)
                     block('sill','trim',s0-.08,s1+.08,y0-.07,y0,outer,outer+.10)
-                if not full or filler and desc.get('overrides',{}).get('ornament_density',.5) <= 0:
+                skip_details = not full or filler and overrides.get('ornament_density',.5) <= 0
+                if skip_details and not (h.get('blind') and recessed):
                     continue
-                if not h.get('blind'):
+                if not h.get('blind') or recessed:
                     # Each clipped aperture owns its four reveal polygons.
                     for s,normal in ((s0,[u[0],0,u[1]]),(s1,[-u[0],0,-u[1]])):
                         emit('reveal',material,[point(s,y0,inner),point(s,y1,inner),
@@ -293,6 +351,8 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                     for y,normal in ((y0,[0,1,0]),(y1,[0,-1,0])):
                         emit('reveal',material,[point(s0,y,inner),point(s1,y,inner),
                              point(s1,y,outer),point(s0,y,outer)],normal)
+                if skip_details:
+                    continue
                 if frame == 'timber':
                     for c,d,e,f in ((s0-.12,s0,y0,y1),(s1,s1+.12,y0,y1),
                                     (s0-.12,s1+.12,y1,y1+.12)):
@@ -305,7 +365,7 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
                         block('frame','trim',c,d,e,f,outer,outer+.03,cut_holes=e < y1 and f > y0,door_surround=kind == 'door')
                     if kind == 'window':
                         block('frame','trim',s0-.05,s1+.05,y0-.05,y0,outer,outer+.06,cut_holes=False)
-                        d0,d1 = (outer+.02,outer+.03) if h.get('blind') else (outer-.10,outer)
+                        d0,d1 = (outer-.14,outer-.08) if h.get('blind') and recessed else ((outer+.02,outer+.03) if h.get('blind') else (outer-.10,outer))
                         centres, _, bar_width = casement_bars(s0,s1,y0,y1,frame)
                         for centre in centres:
                             block('frame','trim',centre-bar_width/2,centre+bar_width/2,y0,y1,d0,d1,cut_holes=False)
@@ -352,4 +412,6 @@ def build_walls(facts: Dict, style: Dict, desc: Dict, *, tier: str,
             following = next((item for item in facts['levels'] if item['level'] == number+1), None)
             if following is None or following.get('filler', False):
                 emit('interior','interior',[[x,top,z] for x,z in level['outline']],[0,-1,0])
+    for level in facts['levels']:
+        parts = clip_party_parts(parts, party_edges(level, desc))
     return parts
