@@ -1,1 +1,0 @@
-function e(e){return!!e.target?.closest?.(`input, textarea, select, [contenteditable]`)}export{e as t};
