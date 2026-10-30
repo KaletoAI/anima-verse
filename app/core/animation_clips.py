@@ -367,12 +367,23 @@ def _read_transitions_file(path: Path) -> List[Dict[str, Any]]:
     return rules if isinstance(rules, list) else []
 
 
+#: Pose groups a rule may name as ``@<group>`` (server-side only: a pose key
+#: never equals one, so the clients' table matching is unaffected).
+_RULE_GROUPS = ("stand", "seat", "ground", "lie")
+
+
 def _validate_transition_group(src: str, dst: str) -> None:
-    """Place groups are server entry targets, never general pose wildcards."""
+    """Place groups are server-side ENTRY targets (``walking -> @seat``) and
+    EXIT sources (``@seat -> *``), never general pose wildcards."""
     if src.startswith("@"):
-        raise ClipLibraryError("place group allowed only as 'to' from 'walking'")
+        if src[1:] not in _RULE_GROUPS:
+            raise ClipLibraryError(f"unknown place group '{src}'")
+        if dst != TRANSITION_ANY:
+            raise ClipLibraryError(
+                f"place group allowed only as 'to' from 'walking' or as 'from' to '{TRANSITION_ANY}'")
+        return
     if dst.startswith("@"):
-        if dst[1:] not in ("stand", "seat", "ground", "lie"):
+        if dst[1:] not in _RULE_GROUPS:
             raise ClipLibraryError(f"unknown place group '{dst}'")
         if src != "walking":
             raise ClipLibraryError("place group target requires from == 'walking'")
@@ -537,6 +548,29 @@ def resolve_transition(from_pose: Any, to_pose: Any,
         elif rs == TRANSITION_ANY and rd == dst and wild_from is None:
             wild_from = r
     return exact or wild_to or wild_from
+
+
+def resolve_pose_transition(from_pose: Any, to_pose: Any) -> Optional[Dict[str, Any]]:
+    """``resolve_transition``, then the pose GROUP rules on the side that has
+    no rule of its own: entering a pose falls back to ``walking → @<group>``
+    (sit-down onto any seat pose), leaving one to ``@<group> → *`` (get up
+    from any seat pose). The pose's own rule always wins."""
+    rule = resolve_transition(from_pose, to_pose)
+    if rule:
+        return rule
+    from app.core.pose_catalog import get_catalog
+    catalog = get_catalog("pose")
+
+    def group(pose: Any) -> str:
+        name = (catalog.get(str(pose or "").strip().lower()) or {}).get("group")
+        return "@" + name if name in _RULE_GROUPS else ""
+
+    to_group, from_group = group(to_pose), group(from_pose)
+    if to_group:
+        rule = resolve_transition(from_pose, to_group)
+    if not rule and from_group:
+        rule = resolve_transition(from_group, to_pose)
+    return rule
 
 
 def save_transitions(entries: Any,

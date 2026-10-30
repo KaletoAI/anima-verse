@@ -801,8 +801,8 @@ def cancel_with_motion(actor: str, execution_id: str) -> dict:
     if held and before and after:
         kind, seconds = travel.exit_bridge_for_pose(pose)
         if not kind:
-            from app.core.animation_clips import clip_meta, resolve_transition
-            rule = resolve_transition(pose, "standing") or {}
+            from app.core.animation_clips import clip_meta, resolve_pose_transition
+            rule = resolve_pose_transition(pose, "standing") or {}
             kind = str(rule.get("kind") or "")
             seconds = float((clip_meta(kind) or {}).get("duration_s") or 0) if kind else 0.0
         motion = dict(seat=[before["x"], before["z"]], stand=[after["x"], after["z"]],
@@ -992,16 +992,10 @@ def register_owner():
 
 def _entry_capability(pose):
     """The same static clip guard used before routing and at actual entry."""
-    from app.core.animation_clips import resolve_transition, clip_meta, _solo_kinds
-    rule = resolve_transition("walking", pose)
-    if not rule:
-        from app.core.pose_catalog import get_catalog
-        group = get_catalog("pose").get(pose, {}).get("group")
-        # Server-only entry fallback, including pair poses' catalog groups.
-        # A pose key never equals '@seat' etc.; client table matching stays
-        # identical, and resolve_transition keeps its existing precedence.
-        if group in ("stand", "seat", "ground", "lie"):
-            rule = resolve_transition("walking", "@" + group)
+    from app.core.animation_clips import resolve_pose_transition, clip_meta, _solo_kinds
+    # The pose's own rule, else its group's (walking → @seat), including pair
+    # poses' catalog groups.
+    rule = resolve_pose_transition("walking", pose)
     if not rule:
         return None, "missing_entry_transition"
     kind = rule["kind"]

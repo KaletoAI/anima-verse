@@ -59,6 +59,18 @@
       "to": "@lie",
       "kind": "lie-down",
       "accel": 0.0
+    },
+    {
+      "from": "@seat",
+      "to": "*",
+      "kind": "get-up-chair",
+      "accel": 0.0
+    },
+    {
+      "from": "@lie",
+      "to": "*",
+      "kind": "get-up-bed",
+      "accel": 0.0
     }
   ]
 }

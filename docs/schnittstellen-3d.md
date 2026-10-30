@@ -2395,13 +2395,19 @@ ctime; gleiche Werte innerhalb eines groben Dateisystem-Ticks bleiben ein Restri
   `animation_clips.client_transition_rules`); `transitions` trägt die
   Pose-Regeln für den Editor. Fehlt der Brücken-Clip, gibt es keinen Übergang.
   Entry bridges for prop actions additionally accept `walking -> @stand`,
-  `@seat`, `@ground` or `@lie` (only as `to`, only from `walking`). The server
+  `@seat`, `@ground` or `@lie` (as `to` only from `walking`; as `from` only to
+  `*`, the EXIT clip of every pose of that group — shipped: `@seat -> *`
+  get-up-chair, `@lie -> *` get-up-bed, no ground exit). The server
   first calls `resolve_transition('walking', pose)` with its existing precedence;
   only if no rule matches does it resolve `walking -> @<group>`, using the
   target pose's `group` in `pose_catalog.get_catalog('pose')`, including pair
   poses. A pose rule therefore wins. Unknown groups are rejected on save and
   ignored with a warning on shared-table load. Access preview and runtime use
-  the same `_entry_capability` guard and measured travel. The client resolver
+  the same `_entry_capability` guard and measured travel. Leaving a pose works
+  the same way the other round (`animation_clips.resolve_pose_transition`):
+  the pose's own rule (`sitting at table -> *`) first, then `@<group> -> *`.
+  Every server exit lookup goes through it — `exit_clip` of a departure, of a
+  prop-action cancel, and the stand point of `room_stand`. The client resolver
   is unchanged: pose keys never equal `@seat` etc., and these server entry
   targets do not expand into client clip rules.
 - **Loop oder letztes Bild** (2026-09-13, E5): Jeder Clip der Auflistung trägt
@@ -8128,7 +8134,8 @@ The normal `walking -> pose` lookup (including existing wildcard precedence)
 runs first; the group lookup happens only when it finds no rule. Both access
 preview and runtime use `_entry_capability`, with the existing solo-clip,
 metadata and positive finite duration guards. Group targets are valid only
-from `walking` and never on the `from` side.
+from `walking`; on the `from` side a group is valid only towards `*` — the
+exit clip a seat or lie pose without its own exit rule gets up with.
 
 All author routes below explicitly require admin. `POST /world/props/{id}/validate`
 takes `{document}` and returns issues plus `placement:"not_checked"`. Valid
