@@ -550,12 +550,26 @@ class Runs(unittest.TestCase):
         Each enters at its clip role point: the halves sit at ±0.094 m along
         the clip axis around the place centre — the marker itself on one
         seat — so the two entry anchors are 2 × 0.094 = 0.188 m apart and
-        their midpoint is slot 0."""
+        their midpoint is slot 0. The editor's access preview
+        (``preview_access``) lists only that slot "0", and its two automatic
+        access points are each moved by the SAME entry travel from their role
+        points: 0.188 m apart (both on one point before), midpoint = the
+        access of the slot itself (``slot_access`` without a point)."""
         name, partner, target, pid = authored_shared_pair()
         from app.core.prop_actions import derive_bindings
         from app.core import places
         doc = F.props.read_sidecar(pid)
         self.assertTrue(derive_bindings(doc, doc["model_variants"][0])[0]["marker_ids"])
+        from app.core.prop_action_access import preview_access
+        marker_id = doc["model_variants"][0]["markers"][0]["id"]
+        preview = preview_access(doc, prop_id=pid)[target["action_id"]][target["variant_uid"]][marker_id]
+        self.assertEqual(list(preview), ["0"])
+        pa_, pb_ = preview["0"]["actor"], preview["0"]["partner"]
+        self.assertAlmostEqual(F.math.dist((pa_["x"], pa_["z"]), (pb_["x"], pb_["z"])), .188, places=6)
+        with patch("app.core.pose_catalog.pose_places", return_value=2):   # the slot's own access
+            seat = preview_access(doc, prop_id=pid)[target["action_id"]][target["variant_uid"]][marker_id]["0"]["actor"]
+        self.assertAlmostEqual((pa_["x"] + pb_["x"]) / 2, seat["x"], places=6)
+        self.assertAlmostEqual((pa_["z"] + pb_["z"]) / 2, seat["z"], places=6)
         result = request(name, target, partner=partner)
         self.assertEqual(result["status"], "awaiting_consent", result)
         accepted = A.respond(partner, result["execution_id"], True)

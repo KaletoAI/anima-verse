@@ -7646,7 +7646,10 @@ centre plus the role's `anchor_xz_m` turned by `pair_yaw`
 pair half at (`pairPoints`). The planner passes it as `point` with the pinned
 slot (`plan_approach`, the journey's `approach_target`); automatic access is
 measured back from it; every revalidation recomputes it
-(`prop_action_engine._entry_point`). A pose with `places` 2 keeps one slot per
+(`prop_action_engine._entry_point`). The editor's access preview
+(`prop_action_access.preview_access`) lists only that slot, with each role's
+access measured from its role point (access role `actor` = clip half A,
+`partner` = B). A pose with `places` 2 keeps one slot per
 role within 5 cm of its role point. Proof: `smoke_prop_action_runs.py`
 `test_a_one_place_pair_shares_one_seat`.
 

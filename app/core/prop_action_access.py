@@ -50,6 +50,8 @@ def preview_access(document: dict, *, prop_id: str = "") -> dict:
     from app.core.prop_actions import derive_bindings
     from app.core.room_recipe import compose_prop_marker
     from app.core.scene_recipe import marker_slots, FIGURE_HEIGHT_M
+    from app.core.interaction_engine import pair_role_point, shared_slot
+    from app.core.pose_catalog import pose_places
     stored = {}
     file_fixes = {}
     if prop_id:
@@ -83,10 +85,23 @@ def preview_access(document: dict, *, prop_id: str = "") -> dict:
                     facing=composed['facing'], floor_y=0,
                     access={role: dict(point, y=0) for role, point in marker.get('access', {}).items()})
                 slots = markers.setdefault(marker['id'], {})
-                for slot in range(len(place['slots'])):
+                shared = (action.get('ability') == 'pair'
+                          and pose_places(action.get('pose_key', '')) == 1)
+                for slot in ([shared_slot(place)] if shared else range(len(place['slots']))):
                     roles = slots.setdefault(str(slot), {})
                     for role in ('actor', 'partner') if action.get('participants') == 2 else ('actor',):
-                        point, reason = slot_access(place, slot, role, action, {'height': FIGURE_HEIGHT_M * 100})
+                        entry = None
+                        if shared:
+                            # Both share this slot; each enters at its clip role
+                            # point — access role actor = clip half A, partner = B
+                            # (interaction_engine.plan_interaction_at).
+                            try:
+                                entry = pair_role_point(place, action['pose_key'],
+                                                        'a' if role == 'actor' else 'b')
+                            except ValueError:
+                                continue
+                        point, reason = slot_access(place, slot, role, action, {'height': FIGURE_HEIGHT_M * 100},
+                                                    point=entry)
                         if not reason:
                             roles[role] = {k: point[k] for k in ('x', 'z', 'yaw')}
                             roles[role]['source'] = 'override' if role in place['access'] else 'auto'
