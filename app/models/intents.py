@@ -703,9 +703,10 @@ def _normalize_title(text: str) -> str:
 def find_duplicate(owner: str, title: str) -> Optional[Dict[str, Any]]:
     """The active intent of ``owner`` that already covers ``title``, or None.
 
-    Both titles are normalized word by word (lowercase, punctuation dropped).
-    A duplicate is an EQUAL title or one CONTAINED in the other on word
-    boundaries ("buy bread" in "buy bread at the market") — and only when the
+    Both titles are normalized (lowercase, punctuation dropped) and compared
+    as word sets, independent of order. A duplicate has equal word sets or
+    all words of the shorter title in the longer ("bread buy" in
+    "buy bread at the market") — and only when the
     shorter of the two has at least ``DUPLICATE_MIN_CHARS`` characters, for
     equality too. Compared against every active intent ``list_intents(owner)``
     returns (owned or taking part), i.e. the same list the prompt shows.
@@ -722,7 +723,7 @@ def find_duplicate(owner: str, title: str) -> Optional[Dict[str, Any]]:
         shorter, longer = sorted((new, old), key=len)
         if len(shorter) < DUPLICATE_MIN_CHARS:
             continue
-        if shorter == longer or f" {shorter} " in f" {longer} ":
+        if set(shorter.split()) <= set(longer.split()):
             return it
     return None
 

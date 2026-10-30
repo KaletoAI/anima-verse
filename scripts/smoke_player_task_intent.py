@@ -83,11 +83,20 @@ HAND-DERIVED EXPECTATIONS
 
   B5 of plan-befundrunde-2026-09-29 (duplicates, ids, counters, expiry):
   [7] Duplicates are not created (``find_duplicate``: titles normalized word
-      by word — lowercase, punctuation dropped — equal or contained on word
-      boundaries, the shorter one >= 6 characters):
+      by word — lowercase, punctuation dropped — compared as word sets,
+      independent of order; equal or all words of the shorter in the longer,
+      the shorter normalized string >= 6 characters):
         existing "Buy bread at the market"
         "Buy bread at the market"      -> equal            -> 0 created
         "buy BREAD!"                   -> "buy bread" (9) inside -> 0 created
+        "market the at bread Buy"      -> same five words -> 0 created
+        "bread buy"                    -> {bread, buy} subset, 9 >= 6
+                                                          -> 0 created
+        "buy milk" vs "buy bread"      -> only "buy" shared, neither set
+                                          contains the other -> no duplicate
+        "a b" vs "b a"                 -> equal sets, 3 < 6 -> no duplicate
+        "a b" vs "bring b a"           -> subset, shorter 3 < 6, in either
+                                          argument order    -> no duplicate
         "Buy breadcrumbs"              -> "buy breadcrumbs" is not a word-run
                                           of the other      -> 1 created
         "Rest" twice                   -> "rest" has 4 < 6 characters, never a
@@ -359,6 +368,10 @@ check("equal title", len(parse_and_apply_intent_markers(
     CHAR, "[INTENT: Buy bread at the market]")), 0)
 check("contained title (normalized)", len(parse_and_apply_intent_markers(
     CHAR, "[INTENT: buy BREAD!]")), 0)
+check("reordered subset", len(parse_and_apply_intent_markers(
+    CHAR, "[INTENT: bread buy]")), 0)
+check("reordered title", len(parse_and_apply_intent_markers(
+    CHAR, "[INTENT: market the at bread Buy]")), 0)
 check("find_duplicate names the existing one",
       (find_duplicate(CHAR, "buy bread") or {}).get("id"),
       base[0]["id"] if base else None)
@@ -374,6 +387,15 @@ check("two markers in one text, the second covers the first",
                 "[INTENT: Visit the lighthouse keeper]")), 1)
 check("another owner's same title is no duplicate",
       len(parse_and_apply_intent_markers(OTHER, "[INTENT: Buy bread at the market]")), 1)
+drop_all()
+
+create_intent(owner=CHAR, title="buy bread")
+check("sharing only some words is no duplicate", find_duplicate(CHAR, "buy milk"), None)
+create_intent(owner=CHAR, title="a b")
+check("reordered equal sets below 6 chars", find_duplicate(CHAR, "b a"), None)
+check("existing shorter title below 6 chars", find_duplicate(CHAR, "bring b a"), None)
+create_intent(owner=CHAR, title="bring b a")
+check("new shorter title below 6 chars", find_duplicate(CHAR, "a b"), None)
 drop_all()
 
 # --------------------------------------------------- B5 [8] ids in the prompt
