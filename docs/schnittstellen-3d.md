@@ -8062,6 +8062,53 @@ Player routes require the authenticated user's current authorized avatar:
   No foreign consent or overland destination is projected. Core equivalent:
   `prop_action_engine.state_for(actor)`. Sync invalidation targets only those
   participants' `self`/`scene` topics, not a public invitation payload.
+  Each `current` row also carries the caller's own `motion` (below; null
+  unless that run is approaching and has started the caller's walk).
+
+**Own motion — the server decides and plans, the own client plays (B1,
+2026-10-30).** The answers of `request` and `respond` carry `motion`: the
+caller's OWN approach exactly as the server runs it, or `null` (refused,
+awaiting consent, no walk of the caller's own). `prop_action_engine.motion_for`
+builds it from a snapshot taken when the approach journey starts:
+
+```ts
+motion: {
+  execution_id: string, journey_id: string, room_id: string,
+  floor_y: number | null,              // world Y of the walked floor
+  waypoints: [number, number][],       // world XZ, the persisted polyline
+  paces_m_s_real: (number | null)[] | null, // per segment; null = timeless
+  departure: null | {                  // leaving a held seat first
+    seat: [x, z], stand: [x, z],       // waypoints[0], waypoints[1]: zero-time leg
+    exit_clip: string, exit_s: number  // "" / 0 = stand up without a clip
+  },
+  access: {x, y, z, yaw},              // floor access = last waypoint
+  anchor: {x, y, z, yaw, root_offset, place_id, slot},
+  entry: null | {mode: "bridge" | "direct", kind: string, pose_key: string,
+                 duration_s: number},  // clip length in REAL seconds
+  height_cm: number | null, role: "a" | "b" | null
+} | null
+```
+
+`anchor` follows the `prop_action_entry` convention (`y` is the body root,
+support height = `y + root_offset`); after activation the server's `place`
+is exactly `(anchor.place_id, anchor.slot)` and its position is `anchor`
+`(x, z)`. The requesting client plays this plan **at once on its own clock**:
+turn towards the first walked segment, walk the waypoints at the given paces
+(after `exit_clip` when `departure` is set), play `entry.kind` at `access` and
+end on `anchor` — it does not wait for `travel.starts_in_s`, does not cap its
+progress at the server clock and does not seat itself on a locally computed
+slot. The server keeps its own journey (observers, NPC parity, per-tick
+revalidation, arrival, entry, activation, effects); the two meet at the same
+anchor, the server a few hundred milliseconds ahead or behind. A run that
+ends early (`cancelled`/`failed` in `/state`) hands the figure back to the
+player at its rendered point. Observers and NPCs are unchanged
+(`local_approach`, `prop_action_entry`).
+
+The `cancel` answer carries `motion` for a participant that was seated or
+lying when it ended: `{seat:[x,z], stand:[x,z], exit_clip, exit_s}` — the
+stand-up its own client plays at once (`exit_clip` is the pose's exit
+transition to walking, else to standing; `stand` is where the server put the
+figure). `null` when the cancel moved nobody (e.g. a walk was stopped).
 
 Prop-action entry bridges use the pose transition table described above:
 `walking -> @seat` covers every target pose whose catalog `group` is `seat`,

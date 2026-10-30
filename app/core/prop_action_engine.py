@@ -658,8 +658,74 @@ def _start(run):
             return
         delay = max(0, (GameTime.parse(journey["started_at_game"]) - game_time()).total_seconds)
         deadline = max(deadline, float(journey["waypoints"][-1][2]) + delay + 60)
+        try:
+            snapshot = _motion_snapshot(run, role, name, journey)
+        except Exception:
+            # The owner's client then follows the worldmap travel block.
+            logger.exception("Prop action motion snapshot failed: %s", run["execution_id"])
+            snapshot = None
+        run["data"].setdefault("motions", {})[name] = snapshot
     run["data"].update(deadline=deadline, last_game=game_time().canonical())
     _save(run)
+
+
+def _motion_snapshot(run, role, name, journey):
+    """What the participant's OWN client plays, taken from the very journey
+    and plan the server runs (B1: the server decides and plans, the owner
+    plays it at once on its own clock). Stored with the run; paces are
+    derived from the timed polyline when it is read."""
+    plan = run["data"]["plans"][role]
+    definition = run["definition"]
+    pose = definition["phases"][0]["pose_key"] if definition["ability"] == "combined" else definition["pose_key"]
+    spec, reason = _entry_spec(name, plan, pose)
+    entry = None
+    if not reason:
+        from app.core.animation_clips import clip_meta
+        seconds = float((clip_meta(spec["kind"]) or {}).get("duration_s") or 0) if spec["kind"] else 0.0
+        entry = dict(mode=plan.get("entry_mode", "bridge"), kind=spec["kind"], pose_key=spec["pose_key"],
+                     duration_s=round(seconds, 3))
+    anchor = plan["entry_anchor"]
+    root_offset = float(anchor.get("root_offset", 0))
+    from app.core.height import height_cm
+    cm = height_cm(C.get_character_profile(name) or {})
+    if cm is None and entry and entry["kind"]:
+        from app.core.animation_clips import clip_ref_height_m
+        reference = clip_ref_height_m(entry["kind"])
+        cm = reference * 100 if reference else None
+    seat = journey.get("departure_seat")
+    departure = None
+    if seat:
+        departure = dict(seat=list(seat), stand=list(journey["waypoints"][1][:2]),
+                         exit_clip=journey.get("exit_clip", ""), exit_s=float(journey.get("exit_s", 0.0)))
+    return dict(execution_id=run["execution_id"], journey_id=journey["journey_id"],
+                room_id=run["target"]["room_id"], floor_y=journey.get("floor_y"),
+                timed=[list(p) for p in journey["waypoints"]], departure=departure,
+                access={k: float(plan["access"][k]) for k in ("x", "y", "z", "yaw")},
+                anchor=dict(x=float(anchor["x"]), y=float(anchor["y"]) - root_offset, z=float(anchor["z"]),
+                            yaw=float(anchor.get("yaw") or 0), root_offset=root_offset,
+                            place_id=anchor["place_id"], slot=anchor["slot"]),
+                entry=entry, height_cm=cm,
+                role=next((r for r, member in run["data"].get("clip_roles", {}).items()
+                           if r in ("a", "b") and member == name), None))
+
+
+def motion_for(name: str, run) -> dict | None:
+    """The participant's own motion plan while its approach runs, else None.
+
+    Public to the participant only (request/respond answers, its own
+    ``state_for`` rows). ``waypoints`` are world-XZ metres, the first leg is
+    the zero-time seat leg when ``departure`` is set; ``paces_m_s_real`` are
+    per segment (null = timeless), from the game clock right now.
+    """
+    if not run or run["status"] != "approaching" or name not in (run["actor"], run["partner"]):
+        return None
+    snapshot = run["data"].get("motions", {}).get(name)
+    if not snapshot:
+        return None
+    motion = {k: v for k, v in snapshot.items() if k != "timed"}
+    motion["waypoints"] = [[round(float(p[0]), 3), round(float(p[1]), 3)] for p in snapshot["timed"]]
+    motion["paces_m_s_real"] = travel.segment_paces_m_s_real(snapshot["timed"], game_speed_factor())
+    return motion
 
 
 def _own_journey(run, name, journey):
@@ -717,6 +783,31 @@ def _cleanup(run, keep_seated=""):
         if name != keep_seated:
             C.release_prop_action_state(name, run["execution_id"])
     store.cleanup_finished(run["execution_id"])
+
+
+def cancel_with_motion(actor: str, execution_id: str) -> dict:
+    """``cancel`` plus, for a participant who was seated or lying, the
+    stand-up its own client plays at once: the exit clip of the pose it held
+    and the standing point the server put it on (``motion: null`` when the
+    actor did not move)."""
+    pose = C.get_effective_pose_key(actor)
+    before = C.get_character_pos(actor)
+    held = bool((C.get_character_profile(actor) or {}).get("place"))
+    result = cancel(actor, execution_id)
+    if result["status"] == "refused":
+        return result
+    after = C.get_character_pos(actor)
+    motion = None
+    if held and before and after:
+        kind, seconds = travel.exit_bridge_for_pose(pose)
+        if not kind:
+            from app.core.animation_clips import clip_meta, resolve_transition
+            rule = resolve_transition(pose, "standing") or {}
+            kind = str(rule.get("kind") or "")
+            seconds = float((clip_meta(kind) or {}).get("duration_s") or 0) if kind else 0.0
+        motion = dict(seat=[before["x"], before["z"]], stand=[after["x"], after["z"]],
+                      exit_clip=kind, exit_s=round(seconds, 3))
+    return dict(result, motion=motion)
 
 
 def cancel(actor: str, execution_id: str) -> dict:
@@ -1248,6 +1339,7 @@ def state_for(actor: str) -> dict:
         elif pending:
             result["incoming" if actor == run["partner"] else "outgoing"].append(row)
         else:
+            row["motion"] = motion_for(actor, run)
             result["current"].append(row)
     return result
 

@@ -104,14 +104,14 @@ def _request_route(body: ActionRequest, user):
         if store.by_request(actor, body.request_id):
             # Core verifies the full fingerprint; a mismatched nonce is never
             # a gate bypass and never pays a cost.
-            return _answer(_request(actor, body))
+            return _with_motion(actor, _answer(_request(actor, body)))
         try:
             skill = _player_action_gate(actor, "prop_action")
         except HTTPException:
             # Another Core caller/process may have committed this nonce while
             # the gate read the newly depleted profile. Recheck before refusing.
             if store.by_request(actor, body.request_id):
-                return _answer(_request(actor, body))
+                return _with_motion(actor, _answer(_request(actor, body)))
             raise
         result, created = engine.request_with_creation(
             actor, body.target.model_dump(), body.action_id, body.revision,
@@ -124,17 +124,25 @@ def _request_route(body: ActionRequest, user):
         # Deferred consent listeners run after the charge/outer guard. Project
         # their real current outcome just as an ordinary Core request does.
         result = engine._result(store.get(result["execution_id"]))
-    return result
+    return _with_motion(actor, result)
+
+
+def _with_motion(actor, result):
+    """The caller's own motion plan beside an approaching result (B1)."""
+    from app.core import prop_action_store as store
+    run = store.get(result["execution_id"]) if result.get("execution_id") else None
+    return dict(result, motion=engine.motion_for(actor, run))
 
 
 @router.post("/play/prop-actions/respond")
 def respond(body: ResponseRequest, user=Depends(get_current_user)):
-    return _answer(engine.respond(_avatar(user), body.execution_id, body.accept))
+    actor = _avatar(user)
+    return _with_motion(actor, _answer(engine.respond(actor, body.execution_id, body.accept)))
 
 
 @router.post("/play/prop-actions/cancel")
 def cancel(body: CancelRequest, user=Depends(get_current_user)):
-    return _answer(engine.cancel(_avatar(user), body.execution_id))
+    return _answer(engine.cancel_with_motion(_avatar(user), body.execution_id))
 
 
 def _admin_target(prop_id, body):
