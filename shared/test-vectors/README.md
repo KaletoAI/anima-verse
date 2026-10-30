@@ -357,11 +357,12 @@ production implementation; they are not converted into passing vectors.
 
 ## Pair clips and figure normalisation (Task 32)
 
-`smoke_pair_vectors.mjs` runs all 70 cases without live tables, model files,
+`smoke_pair_vectors.mjs` runs all 82 cases without live tables, model files,
 network or a DOM. The canonical source smokes also run their own vectors:
 
 | JSON | Source smoke | Cases |
 |---|---|---:|
+| `pair_blend.json` | `smoke_pair_blend.mjs` | 12 |
 | `pair_clip_phase.json` | `smoke_pair_realtime.mjs` | 32 |
 | `pair_clip_geometry.json` | `smoke_clip_pair.mjs` | 22 |
 | `pair_height.json` | `smoke_pair_storey.mjs` | 12 |
@@ -373,6 +374,14 @@ executes production functions and selects result fields. No production code
 was extracted or changed. The real-FBX/GLB integration checks in
 `smoke_clip_pair.mjs` remain, including track shape and the RED counter-probe;
 they still use real model files and sidecars, outside the standalone vectors.
+
+Task 84 adds `pairBlend(from, target, elapsedS)` / native `PairBlend.Sample`:
+`u = clamp(elapsedS / .4, 0, 1)`, weight `u²(3−2u)`, position interpolated
+from the rendered adoption pose toward this frame's target, yaw along the
+shortest arc (radians). It is real-time view state, including a frozen world.
+`smoke_pair_entry.mjs` checks adoption, moving targets, reseeks and own-avatar
+facing ownership; `smoke_pair_facing.mjs` checks invite/accept before HTTP,
+`asked`, `declined`, errors and explicit rejection without a visual turn.
 
 Native-facing adapter signatures (all distances metres except raw track
 values in centimetres; all times seconds, yaw radians):

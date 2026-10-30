@@ -3,6 +3,7 @@
  * counterpart to Self. The cards flow responsively side by side or stacked
  * (flex-wrap, depending on the window width). Source: GET /play/others.
  */
+import { invitePair } from './pairInteractions'
 import { StatFill } from './StatBoost'
 import { statTitle, conditionTitle, type StatBoost, type BoostCondition } from './statBoosts'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -234,7 +235,7 @@ export function OthersPanel() {
 
   const propose = useCallback(async (name: string, pose: string) => {
     setMenu(null)
-    try { await apiPost('/play/interact', { partner: name, pose }) }
+    try { await invitePair(name, pose) }
     catch (e) {
       // 409 carries the engine's own reason ("Kira is in another room") —
       // that sentence is the whole point, so it is shown, not swallowed.

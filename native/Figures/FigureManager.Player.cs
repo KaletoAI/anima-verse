@@ -61,6 +61,7 @@ public partial class FigureManager
     public void SetPlayerTarget(string name, Vector3 goal, double pace = 1)
     {
         if (!_figures.TryGetValue(name, out var f)) return;
+        if (name == AvatarName && new Vector2(goal.X - f.Position.X, goal.Z - f.Position.Z).Length() > .02) _pairPreview = null;
         f.Target = goal;
         f.Pace = double.IsFinite(pace) && pace > 0 ? pace : 1;
     }

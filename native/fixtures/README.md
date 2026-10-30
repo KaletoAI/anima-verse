@@ -1580,7 +1580,9 @@ Frames of 1/30 s. The anchor formula (§ A8a): x = ax + rx·cos(yaw) + rz·sin(y
 **Poll 2** (stamp 2): the handshake's `elapsed_s` 2.5 for Ann AND Ben (Ben's block arrives now); Cy/Dee 1.6; Gil's
 activity "" (stand). One frame:
 - Ann: |2.0 − 2.5| = 0.5 > 0.3 → snapped; Ben adopts 2.5; both clocks **2.5333**; Ann's player (2.0333) is 0.5 > 0.2
-  off the phase → re-seeked; both players **2.5667** — in phase (Δ 0). Ben at (20, g, 40 + 0.366742).
+  off the phase → re-seeked; both players **2.5667** — in phase (Δ 0). Task 84 blends Ben from z=41 toward
+  40+0.366742: at 1/30 s, u=1/12 and smoothstep=17/864, so z=41+(0.366742−1)·17/864
+  (about 40.98754), y=g(20,z). After .4 real seconds he reaches the current clip root.
 - Cy/Dee: |1.5 − 1.6| = 0.1 ≤ 0.3 → the local clock stays: **1.5333**, still in lockstep.
 - Gil opens get-up-chair (sitting-at-the-table → *); 15 more frames: still bridging (4.767 s clip).
 
@@ -1588,12 +1590,22 @@ activity "" (stand). One frame:
 `rate` 0, elapsed 2.0 (a frozen world: no server clock, the local 1.5 + 16/30 stays); Gil and Hal: handshake `hs2`,
 anchor (64, 128) yaw 0, place none, in the loft. One frame:
 - Gil: the bridge ENDS (not bridging, no held height), `greeting-handshake__a` plays; Gil (64 − 0.366742, **7.03**,
-  128), Hal (64 + 0.366742, 7.03, 128) — the room rung, not the ground g(64, 128) = 4. Ten more frames: no travel held,
-  the body on its base.
-- Cy/Dee frozen over those ten frames: players, clocks and roots unchanged.
+  128), Hal (64 + 0.366742, 7.03, 128) are the targets — the room rung, not ground g(64, 128)=4.
+  Their first frame is each rendered adoption point plus 17/864 of its target delta. Twelve more frames finish
+  the .4 s blend; no bridge travel remains held.
+- Cy/Dee frozen over those twelve frames: players, clocks and roots unchanged.
 
-**One-shot end**: 20 more frames → the handshake clock 2.5 + 47/30 ≈ 4.07 > 3.533: phase clamped, the player stops at
+**One-shot end**: 20 more frames → the handshake clock 2.5 + 49/30 ≈ 4.13 > 3.533: phase clamped, the player stops at
 its end (**3.5333**) and holds it, Ann and Ben alike.
+
+**Task 84 entry and feedback**: a first-sighted pair at age zero retains its placed root. After Q9,
+Ann starts a new frozen pair from (10,2,30), yaw 0, toward the handshake anchor (20,40), yaw −π/2.
+At .2 real seconds weight=.5: (15,(2+g(20,40+rx))/2,(30+40+rx)/2), yaw −π/4; the clip clock stays 0.
+The same id is then re-polled at clip time 10 with anchor x=24: halfway x=17, with no blend restart;
+at .4 s she reaches x=24. A later same-id anchor x=28 applies directly. Box Low is made the own avatar
+for visual invite tests: turn toward Ben, retain it over 20 idle seconds, restore on refusal, and let steering
+win over a late refusal. The prop-action check also sends actual HUD begin/keep/rollback commands to an
+arrived B1 seat owner and checks that its private playback keeps the preview.
 
 **Q8 loop flag per figure** (Task 35): Ann and Hal both wear Test3_mia, so their players bind the SAME
 `greeting-hug__a` Animation; the listing calls the hug a cycle (`loop` absent → Linear), length **4.0333 s**. Called

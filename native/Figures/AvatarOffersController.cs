@@ -74,6 +74,11 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
         steering.StandUp=StandUp;
         figures.PositionMapApplied+=MapApplied;
         world.Dropped+=Dropped;
+        hud.Handlers["pairFacing"] = args => {
+            if (args.Count == 3 && args[0] is JsonValue phase && phase.TryGetValue<string>(out var p)
+                && args[1] is JsonValue id && id.TryGetValue<string>(out var i)
+                && args[2] is JsonValue partner && partner.TryGetValue<string>(out var name)) _figures.PairFacing(p, i, name);
+        };
         AttachProps();
     }
     private void EntryAction(JsonArray _) => PendingEntry=EnterAsync();
@@ -214,6 +219,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
         SetActive(false); DetachProps(); _disposed=true; _lifetime.Cancel();
         _figures.PositionMapApplied-=MapApplied; _world.Dropped-=Dropped; _steering.StandUp=null; _hud.LockedEntry=null;
         _hud.Handlers.Remove("enterLocation"); _hud.Handlers.Remove("pickRoomPose"); _hud.Handlers.Remove("closePlaceMenu");
+        _hud.Handlers.Remove("pairFacing");
         Places.Clear(); Places.QueueFree(); _lifetime.Dispose();
     }
 }

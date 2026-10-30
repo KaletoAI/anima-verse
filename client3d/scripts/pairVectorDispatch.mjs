@@ -14,7 +14,8 @@ async function modules() {
   if (!loaded) loaded = (async () => {
     const dir = await mkdtemp(join(root, 'client3d/scripts/.smoke-'));
     try {
-      const entry = `export {pairClipPhase, PAIR_SNAP_S} from '${root}client3d/src/game/pairClip.ts';
+      const entry = `export {pairBlend} from '${root}client3d/src/game/pairBlend.ts';
+export {pairClipPhase, PAIR_SNAP_S} from '${root}client3d/src/game/pairClip.ts';
 export {extractRootPath, isPairClipName, rootPathAt} from '${root}client3d/src/scene/figures.ts';
 export {NpcManager} from '${root}client3d/src/scene/npcs.ts';
 export {roomStandY} from '${root}client3d/src/scene/tiles.ts';
@@ -42,7 +43,7 @@ function placement(m, data) {
   const lib = { pairRootAt: () => data.root };
   const figure = {
     playPair: () => true, holdsTravel: false, takeTravel: () => {},
-    setYaw: () => {}, update: () => {}, setFirstPerson: () => {}, hasHead: false,
+    faceTowards: () => {}, setYaw: () => {}, update: () => {}, setFirstPerson: () => {}, hasHead: false,
   };
   const mgr = new m.NpcManager(lib, {
     syncCounters: { posCorr: 0, pos409: 0, travBack: 0, travFwd: 0, travErrMaxM: 0, arrive: 0, place: 0 },
@@ -72,6 +73,7 @@ function placement(m, data) {
 export async function pairVectorDispatch() {
   const m = await modules();
   return {
+    pairBlend: m.pairBlend,
     pairClipValue: (input, field) => m.pairClipPhase(input)[field],
     pairSnapS: () => m.PAIR_SNAP_S,
     pairFrames: (input, frames, field) => {

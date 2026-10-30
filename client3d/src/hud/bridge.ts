@@ -48,7 +48,7 @@ export interface BridgeTransport {
   send(msg: ToHud | FromHud): void;
   onMessage(fn: (msg: unknown) => void): () => void;
 }
-const gameNames = ['infoAction', 'closeInfo', 'closeOpenView', 'pickPropAction', 'pickRoomPose', 'closePlaceMenu', 'respondPropAction', 'cancelPropAction', 'clearSelection', 'setVolumes', 'speak', 'stopSpeech', 'markResume', 'zoomTo', 'sayBubble',
+const gameNames = ['pairFacing', 'infoAction', 'closeInfo', 'closeOpenView', 'pickPropAction', 'pickRoomPose', 'closePlaceMenu', 'respondPropAction', 'cancelPropAction', 'clearSelection', 'setVolumes', 'speak', 'stopSpeech', 'markResume', 'zoomTo', 'sayBubble',
   'enterEmbodied', 'takeControl', 'exitEmbodied', 'rideElevator', 'rideStairs',
   'enterLocation', 'backToTitle', 'setShowAll', 'applyAudioPrefs', 'applyScatterPrefs',
   'applyGraphicsPrefs', 'clearClientCache', 'setChatBox'] as const satisfies readonly (keyof HudGameActions)[];

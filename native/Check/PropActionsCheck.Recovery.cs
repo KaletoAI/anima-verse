@@ -88,6 +88,16 @@ public static partial class PropActionsCheck
             Near("early authoritative seat cannot cut entry",avatar.Position.Z,-1);
             Step(1); Near("anchor X ignores local marker and server correction",avatar.Position.X,2); Near("anchor root Y",avatar.Position.Y,.129); Near("anchor Z",avatar.Position.Z,0);
             Is("arrived uses direct held clip",avatar.CurrentClip=="sitting" && !avatar.Bridging);
+            // Task 84: the arrived B1 owner must retain visual invite feedback across its private playback tick.
+            double seatedYaw=avatar.Yaw;
+            mgr.Figures["fixture-npc"].Position=avatar.Position+Vector3.Right*3;
+            void PairFeedback(string phase)=>hud.hud_bridge(new JsonObject { ["v"]=4,["kind"]="action",["name"]="pairFacing",
+                ["args"]=new JsonArray(phase,"pair:seated","fixture-npc") }.ToJsonString());
+            PairFeedback("begin"); Near("HUD pair invite turns the own avatar immediately",avatar.Yaw,Math.PI/2);
+            PairFeedback("keep"); Step(0);
+            Near("asked pair turn survives arrived B1 playback",avatar.Yaw,Math.PI/2);
+            PairFeedback("rollback"); Near("seated request refusal restores facing",avatar.Yaw,seatedYaw);
+
             var library=avatar.Player!.GetAnimationLibrary(""); library.AddAnimation("author-held",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
             avatar.FitClip=kind=>kind=="author-held";
             source.MapOverride["characters"]![0]!["activity_animation"]="author-held";

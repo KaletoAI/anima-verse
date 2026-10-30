@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using AnimaNative.Figures;
 using AnimaNative.World;
@@ -149,7 +150,9 @@ public static class PairCheck
             NearD("Q3 resync: Ann's player re-seeked (drift 0.5 > 0.2)", ann.ClipTime, 2.5 + 2 * Dt, ClipTol);
             NearD("Q3 resync: Ann and Ben in phase", ann.ClipTime - ben.ClipTime, 0, ClipTol);
             Expect("Q3 the resync moved Ann's clip", ann.ClipTime - annBefore > 0.4, $"{annBefore:0.###} → {ann.ClipTime:0.###}");
-            NearV("Q2 Ben at anchor + R(−π/2)·root (opposite Ann)", ben.Position, 20, G(20, 40 + rb.X), 40 + rb.X, PosTol);
+            // Task 84: one real frame / .4 s = 1/12, smoothstep = 17/864.
+            double benZ = 41 + (rb.X - 1) * (17.0 / 864);
+            NearV("Q2 Ben blends toward anchor in the first frame", ben.Position, 20, G(20, benZ), benZ, PosTol);
             NearD("Q3 keep: Cy's clock not pulled to 1.6 (|1.5 − 1.6| ≤ 0.3)", cy.Pair.ClipT, 1.5 + Dt, 1e-9);
             NearD("Q3 keep: Cy and Dee still in lockstep", cy.ClipTime - dee.ClipTime, 0, ClipTol);
             Expect("Q6 Gil gets up through get-up-chair", gil.Bridging && gil.CurrentKind == "get-up-chair", gil.CurrentKind);
@@ -159,16 +162,22 @@ public static class PairCheck
             // ---- poll 3: Gil and Hal shake hands in the loft; the bench pair freezes; Ann/Ben 0.17 s off ----
             double cyFrozen = cy.ClipTime, deeFrozen = dee.ClipTime;
             var cyAt = cy.Position;
+            var gilBeforePair = gil.Position;
+            var halBeforePair = hal.Position;
             await Apply(mgr, dir, "worldmap_poll3.json");
             mgr.Tick(Dt);
             Expect("Q6 the handshake ended Gil's bridge", !gil.Bridging && !gil.HoldsHeight && gil.CurrentClip == "greeting-handshake__a",
                    $"bridging {gil.Bridging} kind {gil.CurrentKind}");
             // The loft: declared 3.02 over the datum 4 → floor 7.02, stand + 0.01 = 7.03 (the room rung).
-            NearV("Q2 Gil in the loft at its stand height", gil.Position, 64 + ra.X, 7.03, 128, PosTol);
-            NearV("Q2 Hal in the loft at its stand height", hal.Position, 64 + rb.X, 7.03, 128, PosTol);
+            var gilTarget = new Vector3((float)(64 + ra.X), 7.03f, 128);
+            var halTarget = new Vector3((float)(64 + rb.X), 7.03f, 128);
+            var gilFirst = gilBeforePair + (gilTarget - gilBeforePair) * (17f / 864);
+            var halFirst = halBeforePair + (halTarget - halBeforePair) * (17f / 864);
+            NearV("Q2 Gil blends out of his rendered bridge position", gil.Position, gilFirst.X, gilFirst.Y, gilFirst.Z, PosTol);
+            NearV("Q2 Hal blends into the loft pair", hal.Position, halFirst.X, halFirst.Y, halFirst.Z, PosTol);
             NearD("Q3 keep: Ann not pulled to 3.2 (|3.0333 − 3.2| ≤ 0.3)", ann.Pair.ClipT, 2.5 + 17 * Dt, 1e-9);
             NearD("Q3 Ann and Ben still in phase", ann.ClipTime - ben.ClipTime, 0, ClipTol);
-            for (int i = 0; i < 10; i++) mgr.Tick(Dt);
+            for (int i = 0; i < 12; i++) mgr.Tick(Dt); // finish the new .4 s pair blend before the settled-root assertion
             NearD("Q4 frozen: Cy's player stands", cy.ClipTime, cyFrozen, 1e-9);
             NearD("Q4 frozen: Dee's player stands", dee.ClipTime, deeFrozen, 1e-9);
             NearD("Q4 frozen: Cy's clip clock stands", cy.Pair.ClipT, 1.5 + 16 * Dt, 1e-9);
@@ -232,9 +241,66 @@ public static class PairCheck
                             + $"{refit.RootMotionOwn} root-motion own";
             GD.Print($"[check-pairs] Q9 {memory}");
 
+            // Task 84: a new frozen pair blends in REAL time; same-id reseeks never restart it.
+            var blendMap = JsonNode.Parse(File.ReadAllText(Path.Combine(dir, "worldmap_poll3.json")))!.AsObject();
+            blendMap["avatar"] = "Box Low";
+            var blendRow = blendMap["characters"]!.AsArray().First(n => n!["name"]!.GetValue<string>() == "Ann Hand")!;
+            // A new visible figure is placed before adoption; test after Q0..Q9 so a zero-time tick
+            // does not prime their mixers and change the documented first-seek timing.
+            var firstRow = blendRow.DeepClone();
+            firstRow["name"] = "First Pair"; firstRow["interaction"]!["id"] = "task84-first-sighting";
+            blendMap["characters"]!.AsArray().Add(firstRow);
+            using (var model = await source.GetCharacterModelAsync("Ann Hand"))
+                source.ModelAnswers["First Pair"] = model!.RootElement.GetRawText();
+            await mgr.Apply(JsonSerializer.SerializeToElement(blendMap));
+            var firstFigure = mgr.Figures["First Pair"];
+            Expect("Q84 first-sighting fixture has a rig and a pair", firstFigure.Player is not null && firstFigure.Pair is not null, "missing");
+            var firstShown = firstFigure.Position;
+            mgr.Tick(0);
+            NearV("Q84 first sighting holds the initial rendered point at age zero", firstFigure.Position,
+                firstShown.X, firstShown.Y, firstShown.Z, PosTol);
+            var interaction = blendRow["interaction"]!.AsObject();
+            interaction["id"] = "task84-frozen"; interaction["rate"] = 0; interaction["elapsed_s"] = 0;
+            ann.SnapTo(new Vector3(10, 2, 30)); ann.FaceTowards(new Vector3(0, 0, 1), snap: true);
+            await mgr.Apply(JsonSerializer.SerializeToElement(blendMap));
+            mgr.Tick(.2);
+            NearV("Q84 frozen pair halfway from the rendered position", ann.Position, 15, (2 + G(20, 40 + ra.X)) / 2,
+                (30 + 40 + ra.X) / 2, PosTol);
+            NearD("Q84 frozen clip clock stays zero", ann.Pair!.ClipT, 0, 1e-9);
+            NearD("Q84 yaw halfway on the shortest arc", ann.Yaw, -Math.PI / 4, 1e-6);
+            interaction["rate"] = 2; interaction["elapsed_s"] = 20;
+            interaction["anchor"]!["x"] = 24;
+            await mgr.Apply(JsonSerializer.SerializeToElement(blendMap));
+            mgr.Tick(0);
+            NearV("Q84 reseek uses moving target without restarting blend", ann.Position, 17, (2 + G(24, 40 + ra.X)) / 2,
+                (30 + 40 + ra.X) / 2, PosTol);
+            NearD("Q84 clip reseek stays independent of blend", ann.Pair.ClipT, 10, 1e-9);
+            mgr.Tick(.2);
+            NearV("Q84 exact current target at .4 seconds", ann.Position, 24, G(24, 40 + ra.X), 40 + ra.X, PosTol);
+            interaction["anchor"]!["x"] = 28;
+            await mgr.Apply(JsonSerializer.SerializeToElement(blendMap)); mgr.Tick(0);
+            NearD("Q84 same id after completion does not blend again", ann.Position.X, 28, PosTol);
+
+            // Visual invite feedback belongs only to the own avatar; steering wins over late HTTP answers.
+            var avatar = f[mgr.AvatarName];
+            mgr.SetPlayerDriven(mgr.AvatarName);
+            double savedYaw = avatar.Yaw;
+            mgr.PairFacing("begin", "turn-error", "Ben Hand");
+            double partnerYaw = Math.Atan2(ben.Position.X - avatar.Position.X, ben.Position.Z - avatar.Position.Z);
+            NearD("Q84 invite turns immediately to rendered partner", Wrap(avatar.Yaw - partnerYaw), 0, 1e-6);
+            mgr.PairFacing("keep", "turn-error", "Ben Hand"); mgr.Tick(20);
+            NearD("Q84 asked keeps facing through idle frames", Wrap(avatar.Yaw - partnerYaw), 0, 1e-6);
+            mgr.PairFacing("rollback", "turn-error", "Ben Hand");
+            NearD("Q84 refusal restores previous facing", Wrap(avatar.Yaw - savedYaw), 0, 1e-6);
+            mgr.PairFacing("begin", "turn-steer", "Ben Hand");
+            mgr.SetPlayerTarget(mgr.AvatarName, avatar.Position + Vector3.Right);
+            avatar.FaceTowards(Vector3.Back, snap: true);
+            mgr.PairFacing("rollback", "turn-steer", "Ben Hand");
+            NearD("Q84 steering wins over a late refusal", Wrap(avatar.Yaw), 0, 1e-6);
+
             var report = $"pairs Q0..Q9 ok (box bottom {boxAabb.Position.Y:0.000} m, {string.Join(", ", bodyOffsets)}; handshake ±{-ra.X:0.000} m, "
                          + $"hug ±{-ha.X:0.000} m; seat 4.097, loft 7.03; resync Δ {resyncMs:0.0} ms; "
-                         + $"frozen 10 frames; solo Eve; loop twin Hal once / Ann cycle; {memory})";
+                         + $"frozen 12 frames; Task84 blend/freeze/reseek/facing ok; solo Eve; loop twin Hal once / Ann cycle; {memory})";
             GD.Print($"[check-pairs] {report}");
             return report;
         }

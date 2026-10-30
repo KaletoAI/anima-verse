@@ -84,7 +84,9 @@ try {
   manager.playOwnMotion('avatar',paired,'request');
   manager.update([{char:{name:'avatar',place:{id:'bed',slot:1},activity_animation:`kiss__${role}`},pos:new THREE.Vector3(99,0,99),
    stamp:10,interaction:{id:`pair-${role}`,kind:'kiss',role,anchor:{x:2.4,z:3.4,yaw:Math.PI/2,place_id:'bed'},elapsed_s:.5,rate:1,loop:true,clip_duration_s:2}}]);
-  manager.tick(.25,10);assert.equal(pairCalls.at(-1)[0],`kiss__${role}`);assert.equal(root.position.x,2.4);
+  manager.tick(.25,10);
+  now+=400;manager.tick(0,10); // Task 84: pair yaw reaches the anchor after its real-time entry blend.
+  assert.equal(pairCalls.at(-1)[0],`kiss__${role}`);assert.equal(root.position.x,2.4);
   assert.equal(root.position.z,3);assert.equal(root.position.y,3.5,'pair uses server body anchor Y');
   assert.ok(Math.abs(faces.at(-1).x-1)<1e-8&&Math.abs(faces.at(-1).z)<1e-8,'pair uses authoritative shared interaction yaw');
  }

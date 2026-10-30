@@ -127,6 +127,7 @@ public readonly record struct PairAnchor(double X, double Z, double Yaw, string?
 /// </summary>
 public sealed class PairPlay
 {
+    public (PairPose From, double At)? Blend { get; set; }
     public required string Id { get; init; }
     /// <summary><c>&lt;kind&gt;__&lt;role&gt;</c>.</summary>
     public required string Clip { get; init; }
@@ -156,6 +157,7 @@ public sealed class PairPlay
             fresh = true;
             return new PairPlay
             {
+                Blend = cur?.Id == it.Id ? cur.Blend : null,
                 Id = it.Id, Clip = clip, Anchor = it.Anchor, Elapsed = it.ElapsedS, Rate = it.Rate, Stamp = stamp,
                 ClipT = PairClip.Phase(new PairClipInput(it.ElapsedS, it.Rate, it.Loop, it.ClipDurationS)).ClipT,
                 ClipDuration = it.ClipDurationS, Loop = it.Loop,

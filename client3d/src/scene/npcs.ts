@@ -5,6 +5,7 @@ import type { PropActionMotion, PropActionDeparture } from '@anima/player-ui/pro
 import type { SyncCounters } from '../game/perfstats';
 import type { MapCharacter, MapInteraction, MapPropActionEntry } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
+import { pairBlend, BLEND_S, type PairPose } from '../game/pairBlend';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
 import { entryIdentity, entryPhase, localApproachPoint, sampleMotion, motionEntrySeconds } from '../game/propActionMotion';
 import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
@@ -222,6 +223,7 @@ export interface TravelRoute {
  *  advanced locally with the frame time and reconciled against each new poll
  *  (`game/pairClip.ts`). */
 export interface PairPlay {
+  blend?: { from: PairPose; at: number };
   id: string;
   /** `<kind>__<role>` — the clip half this figure plays */
   clip: string;
@@ -526,6 +528,8 @@ export class NpcManager {
    *  would stand still with an idle clip instead of swimming slowly (finding
    *  2026-08-13). */
   setPlayerTarget(name: string, pos: THREE.Vector3, pace = 1) {
+    const shown = this.npcs.get(name)?.root.position;
+    if (shown && Math.hypot(pos.x - shown.x, pos.z - shown.z) > 0.02) this.pairPreviews.delete(name);
     const npc = this.npcs.get(name);
     if (!npc) return;
     npc.target.copy(pos);
@@ -594,6 +598,7 @@ export class NpcManager {
    *  and the seat decides which way the figure looks. */
   faceTowards(name: string, dx: number, dz: number, snap = false) {
     const npc = this.npcs.get(name);
+    if (dx * dx + dz * dz > 1e-6) this.pairPreviews.delete(name);
     npc?.figure?.faceTowards(new THREE.Vector3(dx, 0, dz), snap);
   }
 
@@ -1245,13 +1250,18 @@ export class NpcManager {
       const rate = it.rate ?? 0;
       const clipDuration = it.clip_duration_s ?? 0;
       const loop = !!it.loop;
+      const newId = npc.interaction?.id !== it.id;
+      const blend = npc.interaction?.id === it.id ? npc.interaction.blend : {
+        from: { ...npc.root.position, yaw: npc.figure?.root.rotation.y ?? 0 }, at: performance.now(),
+      };
       npc.interaction = {
-        id: it.id, clip,
+        blend, id: it.id, clip,
         anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null },
         elapsed: it.elapsed_s, rate, stamp,
         clipT: pairClipPhase({ elapsedGameS: it.elapsed_s, rate, loop, clipDurationS: clipDuration }).clipT,
         clipDuration, loop,
       };
+      if (newId) this.pairPreviews.delete(npc.name);
       npc.route = null;
       npc.waypoints = [];
       npc.ride = null;       // the anchor places the figure, not a flight
@@ -1307,10 +1317,14 @@ export class NpcManager {
     const s = Math.sin(it.anchor.yaw);
     const x = it.anchor.x + root.x * c + root.z * s;
     const z = it.anchor.z - root.x * s + root.z * c;
-    npc.root.position.set(x,
-      ownAnchor ? ownAnchor.y : seat ? seat.slots[0].y : (this.roomStandAt(npc.name, x, z) ?? this.groundY(x, z)), z);
-    if (ownAnchor) npc.figure.faceTowards(new THREE.Vector3(Math.sin(it.anchor.yaw), 0, Math.cos(it.anchor.yaw)), true);
-    else npc.figure.setYaw(it.anchor.yaw);
+    const target = { x, y: ownAnchor ? ownAnchor.y : seat ? seat.slots[0].y
+      : (this.roomStandAt(npc.name, x, z) ?? this.groundY(x, z)), z, yaw: it.anchor.yaw };
+    const age = it.blend ? (performance.now() - it.blend.at) / 1000 : BLEND_S;
+    const shown = it.blend ? pairBlend(it.blend.from, target, age) : target;
+    npc.root.position.set(shown.x, shown.y, shown.z);
+    // Apply the eased yaw exactly; the ordinary standing yaw ease would lag behind it.
+    npc.figure.faceTowards(new THREE.Vector3(Math.sin(shown.yaw), 0, Math.cos(shown.yaw)), true);
+    if (age >= BLEND_S) it.blend = undefined;
     npc.figure.update(dt, { frozen: frozen || it.rate <= 0 });
     npc.label.visible = labelVisible;
     return true;
@@ -1346,6 +1360,37 @@ export class NpcManager {
   }>();
   private playedOwnMotions = new Set<string>();
   private propPreviewYaw = new Map<string, number>();
+  private pairPreviews = new Map<string, { id: string; previous: number; yaw: number; x: number; z: number }>();
+
+  /** Visual request feedback only: no position write, route or movement ownership. */
+  pairFacing(name: string, phase: 'begin' | 'keep' | 'rollback', id: string, partner: string): void {
+    const npc = this.npcs.get(name), figure = npc?.figure;
+    if (!npc || !figure) return;
+    if (phase === 'begin') {
+      const target = this.npcs.get(partner)?.root.position;
+      if (!target || npc.interaction || Math.hypot(target.x - npc.root.position.x, target.z - npc.root.position.z) < 1e-3) return;
+      const previous = figure.root.rotation.y;
+      const yaw = Math.atan2(target.x - npc.root.position.x, target.z - npc.root.position.z);
+      this.pairPreviews.set(name, { id, previous, yaw, x: npc.root.position.x, z: npc.root.position.z });
+      figure.faceTowards(new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)), true);
+    } else if (phase === 'rollback' && this.pairPreviews.get(name)?.id === id) {
+      const preview = this.pairPreviews.get(name)!;
+      this.pairPreviews.delete(name);
+      if (Math.hypot(npc.root.position.x - preview.x, npc.root.position.z - preview.z) <= 0.02)
+        figure.faceTowards(new THREE.Vector3(Math.sin(preview.previous), 0, Math.cos(preview.previous)), true);
+    }
+  }
+
+  private holdsPairFacing(npc: Npc): boolean {
+    const preview = this.pairPreviews.get(npc.name);
+    if (!preview) return false;
+    if (Math.hypot(npc.root.position.x - preview.x, npc.root.position.z - preview.z) > 0.02) {
+      this.pairPreviews.delete(npc.name);
+      return false;
+    }
+    npc.figure?.faceTowards(new THREE.Vector3(Math.sin(preview.yaw), 0, Math.cos(preview.yaw)), true);
+    return true;
+  }
 
   previewPropFacing(name: string, x: number, z: number): () => void {
     const npc = this.npcs.get(name), figure = npc?.figure;
@@ -1484,12 +1529,13 @@ export class NpcManager {
         if (changed && sample.phase === 'arrived' && !motion.cancel)
           console.info(`[prop] motion seated on anchor ${plan.anchor.place_id}/${plan.anchor.slot}`);
       }
+      if (sample.phase === 'arrived' && !motion.cancel && motion.confirmedState) this.adoptInteraction(npc, motion.confirmedState);
       npc.root.position.set(sample.x, sample.phase === 'arrived' ? sample.y : floor, sample.z);
-      if (sample.phase !== 'arrived' || !motion.confirmedState?.interaction)
+      if ((sample.phase !== 'arrived' || !motion.confirmedState?.interaction)
+        && !(sample.phase === 'arrived' && this.holdsPairFacing(npc)))
         npc.figure?.faceTowards(new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)), true);
       let paired = false;
       if (sample.phase === 'arrived' && !motion.cancel && motion.confirmedState) {
-        this.adoptInteraction(npc, motion.confirmedState);
         if (npc.interaction) paired = this.tickInteraction(npc, dt, labelVisible, false, plan.anchor);
       }
       if (!paired) npc.figure?.update(dt, { frozen: sample.phase === 'frozen' });
@@ -1946,7 +1992,7 @@ export class NpcManager {
         this.easeRootY(npc, goalY, dt);
       }
       const standingClip = standingClipFor(npc.animation, standIdle);
-      if (!moving && npc.figure) {
+      if (!moving && npc.figure && !this.holdsPairFacing(npc)) {
         // Standing: the marker's facing beats looking at the neighbours, and
         // where NEITHER says anything the figure keeps the way it is already
         // looking. There used to be a third rule — turn south — and it made

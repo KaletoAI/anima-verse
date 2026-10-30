@@ -147,10 +147,11 @@ public partial class FigureManager
         double x=PropActionMotion.Number(sample["x"]),z=PropActionMotion.Number(sample["z"]);
         if(phase=="departure") { x=PropActionMotion.Number(plan["departure"]?["seat"]?[0]); z=PropActionMotion.Number(plan["departure"]?["seat"]?[1]); }
         double y=phase is "walking" or "frozen" or "departure" ? OwnPropFloor(figure,plan,x,z) : PropActionMotion.Number(sample["y"]);
+        if(phase=="arrived" && !playback.Cancel) AdoptInteraction(figure);
         figure.Position=figure.Target=new((float)x,(float)y,(float)z);
         figure.SetHidden(false);
         double yaw=phase=="departure" ? playback.StartYaw : PropActionMotion.Number(sample["yaw"])*Math.PI/180;
-        figure.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true);
+        if((phase!="arrived" || figure.Pair is null) && !(phase=="arrived" && HoldsPairFacing(figure))) figure.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true);
         if(phase is "entry" or "arrived" && !playback.AccessLogged) { playback.AccessLogged=true; _log("[prop] motion arrived at access"); }
         if(phase=="departure") {
             double duration=Math.Max(0,PropActionMotion.Number(plan["departure"]?["exit_s"]));
@@ -171,7 +172,6 @@ public partial class FigureManager
             if(changed && plan["entry"] is { } entry && PropActionMotion.Text(entry["mode"])=="bridge") {
                 figure.PlayPropEntry(OwnEntrySpec(plan),1); figure.HoldPropPoseAtAnchor();
             }
-            if(!playback.Cancel) AdoptInteraction(figure);
             if(!playback.Cancel && figure.Pair is not null && TickPair(figure,dt,PropActionMotion.Number(plan["anchor"]?["y"]))) {
                 playback.Phase=phase; return;
             }

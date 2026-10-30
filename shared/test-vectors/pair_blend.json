@@ -1,0 +1,330 @@
+{
+  "format": "anima-test-vectors/1",
+  "source": "client3d/scripts/smoke_pair_blend.mjs",
+  "cases": [
+    {
+      "label": "[1] elapsed -1 real seconds",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 1,
+          "y": 2,
+          "z": 3,
+          "yaw": 0
+        },
+        {
+          "x": 5,
+          "y": 6,
+          "z": -1,
+          "yaw": 2
+        },
+        -1
+      ],
+      "expect": {
+        "weight": 0,
+        "x": 1,
+        "y": 2,
+        "z": 3,
+        "yaw": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] elapsed 0 real seconds",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 1,
+          "y": 2,
+          "z": 3,
+          "yaw": 0
+        },
+        {
+          "x": 5,
+          "y": 6,
+          "z": -1,
+          "yaw": 2
+        },
+        0
+      ],
+      "expect": {
+        "weight": 0,
+        "x": 1,
+        "y": 2,
+        "z": 3,
+        "yaw": 0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] elapsed 0.1 real seconds",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 1,
+          "y": 2,
+          "z": 3,
+          "yaw": 0
+        },
+        {
+          "x": 5,
+          "y": 6,
+          "z": -1,
+          "yaw": 2
+        },
+        0.1
+      ],
+      "expect": {
+        "weight": 0.15625,
+        "x": 1.625,
+        "y": 2.625,
+        "z": 2.375,
+        "yaw": 0.3125
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] elapsed 0.2 real seconds",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 1,
+          "y": 2,
+          "z": 3,
+          "yaw": 0
+        },
+        {
+          "x": 5,
+          "y": 6,
+          "z": -1,
+          "yaw": 2
+        },
+        0.2
+      ],
+      "expect": {
+        "weight": 0.5,
+        "x": 3.0,
+        "y": 4.0,
+        "z": 1.0,
+        "yaw": 1.0
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] elapsed 0.3 real seconds",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 1,
+          "y": 2,
+          "z": 3,
+          "yaw": 0
+        },
+        {
+          "x": 5,
+          "y": 6,
+          "z": -1,
+          "yaw": 2
+        },
+        0.3
+      ],
+      "expect": {
+        "weight": 0.84375,
+        "x": 4.375,
+        "y": 5.375,
+        "z": -0.375,
+        "yaw": 1.6875
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] elapsed 0.4 real seconds",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 1,
+          "y": 2,
+          "z": 3,
+          "yaw": 0
+        },
+        {
+          "x": 5,
+          "y": 6,
+          "z": -1,
+          "yaw": 2
+        },
+        0.4
+      ],
+      "expect": {
+        "weight": 1,
+        "x": 5,
+        "y": 6,
+        "z": -1,
+        "yaw": 2
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[1] elapsed 4 real seconds",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 1,
+          "y": 2,
+          "z": 3,
+          "yaw": 0
+        },
+        {
+          "x": 5,
+          "y": 6,
+          "z": -1,
+          "yaw": 2
+        },
+        4
+      ],
+      "expect": {
+        "weight": 1,
+        "x": 5,
+        "y": 6,
+        "z": -1,
+        "yaw": 2
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[2] moving target at halfway",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 1,
+          "y": 2,
+          "z": 3,
+          "yaw": 0
+        },
+        {
+          "x": 9,
+          "y": 4,
+          "z": 7,
+          "yaw": 2
+        },
+        0.2
+      ],
+      "expect": {
+        "weight": 0.5,
+        "x": 5,
+        "y": 3,
+        "z": 5,
+        "yaw": 1
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[3] own avatar position unchanged",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 1,
+          "y": 2,
+          "z": 3,
+          "yaw": 0
+        },
+        {
+          "x": 1,
+          "y": 2,
+          "z": 3,
+          "yaw": 2
+        },
+        0.2
+      ],
+      "expect": {
+        "weight": 0.5,
+        "x": 1,
+        "y": 2,
+        "z": 3,
+        "yaw": 1
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[4] wrap positive",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "yaw": 2.356194490192345
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "yaw": -2.356194490192345
+        },
+        0.2
+      ],
+      "expect": {
+        "weight": 0.5,
+        "x": 0,
+        "y": 0,
+        "z": 0,
+        "yaw": 3.141592653589793
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[4] wrap negative",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "yaw": -2.356194490192345
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "yaw": 2.356194490192345
+        },
+        0.2
+      ],
+      "expect": {
+        "weight": 0.5,
+        "x": 0,
+        "y": 0,
+        "z": 0,
+        "yaw": -3.141592653589793
+      },
+      "eps": 1e-09
+    },
+    {
+      "label": "[4] full turn",
+      "fn": "pairBlend",
+      "args": [
+        {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "yaw": 0
+        },
+        {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "yaw": 6.283185307179586
+        },
+        0.2
+      ],
+      "expect": {
+        "weight": 0.5,
+        "x": 0,
+        "y": 0,
+        "z": 0,
+        "yaw": 0
+      },
+      "eps": 1e-09
+    }
+  ]
+}

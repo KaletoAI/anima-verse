@@ -111,6 +111,7 @@ export const HUD_OWNED_FIELDS = ['movementLocked','partyLeader','groundRoomId','
 
 /** Actions the React side calls INTO the vanilla app; main.ts registers them. */
 export interface HudGameActions {
+  pairFacing?: (phase: 'begin' | 'keep' | 'rollback', requestId: string, partner: string) => void;
   infoAction?: (id: string, kind: 'zoom' | 'lookInside' | 'closeView') => void;
   closeInfo?: () => void;
   closeOpenView?: () => void;

@@ -67,6 +67,10 @@ scene.gameActions.applyGraphicsPrefs = (...args) => graphics.push(args);
 hud.gameActions.applyGraphicsPrefs({ antiAliasing: '4x', shadows: false, renderScale: 0.75 });
 assert.deepEqual(graphics, [[{ antiAliasing: '4x', shadows: false, renderScale: 0.75 }]]);
 assert.deepEqual(hudMessages.at(-1), { v: 4, kind: 'action', name: 'applyGraphicsPrefs', args: [{ antiAliasing: '4x', shadows: false, renderScale: 0.75 }] });
+const pairTurns = [];
+scene.gameActions.pairFacing = (...args) => pairTurns.push(args);
+for (const phase of ['begin', 'keep', 'rollback']) hud.gameActions.pairFacing(phase, 'pair:1', 'Ben');
+assert.deepEqual(pairTurns, [['begin', 'pair:1', 'Ben'], ['keep', 'pair:1', 'Ben'], ['rollback', 'pair:1', 'Ben']]);
 const exactTarget = { location_id: 'home', room_id: 'workshop', placement_id: 'coffee-2', variant_uid: 'ecfa003d-309a-4ce2-8c9b-29944ddae093' };
 const semanticCalls = [];
 for (const name of ['pickPropAction', 'respondPropAction', 'cancelPropAction', 'pickRoomPose', 'closePlaceMenu']) {

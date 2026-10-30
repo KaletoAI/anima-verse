@@ -15,6 +15,7 @@
  * image-generation dialog of the 📷 flow, which belongs to the game-admin UI —
  * the host slots it in via the `photoDialog` prop.
  */
+import { respondPair } from './pairInteractions'
 import { useCallback, useEffect, useRef, useState,
   type ClipboardEvent as ReactClipboardEvent, type DragEvent as ReactDragEvent,
   type ReactNode } from 'react'
@@ -471,7 +472,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     if (answering) return
     setAnswering(inviteId)
     try {
-      await apiPost('/play/interact/respond', { invite_id: inviteId, accept })
+      await respondPair(inviteId, accept, data?.interaction_invites?.find(inv => inv.invite_id === inviteId)?.inviter)
     }
     catch (e) {
       const detail = e instanceof ApiError ? String(e.detail || '') : ''
@@ -479,7 +480,7 @@ export function ScenePanel({ data, refreshScene, avatar, hasCapability, moving, 
     }
     await refreshScene()
     setAnswering('')
-  }, [answering, refreshScene, toast])
+  }, [answering, data?.interaction_invites, refreshScene, toast])
 
   /** Take back the avatar's own open proposal. */
   const handleInteractCancel = useCallback(async (inviteId: string) => {

@@ -6,7 +6,7 @@
 import { runPairVectors } from './pairVectorDispatch.mjs';
 let passed = 0;
 let failed = 0;
-for (const name of ['pair_clip_phase', 'pair_clip_geometry', 'pair_height', 'figure_normalisation']) {
+for (const name of ['pair_blend', 'pair_clip_phase', 'pair_clip_geometry', 'pair_height', 'figure_normalisation']) {
   const result = await runPairVectors(name);
   console.log(`${name}: ${result.passed} ok, ${result.failed} failed`);
   passed += result.passed; failed += result.failed;

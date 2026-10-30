@@ -24,6 +24,7 @@
  * itself when something is said and withdraws when the room stays silent; see
  * the block around CHAT_IDLE_MS below. Self/Others stay purely manual.
  */
+import { setPairFacing } from '@anima/player-ui/pairInteractions';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   SYNC_ENDPOINTS, apiGet, apiPost, usePoll, useI18n, useToast, Icon, ErrorBoundary,
@@ -173,6 +174,7 @@ const SCENE_STICK_SLACK_PX = 48;
 export function Hud({ avatar, username, role }: {
   avatar: string; username: string; role: string;
 }) {
+  useEffect(() => setPairFacing((phase, id, partner) => gameActions.pairFacing?.(phase, id, partner)), []);
   const { t } = useI18n();
   const characterFormHost = useMemo<CharacterFormHost>(() => ({
     renderImageDialog: (ctl) => <PlayerProfileImageDialog ctl={ctl} />,

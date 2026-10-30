@@ -984,7 +984,7 @@ to `Core/Figures/NpcWalk.cs` (vectors `npc_walk.json`, `npc_ground.json`), `Core
 
 A worldmap row's `interaction` (§ A8a) runs the browser's pair (npcs.ts `adoptInteraction` / `tickInteraction`,
 figures.ts `playPair`; core `Core/Figures/PairClip.cs`, vectors `pair_clip_phase.json`, `pair_clip_geometry.json`,
-`pair_height.json`):
+`pair_height.json`, `pair_blend.json`):
 - **Adoption** per poll (the stamp is the poll count: the 1 Hz pass over the cached map reconciles nothing): a new id
   adopts the clip clock `elapsed_s / rate` and drops the figure's stations and climb; the same id takes rate and anchor
   at once and snaps its local clock only when a NEW poll is more than 0.3 s off.
@@ -994,6 +994,14 @@ figures.ts `playPair`; core `Core/Figures/PairClip.cs`, vectors `pair_clip_phase
   `anchor + R_y(yaw) · pairRootAt(phase)` — at the place's first slot when the anchor names one, else the room's stand
   (`roomStandY`), else the ground — and turns to the anchor's yaw. A half the library lacks (or a rig without a player)
   falls back to the ordinary placement and the solo clip.
+- **Pair entry** (Task 84): each new interaction id blends from the rendered position and yaw for 0.4 real seconds,
+  with smoothstep weight toward the moving clip root and shortest yaw. Polls, clip reseeks and same-id half changes
+  preserve that view clock; world freeze stops the clip but keeps the blend running. Furniture keeps its slot height.
+  First-sighted figures are placed before the adoption pose is captured.
+- **Invite/accept feedback**: the shared HUD sends `pairFacing` before HTTP, turning only the own avatar toward the
+  rendered partner without reporting position. `asked` retains the turn (including an arrived B1 seat); HTTP failure
+  or a `declined` response restores the previous facing. Steering or pair adoption releases the preview so a late
+  answer cannot overwrite the newer facing.
 - **The root path** of a half is its hips XZ (`extractRootPath`) — METRES as Godot imports the clip (the browser's
   FBXLoader keeps Mixamo centimetres and divides by 100); a still-standing half whose constant hips curve Godot dropped
   gets the one key of its node default.

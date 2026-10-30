@@ -384,6 +384,8 @@ public partial class FigureManager : Node3D
         if (!fresh && fig.CharacterName == PlayerDriven && HoldAvatarPlacement) return;
         // Task 49: polls still refresh models/activity, but local root, goal, route, facing and visibility belong to input.
         if (!fresh && IsPlayerDriven(fig.CharacterName)) { AdoptInteraction(fig); return; }
+        // Seed a new node before pair adoption captures the position it will first render at.
+        if (fresh) fig.SnapTo(new Vector3((float)plan.Pos.X, (float)plan.Pos.Y, (float)plan.Pos.Z));
         AdoptInteraction(fig);
         if (AdoptPropEntry(fig, plan)) return;
         fig.Rule = plan.Rule;
@@ -399,18 +401,13 @@ public partial class FigureManager : Node3D
         }
         var settle = fig.Settle?.Offset ?? new P2(0, 0);
         var goal = new Vector3((float)(plan.Pos.X + settle.X), (float)plan.Pos.Y, (float)(plan.Pos.Z + settle.Z));
-        if (fresh)
-        {
-            // createNpc: the first sync puts the figure on its point — no walk across the whole map.
-            fig.SnapTo(goal);
-        }
-        else if (arrived)
+        if (!fresh && arrived)
         {
             // A11 arrival (also a route becoming withheld): no residual walk through arrival-room stations.
             fig.SnapTo(goal);
             Stats.Arrive++;
         }
-        else if (fig.Route is null)
+        else if (!fresh && fig.Route is null)
         {
             // main.ts: a routed room change ends whatever climb the figure was on (the avatar's own climb excepted), and
             // a climb over stairs becomes the ride — unarmed, the figure is still a room away.
@@ -511,7 +508,13 @@ public partial class FigureManager : Node3D
     {
         var it = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.Interaction : null;
         if(fig.CharacterName==AvatarName && it is not null && _releasedOwnPropPairs.Contains(it.Id)) it=null;
+        bool newId = it is not null && fig.Pair?.Id != it.Id;
         fig.Pair = PairPlay.Adopt(fig.Pair, it, Stats.Polls, out bool fresh);
+        if (newId && fig.Pair is { } adopted)
+        {
+            adopted.Blend = (new PairPose(fig.Position.X, fig.Position.Y, fig.Position.Z, fig.Yaw), PairViewTime);
+            if (fig.CharacterName == AvatarName) _pairPreview = null;
+        }
         if (!fresh) return;
         fig.Waypoints.Clear();
         fig.Ride = null;
@@ -709,7 +712,7 @@ public partial class FigureManager : Node3D
         }
         fig.Position = new Vector3((float)pos.X, (float)y, (float)pos.Z);
         var standingClip = FigureClips.StandingClipFor(fig.Activity, standIdle, fig.Poses);
-        if (!plan.Moving && fig.Portrait is null)
+        if (!plan.Moving && fig.Portrait is null && !HoldsPairFacing(fig))
         {
             var marker = fig.Face is { } f ? new Vec3(f.X, f.Y, f.Z) : (Vec3?)null;
             // Not while a bridge holds the facing: the body getting up is the clip's.
@@ -729,6 +732,8 @@ public partial class FigureManager : Node3D
         fig.UpdateFigure(dt);
         fig.Portrait?.Tick(dt, camDist, plan.Moving);
     }
+
+    private double PairViewTime => AutoTick ? _source.MonotonicMs / 1000 : _clock;
 
     /// <summary>
     /// npcs.ts <c>tickInteraction</c>: one frame of a pair interaction — the clock advances (<see cref="PairPlay.Advance"/>),
@@ -763,8 +768,12 @@ public partial class FigureManager : Node3D
         var at = it.Place(root, (id, x, z) => ownAnchorY ?? SeatYAt?.Invoke(room, id, x, z),
                           (x, z) => RoomStandAt?.Invoke(room, x, z),
                           (x, z) => GroundYAt?.Invoke(x, z) ?? _height.GroundAt(x, z));
-        fig.Position = new Vector3((float)at.X, (float)at.Y, (float)at.Z);
-        fig.SetYaw(it.Anchor.Yaw);
+        var target = new PairPose(at.X, at.Y, at.Z, it.Anchor.Yaw);
+        double age = it.Blend is { } start ? PairViewTime - start.At : PairBlend.BlendS;
+        var shown = it.Blend is { } blend ? PairBlend.Sample(blend.From, target, age).Pose : target;
+        fig.Position = new Vector3((float)shown.X, (float)shown.Y, (float)shown.Z);
+        fig.FaceTowards(new Vector3((float)Math.Sin(shown.Yaw), 0, (float)Math.Cos(shown.Yaw)), snap: true);
+        if (age >= PairBlend.BlendS) it.Blend = null;
         fig.SecondaryFrozen = WorldFrozen || it.Rate <= 0;   // npcs.ts: figure.update(dt, {frozen: frozen || it.rate <= 0})
         fig.UpdateFigure(dt);
         return true;

@@ -5159,6 +5159,7 @@ async function startApp(username: string, role: string) {
       uiActions.toast?.(String(e));
     } finally { propMutationPending = false; propClickRevert = null; }
   }
+  gameActions.pairFacing = (phase, id, partner) => npcs.pairFacing(avatarName, phase, id, partner);
   let propClickRevert: (() => void) | null = null;
   gameActions.pickPropAction = (actionId, target, revision, partner) => {
     if (propMutationPending) return;
