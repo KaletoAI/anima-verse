@@ -367,14 +367,14 @@ def play_scene(user=Depends(get_current_user), limit: int = 100):
         _answer = _IE.last_answer_of(avatar) if interaction_pending is None else None
         interaction_answered = ({**_answer, "pose_label": pose_label(
             _answer["pose_key"], lang)} if _answer else None)
-        # Agreed, not started yet: whoever said yes is walking over.
+        # Agreed, not started yet: ``walker_of`` is walking over.
         _app = _IE.approach_of(avatar)
         interaction_approaching = (
             {"invite_id": _app["invite_id"], "pose_key": _app["pose_key"],
              "pose_label": pose_label(_app["pose_key"], lang),
              "partner": (_app["inviter"] if _app["invitee"] == avatar
                          else _app["invitee"]),
-             "walking": _app["invitee"] == avatar} if _app else None)
+             "walking": _IE.walker_of(_app) == avatar} if _app else None)
         _run = _IE.get_interaction(avatar)
         interaction = ({"partner": _run["partner"], "pose_key": _run["pose_key"],
                         "pose_label": pose_label(_run["pose_key"], lang)}
@@ -2046,15 +2046,17 @@ async def play_interact_cancel(request: Request, user=Depends(get_current_user))
 
 
 def _play_interact_cancel_sync(body: Dict[str, Any]) -> Dict[str, Any]:
-    """The blocking body of ``play_interact_cancel`` — only the avatar's own
-    proposal, never someone else's question."""
+    """The blocking body of ``play_interact_cancel`` — the avatar's own
+    proposal, or an agreed approach it is part of (the NPC walking over to
+    it); never someone else's open question."""
     from app.core import interaction_engine as IE
     avatar = _require_avatar()
     invite_id = str(body.get("invite_id") or "").strip()
     if not invite_id:
         raise HTTPException(status_code=400, detail="invite_id required")
     inv = IE.get_invite(invite_id)
-    if not inv or inv.get("inviter") != avatar:
+    if not inv or not (inv.get("inviter") == avatar
+                       or (inv.get("invitee") == avatar and inv.get("status") == "approaching")):
         raise HTTPException(status_code=404, detail="invite not found")
     return {"ok": IE.cancel_invite(invite_id) or IE.dismiss_answer(invite_id, avatar)}
 

@@ -330,6 +330,57 @@ def assign_roles(actor: str, partner: str, actor_gender: str,
     return (partner, actor) if swap else (actor, partner)
 
 
+#: A partner this close to its point in the clip steps in at once; farther
+#: and it walks over first (a pair beside a player's avatar).
+_STEP_IN_M = 0.3
+
+
+def held_participant(a: str, b: str) -> str:
+    """The one of the two who stays where it stands: a player's avatar beside
+    a character that is not one — the NPC comes to the player. "" for two
+    NPCs or two avatars (then they meet halfway)."""
+    from app.models.account import is_player_controlled
+    av_a, av_b = is_player_controlled(a), is_player_controlled(b)
+    return a if av_a and not av_b else b if av_b and not av_a else ""
+
+
+def walker_of(invitation: Dict[str, Any]) -> str:
+    """Who walks over for an accepted invitation: the one who said yes —
+    unless that is the held avatar (``held_participant``), then the other."""
+    inviter, invitee = invitation["inviter"], invitation["invitee"]
+    return inviter if held_participant(inviter, invitee) == invitee else invitee
+
+
+def _role_start(meta: Dict[str, Any], role: str) -> Optional[Tuple[float, float]]:
+    """Where the clip half stands in its FIRST frame (clip metres), falling
+    back to its anchor-moment point for a sidecar without ``start_xz_m``."""
+    r = ((meta.get("geometry") or {}).get("roles") or {}).get(role) or {}
+    point = r.get("start_xz_m") or r.get("anchor_xz_m")
+    return (float(point[0]), float(point[1])) if point else None
+
+
+def _held_frame(held: str, who_a: str, who_b: str, meta: Dict[str, Any],
+                pos: Dict[str, Dict[str, float]]):
+    """``(anchor {x, z, yaw}, first-frame points {name: (x, z)})`` of a pair
+    laid around ``held``: +X still runs from the A figure towards the B
+    figure, and the clip frame is shifted so that ``held``'s first frame
+    lands exactly on its own point — it does not move, the other one comes.
+    None without role geometry."""
+    starts = {who_a: _role_start(meta, "a"), who_b: _role_start(meta, "b")}
+    if None in starts.values():
+        return None
+    pa, pb = pos[who_a], pos[who_b]
+    span = math.dist((pa["x"], pa["z"]), (pb["x"], pb["z"]))
+    yaw = _yaw_from_to(pa["x"], pa["z"], pb["x"], pb["z"]) if span > 1e-6 else 0.0
+    hx, hz = _rotate(*starts[held], yaw)
+    ax, az = pos[held]["x"] - hx, pos[held]["z"] - hz
+    points = {}
+    for name, start in starts.items():
+        dx, dz = _rotate(*start, yaw)
+        points[name] = (ax + dx, az + dz)
+    return {"x": ax, "z": az, "yaw": yaw}, points
+
+
 def plan_interaction_at(actor: str, partner: str, pose_key: str, place: dict, *, profiles=None) -> dict:
     """Shared clip-role allocation BEFORE a prop owner claims access/slots.
 
@@ -390,13 +441,20 @@ def start_interaction_at(actor: str, partner: str, pose_key: str, *,
 
 
 def start_interaction(actor: str, partner: str, pose_key: str, *,
-                      invite_id: str = "", _reserved: Optional[dict] = None,
+                      invite_id: str = "", arrived: bool = False,
+                      _reserved: Optional[dict] = None,
                       _commit_profiles=None) -> Dict[str, Any]:
     """Binds ``actor`` (the initiator) and ``partner`` to the pair clip the
     pose names. Who plays which half follows the clip's gender assignment
     (``assign_roles``); without one the actor plays A. Raises ``ValueError``
     with a reason a tool result can relay. A supplied ``invite_id`` is stored
-    with both halves before the pair locks are released."""
+    with both halves before the pair locks are released.
+
+    Beside a player's avatar (``held_participant``) the pair is laid around
+    the avatar, which is neither moved nor written; the other one must stand
+    within ``_STEP_IN_M`` of its first-frame point, else ``TooFarApart`` sends
+    it over. ``arrived`` (the approach just ended) binds without that check:
+    the walker steps the last bit in."""
     from app.core.animation_clips import clip_loops, clip_meta, clip_role_gender
     from app.core.state_events import publish
     from app.models.character import (get_character_current_location,
@@ -466,17 +524,32 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
         if needs_place(group_of(pose_key)):
             raise ValueError("This pair action requires an explicit prop action.")
         seated = None
+    held = ""
     if seated:
         place, yaw = seated
         ax, az = places.centre_of(place)
         anchor = {"x": round(ax, 3), "z": round(az, 3), "yaw": round(yaw, 4),
                   "place_id": place["id"]}
     else:
-        p_a, p_b = (pa, pb) if who_a == actor else (pb, pa)
-        yaw = _yaw_from_to(p_a["x"], p_a["z"], p_b["x"], p_b["z"]) if dist > 1e-6 else 0.0
-        anchor = {"x": round((pa["x"] + pb["x"]) / 2, 3),
-                  "z": round((pa["z"] + pb["z"]) / 2, 3), "yaw": round(yaw, 4),
-                  "place_id": None}
+        held = held_participant(actor, partner)
+        frame = _held_frame(held, who_a, who_b, meta, {actor: pa, partner: pb}) if held else None
+        if frame:
+            laid, points = frame
+            other = partner if held == actor else actor
+            here = pa if other == actor else pb
+            gap = math.dist((here["x"], here["z"]), points[other])
+            if gap > _STEP_IN_M and not arrived:
+                raise TooFarApart(f"{other} has to come over to {held} first ({gap:.1f} m)")
+            yaw = laid["yaw"]
+            anchor = {"x": round(laid["x"], 3), "z": round(laid["z"], 3),
+                      "yaw": round(yaw, 4), "place_id": None}
+        else:
+            held = ""
+            p_a, p_b = (pa, pb) if who_a == actor else (pb, pa)
+            yaw = _yaw_from_to(p_a["x"], p_a["z"], p_b["x"], p_b["z"]) if dist > 1e-6 else 0.0
+            anchor = {"x": round((pa["x"] + pb["x"]) / 2, 3),
+                      "z": round((pa["z"] + pb["z"]) / 2, 3), "yaw": round(yaw, 4),
+                      "place_id": None}
     if _reserved:
         roles_geometry = (meta.get("geometry") or {}).get("roles") or {}
         for name, role in ((who_a, "a"), (who_b, "b")):
@@ -549,7 +622,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
         # past the footprint): the write would evict, so the figure stays
         # where it is and only the seat is bookkept (`places.inside`).
         off = (roles.get(role) or {}).get("anchor_xz_m")
-        if off:
+        if off and name != held:
+            # The held avatar stays exactly where its player put it.
             dx, dz = _rotate(float(off[0]), float(off[1]), yaw)
             px, pz = anchor["x"] + dx, anchor["z"] + dz
             if not _commit_profiles and (not anchor.get("place_id") or places.inside(loc_a, px, pz)):
@@ -1129,15 +1203,15 @@ def resolve_invite(invite_id: str, accept: bool) -> Dict[str, Any]:
         inter = start_interaction(inv["inviter"], inv["invitee"], inv["pose_key"],
                                   invite_id=invite_id)
     except TooFarApart as e:
-        # Yes was said; only the metres are missing. The one who agreed walks
-        # over, and the ticker binds the pair when they get there. Saying
-        # "too far away" to a player who has no way to close the gap would
-        # be a dead end, not an answer.
-        if _walk_to_partner(inv["invitee"], inv["inviter"]):
+        # Yes was said; only the metres are missing. ``walker_of`` walks over
+        # (the one who agreed, or the NPC beside a player's avatar), and the
+        # ticker binds the pair when they get there. Saying "too far away" to
+        # a player who has no way to close the gap would be a dead end.
+        if _walk_to_partner(inv):
             if _set_invite_status(invite_id, "approaching"):
                 return {**out, "status": "approaching", "reason": str(e)}
             from app.core.travel_engine import cancel_journey
-            cancel_journey(inv["invitee"])
+            cancel_journey(walker_of(inv))
             _fail_invite(inv, "the approach could not be saved")
             return {**out, "status": "cannot", "reason": "the approach could not be saved"}
         _fail_invite(inv, str(e))
@@ -1170,34 +1244,62 @@ def _emit_invite_started(invitation: Dict[str, Any], interaction: Dict[str, Any]
 _APPROACH_GAP_M = 1.0
 
 
-def _walk_to_partner(walker: str, target: str) -> bool:
-    """Send ``walker`` over to ``target`` on the nav grid. True when a route
-    was found and the journey is running.
+def _walk_to_partner(invitation: Dict[str, Any]) -> bool:
+    """Send ``walker_of(invitation)`` over to the other one on the nav grid.
+    True when a route was found and the journey is running.
 
-    The goal is a metre SHORT of the other one, on the walker's own side —
-    walking onto an occupied point is no journey, and the pair snaps to its
-    anchor on arrival anyway.
+    Beside a held avatar the goal is the walker's own first-frame point in
+    the pair laid around the avatar (``_held_frame``), so the pair binds
+    where the walk ends and the avatar never moves. Otherwise, or when that
+    point has no route, it is a metre SHORT of the other one, on the
+    walker's own side — the pair snaps to its anchor on arrival anyway.
     """
     from app.core.travel_engine import cancel_journey, start_journey_to_point
     from app.models.character import get_character_pos
+    walker = walker_of(invitation)
+    target = invitation["inviter"] if walker == invitation["invitee"] else invitation["invitee"]
     pw, pt = get_character_pos(walker), get_character_pos(target)
     if not pw or not pt:
         return False
     dx, dz = pw["x"] - pt["x"], pw["z"] - pt["z"]
     span = math.hypot(dx, dz)
-    if span <= _APPROACH_GAP_M:
+    goals = []
+    if held_participant(walker, target) == target:
+        point = _held_goal(invitation, walker, target, pw, pt)
+        if point and math.dist(point, (pw["x"], pw["z"])) > _STEP_IN_M:
+            goals.append(point)
+    if span > _APPROACH_GAP_M:
+        goals.append((pt["x"] + dx / span * _APPROACH_GAP_M,
+                      pt["z"] + dz / span * _APPROACH_GAP_M))
+    if not goals:
         return False            # already there — the refusal was not distance
-    gx = pt["x"] + dx / span * _APPROACH_GAP_M
-    gz = pt["z"] + dz / span * _APPROACH_GAP_M
     # A trip already running is the one this replaces: the walker just agreed
     # to be somewhere else.
     cancel_journey(walker)
-    journey, reason = start_journey_to_point(walker, gx, gz)
-    if not journey:
-        logger.info("%s cannot walk to %s (%s)", walker, target, reason)
-        return False
-    logger.info("%s walks over to %s for a pair interaction", walker, target)
-    return True
+    reason = ""
+    for gx, gz in goals:
+        journey, reason = start_journey_to_point(walker, gx, gz)
+        if journey:
+            logger.info("%s walks over to %s for a pair interaction", walker, target)
+            return True
+    logger.info("%s cannot walk to %s (%s)", walker, target, reason)
+    return False
+
+
+def _held_goal(invitation, walker, target, pw, pt) -> Optional[Tuple[float, float]]:
+    """The walker's first-frame point in the pair laid around ``target``."""
+    from app.core.animation_clips import clip_meta, clip_role_gender
+    from app.models.character import get_character_profile
+    kind = pair_kind_for_pose(invitation["pose_key"])
+    meta = (clip_meta(kind) or {}) if kind else {}
+    if not meta:
+        return None
+    actor, partner = invitation["inviter"], invitation["invitee"]
+    who_a, who_b = assign_roles(
+        actor, partner, str((get_character_profile(actor) or {}).get("gender") or ""),
+        str((get_character_profile(partner) or {}).get("gender") or ""), clip_role_gender(meta))
+    frame = _held_frame(target, who_a, who_b, meta, {walker: pw, target: pt})
+    return frame[1][walker] if frame else None
 
 
 def settle_approaches() -> int:
@@ -1227,13 +1329,13 @@ def settle_approaches() -> int:
             if not _fresh(inv["created_at"]):
                 _fail_invite(inv, "the approach expired", expected_status="approaching")
                 continue
-            if get_journey(inv["invitee"]):
+            if get_journey(walker_of(inv)):
                 continue                      # still on the way
             if not _claim_invite(inv["invite_id"], "approaching"):
                 continue
             claimed = True
             inter = start_interaction(inv["inviter"], inv["invitee"], inv["pose_key"],
-                                      invite_id=inv["invite_id"])
+                                      invite_id=inv["invite_id"], arrived=True)
             if not _set_invite_status(inv["invite_id"], "accepted"):
                 end_interaction(inv["inviter"], reason="invitation_failed",
                                 interaction_id=inter["id"])
@@ -1273,7 +1375,7 @@ def cancel_invite(invite_id: str) -> bool:
     if inv["status"] == "approaching":
         try:
             from app.core.travel_engine import cancel_journey
-            cancel_journey(inv["invitee"])
+            cancel_journey(walker_of(inv))
         except Exception as e:
             logger.debug("cancelling the approach walk failed: %s", e)
     from app.core import sync_topics

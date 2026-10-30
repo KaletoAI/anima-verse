@@ -153,6 +153,30 @@ Hand-derived expectations:
       ends it for both. Without a turn (a player request, a ticker: no trace)
       nothing is stale and the pose ends the pair as before.
 
+  [15] Beside a player's avatar the NPC comes and the avatar stays (P2).
+      Ann is the avatar (``is_player_controlled`` patched), Bob an NPC; hug
+      has no ``start_xz_m``, so the first frame falls back to the anchor
+      points A (−0.3, 0), B (0.3, 0); no gender assignment, so the inviter
+      plays A.
+      (a) Ann (10, 20) asks Bob (10, 20.7). A→B is +Z, yaw −π/2 as in [2]:
+      R(−π/2)·(−0.3, 0) = (0, −0.3), so the anchor is Ann − (0, −0.3) =
+      (10, 20.3) and Bob's point (10, 20.3) + R·(0.3, 0) = (10, 20.6). Bob
+      stands 0.1 m off (≤ _STEP_IN_M 0.3): the pair starts at once, Ann's
+      point is NOT written (still (10, 20)), Bob is put on (10, 20.6).
+      (b) Bob at (10, 23): 2.4 m off his point → TooFarApart although inside
+      4.5 m; Ann's question accepted → BOB walks (he is the invitee anyway),
+      and the walk ends on his point (10, 20.6), not a metre short.
+      (c) Bob asks Ann from (10, 28), Ann says yes. Ann is the invitee but
+      the avatar, so BOB walks (``walker_of`` = inviter) and Ann has no
+      journey. Bob plays A: A→B runs −Z, yaw = atan2(1, 0) = +π/2;
+      R(+π/2)·(x, z) = (z, −x), Ann's B start (0.3, 0) → (0, −0.3), anchor
+      (10, 20.3), Bob's goal (10, 20.3) + R·(−0.3, 0) = (10, 20.6). Ann's
+      scene says she is NOT walking, she may call the approach off (her
+      cancel is accepted though she did not ask), and that stops Bob. Asked
+      again and arrived at (10, 20.65) — 0.05 m off — the beat binds with
+      Ann still on (10, 20).
+      Two NPCs (no avatar) keep the midpoint rule of [2] — blocks [2]–[14].
+
   [13] Reader-language payloads: embracing has no English label, hence
       Ann (en) sees embracing and Bob (de) sees Umarmen in incoming, pending,
       approaching, running and Others card rows. A refused yes yields failed plus reason
@@ -1087,6 +1111,77 @@ check("[14] without a turn nothing is stale: the pose ends the pair",
       ie.get_interaction("Ann") is None and ie.get_interaction("Bob") is None)
 set_pose_intent("Ann", "")
 set_pose_intent("Bob", "")
+
+# ── [15] the NPC comes to the avatar ────────────────────────────────────
+print("\n[15] beside a player's avatar the NPC comes, the avatar stays")
+from app.routes import play as play_routes  # noqa: E402
+set_trace(None)
+for _n in ("Ann", "Bob"):
+    ie.clear_invites_for(_n)
+    clear_pose_intent(_n)
+with patch("app.models.account.is_player_controlled", side_effect=lambda n: n == "Ann"):
+    check("[15] the avatar is the held one", ie.held_participant("Ann", "Bob") == "Ann"
+          and ie.held_participant("Bob", "Cid") == "")
+    set_character_pos("Ann", 10.0, 20.0)
+    set_character_pos("Bob", 10.0, 20.7)
+    _iid = ie.create_invite("Ann", "Bob", "embracing")
+    _res = ie.resolve_invite(_iid, True)
+    _a = (ie.get_interaction("Ann") or {}).get("anchor") or {}
+    check("[15a] 0.1 m off: the pair starts at once", _res["status"] == "started", str(_res))
+    check("[15a] anchor (10, 20.3), yaw −π/2", near(_a.get("x"), 10) and near(_a.get("z"), 20.3)
+          and near(_a.get("yaw"), -math.pi / 2, 1e-3), str(_a))
+    _pa, _pb = get_character_pos("Ann"), get_character_pos("Bob")
+    check("[15a] Ann is not moved (10, 20)", near(_pa["x"], 10) and near(_pa["z"], 20.0), str(_pa))
+    check("[15a] Bob steps onto (10, 20.6)", near(_pb["x"], 10, 0.011) and near(_pb["z"], 20.6, 0.011), str(_pb))
+    ie.end_interaction("Ann", reason="smoke")
+    for _n in ("Ann", "Bob"):
+        clear_pose_intent(_n)
+    set_character_pos("Ann", 10.0, 20.0)
+    set_character_pos("Bob", 10.0, 23.0)
+    _iid = ie.create_invite("Ann", "Bob", "embracing")
+    _res = ie.resolve_invite(_iid, True)
+    _j = get_journey("Bob") or {}
+    check("[15b] 2.4 m off inside 4.5 m: Bob walks over first",
+          _res["status"] == "approaching" and "come over" in _res["reason"]
+          and get_journey("Ann") is None, str(_res))
+    check("[15b] … to his own point (10, 20.6), not a metre short",
+          _j and near(_j["waypoints"][-1][0], 10, 0.011) and near(_j["waypoints"][-1][1], 20.6, 0.011),
+          str((_j.get("waypoints") or [None])[-1]))
+    ie.cancel_invite(_iid)
+    check("[15b] calling it off stops Bob", get_journey("Bob") is None)
+    set_character_pos("Bob", 10.0, 28.0)
+    _iid = ie.create_invite("Bob", "Ann", "embracing")
+    _res = ie.resolve_invite(_iid, True)
+    _j = get_journey("Bob") or {}
+    check("[15c] Ann said yes, yet Bob walks and Ann stays",
+          _res["status"] == "approaching" and get_journey("Ann") is None and _j, str(_res))
+    check("[15c] Bob's goal is (10, 20.6)",
+          _j and near(_j["waypoints"][-1][0], 10, 0.011) and near(_j["waypoints"][-1][1], 20.6, 0.011),
+          str((_j.get("waypoints") or [None])[-1]))
+    with patch("app.models.account.get_active_character", return_value="Ann"):
+        _scene = play_routes.play_scene(user={"role": "admin"})
+    check("[15c] Ann's scene: she is not the one walking",
+          (_scene.get("interaction_approaching") or {}).get("walking") is False
+          and _scene["interaction_approaching"]["partner"] == "Bob", str(_scene.get("interaction_approaching")))
+    with patch.object(play_routes, "_require_avatar", return_value="Ann"):
+        _cancelled = play_routes._play_interact_cancel_sync({"invite_id": _iid})
+    check("[15c] the avatar may call off an approach she was asked into",
+          _cancelled == {"ok": True} and get_journey("Bob") is None
+          and ie.get_invite(_iid)["status"] == "cancelled", str(_cancelled))
+    set_character_pos("Bob", 10.0, 28.0)
+    _iid = ie.create_invite("Bob", "Ann", "embracing")
+    ie.resolve_invite(_iid, True)
+    cancel_journey("Bob")
+    set_character_pos("Bob", 10.0, 20.65)
+    check("[15c] on arrival the beat binds", ie.settle_approaches() == 1)
+    _pa = get_character_pos("Ann")
+    _a = (ie.get_interaction("Ann") or {}).get("anchor") or {}
+    check("[15c] Ann still on (10, 20), yaw +π/2",
+          near(_pa["z"], 20.0) and near(_a.get("yaw"), math.pi / 2, 1e-3), f"{_pa} {_a}")
+    ie.end_interaction("Ann", reason="smoke")
+for _n in ("Ann", "Bob"):
+    ie.clear_invites_for(_n)
+    clear_pose_intent(_n)
 
 print()
 if FAILURES:

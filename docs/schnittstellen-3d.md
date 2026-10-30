@@ -2611,6 +2611,17 @@ oben, nicht Initiator→Partner), `place_id` `null`; eine
 Sitz-Pose ohne freien Sitz wird abgelehnt. Der Server setzt beide
 Spielzustands-Positionen auf `anchor + R(yaw)·anchor_xz_m` der Rolle (so sehen
 Wahrnehmung, Regeln und Karte die beiden dort, wo der Clip sie am Anker hält).
+**Neben einem Spieler-Avatar (2026-10-30) kommt der NPC, der Avatar bleibt**
+(`interaction_engine.held_participant`; zwei NPCs oder zwei Avatare: Mittelpunkt
+wie oben). `yaw` wie oben, aber der Anker wird so gelegt, dass das ERSTE Bild der
+Avatar-Hälfte (`geometry.roles.<r>.start_xz_m`, sonst `anchor_xz_m`) genau auf
+der Avatarposition liegt: `anchor = avatar − R(yaw)·start_xz_m`. Die Avatar-Position
+wird nicht geschrieben. Steht der NPC mehr als 0,3 m neben seinem Startpunkt
+`anchor + R(yaw)·start_xz_m`, geht er erst dorthin (Einladung `approaching`) —
+auch wenn der Avatar der Eingeladene ist (`walker_of`); die Bindung bei Ankunft
+setzt nur ihn. Der Avatar darf ein Hingehen abbrechen, in das er eingeladen wurde
+(`POST /play/interact/cancel`). Für den eigenen Client heißt das: der Avatar
+steht beim Start schon, wo der Clip ihn hält — kein Sprung.
 **Ende: KEIN Uhr-Ende.** Eine Interaktion läuft, bis ein SIGNAL sie beendet —
 neue Pose/Aktivität (`set_pose_intent`/`clear_pose_intent`), manuelle
 Positionsänderung, Reise, Raum- oder Ortswechsel, Einschlafen, NPC-Pooling,
