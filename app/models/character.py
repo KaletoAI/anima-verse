@@ -1510,8 +1510,13 @@ def _drag_party_followers_to_room(character_name: str, room_id: str) -> None:
     pulled into the same room. ``_party_drag`` prevents recursion."""
     try:
         from app.core.party_engine import party_followers
+        leader_location = get_character_current_location(character_name)
         for _follower in party_followers(character_name):
             if _follower and _follower != character_name:
+                if get_character_current_location(_follower) != leader_location:
+                    logger.debug("Party room drag: skipping %s outside leader %s's location %s",
+                                 _follower, character_name, leader_location)
+                    continue
                 save_character_current_room(_follower, room_id,
                                             _party_drag=True)
     except Exception as _pe:
@@ -1673,6 +1678,12 @@ def save_character_current_location(character_name: str = "", location: str = ""
             # Delivery waits for this AND every caller-held lock to release.
             _after_locks(lambda: emit("character.entered_room", character=character_name,
                                       location_id=location, room_id=entered_room))
+    # Party callbacks can write other profiles. Leave after releasing our
+    # profile lock, like the deletion path's _detach_party.
+    if stored and location != old_location and not _party_drag:
+        from app.core.party_engine import is_in_party, is_party_follower, leave_party
+        if is_in_party(character_name) and is_party_follower(character_name):
+            leave_party(character_name)
     if stored and location_changed:
         _notify_prop_presence(old_location, old_room)
         _notify_prop_presence(location, entered_room)
@@ -2480,6 +2491,13 @@ def save_character_current_room(character_name: str, room_id: str,
     _party_drag: True only for a party follower dragged along (recursion
     guard, like save_character_current_location)."""
     from app.core.keyed_lock import keyed_lock
+    # Refuse before interrupting an interaction, which writes both profiles.
+    # Recheck under the write lock in case a concurrent location move intervenes.
+    cur_loc = get_character_current_location(character_name)
+    if room_id and not _room_in_location(room_id, cur_loc):
+        logger.warning("%s: room %s is not part of location %s — not stored",
+                       character_name, room_id, cur_loc)
+        return
     # A pair clip holds two figures at ONE anchor in one room. Walking out of
     # that room ends it for both — the same rule a journey, a teleport and a
     # new pose already follow; without it the partner keeps playing a duet
@@ -2503,6 +2521,10 @@ def save_character_current_room(character_name: str, room_id: str,
         profile = get_character_profile(character_name)
         old_room = profile.get("current_room", "")
         cur_loc = profile.get("current_location", "")
+        if room_id and not _room_in_location(room_id, cur_loc):
+            logger.warning("%s: room %s is not part of location %s — not stored",
+                           character_name, room_id, cur_loc)
+            return
         profile["current_room"] = room_id
         if room_id != old_room:
             # A place is per room (plan-posen-plaetze.md § 3.5): whoever leaves
