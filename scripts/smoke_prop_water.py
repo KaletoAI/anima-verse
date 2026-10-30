@@ -67,7 +67,7 @@ def main():
             lift = lift_arg[0] if lift_arg else 0
             actual = w.water_region_at(specs, x, z, lambda spec: lift)
             assert near(case['expect'], actual, case.get('eps', 1e-9)), case['label']
-        assert scene.SCENE_RECIPE_VERSION == 18
+        assert scene.SCENE_RECIPE_VERSION >= 18  # water arrived in v18
         db.init_schema()
         pid = props.create_prop(name='Water fixture')['id']
         props.add_variant(pid)
