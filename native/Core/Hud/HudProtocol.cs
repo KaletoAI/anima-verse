@@ -19,6 +19,8 @@ public sealed class HudUi
 {
     public bool MenuOpen { get; private set; }
     public bool Typing { get; private set; }
+    /// <summary>New pages opt into bridge text for the focused editable; absent on older v4 pages.</summary>
+    public bool TextInput { get; private set; }
     public bool OverlayOpen { get; private set; }
     public bool PerfOn { get; private set; }
     public IReadOnlyList<HudRect> HitRects { get; private set; } = Array.Empty<HudRect>();
@@ -28,6 +30,7 @@ public sealed class HudUi
     {
         if (Bool(patch, "menuOpen") is { } m) MenuOpen = m;
         if (Bool(patch, "typing") is { } t) Typing = t;
+        if (Bool(patch, "textInput") is { } text) TextInput = text;
         if (Bool(patch, "overlayOpen") is { } o) OverlayOpen = o;
         if (Bool(patch, "perfOn") is { } p) PerfOn = p;
         if (patch["hitRects"] is JsonArray rects)
@@ -46,7 +49,7 @@ public sealed class HudUi
     /// <summary>Back to the HUD's initial state (a new page, or no page).</summary>
     public void Reset()
     {
-        MenuOpen = Typing = OverlayOpen = PerfOn = false;
+        MenuOpen = Typing = TextInput = OverlayOpen = PerfOn = false;
         HitRects = Array.Empty<HudRect>();
     }
 
@@ -81,6 +84,7 @@ public static class HudProtocol
 {
     // v4 (Task 65): clientCache / clearClientCache and correlated speech / speech-done.
     // Task 79: renderScale is an additive graphics field with an auto fallback, on the existing action.
+    // Task 87: additive scene -> HUD text, enabled only by a new page's textInput flag; older pages keep CEF keys.
     public const int Version = 4;
 
     /// <summary><c>gameNames</c> of bridge.ts — actions HUD → scene.</summary>
@@ -195,6 +199,10 @@ public static class HudProtocol
     /// <summary><c>{v:4, kind:'perf', value}</c> — the performance readout (<c>PerfStats</c> of bus.ts) or null.</summary>
     public static string Perf(JsonObject? value)
         => new JsonObject { ["v"] = Version, ["kind"] = "perf", ["value"] = value?.DeepClone() }.ToJsonString();
+
+    /// <summary><c>{v:4, kind:'text', value}</c> — typed text, never a gdCEF virtual key.</summary>
+    public static string Text(string value)
+        => new JsonObject { ["v"] = Version, ["kind"] = "text", ["value"] = value }.ToJsonString();
 
     /// <summary>Task 55 / E7-T10: unchanged v3 minimap wire. Write the already-built relief fragment raw,
     /// avoiding a parse, clone or byte-array serialization on every step. Full states still carry relief,

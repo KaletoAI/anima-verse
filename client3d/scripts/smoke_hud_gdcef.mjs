@@ -14,6 +14,8 @@
  */
 import assert from 'node:assert/strict';
 import { loadHudRealm } from './load_hud_realm.mjs';
+import { smokeHudText } from './smoke_hud_text.mjs';
+smokeHudText('gdcef');
 const scene = loadHudRealm();
 const hud = loadHudRealm();
 

@@ -59,6 +59,7 @@ public partial class HudOverlay : CanvasLayer
     private GdCef? _cef;
     private TextureRect? _rect;
     private readonly MouseRouter _router = new();
+    private readonly HashSet<Key> _textKeys = new();
     private readonly ScenePublisher _state = new();
     private readonly JsonObject _hudOwned = new();
 
@@ -229,6 +230,7 @@ public partial class HudOverlay : CanvasLayer
         _loaded = _hello = false;
         Ui.Reset();
         _router.Reset();
+        _textKeys.Clear();
         _phase = token is null ? Phase.Hud : Phase.Cookie;
         var first = token is null ? HudUrl : CookiePageUrl;
         if (_cef.HasBrowser)
@@ -352,6 +354,7 @@ public partial class HudOverlay : CanvasLayer
         _hello = false;
         Ui.Reset();
         _router.Reset();
+        _textKeys.Clear();
         if (_rect is not null) _rect.Visible = false;
         if (_cef is null || !_cef.HasBrowser) return;
         _phase = Phase.Leaving;
@@ -373,6 +376,7 @@ public partial class HudOverlay : CanvasLayer
         _hello = false;
         Ui.Reset();
         _router.Reset();
+        _textKeys.Clear();
         if (_rect is not null) _rect.Visible = false;
         _phase = Phase.Idle;
         if (_cef is not null && _cef.HasBrowser) _cef.LoadUrl("about:blank");
@@ -609,11 +613,25 @@ public partial class HudOverlay : CanvasLayer
             {
                 // F11 is the window's (Main toggles full screen), never the page's — not even while it types.
                 if (k.Keycode == Key.F11) break;
+                // Releases can lose Unicode/modifiers or arrive after the input blurred.
+                var textKey = k.PhysicalKeycode != Key.None ? k.PhysicalKeycode : k.Keycode;
+                if (!k.Pressed && _textKeys.Remove(textKey)) { Handled(); break; }
                 if (k.Pressed && RouteSceneKey(k)) { Handled(); break; }
                 if (HudRouting.KeysToHud(Ui))
                 {
-                    int code = k.Unicode != 0 ? (int)k.Unicode : (int)k.Keycode;
-                    _cef.Key(code, k.Pressed, k.ShiftPressed, k.AltPressed, k.CtrlPressed || k.MetaPressed);
+                    if (Ui.Typing && Ui.TextInput && HudText.IsTextKey(k.Unicode, k.CtrlPressed, k.AltPressed, k.MetaPressed))
+                    {
+                        if (k.Pressed)
+                        {
+                            _textKeys.Add(textKey);
+                            Send(HudProtocol.Text(char.ConvertFromUtf32((int)k.Unicode)));
+                        }
+                    }
+                    else
+                    {
+                        int code = k.Unicode != 0 ? (int)k.Unicode : (int)k.Keycode;
+                        _cef.Key(code, k.Pressed, k.ShiftPressed, k.AltPressed, k.CtrlPressed || k.MetaPressed);
+                    }
                     Handled();
                 }
                 break;

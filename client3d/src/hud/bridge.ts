@@ -26,9 +26,12 @@ import { onPropActionChanged, notifyPropActionChanged, setPropActionPreparation,
  *  - v4 (Task 65): clientCache, clearClientCache and speech/speech-done completion. */
 // Task 79 adds an optional graphics argument field; older stored prefs still use auto.
 // No new action or message kind, so this remains v4.
+// Task 87 adds opt-in text: native uses it only after textInput=true in a HUD patch.
+// Older pages omit the flag and keep CEF key input; older hosts ignore the extra field.
 export const HUD_BRIDGE_VERSION = 4;
 type V = typeof HUD_BRIDGE_VERSION;
 export type ToHud =
+  | { v: V; kind: 'text'; value: string }
   | { v: V; kind: 'state'; patch: Partial<HudGameState> }
   | { v: V; kind: 'speech-done'; request_id: string }
   | { v: V; kind: 'minimap'; value: MinimapState | null }
@@ -43,7 +46,7 @@ export type FromHud =
   | { v: V; kind: 'action'; name: keyof HudGameActions; args: unknown[] }
   | { v: V; kind: 'prop-actions-changed'; request_id?: string; result?: PropActionResult; source?: PropActionSource }
   | { v: V; kind: 'prop-action-prepare'; request_id: string; target?: PropActionTarget }
-  | { v: V; kind: 'hud'; patch: Partial<HudUiState> };
+  | { v: V; kind: 'hud'; patch: Partial<HudUiState> & { textInput?: boolean } };
 export interface BridgeTransport {
   send(msg: ToHud | FromHud): void;
   onMessage(fn: (msg: unknown) => void): () => void;
@@ -111,6 +114,36 @@ function receiveState(patch: Partial<HudGameState>, fields: readonly (keyof HudG
 }
 
 let speechSerial = 0;
+/** Keyboard ownership also covers selects and checkboxes; only these fields accept text. */
+function acceptsHudText(target: Element | null): boolean {
+  if (target instanceof HTMLInputElement) {
+    return !target.disabled && !target.readOnly && ['text', 'search', 'email', 'url', 'tel', 'password', 'number'].includes(target.type);
+  }
+  if (target instanceof HTMLTextAreaElement) return !target.disabled && !target.readOnly;
+  return !!(target as HTMLElement | null)?.isContentEditable;
+}
+
+/** gdCEF confuses printable character codes with Windows virtual keys. Native
+ *  sends text separately while typing; normal editing keys still go to CEF. */
+function insertHudText(value: string): void {
+  const target = document.activeElement;
+  const field = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+  if (!target || !acceptsHudText(target)) return;
+  try {
+    if (document.execCommand?.('insertText', false, value)) return;
+  } catch { /* Some embedded browsers expose the command but cannot execute it. */ }
+  if (!field) return;
+  const start = target.selectionStart, end = target.selectionEnd;
+  // React's own value tracker must see a browser edit, not an assignment through its instance setter.
+  const prototype = target instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+  if (!setter) return;
+  const from = start ?? target.value.length, to = end ?? from;
+  setter.call(target, target.value.slice(0, from) + value + target.value.slice(to));
+  if (start !== null && end !== null) target.setSelectionRange(from + value.length, from + value.length);
+  target.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 /** HUD endpoint: local writers publish independently of incoming scene state. */
 export function connectHudSide(t: BridgeTransport): () => void {
   setPropActionHost(true);
@@ -164,7 +197,7 @@ export function connectHudSide(t: BridgeTransport): () => void {
   const publishState = statePublisher(t, bus.HUD_OWNED_FIELDS);
   let previousUi = '';
   const publish = (force = false) => {
-    const patch = bus.getHudUiState();
+    const patch = { ...bus.getHudUiState(), textInput: typeof document !== 'undefined' && acceptsHudText(document.activeElement) };
     const next = JSON.stringify(patch);
     if (force || next !== previousUi) {
       previousUi = next;
@@ -182,6 +215,9 @@ export function connectHudSide(t: BridgeTransport): () => void {
       publishState(true);
     }
     switch (msg.kind) {
+      case 'text':
+        if (typeof msg.value !== 'string') { reject(msg); break; }
+        insertHudText(msg.value); break;
       case 'speech-done':
         if (typeof msg.request_id !== 'string') { reject(msg); break; }
         finishSpeech(msg.request_id); break;
@@ -212,9 +248,16 @@ export function connectHudSide(t: BridgeTransport): () => void {
   });
   const unsubscribe = bus.subscribeHudUiState(() => publish());
   const unsubscribeState = bus.subscribeGameState(() => publishState());
+  // Moving between text fields and other controls may leave typing=true unchanged.
+  const focusDocument = typeof document !== 'undefined' ? document : undefined;
+  const publishFocus = () => publish();
+  focusDocument?.addEventListener?.('focusin', publishFocus);
+  focusDocument?.addEventListener?.('focusout', publishFocus);
   publish(); publishState();
   return () => {
     off(); offPreparation(); offPropActionChange(); offPropSnapshot(); setPropActionHost(false); unsubscribe(); unsubscribeState();
+    focusDocument?.removeEventListener?.('focusin', publishFocus);
+    focusDocument?.removeEventListener?.('focusout', publishFocus);
     for (const id of pendingSpeech.keys()) finishSpeech(id);
     if (bus.gameActions.speak === speak) bus.gameActions.speak = previousSpeak;
     if (bus.gameActions.stopSpeech === stopSpeech) bus.gameActions.stopSpeech = previousStop;

@@ -12,6 +12,34 @@ namespace AnimaNative.Tests;
 public class HudProtocolV4Tests
 {
     [Fact]
+    public void TextCapabilityIsOptionalAndResetWithThePage()
+    {
+        var ui = new HudUi();
+        ui.Apply(new System.Text.Json.Nodes.JsonObject { ["typing"] = true });
+        Assert.False(ui.TextInput);
+        ui.Apply(new System.Text.Json.Nodes.JsonObject { ["textInput"] = true });
+        Assert.True(ui.TextInput);
+        ui.Apply(new System.Text.Json.Nodes.JsonObject { ["textInput"] = "invalid" });
+        Assert.True(ui.TextInput);
+        ui.Reset();
+        Assert.False(ui.TextInput);
+    }
+
+    [Fact]
+    public void TextRoundTripsAsAnAdditiveSceneToHudV4Message()
+    {
+        foreach (string value in new[] { ".", "(", "ö", "\"\\", "🙂" })
+        {
+            var wire = System.Text.Json.Nodes.JsonNode.Parse(HudProtocol.Text(value))!;
+            Assert.Equal(4, wire["v"]!.GetValue<int>());
+            Assert.Equal("text", wire["kind"]!.GetValue<string>());
+            Assert.Equal(value, wire["value"]!.GetValue<string>());
+            // Parse validates HUD -> scene only; text must never be accepted back.
+            Assert.Null(HudProtocol.Parse(wire.ToJsonString(), out _));
+        }
+    }
+
+    [Fact]
     public void SpeechIsCorrelatedAndDirectionChecked()
     {
         Assert.Equal(4, HudProtocol.Version);

@@ -24,13 +24,14 @@ public static class HudCheck
         int rects = CheckRects();
         int routes = CheckRouting();
         int keys = CheckKeys();
+        int text = HudInputProbe.Run();
         int messages = CheckMessages();
         CheckCookieScript();
         int seeds = CheckStorageSeed();
         int cache = CheckClientCache();
         CheckNameLists(source);
         var gdcef = CheckBinding();
-        return $"rect_cases={rects} route_cases={routes} key_cases={keys} message_cases={messages} "
+        return $"rect_cases={rects} route_cases={routes} key_cases={keys} text_cases={text} message_cases={messages} "
                + $"storage_seed_cases={seeds} cache_cases={cache} name_lists=4 gdcef={gdcef}";
     }
 
