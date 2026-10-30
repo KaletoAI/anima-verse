@@ -14,6 +14,7 @@ make sense played at ONE anchor, in lockstep. This module owns that state:
         "anchor": {"x": 12.3, "z": -4.5, "yaw": 1.57,    # world metres / rad
                    "place_id": "sofa/s"},                # the PLACE it sits on, or None
         "started_at_game": "Y0002-D109T14:23:45",        # canonical GAME stamp
+        "started_at_sys": "2026-10-30T20:00:00.000000+00:00",  # SYSTEM stamp, ordering only
         "clip_duration_s": 2.533,     # the clip's own length, from the sidecar
         "loop": True,                 # repeat the clip, or hold its last frame
     }
@@ -74,6 +75,39 @@ def _narrate(anchor: str, key: str, **fmt) -> None:
             source="interaction", anchor=anchor)
     except Exception as e:
         logger.debug("interaction narration failed: %s", e)
+
+
+class StaleDecision(ValueError):
+    """A character turn that began BEFORE the pair started tried to end it.
+
+    The turn's prompt showed the character alone; its pose or journey answers
+    a world that no longer exists, and ending the pair for it is what cut
+    pairs off half a minute in. A turn that began after the start saw the
+    pair and may end it.
+    """
+
+
+def stale_against_pair(character_name: str,
+                       profile: Optional[Dict[str, Any]] = None) -> str:
+    """The refusal sentence when the running character turn predates the
+    pair ``character_name`` is in, else "".
+
+    Only a character turn has a decision start
+    (``turn_trace.decision_started_at``); a player request or a ticker never
+    is stale. An interaction without a system start stamp is not protected.
+    """
+    from app.core.turn_trace import decision_started_at
+    decided = decision_started_at()
+    if not decided:
+        return ""
+    inter = get_interaction(character_name, profile)
+    started = str((inter or {}).get("started_at_sys") or "")
+    if not started or started <= decided:
+        return ""
+    from app.core.pose_catalog import pose_label
+    return (f"{character_name} began {pose_label(inter['pose_key'], 'en')} with "
+            f"{inter['partner']} after this decision was made; that keeps going. "
+            f"Do not change {character_name}'s activity or leave in this turn.")
 
 
 class TooFarApart(ValueError):
@@ -461,6 +495,8 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
                 raise ValueError("pair_access_lost")
     inter_id = uuid.uuid4().hex[:12]
     started = game_time().canonical()
+    from app.core.timeutils import utc_now_iso
+    started_sys = utc_now_iso("microseconds")
     roles = (meta.get("geometry") or {}).get("roles") or {}
     halves = ((who_a, "a", who_b), (who_b, "b", who_a))
     # BOTH interaction blobs in ONE locked span, in sorted-name order
@@ -475,7 +511,7 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
             prof["interaction"] = {
                 "id": inter_id, "kind": kind, "role": role, "partner": other,
                 "pose_key": pose_key, "anchor": anchor,
-                "started_at_game": started,
+                "started_at_game": started, "started_at_sys": started_sys,
                 "clip_duration_s": round(clip_duration, 3), "loop": loop,
             }
             if invite_id:

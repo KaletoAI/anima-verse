@@ -142,6 +142,17 @@ Hand-derived expectations:
       is silent, and the end line exists before the exact ended hook. No
       assertion pins localized prose.
 
+  [14] A turn that began BEFORE the pair cannot end it. ``begin_trace``
+      stamps the turn's system start T0; the pair started after it carries
+      ``started_at_sys`` T1 > T0. Inside that turn ``set_pose_intent`` with
+      another key raises ``StaleDecision`` and ``start_journey_to_point``
+      answers (None, <the same sentence>) — the pair and both poses stay
+      exactly as they were. A detail-only refresh ("keep" with an empty key)
+      writes the running pair pose itself, so it is no change of activity and
+      passes. A turn begun after T1 (T2 > T1) saw the pair: its new pose
+      ends it for both. Without a turn (a player request, a ticker: no trace)
+      nothing is stale and the pose ends the pair as before.
+
   [13] Reader-language payloads: embracing has no English label, hence
       Ann (en) sees embracing and Bob (de) sees Umarmen in incoming, pending,
       approaching, running and Others card rows. A refused yes yields failed plus reason
@@ -1035,6 +1046,47 @@ with patch("app.models.account.get_active_character", return_value="Bob"):
         _cards = play_routes.play_others(user={"role": "admin"})["characters"]
 check("[13] Others card uses viewer language", _cards[0]["interaction"].get("pose_label") == "Umarmen")
 ie.end_interaction("Ann", reason="smoke")
+
+# ── [14] a decision older than the pair ─────────────────────────────────
+print("\n[14] a turn that began before the pair cannot end it")
+from app.core.turn_trace import begin_trace, set_trace  # noqa: E402
+from app.core.travel_engine import start_journey_to_point  # noqa: E402
+from app.models.character import set_pose_key_detail  # noqa: E402
+set_game_time(START)
+set_character_pos("Ann", 10.0, 20.0)
+set_character_pos("Bob", 10.0, 21.0)
+_turn = begin_trace("thought", "Ann")                 # T0
+_pair = ie.start_interaction("Ann", "Bob", "embracing")   # T1
+check("[14] the pair carries its system start after the turn's",
+      _pair["started_at_sys"] > _turn["started_at"], f"{_turn['started_at']} / {_pair['started_at_sys']}")
+_stale = ""
+try:
+    set_pose_intent("Ann", "standing")
+except ie.StaleDecision as e:
+    _stale = str(e)
+check("[14] the old turn's new pose is refused", "after this decision" in _stale, _stale)
+check("[14] … the pair and both poses stand", ie.get_interaction("Ann") is not None
+      and ie.get_interaction("Bob") is not None
+      and get_character_pose_key("Ann") == "embracing" and get_character_pose_key("Bob") == "embracing")
+_journey, _reason = start_journey_to_point("Ann", 10.0, 30.0)
+check("[14] the old turn's walk is refused with the same sentence",
+      _journey is None and _reason == _stale, str(_reason))
+check("[14] … nobody walks, the pair stands", get_journey("Ann") is None
+      and ie.get_interaction("Ann") is not None)
+check("[14] a detail refresh keeps the pair pose and passes",
+      set_pose_key_detail("Ann", "", "smiles", unknown="keep") == "embracing"
+      and ie.get_interaction("Ann") is not None)
+begin_trace("thought", "Ann")                         # T2 > T1: saw the pair
+set_pose_intent("Ann", "standing")
+check("[14] a turn begun after the start ends the pair for both",
+      ie.get_interaction("Ann") is None and ie.get_interaction("Bob") is None)
+set_trace(None)
+ie.start_interaction("Ann", "Bob", "embracing")
+set_pose_intent("Ann", "standing")
+check("[14] without a turn nothing is stale: the pose ends the pair",
+      ie.get_interaction("Ann") is None and ie.get_interaction("Bob") is None)
+set_pose_intent("Ann", "")
+set_pose_intent("Bob", "")
 
 print()
 if FAILURES:

@@ -2221,6 +2221,12 @@ def set_pose_intent(character_name: str, pose: str, prefer: str = "",
                  and (profile.get("pose_flavor") or "") == flavor)
     if unchanged and not prefer:
         return
+    running = profile.get("interaction")
+    if isinstance(running, dict) and running.get("pose_key") != key:
+        from app.core.interaction_engine import StaleDecision, stale_against_pair
+        stale = stale_against_pair(character_name, profile)
+        if stale:
+            raise StaleDecision(stale)
     _interrupt_prop_action(character_name, "pose")
     old_display = profile.get("pose_flavor") or profile.get("pose_key") or ""
     old_place = profile.get("place") if isinstance(profile.get("place"), dict) else None
@@ -2646,7 +2652,9 @@ def force_set_status(character_name: str,
     if activity is not None:
         # A two-person pose has no meaning for a single character; an
         # override that names one keeps the previous pose rather than
-        # failing the whole write.
+        # failing the whole write. So does a turn older than the pair the
+        # character has entered since (``StaleDecision``).
+        from app.core.interaction_engine import StaleDecision
         from app.core.pose_catalog import PairPoseWithoutPartner
         try:
             if pose:
@@ -2658,6 +2666,9 @@ def force_set_status(character_name: str,
         except PairPoseWithoutPartner as e:
             logger.info("force_set_status(%s): '%s' is a two-person pose (%s) "
                         "— activity not written", character_name, activity, e)
+        except StaleDecision as e:
+            logger.info("force_set_status(%s): activity '%s' not written — %s",
+                        character_name, activity, e)
     if feeling is not None:
         save_character_current_feeling(character_name, feeling)
         written["feeling"] = feeling

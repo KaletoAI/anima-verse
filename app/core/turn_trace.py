@@ -14,14 +14,31 @@ _trace: contextvars.ContextVar[Optional[Dict[str, str]]] = \
 
 def begin_trace(kind: str, who: str = "") -> Dict[str, str]:
     """Start a new trace at an action root. Overwrites any inherited
-    trace (a worker coroutine inherits the dispatcher's context)."""
-    t = {"id": uuid.uuid4().hex[:10], "kind": kind, "who": who}
+    trace (a worker coroutine inherits the dispatcher's context).
+
+    ``started_at`` is the SYSTEM time the action began (microsecond ISO,
+    sortable): everything decided inside it was decided on what the world
+    looked like then — see ``decision_started_at``."""
+    from app.core.timeutils import utc_now_iso
+    t = {"id": uuid.uuid4().hex[:10], "kind": kind, "who": who,
+         "started_at": utc_now_iso("microseconds")}
     _trace.set(t)
     return t
 
 
 def current_trace() -> Optional[Dict[str, str]]:
     return _trace.get()
+
+
+def decision_started_at() -> str:
+    """When the running character turn began, or "" outside one.
+
+    A turn's tool calls act on a prompt built at that moment; a state that
+    began later (a pair started while the model was thinking) is one the
+    decision never saw. Outside a turn (a player request, a ticker) there is
+    no stale decision to speak of."""
+    t = _trace.get()
+    return (t or {}).get("started_at", "")
 
 
 def set_trace(t: Optional[Dict[str, str]]) -> None:

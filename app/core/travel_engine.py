@@ -866,10 +866,14 @@ def start_journey(character_name: str, target_id: str,
         # differently) per poll.
         journey["exit_clip"] = exit_clip
         journey["exit_s"] = round(exit_s, 3)
-    # Walking away ends a running pair interaction for BOTH participants.
+    # Walking away ends a running pair interaction for BOTH participants —
+    # unless the turn deciding the walk began before the pair did.
+    from app.core.interaction_engine import end_interaction, stale_against_pair
+    stale = stale_against_pair(character_name)
+    if stale:
+        return None, stale
     from app.models.character import _interrupt_prop_action
     _interrupt_prop_action(character_name, "journey")
-    from app.core.interaction_engine import end_interaction
     end_interaction(character_name, reason="journey")
     # Read AND write under the per-character profile lock (DATA-3): the save
     # writes the whole profile_json blob, so a stale read would revert what a
@@ -970,10 +974,14 @@ def start_journey_to_point(character_name: str, x: float,
     if exit_clip:
         journey["exit_clip"] = exit_clip
         journey["exit_s"] = round(exit_s, 3)
-    # Walking away ends a running pair interaction for BOTH participants.
+    # Walking away ends a running pair interaction for BOTH participants —
+    # unless the turn deciding the walk began before the pair did.
+    from app.core.interaction_engine import end_interaction, stale_against_pair
+    stale = stale_against_pair(character_name)
+    if stale:
+        return None, stale
     from app.models.character import _interrupt_prop_action
     _interrupt_prop_action(character_name, "journey")
-    from app.core.interaction_engine import end_interaction
     end_interaction(character_name, reason="journey")
     # Same lock as ``start_journey`` — read and write of the profile blob
     # under ``character_profile``, with ``end_interaction`` kept outside it.
