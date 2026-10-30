@@ -28,8 +28,10 @@ public class GraphicsPrefsVectorTests
 
     private static readonly Dictionary<string, Func<JsonArray, JsonNode?>> Dispatch = new()
     {
+        ["autoRenderScale"] = a => JsonValue.Create(GraphicsPrefs.AutoRenderScale(a[0]!.GetValue<double>(), a[1]!.GetValue<double>())),
+        ["effectiveRenderScale"] = a => JsonValue.Create(GraphicsPrefs.EffectiveRenderScale(GraphicsPrefs.RenderScaleOf(a[0]), a[1]!.GetValue<double>(), a[2]!.GetValue<double>())),
         ["loadGraphicsPrefs"] = a => PrefsJson(GraphicsPrefs.Load(a[0]?.GetValue<string>())),
-        ["checkGraphicsPrefs"] = a => CheckJson(GraphicsPrefs.Check(a[0], a[1])),
+        ["checkGraphicsPrefs"] = a => CheckJson(GraphicsPrefs.Check(a[0], a[1], a.Count > 2 ? a[2] : null)),
         ["saveGraphicsPrefs"] = a => JsonValue.Create(GraphicsPrefs.Save(Prefs(a[0]))),
         ["msaaSamplesOf"] = a => JsonValue.Create(GraphicsPrefs.MsaaSamplesOf(a[0]!.GetValue<string>())),
         ["browserAntialias"] = a => JsonValue.Create(GraphicsPrefs.BrowserAntialias(Prefs(a[0]))),
@@ -47,10 +49,10 @@ public class GraphicsPrefsVectorTests
     private static GraphicsPrefs Prefs(JsonNode? node)
     {
         var o = node!.AsObject();
-        return new GraphicsPrefs(o["antiAliasing"]!.GetValue<string>(), o["shadows"]!.GetValue<bool>());
+        return new GraphicsPrefs(o["antiAliasing"]!.GetValue<string>(), o["shadows"]!.GetValue<bool>(), GraphicsPrefs.RenderScaleOf(o["renderScale"]));
     }
 
-    private static JsonObject PrefsJson(GraphicsPrefs p) => new() { ["antiAliasing"] = p.AntiAliasing, ["shadows"] = p.Shadows };
+    private static JsonObject PrefsJson(GraphicsPrefs p) => new() { ["antiAliasing"] = p.AntiAliasing, ["shadows"] = p.Shadows, ["renderScale"] = GraphicsPrefs.RenderScaleJson(p.RenderScale) };
 
     private static JsonObject CheckJson(GraphicsPrefsCheck c) => c.Prefs is { } p
         ? new JsonObject { ["ok"] = true, ["prefs"] = PrefsJson(p) }
@@ -71,8 +73,9 @@ public class GraphicsPrefsVectorTests
     {
         foreach (var aa in GraphicsPrefs.Levels)
             foreach (var on in new[] { true, false })
+            foreach (var scale in GraphicsPrefs.RenderScales)
             {
-                var p = new GraphicsPrefs(aa, on);
+                var p = new GraphicsPrefs(aa, on, scale);
                 Assert.Equal(p, GraphicsPrefs.Load(GraphicsPrefs.Save(p)));
             }
     }

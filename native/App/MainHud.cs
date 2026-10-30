@@ -138,7 +138,7 @@ public partial class Main : Node3D
             Log("applyGraphicsPrefs: no prefs object — ignored");
             return;
         }
-        var check = GraphicsPrefs.Check(p["antiAliasing"], p["shadows"]);
+        var check = GraphicsPrefs.Check(p["antiAliasing"], p["shadows"], p["renderScale"]);
         if (check.Prefs is not { } prefs)
         {
             Log($"applyGraphicsPrefs refused ({check.Error}): {p.ToJsonString()}");
@@ -152,6 +152,8 @@ public partial class Main : Node3D
         ApplyGraphics(prefs, "menu");
     }
 
+    private Ui.RenderResolution? _renderResolution;
+
     /// <summary>
     /// The Graphics tab onto the frame: the viewport's 3D MSAA (<c>Viewport.msaa_3d</c>, settable at runtime) unless
     /// <c>--msaa</c> was given (it wins for the whole run), and the sun's shadow with its caster gate
@@ -159,6 +161,7 @@ public partial class Main : Node3D
     /// </summary>
     private void ApplyGraphics(GraphicsPrefs prefs, string from)
     {
+        (_renderResolution ??= new Ui.RenderResolution(GetViewport(), Log)).Apply(prefs.RenderScale);
         var msaa = _options!.Msaa ?? CliOptions.MsaaOfSamples(GraphicsPrefs.MsaaSamplesOf(prefs.AntiAliasing));
         if (GetViewport().Msaa3D != msaa) GetViewport().Msaa3D = msaa;
         if (_stage is not null) _stage.Shadows = prefs.Shadows;

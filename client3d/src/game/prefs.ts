@@ -306,14 +306,34 @@ export function scatterLodCfgOf(p: ScatterPrefs): {
  */
 export type AntiAliasing = 'off' | '2x' | '4x';
 
+export type RenderScale = 'auto' | 1 | 0.85 | 0.75 | 0.66 | 0.5;
+export const RENDER_SCALES: readonly RenderScale[] = ['auto', 1, 0.85, 0.75, 0.66, 0.5];
+export const RENDER_PIXEL_BUDGET = 1920 * 1080;
+
+/** Unknown or older values use automatic resolution without resetting other fields. */
+export function renderScaleOf(raw: unknown): RenderScale {
+  return RENDER_SCALES.includes(raw as RenderScale) ? raw as RenderScale : 'auto';
+}
+
+/** Physical output pixels, capped to the budget in downward 5% steps. */
+export function autoRenderScale(widthPx: number, heightPx: number): number {
+  const pixels = widthPx * heightPx;
+  if (pixels <= RENDER_PIXEL_BUDGET) return 1;
+  return Math.max(0.5, Math.min(1, Math.floor(Math.sqrt(RENDER_PIXEL_BUDGET / pixels) * 20) / 20));
+}
+
+export function effectiveRenderScale(pref: RenderScale, widthPx: number, heightPx: number): number {
+  return pref === 'auto' ? autoRenderScale(widthPx, heightPx) : pref;
+}
+
 export interface GraphicsPrefs {
   antiAliasing: AntiAliasing;
   /** the sun casts shadows at all */
   shadows: boolean;
+  renderScale: RenderScale;
 }
 
-/** `localStorage` key. Versioned like the other two; a shape change gets a new
- *  key instead of a migration reader. */
+/** Stable storage key: additive fields fall back individually for older prefs. */
 export const GRAPHICS_PREFS_KEY = 'av3d.view.graphics.v1';
 
 /** The levels in menu order. */
@@ -326,6 +346,7 @@ export const ANTI_ALIASING_LEVELS: readonly AntiAliasing[] = ['off', '2x', '4x']
 export const DEFAULT_GRAPHICS_PREFS: GraphicsPrefs = {
   antiAliasing: '2x',
   shadows: true,
+  renderScale: 'auto',
 };
 
 function antiAliasingOf(raw: unknown): AntiAliasing | null {
@@ -333,22 +354,23 @@ function antiAliasingOf(raw: unknown): AntiAliasing | null {
 }
 
 /**
- * Two values from outside (a menu, a bridge message) → the finished prefs, or
+ * Values from outside (a menu, a bridge message) → the finished prefs, or
  * WHICH field was refused. The level must be one of the three strings exactly
  * — `'2X'`, `2` or `'on'` are not a level — and the switch a real boolean, the
  * same strictness as `flag` above. The scene side runs every incoming
  * `applyGraphicsPrefs` through this: the bridge is a wire, and a malformed
- * message must leave the picture alone rather than half-apply.
+ * message must leave the picture alone rather than half-apply. The additive
+ * renderScale field defaults to auto when absent or invalid.
  */
 export type GraphicsPrefsCheck =
   | { ok: true; prefs: GraphicsPrefs }
   | { ok: false; error: 'antiAliasing' | 'shadows' };
 
-export function checkGraphicsPrefs(antiAliasing: unknown, shadows: unknown): GraphicsPrefsCheck {
+export function checkGraphicsPrefs(antiAliasing: unknown, shadows: unknown, renderScale?: unknown): GraphicsPrefsCheck {
   const aa = antiAliasingOf(antiAliasing);
   if (aa === null) return { ok: false, error: 'antiAliasing' };
   if (typeof shadows !== 'boolean') return { ok: false, error: 'shadows' };
-  return { ok: true, prefs: { antiAliasing: aa, shadows } };
+  return { ok: true, prefs: { antiAliasing: aa, shadows, renderScale: renderScaleOf(renderScale) } };
 }
 
 /**
@@ -373,13 +395,14 @@ export function loadGraphicsPrefs(raw: string | null): GraphicsPrefs {
   return {
     antiAliasing: antiAliasingOf(p.antiAliasing) ?? DEFAULT_GRAPHICS_PREFS.antiAliasing,
     shadows: flag(p.shadows, DEFAULT_GRAPHICS_PREFS.shadows),
+    renderScale: renderScaleOf(p.renderScale),
   };
 }
 
 /** `GraphicsPrefs` → the string to store; `loadGraphicsPrefs` of it returns
  *  the same prefs. Fixed key order, so both clients write the same bytes. */
 export function saveGraphicsPrefs(p: GraphicsPrefs): string {
-  return JSON.stringify({ antiAliasing: p.antiAliasing, shadows: p.shadows });
+  return JSON.stringify({ antiAliasing: p.antiAliasing, shadows: p.shadows, renderScale: renderScaleOf(p.renderScale) });
 }
 
 /** The MSAA sample count a level asks for — what the native client hands to

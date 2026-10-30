@@ -8,6 +8,10 @@
     }
   },
   "translations": {
+    "Reset footprint from size": "Grundfläche aus Größe zurücksetzen",
+    "Render resolution": "Render-Auflösung",
+    "Auto: {percent} % · {width} × {height}": "Auto: {percent} % · {width} × {height}",
+    "{percent} % · {width} × {height}": "{percent} % · {width} × {height}",
     "Local cache": "Lokaler Cache",
     "{size} of {limit} used · {entries} entries": "{size} von {limit} belegt · {entries} Einträge",
     "Clear cache": "Cache leeren",

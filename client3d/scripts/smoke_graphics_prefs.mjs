@@ -89,6 +89,10 @@
  *   key      'av3d.view.graphics.v1'
  *   levels   ['off', '2x', '4x'] — the menu order of the native choice
  *   defaults { antiAliasing: '2x', shadows: true }
+ *   renderScale defaults to 'auto'; its JSON fixed values are numbers.
+ *   [9] Missing/invalid scale -> auto; [10] auto uses a 1920*1080 budget,
+ *   floor(sqrt(budget/pixels)*20)/20, clamped to [.5,1]. Hand derivations
+ *   are in the vector file's comment, consumed by both clients.
  *   `graphicsPrefsConstants()` is a smoke adapter returning these three as
  *   `{ key, levels, defaults }` — the C# side mirrors it.
  */
@@ -119,6 +123,8 @@ async function loadPrefsModule() {
 
 const P = await loadPrefsModule();
 const vectors = runVectors(loadVectors('graphics_prefs'), {
+  autoRenderScale: (...a) => P.autoRenderScale(...a),
+  effectiveRenderScale: (...a) => P.effectiveRenderScale(...a),
   loadGraphicsPrefs: P.loadGraphicsPrefs,
   checkGraphicsPrefs: P.checkGraphicsPrefs,
   saveGraphicsPrefs: P.saveGraphicsPrefs,
@@ -144,15 +150,15 @@ const fresh = P.loadGraphicsPrefs(null);
 fresh.shadows = false;
 check('[1] the defaults come back as a copy', P.DEFAULT_GRAPHICS_PREFS.shadows === true
   && P.loadGraphicsPrefs(null).shadows === true);
-// The round trip holds for every one of the six valid prefs.
+// The round trip holds for all 36 combinations, including automatic and every fixed scale.
 let roundTrips = 0;
 for (const aa of ['off', '2x', '4x']) {
-  for (const shadows of [true, false]) {
-    const back = P.loadGraphicsPrefs(P.saveGraphicsPrefs({ antiAliasing: aa, shadows }));
-    if (back.antiAliasing === aa && back.shadows === shadows) roundTrips += 1;
+  for (const shadows of [true, false]) for (const renderScale of ['auto', 1, 0.85, 0.75, 0.66, 0.5]) {
+    const back = P.loadGraphicsPrefs(P.saveGraphicsPrefs({ antiAliasing: aa, shadows, renderScale }));
+    if (back.antiAliasing === aa && back.shadows === shadows && back.renderScale === renderScale) roundTrips += 1;
   }
 }
-check('[4] save → load returns all six valid prefs unchanged', roundTrips === 6);
+check('[4] save → load returns all 36 valid prefs unchanged', roundTrips === 36);
 // The browser pick never lands on a level the browser would show differently:
 // Off stays off, On stays on.
 let picks = 0;

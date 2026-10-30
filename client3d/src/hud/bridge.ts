@@ -23,6 +23,8 @@ import { onPropActionChanged, notifyPropActionChanged, setPropActionPreparation 
  *    the menu's Graphics tab. No other message changed shape.
  *  - v3: exact semantic prop-action commands and mutation invalidation.
  *  - v4 (Task 65): clientCache, clearClientCache and speech/speech-done completion. */
+// Task 79 adds an optional graphics argument field; older stored prefs still use auto.
+// No new action or message kind, so this remains v4.
 export const HUD_BRIDGE_VERSION = 4;
 type V = typeof HUD_BRIDGE_VERSION;
 export type ToHud =

@@ -74,9 +74,9 @@ assert.deepEqual(last, { v: 4, kind: 'state', patch: { partyLeader: 'Ari "the bo
 // This is the actual JSON string wire the native HudProtocol accepts.
 const graphics = [];
 scene.gameActions.applyGraphicsPrefs = (...args) => graphics.push(args);
-hud.gameActions.applyGraphicsPrefs({ antiAliasing: 'off', shadows: true });
-assert.equal(toGodot.at(-1), '{"v":4,"kind":"action","name":"applyGraphicsPrefs","args":[{"antiAliasing":"off","shadows":true}]}');
-assert.deepEqual(graphics, [[{ antiAliasing: 'off', shadows: true }]]);
+hud.gameActions.applyGraphicsPrefs({ antiAliasing: 'off', shadows: true, renderScale: 'auto' });
+assert.equal(toGodot.at(-1), '{"v":4,"kind":"action","name":"applyGraphicsPrefs","args":[{"antiAliasing":"off","shadows":true,"renderScale":"auto"}]}');
+assert.deepEqual(graphics, [[{ antiAliasing: 'off', shadows: true, renderScale: 'auto' }]]);
 const semantic = [];
 scene.gameActions.pickPropAction = (...args) => semantic.push(args);
 const target = { location_id: 'home', room_id: 'room-a', placement_id: 'bed-1', variant_uid: 'ecfa003d-309a-4ce2-8c9b-29944ddae093' };

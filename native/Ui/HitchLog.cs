@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using Godot;
 
 namespace AnimaNative.Ui;
 
@@ -19,15 +20,18 @@ public static class HitchLog
     private static readonly List<(string What, double Ms)> Marks = new();
     private static int _mainThread = -1, _lines;
     private static int _gc0, _gc1, _gc2;
+    private static Viewport? _viewport;
 
     /// <summary>Frames count only once the world is up: the login screen and the boot run throttled or busy on
     /// purpose (the first field run spent all <see cref="MaxLines"/> lines on the ~7 fps login screen).</summary>
     public static bool Armed { get; set; }
 
     /// <summary>Called once from the main thread before the first frame.</summary>
-    public static void Init()
+    public static void Init(Viewport viewport)
     {
-        _mainThread = Environment.CurrentManagedThreadId;
+        _viewport = viewport;
+        RenderingServer.ViewportSetMeasureRenderTime(viewport.GetViewportRid(), true);
+        _mainThread = System.Environment.CurrentManagedThreadId;
         (_gc0, _gc1, _gc2) = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
     }
 
@@ -41,7 +45,7 @@ public static class HitchLog
         public Scope(string what) { _what = what; _start = Stopwatch.GetTimestamp(); }
         public void Dispose()
         {
-            if (Environment.CurrentManagedThreadId != _mainThread) return;
+            if (System.Environment.CurrentManagedThreadId != _mainThread) return;
             double ms = Stopwatch.GetElapsedTime(_start).TotalMilliseconds;
             if (ms >= MarkMinMs) Marks.Add((_what, ms));
         }
@@ -58,7 +62,9 @@ public static class HitchLog
             var top = Marks.GroupBy(m => m.What).Select(g => (What: g.Key, Ms: g.Sum(m => m.Ms), N: g.Count()))
                 .OrderByDescending(m => m.Ms).Take(6)
                 .Select(m => m.N > 1 ? $"{m.What} {m.Ms:0.#} ms ×{m.N}" : $"{m.What} {m.Ms:0.#} ms");
-            log($"hitch {frameMs:0.#} ms: marked {marked:0.#} ms [{string.Join("; ", top)}] gc {g0 - _gc0}/{g1 - _gc1}/{g2 - _gc2}");
+            double gpu = _viewport is not null ? RenderingServer.ViewportGetMeasuredRenderTimeGpu(_viewport.GetViewportRid()) : 0;
+            float scale = _viewport?.Scaling3DScale ?? 1;
+            log($"hitch {frameMs:0.#} ms: marked {marked:0.#} ms [{string.Join("; ", top)}] gc {g0 - _gc0}/{g1 - _gc1}/{g2 - _gc2} gpu {gpu:0.#} ms, render scale {scale:0.00}");
         }
         Marks.Clear();
         (_gc0, _gc1, _gc2) = (g0, g1, g2);

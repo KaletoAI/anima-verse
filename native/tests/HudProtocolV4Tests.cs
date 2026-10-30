@@ -27,6 +27,20 @@ public class HudProtocolV4Tests
     }
 
     [Fact]
+    public void GraphicsRenderScaleSurvivesTheV4Wire()
+    {
+        foreach (var scale in AnimaNative.Overview.GraphicsPrefs.RenderScales)
+        {
+            var prefs = new AnimaNative.Overview.GraphicsPrefs("2x", false, scale);
+            var json = "{\"v\":4,\"kind\":\"action\",\"name\":\"applyGraphicsPrefs\",\"args\":["
+                + AnimaNative.Overview.GraphicsPrefs.Save(prefs) + "]}";
+            var wire = HudProtocol.Parse(json, out _)!;
+            var p = wire.Args![0]!;
+            Assert.Equal(prefs, AnimaNative.Overview.GraphicsPrefs.Check(p["antiAliasing"], p["shadows"], p["renderScale"]).Prefs);
+        }
+    }
+
+    [Fact]
     public void AV2MessageIsDropped()
         => Assert.Null(HudProtocol.Parse("""{"v":2,"kind":"hud","patch":{}}""", out _));
 

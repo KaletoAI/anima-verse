@@ -43,6 +43,7 @@ import { gameActions, getGameState, subscribeGameState } from './bus';
 import { isNativeHud } from './bridge';
 import { listPlayableCharacters, switchCharacter } from '../api';
 import { browserAntialias, checkScatterPrefs, DEFAULT_SCATTER_PREFS,
+  effectiveRenderScale, renderScaleOf, RENDER_SCALES,
   pickBrowserAntiAliasing, SCATTER_PREF_MAX_M, SCATTER_PREF_MIN_M } from '../game/prefs';
 import { CHAT_ALPHA_MIN } from './chatPanel';
 import type { AntiAliasing, GraphicsPrefs, Prefs, ScatterPrefs,
@@ -180,6 +181,21 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
    *  runtime; the browser's WebGL knows only on/off, fixed at context
    *  creation. So the same setting is offered as two different choices. */
   const native = isNativeHud();
+  // The CEF page covers the window; browser output keeps the engine's DPR cap.
+  const [outputSize, setOutputSize] = useState(() => [window.innerWidth, window.innerHeight, window.devicePixelRatio]);
+  useEffect(() => {
+    const resize = () => setOutputSize([window.innerWidth, window.innerHeight, window.devicePixelRatio]);
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, []);
+  const dpr = native ? outputSize[2] : Math.min(outputSize[2], 2);
+  const scale = effectiveRenderScale(graphicsPrefs.renderScale, outputSize[0] * dpr, outputSize[1] * dpr);
+  const resolutionHint = (graphicsPrefs.renderScale === 'auto'
+    ? t('Auto: {percent} % · {width} × {height}')
+    : t('{percent} % · {width} × {height}'))
+    .replace('{percent}', String(Math.round(scale * 100)))
+    .replace('{width}', String(Math.round(outputSize[0] * dpr * scale)))
+    .replace('{height}', String(Math.round(outputSize[1] * dpr * scale)));
 
   /**
    * THE ONE PIECE OF STATE IN THIS FILE, and it is not a setting: the three
@@ -362,6 +378,17 @@ export function GameMenu({ prefs, onChange, perfOn, onPerfChange,
             {t('Smooths the jagged edges of buildings and figures. Higher levels cost frame rate.')}
             {!native && <> {t('Takes effect after reloading the page.')}</>}
           </p>
+          <label className="hud-menu-row">
+            <span className="hud-menu-label">{t('Render resolution')}</span>
+            <select aria-label={t('Render resolution')} value={String(graphicsPrefs.renderScale)}
+              onChange={(e) => onGraphicsChange({ ...graphicsPrefs,
+                renderScale: renderScaleOf(e.target.value === 'auto' ? 'auto' : Number(e.target.value)) })}>
+              {RENDER_SCALES.map((value) => (
+                <option key={value} value={String(value)}>{value === 'auto' ? t('Auto') : `${Math.round(value * 100)} %`}</option>
+              ))}
+            </select>
+          </label>
+          <p className="hud-menu-hint" aria-live="polite">{resolutionHint}</p>
           <Choice label={t('Shadows')} value={graphicsPrefs.shadows} options={onOff}
             onPick={(v) => onGraphicsChange({ ...graphicsPrefs, shadows: v })} />
           <p className="hud-menu-hint">

@@ -1,3 +1,4 @@
+import { effectiveRenderScale, type RenderScale } from '../game/prefs';
 import { gameHourLights } from './skyLight';
 import { isTypingTarget } from '../hud/dom';
 import { createPropLightPool } from './lightPool';
@@ -208,6 +209,14 @@ export class Engine {
   private shadowsWanted = true;
   private shadowsDebugOff = false;
 
+  private renderScalePref: RenderScale = 'auto';
+  private lastRenderScale?: string;
+
+  setRenderScale(pref: RenderScale) {
+    this.renderScalePref = pref;
+    this.resize(this.container);
+  }
+
   /**
    * `opts.antialias` is the browser's anti-aliasing setting
    * (`browserAntialias(loadGraphicsPrefs(...))`, read by `main.ts`): WebGL
@@ -215,7 +224,8 @@ export class Engine {
    * there is no setter. `opts.shadows` is only the STARTING value of the
    * runtime switch `setShadows`.
    */
-  constructor(container: HTMLElement, opts: { antialias?: boolean; shadows?: boolean } = {}) {
+  constructor(private container: HTMLElement, opts: { antialias?: boolean; shadows?: boolean; renderScale?: RenderScale } = {}) {
+    this.renderScalePref = opts.renderScale ?? 'auto';
     // near 0.2 (was 0.5) so MIN_DIST = 0.8 stays clear of the near plane: at
     // the closest zoom the figure's front faces sit ~0.7 m from the lens, and
     // the free pitch (right mouse) can bring geometry closer still. Trade-off:
@@ -394,7 +404,14 @@ export class Engine {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    const scale = effectiveRenderScale(this.renderScalePref, w * dpr, h * dpr);
+    this.renderer.setPixelRatio(dpr * scale);
+    const line = `render scale: ${this.renderScalePref} → ${scale.toFixed(2)} (${Math.round(w * dpr)}×${Math.round(h * dpr)} → ${Math.round(w * dpr * scale)}×${Math.round(h * dpr * scale)})`;
+    if (line !== this.lastRenderScale) {
+      this.lastRenderScale = line;
+      console.info('[graphics] ' + line);
+    }
     this.labelRenderer.setSize(w, h);
   }
 

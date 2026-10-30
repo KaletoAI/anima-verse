@@ -129,7 +129,7 @@ public partial class Main : Node3D
     public override void _Ready()
     {
         GD.Print($"Anima Native {BuildInfo.Version}");
-        Ui.HitchLog.Init();
+        Ui.HitchLog.Init(GetViewport());
         _ = RunAsync();
     }
 
@@ -270,6 +270,7 @@ public partial class Main : Node3D
 
     public override void _ExitTree()
     {
+        _renderResolution?.Dispose();
         StopSoundtrack();
         DetachEmbody();
         StopSync();

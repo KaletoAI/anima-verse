@@ -191,10 +191,10 @@ public static class HudCheck
 
         // v2 (Task 26d): the Graphics tab's action, the exact wire string smoke_hud_gdcef.mjs pins.
         var gfx = HudProtocol.Parse("{\"v\":4,\"kind\":\"action\",\"name\":\"applyGraphicsPrefs\","
-                                    + "\"args\":[{\"antiAliasing\":\"off\",\"shadows\":true}]}", out _);
+                                    + "\"args\":[{\"antiAliasing\":\"off\",\"shadows\":true,\"renderScale\":\"auto\"}]}", out _);
         n++;
         Expect("applyGraphicsPrefs accepted", gfx is { Kind: "action", Name: "applyGraphicsPrefs" } && gfx.Args!.Count == 1
-                                              && gfx.Args[0] is JsonObject, "rejected");
+                                              && gfx.Args[0] is JsonObject prefs && prefs["renderScale"]?.GetValue<string>() == "auto", "rejected");
 
         n += 5;
         Expect("clear cache action", HudProtocol.Parse("""{"v":4,"kind":"action","name":"clearClientCache","args":[]}""", out _)?.Name == "clearClientCache", "rejected");

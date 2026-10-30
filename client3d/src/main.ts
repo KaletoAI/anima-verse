@@ -544,18 +544,19 @@ async function startApp(username: string, role: string) {
   // starting value; `applyGraphicsPrefs` switches them in the running world.
   const graphics = loadGraphicsPrefs(localStorage.getItem(GRAPHICS_PREFS_KEY));
   const engine = new Engine(app, {
-    antialias: browserAntialias(graphics), shadows: graphics.shadows,
+    antialias: browserAntialias(graphics), shadows: graphics.shadows, renderScale: graphics.renderScale,
   });
   gameActions.applyGraphicsPrefs = (p) => {
     // The prefs may have crossed a wire (the HUD runs in its own realm behind
     // the bridge), so they are checked like any input; a malformed message
     // changes nothing rather than half of the picture.
-    const checked = checkGraphicsPrefs(p?.antiAliasing, p?.shadows);
+    const checked = checkGraphicsPrefs(p?.antiAliasing, p?.shadows, p?.renderScale);
     if (!checked.ok) {
       console.warn('[graphics] refused graphics prefs', checked.error, p);
       return;
     }
     engine.setShadows(checked.prefs.shadows);
+    engine.setRenderScale(checked.prefs.renderScale);
   };
   setModelEnvironment(engine.modelEnv);
   (window as unknown as { __engine: Engine }).__engine = engine;   // debug hook: game-hour lighting

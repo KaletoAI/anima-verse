@@ -49,9 +49,9 @@ assert.equal(scene.getHudUiState().perfOn, true);
 assert.equal(scene.HUD_BRIDGE_VERSION, 4);
 const graphics = [];
 scene.gameActions.applyGraphicsPrefs = (...args) => graphics.push(args);
-hud.gameActions.applyGraphicsPrefs({ antiAliasing: '4x', shadows: false });
-assert.deepEqual(graphics, [[{ antiAliasing: '4x', shadows: false }]]);
-assert.deepEqual(hudMessages.at(-1), { v: 4, kind: 'action', name: 'applyGraphicsPrefs', args: [{ antiAliasing: '4x', shadows: false }] });
+hud.gameActions.applyGraphicsPrefs({ antiAliasing: '4x', shadows: false, renderScale: 0.75 });
+assert.deepEqual(graphics, [[{ antiAliasing: '4x', shadows: false, renderScale: 0.75 }]]);
+assert.deepEqual(hudMessages.at(-1), { v: 4, kind: 'action', name: 'applyGraphicsPrefs', args: [{ antiAliasing: '4x', shadows: false, renderScale: 0.75 }] });
 const exactTarget = { location_id: 'home', room_id: 'workshop', placement_id: 'coffee-2', variant_uid: 'ecfa003d-309a-4ce2-8c9b-29944ddae093' };
 const semanticCalls = [];
 for (const name of ['pickPropAction', 'respondPropAction', 'cancelPropAction', 'pickRoomPose', 'closePlaceMenu']) {

@@ -80,6 +80,7 @@ public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, Js
 public static class HudProtocol
 {
     // v4 (Task 65): clientCache / clearClientCache and correlated speech / speech-done.
+    // Task 79: renderScale is an additive graphics field with an auto fallback, on the existing action.
     public const int Version = 4;
 
     /// <summary><c>gameNames</c> of bridge.ts — actions HUD → scene.</summary>
