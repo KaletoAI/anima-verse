@@ -123,8 +123,28 @@ def furniture_prop(name, *, width, depth, height):
     return pid
 
 
+def pose_clips():
+    """A private clip for every SOLO catalog pose, as an installation has
+    them: a prop action is offered only when the actor's figure can play its
+    pose (prop_action_engine.animated_for). Pair poses keep their role clips
+    to the tests that author them."""
+    from app.core import animation_clips
+    from app.core.pose_catalog import get_catalog
+    directory = ROOT / "clips"
+    directory.mkdir(exist_ok=True)
+    for entry in get_catalog("pose").values():
+        kind = str(entry.get("animation") or "")
+        if not kind or "/" in kind or not entry.get("solo", True):
+            continue
+        if not (directory / f"{kind}.fbx").exists():
+            (directory / f"{kind}.fbx").write_bytes(b"private deterministic pose fixture")
+            (directory / f"{kind}.json").write_text(json.dumps(dict(kind=kind, duration_s=2, loop=True)))
+    animation_clips._clear_entries_cache()
+
+
 def fixture(*, yaw=0, support=False, floor_y=0):
     """Real sidecar -> published variant -> recipe -> world places/geometry."""
+    pose_clips()
     # Replace previous PRIVATE fixtures so overlapping room footprints cannot
     # derive a previous test's location. Never touch a real instance.
     for name in C.list_available_characters():

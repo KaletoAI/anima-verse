@@ -261,6 +261,26 @@ def _requirements(run, profiles):
     return ""
 
 
+def animated_for(name, definition, *, profile=None) -> bool:
+    """Whether ``name``'s figure has a clip for every pose of a solo action:
+    along its set chain (explicit -> derived female/male/animal), then the
+    neutral set — the very lookup its client plays from. A pose whose clip
+    exists only for another figure (a ``female``-only take for a male
+    character) is not meant for this one, and the action is not offered
+    instead of playing as the group's fallback. A pose without a configured
+    clip kind claims nothing and passes."""
+    from app.core.animation_sets import resolve_sets
+    from app.core.movement import clip_file_for, played_pose_kind
+    keys = ([p.get("pose_key") for p in definition.get("phases") or []]
+            if definition.get("ability") == "combined" else [definition.get("pose_key")])
+    chain = resolve_sets(name, profile)
+    for key in keys:
+        kind = played_pose_kind(key) if isinstance(key, str) else ""
+        if kind and clip_file_for(kind, chain, free_only=False) is None:
+            return False
+    return True
+
+
 def _validate(run, *, conn=None, require_claims=False, presence=True, _query=None, replaces=""):
     """``replaces``: the actor's own live run this request ends first — its
     claims, journey and interaction do not count as busy (see _replaceable)."""
@@ -285,6 +305,8 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
         profile = profiles[name] = query.profile(name)
         if places.where(name, profile=profile) != (run["target"]["location_id"], run["target"]["room_id"]):
             return "target_not_in_actor_room"
+        if definition["ability"] != "pair" and not animated_for(name, definition, profile=profile):
+            return "pose_not_for_actor"
         owned_sleep_transition = (run["status"] == "active" and definition["ability"] == "sleep"
                                   and (profile.get("place") or {}).get("execution_id") == run["execution_id"])
         if profile.get("is_sleeping") and run["status"] != "sleeping" and not owned_sleep_transition:

@@ -8143,6 +8143,14 @@ seat, clip end, stand-up point, … with `step_out` = the stand-up point —
 instead of refusing with `start_not_walkable`; only that furniture may hold
 the clip's end (`prop_action_paths.seat_escape_ok`, also on revalidation).
 
+**Only for a figure that can play it** (2026-10-30): a solo action (`pose`,
+`sleep`, every phase of `combined`) whose pose names a clip kind that the
+actor's figure has no clip of — along its set chain (explicit → derived
+female/male/animal), then the neutral set, the lookup its client plays from —
+is not in `offers` at all (players and the NPC prompt alike), and `check` /
+`request` answer `pose_not_for_actor`. A pose without a clip kind passes.
+Pair actions keep `missing_pair_animation`.
+
 **The room hears it** (2026-10-30): every run tells its room through one
 storyteller line (`source "prop_action"`, in the actor's language, in the
 run's room, after all locks; `prop_action_engine._narrate`). The line follows

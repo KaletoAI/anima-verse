@@ -336,6 +336,11 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                       placement_id=placement.get("id", ""), variant_uid=placement.get("variant_uid", ""))
         for action in document.get("actions", []):
             pair = action.get("participants") == 2
+            # Not meant for this figure (no clip for its pose): not offered
+            # at all, rather than shown and played as the group's fallback.
+            if (not pair and action.get("ability") != "pair"
+                    and not engine.animated_for(actor, action, profile=query.profile(actor))):
+                continue
             targets = []
             if pair:
                 for partner in present:
