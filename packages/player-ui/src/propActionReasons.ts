@@ -26,6 +26,7 @@ const REASONS: Record<string, string> = {
   invalid_binding_geometry: "The furniture layout prevents this action",
   access_not_walkable: "The way to this furniture is blocked",
   no_route: "There is no clear path to this furniture",
+  no_free_direct_point: "There is no free spot next to this furniture",
   action_not_found: "This action is no longer available",
   action_disabled: "This action is disabled",
   invalid_action_definition: "This action is not ready yet",

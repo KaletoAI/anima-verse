@@ -107,8 +107,11 @@ console.log('PASS hosted prop panel snapshot through actual usePropActions hook'
 // Collect literal runtime reasons, excluding author-validation issue codes.
 for (const file of ['prop_action_paths.py', 'prop_action_engine.py', 'prop_action_access.py']) {
   const source = readFileSync(new URL(`../../app/core/${file}`, import.meta.url), 'utf8');
+  // A literal followed by a comma is the route MODE of a (route, mode, reason)
+  // tuple, not a reason; that tuple's reason is the third element.
   const patterns = [/_blocked\(["']([^"']+)["']\)/g, /last_reason = ["']([^"']+)["']/g,
-    /return (?:None, )?["']([a-z_]+)["']/g, /_refused\(["']([^"']+)["']\)/g];
+    /return (?:None, )?["']([a-z_]+)["'](?!,)/g, /return None, ["'][a-z_]+["'], ["']([a-z_]+)["']/g,
+    /_refused\(["']([^"']+)["']\)/g];
   for (const pattern of patterns) for (const [, code] of source.matchAll(pattern)) {
     assert.notEqual(propActionReason(code, text => text), 'Not possible right now', `missing player reason: ${code}`);
     assert.notEqual(propActionReason(code, translate), propActionReason(code, text => text), `missing German reason: ${code}`);
