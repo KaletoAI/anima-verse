@@ -462,6 +462,15 @@ class InstagramSkill(PluginSkill):
             _tq.track_finish(_track_id, error=str(e))
             return f"Fehler bei Bildgenerierung: {e}"
 
+        # A failed render comes back as an error RESULT, not an exception:
+        # pass its real reason on instead of claiming an image was made.
+        from app.core.streaming import is_error_result
+        if is_error_result(image_result):
+            reason = str(image_result).strip()
+            logger.error("Instagram image generation failed: %s", reason)
+            _tq.track_finish(_track_id, error=reason[:500])
+            return f"Error: the post image could not be generated: {reason}"
+
         # Extract the file name from the result
         image_filename = self._extract_filename(image_result)
         if not image_filename:
