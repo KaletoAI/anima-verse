@@ -15,7 +15,10 @@ Hand derivations:
 [5] floor(12/2.5)=floor(4.8)=4, hence requested 8 units becomes 4.
 [6] A zero (or negative) side has no footprint and must raise ValueError.
 [7] Every raw unit description forces blind windows, recesses and total
-    storeys; rows alone force the ridge along width. Seed 7+i gives 7..10.
+    storeys; rows alone force the ridge along width. All units share seed 7 (one overhang, one eaves line).
+    Stone house defaults are gable (first form) and (30+45)/2 = 37.5
+    degrees, shared across all units and also set for a single unit.
+    Explicit hip/42 degrees/max rise 2.5 m must survive for every unit.
 [8] Two storeys at 3.5 m on 6 x 9 keep facts storey_m=3.5;
     ground floor_y=0 and upper floor_y=3.5+0.08=3.58 m.
 Additional validation bounds come directly from the brief: 1..12 floors,
@@ -65,7 +68,7 @@ def main():
             assert locations[i]['map3d']['outline'] == [[lo,-5],[hi,-5],[hi,5],[lo,5]]
             desc = unit_description(row, i)
             assert set(desc['overrides']['party_edges']) == [{1},{1,3},{1,3},{3}][i]
-            assert desc['seed'] == 7+i and desc['overrides']['ridge'] == 'width'
+            assert desc['seed'] == 7 and desc['overrides']['ridge'] == 'width'
         assert validate_house_spec({'units':8}, (12,9))['units'] == 4
         for footprint in ((0,9), (6,0), (-1,9)):
             try:
@@ -79,6 +82,18 @@ def main():
             assert overrides['blind_windows'] is True and overrides['blind_recess'] is True
             assert overrides['storeys_total'] == case['storeys']
         assert 'ridge' not in unit_description(spec,0)['overrides']
+        for case in (spec, row):
+            for i in range(case['units']):
+                overrides = unit_description(case, i)['overrides']
+                assert overrides['roof_form'] == 'gable'
+                assert overrides['pitch_deg'] == 37.5
+        explicit = validate_house_spec({'units': 4, 'overrides': {
+            'roof_form': 'hip', 'pitch_deg': 42, 'max_rise_m': 2.5}}, (16, 10))
+        for i in range(4):
+            overrides = unit_description(explicit, i)['overrides']
+            assert (overrides['roof_form'], overrides['pitch_deg'],
+                    overrides['max_rise_m']) == ('hip', 42, 2.5)
+        print('[7] PASS shared roof defaults and explicit overrides')
         clean = validate_house_spec(dict(storeys=99,storey_m=0,units=0,
             style='missing', wall=' BAD/KIND ', door={'style':'missing','at':9},
             unit_overrides=[{'tint':'#abc','door_color':'invalid','extra':'#fff'}],

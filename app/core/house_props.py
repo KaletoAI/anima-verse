@@ -2,6 +2,8 @@
 from copy import deepcopy
 import math
 from typing import Any
+from pathlib import Path
+import threading
 
 from app.core import door_styles, hull_styles, surface_textures
 from app.core.hull_util import tone
@@ -104,6 +106,11 @@ def unit_description(spec: dict, index: int) -> dict:
     if not 0 <= index < spec['units']:
         raise IndexError(index)
     overrides = deepcopy(spec['overrides'])
+    # One seed for the whole row: the hull draws the roof overhang from it,
+    # so per-unit seeds would give a jagged eaves line; tints vary the units.
+    roof = hull_styles.get_style(spec['style'])['roof']
+    overrides.setdefault('roof_form', roof['forms'][0])
+    overrides.setdefault('pitch_deg', sum(roof['pitch_deg']) / 2)
     overrides.update(storeys_total=spec['storeys'], blind_windows=True, blind_recess=True)
     overrides.update(deepcopy(spec['unit_overrides'][index]))
     # Rectangle edges 1 and 3 face +x and -x respectively.
@@ -113,4 +120,167 @@ def unit_description(spec: dict, index: int) -> dict:
         overrides['ridge'] = 'width'
     if spec['balconies'] is not None:
         overrides['balconies'] = deepcopy(spec['balconies'])
-    return dict(style=spec['style'], seed=spec.get('seed', 0) + index, overrides=overrides)
+    return dict(style=spec['style'], seed=spec.get('seed', 0), overrides=overrides)
+
+
+# The guard covers the whole prop, including builds of different variants.
+_running: set[str] = set()
+_running_lock = threading.Lock()
+
+
+def set_house_spec(prop_id: str, variant: int, raw: Any) -> dict:
+    """Save a validated specification through the prop author transaction."""
+    from app.core import props
+    return props.set_variant_house(prop_id, variant, raw)
+
+
+def _build_locations(spec: dict, footprint_m) -> list[dict]:
+    """Inset external wall baselines so outer shell faces meet the footprint."""
+    from app.core.hull_walls import wall_offsets
+    locations = synthetic_locations(spec, footprint_m)
+    outer = wall_offsets(hull_styles.get_style(spec['style']), 0)[1]
+    for i, loc in enumerate(locations):
+        ring = loc['map3d']['outline']
+        for index, point in enumerate(ring):
+            if i == 0 and index in (0, 3):
+                point[0] += outer
+            if i == spec['units'] - 1 and index in (1, 2):
+                point[0] -= outer
+            point[1] += outer if index in (0, 1) else -outer
+    return locations
+
+
+def house_job(prop_id: str, variant: int, *, tex_dir: Path) -> dict:
+    """Merge synthetic unit jobs in Blender coordinates (x, -z, y)."""
+    import hashlib
+    import json
+    from app.core import hull_model, props
+    ctx = props._edit_variant(prop_id, variant)
+    if not ctx or not ctx[2][ctx[3]].get('house'):
+        raise ValueError('save the house spec first')
+    house = ctx[2][ctx[3]]['house']
+    spec, footprint = house['spec'], house['footprint_m']
+    job = {'kind': 'house', 'tiers': {t: {'meshes': []} for t in ('full', 'low')},
+           'materials': [], 'textures': {}, 'extras': {},
+           'export': {'full': 'house_full.glb', 'low': 'house_low.glb'},
+           'description': deepcopy(spec)}
+    for i, loc in enumerate(_build_locations(spec, footprint)):
+        unit = hull_model.build_job(f'house-unit-{i}', unit_description(spec, i),
+                                    location=loc, tex_dir=Path(tex_dir) / f'u{i}')
+        if not unit.get('ok', True):
+            raise ValueError(unit.get('error') or 'unit build failed')
+        for mat in unit['materials']:
+            mat = deepcopy(mat)
+            mat['name'] = f'u{i}/' + mat['name']
+            if mat.get('texture'):
+                mat['texture'] = f'u{i}_' + mat['texture']
+            job['materials'].append(mat)
+        job['textures'].update({f'u{i}_{key}': path for key, path in unit['textures'].items()})
+        for tier in job['tiers']:
+            for mesh in unit['tiers'][tier]['meshes']:
+                mesh = deepcopy(mesh)
+                mesh['name'] = f'u{i}/' + mesh['name']
+                mesh['material'] = f'u{i}/' + mesh['material']
+                job['tiers'][tier]['meshes'].append(mesh)
+    for tier, payload in job['tiers'].items():
+        points = [p for mesh in payload['meshes'] for p in mesh['vertices']]
+        if not points:
+            raise ValueError('empty house geometry')
+        hx = max(abs(p[0]) for p in points)
+        hz = max(abs(p[1]) for p in points)
+        floor = min(p[2] for p in points)
+        for sign in (1, -1):
+            x, z = sign * hx, sign * hz
+            payload['meshes'].append({
+                'name': f'bounds_keeper_{tier}_{sign}', 'material': job['materials'][0]['name'],
+                'vertices': [[x, -z, floor], [x-sign*.02, -z, floor],
+                             [x, -(z-sign*.02), floor]], 'faces': [[0, 1, 2]],
+                'uvs': [[[0, 0], [1, 0], [0, 1]]], 'colors': [[1, 1, 1]]})
+    job['fingerprint'] = hashlib.sha256(json.dumps(
+        {'spec': spec, 'footprint_m': footprint,
+         'tiers': job['tiers'], 'materials': job['materials']}, sort_keys=True).encode()).hexdigest()
+    return job
+
+
+def build_house_variant(prop_id: str, variant: int) -> dict:
+    """Run the generic hull executor and land both tiers as one house model."""
+    import json
+    import tempfile
+    from app.blender import runner
+    from app.core import props
+    from app.core.hull_util import timeout_s
+    from app.core.scene_recipe import invalidate_prop_lib_token
+    failure = {'ok': False, 'error': '', 'file': ''}
+    if not runner.is_available():
+        return {**failure, 'error': 'blender_unavailable'}
+    try:
+        with tempfile.TemporaryDirectory(prefix='av-house-') as temporary:
+            directory = Path(temporary)
+            job = house_job(prop_id, variant, tex_dir=directory / 'textures')
+            job_file = directory / 'job.json'
+            job_file.write_text(json.dumps(job, sort_keys=True), encoding='utf-8')
+            out = directory / 'out'
+            out.mkdir()
+            result = runner.run('hull_build', inputs={'job': job_file, **job['textures']},
+                                out_dir=out, timeout_s=timeout_s())
+            if not result.get('ok'):
+                return {**failure, 'error': str(result.get('error') or 'build failed')}
+            outputs = result.get('outputs') or {}
+            files = {t: Path(outputs.get(t) or '') for t in ('full', 'low')}
+            if not all(p.is_file() for p in files.values()):
+                return {**failure, 'error': 'no glb produced'}
+            blobs = {t: p.read_bytes() for t, p in files.items()}
+            bounds = props.glb_bounds(blobs['full'])
+            if bounds is None:
+                return {**failure, 'error': 'unmeasurable glb'}
+            dims = dict(zip(('width_m', 'height_m', 'depth_m'),
+                            (b-a for a, b in zip(*bounds))))
+            if any(v <= 0 for v in dims.values()):
+                return {**failure, 'error': 'empty glb bounds'}
+            filename = props.save_house_models(prop_id, variant, blobs, job['description'], job['fingerprint'])
+            props.set_variant_dims(prop_id, variant, dims)
+        props._store_bbox(prop_id, variant, landing=True)
+        invalidate_prop_lib_token()
+        return {'ok': True, 'error': '', 'file': filename}
+    except Exception as error:
+        return {**failure, 'error': str(error)}
+
+
+def trigger_house_build(prop_id: str, variant: int) -> bool:
+    """Start one tracked daemon build per prop, releasing the guard on failure."""
+    from app.core import props
+    prop_id = props.safe_prop_id(prop_id)
+    with _running_lock:
+        if prop_id in _running:
+            return False
+        _running.add(prop_id)
+
+    def run():
+        from app.core.task_queue import get_task_queue
+        task_id, error = '', ''
+        try:
+            name = props.read_sidecar(prop_id).get('name') or prop_id
+            try:
+                task_id = get_task_queue().track_start(
+                    'model3d_generation', f'House: {name} v{variant}', start_running=True)
+            except Exception:
+                pass
+            result = build_house_variant(prop_id, variant)
+            error = '' if result.get('ok') else str(result.get('error') or 'failed')
+        except Exception as exc:
+            error = str(exc)
+        finally:
+            with _running_lock:
+                _running.discard(prop_id)
+            if task_id:
+                try:
+                    get_task_queue().track_finish(task_id, error=error)
+                except Exception:
+                    pass
+    try:
+        threading.Thread(target=run, daemon=True).start()
+    except Exception:
+        with _running_lock:
+            _running.discard(prop_id)
+        raise
+    return True

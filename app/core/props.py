@@ -815,6 +815,8 @@ def _variant_list(meta: Dict[str, Any]) -> List[Dict[str, Any]]:
                         if v in EXTRA_VIEWS and isinstance(r, dict)}
                 if kept:
                     rec[IMAGE_VIEWS_KEY] = kept
+            if isinstance(entry.get("house"), dict):
+                rec["house"] = copy.deepcopy(entry["house"])
             seasons = sanitize_season_tags(entry.get(SEASONS_KEY))
             if seasons:
                 rec[SEASONS_KEY] = seasons
@@ -3965,7 +3967,58 @@ def _apply_variant_light(entry: Dict[str, Any], raw: Any) -> None:
 #: is scaled uniformly, so the three numbers say how big AND what shape), and
 #: the two face budgets as ONE `face_targets` object for the same reason: high
 #: and low describe one object at two distances.
+def _apply_variant_house(entry: Dict[str, Any], raw: Any) -> None:
+    """Validate the house record while preserving its first footprint."""
+    from app.core.house_props import validate_house_spec
+    if not isinstance(raw, dict) or not isinstance(raw.get("spec"), dict):
+        raise ValueError("house must contain spec and footprint_m")
+    previous = entry.get("house") or {}
+    footprint = previous.get("footprint_m") or [entry.get("width_m"), entry.get("depth_m")]
+    if not isinstance(footprint, (list, tuple)) or len(footprint) != 2:
+        raise ValueError("set the prop's size first")
+    try:
+        footprint = [float(v) for v in footprint]
+        spec = validate_house_spec(raw["spec"], footprint)
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError("set the prop's size first") from error
+    entry["house"] = {"spec": spec, "footprint_m": footprint}
+
+
+@_author_transaction
+def set_variant_house(prop_id: str, variant: int, raw: Any) -> dict:
+    """Seed the footprint once from stored dimensions, never measured rebuilds."""
+    # Read the authored dimensions before read_sidecar repairs absent fields.
+    path = _sidecar_path(prop_id)
+    stored_meta = json.loads(path.read_text(encoding="utf-8")) if path and path.is_file() else {}
+    pid = safe_prop_id(prop_id)
+    meta = read_sidecar(pid, read_only=True) if pid else {}
+    entries = _variant_list(meta)
+    try:
+        i = int(variant)
+    except (TypeError, ValueError) as error:
+        raise ValueError("prop variant not found") from error
+    if not meta or not 0 <= i < len(entries):
+        raise ValueError("prop variant not found")
+    house = entries[i].get("house") or {}
+    footprint = house.get("footprint_m")
+    if not footprint:
+        stored = next((record for record in stored_meta.get(VARIANTS_KEY, [])
+                       if isinstance(record, dict) and record.get("stem") == entries[i]["stem"]), {})
+        footprint = [stored.get("width_m"), stored.get("depth_m")]
+        from app.core.house_props import validate_house_spec
+        try:
+            validate_house_spec({}, [float(v) for v in footprint])
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError("set the prop's size first") from error
+    _apply_variant_house(entries[i], {"spec": raw if isinstance(raw, dict) else {},
+                                     "footprint_m": footprint})
+    meta[VARIANTS_KEY] = entries
+    _write_sidecar(pid, meta)
+    return copy.deepcopy(entries[i]["house"])
+
+
 VARIANT_PATCH_APPLIERS = {
+    "house": _apply_variant_house,
     "light": _apply_variant_light,
     "dims": _apply_variant_dims,
     "description": _apply_variant_description,
@@ -7224,3 +7277,30 @@ def trigger_generation(prop_id: str, *, prompt: str = "", negative: str = "",
 
     threading.Thread(target=_run, daemon=True).start()
     return True
+
+
+@_author_transaction
+def save_house_models(prop_id: str, variant: int, blobs: Dict[str, bytes],
+                      spec: dict, fingerprint: str) -> str:
+    """Publish both house tiers and prune only previous house builds."""
+    from app.core.model_store import read_sidecar as model_sidecar
+    gallery = model_gallery(prop_id, variant) if read_sidecar(prop_id) else None
+    if not gallery:
+        raise ValueError("prop variant not found")
+    previous = [p for p in gallery.files() if model_sidecar(p).get("source") == "house_build"]
+    targets = {}
+    for tier in ("full", "low"):
+        target = gallery.new_path()
+        target.write_bytes(blobs[tier])
+        write_model_sidecar(target, {
+            "created_at": utc_now_iso(), "source": "house_build", "format": "glb",
+            "rig": "none", "tier": tier, "house": spec, "fingerprint": fingerprint,
+            "rotation": {"x": 0, "y": 0, "z": 0},
+        })
+        targets[tier] = target
+    for tier, target in targets.items():
+        gallery.select(target.name, tier)
+    for old in previous:
+        gallery.delete(old.name)
+    _lod_failed.discard(_lod_key(safe_prop_id(prop_id), variant))
+    return targets["full"].name
