@@ -658,6 +658,14 @@ public partial class Figure : Node3D
     private bool _bridgeResume;
 
     /// <summary>The bridge branch of <c>play</c>: the gate, the deadline, the held facing, the travel and the turn.</summary>
+    /// <summary>A journey projects its holding exit clip through activity_animation.</summary>
+    public bool PlayDeparture(string clip)
+    {
+        if(!EnsureClip(clip)) return false;
+        if(!Bridging) StartBridge(clip,0);
+        return true;
+    }
+
     private void StartBridge(string via, double accel)
     {
         var anim = Player!.GetAnimation(via);

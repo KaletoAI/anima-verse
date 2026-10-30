@@ -43,9 +43,17 @@ export function projectApproachM(points: readonly Point[], point: Point): number
 }
 
 /** Owned approaches retain continuity even after a delayed first poll or frame stall. */
-export function ownedApproachStep(shownM: number, targetM: number, pace: number, catchUpRate: number, dt: number): number {
+export function ownedApproachStep(shownM: number, targetM: number, pace: number, catchUpRate: number, dt: number, startsInS = 0, ageS = 0): number {
+  if (startsInS > Math.max(0, ageS)) return shownM;
   return shownM + Math.min(Math.max(0, targetM - shownM), .25,
     Math.max(0, pace, catchUpRate) * Math.max(0, dt));
+}
+
+/** Future departures hold their rendered start; only late adoption needs catch-up. */
+export function ownedApproachCatchUp(shownM: number, targetM: number, totalM: number,
+  pace: number, startsInS: number, ageS: number): number {
+  return startsInS > Math.max(0, ageS) || targetM - shownM <= .25 ? 0
+    : Math.max(2 * Math.max(0, pace), (totalM - shownM) / .6);
 }
 
 export function entryPhase(entry: { elapsed_game_s: number; duration_game_s: number;

@@ -6,13 +6,14 @@ import { fileURLToPath } from 'node:url';
 import { mainFunction } from './mainFunction.mjs';
 const bundled = await build({ stdin: { contents: `export { NpcManager } from './client3d/src/scene/npcs';
   export { Figure, setClipRootPath } from './client3d/src/scene/figures';
+  export { setClipBridgeLift } from './client3d/src/scene/bridgeLift';
   export * as motion from './client3d/src/game/propActionMotion';
   export * as walk from './client3d/src/game/walk';
   export * as echo from './client3d/src/game/posEcho';
   export * as path from './client3d/src/scene/travelPath'; export * as THREE from 'three';`,
   resolveDir: fileURLToPath(new URL('../..', import.meta.url)), loader: 'ts' },
   bundle: true, loader: { '.css': 'empty' }, write: false, platform: 'node', format: 'esm' });
-const { NpcManager, Figure, setClipRootPath, THREE, path, motion, walk, echo } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
+const { NpcManager, Figure, setClipRootPath, setClipBridgeLift, THREE, path, motion, walk, echo } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
 const read = name => JSON.parse(readFileSync(new URL(`../../native/fixtures/propactions/${name}`, import.meta.url)));
 const map = read('worldmap_approach.json');
 const char = map.characters[0];
@@ -21,7 +22,7 @@ const routeFor = await mainFunction('travellerState', {
   avatarName: char.name, manualPropGate: { withdrawn: () => false },
   ownedPropRun: () => motionStatus ? ({ status: motionStatus }) : null,
   preparedPropJourney: null, propMutationPending: true, propStateUncertain: true, propPreparation: { pending: true }, api: { mapMetaOf: () => ({ parsedAt: performance.now() }) },
-  ...path, ageAtReceiptS: () => 0, THREE,
+  ...path, poseClip: walk.poseClip, ageAtReceiptS: () => 0, THREE,
   groundY: () => 0, terrainGround: { heightAt: () => 0 },
   residency: new Map(), roomOf: new Map([[char.name, 'r-props']]),
   tileAt: () => ({}), worldToTile: (_tile, x, z) => ({ x, z }), roomStandY: () => 9.4, WALK_CLEARANCE_M: 0.01,
@@ -45,6 +46,105 @@ for (const floor of [9.4, undefined, 0]) {
   assert.equal(root.position.y, floor === undefined ? 9.4 : floor + 0.01, 'exact route never falls to terrain');
   assert.ok(root.position.x > .9 && root.position.x < 1.1, 'walk advances on the polyline');
 }
+// Task 80: a future start holds even when the reported progress is ahead.
+{
+  const fresh = structuredClone(char);
+  fresh.travel.starts_in_s = .75; fresh.travel.progress_m = 1;
+  const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });
+  const root = new THREE.Group(); root.position.set(-3, 9.41, -2);
+  const figure = new Figure({ name: 'fresh', template: new THREE.Group(), scale: 1, height: 1.7,
+    clips: ['walking', 'standing', 'fixture-start-walk'].map(name => new THREE.AnimationClip(name, .2, [])),
+    tier: 'full', noClips: false, libraryFits: true });
+  root.add(figure.root);
+  const npc = { name: char.name, root, figure, target: root.position.clone(), waypoints: [],
+    entry: null, interaction: null, route: null, travelLine: null, travelKey: '',
+    label: {}, labelName: {}, labelActivity: {}, bubbleUntil: 0 };
+  mgr.npcs.set(char.name, npc); mgr.setPlayerDriven(char.name); mgr.setServerDriven(char.name, true);
+  mgr.update([routeFor(fresh, 7, map)]);
+  assert.equal(npc.route.catchUpRate, 0, 'future approach never catches up');
+  mgr.tick(.1, 10);
+  assert.equal(root.position.x, -3, 'future approach holds rendered start');
+  assert.equal(figure.current.getClip().name, 'standing', 'fresh approach stands until departure');
+  walk.setClipTransitions([{ from: walk.poseClip('standing'), to: walk.poseClip('walking'), kind: 'fixture-start-walk', accel: 0 }]);
+  npc.route.receivedAt = performance.now() - 800;
+  mgr.tick(1 / 60, 10);
+  assert.equal(figure.current.getClip().name, 'fixture-start-walk', 'departure opens the holding stand-to-walk bridge');
+  assert.equal(root.position.x, -3, 'holding bridge prevents the first walking step');
+  mgr.tick(.25, 10); mgr.tick(1 / 60, 10);
+  assert.ok(root.position.x > -3, 'walk begins after countdown and bridge');
+  walk.setClipTransitions([]);
+  root.position.set(-3, 9.41, -2); npc.route = null;
+  const aged = routeFor(fresh, 8, map); aged.route.ageAtParsedS = .5;
+  mgr.update([aged]);
+  assert.equal(npc.route.catchUpRate, 0, 'aged but future adoption has no catch-up');
+  assert.ok(performance.now() - npc.route.receivedAt >= 500, 'route retains poll age for departure clock');
+  mgr.tick(0, 10); assert.equal(root.position.x, -3, 'remaining countdown still holds');
+}
+
+// The zero-time seat leg is rendered by the exit clip, then handed to the root once.
+{
+  const realPerformance = globalThis.performance;
+  let now = 10000;
+  globalThis.performance = { now: () => now };
+  try {
+    const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });
+    const root = new THREE.Group(); root.position.set(2, .129, 0);
+    const exit = new THREE.AnimationClip('fixture-get-up', .5, []);
+    setClipRootPath(exit, { times: new Float32Array([0, .5]), xz: new Float32Array([0, 0, 0, -.5]) });
+    setClipBridgeLift(exit, { endLift: 0, firstContactS: .5 });
+    const figure = new Figure({ name: 'switch', template: new THREE.Group(), scale: 1, height: 1.7,
+      clips: [exit, ...['walking', 'standing', 'sitting'].map(name => new THREE.AnimationClip(name, 1, []))],
+      tier: 'full', noClips: false, libraryFits: true });
+    root.add(figure.root); figure.setYaw(0); figure.play('sitting');
+    const npc = { name: char.name, root, figure, target: root.position.clone(), waypoints: [],
+      entry: null, interaction: null, route: null, travelLine: null, travelKey: '',
+      label: {}, labelName: {}, labelActivity: {}, bubbleUntil: 0 };
+    mgr.npcs.set(char.name, npc); mgr.setPlayerDriven(char.name); mgr.setServerDriven(char.name, true);
+    const release = await mainFunction('releaseSwitchedPropSeat', {
+      preparedPropSeatExecution: 'old', ownedPropRun: () => ({ execution_id: 'new', status: 'approaching' }),
+      avatarName: char.name, avatarSeated: true, seatedKey: 'bench#0', ownSeatChangeAt: 0,
+      releasedPropExecutions: new Set(), npcs: mgr,
+    }, ['avatarSeated']);
+    release();
+    assert.equal(release.snapshot().avatarSeated, false);
+    assert.equal(figure.current.getClip().name, 'sitting', 'local release preserves seated clip until exit');
+    const fresh = structuredClone(char);
+    fresh.travel = { ...fresh.travel, waypoints: [[2, 0], [2, -.5], [4, -.5]],
+      starts_in_s: .75, progress_m: 0, paces_m_s_real: null, floor_y: 0 };
+    fresh.activity_animation = 'fixture-get-up';
+    const adopted = routeFor(fresh, 30, map);
+    mgr.update([adopted]); mgr.tick(0, 10);
+    assert.equal(figure.current.getClip().name, 'fixture-get-up');
+    assert.equal(figure.bridging, true);
+    assert.equal(root.position.z, 0, 'root stays at seat during exit');
+    const bodyPoint = () => { root.updateMatrixWorld(true); return figure.root.children[0].getWorldPosition(new THREE.Vector3()); };
+    let previous = bodyPoint();
+    for (let i = 0; i < 44; i++) {
+      now += 1000 / 60; mgr.tick(1 / 60, 10);
+      const point = bodyPoint();
+      assert.ok(point.distanceTo(previous) <= .25001, 'rendered exit and handoff stay continuous');
+      previous = point;
+      if (i === 5) {
+        const state = routeFor(fresh, 31, map);
+        state.route.startsInS = .65; // A later countdown must not restart the exit.
+        mgr.update([state]);
+      }
+      assert.notEqual(figure.current.getClip().name, 'walking', 'no walking before departure');
+    }
+    assert.ok(Math.abs(root.position.z + .5) < 1e-6, 'exit travel reaches stand point before walk');
+    assert.equal(root.position.x, 2, 'countdown cannot move beyond stand point');
+    fresh.travel.starts_in_s = null; fresh.travel.progress_m = .5;
+    fresh.travel.paces_m_s_real = [null, 1]; fresh.activity_animation = '';
+    mgr.update([routeFor(fresh, 32, map)]);
+    for (let i = 0; i < 20; i++) {
+      now += 1000 / 60; mgr.tick(1 / 60, 10);
+      const point = bodyPoint(); assert.ok(point.distanceTo(previous) <= .25001); previous = point;
+    }
+    assert.ok(root.position.x > 2 && root.position.z === -.5, 'walk follows second leg after departure');
+    assert.equal(figure.current.getClip().name, 'walking');
+  } finally { globalThis.performance = realPerformance; }
+}
+
 // A late first owned poll must walk the remaining visual route, including corners.
 {
   const late = structuredClone(char);

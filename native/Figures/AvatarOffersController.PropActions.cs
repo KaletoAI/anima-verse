@@ -25,7 +25,7 @@ public sealed partial class AvatarOffersController
     private JsonArray _semanticOffers=new();
     private long _semanticGeneration;
     private string _semanticLog="";
-    private string? _preparedPropJourney;
+    private string? _preparedPropJourney,_preparedPropSeatExecution;
     private bool _propPrepared;
     private static void LogProp(string message)=>GD.Print("[native] [prop] "+message);
     private double _nextPropPoll,_propBurstUntil;
@@ -36,6 +36,9 @@ public sealed partial class AvatarOffersController
         var props=PropActions=new(_source,_clock) { RefreshOffers=RefreshSemanticOffersAsync,Log=LogProp };
         props.PrepareWrites=async ()=> {
             _propPrepared=true;
+            _preparedPropSeatExecution=_steering.AvatarSeated || (Map is { } seatedMap && Self(seatedMap) is { } seated
+                && seated.TryGetProperty("place",out var held) && held.ValueKind==JsonValueKind.Object)
+                ? PropActionMotion.Text(props.OwnedRun?["execution_id"]) : null;
             _preparedPropJourney=Map is { } map && Self(map) is { } me && me.TryGetProperty("travel",out var tr) && tr.ValueKind==JsonValueKind.Object
                 ? Text(tr,"journey_id") : null;
             _steering.CancelRoute();
@@ -50,6 +53,7 @@ public sealed partial class AvatarOffersController
                 : $"position pre-flush skipped (clean) ms={timer.ElapsedMilliseconds}");
         };
         props.RefreshWorld=async ()=> {
+            ReleaseSwitchedPropSeat();
             if(RefreshPropWorld is { } refresh) await refresh();
             else { using var doc=await _source.GetWorldMapAsync(); if(!_disposed) _figures.ApplyPolled(doc.RootElement.Clone()); }
         };
@@ -84,6 +88,21 @@ public sealed partial class AvatarOffersController
         PickPropAction=PickSemanticProp;
         PropPauseChanged();
         PendingPropAction=ObservePropAsync(async ()=> { await props.RefreshAsync(); await RefreshSemanticOffersAsync(); });
+    }
+    private void ReleaseSwitchedPropSeat()
+    {
+        if(_disposed || _preparedPropSeatExecution is not { } old || PropActions?.OwnedRun is not { } run
+            || PropActionMotion.Text(run["status"])!="approaching" || PropActionMotion.Text(run["execution_id"])==old) return;
+        _preparedPropSeatExecution=null;
+        _figures.PropSeatSwitchExecution=old;
+        _position.OwnSeatChangeAt=_clock(); _position.Channel.DiscardPendingAnswers();
+        // Keep the current seated clip: the new route opens the measured exit bridge.
+        _figures.ClearPropEntry(_figures.AvatarName,preservePose:true);
+        _steering.SetSeated(false); _seatKey="";
+        if(Avatar is { } f) {
+            f.Face=null; f.Lean=null; f.SurfaceGroup="ground"; f.ApplyRotation();
+            _figures.SetPlayerAnimation(f.CharacterName,null);
+        }
     }
     private void PropPauseChanged()
     {

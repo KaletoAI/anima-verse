@@ -29,7 +29,7 @@ const deps = {
   },
   rebuildPlaceGlyphs() {}, getGameState: () => ({}), setGameState() {},
   figures: { state: 'loading' }, npcs: {}, uiActions: { toast: m => { throw Error(m); } },
-  logPropOffers() {},
+  releaseSwitchedPropSeat() {}, logPropOffers() {},
 };
 const sync = await mainFunction('syncPlaceGlyphs', deps, ['semanticOffers']);
 status = 'active';
@@ -44,7 +44,7 @@ assert.equal(sync.snapshot().semanticOffers[0].enabled, true, 'polled completion
 assert.equal(actionReads, 2);
 finishActions = null;
 const refreshMotion = await mainFunction('refreshPropMotion', {
-  propStateEpoch: 0, api: deps.api, semanticState: {}, propStateUncertain: false,
+  releaseSwitchedPropSeat() {}, propStateEpoch: 0, api: deps.api, semanticState: {}, propStateUncertain: false,
   ownedPropRun: () => null, propPreparation: deps.propPreparation,
   pollCore: () => ({ refresh: async () => { refreshWorld++; } }), lastMap: map, syncPlaceGlyphs: sync,
 });
@@ -67,7 +67,7 @@ console.log('prop action offers: PASS (arrival, completion, in-flight rows retai
 // Request diagnostics begin after the production position preparation has drained.
 const events = [], diagnostic = {};
 const prepare = await mainFunction('preparePropAction', {
-  preparedPropJourney: undefined, avatarName: 'avatar', lastMap: map,
+  preparedPropSeatExecution: undefined, preparedPropJourney: undefined, avatarName: 'avatar', lastMap: map,
   propPreparation: { begin() {} }, propStateUncertain: false, propStateEpoch: 0,
   cancelRoute() {}, npcs: { positionOf: () => ({ x: 1, z: 2 }), setPlayerTarget() {} },
   avatarDrive: { kind: 'PLAYER' }, ownedPropRun: () => null, pendingReport: null,
@@ -86,3 +86,19 @@ const pick = await mainFunction('gameActions.pickPropAction', {
 pick('sit', { placement_id: 'bench' }, 'revision'); await operation;
 assert.deepEqual(events, ['flush', 'drained', 'position', 'sent', 'http', 'answered']);
 console.log('prop action diagnostics: PASS (pre-flush, request sent, HTTP, answer ordering)');
+
+// Task 80: the accepted replacement releases local seat ownership before world adoption.
+let replacement = { execution_id: 'old', status: 'active' };
+const switched = await mainFunction('releaseSwitchedPropSeat', {
+  preparedPropSeatExecution: 'old', ownedPropRun: () => replacement,
+  avatarName: 'avatar', avatarSeated: true, seatedKey: 'bench#0', ownSeatChangeAt: 0,
+  releasedPropExecutions: new Set(), npcs: {
+    clearPropEntry() {}, setPlayerPose() {}, setPlayerAnimation() {}, propSeatSwitchExecution: null,
+  },
+}, ['avatarSeated', 'seatedKey', 'preparedPropSeatExecution']);
+switched();
+assert.equal(switched.snapshot().avatarSeated, true, 'unchanged/refused run retains local seat');
+replacement = { execution_id: 'new', status: 'approaching' };
+switched();
+assert.deepEqual(switched.snapshot(), { avatarSeated: false, seatedKey: '', preparedPropSeatExecution: undefined });
+console.log('prop switch seat release: PASS');

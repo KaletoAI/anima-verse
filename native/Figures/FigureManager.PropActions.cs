@@ -23,11 +23,14 @@ public partial class FigureManager
     public Func<bool>? SuppressAvatarPropEntry { get; set; }
     public Action<string>? PropEntryError { get; set; }
     public bool HasPropMotion=>_figures.Values.Any(f=>f.PropEntry is not null || f.Route?.ExactPath is not null);
-    public void ClearPropEntry(string name)
+    public string? PropSeatSwitchExecution { get; set; }
+    public void ClearPropEntry(string name,bool preservePose=false)
     {
         if(!_figures.TryGetValue(name,out var f)) return;
-        f.PropEntry=null; f.PropEntryBlocked=false; f.PropCommitPending=false; f.PropCommitKey=""; f.FinishPropEntry(FigureClips.PoseKind("standing",f.Poses));
-        f.Route=null; f.DropTravelLine(); f.SetHidden(false);
+        f.PropEntry=null; f.PropEntryBlocked=false; f.PropCommitPending=false; f.PropCommitKey="";
+        if(!preservePose) f.FinishPropEntry(FigureClips.PoseKind("standing",f.Poses));
+        if(!preservePose || f.Route?.OwnedApproach!=true) { f.Route=null; f.DropTravelLine(); }
+        f.SetHidden(false);
     }
     private bool AdoptExactPropRoute(Figure fig,CharacterRow row)
     {
@@ -50,14 +53,25 @@ public partial class FigureManager
             if(route.OwnedApproach) route.ShownM=PropActionMotion.ProjectApproachM(points,(fig.Position.X,fig.Position.Z));
         }
         if(route.Stamp!=Stats.Polls) {
-            route.ExactPath=(JsonObject)path.DeepClone(); route.ReceivedAt=_mapAppliedClock; route.Stamp=Stats.Polls;
+            route.ExactPath=(JsonObject)path.DeepClone(); route.ReceivedAt=_mapAppliedClock-_ageAtAppliedS; route.Stamp=Stats.Polls;
             route.Paces=(path["paces_m_s_real"] as JsonArray)?.Select(p=>p?.GetValue<double>()).ToArray();
             route.TargetM=PropActionMotion.Number(path["progress_m"]);
             if(!route.OwnedApproach) route.ShownM=route.TargetM;
-            else if(route.TargetM-route.ShownM>.25) route.CatchUpRate=Math.Max(route.CatchUpRate,
-                Math.Max(2*(TravelPath.RateAt(points,route.Paces,route.ShownM) ?? 0),(route.TotalM-route.ShownM)/.6));
+            else {
+                double age=_clock-route.ReceivedAt,starts=PropActionMotion.Number(path["starts_in_s"]);
+                route.TargetM=TravelPath.AdvanceAlongPaces(points,route.Paces,route.TargetM,Math.Max(0,age-starts));
+                route.CatchUpRate=starts>age ? 0 : Math.Max(route.CatchUpRate,
+                    PropActionMotion.OwnedApproachCatchUp(route.ShownM,route.TargetM,route.TotalM,
+                        TravelPath.RateAt(points,route.Paces,route.ShownM) ?? 0,starts,age));
+            }
+            if(adopted && PropActionMotion.Number(path["starts_in_s"])>_clock-route.ReceivedAt
+                && row.ActivityAnimation!=FigureClips.PoseKind("standing",fig.Poses)) route.DepartureClip=row.ActivityAnimation;
         }
-        if(adopted && route.OwnedApproach) _log($"[prop] approach adopted journey={PropActionMotion.Text(path["journey_id"])} total_m={route.TotalM:F3} server_m={route.TargetM:F3} rendered_start_m={route.ShownM:F3} catch_up={(route.CatchUpRate>0 ? "yes" : "no")}");
+        if(route.OwnedApproach && PropSeatSwitchExecution is { } oldExecution) {
+            _log($"[prop] switch from seat: old execution={oldExecution} exit clip={route.DepartureClip} starts_in_s={Math.Max(0,PropActionMotion.Number(path["starts_in_s"])-(_clock-route.ReceivedAt)):F3}");
+            PropSeatSwitchExecution=null;
+        }
+        if(adopted && route.OwnedApproach) _log($"[prop] approach adopted journey={PropActionMotion.Text(path["journey_id"])} total_m={route.TotalM:F3} server_m={route.TargetM:F3} rendered_start_m={route.ShownM:F3} starts_in_s={Math.Max(0,PropActionMotion.Number(path["starts_in_s"])-(_clock-route.ReceivedAt)):F3} catch_up={(route.CatchUpRate>0 ? "yes" : "no")}");
         fig.Waypoints.Clear(); fig.Settle=null; fig.Reckon=null; return true;
     }
     private bool AdoptPropEntry(Figure fig,FigurePlan plan)
@@ -131,21 +145,40 @@ public partial class FigureManager
     }
     private void StepExactPropRoute(Figure fig,JourneyRoute route,double dt,double camDist)
     {
+        double age=_clock-route.ReceivedAt,starts=PropActionMotion.Number(route.ExactPath!["starts_in_s"]);
+        bool waiting=starts>age;
+        if(route.DepartureClip.Length>0 && !route.DepartureStarted) {
+            double rootY=fig.Position.Y,goalY=PropApproachFloor(fig,route,fig.Position.X,fig.Position.Z);
+            route.DepartureStarted=fig.PlayDeparture(route.DepartureClip);
+            if(route.DepartureStarted && fig.BeginBridgeLift(rootY-goalY))
+                fig.Position=new(fig.Position.X,(float)goalY,fig.Position.Z);
+        }
+        if(!fig.Bridging && fig.HoldsTravel && ApplyBridgeTravel(fig))
+            route.ShownM=PropActionMotion.ProjectApproachM(route.Points,(fig.Position.X,fig.Position.Z));
+        if(waiting || (route.DepartureStarted && fig.Bridging)) {
+            if(route.DepartureClip.Length==0 || route.DepartureStarted) fig.Play(FigureClips.PoseKind("standing",fig.Poses));
+            fig.SecondaryFrozen=WorldFrozen; fig.UpdateFigure(dt); fig.Portrait?.Tick(dt,camDist,false);
+            return;
+        }
         var before=fig.Position;
         var paces=Enumerable.Range(0,route.Points.Count-1).Select(i=>(double?)(route.Paces is { } ps && i<ps.Count ? ps[i] ?? 0 : 0)).ToArray();
         route.TargetM=route.Settled ? route.TotalM : TravelPath.AdvanceAlongPaces(route.Points,paces,PropActionMotion.Number(route.ExactPath!["progress_m"]),
             Math.Max(0,_clock-route.ReceivedAt-Math.Max(0,PropActionMotion.Number(route.ExactPath["starts_in_s"]))));
         var point=PropActionMotion.LocalApproachPoint(route.ExactPath!,_clock-route.ReceivedAt);
         if(route.OwnedApproach) {
-            route.ShownM=PropActionMotion.OwnedApproachStep(route.ShownM,route.TargetM,TravelPath.RateAt(route.Points,route.Paces,route.ShownM) ?? 0,route.CatchUpRate,dt);
+            route.ShownM=PropActionMotion.OwnedApproachStep(route.ShownM,route.TargetM,TravelPath.RateAt(route.Points,route.Paces,route.ShownM) ?? 0,route.CatchUpRate,
+                dt*fig.PaceLimitFor(FigureClips.PoseKind("walking",fig.Poses)),starts,age);
             var at=TravelPath.PointAtDistance(route.Points,route.ShownM)!.Value; point=new(at.X,at.Z);
             if(route.ShownM>=route.TotalM-1e-6 && !route.AccessLogged) {
                 route.AccessLogged=true; _log("[prop] arrival standing at access");
             }
         } else route.ShownM=route.TargetM;
         fig.Position=new((float)point.X,(float)PropApproachFloor(fig,route,point.X,point.Z),(float)point.Z); fig.Target=fig.Position;
-        bool moving=(!route.OwnedApproach || route.ShownM<route.TotalM-1e-6) && double.Hypot(point.X-before.X,point.Z-before.Z)>1e-6;
-        if(moving) fig.FaceTowards(fig.Position-before);
+        // The walking request opens its bridge even while that bridge forbids the first step.
+        bool moving=(!route.OwnedApproach || route.ShownM<route.TotalM-1e-6)
+            && (double.Hypot(point.X-before.X,point.Z-before.Z)>1e-6 || (route.OwnedApproach && route.TargetM>route.ShownM+1e-6
+                && Math.Max(TravelPath.RateAt(route.Points,route.Paces,route.ShownM) ?? 0,route.CatchUpRate)>0));
+        if(double.Hypot(point.X-before.X,point.Z-before.Z)>1e-6) fig.FaceTowards(fig.Position-before);
         UpdateTravelLine(fig);
         fig.SetMotion(moving,false,FigureClips.WalkRun);
         fig.Play(FigureClips.PoseKind(moving ? "walking" : "standing",fig.Poses));

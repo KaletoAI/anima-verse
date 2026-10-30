@@ -50,8 +50,11 @@ public static class PropActionMotion
         return result;
     }
     /// <summary>Keep owned playback continuous across delayed polls and slow frames.</summary>
-    public static double OwnedApproachStep(double shownM,double targetM,double pace,double catchUpRate,double dt)
-        =>shownM+Math.Min(Math.Min(Math.Max(0,targetM-shownM),.25),Math.Max(0,Math.Max(pace,catchUpRate))*Math.Max(0,dt));
+    public static double OwnedApproachStep(double shownM,double targetM,double pace,double catchUpRate,double dt,double startsInS=0,double ageS=0)
+        =>startsInS>Math.Max(0,ageS) ? shownM : shownM+Math.Min(Math.Min(Math.Max(0,targetM-shownM),.25),Math.Max(0,Math.Max(pace,catchUpRate))*Math.Max(0,dt));
+    /// <summary>Future departures hold; catch-up belongs only to late adoption.</summary>
+    public static double OwnedApproachCatchUp(double shownM,double targetM,double totalM,double pace,double startsInS,double ageS)
+        =>startsInS>Math.Max(0,ageS) || targetM-shownM<=.25 ? 0 : Math.Max(2*Math.Max(0,pace),(totalM-shownM)/.6);
     public static double EntryPhase(JsonNode entry,double ageS) => Math.Min(1,Math.Max(0,
         (Number(entry["elapsed_game_s"])+Math.Max(0,ageS)*Math.Max(0,Number(entry["game_seconds_per_real_second"])))
         /Number(entry["duration_game_s"])));

@@ -66,6 +66,10 @@
  * fixture-npc busy / fixture-other enabled rows in that order, without picking
  * either. An empty pair list yields one disabled partner_required row.
  *
+ * [14] A .75 s departure at age 0 or .5 must hold even with reported progress
+ * ahead. At age .75 the step may advance .1 m; age 1 permits late catch-up
+ * (6 m / .6 s = 10 m/s). A lead of exactly .25 m needs no catch-up.
+ *
  * Adapters call production exports and normalize Three/Promise results only.
  * Async traces resolve before passing their actual result through runVectors;
  * the common loader, fixture resolver, comparator and failure accounting apply.
@@ -159,3 +163,5 @@ console.log(`prop action motion: ${passed} vectors + 27 inline assertions = ${pa
 await import('./smoke_prop_action_storey.mjs');
 
 await import('./smoke_prop_action_offers.mjs');
+
+await import('./smoke_prop_action_menu.mjs');

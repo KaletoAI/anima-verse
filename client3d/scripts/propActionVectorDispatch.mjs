@@ -95,6 +95,7 @@ async function positionDrainTrace(steps, waiters) {
 export const propActionDispatch = {
   propActionChoices,
   projectApproachM: motion.projectApproachM,
+  ownedApproachCatchUp: motion.ownedApproachCatchUp,
   ownedApproachStep: motion.ownedApproachStep,
   localApproachPoint: motion.localApproachPoint,
   entryPhase: motion.entryPhase,

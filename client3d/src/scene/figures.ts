@@ -2044,6 +2044,78 @@ export class Figure {
     this.play(poseClip('standing'));
   }
 
+  /** A journey's activity_animation names its holding departure clip directly. */
+  playDeparture(clip: string): boolean {
+    if (!this.actions.has(clip)) return false;
+    if (!this.transition) this.startBridge(clip, 0);
+    return true;
+  }
+
+  private startBridge(via: string, accel: number, destination = via): void {
+    const bridge = this.actions.get(via)!;
+    this.bridgeFrom = this.currentKind;
+    this.bridgeResume = false;
+    this.transition = bridge;
+    bridge.reset();
+    bridge.setLoop(THREE.LoopOnce, 1);
+    // Hold the last frame: without it the bridge snaps back to its first
+    // pose in the frame between "finished" and the target's fade-in.
+    bridge.clampWhenFinished = true;
+    bridge.timeScale = 1;
+    // Half a second of slack over the clip: the crossfade at each end, and
+    // a frame loop that is never exactly on time.
+    this.bridgeUntil = performance.now() + bridge.getClip().duration * 1000 + 500;
+    this.bridgeAccel = accel;
+    this.bridgeStart = performance.now();
+    // A bridge that HOLDS the figure holds ALL of it: the way it looks is
+    // the clip's from here on, so a turn ordered in the very frame this
+    // starts is taken back. Without this the yaw kept easing towards a
+    // target set just before — the figure lay in its bed and rotated
+    // towards the key for the whole seven seconds of getting up. From here
+    // on `faceTowards`/`setYaw` only remember a turn (`holdsFacing`).
+    // A ramping bridge keeps its turn: it is about to walk off.
+    if (accel <= 0) {
+      this.targetYaw = this.root.rotation.y;
+      // …and so is a turn an earlier bridge remembered and has not handed
+      // over yet: this bridge owns the facing from here on.
+      this.pendingYaw = null;
+    }
+    // Rule 5 of the root motion (see `travelBase`): a travel still held here
+    // means its owner never took it. Folded in, never dropped — dropping it
+    // would snap the figure back to the seat it left.
+    // The offset is the instance's own, in the root frame as it is now —
+    // the new bridge's base frame (an earlier turn may have turned it).
+    if (this.holding) {
+      console.warn(`[figures] bridge ${this.currentKind} -> ${destination} starts while`
+        + ` a bridge travel is still held — the owner did not take it; folding it in`);
+      this.travelOrigin = this.instanceOffset();
+      this.heldTravel = { ...this.travelOrigin };
+    }
+    // Rule 1: only a HOLDING bridge carries the figure, and only along a
+    // clip that brought a travel path.
+    this.travelPath = accel <= 0 ? clipRootPath(bridge.getClip()) ?? null : null;
+    this.travelAction = this.travelPath ? bridge : null;
+    // …and turns it, where the clip brought a turn (see `turn`).
+    this.startTurn(this.travelPath ? clipRootTurn(bridge.getClip()) ?? null : null, bridge);
+    if (!this.travelPath) warnTurnWithoutRoot(bridge.getClip());
+    // Loud on purpose: a bridge is rare (a state change), and when one fires
+    // in a loop — the figure keeps starting over — this line is what says
+    // WHICH origin keeps coming back. Without it the loop is only visible as
+    // a stutter and every diagnosis is a guess.
+    console.info(`[figures] bridge ${this.currentKind} -> ${destination} via ${via}`);
+    bridge.fadeIn(BRIDGE_FADE_IN_S).play();
+    this.current?.fadeOut(BRIDGE_FADE_IN_S);
+    this.current = bridge;
+    this.currentKind = via;
+    this.root.userData.clipKind = via;
+    this.root.userData.clipBound = true;
+    this.heightGroup = 'ground';
+    this.setClipHeight(bridge.getClip(), 'ground');
+    this.terrainClip = false;
+    this.sink = 0;
+    this.setClipDrop(0);
+  }
+
   /** Switches the clip with a crossfade; a missing clip plays its stand-in,
    *  then idle. `kind` is server-authoritative (`activity_animation`), hence
    *  the normalisation here — the actions are indexed by lowercase kinds. An
@@ -2078,68 +2150,7 @@ export class Figure {
     // Only a bridge this rig actually carries: a rule pointing at a clip the
     // figure does not have must cost nothing, not stall it between states.
     if (rule && via && via !== kind && this.actions.has(via)) {
-      const bridge = this.actions.get(via)!;
-      this.bridgeFrom = this.currentKind;
-      this.bridgeResume = false;
-      this.transition = bridge;
-      bridge.reset();
-      bridge.setLoop(THREE.LoopOnce, 1);
-      // Hold the last frame: without it the bridge snaps back to its first
-      // pose in the frame between "finished" and the target's fade-in.
-      bridge.clampWhenFinished = true;
-      bridge.timeScale = 1;
-      // Half a second of slack over the clip: the crossfade at each end, and
-      // a frame loop that is never exactly on time.
-      this.bridgeUntil = performance.now() + bridge.getClip().duration * 1000 + 500;
-      this.bridgeAccel = rule.accel;
-      this.bridgeStart = performance.now();
-      // A bridge that HOLDS the figure holds ALL of it: the way it looks is
-      // the clip's from here on, so a turn ordered in the very frame this
-      // starts is taken back. Without this the yaw kept easing towards a
-      // target set just before — the figure lay in its bed and rotated
-      // towards the key for the whole seven seconds of getting up. From here
-      // on `faceTowards`/`setYaw` only remember a turn (`holdsFacing`).
-      // A ramping bridge keeps its turn: it is about to walk off.
-      if (rule.accel <= 0) {
-        this.targetYaw = this.root.rotation.y;
-        // …and so is a turn an earlier bridge remembered and has not handed
-        // over yet: this bridge owns the facing from here on.
-        this.pendingYaw = null;
-      }
-      // Rule 5 of the root motion (see `travelBase`): a travel still held here
-      // means its owner never took it. Folded in, never dropped — dropping it
-      // would snap the figure back to the seat it left.
-      // The offset is the instance's own, in the root frame as it is now —
-      // the new bridge's base frame (an earlier turn may have turned it).
-      if (this.holding) {
-        console.warn(`[figures] bridge ${this.currentKind} -> ${kind} starts while`
-          + ` a bridge travel is still held — the owner did not take it; folding it in`);
-        this.travelOrigin = this.instanceOffset();
-        this.heldTravel = { ...this.travelOrigin };
-      }
-      // Rule 1: only a HOLDING bridge carries the figure, and only along a
-      // clip that brought a travel path.
-      this.travelPath = rule.accel <= 0 ? clipRootPath(bridge.getClip()) ?? null : null;
-      this.travelAction = this.travelPath ? bridge : null;
-      // …and turns it, where the clip brought a turn (see `turn`).
-      this.startTurn(this.travelPath ? clipRootTurn(bridge.getClip()) ?? null : null, bridge);
-      if (!this.travelPath) warnTurnWithoutRoot(bridge.getClip());
-      // Loud on purpose: a bridge is rare (a state change), and when one fires
-      // in a loop — the figure keeps starting over — this line is what says
-      // WHICH origin keeps coming back. Without it the loop is only visible as
-      // a stutter and every diagnosis is a guess.
-      console.info(`[figures] bridge ${this.currentKind} -> ${kind} via ${via}`);
-      bridge.fadeIn(BRIDGE_FADE_IN_S).play();
-      this.current?.fadeOut(BRIDGE_FADE_IN_S);
-      this.current = bridge;
-      this.currentKind = via;
-      this.root.userData.clipKind = via;
-      this.root.userData.clipBound = true;
-      this.heightGroup = 'ground';
-      this.setClipHeight(bridge.getClip(), 'ground');
-      this.terrainClip = false;
-      this.sink = 0;
-      this.setClipDrop(0);
+      this.startBridge(via, rule.accel, kind);
       return;
     }
     // Junk is no depth, and never NaN: one NaN in the drop and the figure

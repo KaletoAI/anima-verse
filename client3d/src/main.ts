@@ -2662,7 +2662,9 @@ async function startApp(username: string, role: string) {
                  ageAtParsedS: ageAtReceiptS(map.sync, meta), parsedAt: meta.parsedAt,
                  journeyId: tr.journey_id ?? null, stamp, exact, floorY,
                  ownedApproach: c.name === avatarName && exact,
-                 startsInS: tr.starts_in_s ?? 0 },
+                 startsInS: tr.starts_in_s ?? 0,
+                 departureClip: tr.starts_in_s && c.activity_animation
+                   && c.activity_animation !== poseClip('standing') ? c.activity_animation : undefined },
       };
     }
     // Withheld route, or a degenerate one-point line (a journey without a way):
@@ -3830,6 +3832,7 @@ async function startApp(username: string, role: string) {
   let offersAppliedGeneration = 0;
   let manualPropRelease = false;
   let propMutationPending = false;
+  let preparedPropSeatExecution: string | undefined;
   let preparedPropJourney: string | null | undefined;
   const propRequestDiagnostic: { actionId?: string; placement?: string; sentAt?: number } = {};
   let propStateUncertain = false;
@@ -4758,6 +4761,7 @@ async function startApp(username: string, role: string) {
       semanticOffers = actions;
       logPropOffers(actions);
       semanticState = state;
+      releaseSwitchedPropSeat();
       propStateUncertain = false;
       propPreparation.adoptFreshState();
       if (!state.current.some(run => run.status === 'approaching' || run.status === 'active')) manualPropRelease = false;
@@ -4786,6 +4790,8 @@ async function startApp(username: string, role: string) {
 
   async function preparePropAction(requestId: string): Promise<void> {
     // Synchronous pause before acknowledging the host/iframe preparation.
+    preparedPropSeatExecution = avatarSeated || lastMap?.characters.find(c => c.name === avatarName)?.place
+      ? ownedPropRun()?.execution_id ?? '' : undefined;
     preparedPropJourney = lastMap?.characters.find(c => c.name === avatarName)?.travel?.journey_id ?? null;
     propPreparation.begin(requestId, performance.now());
     propStateUncertain = true;
@@ -4821,11 +4827,28 @@ async function startApp(username: string, role: string) {
   gameActions.preparePropAction = preparePropAction;
   api.setPropActionPreparation(preparePropAction);
 
+  function releaseSwitchedPropSeat(): void {
+    const run = ownedPropRun();
+    if (preparedPropSeatExecution === undefined || !run || run.status !== 'approaching'
+      || run.execution_id === preparedPropSeatExecution) return;
+    if (preparedPropSeatExecution) releasedPropExecutions.add(preparedPropSeatExecution);
+    npcs.propSeatSwitchExecution = preparedPropSeatExecution;
+    preparedPropSeatExecution = undefined;
+    ownSeatChangeAt = performance.now();
+    avatarSeated = false;
+    seatedKey = '';
+    // Keep the seated clip until the projected departure opens its bridge.
+    npcs.clearPropEntry(avatarName, true);
+    npcs.setPlayerPose(avatarName, null, null);
+    npcs.setPlayerAnimation(avatarName, null);
+  }
+
   async function refreshPropMotion(): Promise<void> {
     const stateEpoch = propStateEpoch;
     const state = await api.getPropActionState();
     if (stateEpoch !== propStateEpoch) return;
     semanticState = state;
+    releaseSwitchedPropSeat();
     if (ownedPropRun()) manualPropRelease = false;
     propStateUncertain = false;
     propPreparation.adoptFreshState();

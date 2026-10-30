@@ -2204,6 +2204,100 @@
         0.02
       ],
       "expect": 1.02
+    },
+    {
+      "label": "[14] future owned approach holds reported lead",
+      "fn": "ownedApproachStep",
+      "args": [
+        0,
+        1,
+        1,
+        10,
+        0.1,
+        0.75,
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] poll age leaves quarter second to wait",
+      "fn": "ownedApproachStep",
+      "args": [
+        0,
+        1,
+        1,
+        10,
+        0.1,
+        0.75,
+        0.5
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] exact departure releases step",
+      "fn": "ownedApproachStep",
+      "args": [
+        0,
+        1,
+        1,
+        0,
+        0.1,
+        0.75,
+        0.75
+      ],
+      "expect": 0.1
+    },
+    {
+      "label": "[14] future adoption has no catch-up",
+      "fn": "ownedApproachCatchUp",
+      "args": [
+        0,
+        1,
+        6,
+        1,
+        0.75,
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] poll age still before start has no catch-up",
+      "fn": "ownedApproachCatchUp",
+      "args": [
+        0,
+        1,
+        6,
+        1,
+        0.75,
+        0.5
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[14] expired start allows genuine late catch-up",
+      "fn": "ownedApproachCatchUp",
+      "args": [
+        0,
+        1,
+        6,
+        1,
+        0.75,
+        1
+      ],
+      "expect": 10
+    },
+    {
+      "label": "[14] small lead needs no catch-up",
+      "fn": "ownedApproachCatchUp",
+      "args": [
+        0,
+        0.25,
+        6,
+        1,
+        0,
+        1
+      ],
+      "expect": 0
     }
   ]
 }
