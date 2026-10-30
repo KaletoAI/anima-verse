@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 import { normBoneName } from '@anima/scene-render';
-import { clipRootPath, setClipRootPath, setClipRootTurn, travelAt } from './bridgeTravel';
+import { clipRootPath, setClipRootPath, setClipRootTurn, travelAt, clipKeepsFacing } from './bridgeTravel';
 import type { RootPath } from './bridgeTravel';
 import { setClipBridgeLift } from './bridgeLift';
 import { headingTrack } from './bridgeHeading';
@@ -649,7 +649,7 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
     // does not move the UpLeg joints or the hips.
     const handTurnOver = (): Pick<RelockReport, 'turnDeg' | 'turnReason'> => {
       if (!turnBones || !pivotWorld || !pivotLocal) return { turnDeg: null, turnReason: 'no hip bones' };
-      if (!turnWanted) return { turnDeg: null, turnReason: 'switched off' };
+      if (!turnWanted || clipKeepsFacing(clip)) return { turnDeg: null, turnReason: 'switched off' };
       return { turnDeg: bakeTurn(clip, times, turnFrames, turnBones.hips, pivotWorld, pivotLocal) };
     };
     sampleOnProbe(mixer, probe, clip, times, () => {

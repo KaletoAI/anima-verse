@@ -13,7 +13,7 @@ public static class DerivedKeys
     /// <summary>Task 64: bump whenever retarget, relock, ground measurement, plan rules or fitting inputs change
     /// (ClipLibrary.Compute/Write, TemplateClips, RestAdapter, BridgeFit or their core math). ONE fit version
     /// governs both plan and fitted-resource entries; never add a separate plan/ground/relock version.</summary>
-    public const int FitCodeVersion = 1;
+    public const int FitCodeVersion = 2;
     /// <summary>Task 64: bump when FBX import or source/rig extraction changes.</summary>
     public const int ClipImportVersion = 1;
     public static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));

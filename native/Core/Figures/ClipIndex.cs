@@ -16,6 +16,8 @@ public sealed record ClipSourceEntry(string Kind, string Set, string Url, bool? 
 {
     /// <summary>Per-surface reference-height corrections of THIS file, never baked into its tracks.</summary>
     public ClipHeightOffsets HeightOffsets { get; init; }
+    /// <summary>Keep clips retain their authored hips turn in the access frame.</summary>
+    public bool KeepFacing { get; init; }
     /// <summary><c>clipLoops</c>: a missing flag loops (§ A8).</summary>
     public bool Loops => Loop ?? true;
 }

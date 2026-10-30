@@ -31,8 +31,8 @@ public partial class Figure
         }
         if(hips<0) return false;
         double time=Math.Min(animation.Length-1e-6,Math.Max(0,phase)*animation.Length);
-        double first=animation.PositionTrackInterpolate(hips,0).Y,last=animation.PositionTrackInterpolate(hips,animation.Length).Y;
-        double? lift=PropActionMotion.EntrySupportLift(first,last,animation.PositionTrackInterpolate(hips,time).Y,
+        double first=PropHipsHeight(animation,hips,0),last=PropHipsHeight(animation,hips,animation.Length);
+        double? lift=PropActionMotion.EntrySupportLift(first,last,PropHipsHeight(animation,hips,time),
             PropActionMotion.Number(spec["access"]?["y"]),PropActionMotion.Number(spec["anchor"]?["y"]),PropActionMotion.Number(spec["root_offset"]));
         if(lift is null) return false;
         if(CurrentClip!=kind || _transition?.Kind!=kind) {
@@ -41,6 +41,8 @@ public partial class Figure
             _transition=_currentRun=run; _runs.Add(run); _travelAction=run;
             _travelPath=extras.Path; _travelOrigin=new P2(0,0); _bridgeUntil=double.PositiveInfinity; _bridgeAccel=0;
             Yaw=TargetYaw=PropActionMotion.Number(spec["access"]?["yaw"])*Math.PI/180; StartTurn(extras.Turn,run);
+            double appliedTurn=(extras.Turn?.Yaw[^1] ?? 0)*180/Math.PI;
+            GD.Print($"[prop] {CharacterName}: {kind} entry yaw start={Yaw*180/Math.PI:F1}° clip_turn={appliedTurn:F1}° end={Yaw*180/Math.PI+appliedTurn:F1}°");
             SetClipDrop(0); HeightCorrectionM=0; _terrainClip=false; _sink=0;
             var name=PlayName(kind,false); player.Play(name); CurrentClip=kind; CurrentKind=kind;
         }
@@ -51,6 +53,16 @@ public partial class Figure
         _lift=PropEntryLift=lift.Value;
         SecondaryFrozen=PropActionMotion.Number(spec["game_seconds_per_real_second"])<=0;
         UpdateFigure(0); return true;
+    }
+    // Imported humanoids can carry world-up on local Z. Support uses the parent frame, not a component name.
+    private double PropHipsHeight(Animation animation,int track,double time)
+    {
+        var position=animation.PositionTrackInterpolate(track,time);
+        if(Skeleton is not { } skeleton) return position.Y;
+        int bone=skeleton.FindBone(animation.TrackGetPath(track).GetConcatenatedSubNames());
+        int parent=bone>=0 ? skeleton.GetBoneParent(bone) : -1;
+        var frame=skeleton.GlobalTransform.Basis*(parent>=0 ? skeleton.GetBoneGlobalRest(parent).Basis : Basis.Identity);
+        return (frame*position).Y;
     }
     /// <summary>Answer-clock exit playback retains the measured root path and turn at the held seat.</summary>
     public bool PlayOwnPropDeparture(string kind,double phase,double startLift)
@@ -71,9 +83,9 @@ public partial class Figure
         for(int i=0;i<animation.GetTrackCount();i++) if(animation.TrackGetType(i)==Animation.TrackType.Position3D
             && animation.TrackGetPath(i).ToString().Contains("hips",StringComparison.OrdinalIgnoreCase)) { hips=i; break; }
         if(hips>=0) {
-            double first=animation.PositionTrackInterpolate(hips,0).Y,last=animation.PositionTrackInterpolate(hips,animation.Length).Y;
+            double first=PropHipsHeight(animation,hips,0),last=PropHipsHeight(animation,hips,animation.Length);
             if(Math.Abs(last-first)<1e-6) { if(Math.Abs(startLift)>1e-6) return false; fraction=1; }
-            else fraction=Math.Clamp((animation.PositionTrackInterpolate(hips,time).Y-first)/(last-first),0,1);
+            else fraction=Math.Clamp((PropHipsHeight(animation,hips,time)-first)/(last-first),0,1);
         } else if(Math.Abs(startLift)>1e-6) return false;
         _transition!.Time=time; player.SpeedScale=0; player.Seek(time,true);
         _lift=startLift*(1-fraction); SecondaryFrozen=false; UpdateFigure(0); return true;

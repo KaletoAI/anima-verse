@@ -53,6 +53,7 @@ public static class BridgeCheck
 
     public static async Task<string> RunAsync(Node3D host, string fixtures)
     {
+        await PropActionsCheck.CheckBedEntry(host,fixtures);
         var dir = Path.Combine(fixtures, "bridges");
         var source = new FixtureSource(dir, fixtures);
         var world = new Node3D { Name = "BridgeWorld" };

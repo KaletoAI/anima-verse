@@ -26,7 +26,8 @@ public static partial class PropActionsCheck
 {
     public static async Task<string> RunAsync(Node3D host,string fixtures)
     {
-        int checks=await CheckMotionPlayback(host,fixtures);
+        int checks=await CheckBedEntry(host,fixtures);
+        checks+=await CheckMotionPlayback(host,fixtures);
         checks+=await CheckUpperMotion(host,fixtures);
         checks+=await CheckMenus(host,fixtures);
         checks+=await CheckPolling(host,fixtures);

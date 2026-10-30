@@ -25,7 +25,7 @@ import { getAnimationClips, getCharacterModel } from '../api';
 import { bridgePace, steerCancelsBridge, clipTransition, poseClip, setClipTransitions,
   setMovementPoses } from '../game/walk';
 import { clipRootPath, clipRootTurn, rootPathAt, setClipRootPath, setClipRootTurn, toWorld, travelAt,
-  turnAt } from './bridgeTravel';
+  turnAt, clipKeepsFacing, setClipKeepFacing } from './bridgeTravel';
 import type { RootPath, RootTurn } from './bridgeTravel';
 import { BRIDGE_FADE_IN_S, clipBridgeLift, fadeCarry, liftAt } from './bridgeLift';
 import type { BridgeLift } from './bridgeLift';
@@ -117,8 +117,9 @@ const clipRootMotionFlags = new WeakMap<THREE.AnimationClip, boolean>();
 /** Remembers the listing's root-motion flag for one loaded clip file.
  *  Exported for `client3d/scripts/smoke_bridge_root.mjs`, which stands in for
  *  the listing. */
-export function setClipRootMotion(clip: THREE.AnimationClip, rootMotion: boolean | undefined): void {
+export function setClipRootMotion(clip: THREE.AnimationClip, rootMotion: boolean | undefined, mode?: string): void {
   if (rootMotion !== undefined) clipRootMotionFlags.set(clip, rootMotion);
+  setClipKeepFacing(clip, mode === 'keep');
 }
 
 interface ManifestModel {
@@ -481,6 +482,7 @@ function retargetClips(
           times: donorPath.times, xz: donorPath.xz.map((c) => c * hipScale),
         });
       }
+      setClipKeepFacing(retargeted, clipKeepsFacing(clip));
       out.push(retargeted);
     }
   }
@@ -671,6 +673,7 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
     if (tracks.length >= MIN_CLIP_TRACKS) {
       const adapted = new THREE.AnimationClip(clip.name, clip.duration, tracks);
       if (rootPath) setClipRootPath(adapted, rootPath);
+      setClipKeepFacing(adapted, clipKeepsFacing(clip));
       out.push(adapted);
     }
   }
@@ -939,11 +942,12 @@ export class FigureLibrary {
       // carries a travel in its hips track that the figure is to follow
       // (`Figure.update`); `strip` or no block plays in place as before.
       const sources: Array<{ kind: string; set: string; url: string; loop?: boolean;
-                             rootMotion?: boolean; heightOffsets?: ClipHeightOffsetsCm }> =
+                             rootMotion?: boolean; rootMotionMode?: string; heightOffsets?: ClipHeightOffsetsCm }> =
         serverClips.map((c) => ({
           kind: c.role ? `${c.kind}__${c.role}` : c.kind, set: c.set ?? '',
           url: c.url, loop: c.loop,
           rootMotion: !!c.root_motion && c.root_motion.mode !== 'strip',
+          rootMotionMode: c.root_motion?.mode,
           heightOffsets: c.height_offsets_cm,
         }));
       if (!sources.length) {
@@ -997,7 +1001,7 @@ export class FigureLibrary {
         rename: (clip, kind) => { clip.name = kind; return clip; },
         setFlags: (clip, source) => {
           setClipLoop(clip, source.loop);
-          setClipRootMotion(clip, source.rootMotion);
+          setClipRootMotion(clip, source.rootMotion, source.rootMotionMode);
           setClipHeightOffsets(clip, source.heightOffsets);
         },
         isPair: isPairClipName,
@@ -1492,7 +1496,7 @@ export class FigureLibrary {
           // The set chain has just decided WHICH file this character plays
           // for this kind — its flag is the one that counts from here on.
           setClipLoop(c, clipLoopFlags.get(clip));
-          setClipRootMotion(c, clipRootMotionFlags.get(clip));
+          setClipRootMotion(c, clipRootMotionFlags.get(clip), clipKeepsFacing(clip) ? 'keep' : undefined);
           const heights = clipHeightOffsets.get(clip);
           if (heights) clipHeightOffsets.set(c, heights);
           out.push(c);
@@ -2648,6 +2652,8 @@ export class Figure {
       this.root.rotation.y = yaw;
       this.targetYaw = yaw;
       this.startTurn(clipRootTurn(action.getClip()) ?? null, action);
+      const appliedTurn = (this.turn?.yaw.at(-1) ?? 0) * 180 / Math.PI;
+      console.info(`[prop] ${kind} entry yaw start=${(yaw * 180 / Math.PI).toFixed(1)}° clip_turn=${appliedTurn.toFixed(1)}° end=${(yaw * 180 / Math.PI + appliedTurn).toFixed(1)}°`);
       this.liftAction = null;
       this.liftSpec = null;
       this.lift = 0;

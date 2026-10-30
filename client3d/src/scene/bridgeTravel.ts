@@ -144,3 +144,10 @@ export function toWorld(local: { x: number; z: number }, yaw: number): { x: numb
   const s = Math.sin(yaw);
   return { x: local.x * c + local.z * s, z: -local.x * s + local.z * c };
 }
+
+// Keep clips stay in the access frame; their hips retain the authored turn.
+const keepFacingClips = new WeakSet<object>();
+export function setClipKeepFacing(clip: object, keep: boolean): void {
+  if (keep) keepFacingClips.add(clip); else keepFacingClips.delete(clip);
+}
+export function clipKeepsFacing(clip: object): boolean { return keepFacingClips.has(clip); }

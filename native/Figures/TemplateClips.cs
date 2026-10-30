@@ -61,7 +61,7 @@ public sealed class TemplateClips
         ActionBinding[]? Bindings = null, Dictionary<string, string>? Sets = null,
         int Clips = 0, int Tracks = 0, long Keys = 0);
     private static string SourceDependency(ClipSource source) => AnimaNative.Cache.DerivedKeys.Of(
-        source.Kind, source.Set, source.Url, source.CacheIdentity, source.Loop, source.RootMotion, source.HeightOffsets);
+        source.Kind, source.Set, source.Url, source.CacheIdentity, source.Loop, source.RootMotion, source.KeepFacing, source.HeightOffsets);
     private string? FitKey(ClipSource source) => _cacheKey is not null && source.CacheIdentity is not null
         ? "derived:fit:" + AnimaNative.Cache.DerivedKeys.Of(_cacheKey, SourceDependency(source), _standRef, _rigKnown, _scale) : null;
     private readonly Action<string> _log;
@@ -327,7 +327,8 @@ public sealed class TemplateClips
         {
             var clip = BridgeFit.RelockClipOf(src.Kind, anim, path);
             var lines = new List<string>();
-            var reports = FootLockMeasure.Relock(new[] { clip }, _probe, 1 / (100 * _scale), line => lines.Add(line));
+            // Keep entries share the anchor frame with their held pose; leave the turn in the hips.
+            var reports = FootLockMeasure.Relock(new[] { clip }, _probe, 1 / (100 * _scale), line => lines.Add(line), turn: !src.KeepFacing);
             extraLog += Relocked(src.Kind, anim, clip, reports, lines);
         }
         if (_hasSkins && _scale > 0)
@@ -378,7 +379,7 @@ public sealed class TemplateClips
                 var lines = new List<string>();
                 var probe = _probe;
                 double unitsPerCm = 1 / (100 * _scale);
-                var (reports, rk) = await Worker(() => FootLockMeasure.Relock(new[] { clip }, probe, unitsPerCm, line => lines.Add(line)));
+                var (reports, rk) = await Worker(() => FootLockMeasure.Relock(new[] { clip }, probe, unitsPerCm, line => lines.Add(line), turn: !src.KeepFacing));
                 worker += rk;
                 if (!await _mgr.MainTurn() || _dead) return null;
                 step.Restart();

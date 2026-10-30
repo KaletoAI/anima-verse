@@ -26,6 +26,7 @@ public sealed record ClipSource
     public required bool Loop { get; init; }
     /// <summary>The file carries a root travel (<c>root_motion.mode</c> keep/foot_lock); its path is built at fit time.</summary>
     public required bool RootMotion { get; init; }
+    public bool KeepFacing { get; init; }
     /// <summary>Saved reference-height corrections of this exact file and set.</summary>
     public ClipHeightOffsets HeightOffsets { get; init; }
     public required Animation Anim { get; init; }
@@ -157,6 +158,7 @@ public sealed class ClipLibrary
                               && !(rm.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String && mode.GetString() == "strip");
             Entries.Add(new ClipSourceEntry(role.Length > 0 ? $"{kind}__{role}" : kind, Json.Str(c, "set"), url, loop, rootMotion)
             {
+                KeepFacing = rootMotion && rm.TryGetProperty("mode", out var facingMode) && facingMode.ValueKind == JsonValueKind.String && facingMode.GetString() == "keep",
                 HeightOffsets = c.TryGetProperty("height_offsets_cm", out var offsets) ? ClipHeightOffsets.Parse(offsets) : default,
             });
         }
@@ -452,7 +454,7 @@ public sealed class ClipLibrary
             }
             return new ClipSource
             {
-                Kind = entry.Kind, Set = entry.Set, Url = entry.Url, Loop = entry.Loops, RootMotion = entry.RootMotion,
+                Kind = entry.Kind, Set = entry.Set, Url = entry.Url, Loop = entry.Loops, RootMotion = entry.RootMotion, KeepFacing = entry.KeepFacing,
                 HeightOffsets = entry.HeightOffsets,
                 Anim = anim, Bones = bones, RestRotations = rots, RestPositions = poss,
                 RotationTracks = rot, PositionTracks = pos, HipsMedian = median, Length = anim.Length,

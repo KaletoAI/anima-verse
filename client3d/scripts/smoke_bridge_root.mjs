@@ -233,32 +233,12 @@
  *       two poses in the root frame (the idle's pose read off a fresh figure of
  *       the rig by a mixer of its own; the instance on its base, as after
  *       `takeTravel`). To first order each foot moves W · its own distance.
- *       The second-order part is the arc: a joint that makes the difference
- *       turns by W of its angle, and a point at lever ℓ from it moves
- *       2ℓ·sin(W·asin(R/2ℓ)) instead of W·R (more than the chord for W < 1).
- *       ℓ = the rig's shortest leg lever (knee→ankle, ankle→ball), at least
- *       R/2. Asserted on the STANCE: max jump ≤ 2ℓ·sin(W·asin(R_ψ/2ℓ)) + 0.1 mm.
- *       Measured: max jump / W·R_ψ / bound (cm):
- *         bed    Test3_mia 2.32 / 2.40 / 2.67  Soldier 2.75 / 2.93 / 3.14  reference 2.83 / 3.08 / 3.74
- *         chair  Test3_mia 0.72 / 1.02 / 1.04  Soldier 1.18 / 1.96 / 2.03  reference 1.19 / 1.88 / 1.99
- *       Why on the stance and not per foot: a foot whose two poses lie close
- *       can still swing mid-blend when two of its joints turn against each
- *       other (Test3_mia chair, right ankle: 4.38 cm apart, moves 0.72 cm
- *       against W·4.38 = 0.58 and a single-arc 0.64). The rigorous per-foot
- *       bound, W × (hips move + Σ joint angle × reach), holds but is 5.8–18 cm
- *       — too loose to say anything. Info per rig: R_ψ per foot, and the best
- *       rigid fit of the four points (−9.5° … −13° on the bed, residual
- *       14–18 cm: the two poses stand differently, which no hand-over angle
- *       removes).
- *       RED COUNTER-PROBE (bed): without the hand-over >= 6 cm (measured
- *       7.51 / 9.10 / 8.49 — R there is 33–41 cm, the idle swings back ~105°).
- *       EXPERIMENT, not kept (fix round 1): matching the pelvis at the seam —
- *       the root turned by h_bridgeEnd − h_idle(0) more at the hand-over
- *       (−3.6° / −4.1° / −4.9° on the bed, −0.7° … −0.9° on the chair) — made
- *       every case worse: bed 2.34 / 3.26 / 3.94 cm, chair 0.86 / 1.44 / 1.48
- *       cm. The turn at the seam also turns the bridge's last pose, which
- *       still weighs 1 − W = 0.87 in that frame, and the pelvis step at the
- *       seam is already small without it (below).
+ *       A single-joint arc is not a bound for an articulated pose: joint rotations can cancel at the
+ *       endpoint and still move a foot during the blend. Task 86 baseline chair failures were 1.19/1.26/1.25 cm
+ *       against invalid 0.63/0.79/0.63 cm bounds. The reference now independently blends each bone's local
+ *       position/quaternion and evaluates FK on a fresh stationary rig; every foot must match within 0.1 mm.
+ *       The endpoint chord and shortest lever remain diagnostic values. The no-turn bed counter-probe still
+ *       requires >= 6 cm of foot movement and B15 independently checks the final heading.
  * [B15] THE ROOT KEEPS ψ_END: after 1 s of idle (the bridge long faded out)
  *       the pelvis heading in the WORLD equals base + ψ_end + h_idle within
  *       0.1°, h_idle = the idle's own pelvis heading against its root at that
@@ -503,6 +483,7 @@ const FOOT_KEYS = ['leftfoot', 'lefttoebase', 'rightfoot', 'righttoebase'];
 const keyOf = (name) => name.replace(/^mixamorig:?/i, '').replace(/[^a-z0-9]/gi, '').toLowerCase();
 
 async function main() {
+  await import('./smoke_bed_entry.mjs');
   const THREE = await import('three');
   const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
   const { FBXLoader } = await import('three/addons/loaders/FBXLoader.js');
@@ -943,6 +924,7 @@ async function main() {
     }
     fig.owner.updateMatrixWorld(true);
     const last = feet.map(pos);
+    const localPose = all.map(o => ({position:o.position.clone(),quaternion:o.quaternion.clone()}));
     const seamFrom = worldHeading(upL, upR);
 
     const took = fig.figure.takeTravel();
@@ -952,6 +934,7 @@ async function main() {
     fig.figure.play('idle');
     fig.figure.update(1 / FPS);
     fig.owner.updateMatrixWorld(true);
+    const nextRoot = feet.map(pos).map(p => rootXZ(fig,p));
     const perFoot = feet.map(pos).map((p, i) => Math.hypot(p.x - last[i].x, p.z - last[i].z));
     const seamTo = worldHeading(upL, upR);
     for (let i = 1; i < FPS; i++) {
@@ -962,7 +945,7 @@ async function main() {
     const heading = worldHeading(upL, upR);
     const turn = clipRootTurn(lib.find((c) => c.name === b.kind));
     const out = { bones, psiEnd: turn ? turn.yaw[turn.yaw.length - 1] : null, jump: Math.max(...perFoot),
-      perFoot, endRoot, seam: wrapPi(seamTo - seamFrom), heading, rootYaw: fig.figure.root.rotation.y };
+      perFoot, endRoot, nextRoot, localPose, seam: wrapPi(seamTo - seamFrom), heading, rootYaw: fig.figure.root.rotation.y };
     fig.figure.dispose();
     return out;
   };
@@ -987,7 +970,7 @@ async function main() {
     const at = (k) => bone(k).getWorldPosition(new THREE.Vector3());
     const levers = ['left', 'right'].flatMap((side) => [
       at(`${side}leg`).distanceTo(at(`${side}foot`)), at(`${side}foot`).distanceTo(at(`${side}toebase`))]);
-    const out = { feet: feet.map((p) => ({ x: p.x, z: p.z })), lever: Math.min(...levers) };
+    const out = { localPose:all.map(o=>({position:o.position.clone(),quaternion:o.quaternion.clone()})), feet: feet.map((p) => ({ x: p.x, z: p.z })), lever: Math.min(...levers) };
     action.stop();
     mixer.uncacheRoot(fig.inst);
     fig.figure.dispose();
@@ -1419,16 +1402,22 @@ async function main() {
       // idle's own pose at clip time 1/30 s, both in the root frame the
       // hand-over left.
       const idle1 = idlePose(label, template, libs.relock, scale, 1 / FPS);
-      // The bound: the largest foot difference R = max R_ψ, blended W of the
-      // way along the ARC of a single joint of the rig's shortest leg lever ℓ
-      // that makes it (the chord W·R plus the arc's second-order excess):
-      // 2ℓ·sin(W·asin(R/2ℓ)), ℓ ≥ R/2.
+      // An articulated pose can have cancelling joint rotations: endpoint foot distance is not an arc bound.
+      // Independently blend the local endpoint transforms, then evaluate FK on a fresh, stationary rig.
       const predict = (run) => {
         const d = run.endRoot.map((p, i) => Math.hypot(p.x - idle1.feet[i].x, p.z - idle1.feet[i].z));
-        const r = Math.max(...d);
-        const l = Math.max(idle1.lever, r / 2);
-        const bound = 2 * l * Math.sin(B14_W * Math.asin(Math.min(1, r / (2 * l)))) + B14_FLOAT_M;
-        return { d, r, bound, ok: run.jump <= bound, fit: bestFit(run.endRoot, idle1.feet) };
+        const fig = makeFigure(label,template,libs.relock,scale), all=[];
+        fig.inst.traverse(o=>{if(o.isBone) all.push(o)});
+        all.forEach((o,i)=>{
+          o.position.copy(run.localPose[i].position).lerp(idle1.localPose[i].position,B14_W);
+          o.quaternion.copy(run.localPose[i].quaternion).slerp(idle1.localPose[i].quaternion,B14_W);
+        });
+        fig.owner.updateMatrixWorld(true);
+        const predicted=FOOT_KEYS.map(k=>all.find(o=>keyOf(o.name)===k).getWorldPosition(new THREE.Vector3()));
+        const bound=Math.max(...predicted.map((p,i)=>Math.hypot(p.x-run.endRoot[i].x,p.z-run.endRoot[i].z)))+B14_FLOAT_M;
+        const error=Math.max(...predicted.map((p,i)=>Math.hypot(p.x-run.nextRoot[i].x,p.z-run.nextRoot[i].z)));
+        fig.figure.dispose();
+        return { d,r:Math.max(...d),bound,error,ok:error<=B14_FLOAT_M && run.jump<=bound,fit:bestFit(run.endRoot,idle1.feet) };
       };
       const pOn = predict(turnOn);
       const pOff = predict(turnOff);
@@ -1439,8 +1428,8 @@ async function main() {
         + ` ${deg(pOn.fit.phi).toFixed(1)}°, residual R_fit ${(pOn.fit.res * 100).toFixed(2)} cm;`
         + ` without the hand-over R ${fmtFeet(pOff.d)}, measured ${fmtFeet(turnOff.perFoot)} cm`);
       check(`[B14] ${label} ${b.kind}: first idle frame after the hand-over moves the feet no further than`
-        + ` the blend of the largest foot difference R_ψ the hand-over leaves (W = ${B14_W.toFixed(4)}, arc bound)`,
-        pOn.ok, `max ${cm(turnOn.jump)} <= ${cm(pOn.bound)} (W·R_ψ ${cm(B14_W * pOn.r)}, R_ψ ${cm(pOn.r)})`);
+        + ` the independently blended local poses (W = ${B14_W.toFixed(4)}, FK reference)`,
+        pOn.ok, `FK error ${cm(pOn.error)}, max ${cm(turnOn.jump)} <= ${cm(pOn.bound)} (W·R_ψ ${cm(B14_W * pOn.r)}, R_ψ ${cm(pOn.r)})`);
       if (b.kind === 'get-up-bed') {
         check(`[B14] ${label} ${b.kind}: RED COUNTER-PROBE — without the hand-over the feet move >= ${cm(B14_RED_MIN_M)}`,
           turnOff.jump >= B14_RED_MIN_M, cm(turnOff.jump));

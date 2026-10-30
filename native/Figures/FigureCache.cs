@@ -177,7 +177,7 @@ public sealed class FigureCache(DiskCache disk)
             t.Positions?.Select(v => new Vector3((float)v.X, (float)v.Y, (float)v.Z)).ToArray());
         return new ClipSource
         {
-            Kind = entry.Kind, Set = entry.Set, Url = entry.Url, Loop = entry.Loops, RootMotion = entry.RootMotion,
+            Kind = entry.Kind, Set = entry.Set, Url = entry.Url, Loop = entry.Loops, RootMotion = entry.RootMotion, KeepFacing = entry.KeepFacing,
             HeightOffsets = entry.HeightOffsets, Anim = animation, Bones = data.Bones,
             RestRotations = data.Rotations.Select(RestAdapter.ToGodot).ToArray(),
             RestPositions = data.Positions.Select(v => new Vector3((float)v.X, (float)v.Y, (float)v.Z)).ToArray(),

@@ -1,5 +1,6 @@
 export interface ClipSource {
   kind: string; set: string; url: string; loop?: boolean; rootMotion?: boolean;
+  rootMotionMode?: string;
   heightOffsets?: Partial<Record<'ground' | 'seat' | 'lie', number>>;
 }
 export interface ClipResult<C> { clip: C | null }

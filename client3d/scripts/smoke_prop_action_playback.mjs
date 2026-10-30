@@ -130,3 +130,6 @@ try {
  now+=300;manager.tick(.3,10);assert.equal(root.position.x,2,'observer does not walk before its public countdown');
  console.log('prop action playback manager: PASS (immediate answer, poll suppression, anchor hold, dedupe, cancel)');
 }finally{globalThis.performance=savedPerformance}
+
+// Task 86: the keep entry and held pose share the access/anchor frame.
+await import('./smoke_bed_entry.mjs');
