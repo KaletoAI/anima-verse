@@ -8,12 +8,13 @@ let status = 'approaching', reason = 'approaching', actionReads = 0, finishActio
 const blocked = [{ action_id: 'sit', enabled: false, reason: 'approaching' }];
 const enabled = [{ action_id: 'sit', enabled: true, reason: '' }];
 const deps = {
-  offersGeneration: 0, offersAppliedGeneration: 0, propStateEpoch: 0, ownSeatChangeAt: 0,
+  propOffersRoomKey: null, offersGeneration: 0, offersAppliedGeneration: 0, propStateEpoch: 0, ownSeatChangeAt: 0,
   avatarName: 'avatar', lastMap: map, semanticOffers: blocked,
   semanticState: { current: [{ execution_id: 'run', status: 'approaching' }] },
   placeOffers: [], placeOffersRoom: 'room', manualPropRelease: false, propStateUncertain: false,
   propPreparation: { adoptFreshState() {} }, pollIsStale: () => false,
   api: {
+    invalidatePropActionOffers() {},
     getPlaces: async () => ({ places: [], room_id: 'room' }),
     getPropActions: async () => {
       actionReads++;

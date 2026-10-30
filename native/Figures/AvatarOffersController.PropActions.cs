@@ -200,6 +200,14 @@ public sealed partial class AvatarOffersController
         _lastStatePoll=_clock();
         return _stateRefresh=props.RefreshAsync();
     }
+    private void RefreshRoomOffers()
+    {
+        if(!_active || _disposed || PropActions is null) return;
+        _semanticGeneration++;
+        _semanticOffers=new();
+        PublishPropSnapshot();
+        PendingPropAction=ObservePropAsync(()=>RefreshSemanticOffersAsync());
+    }
     public Task RefreshSemanticOffersAsync(bool force=true)
     {
         if(_disposed || PropActions is null) return Task.CompletedTask;
@@ -213,6 +221,7 @@ public sealed partial class AvatarOffersController
         long generation; string room,loc;
         do {
             generation=_semanticGeneration; room=_position.RoomId; loc=_position.LocationId;
+            _lastSemanticPoll=_clock();
             await ReadSemanticOffersOnceAsync();
         } while(!_disposed && (generation!=_semanticGeneration || room!=_position.RoomId || loc!=_position.LocationId));
     }

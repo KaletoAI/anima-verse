@@ -160,3 +160,65 @@ for (let i = 0; i < 60; i++) {
 }
 assert.equal(failedReads, 1, 'failed reads retain normal spacing');
 Date.now = originalNow;
+
+// Room entry bypasses the timer and waits for exactly one new-room answer.
+now += 10000;
+Date.now = () => now;
+let roomReads = 0, answerOldRoom;
+globalThis.fetch = () => {
+  roomReads++;
+  if (roomReads === 1) return new Promise(resolve => { answerOldRoom = () => resolve(new Response(JSON.stringify([{ ...offer, label: 'Old room' }]))); });
+  return Promise.resolve(new Response(JSON.stringify([{ ...offer, label: 'New room' }])));
+};
+const oldRoom = actions.getPropActions();
+actions.invalidatePropActionOffers();
+const newRoom = actions.getPropActions();
+const joinedRoom = actions.getPropActions();
+assert.equal(roomReads, 1, 'room entry coalesces with the old in-flight request');
+answerOldRoom();
+const roomAnswers = await Promise.all([oldRoom, newRoom, joinedRoom]);
+assert.equal(roomReads, 2, 'exactly one fresh read after the old room');
+assert.equal(roomAnswers[1][0].label, 'New room');
+assert.equal(roomAnswers[2][0].label, 'New room');
+await actions.getPropActions();
+assert.equal(roomReads, 2, 'same room keeps normal budget');
+actions.invalidatePropActionOffers();
+assert.equal((await actions.getPropActions())[0].label, 'New room');
+assert.equal(roomReads, 3, 'idle room entry bypasses cached normal budget');
+Date.now = originalNow;
+console.log('PASS immediate room offers with slow in-flight source');
+
+// Entering control in the same room shares an existing read rather than replacing it.
+now += 10000;
+Date.now = () => now;
+let activationReads = 0, finishActivation;
+globalThis.fetch = () => {
+  activationReads++;
+  return new Promise(resolve => { finishActivation = () => resolve(new Response(JSON.stringify([offer]))); });
+};
+const activation = actions.getPropActions();
+actions.invalidatePropActionOffers(true);
+const enteringControl = actions.getPropActions();
+finishActivation();
+// A duplicate read would wait forever on this fixture; use a bounded race.
+assert.equal(await Promise.race([Promise.all([activation, enteringControl]).then(() => 'done'), new Promise(resolve => setTimeout(() => resolve('timeout'), 100))]), 'done');
+assert.equal(activationReads, 1, 'same-room embodiment coalesces with current-room flight');
+Date.now = originalNow;
+
+// Failure of the old room must not consume the new room's one immediate read.
+now += 10000;
+Date.now = () => now;
+let recoveryReads = 0, rejectOldRoom;
+globalThis.fetch = () => {
+  recoveryReads++;
+  if (recoveryReads === 1) return new Promise((_resolve, reject) => { rejectOldRoom = reject; });
+  return Promise.resolve(new Response(JSON.stringify([{ ...offer, label: 'Recovered room' }])));
+};
+const failedOldRoom = actions.getPropActions();
+actions.invalidatePropActionOffers();
+const recoveredRoom = actions.getPropActions();
+rejectOldRoom(new Error('old room offline'));
+await assert.rejects(failedOldRoom, /old room offline/);
+assert.equal((await recoveredRoom)[0].label, 'Recovered room');
+assert.equal(recoveryReads, 2);
+Date.now = originalNow;

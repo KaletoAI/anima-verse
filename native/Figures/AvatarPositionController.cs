@@ -31,6 +31,13 @@ public sealed class AvatarPositionController : IDisposable
     public string RoomId { get; private set; } = "";
     /// <summary>Task 52: a crossing is acknowledged by the position answer's destination, never guessed locally.</summary>
     public string LocationId { get; private set; } = "";
+    public event Action? RoomChanged;
+    private void SetRoom(string location, string room)
+    {
+        bool changed = LocationId != location || RoomId != room;
+        LocationId = location; RoomId = room; _steering.RoomId = room;
+        if (changed) RoomChanged?.Invoke();
+    }
     private double _ownRoomChangeAt;
     /// <summary>Task 51: successful rides outrank polls started before their acknowledgement and all older position flights.</summary>
     private double OwnStateChangedAt => Math.Max(_ownRoomChangeAt, Math.Max(OwnCorrectionAt, OwnSeatChangeAt));
@@ -38,7 +45,7 @@ public sealed class AvatarPositionController : IDisposable
     {
         _ownRoomChangeAt = _clock();
         Channel.DiscardPendingAnswers();
-        RoomId = room; _steering.RoomId = room;
+        SetRoom(LocationId, room);
     }
     public Action<string>? Toast { get; set; }
     public Action<Vector3>? FlyTo { get; set; }
@@ -62,7 +69,7 @@ public sealed class AvatarPositionController : IDisposable
         Channel = channel ?? new PositionChannel(source.ReportPositionAsync, _clock);
         Channel.CanReport = () => CanReport;
         Channel.CanPrepareReport = () => _active && !_disposed && _readiness.PendingSnap is null && _steering.Correction is null;
-        Channel.Adopted += answer => { RoomId = answer.RoomId; LocationId=Text(answer.Body,"location_id"); _steering.RoomId = RoomId; };
+        Channel.Adopted += answer => SetRoom(Text(answer.Body,"location_id"), answer.RoomId);
         Channel.Refused += (point, home) => steering.RememberRefused(point, home ?? CurrentPoint());
         Channel.Corrected += CorrectTo;
         Channel.Toast += message => Toast?.Invoke(message);
@@ -110,8 +117,7 @@ public sealed class AvatarPositionController : IDisposable
         _row = null;
         foreach (var row in rows.EnumerateArray()) if (Text(row,"name") == Text(root,"avatar")) { _row = row.Clone(); break; }
         if (_row is not { } me) return;
-        RoomId = Text(me,"room_id"); _steering.RoomId = RoomId;
-        LocationId = Text(me,"location_id");
+        SetRoom(Text(me,"location_id"), Text(me,"room_id"));
         // Task 57: semantic state owns approach/active motion, including the avatar travel route and measured entry.
         bool wasPropDriven = _steering.PropActionDriven;
         _steering.PropActionDriven = PropMotionOwned?.Invoke()==true;

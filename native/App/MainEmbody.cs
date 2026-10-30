@@ -34,6 +34,7 @@ public partial class Main
         if (id is not null) _builder?.Pin(id, "entry");
     }
     private bool _pendingTakeControl, _pendingArrivalTakeControl;
+    private bool _autoControlHandled;
     private AvatarRecovery? _avatarRecovery;
     private Task _avatarIdentity = Task.CompletedTask;
 
@@ -99,8 +100,20 @@ public partial class Main
 
     private void EmbodyToast(string message) => _hud?.SendUi("toast", message, true);
 
+    /// <summary>Each Main lifetime is one session start, including the character-switch resume path.</summary>
+    private void TryAutoTakeControl()
+    {
+        if (_autoControlHandled || Leaving || !ControlBootReady || !_avatarIdentity.IsCompleted) return;
+        if (!string.IsNullOrEmpty(_options?.Goto) || _showAll || Embodied || _avatarRecovery?.OwnCharacter is null)
+        { _autoControlHandled = true; return; }
+        _autoControlHandled = true;
+        Log($"automatic take-control: '{_avatarRecovery.OwnCharacter}'");
+        TakeControl();
+    }
+
     private void CancelPendingControl()
     {
+        _autoControlHandled = true;
         if (!_pendingTakeControl && !_pendingArrivalTakeControl) return;
         _pendingTakeControl = _pendingArrivalTakeControl = false;
         _avatarRecovery?.Cancel();
@@ -185,6 +198,7 @@ public partial class Main
     private void TickEmbody()
     {
         if (Leaving) { CancelPendingControl(); _avatarRooms?.SetActive(false); _playerSteering?.SetActive(false); return; }
+        TryAutoTakeControl();
         SyncPlayerSteering();
         TickAvatarRooms();
         TickAvatarOffers();

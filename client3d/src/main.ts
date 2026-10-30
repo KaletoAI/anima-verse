@@ -567,13 +567,27 @@ async function startApp(username: string, role: string) {
   void figures.load();
   let npcBootReady = false;
   let bootDone = false;
+  let arrivalReady = false;
+  let autoControlHandled = false;
   let avatarReady = false;
   let pendingTakeControl = false;
   let pendingArrivalTakeControl = false;
-  function cancelPendingControl(): void {
+  function cancelPendingControl(explicit = true): void {
+    if (explicit) autoControlHandled = true;
     pendingArrivalTakeControl = false;
     pendingTakeControl = false;
     setBootNote(null);
+  }
+  /** Once per world start; resume creates a new start, while Esc consumes this one. */
+  function tryAutoTakeControl(): void {
+    if (autoControlHandled || !bootDone || !arrivalReady) return;
+    if (showAll || new URLSearchParams(location.search).get('goto') || !firstMap.avatar
+      || getGameState().mode === 'embodied') { autoControlHandled = true; return; }
+    const map = lastMap ?? firstMap;
+    if (!map.characters.some(c => c.name === firstMap.avatar) || !npcs.positionOf(firstMap.avatar)) return;
+    autoControlHandled = true;
+    console.info(`[client3d] automatic take-control: '${firstMap.avatar}'`);
+    gameActions.takeControl?.();
   }
   let avatarReadiness: Promise<void> | null = null;
   function trackAvatarReadiness(): Promise<void> {
@@ -2175,6 +2189,7 @@ async function startApp(username: string, role: string) {
     pendingArrivalTakeControl = false;
     zoomCapHinted = false;
     enterEmbodied(embody);
+    if (getGameState().mode === 'embodied') void syncPlaceGlyphs(map, true);
   };
   gameActions.exitEmbodied = () => {
     cancelPendingControl();
@@ -2464,11 +2479,12 @@ async function startApp(username: string, role: string) {
   function applyWorldMap(p: PolledMap): void {
     // A show-all switch publishes its own snapshot; reject the previous view.
     if (p.viewRev !== viewRev || viewSwitchBusy) return;
-    const { map, polledAt } = p;
+    const { polledAt } = p;
+    const map = preserveOfferRoom(p.map, polledAt);
     try {
       if (map.locations_rev !== locationsRev) void syncLocations();
       lastMap = map;
-      if (!map.characters.some(c => c.name === firstMap.avatar)) cancelPendingControl();
+      if (!map.characters.some(c => c.name === firstMap.avatar)) cancelPendingControl(false);
       syncStreamPins();
       mapPolledAt = polledAt;
       mapStamp += 1;
@@ -2916,6 +2932,7 @@ async function startApp(username: string, role: string) {
 
   setInterval(() => {
     if (lastMap && figures.state !== 'loading') npcs.update(computeNpcStates(lastMap), npcUpdateOpts());
+    tryAutoTakeControl();
     if (bootDone && pendingArrivalTakeControl) {
       const map = lastMap ?? firstMap;
       if (getGameState().mode === 'overview' && map.avatar
@@ -3584,9 +3601,10 @@ async function startApp(username: string, role: string) {
         uiActions.toast?.('The view could not be switched.', true);
         return;
       }
+      map = preserveOfferRoom(map, askedAt);
       lastMap = map;
       applyDriver(map, askedAt);
-      if (!map.characters.some(c => c.name === firstMap.avatar)) cancelPendingControl();
+      if (!map.characters.some(c => c.name === firstMap.avatar)) cancelPendingControl(false);
       syncStreamPins();
       mapPolledAt = askedAt;
       mapStamp += 1;
@@ -3824,6 +3842,7 @@ async function startApp(username: string, role: string) {
   let ownSeatChangeAt = 0;
   /** Polls asked before our latest correction cannot describe the new position. */
   let ownCorrectionAt = 0;
+  let ownOfferRoomChangeAt = 0;
   // --- Sitting down by click (plan-posen-plaetze.md § 4, Task 13): the
   // state of the rings and the menu; the functions live with the place
   // reconcile below.
@@ -3834,6 +3853,7 @@ async function startApp(username: string, role: string) {
   let semanticOffers: PropActionOffer[] = [];
   let semanticState: PropActionState = { incoming: [], outgoing: [], current: [], recent_results: [] };
   let offersGeneration = 0;
+  let propOffersRoomKey: string | null = null;
   const manualPropGate = createManualPropGate();
   let offersAppliedGeneration = 0;
   let manualPropRelease = false;
@@ -3905,6 +3925,7 @@ async function startApp(username: string, role: string) {
     // must overwrite `roomOf` unconditionally, or the avatar keeps the room of
     // the location it just left.
     roomOf.set(avatarName, res.room_id ?? '');
+    refreshRoomOffers(res.location_id, res.room_id ?? '');
   }
 
   /** How far a correction may be walked instead of jumped (metres). Beyond it
@@ -4743,13 +4764,40 @@ async function startApp(username: string, role: string) {
       held.group);
   }
 
+  /** Keep acknowledged room identity until a poll started after the room change can confirm it. */
+  function preserveOfferRoom(map: WorldMap, polledAt: number): WorldMap {
+    if (!lastMap || !pollIsStale(polledAt, ownOfferRoomChangeAt)) return map;
+    const me = lastMap.characters.find(c => c.name === avatarName);
+    if (!me) return map;
+    return { ...map, characters: map.characters.map(c => c.name === avatarName
+      ? { ...c, location_id: me.location_id, room_id: me.room_id } : c) };
+  }
+
+  /** Position and room-entry answers can lead the next worldmap by a full polling period. */
+  function refreshRoomOffers(locationId: string | undefined, roomId: string): void {
+    if (!lastMap) return;
+    const me = lastMap.characters.find(c => c.name === avatarName);
+    if (!me || (me.location_id === (locationId ?? me.location_id) && (me.room_id ?? '') === roomId)) return;
+    ownOfferRoomChangeAt = performance.now();
+    lastMap = { ...lastMap, characters: lastMap.characters.map(c => c === me
+      ? { ...c, location_id: locationId ?? c.location_id, room_id: roomId } : c) };
+    void syncPlaceGlyphs(lastMap);
+  }
+
   // Geometry and semantic availability are refreshed together on EVERY poll.
   // People, consent, definitions and claims can change without anyone sitting.
-  async function syncPlaceGlyphs(map: WorldMap): Promise<void> {
+  async function syncPlaceGlyphs(map: WorldMap, fresh = false): Promise<void> {
     const generation = ++offersGeneration;
     const askedAt = performance.now();
     const stateEpoch = propStateEpoch;
     const me = map.characters.find(c => c.name === avatarName);
+    const roomKey = JSON.stringify([me?.location_id ?? '', me?.room_id ?? '']);
+    if (fresh || roomKey !== propOffersRoomKey) {
+      api.invalidatePropActionOffers(roomKey === propOffersRoomKey);
+      propOffersRoomKey = roomKey;
+      semanticOffers = [];
+      setGameState({ propActionSnapshot: { offers: [], state: semanticState } });
+    }
     try {
       // Read availability after lifecycle state: arrival/release can change offers during a poll.
       const state = await api.getPropActionState();
@@ -5721,6 +5769,7 @@ async function startApp(username: string, role: string) {
     // before the poll repeats it. Without it the room walk would judge the
     // ride against the storey just left and ask the avatar back down.
     roomOf.set(avatarName, target);
+    refreshRoomOffers(tile.loc.id, target);
     npcs.setPlayerTarget(avatarName, stop.clone());
     // From here the lift owns the figure until it stands at that point.
     verticalRide = { goal: stop.clone(), until: performance.now() + VERTICAL_RIDE_MS };
@@ -5850,6 +5899,7 @@ async function startApp(username: string, role: string) {
     // before the poll repeats it. Without it the room walk would judge the
     // climb against the storey just left and ask the avatar back down.
     roomOf.set(avatarName, target);
+    refreshRoomOffers(tile.loc.id, target);
     const goal = new THREE.Vector3(dest.x, dest.y, dest.z);
     npcs.setPlayerTarget(avatarName, goal.clone());
     // THE FLIGHT under the figure, for the whole climb: the offer names the
@@ -6634,11 +6684,11 @@ async function startApp(username: string, role: string) {
   await settleArrival();
   bootDone = true;
   setPinOwner('boot', null);
-  if (npcs.positionOf(firstMap.avatar) && (firstMap.avatar || pendingTakeControl)
-      && getGameState().mode !== 'embodied') gameActions.takeControl?.();
-  pendingTakeControl = false;
   setBootNote(null);
   reportBootStage('arrival');
+  arrivalReady = true;
+  if (pendingTakeControl) gameActions.takeControl?.();
+  tryAutoTakeControl();
   // Install after boot/arrival: neither auto-follow nor the arrival fly can
   // replace the bench camera. Manual starts resolve the current location anew.
   initBench(engine, {

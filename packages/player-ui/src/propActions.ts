@@ -125,12 +125,21 @@ function cachedRead<T>(load: () => Promise<T>) {
   let pending: Promise<T> | null = null, value: T, hasValue = false
   let started = -Infinity, generation = 0, failed = false, failure: unknown
   return {
-    invalidate() { generation++; hasValue = false; failed = false },
+    invalidate(coalescePending = false) {
+      if (coalescePending && pending) return
+      generation++; hasValue = false; failed = false
+    },
     async read(): Promise<T> {
       const epoch = generation
       if (pending) {
-        const answer = await pending
-        return epoch === generation && hasValue ? answer : this.read()
+        try {
+          const answer = await pending
+          return epoch === generation && hasValue ? answer : this.read()
+        } catch (error) {
+          // An invalidated flight cannot spend the new room's read, even when it fails.
+          if (epoch === generation && failed) throw error
+          return this.read()
+        }
       }
       const now = Date.now()
       if (now - started < pollPeriodMs) {
@@ -153,6 +162,9 @@ function cachedRead<T>(load: () => Promise<T>) {
 }
 const offersRead = cachedRead(() => apiGet<PropActionOffer[]>('/play/prop-actions'))
 const stateRead = cachedRead(() => apiGet<PropActionState>('/play/prop-actions/state'))
+
+/** Room entry bypasses the cadence while preserving in-flight request coalescing. */
+export function invalidatePropActionOffers(coalescePending = false): void { offersRead.invalidate(coalescePending) }
 
 const CHANGED = 'prop-actions:changed'
 /** Hosts receive mutation answers immediately; uncorrelated events invalidate status. */

@@ -1,6 +1,6 @@
 import type { MotionPayload } from "./types";
 export {
-  getPropActions, getPropActionState, requestPropAction, respondPropAction,
+  getPropActions, getPropActionState, invalidatePropActionOffers, requestPropAction, respondPropAction,
   cancelPropAction, onPropActionChanged, notifyPropActionChanged, setPropActionPreparation,
 } from '@anima/player-ui/propActions';
 import type {

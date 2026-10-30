@@ -8,6 +8,7 @@ using AnimaNative.Embody;
 using AnimaNative.Figures;
 using AnimaNative.Hud;
 using AnimaNative.Props;
+using AnimaNative.Scene;
 using AnimaNative.World;
 using Godot;
 
@@ -31,7 +32,7 @@ public static partial class PropActionsCheck
             using var map=await fixture.GetWorldMapAsync(); await manager.Apply(map.RootElement);
             double now=0;
             var steering=new PlayerSteering(manager,builder); steering.SetActive(true);
-            position=new(manager,builder,steering,source); position.SetActive(true,map.RootElement);
+            position=new(manager,builder,steering,source,()=>now); position.SetActive(true,map.RootElement);
             hud=new HudOverlay(); offers=new(manager,builder,steering,source,hud,position,()=>now);
             offers.SetActive(true); await offers.PendingPropAction!;
             int startupStateReads=source.StateRequests;
@@ -137,6 +138,37 @@ public static partial class PropActionsCheck
             now+=10000; reads=source.StateRequests;
             offers.Tick(); await offers.PendingPropAction!;
             Is("lease expiry uses one canonical state read",source.StateRequests==reads+1 && !offers.PropActions.Paused);
+            // Room entry may spend one read outside the normal timer, including during a slow old-room read.
+            source.PendingOffers=new TaskCompletionSource<JsonDocument>();
+            var oldRoomOffers=source.PendingOffers;
+            reads=source.OfferRequests;
+            first=offers.RefreshSemanticOffersAsync();
+            position.AdoptRoom("task85-new-room");
+            position.AdoptRoom("task85-new-room");
+            second=offers.PendingPropAction!;
+            Is("room change joins old flight",source.OfferRequests==reads+1);
+            var staleOffers=JsonDocument.Parse(source.Offers.ToJsonString());
+            source.Offers[0]!["target"]!["room_id"]="task85-new-room";
+            source.PendingOffers=null; oldRoomOffers.SetResult(staleOffers);
+            await Task.WhenAll(first,second);
+            Is("room change re-reads once and publishes immediately",source.OfferRequests==reads+2
+                && hud.SceneOwned("propActionSnapshot")!["offers"]![0]!["target"]!["room_id"]!.GetValue<string>()=="task85-new-room");
+            reads=source.OfferRequests;
+            position.AdoptRoom("task85-new-room");
+            await offers.RefreshSemanticOffersAsync(false);
+            Is("same room spends no extra read",source.OfferRequests==reads);
+            position.AdoptRoom("task85-next-room");
+            await offers.PendingPropAction!;
+            Is("idle room change bypasses normal budget",source.OfferRequests==reads+1);
+            var relocated=JsonNode.Parse(map.RootElement.GetRawText())!;
+            foreach(var character in relocated["characters"]!.AsArray())
+                if(character!["name"]!.GetValue<string>()==manager.AvatarName) {
+                    character["room_id"]="task85-next-room"; character["location_id"]="task85-new-location";
+                }
+            using var relocatedReceipt=new MapReceipt(now,now,now).Attach(JsonSerializer.SerializeToElement(relocated));
+            manager.ApplyPolled(relocatedReceipt.RootElement.Clone());
+            await offers.PendingPropAction!;
+            Is("location-only change also reads immediately",source.OfferRequests==reads+2);
             return checks;
         } finally { offers?.Dispose(); position?.Dispose(); hud?.Free(); builder.StopResidency(); builder.Models?.FreeAll(); world.QueueFree(); }
     }

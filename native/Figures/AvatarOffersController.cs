@@ -73,6 +73,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
         hud.Handlers["closePlaceMenu"]=CloseMenu;
         steering.StandUp=StandUp;
         figures.PositionMapApplied+=MapApplied;
+        position.RoomChanged+=RefreshRoomOffers;
         world.Dropped+=Dropped;
         hud.Handlers["pairFacing"] = args => {
             if (args.Count == 3 && args[0] is JsonValue phase && phase.TryGetValue<string>(out var p)
@@ -104,7 +105,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
             _seatMap=map.Clone(); _seatMapAt=MapReceiptTime(map);
             ReconcilePlace(map,_seatMapAt);
             PendingPlaces=RefreshPlacesAsync();
-            if(PropActions is not null) PendingPropAction=ObservePropAsync(async ()=> { await RefreshPropStateAsync(); await RefreshSemanticOffersAsync(false); });
+            if(PropActions is not null) PendingPropAction=ObservePropAsync(()=>RefreshSemanticOffersAsync());
             UpdateOffers();
         }
     }
@@ -217,6 +218,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     {
         if(_disposed) return;
         SetActive(false); DetachProps(); _disposed=true; _lifetime.Cancel();
+        _position.RoomChanged-=RefreshRoomOffers;
         _figures.PositionMapApplied-=MapApplied; _world.Dropped-=Dropped; _steering.StandUp=null; _hud.LockedEntry=null;
         _hud.Handlers.Remove("enterLocation"); _hud.Handlers.Remove("pickRoomPose"); _hud.Handlers.Remove("closePlaceMenu");
         _hud.Handlers.Remove("pairFacing");
