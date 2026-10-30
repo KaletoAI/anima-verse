@@ -469,6 +469,9 @@ def plan_approach(actor: str, target: dict, role: str, *, _query=None) -> dict:
     target requires location_id, room_id, placement_id, variant_uid, action_id,
     definition_revision. Optional marker_id/slot pins an executor's reservation;
     otherwise choose the shortest reachable alternative, ties by marker ID.
+    Optional ``point`` [x, z] (location metres, only with a pinned slot) is the
+    entry target instead of the slot position — a pair sharing one place
+    enters at its clip role point.
     role is actor or partner. This function reserves/writes/activates nothing.
     """
     return _plan_approach(actor, target, role, _query=_query)
@@ -580,18 +583,22 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
                 reason = "missing_role_access"
                 continue
             slots = [target["slot"]] if "slot" in target else range(len(place["slots"]))
+            point = target.get("point") if "slot" in target else None
             for slot in slots:
                 try:
                     if isinstance(slot, bool) or not isinstance(slot, int) or not 0 <= slot < len(place["slots"]):
                         reason = "invalid_entry_slot"
                         continue
                     from app.core.prop_action_access import slot_access
-                    access, reason = slot_access(place, slot, role, action, profile)
+                    if point is not None and not (
+                            len(point) == 2 and all(math.isfinite(float(v)) for v in point)):
+                        raise ValueError("invalid entry point")
+                    access, reason = slot_access(place, slot, role, action, profile, point=point)
                     if reason:
                         continue
                     if not all(math.isfinite(float(access[k])) for k in ("x", "z", "y", "yaw")):
                         raise ValueError("nonfinite access")
-                    sx, sz = place["slots"][slot]
+                    sx, sz = place["slots"][slot] if point is None else (float(point[0]), float(point[1]))
                 except (KeyError, TypeError, ValueError, OverflowError):
                     reason = "invalid_binding_geometry"
                     continue

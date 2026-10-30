@@ -44,7 +44,10 @@ def derive_bindings(document: dict, variant: dict, *, poses: dict | None = None)
             continue
         key = entry_pose(action)
         group = 'lie' if action.get('ability') == 'sleep' else poses.get(key if isinstance(key, str) else '', {}).get('group')
-        required = 2 if action.get('ability') == 'pair' else action.get('participants', 1)
+        # A pair needs its pose's ``places`` slots on ONE marker: 2, or 1 when
+        # the pose shares a place (one seat for both, e.g. one on the other's lap).
+        required = (int(poses.get(key if isinstance(key, str) else '', {}).get('places') or 2)
+                    if action.get('ability') == 'pair' else action.get('participants', 1))
         mids = [m['id'] for m in markers
                 if isinstance(m, dict) and m.get('id') and group and m.get('group') == group
                 and type(required) is int and _capacity(m.get('capacity')) >= required

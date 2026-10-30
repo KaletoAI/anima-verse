@@ -9,11 +9,13 @@ def entry_pose(action: dict) -> str:
 
 
 def slot_access(place: dict, slot: int, role: str, action: dict,
-                profile: dict) -> tuple[dict | None, str]:
+                profile: dict, point=None) -> tuple[dict | None, str]:
     """Resolve one chosen slot in the place's coordinate frame, on its floor.
 
     Overrides already share that frame after composition. The entry clip faces
     the marker; subtracting its measured travel gives the exact start point.
+    ``point`` replaces the slot position as the entry target — a pair sharing
+    one place enters at its clip role point (``plan_interaction_at``).
     """
     override = place.get('access', {}).get(role)
     if override is not None:
@@ -27,7 +29,7 @@ def slot_access(place: dict, slot: int, role: str, action: dict,
         return None, reason
     kind, _ = capability
     yaw = float(place.get('facing') or 0)
-    x, z = bridge_start_point(place['slots'][slot], clip_travel_m(kind), yaw,
+    x, z = bridge_start_point(place['slots'][slot] if point is None else point, clip_travel_m(kind), yaw,
                               height_cm(profile), clip_ref_height_m(kind))
     return dict(x=x, z=z, yaw=yaw, y=place['floor_y']), ''
 

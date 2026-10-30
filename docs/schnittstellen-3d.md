@@ -7624,7 +7624,8 @@ Author documents and sidecars contain no `action_bindings`. The one server
 function `prop_actions.derive_bindings(document, variant)` matches every action
 to every body marker with the entry pose's catalog group and sufficient capacity.
 Sleep uses `lie`; combined actions use only the first phase pose; pairs require
-at least two slots. A marker's optional `exclude_actions: [action_id]` opts it
+the pose's catalog `places` slots — two, or ONE for a pose that shares a place
+(one on the other's lap). A marker's optional `exclude_actions: [action_id]` opts it
 out. Unknown excluded IDs are errors. Enabled actions with no matching marker
 on any active variant produce the warning "No matching place on any variant".
 Changes to actions, markers or exclusions change the author revision.
@@ -7635,6 +7636,19 @@ for its current draft; it never maintains another matching rule. Composed runtim
 bindings retain action ID, variant UID, marker ID, definition revision, supported,
 validation and reason. Invalid support chains and incompatible dependencies block
 these derived bindings with their existing reasons.
+
+**A pair sharing one place** (2026-10-31): a pair pose with `places` 1 binds to
+any marker of its group, a single seat included. Both partners hold ONE slot —
+the one nearest the place centre (`interaction_engine.shared_slot`), one claim —
+and each enters at its clip role point instead of the slot position: the place
+centre plus the role's `anchor_xz_m` turned by `pair_yaw`
+(`interaction_engine.pair_role_point`), the same point both renderers draw the
+pair half at (`pairPoints`). The planner passes it as `point` with the pinned
+slot (`plan_approach`, the journey's `approach_target`); automatic access is
+measured back from it; every revalidation recomputes it
+(`prop_action_engine._entry_point`). A pose with `places` 2 keeps one slot per
+role within 5 cm of its role point. Proof: `smoke_prop_action_runs.py`
+`test_a_one_place_pair_shares_one_seat`.
 
 A variant body marker may carry an optional `access` override with `actor` and,
 for markers with at least two slots, `partner` points. Each point is `{x,z,yaw}`:

@@ -94,6 +94,29 @@ def authored_pair():
     return name, partner, target, pid
 
 
+def authored_shared_pair():
+    """The pair fixture on ONE seat: pose ``places`` 1, a capacity-1 marker
+    without access overrides, clip halves 0.094 m either side of the anchor
+    (one on the other's lap) — see test_a_one_place_pair_shares_one_seat."""
+    name, partner, target, pid = authored_pair()
+    entries = pose_catalog.world_entries("pose")
+    entries["run-pair"]["places"] = 1
+    pose_catalog.replace_world_entries("pose", entries)
+    pose_catalog.reload_catalogs()
+    (F.ROOT / "clips" / "run-pair.json").write_text(json.dumps(dict(
+        kind="run-pair", pair=True, duration_s=2, loop=True,
+        geometry=dict(roles=dict(a=dict(anchor_xz_m=[.094, 0]), b=dict(anchor_xz_m=[-.094, 0]))))))
+    clips._clear_entries_cache()
+    doc = F.props.read_sidecar(pid)
+    marker = doc["model_variants"][0]["markers"][0]
+    marker.update(capacity=1)
+    marker.pop("access", None)
+    marker.pop("spacing_m", None)
+    F.props._write_sidecar(pid, doc)
+    target["definition_revision"] = F.props.get_prop(pid)["revision"]
+    return name, partner, target, pid
+
+
 def setup_run(ability="pose"):
     clips._write_world_transitions([])
     name, target, pid = F.fixture()
@@ -519,6 +542,50 @@ class Runs(unittest.TestCase):
         end_interaction(partner, reason="manual", interaction_id=b["interaction"]["id"])
         self.assertEqual(R.get(result["execution_id"])["status"], "cancelled")
         self.assertFalse(R.claims())
+
+    def test_a_one_place_pair_shares_one_seat(self):
+        """Hand-derived: a pose with ``places`` 1 binds to a capacity-1 seat
+        (a ``places`` 2 pose found no place there). Claims: two persons + the
+        ONE slot = 3 (the two-place pair holds 4). Both figures hold slot 0.
+        Each enters at its clip role point: the halves sit at ±0.094 m along
+        the clip axis around the place centre — the marker itself on one
+        seat — so the two entry anchors are 2 × 0.094 = 0.188 m apart and
+        their midpoint is slot 0."""
+        name, partner, target, pid = authored_shared_pair()
+        from app.core.prop_actions import derive_bindings
+        from app.core import places
+        doc = F.props.read_sidecar(pid)
+        self.assertTrue(derive_bindings(doc, doc["model_variants"][0])[0]["marker_ids"])
+        result = request(name, target, partner=partner)
+        self.assertEqual(result["status"], "awaiting_consent", result)
+        accepted = A.respond(partner, result["execution_id"], True)
+        self.assertEqual(accepted["status"], "approaching", accepted)
+        self.assertEqual(len(R.claims()), 3)
+        plans = R.get(result["execution_id"])["data"]["plans"]
+        a, b = plans["actor"]["entry_anchor"], plans["partner"]["entry_anchor"]
+        self.assertEqual((a["slot"], b["slot"]), (0, 0))
+        self.assertAlmostEqual(F.math.dist((a["x"], a["z"]), (b["x"], b["z"])), .188, places=6)
+        place = next(p for p in places._GeometryQuery().room_places(target["location_id"], target["room_id"])
+                     if p["id"] == a["place_id"])
+        self.assertAlmostEqual((a["x"] + b["x"]) / 2, place["slots"][0][0], places=6)
+        self.assertAlmostEqual((a["z"] + b["z"]) / 2, place["slots"][0][1], places=6)
+        for _ in range(40):
+            tick(2)
+            if R.get(result["execution_id"])["status"] == "active":
+                break
+        row = R.get(result["execution_id"])
+        self.assertEqual(row["status"], "active", row)
+        pa, pb = (F.C.get_character_profile(n) for n in (name, partner))
+        self.assertEqual(pa["interaction"]["id"], pb["interaction"]["id"])
+        self.assertEqual((pa["place"]["slot"], pb["place"]["slot"]), (0, 0))
+        from app.core.interaction_engine import end_interaction
+        end_interaction(partner, reason="manual", interaction_id=pb["interaction"]["id"])
+        self.assertFalse(R.claims())
+        entries = pose_catalog.world_entries("pose")
+        entries["run-pair"]["places"] = 2
+        pose_catalog.replace_world_entries("pose", entries)
+        pose_catalog.reload_catalogs()
+        self.assertFalse(derive_bindings(doc, doc["model_variants"][0])[0]["marker_ids"])
 
     def test_freeze_deadline_and_process_restart_have_no_offline_phase_bonus(self):
         name, target, _ = setup_run("combined")

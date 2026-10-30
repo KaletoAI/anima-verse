@@ -355,12 +355,17 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
             if not binding or not binding.get("supported") or binding.get("validation") != "local_valid":
                 return "binding_not_supported"
             from app.core.prop_action_access import slot_access
+            try:
+                point = _entry_point(run, role, place)
+            except ValueError:
+                return "approach_target_changed"
             current_access, access_reason = slot_access(
                 place, anchor["slot"], run["data"]["access_roles"][role],
-                definition, profiles[run[role]])
+                definition, profiles[run[role]], point=point)
             if access_reason:
                 return access_reason
-            if current_access != plan.get("bridge_access", plan["access"]) or list(place["slots"][anchor["slot"]]) != [anchor["x"], anchor["z"]] or place["y_world"] != anchor["y"]:
+            expected = point if point is not None else list(place["slots"][anchor["slot"]])
+            if current_access != plan.get("bridge_access", plan["access"]) or expected != [anchor["x"], anchor["z"]] or place["y_world"] != anchor["y"]:
                 return "approach_target_changed"
             if run["status"] == "approaching" and (run["phase"] == "entry" or run[role] in run["data"]["arrived"]):
                 pos = C.get_character_pos(run[role])
@@ -375,6 +380,27 @@ def _validate(run, *, conn=None, require_claims=False, presence=True, _query=Non
                 if not pos or math.dist((pos["x"], pos["z"]), (anchor["x"], anchor["z"])) > .05:
                     return "owned_position_lost"
     return ""
+
+
+def _shares_place(run) -> bool:
+    """A pair whose pose shares one place (catalog ``places`` 1)."""
+    from app.core.pose_catalog import pose_places
+    definition = run["definition"]
+    return definition["ability"] == "pair" and pose_places(definition["pose_key"]) == 1
+
+
+def _entry_point(run, role, place):
+    """The entry target of ``role`` on ``place`` when it is NOT its slot
+    position: a pair sharing one place (``_shares_place``) enters at its clip
+    role point (``interaction_engine.pair_role_point``), else None.
+    Recomputed, never read back from a plan, so a revalidation compares the
+    plan against today's place and catalog."""
+    if not _shares_place(run):
+        return None
+    definition = run["definition"]
+    from app.core.interaction_engine import pair_role_point
+    clip_role = "a" if run["data"].get("clip_roles", {}).get("a") == run[role] else "b"
+    return list(pair_role_point(place, definition["pose_key"], clip_role))
 
 
 def _plan(run, *, conn, _query=None, replaces=""):
@@ -400,7 +426,9 @@ def _plan(run, *, conn, _query=None, replaces=""):
             continue
         free = [s for s in places.free_slots(place, [t for t in occupancy.get(place["id"], []) if t[0] not in own])
                 if store.held(store.slot_key(target, place["marker_id"], s), conn=conn) in (None, "", replaces or None)]
-        if len(free) < len(_members(run)):
+        from app.core.pose_catalog import pose_places
+        need = pose_places(definition["pose_key"]) if definition["ability"] == "pair" else len(_members(run))
+        if len(free) < need:
             continue
         if definition["ability"] == "pair":
             from app.core.interaction_engine import plan_interaction_at
@@ -427,7 +455,9 @@ def _plan(run, *, conn, _query=None, replaces=""):
             plans = {}
             for role, name in _members(run):
                 slot = allocation["slots"][role]
-                plan = plan_approach(name, dict(target, marker_id=place["marker_id"], slot=slot),
+                point = (allocation.get("points") or {}).get(role)
+                plan = plan_approach(name, dict(target, marker_id=place["marker_id"], slot=slot,
+                                                **({"point": point} if point else {})),
                                      allocation["access_roles"][role], _query=query)
                 if plan["status"] != "ok":
                     last_reason = plan["reason"]
@@ -674,6 +704,8 @@ def _start(run):
         anchor = run["data"]["plans"][role]["entry_anchor"]
         target = dict(run["target"], action_id=run["action_id"], definition_revision=run["definition_revision"],
                       marker_id=anchor["marker_id"], slot=anchor["slot"])
+        if _shares_place(run):   # the planned clip role point, not the slot position
+            target["point"] = [anchor["x"], anchor["z"]]
         journey, reason = travel.start_approach_journey(name, target, run["data"]["access_roles"][role], execution_kind="prop_action",
                             execution_ref=run["execution_id"], journey_id=run["data"]["journey_ids"][name])
         if not journey:

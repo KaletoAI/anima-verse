@@ -94,7 +94,12 @@ def acquire(conn, run, slots):
     """Caller rechecks guards under BEGIN IMMEDIATE before this all-or-none write."""
     entries = [(person_key(n), "person", {"name": n}) for n in (run["actor"], run["partner"]) if n]
     entries += [(slot_key(run["target"], s["marker_id"], s["slot"]), "slot", s) for s in slots]
+    seen = set()
     for key, kind, subject in entries:
+        # A pair sharing one place lists that slot once per role: one claim.
+        if key in seen:
+            continue
+        seen.add(key)
         conn.execute("INSERT INTO prop_action_claims VALUES (?,?,?,?)",
                      (key, run["execution_id"], kind, encode(subject)))
 

@@ -381,38 +381,71 @@ def _held_frame(held: str, who_a: str, who_b: str, meta: Dict[str, Any],
     return {"x": ax, "z": az, "yaw": yaw}, points
 
 
+def pair_role_point(place: dict, pose_key: str, clip_role: str) -> Tuple[float, float]:
+    """Where clip role ``a``/``b`` of the pose's pair clip stands on ``place``:
+    the place centre plus the role's sidecar ``anchor_xz_m`` turned by
+    ``places.pair_yaw`` — the point both renderers draw it at
+    (``pairPoints``). Raises ``ValueError("pair_geometry_missing")``."""
+    from app.core.animation_clips import clip_meta
+    from app.core import places
+    meta = clip_meta(pair_kind_for_pose(pose_key)) or {}
+    offset = ((((meta.get("geometry") or {}).get("roles") or {}).get(clip_role) or {})
+              .get("anchor_xz_m"))
+    if not offset:
+        raise ValueError("pair_geometry_missing")
+    cx, cz = places.centre_of(place)
+    dx, dz = _rotate(float(offset[0]), float(offset[1]), places.pair_yaw(place, pose_key))
+    return cx + dx, cz + dz
+
+
+def shared_slot(place: dict) -> int:
+    """The ONE slot a pair whose pose shares a place (catalog ``places`` 1)
+    holds: the slot nearest the place centre — the marker itself on a single
+    seat, the middle of a row; a tie takes the lower index."""
+    from app.core import places
+    centre = places.centre_of(place)
+    return min(range(len(place["slots"])),
+               key=lambda i: (math.dist(place["slots"][i], centre), i))
+
+
 def plan_interaction_at(actor: str, partner: str, pose_key: str, place: dict, *, profiles=None) -> dict:
     """Shared clip-role allocation BEFORE a prop owner claims access/slots.
 
     Binding access `actor` is clip A, `partner` is clip B. Semantic actor and
     partner identities remain initiator/invitee, including effect targets.
+
+    A pose with ``places`` 2 needs one slot per role, each within 5 cm of its
+    role point. A pose with ``places`` 1 shares a place: both roles hold
+    :func:`shared_slot` and enter at their own role point, returned under
+    ``points`` (location metres) — the slot position would put both figures
+    on one spot.
     """
     from app.core.animation_clips import clip_meta, clip_role_gender
-    from app.core import places
+    from app.core.pose_catalog import pose_places
     from app.models.character import get_character_profile
-    kind = pair_kind_for_pose(pose_key)
-    meta = clip_meta(kind) or {}
+    meta = clip_meta(pair_kind_for_pose(pose_key)) or {}
     profiles = profiles if profiles is not None else {n: get_character_profile(n) for n in (actor, partner)}
     a, b = assign_roles(actor, partner,
         str(profiles[actor].get("gender") or ""),
         str(profiles[partner].get("gender") or ""), clip_role_gender(meta))
     clip_roles = {"a": a, "b": b}
-    yaw = places.pair_yaw(place, pose_key)
-    cx, cz = places.centre_of(place)
-    geometry = (meta.get("geometry") or {}).get("roles") or {}
-    slots, access_roles = {}, {}
+    shared = pose_places(pose_key) == 1
+    slots, access_roles, points = {}, {}, {}
     for clip_role, name in clip_roles.items():
-        offset = (geometry.get(clip_role) or {}).get("anchor_xz_m")
-        if not offset:
-            raise ValueError("pair_geometry_missing")
-        dx, dz = _rotate(float(offset[0]), float(offset[1]), yaw)
-        matches = [i for i, p in enumerate(place["slots"])
-                   if math.dist(p, (cx + dx, cz + dz)) <= .05]
+        point = pair_role_point(place, pose_key, clip_role)
+        semantic = "actor" if name == actor else "partner"
+        access_roles[semantic] = "actor" if clip_role == "a" else "partner"
+        if shared:
+            points[semantic] = [point[0], point[1]]
+            continue
+        matches = [i for i, p in enumerate(place["slots"]) if math.dist(p, point) <= .05]
         if len(matches) != 1:
             raise ValueError("pair_geometry_marker_mismatch")
-        semantic = "actor" if name == actor else "partner"
         slots[semantic] = matches[0]
-        access_roles[semantic] = "actor" if clip_role == "a" else "partner"
+    if shared:
+        slot = shared_slot(place)
+        return dict(clip_roles=clip_roles, access_roles=access_roles,
+                    slots={"actor": slot, "partner": slot}, points=points)
     if len(set(slots.values())) != 2:
         raise ValueError("pair_geometry_marker_mismatch")
     return dict(clip_roles=clip_roles, access_roles=access_roles, slots=slots)
@@ -512,7 +545,9 @@ def start_interaction(actor: str, partner: str, pose_key: str, *,
     if _reserved:
         a = _reserved["data"]["plans"]["actor"]["entry_anchor"]
         b = _reserved["data"]["plans"]["partner"]["entry_anchor"]
-        if a["place_id"] != b["place_id"] or a["slot"] == b["slot"]:
+        from app.core.pose_catalog import pose_places
+        # Two seats for a two-place pose; ONE shared seat for a one-place pose.
+        if a["place_id"] != b["place_id"] or (a["slot"] == b["slot"]) != (pose_places(pose_key) == 1):
             raise ValueError("pair_marker_mismatch")
         place = next((p for p in places._compose(loc_a).get(a["room_id"], [])
                       if p["id"] == a["place_id"] and p.get("variant_uid") == a["variant_uid"]), None)
