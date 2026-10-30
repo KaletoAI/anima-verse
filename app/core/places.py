@@ -53,6 +53,7 @@ _CACHE_TTL_S = 300.0          # belt and braces — every writer invalidates any
 _lock = threading.Lock()      # guards ``_cache`` only, never held around a compose
 _cache: Dict[str, Tuple[Any, Dict[str, List[Place]]]] = {}   # location_id -> (stamp, {room_id: places})
 _warned_outside: set = set()  # place ids already reported as lying outside their location
+_composed: Dict[str, Tuple[Any, Dict[str, List[Place]]]] = {}  # location_id -> (fingerprint key, places)
 
 
 class PlaceUnavailable(ValueError):
@@ -64,6 +65,7 @@ def invalidate() -> None:
     and catalog writer."""
     with _lock:
         _cache.clear()
+        _composed.clear()
 
 
 def _compose(location_id: str) -> Dict[str, List[Place]]:
@@ -76,12 +78,30 @@ def _compose(location_id: str) -> Dict[str, List[Place]]:
     UNPLACED location (no pin) has no world frame, so it has no places:
     its recipe-local metres would read as world metres, and a seat there
     would put the sitter somewhere on the map that is not this location."""
-    from app.core.scene_recipe import compose_scene, scene_inputs
-    from app.core.world_geometry import local_to_world
+    from copy import deepcopy
+    from app.core.scene_recipe import scene_fingerprint
     from app.models.world import get_location_by_id
     loc = get_location_by_id(location_id)
     if not loc or loc.get("pos_x") is None or loc.get("pos_z") is None:
         return {}
+    # A compose costs ~0.5 s and an offer poll, a request and every approach
+    # tick each need one. The scene fingerprint covers every compose input
+    # (sidecar writers invalidate the prop token), so equal keys mean equal
+    # places; callers get a private copy.
+    key = (location_id, scene_fingerprint(loc, location_id))
+    with _lock:
+        hit = _composed.get(location_id)
+    if hit and hit[0] == key:
+        return deepcopy(hit[1])
+    by_room = _compose_fresh(location_id, loc)
+    with _lock:
+        _composed[location_id] = (key, deepcopy(by_room))
+    return by_room
+
+
+def _compose_fresh(location_id: str, loc: dict) -> Dict[str, List[Place]]:
+    from app.core.scene_recipe import compose_scene, scene_inputs
+    from app.core.world_geometry import local_to_world
     plan_width_m, building_meta, room_metas = scene_inputs(loc, location_id, read_only=True)
     scene = compose_scene(loc, plan_width_m=plan_width_m,
                           building_meta=building_meta, room_metas=room_metas, read_only=True)

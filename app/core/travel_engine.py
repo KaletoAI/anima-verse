@@ -1077,6 +1077,9 @@ def start_approach_journey(character_name: str, target: dict, role: str, *,
             return None, "write_failed"
     from app.core import sync_topics
     sync_topics.travel_changed(character_name)
+    # An approach is about a second long: let the ticker plan its arrival beat
+    # now instead of after the fixed sleep it is in.
+    get_travel_ticker().wake()
     return journey, ""
 
 
@@ -2119,9 +2122,19 @@ class TravelTicker:
 
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._wake: asyncio.Event | None = None
+
+    def wake(self) -> None:
+        """Thread-safe: re-plan the next beat now (a short approach started)."""
+        loop, event = self._loop, self._wake
+        if loop is not None and event is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(event.set)
 
     async def start(self) -> None:
         if self._task is None or self._task.done():
+            self._loop = asyncio.get_running_loop()
+            self._wake = asyncio.Event()
             self._task = asyncio.create_task(self._run(), name="travel-ticker")
             logger.info("TravelTicker started (%.0fs interval)", _TICK_SECONDS)
 
@@ -2156,7 +2169,58 @@ class TravelTicker:
                 await asyncio.to_thread(settle_approaches)
             except Exception:
                 logger.exception("interaction settle failed")
-            await asyncio.sleep(_TICK_SECONDS)
+            try:
+                delay = await asyncio.to_thread(_next_beat_s)
+            except Exception:
+                logger.exception("travel tick planning failed")
+                delay = _TICK_SECONDS
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+            self._wake.clear()
+
+
+#: Earliest re-check after a due arrival; one tick may land a hair early.
+_MIN_BEAT_S = 0.1
+#: Approaches already given their early arrival beat. An arrival the tick
+#: could not settle (an owner refusing it) falls back to the fixed beat
+#: instead of spinning the whole ticker every 0.1 s.
+_early_beats: Set[str] = set()
+
+
+def _next_beat_s() -> float:
+    """Real seconds until the next beat: the fixed tick, or sooner when an
+    in-room approach (a walk to a seat, about a second long) arrives first.
+
+    Its arrival is what starts the sit; waiting for the fixed 5 s tick left the
+    figure walking on the spot at the seat. Overland journeys keep the fixed
+    beat — their arrival is minutes away and a few seconds do not show.
+    """
+    from app.models.character import list_active_journeys
+    factor = game_speed_factor()
+    if factor <= 0:
+        return _TICK_SECONDS
+    now = game_time()
+    soonest = _TICK_SECONDS
+    live = set()
+    for entry in list_active_journeys():
+        j = entry.get("journey") or {}
+        if not isinstance(j, dict) or j.get("approach_target") is None or not j.get("waypoints"):
+            continue
+        jid = str(j.get("journey_id") or entry.get("name"))
+        live.add(jid)
+        if jid in _early_beats:
+            continue
+        st = journey_state(j["waypoints"], j["started_at_game"], now)
+        if st["arrived"]:
+            _early_beats.add(jid)
+            soonest = _MIN_BEAT_S
+            continue
+        remaining = (GameTime.parse(st["eta_game"]) - now).total_seconds / factor
+        soonest = min(soonest, remaining + _MIN_BEAT_S)
+    _early_beats.intersection_update(live)
+    return max(_MIN_BEAT_S, soonest)
 
 
 _ticker: TravelTicker | None = None

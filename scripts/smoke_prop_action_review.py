@@ -80,6 +80,9 @@ class Review(unittest.TestCase):
             def uncached_route(query, start, goal, geometry):
                 return P.visibility_path(start, goal, *geometry)
             with patch.object(room_stand, 'room_geometry', return_value=geometry):
+                # The geometry is swapped under an unchanged world: drop the
+                # short offers() cache so both legs really plan.
+                prop_actions.invalidate_offers_cache()
                 with patch.object(F.places._GeometryQuery, 'route', uncached_route), \
                         patch.object(P._VisibilityGraph, '_build_graph', autospec=True,
                                      side_effect=P._VisibilityGraph._build_graph) as builds:
@@ -87,6 +90,8 @@ class Review(unittest.TestCase):
                     expected = prop_actions.offers(name)
                     before = time.perf_counter() - started
                     old_builds = builds.call_count
+                # Measure a real planning pass, not the short offers() cache.
+                prop_actions.invalidate_offers_cache()
                 with patch.object(P._VisibilityGraph, '_build_graph', autospec=True,
                                   side_effect=P._VisibilityGraph._build_graph) as builds:
                     started = time.perf_counter()
@@ -94,8 +99,12 @@ class Review(unittest.TestCase):
                     after = time.perf_counter() - started
                 self.assertEqual(actual, expected)
                 self.assertTrue(all(row['enabled'] for row in actual))
-                self.assertEqual(old_builds, 6)
-                self.assertEqual(builds.call_count, 1)
+                # Patching _GeometryQuery.route no longer forces a build per
+                # action: the planner keeps one graph per query itself.
+                self.assertEqual(old_builds, 1)
+                # At most one shared build; none at all when every access is in
+                # straight sight (the graph is built lazily).
+                self.assertLessEqual(builds.call_count, 1)
                 print(f'{count} blockers, 6 offers: uncached={before:.4f}s/{old_builds} builds cached={after:.4f}s/{builds.call_count} builds')
                 # Distinct endpoints must share the static graph as well.
                 query = F.places._GeometryQuery()

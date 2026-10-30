@@ -216,10 +216,10 @@ SPEED = 1.0
 # Exactly the fields § A11 lists — no more, no less.
 FIELDS = {"target_id", "waypoints", "progress_m", "total_m", "eta_game",
           "eta_hhmm", "eta_label", "starts_in_s", "speed_m_s_real",
-          "pace_m_s_real", "paces_m_s_real", "journey_id"}
+          "pace_m_s_real", "paces_m_s_real", "journey_id", "floor_y"}
 # Route details withheld from foreign travellers; the departure countdown stays.
 THIN_NUMBERS = ("progress_m", "total_m", "eta_game", "eta_hhmm", "eta_label",
-                "speed_m_s_real", "pace_m_s_real", "paces_m_s_real")
+                "speed_m_s_real", "pace_m_s_real", "paces_m_s_real", "floor_y")
 # The v1 cell vocabulary, dropped without replacement.
 V1_FIELDS = ("path", "seg", "frac", "progress_cells", "cell_seconds_real")
 

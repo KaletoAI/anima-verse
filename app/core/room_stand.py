@@ -40,10 +40,14 @@ polygon, footprints and door zones into world metres, and :func:`stand_up`
 writes the result through ``set_character_pos``.
 """
 import math
+import threading
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from app.core import furnish_geometry as fg
 from app.core.log import get_logger
+
+_geometry_lock = threading.Lock()
+_geometry_cache: Dict[Tuple[str, str], Tuple[Any, Any]] = {}
 
 logger = get_logger("room_stand")
 
@@ -285,12 +289,28 @@ def room_geometry(location_id: str, room_id: str
     the storey's, not a room's). Nobody is moved in those: the position stays
     what it was.
     """
-    from app.core.room_recipe import compose_recipe
-    from app.core.world_geometry import local_to_world
+    from copy import deepcopy
+    from app.core.scene_recipe import scene_fingerprint
     from app.models.world import get_location_by_id
     loc = get_location_by_id(location_id)
     if not loc or loc.get("pos_x") is None or loc.get("pos_z") is None:
         return None
+    # The recipe reads a subset of the scene inputs, so the scene fingerprint
+    # is a safe key; planners ask for the same room several times per request.
+    key = (location_id, room_id, scene_fingerprint(loc, location_id))
+    with _geometry_lock:
+        hit = _geometry_cache.get(key[:2])
+    if hit and hit[0] == key:
+        return deepcopy(hit[1])
+    result = _room_geometry_fresh(loc, room_id)
+    with _geometry_lock:
+        _geometry_cache[key[:2]] = (key, deepcopy(result))
+    return result
+
+
+def _room_geometry_fresh(loc: dict, room_id: str):
+    from app.core.room_recipe import compose_recipe
+    from app.core.world_geometry import local_to_world
     rooms = [r for r in (loc.get("rooms") or []) if isinstance(r, dict)]
     room = next((r for r in rooms if str(r.get("id") or "") == room_id), None)
     if room is None:

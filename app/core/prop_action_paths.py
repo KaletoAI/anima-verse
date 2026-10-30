@@ -360,6 +360,31 @@ def slot_route(start, access, anchor, geometry, placement_id, *, graph=None, rea
     return None, "blocked", "no_route" if found_free else "no_free_direct_point"
 
 
+class _LazySequence:
+    """Replayable view of a generator: computes each item once, only on demand.
+
+    The first free anchor sample usually routes, so the full ~2000-point ring
+    is only evaluated for an anchor that really needs it.
+    """
+
+    def __init__(self, source):
+        self._source = source
+        self._items = []
+
+    def __iter__(self):
+        index = 0
+        while True:
+            if index < len(self._items):
+                yield self._items[index]
+            else:
+                item = next(self._source, _LazySequence)
+                if item is _LazySequence:
+                    return
+                self._items.append(item)
+                yield item
+            index += 1
+
+
 def _query_slot_route(query, geometry_key, start, access, anchor, geometry,
                       placement_id, graph, reached):
     """Reuse exact slot work and nearest free anchor samples within one read."""
@@ -369,8 +394,8 @@ def _query_slot_route(query, geometry_key, start, access, anchor, geometry,
         def candidates():
             anchor_key = (geometry_key, tuple(anchor))
             if anchor_key not in query._action_direct_candidates:
-                query._action_direct_candidates[anchor_key] = tuple(graph.space.nearby_free(anchor))
-            return query._action_direct_candidates[anchor_key]
+                query._action_direct_candidates[anchor_key] = _LazySequence(graph.space.nearby_free(anchor))
+            return iter(query._action_direct_candidates[anchor_key])
 
         query._action_slot_routes[key] = slot_route(
             start, access, anchor, geometry, placement_id, graph=graph,
