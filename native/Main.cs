@@ -39,7 +39,11 @@ public partial class Main : Node3D
     /// <summary>What the world is built from: the logged-in API, or the payload dump of <c>--offline</c>.</summary>
     private IWorldSource? _source;
     private WorldBuilder? _builder;
-    private Label? _status;
+    /// <summary>
+    /// The last world-status line (load stage, figures, labels, scatter, sync). The spike's on-screen label is gone —
+    /// the player sees the HUD; every part of the line already has its own log lines, and it changes every second.
+    /// </summary>
+    private string? _statusLine;
     private OverviewCamera? _camera;
     private ShadowCasterGate? _shadowGate;
     private FigureManager? _figures;
@@ -261,11 +265,6 @@ public partial class Main : Node3D
             _hoverAt = at;
             _hoverPending = true;
         };
-
-        var hud = new CanvasLayer { Name = "Hud" };
-        AddChild(hud);
-        _status = new Label { Position = new Vector2(12, 8), Modulate = new Color(0.1f, 0.1f, 0.1f) };
-        hud.AddChild(_status);
     }
 
     public override void _ExitTree()
@@ -350,10 +349,7 @@ public partial class Main : Node3D
         => o.ValueKind == JsonValueKind.Object && o.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString() : null;
 
-    private void SetStatus(string text)
-    {
-        if (_status is not null) _status.Text = text;
-    }
+    private void SetStatus(string text) => _statusLine = text;
 
     private static void Log(string line) => GD.Print("[native] " + line);
 }
