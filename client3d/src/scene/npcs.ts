@@ -5,7 +5,7 @@ import type { SyncCounters } from '../game/perfstats';
 import type { MapCharacter, MapInteraction, MapPropActionEntry } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
-import { entryIdentity, entryPhase, localApproachPoint, projectApproachM, ownedApproachStep, ownedApproachCatchUp } from '../game/propActionMotion';
+import { entryIdentity, entryPhase, localApproachPoint, projectApproachM, ownedApproachStep, ownedApproachCatchUp, seatStandM } from '../game/propActionMotion';
 import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, sinkForState, standingClipFor,
   terrainPace, propWaterWord,
@@ -218,6 +218,8 @@ export interface TravelRoute {
   startsInS?: number;
   departureClip?: string;
   departureStarted?: boolean;
+  seatDeparture?: boolean;
+  seatReleased?: boolean;
 }
 
 /** A pair interaction as the renderer runs it (§ A8a): the anchor the two
@@ -929,10 +931,13 @@ export class NpcManager {
             totalM: inc.totalM, paces: inc.paces, targetM: target, shownM: shown,
             ownedApproach: inc.ownedApproach,
             catchUpRate: inc.ownedApproach ? catchUp : 0,
-            departureClip: (inc.startsInS ?? 0) > age ? inc.departureClip : undefined,
+            departureClip: (inc.startsInS ?? 0) > age && inc.departureClip !== this.propDeparturePose ? inc.departureClip : undefined,
+            seatDeparture: !!inc.ownedApproach && this.propDeparturePose !== null
+              && (!inc.departureClip || inc.departureClip === this.propDeparturePose || (inc.startsInS ?? 0) <= age),
             stamp: inc.stamp, exact: inc.exact, floorY: inc.floorY, serverM: inc.serverM,
             receivedAt: performance.now() - age * 1000, startsInS: inc.startsInS,
           };
+          if (inc.ownedApproach) this.propDeparturePose = null;
           if (inc.ownedApproach) console.info(`[prop] approach adopted journey=${inc.journeyId} total_m=${inc.totalM.toFixed(3)} server_m=${target.toFixed(3)} rendered_start_m=${shown.toFixed(3)} starts_in_s=${Math.max(0, (inc.startsInS ?? 0) - age).toFixed(3)} catch_up=${catchUp > 0 ? 'yes' : 'no'}`);
         } else {
           npc.route.paces = inc.paces;
@@ -1352,16 +1357,22 @@ export class NpcManager {
   }
 
   propSeatSwitchExecution: string | null = null;
+  propDeparturePose: string | null = null;
+
+  preparePropDeparture(name: string): void {
+    const npc = this.npcs.get(name);
+    this.propDeparturePose = npc?.figure?.currentClip ?? npc?.animation ?? null;
+  }
 
   clearPropEntry(name: string, preservePose = false): void {
     const npc = this.npcs.get(name);
     if (!npc) return;
     npc.entryBlocked = false;
+    npc.propCommitKey = '';
     npc.root.visible = true;
-    if (!npc.entry) return;
     if (!preservePose) npc.figure?.finishPropEntry(poseClip('standing'));
     npc.entry = null;
-    npc.route = null;
+    if (!preservePose || !npc.route?.ownedApproach) npc.route = null;
     npc.waypoints = [];
     npc.target.copy(npc.root.position);
   }
@@ -1475,10 +1486,25 @@ export class NpcManager {
           const age = (performance.now() - (r.receivedAt ?? performance.now())) / 1000;
           const waiting = (r.startsInS ?? 0) > age;
           const figure = npc.figure;
+          if (r.seatDeparture && !r.seatReleased) {
+            const standM = seatStandM(r.points, r.startsInS ?? 0, age);
+            if (standM === null) {
+              figure?.update(dt, { frozen }); npc.label.visible = labelVisible; continue;
+            }
+            r.seatReleased = true; r.shownM = standM;
+            const stand = r.points[1];
+            npc.root.position.set(stand[0], r.floorY ?? this.roomStandAt(npc.name, stand[0], stand[1])
+              ?? this.groundY(stand[0], stand[1]), stand[1]);
+            npc.target.copy(npc.root.position);
+            this.setPlayerPose(npc.name, null, null);
+            figure?.finishPropEntry(poseClip('standing'));
+            figure?.update(0, { frozen }); npc.label.visible = labelVisible; continue;
+          }
           // Exit travel belongs to the clip until it finishes, then to the route root once.
           if (r.departureClip && !r.departureStarted && figure) {
             const rootY = npc.root.position.y;
             r.departureStarted = figure.playDeparture(r.departureClip);
+            if (r.departureStarted) this.setPlayerPose(npc.name, null, null);
             if (r.departureStarted && figure.beginBridgeLift(rootY - (r.floorY ?? rootY)))
               npc.root.position.y = r.floorY ?? rootY;
           }

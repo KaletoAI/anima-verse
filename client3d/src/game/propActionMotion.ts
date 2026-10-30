@@ -42,6 +42,12 @@ export function projectApproachM(points: readonly Point[], point: Point): number
   return result;
 }
 
+/** A clipless seat departure releases at waypoint 2, once the server lead has elapsed. */
+export function seatStandM(points: readonly Point[], startsInS: number, ageS: number): number | null {
+  return startsInS > Math.max(0, ageS) ? null : points.length < 2 ? 0
+    : Math.hypot(points[1][0] - points[0][0], points[1][1] - points[0][1]);
+}
+
 /** Owned approaches retain continuity even after a delayed first poll or frame stall. */
 export function ownedApproachStep(shownM: number, targetM: number, pace: number, catchUpRate: number, dt: number, startsInS = 0, ageS = 0): number {
   if (startsInS > Math.max(0, ageS)) return shownM;
@@ -85,6 +91,7 @@ export function createManualPropGate() {
   let pending: Promise<void> | null = null;
   return {
     get pending() { return pending !== null; },
+    withdraw(journey: string | null | undefined) { if (journey) withdrawn.add(journey); },
     withdrawn(journey: string | null | undefined) { return !!journey && withdrawn.has(journey); },
     cancel(_execution: string, journey: string | null, cancel: () => Promise<unknown>): Promise<void> {
       if (pending) return pending;

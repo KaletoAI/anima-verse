@@ -70,6 +70,10 @@
  * ahead. At age .75 the step may advance .1 m; age 1 permits late catch-up
  * (6 m / .6 s = 10 m/s). A lead of exactly .25 m needs no catch-up.
  *
+ * [15] A .3 s lead holds until age .3 exactly. The seat stand leg is
+ * sqrt((2-2)^2+(-.5-0)^2)=.5 m; a .3/.4 diagonal is also .5 m.
+ * After this defined release, .1 s at 1 m/s advances .5 -> .6 m.
+ *
  * Adapters call production exports and normalize Three/Promise results only.
  * Async traces resolve before passing their actual result through runVectors;
  * the common loader, fixture resolver, comparator and failure accounting apply.
@@ -165,3 +169,5 @@ await import('./smoke_prop_action_storey.mjs');
 await import('./smoke_prop_action_offers.mjs');
 
 await import('./smoke_prop_action_menu.mjs');
+
+await import('./smoke_prop_action_recovery.mjs');

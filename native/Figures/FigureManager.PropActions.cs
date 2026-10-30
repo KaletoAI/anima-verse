@@ -23,6 +23,7 @@ public partial class FigureManager
     public Func<bool>? SuppressAvatarPropEntry { get; set; }
     public Action<string>? PropEntryError { get; set; }
     public bool HasPropMotion=>_figures.Values.Any(f=>f.PropEntry is not null || f.Route?.ExactPath is not null);
+    public string? PropDeparturePose { get; set; }
     public string? PropSeatSwitchExecution { get; set; }
     public void ClearPropEntry(string name,bool preservePose=false)
     {
@@ -65,7 +66,12 @@ public partial class FigureManager
                         TravelPath.RateAt(points,route.Paces,route.ShownM) ?? 0,starts,age));
             }
             if(adopted && PropActionMotion.Number(path["starts_in_s"])>_clock-route.ReceivedAt
-                && row.ActivityAnimation!=FigureClips.PoseKind("standing",fig.Poses)) route.DepartureClip=row.ActivityAnimation;
+                && row.ActivityAnimation!=FigureClips.PoseKind("standing",fig.Poses)
+                && row.ActivityAnimation!=PropDeparturePose) route.DepartureClip=row.ActivityAnimation;
+            if(adopted && route.OwnedApproach) {
+                route.SeatDeparture=PropDeparturePose is not null && route.DepartureClip.Length==0;
+                PropDeparturePose=null;
+            }
         }
         if(route.OwnedApproach && PropSeatSwitchExecution is { } oldExecution) {
             _log($"[prop] switch from seat: old execution={oldExecution} exit clip={route.DepartureClip} starts_in_s={Math.Max(0,PropActionMotion.Number(path["starts_in_s"])-(_clock-route.ReceivedAt)):F3}");
@@ -147,9 +153,21 @@ public partial class FigureManager
     {
         double age=_clock-route.ReceivedAt,starts=PropActionMotion.Number(route.ExactPath!["starts_in_s"]);
         bool waiting=starts>age;
+        if(route.SeatDeparture && !route.SeatReleased) {
+            if(PropActionMotion.SeatStandM(route.Points,starts,age) is not { } standM) {
+                fig.SecondaryFrozen=WorldFrozen; fig.UpdateFigure(dt); fig.Portrait?.Tick(dt,camDist,false); return;
+            }
+            route.SeatReleased=true; route.ShownM=standM;
+            var stand=route.Points[1];
+            fig.Position=new((float)stand.X,(float)PropApproachFloor(fig,route,stand.X,stand.Z),(float)stand.Z); fig.Target=fig.Position;
+            fig.Face=null; fig.Lean=null; fig.SurfaceGroup="ground"; fig.ApplyRotation();
+            fig.FinishPropEntry(FigureClips.PoseKind("standing",fig.Poses));
+            fig.UpdateFigure(0); return;
+        }
         if(route.DepartureClip.Length>0 && !route.DepartureStarted) {
             double rootY=fig.Position.Y,goalY=PropApproachFloor(fig,route,fig.Position.X,fig.Position.Z);
             route.DepartureStarted=fig.PlayDeparture(route.DepartureClip);
+            if(route.DepartureStarted) { fig.Face=null; fig.Lean=null; fig.SurfaceGroup="ground"; fig.ApplyRotation(); }
             if(route.DepartureStarted && fig.BeginBridgeLift(rootY-goalY))
                 fig.Position=new(fig.Position.X,(float)goalY,fig.Position.Z);
         }
@@ -161,7 +179,7 @@ public partial class FigureManager
             return;
         }
         var before=fig.Position;
-        var paces=Enumerable.Range(0,route.Points.Count-1).Select(i=>(double?)(route.Paces is { } ps && i<ps.Count ? ps[i] ?? 0 : 0)).ToArray();
+        var paces=route.Paces;
         route.TargetM=route.Settled ? route.TotalM : TravelPath.AdvanceAlongPaces(route.Points,paces,PropActionMotion.Number(route.ExactPath!["progress_m"]),
             Math.Max(0,_clock-route.ReceivedAt-Math.Max(0,PropActionMotion.Number(route.ExactPath["starts_in_s"]))));
         var point=PropActionMotion.LocalApproachPoint(route.ExactPath!,_clock-route.ReceivedAt);

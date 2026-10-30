@@ -49,6 +49,9 @@ public static class PropActionMotion
         }
         return result;
     }
+    /// <summary>A clipless departure releases at waypoint 2 after the server lead.</summary>
+    public static double? SeatStandM(IReadOnlyList<(double X,double Z)> points,double startsInS,double ageS)
+        =>startsInS>Math.Max(0,ageS) ? null : points.Count<2 ? 0 : double.Hypot(points[1].X-points[0].X,points[1].Z-points[0].Z);
     /// <summary>Keep owned playback continuous across delayed polls and slow frames.</summary>
     public static double OwnedApproachStep(double shownM,double targetM,double pace,double catchUpRate,double dt,double startsInS=0,double ageS=0)
         =>startsInS>Math.Max(0,ageS) ? shownM : shownM+Math.Min(Math.Min(Math.Max(0,targetM-shownM),.25),Math.Max(0,Math.Max(pace,catchUpRate))*Math.Max(0,dt));

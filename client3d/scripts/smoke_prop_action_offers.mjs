@@ -29,7 +29,7 @@ const deps = {
   },
   rebuildPlaceGlyphs() {}, getGameState: () => ({}), setGameState() {},
   figures: { state: 'loading' }, npcs: {}, uiActions: { toast: m => { throw Error(m); } },
-  releaseSwitchedPropSeat() {}, logPropOffers() {},
+  releaseSwitchedPropSeat() {}, logPropOffers() {}, adoptPropState() {},
 };
 const sync = await mainFunction('syncPlaceGlyphs', deps, ['semanticOffers']);
 status = 'active';
@@ -44,11 +44,12 @@ assert.equal(sync.snapshot().semanticOffers[0].enabled, true, 'polled completion
 assert.equal(actionReads, 2);
 finishActions = null;
 const refreshMotion = await mainFunction('refreshPropMotion', {
-  releaseSwitchedPropSeat() {}, propStateEpoch: 0, api: deps.api, semanticState: {}, propStateUncertain: false,
+  adoptPropState() {}, releaseSwitchedPropSeat() {}, propStateEpoch: 0, api: deps.api, semanticState: {}, propStateUncertain: false,
   ownedPropRun: () => null, propPreparation: deps.propPreparation,
   pollCore: () => ({ refresh: async () => { refreshWorld++; } }), lastMap: map, syncPlaceGlyphs: sync,
 });
 const release = await mainFunction('releaseOwnedProp', {
+  trackedPropRun: null, requestedPropRun: null, adoptedPropJourney: null, releaseLocalProp() {},
   ownedPropRun: () => ({ execution_id: 'run' }), manualPropGate: {
     pending: false, cancel: async (_run, _journey, cancel) => { await cancel(); },
   },

@@ -16,6 +16,7 @@ public sealed class ManualPropGate
     private readonly HashSet<string> _withdrawn = new(StringComparer.Ordinal);
     private Task? _pending;
     public bool Pending { get { lock (_sync) return _pending is not null; } }
+    public void Withdraw(string? journey) { lock(_sync) if(!string.IsNullOrEmpty(journey)) _withdrawn.Add(journey); }
     public bool Withdrawn(string? journey)
     {
         lock (_sync) return !string.IsNullOrEmpty(journey) && _withdrawn.Contains(journey);

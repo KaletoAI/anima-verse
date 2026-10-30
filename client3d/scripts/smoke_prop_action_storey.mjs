@@ -145,6 +145,57 @@ for (const floor of [9.4, undefined, 0]) {
   } finally { globalThis.performance = realPerformance; }
 }
 
+// Task 81: no exit clip holds the seat through the short lead, then releases at waypoint 2.
+{
+  const realPerformance = globalThis.performance;
+  let now = 10000;
+  globalThis.performance = { now: () => now };
+  try {
+    const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });
+    const root = new THREE.Group(); root.position.set(2, .129, 0);
+    const figure = new Figure({ name: 'no-exit', template: new THREE.Group(), scale: 1, height: 1.7,
+      clips: ['walking', 'standing', 'sitting'].map(name => new THREE.AnimationClip(name, 1, [])),
+      tier: 'full', noClips: false, libraryFits: true });
+    root.add(figure.root); figure.play('sitting');
+    // Imported asset names may differ from the semantic action key.
+    figure.current.getClip().name = 'SittingIdle';
+    const npc = { name: char.name, root, figure, target: root.position.clone(), waypoints: [],
+      entry: null, interaction: null, route: null, travelLine: null, travelKey: '',
+      label: {}, labelName: {}, labelActivity: {}, bubbleUntil: 0 };
+    mgr.npcs.set(char.name, npc); mgr.setPlayerDriven(char.name); mgr.setServerDriven(char.name, true);
+    mgr.preparePropDeparture(char.name);
+    const fresh = structuredClone(char);
+    fresh.travel = { ...fresh.travel, waypoints: [[2, 0], [2, -.5], [4, -.5]],
+      starts_in_s: .3, progress_m: 0, paces_m_s_real: [null, 1], floor_y: 0 };
+    fresh.activity_animation = 'sitting';
+    mgr.update([routeFor(fresh, 81, map)]);
+    for (let i = 0; i < 3; i++) {
+      mgr.tick(.1, 10);
+      assert.equal(figure.current.getClip().name, 'SittingIdle', 'no-exit lead retains aliased seat pose');
+      assert.equal(root.position.z, 0, 'no-exit lead retains seat point');
+      assert.equal(figure.bridging, false, 'seat pose never becomes a departure bridge');
+      now += 100;
+    }
+    mgr.tick(0, 10);
+    assert.equal(root.position.z, -.5, 'at start, stand up at SECOND waypoint');
+    assert.equal(root.position.y, .01, 'at start, stand on the bare floor plus clearance');
+    assert.equal(figure.current.getClip().name, 'standing', 'at start, release directly to upright pose');
+    let previous = root.position.clone();
+    for (let i = 0; i < 30; i++) {
+      now += 1000 / 60; mgr.tick(1 / 60, 10);
+      assert.ok(root.position.distanceTo(previous) <= .25001, 'walk after defined stand-up remains continuous');
+      previous.copy(root.position);
+    }
+    assert.ok(root.position.x > 2 && root.position.z === -.5, 'null seat pace cannot trap the walk');
+    assert.equal(figure.current.getClip().name, 'walking');
+    npc.propCommitKey = 'old-seat';
+    mgr.clearPropEntry(char.name);
+    assert.equal(npc.propCommitKey, '', 'release clears held-pose commit identity');
+    assert.equal(npc.route, null, 'release clears a route even without an entry');
+    assert.equal(figure.current.getClip().name, 'standing', 'release clears animation even without an entry');
+  } finally { globalThis.performance = realPerformance; }
+}
+
 // A late first owned poll must walk the remaining visual route, including corners.
 {
   const late = structuredClone(char);
@@ -214,6 +265,7 @@ for (const floor of [9.4, undefined, 0]) {
     slotFor: () => seatedState.pos.clone(), cancelRoute() {}, walkIn: null, correction: null, THREE,
   });
   const driver = await mainFunction('applyDriver', {
+  reconcilePropWorld() {},
     pollIsStale: () => false, ownCorrectionAt: 0, ownSeatChangeAt: 0, avatarName: char.name,
     manualPropGate: { pending: false, withdrawn: () => false }, ownedPropRun: () => null,
     ownedPropJourney: late.travel.journey_id, avatarDrive: { kind: 'SERVER', j: late.travel.journey_id },
@@ -284,6 +336,7 @@ assert.equal(figure.current.getClip().name, 'sitting');
 
 let serverDrive = 0, terminalPoint = null, ownedRun = { status: 'active' };
 const applyDriver = await mainFunction('applyDriver', {
+  reconcilePropWorld() {},
   pollIsStale: () => false, ownCorrectionAt: 0, ownSeatChangeAt: 0,
   manualPropGate: { pending: false, withdrawn: () => false }, avatarName: char.name,
   ownedPropRun: () => ownedRun, ownedPropJourney: 'upper',
@@ -304,7 +357,13 @@ assert.equal(terminalPoint.y, 9.41, 'terminal handoff retains the indoor floor')
 const manualGate = motion.createManualPropGate();
 let finishCancel, requests = 0;
 const released = new Set();
+const localRelease = await mainFunction('releaseLocalProp', {
+  manualPropGate: manualGate, manualPropRelease: false, ownSeatChangeAt: 0, answerFloor: 0, posSeq: 1, pendingReport: {},
+  avatarName: char.name, avatarCancelled: null, avatarDrive: { kind: 'SERVER', j: 'upper-journey' }, npcs: mgr,
+  avatarSeated: true, seatedKey: 'bench#0', preparedPropJourney: null, preparedPropSeatExecution: 'upper',
+}, ['avatarDrive', 'avatarSeated', 'manualPropRelease']);
 const release = await mainFunction('releaseOwnedProp', {
+  releaseLocalProp: localRelease, trackedPropRun: null, requestedPropRun: null, adoptedPropJourney: null,
   avatarName: char.name, ownedPropRun: () => ({ execution_id: 'upper' }),
   manualPropGate: manualGate, lastMap: { characters: [active] }, ownedPropJourney: 'upper-journey',
   api: { cancelPropAction: () => { requests++; return new Promise(resolve => { finishCancel = resolve; }); } },
@@ -328,7 +387,7 @@ finishCancel({ status: 'cancelled' }); await releasing;
 assert.equal(requests, 1);
 assert.equal(manualGate.pending, false);
 assert.equal(manualGate.withdrawn('upper-journey'), true);
-assert.deepEqual(release.snapshot(), { avatarDrive: { kind: 'PLAYER' }, avatarSeated: false, manualPropRelease: true });
+assert.deepEqual(localRelease.snapshot(), { avatarDrive: { kind: 'PLAYER' }, avatarSeated: false, manualPropRelease: true });
 assert.equal(mgr.propEntryUnavailable(char.name), false);
 
 

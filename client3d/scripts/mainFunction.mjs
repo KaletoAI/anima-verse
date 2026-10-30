@@ -16,3 +16,18 @@ export async function mainFunction(name, dependencies, observe = []) {
   const code = ts.transpileModule(`return Object.assign((${found.getText(source)}), { snapshot: () => ({ ${observe.join(", ")} }) });`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   return new Function(...Object.keys(dependencies), code)(...Object.values(dependencies));
 }
+
+/** Execute cooperating production closures in one fixture scope, preserving their shared state. */
+export async function mainFunctions(names, dependencies, observe = []) {
+  const source = ts.createSourceFile('main.ts', readFileSync(new URL('../src/main.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+  const found = new Map();
+  function visit(node) {
+    if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text)) found.set(node.name.text, node.getText(source));
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  for (const name of names) if (!found.has(name)) throw new Error(`Missing production function ${name}`);
+  const code = ts.transpileModule(`${[...found.values()].join('\n')}\nreturn { ${names.join(', ')}, snapshot: () => ({ ${observe.join(', ')} }) };`,
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  return new Function(...Object.keys(dependencies), code)(...Object.values(dependencies));
+}

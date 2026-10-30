@@ -2044,6 +2044,8 @@ export class Figure {
     this.play(poseClip('standing'));
   }
 
+  get currentClip(): string | null { return this.currentKind; }
+
   /** A journey's activity_animation names its holding departure clip directly. */
   playDeparture(clip: string): boolean {
     if (!this.actions.has(clip)) return false;

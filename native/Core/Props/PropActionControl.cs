@@ -32,13 +32,16 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     public Func<Task>? RefreshOffers { get; set; }
     public Action<string>? Log { get; set; }
     private string _offeredOwnKey="";
+    private JsonObject? _requestedRun,_trackedRun;
+    private string? _adoptedJourney;
+    public event Action<string,string>? RunEnded;
     private string OwnStateKey => OwnedRun is { } run ? $"{PropActionMotion.Text(run["execution_id"])}|{PropActionMotion.Text(run["status"])}|{PropActionMotion.Text(run["phase"])}" : "";
     public Func<Task> RefreshWorld { get; set; }=()=>Task.CompletedTask;
     public event Action? PauseChanged;
     public event Action<string?>? NotifyChanged;
     /// <summary>Task 67 #5: reconciliation errors are observable without replacing the mutation verdict.</summary>
     public event Action<string>? RefreshFailed;
-    public JsonObject? OwnedRun => (_state["current"] as JsonArray ?? new()).OfType<JsonObject>()
+    public JsonObject? OwnedRun => _requestedRun ?? (_state["current"] as JsonArray ?? new()).OfType<JsonObject>()
         .FirstOrDefault(r=>!_released.Contains(PropActionMotion.Text(r["execution_id"])) && PropActionMotion.Text(r["status"]) is "approaching" or "active")
         ?? (_state["outgoing"] as JsonArray ?? new()).OfType<JsonObject>()
         .FirstOrDefault(r=>!_released.Contains(PropActionMotion.Text(r["execution_id"])) && PropActionMotion.Text(r["status"])=="approaching");
@@ -48,39 +51,87 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
         Preparation.Begin(id,clock()); _uncertain=true; _epoch++; PauseChanged?.Invoke();
         await PrepareWrites();
     }
-    public Task ChangedAsync(string? id)
+    public Task ChangedAsync(string? id,bool immediateWorld=false)
     {
         if(_disposed) return Task.CompletedTask;
         Preparation.Changed(id); _uncertain=true; _epoch++; PauseChanged?.Invoke();
-        return RefreshAsync();
+        return RefreshAsync(immediateWorld);
     }
-    public async Task RefreshAsync()
+    public async Task RefreshAsync(bool immediateWorld=false)
     {
         if(_disposed) return;
         int epoch=_epoch; long serial=++_refreshSerial;
-        using var state=await source.GetPropActionStateAsync();
-        if(_disposed || epoch!=_epoch || serial!=_refreshSerial) return;
+        // Start the map before private-state latency can consume the 0.3 s lead.
+        var stateRequest=source.GetPropActionStateAsync();
+        Task<Exception?>? world=null;
+        if(immediateWorld) { Log?.Invoke("approaching answer: immediate worldmap poll"); world=ObserveWorldRefreshAsync(); }
+        using var state=await stateRequest;
+        if(_disposed || epoch!=_epoch || serial!=_refreshSerial) { if(world is not null) await world; return; }
         var fresh=JsonNode.Parse(state.RootElement.GetRawText())!.AsObject();
         // Exact own approaches need this private status while applying their public world route.
-        _state=fresh;
-        await RefreshWorld();
+        _trackedRun ??= OwnedRun?.DeepClone().AsObject();
+        _state=fresh; _requestedRun=null;
+        ReconcileRun(); PauseChanged?.Invoke();
+        if(world is not null) { if(await world is { } error) throw error; } else await RefreshWorld();
         if(_disposed || epoch!=_epoch || serial!=_refreshSerial) return;
         _uncertain=false; Preparation.AdoptFreshState(); PauseChanged?.Invoke();
         string key=OwnStateKey;
         if(key!=_offeredOwnKey && RefreshOffers is { } refresh) { await refresh(); _offeredOwnKey=key; }
     }
+    // Observe the parallel map failure immediately, including superseded or failed state reads.
+    private async Task<Exception?> ObserveWorldRefreshAsync()
+    {
+        try { await RefreshWorld(); return null; }
+        catch(Exception error) { return error; }
+    }
     public async Task<JsonDocument> MutateAsync(Func<Task<JsonDocument>> mutation)
     {
         string id=$"{_session}:{++_sequence}";
-        try { await PrepareAsync(id); return await mutation(); }
+        bool approaching=false;
+        try {
+            await PrepareAsync(id);
+            var answer=await mutation();
+            if(answer.RootElement.TryGetProperty("status",out var status) && status.GetString()=="approaching") {
+                _requestedRun=JsonNode.Parse(answer.RootElement.GetRawText())!.AsObject();
+                _trackedRun=(JsonObject)_requestedRun.DeepClone(); _adoptedJourney=null; approaching=true;
+            }
+            return answer;
+        }
         finally
         {
             if(!_disposed)
             {
-                try { NotifyChanged?.Invoke(id); await ChangedAsync(id); }
+                try { NotifyChanged?.Invoke(id); await ChangedAsync(id,approaching); }
                 catch(Exception e) { RefreshFailed?.Invoke(e.Message); }
             }
         }
+    }
+    private void ReconcileRun()
+    {
+        if(_trackedRun is not { } previous) { _trackedRun=OwnedRun?.DeepClone().AsObject(); return; }
+        string id=PropActionMotion.Text(previous["execution_id"]);
+        var row=new[]{"current","outgoing","recent_results"}.SelectMany(k=>(_state[k] as JsonArray ?? new()).OfType<JsonObject>())
+            .FirstOrDefault(r=>PropActionMotion.Text(r["execution_id"])==id);
+        string status=PropActionMotion.Text(row?["status"]);
+        if(status is "cancelled" or "failed" || (row is null && PropActionMotion.Text(previous["status"])=="approaching"))
+            EndRun(status.Length>0 ? status : "cancelled",row is null ? "approach_withdrawn" : PropActionMotion.Text(row["reason"]));
+        else if(OwnedRun is { } owned) _trackedRun=(JsonObject)owned.DeepClone();
+    }
+    /// <summary>A fresh map may withdraw an adopted approach before the private lifecycle poll catches up.</summary>
+    public void ObserveWorld(string? journey,bool physicalState)
+    {
+        if(_trackedRun is null) return;
+        if(!string.IsNullOrEmpty(journey)) _adoptedJourney=journey;
+        else if(_adoptedJourney is not null && !physicalState) EndRun("cancelled","approach_withdrawn");
+    }
+    private void EndRun(string status,string reason)
+    {
+        if(_trackedRun is null) return;
+        _released.Add(PropActionMotion.Text(_trackedRun["execution_id"]));
+        _trackedRun=_requestedRun=null; _adoptedJourney=null;
+        _uncertain=false; Preparation.AdoptFreshState();
+        Log?.Invoke($"run ended without approach: status={status} reason={reason}");
+        RunEnded?.Invoke(status,reason);
     }
     /// <summary>Task 57: success alone tombstones the captured journey; refusal leaves it retriable.</summary>
     public Task ReleaseAsync(string executionId,string? journey,Action release)
@@ -98,7 +149,9 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
             string status=result.RootElement.TryGetProperty("status",out var s) ? s.GetString() ?? "" : "";
             if(status is "refused" or "failed") throw new InvalidOperationException(result.RootElement.GetProperty("reason").GetString());
             if(_disposed) return;
-            _released.Add(executionId); release();
+            _released.Add(executionId);
+            _trackedRun=_requestedRun=null; _adoptedJourney=null;
+            release();
         });
     public Task ExpireAsync() => Preparation.Expire(clock()) ? ChangedAsync(null) : Task.CompletedTask;
     public void Dispose() { _disposed=true; _epoch++; }

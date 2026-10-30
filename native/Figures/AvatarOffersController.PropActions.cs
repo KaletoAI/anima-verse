@@ -41,6 +41,7 @@ public sealed partial class AvatarOffersController
                 ? PropActionMotion.Text(props.OwnedRun?["execution_id"]) : null;
             _preparedPropJourney=Map is { } map && Self(map) is { } me && me.TryGetProperty("travel",out var tr) && tr.ValueKind==JsonValueKind.Object
                 ? Text(tr,"journey_id") : null;
+            _figures.PropDeparturePose=_preparedPropSeatExecution is null ? null : Avatar?.CurrentKind ?? "";
             _steering.CancelRoute();
             if(Avatar is { } f && !_figures.ServerDriven) _figures.SetPlayerTarget(f.CharacterName,f.Position);
             var point=Avatar is { } a ? new AnimaNative.Scatter.P2(a.Position.X,a.Position.Z) : (AnimaNative.Scatter.P2?)null;
@@ -62,6 +63,7 @@ public sealed partial class AvatarOffersController
         props.PauseChanged+=PropPauseChanged;
         props.NotifyChanged+=PropNotifyChanged;
         props.RefreshFailed+=PropRefreshFailed;
+        props.RunEnded+=PropRunEnded;
         _hud.PropActionPrepare=props.PrepareAsync;
         _hud.PropActionsChanged=id=> { _propBurstUntil=_clock()+5000; PendingPropAction=ObservePropAsync(()=>props.ChangedAsync(id)); };
         _hud.Handlers["pickPropAction"]=args=> {
@@ -99,10 +101,7 @@ public sealed partial class AvatarOffersController
         // Keep the current seated clip: the new route opens the measured exit bridge.
         _figures.ClearPropEntry(_figures.AvatarName,preservePose:true);
         _steering.SetSeated(false); _seatKey="";
-        if(Avatar is { } f) {
-            f.Face=null; f.Lean=null; f.SurfaceGroup="ground"; f.ApplyRotation();
-            _figures.SetPlayerAnimation(f.CharacterName,null);
-        }
+        if(Avatar is { } f) _figures.SetPlayerAnimation(f.CharacterName,null);
     }
     private void PropPauseChanged()
     {
@@ -146,16 +145,37 @@ public sealed partial class AvatarOffersController
         string? journey=Self(Map!.Value) is { } me && me.TryGetProperty("travel",out var tr) && tr.ValueKind==JsonValueKind.Object ? Text(tr,"journey_id") : _position.OwnedPropJourney;
         await ObservePropAsync(async ()=> {
             try { await props.ReleaseAsync(PropActionMotion.Text(run["execution_id"]),journey,()=> {
-                _manualPropRelease=true;
-                _position.OwnSeatChangeAt=_clock(); _position.Channel.DiscardPendingAnswers();
-                _figures.ClearPropEntry(_figures.AvatarName); _figures.SetServerDriven(false);
-                _steering.PropActionDriven=false; _steering.SetSeated(false); _seatKey="";
-                if(Avatar is { } f) { f.Face=null; f.Lean=null; f.ApplyRotation(); _figures.SetPlayerAnimation(f.CharacterName,null); }
+                ReleaseLocalProp();
             });
                 await RefreshSemanticOffersAsync();
             }
             finally { PropPauseChanged(); }
         });
+    }
+    private void PropRunEnded(string status,string reason)
+    {
+        if(_disposed) return;
+        _propBurstUntil=0;
+        ReleaseLocalProp();
+    }
+    private void ReleaseLocalProp()
+    {
+        PropActions?.ManualGate.Withdraw(_position.OwnedPropJourney);
+        _position.Channel.ApplyDriver(new(false,null,null));
+        _manualPropRelease=true; _propPrepared=false;
+        _preparedPropJourney=_preparedPropSeatExecution=null; _figures.PropDeparturePose=null;
+        _position.OwnSeatChangeAt=_clock(); _position.Channel.DiscardPendingAnswers();
+        _figures.ClearPropEntry(_figures.AvatarName); _figures.SetServerDriven(false);
+        _steering.PropActionDriven=false; _steering.SetSeated(false); _seatKey="";
+        if(Avatar is { } f) { f.Face=null; f.Lean=null; f.SurfaceGroup="ground"; f.ApplyRotation(); _figures.SetPlayerAnimation(f.CharacterName,null); }
+        PropPauseChanged();
+    }
+    private void ReconcilePropWorld(JsonElement map)
+    {
+        if(PropActions is not { } props || Self(map) is not { } me) return;
+        string? journey=me.TryGetProperty("travel",out var tr) && tr.ValueKind==JsonValueKind.Object ? Text(tr,"journey_id") : null;
+        bool Physical(string key)=>me.TryGetProperty(key,out var value) && value.ValueKind==JsonValueKind.Object;
+        props.ObserveWorld(journey,Physical("place") || Physical("prop_action_entry") || Physical("interaction"));
     }
     public async Task RefreshSemanticOffersAsync()
     {
@@ -227,7 +247,7 @@ public sealed partial class AvatarOffersController
     private void DetachProps()
     {
         if(PropActions is not { } props) return;
-        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.Dispose();
+        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.Dispose();
         _hud.PropActionPrepare=null; _hud.PropActionsChanged=null;
         foreach(string name in new[]{"pickPropAction","respondPropAction","cancelPropAction"}) _hud.Handlers.Remove(name);
         _figures.OwnedPropApproaching=null; _figures.SuppressAvatarPropEntry=null; _figures.PropEntryError=null; _position.PropMotionOwned=null; _position.ManualPropWithdrawn=null;

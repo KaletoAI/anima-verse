@@ -109,6 +109,7 @@ public sealed partial class AvatarOffersController : IDisposable, IEntryDeps
     {
         if(FigureGround.PollIsStale(polledAt,_position.OwnSeatChangeAt)) return;
         ClearHover();
+        ReconcilePropWorld(map);
         _seatMap=map.Clone(); _seatMapAt=polledAt;
         ReconcilePlace(map,polledAt);
         if(_active) { PendingPlaces=RefreshPlacesAsync(); if(PropActions is not null) _=RefreshSemanticOffersAsync(); }

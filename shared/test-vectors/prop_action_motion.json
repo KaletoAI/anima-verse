@@ -2298,6 +2298,149 @@
         1
       ],
       "expect": 0
+    },
+    {
+      "label": "[15] clipless seat lead .3 holds",
+      "fn": "seatStandM",
+      "args": [
+        [
+          [
+            2,
+            0
+          ],
+          [
+            2,
+            -0.5
+          ],
+          [
+            4,
+            -0.5
+          ]
+        ],
+        0.3,
+        0.299
+      ],
+      "expect": null
+    },
+    {
+      "label": "[15] clipless seat exact start releases half metre",
+      "fn": "seatStandM",
+      "args": [
+        [
+          [
+            2,
+            0
+          ],
+          [
+            2,
+            -0.5
+          ],
+          [
+            4,
+            -0.5
+          ]
+        ],
+        0.3,
+        0.3
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[15] clipless seat late adoption uses second waypoint",
+      "fn": "seatStandM",
+      "args": [
+        [
+          [
+            2,
+            0
+          ],
+          [
+            2,
+            -0.5
+          ],
+          [
+            4,
+            -0.5
+          ]
+        ],
+        0.3,
+        1
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[15] diagonal stand leg length",
+      "fn": "seatStandM",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            0.3,
+            0.4
+          ],
+          [
+            2,
+            0.4
+          ]
+        ],
+        0.3,
+        0.31
+      ],
+      "expect": 0.5
+    },
+    {
+      "label": "[15] zero seat leg",
+      "fn": "seatStandM",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            2,
+            0
+          ]
+        ],
+        0.3,
+        0.3
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[15] .3 second owned lead holds",
+      "fn": "ownedApproachStep",
+      "args": [
+        0,
+        1,
+        1,
+        0,
+        0.1,
+        0.3,
+        0.299
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[15] .3 second owned lead starts",
+      "fn": "ownedApproachStep",
+      "args": [
+        0.5,
+        1,
+        1,
+        0,
+        0.1,
+        0.3,
+        0.3
+      ],
+      "expect": 0.6
     }
   ]
 }

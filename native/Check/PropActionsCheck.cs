@@ -22,7 +22,7 @@ namespace AnimaNative.Check;
 /// two-second measured synthetic entry rig; no installed asset readiness or server planner claim is implied.
 /// Ownership ledger: check owns its world/manager/rig/HUD nodes and frees them; shared animation data is immutable.
 /// </summary>
-public static class PropActionsCheck
+public static partial class PropActionsCheck
 {
     public static async Task<string> RunAsync(Node3D host,string fixtures)
     {
@@ -140,6 +140,7 @@ public static class PropActionsCheck
         checks += await CheckLateApproach(host,fixtures);
         checks += await CheckMenus(host,fixtures);
         checks += await CheckSeatedSwitch(host,fixtures);
+        checks += await CheckNoExitAndDeadRun(host,fixtures);
         checks += await CheckUpperStorey(host,fixtures);
         // Real bridge callback: the host cannot acknowledge a preparation while a position promise is outstanding.
         var hud=new HudOverlay(); var write=new TaskCompletionSource(); int changed=0;
@@ -521,7 +522,8 @@ public static class PropActionsCheck
         public JsonArray Offers { get; }
         public JsonNode? Request;
         public JsonObject? MapOverride,StateOverride,SceneOverride;
-        public int CancelRequests,OfferRequests;
+        public int CancelRequests,OfferRequests,WorldRequests,StateRequests;
+        public TaskCompletionSource<JsonDocument>? PendingState;
         public bool EnableOffersOnCancel;
         public TaskCompletionSource<JsonDocument>? PendingOffers,PendingRequest;
         public Task<JsonDocument> CancelPropActionAsync(string executionId,System.Threading.CancellationToken ct=default)
@@ -533,11 +535,11 @@ public static class PropActionsCheck
         public bool SupportsPropActions=>true;
         public MenuSource(FixtureSource fixture) { _fixture=fixture; Offers=JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.Dir,"offers.json")))!.AsArray(); Offers[0]!["enabled"]=false; Offers[0]!["reason"]="claimed"; }
         public Task<JsonDocument> GetPropActionsAsync() { OfferRequests++; return PendingOffers?.Task ?? Task.FromResult(JsonDocument.Parse(Offers.ToJsonString())); }
-        public Task<JsonDocument> GetPropActionStateAsync()=>Task.FromResult(JsonDocument.Parse(StateOverride?.ToJsonString() ?? "{\"current\":[],\"outgoing\":[],\"incoming\":[],\"recent_results\":[]}"));
+        public Task<JsonDocument> GetPropActionStateAsync() { StateRequests++; return PendingState?.Task ?? Task.FromResult(JsonDocument.Parse(StateOverride?.ToJsonString() ?? "{\"current\":[],\"outgoing\":[],\"incoming\":[],\"recent_results\":[]}")); }
         public Task<JsonDocument> GetPlacesAsync()=>Task.FromResult(JsonDocument.Parse("{\"room_id\":\"r-props\",\"places\":[]}"));
         public Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,string? partner=null,System.Threading.CancellationToken ct=default)
         { Request=JsonNode.Parse(PropActionRequest.Request(actionId,target,revision,partner).GetRawText()); return PendingRequest?.Task ?? Task.FromResult(JsonDocument.Parse("{\"execution_id\":\"\",\"status\":\"refused\",\"reason\":\"claimed\"}")); }
-        public Task<JsonDocument> GetWorldMapAsync()=>MapOverride is { } map ? Task.FromResult(JsonDocument.Parse(map.ToJsonString())) : _fixture.GetWorldMapFileAsync("worldmap.json");
+        public Task<JsonDocument> GetWorldMapAsync() { WorldRequests++; return MapOverride is { } map ? Task.FromResult(JsonDocument.Parse(map.ToJsonString())) : _fixture.GetWorldMapFileAsync("worldmap.json"); }
         public Task<JsonDocument> GetHeightfieldAsync()=>_fixture.GetHeightfieldAsync();
         public Task<JsonDocument> GetHeightTilesAsync(IReadOnlyList<(int Tx,int Tz)> keys)=>_fixture.GetHeightTilesAsync(keys);
         public Task<JsonDocument> GetLocations3dAsync()=>_fixture.GetLocations3dAsync();
