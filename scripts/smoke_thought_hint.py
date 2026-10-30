@@ -25,9 +25,12 @@ EXPECTATIONS, DERIVED BY HAND
    "# Triggered thought\\nKira asks you to dance together.\\n\\n" and ends with
    THOUGHT_TRIGGER_DEFAULT (header line, the stripped hint, a blank line,
    then the unchanged default trigger).
-3  STRUCTURAL: the literal "# Triggered thought" occurs exactly ONCE in
+3  Presence is the first line before the hint or default trigger.
+   The template gives exactly one bracket line for alone, companions and
+   absent names, uses the outdoor place label, and emits nothing if unknown.
+4  STRUCTURAL: the literal "# Triggered thought" occurs exactly ONCE in
    app/core/thoughts.py (inside the helper); run_thought_turn's source
-   contains "thought_user_input(context_hint)" and no longer contains
+   contains "thought_user_input(context_hint, presence_line=presence_line)" and no longer contains
    'system_prompt = f"# Triggered'.
    Why structural: whether the hint lands in the user turn of the real
    thought turn could only be observed by running run_thought_turn, which
@@ -72,12 +75,29 @@ if callable(helper) and isinstance(DEFAULT, str):
           out.startswith("# Triggered thought\nKira asks you to dance together.\n\n"), True)
     check("hint: ends with the default trigger", out.endswith(DEFAULT), True)
 
+line = "[Right now in Hall of Inn: only you.]"
+check("presence precedes hint", helper("A hint", presence_line=line),
+      line + "\n# Triggered thought\nA hint\n\n" + DEFAULT)
+check("presence without hint", helper("", presence_line=line), line + "\n" + DEFAULT)
+
+from app.core.prompt_templates import render
+for names, absent, room, place, expected in [
+    ([], [], "Hall", "Inn", "[Right now in Hall of Inn: only you.]"),
+    (["A", "B"], ["X", "Y"], "Hall", "Inn",
+     "[Right now in Hall of Inn: you and A, B. X, Y are NOT here — they cannot enter, speak or touch you in this turn.]"),
+    ([], [], "", "Open world", "[Right now in Open world: only you.]"),
+    (None, ["X"], "Hall", "Inn", ""),
+]:
+    check("presence template " + repr(names), render("chat/thought_presence.md",
+          room_presence_names=names, absent_people=absent, room_name=room,
+          location_name=place), expected)
+
 print("3 structural (source)")
 src = (ROOT / "app" / "core" / "thoughts.py").read_text(encoding="utf-8")
 check('"# Triggered thought" occurs exactly once', src.count("# Triggered thought"), 1)
 turn_src = inspect.getsource(th.ThoughtRunner.run_thought_turn)
 check("run_thought_turn calls thought_user_input(context_hint)",
-      "thought_user_input(context_hint)" in turn_src, True)
+      "thought_user_input(context_hint, presence_line=presence_line)" in turn_src, True)
 check("run_thought_turn no longer prepends the hint to the system prompt",
       'system_prompt = f"# Triggered' in turn_src, False)
 

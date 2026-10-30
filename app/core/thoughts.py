@@ -29,15 +29,15 @@ THOUGHT_TRIGGER_DEFAULT = (
 )
 
 
-def thought_user_input(context_hint: str = "") -> str:
+def thought_user_input(context_hint: str = "", *, presence_line: str = "") -> str:
     """The user turn of a thought turn. A bump hint (an invitation, a
     scheduled message) goes HERE, behind the history — never into the system
     prompt, which must stay byte-stable for the prompt cache
     (CHAT_PROMPTS.md § 1)."""
     hint = (context_hint or "").strip()
-    if not hint:
-        return THOUGHT_TRIGGER_DEFAULT
-    return f"# Triggered thought\n{hint}\n\n{THOUGHT_TRIGGER_DEFAULT}"
+    trigger = (f"# Triggered thought\n{hint}\n\n{THOUGHT_TRIGGER_DEFAULT}"
+               if hint else THOUGHT_TRIGGER_DEFAULT)
+    return f"{presence_line}\n{trigger}" if presence_line else trigger
 
 
 _thought_runner: Optional["ThoughtRunner"] = None
@@ -619,7 +619,27 @@ class ThoughtRunner:
         had_notification_tool = False
         notification_tool_content = ""
         from app.core.thought_rut import rut_hint
-        user_input = thought_user_input(context_hint)
+        from app.core.prompt_templates import render_async
+        if ctx is None:
+            # A caller supplying only a system override needs presence data,
+            # not another full system context (or its skill/tool builders).
+            from app.core.thought_context import room_presence_names, absent_named_people
+            from app.core.perception import prompt_place
+            from app.models.character import get_character_profile, get_character_language
+            from app.models.world import get_room_name
+            profile = get_character_profile(character_name)
+            loc = profile.get("current_location", "") or ""
+            room = profile.get("current_room", "") or ""
+            presence = room_presence_names(character_name, loc, room)
+            ctx = {
+                "room_presence_names": presence[0] if presence is not None else None,
+                "location_name": prompt_place(character_name, loc)[0],
+                "room_name": get_room_name(loc, room, get_character_language(character_name) or "de")
+                             if loc and room else "",
+                "absent_people": absent_named_people(character_name, loc, room, [system_prompt]),
+            }
+        presence_line = await render_async("chat/thought_presence.md", **ctx)
+        user_input = thought_user_input(context_hint, presence_line=presence_line)
         _rut_hint = rut_hint(character_name)
         if _rut_hint:
             user_input += "\n\n" + _rut_hint

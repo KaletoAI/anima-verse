@@ -249,6 +249,8 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
     ctx["absent_block"] = "\n".join(
         f"- {name} (avatar)" if name == avatar else f"- {name}"
         for name in ctx["absent_people"])
+    presence = room_presence_names(character_name, location_id, room_id)
+    ctx["room_presence_names"] = presence[0] if presence is not None else None
     return ctx
 
 

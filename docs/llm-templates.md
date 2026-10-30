@@ -255,6 +255,8 @@ privacy, see [the public Influence contract](skill-core-api.md#rp-influence--app
 | `chat/situational_memories.md` | `memory_situational` (`TEMPLATE`) | Pick the memories that fit the current message |
 | `chat/intent_markers.md` | `{% include %}` in `reply_base.md` (both system templates) AND `streaming.intent_marker_help()` for both rp_first tool-decision prompts (`streaming.build_tool_decision_input`, `chat_engine._rp_tool_decision_input`) | The `[INTENT: …]` marker grammar (including the `by=player` / `by=self` token) — a fragment, not a prompt of its own, so the places that teach it cannot drift apart |
 
+`chat/thought_presence.md` renders the presence bracket at the start of the thought user turn.
+
 ### `chat/agent_thought.md`
 
 The AgentLoop's slim system prompt. Pre-decision logic in

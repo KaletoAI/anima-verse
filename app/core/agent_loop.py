@@ -266,6 +266,7 @@ class AgentLoop:
         # Decay per hop + a hard Backstop prevent endless cascades in emergent
         # NPC↔NPC conversations. Avatar input resets it.
         self._room_ai_turns: Dict[str, int] = {}
+        self._outdoor_ai_key: Dict[str, str] = {}
         # Rooms where the one-off visible exit (concept §5) has already fired
         # for the current cascade. Reset on avatar input.
         self._room_winddown_done: set = set()
@@ -511,6 +512,7 @@ class AgentLoop:
         """Bucket key for the room-scoped loop state: chime budget
         (``_room_ai_turns``), winddown marker (``_room_winddown_done``),
         avatar-floor clock and the respond lock.
+        Outdoor AI speakers carry their budget and winddown marker across cells.
 
         Inside a location that is ``"<loc>/<room>"``. OUTSIDE (E6) it is the
         open-world CELL around ``who``'s point. The wilderness used to
@@ -533,6 +535,18 @@ class AgentLoop:
                 return open_world_cell_key(pos["x"], pos["z"])
         return "/"
 
+    def _carry_outdoor_energy(self, who: str, key: str) -> None:
+        """Move a speaker's conversation budget with its outdoor utterance."""
+        if not key.startswith("open:"):
+            return
+        old = self._outdoor_ai_key.get(who)
+        if old and old != key:
+            self._room_ai_turns[key] = max(
+                self._room_ai_turns.get(key, 0), self._room_ai_turns.get(old, 0))
+            if old in self._room_winddown_done:
+                self._room_winddown_done.add(key)
+        self._outdoor_ai_key[who] = key
+
     def reset_room_energy(self, location_id: str, room_id: str,
                           who: str = "") -> None:
         """A NEW conversation is a new beat: the chime budget of the bucket
@@ -547,6 +561,7 @@ class AgentLoop:
         avatar in the room the effective backstop is still 1.
         """
         key = self._room_key(location_id, room_id, who)
+        self._outdoor_ai_key.pop(who, None)
         self._room_ai_turns[key] = 0
         self._room_winddown_done.discard(key)
 
@@ -773,10 +788,13 @@ class AgentLoop:
         effective_backstop = 1 if floor_mode else self._chime_backstop
 
         if is_avatar:
+            for name in {*in_earshot, speaker}:
+                self._outdoor_ai_key.pop(name, None)
             self._room_ai_turns[key] = 0  # avatar sets the beat: energy reset
             self._room_winddown_done.discard(key)  # new cascade → exit allowed again
             self._room_avatar_idle.pop(key, None)  # avatar active → floor clock reset
         else:
+            self._carry_outdoor_energy(speaker, key)
             if self._room_ai_turns.get(key, 0) >= effective_backstop:
                 # With player priority: simply fall silent (the player is up),
                 # NO visible exit beat.
@@ -1682,6 +1700,7 @@ class AgentLoop:
                 # arise and ebb away.
                 try:
                     key = self._room_key(_loc, _room, character_name)
+                    self._carry_outdoor_energy(character_name, key)
                     self._room_ai_turns[key] = self._room_ai_turns.get(key, 0) + 1
                     self.dispatch_room_reactions(
                         speaker=character_name, content=reply, volume=_reply_vol,
