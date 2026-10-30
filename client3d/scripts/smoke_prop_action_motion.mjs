@@ -66,13 +66,11 @@
  * fixture-npc busy / fixture-other enabled rows in that order, without picking
  * either. An empty pair list yields one disabled partner_required row.
  *
- * [14] A .75 s departure at age 0 or .5 must hold even with reported progress
- * ahead. At age .75 the step may advance .1 m; age 1 permits late catch-up
- * (6 m / .6 s = 10 m/s). A lead of exactly .25 m needs no catch-up.
- *
- * [15] A .3 s lead holds until age .3 exactly. The seat stand leg is
- * sqrt((2-2)^2+(-.5-0)^2)=.5 m; a .3/.4 diagonal is also .5 m.
- * After this defined release, .1 s at 1 m/s advances .5 -> .6 m.
+ * [16] B1 Own answer playback consumes real elapsed seconds, departure first,
+ * then each positive-pace segment. Null legs consume no time; null overall
+ * holds at the first walked point. Entry holds access for its real duration;
+ * direct entry and completed bridges end exactly on the server body anchor.
+ * The shared vectors enumerate corners, height, yaw, departure and freezing.
  *
  * Adapters call production exports and normalize Three/Promise results only.
  * Async traces resolve before passing their actual result through runVectors;
@@ -171,3 +169,7 @@ await import('./smoke_prop_action_offers.mjs');
 await import('./smoke_prop_action_menu.mjs');
 
 await import('./smoke_prop_action_recovery.mjs');
+
+await import('./smoke_prop_action_playback.mjs');
+
+await import('./smoke_prop_action_answer_bridge.mjs');

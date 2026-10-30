@@ -27,39 +27,55 @@ export function localApproachPoint(path: LocalPath, ageS: number): Point {
   return points[points.length - 1] ?? [0, 0];
 }
 
-/** Closest rendered point on the route, expressed as arc length. Ties keep the first leg. */
-export function projectApproachM(points: readonly Point[], point: Point): number {
-  let best = Infinity, result = 0, distance = 0;
-  for (let i = 1; i < points.length; i++) {
-    const a = points[i - 1], b = points[i];
-    const dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz);
-    if (!length) continue;
-    const t = Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dz) / (length * length)));
-    const error = Math.hypot(point[0] - a[0] - t * dx, point[1] - a[1] - t * dz);
-    if (error < best) { best = error; result = distance + t * length; }
-    distance += length;
+/** Own motion uses only elapsed real seconds since the answer was received. */
+export function sampleMotion(plan: import('@anima/player-ui/propActions').PropActionMotion, elapsedS: number) {
+  let time = Math.max(0, elapsedS);
+  const y = plan.floor_y ?? plan.access.y;
+  const yawOf = (a: Point, b: Point) => Math.atan2(b[0] - a[0], b[1] - a[1]) * 180 / Math.PI;
+  const sample = (phase: string, point: Point, yaw: number) => ({ phase, x: point[0], y, z: point[1], yaw });
+  const departure = plan.departure;
+  if (departure?.exit_clip && departure.exit_s > 0) {
+    if (time < departure.exit_s) {
+      const t = time / departure.exit_s, a = departure.seat, b = departure.stand;
+      return sample('departure', [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], yawOf(a, b));
+    }
+    time -= departure.exit_s;
   }
-  return result;
+  const points = plan.waypoints;
+  for (let i = departure ? 2 : 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (!length) continue;
+    const yaw = yawOf(a, b);
+    if (plan.paces_m_s_real === null) return sample('frozen', a, yaw);
+    const pace = plan.paces_m_s_real[i - 1];
+    if (pace === null) continue;
+    if (!(pace > 0)) return sample('frozen', a, yaw);
+    const seconds = length / pace;
+    if (time < seconds) {
+      const t = time / seconds;
+      return sample('walking', [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], yaw);
+    }
+    time -= seconds;
+  }
+  if (plan.paces_m_s_real === null) {
+    const point = departure?.stand ?? points[0] ?? [plan.access.x, plan.access.z];
+    return sample('frozen', point, plan.access.yaw);
+  }
+  if (plan.entry?.mode === 'bridge' && time < plan.entry.duration_s)
+    return { phase: 'entry', ...plan.access };
+  const { x, y: anchorY, z, yaw } = plan.anchor;
+  return { phase: 'arrived', x, y: anchorY, z, yaw };
 }
 
-/** A clipless seat departure releases at waypoint 2, once the server lead has elapsed. */
-export function seatStandM(points: readonly Point[], startsInS: number, ageS: number): number | null {
-  return startsInS > Math.max(0, ageS) ? null : points.length < 2 ? 0
-    : Math.hypot(points[1][0] - points[0][0], points[1][1] - points[0][1]);
-}
-
-/** Owned approaches retain continuity even after a delayed first poll or frame stall. */
-export function ownedApproachStep(shownM: number, targetM: number, pace: number, catchUpRate: number, dt: number, startsInS = 0, ageS = 0): number {
-  if (startsInS > Math.max(0, ageS)) return shownM;
-  return shownM + Math.min(Math.max(0, targetM - shownM), .25,
-    Math.max(0, pace, catchUpRate) * Math.max(0, dt));
-}
-
-/** Future departures hold their rendered start; only late adoption needs catch-up. */
-export function ownedApproachCatchUp(shownM: number, targetM: number, totalM: number,
-  pace: number, startsInS: number, ageS: number): number {
-  return startsInS > Math.max(0, ageS) || targetM - shownM <= .25 ? 0
-    : Math.max(2 * Math.max(0, pace), (totalM - shownM) / .6);
+/** Entry time is measured from the end of departure and every walked leg. */
+export function motionEntrySeconds(plan: import('@anima/player-ui/propActions').PropActionMotion, elapsedS: number): number {
+  let seconds = plan.departure?.exit_clip ? Math.max(0, plan.departure.exit_s) : 0;
+  for (let i = plan.departure ? 2 : 1; i < plan.waypoints.length; i++) {
+    const a = plan.waypoints[i - 1], b = plan.waypoints[i], pace = plan.paces_m_s_real?.[i - 1];
+    if (pace != null && pace > 0) seconds += Math.hypot(b[0] - a[0], b[1] - a[1]) / pace;
+  }
+  return Math.max(0, elapsedS - seconds);
 }
 
 export function entryPhase(entry: { elapsed_game_s: number; duration_game_s: number;
@@ -126,8 +142,8 @@ export function createPositionDrain() {
   };
 }
 
-/** Only completion of the SAME HTTP mutation may release its control pause,
- * and only after a subsequently fetched authoritative state was adopted. */
+/** Only the same HTTP mutation releases its preparation pause. A returned
+ * answer supplies authority immediately; uncertain transport needs fresh state. */
 export function createPropPreparationBarrier() {
   const requests = new Map<string, { completed: boolean; expiresAt: number }>();
   return {

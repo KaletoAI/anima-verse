@@ -8284,13 +8284,20 @@ notification invalidates own action state and motion after a mutation attempt
 current/recent state remains session-private; visible NPC motion is not consent.
 
 Before a shared panel sends semantic HTTP, the HUD sends
-`{v:3,kind:"prop-action-prepare",request_id}`. The world host pauses manual
+`{v:3,kind:"prop-action-prepare",request_id,target?}`. For an own request,
+`target` is the exact offered prop target, used only to turn the avatar
+toward the selected prop before HTTP (restored on refusal). The world host pauses manual
 position publishing, drains its already-sent position write, then acknowledges
 `{v:3,kind:"prop-action-prepared",request_id,error?}`. HTTP waits for the exact
 acknowledgement; preparation errors/timeouts do not execute it. Finally
 `prop-actions-changed` carries the same optional correlation ID, even on refusal,
 so the host can refresh before releasing that barrier. Ordinary lifecycle
 invalidation carries no ID and must not release a different pending mutation.
+For B1, the same notification also carries the optional mutation `result`
+(the complete answer, including `motion`) and `source:"request"|"respond"|"cancel"`.
+The world host consumes that answer immediately, before refreshing state;
+a detached HUD must not discard the motion plan. Status-only invalidations
+remain possible without a result. This uses the existing bridge version.
 This transport correlation is neither a Core execution identity nor a server
 request nonce. Disconnection clears pending HUD waits; preparation has a
 10-second deadline and does not retry. A stale manual position write therefore

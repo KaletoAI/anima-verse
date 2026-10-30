@@ -23,7 +23,7 @@ public sealed class AvatarPositionController : IDisposable
     private readonly ReadinessState _readiness = new();
     private JsonElement? _row;
     private P2? _lastPosition;
-    private bool _active, _disposed;
+    private bool _active, _disposed, _propRelease;
     public PositionChannel Channel { get; }
     public double OwnCorrectionAt { get; private set; }
     /// <summary>Task 52 seat write hook: infinity while pending, answer time after acknowledgement.</summary>
@@ -114,9 +114,7 @@ public sealed class AvatarPositionController : IDisposable
         LocationId = Text(me,"location_id");
         // Task 57: semantic state owns approach/active motion, including the avatar travel route and measured entry.
         bool wasPropDriven = _steering.PropActionDriven;
-        _steering.PropActionDriven = PropMotionOwned?.Invoke()==true || HasObject(me,"prop_action_entry") || HasObject(me,"local_approach")
-            || (Avatar?.Route is { OwnedApproach:true } approach && approach.ShownM<approach.TotalM-1e-6
-                && (HasObject(me,"place") || HasObject(me,"interaction")));
+        _steering.PropActionDriven = PropMotionOwned?.Invoke()==true;
         if (_steering.PropActionDriven)
         {
             if (me.TryGetProperty("travel",out var propTravel) && propTravel.ValueKind==JsonValueKind.Object
@@ -134,13 +132,20 @@ public sealed class AvatarPositionController : IDisposable
         _figures.SetServerDriven(Channel.Driver.Kind == DriverKind.SERVER);
     }
 
+    /// <summary>End private motion without adopting the last polled position during the driver handoff.</summary>
+    public void ReleasePropDriver()
+    {
+        _propRelease=true;
+        try { Channel.ApplyDriver(new(false,null,null)); }
+        finally { _propRelease=false; }
+    }
     private void DriverChanged(DriverState before, DriverState after)
     {
         if (!_active || _disposed) return;
         if (after.Kind == DriverKind.SERVER) { ClearOwnedMovement(); _figures.SetServerDriven(true); }
         else if (before.Kind == DriverKind.SERVER)
         {
-            Vector3? arrive = after.Kind == DriverKind.PLAYER && _row is { } me && Point(me) is { } p ? GroundPoint(p) : null;
+            Vector3? arrive = !_propRelease && after.Kind == DriverKind.PLAYER && _row is { } me && Point(me) is { } p ? GroundPoint(p) : null;
             if (arrive is not null) OwnCorrectionAt = _clock();
             _figures.SetServerDriven(false, arrive);
         }
@@ -156,7 +161,7 @@ public sealed class AvatarPositionController : IDisposable
     /// <summary>Walk at most 8 m for at most 3 s; farther corrections snap and invalidate the local plan.</summary>
     public void CorrectTo(P2 point)
     {
-        if (!_active || Avatar is not { } f) return;
+        if (!_active || Avatar is not { } f || _figures.OwnPropMotion is not null) return;
         OwnCorrectionAt = _clock();
         // Task 51: the authoritative correction takes ownership even while a stair/lift owns the steering branch.
         _steering.VerticalRide = null; _figures.SetStairRide(f.CharacterName, null);

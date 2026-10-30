@@ -87,8 +87,8 @@ public static partial class PropActionsCheck
             Is("startup and activation share one state read",startupStateReads==1);
             Is("seated budget <=20 offers +20 state per 60s",seated.Offers<=20 && seated.State<=20);
             Is("walking budget <=20 offers +20 state per 60s",walking.Offers<=20 && walking.State<=20);
-            Is("own bursts <=4 total GETs/s",peak<=4);
-            Is("own bursts end after five seconds",buckets[17]+buckets[18]+buckets[19]<=2);
+            Is("own motion stays at normal polling cadence",peak<=4);
+            Is("normal polling continues after own mutation",buckets[17]+buckets[18]+buckets[19]<=2);
             Is("release remains steerable",!offers.PropActions!.Paused && !steering.PropActionDriven);
             offers.PropPollPeriod=()=>6000;
             var pushed=await Window(false);
@@ -125,8 +125,8 @@ public static partial class PropActionsCheck
             var held=source.PendingState;
             first=control.RefreshAsync();
             await control.PrepareAsync("during-read");
-            second=control.ChangedAsync("during-read",immediateWorld:true);
-            Is("joined own answer starts its world read before private-state latency",earlyMaps==1);
+            second=control.ChangedAsync("during-read");
+            Is("joined own answer does not request a burst world poll",earlyMaps==0);
             reads=source.StateRequests;
             source.PendingState=null;
             held.SetResult(JsonDocument.Parse("{\"current\":[{\"execution_id\":\"stale\",\"status\":\"active\"}],\"outgoing\":[]}"));

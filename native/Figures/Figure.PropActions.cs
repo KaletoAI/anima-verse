@@ -52,13 +52,54 @@ public partial class Figure
         SecondaryFrozen=PropActionMotion.Number(spec["game_seconds_per_real_second"])<=0;
         UpdateFigure(0); return true;
     }
-    /// <summary>Task 57: commit the played entry once, drop travel/lift, then play the direct pose without a bridge.</summary>
-    public bool FinishPropEntry(string clip)
+    /// <summary>Answer-clock exit playback retains the measured root path and turn at the held seat.</summary>
+    public bool PlayOwnPropDeparture(string kind,double phase,double startLift)
+    {
+        if(Player is not { } player || !EnsureClip(kind) || AnimOf(kind) is not { } animation) return false;
+        double time=Math.Clamp(phase,0,1)*Math.Max(0,animation.Length-1e-6);
+        if(CurrentClip!=kind || _transition?.Kind!=kind) {
+            ReleaseBridge(); TakeTravel(); _runs.Clear(); _currentRun=null;
+            var run=new BridgeRun { Kind=kind,Length=animation.Length,Extras=Extras.TryGetValue(animation,out var extras) ? extras : null };
+            _transition=_currentRun=run; _runs.Add(run); _bridgeUntil=double.PositiveInfinity;
+            _travelPath=run.Extras?.Path; _travelAction=run; _travelOrigin=new P2(0,0);
+            StartTurn(run.Extras?.Turn,run);
+            SetClipDrop(0); HeightCorrectionM=0; _terrainClip=false; _sink=0;
+            player.Play(PlayName(kind,false)); CurrentClip=CurrentKind=kind;
+        }
+        double fraction=Math.Clamp(phase,0,1);
+        int hips=-1;
+        for(int i=0;i<animation.GetTrackCount();i++) if(animation.TrackGetType(i)==Animation.TrackType.Position3D
+            && animation.TrackGetPath(i).ToString().Contains("hips",StringComparison.OrdinalIgnoreCase)) { hips=i; break; }
+        if(hips>=0) {
+            double first=animation.PositionTrackInterpolate(hips,0).Y,last=animation.PositionTrackInterpolate(hips,animation.Length).Y;
+            if(Math.Abs(last-first)<1e-6) { if(Math.Abs(startLift)>1e-6) return false; fraction=1; }
+            else fraction=Math.Clamp((animation.PositionTrackInterpolate(hips,time).Y-first)/(last-first),0,1);
+        } else if(Math.Abs(startLift)>1e-6) return false;
+        _transition!.Time=time; player.SpeedScale=0; player.Seek(time,true);
+        _lift=startLift*(1-fraction); SecondaryFrozen=false; UpdateFigure(0); return true;
+    }
+    /// <summary>Bake the measured rendered displacement into the root before input takes ownership.</summary>
+    public void ReleasePropAtRenderedPoint()
+    {
+        var travel=TakeTravel();
+        Position+=new Vector3((float)(travel?.X ?? 0),(float)_lift,(float)(travel?.Z ?? 0)); Target=Position;
+        HoldPropPoseAtAnchor();
+    }
+    /// <summary>Keep the current measured frame while removing its root displacement at the final anchor.</summary>
+    public void HoldPropPoseAtAnchor()
     {
         ReleaseBridge(); TakeTravel(); _travelPath=null; _travelAction=null; _turn=null; _turnAction=null;
         _lift=PropEntryLift=0; ApplyBody();
+        if(Player is { } player) player.SpeedScale=0;
+    }
+    /// <summary>Task 57: commit the played entry once, drop travel/lift, then play the direct pose without a bridge.</summary>
+    public bool FinishPropEntry(string clip)
+    {
+        if(!EnsureClip(clip)) return false;
+        ReleaseBridge(); TakeTravel(); _travelPath=null; _travelAction=null; _turn=null; _turnAction=null;
+        _lift=PropEntryLift=0; ApplyBody();
         if(Player is { } player) player.SpeedScale=1;
-        if(!EnsureClip(clip) || !PlayPair(clip,0,false,true)) return false;
+        if(!PlayPair(clip,0,false,true)) return false;
         // A body replacement replays WantedClip before the next placement tick.
         WantedClip=(clip,false,0,"ground");
         return true;

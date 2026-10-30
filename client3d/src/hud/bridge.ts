@@ -10,6 +10,7 @@
  * gameActions travel HUD -> scene, uiActions scene -> HUD. Speech requests
  * await a correlated completion, pacing voiceover like the in-process path.
  */
+import type { PropActionResult, PropActionSource, PropActionTarget } from '@anima/player-ui/propActions';
 import * as bus from './bus';
 import type { HudGameState, HudUiState, HudBoot, HudGameActions, HudUiActions, HudRect } from './bus';
 import type { MinimapState } from '../game/minimap';
@@ -33,15 +34,15 @@ export type ToHud =
   | { v: V; kind: 'minimap'; value: MinimapState | null }
   | { v: V; kind: 'perf'; value: PerfStats | null }
   | { v: V; kind: 'boot'; value: HudBoot }
-  | { v: V; kind: 'prop-actions-changed'; request_id?: string }
+  | { v: V; kind: 'prop-actions-changed'; request_id?: string; result?: PropActionResult; source?: PropActionSource }
   | { v: V; kind: 'prop-action-prepared'; request_id: string; error?: string }
   | { v: V; kind: 'ui'; name: keyof HudUiActions; args: unknown[] };
 export type FromHud =
   | { v: V; kind: 'speech'; request_id: string; url: string }
   | { v: V; kind: 'state'; patch: Partial<HudGameState> }
   | { v: V; kind: 'action'; name: keyof HudGameActions; args: unknown[] }
-  | { v: V; kind: 'prop-actions-changed'; request_id?: string }
-  | { v: V; kind: 'prop-action-prepare'; request_id: string }
+  | { v: V; kind: 'prop-actions-changed'; request_id?: string; result?: PropActionResult; source?: PropActionSource }
+  | { v: V; kind: 'prop-action-prepare'; request_id: string; target?: PropActionTarget }
   | { v: V; kind: 'hud'; patch: Partial<HudUiState> };
 export interface BridgeTransport {
   send(msg: ToHud | FromHud): void;
@@ -143,13 +144,13 @@ export function connectHudSide(t: BridgeTransport): () => void {
   const pendingPreparations = new Map<string, {
     resolve: () => void; reject: (error: Error) => void; timer: number;
   }>();
-  const offPreparation = setPropActionPreparation(request_id => new Promise<void>((resolve, rejectPreparation) => {
+  const offPreparation = setPropActionPreparation((request_id, target) => new Promise<void>((resolve, rejectPreparation) => {
     const timer = window.setTimeout(() => {
       pendingPreparations.delete(request_id);
       rejectPreparation(new Error('Prop action preparation timed out'));
     }, 10_000);
     pendingPreparations.set(request_id, { resolve, reject: rejectPreparation, timer });
-    try { t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-action-prepare', request_id }); }
+    try { t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-action-prepare', request_id, ...(target ? { target } : {}) }); }
     catch (error) {
       window.clearTimeout(timer);
       pendingPreparations.delete(request_id);
@@ -157,8 +158,8 @@ export function connectHudSide(t: BridgeTransport): () => void {
     }
   }));
   let receivingPropActionChange = false;
-  const offPropActionChange = onPropActionChanged(request_id => {
-    if (!receivingPropActionChange) t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-actions-changed', ...(request_id === undefined ? {} : { request_id }) });
+  const offPropActionChange = onPropActionChanged((request_id, result, source) => {
+    if (!receivingPropActionChange) t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-actions-changed', ...(request_id === undefined ? {} : { request_id }), result, source });
   });
   const publishState = statePublisher(t, bus.HUD_OWNED_FIELDS);
   let previousUi = '';
@@ -204,7 +205,7 @@ export function connectHudSide(t: BridgeTransport): () => void {
       case 'prop-actions-changed':
         if (msg.request_id !== undefined && typeof msg.request_id !== 'string') { reject(msg); break; }
         receivingPropActionChange = true;
-        try { notifyPropActionChanged(msg.request_id); } finally { receivingPropActionChange = false; }
+        try { notifyPropActionChanged(msg.request_id, msg.result, msg.source); } finally { receivingPropActionChange = false; }
         break;
       default: reject(msg);
     }
@@ -230,8 +231,8 @@ export function connectSceneSide(t: BridgeTransport): () => void {
   let connected = true;
   const restore = senders(bus.uiActions, uiNames, (name, args) => t.send({ v: HUD_BRIDGE_VERSION, kind: 'ui', name, args }));
   let receivingPropActionChange = false;
-  const offPropActionChange = onPropActionChanged(request_id => {
-    if (!receivingPropActionChange) t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-actions-changed', ...(request_id === undefined ? {} : { request_id }) });
+  const offPropActionChange = onPropActionChanged((request_id, result, source) => {
+    if (!receivingPropActionChange) t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-actions-changed', ...(request_id === undefined ? {} : { request_id }), result, source });
   });
   const off = t.onMessage(msg => {
     if (!valid(msg)) return reject(msg);
@@ -253,7 +254,7 @@ export function connectSceneSide(t: BridgeTransport): () => void {
           try {
             const prepare = bus.gameActions.preparePropAction;
             if (!prepare) throw new Error('Prop action preparation unavailable');
-            await prepare(msg.request_id);
+            await prepare(msg.request_id, msg.target);
             t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-action-prepared', request_id: msg.request_id });
           } catch (error) {
             t.send({ v: HUD_BRIDGE_VERSION, kind: 'prop-action-prepared', request_id: msg.request_id,
@@ -264,7 +265,7 @@ export function connectSceneSide(t: BridgeTransport): () => void {
       case 'prop-actions-changed':
         if (msg.request_id !== undefined && typeof msg.request_id !== 'string') { reject(msg); break; }
         receivingPropActionChange = true;
-        try { notifyPropActionChanged(msg.request_id); } finally { receivingPropActionChange = false; }
+        try { notifyPropActionChanged(msg.request_id, msg.result, msg.source); } finally { receivingPropActionChange = false; }
         break;
       default: reject(msg);
     }

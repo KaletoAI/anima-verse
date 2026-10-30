@@ -14,7 +14,11 @@ namespace AnimaNative.Props;
 /// </summary>
 public static class PropActionMotion
 {
-    public static double Number(JsonNode? n) => n?.GetValue<double>() ?? 0;
+    public static double Number(JsonNode? n)
+    {
+        if(n is not JsonValue value) return 0;
+        return value.TryGetValue<double>(out var number) ? number : double.Parse(value.ToJsonString(),CultureInfo.InvariantCulture);
+    }
     public static string Text(JsonNode? n) => n?.GetValue<string>() ?? "";
     public static P2 LocalApproachPoint(JsonNode path,double ageS)
     {
@@ -49,15 +53,46 @@ public static class PropActionMotion
         }
         return result;
     }
-    /// <summary>A clipless departure releases at waypoint 2 after the server lead.</summary>
-    public static double? SeatStandM(IReadOnlyList<(double X,double Z)> points,double startsInS,double ageS)
-        =>startsInS>Math.Max(0,ageS) ? null : points.Count<2 ? 0 : double.Hypot(points[1].X-points[0].X,points[1].Z-points[0].Z);
-    /// <summary>Keep owned playback continuous across delayed polls and slow frames.</summary>
-    public static double OwnedApproachStep(double shownM,double targetM,double pace,double catchUpRate,double dt,double startsInS=0,double ageS=0)
-        =>startsInS>Math.Max(0,ageS) ? shownM : shownM+Math.Min(Math.Min(Math.Max(0,targetM-shownM),.25),Math.Max(0,Math.Max(pace,catchUpRate))*Math.Max(0,dt));
-    /// <summary>Future departures hold; catch-up belongs only to late adoption.</summary>
-    public static double OwnedApproachCatchUp(double shownM,double targetM,double totalM,double pace,double startsInS,double ageS)
-        =>startsInS>Math.Max(0,ageS) || targetM-shownM<=.25 ? 0 : Math.Max(2*Math.Max(0,pace),(totalM-shownM)/.6);
+    /// <summary>Sample the private own-motion plan on elapsed client seconds, without a server clock.</summary>
+    public static JsonObject SampleMotion(JsonNode plan,double elapsedS)
+    {
+        double time=Math.Max(0,elapsedS),floor=plan["floor_y"] is { } f ? Number(f) : Number(plan["access"]?["y"]);
+        var points=plan["waypoints"]!.AsArray(); var access=plan["access"]!; var anchor=plan["anchor"]!;
+        double Facing(double ax,double az,double bx,double bz)=>Math.Atan2(bx-ax,bz-az)*180/Math.PI;
+        JsonObject At(string phase,double x,double y,double z,double yaw)=>new() { ["phase"]=phase,["x"]=x,["y"]=y,["z"]=z,["yaw"]=yaw };
+        int first=0;
+        if(plan["departure"] is { } departure) {
+            first=1;
+            double seconds=Text(departure["exit_clip"]).Length>0 ? Math.Max(0,Number(departure["exit_s"])) : 0;
+            if(time<seconds) {
+                var seat=departure["seat"]!; var stand=departure["stand"]!; double t=time/seconds;
+                double ax=Number(seat[0]),az=Number(seat[1]),bx=Number(stand[0]),bz=Number(stand[1]);
+                return At("departure",ax+(bx-ax)*t,floor,az+(bz-az)*t,Facing(ax,az,bx,bz));
+            }
+            time-=seconds;
+        }
+        var paces=plan["paces_m_s_real"] as JsonArray;
+        for(int i=first+1;i<points.Count;i++) {
+            var a=points[i-1]!; var b=points[i]!;
+            double ax=Number(a[0]),az=Number(a[1]),bx=Number(b[0]),bz=Number(b[1]),length=double.Hypot(bx-ax,bz-az);
+            if(length==0) continue;
+            double yaw=Facing(ax,az,bx,bz);
+            if(paces is null) return At("frozen",ax,floor,az,yaw);
+            if(i-1<paces.Count && paces[i-1] is null) continue;
+            double pace=i-1<paces.Count ? Number(paces[i-1]) : 0;
+            if(pace<=0) return At("frozen",ax,floor,az,yaw);
+            double seconds=length/pace;
+            if(time<seconds) return At("walking",ax+(bx-ax)*time/seconds,floor,az+(bz-az)*time/seconds,yaw);
+            time-=seconds;
+        }
+        if(paces is null) {
+            var point=points[Math.Min(first,points.Count-1)]!;
+            return At("frozen",Number(point[0]),floor,Number(point[1]),Number(access["yaw"]));
+        }
+        if(plan["entry"] is { } entry && Text(entry["mode"])=="bridge" && time<Math.Max(0,Number(entry["duration_s"])))
+            return At("entry",Number(access["x"]),Number(access["y"]),Number(access["z"]),Number(access["yaw"]));
+        return At("arrived",Number(anchor["x"]),Number(anchor["y"]),Number(anchor["z"]),Number(anchor["yaw"]));
+    }
     public static double EntryPhase(JsonNode entry,double ageS) => Math.Min(1,Math.Max(0,
         (Number(entry["elapsed_game_s"])+Math.Max(0,ageS)*Math.Max(0,Number(entry["game_seconds_per_real_second"])))
         /Number(entry["duration_game_s"])));

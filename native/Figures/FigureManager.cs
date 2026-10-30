@@ -380,15 +380,10 @@ public partial class FigureManager : Node3D
     /// </summary>
     private void ApplyPlan(Figure fig, FigurePlan plan, bool fresh)
     {
+        if (fig.CharacterName == AvatarName && OwnPropMotion is not null) return;
         if (!fresh && fig.CharacterName == PlayerDriven && HoldAvatarPlacement) return;
         // Task 49: polls still refresh models/activity, but local root, goal, route, facing and visibility belong to input.
         if (!fresh && IsPlayerDriven(fig.CharacterName)) { AdoptInteraction(fig); return; }
-        // An early server arrival must not cut short the rendered owned approach.
-        if(fig.Route is { OwnedApproach:true } own && own.ShownM<own.TotalM-1e-6
-            && _rowByName.TryGetValue(fig.CharacterName,out var arriving) && arriving.Travel is null
-            && (arriving.PropActionEntry is not null || arriving.Place is not null || arriving.Interaction is not null)) {
-            own.Settled=true; return;
-        }
         AdoptInteraction(fig);
         if (AdoptPropEntry(fig, plan)) return;
         fig.Rule = plan.Rule;
@@ -515,6 +510,7 @@ public partial class FigureManager : Node3D
     private void AdoptInteraction(Figure fig)
     {
         var it = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.Interaction : null;
+        if(fig.CharacterName==AvatarName && it is not null && _releasedOwnPropPairs.Contains(it.Id)) it=null;
         fig.Pair = PairPlay.Adopt(fig.Pair, it, Stats.Polls, out bool fresh);
         if (!fresh) return;
         fig.Waypoints.Clear();
@@ -637,6 +633,7 @@ public partial class FigureManager : Node3D
 
     private void StepFigure(Figure fig, double dt, Vec3? neighbour, double camDist)
     {
+        if (fig.CharacterName==AvatarName && OwnPropMotion is not null) { TickOwnPropMotion(fig,dt,camDist); return; }
         if (fig.PropCommitPending && !IsPlayerDriven(fig.CharacterName) && _lastPlans.TryGetValue(fig.CharacterName,out var held))
         {
             // Retry lazy held-pose fitting without ever opening an ordinary entry bridge at the anchor.
@@ -740,7 +737,7 @@ public partial class FigureManager : Node3D
     /// place's slot height, else the room's stand, else the ground (<see cref="PairPlay.Place"/>), turned to the anchor's
     /// yaw. False when the figure has no rig or the half is not loaded / bound: the ordinary placement and a solo clip.
     /// </summary>
-    private bool TickPair(Figure fig, double dt)
+    private bool TickPair(Figure fig, double dt, double? ownAnchorY=null)
     {
         var it = fig.Pair!;
         if (fig.Player is null || fig.Portrait is not null) return false;
@@ -763,7 +760,7 @@ public partial class FigureManager : Node3D
         if (!fig.PlayPair(it.Clip, phase, it.Rate <= 0, it.Loop, surfaceGroup)) return false;
         if (fig.HoldsTravel) fig.TakeTravel();
         var room = _rowByName.TryGetValue(fig.CharacterName, out var row) ? row.RoomId : "";
-        var at = it.Place(root, (id, x, z) => SeatYAt?.Invoke(room, id, x, z),
+        var at = it.Place(root, (id, x, z) => ownAnchorY ?? SeatYAt?.Invoke(room, id, x, z),
                           (x, z) => RoomStandAt?.Invoke(room, x, z),
                           (x, z) => GroundYAt?.Invoke(x, z) ?? _height.GroundAt(x, z));
         fig.Position = new Vector3((float)at.X, (float)at.Y, (float)at.Z);

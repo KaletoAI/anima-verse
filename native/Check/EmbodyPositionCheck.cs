@@ -165,12 +165,15 @@ public static class EmbodyPositionCheck
             controller.OwnSeatChangeAt=0;
 
             await Poll(row=> {row["travel"]=null; row["prop_action_entry"]=new JsonObject{["id"]="task57-hook"};});
-            Is("Task57 prop entry is server driven",steering.PropActionDriven && manager.ServerDriven);
-            var propPoint=fig.Position; long propSeq=channel.Seq; Frame(d);
-            Is("Task57 prop entry has no local input/report",channel.Seq==propSeq && steering.Route is null);
+            Is("B1 own public entry does not select driver",!steering.PropActionDriven && !manager.ServerDriven);
             await Poll(row=> {row["travel"]=null; row["local_approach"]=new JsonObject{["room_id"]="r-a"};});
-            Is("Task57 local approach is server driven",steering.PropActionDriven && manager.ServerDriven);
-            Frame(d); Is("Task57 approach has no report",channel.Seq==propSeq);
+            Is("B1 own public approach does not select driver",!steering.PropActionDriven && !manager.ServerDriven);
+            controller.PropMotionOwned=()=>true;
+            await Poll(row=>row["travel"]=null);
+            Is("B1 private motion owns driver",steering.PropActionDriven && manager.ServerDriven);
+            long propSeq=channel.Seq; Frame(d);
+            Is("B1 private motion has no local input/report",channel.Seq==propSeq && steering.Route is null);
+            controller.PropMotionOwned=null;
             await Poll(row=>row["travel"]=null); steering.Correction=null;
             steering.MovementLocked=true; var locked=fig.Position; long before=channel.Seq;
             for(int i=0;i<50;i++) Frame(d);

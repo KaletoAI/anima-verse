@@ -60,10 +60,10 @@ const release = await mainFunction('releaseOwnedProp', {
   avatarSeated: true, seatedKey: '', refreshPropMotion: refreshMotion, uiActions: deps.uiActions,
 });
 await release();
-assert.equal(actionReads, 3, 'release runs actual motion refresh and refetches offers');
-assert.equal(refreshWorld, 1, 'release also refreshes public state');
+assert.equal(actionReads, 2, 'cancel answer uses its own motion without another offers poll');
+assert.equal(refreshWorld, 0, 'cancel does not need a separate worldmap poll');
 assert.equal(sync.snapshot().semanticOffers[0].enabled, true);
-console.log('prop action offers: PASS (arrival, completion, in-flight rows retained, release refetch)');
+console.log('prop action offers: PASS (arrival, completion, in-flight rows retained, answer-driven release)');
 
 // Request diagnostics begin after the production position preparation has drained.
 const events = [], diagnostic = {};
@@ -79,7 +79,7 @@ const prepare = await mainFunction('preparePropAction', {
 });
 let operation;
 const pick = await mainFunction('gameActions.pickPropAction', {
-  gameActions: { closePlaceMenu() {} }, propRequestDiagnostic: diagnostic,
+  gameActions: { closePlaceMenu() {} }, propRequestDiagnostic: diagnostic, propMutationPending:false, placeEntries:undefined,
   mutatePropAction: work => { operation = work(); },
   api: { requestPropAction: async () => { await prepare('fixture'); events.push('http'); return { status: 'approaching' }; } },
   console: { info: () => events.push('answered') },
@@ -87,19 +87,3 @@ const pick = await mainFunction('gameActions.pickPropAction', {
 pick('sit', { placement_id: 'bench' }, 'revision'); await operation;
 assert.deepEqual(events, ['flush', 'drained', 'position', 'sent', 'http', 'answered']);
 console.log('prop action diagnostics: PASS (pre-flush, request sent, HTTP, answer ordering)');
-
-// Task 80: the accepted replacement releases local seat ownership before world adoption.
-let replacement = { execution_id: 'old', status: 'active' };
-const switched = await mainFunction('releaseSwitchedPropSeat', {
-  preparedPropSeatExecution: 'old', ownedPropRun: () => replacement,
-  avatarName: 'avatar', avatarSeated: true, seatedKey: 'bench#0', ownSeatChangeAt: 0,
-  releasedPropExecutions: new Set(), npcs: {
-    clearPropEntry() {}, setPlayerPose() {}, setPlayerAnimation() {}, propSeatSwitchExecution: null,
-  },
-}, ['avatarSeated', 'seatedKey', 'preparedPropSeatExecution']);
-switched();
-assert.equal(switched.snapshot().avatarSeated, true, 'unchanged/refused run retains local seat');
-replacement = { execution_id: 'new', status: 'approaching' };
-switched();
-assert.deepEqual(switched.snapshot(), { avatarSeated: false, seatedKey: '', preparedPropSeatExecution: undefined });
-console.log('prop switch seat release: PASS');

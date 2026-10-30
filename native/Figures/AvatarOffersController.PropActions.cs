@@ -25,10 +25,10 @@ public sealed partial class AvatarOffersController
     private JsonArray _semanticOffers=new();
     private long _semanticGeneration;
     private string _semanticLog="";
-    private string? _preparedPropJourney,_preparedPropSeatExecution;
     private bool _propPrepared;
+    private double? _propPreviewYaw;
     private static void LogProp(string message)=>GD.Print("[native] [prop] "+message);
-    private double _nextPropPoll,_propBurstUntil,_lastSemanticPoll=double.NegativeInfinity,_lastStatePoll=double.NegativeInfinity;
+    private double _nextPropPoll,_lastSemanticPoll=double.NegativeInfinity,_lastStatePoll=double.NegativeInfinity;
     private Task? _semanticRefresh,_stateRefresh;
     private bool _propPollBusy,_propMutationBusy,_manualPropRelease;
     private void AttachProps()
@@ -37,12 +37,6 @@ public sealed partial class AvatarOffersController
         var props=PropActions=new(_source,_clock) { RefreshOffers=()=>RefreshSemanticOffersAsync(),Log=LogProp };
         props.PrepareWrites=async ()=> {
             _propPrepared=true;
-            _preparedPropSeatExecution=_steering.AvatarSeated || (Map is { } seatedMap && Self(seatedMap) is { } seated
-                && seated.TryGetProperty("place",out var held) && held.ValueKind==JsonValueKind.Object)
-                ? PropActionMotion.Text(props.OwnedRun?["execution_id"]) : null;
-            _preparedPropJourney=Map is { } map && Self(map) is { } me && me.TryGetProperty("travel",out var tr) && tr.ValueKind==JsonValueKind.Object
-                ? Text(tr,"journey_id") : null;
-            _figures.PropDeparturePose=_preparedPropSeatExecution is null ? null : Avatar?.CurrentKind ?? "";
             _steering.CancelRoute();
             if(Avatar is { } f && !_figures.ServerDriven) _figures.SetPlayerTarget(f.CharacterName,f.Position);
             var point=Avatar is { } a ? new AnimaNative.Scatter.P2(a.Position.X,a.Position.Z) : (AnimaNative.Scatter.P2?)null;
@@ -55,7 +49,6 @@ public sealed partial class AvatarOffersController
                 : $"position pre-flush skipped (clean) ms={timer.ElapsedMilliseconds}");
         };
         props.RefreshWorld=async ()=> {
-            ReleaseSwitchedPropSeat();
             if(RefreshPropWorld is { } refresh) await refresh();
             else { using var doc=await _source.GetWorldMapAsync(); if(!_disposed) _figures.ApplyPolled(doc.RootElement.Clone()); }
         };
@@ -65,47 +58,61 @@ public sealed partial class AvatarOffersController
         props.NotifyChanged+=PropNotifyChanged;
         props.RefreshFailed+=PropRefreshFailed;
         props.RunEnded+=PropRunEnded;
-        _hud.PropActionPrepare=id=> { BeginPropBurst(); return props.PrepareAsync(id); };
+        props.MotionReceived+=PropMotionReceived;
+        _figures.OwnPropMotionReleased+=ReleaseLocalProp;
+        _hud.PropActionResult=(result,source)=> {
+            props.ConsumeMotion(result,source);
+            string status=PropActionMotion.Text(result["status"]);
+            if(source=="cancel" && status is not ("refused" or "failed") && _figures.OwnPropMotion?.Cancel!=true) ReleaseLocalProp();
+        };
+        _hud.PropActionTarget=PreviewPropTarget;
+        _hud.PropActionPrepare=id=>props.PrepareAsync(id);
         _hud.PropActionsChanged=id=> {
-            if(id is not null) { BeginPropBurst(); InvalidatePropOffers(); }
+            if(id is not null) { InvalidatePropOffers(); }
             PendingPropAction=ObservePropAsync(async ()=> { await props.ChangedAsync(id); await RefreshSemanticOffersAsync(false); PublishPropSnapshot(); });
         };
         _hud.Handlers["pickPropAction"]=args=> {
             CloseMenu(new());
             if(args.Count<3 || args[1] is not JsonObject target) return;
+            PreviewPropTarget(target);
             PendingPropAction=MutatePropAsync(()=>RequestLoggedAsync(PropActionMotion.Text(args[0]),target,
                 PropActionMotion.Text(args[2]),args.Count>3 ? args[3]?.GetValue<string>() : null));
         };
         _hud.Handlers["respondPropAction"]=args=> {
             if(args.Count<2 || args[1] is not JsonValue b || !b.TryGetValue<bool>(out var accept)) return;
-            PendingPropAction=MutatePropAsync(()=>_source.RespondPropActionAsync(PropActionMotion.Text(args[0]),accept,_lifetime.Token));
+            PendingPropAction=MutatePropAsync(()=>_source.RespondPropActionAsync(PropActionMotion.Text(args[0]),accept,_lifetime.Token),"respond");
         };
         _hud.Handlers["cancelPropAction"]=args=> {
             if(args.Count==0) return;
             string id=PropActionMotion.Text(args[0]);
             PendingPropAction=PropActionMotion.Text(props.OwnedRun?["execution_id"])==id ? ReleaseOwnedPropAsync()
-                : MutatePropAsync(()=>_source.CancelPropActionAsync(id,_lifetime.Token));
+                : MutatePropAsync(()=>_source.CancelPropActionAsync(id,_lifetime.Token),"cancel");
         };
-        // Private state can become active before the world-map response drops its approach.
-        _figures.OwnedPropApproaching=journey=>props.OwnedRun is not null || (_propPrepared && props.Paused && !string.IsNullOrEmpty(journey) && journey!=_preparedPropJourney);
-        _position.PropMotionOwned=()=>props.OwnedRun is not null || (_propPrepared && props.Paused);
+        _position.PropMotionOwned=()=>_figures.OwnPropMotion is not null || props.OwnedRun is not null || (_propPrepared && props.Paused);
         _position.ManualPropWithdrawn=props.ManualGate.Withdrawn;
         _steering.ReleasePropAction=()=> { if(!props.Paused && !props.ManualGate.Pending) PendingPropAction=ReleaseOwnedPropAsync(); };
         PickPropAction=PickSemanticProp;
         PropPauseChanged();
         PendingPropAction=ObservePropAsync(async ()=> { await RefreshPropStateAsync(); await RefreshSemanticOffersAsync(false); PublishPropSnapshot(); });
     }
-    private void ReleaseSwitchedPropSeat()
+    private void PreviewPropTarget(JsonObject target)
     {
-        if(_disposed || _preparedPropSeatExecution is not { } old || PropActions?.OwnedRun is not { } run
-            || PropActionMotion.Text(run["status"])!="approaching" || PropActionMotion.Text(run["execution_id"])==old) return;
-        _preparedPropSeatExecution=null;
-        _figures.PropSeatSwitchExecution=old;
+        if(Avatar is not { } avatar) return;
+        var placement=_world.Slots.Values.SelectMany(tile=>tile.Placements)
+            .FirstOrDefault(rec=>rec.Spec.PlacementId==PropActionMotion.Text(target["placement_id"]));
+        if(placement?.Node is not { } node) return;
+        _propPreviewYaw=avatar.Yaw;
+        avatar.FaceTowards(node.GlobalPosition-avatar.Position,snap:true);
+    }
+    private void PropMotionReceived(JsonObject motion,string source,string executionId)
+    {
+        if(_disposed) return;
+        if(motion["departure"] is not null && _propPreviewYaw is { } previous && Avatar is { } avatar) avatar.FaceTowards(new((float)Math.Sin(previous),0,(float)Math.Cos(previous)),snap:true);
+        _manualPropRelease=false; _propPrepared=false; _propPreviewYaw=null;
         _position.OwnSeatChangeAt=_clock(); _position.Channel.DiscardPendingAnswers();
-        // Keep the current seated clip: the new route opens the measured exit bridge.
-        _figures.ClearPropEntry(_figures.AvatarName,preservePose:true);
-        _steering.SetSeated(false); _seatKey="";
-        if(Avatar is { } f) _figures.SetPlayerAnimation(f.CharacterName,null);
+        _steering.CancelRoute(); _steering.PropActionDriven=true; _steering.SetSeated(false); _seatKey="";
+        _figures.PlayOwnPropMotion(motion,source,executionId);
+        if(_figures.OwnPropMotion is not null) _figures.SetServerDriven(true);
     }
     private void PropPauseChanged()
     {
@@ -116,12 +123,10 @@ public sealed partial class AvatarOffersController
         _steering.PropPreparationPending=props.Paused;
     }
     private void PropRefreshFailed(string message) { if(!_disposed) Toast?.Invoke(message); }
-    private void PropNotifyChanged(string? id) { if(id is not null) { BeginPropBurst(); InvalidatePropOffers(); } _hud.NotifyPropActionsChanged(id); }
-    // Persistent seats and public NPC motion never extend this own-operation deadline.
-    private void BeginPropBurst() { if(_clock()>=_propBurstUntil) _propBurstUntil=_clock()+5000; }
-    private void InvalidatePropOffers() { _semanticGeneration++; _lastSemanticPoll=double.NegativeInfinity; _lastStatePoll=_clock(); _nextPropPoll=_clock()+500; }
+    private void PropNotifyChanged(string? id) { if(id is not null) { InvalidatePropOffers(); } _hud.NotifyPropActionsChanged(id); }
+    private void InvalidatePropOffers() { _semanticGeneration++; _lastSemanticPoll=double.NegativeInfinity; _lastStatePoll=_clock(); _nextPropPoll=_clock()+PropPollPeriod(); }
     public Func<double> PropPollPeriod { get; set; }=()=>AnimaNative.Sync.PollSpec.Worldmap3d.IntervalMs;
-    private double PropPollInterval=>_clock()<_propBurstUntil ? 500 : PropPollPeriod();
+    private double PropPollInterval=>PropPollPeriod();
     private void PublishPropSnapshot() { if(!_disposed && PropActions is { } props) _hud.SetState("propActionSnapshot",new JsonObject { ["offers"]=_semanticOffers.DeepClone(),["state"]=props.State }); }
     private async Task<JsonDocument> RequestLoggedAsync(string action,JsonObject target,string revision,string? partner)
     {
@@ -138,13 +143,12 @@ public sealed partial class AvatarOffersController
         try { await work(); }
         catch(Exception e) { if(!_disposed) Toast?.Invoke(e.Message); }
     }
-    private async Task MutatePropAsync(Func<Task<JsonDocument>> operation)
+    private async Task MutatePropAsync(Func<Task<JsonDocument>> operation,string source="request")
     {
         if(_propMutationBusy || _disposed || PropActions is not { } props) return;
         _propMutationBusy=true;
         try {
-            BeginPropBurst();
-            using var answer=await props.MutateAsync(operation);
+            using var answer=await props.MutateAsync(operation,source);
             if(answer.RootElement.TryGetProperty("status",out var s) && s.GetString() is "refused" or "failed")
                 throw new InvalidOperationException(answer.RootElement.GetProperty("reason").GetString());
             await RefreshSemanticOffersAsync(false);
@@ -155,10 +159,9 @@ public sealed partial class AvatarOffersController
     {
         if(_disposed || PropActions is not { OwnedRun: { } run } props) return;
         string? journey=Self(Map!.Value) is { } me && me.TryGetProperty("travel",out var tr) && tr.ValueKind==JsonValueKind.Object ? Text(tr,"journey_id") : _position.OwnedPropJourney;
-        BeginPropBurst();
         await ObservePropAsync(async ()=> {
             try { await props.ReleaseAsync(PropActionMotion.Text(run["execution_id"]),journey,()=> {
-                ReleaseLocalProp();
+                if(_figures.OwnPropMotion?.Cancel!=true) ReleaseLocalProp();
             });
                 await RefreshSemanticOffersAsync(false);
             }
@@ -168,27 +171,25 @@ public sealed partial class AvatarOffersController
     private void PropRunEnded(string status,string reason)
     {
         if(_disposed) return;
-        _propBurstUntil=0; _nextPropPoll=_clock()+PropPollPeriod();
+        _nextPropPoll=_clock()+PropPollPeriod();
+        if(_propPreviewYaw is { } yaw && Avatar is { } avatar) { avatar.FaceTowards(new((float)Math.Sin(yaw),0,(float)Math.Cos(yaw)),snap:true); _propPreviewYaw=null; }
         ReleaseLocalProp();
     }
     private void ReleaseLocalProp()
     {
         PropActions?.ManualGate.Withdraw(_position.OwnedPropJourney);
-        _position.Channel.ApplyDriver(new(false,null,null));
+        PropActions?.ManualGate.Withdraw(PropActionMotion.Text(_figures.OwnPropMotion?.Plan["journey_id"]) is { Length:>0 } playedJourney ? playedJourney : _position.OwnedPropJourney);
+        _figures.WithdrawOwnPropInteraction();
+        _position.ReleasePropDriver();
         _manualPropRelease=true; _propPrepared=false;
-        _preparedPropJourney=_preparedPropSeatExecution=null; _figures.PropDeparturePose=null;
+        Avatar?.ReleasePropAtRenderedPoint();
+        _figures.ClearOwnPropMotion();
+        LogProp("motion ended: handed back");
         _position.OwnSeatChangeAt=_clock(); _position.Channel.DiscardPendingAnswers();
         _figures.ClearPropEntry(_figures.AvatarName); _figures.SetServerDriven(false);
         _steering.PropActionDriven=false; _steering.SetSeated(false); _seatKey="";
         if(Avatar is { } f) { f.Face=null; f.Lean=null; f.SurfaceGroup="ground"; f.ApplyRotation(); _figures.SetPlayerAnimation(f.CharacterName,null); }
         PropPauseChanged();
-    }
-    private void ReconcilePropWorld(JsonElement map)
-    {
-        if(PropActions is not { } props || Self(map) is not { } me) return;
-        string? journey=me.TryGetProperty("travel",out var tr) && tr.ValueKind==JsonValueKind.Object ? Text(tr,"journey_id") : null;
-        bool Physical(string key)=>me.TryGetProperty(key,out var value) && value.ValueKind==JsonValueKind.Object;
-        props.ObserveWorld(journey,Physical("place") || Physical("prop_action_entry") || Physical("interaction"));
     }
     // Startup, mode changes and the timer share one normal read budget.
     private Task RefreshPropStateAsync()
@@ -286,10 +287,10 @@ public sealed partial class AvatarOffersController
     private void DetachProps()
     {
         if(PropActions is not { } props) return;
-        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.Dispose();
-        _hud.PropActionPrepare=null; _hud.PropActionsChanged=null;
+        props.PauseChanged-=PropPauseChanged; props.NotifyChanged-=PropNotifyChanged; props.RefreshFailed-=PropRefreshFailed; props.RunEnded-=PropRunEnded; props.MotionReceived-=PropMotionReceived; _figures.OwnPropMotionReleased-=ReleaseLocalProp; props.Dispose();
+        _hud.PropActionPrepare=null; _hud.PropActionsChanged=null; _hud.PropActionResult=null; _hud.PropActionTarget=null;
         foreach(string name in new[]{"pickPropAction","respondPropAction","cancelPropAction"}) _hud.Handlers.Remove(name);
-        _figures.OwnedPropApproaching=null; _figures.SuppressAvatarPropEntry=null; _figures.PropEntryError=null; _position.PropMotionOwned=null; _position.ManualPropWithdrawn=null;
+        _figures.SuppressAvatarPropEntry=null; _figures.PropEntryError=null; _position.PropMotionOwned=null; _position.ManualPropWithdrawn=null;
         _steering.ReleasePropAction=null; _steering.PropPreparationPending=false; _position.Channel.ReportsPaused=false;
         PickPropAction=null;
     }

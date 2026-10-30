@@ -39,10 +39,31 @@ export interface PropActionOffer {
   available_targets: Array<PropActionChoice & { partner: string }>
   effects: PropActionEffect[]
 }
+export interface PropActionDeparture {
+  seat: [number, number]
+  stand: [number, number]
+  exit_clip: string
+  exit_s: number
+}
+export interface PropActionMotion {
+  execution_id: string
+  journey_id: string
+  room_id: string
+  floor_y: number | null
+  waypoints: [number, number][]
+  paces_m_s_real: (number | null)[] | null
+  departure: PropActionDeparture | null
+  access: { x: number; y: number; z: number; yaw: number }
+  anchor: { x: number; y: number; z: number; yaw: number; root_offset: number; place_id: string; slot: number }
+  entry: { mode: 'bridge' | 'direct'; kind: string; pose_key: string; duration_s: number } | null
+  height_cm: number | null
+  role: 'a' | 'b' | null
+}
 export interface PropActionResult {
   execution_id: string
   status: string
   reason: string
+  motion?: PropActionMotion | PropActionDeparture | null
   effects?: Record<string, unknown>
 }
 /** Private lifecycle DTO: only GET /play/prop-actions/state may supply this. */
@@ -98,7 +119,6 @@ export function subscribeHostedPropActions(listener: () => void): () => void {
   return () => { hostListeners.delete(listener) }
 }
 
-let burstUntil = 0
 let pollPeriodMs = 3000
 export function setPropActionPollPeriod(ms: number): void { pollPeriodMs = Math.max(3000, ms) }
 function cachedRead<T>(load: () => Promise<T>) {
@@ -113,7 +133,7 @@ function cachedRead<T>(load: () => Promise<T>) {
         return epoch === generation && hasValue ? answer : this.read()
       }
       const now = Date.now()
-      if (now - started < (now < burstUntil ? 500 : pollPeriodMs)) {
+      if (now - started < pollPeriodMs) {
         if (hasValue) return value
         if (failed) throw failure
       }
@@ -135,18 +155,21 @@ const offersRead = cachedRead(() => apiGet<PropActionOffer[]>('/play/prop-action
 const stateRead = cachedRead(() => apiGet<PropActionState>('/play/prop-actions/state'))
 
 const CHANGED = 'prop-actions:changed'
-/** Hosts subscribe here to force a world poll before short approaches disappear. */
-export function onPropActionChanged(listener: (requestId?: string) => void): () => void {
-  const changed = (event: Event) => listener((event as CustomEvent<{ request_id?: string }>).detail?.request_id)
+/** Hosts receive mutation answers immediately; uncorrelated events invalidate status. */
+export type PropActionSource = 'request' | 'respond' | 'cancel'
+export function onPropActionChanged(listener: (requestId?: string, result?: PropActionResult, source?: PropActionSource) => void): () => void {
+  const changed = (event: Event) => {
+    const detail = (event as CustomEvent<{ request_id?: string; result?: PropActionResult; source?: PropActionSource }>).detail
+    listener(detail?.request_id, detail?.result, detail?.source)
+  }
   window.addEventListener(CHANGED, changed)
   return () => window.removeEventListener(CHANGED, changed)
 }
-export function notifyPropActionChanged(requestId?: string): void {
+export function notifyPropActionChanged(requestId?: string, result?: PropActionResult, source?: PropActionSource): void {
   if (requestId !== undefined) {
     offersRead.invalidate(); stateRead.invalidate()
-    if (Date.now() >= burstUntil) burstUntil = Date.now() + 5000
   }
-  window.dispatchEvent(new CustomEvent(CHANGED, { detail: requestId === undefined ? undefined : { request_id: requestId } }))
+  window.dispatchEvent(new CustomEvent(CHANGED, { detail: { request_id: requestId, result, source } }))
 }
 export function getPropActions(): Promise<PropActionOffer[]> {
   return hosted ? Promise.resolve(hostSnapshot?.offers ?? []) : offersRead.read()
@@ -154,24 +177,33 @@ export function getPropActions(): Promise<PropActionOffer[]> {
 export function getPropActionState(): Promise<PropActionState> {
   return hosted ? Promise.resolve(hostSnapshot?.state ?? { incoming: [], outgoing: [], current: [], recent_results: [] }) : stateRead.read()
 }
-let preparation: ((requestId: string) => Promise<void>) | null = null
+let preparation: ((requestId: string, target?: PropActionTarget) => Promise<void>) | null = null
 // Transport correlation only, not an execution identity or server request nonce.
 const preparationSession = Math.random().toString(36).slice(2)
 let preparationSequence = 0
 /** One host owns the position-writer barrier; standalone frontend needs none. */
-export function setPropActionPreparation(handler: (requestId: string) => Promise<void>): () => void {
+export function setPropActionPreparation(handler: (requestId: string, target?: PropActionTarget) => Promise<void>): () => void {
   preparation = handler
   return () => { if (preparation === handler) preparation = null }
 }
 async function mutate(path: string, body: unknown): Promise<PropActionResult> {
   const requestId = `${preparationSession}:${++preparationSequence}`
+  let result: PropActionResult | undefined
   try {
-    await preparation?.(requestId)
-    return await apiPost<PropActionResult>(path, body)
+    const payload = body as { target?: PropActionTarget; execution_id?: string }
+    const target = payload.target ?? (path.endsWith('/respond')
+      ? hostSnapshot?.state.incoming.find(row => row.execution_id === payload.execution_id)?.target : undefined)
+    await preparation?.(requestId, target)
+    result = await apiPost<PropActionResult>(path, body)
+    return result
+  } catch (error) {
+    const execution = body as { execution_id?: string }
+    result = { execution_id: execution.execution_id ?? '', status: 'failed', reason: String(error) }
+    throw error
   } finally {
     // Invalidation releases the host's position barrier even after a refusal.
     // It is never a statement that a request adopted a place or succeeded.
-    notifyPropActionChanged(requestId)
+    notifyPropActionChanged(requestId, result, path.split('/').at(-1) as PropActionSource)
   }
 }
 export function requestPropAction(actionId: string, target: PropActionTarget, revision: string, partner?: string): Promise<PropActionResult> {

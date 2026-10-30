@@ -79,6 +79,54 @@
           ]
         }
       ]
+    },
+    "MOTION": {
+      "execution_id": "run-b1",
+      "journey_id": "journey-b1",
+      "room_id": "room",
+      "floor_y": 3,
+      "waypoints": [
+        [
+          0,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          2,
+          3
+        ]
+      ],
+      "paces_m_s_real": [
+        2,
+        1
+      ],
+      "departure": null,
+      "access": {
+        "x": 2,
+        "y": 3,
+        "z": 3,
+        "yaw": 180
+      },
+      "anchor": {
+        "x": 2,
+        "y": 3.5,
+        "z": 4,
+        "yaw": 270,
+        "root_offset": -0.2,
+        "place_id": "bed-1",
+        "slot": 1
+      },
+      "entry": {
+        "mode": "bridge",
+        "kind": "lie-down",
+        "pose_key": "lying",
+        "duration_s": 2
+      },
+      "height_cm": 170,
+      "role": null
     }
   },
   "cases": [
@@ -2047,400 +2095,822 @@
       "expect": null
     },
     {
-      "label": "[13] owned start projects to first point, never server progress",
-      "fn": "projectApproachM",
+      "label": "[16] B1 response frame starts own route",
+      "fn": "sampleMotion",
       "args": [
-        [
-          [
-            0,
-            0
-          ],
-          [
-            2,
-            0
-          ],
-          [
-            2,
-            3
-          ]
-        ],
-        [
-          0,
-          0
-        ]
-      ],
-      "expect": 0
-    },
-    {
-      "label": "[13] closest point on second leg keeps arc length",
-      "fn": "projectApproachM",
-      "args": [
-        [
-          [
-            0,
-            0
-          ],
-          [
-            2,
-            0
-          ],
-          [
-            2,
-            3
-          ]
-        ],
-        [
-          2.2,
-          2
-        ]
-      ],
-      "expect": 4
-    },
-    {
-      "label": "[13] degenerate legs preserve projection",
-      "fn": "projectApproachM",
-      "args": [
-        [
-          [
-            0,
-            0
-          ],
-          [
-            0,
-            0
-          ],
-          [
-            3,
-            4
-          ]
-        ],
-        [
-          1.5,
-          2
-        ]
-      ],
-      "expect": 2.5
-    },
-    {
-      "label": "[13] empty projection holds origin",
-      "fn": "projectApproachM",
-      "args": [
-        [],
-        [
-          4,
-          5
-        ]
-      ],
-      "expect": 0
-    },
-    {
-      "label": "[13] zero-time late approach never advances",
-      "fn": "ownedApproachStep",
-      "args": [
-        0,
-        5.4,
-        1,
-        10,
+        {
+          "$fixture": "MOTION"
+        },
         0
       ],
-      "expect": 0
+      "expect": {
+        "phase": "walking",
+        "x": 0,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
     },
     {
-      "label": "[13] catch-up moves along route in real time",
-      "fn": "ownedApproachStep",
+      "label": "[16] B1 negative elapsed clamps to response frame",
+      "fn": "sampleMotion",
       "args": [
-        0,
-        5.4,
-        1,
-        10,
-        0.02
+        {
+          "$fixture": "MOTION"
+        },
+        -5
       ],
-      "expect": 0.2
+      "expect": {
+        "phase": "walking",
+        "x": 0,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
     },
     {
-      "label": "[13] slow frame caps visible advance at quarter metre",
-      "fn": "ownedApproachStep",
+      "label": "[16] B1 first pace two metres per second",
+      "fn": "sampleMotion",
       "args": [
-        0,
-        5.4,
-        1,
-        10,
-        0.1
-      ],
-      "expect": 0.25
-    },
-    {
-      "label": "[13] catch-up never passes authoritative target",
-      "fn": "ownedApproachStep",
-      "args": [
-        5.9,
-        6,
-        1,
-        10,
-        0.02
-      ],
-      "expect": 6
-    },
-    {
-      "label": "[13] older progress never rewinds owned avatar",
-      "fn": "ownedApproachStep",
-      "args": [
-        4,
-        3,
-        1,
-        10,
-        0.02
-      ],
-      "expect": 4
-    },
-    {
-      "label": "[13] ordinary owned playback uses route pace",
-      "fn": "ownedApproachStep",
-      "args": [
-        1,
-        2,
-        1,
-        0,
-        0.02
-      ],
-      "expect": 1.02
-    },
-    {
-      "label": "[14] future owned approach holds reported lead",
-      "fn": "ownedApproachStep",
-      "args": [
-        0,
-        1,
-        1,
-        10,
-        0.1,
-        0.75,
-        0
-      ],
-      "expect": 0
-    },
-    {
-      "label": "[14] poll age leaves quarter second to wait",
-      "fn": "ownedApproachStep",
-      "args": [
-        0,
-        1,
-        1,
-        10,
-        0.1,
-        0.75,
+        {
+          "$fixture": "MOTION"
+        },
         0.5
       ],
-      "expect": 0
+      "expect": {
+        "phase": "walking",
+        "x": 1,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
     },
     {
-      "label": "[14] exact departure releases step",
-      "fn": "ownedApproachStep",
+      "label": "[16] B1 exact corner turns to next segment",
+      "fn": "sampleMotion",
       "args": [
-        0,
-        1,
-        1,
-        0,
-        0.1,
-        0.75,
-        0.75
+        {
+          "$fixture": "MOTION"
+        },
+        1
       ],
-      "expect": 0.1
+      "expect": {
+        "phase": "walking",
+        "x": 2,
+        "y": 3,
+        "z": 0,
+        "yaw": 0
+      }
     },
     {
-      "label": "[14] future adoption has no catch-up",
-      "fn": "ownedApproachCatchUp",
+      "label": "[16] B1 second pace one metre per second",
+      "fn": "sampleMotion",
       "args": [
-        0,
-        1,
-        6,
-        1,
-        0.75,
+        {
+          "$fixture": "MOTION"
+        },
+        2.5
+      ],
+      "expect": {
+        "phase": "walking",
+        "x": 2,
+        "y": 3,
+        "z": 1.5,
+        "yaw": 0
+      }
+    },
+    {
+      "label": "[16] B1 access begins entry immediately",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION"
+        },
+        4
+      ],
+      "expect": {
+        "phase": "entry",
+        "x": 2,
+        "y": 3,
+        "z": 3,
+        "yaw": 180
+      }
+    },
+    {
+      "label": "[16] B1 entry clock independent of height",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "height_cm": 100
+          }
+        },
+        5
+      ],
+      "expect": {
+        "phase": "entry",
+        "x": 2,
+        "y": 3,
+        "z": 3,
+        "yaw": 180
+      }
+    },
+    {
+      "label": "[16] B1 entry exact end commits server anchor",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION"
+        },
+        6
+      ],
+      "expect": {
+        "phase": "arrived",
+        "x": 2,
+        "y": 3.5,
+        "z": 4,
+        "yaw": 270
+      }
+    },
+    {
+      "label": "[16] B1 ended plan retains exact anchor",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION"
+        },
+        100
+      ],
+      "expect": {
+        "phase": "arrived",
+        "x": 2,
+        "y": 3.5,
+        "z": 4,
+        "yaw": 270
+      }
+    },
+    {
+      "label": "[16] B1 direct entry takes anchor immediately",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "entry": {
+              "mode": "direct",
+              "kind": "",
+              "pose_key": "lying",
+              "duration_s": 0
+            }
+          }
+        },
+        4
+      ],
+      "expect": {
+        "phase": "arrived",
+        "x": 2,
+        "y": 3.5,
+        "z": 4,
+        "yaw": 270
+      }
+    },
+    {
+      "label": "[16] B1 no entry takes anchor immediately",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "entry": null
+          }
+        },
+        4
+      ],
+      "expect": {
+        "phase": "arrived",
+        "x": 2,
+        "y": 3.5,
+        "z": 4,
+        "yaw": 270
+      }
+    },
+    {
+      "label": "[16] B1 frozen clock holds response position",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "paces_m_s_real": null
+          }
+        },
+        500
+      ],
+      "expect": {
+        "phase": "frozen",
+        "x": 0,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
+    },
+    {
+      "label": "[16] B1 null first pace jumps timeless leg",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "paces_m_s_real": [
+              null,
+              1
+            ]
+          }
+        },
         0
       ],
-      "expect": 0
+      "expect": {
+        "phase": "walking",
+        "x": 2,
+        "y": 3,
+        "z": 0,
+        "yaw": 0
+      }
     },
     {
-      "label": "[14] poll age still before start has no catch-up",
-      "fn": "ownedApproachCatchUp",
+      "label": "[16] B1 null final pace jumps to entry",
+      "fn": "sampleMotion",
       "args": [
-        0,
-        1,
-        6,
-        1,
-        0.75,
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "paces_m_s_real": [
+              2,
+              null
+            ]
+          }
+        },
+        1
+      ],
+      "expect": {
+        "phase": "entry",
+        "x": 2,
+        "y": 3,
+        "z": 3,
+        "yaw": 180
+      }
+    },
+    {
+      "label": "[16] B1 floor fallback uses access floor",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "floor_y": null
+          }
+        },
         0.5
       ],
-      "expect": 0
+      "expect": {
+        "phase": "walking",
+        "x": 1,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
     },
     {
-      "label": "[14] expired start allows genuine late catch-up",
-      "fn": "ownedApproachCatchUp",
+      "label": "[16] B1 zero length segment consumes its pace index",
+      "fn": "sampleMotion",
       "args": [
-        0,
-        1,
-        6,
-        1,
-        0.75,
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "waypoints": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "paces_m_s_real": [
+              null,
+              2,
+              1
+            ]
+          }
+        },
+        0.5
+      ],
+      "expect": {
+        "phase": "walking",
+        "x": 1,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
+    },
+    {
+      "label": "[16] B1 departure starts at seat",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "waypoints": [
+              [
+                -1,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "paces_m_s_real": [
+              null,
+              2,
+              1
+            ],
+            "departure": {
+              "seat": [
+                -1,
+                0
+              ],
+              "stand": [
+                0,
+                0
+              ],
+              "exit_clip": "stand-up",
+              "exit_s": 1
+            }
+          }
+        },
+        0
+      ],
+      "expect": {
+        "phase": "departure",
+        "x": -1,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
+    },
+    {
+      "label": "[16] B1 departure plays before route",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "waypoints": [
+              [
+                -1,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "paces_m_s_real": [
+              null,
+              2,
+              1
+            ],
+            "departure": {
+              "seat": [
+                -1,
+                0
+              ],
+              "stand": [
+                0,
+                0
+              ],
+              "exit_clip": "stand-up",
+              "exit_s": 1
+            }
+          }
+        },
+        0.5
+      ],
+      "expect": {
+        "phase": "departure",
+        "x": -0.5,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
+    },
+    {
+      "label": "[16] B1 departure exact end starts walk",
+      "fn": "sampleMotion",
+      "args": [
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "waypoints": [
+              [
+                -1,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "paces_m_s_real": [
+              null,
+              2,
+              1
+            ],
+            "departure": {
+              "seat": [
+                -1,
+                0
+              ],
+              "stand": [
+                0,
+                0
+              ],
+              "exit_clip": "stand-up",
+              "exit_s": 1
+            }
+          }
+        },
         1
       ],
-      "expect": 10
+      "expect": {
+        "phase": "walking",
+        "x": 0,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
     },
     {
-      "label": "[14] small lead needs no catch-up",
-      "fn": "ownedApproachCatchUp",
+      "label": "[16] B1 walk clock excludes departure",
+      "fn": "sampleMotion",
       "args": [
-        0,
-        0.25,
-        6,
-        1,
-        0,
-        1
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "waypoints": [
+              [
+                -1,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "paces_m_s_real": [
+              null,
+              2,
+              1
+            ],
+            "departure": {
+              "seat": [
+                -1,
+                0
+              ],
+              "stand": [
+                0,
+                0
+              ],
+              "exit_clip": "stand-up",
+              "exit_s": 1
+            }
+          }
+        },
+        1.5
       ],
-      "expect": 0
+      "expect": {
+        "phase": "walking",
+        "x": 1,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
     },
     {
-      "label": "[15] clipless seat lead .3 holds",
-      "fn": "seatStandM",
+      "label": "[16] B1 entry clock excludes departure",
+      "fn": "sampleMotion",
       "args": [
-        [
-          [
-            2,
-            0
-          ],
-          [
-            2,
-            -0.5
-          ],
-          [
-            4,
-            -0.5
-          ]
-        ],
-        0.3,
-        0.299
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "waypoints": [
+              [
+                -1,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "paces_m_s_real": [
+              null,
+              2,
+              1
+            ],
+            "departure": {
+              "seat": [
+                -1,
+                0
+              ],
+              "stand": [
+                0,
+                0
+              ],
+              "exit_clip": "stand-up",
+              "exit_s": 1
+            }
+          }
+        },
+        5
       ],
-      "expect": null
+      "expect": {
+        "phase": "entry",
+        "x": 2,
+        "y": 3,
+        "z": 3,
+        "yaw": 180
+      }
     },
     {
-      "label": "[15] clipless seat exact start releases half metre",
-      "fn": "seatStandM",
+      "label": "[16] B1 departure and entry end on anchor",
+      "fn": "sampleMotion",
       "args": [
-        [
-          [
-            2,
-            0
-          ],
-          [
-            2,
-            -0.5
-          ],
-          [
-            4,
-            -0.5
-          ]
-        ],
-        0.3,
-        0.3
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "waypoints": [
+              [
+                -1,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "paces_m_s_real": [
+              null,
+              2,
+              1
+            ],
+            "departure": {
+              "seat": [
+                -1,
+                0
+              ],
+              "stand": [
+                0,
+                0
+              ],
+              "exit_clip": "stand-up",
+              "exit_s": 1
+            }
+          }
+        },
+        7
       ],
-      "expect": 0.5
+      "expect": {
+        "phase": "arrived",
+        "x": 2,
+        "y": 3.5,
+        "z": 4,
+        "yaw": 270
+      }
     },
     {
-      "label": "[15] clipless seat late adoption uses second waypoint",
-      "fn": "seatStandM",
+      "label": "[16] B1 clipless departure stands immediately",
+      "fn": "sampleMotion",
       "args": [
-        [
-          [
-            2,
-            0
-          ],
-          [
-            2,
-            -0.5
-          ],
-          [
-            4,
-            -0.5
-          ]
-        ],
-        0.3,
-        1
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "waypoints": [
+              [
+                -1,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "paces_m_s_real": [
+              null,
+              2,
+              1
+            ],
+            "departure": {
+              "seat": [
+                -1,
+                0
+              ],
+              "stand": [
+                0,
+                0
+              ],
+              "exit_clip": "",
+              "exit_s": 1
+            }
+          }
+        },
+        0
       ],
-      "expect": 0.5
+      "expect": {
+        "phase": "walking",
+        "x": 0,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
     },
     {
-      "label": "[15] diagonal stand leg length",
-      "fn": "seatStandM",
+      "label": "[16] B1 frozen walk holds after departure",
+      "fn": "sampleMotion",
       "args": [
-        [
-          [
-            0,
-            0
-          ],
-          [
-            0.3,
-            0.4
-          ],
-          [
-            2,
-            0.4
-          ]
-        ],
-        0.3,
-        0.31
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "waypoints": [
+              [
+                -1,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "paces_m_s_real": null,
+            "departure": {
+              "seat": [
+                -1,
+                0
+              ],
+              "stand": [
+                0,
+                0
+              ],
+              "exit_clip": "stand-up",
+              "exit_s": 1
+            }
+          }
+        },
+        10
       ],
-      "expect": 0.5
+      "expect": {
+        "phase": "frozen",
+        "x": 0,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
     },
     {
-      "label": "[15] zero seat leg",
-      "fn": "seatStandM",
+      "label": "[16] B1 all timeless legs enter immediately",
+      "fn": "sampleMotion",
       "args": [
-        [
-          [
-            0,
-            0
-          ],
-          [
-            0,
-            0
-          ],
-          [
-            2,
-            0
-          ]
-        ],
-        0.3,
-        0.3
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "paces_m_s_real": [
+              null,
+              null
+            ]
+          }
+        },
+        0
       ],
-      "expect": 0
+      "expect": {
+        "phase": "entry",
+        "x": 2,
+        "y": 3,
+        "z": 3,
+        "yaw": 180
+      }
     },
     {
-      "label": "[15] .3 second owned lead holds",
-      "fn": "ownedApproachStep",
+      "label": "[16] B1 frozen repeated start faces first nonzero leg",
+      "fn": "sampleMotion",
       "args": [
-        0,
-        1,
-        1,
-        0,
-        0.1,
-        0.3,
-        0.299
+        {
+          "$fixture": "MOTION",
+          "$with": {
+            "waypoints": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                2,
+                0
+              ],
+              [
+                2,
+                3
+              ]
+            ],
+            "paces_m_s_real": null
+          }
+        },
+        100
       ],
-      "expect": 0
-    },
-    {
-      "label": "[15] .3 second owned lead starts",
-      "fn": "ownedApproachStep",
-      "args": [
-        0.5,
-        1,
-        1,
-        0,
-        0.1,
-        0.3,
-        0.3
-      ],
-      "expect": 0.6
+      "expect": {
+        "phase": "frozen",
+        "x": 0,
+        "y": 3,
+        "z": 0,
+        "yaw": 90
+      }
     }
   ]
 }

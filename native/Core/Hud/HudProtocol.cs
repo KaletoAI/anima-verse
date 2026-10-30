@@ -58,7 +58,7 @@ public sealed class HudUi
 }
 
 /// <summary>A message from the HUD that passed validation (<paramref name="RequestId"/>: prop-action and speech correlation).</summary>
-public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, JsonArray? Args, string? RequestId = null, string? Url = null);
+public sealed record HudInbound(string Kind, JsonObject? Patch, string? Name, JsonArray? Args, string? RequestId = null, string? Url = null, JsonObject? Result = null, string? Source = null, JsonObject? Target = null);
 
 /// <summary>
 /// Protocol v4 of client3d/src/hud/bridge.ts (<c>HUD_BRIDGE_VERSION</c>), scene side, as pure functions:
@@ -147,12 +147,21 @@ public static class HudProtocol
             case "prop-action-prepare":
                 if (msg["request_id"] is not JsonValue r || r.GetValueKind() != JsonValueKind.String)
                 { reason = "prop-action-prepare without a string request_id"; return null; }
-                return new HudInbound(kind, null, null, null, r.GetValue<string>());
+                if(msg.ContainsKey("target") && msg["target"] is not JsonObject)
+                { reason="prop-action-prepare target is not an object"; return null; }
+                return new HudInbound(kind, null, null, null, r.GetValue<string>(),Target:msg["target"] as JsonObject);
             case "prop-actions-changed":
-                if (!msg.ContainsKey("request_id")) return new HudInbound(kind, null, null, null);
-                if (msg["request_id"] is not JsonValue c || c.GetValueKind() != JsonValueKind.String)
-                { reason = "prop-actions-changed with a request_id that is not a string"; return null; }
-                return new HudInbound(kind, null, null, null, c.GetValue<string>());
+                string? changedId=null;
+                if(msg.ContainsKey("request_id")) {
+                    if(msg["request_id"] is not JsonValue c || !c.TryGetValue<string>(out changedId))
+                    { reason="prop-actions-changed with a request_id that is not a string"; return null; }
+                }
+                if(msg.ContainsKey("result") && msg["result"] is not JsonObject)
+                { reason="prop-actions-changed result is not an object"; return null; }
+                string? source=msg["source"] is JsonValue sourceValue && sourceValue.TryGetValue<string>(out var sourceText) ? sourceText : null;
+                if(msg.ContainsKey("source") && source is not ("request" or "respond" or "cancel"))
+                { reason="prop-actions-changed source is invalid"; return null; }
+                return new HudInbound(kind,null,null,null,changedId,Result:msg["result"] as JsonObject,Source:source);
             default:
                 reason = $"unknown kind '{kind}'";
                 return null;

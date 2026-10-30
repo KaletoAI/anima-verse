@@ -81,11 +81,11 @@ public class PropActionControlTests
         state.SetResult("{\"current\":[],\"outgoing\":[]}"); await changed; Assert.True(control.Paused);
         await control.ChangedAsync("b"); Assert.False(control.Paused);
     }
-    /// <summary>Task 67 #5: failed reconciliation cannot undo an accepted cancel or its local tombstone/reset.</summary>
+    /// <summary>B1: an accepted cancel is final without a state or world read; the answer owns the release.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task AcceptedReleaseSurvivesStateOrWorldRefreshFailure(bool failWorld)
+    public async Task AcceptedReleaseNeedsNoStateOrWorldRefresh(bool failWorld)
     {
         var transport = new Transport();
         transport.Reply = req => req.Method == HttpMethod.Post ? Task.FromResult("{\"status\":\"cancelled\"}")
@@ -98,9 +98,9 @@ public class PropActionControlTests
         int resets = 0;
         await control.ReleaseAsync("run", "journey", () => resets++);
         Assert.Equal(1, resets);
-        Assert.Equal(new[] { failWorld ? "view changed" : "state offline" }, errors);
+        Assert.Empty(errors);
         Assert.True(control.ManualGate.Withdrawn("journey"));
-        Assert.True(control.Paused);
+        Assert.False(control.Paused);
         transport.Reply = _ => Task.FromResult("{\"current\":[],\"outgoing\":[]}");
         control.RefreshWorld = () => Task.CompletedTask;
         await control.RefreshAsync();
@@ -108,7 +108,7 @@ public class PropActionControlTests
     }
 
     [Fact]
-    public async Task MutationFailureSurvivesRefreshFailure()
+    public async Task KnownMutationFailureReleasesInputEvenWhenRefreshFails()
     {
         var transport = new Transport { Reply = _ => Task.FromException<string>(new InvalidOperationException("refresh failed")) };
         using var api = new AnimaApi("http://fixture/", transport);
@@ -116,6 +116,6 @@ public class PropActionControlTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => control.MutateAsync(
             () => Task.FromException<System.Text.Json.JsonDocument>(new InvalidOperationException("mutation failed"))));
         Assert.Equal("mutation failed", error.Message);
-        Assert.True(control.Paused);
+        Assert.False(control.Paused);
     }
 }

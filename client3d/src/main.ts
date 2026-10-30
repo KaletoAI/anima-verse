@@ -2637,7 +2637,7 @@ async function startApp(username: string, role: string) {
     const local = c.name !== avatarName && c.local_approach?.room_id === c.room_id
       ? c.local_approach : null;
     const tr = local ?? c.travel;
-    if (!tr || (c.name === avatarName && manualPropGate.withdrawn(tr.journey_id))) return null;
+    if (!tr || (c.name === avatarName && (npcs.hasOwnMotion(avatarName) || ownedPropRun() || manualPropGate.withdrawn(tr.journey_id)))) return null;
     const wp = tr.waypoints;
     // The knowledge filter thins route AND distance out together (§ A12); a
     // route without a `progress_m` is therefore a withheld row, not a walkable
@@ -2649,9 +2649,7 @@ async function startApp(username: string, role: string) {
       const totalM = polylineLength(points);
       const progressM = clampProgress(tr.progress_m, totalM);
       const at = pointAtDistance(points, progressM)!;
-      const preparedApproach = preparedPropJourney !== undefined && tr.journey_id !== preparedPropJourney
-        && (propMutationPending || propStateUncertain || propPreparation.pending);
-      const exact = !!local || (c.name === avatarName && (!!ownedPropRun() || preparedApproach));
+      const exact = !!local;
       const tile = exact ? tileAt(at[0], at[1]) : null;
       const localAt = tile ? worldToTile(tile, at[0], at[1]) : null;
       // The server's floor_y is the bare floor; the walking clearance comes on top, as for every room floor.
@@ -2665,9 +2663,8 @@ async function startApp(username: string, role: string) {
         route: { points, totalM, paces: tr.paces_m_s_real, serverM: progressM,
                  ageAtParsedS: ageAtReceiptS(map.sync, meta), parsedAt: meta.parsedAt,
                  journeyId: tr.journey_id ?? null, stamp, exact, floorY,
-                 ownedApproach: c.name === avatarName && exact,
                  startsInS: tr.starts_in_s ?? 0,
-                 departureClip: tr.starts_in_s && c.activity_animation
+                 departureClip: local && tr.starts_in_s && c.activity_animation
                    && c.activity_animation !== poseClip('standing') ? c.activity_animation : undefined },
       };
     }
@@ -2689,7 +2686,7 @@ async function startApp(username: string, role: string) {
     // placement for as long as it lasts. The poll stamp goes with it so the
     // locally advanced clip time reconciles only against a NEW payload.
     for (const st of states) {
-      if (st.char.name === avatarName && manualPropRelease) st.char = { ...st.char, prop_action_entry: null };
+      if (st.char.name === avatarName && manualPropRelease) st.char = { ...st.char, prop_action_entry: null, place: null, interaction: null, activity_animation: undefined };
       st.interaction = st.char.interaction ?? null;
       st.stamp = mapStamp;
       const meta = api.mapMetaOf(map);
@@ -2706,6 +2703,11 @@ async function startApp(username: string, role: string) {
     hiddenChars.clear();
     const states: NpcState[] = [];
     for (const c of map.characters) {
+      if (c.name === avatarName && npcs.hasOwnMotion(avatarName)) {
+        const point = npcs.positionOf(avatarName) ?? new THREE.Vector3(c.pos?.x ?? 0, 0, c.pos?.z ?? 0);
+        states.push({char: c, pos: point.clone()});
+        continue;
+      }
       if (c.name === avatarName && c.travel && (manualPropGate.withdrawn(c.travel.journey_id) || suppressedJourney(avatarDrive, avatarCancelled, c.travel.journey_id))) {
         const local = npcs.positionOf(avatarName);
         if (local) avatarLocalPos = { x: local.x, z: local.z };
@@ -3836,15 +3838,11 @@ async function startApp(username: string, role: string) {
   let offersAppliedGeneration = 0;
   let manualPropRelease = false;
   let propMutationPending = false;
-  let preparedPropSeatExecution: string | undefined;
-  let preparedPropJourney: string | null | undefined;
   const propRequestDiagnostic: { actionId?: string; placement?: string; sentAt?: number } = {};
   let propStateUncertain = false;
   let propStateEpoch = 0;
-  let ownedPropJourney: string | null = null;
   let requestedPropRun: PropActionResult | null = null;
   let trackedPropRun: PropActionResult | null = null;
-  let adoptedPropJourney: string | null = null;
   const releasedPropExecutions = new Set<string>();
   const propPreparation = createPropPreparationBarrier();
   let propPositionDrainActive = false;
@@ -3957,15 +3955,9 @@ async function startApp(username: string, role: string) {
   /** Adopt server ownership only from a payload fresh enough to know our last move. */
   function applyDriver(map: WorldMap, polledAt: number): void {
     if (pollIsStale(polledAt, Math.max(ownCorrectionAt, ownSeatChangeAt)) || manualPropGate.pending) return;
-    reconcilePropWorld(map);
+    if (npcs.hasOwnMotion(avatarName)) return;
     const me = map.characters.find((c) => c.name === avatarName);
     const tr = manualPropGate.withdrawn(me?.travel?.journey_id) ? null : me?.travel ?? null;
-    if (tr?.journey_id && ownedPropRun()?.status === 'approaching') ownedPropJourney = tr.journey_id;
-    if (ownedPropRun() || (npcs.propEntryUnavailable(avatarName) && (me?.place || me?.interaction || me?.prop_action_entry))) {
-      if (avatarDrive.kind !== 'SERVER') enterServerDrive();
-      avatarDrive = { kind: 'SERVER', j: tr?.journey_id ?? ownedPropJourney };
-      return;
-    }
     const prev = avatarDrive;
     const r = avatarDriver(avatarDrive, { kind: 'payload',
       hasRoute: !!(tr && tr.waypoints && tr.waypoints.length >= 2),
@@ -4256,6 +4248,7 @@ async function startApp(username: string, role: string) {
       if (manualInput) void releaseOwnedProp();
       return;
     }
+    if (npcs.hasOwnMotion(avatarName)) return;
     if (lastMap?.characters.find(c => c.name === avatarName)?.prop_action_entry && !manualPropRelease) return;
     // THE STAND-UP'S TRAVEL (rule 4 of `Figure.travelBase`): a bridge clip
     // with root motion carried the body out of the seat along its own travel
@@ -4586,6 +4579,7 @@ async function startApp(username: string, role: string) {
    */
   function reconcileAvatarPos(map: WorldMap, polledAt: number) {
     if (getGameState().mode !== 'embodied') return;
+    if (npcs.hasOwnMotion(avatarName)) return;
     if (avatarDrive.kind === 'SERVER') return;
     if (npcs.propEntryUnavailable(avatarName)) return;
     // A poll older than our own last seat change knows nothing about now (the
@@ -4680,7 +4674,7 @@ async function startApp(username: string, role: string) {
     // into the chair through the third.
     if (pollIsStale(polledAt, ownSeatChangeAt)) return;
     const me = map.characters.find((c) => c.name === avatarName);
-    if (me?.prop_action_entry || manualPropGate.pending || npcs.propEntryUnavailable(avatarName)) return;
+    if (npcs.hasOwnMotion(avatarName) || me?.prop_action_entry || manualPropGate.pending || npcs.propEntryUnavailable(avatarName)) return;
     const place = me?.place ?? null;
     if (!place) {
       // Not seated (any more): the server released the place — by our own
@@ -4770,7 +4764,6 @@ async function startApp(username: string, role: string) {
       setGameState({ propActionSnapshot: { offers: actions, state } });
       logPropOffers(actions);
       adoptPropState(state);
-      releaseSwitchedPropSeat();
       propStateUncertain = false;
       propPreparation.adoptFreshState();
 
@@ -4797,13 +4790,13 @@ async function startApp(username: string, role: string) {
       ?? semanticState.outgoing.find(run => !releasedPropExecutions.has(run.execution_id) && run.status === 'approaching');
   }
 
-  async function preparePropAction(requestId: string): Promise<void> {
-    // Synchronous pause before acknowledging the host/iframe preparation.
-    preparedPropSeatExecution = avatarSeated || lastMap?.characters.find(c => c.name === avatarName)?.place
-      ? ownedPropRun()?.execution_id ?? '' : undefined;
-    preparedPropJourney = lastMap?.characters.find(c => c.name === avatarName)?.travel?.journey_id ?? null;
-    if (preparedPropSeatExecution !== undefined) npcs.preparePropDeparture(avatarName);
-    else npcs.propDeparturePose = null;
+  async function preparePropAction(requestId: string, target?: import('@anima/player-ui/propActions').PropActionTarget): Promise<void> {
+    // Turn before awaiting the position writer, including detached HUD requests.
+    if (target && !propClickRevert) {
+      const entry = [...(placeEntries?.values() ?? [])].find(e => e.placementId === target.placement_id && e.variantUid === target.variant_uid);
+      const point = entry?.slots[0];
+      if (point) propClickRevert = npcs.previewPropFacing(avatarName, point.x, point.z);
+    }
     propPreparation.begin(requestId, performance.now());
     propStateUncertain = true;
     propStateEpoch++;
@@ -4838,132 +4831,121 @@ async function startApp(username: string, role: string) {
   gameActions.preparePropAction = preparePropAction;
   api.setPropActionPreparation(preparePropAction);
 
-  function releaseSwitchedPropSeat(): void {
-    const run = ownedPropRun();
-    if (preparedPropSeatExecution === undefined || !run || run.status !== 'approaching'
-      || run.execution_id === preparedPropSeatExecution) return;
-    if (preparedPropSeatExecution) releasedPropExecutions.add(preparedPropSeatExecution);
-    npcs.propSeatSwitchExecution = preparedPropSeatExecution;
-    preparedPropSeatExecution = undefined;
-    ownSeatChangeAt = performance.now();
-    avatarSeated = false;
-    seatedKey = '';
-    // Keep the seat posture until the exit clip or clipless departure takes ownership.
-    npcs.clearPropEntry(avatarName, true);
-    npcs.setPlayerAnimation(avatarName, null);
-  }
-
   function adoptPropState(state: PropActionState): void {
     const previous = trackedPropRun ?? ownedPropRun();
     semanticState = state; requestedPropRun = null;
     if (previous) {
       const row = [...state.current, ...state.outgoing, ...state.recent_results]
         .find(run => run.execution_id === previous.execution_id);
-      if (row?.status === 'cancelled' || row?.status === 'failed' || (!row && previous.status === 'approaching')) {
+      if (row?.status === 'cancelled' || row?.status === 'failed' || row?.status === 'completed' || (!row && previous.status === 'approaching')) {
         endPropRun(previous.execution_id, row?.status ?? 'cancelled', row?.reason ?? 'approach_withdrawn');
         return;
       }
     }
     trackedPropRun = ownedPropRun() ?? null;
-  }
-
-  function reconcilePropWorld(map: WorldMap): void {
-    if (!trackedPropRun) return;
-    const me = map.characters.find(c => c.name === avatarName);
-    if (me?.travel?.journey_id && !manualPropGate.withdrawn(me.travel.journey_id)) adoptedPropJourney = me.travel.journey_id;
-    else if (adoptedPropJourney && me && !me.place && !me.prop_action_entry && !me.interaction)
-      endPropRun(trackedPropRun.execution_id, 'cancelled', 'approach_withdrawn');
+    for (const row of state.current) receivePropAnswer(row, 'state');
   }
 
   function endPropRun(executionId: string, status: string, reason: string): void {
     console.info(`[prop] run ended without approach: status=${status} reason=${reason}`);
-    releasedPropExecutions.add(executionId);
+    if (executionId) releasedPropExecutions.add(executionId);
+    if (trackedPropRun) releasedPropExecutions.add(trackedPropRun.execution_id);
     trackedPropRun = requestedPropRun = null;
     propStateUncertain = false; propPreparation.adoptFreshState();
-    propPollUntil = 0;
-    releaseLocalProp(adoptedPropJourney ?? ownedPropJourney);
-    adoptedPropJourney = null;
+    releaseLocalProp(null);
   }
 
   function releaseLocalProp(journey: string | null): void {
+    journey ??= npcs.ownMotionJourney(avatarName);
     manualPropGate.withdraw(journey);
     manualPropRelease = true;
     ownSeatChangeAt = performance.now();
     answerFloor = posSeq + 1; pendingReport = null;
     avatarCancelled = journey;
     avatarDrive = { kind: 'PLAYER' };
+    npcs.clearOwnMotion(avatarName);
     npcs.clearPropEntry(avatarName);
     npcs.setServerDriven(avatarName, false);
-    npcs.propDeparturePose = null;
     avatarSeated = false; seatedKey = '';
-    preparedPropSeatExecution = undefined; preparedPropJourney = undefined;
     npcs.setPlayerPose(avatarName, null, null);
     npcs.setPlayerAnimation(avatarName, null);
+    console.info('[prop] motion ended: handed back');
   }
 
-  async function refreshPropMotion(immediateWorld = false): Promise<void> {
-    const stateEpoch = propStateEpoch;
-    // A provisional own verdict lets the map adopt a route before private-state latency.
-    const world = immediateWorld ? (console.info('[prop] approaching answer: immediate worldmap poll'), pollCore().refresh('c3d-worldmap').then(() => null, (error: unknown) => ({ error }))) : null;
-    const state = await api.getPropActionState();
-    if (stateEpoch !== propStateEpoch) { await world; return; }
-    adoptPropState(state);
-    releaseSwitchedPropSeat();
-    if (ownedPropRun()) manualPropRelease = false;
+  function receivePropAnswer(result: PropActionResult, source: string): void {
+    if (result.execution_id && releasedPropExecutions.has(result.execution_id)) return;
+    const motion = result.motion;
+    if (source === 'cancel' && (result.status === 'refused' || result.status === 'failed')) {
+      propStateUncertain = false; propPreparation.adoptFreshState();
+      return;
+    }
+    if (source === 'cancel' && result.status !== 'refused' && result.status !== 'failed') {
+      releasedPropExecutions.add(result.execution_id);
+      trackedPropRun = requestedPropRun = null;
+      propClickRevert = null;
+      const journey = npcs.ownMotionJourney(avatarName);
+      const done = () => releaseLocalProp(journey);
+      if (motion && 'seat' in motion) npcs.playOwnCancel(avatarName, motion, done);
+      else done();
+    } else if (result.status === 'refused' || result.status === 'failed' || result.status === 'cancelled') {
+      propClickRevert?.(); propClickRevert = null;
+      endPropRun(result.execution_id, result.status, result.reason);
+    } else if (motion && 'waypoints' in motion) {
+      if (trackedPropRun && trackedPropRun.execution_id !== result.execution_id)
+        releasedPropExecutions.add(trackedPropRun.execution_id);
+      requestedPropRun = trackedPropRun = result;
+      manualPropRelease = false;
+      ownSeatChangeAt = performance.now();
+      answerFloor = posSeq + 1; pendingReport = null;
+      cancelRoute(); walkIn = null; correction = null;
+      avatarDrive = {kind: 'PLAYER'};
+      npcs.setServerDriven(avatarName, false);
+      npcs.playOwnMotion(avatarName, motion, source);
+      propClickRevert = null;
+      avatarSeated = false; seatedKey = '';
+    } else {
+      propClickRevert = null;
+      if (result.status === 'approaching') requestedPropRun = trackedPropRun = result;
+    }
     propStateUncertain = false;
     propPreparation.adoptFreshState();
-    if (world) { const failed = await world; if (failed) throw failed.error; }
-    else await pollCore().refresh('c3d-worldmap');
-    if (lastMap) await syncPlaceGlyphs(lastMap);
   }
-  onPropActionChanged(requestId => {
-    // Completion/refusal of this exact HTTP operation may release its pause
-    // only after a new private state; unrelated lifecycle changes never do.
+
+  async function refreshPropMotion(): Promise<void> {
+    const stateEpoch = propStateEpoch;
+    const state = await api.getPropActionState();
+    if (stateEpoch !== propStateEpoch) return;
+    adoptPropState(state);
+    propStateUncertain = false;
+    propPreparation.adoptFreshState();
+  }
+  onPropActionChanged((requestId, result, source) => {
     propPreparation.changed(requestId);
-    propStateUncertain = true;
     propStateEpoch++;
-    // Local mutations reconcile their returned verdict; bridged HUD mutations have no local caller.
-    if (!propMutationPending && !manualPropGate.pending)
-      void refreshPropMotion(true).catch(e => uiActions.toast?.(String(e)));
+    if (result) receivePropAnswer(result, source ?? 'request');
+    else {
+      propStateUncertain = true;
+      void refreshPropMotion().catch(e => uiActions.toast?.(String(e)));
+    }
   });
-  // Short entries must be sampled while live, never replayed after commit.
-  let propPollBusy = false;
-  let propPollUntil = 0;
-  onPropActionChanged(requestId => { if (requestId !== undefined && performance.now() >= propPollUntil) propPollUntil = performance.now() + 5000; });
   function pollPropMotion(): void {
     if (propPreparation.expire(performance.now())) {
-      // A disconnected HUD cannot strand control. Expiry only makes its
-      // exact lease releasable by a NEW canonical state, never by a timer.
       propStateUncertain = true;
       propStateEpoch++;
       void refreshPropMotion().catch(e => uiActions.toast?.(String(e)));
     }
-    const moving = performance.now() < propPollUntil;
-    if (!moving || propPollBusy) return;
-    propPollBusy = true;
-    void pollCore().refresh('c3d-worldmap').finally(() => { propPollBusy = false; });
   }
   setInterval(pollPropMotion, 500);
 
   async function releaseOwnedProp(): Promise<void> {
     const run = ownedPropRun();
     if (!run || manualPropGate.pending) return;
-    const journey = lastMap?.characters.find(c => c.name === avatarName)?.travel?.journey_id ?? ownedPropJourney;
+    const journey = lastMap?.characters.find(c => c.name === avatarName)?.travel?.journey_id ?? null;
     try {
       await manualPropGate.cancel(run.execution_id, journey, async () => {
-        const at = performance.now();
-        console.info(`[prop] release requested execution=${JSON.stringify(run.execution_id)}`);
-        let result;
-        try {
-          result = await api.cancelPropAction(run.execution_id);
-          console.info(`[prop] release answered status=${result.status} ms=${Math.round(performance.now() - at)}`);
-        } catch (e) { console.info(`[prop] release answered status=error ms=${Math.round(performance.now() - at)}`); throw e; }
+        const result = await api.cancelPropAction(run.execution_id);
         if (result.status === 'refused' || result.status === 'failed') throw new Error(result.reason);
       });
-      releasedPropExecutions.add(run.execution_id);
-      trackedPropRun = requestedPropRun = null; adoptedPropJourney = null;
-      releaseLocalProp(journey);
-      await refreshPropMotion();
     } catch (e) { uiActions.toast?.(String(e)); }
   }
 
@@ -5167,18 +5149,22 @@ async function startApp(username: string, role: string) {
     propMutationPending = true;
     try {
       const result = await operation();
-      if (result.status === 'refused' || result.status === 'failed') throw new Error(result.reason);
-      if (result.status === 'approaching') {
-        requestedPropRun = trackedPropRun = result; adoptedPropJourney = null;
+      if (result.status === 'refused' || result.status === 'failed') {
+        propClickRevert?.();
+        uiActions.toast?.(result.reason);
       }
-      cancelRoute();
-      await refreshPropMotion(result.status === 'approaching');
     } catch (e) {
+      propClickRevert?.();
+      endPropRun(trackedPropRun?.execution_id ?? '', 'failed', String(e));
       uiActions.toast?.(String(e));
-      await refreshPropMotion().catch(error => uiActions.toast?.(String(error)));
-    } finally { propMutationPending = false; }
+    } finally { propMutationPending = false; propClickRevert = null; }
   }
+  let propClickRevert: (() => void) | null = null;
   gameActions.pickPropAction = (actionId, target, revision, partner) => {
+    if (propMutationPending) return;
+    const entry = [...(placeEntries?.values() ?? [])].find(e => e.placementId === target.placement_id && e.variantUid === target.variant_uid);
+    const point = entry?.slots[0];
+    if (point) propClickRevert = npcs.previewPropFacing(avatarName, point.x, point.z);
     gameActions.closePlaceMenu?.();
     void mutatePropAction(async () => {
       const at = performance.now();

@@ -120,7 +120,7 @@ export interface HudGameActions {
   respondPropAction?: (executionId: string, accept: boolean) => void | Promise<void>;
   cancelPropAction?: (executionId: string) => void | Promise<void>;
   /** Internal awaited host barrier, not an invokable HUD game command. */
-  preparePropAction?: (requestId: string) => Promise<void>;
+  preparePropAction?: (requestId: string, target?: import('@anima/player-ui/propActions').PropActionTarget) => Promise<void>;
   setVolumes?: (prefs: Prefs) => void;
   speak?: (url: string) => void | Promise<void>;
   stopSpeech?: () => void;

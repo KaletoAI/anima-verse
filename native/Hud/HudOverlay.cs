@@ -112,6 +112,8 @@ public partial class HudOverlay : CanvasLayer
     }
     /// <summary>Task 57: HUD mutation finally notification, including refusal, requests fresh state/world adoption.</summary>
     public Action<string?>? PropActionsChanged { get; set; }
+    public Action<JsonObject,string>? PropActionResult { get; set; }
+    public Action<JsonObject>? PropActionTarget { get; set; }
     public Task? PendingPropPreparation { get; private set; }
     public void NotifyPropActionsChanged(string? requestId = null) => Send(HudProtocol.PropActionsChanged(requestId));
     private async Task PreparePropAction(string requestId)
@@ -449,9 +451,11 @@ public partial class HudOverlay : CanvasLayer
                 _ = SpeakLine(msg.RequestId!, msg.Url!);
                 break;
             case "prop-action-prepare":
+                if(msg.Target is { } target) PropActionTarget?.Invoke(target);
                 PendingPropPreparation = PreparePropAction(msg.RequestId!);
                 break;
             case "prop-actions-changed":
+                if(msg.Result is { } result) PropActionResult?.Invoke(result,msg.Source ?? "request");
                 PropActionsChanged?.Invoke(msg.RequestId);
                 break;
         }

@@ -646,18 +646,26 @@ The capsule-clamp invariant based on the source smoke's independent
 checks stay inline. Prop integration references in the position harness are
 inert stubs only: no prop-action API or native prop behavior was added.
 
-## Prop actions (Task 56 / E7-T11, TypeScript side)
+## Prop actions (Task 56 / E7-T11; B1 own playback, Task 83)
 
-Run `node client3d/scripts/smoke_prop_action_motion.mjs`. The 72 cases in
+Run `node client3d/scripts/smoke_prop_action_motion.mjs`. The 98 cases in
 `prop_action_motion.json` use `anima-test-vectors/1`; their single canonical
 source is that smoke's opening docstring. All 24 original local-route,
 entry-clock and support cases retain their hand-derived inputs and values.
 The format guard includes this file. The smoke retains 27 inline lifecycle
-and mesh assertions, for 99 checks versus the original 75 assertions.
+and mesh assertions. Task 83 removes the obsolete own-approach catch-up,
+projection and server-lead cases, retaining observer timing. The 26 B1 cases
+exercise the same production motion sampler in both clients.
 
 `client3d/scripts/propActionVectorDispatch.mjs` calls the production exports
-without changing `client3d/src` or `packages/`. Native-facing signatures:
+through shape adapters. Native-facing signatures:
 
+- `sampleMotion(plan, elapsedS)` → `{phase,x,y,z,yaw}` on the own client
+  clock. Phases are `departure`, `walking`, `frozen`, `entry`, `arrived`; yaw
+  uses compass degrees. Walking and departure use `floor_y ?? access.y`
+  before renderer clearance. A null per-leg pace is timeless; a null pace
+  array holds after departure. Entry samples hold access while the renderer
+  plays the measured bridge, then finish at the exact server anchor.
 - `localApproachPoint(path, ageS)` → `[x,z]`; path has `waypoints`, nullable
   segment `paces_m_s_real`, `progress_m`, optional `starts_in_s`.
 - `entryPhase(entry, ageS)` → fraction; `entryClipSample(entry, ageS)` →
@@ -689,7 +697,9 @@ state machines; they contain no copied state-transition rules. Because the
 common runner is synchronous, the smoke awaits each actual result first,
 then passes it (or its error) through `runVectors`. Shared fixture/sentinel
 resolution, expectation comparison and failure accounting apply unchanged;
-unknown functions fail before cases run. No C# consumer is added before Task 57.
+unknown functions fail before cases run. Native dispatch lives in
+`native/tests/PropActionDispatch.cs`; the B1 headless check also consumes
+the shared sampler cases without VSTest.
 
 The separate synthetic world and route answer table are documented in
 [`native/fixtures/propactions/README.md`](../../native/fixtures/propactions/README.md).

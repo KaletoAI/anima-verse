@@ -131,6 +131,7 @@ public sealed partial class AvatarOffersController
     private async Task ActivityAsync(JsonElement body,bool standUp)
     {
         if(_activityBusy || _disposed) return;
+        _manualPropRelease=false;
         _activityBusy=true; _steering.SeatWritePending=true; _steering.SeatTakingPending=!standUp;
         _position.OwnSeatChangeAt=double.PositiveInfinity;
         _position.Channel.DiscardPendingAnswers();
@@ -162,7 +163,7 @@ public sealed partial class AvatarOffersController
     public void ReconcilePlace(JsonElement map,double polledAt)
     {
         if(!_active || _disposed || FigureGround.PollIsStale(polledAt,_position.OwnSeatChangeAt)
-            || _steering.PropActionDriven || _figures.ServerDriven || Avatar is not { } f || Self(map) is not { } me) return;
+            || _manualPropRelease || _figures.OwnPropMotion is not null || _steering.PropActionDriven || _figures.ServerDriven || Avatar is not { } f || Self(map) is not { } me) return;
         if(!me.TryGetProperty("place",out var p) || p.ValueKind!=JsonValueKind.Object)
         {
             if(_steering.AvatarSeated || _seatKey.Length>0)

@@ -117,7 +117,8 @@ const heldReads = stateReads;
 assert.equal(heldReads - beforeHeldReads, 1, 'one identical in-flight HTTP read');
 finishRead(); await Promise.all([aRead, bRead]);
 assert.equal(stateReads, heldReads, 'second caller awaits the running identical request');
-// Own operation: no more than two pairs/s and the burst expires after five seconds.
+// Own operation (B1): the answer carries the motion, so a mutation opens no burst —
+// reads keep the normal cadence (3 s): 5 s of 50 ms probes = reads at 0 s and 3 s.
 now = pollStart + 200000;
 actions.notifyPropActionChanged('fixture-own-action');
 let burstOffers = 0, burstStates = 0;
@@ -128,14 +129,15 @@ globalThis.fetch = async path => {
 for (let step = 0; step < 100; step++) {
   await Promise.all([actions.getPropActions(), actions.getPropActionState()]); now += 50;
 }
-assert.equal(burstOffers, 10); assert.equal(burstStates, 10);
+assert.equal(burstOffers, 2, 'no own burst: normal cadence after a mutation');
+assert.equal(burstStates, 2, 'no own burst: normal cadence after a mutation');
 const afterBurst = burstStates;
 for (let step = 0; step < 60; step++) {
-  actions.notifyPropActionChanged(); // Lifecycle observations must not prolong a burst.
+  actions.notifyPropActionChanged(); // Lifecycle observations must not start a burst either.
   await Promise.all([actions.getPropActions(), actions.getPropActionState()]); now += 50;
 }
-assert.equal(burstStates - afterBurst, 1, 'burst ends even when lifecycle notices continue');
-console.log(`POLL-MEASURE JS own burst 5s offers=10 state=10; following 3s offers=${burstOffers - 10} state=${burstStates - afterBurst}`);
+assert.ok(burstStates - afterBurst <= 1, 'lifecycle notices keep the normal cadence');
+console.log(`POLL-MEASURE JS after own mutation 5s offers=${burstOffers} state=${burstStates}; following 3s state=${burstStates - afterBurst}`);
 // A push-connected world uses the existing six-second cadence.
 now += 10000;
 actions.setPropActionPollPeriod(6000);
