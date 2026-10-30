@@ -8137,6 +8137,20 @@ metadata and positive finite duration guards. Group targets are valid only
 from `walking`; on the `from` side a group is valid only towards `*` — the
 exit clip a seat or lie pose without its own exit rule gets up with.
 
+**The room hears it** (2026-10-30): every run tells its room through one
+storyteller line (`source "prop_action"`, in the actor's language, in the
+run's room, after all locks; `prop_action_engine._narrate`). The line follows
+the catalog `group` of the held pose and names the prop's localized `name`:
+taking the place (`sits down on` / `lies down on` / `settles down by` /
+`steps up to`, a sleep action `lies down … to sleep`), leaving it (`gets up
+from`, `stand`: `steps away from`, waking: `wakes up and gets up from`), an
+approach that failed (`does not get to … after all`), an invitation
+(`suggests {pose}`), a decline and an unanswered invitation. A pair run starts
+and stops through `interaction_engine` and says nothing of its own there; a
+seat switch (`keep_seated`) and a run the player called off on the way say
+nothing. The chat shows these lines, so a compact action panel needs no
+explanatory text of its own.
+
 All author routes below explicitly require admin. `POST /world/props/{id}/validate`
 takes `{document}` and returns issues plus `placement:"not_checked"`. Valid
 documents also return `access_previews`: action ID → variant UID → marker ID →

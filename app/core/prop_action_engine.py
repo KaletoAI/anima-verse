@@ -571,6 +571,7 @@ def _admit_timed(run, fingerprint, marks):
         marks.append(("start", time.perf_counter()))
     _notify(run)
     if partner:
+        _narrate(run, "{inviter} suggests {pose} to {invitee}.", inviter=actor, invitee=partner)
         # A decision/model or respond-lane request must never run inside an
         # execution/profile/place lock or an SQLite transaction.
         from app.core.hooks import emit
@@ -742,10 +743,93 @@ def _own_journey(run, name, journey):
             and target.get("slot") == plan["entry_anchor"]["slot"])
 
 
+#: Narrator lines per pose group of the place: taking it, and leaving it.
+_SETTLE_LINES = {"seat": "{actor} sits down on the {prop}.",
+                 "lie": "{actor} lies down on the {prop}.",
+                 "ground": "{actor} settles down by the {prop}.",
+                 "stand": "{actor} steps up to the {prop}."}
+_LEAVE_LINES = {"seat": "{actor} gets up from the {prop}.",
+                "lie": "{actor} gets up from the {prop}.",
+                "ground": "{actor} gets up from the {prop}.",
+                "stand": "{actor} steps away from the {prop}."}
+
+
+def _held_pose(run):
+    """The pose the run holds its actor in right now."""
+    definition = run["definition"]
+    if definition["ability"] == "combined":
+        phase = next((p for p in definition["phases"] if p["id"] == run.get("phase")),
+                     definition["phases"][0])
+        return phase["pose_key"]
+    return definition["pose_key"]
+
+
+def _narrate(run, key, **fmt):
+    """One storyteller line in the run's room, in the actor's language, after
+    every lock is released. The room has to SEE a figure sit down or get up —
+    the perception stream is what the characters remember of the scene, and
+    the player's chat shows it. Never raises."""
+    from app.core.keyed_lock import _after_locks
+
+    def deliver():
+        try:
+            from app.core.i18n import localized, t
+            from app.core.perception import STORYTELLER_SPEAKER, VOLUME_NORMAL, record_utterance
+            from app.core.pose_catalog import pose_label
+            actor, target = run["actor"], run["target"]
+            lang = C.get_character_language(actor)
+            query = places._GeometryQuery()
+            place = next((p for p in query.room_places(target["location_id"], target["room_id"])
+                          if p.get("placement_id") == target["placement_id"]), None) or {}
+            document = query.prop_document(place["prop_id"]) if place.get("prop_id") else {}
+            prop = localized(document or {}, "name", lang) or place.get("prop_id") or ""
+            pose = pose_label(_held_pose(run), lang)
+            record_utterance(
+                speaker=STORYTELLER_SPEAKER,
+                content=t(key, lang).format(actor=actor, partner=run["partner"], prop=prop,
+                                            pose=pose, **fmt),
+                volume=VOLUME_NORMAL, location_id=target["location_id"], room_id=target["room_id"],
+                source="prop_action", anchor=actor)
+        except Exception as e:
+            logger.debug("prop-action narration failed: %s", e)
+
+    _after_locks(deliver)
+
+
+def _group_line(lines, run):
+    from app.core.pose_catalog import get_catalog
+    return lines.get((get_catalog("pose").get(_held_pose(run)) or {}).get("group"), "")
+
+
+def _narrate_finish(run, before, status, reason, keep_seated):
+    """The line for a run that has just ended, from the status it had."""
+    pair = run["definition"]["ability"] == "pair"
+    if reason == "consent_declined":
+        _narrate(run, "{invitee} does not feel like {pose} with {inviter} right now.",
+                 inviter=run["actor"], invitee=run["partner"])
+    elif reason == "consent_expired":
+        _narrate(run, "{invitee} does not respond to the invitation from {inviter}.",
+                 inviter=run["actor"], invitee=run["partner"])
+    elif before in ("active", "sleeping"):
+        # A pair ends through end_interaction, which tells the room itself;
+        # a seat kept for the actor's next place is no getting up.
+        if pair or keep_seated == run["actor"]:
+            return
+        if run["definition"]["ability"] == "sleep" and reason == "awake":
+            _narrate(run, "{actor} wakes up and gets up from the {prop}.")
+        else:
+            line = _group_line(_LEAVE_LINES, run)
+            if line:
+                _narrate(run, line)
+    elif before == "approaching" and status == "failed":
+        _narrate(run, "{actor} does not get to the {prop} after all.")
+
+
 @_internal_mutation()
 def _finish(run, status, reason, *, keep_seated=""):
     if run["status"] in store.TERMINAL:
         return _result(run)
+    before = run["status"]
     phases = []
     if run["status"] == "active" and run["definition"]["ability"] != "sleep":
         # Include the final online partial interval before any cleanup. _clock
@@ -763,6 +847,7 @@ def _finish(run, status, reason, *, keep_seated=""):
     run["data"]["cleanup_pending"] = True
     _commit(run, phases)  # Terminal, effects and claim release precede cleanup.
     _cleanup(run, keep_seated=keep_seated)
+    _narrate_finish(run, before, status, reason, keep_seated)
     return _result(run)
 
 
@@ -1107,6 +1192,10 @@ def _activate(run):
                                 pos_x=anchor["x"], pos_z=anchor["z"], pos_session=None, pos_seq=None)})
     if ability != "pair":
         C._publish_activity_changed(run["actor"], pose, "", pose, place, None)
+        line = ("{actor} lies down on the {prop} to sleep." if ability == "sleep"
+                else _group_line(_SETTLE_LINES, run))
+        if line:
+            _narrate(run, line)
     if ability == "sleep":
         _resume_sleep(run)
 
