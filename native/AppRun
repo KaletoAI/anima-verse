@@ -29,6 +29,8 @@ log="$(mktemp "$logs/native-$(date -u +%Y%m%d-%H%M%S)-XXXXXX.log")"
 # Keep the complete console transcript (including the engine banner) after the
 # version header; Godot also writes its own log under the same writable root.
 printf 'Anima Native %s\n' "$version" | tee "$log"
+# The patched libcef.so imports mallinf_ from this shim (see native/build.sh); CEF's helpers inherit it.
+if [ -f "$bin/libanima_mallinfo.so" ]; then export LD_PRELOAD="$bin/libanima_mallinfo.so${LD_PRELOAD:+:$LD_PRELOAD}"; fi
 set +e
 "$bin/anima-native.x86_64" --log-file "${log%.log}.engine.log" "${engine[@]}" 2>&1 | tee -a "$log"
 result=("${PIPESTATUS[@]}")

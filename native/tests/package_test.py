@@ -117,7 +117,7 @@ class PackagingTests(unittest.TestCase):
 set -eu
 out="$1"
 mkdir -p "$out/locales"
-for file in anima-native.x86_64 libgdcef.so libcef.so gdCefRenderProcess libmeshoptimizer.so icudtl.dat extra.pak; do
+for file in anima-native.x86_64 libgdcef.so libcef.so libanima_mallinfo.so gdCefRenderProcess libmeshoptimizer.so icudtl.dat extra.pak; do
   echo payload > "$out/$file"
 done
 bash "$(dirname "$0")/version.sh" > "$out/version.txt"

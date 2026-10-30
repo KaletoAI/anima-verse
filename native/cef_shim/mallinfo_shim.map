@@ -1,0 +1,2 @@
+/* libcef.so keeps its GLIBC_2.2.5 version requirement on the renamed import. */
+GLIBC_2.2.5 { global: mallinf_; local: *; };

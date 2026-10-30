@@ -43,7 +43,7 @@ appdir="$work/AnimaNative.AppDir"
 mkdir -p "$appdir/usr/bin"
 bash "$here/build.sh" "$appdir/usr/bin"
 [ "$(cat "$appdir/usr/bin/version.txt")" = "$version" ] || { echo 'Source version changed during export' >&2; exit 1; }
-for file in libgdcef.so libcef.so gdCefRenderProcess libmeshoptimizer.so icudtl.dat; do
+for file in libgdcef.so libcef.so libanima_mallinfo.so gdCefRenderProcess libmeshoptimizer.so icudtl.dat; do
   [ -s "$appdir/usr/bin/$file" ] || { echo "AppImage requires gdCEF and meshoptimizer: missing $file" >&2; exit 1; }
 done
 [ -d "$appdir/usr/bin/locales" ] || { echo 'AppImage requires gdCEF locales/' >&2; exit 1; }
