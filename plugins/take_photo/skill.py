@@ -60,6 +60,7 @@ class TakePhotoSkill(PluginSkill):
 
     SKILL_ID = "image_generation"
     DEFERRED = True  # image is generated after the chat reply
+    FAILURE_LINE = "{actor} tries to take a photo, but it does not work out."
     PROGRESS_TYPE = "image"  # count-based intent/assignment progress
 
     def __init__(self, config: Dict[str, Any], ctx: PluginContext):

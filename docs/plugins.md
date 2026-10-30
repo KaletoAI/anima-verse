@@ -181,6 +181,13 @@ Ausführungszeitpunkt ändern und nicht bloß Metadaten sind): `DEFERRED` (Tool 
 erst NACH der Chat-Antwort) und `CONTENT_TOOL` (Ergebnis muss in die RP zurück, im
 `rp_first`-Modus mit Chat-Retry). Beide liest der Core generisch per `getattr`.
 
+Ebenfalls nur als Klassenattribut: `FAILURE_LINE` — die Erzählerzeile, die der Raum
+hört, wenn ein verzögerter Aufruf dieses Verbs scheitert. Englisch, einziger Platzhalter
+`{actor}` (z. B. `"{actor} tries to take a photo, but it does not work out."`). Sie läuft
+durch `t()`, die deutsche Übersetzung gehört also nach `shared/languages/de.json`. Ohne
+das Attribut (oder ohne `{actor}`) hört der Raum die generische Zeile „{actor} tries, but
+it does not work out — nothing came of it." (`streaming._failure_line`).
+
 **Abhängigkeits-Semantik (F9):** „Aktiv am Charakter" heißt für Verb-Pakete:
 mindestens ein Verb ist für den Charakter aktiviert; für Content-Packs: mindestens ein
 Template-Fragment greift auf das Template des Charakters. Durchsetzung: Lade-Zeit

@@ -50,6 +50,7 @@ class InstagramSkill(PluginSkill):
 
     SKILL_ID = "instagram"
     DEFERRED = True  # The post is created after the chat response.
+    FAILURE_LINE = "{actor} tries to post on Instagram, but it does not work out."
     # [INTENT: instagram_post | caption=...] (F6) — dispatched here.
     INTENT_TYPES = ("instagram_post",)
     INTENT_PAYLOAD_KEYS = ("caption",)

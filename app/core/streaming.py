@@ -185,10 +185,11 @@ def report_deferred_failure(character: str, tool_name: str, result: Any, *,
     On an error answer (``is_error_result``) three things happen:
 
     * a WARNING with the tool's answer in it;
-    * a narrator line in the room — generic on purpose, the core never names
-      a skill (R1) — and NOT display_only, so the character reads in its own
-      transcript that nothing came of it. ``react=False``: a failure is no
-      cue for the room to chime in;
+    * a narrator line in the room that names the action: the skill's own
+      ``FAILURE_LINE`` (``_failure_line``), else a generic line — the core
+      never names a skill (R1). NOT display_only, so the character reads in
+      its own transcript that nothing came of it. ``react=False``: a failure
+      is no cue for the room to chime in;
     * a notification to the avatar involved (``speaker`` unless that is the
       "user" sentinel, else the active character — and only when that one is
       player-controlled; without an avatar none). ``notify=False`` for
@@ -222,8 +223,7 @@ def report_deferred_failure(character: str, tool_name: str, result: Any, *,
                 else (get_character_language(character) or "de"))
         announce_action(
             character,
-            t("{actor} tries, but it does not work out — nothing came of it.",
-              lang).format(actor=character),
+            t(_failure_line(tool_name), lang).format(actor=character),
             source="tool_failed", react=False)
         if avatar:
             from app.models.notifications import create_notification
@@ -270,6 +270,23 @@ def pose_keep_rule(character_name: str) -> str:
             f"changing shape; a glance, a gesture, looking at or holding "
             f"something, or thinking is NOT a new pose — then emit no **I do** "
             f"marker and the current pose stays.")
+
+
+_GENERIC_FAILURE_LINE = "{actor} tries, but it does not work out — nothing came of it."
+
+
+def _failure_line(tool_name: str) -> str:
+    """The English narrator line for a failed tool: the skill's own
+    ``FAILURE_LINE`` declaration (it names the action, e.g. taking a photo),
+    else the generic line. Both go through ``t()``; ``{actor}`` is the only
+    placeholder. No tool name here (R1)."""
+    try:
+        from app.core.dependencies import get_skill_manager
+        skill = get_skill_manager().get_skill_by_name(tool_name)
+        line = str(getattr(skill, "FAILURE_LINE", "") or "") if skill else ""
+    except Exception:
+        line = ""
+    return line if "{actor}" in line else _GENERIC_FAILURE_LINE
 
 
 def _defers_for_attachment(tool_name: str, tool_input: str) -> bool:

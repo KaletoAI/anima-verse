@@ -51,8 +51,9 @@ class VideoGenerationSkill(BaseSkill):
     """
 
     SKILL_ID = "video_generation"
-    ALWAYS_LOAD = True  # Aktivierung per Character
-    DEFERRED = True  # Video wird erst nach Chat-Antwort generiert
+    ALWAYS_LOAD = True  # enabled per character
+    DEFERRED = True  # the video is generated after the chat reply
+    FAILURE_LINE = "{actor} tries to record a video, but it does not work out."
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)

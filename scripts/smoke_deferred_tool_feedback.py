@@ -14,8 +14,9 @@ predicate for that. ``streaming.report_deferred_failure(character, tool,
 result, *, speaker)`` turns such an answer into
   * a WARNING carrying the answer,
   * a narrator line through ``perception.announce_action(..., react=False)``
-    with the GENERIC text "{actor} tries, but it does not work out — nothing
-    came of it." (the core never names a skill — R1),
+    with the skill's own ``FAILURE_LINE`` (it names the action), else the
+    GENERIC text "{actor} tries, but it does not work out — nothing came of
+    it." (the core never names a skill — R1),
   * a notification (kind "tool_failed", sender = the character,
     metadata.to = the avatar's NAME) whose wrapper "{actor} could not
     complete {tool}: {reason}" is translated and whose reason stays raw —
@@ -73,6 +74,18 @@ per case), Otto (NPC). ``is_player_controlled`` answers True for "Kai" only.
  [12] InstagramPost's refusals are failures too (source check of
       plugins/instagram/skill_post.py): "Error: Instagram is disabled for …"
       and "Error: … is still on post cooldown …".
+ [13] the skill names the action: a stub skill manager knows "TakePhoto"
+      with FAILURE_LINE "{actor} tries to take a photo, but it does not work
+      out.", "Plain" without one and "Broken" with "tries and fails" (no
+      {actor}). Mira "en": TakePhoto -> "Mira tries to take a photo, but it
+      does not work out."; with Kai "de" as the speaking avatar -> the de.json
+      text "Mira versucht, ein Foto zu machen, aber es klappt nicht.";
+      Plain and Broken -> the generic EN_LINE; an unknown tool -> EN_LINE.
+ [14] the shipped declarations: TakePhotoSkill, InstagramSkill and
+      VideoGenerationSkill each carry a FAILURE_LINE containing {actor}, and
+      each has a German translation in shared/languages/de.json — "take a
+      photo" -> "ein Foto zu machen", "post on Instagram" -> "etwas auf
+      Instagram zu posten", "record a video" -> "ein Video aufzunehmen".
 """
 import logging
 import sys
@@ -314,6 +327,60 @@ check("disabled answer",
       'return f"Error: Instagram is disabled for {character_name}."' in _isrc, True)
 check("cooldown answer",
       'return (f"Error: {character_name} is still on post cooldown "' in _isrc, True)
+
+# ------------------------------------------------------------------ [13]
+print("[13] the skill's FAILURE_LINE names the action")
+import app.core.dependencies as deps_mod  # noqa: E402
+
+
+class _Skill:
+    def __init__(self, line=None):
+        if line is not None:
+            self.FAILURE_LINE = line
+
+
+class _Manager:
+    SKILLS = {"takephoto": _Skill("{actor} tries to take a photo, but it does not work out."),
+              "plain": _Skill(), "broken": _Skill("tries and fails")}
+
+    def get_skill_by_name(self, name):
+        return self.SKILLS.get(name.lower())
+
+
+_real_manager = deps_mod.get_skill_manager
+deps_mod.get_skill_manager = lambda: _Manager()
+try:
+    for tool, speaker, want in (
+            ("TakePhoto", "Otto", "Mira tries to take a photo, but it does not work out."),
+            ("Plain", "Otto", EN_LINE), ("Broken", "Otto", EN_LINE), ("Unknown", "Otto", EN_LINE)):
+        _reset()
+        report_deferred_failure("Mira", tool, "Error: backend down", speaker=speaker)
+        check(f"{tool}: narrator line", ANNOUNCED, [("Mira", want, False)])
+    _reset()
+    LANG["Kai"] = "de"
+    report_deferred_failure("Mira", "TakePhoto", "Error: backend down", speaker="Kai")
+    check("TakePhoto in the avatar's German", ANNOUNCED,
+          [("Mira", "Mira versucht, ein Foto zu machen, aber es klappt nicht.", False)])
+    LANG["Kai"] = "en"
+finally:
+    deps_mod.get_skill_manager = _real_manager
+
+# ------------------------------------------------------------------ [14]
+print("[14] the shipped deferred skills declare a translated line")
+import json  # noqa: E402
+from app.core.i18n import t  # noqa: E402
+from plugins.take_photo.skill import TakePhotoSkill  # noqa: E402
+from plugins.instagram.skill_post import InstagramSkill  # noqa: E402
+from app.skills.video_generation_skill import VideoGenerationSkill  # noqa: E402
+_de = json.loads((REPO / "shared/languages/de.json").read_text(encoding="utf-8"))["translations"]
+for cls, phrase in ((TakePhotoSkill, "ein Foto zu machen"),
+                    (InstagramSkill, "etwas auf Instagram zu posten"),
+                    (VideoGenerationSkill, "ein Video aufzunehmen")):
+    line = getattr(cls, "FAILURE_LINE", "")
+    check(f"{cls.__name__}: has {{actor}}", "{actor}" in line, True)
+    check(f"{cls.__name__}: German", _de.get(line, ""),
+          "{actor} versucht, " + phrase + ", aber es klappt nicht.")
+    check(f"{cls.__name__}: t() finds it", t(line, "de") == _de.get(line), True)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:
