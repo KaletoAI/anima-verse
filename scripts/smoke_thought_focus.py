@@ -17,8 +17,12 @@ Presence: flavor is last after appearance and states; sleep overrides flavor,
 pose_key is the fallback, no pose adds nothing, 100 chars become 80 plus …,
 and the default chat path omits activity. Expectations are derived by hand.
 All database imports follow paths.init in a temporary directory.
+Left-off expectations: alone with absent mentions withholds the journal;
+alone without them, company, and unknown presence keep it in both templates.
+Scanning precedes withholding: a journal-only mention still names the absent person.
 """
 import sys
+from contextlib import ExitStack
 import tempfile
 import unittest
 from pathlib import Path
@@ -38,6 +42,50 @@ from jinja2 import meta
 
 
 class Focus(unittest.TestCase):
+    def test_leftoff_alone(self):
+        for presence, journal, absent, kept in [
+            (([], []), "- Waiting for Kai, hearing the door handle move.", ["Kai"], False),
+            (([], []), "- Reading my book.", [], True),
+            ((["Lukas"], []), "- Waiting for Kai.", ["Kai"], True),
+            (None, "- Waiting for Kai.", [], True),
+        ]:
+            with self.subTest(presence=presence, journal=journal), ExitStack() as stack:
+                # Keep the real absence scan; isolate unrelated context loaders.
+                for name in (
+                    "inbox", "events", "assignments", "state_flags", "outfit_decision",
+                    "arc", "retrospective", "recent_chat", "avatar_outfit", "known_secrets",
+                    "room_items", "inventory", "tracker", "activity_hint",
+                ):
+                    stack.enter_context(patch.object(tc, f"_build_{name}_block", return_value=""))
+                for name, value in [
+                    ("_build_general_task", ""), ("_build_outfit_block", ""),
+                    ("_build_daily_schedule_context", ("", False)),
+                    ("_build_skill_context_blocks", []), ("_room_presence", presence),
+                    ("recent_thoughts_block", journal),
+                ]:
+                    stack.enter_context(patch.object(tc, name, return_value=value))
+                for target, value in [
+                    ("app.models.character.get_character_profile",
+                     {"current_location": "demo", "current_room": "room"}),
+                    ("app.models.character.list_available_characters", ["Kira", "Kai", "Lukas"]),
+                    ("app.models.account.get_active_character", ""),
+                    ("app.core.prompt_filters.apply_filters", None),
+                    ("app.core.stat_hints.stat_bands", []),
+                    ("app.core.skill_gate.prompt_lines", []),
+                ]:
+                    stack.enter_context(patch(target, return_value=value))
+                log = stack.enter_context(patch.object(tc.logger, "info"))
+                ctx = tc.build_thought_context("Kira")
+                self.assertEqual(ctx["absent_people"], absent)
+                self.assertEqual(ctx["recent_thoughts"], journal if kept else "")
+                if kept:
+                    log.assert_not_called()
+                else:
+                    log.assert_called_once_with(
+                        "%s: left-off lines withheld (alone; absent: %s)", "Kira", "Kai")
+                for template in ("chat/agent_thought.md", "chat/agent_thought_in_chat.md"):
+                    self.assertEqual("=== Where you left off (" in render(template, **ctx), kept)
+
     def test_presence_activity(self):
         cases = [
             ({"pose_flavor": "Schläft auf der Bank"}, "Schläft auf der Bank"),

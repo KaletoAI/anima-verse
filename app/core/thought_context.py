@@ -251,6 +251,11 @@ def build_thought_context(character_name: str, tools_hint: str = "") -> Dict[str
         for name in ctx["absent_people"])
     presence = room_presence_names(character_name, location_id, room_id)
     ctx["room_presence_names"] = presence[0] if presence is not None else None
+    # Scan absent names first: the journal itself may be their only mention.
+    if presence is not None and not presence[0] and ctx["absent_people"]:
+        ctx["recent_thoughts"] = ""
+        logger.info("%s: left-off lines withheld (alone; absent: %s)",
+                    character_name, ", ".join(ctx["absent_people"]))
     return ctx
 
 

@@ -52,6 +52,11 @@ class Pacing(unittest.TestCase):
         async def inline_worker(func, *args, **kwargs):
             return func(*args, **kwargs)
 
+        def chat_turn(*args, publish_reply, **kwargs):
+            # The real chat turn publishes through the handler's callback.
+            publish_reply(reply)
+            return reply
+
         for cascade, reply, eligible in [
                 (False, "Hallo Kira.", True), (False, "x" * 400, True),
                 (False, "Hallo Kira.", False), (True, "Hallo Kira.", True)]:
@@ -62,8 +67,9 @@ class Pacing(unittest.TestCase):
                 with patch.object(asyncio, "to_thread", inline_worker), \
                         patch.object(al, "_is_respond_eligible", return_value=True), \
                         patch.object(al, "_is_agent_eligible", return_value=eligible), \
-                        patch.object(chat_engine, "run_chat_turn", return_value=reply), \
-                        patch.object(perception, "record_utterance") as record, \
+                        patch.object(chat_engine, "run_chat_turn", side_effect=chat_turn), \
+                        patch.object(perception, "record_utterance",
+                                     wraps=perception.record_utterance) as record, \
                         patch.object(loop, "dispatch_room_reactions") as dispatch:
                     self.assertTrue(loop.bump_respond(
                         "Lukas", "Kira", "Hallo.", **({"cascade": False} if not cascade else {})))
