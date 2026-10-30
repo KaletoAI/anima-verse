@@ -32,6 +32,7 @@ its appliers ARE the bodies those routes used to have. ``/area-defaults``,
 ``/slot-values`` and ``/picture`` stay: they are the picture-prop verbs the
 Areas tab calls and the batch does not carry them.
 """
+import asyncio
 from typing import Any, Dict
 
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Request,
@@ -639,9 +640,12 @@ def prop_variant_house(prop_id: str, index: int) -> Dict[str, Any]:
 async def put_prop_variant_house(prop_id: str, index: int, request: Request,
                                  _admin: dict = Depends(require_admin)) -> Dict[str, Any]:
     from app.core.house_props import set_house_spec
-    _variant(prop_id, index)
+    body = await _body(request)
+    # Off the event loop: the save takes the prop's author mutex, which a
+    # running house build may hold.
+    await asyncio.to_thread(_variant, prop_id, index)
     try:
-        house = set_house_spec(prop_id, index, await _body(request))
+        house = await asyncio.to_thread(set_house_spec, prop_id, index, body)
     except ValueError as error:
         raise HTTPException(400, detail=str(error)) from error
     invalidate_prop_lib_token()
@@ -673,9 +677,9 @@ async def copy_prop_house_layout(prop_id: str, request: Request,
     source = body.get('from')
     if type(source) is not int:
         raise HTTPException(400, detail='from must be a variant index')
-    _variant(prop_id, source)
+    await asyncio.to_thread(_variant, prop_id, source)
     try:
-        props.copy_house_layout(prop_id, source)
+        await asyncio.to_thread(props.copy_house_layout, prop_id, source)
     except ValueError as error:
         raise HTTPException(400, detail=str(error)) from error
     invalidate_prop_lib_token()

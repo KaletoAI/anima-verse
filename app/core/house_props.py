@@ -234,12 +234,14 @@ def build_house_variant(prop_id: str, variant: int, variant_uid: str = "") -> di
     try:
         with tempfile.TemporaryDirectory(prefix='av-house-') as temporary:
             directory = Path(temporary)
-            with props._author_mutex(prop_id):
-                entries = props._variant_list(props.read_sidecar(prop_id))
-                if not variant_uid:
-                    variant_uid = entries[variant]['uid']
-                variant = _uid_index(entries, variant_uid)
-                job = house_job(prop_id, variant, tex_dir=directory / 'textures')
+            # The job is computed WITHOUT the author mutex: house_job reads the
+            # spec with its own read, and a long hold here starves every other
+            # reader of this prop (the server froze on it, 2026-10-30).
+            entries = props._variant_list(props.read_sidecar(prop_id))
+            if not variant_uid:
+                variant_uid = entries[variant]['uid']
+            variant = _uid_index(entries, variant_uid)
+            job = house_job(prop_id, variant, tex_dir=directory / 'textures')
             job_file = directory / 'job.json'
             job_file.write_text(json.dumps(job, sort_keys=True), encoding='utf-8')
             out = directory / 'out'
@@ -264,7 +266,10 @@ def build_house_variant(prop_id: str, variant: int, variant_uid: str = "") -> di
                 variant = _uid_index(props._variant_list(props.read_sidecar(prop_id)), variant_uid)
                 filename = props.save_house_models(prop_id, variant, blobs, job['description'], job['fingerprint'])
                 props.set_variant_dims(prop_id, variant, dims)
-                props._store_bbox(prop_id, variant, landing=True)
+            # The landing (bake, area split, re-encode, surface, measurement)
+            # runs outside the mutex, as for an upload: its own steps and
+            # background workers take that mutex themselves.
+            props._store_bbox(prop_id, variant, landing=True)
         invalidate_prop_lib_token()
         return {'ok': True, 'error': '', 'file': filename}
     except Exception as error:
