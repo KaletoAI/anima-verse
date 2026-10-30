@@ -18,6 +18,10 @@ public sealed class JourneyRoute
     public int Stamp { get; set; }
     /// <summary>Task 57: exact public local/owned prop route uses its receipt clock and unsmoothed sampled path.</summary>
     public JsonObject? ExactPath { get; set; }
+    public bool OwnedApproach { get; set; }
+    public double CatchUpRate { get; set; }
+    public bool AccessLogged { get; set; }
+    public bool Settled { get; set; }
     public double ReceivedAt { get; set; }
 }
 

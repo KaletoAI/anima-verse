@@ -114,7 +114,7 @@ function reportFixture() {
     propPositionDrainActive: false, positionDrain: { begin: () => () => {} },
     manualPropGate: { pending: false, withdrawn: () => false }, pollIsStale: (asked, corrected) => asked < corrected,
     performance: { now: () => 100 }, THREE: { Vector3: class { constructor(x,y,z) { Object.assign(this,{x,y,z}); } } },
-    groundY: () => 0, clearSnap() {}, cancelRoute() {},
+    groundY: () => 0, tileAt: () => null, roomFloorY: () => null, clearSnap() {}, cancelRoute() {},
     npcs: { propEntryUnavailable: () => false, setServerDriven: (...args) => effects.push(['drive', ...args]), positionOf: () => ({x:3,z:0}) },
     api: { ApiError, isAuthError: () => false, postPos: (...args) => new Promise((resolve,reject) => sent.push({args,resolve,reject})) },
     adoptReport: () => effects.push('adopt'), rememberRefused: () => effects.push('refused'),

@@ -2644,7 +2644,9 @@ async function startApp(username: string, role: string) {
       const totalM = polylineLength(points);
       const progressM = clampProgress(tr.progress_m, totalM);
       const at = pointAtDistance(points, progressM)!;
-      const exact = !!local || (c.name === avatarName && !!ownedPropRun());
+      const preparedApproach = preparedPropJourney !== undefined && tr.journey_id !== preparedPropJourney
+        && (propMutationPending || propStateUncertain || propPreparation.pending);
+      const exact = !!local || (c.name === avatarName && (!!ownedPropRun() || preparedApproach));
       const tile = exact ? tileAt(at[0], at[1]) : null;
       const localAt = tile ? worldToTile(tile, at[0], at[1]) : null;
       // The server's floor_y is the bare floor; the walking clearance comes on top, as for every room floor.
@@ -2658,6 +2660,7 @@ async function startApp(username: string, role: string) {
         route: { points, totalM, paces: tr.paces_m_s_real, serverM: progressM,
                  ageAtParsedS: ageAtReceiptS(map.sync, meta), parsedAt: meta.parsedAt,
                  journeyId: tr.journey_id ?? null, stamp, exact, floorY,
+                 ownedApproach: c.name === avatarName && exact,
                  startsInS: tr.starts_in_s ?? 0 },
       };
     }
@@ -3818,6 +3821,7 @@ async function startApp(username: string, role: string) {
   /** The last answer of `GET /play/places` and the room it was given for. */
   let placeOffers: PlaceOffer[] = [];
   let placeOffersRoom = '';
+  let propOffersLog = '';
   let semanticOffers: PropActionOffer[] = [];
   let semanticState: PropActionState = { incoming: [], outgoing: [], current: [], recent_results: [] };
   let offersGeneration = 0;
@@ -3825,6 +3829,8 @@ async function startApp(username: string, role: string) {
   let offersAppliedGeneration = 0;
   let manualPropRelease = false;
   let propMutationPending = false;
+  let preparedPropJourney: string | null | undefined;
+  const propRequestDiagnostic: { actionId?: string; placement?: string; sentAt?: number } = {};
   let propStateUncertain = false;
   let propStateEpoch = 0;
   let ownedPropJourney: string | null = null;
@@ -3943,7 +3949,7 @@ async function startApp(username: string, role: string) {
     const me = map.characters.find((c) => c.name === avatarName);
     const tr = manualPropGate.withdrawn(me?.travel?.journey_id) ? null : me?.travel ?? null;
     if (tr?.journey_id && ownedPropRun()?.status === 'approaching') ownedPropJourney = tr.journey_id;
-    if (ownedPropRun()) {
+    if (ownedPropRun() || (npcs.propEntryUnavailable(avatarName) && (me?.place || me?.interaction || me?.prop_action_entry))) {
       if (avatarDrive.kind !== 'SERVER') enterServerDrive();
       avatarDrive = { kind: 'SERVER', j: tr?.journey_id ?? ownedPropJourney };
       return;
@@ -4739,9 +4745,9 @@ async function startApp(username: string, role: string) {
     const stateEpoch = propStateEpoch;
     const me = map.characters.find(c => c.name === avatarName);
     try {
-      const [places, actions, state] = await Promise.all([
-        api.getPlaces(), api.getPropActions(), api.getPropActionState(),
-      ]);
+      // Read availability after lifecycle state: arrival/release can change offers during a poll.
+      const state = await api.getPropActionState();
+      const [places, actions] = await Promise.all([api.getPlaces(), api.getPropActions()]);
       const currentMe = lastMap?.characters.find(c => c.name === avatarName);
       if (stateEpoch !== propStateEpoch || generation < offersAppliedGeneration || me?.location_id !== currentMe?.location_id
         || me?.room_id !== currentMe?.room_id || pollIsStale(askedAt, ownSeatChangeAt)) return;
@@ -4749,6 +4755,7 @@ async function startApp(username: string, role: string) {
       placeOffers = places.places;
       placeOffersRoom = me?.room_id ?? places.room_id;
       semanticOffers = actions;
+      logPropOffers(actions);
       semanticState = state;
       propStateUncertain = false;
       propPreparation.adoptFreshState();
@@ -4765,6 +4772,11 @@ async function startApp(username: string, role: string) {
     }
   }
 
+  function logPropOffers(actions: PropActionOffer[]): void {
+    const summary = `n=${actions.length} enabled=${actions.filter(a => a.enabled).length} reasons=${JSON.stringify([...new Set(actions.map(a => a.reason).filter(Boolean))].sort())}`;
+    if (summary !== propOffersLog) { propOffersLog = summary; console.info(`[prop] offers refreshed ${summary}`); }
+  }
+
   function ownedPropRun() {
     return semanticState.current.find(run => !releasedPropExecutions.has(run.execution_id)
       && (run.status === 'approaching' || run.status === 'active'))
@@ -4773,6 +4785,7 @@ async function startApp(username: string, role: string) {
 
   async function preparePropAction(requestId: string): Promise<void> {
     // Synchronous pause before acknowledging the host/iframe preparation.
+    preparedPropJourney = lastMap?.characters.find(c => c.name === avatarName)?.travel?.journey_id ?? null;
     propPreparation.begin(requestId, performance.now());
     propStateUncertain = true;
     propStateEpoch++;
@@ -4782,6 +4795,8 @@ async function startApp(username: string, role: string) {
       || !!lastMap?.characters.find(c => c.name === avatarName)?.prop_action_entry;
     if (serverOwned) pendingReport = null;
     else if (point) npcs.setPlayerTarget(avatarName, point);
+    const flushAt = performance.now();
+    const sent = !serverOwned && !avatarSeated && !!point && posDirty;
     propPositionDrainActive = true;
     propPositionDrainFailed = false;
     try {
@@ -4791,6 +4806,13 @@ async function startApp(username: string, role: string) {
       } else flushPendingReport();
       await positionDrain.wait();
       if (propPositionDrainFailed) throw new Error('Position synchronization failed; furniture action was not sent.');
+      console.info(serverOwned ? '[prop] position pre-flush skipped (server-owned)' : sent
+        ? `[prop] position pre-flush point=(${point!.x.toFixed(2)},${point!.z.toFixed(2)}) ms=${Math.round(performance.now() - flushAt)}`
+        : `[prop] position pre-flush skipped (clean) ms=${Math.round(performance.now() - flushAt)}`);
+      if (propRequestDiagnostic.actionId !== undefined) {
+        propRequestDiagnostic.sentAt = performance.now();
+        console.info(`[prop] request sent action=${JSON.stringify(propRequestDiagnostic.actionId)} placement=${JSON.stringify(propRequestDiagnostic.placement)}`);
+      }
     } finally {
       propPositionDrainActive = false;
     }
@@ -4842,8 +4864,14 @@ async function startApp(username: string, role: string) {
     const journey = lastMap?.characters.find(c => c.name === avatarName)?.travel?.journey_id ?? ownedPropJourney;
     try {
       await manualPropGate.cancel(run.execution_id, journey, async () => {
-        const result = await api.cancelPropAction(run.execution_id);
-        if (result.status === 'refused') throw new Error(result.reason);
+        const at = performance.now();
+        console.info(`[prop] release requested execution=${JSON.stringify(run.execution_id)}`);
+        let result;
+        try {
+          result = await api.cancelPropAction(run.execution_id);
+          console.info(`[prop] release answered status=${result.status} ms=${Math.round(performance.now() - at)}`);
+        } catch (e) { console.info(`[prop] release answered status=error ms=${Math.round(performance.now() - at)}`); throw e; }
+        if (result.status === 'refused' || result.status === 'failed') throw new Error(result.reason);
       });
       releasedPropExecutions.add(run.execution_id);
       manualPropRelease = true;
@@ -5068,7 +5096,18 @@ async function startApp(username: string, role: string) {
   }
   gameActions.pickPropAction = (actionId, target, revision, partner) => {
     gameActions.closePlaceMenu?.();
-    void mutatePropAction(() => api.requestPropAction(actionId, target, revision, partner));
+    void mutatePropAction(async () => {
+      const at = performance.now();
+      propRequestDiagnostic.actionId = actionId;
+      propRequestDiagnostic.placement = target.placement_id;
+      propRequestDiagnostic.sentAt = undefined;
+      try {
+        const result = await api.requestPropAction(actionId, target, revision, partner);
+        console.info(`[prop] request answered status=${result.status} ms=${Math.round(performance.now() - (propRequestDiagnostic.sentAt ?? at))}`);
+        return result;
+      } catch (e) { console.info(`[prop] request answered status=${propRequestDiagnostic.sentAt === undefined ? 'preparation-error' : 'error'} ms=${Math.round(performance.now() - (propRequestDiagnostic.sentAt ?? at))}`); throw e; }
+      finally { propRequestDiagnostic.actionId = undefined; propRequestDiagnostic.sentAt = undefined; }
+    });
   };
   gameActions.respondPropAction = (executionId, accept) => {
     void mutatePropAction(() => api.respondPropAction(executionId, accept));

@@ -19,7 +19,8 @@ const char = map.characters[0];
 let motionStatus = 'approaching';
 const routeFor = await mainFunction('travellerState', {
   avatarName: char.name, manualPropGate: { withdrawn: () => false },
-  ownedPropRun: () => ({ status: motionStatus }), api: { mapMetaOf: () => ({ parsedAt: performance.now() }) },
+  ownedPropRun: () => motionStatus ? ({ status: motionStatus }) : null,
+  preparedPropJourney: null, propMutationPending: true, propStateUncertain: true, propPreparation: { pending: true }, api: { mapMetaOf: () => ({ parsedAt: performance.now() }) },
   ...path, ageAtReceiptS: () => 0, THREE,
   groundY: () => 0, terrainGround: { heightAt: () => 0 },
   residency: new Map(), roomOf: new Map([[char.name, 'r-props']]),
@@ -30,6 +31,8 @@ for (const floor of [9.4, undefined, 0]) {
   const state = routeFor(char, 1, map);
   assert.equal(state.pos.y, floor === undefined ? 9.4 : floor + 0.01, 'initial placement uses journey floor (+ walking clearance) or room floor');
   assert.equal(state.route.floorY, floor === undefined ? 9.4 : floor + 0.01, 'route carries floor to frame ticks');
+  // This loop also preserves exact public/NPC receipt-clock playback.
+  state.route.ownedApproach = false;
   const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });
   const root = new THREE.Group();
   const npc = { name: char.name, root, target: new THREE.Vector3(), figure: null,
@@ -41,6 +44,95 @@ for (const floor of [9.4, undefined, 0]) {
   mgr.tick(0, 10);
   assert.equal(root.position.y, floor === undefined ? 9.4 : floor + 0.01, 'exact route never falls to terrain');
   assert.ok(root.position.x > .9 && root.position.x < 1.1, 'walk advances on the polyline');
+}
+// A late first owned poll must walk the remaining visual route, including corners.
+{
+  const late = structuredClone(char);
+  late.travel.progress_m = 5.4; late.travel.floor_y = 9.4;
+  const mgr = new NpcManager(null, { syncCounters: {}, errWindow: { t: [], e: [] } });
+  const root = new THREE.Group(); root.position.set(-3, 9.41, -2);
+  const figure = new Figure({ name: 'late', template: new THREE.Group(), scale: 1, height: 1.7,
+    clips: ['walking', 'standing', 'sitting'].map(name => new THREE.AnimationClip(name, 1, [])),
+    tier: 'full', noClips: false, libraryFits: true });
+  root.add(figure.root);
+  const npc = { name: char.name, root, figure, target: root.position.clone(), waypoints: [],
+    entry: null, interaction: null, route: null, travelLine: null, travelKey: '',
+    label: {}, labelName: {}, labelActivity: {}, bubbleUntil: 0 };
+  mgr.npcs.set(char.name, npc);
+  mgr.setPlayerDriven(char.name); mgr.setServerDriven(char.name, true);
+  motionStatus = null;
+  const pendingOwnership = routeFor(late, 8, map);
+  assert.equal(pendingOwnership.route.ownedApproach, true, 'new prepared journey is continuous before private state arrives');
+  mgr.update([pendingOwnership]); mgr.tick(1 / 60, 10);
+  assert.ok(root.position.x > -3 && root.position.x < -2.7 && root.position.z === -2, 'pre-private frame follows first route leg');
+  root.position.set(-3, 9.41, -2); npc.route = null;
+  motionStatus = 'approaching';
+  const beforeOwnership = routeFor(late, 9, map);
+  beforeOwnership.route.exact = false; beforeOwnership.route.ownedApproach = false;
+  mgr.update([beforeOwnership]);
+  mgr.update([routeFor(late, 10, map)]);
+  assert.equal(root.position.x, -3, 'late adoption retains current rendered point');
+  assert.equal(npc.route.shownM, 0, 'owned route starts at current projection, not 90%');
+  mgr.tick(0, 10);
+  assert.equal(root.position.x, -3, 'first zero-time frame never jumps');
+  for (let i = 0; i < 50; i++) {
+    const before = root.position.clone();
+    if (i === 5) {
+      late.travel.progress_m = 6;
+      mgr.update([routeFor(late, 11, map)]);
+      assert.ok(root.position.distanceTo(before) < 1e-6, 'new poll cannot snap forward');
+    }
+    mgr.tick(1 / 60, 10);
+    assert.ok(root.position.distanceTo(before) <= .25001, 'no frame jumps more than .25m');
+    assert.ok((root.position.z === -2 && root.position.x <= 0)
+      || (Math.abs(root.position.x) < 1e-5 && root.position.z <= -1)
+      || (root.position.z === -1 && root.position.x >= 0), 'catch-up follows exact corners');
+  }
+  assert.ok(root.position.distanceTo(new THREE.Vector3(2, 9.41, -1)) < 1e-5, 'reaches access within catch-up window');
+  assert.equal(figure.current.getClip().name, 'standing', 'waiting for server settlement stands at access');
+  root.position.set(-3, 9.41, -2); npc.route = null;
+  mgr.update([routeFor(late, 19, map)]);
+  const paired = { ...read('worldmap_active.json').characters[0], place: null,
+    interaction: { id: 'pair', kind: 'greeting-handshake', role: 'a', partner: 'npc',
+      anchor: { x: 2, z: -1, yaw: 0, place_id: null }, elapsed_s: 0, clip_duration_s: 2, loop: false, rate: 1 } };
+  mgr.update([{ char: paired, interaction: paired.interaction, pos: new THREE.Vector3(2, 9.41, -1), stamp: 19 }]);
+  assert.equal(root.position.x, -3, 'interaction-only arrival cannot skip approach');
+  assert.equal(npc.route.ownedApproach, true, 'pair arrival retains owned route');
+  assert.equal(npc.interaction, null, 'pair clip waits for visual access');
+  root.position.set(-3, 9.41, -2); npc.route = null;
+  mgr.update([routeFor(late, 20, map)]);
+  const seatedState = { char: read('worldmap_active.json').characters[0],
+    pos: new THREE.Vector3(2, 9.529, 0), committedPropKey: 'bench#0#sitting', stamp: 21 };
+  const held = {};
+  const reconcileSeat = await mainFunction('reconcileAvatarPlace', {
+    pollIsStale: () => false, ownSeatChangeAt: 0, avatarName: char.name,
+    manualPropGate: { pending: false }, npcs: mgr, avatarSeated: false, seatedKey: '',
+    getGameState: () => ({ mode: 'embodied' }),
+    residency: new Map([[seatedState.char.location_id, { ring: 'near', tile: {
+      roomMarkers: new Map([[seatedState.char.place.room_id, new Map([[seatedState.char.place.id, held]])]]),
+    } }]]),
+    slotFor: () => seatedState.pos.clone(), cancelRoute() {}, walkIn: null, correction: null, THREE,
+  });
+  const driver = await mainFunction('applyDriver', {
+    pollIsStale: () => false, ownCorrectionAt: 0, ownSeatChangeAt: 0, avatarName: char.name,
+    manualPropGate: { pending: false, withdrawn: () => false }, ownedPropRun: () => null,
+    ownedPropJourney: late.travel.journey_id, avatarDrive: { kind: 'SERVER', j: late.travel.journey_id },
+    avatarCancelled: echo.NO_CANCEL, avatarDriver: echo.avatarDriver, posSession: 'late', THREE,
+    npcs: mgr, enterServerDrive: () => mgr.setServerDriven(char.name, true),
+    tileAt: () => null, roomFloorY: () => 9.41, groundY: () => 0,
+  });
+  driver({ characters: [seatedState.char] }, 21);
+  reconcileSeat({ characters: [seatedState.char] }, 21);
+  mgr.update([seatedState]);
+  assert.equal(root.position.x, -3, 'early seat cannot skip rendered approach');
+  for (let i = 0; i < 50; i++) {
+    const before = root.position.clone(); mgr.tick(1 / 60, 10);
+    assert.ok(root.position.distanceTo(before) <= .25001, 'early settlement still walks continuously');
+  }
+  reconcileSeat({ characters: [seatedState.char] }, 21);
+  mgr.update([seatedState]);
+  assert.equal(figure.current.getClip().name, 'sitting', 'seat follows completed visible approach');
+
 }
 motionStatus = 'active'; char.travel.floor_y = 9.4;
 assert.equal(routeFor(char, 2, map).route.exact, true, 'active private state cannot turn the older owned approach into an overland journey');
@@ -97,7 +189,8 @@ const applyDriver = await mainFunction('applyDriver', {
   ownedPropRun: () => ownedRun, ownedPropJourney: 'upper',
   avatarDriver: echo.avatarDriver, avatarCancelled: echo.NO_CANCEL, posSession: 'upper',
   THREE, groundY: () => 0, roomFloorY: () => 9.41, tileAt: () => ({}),
-  npcs: { setServerDriven: (_name, _on, how) => { terminalPoint = how.arriveAt; } },
+  npcs: { propEntryUnavailable: name => mgr.propEntryUnavailable(name),
+    setServerDriven: (_name, _on, how) => { terminalPoint = how.arriveAt; } },
   avatarDrive: { kind: 'PLAYER' }, enterServerDrive: () => serverDrive++,
 }, ['avatarDrive']);
 applyDriver({ characters: [active] }, 1);

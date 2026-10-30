@@ -49,7 +49,7 @@ public static class PropActionsCheck
                 { AutoTick=false,GroundYAt=(_,_)=>0 };
             host.AddChild(mgr);
             using var control=new PropActionControl(source,()=>mgr.Clock*1000);
-            mgr.OwnedPropApproaching=()=>PropActionMotion.Text(control.OwnedRun?["status"])=="approaching";
+            mgr.OwnedPropApproaching=_=>PropActionMotion.Text(control.OwnedRun?["status"])=="approaching";
             mgr.SuppressAvatarJourney=control.ManualGate.Withdrawn;
             control.RefreshWorld=async ()=> { using var map=await source.GetWorldMapAsync(); await mgr.Apply(map.RootElement); };
             var notices=new List<string?>(); control.NotifyChanged+=notices.Add;
@@ -64,7 +64,7 @@ public static class PropActionsCheck
                     using var result=await control.MutateAsync(()=>source.RequestPropActionAsync("pose-56",target.RootElement,"revision-56"));
                     Is("solo admitted without synthetic seating",Json.Str(result.RootElement,"status")=="approaching" && avatar.Route?.ExactPath is not null && avatar.PropEntry is null);
                     var times=new[]{0,3,4,5,6,20}; var xs=new[]{-3,0,0,1,2,2}; var zs=new[]{-2,-2,-1,-1,-1,-1}; double previous=0;
-                    for(int i=0;i<times.Length;i++) { mgr.Tick(times[i]-previous); previous=times[i]; Near("solo route X "+times[i],avatar.Position.X,xs[i]); Near("solo route Z "+times[i],avatar.Position.Z,zs[i]); Near("solo floor Y",avatar.Position.Y,0); }
+                    for(int i=0;i<times.Length;i++) { for(double left=times[i]-previous;left>1e-8;left-=1.0/60) mgr.Tick(Math.Min(left,1.0/60)); previous=times[i]; Near("solo route X "+times[i],avatar.Position.X,xs[i]); Near("solo route Z "+times[i],avatar.Position.Z,zs[i]); Near("solo floor Y",avatar.Position.Y,0); }
                     using var entry=await source.GetWorldMapAsync(); await mgr.Apply(entry.RootElement);
                     mgr.Tick(0); Is("entry live",avatar.PropEntry?.Played==true); Near("entry measured clip time",avatar.ClipTime,1); Near("entry measured support",avatar.PropEntryLift,.0645);
                     Near("entry root stays at access",avatar.Position.Z,-1); Near("entry body travels half metre in world",avatar.Body!.GlobalPosition.Z-avatar.Position.Z,.5);
@@ -106,7 +106,7 @@ public static class PropActionsCheck
                     using var result=await control.MutateAsync(()=>source.RespondPropActionAsync("execution-56-invite",scenario=="pair-accept"));
                     if(scenario=="pair-accept") {
                         Is("both exact routes",avatar.Route?.ExactPath is not null && npc.Route?.ExactPath is not null);
-                        mgr.Tick(2); Near("NPC public detour X",npc.Position.X,5); Near("NPC public detour Z",npc.Position.Z,1);
+                        for(int frame=0;frame<120;frame++) mgr.Tick(1.0/60); Near("NPC public detour X",npc.Position.X,5); Near("NPC public detour Z",npc.Position.Z,1);
                         Near("own pair approach X",avatar.Position.X,-1); Near("own pair approach Z",avatar.Position.Z,-2);
                         var roles=control.OwnedRun!["roles"]!;
                         Is("access role ownership retained",PropActionMotion.Text(roles["access"]?["actor"])=="partner" && PropActionMotion.Text(roles["access"]?["partner"])=="actor");
@@ -137,6 +137,7 @@ public static class PropActionsCheck
             }
             finally { mgr.QueueFree(); }
         }
+        checks += await CheckLateApproach(host,fixtures);
         checks += await CheckMenus(host,fixtures);
         checks += await CheckUpperStorey(host,fixtures);
         // Real bridge callback: the host cannot acknowledge a preparation while a position promise is outstanding.
@@ -146,7 +147,74 @@ public static class PropActionsCheck
         Is("bridge awaits position preparation",hud.PendingPropPreparation is { IsCompleted:false });
         write.SetResult(); await hud.PendingPropPreparation!;
         hud.hud_bridge("""{"v":4,"kind":"prop-actions-changed","request_id":"hud:57"}"""); Is("bridge invalidates correlated",changed==1); hud.Free();
-        return $"propactions scenarios=8 checks={checks} solo=pass pair-request=pass pair-accept=pass pair-decline=pass cancel=pass stale-revision=pass upper-direct=pass upper-bridge=pass route=6m npc=5m clip=1s lift=.0645 root=.129";
+        return $"propactions scenarios=9 checks={checks} solo=pass pair-request=pass pair-accept=pass pair-decline=pass cancel=pass stale-revision=pass upper-direct=pass upper-bridge=pass late-adoption=pass prepared=pass early-pair=pass route=6m npc=5m clip=1s lift=.0645 root=.129";
+    }
+    private static async Task<int> CheckLateApproach(Node3D host,string fixtures)
+    {
+        int n=0;
+        void Is(string label,bool ok) { n++; if(!ok) throw new InvalidOperationException("propactions late "+label); }
+        var vectors=JsonNode.Parse(File.ReadAllText(Path.Combine(fixtures,"../../shared/test-vectors/prop_action_motion.json")))!;
+        Is("shared math format /1",vectors["format"]!.GetValue<string>()=="anima-test-vectors/1");
+        foreach(var row in vectors["cases"]!.AsArray()) {
+            var args=row!["args"]!.AsArray(); double got;
+            if(row["fn"]!.GetValue<string>()=="projectApproachM")
+                got=PropActionMotion.ProjectApproachM(args[0]!.AsArray().Select(p=>(PropActionMotion.Number(p![0]),PropActionMotion.Number(p[1]))).ToArray(),
+                    (PropActionMotion.Number(args[1]![0]),PropActionMotion.Number(args[1]![1])));
+            else if(row["fn"]!.GetValue<string>()=="ownedApproachStep")
+                got=PropActionMotion.OwnedApproachStep(PropActionMotion.Number(args[0]),PropActionMotion.Number(args[1]),PropActionMotion.Number(args[2]),PropActionMotion.Number(args[3]),PropActionMotion.Number(args[4]));
+            else continue;
+            Is(row["label"]!.GetValue<string>(),Math.Abs(got-PropActionMotion.Number(row["expect"]))<1e-8);
+        }
+        var source=new FixtureSource(Path.Combine(fixtures,"propactions"),fixtures);
+        using var hf=await source.GetHeightfieldAsync();
+        var mgr=new FigureManager(source,new WorldHeight(HeightfieldOverview.Parse(hf.RootElement)),_=>{},strict:true)
+            { AutoTick=false,GroundYAt=(_,_)=>0,OwnedPropApproaching=_=>true };
+        host.AddChild(mgr);
+        try {
+            using(var initial=await source.GetWorldMapAsync()) await mgr.Apply(initial.RootElement);
+            var avatar=mgr.Figures["fixture-avatar"]; InstallMeasuredRig(avatar);
+            var start=avatar.Position;
+            var map=JsonNode.Parse(File.ReadAllText(Path.Combine(source.Dir,"worldmap_approach.json")))!;
+            map["characters"]![0]!["travel"]!["progress_m"]=5.4;
+            using(var late=JsonDocument.Parse(map.ToJsonString())) await mgr.Apply(late.RootElement);
+            Is("adoption keeps rendered position",avatar.Position.DistanceTo(start)<.00001);
+            Is("starts at current projection",Math.Abs(avatar.Route!.ShownM)<.00001);
+            mgr.Tick(0); Is("zero-time frame has no jump",avatar.Position.DistanceTo(start)<.00001);
+            for(int i=0;i<50;i++) {
+                var before=avatar.Position;
+                if(i==5) {
+                    map["characters"]![0]!["travel"]!["progress_m"]=6;
+                    using var poll=JsonDocument.Parse(map.ToJsonString()); await mgr.Apply(poll.RootElement);
+                    Is("later poll cannot snap forward",avatar.Position.DistanceTo(before)<.00001);
+                }
+                mgr.Tick(1.0/60);
+                Is("frame step <= .25m",avatar.Position.DistanceTo(before)<=.25001);
+            }
+            Is("reaches access",avatar.Position.DistanceTo(new Vector3(2,0,-1))<.00001);
+            mgr.Tick(.016); Is("no walking on spot",avatar.CurrentClip!="walk" && avatar.CurrentClip!="walking");
+            Is("actual standing clip",avatar.CurrentClip==FigureClips.PoseKind("standing",avatar.Poses));
+            avatar.SnapTo(start); avatar.Route=null;
+            using(var late=JsonDocument.Parse(map.ToJsonString())) await mgr.Apply(late.RootElement);
+            using(var active=await source.GetWorldMapFileAsync("worldmap_active.json")) await mgr.Apply(active.RootElement);
+            Is("early seat keeps visible start",avatar.Position.DistanceTo(start)<.00001 && avatar.Route is not null);
+            for(int i=0;i<50;i++) {
+                var before=avatar.Position; mgr.Tick(1.0/60);
+                Is("early seat keeps continuous approach",avatar.Position.DistanceTo(before)<=.25001);
+            }
+            mgr.TickPlacement();
+            mgr.Tick(0);
+            Is($"seat after visible arrival clip={avatar.CurrentClip} route={avatar.Route?.ShownM}",avatar.CurrentClip=="sitting" && avatar.Route is null);
+
+            avatar.SnapTo(start); avatar.Route=null;
+            using(var late=JsonDocument.Parse(map.ToJsonString())) await mgr.Apply(late.RootElement);
+            var paired=JsonNode.Parse(File.ReadAllText(Path.Combine(source.Dir,"worldmap_active.json")))!;
+            paired["characters"]![0]!["place"]=null;
+            paired["characters"]![0]!["interaction"]=new JsonObject { ["id"]="pair",["kind"]="greeting-handshake",["role"]="a",["partner"]="fixture-npc",
+                ["anchor"]=new JsonObject { ["x"]=2,["z"]=-1,["yaw"]=0 },["elapsed_s"]=0,["clip_duration_s"]=2,["rate"]=1 };
+            using(var pair=JsonDocument.Parse(paired.ToJsonString())) await mgr.Apply(pair.RootElement);
+            Is("interaction-only arrival keeps route",avatar.Route is { OwnedApproach:true } && avatar.Position.DistanceTo(start)<.00001 && avatar.Pair is null);
+            return n;
+        } finally { mgr.QueueFree(); }
     }
     private static async Task<int> CheckUpperStorey(Node3D host,string fixtures)
     {
@@ -176,15 +244,39 @@ public static class PropActionsCheck
             var steering=new PlayerSteering(mgr,builder); steering.SetActive(true);
             position=new(mgr,builder,steering,source); using(var map=await source.GetWorldMapAsync()) position.SetActive(true,map.RootElement);
             offers=new(mgr,builder,steering,source,hud,position); offers.SetActive(true); await offers.PendingPropAction!;
+            source.PendingRequest=new TaskCompletionSource<JsonDocument>();
+            var request=source.Offers[0]!;
+            hud.Handlers["pickPropAction"](new JsonArray(request["action_id"]!.DeepClone(),request["target"]!.DeepClone(),request["definition_revision"]!.DeepClone()));
+            var beforePrivate=avatar.Position;
+            source.MapOverride=Read("worldmap_approach.json"); source.MapOverride["characters"]![0]!["travel"]!["progress_m"]=5.4;
+            source.MapOverride["characters"]![0]!["travel"]!["floor_y"]=9.4;
+            using(var poll=JsonDocument.Parse(source.MapOverride.ToJsonString())) mgr.ApplyPolled(poll.RootElement.Clone());
+            Is("prepared approach adopted before private state",avatar.Route is { OwnedApproach:true } && avatar.Position.DistanceTo(beforePrivate)<.00001);
+            mgr.Tick(1.0/60);
+            Is("pre-private frame stays continuous",double.Hypot(avatar.Position.X-beforePrivate.X,avatar.Position.Z-beforePrivate.Z)<=.25001);
+            source.MapOverride=Read("worldmap.json");
+            source.PendingRequest.SetResult(JsonDocument.Parse("{\"status\":\"refused\",\"reason\":\"claimed\"}"));
+            await offers.PendingPropAction!; source.PendingRequest=null;
             foreach(bool explicitFloor in new[]{true,false}) {
                 source.StateOverride=new JsonObject { ["current"]=new JsonArray(new JsonObject { ["execution_id"]="upper-"+explicitFloor,["status"]="approaching" }),["outgoing"]=new JsonArray() };
                 source.MapOverride=Read("worldmap_approach.json");
                 source.MapOverride["characters"]![0]!["travel"]!["journey_id"]="upper-"+explicitFloor;
                 if(explicitFloor) source.MapOverride["characters"]![0]!["travel"]!["floor_y"]=9.4;
-                await offers.PropActions!.RefreshAsync(); mgr.Tick(1);
+                await offers.PropActions!.RefreshAsync();
+                for(int frame=0;frame<420;frame++) mgr.Tick(1.0/60);
                 Near("approach uses upper floor "+explicitFloor,avatar.Position.Y,9.41);
                 Is("owned approach suppresses reports",!position.Channel.CanReport());
                 source.StateOverride["current"]![0]!["status"]="active";
+                int transitionReads=source.OfferRequests;
+                offers.RefreshPropWorld=()=>Task.CompletedTask;
+                await offers.PropActions.RefreshAsync();
+                Is("private arrival refreshes offers without map event",source.OfferRequests>transitionReads);
+                source.StateOverride["current"]!.AsArray().Clear();
+                transitionReads=source.OfferRequests;
+                await offers.PropActions.RefreshAsync();
+                Is("polled own completion refreshes offers without map event",source.OfferRequests>transitionReads);
+                source.StateOverride["current"]!.AsArray().Add(new JsonObject { ["execution_id"]="upper-"+explicitFloor,["status"]="active" });
+                offers.RefreshPropWorld=null;
                 await offers.PropActions.RefreshAsync();
                 Is("private active state retains older exact approach",avatar.Route?.ExactPath is not null);
                 source.StateOverride["current"]![0]!["status"]="approaching";
@@ -218,7 +310,13 @@ public static class PropActionsCheck
                 }
                 Near("direct anchor",avatar.Position.Y,9.529);
                 Is("direct seated clip without bridge",avatar.CurrentClip=="sitting" && avatar.PropEntry is null && !avatar.Bridging);
+                int offerReads=source.OfferRequests;
+                offers.RefreshPropWorld=()=>Task.CompletedTask;
+                source.EnableOffersOnCancel=true;
                 steering.Step(.016,new HashSet<string>{"w"},0); await offers.PendingPropAction!;
+                Is("release refetches semantic offers without a map event",source.OfferRequests>offerReads);
+                offers.RefreshPropWorld=null;
+                await offers.PropActions.RefreshAsync();
                 Is("keys await explicit cancellation",source.CancelRequests==(explicitFloor ? 1 : 2) && !steering.PropActionDriven && !steering.PropPreparationPending);
                 Near("release correction stays on upper floor",avatar.Target.Y,9.41);
             }
@@ -285,6 +383,16 @@ public static class PropActionsCheck
             var menu=hud.SceneOwned("placeMenu")!["offer"]!;
             Is("exact actions including blocked",menu["prop_actions"]!.AsArray().Count==2 && menu["prop_actions"]![0]!["enabled"]!.GetValue<bool>()==false);
             Is("no room pose alias",menu["poses"]!.AsArray().Count==0 && PropActionMotion.Text(menu["id"])=="prop-action:bench-56");
+            source.PendingOffers=new TaskCompletionSource<JsonDocument>();
+            var refreshing=offers.RefreshSemanticOffersAsync();
+            Is("in-flight refresh preserves previous rows",hud.SceneOwned("placeMenu")!["offer"]!["prop_actions"]![0]!["enabled"]!.GetValue<bool>()==false);
+            source.Offers[0]!["enabled"]=true; source.Offers[0]!["reason"]="";
+            source.PendingOffers.SetResult(JsonDocument.Parse(source.Offers.ToJsonString())); await refreshing;
+            Is("fresh rows update open menu",hud.SceneOwned("placeMenu")!["offer"]!["prop_actions"]![0]!["enabled"]!.GetValue<bool>());
+            source.PendingOffers=null;
+            source.Offers[0]!["enabled"]=false; source.Offers[0]!["reason"]="claimed";
+            await offers.RefreshSemanticOffersAsync();
+
             var action=menu["prop_actions"]![0]!;
             hud.Handlers["pickPropAction"](new JsonArray(action["action_id"]!.DeepClone(),action["target"]!.DeepClone(),action["definition_revision"]!.DeepClone()));
             await offers.PendingPropAction!;
@@ -312,20 +420,22 @@ public static class PropActionsCheck
         public JsonArray Offers { get; }
         public JsonNode? Request;
         public JsonObject? MapOverride,StateOverride,SceneOverride;
-        public int CancelRequests;
+        public int CancelRequests,OfferRequests;
+        public bool EnableOffersOnCancel;
+        public TaskCompletionSource<JsonDocument>? PendingOffers,PendingRequest;
         public Task<JsonDocument> CancelPropActionAsync(string executionId,System.Threading.CancellationToken ct=default)
         {
-            CancelRequests++; MapOverride=JsonNode.Parse(File.ReadAllText(Path.Combine(_fixture.Dir,"worldmap_cancelled.json")))!.AsObject();
+            CancelRequests++; if(EnableOffersOnCancel) { Offers[0]!["enabled"]=true; Offers[0]!["reason"]=""; } MapOverride=JsonNode.Parse(File.ReadAllText(Path.Combine(_fixture.Dir,"worldmap_cancelled.json")))!.AsObject();
             StateOverride=new JsonObject { ["current"]=new JsonArray(),["outgoing"]=new JsonArray() };
             return Task.FromResult(JsonDocument.Parse("{\"status\":\"cancelled\"}"));
         }
         public bool SupportsPropActions=>true;
         public MenuSource(FixtureSource fixture) { _fixture=fixture; Offers=JsonNode.Parse(File.ReadAllText(Path.Combine(fixture.Dir,"offers.json")))!.AsArray(); Offers[0]!["enabled"]=false; Offers[0]!["reason"]="claimed"; }
-        public Task<JsonDocument> GetPropActionsAsync()=>Task.FromResult(JsonDocument.Parse(Offers.ToJsonString()));
+        public Task<JsonDocument> GetPropActionsAsync() { OfferRequests++; return PendingOffers?.Task ?? Task.FromResult(JsonDocument.Parse(Offers.ToJsonString())); }
         public Task<JsonDocument> GetPropActionStateAsync()=>Task.FromResult(JsonDocument.Parse(StateOverride?.ToJsonString() ?? "{\"current\":[],\"outgoing\":[],\"incoming\":[],\"recent_results\":[]}"));
         public Task<JsonDocument> GetPlacesAsync()=>Task.FromResult(JsonDocument.Parse("{\"room_id\":\"r-props\",\"places\":[]}"));
         public Task<JsonDocument> RequestPropActionAsync(string actionId,JsonElement target,string revision,string? partner=null,System.Threading.CancellationToken ct=default)
-        { Request=JsonNode.Parse(PropActionRequest.Request(actionId,target,revision,partner).GetRawText()); return Task.FromResult(JsonDocument.Parse("{\"execution_id\":\"\",\"status\":\"refused\",\"reason\":\"claimed\"}")); }
+        { Request=JsonNode.Parse(PropActionRequest.Request(actionId,target,revision,partner).GetRawText()); return PendingRequest?.Task ?? Task.FromResult(JsonDocument.Parse("{\"execution_id\":\"\",\"status\":\"refused\",\"reason\":\"claimed\"}")); }
         public Task<JsonDocument> GetWorldMapAsync()=>MapOverride is { } map ? Task.FromResult(JsonDocument.Parse(map.ToJsonString())) : _fixture.GetWorldMapFileAsync("worldmap.json");
         public Task<JsonDocument> GetHeightfieldAsync()=>_fixture.GetHeightfieldAsync();
         public Task<JsonDocument> GetHeightTilesAsync(IReadOnlyList<(int Tx,int Tz)> keys)=>_fixture.GetHeightTilesAsync(keys);
@@ -346,10 +456,11 @@ public static class PropActionsCheck
         var library=new AnimationLibrary(); var clip=new Animation { Length=2 };
         int hips=clip.AddTrack(Animation.TrackType.Position3D); clip.TrackSetPath(hips,"Rig:Hips");
         clip.PositionTrackInsertKey(hips,0,new Vector3(0,1,0)); clip.PositionTrackInsertKey(hips,2,new Vector3(0,.5f,0));
+        library.AddAnimation(FigureClips.PoseKind("standing",fig.Poses),new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
         library.AddAnimation("walk",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
         if(!deferred) library.AddAnimation("fixture-sit-down",clip); library.AddAnimation("sitting",new Animation { Length=1,LoopMode=Animation.LoopModeEnum.Linear });
         player.AddAnimationLibrary("",library);
-        fig.SetBody(body,true,skeleton,player,new[]{"fixture-sit-down","sitting","walk"},bodyHeight:1.7); fig.BaseScale=1;
+        fig.SetBody(body,true,skeleton,player,new[]{"fixture-sit-down","sitting","walk",FigureClips.PoseKind("standing",fig.Poses)},bodyHeight:1.7); fig.BaseScale=1;
         fig.Extras=new Dictionary<Animation,ClipExtras> { [clip]=new() { Path=new RootPath(new float[]{0,2},new float[]{0,0,0,-1}) } };
         bool ready=!deferred; int requests=0;
         fig.FitClip=kind=> { requests++; if(!ready || kind!="fixture-sit-down") return false; library.AddAnimation(kind,clip); return true; };

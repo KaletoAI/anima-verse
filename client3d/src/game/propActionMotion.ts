@@ -27,6 +27,27 @@ export function localApproachPoint(path: LocalPath, ageS: number): Point {
   return points[points.length - 1] ?? [0, 0];
 }
 
+/** Closest rendered point on the route, expressed as arc length. Ties keep the first leg. */
+export function projectApproachM(points: readonly Point[], point: Point): number {
+  let best = Infinity, result = 0, distance = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const dx = b[0] - a[0], dz = b[1] - a[1], length = Math.hypot(dx, dz);
+    if (!length) continue;
+    const t = Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dz) / (length * length)));
+    const error = Math.hypot(point[0] - a[0] - t * dx, point[1] - a[1] - t * dz);
+    if (error < best) { best = error; result = distance + t * length; }
+    distance += length;
+  }
+  return result;
+}
+
+/** Owned approaches retain continuity even after a delayed first poll or frame stall. */
+export function ownedApproachStep(shownM: number, targetM: number, pace: number, catchUpRate: number, dt: number): number {
+  return shownM + Math.min(Math.max(0, targetM - shownM), .25,
+    Math.max(0, pace, catchUpRate) * Math.max(0, dt));
+}
+
 export function entryPhase(entry: { elapsed_game_s: number; duration_game_s: number;
   game_seconds_per_real_second: number }, ageS: number): number {
   return Math.min(1, Math.max(0, (entry.elapsed_game_s + Math.max(0, ageS)

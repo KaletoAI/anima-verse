@@ -35,6 +35,23 @@ public static class PropActionMotion
         }
         return points.Count>0 ? new(Number(points[^1]![0]),Number(points[^1]![1])) : new(0,0);
     }
+    /// <summary>Closest rendered route point by arc length. Equal projections keep the first leg.</summary>
+    public static double ProjectApproachM(IReadOnlyList<(double X,double Z)> points,(double X,double Z) point)
+    {
+        double best=double.PositiveInfinity,result=0,distance=0;
+        for(int i=1;i<points.Count;i++) {
+            var a=points[i-1]; var b=points[i]; double dx=b.X-a.X,dz=b.Z-a.Z,length=double.Hypot(dx,dz);
+            if(length==0) continue;
+            double t=Math.Clamp(((point.X-a.X)*dx+(point.Z-a.Z)*dz)/(length*length),0,1);
+            double error=double.Hypot(point.X-a.X-t*dx,point.Z-a.Z-t*dz);
+            if(error<best) { best=error; result=distance+t*length; }
+            distance+=length;
+        }
+        return result;
+    }
+    /// <summary>Keep owned playback continuous across delayed polls and slow frames.</summary>
+    public static double OwnedApproachStep(double shownM,double targetM,double pace,double catchUpRate,double dt)
+        =>shownM+Math.Min(Math.Min(Math.Max(0,targetM-shownM),.25),Math.Max(0,Math.Max(pace,catchUpRate))*Math.Max(0,dt));
     public static double EntryPhase(JsonNode entry,double ageS) => Math.Min(1,Math.Max(0,
         (Number(entry["elapsed_game_s"])+Math.Max(0,ageS)*Math.Max(0,Number(entry["game_seconds_per_real_second"])))
         /Number(entry["duration_game_s"])));

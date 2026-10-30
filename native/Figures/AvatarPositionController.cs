@@ -114,7 +114,9 @@ public sealed class AvatarPositionController : IDisposable
         LocationId = Text(me,"location_id");
         // Task 57: semantic state owns approach/active motion, including the avatar travel route and measured entry.
         bool wasPropDriven = _steering.PropActionDriven;
-        _steering.PropActionDriven = PropMotionOwned?.Invoke()==true || HasObject(me,"prop_action_entry") || HasObject(me,"local_approach");
+        _steering.PropActionDriven = PropMotionOwned?.Invoke()==true || HasObject(me,"prop_action_entry") || HasObject(me,"local_approach")
+            || (Avatar?.Route is { OwnedApproach:true } approach && approach.ShownM<approach.TotalM-1e-6
+                && (HasObject(me,"place") || HasObject(me,"interaction")));
         if (_steering.PropActionDriven)
         {
             if (me.TryGetProperty("travel",out var propTravel) && propTravel.ValueKind==JsonValueKind.Object

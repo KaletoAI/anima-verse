@@ -383,6 +383,12 @@ public partial class FigureManager : Node3D
         if (!fresh && fig.CharacterName == PlayerDriven && HoldAvatarPlacement) return;
         // Task 49: polls still refresh models/activity, but local root, goal, route, facing and visibility belong to input.
         if (!fresh && IsPlayerDriven(fig.CharacterName)) { AdoptInteraction(fig); return; }
+        // An early server arrival must not cut short the rendered owned approach.
+        if(fig.Route is { OwnedApproach:true } own && own.ShownM<own.TotalM-1e-6
+            && _rowByName.TryGetValue(fig.CharacterName,out var arriving) && arriving.Travel is null
+            && (arriving.PropActionEntry is not null || arriving.Place is not null || arriving.Interaction is not null)) {
+            own.Settled=true; return;
+        }
         AdoptInteraction(fig);
         if (AdoptPropEntry(fig, plan)) return;
         fig.Rule = plan.Rule;

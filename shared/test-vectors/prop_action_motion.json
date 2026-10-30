@@ -2045,6 +2045,165 @@
         0
       ],
       "expect": null
+    },
+    {
+      "label": "[13] owned start projects to first point, never server progress",
+      "fn": "projectApproachM",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            2,
+            3
+          ]
+        ],
+        [
+          0,
+          0
+        ]
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[13] closest point on second leg keeps arc length",
+      "fn": "projectApproachM",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            2,
+            3
+          ]
+        ],
+        [
+          2.2,
+          2
+        ]
+      ],
+      "expect": 4
+    },
+    {
+      "label": "[13] degenerate legs preserve projection",
+      "fn": "projectApproachM",
+      "args": [
+        [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        [
+          1.5,
+          2
+        ]
+      ],
+      "expect": 2.5
+    },
+    {
+      "label": "[13] empty projection holds origin",
+      "fn": "projectApproachM",
+      "args": [
+        [],
+        [
+          4,
+          5
+        ]
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[13] zero-time late approach never advances",
+      "fn": "ownedApproachStep",
+      "args": [
+        0,
+        5.4,
+        1,
+        10,
+        0
+      ],
+      "expect": 0
+    },
+    {
+      "label": "[13] catch-up moves along route in real time",
+      "fn": "ownedApproachStep",
+      "args": [
+        0,
+        5.4,
+        1,
+        10,
+        0.02
+      ],
+      "expect": 0.2
+    },
+    {
+      "label": "[13] slow frame caps visible advance at quarter metre",
+      "fn": "ownedApproachStep",
+      "args": [
+        0,
+        5.4,
+        1,
+        10,
+        0.1
+      ],
+      "expect": 0.25
+    },
+    {
+      "label": "[13] catch-up never passes authoritative target",
+      "fn": "ownedApproachStep",
+      "args": [
+        5.9,
+        6,
+        1,
+        10,
+        0.02
+      ],
+      "expect": 6
+    },
+    {
+      "label": "[13] older progress never rewinds owned avatar",
+      "fn": "ownedApproachStep",
+      "args": [
+        4,
+        3,
+        1,
+        10,
+        0.02
+      ],
+      "expect": 4
+    },
+    {
+      "label": "[13] ordinary owned playback uses route pace",
+      "fn": "ownedApproachStep",
+      "args": [
+        1,
+        2,
+        1,
+        0,
+        0.02
+      ],
+      "expect": 1.02
     }
   ]
 }

@@ -5,7 +5,7 @@ import type { SyncCounters } from '../game/perfstats';
 import type { MapCharacter, MapInteraction, MapPropActionEntry } from '../types';
 import { bubbleMs, bubbleText } from '../game/bubble';
 import { PAIR_SNAP_S, pairClipPhase } from '../game/pairClip';
-import { entryIdentity, entryPhase, localApproachPoint } from '../game/propActionMotion';
+import { entryIdentity, entryPhase, localApproachPoint, projectApproachM, ownedApproachStep } from '../game/propActionMotion';
 import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
   movementOf, ghostCutY, groundWaterLevel, idleClip, poseClip, moveClip, sinkForState, standingClipFor,
   terrainPace, propWaterWord,
@@ -192,6 +192,7 @@ export interface IncomingRoute {
   journeyId: string | null;
   stamp: number;
   exact?: boolean;
+  ownedApproach?: boolean;
   floorY?: number;
   startsInS?: number;
 }
@@ -206,7 +207,11 @@ export interface TravelRoute {
   shownM: number;
   stamp: number;
   exact?: boolean;
+  ownedApproach?: boolean;
   floorY?: number;
+  catchUpRate?: number;
+  accessLogged?: boolean;
+  settled?: boolean;
   serverM?: number;
   receivedAt?: number;
   startsInS?: number;
@@ -840,6 +845,13 @@ export class NpcManager {
       // activity, animation). The travel line is cleared: a player walking on
       // foot has no server journey to draw, and drawing one from `st.pos`
       // would start it where the figure is not.
+      // Finish the visible approach before adopting an early entry/seat poll.
+      if (npc.route?.ownedApproach && npc.route.shownM < npc.route.totalM - 1e-6
+        && !st.route && (st.char.prop_action_entry || st.committedPropKey || st.char.interaction)) {
+        npc.route.settled = true;
+        continue;
+      }
+      const hadEntry = !!npc.entry;
       this.adoptInteraction(npc, st);
       if (!(st.char.name === this.playerDriven && opts.playerStale)) this.adoptPropEntry(npc, st);
       if (npc.entryBlocked) {
@@ -852,8 +864,10 @@ export class NpcManager {
       if (!(st.char.name === this.playerDriven && opts.playerStale)) {
         const key = st.committedPropKey ?? '';
         if (key && key !== npc.propCommitKey && !npc.entry && st.char.activity_animation) {
+          if (!hadEntry && st.char.name === this.playerDriven) console.info('[prop] direct seat');
           npc.figure?.finishPropEntry(st.char.activity_animation);
         }
+        if (key && key !== npc.propCommitKey && st.char.name === this.playerDriven) console.info('[prop] seated confirmed');
         npc.propCommitKey = key;
       }
       if (npc.entry) {
@@ -899,13 +913,18 @@ export class NpcManager {
         const key = `${inc.journeyId ?? ''}|${routeKey(inc.points)}`;
         const age = inc.ageAtParsedS + (performance.now() - inc.parsedAt) / 1000;
         const target = advanceAlongPaces(inc.points, inc.paces, inc.serverM, Math.max(0, age - (inc.startsInS ?? 0)));
-        if (!npc.route || npc.route.key !== key) {
+        if (!npc.route || npc.route.key !== key || (inc.ownedApproach && !npc.route.ownedApproach)) {
+          const shown = inc.ownedApproach ? projectApproachM(inc.points, [npc.root.position.x, npc.root.position.z]) : target;
+          const behind = target - shown > .25;
           npc.route = {
             key, points: inc.points.map((p) => [p[0], p[1]] as MetrePoint),
-            totalM: inc.totalM, paces: inc.paces, targetM: target, shownM: target,
+            totalM: inc.totalM, paces: inc.paces, targetM: target, shownM: shown,
+            ownedApproach: inc.ownedApproach,
+            catchUpRate: inc.ownedApproach && behind ? Math.max(2 * (rateAt(inc.points, inc.paces, shown) ?? 0), (inc.totalM - shown) / .6) : 0,
             stamp: inc.stamp, exact: inc.exact, floorY: inc.floorY, serverM: inc.serverM,
             receivedAt: performance.now() - age * 1000, startsInS: inc.startsInS,
           };
+          if (inc.ownedApproach) console.info(`[prop] approach adopted journey=${inc.journeyId} total_m=${inc.totalM.toFixed(3)} server_m=${target.toFixed(3)} rendered_start_m=${shown.toFixed(3)} catch_up=${behind ? 'yes' : 'no'}`);
         } else {
           npc.route.paces = inc.paces;
           npc.route.exact = inc.exact;
@@ -916,7 +935,11 @@ export class NpcManager {
             npc.route.serverM = inc.serverM;
             npc.route.receivedAt = performance.now() - age * 1000;
             npc.route.startsInS = inc.startsInS;
-            const a = adoptTarget(npc.route.shownM, target, rateAt(npc.route.points, inc.paces, target));
+            if (npc.route.ownedApproach) {
+              if (target - npc.route.shownM > .25) npc.route.catchUpRate = Math.max(npc.route.catchUpRate ?? 0,
+                2 * (rateAt(inc.points, inc.paces, npc.route.shownM) ?? 0), (inc.totalM - npc.route.shownM) / .6);
+            }
+            const a = npc.route.ownedApproach ? { shownM: npc.route.shownM, snap: 'none' } : adoptTarget(npc.route.shownM, target, rateAt(npc.route.points, inc.paces, target));
             npc.route.shownM = a.shownM;
             if (a.snap === 'back') {
               const at = pointAtDistance(npc.route.points, a.shownM)!;
@@ -1313,7 +1336,9 @@ export class NpcManager {
 
   propEntryUnavailable(name: string): boolean {
     const npc = this.npcs.get(name);
-    return !!npc && (npc.entryBlocked || (!!npc.entry && (!npc.entry.played || npc.entry.failed)));
+    // Seat and position reconciliation share this gate with live entry readiness.
+    return !!npc && (npc.entryBlocked || (!!npc.entry && (!npc.entry.played || npc.entry.failed))
+      || (!!npc.route?.ownedApproach && npc.route.shownM < npc.route.totalM - 1e-6));
   }
 
   clearPropEntry(name: string): void {
@@ -1355,6 +1380,7 @@ export class NpcManager {
     const key = entryIdentity(spec);
     if (!npc.entry || npc.entry.key !== key) {
       npc.entryBlocked = false;
+      if (npc.name === this.playerDriven) console.info(`[prop] entry start bridge=${spec.kind}`);
       npc.entry = { spec, key, stamp, receivedAt: st.entryAt ?? performance.now(), failed: false, played: false };
     } else {
       npc.entry.spec = spec;
@@ -1434,14 +1460,26 @@ export class NpcManager {
       if (npc.route && npc.route.points.length >= 2) {
         const r = npc.route;
         if (r.exact) {
-          const at = localApproachPoint({ waypoints: r.points, paces_m_s_real: r.paces,
-            progress_m: r.serverM ?? 0, starts_in_s: r.startsInS },
-            (performance.now() - (r.receivedAt ?? performance.now())) / 1000);
+          const age = (performance.now() - (r.receivedAt ?? performance.now())) / 1000;
+          let at: readonly [number, number];
+          if (r.ownedApproach) {
+            r.targetM = r.settled ? r.totalM : advanceAlongPaces(r.points, r.paces, r.serverM ?? 0,
+              Math.max(0, age - (r.startsInS ?? 0)));
+            r.shownM = ownedApproachStep(r.shownM, r.targetM, rateAt(r.points, r.paces, r.shownM) ?? 0, r.catchUpRate ?? 0, dt);
+            at = pointAtDistance(r.points, r.shownM)!;
+            if (r.shownM >= r.totalM - 1e-6 && !r.accessLogged) {
+              r.accessLogged = true;
+              console.info(`[prop] arrival standing at access journey=${r.key.split('|')[0]}`);
+            }
+            this.updateTravelLine(npc, r);
+          } else at = localApproachPoint({ waypoints: r.points, paces_m_s_real: r.paces,
+            progress_m: r.serverM ?? 0, starts_in_s: r.startsInS }, age);
           const previousX = npc.root.position.x, previousZ = npc.root.position.z;
           npc.root.position.set(at[0], r.floorY ?? this.roomStandAt(npc.name, at[0], at[1])
             ?? this.groundY(at[0], at[1]), at[1]);
           npc.target.copy(npc.root.position);
-          const moving = Math.hypot(at[0] - previousX, at[1] - previousZ) > 1e-6;
+          const moving = (!r.ownedApproach || r.shownM < r.totalM - 1e-6)
+            && Math.hypot(at[0] - previousX, at[1] - previousZ) > 1e-6;
           if (moving) {
             _goal.set(at[0] - previousX, 0, at[1] - previousZ);
             npc.figure?.faceTowards(_goal);

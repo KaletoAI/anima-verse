@@ -157,3 +157,5 @@ assert.equal(glyphs.pickableProps([{role:'prop',roomId:'room',anchor:[0,0],
 console.log(`prop action motion: ${passed} vectors + 27 inline assertions = ${passed + 27} checks, all ok`);
 
 await import('./smoke_prop_action_storey.mjs');
+
+await import('./smoke_prop_action_offers.mjs');

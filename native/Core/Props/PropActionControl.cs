@@ -29,6 +29,10 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     public bool Paused=>Preparation.Pending || _uncertain || ManualGate.Pending;
     public JsonObject State=>(JsonObject)_state.DeepClone();
     public Func<Task> PrepareWrites { get; set; }=()=>Task.CompletedTask;
+    public Func<Task>? RefreshOffers { get; set; }
+    public Action<string>? Log { get; set; }
+    private string _offeredOwnKey="";
+    private string OwnStateKey => OwnedRun is { } run ? $"{PropActionMotion.Text(run["execution_id"])}|{PropActionMotion.Text(run["status"])}|{PropActionMotion.Text(run["phase"])}" : "";
     public Func<Task> RefreshWorld { get; set; }=()=>Task.CompletedTask;
     public event Action? PauseChanged;
     public event Action<string?>? NotifyChanged;
@@ -62,6 +66,8 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
         await RefreshWorld();
         if(_disposed || epoch!=_epoch || serial!=_refreshSerial) return;
         _uncertain=false; Preparation.AdoptFreshState(); PauseChanged?.Invoke();
+        string key=OwnStateKey;
+        if(key!=_offeredOwnKey && RefreshOffers is { } refresh) { await refresh(); _offeredOwnKey=key; }
     }
     public async Task<JsonDocument> MutateAsync(Func<Task<JsonDocument>> mutation)
     {
@@ -80,7 +86,15 @@ public sealed class PropActionControl(IWorldSource source,Func<double> clock) : 
     public Task ReleaseAsync(string executionId,string? journey,Action release)
         =>ManualGate.Cancel(executionId,journey,async ()=>
         {
-            using var result=await MutateAsync(()=>source.CancelPropActionAsync(executionId));
+            var timer=System.Diagnostics.Stopwatch.StartNew();
+            Log?.Invoke($"release requested execution={JsonSerializer.Serialize(executionId)}");
+            using var result=await MutateAsync(async ()=> {
+                try {
+                    var answer=await source.CancelPropActionAsync(executionId);
+                    Log?.Invoke($"release answered status={answer.RootElement.GetProperty("status").GetString()} ms={timer.ElapsedMilliseconds}");
+                    return answer;
+                } catch { Log?.Invoke($"release answered status=error ms={timer.ElapsedMilliseconds}"); throw; }
+            });
             string status=result.RootElement.TryGetProperty("status",out var s) ? s.GetString() ?? "" : "";
             if(status is "refused" or "failed") throw new InvalidOperationException(result.RootElement.GetProperty("reason").GetString());
             if(_disposed) return;
