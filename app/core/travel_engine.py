@@ -1004,10 +1004,11 @@ def start_journey_to_point(character_name: str, x: float,
     return journey, "ok"
 
 
-#: Real seconds an in-room approach waits before it walks off. The client
-#: learns of it from its next worldmap poll (about every half second); a walk
-#: already under way by then has the figure chase its own position.
-_APPROACH_LEAD_S = 0.75
+#: Least real seconds an in-room approach waits before it walks off: time
+#: for the requesting client's worldmap poll right after the answer, so the
+#: walk is not already under way when the figure adopts it. The start is a
+#: whole game second, so the wait is this plus up to one second.
+_APPROACH_LEAD_S = 0.3
 
 
 def _approach_start(exit_s: float) -> GameTime:
@@ -1092,6 +1093,12 @@ def start_approach_journey(character_name: str, target: dict, role: str, *,
         profile.update(journey=journey, movement_target="", place=None, pose_key="", pose_flavor="")
         if not save_character_profile(character_name, profile):
             return None, "write_failed"
+    logger.info("Approach started: %s -> %s slot %s, %.2f m via %s%s%s, starts in %.2f game s",
+                character_name, target["placement_id"], plan["entry_anchor"]["slot"],
+                elapsed * speed, [[round(p[0], 2), round(p[1], 2)] for p in points],
+                f" (seat {list(plan['departure_seat'])})" if plan.get("departure_seat") else "",
+                f" (step-out {plan['step_out']})" if plan.get("step_out") else "",
+                (starts - game_time()).seconds)
     from app.core import sync_topics
     sync_topics.travel_changed(character_name)
     # An approach is about a second long: let the ticker plan its arrival beat
@@ -1186,7 +1193,8 @@ def _advance_approach(name: str, journey: dict, now: GameTime) -> None:
     key = ({k: v for k, v in journey.items() if k != "position_checkpoint_game"},
            {k: v for k, v in profile.items() if k != "journey"},
            places.where(name, profile=profile), inventory, geometry,
-           [query.prop_document(pid) for pid in sorted({p["prop_id"] for p in inventory})])
+           # A room-level marker (source "room") carries no prop.
+           [query.prop_document(pid) for pid in sorted({p["prop_id"] for p in inventory if p.get("prop_id")})])
     position = (pos["x"], pos["z"]) if pos is not None else None
     with _approach_validation_lock:
         cached = _approach_validation_cache.get(name)

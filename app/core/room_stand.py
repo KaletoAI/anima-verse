@@ -466,9 +466,12 @@ def approach_departure(name: str, *, profile: Optional[Dict[str, Any]] = None,
                        _places=None) -> Tuple[Optional[Point], Optional[Point], str]:
     """Read-only start for an indoor approach, including the real exit clip.
 
-    Unlike free standing-point selection, this never relocates a seated actor
-    to a convenient free point. The measured existing bridge must put it on a
-    walkable floor point; the planner checks that point against room geometry.
+    A seated actor leaves where the measured exit clip of its pose sets it
+    down; the planner checks that point against room geometry. A pose
+    without such a clip (none configured, or one that stays on the spot)
+    leaves for the free standing point a plain stand-up would choose
+    (:func:`stand_up` without a bridge), so switching to another action
+    never needs more than standing up does.
     """
     from app.core import places
     from app.models.character import get_character_pos, get_effective_pose_key
@@ -481,6 +484,9 @@ def approach_departure(name: str, *, profile: Optional[Dict[str, Any]] = None,
         return here, None, ""
     pose = get_effective_pose_key(name, profile=profile)
     stand = bridge_stand_point(name, held, pose, profile=profile, at=here)
+    if stand is None:
+        loc, room = places.where(name, profile=profile)
+        stand = free_stand_point(loc, room, here, exclude=name)
     if stand is None:
         return None, None, "missing_exit_transition"
     # The stored path and the authoritative position use centimetres.

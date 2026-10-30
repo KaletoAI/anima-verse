@@ -12,6 +12,7 @@ from threading import Lock, RLock
 from weakref import WeakValueDictionary
 import math
 import operator
+import time
 import uuid
 
 from app.core import prop_action_store as store, places, props, travel_engine as travel
@@ -516,14 +517,35 @@ def request_with_creation(actor: str, target: dict, action_id: str, revision: st
         C.release_prop_action_state(actor, replaces)
 
 
+#: An admission slower than this logs where its time went.
+_SLOW_ADMIT_MS = 150.0
+
+
 def _admit(run, fingerprint):
     """Validate, plan, claim and start one new run (request_with_creation)."""
     actor, partner, request_id = run["actor"], run["partner"], run["request_id"] or ""
+    marks = [("begin", time.perf_counter())]
+    try:
+        return _admit_timed(run, fingerprint, marks)
+    finally:
+        marks.append(("end", time.perf_counter()))
+        total = (marks[-1][1] - marks[0][1]) * 1000
+        if total >= _SLOW_ADMIT_MS:
+            steps = " ".join(f"{name}={(at - marks[i][1]) * 1000:.0f}"
+                             for i, (name, at) in enumerate(marks[1:]))
+            logger.info("prop-action admission for %s took %.0f ms (%s)", actor, total, steps)
+
+
+def _admit_timed(run, fingerprint, marks):
+    actor, partner, request_id = run["actor"], run["partner"], run["request_id"] or ""
     with _lock(run["execution_id"]):
+        marks.append(("lock", time.perf_counter()))
         query = places._GeometryQuery(cache_profiles=True)
         reason = _validate(run, _query=query)
+        marks.append(("validate", time.perf_counter()))
         planned_state = _planning_state(run, query)
         plans, plan_reason = _plan(run, conn=store.db.get_connection(), _query=query) if not reason else ({}, "")
+        marks.append(("plan", time.perf_counter()))
         reason = reason or plan_reason
         if reason:
             previous = store.by_request(actor, request_id)
@@ -543,8 +565,10 @@ def _admit(run, fingerprint):
             store.insert(conn, run)
             if not partner:
                 store.acquire(conn, run, [p["entry_anchor"] for p in plans.values()])
+        marks.append(("claim", time.perf_counter()))
         if not partner:
             _start_checked(run)
+        marks.append(("start", time.perf_counter()))
     _notify(run)
     if partner:
         # A decision/model or respond-lane request must never run inside an

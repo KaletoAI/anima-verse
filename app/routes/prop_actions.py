@@ -1,9 +1,14 @@
 """Session-avatar execution and read-only admin authoring adapters."""
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
 from app.core.auth_dependency import get_current_user, require_admin
 from app.core import prop_actions, prop_action_engine as engine, places, props
 
+from app.core.log import get_logger
+
+logger = get_logger("prop_actions_route")
 router = APIRouter(tags=["prop-actions"])
 
 
@@ -78,6 +83,20 @@ def state(user=Depends(get_current_user)):
 
 @router.post("/play/prop-actions/request")
 def request(body: ActionRequest, user=Depends(get_current_user)):
+    started = time.perf_counter()
+    try:
+        return _request_route(body, user)
+    finally:
+        elapsed = (time.perf_counter() - started) * 1000
+        if elapsed >= _SLOW_REQUEST_MS:
+            logger.info("prop-action request took %.0f ms", elapsed)
+
+
+#: A request slower than this is logged (the admission logs its own steps).
+_SLOW_REQUEST_MS = 150.0
+
+
+def _request_route(body: ActionRequest, user):
     actor = _avatar(user)
     from app.core import prop_action_store as store
     from app.routes.play import _player_action_gate

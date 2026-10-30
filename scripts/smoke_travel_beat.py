@@ -22,11 +22,11 @@ due_in_game_s, now = last stamp + 1 s:
 - combined phase 5 s, 2 s elapsed                -> 5 - 2 - 1 = 2
 - the earliest wins                              -> 1; nothing timed -> None
 An approach starts on the first WHOLE game second >= exact now + max(exit
-clip, 0.75 s lead) x factor (game time 1000, fraction 0.4 unless stated):
-- no exit clip, factor 1     -> ceil(1000.4 + 0.75) = 1002
+clip, 0.3 s lead) x factor (game time 1000, fraction 0.4 unless stated):
+- no exit clip, factor 1     -> ceil(1000.4 + 0.3)  = 1001
 - exit 2.23 s, factor 10     -> ceil(1000.4 + 22.3) = 1023
-- fraction -0.3, factor 1    -> ceil(999.7 + 0.75)  = 1001
-- frozen (factor 0)          -> lead unscaled: ceil(1000.4 + 0.75) = 1002
+- fraction -0.2, factor 1    -> ceil(999.8 + 0.3)   = 1001
+- frozen (factor 0)          -> lead unscaled: ceil(1000.4 + 0.3) = 1001
 A woken ticker starts its next pass at once instead of after its 5 s sleep.
 places._compose and room_stand.room_geometry compose once per scene
 fingerprint, recompose when it moves, and hand out private copies.
@@ -141,8 +141,8 @@ def due_steps():
 
 
 def approach_start():
-    for fraction, exit_s, factor, expected in ((0.4, 0.0, 1.0, 1002), (0.4, 2.23, 10.0, 1023),
-                                               (-0.3, 0.0, 1.0, 1001), (0.4, 0.0, 0.0, 1002)):
+    for fraction, exit_s, factor, expected in ((0.4, 0.0, 1.0, 1001), (0.4, 2.23, 10.0, 1023),
+                                               (-0.2, 0.0, 1.0, 1001), (0.4, 0.0, 0.0, 1001)):
         with patch("app.core.timeutils.game_time_exact", return_value=(GameTime(1000), fraction)), \
                 patch.object(T, "game_speed_factor", return_value=factor):
             got = T._approach_start(exit_s).total_seconds

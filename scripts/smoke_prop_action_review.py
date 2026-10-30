@@ -221,7 +221,12 @@ class Review(unittest.TestCase):
                 facing=None, y_world=0.0, root_offset=0.0, source='room', room_id=room_id, floor_y=0.0)]
         with patch.object(places._GeometryQuery, 'room_places', with_room_marker):
             result = S.request(name, target)
-        self.assertEqual(result['status'], 'approaching', result)
+            self.assertEqual(result['status'], 'approaching', result)
+            # The ticker's revalidation of the walk reads the same inventory;
+            # it used to raise there and cancel the approach on its first step.
+            S.tick(1)
+        self.assertEqual(R.get(result['execution_id'])['status'], 'approaching')
+        self.assertEqual(F.C.get_character_profile(name)['journey']['execution_ref'], result['execution_id'])
 
     def test_other_action_while_seated_stands_up_and_goes(self):
         # Seated in one action, choosing another one: the offer is open, the
@@ -263,10 +268,11 @@ class Review(unittest.TestCase):
         self.assertEqual({c['execution_id'] for c in R.claims()}, {second['execution_id']})
         self.assertEqual(S.request(name, other)['reason'], 'participant_claimed')
 
-    def test_failed_replacement_stands_the_actor_up(self):
-        # The plan fails after the first action has ended (no exit clip to
-        # leave the seat): the actor stands up instead of keeping a place
-        # nobody owns any more.
+    def test_seat_without_exit_clip_stands_up_where_release_would(self):
+        # No exit clip for the seated pose: the switch still works. The new
+        # approach leaves the seat for the free standing point the plain
+        # stand-up (release) would choose, through a zero-time seat leg.
+        from app.core import room_stand
         name, target, pid = S.setup_run()
         doc = F.props.read_sidecar(pid)
         doc['actions'].append(dict(deepcopy(doc['actions'][0]), id='rest-2', name='Rest 2'))
@@ -276,12 +282,42 @@ class Review(unittest.TestCase):
         S.tick(30)
         S.tick(2)
         self.assertEqual(R.get(first['execution_id'])['status'], 'active')
+        seat = F.C.get_character_pos(name)
+        stand = room_stand.free_stand_point(target['location_id'], target['room_id'],
+                                            (seat['x'], seat['z']), exclude=name)
+        self.assertIsNotNone(stand)
+        prop_actions.invalidate_offers_cache()
+        rows = {row['action_id']: row for row in prop_actions.offers(name)}
+        self.assertEqual((rows['rest-2']['enabled'], rows['rest-2']['reason']), (True, ''), rows['rest-2'])
         second = S.request(name, dict(target, action_id='rest-2'))
+        self.assertEqual(second['status'], 'approaching', second)
+        self.assertEqual(R.get(first['execution_id'])['status'], 'completed')
+        journey = F.C.get_character_profile(name)['journey']
+        self.assertNotIn('exit_clip', journey)
+        self.assertEqual(journey['waypoints'][0][:2], [seat['x'], seat['z']])
+        self.assertEqual(journey['waypoints'][1][:2], [round(stand[0], 2), round(stand[1], 2)])
+        self.assertEqual(journey['waypoints'][1][2], 0.0)
+
+    def test_failed_replacement_stands_the_actor_up(self):
+        # The plan fails after the first action has ended (the room offers no
+        # standing point to leave the seat for): the actor stands up instead
+        # of keeping a place nobody owns any more.
+        from app.core import room_stand
+        name, target, pid = S.setup_run()
+        doc = F.props.read_sidecar(pid)
+        doc['actions'].append(dict(deepcopy(doc['actions'][0]), id='rest-2', name='Rest 2'))
+        F.props._write_sidecar(pid, doc)
+        target['definition_revision'] = F.props.get_prop(pid)['revision']
+        first = S.request(name, target)
+        S.tick(30)
+        S.tick(2)
+        self.assertEqual(R.get(first['execution_id'])['status'], 'active')
+        with patch.object(room_stand, 'free_stand_point', return_value=None):
+            second = S.request(name, dict(target, action_id='rest-2'))
         self.assertEqual((second['status'], second['reason']), ('refused', 'missing_exit_transition'), second)
         self.assertEqual(R.get(first['execution_id'])['status'], 'completed')
         self.assertFalse(F.C.get_character_profile(name).get('place'))
         self.assertFalse(R.claims())
-
 
 if __name__ == '__main__':
     unittest.main()
