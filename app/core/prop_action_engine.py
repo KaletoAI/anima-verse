@@ -1086,6 +1086,8 @@ def check(actor: str, target: dict, action_id: str, revision: str, partner: str 
                status="awaiting_consent" if partner else "approaching",
                data=dict(plans={}, journey_ids={}, access_roles={}))
     plans = {}
+    # Preserve definition/partner/freeze/participant/requirement precedence.
+    # Never build a route for an already refused offer.
     reason = "world_frozen" if is_world_frozen() else _validate(run, _query=query)
     if not reason:
         plans, reason = _plan(run, conn=store.db.get_connection(), _query=query)

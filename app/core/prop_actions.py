@@ -1,5 +1,9 @@
 """Prop action authoring contract. Validation is read-only and never executes actions."""
 import math
+from collections import OrderedDict
+from copy import deepcopy
+from threading import RLock
+from time import monotonic
 from uuid import UUID
 from typing import TypedDict, Literal
 
@@ -243,6 +247,60 @@ def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue
     return issues
 
 
+_OFFERS_TTL_S = 3.0
+_offers_cache = OrderedDict()
+_offers_lock = RLock()
+_offers_generation = 0
+
+
+def invalidate_offers_cache():
+    """Called after every committed run/claim transaction, including cleanup."""
+    global _offers_generation
+    with _offers_lock:
+        _offers_generation += 1
+        _offers_cache.clear()
+
+
+def _offers_version():
+    from app.core import db
+    conn = db.get_connection()
+    with _offers_lock:
+        generation = _offers_generation
+    return (str(db.get_db_path()), conn, conn.execute('PRAGMA data_version').fetchone()[0],
+            conn.total_changes, generation)
+
+
+def _offers_key(actor, lang, location, room, query, version):
+    """Conservative invalidation: any DB write also invalidates eligibility.
+
+    data_version observes OTHER connections, total_changes this connection.
+    Keep connection identity in the key: PRAGMA counters are connection-local.
+    This covers claims even from another server process, profiles, occupancy,
+    frozen state, item bonuses and world catalog edits without polling runs.
+    """
+    from app.core import paths, scene_recipe, terrain_types, door_models
+    from app.core.timeutils import game_time
+    from app.models import character, world, world_props, terrain
+    from app.core import places
+    position = character.get_character_pos(actor) or {}
+    present = sorted({actor, *(name for name, _ in places._present(location, room))})
+    timed = any(query.profile(name).get('active_conditions') for name in present)
+    shared = paths.get_shared_dir()
+    # Published prop writers invalidate this existing token immediately.
+    # Other file-backed admission catalogs have no shared generation counter.
+    files = tuple(scene_recipe._dir_stat_sig(directory, depth=depth) for directory, depth in
+                  [(shared / 'templates', 2), (shared / 'config', 0),
+                   (shared / 'prompt_filters', 0), (shared / 'stats', 1),
+                   (shared / 'terrain', 1),
+                   *[(root, 1) for root, _ in paths.get_animation_clips_dirs()]])
+    return (*version, actor, lang,
+            tuple(round(float(position.get(axis, 0)), 2) for axis in ('x', 'z')),
+            location, room, world.world_generation(), world_props.world_props_generation(),
+            terrain.terrain_generation(), terrain_types.types_generation(), door_models.generation(),
+            scene_recipe.prop_lib_token(), scene_recipe.season_token(), files,
+            str(game_time()) if timed else None)
+
+
 def offers(actor: str, *, lang: str = "en") -> list[dict]:
     """Actual same-room actions, including blocked entries and partner checks.
 
@@ -253,12 +311,19 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
     from app.core.room_recipe import compose_recipe
     from app.core.i18n import localized
     from app.models.world import get_location_by_id
+    version = _offers_version()
+    cacheable = not version[1].in_transaction
     query = places._GeometryQuery(cache_profiles=True)
     location_id, room_id = places.where(actor, profile=query.profile(actor))
     loc = get_location_by_id(location_id) if location_id else None
     room = next((r for r in (loc or {}).get("rooms", []) if r.get("id") == room_id), None)
     if not room:
         return []
+    cache_key = _offers_key(actor, lang, location_id, room_id, query, version)
+    with _offers_lock:
+        hit = _offers_cache.get(cache_key)
+        if cacheable and hit and monotonic() < hit[0]:
+            return deepcopy(hit[1])
     recipe = compose_recipe(room, [r for r in loc["rooms"] if r is not room],
                             map3d=loc.get("map3d") or {}, read_only=True)
     present = sorted(name for name, _ in places._present(location_id, room_id) if name != actor)
@@ -287,6 +352,17 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
                                target=target, label=action["name"], description=action.get("description", ""),
                                enabled=checked["enabled"], reason=checked["reason"], required_partner=pair,
                                available_targets=targets, effects=action.get("effects", [])))
+    # Capture the entire key before reading; a concurrent mutation must never
+    # publish an older snapshot under a newer version. Lazy readers can write,
+    # so recheck before publishing as well.
+    if cacheable and not version[1].in_transaction and _offers_key(
+            actor, lang, location_id, room_id, query, _offers_version()) == cache_key:
+        with _offers_lock:
+            if cache_key[4] == _offers_generation:
+                _offers_cache[cache_key] = (monotonic() + _OFFERS_TTL_S, deepcopy(result))
+                _offers_cache.move_to_end(cache_key)
+                while len(_offers_cache) > 128:
+                    _offers_cache.popitem(last=False)
     return result
 
 

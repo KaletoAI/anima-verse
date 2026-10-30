@@ -28,6 +28,8 @@ from unittest.mock import patch
 
 import smoke_prop_action_runs as S
 F, A = S.F, S.A
+# The reused fixture has already initialized this private storage root.
+F.paths.init(F.ROOT / "world")
 from app.core import prop_actions as P
 
 

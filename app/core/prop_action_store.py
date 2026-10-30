@@ -31,6 +31,8 @@ def transaction():
         conn.execute("BEGIN IMMEDIATE")
         yield conn
         conn.commit()
+        from app.core.prop_actions import invalidate_offers_cache
+        invalidate_offers_cache()
     except BaseException:
         conn.rollback()
         raise

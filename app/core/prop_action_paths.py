@@ -116,6 +116,20 @@ class _Space:
             self.valid = False
 
     def free(self, p: Point) -> bool:
+        # A space never changes after construction, and the planners ask about
+        # the same corners and ring samples thousands of times per read.
+        try:
+            key = (float(p[0]), float(p[1])) if len(p) == 2 else None
+        except (TypeError, ValueError, OverflowError):
+            key = None
+        if key is None:
+            return self._free(p)
+        cache = self.__dict__.setdefault("_free_cache", {})
+        if key not in cache:
+            cache[key] = self._free(p)
+        return cache[key]
+
+    def _free(self, p: Point) -> bool:
         if not self.valid or not all(math.isfinite(v) for v in p) or not fg.point_in_poly(p, self.poly):
             return False
         if min(fg.point_segment_distance(p, a, b) for a, b in _edges(self.poly)) < WALL_CLEAR_M - _EPS:
@@ -231,6 +245,81 @@ class _VisibilityGraph:
         return None
 
 
+class _Reachability:
+    """One source Dijkstra; candidate goals only link to reached vertices.
+
+    Distance/path tuples retain route()'s shortest-path and lexical tie rules.
+    The direct edge still wins immediately, exactly as in route().
+    """
+
+    def __init__(self, graph, start):
+        self.graph = graph
+        try:
+            self.start = tuple(map(float, start))
+            if len(self.start) != 2:
+                self.start = None
+        except (TypeError, ValueError, OverflowError):
+            self.start = None
+        self.best = None
+
+    def _distances(self):
+        if self.best is not None:
+            return self.best
+        graph, start = self.graph, self.start
+        self.best = {}
+        if start is None or not graph.space.free(start):
+            return self.best
+        if graph.nodes is None:
+            graph._build_graph()
+        nodes = [start] + [p for p in graph.nodes if p != start]
+        edges = {p: [] for p in nodes}
+        for (a, b), cost in graph.edges.items():
+            if start not in (a, b):
+                edges[a].append((b, cost))
+                edges[b].append((a, cost))
+        for point in nodes[1:]:
+            if graph.space.visible(start, point):
+                edges[start].append((point, math.dist(start, point)))
+        best = self.best
+        best[start] = (0.0, (start,))
+        queue = [(0.0, (start,), start)]
+        while queue:
+            distance, path, point = heapq.heappop(queue)
+            if best.get(point) != (distance, path):
+                continue
+            for neighbor, cost in edges[point]:
+                candidate = (distance + cost, path + (neighbor,))
+                if neighbor not in best or candidate < best[neighbor]:
+                    best[neighbor] = candidate
+                    heapq.heappush(queue, (*candidate, neighbor))
+        return best
+
+    def route(self, goal, *, final_space=None):
+        final = final_space or self.graph.space
+        start = self.start
+        try:
+            goal = tuple(map(float, goal))
+            if len(goal) != 2:
+                return None
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if start is None or not self.graph.space.free(start) or not final.free(goal):
+            return None
+        if start == goal:
+            return [start]
+        if final.visible(start, goal):
+            return [start, goal]
+        choices = []
+        for point, (distance, path) in self._distances().items():
+            if point == start:
+                continue  # Already checked the direct edge.
+            if point == goal:
+                choices.append((distance, path))
+            elif final.visible(point, goal):
+                choices.append((distance + math.dist(point, goal), path + (goal,)))
+        return list(min(choices)[1]) if choices else None
+
+
 def visibility_path(start: Sequence[float], goal: Sequence[float], polygon,
                     blockers, door_zones=(), *, _graph=None) -> list[Point] | None:
     """Shortest deterministic visibility path; reuse a graph only for its geometry."""
@@ -246,9 +335,10 @@ def access_space(geometry, placement_id):
         furniture_radius=ACCESS_BODY_R_M)
 
 
-def slot_route(start, access, anchor, geometry, placement_id, *, graph=None):
+def slot_route(start, access, anchor, geometry, placement_id, *, graph=None, reachability=None, _candidates=None):
     """Shared runtime/report planner. Direct candidates use full walking rules."""
     graph = graph or _VisibilityGraph(geometry)
+    reached = reachability or _Reachability(graph, start)
     final = access_space(geometry, placement_id)
     goal = (access["x"], access["z"])
     if not final.free(goal):
@@ -256,17 +346,38 @@ def slot_route(start, access, anchor, geometry, placement_id, *, graph=None):
     elif not final.visible(goal, anchor):
         reason = "entry_transition_blocked"
     else:
-        route = graph.route(start, goal, final_space=final)
+        route = reached.route(goal, final_space=final)
         if route is not None:
             return route, "bridge", ""
         reason = "no_route"
     found_free = False
-    for point in graph.space.nearby_free(anchor):
+    candidates = _candidates() if _candidates is not None else graph.space.nearby_free(anchor)
+    for point in candidates:
         found_free = True
-        route = graph.route(start, point)
+        route = reached.route(point)
         if route is not None:
             return route, "direct", reason
     return None, "blocked", "no_route" if found_free else "no_free_direct_point"
+
+
+def _query_slot_route(query, geometry_key, start, access, anchor, geometry,
+                      placement_id, graph, reached):
+    """Reuse exact slot work and nearest free anchor samples within one read."""
+    key = (geometry_key, tuple(start), round(access["x"], 9), round(access["z"], 9),
+           tuple(anchor), placement_id)
+    if key not in query._action_slot_routes:
+        def candidates():
+            anchor_key = (geometry_key, tuple(anchor))
+            if anchor_key not in query._action_direct_candidates:
+                query._action_direct_candidates[anchor_key] = tuple(graph.space.nearby_free(anchor))
+            return query._action_direct_candidates[anchor_key]
+
+        query._action_slot_routes[key] = slot_route(
+            start, access, anchor, geometry, placement_id, graph=graph,
+            reachability=reached, _candidates=candidates)
+    route, mode, reason = query._action_slot_routes[key]
+    # A caller may prepend step-out or otherwise consume its own route list.
+    return (list(route) if route is not None else None), mode, reason
 
 
 def _departure_walkable(seat: Point, start: Point, geometry, placement_id: str) -> bool:
@@ -333,28 +444,57 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
     geometry = query.room_geometry(location, room)
     if geometry is None:
         return _blocked("room_geometry_unavailable")
-    space = _Space(*geometry)
+    # These caches belong to the explicit query, never to a process-wide TTL.
+    if not hasattr(query, "_action_graphs"):
+        query._action_graphs = {}
+        query._action_starts = {}
+        query._action_reached = {}
+        query._action_slot_routes = {}
+        query._action_direct_candidates = {}
+    geometry_key = (location, room, id(geometry))
+    if geometry_key not in query._action_graphs:
+        query._action_graphs[geometry_key] = _VisibilityGraph(geometry)
+    graph = query._action_graphs[geometry_key]
+    space = graph.space
     if not space.valid:
         return _blocked("invalid_room_geometry")
-    start, seat, departure_reason = departure if departure is not None else approach_departure(
-        actor, profile=profile, _places=inventory)
+    start_key = (geometry_key, actor)
+    reusable = departure is None and route_start is None
+
+    def blocked_start(reason):
+        if reusable:
+            query._action_starts[start_key] = (None, None, None, None, "", reason)
+        return _blocked(reason)
+
+    if reusable and start_key in query._action_starts:
+        start, real_start, seat, step_out, departing_placement, departure_reason = query._action_starts[start_key]
+    else:
+        start, seat, departure_reason = departure if departure is not None else approach_departure(
+            actor, profile=profile, _places=inventory)
+        if departure_reason:
+            return blocked_start(departure_reason)
+        if route_start is not None:
+            start = tuple(route_start)
+        real_start = start
+        step_out = None
+        if not space.free(start):
+            step_out = space.step_out(start) if seat is None else None
+            if step_out is None:
+                return blocked_start("start_not_walkable")
+            start = step_out
+        departing_placement = departure_placement_id if departure is not None else (
+            (places.place_of(actor, profile=profile, _places=inventory) or {}).get("placement_id", "") if seat is not None else "")
+        if seat is not None and not _departure_walkable(seat, start, geometry, departing_placement):
+            return blocked_start("departure_not_walkable")
+        if reusable:
+            query._action_starts[start_key] = (start, real_start, seat, step_out, departing_placement, "")
     if departure_reason:
         return _blocked(departure_reason)
-    if route_start is not None:
-        start = tuple(route_start)
-    real_start = start
-    step_out = None
-    if not space.free(start):
-        step_out = space.step_out(start) if seat is None else None
-        if step_out is None:
-            return _blocked("start_not_walkable")
-        start = step_out
-    departing_placement = departure_placement_id if departure is not None else (
-        (places.place_of(actor, profile=profile, _places=inventory) or {}).get("placement_id", "") if seat is not None else "")
-    if seat is not None and not _departure_walkable(seat, start, geometry, departing_placement):
-        return _blocked("departure_not_walkable")
+    reached_key = (geometry_key, tuple(start))
+    if reached_key not in query._action_reached:
+        query._action_reached[reached_key] = _Reachability(graph, start)
+    reached = query._action_reached[reached_key]
     choices = []
-    graph = _VisibilityGraph(geometry)
     reason = "binding_not_found"
     for place in sorted(candidates, key=lambda p: p["id"]):
         if target.get("marker_id") and target["marker_id"] != place["marker_id"]:
@@ -393,8 +533,9 @@ def _plan_approach(actor: str, target: dict, role: str, *, departure=None,
                 except (KeyError, TypeError, ValueError, OverflowError):
                     reason = "invalid_binding_geometry"
                     continue
-                route, mode, route_reason = slot_route(start, access, (sx, sz), geometry,
-                                                        target["placement_id"], graph=graph)
+                route, mode, route_reason = _query_slot_route(
+                    query, geometry_key, start, access, (sx, sz), geometry,
+                    target["placement_id"], graph, reached)
                 if route is None:
                     reason = route_reason
                     continue
