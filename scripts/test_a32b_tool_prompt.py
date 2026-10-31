@@ -4,7 +4,7 @@
 Usage:
     ./.venv/bin/python scripts/test_a32b_tool_prompt.py
 
-Runs WITHOUT the server and WITHOUT touching world.db: the skill manager and
+Runs WITHOUT the server and with a temporary world DB: the skill manager and
 the world's location list are replaced by synthetic stubs, so every expected
 value below is derived by hand from the fixture, not from live data.
 
@@ -16,42 +16,13 @@ and the same character as a PARTY FOLLOWER, i.e. without SetLocation
 (party_engine: only the leader moves).
 
 Expectations, derived by hand:
-  1. Follower prompt (streaming, thought + chat, and chat_engine) contains no
-     "→ SetLocation" mapping line; the leader prompt does.
-  2. Neither path mentions the dead names ImageGenerator / SetPose anywhere.
-  3. streaming and chat_engine produce the SAME mapping lines for the same
-     tools_dict (one source: action_mapping_lines).
-  4. Both paths carry the two anti-hallucination rules (speech verbatim / no
-     other figure's lines, at most one call per singleton tool) and the
-     single-marker rule.
-  5. The room-speech note names TalkTo, never the remote verb SendMessage,
-     and disappears when the character has no room-speech verb.
-  6. Location catalogue: 6 synthetic locations with 3 distinct display names
-     produce exactly 3 entries in "Available locations:".
-  7. The tool-instruction system prompt (build_tool_instruction) names no tool
-     of its own any more, and its appearance hint is driven by the declared
-     image tool (PROGRESS_TYPE "image") instead of the vanished name
-     "ImageGenerator".
-  8. In-person suppression: with suppress_move_in_conversation / medium
-     "in_person" the SUPPRESS_IN_PERSON verb (SetLocation) leaves the mapping
-     of BOTH paths — it would be discarded on execution anyway.
-     B3 (2026-09-29): the SAME holds for the SYSTEM part of the room path
-     (chat_engine._build_rp_tool_system, in_person=True): neither SetLocation
-     nor GoToCharacter (both SUPPRESS_IN_PERSON in the fixture) appears — not
-     in the tool list, not in "Available tools", not in a usage example line
-     (the real SkillManager.get_agent_usage_instructions with ``exclude``);
-     without in_person both are there.
-     B4 (2026-09-29): the respond decision prompt carries the streaming twin's
-     guard ("NEVER call a tool because of what the user said"), scoped to
-     TOOLS; the tool-decision system part (build_tool_instruction with
-     for_tool_decision=True) has no "Whenever the user asks" bullet, the
-     chat-model default still has it. The **I do** placeholder is third
-     person, and the current pose (stubbed "sitting: reads a letter") is
-     shown with the keep rule in BOTH decision prompts.
-  7b. Names instead of role words (B4): the image hint asks to name every
-     person ("name yourself and every other person in it by name") and keeps
-     the appearance as reference; the photographer hint names the subjects
-     ("by their NAME").
+  The new shared template lists only offered tools with their brief, keeps
+  singleton and speech guardrails, suppresses in-person movement and omits
+  pose/mood markers. A free character gets the place marker; followers and
+  movement owners do not. The legacy chat_engine checks remain until Task 5.
+  Both paths retain inventory-derived tool names, image-name guidance and
+  no dead tool names. Six locations with three distinct names deduplicate
+  to three legacy catalogue entries.
 """
 import sys
 import tempfile
@@ -63,6 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # but a stub that is missed must hit an empty temp world, never a real one.
 from app.core import paths  # noqa: E402
 paths.init(tempfile.mkdtemp(prefix="a32b_"))
+from app.core import db
+db.init_schema()
 
 FAILS = []
 RESULTS = []
@@ -89,7 +62,11 @@ class _Skill:
         self.REMOTE_COMM = remote
         self.SUPPRESS_IN_PERSON = suppress_in_person
         self.PROGRESS_TYPE = progress_type
+        self.brief = hint
         self.description = f"{name} does something"
+
+    def available_now(self, facts):
+        return None
 
     def get_usage_instructions(self, format_name="", **kwargs):
         return f"USAGE {self.name}: <tool name=\"{self.name}\">x</tool>"
@@ -129,16 +106,16 @@ class _StubManager:
     # _get_agent_skills on THIS stub would change what
     # routes/chat._marker_travel_refusal answers in section 4.
     def get_agent_usage_instructions(self, character_name, format_name="",
-                                     check_limits=True, exclude=frozenset()):
+                                     check_limits=True, exclude=frozenset(), turn=None):
         from app.skills.skill_manager import SkillManager
 
         class _Holder:
-            def _get_agent_skills(self, name, check_limits=True):
+            def _get_agent_skills(self, name, check_limits=True, turn=None):
                 return list(_SKILLS)
 
         return SkillManager.get_agent_usage_instructions(
             _Holder(), character_name, format_name, check_limits=check_limits,
-            exclude=exclude)
+            exclude=exclude, turn=turn)
 
 
 import app.core.dependencies as deps  # noqa: E402
@@ -158,13 +135,19 @@ FOLLOWER = {k: v for k, v in LEADER.items() if k != "SetLocation"}
 MUTE = {"ChangeOutfit": (lambda x: ""), "TakePhoto": (lambda x: "")}
 
 
-def streaming_prompt(tools, *, thought=False, constrained=False, in_person=False):
-    st = StreamingAgent(
-        llm=None, tool_format="tag", tools_dict=tools, mode="rp_first",
-        log_task="thought" if thought else "chat_stream",
-        constrained_tools=constrained,
-        suppress_move_in_conversation=in_person)
-    return st.build_tool_decision_input("Hi", "She walks to the kitchen.")
+def streaming_prompt(tools, *, thought=False, constrained=False, in_person=False,
+                     marker_refusal="has_movement_verb"):
+    from app.core.tool_step_prompt import build_tool_step_prompt
+    from app.skills.base import TurnFacts
+    from unittest.mock import patch
+    mode = 'thought' if thought else 'respond'
+    offered = [n for n in tools if not (in_person and
+               getattr(_StubManager().get_skill_by_name(n), 'SUPPRESS_IN_PERSON', False))]
+    with patch('app.routes.chat._marker_travel_refusal', return_value=marker_refusal):
+        prompt = build_tool_step_prompt('demo', mode=mode, rp_response='She walks to the kitchen.',
+            user_input='Hi', tools=offered, facts=TurnFacts('demo', mode, ('Ben Example',), 'Ben Example' if in_person else ''),
+            constrained=constrained, tool_format='tag')
+    return prompt.system + prompt.user
 
 
 print("\n1) Party follower loses the SetLocation mapping line")
@@ -173,8 +156,8 @@ for label, thought, constrained in [("thought", True, False),
                                     ("constrained", False, True)]:
     lead = streaming_prompt(LEADER, thought=thought, constrained=constrained)
     foll = streaming_prompt(FOLLOWER, thought=thought, constrained=constrained)
-    check(f"streaming/{label}: leader HAS '→ SetLocation'", "→ SetLocation" in lead)
-    check(f"streaming/{label}: follower has NO '→ SetLocation'", "→ SetLocation" not in foll)
+    check(f"streaming/{label}: leader HAS '→ SetLocation'", "- SetLocation:" in lead)
+    check(f"streaming/{label}: follower has NO '→ SetLocation'", "- SetLocation:" not in foll)
 ce_lead = _rp_tool_decision_input("Hi", "She walks to the kitchen.", LEADER)
 ce_foll = _rp_tool_decision_input("Hi", "She walks to the kitchen.", FOLLOWER)
 check("chat_engine: leader HAS '→ SetLocation'", "→ SetLocation" in ce_lead)
@@ -191,9 +174,9 @@ for name, text in ALL_PROMPTS.items():
     for dead in ("ImageGenerator", "SetPose"):
         check(f"{name}: no '{dead}'", dead not in text)
 
-print("\n3) One source — identical mapping lines in both paths")
+print("\n3) Inventory-derived declarations and legacy mapping")
 lines = action_mapping_lines(LEADER)
-check("streaming/chat contains the mapping block verbatim", lines in ALL_PROMPTS["streaming/chat"])
+check("shared template declares every offered tool", all(f"- {n}:" in ALL_PROMPTS["streaming/chat"] for n in LEADER))
 check("chat_engine contains the mapping block verbatim", lines in ce_lead)
 check("6 tools → 6 mapping lines", len(lines.splitlines()) == 6,
       f"{len(lines.splitlines())}")
@@ -296,17 +279,17 @@ _ip_stream = streaming_prompt(LEADER, in_person=True)
 _ip_thought = streaming_prompt(LEADER, thought=True, in_person=True)
 _ip_chat_engine = _rp_tool_decision_input("Hi", "She walks to the kitchen.", LEADER,
                                           in_person=True)
-check("streaming/in-person: no '→ SetLocation'", "→ SetLocation" not in _ip_stream)
-check("streaming/in-person thought: no '→ SetLocation'", "→ SetLocation" not in _ip_thought)
+check("streaming/in-person: no '→ SetLocation'", "- SetLocation:" not in _ip_stream)
+check("streaming/in-person thought: no '→ SetLocation'", "- SetLocation:" not in _ip_thought)
 check("chat_engine/in-person: no '→ SetLocation'", "→ SetLocation" not in _ip_chat_engine)
 check("streaming/in-person: singleton rule no longer lists SetLocation",
       "SetLocation" not in _ip_stream)
 check("chat_engine/in-person: singleton rule no longer lists SetLocation",
       "SetLocation" not in _ip_chat_engine)
 check("streaming/in-person keeps the other 5 tools",
-      all(f"→ {n}" in _ip_stream for n in
+      all(f"- {n}:" in _ip_stream for n in
           ["ChangeOutfit", "TakePhoto", "JoinParty", "TalkTo", "SendMessage"]))
-check("not-in-person is unchanged", "→ SetLocation" in streaming_prompt(LEADER))
+check("not-in-person is unchanged", "- SetLocation:" in streaming_prompt(LEADER))
 
 # B3: the SYSTEM part of the room path, with every world read stubbed.
 import app.models.character as _mchar  # noqa: E402
@@ -344,7 +327,7 @@ _GUARD = "NEVER call a tool because of what the user said or asked for"
 check("respond decision carries the guard", _GUARD in _ip_chat_engine)
 check("respond decision scopes the guard to TOOLS",
       "Base every TOOL call ONLY on what the CHARACTER actually did" in _ip_chat_engine)
-check("streaming decision keeps its guard", _GUARD in _ip_stream)
+check("streaming decision keeps its guard", "Act only on the character’s text" in _ip_stream)
 _USER_ASKS = "Whenever the user asks for something"
 check("tool-decision system part has no 'user asks' bullet",
       _USER_ASKS not in _sys_ip and _USER_ASKS not in _sys_away)
@@ -359,7 +342,7 @@ check("tool-decision instruction keeps the rest of the default",
 
 # B7: third-person placeholder + current pose with the keep rule.
 _PH = "<what a bystander sees, 2-6 words, third person — never I/my/ich/mein>"
-for _nm, _txt in (("chat_engine", _ip_chat_engine), ("streaming", _ip_stream)):
+for _nm, _txt in (("chat_engine", _ip_chat_engine),):
     check(f"{_nm}: third-person **I do** placeholder", _PH in _txt)
     check(f"{_nm}: old first-person placeholder gone",
           "<what you do, 2-6 words>" not in _txt)
@@ -387,21 +370,18 @@ try:
     _chat_mod._marker_travel_refusal = lambda name: "has_movement_verb"
     _lead = streaming_prompt(LEADER)
     _chat_mod._marker_travel_refusal = lambda name: ""
-    _free = streaming_prompt(MUTE)
+    _free = streaming_prompt(MUTE, marker_refusal="")
     _chat_mod._marker_travel_refusal = lambda name: "party_follower"
-    _foll = streaming_prompt(MUTE)
+    _foll = streaming_prompt(MUTE, marker_refusal="party_follower")
 finally:
     _chat_mod._marker_travel_refusal = _real_refusal
 
-check("owner of the verb is sent to the tool", "CALL THAT TOOL" in _lead)
-check("owner of the verb is not ASKED for the marker",
-      "emit **I am at <room or place>**" not in _lead)
-check("a character with no other way keeps the marker",
-      "emit **I am at <room or place>**" in _free)
-check("...and is told a place is a walk", "starts a walk" in _free)
-check("...and is not sent to a tool it does not have", "CALL THAT TOOL" not in _free)
-check("a follower is taught neither way",
-      "CALL THAT TOOL" not in _foll and "**I am at" not in _foll)
+check("free character keeps the place marker", "**I am at <place>**" in _free)
+check("follower has no place marker", "**I am at" not in _foll)
+check("movement owner has no place marker", "**I am at" not in _lead)
+check("new builder offers the movement verb", "- SetLocation:" in _lead)
+check("new builder does not request pose/mood markers",
+      "**I feel" not in _lead and "**I do" not in _lead)
 
 # The room path (chat_engine) asks the same rule once it is given the name.
 try:

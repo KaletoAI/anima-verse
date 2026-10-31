@@ -32,7 +32,8 @@ with tempfile.TemporaryDirectory(prefix="intent-done-") as storage:
     db.init_schema()
     from app.models import intents
     from app.core.chat_engine import _rp_tool_decision_input
-    from app.core.streaming import StreamingAgent
+    from app.core.tool_step_prompt import build_tool_step_prompt
+    from app.skills.base import TurnFacts
 
     checks = []
 
@@ -44,17 +45,16 @@ with tempfile.TemporaryDirectory(prefix="intent-done-") as storage:
     second = intents.create_intent(owner="demo", title="Pack the bag")
     with patch("app.routes.chat._marker_travel_refusal", return_value="no_name"):
         room = _rp_tool_decision_input("Hello", "Found the book.", {}, agent_name="demo")
-        agent = StreamingAgent(llm=None, tool_format="tag", tools_dict={},
-                               mode="rp_first", agent_name="demo",
-                               tool_system_content="Stable tools")
-        stream = agent.build_tool_decision_input("Hello", "Found the book.")
+        tool_step = build_tool_step_prompt('demo', mode='thought', rp_response='Found the book.',
+            user_input='Hello', tools=[], facts=TurnFacts('demo', 'thought', ()), tool_format='tag')
+        stream = tool_step.system + tool_step.user
     for label, prompt in (("room", room), ("streaming", stream)):
         check(f"{label}: both open ids", all(
             f"{it['id']} | {it['title']}" in prompt for it in (first, second)))
         check(f"{label}: explicit completion decision", all(token in prompt for token in (
-            "goal reached", "awaited person arrived", "task carried out",
-            "[INTENT_DONE: <id>] for exactly that plan", "DONE, not PROGRESS")))
-    check("streaming system stays stable", agent.tool_system_content == "Stable tools")
+            "goal is reached" if label == "streaming" else "goal reached",
+            "[INTENT_DONE: <id>]", "write [INTENT_DONE: <id>] instead" if label == "streaming" else "DONE, not PROGRESS")))
+    check("streaming system has no plan ids", first["id"] not in tool_step.system)
     check("hint uses actual id", f"[INTENT_DONE: {first['id']}]" in intents._intent_hint(first))
 
     iid = first["id"]

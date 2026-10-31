@@ -17,10 +17,6 @@ from app.core.stat_sources import (
 )
 logger = get_logger("thought")
 
-#: How many open plans the rp_first tool prompt of a thought turn lists (by
-#: priority). Capped by ENTRIES, so each listed id stays whole.
-_TOOL_PROMPT_MAX_INTENTS = 12
-
 #: The synthetic user turn of every thought turn. English on purpose — the
 #: answer language is set by lang_instruction in the system prompt.
 THOUGHT_TRIGGER_DEFAULT = (
@@ -441,121 +437,18 @@ class ThoughtRunner:
         except Exception:
             arc_context = ""
 
-        # Tool system prompt for the tool LLM (extended context for autonomous
-        # decisions). In thought mode the tool LLM needs the full situation
-        # context, because it decides on its own which tools to call.
-        # Budget system: sections are shortened when the token limit gets tight.
-        #
-        # ORDER IS A CACHE CONTRACT (CHAT_PROMPTS.md § 1): the backend caches by
-        # prefix, so the stable part comes first — who the character is, its
-        # standing task, then the big tool block — and everything that moves
-        # (clock, weather, place, mood, the room's offer, memories) follows it.
-        # The clock used to sit in the essentials, ~400 chars in: it changed
-        # every turn and pushed the ~17 KB tool block out of the cache, which
-        # left ~96 cacheable tokens of an otherwise 93-96 % identical prompt.
-        tool_system_content = ""
-        if mode == "rp_first" and tools_dict and agent_tools:
-            from app.core.system_prompt_builder import load_prompt_data, THOUGHT_FULL
-            _td = await asyncio.to_thread(load_prompt_data, character_name, THOUGHT_FULL)
-
-            appearance = get_character_appearance(character_name)
-            usage = sm.get_agent_usage_instructions(character_name, tool_format, turn="thought")
-            _tool_fmt = tool_format
-            from app.models.character_template import is_roleplay_character as _is_rp_pa
-            tool_instr_block = build_tool_instruction(
-                _tool_fmt, agent_tools, appearance, usage, model_name=tool_model_name,
-                is_roleplay=_is_rp_pa(character_name), for_tool_decision=True)
-
-            # Build the context sections within budget (priority order)
-            _ctx_parts = []
-            # Prio 1: essentials (always). The birthday line only shows up on
-            # the day itself — the standing "Birthday: Summer, day 14" comes
-            # from the character template, not from here.
-            _ctx_parts.append(
-                f"Character: {character_name}.\n"
-                f"Aufgabe: {_td.get('task', '')}"
-            )
-            # Prio 2: tool instructions (always)
-            _ctx_parts.append(tool_instr_block)
-            # Prio 3: current situation — the per-turn half of the prompt
-            # starts HERE, behind the tool block (see the cache note above).
-            _situation = (
-                f"Aktuelle Situation:\n"
-                f"- Uhrzeit: {_td.get('time_of_day', '')} "
-                f"({_td.get('game_date', '')})\n"
-                f"- Wetter: {_td.get('game_weather', '')}\n"
-                f"- Ort: {_td.get('location_name', 'Unbekannt')}\n"
-                f"- Aktivitaet: {_td.get('activity', 'Keine')}\n"
-                f"- Stimmung: {_td.get('feeling', 'Neutral')}"
-            )
-            if _td.get("birthday_today"):
-                _situation += "\n- Today is your birthday."
-            _ctx_parts.append(_situation)
-            # Prio 3b: the room's place offer — the pose keys SetActivity
-            # takes. The chat route's tool phase shows the same block
-            # (chat.py _current_activity_hint); without it the tool LLM
-            # has no menu to copy a key from. It is the SAME string the
-            # thought context already built, and the cap falls on a LINE
-            # boundary so a pose key is never cut in half.
-            try:
-                if ctx is not None:
-                    _offer = ctx.get("activity_hint_block") or ""
-                else:
-                    # Render-only callers supplied no context snapshot.
-                    # Read their current offer without blocking the event loop.
-                    from app.core.thought_context import _build_activity_hint_block
-                    from app.models.character import (get_character_current_location,
-                                                      get_character_current_room)
-                    _offer = await asyncio.to_thread(
-                        _build_activity_hint_block,
-                        character_name,
-                        await asyncio.to_thread(get_character_current_location, character_name) or "",
-                        await asyncio.to_thread(get_character_current_room, character_name) or "")
-                if _offer:
-                    _cut = _offer[:900]
-                    if len(_offer) > 900 and "\n" in _cut:
-                        _cut = _cut[:_cut.rfind("\n")]
-                    _ctx_parts.append(_cut)
-            except Exception as _oe:
-                logger.warning("tool context: place offer failed for %s: %s",
-                               character_name, _oe)
-            # Prio 4: open plans & tasks WITH their ids (the tool LLM writes
-            # [INTENT_PROGRESS/DONE: <id>] from them) — capped by entries, not
-            # characters, so no id is ever cut in half. A whitelisted turn
-            # (constrained_tools) extracts no markers, so it gets no list.
-            if _td.get("assignment_section") and not tool_whitelist:
-                from app.models.intents import build_intents_prompt_section
-                _assign = build_intents_prompt_section(
-                    character_name, max_entries=_TOOL_PROMPT_MAX_INTENTS)
-                if _assign:
-                    _ctx_parts.append(_assign)
-            # Prio 5: Nearby characters. Cap raised 400 -> 800 for the
-            # room-scoped block (2026-07-30): it now carries the room list,
-            # the elsewhere-at-location list AND the TalkTo-reach guidance —
-            # truncating the guidance would undo the room gating in exactly
-            # the prompts that need it.
-            if _td.get("nearby_hint"):
-                _ctx_parts.append(_td["nearby_hint"][:800])
-            # Prio 6: personality (shortened)
-            if _td.get("personality"):
-                _ctx_parts.append(f"Persoenlichkeit: {_td['personality'][:400]}")
-            # Prio 7: memory (shortened, max ~1200 chars)
-            if _td.get("memory_section"):
-                _ctx_parts.append(_td["memory_section"][:1200])
-            # Prio 8: story arc (shortened, max ~800 chars)
-            if _td.get("arc_context"):
-                _ctx_parts.append(_td["arc_context"][:800])
-
-            # Closing: the instruction
-            _ctx_parts.append(
-                f"Available tools: {', '.join(available_tool_names)}\n"
-                f"Based on the task and current situation, decide which tools to call. "
-                f"You may call MULTIPLE tools in a single response.\n"
-                f"If there is nothing relevant to do, respond with SKIP.\n"
-                f"IMPORTANT: When tool input is JSON, all field values must be plain natural text. "
-                f"NEVER nest JSON objects or tool tags inside field values."
-            )
-            tool_system_content = "\n\n".join(_ctx_parts)
+        tool_step_builder = None
+        if mode == "rp_first":
+            from functools import partial
+            from app.core.tool_step_prompt import build_tool_step_prompt
+            from app.skills.base import TurnFacts
+            from app.core.streaming import tool_step_presence
+            present = await asyncio.to_thread(tool_step_presence, character_name)
+            facts = TurnFacts(character_name, "thought", present)
+            tool_step_builder = partial(
+                build_tool_step_prompt, character_name, mode="thought",
+                tools=agent_tools, facts=facts, constrained=bool(tool_whitelist),
+                tool_format=tool_format, model_name=tool_model_name)
 
         # Tool categories.
         _deferred_tools = set()
@@ -580,7 +473,7 @@ class ThoughtRunner:
             agent_name=character_name,
             max_iterations=max_iter,
             tool_llm=tool_llm,
-            tool_system_content=tool_system_content,
+            tool_step_builder=tool_step_builder,
             log_task="thought",
             deferred_tools=_deferred_tools,
             content_tools=_content_tools,

@@ -54,12 +54,8 @@ on the last user turn, BEHIND the history. Derived expectations:
     c) empty list -> [{"role": "user", "content": "M"}]
     d) empty moment -> an equal copy, not the same list object
 
-[8] The thought turn's tool prompt (app/core/thoughts.py) follows the same
-    contract: its ~17 KB tool-instruction block is stable, the clock is not.
-    Reading the ``_ctx_parts.append(...)`` calls in source order, the part
-    naming the standing task comes first, then ``tool_instr_block``, and the
-    clock ("Uhrzeit") only after it — a clock in front of the tool block cost
-    123 of 297 measured pairs their whole cacheable prefix (~96 tokens left).
+[8] The thought caller renders exactly the shared tool-step system and user
+    parts for the same facts; its inline tool-system construction is gone.
 
 [9] The chat path never names a place the character may not know. Both files
     that build a chat prompt (app/routes/chat.py, app/core/chat_engine.py) use
@@ -223,30 +219,41 @@ check("[7] volatile", build_prompt_section(tpl, data, volatile=True), ["B: 2", "
 check("[7] all", build_prompt_section(tpl, data), ["A: 1", "B: 2", "C: 3/100", "D: 4/100"])
 
 # [8]
+# Execute the actual caller's builder setup with synthetic room participants.
+import asyncio
+import textwrap
+from unittest.mock import patch, Mock
+from app.core.tool_step_prompt import build_tool_step_prompt
+from app.skills.base import TurnFacts
 thought_src = (ROOT / "app/core/thoughts.py").read_text()
-thought_tree = ast.parse(thought_src)
-# A part is often assembled in a variable first, so a bare name is resolved to
-# the source of its assignment — otherwise "Uhrzeit" hides behind `_situation`.
-assigned = {}
-for n in ast.walk(thought_tree):
-    if (isinstance(n, ast.Assign) and len(n.targets) == 1
-            and isinstance(n.targets[0], ast.Name)
-            and n.targets[0].id not in assigned):
-        assigned[n.targets[0].id] = ast.get_source_segment(thought_src, n.value) or ""
-appends = [ast.get_source_segment(thought_src, n.value.args[0]) or ""
-           for n in ast.walk(thought_tree)
-           if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call)
-           and getattr(n.value.func, "attr", "") == "append"
-           and getattr(getattr(n.value.func, "value", None), "id", "") == "_ctx_parts"
-           and n.value.args]
-resolved = [assigned.get(s.strip(), s) for s in appends]
-task_at = next((i for i, s in enumerate(resolved) if "Aufgabe" in s), -1)
-tools_at = next((i for i, s in enumerate(appends) if s.strip() == "tool_instr_block"), -1)
-clock_at = next((i for i, s in enumerate(resolved) if "Uhrzeit" in s), -1)
-check("[8] thought tool prompt: all three parts found",
-      [x >= 0 for x in (task_at, tools_at, clock_at)], [True, True, True])
-check("[8] standing task before the tool block", task_at < tools_at, True)
-check("[8] clock behind the tool block", clock_at > tools_at, True)
+tree = ast.parse(thought_src)
+setup = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
+             and ast.unparse(n.test) == "mode == 'rp_first'"
+             and "tool_step_builder = partial" in ast.get_source_segment(thought_src, n))
+body = textwrap.dedent(ast.get_source_segment(thought_src, setup))
+exec("async def thought_setup():\n" + textwrap.indent(body, "    ")
+     + "\n    return tool_step_builder\n", globals())
+async def inline_thread(fn, *args, **kwargs):
+    return fn(*args, **kwargs)
+
+with patch('asyncio.to_thread', new=inline_thread), \
+     patch('app.core.flag_lifecycle.inactive_clearing_tools', return_value=set()), \
+     patch('app.core.streaming.tool_step_presence',
+           return_value=('Mira Example',)), \
+     patch('app.core.dependencies.get_skill_manager',
+           return_value=Mock(tool_names_with_flag=lambda flag: frozenset())), \
+     patch('app.routes.chat._marker_travel_refusal', return_value='has_movement_verb'):
+    mode, character_name, location_id = 'rp_first', 'Ada Example', 'home'
+    profile, agent_tools, tool_whitelist = {'current_room': 'kitchen'}, [], None
+    tool_format, tool_model_name = 'tag', ''
+    factory = asyncio.run(thought_setup())
+    actual = factory(rp_response='She waits.', user_input='')
+    expected = build_tool_step_prompt(character_name, mode='thought', rp_response='She waits.',
+        user_input='', tools=[], facts=TurnFacts(character_name, 'thought', ('Mira Example',)),
+        tool_format='tag')
+    check("[8] thought system equals shared builder", actual.system, expected.system)
+    check("[8] thought user uses exact room names", actual.user, expected.user)
+check("[8] inline thought tool system removed", "_ctx_parts" in thought_src, False)
 
 # [9]
 import re  # noqa: E402

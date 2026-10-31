@@ -10,7 +10,9 @@ system <=2500. [3] No pose/mood/event or legacy prompt sections. [4] Only an
 offered outfit verb supplies Red Mieder. [5] Exact supplied full names or
 'Nobody else is here.' [6] Only an empty travel refusal permits the place
 marker. [7] Constrained renders contain neither plan grammar nor plan data.
-[8] A world override replaces the turn template. Movement menus include all
+[8] A world override replaces the turn template. [9] rp_first discards tool
+mood/pose markers and sends the supplied system/user prompt unchanged.
+Movement menus include all
 known place names but rooms only at the current place. All storage is temporary.
 """
 import sys
@@ -104,6 +106,54 @@ def main():
             assert build().user == 'OVERRIDE ' + prose
             template_overrides.delete_override('chat/tool_step_turn.md')
             print('[8] PASS world override')
+            markers = '**I feel froh**\n**I do sitting**'
+            assert streaming._extract_markers(markers, '', rp_first=True) == ''
+            assert streaming._extract_markers(markers, '', rp_first=False) == markers
+            import asyncio
+
+            async def verify_stream():
+                agent = streaming.StreamingAgent(
+                    llm=None, tool_format='tag', tools_dict={}, mode='rp_first',
+                    tool_step=first)
+
+                async def narrate(state, *args, **kwargs):
+                    state.response = prose
+                    if False:
+                        yield
+
+                async def decide(state, system, user):
+                    assert (system, user) == (first.system, first.user)
+                    state.response = markers + '\n[INTENT_DONE: p1]'
+                    if False:
+                        yield
+
+                agent._stream_llm_response = narrate
+                agent._invoke_tool_decision = decide
+                events = [event async for event in agent._stream_rp_first('RP system', [], '')]
+                extracted = [event.markers for event in events
+                             if isinstance(event, streaming.ExtractionEvent)]
+                assert extracted == ['[INTENT_DONE: p1]'], extracted
+
+            asyncio.run(verify_stream())
+            names = [f'Person {i} Example' for i in range(18)]
+            locations = dict.fromkeys(names + ['Ada Example', 'Avatar Example', 'Elsewhere Example'], 'home')
+            rooms = dict.fromkeys(locations, 'kitchen')
+            rooms['Elsewhere Example'] = 'cellar'
+            with patch('app.models.character.get_character_current_location',
+                       side_effect=lambda name: locations.get(name, '')), \
+                 patch('app.models.character.get_character_current_room',
+                       side_effect=lambda name: rooms.get(name, '')), \
+                 patch('app.models.character.list_available_characters',
+                       return_value=names + ['Ada Example', 'Avatar Example', 'Elsewhere Example']), \
+                 patch('app.models.account.get_active_character', return_value='Avatar Example'):
+                assert streaming.tool_step_presence('Ada Example') == tuple(['Avatar Example'] + names)
+                locations['Ada Example'] = ''
+                with patch('app.models.character.get_character_pos', return_value={'x': 1, 'y': 2}), \
+                     patch('app.core.perception.nearby_in_the_open',
+                           return_value=['Earshot Example']) as nearby:
+                    assert streaming.tool_step_presence('Ada Example') == ('Earshot Example',)
+                    nearby.assert_called_once_with('Ada Example', {'x': 1, 'y': 2})
+            print('[9] PASS rp_first markers, supplied prompt and room/earshot names')
             sample_tools = [Skill('ChangeOutfit'), Skill('Sleep'), Skill('SetLocation')]
             for skill, brief in zip(sample_tools, (
                 'Change clothing; JSON: {"add": ["exact item name"], "remove": ["exact item name"]}.',

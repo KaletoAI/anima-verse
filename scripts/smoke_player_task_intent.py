@@ -411,11 +411,12 @@ check_true("the header is English", "== CURRENT PLANS & TASKS" in section, secti
 brief = build_open_intents_brief(CHAR)
 check_true("brief line '  <id> | <title>'",
            f"  {mine[0]['id']} | Plan alpha" in brief, brief)
-_room = _rp_tool_decision_input("Hello.", '"Hi," she says.', {}, agent_name=CHAR)
-_i_grammar = _room.find("[INTENT_DONE: <id>]")
-_i_list = _room.find(f"{mine[0]['id']} | Plan alpha")
-check_true("the room tool prompt lists the open plan after the grammar",
-           0 <= _i_grammar < _i_list, f"{_i_grammar} < {_i_list}")
+from app.core.tool_step_prompt import build_tool_step_prompt
+from app.skills.base import TurnFacts
+_step = build_tool_step_prompt(CHAR, mode='thought', rp_response='Hi', user_input='',
+    tools=[], facts=TurnFacts(CHAR, 'thought', ()), tool_format='tag')
+check_true("thought user lists every open plan", all(m['id'] in _step.user for m in mine))
+check_true("thought system has DONE grammar", '[INTENT_DONE: <id>]' in _step.system)
 for n in range(11):
     create_intent(owner=CHAR, title=f"Extra plan {n}",
                   participants={CHAR: {"role": "", "progress": []}})

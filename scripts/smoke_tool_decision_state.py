@@ -13,7 +13,7 @@ tool LLM never said whether a state flag was set (0 of 3005 carried the
 the end verb of one package runs a stat round of its own — and could not tell
 a start from a running state. `flag_lifecycle.decision_state_lines` now gives
 every flag whose clearing verb is OFFERED one line, set or not, and both
-decision builders (`streaming.build_tool_decision_input`, the chat-turn
+decision builders (`tool_step_prompt.build_tool_step_prompt`, the chat-turn
 `chat_engine._rp_tool_decision_input`) carry it.
 
 The flags, verbs and profile below are invented for the check; the expected
@@ -105,14 +105,13 @@ def main() -> int:
         (flag_lifecycle._specs, flag_lifecycle._clear_tool_name,
          character_mod.get_character_profile) = orig
 
-    print("4. both decision builders carry it")
+    print("4. shared builder filters inactive endings; legacy chat retains state notes")
     from app.core import chat_engine
-    from app.core.streaming import StreamingAgent
-    src = inspect.getsource(StreamingAgent.build_tool_decision_input)
-    # Two return branches (constrained + full) → two calls.
-    check("streaming builder: both branches",
-          src.count("tool_state_note(self.agent_name, _tools)") == 2,
-          f"found {src.count('tool_state_note(')}")
+    from app.core.tool_step_prompt import build_tool_step_prompt
+    from app.core.streaming import turn_tools
+    src = inspect.getsource(build_tool_step_prompt)
+    check("shared builder filters per turn", "turn_tools(tools, facts, rp_first=True)" in src)
+    check("inactive endings are removed", "inactive_clearing_tools" in inspect.getsource(turn_tools))
     src = inspect.getsource(chat_engine._rp_tool_decision_input)
     check("chat-turn builder", "tool_state_note(agent_name, tools_dict" in src)
 

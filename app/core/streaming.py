@@ -8,12 +8,15 @@ import re
 import time
 
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncGenerator, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
 from app.skills.base import TurnFacts
 from app.core.log import get_logger
 from app.core.prompt_templates import render as render_template
 from app.utils.llm_logger import get_model_name
+
+if TYPE_CHECKING:
+    from app.core.tool_step_prompt import ToolStepPrompt
 
 logger = get_logger("agent_loop")
 
@@ -56,12 +59,13 @@ def _intent_markers(text: str) -> str:
     return "\n".join(m.group(0) for m in _INTENT_RE.finditer(text or ""))
 
 
-def _extract_markers(tool_response: str, rp_response: str = "") -> str:
+def _extract_markers(tool_response: str, rp_response: str = "", *, rp_first: bool = False) -> str:
     """Markers harvested from the tool-LLM answer.
 
     Takes [INTENT*:...] and [EVENT_RESOLVED:...] as they are, plus the
     fallback markers **I feel**, **I do**, **I am at** — but only when they are
-    NOT already in ``rp_response`` (duplicate avoidance).
+    NOT already in ``rp_response`` (duplicate avoidance). In rp_first,
+    mood and pose belong to state extraction, so tool mood/pose are ignored.
     """
     markers = []
     for m in _INTENT_RE.finditer(tool_response):
@@ -69,11 +73,11 @@ def _extract_markers(tool_response: str, rp_response: str = "") -> str:
     for m in _EVENT_RESOLVED_RE.finditer(tool_response):
         markers.append(m.group(0))
     # Fallback markers apply only when absent from the narrative.
-    if not _MOOD_MARKER_RE.search(rp_response):
+    if not rp_first and not _MOOD_MARKER_RE.search(rp_response):
         mm = _MOOD_MARKER_RE.search(tool_response)
         if mm:
             markers.append(mm.group(0))
-    if not _ACTIVITY_MARKER_RE.search(rp_response):
+    if not rp_first and not _ACTIVITY_MARKER_RE.search(rp_response):
         am = _ACTIVITY_MARKER_RE.search(tool_response)
         if am:
             markers.append(am.group(0))
@@ -385,6 +389,29 @@ def decision_tools(tools, *, suppress_in_person: bool):
     if isinstance(tools, dict):
         return {k: v for k, v in tools.items() if k not in suppressed}
     return [tool for tool in tools or () if getattr(tool, "name", tool) not in suppressed]
+
+
+def tool_step_presence(character: str) -> tuple[str, ...]:
+    """Exact names from the legacy thought tool context's room/earshot list."""
+    from app.models.character import (
+        get_character_current_location, get_character_current_room,
+        list_available_characters, get_character_pos,
+    )
+    from app.models.account import get_active_character
+
+    location = get_character_current_location(character) or ""
+    if not location:
+        from app.core.perception import nearby_in_the_open
+        pos = get_character_pos(character)
+        return tuple(nearby_in_the_open(character, pos)) if pos else ()
+    room = get_character_current_room(character) or ""
+    avatar = get_active_character()
+    candidates = ([avatar] if avatar and avatar != character else []) + [
+        name for name in list_available_characters()
+        if name != character and name != avatar]
+    return tuple(name for name in candidates
+                 if get_character_current_location(name) == location
+                 and (get_character_current_room(name) or "") == room)
 
 
 def turn_tools(tools, facts: TurnFacts, *, rp_first: bool) -> tuple[list, dict[str, str]]:
@@ -1081,17 +1108,20 @@ class StreamingAgent:
         agent_name: str = "",
         max_iterations: int = 3,
         tool_llm=None,
-        tool_system_content: str = "", log_task: str = "",
+        log_task: str = "",
         deferred_tools: Optional[set] = None,
         content_tools: Optional[set] = None,
         mode: str = "no_tools",
         constrained_tools: bool = False,
         chat_task_id: str = "",
         suppress_move_in_conversation: bool = False,
-        user_turn_suffix: str = ""):
+        user_turn_suffix: str = "",
+        tool_step: Optional["ToolStepPrompt"] = None,
+        tool_step_builder: Optional[Callable[..., "ToolStepPrompt"]] = None):
         self.llm = llm
+        self.tool_step = tool_step
+        self.tool_step_builder = tool_step_builder
         self.tool_llm = tool_llm or llm  # Use the chat LLM when no tool LLM is configured.
-        self.tool_system_content = tool_system_content  # Minimal tool-LLM system prompt.
         self.tool_format = tool_format
         self.tools_dict = tools_dict
         self.tool_executor = tool_executor
@@ -1272,194 +1302,6 @@ class StreamingAgent:
     # Mode: rp_first — Chat-LLM antwortet, Tool-LLM entscheidet danach
     # ------------------------------------------------------------------
 
-    def build_tool_decision_input(self, user_input: str,
-                                  rp_response: str) -> str:
-        """The rp_first tool-decision prompt (user message for the tool LLM).
-
-        The action→tool mapping ALWAYS comes from the character's real
-        inventory (A3.2b): a hard-wired list used to offer tools the character
-        does not have — party followers lose the move verb, yet the prompt kept
-        offering it, which produced 3 % dead calls. The instruction frame
-        (narrative action IS the trigger, indirect phrasings, multiple tools
-        are fine, EXTRACTION and FALLBACK MARKER steps) is unchanged; only the
-        mapping, the speech note and the hard rules are derived from the tools.
-
-        With constrained_tools (forced_thought with a whitelist) the prompt is
-        minimal: no EXTRACTION (intent/assignment/event-resolved are chat
-        concepts, not reactor concepts) and no FALLBACK MARKERS (marker
-        synthesis needs the full context, not the restricted reactor set).
-        """
-        _is_thought = (self.log_task or "").startswith("thought")
-        _tools = decision_tools(
-            self.tools_dict,
-            suppress_in_person=self.suppress_move_in_conversation)
-        _action_lines = action_mapping_lines(_tools)
-        # Who may move how — asked ONCE, from the same rule the server applies
-        # when it reads the answer (routes/chat._marker_travel_refusal). The
-        # tool LLM used to be told to emit **I am at ...** for everyone, and
-        # the server threw those markers away again for whoever owns the verb.
-        # "" = the marker still travels for this character.
-        try:
-            from app.routes.chat import _marker_travel_refusal
-            _move_refusal = _marker_travel_refusal(self.agent_name)
-        except Exception:
-            _move_refusal = "has_movement_verb" if "SetLocation" in (_tools or {}) else ""
-        _guardrails = tool_decision_guardrails(
-            _tools,
-            with_markers=(not self.constrained_tools) and not _move_refusal)
-        if self.constrained_tools:
-            return (
-                f"The user said: {user_input}\n\n"
-                f"The character responded:\n{rp_response}\n\n"
-                f"Base your decision ONLY on what the CHARACTER actually did in the response above — "
-                f"never on what the user said, and never invent an action that is not in the text.\n"
-                f"Call any tool that the character's narrative action triggers. "
-                f"The character NEVER writes tool calls themselves; you do that.\n\n"
-                f"Available action → tool mapping (these are the ONLY tools this character has — "
-                f"never call anything that is not listed):\n"
-                f"{_action_lines}\n"
-                f"{tool_state_note(self.agent_name, _tools)}"
-                f"{_guardrails}\n"
-                f"Call every tool that genuinely applies; multiple tools are fine. "
-                f"But pure talk, a feeling, or a trivial gesture is NOT an action — do not call a tool for it. "
-                f"If the response is purely conversational/observational and triggers "
-                f"none of these actions, respond with: NONE"
-            )
-
-        # Speech handling differs by turn kind — the note is built from the
-        # character's own speech verbs (speech_turn_note), so it disappears
-        # when the character has none.
-        _speech_note = speech_turn_note(_tools, _is_thought)
-        # The place marker is a DEAD END for a character that has SetLocation:
-        # the server refuses a narrative place change from whoever owns the
-        # verb (routes/chat._marker_travel_refusal), because the verb is the
-        # one way — as a timed journey over the map, not a jump. Asking the
-        # tool LLM for the marker there produced markers that were thrown
-        # away, while the move never happened.
-        if not _move_refusal:
-            _location_marker_rule = (
-                "     - Place marker: ONLY emit **I am at <room or place>** when the RP text "
-                "EXPLICITLY describes the character physically setting off (verbs like 'I walk "
-                "to', 'ich gehe in', 'arriving at'). A room of the current place is reached at "
-                "once; a place from the Known locations list starts a walk. Do NOT emit it when "
-                "the character simply STAYS where it is — even if props, furniture or scene "
-                "details suggest another place. If in doubt: do NOT emit it.\n")
-            _location_example = (
-                "     RP says 'I walk to the kitchen' without '**I am at ...**' → "
-                "EMIT **I am at Küche**\n")
-        elif "SetLocation" in (_tools or {}):
-            _location_marker_rule = (
-                "     - Place: the character has SetLocation. When the RP text describes "
-                "physically setting off for another place, CALL THAT TOOL (step 1) — never "
-                "emit **I am at ...**; the marker is refused for this character. Staying "
-                "put is not a move: props or scenery naming another place mean nothing.\n")
-            _location_example = (
-                "     RP says 'I walk to the kitchen' → call SetLocation, no marker\n")
-        else:
-            # Neither way is open (a party follower is carried by its leader,
-            # an avatar travels over its own route). Saying nothing beats
-            # teaching a way that is closed.
-            _location_marker_rule = ""
-            _location_example = ""
-        if _is_thought:
-            _pure_talk_rule = (
-                "   BUT a feeling or a trivial gesture alone (shaking their head, smiling, "
-                "waving something in their hand) is NOT a tool action — do not call a tool "
-                "for it. SPOKEN DIALOGUE however IS an action here (see the speech note "
-                "above). Agreeing to travel together with someone is an action too — use "
-                "the party verb from the mapping instead of moving there alone. Emotions "
-                "and small gestures are carried by the markers in step 3, never by tools.\n\n")
-        else:
-            _pure_talk_rule = (
-                "   BUT if the character ONLY talks, shows a feeling, or makes a trivial gesture "
-                "(shaking their head, smiling, waving something in their hand) — that is NOT a "
-                "tool action. Do NOT call any tool for it. Agreeing to travel together with "
-                "someone, though, IS an action — use the party verb from the mapping instead "
-                "of moving there alone. Emotions and small gestures are carried by the "
-                "markers in step 3, never by tools.\n\n")
-        _intent_marker_block = intent_marker_help(indent="   ")
-        # Open plan ids change per turn and belong only in this user part.
-        _open_plans = ""
-        if self.agent_name:
-            try:
-                from app.models.intents import build_open_intents_brief
-                _brief = build_open_intents_brief(self.agent_name)
-                if _brief:
-                    _open_plans = f"Open plans of this character (id | title):\n{_brief}\n"
-            except Exception as exc:  # noqa: BLE001 — the prompt works without it
-                logger.debug("open intents brief failed for %s: %s", self.agent_name, exc)
-
-        # The pose the **I do** marker would overwrite + the rule that keeps
-        # it. Per turn — this is the user message, never the system prompt.
-        _pose_note = pose_keep_rule(self.agent_name)
-        return (
-            f"The user said: {user_input}\n\n"
-            f"The character responded:\n{rp_response}\n\n"
-            f"Base EVERY decision ONLY on what the CHARACTER actually did in 'The character "
-            f"responded' text above. NEVER call a tool because of what the user said or asked "
-            f"for, and NEVER invent an action (an outfit, location, or activity) that is not "
-            f"literally in the character's text.\n\n"
-            f"Do THREE things:\n\n"
-            f"1. TOOLS: The character's narrative actions ARE the trigger — you execute the tools "
-            f"that enact those actions. The character NEVER writes tool calls themselves; that is your job.\n"
-            f"   Action → Tool mapping (fire the tool whenever the character's text shows the action, "
-            f"even if phrased indirectly like \"she goes to change\", \"puts on a dress\", \"takes a photo\", "
-            f"\"heads to the kitchen\"). This list is the character's COMPLETE tool inventory — "
-            f"never call a tool that is not on it:\n"
-            f"{_action_lines}\n"
-            f"{tool_state_note(self.agent_name, _tools)}"
-            f"{_speech_note}"
-            f"   For a REAL action listed above, narrative description IS the signal — do not skip the "
-            f"tool just because it was only described. Call every tool that genuinely applies; "
-            f"multiple tools are fine.\n"
-            f"{_guardrails}"
-            f"{_pure_talk_rule}"
-            f"2. EXTRACTION: Check the character's response for:\n"
-            f"   - Plan or task: If the character takes on an ongoing plan, or the person "
-            f"they talk to gives them a task (an errand, a promise, something to do later), "
-            f"output a marker line. Set by= exactly as defined below — by=player only when "
-            f"the other person explicitly asked for it; when in doubt, by=self:\n"
-            f"{_intent_marker_block}"
-            f"   If the character's text shows an open plan listed in this prompt is finished "
-            f"(goal reached, awaited person arrived, task carried out), output "
-            f"[INTENT_DONE: <id>] for exactly that plan: DONE, not PROGRESS.\n"
-            f"{_open_plans}"
-            f"   For anything the character can do NOW, use its <tool> tag from step 1 — "
-            f"never write an [INTENT: ...] marker to run a tool.\n"
-            f"   - Event resolved: If the character actively resolved/fixed a disruption or danger "
-            f"event (repaired something, helped someone, fixed a problem), output:\n"
-            f"   [EVENT_RESOLVED: <short description of what they did>]\n\n"
-            f"3. FALLBACK MARKERS — CRITICAL: Your job here is to EMIT markers the character forgot. "
-            f"Plain prose like 'I feel happy' or 'Ich fuehle mich gluecklich' WITHOUT double-asterisks "
-            f"means the marker is MISSING — you MUST emit it. A marker only counts as already-present "
-            f"when it is wrapped in '**...**' literally in the text.\n"
-            f"   Decision rule:\n"
-            f"     - Emotion clearly shown in RP AND no '**I feel <X>**' in RP → EMIT **I feel <emotion>**\n"
-            f"     - New activity clearly started AND no '**I do ...**' marker in RP → "
-            f"EMIT **I do <pose key>: <what a bystander sees, 2-6 words, third person — "
-            f"never I/my/ich/mein>**\n"
-            f"       {_pose_note}\n"
-            f"{_location_marker_rule}"
-            f"   Examples (study carefully):\n"
-            f"     RP ends with 'Ich fuehle mich... gluecklich.' (no asterisks) → EMIT **I feel gluecklich**\n"
-            f"     RP ends with 'I feel manipulative.' (no asterisks) → EMIT **I feel manipulative**\n"
-            f"     RP ends with '**I feel happy**' (has asterisks) → do NOT emit (already present)\n"
-            f"     RP mentions 'sits on a chair' without walking/moving → do NOT emit any place marker\n"
-            f"{_location_example}"
-            f"   Use the SAME language as the character's RP response (German → German word, English → English).\n"
-            f"   For a location: match the EXACT name from the Known locations list in your system prompt. "
-            f"The pose key is one of the keys listed after a place (or under 'Anywhere here') in the "
-            f"places block, copied exactly; the part after the colon is the detail (what a bystander "
-            f"would see), and may be left out. NEVER emit an **I do** marker with a key "
-            f"marked '(with partner)' — a two-person action is started by the InteractWith tool, not by "
-            f"this marker. Do NOT invent location names.\n"
-            f"   Do NOT skip this step just because the text mentions the emotion in prose — that is "
-            f"EXACTLY when you must emit the marker. The prose mention is the SIGNAL.\n\n"
-            f"If the character performed no real tool action, respond with NONE for step 1. "
-            f"NONE must never appear next to a <tool> tag — it means 'no tool'. The marker lines from "
-            f"step 3 are NOT tools, so you may still output them together with NONE."
-        )
-
     async def _stream_rp_first(
         self, system_content: str, history: List, user_input: str) -> AsyncGenerator[StreamEvent, None]:
         """RP first, tools afterwards.
@@ -1495,13 +1337,15 @@ class StreamingAgent:
         # Phase 2: the tool LLM decides + extracts (intent, assignment,
         # fallback markers).
         _is_thought = (self.log_task or "").startswith("thought")
-        # Off the event loop: the builder reads the world (movement rule,
-        # current pose, the skills' flags). asyncio.to_thread copies the
-        # context, so the turn trace stays attached to anything it logs.
-        tool_decision_input = await asyncio.to_thread(
-            self.build_tool_decision_input, user_input, rp_response)
-
-        tool_system = self.tool_system_content or system_content
+        # Render after narration: prose is known only now. The caller supplies
+        # its mode, narrowed tools and presence snapshot through the builder.
+        if self.tool_step_builder is not None:
+            self.tool_step = await asyncio.to_thread(
+                self.tool_step_builder, rp_response=rp_response, user_input=user_input)
+        if self.tool_step is None:
+            raise ValueError("rp_first requires a ToolStepPrompt")
+        tool_decision_input = self.tool_step.user
+        tool_system = self.tool_step.system
 
         state_tool = _StreamState()
         async for event in self._invoke_tool_decision(
@@ -1517,7 +1361,7 @@ class StreamingAgent:
         self.last_tool_response = state_tool.response.strip()
 
         # Extracted markers (intent, assignment, fallback mood/activity/location)
-        _extracted = _extract_markers(state_tool.response, rp_response)
+        _extracted = _extract_markers(state_tool.response, rp_response, rp_first=True)
         if _extracted:
             yield ExtractionEvent(markers=_extracted)
             logger.info("rp_first: extracted markers: %s", _extracted[:100])

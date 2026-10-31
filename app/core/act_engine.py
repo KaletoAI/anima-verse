@@ -394,45 +394,18 @@ async def _run_storyteller_agent(
             if getattr(skill, "CONTENT_TOOL", False):
                 _content_tools.add(t_name)
 
-    # ── Tool system prompt: the full format block, same as in chat ─────
-    # Without these tool-format hints the tool LLM does not know HOW to call
-    # a tool (e.g. the <ChangeOutfit>…</ChangeOutfit> syntax) and answers
-    # NONE even when it did recognise a trigger.
-    if tool_specs:
-        from app.core.tool_formats import build_tool_instruction
-        tool_instr_block = build_tool_instruction(
-            tool_format, tool_specs,
-            model_name=tool_model_name,
-            is_roleplay=False, for_tool_decision=True)
-
-        # Outfit context: IMPORTANT — supply the real item NAMES from the DB,
-        # not the prompt fragments from build_equipped_outfit_prompt. The
-        # ChangeOutfit skill name-matches unequip_items against item.name —
-        # prompt fragments would never match.
-        equipped = _equipped_item_names(actor)
-        outfit_block = (f"\n{actor} currently wears: {equipped}"
-                         if equipped else "")
-
-        tool_system_content = (
-            f"Subject performing the action: {actor}.\n"
-            f"You decide which tools to call after the storyteller has "
-            f"narrated the immediate consequence of an in-world action. "
-            f"Trigger every tool whose action mapping fits the action OR "
-            f"the narration. If none apply, respond with: NONE.\n"
-            f"\n"
-            f"ChangeOutfit rules:\n"
-            f"- Take-off / ablegen / ausziehen → use unequip_items with the "
-            f"EXACT item names from the worn-list below. Do NOT invent names.\n"
-            f"- Argument MUST be a single JSON object wrapped in braces "
-            f'(e.g. {{"unequip_items": ["Green Wood Silk Cloak"]}}), not '
-            f"a bare key:value pair.\n"
-            f"- For full-body undressing: use unequip_slots with all worn "
-            f'slots (e.g. {{"unequip_slots": ["top", "bottom", "outer"]}}).'
-            f"{outfit_block}\n"
-            f"{tool_instr_block}"
-        )
-    else:
-        tool_system_content = ""
+    tool_step_builder = None
+    if chat_mode == "rp_first":
+        from functools import partial
+        from app.core.tool_step_prompt import build_tool_step_prompt
+        from app.skills.base import TurnFacts
+        from app.core.streaming import tool_step_presence
+        present = await asyncio.to_thread(tool_step_presence, actor)
+        facts = TurnFacts(actor, "act", present)
+        tool_step_builder = partial(
+            build_tool_step_prompt, actor, mode="act", tools=tool_specs,
+            facts=facts, constrained=True, tool_format=tool_format,
+            model_name=tool_model_name)
 
     agent = StreamingAgent(
         llm=st_llm,
@@ -441,7 +414,7 @@ async def _run_storyteller_agent(
         tools_dict=tools_dict,
         agent_name=actor,
         max_iterations=1 if chat_mode != "rp_first" else 2,
-        tool_system_content=tool_system_content,
+        tool_step_builder=tool_step_builder,
         log_task="storyteller",
         deferred_tools=_deferred_tools,
         content_tools=_content_tools,
