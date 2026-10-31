@@ -461,21 +461,20 @@ async function suitJobsRefresh() {
     const running = jobs.filter(j => j.status === 'running');
     if (!jobs.length) { el.innerHTML = ''; }
     else {
-        // Running jobs first, followed by completed jobs.
-        jobs.sort((a, b) => (a.status === 'running' ? 0 : 1) - (b.status === 'running' ? 0 : 1));
         el.innerHTML = '<div class="info-text" style="margin-bottom:4px;">Test jobs ('
             + running.length + ' running):</div>'
             + jobs.map(j => {
                 const v = j.verdict || {};
                 let st, col;
                 if (j.status === 'running') { st = (j.done || 0) + '/' + (j.total || '?'); col = '#58a6ff'; }
+                else if (j.status === 'queued') { st = 'Queued · position ' + j.position; col = '#8b949e'; }
                 else if (j.status === 'done') {
                     st = (j.score || '') + ' · ' + suitabilityVerdict(v.tool, 'TOOL checks'); col = v.tool === true ? '#3fb950' : '#d29922';
                 } else if (j.status === 'error') { st = 'Error'; col = '#f85149'; }
                 else { st = j.status || ''; col = '#8b949e'; }
                 const dot = j.status === 'running' ? '⏳' : (j.status === 'error' ? '❌' : '✔');
                 return '<div style="padding:2px 0; cursor:pointer; font-size:13px;" '
-                    + 'onclick="suitSelectJob(\'' + escJs(j.model) + '\')" title="Show details">'
+                    + 'onclick="suitSelectJob(\'' + escJs(j.job_id) + '\')" title="Show details">'
                     + dot + ' <b>' + esc(j.model) + '</b> '
                     + (j.entry_name ? '<span class="info-text">(' + esc(j.entry_name) + ')</span> ' : '')
                     + '<span style="color:' + col + ';">' + esc(st) + '</span></div>';
@@ -486,11 +485,8 @@ async function suitJobsRefresh() {
 }
 
 // Show a selected job in the detail view.
-function suitSelectJob(modelFull) {
-    const idx = modelFull.indexOf('::');
-    suitCur = idx >= 0
-        ? { provider: modelFull.slice(0, idx), model: modelFull.slice(idx + 2) }
-        : { provider: '', model: modelFull };
+function suitSelectJob(jobId) {
+    suitCur = { job_id: jobId };
     suitPoll();
 }
 
@@ -574,14 +570,23 @@ function suitFinite(value) {
     if (value && typeof value === 'object') return Object.values(value).every(suitFinite);
     return true;
 }
-function suitOnModelChange() {
+async function suitOnModelChange() {
     suitCur = { provider: document.getElementById('suitProvider').value,
                 model: document.getElementById('suitModel').value };
     suitRenderEntries();
     if (suitPollTimer) { clearTimeout(suitPollTimer); suitPollTimer = null; }
     document.getElementById('suitProgress').innerHTML = '';
     document.getElementById('suitStatus').textContent = '';
-    if (suitCur.model) suitPoll();  // show an existing job
+    if (suitCur.model) {
+        const full = suitCur.provider ? suitCur.provider + '::' + suitCur.model : suitCur.model;
+        try {
+            const response = await fetch('/admin/settings/llm-suitability-test/jobs');
+            const jobs = ((await response.json()).jobs || []).filter(j => j.model === full);
+            const job = jobs.find(j => j.status === 'running' || j.status === 'queued') || jobs[jobs.length - 1];
+            const current = suitCur.provider ? suitCur.provider + '::' + suitCur.model : suitCur.model;
+            if (job && current === full) { suitCur = job; suitPoll(); }
+        } catch (e) { /* The jobs list will retry on its next refresh. */ }
+    }
 }
 function suitOverrideChanged() {
     document.getElementById('suitOverrideFields').hidden = !document.getElementById('suitOverride').checked;
@@ -645,6 +650,7 @@ async function suitStart() {
             const data = await r.json().catch(() => ({}));
             throw new Error(typeof data.detail === 'string' ? data.detail : 'HTTP ' + r.status);
         }
+        suitCur = await r.json();
         suitPoll();
         suitJobsRefresh();
     } catch (e) {
@@ -663,7 +669,12 @@ function suitRenderJob(job) {
     const status = document.getElementById('suitStatus');
     const prog = document.getElementById('suitProgress');
     const checks = job.checks || [];
-    if (job.status === 'running') {
+    if (job.status === 'queued') {
+        document.getElementById('suitStartBtn').disabled = true;
+        status.textContent = 'Queued · position ' + job.position;
+    } else if (job.status === 'cancelled') {
+        status.textContent = 'Cancelled';
+    } else if (job.status === 'running') {
         document.getElementById('suitStartBtn').disabled = true;
         status.textContent = 'Running' + (job.entry_name ? ' ' + job.entry_name : '') +
             '… (' + (job.done || 0) + '/' + (job.total || '?') + ')';
@@ -699,13 +710,13 @@ function suitRenderJob(job) {
 }
 async function suitPoll() {
     if (suitPollTimer) { clearTimeout(suitPollTimer); suitPollTimer = null; }
-    if (!suitCur.model) return;
+    if (!suitCur.job_id) return;
     try {
-        const q = 'provider=' + encodeURIComponent(suitCur.provider) + '&model=' + encodeURIComponent(suitCur.model);
+        const q = 'job_id=' + encodeURIComponent(suitCur.job_id);
         const r = await fetch('/admin/settings/llm-suitability-test/status?' + q);
         const job = await r.json();
         suitRenderJob(job);
-        if (job.status === 'running') {
+        if (job.status === 'running' || job.status === 'queued') {
             suitPollTimer = setTimeout(suitPoll, 1500);
         } else {
             document.getElementById('suitStartBtn').disabled = false;

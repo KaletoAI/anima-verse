@@ -445,7 +445,6 @@ DELETED = [
     ("POST", "/templates/coverage/{character_name}/seed"),
     ("GET", "/templates/readiness/{character_name}"),
     ("GET", "/admin/settings/data"),
-    ("GET", "/admin/settings/llm-suitability-checks"),
     ("POST", "/admin/settings/memory-consolidate"),
     ("POST", "/admin/agent-loop/bump"),
     ("GET", "/auth/me"),

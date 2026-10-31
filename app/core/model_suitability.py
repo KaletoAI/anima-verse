@@ -277,6 +277,7 @@ def _v_json(out: str, expect: dict, allowed: List[str]) -> Verdict:
 def iter_suitability_results(
     model_full: str, extra_params: Optional[Dict[str, Any]] = None,
     routing_entry: Optional[dict] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Iterator[Dict[str, Any]]:
     """Run frozen fixture cases against a model and yield NDJSON events."""
     from app.core.llm_router import create_llm_instance
@@ -321,6 +322,8 @@ def iter_suitability_results(
 
     results: List[Dict[str, Any]] = []
     for idx, case in enumerate(cases):
+        if cancel_event is not None and cancel_event.is_set():
+            return
         repeats = int(case.get("repeats", 1)) or 1
         runs: List[Verdict] = []
         durs: List[float] = []
@@ -379,11 +382,15 @@ def iter_suitability_results(
                ("id", "label", "category", "ok", "hallucinated", "detail",
                 "infra", "duration_s", "tok_s", "dimensions", "run_checks")}}
 
-    summary = _summarize(model_full, results)
-    summary.update(scorer_version=SCORER_VERSION,
-                   fixture_version=data.get("fixture_version") or fixture_version(cases))
-    summary["saved"] = _persist(model_full, summary, results)
-    yield {"type": "done", "summary": summary}
+    # Cancellation and final persistence must be atomic with job completion.
+    with _JOBS_LOCK:
+        if cancel_event is not None and cancel_event.is_set():
+            return
+        summary = _summarize(model_full, results)
+        summary.update(scorer_version=SCORER_VERSION,
+                       fixture_version=data.get("fixture_version") or fixture_version(cases))
+        summary["saved"] = _persist(model_full, summary, results)
+        yield {"type": "done", "summary": summary}
 
 
 def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -486,87 +493,116 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
 # Asynchronous job runner (background thread, pollable status)
 # ---------------------------------------------------------------------------
 _JOBS: Dict[str, Dict[str, Any]] = {}
-_JOBS_LOCK = threading.Lock()
-
-class SuitabilityTestConflict(RuntimeError):
-    """A different request is already testing this provider/model."""
-
-
-def _run_job(model_full: str, extra_params: Optional[Dict[str, Any]] = None,
-             routing_entry: Optional[dict] = None) -> None:
-    try:
-        for ev in iter_suitability_results(
-                model_full, extra_params=extra_params, routing_entry=routing_entry):
-            t = ev.get("type")
-            with _JOBS_LOCK:
-                job = _JOBS.get(model_full)
-                if job is None:
-                    return
-                if t == "start":
-                    job["total"] = ev.get("total", 0)
-                    job["status"] = "running"
-                elif t == "check":
-                    job["checks"].append({k: ev.get(k) for k in
-                                          ("id", "label", "category", "ok",
-                                           "hallucinated", "detail", "infra",
-                                           "duration_s", "tok_s", "dimensions", "run_checks")})
-                    job["done"] = len(job["checks"])
-                elif t == "done":
-                    job["summary"] = ev.get("summary")
-                    job["status"] = "done"
-                elif t == "error":
-                    job["error"] = ev.get("message")
-                    job["status"] = "error"
-    except Exception as e:  # noqa: BLE001
-        logger.error("suitability job %s crashed: %s", model_full, e)
-        with _JOBS_LOCK:
-            job = _JOBS.get(model_full)
-            if job is not None:
-                job["error"] = str(e)
-                job["status"] = "error"
+_JOBS_LOCK = threading.RLock()
+_WORKER_ACTIVE = False
 
 
 def _snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
-    j = dict(job)
-    j.pop("_request", None)
-    j["checks"] = list(job.get("checks") or [])
-    return j
+    from copy import deepcopy
+    result = deepcopy({k: v for k, v in job.items() if not k.startswith("_")})
+    waiting = [j["job_id"] for j in _JOBS.values() if j["status"] == "queued"]
+    result["position"] = waiting.index(job["job_id"]) + 1 if job["status"] == "queued" else 0
+    return result
 
 
-def start_test(model_full: str, extra_params: Optional[Dict[str, Any]] = None,
-               routing_entry: Optional[dict] = None,
-               entry_index: Optional[int] = None) -> Dict[str, Any]:
-    """Run a model test, reusing only an identical active request."""
-    request = (entry_index, routing_entry, extra_params)
+def _run_job(job: Dict[str, Any]) -> None:
+    _, routing, params = job["_request"]
+    try:
+        for ev in iter_suitability_results(job["model"], extra_params=params,
+                                          routing_entry=routing, cancel_event=job["_cancel"]):
+            with _JOBS_LOCK:
+                if job["_cancel"].is_set():
+                    continue
+                kind = ev.get("type")
+                if kind == "start":
+                    job["total"] = ev.get("total", 0)
+                elif kind == "check":
+                    job["checks"].append({k: v for k, v in ev.items() if k not in ("type", "index")})
+                    job["done"] = len(job["checks"])
+                elif kind == "done":
+                    job["summary"] = ev.get("summary")
+                    job["status"] = "done"
+                elif kind == "error":
+                    job["error"] = ev.get("message")
+                    job["status"] = "error"
+    except Exception as exc:
+        logger.error("suitability job %s crashed: %s", job["model"], exc)
+        with _JOBS_LOCK:
+            job["error"] = str(exc)
+            job["status"] = "error"
+    finally:
+        with _JOBS_LOCK:
+            if job["_cancel"].is_set():
+                job["status"] = "cancelled"
+            elif job["status"] == "running":
+                job["status"] = "error"
+                job["error"] = "Runner ended without a result"
+
+
+def _worker() -> None:
+    global _WORKER_ACTIVE
+    while True:
+        with _JOBS_LOCK:
+            job = next((j for j in _JOBS.values() if j["status"] == "queued"), None)
+            if job is None:
+                _WORKER_ACTIVE = False
+                return
+            job["status"] = "running"
+        _run_job(job)
+
+
+def enqueue_test(model_full: str, *, extra_params: Optional[Dict[str, Any]] = None,
+                 routing_entry: Optional[dict] = None, entry_index: Optional[int] = None,
+                 concurrency: int = 3) -> Dict[str, Any]:
+    """Queue a test, reusing an identical active request."""
+    from copy import deepcopy
+    from uuid import uuid4
+    global _WORKER_ACTIVE
+    request = deepcopy((entry_index, routing_entry, extra_params))
     with _JOBS_LOCK:
-        cur = _JOBS.get(model_full)
-        if cur and cur.get("status") == "running":
-            if cur.get("_request") != request:
-                raise SuitabilityTestConflict(
-                    "A different suitability test is already running for this model")
-            return _snapshot(cur)
+        for job in _JOBS.values():
+            if (job["model"] == model_full and job["status"] in ("queued", "running")
+                    and job["_request"] == request):
+                return _snapshot(job)
         entry_name = (str(routing_entry.get("name") or
                           (f"Entry #{entry_index + 1}" if entry_index is not None
                            else "Saved LLM entry")) if routing_entry else "")
-        job = {"model": model_full, "status": "running", "total": 0, "done": 0,
-               "checks": [], "summary": None, "error": None,
+        job = {"job_id": uuid4().hex, "model": model_full, "status": "queued",
+               "total": 0, "done": 0, "checks": [], "summary": None, "error": None,
                "entry_index": entry_index, "entry_name": entry_name,
-               "_request": request}
-        _JOBS[model_full] = job
-    threading.Thread(target=_run_job, args=(model_full, extra_params, routing_entry),
-                     daemon=True, name="suit-test").start()
+               "concurrency": concurrency, "_request": request, "_cancel": threading.Event()}
+        _JOBS[job["job_id"]] = job
+        start_worker = not _WORKER_ACTIVE
+        if start_worker:
+            _WORKER_ACTIVE = True
+    if start_worker:
+        threading.Thread(target=_worker, args=(), daemon=True, name="suit-test").start()
     with _JOBS_LOCK:
-        return _snapshot(_JOBS[model_full])
+        return _snapshot(job)
 
 
-def get_job(model_full: str) -> Optional[Dict[str, Any]]:
-    """Current status of a running or completed job, if any."""
+def cancel_test(job_id: str) -> bool:
     with _JOBS_LOCK:
-        job = _JOBS.get(model_full)
+        job = _JOBS.get(job_id)
+        if job is None or job["status"] not in ("queued", "running"):
+            return False
+        job["_cancel"].set()
+        if job["status"] == "queued":
+            job["status"] = "cancelled"
+        return True
+
+
+def get_job(job_id: str) -> Optional[Dict[str, Any]]:
+    with _JOBS_LOCK:
+        job = _JOBS.get(job_id)
         return _snapshot(job) if job else None
 
 
 def list_jobs() -> List[Dict[str, Any]]:
-    """All known jobs, for restoring the running-jobs view after reload."""
+    """Active FIFO first, then terminal jobs in submission order."""
     with _JOBS_LOCK:
-        return [_snapshot(j) for j in _JOBS.values()]
+        jobs = list(_JOBS.values())
+        ordered = ([j for j in jobs if j["status"] == "running"]
+                   + [j for j in jobs if j["status"] == "queued"]
+                   + [j for j in jobs if j["status"] not in ("running", "queued")])
+        return [_snapshot(j) for j in ordered]

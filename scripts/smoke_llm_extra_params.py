@@ -307,11 +307,11 @@ def main():
                 raise AssertionError("Saved routing accepted string extra_params")
             persist.assert_not_called()
         # The test POST accepts textarea JSON independently of saved settings.
-        with patch("app.core.model_suitability.start_test", return_value={"status": "running"}):
+        with patch("app.core.model_suitability.enqueue_test", return_value={"status": "running"}):
             assert _llm_suitability_test_start_sync(None, {
                 "provider": "P", "model": "test", "extra_params": '{"temperature":0}'
             }) == {"status": "running"}
-        with patch("app.core.model_suitability.start_test", return_value={"status": "running"}) as start:
+        with patch("app.core.model_suitability.enqueue_test", return_value={"status": "running"}) as start:
             assert _llm_suitability_test_start_sync(None, {
                 "provider": "P", "model": "test", "extra_params": {}
             }) == {"status": "running"}

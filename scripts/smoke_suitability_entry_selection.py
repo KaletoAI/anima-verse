@@ -159,7 +159,7 @@ def selection_on_wire():
             first = _llm_suitability_test_start_sync(None, {
                 "provider": "P", "model": "same", "entry_index": 0,
                 "routing_revision": "rev-1"})
-            assert first["status"] == "running"
+            assert first["status"] == "queued"
             assert first["entry_index"] == 0 and first["entry_name"] == "Precise"
             assert _llm_suitability_test_start_sync(None, {
                 "provider": "P", "model": "same", "entry_index": 0,
@@ -169,17 +169,14 @@ def selection_on_wire():
                                 {"provider": "P", "model": "same", "entry_index": 0,
                                  "routing_revision": "rev-1",
                                  "extra_params": {"nested": {"selection": "changed"}}}):
-                try:
-                    _llm_suitability_test_start_sync(None, conflicting)
-                except HTTPException as exc:
-                    assert exc.status_code == 409 and "running" in exc.detail.lower()
-                else:
-                    raise AssertionError("Reused another active suitability request")
-            status = model_suitability.get_job("P::same")
+                queued = _llm_suitability_test_start_sync(None, conflicting)
+                assert queued["status"] == "queued"
+                assert queued["job_id"] != first["job_id"]
+            status = model_suitability.get_job(first["job_id"])
             assert status["entry_index"] == 0 and status["entry_name"] == "Precise"
             assert "_request" not in status
             listed = next(j for j in llm_suitability_test_jobs()["jobs"]
-                          if j["model"] == "P::same")
+                          if j["job_id"] == first["job_id"])
             assert listed["entry_index"] == 0 and listed["entry_name"] == "Precise"
 
 

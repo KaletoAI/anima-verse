@@ -1698,7 +1698,7 @@ def _llm_suitability_test_start_sync(user, body: Any):
     threadpool."""
     from copy import deepcopy
     from app.core.llm_router import parse_extra_params
-    from app.core.model_suitability import SuitabilityTestConflict, start_test
+    from app.core.model_suitability import enqueue_test
     if not isinstance(body, dict):
         raise HTTPException(400, "body must be a JSON object")
     provider = str(body.get("provider") or "").strip()
@@ -1736,23 +1736,32 @@ def _llm_suitability_test_start_sync(user, body: Any):
         index = matching[0]
         selected = deepcopy(routing[index])
     full = f"{provider}::{model}" if provider else model
+    return enqueue_test(full, extra_params=extra_params, routing_entry=selected,
+                        entry_index=index)
+
+
+@router.post("/settings/llm-suitability-test/cancel")
+async def llm_suitability_test_cancel(request: Request, user=Depends(require_admin)):
+    from app.core.model_suitability import cancel_test
     try:
-        return start_test(full, extra_params=extra_params, routing_entry=selected,
-                          entry_index=index)
-    except SuitabilityTestConflict as exc:
-        raise HTTPException(409, str(exc)) from exc
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "body must be valid JSON") from exc
+    if not isinstance(body, dict) or not isinstance(body.get("job_id"), str) or not body["job_id"]:
+        raise HTTPException(400, "job_id required")
+    return {"cancelled": cancel_test(body["job_id"])}
 
 
 @router.get("/settings/llm-suitability-test/status")
-def llm_suitability_test_status(provider: str = "", model: str = "",
-                                user=Depends(require_admin)):
-    """Current status and progress of a running or completed test."""
+def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
+    """Status and progress of a queued, running or completed test."""
     from app.core.model_suitability import get_job
-    if not model:
-        raise HTTPException(400, "model required")
-    full = f"{provider}::{model}" if provider else model
-    job = get_job(full)
-    return job or {"model": full, "status": "idle"}
+    if not job_id:
+        raise HTTPException(400, "job_id required")
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(404, "Test job not found")
+    return job
 
 
 @router.get("/settings/llm-suitability-test/jobs")
@@ -1763,6 +1772,8 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
     for j in list_jobs():
         s = j.get("summary") or {}
         jobs.append({
+            "job_id": j["job_id"],
+            "position": j["position"],
             "model": j.get("model", ""),
             "status": j.get("status", ""),
             "done": j.get("done", 0),
