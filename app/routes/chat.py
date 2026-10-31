@@ -340,24 +340,31 @@ def _current_activity_hint(character_name: str, location_id: str) -> str:
         return ""
 
 
-def _extract_mood(agent_name: str, response: str) -> Optional[str]:
-    """Extract mood from an LLM answer, or return None."""
-    config = get_character_config(agent_name)
-    if not config.get("mood_tracking", False):
-        return None
+def find_mood_marker(text: str) -> str | None:
+    """Read explicit or legacy mood markers without changing state."""
     # Prefer **I feel <emotion>** or the localized equivalent.
-    match = re.search(r'\*\*\s*(?:I\s+feel|Ich\s+f[\u00FCu]hle)\s+(.+?)\*\*', response, re.IGNORECASE)
+    match = re.search(r'\*\*\s*(?:I\s+feel|Ich\s+f[\u00FCu]hle)\s+(.+?)\*\*', text, re.IGNORECASE)
     # Fallback: the final **<emotion>** at the end of the answer.
     if not match:
         match = re.search(
             r'\*\*([A-Za-z\u00C0-\u00FF][a-z\u00E0-\u00FF]+(?:\s+[a-z\u00E0-\u00FF]+)*)[.?!]*\*\*\s*$',
-            response
+            text
         )
     if not match:
         return None
     mood = match.group(1).strip().rstrip('.!,')
     # Strip a feeling prefix if the fallback captured the whole phrase.
     mood = re.sub(r'^(?:I\s+feel|Ich\s+f[\u00FCu]hle)\s+', '', mood, flags=re.IGNORECASE).strip()
+    return mood or None
+
+
+def _extract_mood(agent_name: str, response: str) -> Optional[str]:
+    """Extract and persist a mood marker when tracking is enabled."""
+    if not get_character_config(agent_name).get("mood_tracking", False):
+        return None
+    mood = find_mood_marker(response)
+    if not mood:
+        return None
     save_character_current_feeling(agent_name, mood)
     # Record mood history.
     try:
@@ -654,7 +661,7 @@ def _apply_removed_pieces(character_name: str,
 def _extract_context_from_last_chat(agent_name: str,
     chat_history: List[Dict[str, str]],
     agent_config: Optional[Dict[str, Any]] = None,
-    detach: bool = False, *, stat_context=None) -> None:
+    detach: bool = False, *, stat_context=None, rp_mood_marker: bool = False) -> None:
     """Extract pose/activity and outfit changes from the latest chat messages.
 
     Pose and clothing use only the newest reply; earlier turns are context.
@@ -814,6 +821,13 @@ def _extract_context_from_last_chat(agent_name: str,
         # the body clearly changes shape.
         current_pose = current_pose_text(target_name) if not is_avatar and source_available else ""
 
+        from app.models.account import is_player_controlled
+        mood_config = target_config if target_config is not None else get_character_config(target_name)
+        rp_first = mood_config.get("chat_mode", "").lower() == "rp_first"
+        ask_feeling = bool(
+            rp_first and not is_avatar and not is_player_controlled(target_name)
+            and mood_config.get("mood_tracking", False))
+
         from app.core.prompt_templates import render_task
         try:
             sys_prompt, user_prompt = render_task(
@@ -827,6 +841,8 @@ def _extract_context_from_last_chat(agent_name: str,
                 context_text=context_text,
                 outfit_locked=outfit_locked,
                 is_avatar=is_avatar,
+                ask_feeling=ask_feeling,
+                rp_first=rp_first,
                 stats_enabled=stats_enabled,
                 stat_sources=stat_targets.get("stat_sources", ()),
                 stat_targets=stat_targets.get("stat_targets", ()),
@@ -861,6 +877,13 @@ def _extract_context_from_last_chat(agent_name: str,
         except json.JSONDecodeError:
             logger.debug("Chat-Kontext [%s]: JSON-Parse-Fehler: %s", target_name, raw[:100])
             return
+
+        feeling = data.get("feeling")
+        if (ask_feeling and not rp_mood_marker and source_available
+                and isinstance(feeling, str) and len(feeling.split()) == 1):
+            feeling = feeling.strip()
+            save_character_current_feeling(target_name, feeling)
+            record_mood_history(target_name, feeling)
 
         # The removed list is ignored while the lock is on — no write, no
         # expression trigger.

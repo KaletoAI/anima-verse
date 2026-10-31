@@ -187,10 +187,18 @@ def stage3():
     from app.core.prompt_templates import render_task
     common = dict(target_name="demo", piece_list="", source_label="Character reply",
                   source_text="x", context_text="", outfit_locked=False,
-                  stats_enabled=False, stat_list="", current_pose="")
+                  stats_enabled=False, stat_list="", current_pose="", ask_feeling=False, rp_first=True)
     sys_p, _ = render_task("extraction_chat_state", is_avatar=False,
                            pose_keys=["standing", "sitting"], **common)
     check("standing, sitting" in sys_p, "stage3 key list missing")
+    sys_f, _ = render_task("extraction_chat_state", is_avatar=False,
+                           pose_keys=["standing", "sitting"],
+                           **dict(common, ask_feeling=True))
+    check('"feeling"' in sys_f and '"feeling"' not in sys_p,
+          "stage3 feeling field must follow ask_feeling")
+    from app.core.npc_actions import _solo_pose_keys
+    check("sitting" in _solo_pose_keys() and "dancing together" not in _solo_pose_keys(),
+          "stage3 extraction menu must keep pair poses out")
     check('"pose"' in sys_p and '"detail"' in sys_p, "stage3 fields missing")
     check("no facial expression" in sys_p, "stage3 no-expression rule missing")
     check("same language" in sys_p, "stage3 language rule missing")

@@ -144,7 +144,7 @@ print("5) extraction_chat_state schema is valid JSON in all 8 flag combinations"
 SUBST = [
     ('"<one of the keys, or empty>"', '"standing"'),
     ('"<2-6 words, or empty>"', '"reads a book"'),
-    ('{"<value>": <delta>, ...}', '{"stamina": -5}'),
+    ('<integer delta>', '-5'),
     ('["<exact piece name>", ...]', '["shirt"]'),
 ]
 for is_avatar in (False, True):
@@ -158,9 +158,9 @@ for is_avatar in (False, True):
                     target_name="Beta", piece_list=pieces,
                     pose_keys=["standing", "sitting"], current_pose="",
                     source_label="reply", source_text="t", context_text="",
-                    outfit_locked=locked, is_avatar=is_avatar,
+                    outfit_locked=locked, is_avatar=is_avatar, ask_feeling=not is_avatar, rp_first=True,
                     stats_enabled=stats_enabled,
-                    stat_list="- stamina (0-100): 50")
+                    stat_sources=[], stat_targets=[], required_stat_pairs=[])
                 # the reply schema sits in the system turn (before "## user")
                 whole = system + "\n" + user
                 m = re.search(r'^\{.*\}$', whole, re.M)

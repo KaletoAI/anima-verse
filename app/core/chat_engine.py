@@ -1166,6 +1166,7 @@ def run_chat_turn(
                     post_process_response(
                         owner_id=owner_id, character_name=responder,
                         user_input=incoming_message,
+                        rp_response=raw,
                         full_response=(clean + ("\n" + _markers if _markers else "")),
                         agent_config=ctx["agent_config"], llm=ctx["llm"],
                         user_display_name=(speaker or ctx["user_display_name"]),
@@ -1315,7 +1316,8 @@ def post_process_response(
     extraction_context: Dict[str, Any] = None,
     executed_tools: list = None,
     detach_background: bool = False,
-    synthetic_input: bool = False) -> Dict[str, Any]:
+    synthetic_input: bool = False,
+    rp_response: str | None = None) -> Dict[str, Any]:
     """
     Run all post-processing after a chat response: mood, location, activity,
     memory extraction, relationship updates, intent extraction.
@@ -1333,6 +1335,7 @@ def post_process_response(
         full_chat_history: Full chat history (before this exchange)
         history_window: DEPRECATED — ignored, kept for backward compat
         old_history: Messages older than short-term window (for summary)
+        rp_response: Original RP prose, before cleaning and tool-step markers.
         synthetic_input: The incoming text is a hint, not partner speech.
         detach_background: the caller runs this in a worker thread that must
             not wait for the LLM extractions started here (a thought turn via
@@ -1343,10 +1346,14 @@ def post_process_response(
         Dict with extracted data: mood, location, activity (may be None)
     """
     from app.routes.chat import _extract_mood, _extract_location, _extract_activity
-    from app.routes.chat import _extract_context_from_last_chat
+    from app.routes.chat import _extract_context_from_last_chat, find_mood_marker
 
     result = {"mood": None, "location": None, "activity": None}
     stat_context = (extraction_context or {}).get("stat_context")
+    # Respond turns supply the original prose before cleaning and tool markers.
+    prose = rp_response if rp_response is not None else re.sub(
+        r'<tool\s+name="[^"]*">[\s\S]*?</tool>', "", full_response)
+    rp_mood_marker = find_mood_marker(prose) is not None
     cleaned = clean_response(full_response)
     has_private_prose = bool(cleaned and cleaned.strip().upper() != "SKIP")
     stat_only = bool((extraction_context or {}).get("stat_only"))
@@ -1362,13 +1369,14 @@ def post_process_response(
                 updated_history.append({"role": "assistant", "content": cleaned})
             _extract_context_from_last_chat(
                 character_name, updated_history, agent_config,
-                detach=detach_background, stat_context=stat_context)
+                detach=detach_background, stat_context=stat_context,
+                rp_mood_marker=rp_mood_marker)
         except Exception as e:
             logger.error("[%s] Context extraction error: %s", character_name, e)
 
     # Mood extraction
     try:
-        mood = _extract_mood(character_name, full_response)
+        mood = _extract_mood(character_name, prose)
         if mood:
             result["mood"] = mood
     except Exception as e:

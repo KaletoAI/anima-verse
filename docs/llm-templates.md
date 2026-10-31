@@ -253,7 +253,9 @@ privacy, see [the public Influence contract](skill-core-api.md#rp-influence--app
 |---|---|---|
 | `chat/agent_thought_in_chat.md` | `agent_loop` (instead of `agent_thought.md` when the character is in a running chat) | The same thought turn, but written for a character that is mid-conversation |
 | `chat/situational_memories.md` | `memory_situational` (`TEMPLATE`) | Pick the memories that fit the current message |
-| `chat/intent_markers.md` | `{% include %}` in `reply_base.md` (both system templates) AND `streaming.intent_marker_help()` for both rp_first tool-decision prompts (`streaming.build_tool_decision_input`, `chat_engine._rp_tool_decision_input`) | The `[INTENT: …]` marker grammar (including the `by=player` / `by=self` token) — a fragment, not a prompt of its own, so the places that teach it cannot drift apart |
+| `chat/tool_step_system.md` | `tool_step_prompt.build_tool_step_prompt` (every rp_first tool step: thought, respond, act) | The stable system part: role, tool-call syntax with one example, NONE, the plan-marker grammar (left out when constrained) |
+| `chat/tool_step_turn.md` | `tool_step_prompt.build_tool_step_prompt` | The per-turn user part: the prose, the other person's words as context, who is present, the offered tools as one brief line each, the names each verb takes (`decision_menu`), open questions, guardrails, the place marker with the known places when it is the character's way to move, open plans |
+| `chat/intent_markers.md` | `{% include %}` in `reply_base.md` (both system templates) AND `chat/tool_step_system.md` (the rp_first tool step) | The `[INTENT: …]` marker grammar (including the `by=player` / `by=self` token) — a fragment, not a prompt of its own, so the places that teach it cannot drift apart |
 
 `chat/thought_presence.md` renders the presence bracket at the start of the thought user turn.
 

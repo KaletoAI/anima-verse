@@ -9,6 +9,8 @@ placeholders:
   context_text: Older/counterpart text for disambiguation only, never a new extraction source.
   outfit_locked: bool — when true, the outfit (removed pieces) is NOT extracted
   is_avatar: bool — when true, only outfit is extracted (no pose, no stats)
+  rp_first: bool (default false) — use a reference for duplicate self-source text in this mode
+  ask_feeling: bool (default false) — extract one-word feeling for a non-avatar with mood tracking
   stats_enabled: bool — when true, evaluate precisely the listed event/target stat pairs.
   stat_sources: Explicit source tokens with server-identified actor, text and medium.
   stat_targets: Target tokens with character labels and template-driven stat descriptions.
@@ -38,6 +40,9 @@ Leave "pose" empty ("") when the text does not show a body shape or none of the 
 {% endif %}Return "pose" "" (keep the current one) unless the text shows the body clearly changing shape; a glance, a gesture, looking at or holding something, or thinking is NOT a new pose.
 
 Determine "detail": what {{ target_name }} is doing in that shape, in 2-6 words (what a bystander would see: the object handled, the direction faced), third person — never I/my/ich/mein — no facial expression, no mood, no clothing, no speech, no other character's name. Write "detail" in the same language as the {{ source_label }} below. Empty ("") when nothing is shown.
+{% if ask_feeling | default(false) %}
+Return "feeling" as one word in the reply's language, or empty when unclear.
+{% endif %}
 {% if stats_enabled %}
 Evaluate "stat_results": the BASE changes caused by each explicit event for its allowed target. Do not apply personality multipliers or other numeric rule factors yourself; the server applies those afterwards.
 The only stat targets are:
@@ -62,7 +67,7 @@ Rules for "stat_results":
 Pose/clothing extraction applies ONLY to the {{ source_label }} below. The Context block only disambiguates references. Stat results apply ONLY to the explicit Stat sources and required pairs; never extract a new stat event from Context or invent an actor, target, multiplier or additional pair.
 
 Reply schema:
-{ {%- if not is_avatar -%}"pose": "<one of the keys, or empty>", "detail": "<2-6 words, or empty>"{% if stats_enabled %}, "stat_results": [{"event": "<source token>", "target": "<target token>", "deltas": {"<value>": <integer delta>}}]{% endif %}{% if not outfit_locked and piece_list %}, {% endif %}{%- endif -%}{% if not outfit_locked and piece_list %}"removed": ["<exact piece name>", ...]{% endif %} }
+{ {%- if not is_avatar -%}"pose": "<one of the keys, or empty>", "detail": "<2-6 words, or empty>"{% if ask_feeling | default(false) %}, "feeling": "<one word or empty>"{% endif %}{% if stats_enabled %}, "stat_results": [{"event": "<source token>", "target": "<target token>", "deltas": {"<value>": <integer delta>}}]{% endif %}{% if not outfit_locked and piece_list %}, {% endif %}{%- endif -%}{% if not outfit_locked and piece_list %}"removed": ["<exact piece name>", ...]{% endif %} }
 
 ## user
 /no_think
@@ -76,6 +81,6 @@ Reply schema:
 Stat sources (only the required pairs above may be evaluated):
 {% for source in stat_sources %}
 {{ source.id }} — actor: {{ source.actor or "self / unattributed" }}; medium: {{ source.medium }}
-{{ source.text }}
+{% if rp_first | default(false) and (source.text == source_text or (source.medium == "self" and source_text == "Character: " ~ source.text)) %}See {{ source_label }} above.{% else %}{{ source.text }}{% endif %}
 {% endfor %}
 {% endif %}
