@@ -258,7 +258,7 @@ check("[8] inline thought tool system removed", "_ctx_parts" in thought_src, Fal
 # [9]
 import re  # noqa: E402
 
-for path in ("app/routes/chat.py", "app/core/chat_engine.py"):
+for path in ("app/routes/chat.py", "app/core/tool_step_prompt.py"):
     src = (ROOT / path).read_text()
     check(f"[9] {path} asks only for the character's places",
           len(re.findall(r"\blist_locations\(", src)), 0)

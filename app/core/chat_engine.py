@@ -112,190 +112,6 @@ def _messages_from_room_stream(responder: str,
     return out
 
 
-def _build_rp_tool_system(character_name: str, agent_tools: list,
-                          tool_format: str, tool_model_name: str,
-                          partner_name: str, in_person: bool = False,
-                          room_offer: str | None = None) -> str:
-    """Builds the system prompt of the rp_first tool phase (the non-streaming
-    variant of the block in routes/chat.py). With it the tool LLM spots
-    narrative actions (ChangeOutfit, SetActivity, …) and calls the tools.
-
-    ``in_person``: the turn answers inside an in-person conversation. The
-    SUPPRESS_IN_PERSON verbs (movement) are discarded on execution there
-    (``execute_tool_matches``), so they leave this prompt too — tool list,
-    usage examples and the "Available tools" line — exactly like the mapping
-    of the decision prompt (``streaming.decision_tools``). Offered anyway,
-    the tool block told the model "you MUST call" a verb that was thrown
-    away.
-    """
-    from app.core.tool_formats import build_tool_instruction
-    from app.core.dependencies import get_skill_manager
-    from app.core.outfit_renderer import render_outfit, undressed_line
-    from app.core.streaming import _suppress_in_person_tool_names
-    from app.models.character import (get_character_appearance,
-                                       get_character_current_location,
-                                       get_character_language_instruction)
-    from app.models.character_template import is_roleplay_character
-    from app.models.world import list_locations_for_character
-    from app.models.account import get_active_character
-
-    sm = get_skill_manager()
-    suppressed = _suppress_in_person_tool_names() if in_person else frozenset()
-    if suppressed:
-        agent_tools = [t for t in agent_tools if t.name not in suppressed]
-    appearance = get_character_appearance(character_name) or ""
-    usage = sm.get_agent_usage_instructions(character_name, tool_format,
-                                            check_limits=False, exclude=suppressed)
-    instr = build_tool_instruction(tool_format, agent_tools, appearance, usage,
-                                   model_name=tool_model_name,
-                                   is_roleplay=is_roleplay_character(character_name),
-                                   for_tool_decision=True)
-    names = [t.name for t in agent_tools]
-
-    loc_id = get_character_current_location(character_name) or ""
-    loc_list = ", ".join(l.get("name", "")
-                         for l in list_locations_for_character(character_name)
-                         if l.get("name"))
-    from app.core import places
-    from app.models.character import get_character_current_room
-    # Semantic actions remain available independently of the old pose-marker
-    # switch, with exact targets and effects rather than global pose guesses.
-    act_list = (room_offer if room_offer is not None else
-                places.room_offer(character_name, loc_id,
-                                  get_character_current_room(character_name) or ""))
-    self_outfit = (undressed_line(character_name)
-                   or render_outfit(character_name=character_name).get("full", "")
-                   or "(nothing equipped)")
-    outfit_block = f"\n{character_name} currently wears: {self_outfit}"
-    avatar = get_active_character() or ""
-    if avatar and avatar != character_name:
-        av_outfit = (undressed_line(avatar)
-                     or render_outfit(character_name=avatar).get("full", "")
-                     or "(nothing equipped)")
-        outfit_block += f"\n{avatar} currently wears: {av_outfit}"
-
-    real_partner = (partner_name or "").strip()
-    if real_partner.lower() in {"user", "player", "spieler", "admin", ""}:
-        real_partner = ""
-    if real_partner:
-        header = f"Character: {character_name}. Conversation partner: {real_partner}.\n"
-        warn = (f"IMPORTANT: Do NOT use TalkTo for {real_partner} — "
-                f"they are already in the conversation.\n")
-    else:
-        header = f"Character: {character_name}.\n"
-        warn = ""
-    lang = get_character_language_instruction(character_name)
-    lang_block = (f"\n{lang} Every message, caption or free-text tool argument "
-                  f"you write MUST be in that language.\n") if lang else ""
-    return (f"{header}{instr}\n\nAvailable tools: {', '.join(names)}\n"
-            f"Decide which tools to call based on the conversation. "
-            f"If no tools are needed, respond with: NONE\n{warn}{lang_block}"
-            f"\nKnown locations: {loc_list}\n"
-            + (f"{act_list}\n" if act_list else "")   # the offer brings its own headings
-            + outfit_block)
-
-
-def _rp_tool_decision_input(user_input: str, rp_response: str,
-                            tools_dict: Dict[str, Any],
-                            in_person: bool = False,
-                            agent_name: str = "") -> str:
-    """Tool decision prompt for the character-to-character chat turn.
-
-    The action→tool mapping, the speech note and the anti-hallucination rules
-    come from the SAME source as the streaming path (app.core.streaming), so
-    both prompts always offer exactly the tools this character actually has —
-    minus the movement verbs an in-person turn would discard anyway.
-
-    ``agent_name`` decides how this character may move at all — the same rule
-    the server applies when it reads the answer
-    (``routes.chat._marker_travel_refusal``): whoever owns the movement verb
-    is sent to the verb, a character with no other way keeps the place marker,
-    and a party follower or an avatar is told nothing about moving, because
-    neither way is open to it. Without a name the marker is left out: naming a
-    way that turns out to be closed is how a model writes one anyway.  That
-    suppression is about the MOVEMENT marker only (``tool_decision_guardrails``
-    gates nothing else on it) — the plan/task marker is taught either way, from
-    the same fragment the character's own prompt includes.
-    """
-    from app.core.streaming import (action_mapping_lines, decision_tools,
-                                    intent_marker_help, pose_keep_rule,
-                                    speech_turn_note, tool_decision_guardrails,
-                                    tool_state_note)
-    tools_dict = decision_tools(tools_dict, suppress_in_person=in_person)
-    try:
-        from app.routes.chat import _marker_travel_refusal
-        _move_refusal = _marker_travel_refusal(agent_name) if agent_name else "no_name"
-    except Exception:
-        _move_refusal = "no_name"
-    if not _move_refusal:
-        _place_rule = (
-            ", and **I am at <room or place>** ONLY when the RP explicitly describes "
-            "physically setting off — a room of this place is reached at once, a place "
-            "from the list starts a walk")
-    elif "SetLocation" in tools_dict:
-        _place_rule = (
-            ". When the RP describes setting off for another place, call SetLocation "
-            "from the list above — never write **I am at ...**, it is refused for this "
-            "character")
-    else:
-        _place_rule = ""
-    # The character's open plans with their ids — per turn, so it sits in this
-    # USER part: [INTENT_PROGRESS/DONE: <id>] need an id, and a plan that is
-    # already open must not come back as a new [INTENT:].
-    _open_plans = ""
-    if agent_name:
-        try:
-            from app.models.intents import build_open_intents_brief
-            _brief = build_open_intents_brief(agent_name)
-            if _brief:
-                _open_plans = f"Open plans of this character (id | title):\n{_brief}\n"
-        except Exception as _ie:  # noqa: BLE001 — the prompt works without it
-            logger.debug("open intents brief failed for %s: %s", agent_name, _ie)
-    # The pose the **I do** marker would overwrite, and the rule that keeps
-    # it — per turn, so it lives in this user part, never in the system one.
-    _pose_note = pose_keep_rule(agent_name) + " "
-    return (
-        f"The user said: {user_input}\n\n"
-        f"The character responded:\n{rp_response}\n\n"
-        # The same guard the streaming twin carries — scoped to TOOLS: the
-        # plan/task marker below may still come from the user's words.
-        f"Base every TOOL call ONLY on what the CHARACTER actually did in 'The "
-        f"character responded' text above. NEVER call a tool because of what the "
-        f"user said or asked for, and NEVER invent an action (an outfit, location, "
-        f"or activity) that is not literally in the character's text.\n\n"
-        f"Analyze the response and call any tool the character's narrative action "
-        f"triggers. The character NEVER writes tool calls themselves; you do that. "
-        f"Fire the tool whenever the narrative shows the action, even if phrased "
-        f"indirectly (\"she goes to change\", \"puts on a dress\", \"heads to the kitchen\", "
-        f"\"let's go to the forest edge\"). This list is the character's COMPLETE tool "
-        f"inventory — never call a tool that is not on it:\n"
-        f"{action_mapping_lines(tools_dict)}\n"
-        f"{tool_state_note(agent_name, tools_dict, indent='  ')}"
-        f"{speech_turn_note(tools_dict, False)}"
-        f"Call every tool that applies; multiple are fine. Do NOT skip a tool because "
-        f"the action was \"only described\" narratively — that IS the signal.\n"
-        f"{tool_decision_guardrails(tools_dict, with_markers=not _move_refusal)}"
-        f"Also emit fallback markers the character forgot (only if NOT already wrapped "
-        f"in **...** in the RP): **I feel <emotion>**, "
-        f"**I do <pose key>: <what a bystander sees, 2-6 words, third person — never "
-        f"I/my/ich/mein>**"
-        f"{_place_rule}. The pose key is one of the keys listed after a place (or under "
-        f"'Anywhere here'), copied exactly; the part after the colon is the detail (what a "
-        f"bystander would see), and may be left out. {_pose_note}Use the character's "
-        f"language; match exact names from the lists in your system prompt.\n"
-        f"Also emit the plan/task marker the character forgot (only if the RP text carries "
-        f"no [INTENT: ...] line): the person the character talks to gave them a task — an "
-        f"errand, a promise, something to do later — or the character took on an ongoing "
-        f"plan of its own. Set by= exactly as defined below — by=player only when the other "
-        f"person explicitly asked for it; when in doubt, by=self:\n"
-        f"{intent_marker_help(indent='  ')}"
-        f"If the character's text shows an open plan listed in this prompt is finished "
-        f"(goal reached, awaited person arrived, task carried out), output "
-        f"[INTENT_DONE: <id>] for exactly that plan: DONE, not PROGRESS.\n"
-        f"{_open_plans}"
-        f"If nothing applies, respond with: NONE")
-
-
 def chat_llm_task(character_name: str) -> str:
     """The routing task a character's CHAT replies resolve their model through.
 
@@ -606,19 +422,10 @@ def build_chat_context(
         )
         tool_format = get_format_for_model(tool_model_name)
 
-    # Prepare the system prompt and tool classes for narrative actions
-    # after the roleplay reply in run_chat_turn.
-    tool_system_content = ""
+    # Classify execution timing; render the tool prompt after the RP reply.
     deferred_tools: set = set()
     content_tools: set = set()
     if mode == "rp_first" and agent_tools and tool_llm is not None:
-        try:
-            tool_system_content = _build_rp_tool_system(
-                character_name, agent_tools, tool_format, tool_model_name,
-                partner_name=(speaker if speaker != "user" else ""),
-                in_person=(medium == "in_person"), room_offer=_prompt.room_offer)
-        except Exception as _e:
-            logger.debug("tool_system_content build failed: %s", _e)
         for _t in agent_tools:
             _sk = sm.get_skill_by_name(_t.name)
             if _sk and getattr(_sk, "DEFERRED", False):
@@ -646,7 +453,6 @@ def build_chat_context(
         "partner_name": _history_partner,
         "room_mode": room_mode,
         "agent_tools": agent_tools,
-        "tool_system_content": tool_system_content,
         "deferred_tools": deferred_tools,
         "content_tools": content_tools,
         "tool_model_name": tool_model_name if agent_tools else "",
@@ -1185,8 +991,8 @@ def run_chat_turn(
 
     # rp_first tool phase (feature parity): a second tool-LLM call spots the
     # narrative actions in the RP text ("puts on shorts", "off to the forest
-    # edge") and runs the matching tools, plus the fallback markers (mood,
-    # location, activity) that feed post-processing.
+    # edge") and runs the matching tools, plus plan and place markers
+    # that feed post-processing.
     # Classification as in streaming._stream_rp_first: side-effect tools run
     # immediately, DEFERRED tools run after the reply in the background with
     # RP context injected. CONTENT_TOOLs would need a chat retry (the result
@@ -1196,20 +1002,34 @@ def run_chat_turn(
     # away (see _bg_after_reply below) — otherwise the tool-LLM call added
     # ~8 s of visible latency before the utterance was recorded.
     _needs_tool_phase = bool(
-        ctx.get("mode") == "rp_first" and ctx.get("tool_system_content")
+        ctx.get("mode") == "rp_first"
         and ctx.get("tool_llm") is not None and ctx.get("tools_dict"))
 
     def _run_tool_phase() -> str:
         """rp_first tool phase — returns the extracted fallback markers."""
         try:
             from app.core.tool_formats import find_tool_calls
-            from app.core.streaming import _extract_markers, _inject_rp_context
+            from app.core.streaming import (
+                _extract_markers, tool_step_presence, decision_tools)
+            from app.core.tool_step_prompt import build_tool_step_prompt
+            from app.skills.base import TurnFacts
+            present = tool_step_presence(responder)
+            partner = speaker
+            if partner == "user":
+                # Identity was resolved with the request context, before this worker.
+                partner = ctx["user_display_name"]
+            tools = decision_tools(
+                ctx["agent_tools"],
+                suppress_in_person=ctx.get("medium") == "in_person")
+            prompt = build_tool_step_prompt(
+                responder, mode="respond", rp_response=clean,
+                user_input=incoming_message, tools=tools,
+                facts=TurnFacts(responder, "respond", present, partner=partner),
+                tool_format=ctx.get("tool_format", "tag"),
+                model_name=ctx.get("tool_model_name", ""))
             _tool_msgs = [
-                {"role": "system", "content": ctx["tool_system_content"]},
-                {"role": "user", "content": _rp_tool_decision_input(
-                    incoming_message, clean, ctx["tools_dict"],
-                    in_person=(ctx.get("medium") == "in_person"),
-                    agent_name=responder)},
+                {"role": "system", "content": prompt.system},
+                {"role": "user", "content": prompt.user},
             ]
             _tresp = get_llm_queue().submit(
                 task_type="intent", priority=Priority.CHAT, llm=ctx["tool_llm"],
@@ -1219,7 +1039,7 @@ def run_chat_turn(
             _matches = find_tool_calls(ctx.get("tool_format", "tag"), _ttext, ctx["tools_dict"])
             _execute_tools_with_correction(ctx, responder, _matches, rp_text=clean,
                                  incoming_message=incoming_message)
-            return _extract_markers(_ttext, clean) or ""
+            return _extract_markers(_ttext, clean, rp_first=True) or ""
         except Exception as _e:
             logger.warning("run_chat_turn rp_first tool-phase failed: %s", _e)
             return ""

@@ -366,7 +366,7 @@ def _remote_comm_tool_names() -> frozenset:
 
 # ----------------------------------------------------------------------
 # rp_first tool-decision prompt — ONE source for both paths
-# (streaming._stream_rp_first and chat_engine._rp_tool_decision_input).
+# (tool_step_prompt.build_tool_step_prompt, used by every rp_first caller).
 # Everything below is derived from the character's ACTUAL tool inventory;
 # the core never names a skill (R1).
 # ----------------------------------------------------------------------

@@ -145,7 +145,7 @@ def scenario(label, correction, *, mode="rp_first", available=True, tool_llm=Tru
     context = {"llm": object(), "system_content": "Scripted chat", "moment_content": "",
                "messages": [], "room_mode": True, "mode": mode, "tool_format": "tag",
                "tools_dict": tools, "tool_llm": object() if tool_llm else None,
-               "tool_system_content": "Scripted tool instructions", "speaker": "Bob",
+               "speaker": "Bob",
                "medium": "in_person", "agent_config": {}, "full_chat_history": [],
                "user_display_name": "Bob", "agent_tools": [POSE.as_tool(), PAIR.as_tool()]}
 

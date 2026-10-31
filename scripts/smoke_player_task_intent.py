@@ -56,7 +56,7 @@ HAND-DERIVED EXPECTATIONS
       [4b] Only the tool LLM has it -> still exactly one.
       [4c] Neither has it -> none.
   [4d] The ROOM tool-decision prompt teaches the same marker: the rendered
-      ``chat_engine._rp_tool_decision_input`` carries the syntax line
+      the shared respond builder carries the syntax line
       "[INTENT: <title>" EXACTLY once (it comes from the one fragment, so a
       second copy would mean the text was pasted a second time), and the
       ``by=player`` token with it.  That prompt is the LIVE chat path — the
@@ -159,7 +159,7 @@ from app.core.perception import STORYTELLER_SPEAKER  # noqa: E402
 from app.core.timeutils import game_time  # noqa: E402
 from app.core.streaming import _extract_markers, _intent_markers  # noqa: E402
 from app.core.chat_engine import (_announce_player_tasks,  # noqa: E402
-                                  _merge_marker_lines, _rp_tool_decision_input,
+                                  _merge_marker_lines,
                                   clean_response)
 from app.models.intents import (list_intents,  # noqa: E402
                                 parse_and_apply_intent_markers)
@@ -275,9 +275,11 @@ check("intents created", len(created), 0)
 drop_all()
 
 print("[4d] the ROOM tool-decision prompt teaches the same marker, once")
-_room_prompt = _rp_tool_decision_input(
-    "Bring me the book from the library.", '"Of course," she says.', {},
-    agent_name="")
+from app.core.tool_step_prompt import build_tool_step_prompt
+from app.skills.base import TurnFacts
+_step = build_tool_step_prompt(CHAR, mode='respond', user_input='Bring me the book from the library.',
+    rp_response='"Of course," she says.', tools=[], facts=TurnFacts(CHAR, 'respond', (), 'Player Example'), tool_format='tag')
+_room_prompt = _step.system + _step.user
 check("syntax line occurrences", _room_prompt.count("[INTENT: <title>"), 1)
 check_true("the by=player token is in it", "by=<player|self>" in _room_prompt)
 check_true("the movement hard rule is suppressed (agent_name='')",

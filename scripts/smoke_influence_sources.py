@@ -138,7 +138,7 @@ def main():
         context = {
             "llm": object(), "system_content": "fixture", "moment_content": "",
             "messages": [{"role": "user", "content": "Receiver: Please encourage me."}],
-            "room_mode": True, "mode": "single", "tool_system_content": "", "tool_llm": None,
+            "room_mode": True, "mode": "single", "tool_llm": None,
             "tools_dict": {"MoveFixture": move_fixture}, "tool_format": "tag",
             "deferred_tools": set(), "content_tools": set(), "medium": "in_person",
             "agent_config": {}, "user_display_name": "Receiver", "full_chat_history": [],
@@ -280,7 +280,7 @@ def run_turn_regressions(root, names):
         context = {
             "llm": llm, "system_content": "fixture", "moment_content": "",
             "messages": [{"role": "user", "content": "Bystander: A real conversation."}],
-            "room_mode": True, "mode": "single", "tool_system_content": "", "tool_llm": None,
+            "room_mode": True, "mode": "single", "tool_llm": None,
             "tools_dict": tools or {}, "tool_format": "tag", "deferred_tools": set(deferred),
             "content_tools": set(), "medium": "in_person", "agent_config": {},
             "user_display_name": "", "full_chat_history": [], "old_history": [],
@@ -389,7 +389,7 @@ def run_turn_regressions(root, names):
                 "llm": llm, "system_content": "fixture", "moment_content": "",
                 "messages": [{"role": "user", "content": "Sender: An encouragement."}],
                 "room_mode": True, "mode": "single", "tools_dict": {}, "medium": "in_person",
-                "tool_system_content": "", "tool_llm": None, "agent_config": {},
+                "tool_llm": None, "agent_config": {},
                 "user_display_name": "", "full_chat_history": [], "old_history": [],
             }
             chime["cascade"] = False
@@ -443,7 +443,7 @@ def run_turn_regressions(root, names):
                             "llm": llm, "system_content": "fixture", "moment_content": "",
                             "messages": [{"role": "user", "content": "Sender: Room speech."}],
                             "room_mode": True, "mode": "single", "tools_dict": {},
-                            "medium": "in_person", "tool_system_content": "", "tool_llm": None,
+                            "medium": "in_person", "tool_llm": None,
                             "agent_config": {}, "user_display_name": "",
                             "full_chat_history": [], "old_history": [],
                         }

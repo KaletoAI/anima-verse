@@ -174,7 +174,7 @@ chat_engine.build_chat_context = lambda *a, **k: {
     "llm": object(), "system_content": "sys", "messages": [{"role": "user",
                                                           "content": "Kai: hi"}],
     "moment_content": "", "room_mode": True, "mode": "rp_first",
-    "tools_dict": {}, "tool_system_content": "", "tool_llm": None,
+    "tools_dict": {}, "tool_llm": None,
     "agent_config": {}, "full_chat_history": [], "user_display_name": "Kai",
     "speaker": "Kai", "medium": "in_person"}
 import app.core.pending_reports as pr_mod  # noqa: E402

@@ -12,6 +12,8 @@ offered outfit verb supplies Red Mieder. [5] Exact supplied full names or
 marker. [7] Constrained renders contain neither plan grammar nor plan data.
 [8] A world override replaces the turn template. [9] rp_first discards tool
 mood/pose markers and sends the supplied system/user prompt unchanged.
+[10] Respond queue submission equals the builder, partner words are context only,
+TalkTo needs a third person, and tool mood/pose markers are ignored.
 Movement menus include all
 known place names but rooms only at the current place. All storage is temporary.
 """
@@ -154,6 +156,53 @@ def main():
                     assert streaming.tool_step_presence('Ada Example') == ('Earshot Example',)
                     nearby.assert_called_once_with('Ada Example', {'x': 1, 'y': 2})
             print('[9] PASS rp_first markers, supplied prompt and room/earshot names')
+            from app.core import chat_engine
+            from types import SimpleNamespace
+            from plugins.talk_to.skill import TalkToSkill
+            talk = object.__new__(TalkToSkill)
+            talk.name, talk.brief = 'TalkTo', 'Speak to a third person; input: full name, words.'
+            pose = Skill('SetActivity')
+            pose.POSE_SETTER = True
+            skills.update(TalkTo=talk, SetActivity=pose)
+            manager.tool_names_with_flag = lambda flag: (
+                frozenset({"TalkTo"}) if flag == "DELIVERS_SPEECH" else frozenset())
+            words, reply = 'Please change your clothes.', 'Ada smiles. **I feel froh**'
+            for present in [('Ylva Nordwind',), ('Ylva Nordwind', 'Ben Example')]:
+                expected = build_tool_step_prompt('Ada Example', mode='respond',
+                    rp_response=chat_engine.clean_response(reply), user_input=words, tools=[talk, pose],
+                    facts=TurnFacts('Ada Example', 'respond', present, 'Ylva Nordwind'), tool_format='tag')
+                assert 'SetActivity' not in expected.offered
+                assert ('TalkTo' in expected.offered) == (len(present) == 2)
+                assert words not in expected.system and expected.user.count(words) == 1
+                assert 'Other person’s words (context only):\n' + words in expected.user
+                ctx = dict(llm=object(), system_content='RP', moment_content='', messages=[], room_mode=True,
+                    mode='rp_first', tool_format='tag', tools_dict={'TalkTo': lambda raw: ''},
+                    tool_llm=object(), agent_tools=[talk, pose], agent_config={},
+                    speaker='Ylva Nordwind', medium='in_person', full_chat_history=[])
+                calls, processed = [], []
+                def submit(**kw):
+                    calls.append(kw)
+                    return SimpleNamespace(content=reply if len(calls) == 1 else
+                        '**I feel tired**\n**I do sitting**\n[INTENT_DONE: p1]\n'
+                        '**I am at Cafe**\n[EVENT_RESOLVED: e1]')
+                class InlineThread:
+                    def __init__(self, target, **kw): self.target = target
+                    def start(self): self.target()
+                with patch.object(chat_engine, 'build_chat_context', return_value=ctx), \
+                     patch('app.core.streaming.tool_step_presence', return_value=present), \
+                     patch('app.core.llm_queue.get_llm_queue', return_value=SimpleNamespace(submit=submit)), \
+                     patch('app.core.memory_situational.build_situational_block', return_value=''), \
+                     patch('threading.Thread', InlineThread), \
+                     patch.object(chat_engine, 'post_process_response', side_effect=lambda *a, **k: processed.append((a, k))):
+                    chat_engine.run_chat_turn('demo', 'Ada Example', 'Ylva Nordwind', words, post_process=True)
+                assert len(calls) == 2, calls
+                assert calls[1]['task_type'] == 'intent'
+                assert calls[1]['messages_or_prompt'] == [dict(role='system', content=expected.system), dict(role='user', content=expected.user)]
+                assert processed and 'tired' not in str(processed) and '**I do sitting**' not in str(processed)
+                assert all(marker in str(processed) for marker in (
+                    '[INTENT_DONE: p1]', '**I am at Cafe**', '[EVENT_RESOLVED: e1]'))
+            print('[10] PASS respond queue, partner context, availability and markers')
+            print('RESPOND SAMPLE SYSTEM\n' + expected.system + '\nRESPOND SAMPLE USER\n' + expected.user)
             sample_tools = [Skill('ChangeOutfit'), Skill('Sleep'), Skill('SetLocation')]
             for skill, brief in zip(sample_tools, (
                 'Change clothing; JSON: {"add": ["exact item name"], "remove": ["exact item name"]}.',

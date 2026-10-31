@@ -231,7 +231,7 @@ def make_ctx(mode="single"):
         "tools_dict": ({"SetLocation": lambda *_a, **_k: ""}
                        if mode == "rp_first" else {}),
         "tool_format": "tag",
-        "tool_system_content": "TOOL SYSTEM" if mode == "rp_first" else "",
+        "agent_tools": ["SetLocation"] if mode == "rp_first" else [],
         "tool_llm": object() if mode == "rp_first" else None,
         "medium": "in_person",
         "full_chat_history": [],

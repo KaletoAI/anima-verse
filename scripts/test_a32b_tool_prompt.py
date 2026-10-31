@@ -19,7 +19,7 @@ Expectations, derived by hand:
   The new shared template lists only offered tools with their brief, keeps
   singleton and speech guardrails, suppresses in-person movement and omits
   pose/mood markers. A free character gets the place marker; followers and
-  movement owners do not. The legacy chat_engine checks remain until Task 5.
+  movement owners do not. Respond uses the same builder.
   Both paths retain inventory-derived tool names, image-name guidance and
   no dead tool names. Six locations with three distinct names deduplicate
   to three legacy catalogue entries.
@@ -127,7 +127,6 @@ import app.core.streaming as _streaming_mod  # noqa: E402
 _streaming_mod.current_pose_text = lambda name: "sitting: reads a letter"
 
 from app.core.streaming import (StreamingAgent, action_mapping_lines)  # noqa: E402
-from app.core.chat_engine import _rp_tool_decision_input  # noqa: E402
 
 LEADER = {n: (lambda x: "") for n in
           ["ChangeOutfit", "TakePhoto", "SetLocation", "JoinParty", "TalkTo", "SendMessage"]}
@@ -158,10 +157,10 @@ for label, thought, constrained in [("thought", True, False),
     foll = streaming_prompt(FOLLOWER, thought=thought, constrained=constrained)
     check(f"streaming/{label}: leader HAS '→ SetLocation'", "- SetLocation:" in lead)
     check(f"streaming/{label}: follower has NO '→ SetLocation'", "- SetLocation:" not in foll)
-ce_lead = _rp_tool_decision_input("Hi", "She walks to the kitchen.", LEADER)
-ce_foll = _rp_tool_decision_input("Hi", "She walks to the kitchen.", FOLLOWER)
-check("chat_engine: leader HAS '→ SetLocation'", "→ SetLocation" in ce_lead)
-check("chat_engine: follower has NO '→ SetLocation'", "→ SetLocation" not in ce_foll)
+ce_lead = streaming_prompt(LEADER)
+ce_foll = streaming_prompt(FOLLOWER)
+check("respond: leader offers movement", "- SetLocation:" in ce_lead)
+check("respond: follower has no movement", "- SetLocation:" not in ce_foll)
 
 print("\n2) Dead tool names are gone from both paths")
 ALL_PROMPTS = {
@@ -177,7 +176,7 @@ for name, text in ALL_PROMPTS.items():
 print("\n3) Inventory-derived declarations and legacy mapping")
 lines = action_mapping_lines(LEADER)
 check("shared template declares every offered tool", all(f"- {n}:" in ALL_PROMPTS["streaming/chat"] for n in LEADER))
-check("chat_engine contains the mapping block verbatim", lines in ce_lead)
+check("respond contains short inventory declarations", all(f"- {n}:" in ce_lead for n in LEADER))
 check("6 tools → 6 mapping lines", len(lines.splitlines()) == 6,
       f"{len(lines.splitlines())}")
 check("follower mapping has 5 lines", len(action_mapping_lines(FOLLOWER).splitlines()) == 5)
@@ -277,8 +276,7 @@ check("photographer hint: subjects named", "by their NAME" in _photog)
 print("\n8) In-person turn drops the suppressed movement verb from the mapping")
 _ip_stream = streaming_prompt(LEADER, in_person=True)
 _ip_thought = streaming_prompt(LEADER, thought=True, in_person=True)
-_ip_chat_engine = _rp_tool_decision_input("Hi", "She walks to the kitchen.", LEADER,
-                                          in_person=True)
+_ip_chat_engine = streaming_prompt(LEADER, in_person=True)
 check("streaming/in-person: no '→ SetLocation'", "- SetLocation:" not in _ip_stream)
 check("streaming/in-person thought: no '→ SetLocation'", "- SetLocation:" not in _ip_thought)
 check("chat_engine/in-person: no '→ SetLocation'", "→ SetLocation" not in _ip_chat_engine)
@@ -291,46 +289,20 @@ check("streaming/in-person keeps the other 5 tools",
           ["ChangeOutfit", "TakePhoto", "JoinParty", "TalkTo", "SendMessage"]))
 check("not-in-person is unchanged", "- SetLocation:" in streaming_prompt(LEADER))
 
-# B3: the SYSTEM part of the room path, with every world read stubbed.
-import app.models.character as _mchar  # noqa: E402
-import app.models.character_template as _mtpl  # noqa: E402
-import app.models.world as _mworld  # noqa: E402
-import app.models.account as _macc  # noqa: E402
-import app.core.outfit_renderer as _outfit  # noqa: E402
-_mchar.get_character_appearance = lambda name: "red hair"
-_mchar.get_character_current_location = lambda name, **kw: ""
-_mchar.get_character_current_room = lambda name, **kw: ""
-_mchar.get_character_language_instruction = lambda name: ""
-_mtpl.is_roleplay_character = lambda name: True
-_mworld.list_locations_for_character = lambda name: []
-_macc.get_active_character = lambda: ""
-_outfit.render_outfit = lambda **kw: {"full": "a coat"}
-from app.core.chat_engine import _build_rp_tool_system  # noqa: E402
-
-_ALL_SPECS = [_T(sk.name) for sk in _SKILLS]
-_sys_ip = _build_rp_tool_system("demo_one", _ALL_SPECS, "tag", "", "",
-                                in_person=True)
-_sys_away = _build_rp_tool_system("demo_one", _ALL_SPECS, "tag", "", "",
-                                  in_person=False)
-for _mv in ("SetLocation", "GoToCharacter"):
-    check(f"system part in-person: no '{_mv}' anywhere", _mv not in _sys_ip)
-    check(f"system part in-person: no usage line of {_mv}",
-          f"USAGE {_mv}:" not in _sys_ip)
-    check(f"system part not in person: '{_mv}' listed with its usage line",
-          f"- {_mv}:" in _sys_away and f"USAGE {_mv}:" in _sys_away)
-check("system part in-person keeps the other tools + their usage lines",
-      all(f"- {n}:" in _sys_ip and f"USAGE {n}:" in _sys_ip for n in
-          ["ChangeOutfit", "TakePhoto", "JoinParty", "TalkTo", "SendMessage"]))
+# The respond mode uses the same short declarations, not long usage examples.
+for name in LEADER:
+    check(f"respond short declaration: {name}", f"- {name}:" in ce_lead)
+check("respond omits long usage examples", "USAGE " not in ce_lead)
 
 # B4: the guard and the missing "user asks" bullet.
-_GUARD = "NEVER call a tool because of what the user said or asked for"
+_GUARD = "Act only on the character’s text, not on a request alone"
 check("respond decision carries the guard", _GUARD in _ip_chat_engine)
 check("respond decision scopes the guard to TOOLS",
-      "Base every TOOL call ONLY on what the CHARACTER actually did" in _ip_chat_engine)
+      "You translate what demo did in the text into tool calls" in _ip_chat_engine)
 check("streaming decision keeps its guard", "Act only on the character’s text" in _ip_stream)
 _USER_ASKS = "Whenever the user asks for something"
 check("tool-decision system part has no 'user asks' bullet",
-      _USER_ASKS not in _sys_ip and _USER_ASKS not in _sys_away)
+      _USER_ASKS not in _ip_chat_engine and _USER_ASKS not in ce_lead)
 check("build_tool_instruction(for_tool_decision=True) drops the bullet",
       _USER_ASKS not in build_tool_instruction("tag", [_T("TakePhoto")],
                                                for_tool_decision=True))
@@ -340,15 +312,8 @@ check("tool-decision instruction keeps the rest of the default",
       "Only the tools listed under AVAILABLE TOOLS above exist" in
       build_tool_instruction("tag", [_T("TakePhoto")], for_tool_decision=True))
 
-# B7: third-person placeholder + current pose with the keep rule.
-_PH = "<what a bystander sees, 2-6 words, third person — never I/my/ich/mein>"
-for _nm, _txt in (("chat_engine", _ip_chat_engine),):
-    check(f"{_nm}: third-person **I do** placeholder", _PH in _txt)
-    check(f"{_nm}: old first-person placeholder gone",
-          "<what you do, 2-6 words>" not in _txt)
-    check(f"{_nm}: current pose shown", "Current pose: sitting: reads a letter." in _txt)
-    check(f"{_nm}: keep rule", "a glance, a gesture, looking at or holding "
-          "something, or thinking is NOT a new pose" in _txt)
+# Pose and mood are owned by state extraction in rp_first.
+check("respond does not request pose or mood", "**I do" not in ce_lead and "**I feel" not in ce_lead)
 
 # ---------------------------------------------------------------------------
 # 9) The place rule follows the SERVER's rule, not the tool list alone
@@ -383,34 +348,10 @@ check("new builder offers the movement verb", "- SetLocation:" in _lead)
 check("new builder does not request pose/mood markers",
       "**I feel" not in _lead and "**I do" not in _lead)
 
-# The room path (chat_engine) asks the same rule once it is given the name.
-try:
-    _chat_mod._marker_travel_refusal = lambda name: ""
-    _ce_free = _rp_tool_decision_input("Hi", "She walks to the kitchen.", MUTE,
-                                       agent_name="demo_one")
-    _chat_mod._marker_travel_refusal = lambda name: "has_movement_verb"
-    _ce_verb = _rp_tool_decision_input("Hi", "She walks to the kitchen.", LEADER,
-                                       agent_name="demo_one")
-    _chat_mod._marker_travel_refusal = lambda name: "party_follower"
-    _ce_foll = _rp_tool_decision_input("Hi", "She walks to the kitchen.", MUTE,
-                                       agent_name="demo_one")
-finally:
-    _chat_mod._marker_travel_refusal = _real_refusal
-check("room path: no other way -> the marker", "**I am at <room or place>**" in _ce_free)
-check("room path: owner of the verb -> the verb", "call SetLocation" in _ce_verb)
-check("room path: owner of the verb is not asked for the marker",
-      "**I am at <room or place>**" not in _ce_verb)
-check("room path: a follower is taught neither way",
-      "**I am at" not in _ce_foll and "call SetLocation" not in _ce_foll)
-# No name: the builder cannot ask the rule, so it never ASKS for the marker.
-# With the verb in hand it still points at the verb — that is the safe half.
-_ce_anon = _rp_tool_decision_input("Hi", "x", LEADER)
-check("room path without a name does not ask for the marker",
-      "**I am at <room or place>**" not in _ce_anon)
-check("room path without a name still points at the verb",
-      "call SetLocation" in _ce_anon)
-check("room path without a name and without the verb promises nothing",
-      "**I am at" not in _rp_tool_decision_input("Hi", "x", MUTE))
+for refusal, offered, marker in [('', MUTE, True), ('has_movement_verb', LEADER, False),
+                                  ('party_follower', MUTE, False)]:
+    text = streaming_prompt(offered, marker_refusal=refusal)
+    check(f"respond travel marker gate: {refusal or 'free'}", ('**I am at' in text) == marker)
 
 print(f"\n{len(RESULTS)} checks run.")
 print("\n" + ("ALL CHECKS PASSED" if not FAILS

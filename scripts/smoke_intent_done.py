@@ -31,7 +31,6 @@ with tempfile.TemporaryDirectory(prefix="intent-done-") as storage:
     config.load(Path(storage) / "config.json")
     db.init_schema()
     from app.models import intents
-    from app.core.chat_engine import _rp_tool_decision_input
     from app.core.tool_step_prompt import build_tool_step_prompt
     from app.skills.base import TurnFacts
 
@@ -44,7 +43,8 @@ with tempfile.TemporaryDirectory(prefix="intent-done-") as storage:
     first = intents.create_intent(owner="demo", title="Find the book")
     second = intents.create_intent(owner="demo", title="Pack the bag")
     with patch("app.routes.chat._marker_travel_refusal", return_value="no_name"):
-        room = _rp_tool_decision_input("Hello", "Found the book.", {}, agent_name="demo")
+        respond = build_tool_step_prompt('demo', mode='respond', rp_response='Found the book.', user_input='Hello', tools=[], facts=TurnFacts('demo', 'respond', (), 'Partner Example'), tool_format='tag')
+        room = respond.system + respond.user
         tool_step = build_tool_step_prompt('demo', mode='thought', rp_response='Found the book.',
             user_input='Hello', tools=[], facts=TurnFacts('demo', 'thought', ()), tool_format='tag')
         stream = tool_step.system + tool_step.user
@@ -52,8 +52,8 @@ with tempfile.TemporaryDirectory(prefix="intent-done-") as storage:
         check(f"{label}: both open ids", all(
             f"{it['id']} | {it['title']}" in prompt for it in (first, second)))
         check(f"{label}: explicit completion decision", all(token in prompt for token in (
-            "goal is reached" if label == "streaming" else "goal reached",
-            "[INTENT_DONE: <id>]", "write [INTENT_DONE: <id>] instead" if label == "streaming" else "DONE, not PROGRESS")))
+            "goal is reached",
+            "[INTENT_DONE: <id>]", "write [INTENT_DONE: <id>] instead")))
     check("streaming system has no plan ids", first["id"] not in tool_step.system)
     check("hint uses actual id", f"[INTENT_DONE: {first['id']}]" in intents._intent_hint(first))
 
