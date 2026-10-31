@@ -294,6 +294,26 @@ def effective_document(document: dict) -> dict:
     return result
 
 
+def package_actions_for(document: dict) -> list[dict]:
+    """The package actions the prop editor lists for this (draft) document:
+    every loaded one whose ``match`` admits the prop, excluded or not, read
+    only — the editor never copies them into the draft."""
+    from app.core.prop_action_sources import _current, matches
+    from app.plugins import registry
+    excluded = document.get('exclude_actions') if isinstance(document.get('exclude_actions'), list) else []
+    rows = []
+    for entry in _current()[0]:
+        if not matches(entry['match'], document):
+            continue
+        action, package = entry['action'], registry.get_package(entry['owner'])
+        label = str(getattr(package, 'manifest', {}).get('capability_label') or '') or entry['owner']
+        rows.append(dict(id=action['id'], name=action['name'], description=action.get('description', ''),
+                         ability=action['ability'], participants=action['participants'],
+                         pose_key=action.get('pose_key', ''), package=entry['owner'], package_label=label,
+                         excluded=action['id'] in excluded))
+    return rows
+
+
 _OFFERS_TTL_S = 3.0
 _offers_cache = OrderedDict()
 _offers_lock = RLock()

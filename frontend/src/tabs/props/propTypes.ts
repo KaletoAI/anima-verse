@@ -94,6 +94,8 @@ export interface PropFull {
   revision: string
   actions: ActionDefinition[]
   unmatched_action_count?: number
+  /** Package actions this prop does not offer (ids with the `pack-` prefix). */
+  exclude_actions?: string[]
   name: string
   category: string
   /** Real extent in metres AFTER the orientation fix (x/y/z) — of the PRIMARY
@@ -770,6 +772,20 @@ export interface ActionDefinition {
 /** Server-resolved reference-height access: action, variant, marker, slot, role. */
 export type PropAccessPreviews = Record<string, Record<string, Record<string, Record<string,
   Partial<Record<'actor' | 'partner', { x: number; z: number; yaw: number; source: 'auto' | 'override' }>>>>>>
+
+/** A furniture action an installed package adds at runtime — listed read-only,
+ *  never part of the draft (plan-pack-prop-actions.md). */
+export interface PackAction {
+  id: string
+  name: string
+  description: string
+  ability: ActionDefinition['ability']
+  participants: 1 | 2
+  pose_key: string
+  package: string
+  package_label: string
+  excluded: boolean
+}
 
 export interface VariantBinding {
   action_id: string

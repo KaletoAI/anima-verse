@@ -71,6 +71,7 @@ export function propActionCheckDocument(prop: PropFull, variants: PropVariant[],
     name: prop.name, category: prop.category, tags: prop.tags, bbox: prop.bbox,
     sway_factor: prop.sway_factor, mount: prop.mount,
     mount_suggested: prop.mount_suggested, slots: prop.slots, key_areas: prop.key_areas,
+    exclude_actions: prop.exclude_actions || [],
     ...general,
     ...(mount && typeof mount === 'object'
       ? { mount: mount.value || '', mount_suggested: !!mount.suggested } : {}),

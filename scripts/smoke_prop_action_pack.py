@@ -37,6 +37,14 @@ h. ``match`` {"categories": ["throne"]}: the fixture prop (category "") gets
 i. Changing a definition's description changes the signature, the scene
    fingerprint and the offer revision; the OLD revision is refused
    (stale_definition) and the new one accepted.
+j. Editor (phase 2): the validate route lists "sit back" read-only as
+   ``pack_actions`` (package testpack, not excluded) and binds it on "body"
+   beside "rest"; with the draft excluding it, the row says excluded and
+   only "rest" binds. The batch save stores ``exclude_actions`` deduplicated
+   ([sit back] from [sit back, sit back]) — a new author revision, the
+   runtime revision now equal to it, no offer; an own id ("rest") is a 422
+   (PropDocumentInvalid), a non-list a ValueError; saving [] removes the key
+   and the offer comes back.
 """
 import io
 import json
@@ -180,6 +188,38 @@ def main():
     assert A.check(name, identity(target), SIT["id"], before[2]) == dict(enabled=False, reason="stale_definition")
     assert A.check(name, identity(target), SIT["id"], after[2])["enabled"]
     print("PASS i: a changed definition moves signature, scene key and revision")
+
+    # j — the editor's side (phase 2)
+    from app.routes import prop_actions as route
+    SRC.register_source("testpack", lambda: [SIT])
+    raw = props.read_sidecar(pid)
+    answer = route.validate(pid, route.Document(document=raw), user={})
+    assert [(row["id"], row["name"], row["package"], row["excluded"]) for row in answer["pack_actions"]] \
+        == [(SIT["id"], "Sit back", "testpack", False)], answer["pack_actions"]
+    uid = raw["model_variants"][0]["uid"]
+    assert {b["action_id"]: b["marker_ids"] for b in answer["derived_bindings"][uid]} \
+        == {"rest": ["body"], SIT["id"]: ["body"]}
+    off = route.validate(pid, route.Document(document={**raw, "exclude_actions": [SIT["id"]]}), user={})
+    assert off["pack_actions"][0]["excluded"] is True
+    assert [b["action_id"] for b in off["derived_bindings"][uid]] == ["rest"]
+    base = props.get_prop(pid)["revision"]
+    saved = props.bulk_update(pid, {"exclude_actions": [SIT["id"], SIT["id"]]}, base_revision=base)
+    assert props.read_sidecar(pid)["exclude_actions"] == [SIT["id"]]
+    assert saved["exclude_actions"] == [SIT["id"]] and saved["revision"] != base
+    assert saved["action_revision"] == saved["revision"]   # nothing added any more
+    assert SIT["id"] not in offers(name)
+    for bad, error in (({"exclude_actions": ["rest"]}, props.PropDocumentInvalid),
+                       ({"exclude_actions": "rest"}, ValueError)):
+        try:
+            props.bulk_update(pid, bad, base_revision=saved["revision"])
+        except error:
+            pass
+        else:
+            raise AssertionError(f"{bad} was accepted")
+    cleared = props.bulk_update(pid, {"exclude_actions": []}, base_revision=saved["revision"])
+    assert "exclude_actions" not in props.read_sidecar(pid) and SIT["id"] in offers(name)
+    assert cleared["action_revision"] != cleared["revision"]
+    print("PASS j: the editor lists package actions read-only and saves the prop's exclusion")
     SRC.unregister_source("testpack")
     F.assert_no_external_work()
 

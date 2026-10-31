@@ -26,7 +26,7 @@ import { propActionCheckDocument } from './propActionChecks'
 import { actionEditorIssues } from './propActionAuthoring'
 import type {
   PropAreasInfo, PropFull, PropLight, PropMarker, PropSlotValues, PropSourceImage,
-  PropVariant, PropView, PropWorkspaceArea, PropActionIssue, VariantBinding, PropAccessPreviews,
+  PropVariant, PropView, PropWorkspaceArea, PropActionIssue, VariantBinding, PackAction, PropAccessPreviews,
 } from './propTypes'
 import { resolveVariantAfterBarrier, propGenerationSubject, propGenerationTarget,
   propGenerationAuthor, resolvePropRepairAfterBarrier, type PropGenerationTarget,
@@ -89,7 +89,8 @@ function authorSnapshot(prop: PropFull, variants: PropVariant[]): AuthorFields {
     [GENERAL_TARGET, { name: prop.name, category: prop.category,
       tags: prop.tags.join(', '), sway_factor: prop.sway_factor ?? 1,
       mount: { value: prop.mount || '', suggested: !!prop.mount_suggested },
-      actions: prop.actions, slots: prop.slots, key_areas: prop.key_areas }],
+      actions: prop.actions, slots: prop.slots, key_areas: prop.key_areas,
+      exclude_actions: prop.exclude_actions || [] }],
     ...variants.map((v): [string, Record<string, unknown>] => [
       variantTarget(v.uid), { dims: v.dims, description: v.description,
         ground_offset_m: v.ground_offset_m, markers: v.markers,
@@ -1126,14 +1127,16 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
   }
   const actions = draftValue(buf, GENERAL_TARGET, 'actions', prop.actions || [])
   const accessDocument = useMemo(() => propActionCheckDocument(prop, variants, buf), [prop, variants, buf])
-  const [accessPreviewResult, setAccessPreviewResult] = useState<{ document: typeof accessDocument; points: PropAccessPreviews; bindings: Record<string, VariantBinding[]> } | null>(null)
+  const [accessPreviewResult, setAccessPreviewResult] = useState<{ document: typeof accessDocument; points: PropAccessPreviews; bindings: Record<string, VariantBinding[]>; packActions: PackAction[] } | null>(null)
   const accessPreviews = accessPreviewResult?.document === accessDocument ? accessPreviewResult.points : {}
   const derivedBindings = accessPreviewResult?.document === accessDocument ? accessPreviewResult.bindings : {}
+  // Kept across re-validations so the list does not blink while a draft is checked.
+  const packActions = accessPreviewResult?.packActions || []
   useEffect(() => {
     let current = true
     const timer = setTimeout(() => {
-      void apiPost<{ access_previews: PropAccessPreviews; derived_bindings: Record<string, VariantBinding[]> }>(`/world/props/${enc}/validate`, { document: accessDocument })
-        .then(result => { if (current) setAccessPreviewResult({ document: accessDocument, points: result.access_previews || {}, bindings: result.derived_bindings || {} }) })
+      void apiPost<{ access_previews: PropAccessPreviews; derived_bindings: Record<string, VariantBinding[]>; pack_actions?: PackAction[] }>(`/world/props/${enc}/validate`, { document: accessDocument })
+        .then(result => { if (current) setAccessPreviewResult({ document: accessDocument, points: result.access_previews || {}, bindings: result.derived_bindings || {}, packActions: result.pack_actions || [] }) })
         .catch(() => { if (current) setAccessPreviewResult(null) })
     }, 250)
     return () => { current = false; clearTimeout(timer) }
@@ -1313,7 +1316,7 @@ export function usePropWorkspace({ prop, pending, generatingVariants, cacheBump,
     area, navigate, mobilePane, setMobilePane,
     revisionReady, variantLoadError,
     prepareVariantOperation,
-    selectedActionId, setSelectedActionId, saveIssues, derivedBindings, accessPreviews, accessPlacing, armAccess, onPickAccess,
+    selectedActionId, setSelectedActionId, saveIssues, derivedBindings, packActions, accessPreviews, accessPlacing, armAccess, onPickAccess,
     catalog, reloadActionCatalog, authoringIssues,
     generationRepairs, repairLoading, repairLoadError, repairError, repairBusy, repairRequest,
     refreshGenerationRepairs, openGenerationRepair, cancelGenerationRepair, confirmGenerationRepair, dismissGenerationRepair,

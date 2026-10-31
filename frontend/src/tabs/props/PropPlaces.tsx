@@ -83,7 +83,8 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
               <div id="prop-marker-card" className="ga-marker-card">
                 <p className="ga-hint">{t('Used by:')} {(workspace.derivedBindings[workspace.shownVariant?.uid || ''] || [])
                   .filter(b => !!selMarker.id && b.marker_ids.includes(selMarker.id))
-                  .map(b => workspace.actions.find(a => a.id === b.action_id)?.name || b.action_id).join(', ') || t('None')}</p>
+                  .map(b => workspace.actions.find(a => a.id === b.action_id)?.name
+                    || workspace.packActions.find(a => a.id === b.action_id)?.name || b.action_id).join(', ') || t('None')}</p>
                 <div className="ga-form-row">
                   <span className="ga-hint" style={{ minWidth: 20 }}>🎯 {selIdx + 1}</span>
                   <select
@@ -125,7 +126,7 @@ export function PropPlaces({ workspace }: { workspace: PropWorkspace }) {
                 </div>
                 <details className="prop-inspector-group"><summary>{t('Advanced')}</summary>
                   <fieldset><legend>{t('Not for these actions')}</legend>
-                    {workspace.actions.map(action => <label key={action.id} className="ga-form-row">
+                    {[...workspace.actions, ...workspace.packActions.map(pack => ({ ...pack, name: `${pack.name} (${pack.package_label})` }))].map(action => <label key={action.id} className="ga-form-row">
                       <input type="checkbox" checked={selMarker.exclude_actions?.includes(action.id) || false}
                         onChange={event => patchMarker(selIdx, { exclude_actions: event.target.checked
                           ? [...(selMarker.exclude_actions || []), action.id]

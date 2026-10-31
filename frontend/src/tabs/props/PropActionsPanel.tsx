@@ -4,6 +4,7 @@ import { PropWorkspaceDialog } from './PropWorkspaceDialog'
 import { PropActionChecks } from './PropActionChecks'
 import { ActionField, ActionReference, GameDuration, PropActionEffects, PropActionRequirements, referenceLabel } from './PropActionEffects'
 import { copyAction, createActionPreset, presentations, type ActionPreset } from './propActionAuthoring'
+import { draftValue, GENERAL_TARGET } from './pendingFields'
 import type { ActionDefinition, PropActionIssue, PropFull } from './propTypes'
 import type { PropWorkspace } from './usePropWorkspace'
 
@@ -62,6 +63,9 @@ export function PropActionsPanel({ workspace, onIssue }: { workspace: PropWorksp
   const available = action ? presentations(catalog, action.participants === 2 ? 'pair' : 'pose') : []
   const poseOptions = available.map(pose => ({ value: pose.key, label: pose.label || t(referenceLabel(pose.key)) }))
   const binding = (workspace.derivedBindings[shownVariant?.uid || ''] || []).find(item => item.action_id === action?.id)
+  // Package actions are listed, never drafted: the one thing the author
+  // decides here is whether THIS furniture offers them (exclude_actions).
+  const excluded = draftValue<string[]>(workspace.buf, GENERAL_TARGET, 'exclude_actions', workspace.prop.exclude_actions || [])
   return <div className="ga-form prop-area-content prop-actions-panel">
     <div className="prop-action-toolbar"><h3>{t('Actions')}</h3>
       <button type="button" className="ga-btn ga-btn-primary ga-btn-sm" disabled={catalog.status !== 'ready'} onClick={() => setCreateOpen(true)}>{t('Add action')}</button>
@@ -128,6 +132,21 @@ export function PropActionsPanel({ workspace, onIssue }: { workspace: PropWorksp
         </details>
       </div>}
     </>}
+    {workspace.packActions.length > 0 && <section className="prop-action-section prop-pack-actions"><h4>{t('From packages')}</h4>
+      <p className="ga-hint">{t('An installed package adds these actions to every prop with a matching place. They are not stored in this prop and are not exported with it.')}</p>
+      <ul className="prop-action-list" aria-label={t('From packages')}>
+        {workspace.packActions.map(pack => {
+          const off = excluded.includes(pack.id)
+          const places = (workspace.derivedBindings[shownVariant?.uid || ''] || []).find(item => item.action_id === pack.id)?.marker_ids.length || 0
+          return <li key={pack.id} className="prop-pack-action">
+            <div><strong>{pack.name}</strong> <span className="ga-hint">{t('From package')} {pack.package_label} · {pack.participants} {t('People')}</span></div>
+            <label className="ga-form-row"><input type="checkbox" checked={!off}
+              onChange={event => queueGeneral({ exclude_actions: event.target.checked ? excluded.filter(id => id !== pack.id) : [...excluded, pack.id] })} />{t('Offer on this furniture')}</label>
+            {!off && <p className="ga-hint">{t('Applies to:')} {places} {t('places on this variant')}</p>}
+          </li>
+        })}
+      </ul>
+    </section>}
     {!action && <details className="prop-inspector-group"><summary>{t('Advanced')}</summary>
       <button type="button" className="ga-btn ga-btn-sm" onClick={() => setCopyOpen(true)}>{t('Copy from another prop')}</button>
     </details>}

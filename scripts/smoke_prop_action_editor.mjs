@@ -1,6 +1,12 @@
 /** Behavioral editor checks. By hand: server supplies two places; a lie solo
  * shows the sleep checkbox; choosing 2 persons derives pair; effects summarize
- * energy +5/min and mood relaxed. Advanced and Effects start collapsed. */
+ * energy +5/min and mood relaxed. Advanced and Effects start collapsed.
+ * Package actions (plan-pack-prop-actions.md): the one server-listed package
+ * action "Doze" (package label "Test pack", bound on "left") is shown read-only
+ * under "From packages" with "Applies to: 1 places"; unticking "Offer on this
+ * furniture" queues exclude_actions [pack-doze] beside the stored [pack-old],
+ * and it appears as "Doze (Test pack)" among a marker's exclusions and in
+ * "Used by". */
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
@@ -28,10 +34,11 @@ const author = await load('propActionAuthoring.ts', {});
 const effects = await load('PropActionEffects.tsx', {
   '../../lib/moods': { useMoods: () => ['relaxed'] }, './propActionAuthoring': author,
 });
+const pending = await load('pendingFields.ts', {});
 const { PropActionsPanel } = await load('PropActionsPanel.tsx', {
   '../../lib/api': {}, './PropWorkspaceDialog': { PropWorkspaceDialog() {} },
   './PropActionChecks': { PropActionChecks() {} }, './PropActionEffects': effects,
-  './propActionAuthoring': author,
+  './propActionAuthoring': author, './pendingFields': pending,
 });
 function nodes(tree) {
   if (Array.isArray(tree)) return tree.flatMap(nodes);
@@ -53,8 +60,11 @@ const catalog = { status: 'ready', stats: ['energy'], conditions: [], groups: {}
 let patch;
 const workspace = { t: value => value, actions: [action], shownVariant: { uid: 'v', markers: [
   { id: 'left', group: 'lie' }, { id: 'right', group: 'lie' }] },
-  derivedBindings: { v: [{ action_id: 'rest', marker_ids: ['left', 'right'] }] },
-  selectedActionId: 'rest', variants: [], catalog, authoringIssues: [], prop: { id: 'bed' },
+  derivedBindings: { v: [{ action_id: 'rest', marker_ids: ['left', 'right'] }, { action_id: 'pack-doze', marker_ids: ['left'] }] },
+  selectedActionId: 'rest', variants: [], catalog, authoringIssues: [], prop: { id: 'bed', exclude_actions: ['pack-old'] },
+  buf: pending.emptyFields(),
+  packActions: [{ id: 'pack-doze', name: 'Doze', description: '', ability: 'pose', participants: 1,
+    pose_key: 'lie', package: 'testpack', package_label: 'Test pack', excluded: false }],
   queueGeneral: value => { patch = value; }, setSelectedActionId() {}, queueVariant() {},
 };
 const tree = PropActionsPanel({ workspace, onIssue() {} });
@@ -63,6 +73,15 @@ assert(text(tree).includes('Applies to: 2 places on this variant (lie x2)'));
 assert(!all.some(node => node.props?.label === 'Executable ability'));
 const poses = all.find(node => node.props?.label === 'Pose');
 assert.deepEqual(Array.from(poses.props.options, p => p.value), ['lie', 'sit']);
+const packSection = all.find(node => node.type === 'section' && text(node).startsWith('From packages'));
+assert(packSection && text(packSection).includes('Doze From package Test pack · 1 People'));
+assert(text(packSection).includes('Applies to: 1 places on this variant'));
+assert(!nodes(packSection).some(node => node.type === 'input' && node.props.type !== 'checkbox'), 'read-only');
+const offerHere = nodes(packSection).find(node => node.type === 'input' && node.props.type === 'checkbox');
+assert.equal(offerHere.props.checked, true);
+offerHere.props.onChange({ target: { checked: false } });
+assert.deepEqual(Array.from(patch.exclude_actions), ['pack-old', 'pack-doze']);
+assert(!('actions' in patch), 'a package action never enters the draft');
 const sleep = all.find(node => node.type === 'label' && text(node).includes('Really fall asleep'));
 nodes(sleep).find(node => node.type === 'input').props.onChange({ target: { checked: true } });
 assert.equal(patch.actions[0].ability, 'sleep');
@@ -94,7 +113,8 @@ const markerTree = PropPlaces({ workspace: { ...workspace, markers: [marker], se
   shownDims: { width_m: 2, depth_m: 2, height_m: 1 },
   patchMarker: (_, change) => { markerPatch = change; },
 } });
-assert(text(markerTree).includes('Used by: Rest'));
+assert(text(markerTree).includes('Used by: Rest, Doze'));
+assert(text(markerTree).includes('Doze (Test pack)'));
 const markerAdvanced = nodes(markerTree).find(node => node.type === 'details');
 assert(!markerAdvanced.props.open);
 assert(text(markerAdvanced).includes('Not for these actions'));

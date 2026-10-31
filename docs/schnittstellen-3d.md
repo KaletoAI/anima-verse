@@ -7645,7 +7645,13 @@ actions both are equal. The scene fingerprint, the places cache and the offers
 key carry `prop_action_sources.signature()`, so a changed package setting needs
 no restart; a running action whose runtime revision is gone ends with
 `stale_definition`. Ids of package actions carry the reserved prefix `pack-`.
-Proof: `scripts/smoke_prop_action_pack.py`.
+The prop editor never drafts them: `POST /world/props/{id}/validate` answers
+`pack_actions` (every admitted one with `name`, `package`, `package_label`,
+`excluded`, read-only) and derives `derived_bindings` on the runtime document;
+the author switches one off for this prop through the batch save's
+`general.exclude_actions` (deduplicated, `[]` removes the key) or for one place
+through the marker's `exclude_actions`.
+Proof: `scripts/smoke_prop_action_pack.py`, `scripts/smoke_prop_action_editor.mjs`.
 
 The validate endpoint returns `derived_bindings` keyed by variant UUID, alongside
 `issues`, `valid` and `access_previews`. The editor renders these server results

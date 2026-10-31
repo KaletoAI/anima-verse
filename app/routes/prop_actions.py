@@ -195,8 +195,13 @@ def validate(prop_id: str, body: Document, user=Depends(require_admin)):
     issues = prop_actions.validate_document(body.document)
     valid = not any(i["severity"] == "error" for i in issues)
     from app.core.prop_action_access import preview_access
+    # Bindings as the runtime derives them: own actions plus the package
+    # actions this draft admits (plan-pack-prop-actions.md). The package
+    # actions travel separately, read-only, so the draft never takes them in.
+    runtime = prop_actions.effective_document(body.document)
     return {"issues": issues, "valid": valid, "placement": "not_checked",
-            "derived_bindings": {v.get("uid"): prop_actions.derive_bindings(body.document, v)
+            "pack_actions": prop_actions.package_actions_for(body.document),
+            "derived_bindings": {v.get("uid"): prop_actions.derive_bindings(runtime, v)
                                  for v in body.document.get("model_variants", []) if isinstance(v, dict)} if valid else {},
             "access_previews": preview_access(body.document, prop_id=prop_id) if valid else {}}
 

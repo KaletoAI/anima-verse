@@ -2958,7 +2958,7 @@ def create_prop(*, name: str, category: str = "", width_m: Any = None,
 #: the variants (2026-08-25), and :data:`MOVED_TO_VARIANT` names those so a
 #: stale client is REFUSED instead of silently writing a key nobody reads.
 PROP_PATCH_KEYS = ("name", "category", "tags", "sway_factor", "slots",
-                   "key_areas", MOUNT_KEY)
+                   "key_areas", MOUNT_KEY, "exclude_actions")
 #: The fields that are variant-only now. A prop-level patch naming one of
 #: them is a 400 with the route that owns it — never a no-op: an editor that
 #: still sends ``height_m`` here would report "Saved" over a value that never
@@ -3010,6 +3010,11 @@ def _check_prop_patch(patch: Dict[str, Any],
         sanitize_key_areas(patch.get(KEY_AREAS_KEY))
     if MOUNT_KEY in patch:
         sanitize_mount(patch.get(MOUNT_KEY))
+    # Package actions this prop does not offer (plan-pack-prop-actions.md);
+    # which ids are allowed is ``prop_actions.validate_document``'s call.
+    if "exclude_actions" in patch and (not isinstance(patch["exclude_actions"], list)
+                                       or not all(isinstance(v, str) for v in patch["exclude_actions"])):
+        raise ValueError("exclude_actions must be a list of action ids")
 
 
 def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
@@ -3025,6 +3030,13 @@ def _apply_prop_fields(meta: Dict[str, Any], patch: Dict[str, Any]) -> None:
             meta["name"] = nm
     if "category" in patch:
         meta["category"] = str(patch.get("category") or "").strip()
+    if "exclude_actions" in patch:
+        # Absence is "offers every package action"; an emptied list goes.
+        excluded = sorted(set(patch["exclude_actions"]))
+        if excluded:
+            meta["exclude_actions"] = excluded
+        else:
+            meta.pop("exclude_actions", None)
     if "tags" in patch:
         meta["tags"] = _coerce_tags(patch.get("tags"))
     if "sway_factor" in patch:
