@@ -289,7 +289,7 @@ def tool_log_data(
     from app.core import tool_call_log
     rows = []
     try:
-        with tool_call_log.LOG_FILE.open(encoding="utf-8") as stream:
+        with tool_call_log.LIVE_LOG_FILE.open(encoding="utf-8") as stream:
             for line in stream:
                 try:
                     row = json.loads(line)

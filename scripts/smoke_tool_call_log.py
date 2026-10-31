@@ -3,8 +3,11 @@
 Hand-derived: TalkTo has 2 ok + 1 error: total 3, fail rate .333.
 Move has blocked + exception: total 2, fail rate 1. Filtering status
 leaves these summaries intact. Nested execution writes exactly one row.
-Input/result limits are 2000/1000 characters respectively.
+Input/result limits are 2000/1000 characters respectively. Disabled logging
+writes no file; only server startup enables the live log. Refusal matching
+uses only the first line and its first 300 characters.
 """
+import ast
 import json
 import os
 from pathlib import Path
@@ -24,15 +27,51 @@ def main():
         paths.init(directory)
         from app.core import tool_call_log as log, skill_gate as gate
         from app.core.turn_trace import begin_trace, set_trace
-        log.LOG_FILE = Path(directory) / 'tools.jsonl'
+        live_mtime_before = (log.LIVE_LOG_FILE.stat().st_mtime_ns
+                             if log.LIVE_LOG_FILE.exists() else None)
+        assert log.LOG_FILE is None
+        log.configure(None)
+        log.record(character='demo', tool='demo', status='ok')
+        assert (log.LIVE_LOG_FILE.stat().st_mtime_ns
+                if log.LIVE_LOG_FILE.exists() else None) == live_mtime_before
+        log.configure(Path(directory) / 'tools.jsonl')
         def rows():
             return [json.loads(line) for line in log.LOG_FILE.read_text().splitlines()]
         for value in ('Error: x', 'Fehler: y', '{"success": false}',
                       {'ok': False}, {'status': 'refused'}):
             assert log.classify(value) == 'error', value
-        for value in ('Moved to kitchen', "Character 'Zed' not found"):
-            # Known gap: is_error_result does not recognize missing characters.
-            assert log.classify(value) == 'ok'
+        for value in ("Character 'Zed' not found",
+                      "Error: Character 'Ylva' not found. Available: ...",
+                      "Cannot: Rosi is already busy with someone",
+                      "You cannot reach the cellar from here",
+                      "Error: Vallerie is still on post cooldown (11.6 h of 12 h left).",
+                      "FEHLER: 'Bluse' nicht im Inventar. Verfuegbar: ...",
+                      "FEHLER: 'Bluse': not_equipped",
+                      "CHARACTER 'DEMO' NOT FOUND"):
+            assert log.classify(value) == 'error', value
+        for value in ('Moved to kitchen', 'Searched: nothing new about cats',
+                      '{"name": "demo", "moved": false}',
+                      'Moved successfully\nCharacter demo not found',
+                      'x' * 300 + ' not found', 'Cannotaloupe', 'not foundry',
+                      'Posted. The next post is possible after the 12 h cooldown.'):
+            assert log.classify(value) == 'ok', value
+        src = Path('app/server.py').read_text()
+        assert 'tool_call_log.configure(tool_call_log.LIVE_LOG_FILE)' in src
+        callers = sorted(p for p in Path('app').rglob('*.py')
+                         if 'tool_call_log.configure(' in p.read_text()
+                         or 'log.configure(' in p.read_text())
+        assert callers == [Path('app/server.py')], callers
+        callers = []
+        for script in Path('scripts').rglob('*.py'):
+            tree = ast.parse(script.read_text(), filename=str(script))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr == 'configure'
+                        and any(isinstance(arg, ast.Attribute)
+                                and arg.attr == 'LIVE_LOG_FILE' for arg in node.args)):
+                    callers.append(script)
+        assert not callers, callers
         log.record(character='demo', tool='demo', status='ok',
                    tool_input='x' * 2500, result='y' * 1500)
         assert len(rows()[-1]['input']) == 2000
@@ -105,7 +144,8 @@ def main():
         def query(**kwargs):
             args = dict(limit=100, offset=0, character='', tool='', status='', source='', search='')
             args.update(kwargs)
-            return logs.tool_log_data(**args)
+            with patch.object(log, 'LIVE_LOG_FILE', valid):
+                return logs.tool_log_data(**args)
         result = query()
         assert result['total'] == 5 and result['entries'][0]['status'] == 'exception'
         assert result['summary'] == [
@@ -143,6 +183,7 @@ def main():
             assert npc_actions.run_action_for('demo', llm=lambda: None) is None
             assert len(rows()) == 3
         assert 'prune_jsonl_log(LOG_DIR / "tool_calls.jsonl", days)' in Path('app/utils/llm_logger.py').read_text()
+        log.configure(None)
     print('PASS: tool call logging, gates, trace, viewer, retention')
 
 

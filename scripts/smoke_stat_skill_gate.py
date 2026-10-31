@@ -83,7 +83,8 @@ def main():
                                       ('act_engine.py', '_make_wrapper')):
                 tree = ast.parse((Path(__file__).resolve().parents[1] / 'app/core' / filename).read_text())
                 node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == factory)
-                context = dict(t=sm.skills[0].as_tool(), character_name='Tester', owner_id='',
+                context = dict(t=sm.skills[0].as_tool(), t_name=sm.skills[0].as_tool().name,
+                               character_name='Tester', owner_id='',
                                _tool_initiator='', actor='Tester', sid='fake_move', json=json,
                                _json=json, _coerce_to_dict=lambda raw: {},
                                bind_stat_sources=bind_stat_sources, stat_collector=None)

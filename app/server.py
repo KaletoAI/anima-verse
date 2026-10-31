@@ -152,6 +152,9 @@ async def lifespan(app: FastAPI):
     clear_story_tmp()
     clear_tts_tmp()
 
+    from app.core import tool_call_log
+    tool_call_log.configure(tool_call_log.LIVE_LOG_FILE)
+
     # Log retention: entries older than the window are moved out of
     # llm_calls.jsonl + image_prompts.jsonl into their monthly bucket under
     # logs/archive/ (default 5 days, configurable via server.log_retention_days
