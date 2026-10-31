@@ -127,7 +127,7 @@ def extract_memories_from_exchange(character_name: str,
     partner_name: str,
     partner_message: str,
     own_message: str,
-    llm) -> List[Dict[str, Any]]:
+    llm, *, plans: bool = True) -> List[Dict[str, Any]]:
     """Extract memories from a character-to-character exchange.
 
     Args:
@@ -139,6 +139,7 @@ def extract_memories_from_exchange(character_name: str,
                         text itself names someone.
         partner_message: What the partner said (text_a)
         own_message:    What the memory owner said (text_b)
+        plans:          Extract and complete plans as well as semantic facts.
 
     Returns list of extracted memory dicts.
     """
@@ -165,15 +166,15 @@ def extract_memories_from_exchange(character_name: str,
     from app.models.memory import load_memories
     existing = load_memories(character_name)
     existing_summary = "\n".join(
-        f"- {e['content']}" for e in existing[:15]
+        "- " + " ".join(e["content"].split())[:200] for e in existing[:15]
     ) if existing else "(none yet)"
 
     from app.models.intents import build_open_intents_brief, complete_intent_as
-    plans = build_open_intents_brief(character_name)
+    open_plans = build_open_intents_brief(character_name) if plans else ""
     open_plans_block = (
         "Open plans (id | title) — do not extract one of these again; "
-        "if this thought finishes one, list its id in completed_ids:\n" + plans
-    ) if plans else ""
+        "if this thought finishes one, list its id in completed_ids:\n" + open_plans
+    ) if open_plans else ""
 
     # Clean own message (remove meta-tags)
     clean_own = re.sub(r'\*\*I\s+feel\s+[^*]+\*\*', '', own_message, flags=re.IGNORECASE)
@@ -192,6 +193,7 @@ def extract_memories_from_exchange(character_name: str,
         from app.core.prompt_templates import render_task
 
         shared = dict(
+            plans_enabled=plans,
             speaker_b=character_name,
             text_b=clean_own[:1500],
             existing_summary=existing_summary,
@@ -248,6 +250,8 @@ def extract_memories_from_exchange(character_name: str,
                 if mem_type == "episodic":
                     continue
                 mem_type = "semantic"
+            if mem_type == "commitment" and not plans:
+                continue
             if monologue and mem_type == "commitment":
                 when = str(item.get("when") or "").strip().lower()
                 if when != "later":
@@ -293,7 +297,7 @@ def extract_memories_from_exchange(character_name: str,
 
         # Complete plans named by their hex ids.
         completed_ids = parsed.get("completed_ids", [])
-        if isinstance(completed_ids, list) and completed_ids:
+        if plans and isinstance(completed_ids, list) and completed_ids:
             for intent_id in completed_ids:
                 complete_intent_as(character_name, str(intent_id).strip())
 

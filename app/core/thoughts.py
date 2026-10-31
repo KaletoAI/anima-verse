@@ -773,6 +773,7 @@ class ThoughtRunner:
                         "stat_context": stat_context,
                     },
                     detach_background=True,
+                    chat_mode=mode,
                 )
                 if _pp_result.get("location"):
                     logger.info("%s thought: location -> %s", character_name, _pp_result["location"])

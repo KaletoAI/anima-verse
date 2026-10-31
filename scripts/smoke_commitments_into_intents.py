@@ -20,6 +20,10 @@ A monologue reply with later/now/ongoing/missing commitments and a semantic
 fact returns exactly the later commitment and the fact, without storing when.
 A dyadic commitment without when survives. Rendered thought JSON includes
 "when": "later".
+Facts-only mode returns one semantic fact, creates no plan and completes none,
+with no plan schema or open-plan context in its prompt. Stored memories collapse
+whitespace and cap content at 200 characters. Thought modes pass plans=False
+for rp_first and plans=True for single.
 """
 import json
 import os
@@ -79,6 +83,67 @@ def main():
                 llm.assert_called_once()
                 prompt = llm.call_args.kwargs['user_prompt']
                 assert prose in prompt and 'SetActivity(' not in prompt
+
+            # Facts-only extraction ignores even unsolicited plan output.
+            fixture = dict(speaker_b='demo', text_b='The cellar door is repaired.',
+                           presence_known=True, present_names='', absent_names='',
+                           existing_summary='- A B C', open_plans_block='Open plans SENTINEL',
+                           lang_instruction='')
+            system, user = render_task('extraction_thought', plans_enabled=False, **fixture)
+            for forbidden in ('commitment', 'completed_ids', 'Open plans', 'SENTINEL',
+                              'delay_minutes', '"when"', '"title"'):
+                assert forbidden not in system + user, forbidden
+            assert '"semantic"' in user
+            active = intents.create_intent(owner='demo', title='Keep this open')
+            unsolicited = SimpleNamespace(content=json.dumps({'memories': [
+                {'memory_type': 'commitment', 'title': 'Unwanted plan',
+                 'content': 'demo will bake tomorrow.', 'when': 'later'},
+                {'memory_type': 'semantic', 'content': 'The cellar door is repaired.'}],
+                'completed_ids': [active['id']]}))
+            with patch('app.models.character.get_character_config', return_value={}), \
+                 patch('app.models.memory.load_memories', return_value=[
+                     {'content': 'A\nB  C'}, {'content': 'x ' * 150}]), \
+                 patch('app.core.llm_router.llm_call', return_value=unsolicited) as llm:
+                extracted = ms.extract_memories_from_exchange(
+                    'demo', '', '', 'A learned fact and a future plan.', None, plans=False)
+                assert [e['memory_type'] for e in extracted] == ['semantic'], extracted
+                assert ms.apply_extracted_memories('demo', extracted) == 1
+                prompt = llm.call_args.kwargs['user_prompt']
+                assert '- A B C' in prompt and 'A\nB  C' not in prompt
+                assert '- ' + ('x ' * 150).strip()[:200] in prompt.splitlines()
+                assert '- ' + ('x ' * 150).strip()[:201] not in prompt.splitlines()
+            assert intents.list_intents() == [active]
+            intents.delete_intent(active['id'])
+            for row in memory.load_memories('demo'):
+                memory.delete_memory('demo', row['id'])
+
+            # Execute the real thought call with a patched postprocessor, then
+            # capture the extraction invoked by the real postprocessor.
+            import ast
+            from app.core.chat_engine import post_process_response
+            tree = ast.parse((Path(__file__).resolve().parents[1] / 'app/core/thoughts.py').read_text())
+            call_node = next(node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                             and isinstance(node.func, ast.Attribute) and node.func.attr == 'to_thread'
+                             and node.args and isinstance(node.args[0], ast.Name)
+                             and node.args[0].id == 'post_process_response')
+            for mode in ('rp_first', 'single'):
+                capture = Mock(return_value={})
+                scope = dict(asyncio=SimpleNamespace(to_thread=lambda fn, **kw: fn(**kw)),
+                             post_process_response=capture, character_name='demo',
+                             user_input='', has_private_prose=True, full_response='A sufficiently long thought about a fact.',
+                             config={}, llm=None, user_name='', recent_history=[], stat_context=None, mode=mode)
+                eval(compile(ast.Expression(call_node), '<thought call>', 'eval'), scope)
+                assert capture.call_args.kwargs['chat_mode'] == mode
+                kwargs = dict(capture.call_args.kwargs, detach_background=False)
+                with patch('app.routes.chat._extract_mood', return_value=None), \
+                     patch('app.routes.chat._extract_location', return_value=None), \
+                     patch('app.routes.chat._extract_activity', return_value=None), \
+                     patch('app.routes.chat._extract_context_from_last_chat'), \
+                     patch('app.core.chat_engine.run_follow_up', side_effect=lambda fn, **kw: fn()), \
+                     patch.object(ms, 'extract_memories_from_exchange', return_value=[]) as extract:
+                    post_process_response(**kwargs)
+                    extract.assert_called_once()
+                    assert extract.call_args.kwargs['plans'] == (mode != 'rp_first')
 
             timing_items = [
                 {'memory_type': 'commitment', 'title': 'Bake tomorrow', 'content': 'demo will bake tomorrow.', 'when': 'later'},

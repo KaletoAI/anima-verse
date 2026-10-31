@@ -1317,7 +1317,8 @@ def post_process_response(
     executed_tools: list = None,
     detach_background: bool = False,
     synthetic_input: bool = False,
-    rp_response: str | None = None) -> Dict[str, Any]:
+    rp_response: str | None = None,
+    chat_mode: str = '') -> Dict[str, Any]:
     """
     Run all post-processing after a chat response: mood, location, activity,
     memory extraction, relationship updates, intent extraction.
@@ -1336,6 +1337,7 @@ def post_process_response(
         history_window: DEPRECATED — ignored, kept for backward compat
         old_history: Messages older than short-term window (for summary)
         rp_response: Original RP prose, before cleaning and tool-step markers.
+        chat_mode: Thought extraction keeps facts only in rp_first mode.
         synthetic_input: The incoming text is a hint, not partner speech.
         detach_background: the caller runs this in a worker thread that must
             not wait for the LLM extractions started here (a thought turn via
@@ -1460,7 +1462,8 @@ def post_process_response(
             try:
                 from app.core.memory_service import extract_memories_from_exchange, apply_extracted_memories
                 extracted = extract_memories_from_exchange(
-                    character_name, _extract_partner, _mem_user_input, cleaned, llm
+                    character_name, _extract_partner, _mem_user_input, cleaned, llm,
+                    plans=chat_mode != "rp_first"
                 )
                 if extracted:
                     count = apply_extracted_memories(character_name, extracted,

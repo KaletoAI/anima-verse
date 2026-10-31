@@ -2,6 +2,7 @@
 task: extraction
 purpose: Extract semantic facts and commitments from a character's own thought turn — the monologue counterpart of extraction_memory (used by memory_service.extract_memories_from_exchange without a partner)
 placeholders:
+  plans_enabled: Whether to extract plans as well as facts (default true)
   speaker_b: Name of the memory owner (the character whose thought this is)
   text_b: The thought itself
   presence_known: Whether actual room presence is known
@@ -27,6 +28,7 @@ is imagined — it did not happen.
 {% endif %}
 {% endif %}
 
+{% if plans_enabled | default(true) %}
 Extract as a JSON array. For each memory:
 - memory_type: "semantic" (fact/info) or "commitment" (promise/plan)
 - title: ONLY for commitments — a short plan label, 2–6 words, in the language of the content, without the owner's name (e.g. "bake bread", "return the borrowed book").
@@ -67,3 +69,26 @@ Reply ONLY with valid JSON:
 ],
 "completed_ids": ["a1b2c3d4", ...]
 }
+{% else %}
+Extract facts worth keeping as JSON. For each memory:
+- memory_type: "semantic"
+- content: short, compact sentence (max 1-2 sentences) — written about {{ speaker_b }} in third person. Name every person using ONLY names literally in the thought; never infer or complete a name or use a role instead.
+- related_character: the other person this fact is ABOUT, if named in the thought. Otherwise leave it out.
+- importance: 1-5 (5=critical, 4=important, 3=medium, 2=minor, 1=trivial)
+- tags: list of keywords
+
+Already stored memories (DO NOT repeat):
+{{ existing_summary }}
+
+IMPORTANT:
+- Something done WITH a person who was not there did not happen. Do not extract imagined events.
+- Keep only facts explicitly LEARNED or actions DONE with a lasting result that still matters later.
+- Ignore intentions, future actions, wishes, preparations, rehearsals, moods, worries, scenery, smalltalk, gestures, poses and passing body movements.
+- Keep WHO did or said what exactly as written. Never turn an intention into an accomplished action.
+- NO episodic memories — those are auto-consolidated from chat history.
+- NEVER write "User", "Player", "Spieler", "the user", "I" or generic labels such as "the narrator" or "my conversation partner".{{ lang_instruction }}
+- If nothing new: {"memories": []}
+
+Reply ONLY with valid JSON:
+{"memories": [{"memory_type": "semantic", "content": "...", "related_character": "...", "importance": 3, "tags": ["..."]}]}
+{% endif %}
