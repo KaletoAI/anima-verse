@@ -8077,8 +8077,9 @@ bytes remain test assets, not a claim of playable client media.
 
 ### Authorized semantic action APIs and effective prompts
 
-`prop_actions.offers(actor)` returns the actual room's authored actions, including
-blocked ones. Each row includes `action_id`, `definition_revision`, exact `target`
+`prop_actions.offers(actor)` returns the actual room's actions that have a place on
+their placement (a binding on one of its composed markers — an action without one is
+no offer, 2026-10-31), including blocked ones. Each row includes `action_id`, `definition_revision`, exact `target`
 (`location_id,room_id,placement_id,variant_uid`), `placement_id`, `variant_uid`,
 `label`, `description`, `enabled`, `reason`, `required_partner`, `available_targets`
 (per-partner `{partner,enabled,reason}`) and declared `effects`. Checks cover every
@@ -8299,8 +8300,10 @@ the entire Shared NPC template; a bare tool request is not an NPC answer.
 General temporary Together's legacy acceptance is unchanged.
 
 Effective Shared/World `chat_moment`, both thought templates and `npc_action`
-render `prop_actions_block`: current IDs/targets, enabled/blocked reasons,
-partner choices, effect timing and exact executable signatures, even when the
+render `prop_actions_block`: only the offers requestable NOW (a pair offer with its
+enabled `partners`; no blocked offer, no `enabled`/`reason`/`available_targets`,
+target fields once — a room with a package's pair poses once grew it past 200 KB,
+`scripts/smoke_prop_action_prompt_block.py`), effect timing and exact executable signatures, even when the
 legacy activity-marker switch is off. If an override drops mandatory context,
 the renderer preserves its custom text, logs a repair warning and appends the
 real runtime block. Missing actor context raises instead of silently omitting it.

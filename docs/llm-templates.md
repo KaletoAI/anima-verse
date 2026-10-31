@@ -292,8 +292,8 @@ attention:
 
 Room furniture uses mandatory `prop_actions_block`, not a catalog-wide pose
 list. `chat/chat_moment.md`, both thought templates and `tasks/npc_action.md`
-render current exact action IDs/revisions/targets, real enabled/blocked reasons,
-partner choices, declared effects and executable `PropAction`/`InteractWith`
+render current exact action IDs/revisions/targets of the offers requestable now
+(blocked ones stay out), the enabled partners of a pair offer, declared effects and executable `PropAction`/`InteractWith`
 signatures. The old activity-marker enable flag only controls its marker syntax;
 it never disables semantic tool context. `set_pose` also supplies the executable
 `prop_action` capability, and NPC structured `prop_action` answers use that skill.

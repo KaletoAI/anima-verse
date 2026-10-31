@@ -395,6 +395,13 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
     recipe = compose_recipe(room, [r for r in loc["rooms"] if r is not room],
                             map3d=loc.get("map3d") or {}, read_only=True)
     present = sorted(name for name, _ in places._present(location_id, room_id) if name != actor)
+    # Which actions have a place on which placement (``derive_bindings`` via
+    # the composed markers). An action without one is no offer at all: it
+    # could only ever answer "this place does not support the pose" — and a
+    # package action reaches every prop, fitting or not.
+    bound = {(marker.get("placement_id"), binding.get("action_id"))
+             for marker in (recipe or {}).get("prop_markers", [])
+             for binding in marker.get("action_bindings", [])}
     result = []
     for placement in (recipe or {}).get("placements", []):
         pid = placement.get("prop_id", "")
@@ -403,6 +410,8 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
         target = dict(location_id=location_id, room_id=room_id,
                       placement_id=placement.get("id", ""), variant_uid=placement.get("variant_uid", ""))
         for action in document.get("actions", []):
+            if (target["placement_id"], action.get("id")) not in bound:
+                continue
             pair = action.get("participants") == 2
             # Not meant for this figure (no clip for its pose): not offered
             # at all, rather than shown and played as the group's fallback.
@@ -444,11 +453,28 @@ def prompt_block(actor: str) -> str:
     """Mandatory executable context shared by every real LLM consumer."""
     import json
     from app.core.prop_action_engine import state_for
-    rows = offers(actor)
+    # Only what can be requested NOW, and each fact once. Blocked offers stay
+    # out: a room with a few chairs and a package's pair poses lists hundreds
+    # of them (every partner, every place), which once grew this block past
+    # 200 KB per call. The player panel still shows them with their reason.
+    rows = []
+    for offer in offers(actor):
+        if offer["required_partner"]:
+            partners = [t["partner"] for t in offer["available_targets"] if t["enabled"]]
+            if not partners:
+                continue
+        elif not offer["enabled"]:
+            continue
+        row = {k: v for k, v in offer.items()
+               if k not in ("enabled", "reason", "available_targets", "placement_id", "variant_uid")
+               and v not in ("", [])}
+        if offer["required_partner"]:
+            row["partners"] = partners
+        rows.append(row)
     return ("<prop_actions_contract>\n"
             "Use PropAction for furniture actions, never SetActivity or a raw pose. "
-            "Only enabled offers and enabled exact partners can be requested. "
-            "Effects describe real rewards and timing; blocked reasons are authoritative. "
+            "The offers below are exactly what can be requested now; a pair offer only with one of its partners. "
+            "Effects describe real rewards and timing. "
             "Call PropAction with JSON {\"operation\":\"request\",\"action_id\":ID,"
             "\"revision\":DEFINITION_REVISION,\"target\":EXACT_TARGET,\"partner\":NAME_OR_EMPTY}. "
             "An accepted request starts walking, not instant seating or success. "

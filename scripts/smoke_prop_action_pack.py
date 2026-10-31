@@ -19,7 +19,9 @@ c. Source with "sit back" (pose "sitting" -> group seat) and "doze"
    "body", "doze" binds none (no lie marker). ``revision`` is still the hash
    of the raw sidecar, ``action_revision`` differs. The offer list carries
    "sit back" (enabled, with the runtime revision) under its German name
-   for lang "de" ("Zurücklehnen") and its English one for "en".
+   for lang "de" ("Zurücklehnen") and its English one for "en". "doze" binds
+   no marker of the placement, so it is no offer at all — the offers are
+   exactly {rest, sit back}.
 d. Export: the ZIP's sidecar.json equals the raw sidecar; no "pack-" in it.
 e. A request of "sit back" with the offer's revision starts (approaching).
    The package source is then removed: the offer disappears, and the
@@ -57,23 +59,29 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 
-import smoke_prop_action_runs as S  # noqa: E402
-
-F, A, R = S.F, S.A, S.R
 from uuid import NAMESPACE_URL, uuid5  # noqa: E402
-from app.core import prop_action_sources as SRC, prop_actions as P, props  # noqa: E402
-from app.plugins import registry  # noqa: E402
 
 LOADED = {"testpack"}
-_real_get_package = registry.get_package
+S = F = A = R = SRC = P = props = registry = None
 
 
-def _get_package(package_id):
-    return object() if package_id in LOADED else _real_get_package(package_id)
+def _load():
+    """Import the fixture and the core only now: the fixture points storage
+    at its private world before any world module is imported."""
+    global S, F, A, R, SRC, P, props, registry
+    import smoke_prop_action_runs as fixture
+    S, F, A, R = fixture, fixture.F, fixture.A, fixture.R
+    F.paths.init(F.ROOT / "world")
+    from app.core import prop_action_sources, prop_actions, props as prop_store
+    from app.plugins import registry as package_registry
+    SRC, P, props, registry = prop_action_sources, prop_actions, prop_store, package_registry
+    real = registry.get_package
+    patch.object(registry, "get_package",
+                 lambda package_id: object() if package_id in LOADED else real(package_id)).start()
 
 
 def definition(key, **kw):
-    base = dict(id=SRC.pack_action_id("testpack", key), name=key.title(), description="Package fixture",
+    base = dict(id="pack-" + str(uuid5(NAMESPACE_URL, f"anima:pack-action:testpack:{key}")), name=key.title(), description="Package fixture",
                 enabled=True, ability="pose", pose_key="sitting", participants=1, presence="any",
                 interrupt_on_presence_change=False, phases=[], requirements=[], effects=[])
     base.update(kw)
@@ -95,8 +103,7 @@ def identity(target):
 
 
 def main():
-    F.paths.init(F.ROOT / "world")
-    patch.object(registry, "get_package", _get_package).start()
+    _load()
 
     # a
     expected = "pack-" + str(uuid5(NAMESPACE_URL, "anima:pack-action:testpack:sit back"))
@@ -127,6 +134,9 @@ def main():
     assert en[SIT["id"]]["label"] == "Sit back" and de[SIT["id"]]["label"] == "Zurücklehnen"
     assert en[SIT["id"]]["definition_revision"] == record["action_revision"]
     assert en[SIT["id"]]["enabled"], en[SIT["id"]]
+    # "doze" binds no marker of this placement -> no offer at all (it could
+    # only be refused with incompatible_pose_marker).
+    assert DOZE["id"] not in en and set(en) == {"rest", SIT["id"]}, sorted(en)
     print("PASS c: package actions bind at runtime, the author record stays raw")
 
     # d
