@@ -341,6 +341,16 @@ def main():
         assert BODIES[-1]["stream_options"]["probe"] is True
         assert ("https://mock.test/v1", "explicit") not in llm_client._NO_STREAM_USAGE
         llm_client._NO_STREAM_USAGE.clear()
+        # Direct llama.cpp / vLLM honour only the chat-template switch
+        # (measured 2026-10-31: Gemma 4 on llama.cpp kept reasoning with the
+        # "thinking" field alone), so both families carry enable_thinking=false.
+        for model, gemma in (("gemma-4-26b-a4b-it", True), ("qwen3.5-9b", False)):
+            body = llm_client.LLMClient(model, "not-a-real-key", "https://mock.test/v1")._build_kwargs()["extra_body"]
+            assert body["chat_template_kwargs"] == {"enable_thinking": False}, (model, body)
+            assert ("thinking" in body) is gemma, (model, body)
+        body = llm_client.LLMClient("gemma-4", "k", "https://mock.test/v1", extra_params={
+            "chat_template_kwargs": {"enable_thinking": True}})._build_kwargs()["extra_body"]
+        assert body["chat_template_kwargs"] == {"enable_thinking": True}
     print("LLM extra_params: routed sync/stream, fallback, direct, suitability, Anthropic, validation OK")
 
 

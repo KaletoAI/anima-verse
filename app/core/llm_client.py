@@ -319,10 +319,13 @@ class LLMClient:
             _is_qwen3_model(self.model) or _is_gemma_model(self.model)
         ))
         if _disable_thinking:
+            # llama.cpp and vLLM switch thinking off only through the chat
+            # template (Qwen3 and Gemma 4 templates both read enable_thinking);
+            # they ignore the Anthropic-style "thinking" field, which a
+            # gateway may still map for Gemma.
+            extra_body["chat_template_kwargs"] = {"enable_thinking": False}
             if _is_gemma_model(self.model):
                 extra_body["thinking"] = {"type": "disabled"}
-            else:
-                extra_body["chat_template_kwargs"] = {"enable_thinking": False}
         if self.chat_template:
             extra_body["chat_template"] = self.chat_template
         if self.repetition_penalty is not None:
