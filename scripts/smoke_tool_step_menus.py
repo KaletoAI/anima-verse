@@ -86,8 +86,8 @@ def main():
             state["current"] = [dict(actor="Alex", partner="", target={}, label="Rest")]
             running = 'running: Bench | Rest - to get up or leave it: {"stop": true}'
             assert prop.decision_menu("Alex") == [running, *expected]
-            assert "get" in prop.brief and '{"stop": true}' in prop.brief
-            assert "get" in meta["action_hint"] and '{"stop": true}' in meta["action_hint"]
+            assert "get" in prop.brief and '{"stop":true}' in prop.brief
+            assert "get" in meta["action_hint"] and '{"stop":true}' in meta["action_hint"]
             print("[2] PASS: running action first; brief and hint explain getting up")
             assert pair.decision_menu("Alex") == ["wave", "greet"]
             with patch.object(IE, "check_can_pair", return_value="busy"):

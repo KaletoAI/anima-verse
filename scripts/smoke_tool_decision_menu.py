@@ -16,7 +16,8 @@ Fixture: "sample" owns "Red Mieder" (top), "Black pencil skirt" (bottom),
       "Black pencil skirt (bottom, worn)", "Red Mieder (top)",
       "Silk Slip Dress (top+bottom)" — no lamp, no item id.
   [2] decision_menu_note with ChangeOutfit offered (indent 3 spaces):
-      "   ChangeOutfit takes these names — copy one exactly:\\n"
+      "   ChangeOutfit takes these names — copy one exactly (a part in brackets is
+      a note, not part of the name):\\n" — the note appears because [1] has brackets.
       + one "   - <line>\\n" per [1] line.
   [3] A verb without a menu and an unknown tool name add nothing; with only
       those offered the note is "".
@@ -87,7 +88,8 @@ def main() -> int:
         with mock.patch("app.core.dependencies.get_skill_manager", lambda: manager):
             print("[2] decision_menu_note")
             check("note", streaming.decision_menu_note("sample", {skill.name: 1, "Plain": 1}),
-                  f"   {skill.name} takes these names — copy one exactly:\n"
+                  f"   {skill.name} takes these names — copy one exactly"
+                  " (a part in brackets is a note, not part of the name):\n"
                   + "".join(f"   - {line}\n" for line in menu))
             print("[3] no menu, unknown tool")
             check("note", streaming.decision_menu_note("sample", {"Plain": 1, "Nope": 1}), "")

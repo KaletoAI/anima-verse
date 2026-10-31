@@ -548,7 +548,11 @@ def decision_menu_note(agent_name: str, tools: Dict[str, Any],
             continue
         if lines:
             body = "".join(f"{indent}- {line}\n" for line in lines)
-            note += f"{indent}{name} takes these names — copy one exactly:\n{body}"
+            # A menu line may carry a note in brackets (an outfit piece's
+            # slots, "worn"); the verb matches the name in front of it.
+            hint = (" (a part in brackets is a note, not part of the name)"
+                    if any("(" in line for line in lines) else "")
+            note += f"{indent}{name} takes these names — copy one exactly{hint}:\n{body}"
     return note
 
 
