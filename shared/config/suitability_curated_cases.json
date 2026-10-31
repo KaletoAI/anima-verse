@@ -1,0 +1,467 @@
+{
+  "cases": [
+    {
+      "id": "outfit_names_from_inventory",
+      "group": "tools",
+      "task": "thought",
+      "system": "You translate what Velumi Kieselglanz did in the text into tool calls. You never write prose. Act only on the character’s text, not on a request alone. Use only the tools offered in this turn, with their exact names and input shapes. Emit each call separately, with no surrounding text.\nTool-call syntax (one example):\n<tool name=\"TalkTo\">{\"name\": \"Lumira Fennelglanz\", \"message\": \"Kommst du mit?\"}</tool>\nWrite NONE when the text shows no action and no plan marker is needed.\nAlso write plan markers when the character takes on a plan for later, advances an open plan or finishes it:\n[INTENT: <title> | <description> | when=<standing|now|in:2h|at:10:00|at:tomorrow 10:00|at_location:Place> | prio=<1-5> | by=<player|self>]\n  when: standing=ongoing; now=the character sets off to do it on its own right after this exchange — never for something the reply already does; in:2h=in 2 hours (or in:30m / in:1d); at:10:00=next 10:00; at:tomorrow 10:00=tomorrow at 10:00; at_location:<Place>=on the next arrival at that place\n  prio: 1=critical, 3=normal, 5=background\n  by: player=the OTHER person explicitly asked the character to do it — the request stands in THEIR words. self=everything else, even when it concerns the other person. When in doubt: self. Left out it counts as self.\nOnly for something still to be done AFTER this reply — never for hypothetical or past actions. What the reply itself already does (showing, handing over, answering, a feeling, a wish about how something should go) is never an intent.\nIf an open plan listed in this prompt covers it, even in other words, never create a new [INTENT:]. Use [INTENT_PROGRESS: <id> | <note>] only for a real step towards a plan still open: one note for ONE plan, never the same note on several plans, never repeat a note already listed. Once its goal is reached, write [INTENT_DONE: <id>] instead.\nA time or day belongs in when=, never in the title or description: \"tomorrow at 10\" → when=at:tomorrow 10:00; \"in two hours\" → when=in:2h.",
+      "user": "Character’s text:\nIch ziehe meine blaue Jacke an.\nNobody else is here.\n\nTools offered this turn:\n- ChangeOutfit: Change clothing; JSON {\"equip\":[\"exact item name\"]}.\nChangeOutfit takes these names — copy one exactly:\n- Blue Jacket\n- Green Scarf\n\nOpen plans (id | title):\na1b2c3d4 | Die Laterne holen",
+      "allowed_tools": [
+        "ChangeOutfit"
+      ],
+      "sets": {
+        "inventory": [
+          "Blue Jacket",
+          "Green Scarf"
+        ]
+      },
+      "expect": {
+        "tools": {
+          "ChangeOutfit": {
+            "required": [
+              "equip"
+            ],
+            "equip_in": "inventory",
+            "types": {
+              "equip": "array"
+            },
+            "min_items": {
+              "equip": 1
+            }
+          }
+        },
+        "none": false,
+        "forbid_tools": [
+          "SetActivity"
+        ]
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "fmt": "tool"
+    },
+    {
+      "id": "pair_action",
+      "group": "tools",
+      "task": "thought",
+      "system": "You translate what Velumi Kieselglanz did in the text into tool calls. You never write prose. Act only on the character’s text, not on a request alone. Use only the tools offered in this turn, with their exact names and input shapes. Emit each call separately, with no surrounding text.\nTool-call syntax (one example):\n<tool name=\"TalkTo\">{\"name\": \"Lumira Fennelglanz\", \"message\": \"Kommst du mit?\"}</tool>\nWrite NONE when the text shows no action and no plan marker is needed.\nAlso write plan markers when the character takes on a plan for later, advances an open plan or finishes it:\n[INTENT: <title> | <description> | when=<standing|now|in:2h|at:10:00|at:tomorrow 10:00|at_location:Place> | prio=<1-5> | by=<player|self>]\n  when: standing=ongoing; now=the character sets off to do it on its own right after this exchange — never for something the reply already does; in:2h=in 2 hours (or in:30m / in:1d); at:10:00=next 10:00; at:tomorrow 10:00=tomorrow at 10:00; at_location:<Place>=on the next arrival at that place\n  prio: 1=critical, 3=normal, 5=background\n  by: player=the OTHER person explicitly asked the character to do it — the request stands in THEIR words. self=everything else, even when it concerns the other person. When in doubt: self. Left out it counts as self.\nOnly for something still to be done AFTER this reply — never for hypothetical or past actions. What the reply itself already does (showing, handing over, answering, a feeling, a wish about how something should go) is never an intent.\nIf an open plan listed in this prompt covers it, even in other words, never create a new [INTENT:]. Use [INTENT_PROGRESS: <id> | <note>] only for a real step towards a plan still open: one note for ONE plan, never the same note on several plans, never repeat a note already listed. Once its goal is reached, write [INTENT_DONE: <id>] instead.\nA time or day belongs in when=, never in the title or description: \"tomorrow at 10\" → when=at:tomorrow 10:00; \"in two hours\" → when=in:2h.",
+      "user": "Character’s text:\nIch klatsche mit Lumira Fennelglanz ab.\nPresent in your room: Lumira Fennelglanz\n\nTools offered this turn:\n- InteractWith: Start a pair action; JSON {\"partner\":\"exact full name\",\"action\":\"offered key\"}.\nInteractWith takes these names — copy one exactly:\n- Lumira Fennelglanz | high_five\n\nOpen plans (id | title):\na1b2c3d4 | Die Laterne holen",
+      "allowed_tools": [
+        "InteractWith"
+      ],
+      "sets": {
+        "present": [
+          "Lumira Fennelglanz"
+        ],
+        "interactions": [
+          "high_five"
+        ]
+      },
+      "expect": {
+        "tools": {
+          "InteractWith": {
+            "required": [
+              "partner",
+              "action"
+            ],
+            "partner_in": "present",
+            "action_in": "interactions"
+          }
+        },
+        "none": false,
+        "forbid_tools": [
+          "SetActivity"
+        ]
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "fmt": "tool"
+    },
+    {
+      "id": "full_present_name",
+      "group": "tools",
+      "task": "thought",
+      "system": "You translate what Velumi Kieselglanz did in the text into tool calls. You never write prose. Act only on the character’s text, not on a request alone. Use only the tools offered in this turn, with their exact names and input shapes. Emit each call separately, with no surrounding text.\nTool-call syntax (one example):\n<tool name=\"TalkTo\">{\"name\": \"Lumira Fennelglanz\", \"message\": \"Kommst du mit?\"}</tool>\nWrite NONE when the text shows no action and no plan marker is needed.\nAlso write plan markers when the character takes on a plan for later, advances an open plan or finishes it:\n[INTENT: <title> | <description> | when=<standing|now|in:2h|at:10:00|at:tomorrow 10:00|at_location:Place> | prio=<1-5> | by=<player|self>]\n  when: standing=ongoing; now=the character sets off to do it on its own right after this exchange — never for something the reply already does; in:2h=in 2 hours (or in:30m / in:1d); at:10:00=next 10:00; at:tomorrow 10:00=tomorrow at 10:00; at_location:<Place>=on the next arrival at that place\n  prio: 1=critical, 3=normal, 5=background\n  by: player=the OTHER person explicitly asked the character to do it — the request stands in THEIR words. self=everything else, even when it concerns the other person. When in doubt: self. Left out it counts as self.\nOnly for something still to be done AFTER this reply — never for hypothetical or past actions. What the reply itself already does (showing, handing over, answering, a feeling, a wish about how something should go) is never an intent.\nIf an open plan listed in this prompt covers it, even in other words, never create a new [INTENT:]. Use [INTENT_PROGRESS: <id> | <note>] only for a real step towards a plan still open: one note for ONE plan, never the same note on several plans, never repeat a note already listed. Once its goal is reached, write [INTENT_DONE: <id>] instead.\nA time or day belongs in when=, never in the title or description: \"tomorrow at 10\" → when=at:tomorrow 10:00; \"in two hours\" → when=in:2h.",
+      "user": "Character’s text:\nIch klatsche mit Lumira ab.\nPresent in your room: Lumira Fennelglanz\n\nTools offered this turn:\n- InteractWith: Start a pair action; JSON {\"partner\":\"exact full name\",\"action\":\"offered key\"}.\nInteractWith takes these names — copy one exactly:\n- Lumira Fennelglanz | high_five\n\nOpen plans (id | title):\na1b2c3d4 | Die Laterne holen",
+      "allowed_tools": [
+        "InteractWith"
+      ],
+      "sets": {
+        "present": [
+          "Lumira Fennelglanz"
+        ],
+        "interactions": [
+          "high_five"
+        ]
+      },
+      "expect": {
+        "tools": {
+          "InteractWith": {
+            "required": [
+              "partner",
+              "action"
+            ],
+            "partner_in": "present",
+            "action_in": "interactions"
+          }
+        },
+        "none": false,
+        "forbid_tools": [
+          "SetActivity"
+        ]
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "fmt": "tool"
+    },
+    {
+      "id": "autonomous_speech",
+      "group": "tools",
+      "task": "thought",
+      "system": "You translate what Velumi Kieselglanz did in the text into tool calls. You never write prose. Act only on the character’s text, not on a request alone. Use only the tools offered in this turn, with their exact names and input shapes. Emit each call separately, with no surrounding text.\nTool-call syntax (one example):\n<tool name=\"TalkTo\">{\"name\": \"Lumira Fennelglanz\", \"message\": \"Kommst du mit?\"}</tool>\nWrite NONE when the text shows no action and no plan marker is needed.\nAlso write plan markers when the character takes on a plan for later, advances an open plan or finishes it:\n[INTENT: <title> | <description> | when=<standing|now|in:2h|at:10:00|at:tomorrow 10:00|at_location:Place> | prio=<1-5> | by=<player|self>]\n  when: standing=ongoing; now=the character sets off to do it on its own right after this exchange — never for something the reply already does; in:2h=in 2 hours (or in:30m / in:1d); at:10:00=next 10:00; at:tomorrow 10:00=tomorrow at 10:00; at_location:<Place>=on the next arrival at that place\n  prio: 1=critical, 3=normal, 5=background\n  by: player=the OTHER person explicitly asked the character to do it — the request stands in THEIR words. self=everything else, even when it concerns the other person. When in doubt: self. Left out it counts as self.\nOnly for something still to be done AFTER this reply — never for hypothetical or past actions. What the reply itself already does (showing, handing over, answering, a feeling, a wish about how something should go) is never an intent.\nIf an open plan listed in this prompt covers it, even in other words, never create a new [INTENT:]. Use [INTENT_PROGRESS: <id> | <note>] only for a real step towards a plan still open: one note for ONE plan, never the same note on several plans, never repeat a note already listed. Once its goal is reached, write [INTENT_DONE: <id>] instead.\nA time or day belongs in when=, never in the title or description: \"tomorrow at 10\" → when=at:tomorrow 10:00; \"in two hours\" → when=in:2h.",
+      "user": "Character’s text:\nIch sage zu Lumira: „Der Tee ist fertig.“\nPresent in your room: Lumira Fennelglanz\n\nTools offered this turn:\n- TalkTo: Speak to someone present; JSON {\"name\":\"exact full name\",\"message\":\"spoken words\"}.\nTalkTo takes these names — copy one exactly:\n- Lumira Fennelglanz\n\nOpen plans (id | title):\na1b2c3d4 | Die Laterne holen",
+      "allowed_tools": [
+        "TalkTo"
+      ],
+      "sets": {
+        "present": [
+          "Lumira Fennelglanz"
+        ]
+      },
+      "expect": {
+        "tools": {
+          "TalkTo": {
+            "required": [
+              "name",
+              "message"
+            ],
+            "name_in": "present",
+            "text_fields": {
+              "message": {
+                "lang": "de",
+                "min": 1,
+                "max": 300
+              }
+            }
+          }
+        },
+        "none": false,
+        "forbid_tools": [
+          "SetActivity"
+        ]
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "fmt": "tool"
+    },
+    {
+      "id": "respond_partner",
+      "group": "tools",
+      "task": "intent",
+      "system": "You translate what Velumi Kieselglanz did in the text into tool calls. You never write prose. Act only on the character’s text, not on a request alone. Use only the tools offered in this turn, with their exact names and input shapes. Emit each call separately, with no surrounding text.\nTool-call syntax (one example):\n<tool name=\"TalkTo\">{\"name\": \"Lumira Fennelglanz\", \"message\": \"Kommst du mit?\"}</tool>\nWrite NONE when the text shows no action and no plan marker is needed.\nAlso write plan markers when the character takes on a plan for later, advances an open plan or finishes it:\n[INTENT: <title> | <description> | when=<standing|now|in:2h|at:10:00|at:tomorrow 10:00|at_location:Place> | prio=<1-5> | by=<player|self>]\n  when: standing=ongoing; now=the character sets off to do it on its own right after this exchange — never for something the reply already does; in:2h=in 2 hours (or in:30m / in:1d); at:10:00=next 10:00; at:tomorrow 10:00=tomorrow at 10:00; at_location:<Place>=on the next arrival at that place\n  prio: 1=critical, 3=normal, 5=background\n  by: player=the OTHER person explicitly asked the character to do it — the request stands in THEIR words. self=everything else, even when it concerns the other person. When in doubt: self. Left out it counts as self.\nOnly for something still to be done AFTER this reply — never for hypothetical or past actions. What the reply itself already does (showing, handing over, answering, a feeling, a wish about how something should go) is never an intent.\nIf an open plan listed in this prompt covers it, even in other words, never create a new [INTENT:]. Use [INTENT_PROGRESS: <id> | <note>] only for a real step towards a plan still open: one note for ONE plan, never the same note on several plans, never repeat a note already listed. Once its goal is reached, write [INTENT_DONE: <id>] instead.\nA time or day belongs in when=, never in the title or description: \"tomorrow at 10\" → when=at:tomorrow 10:00; \"in two hours\" → when=in:2h.",
+      "user": "Character’s text:\nIch antworte Lumira: „Ja, gern.“\nOther person’s words (context only):\nMoechtest du Tee?\nPresent in your room: Lumira Fennelglanz\n\nTools offered this turn:\n- Sleep: Go to sleep; JSON {}.\n\nOpen plans (id | title):\na1b2c3d4 | Die Laterne holen",
+      "allowed_tools": [
+        "Sleep"
+      ],
+      "sets": {
+        "present": [
+          "Lumira Fennelglanz"
+        ]
+      },
+      "expect": {
+        "tools": {},
+        "forbid_tools": [
+          "TalkTo",
+          "SetActivity"
+        ],
+        "none": true
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "fmt": "tool"
+    },
+    {
+      "id": "no_action",
+      "group": "tools",
+      "task": "thought",
+      "system": "You translate what Velumi Kieselglanz did in the text into tool calls. You never write prose. Act only on the character’s text, not on a request alone. Use only the tools offered in this turn, with their exact names and input shapes. Emit each call separately, with no surrounding text.\nTool-call syntax (one example):\n<tool name=\"TalkTo\">{\"name\": \"Lumira Fennelglanz\", \"message\": \"Kommst du mit?\"}</tool>\nWrite NONE when the text shows no action and no plan marker is needed.\nAlso write plan markers when the character takes on a plan for later, advances an open plan or finishes it:\n[INTENT: <title> | <description> | when=<standing|now|in:2h|at:10:00|at:tomorrow 10:00|at_location:Place> | prio=<1-5> | by=<player|self>]\n  when: standing=ongoing; now=the character sets off to do it on its own right after this exchange — never for something the reply already does; in:2h=in 2 hours (or in:30m / in:1d); at:10:00=next 10:00; at:tomorrow 10:00=tomorrow at 10:00; at_location:<Place>=on the next arrival at that place\n  prio: 1=critical, 3=normal, 5=background\n  by: player=the OTHER person explicitly asked the character to do it — the request stands in THEIR words. self=everything else, even when it concerns the other person. When in doubt: self. Left out it counts as self.\nOnly for something still to be done AFTER this reply — never for hypothetical or past actions. What the reply itself already does (showing, handing over, answering, a feeling, a wish about how something should go) is never an intent.\nIf an open plan listed in this prompt covers it, even in other words, never create a new [INTENT:]. Use [INTENT_PROGRESS: <id> | <note>] only for a real step towards a plan still open: one note for ONE plan, never the same note on several plans, never repeat a note already listed. Once its goal is reached, write [INTENT_DONE: <id>] instead.\nA time or day belongs in when=, never in the title or description: \"tomorrow at 10\" → when=at:tomorrow 10:00; \"in two hours\" → when=in:2h.",
+      "user": "Character’s text:\nIch denke still ueber den vergangenen Tag nach.\nNobody else is here.\n\nTools offered this turn:\n- Sleep: Go to sleep; JSON {}.\n\nOpen plans (id | title):\na1b2c3d4 | Die Laterne holen",
+      "allowed_tools": [
+        "Sleep"
+      ],
+      "sets": {},
+      "expect": {
+        "tools": {},
+        "none": true,
+        "forbid_tools": [
+          "SetActivity"
+        ]
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "fmt": "tool"
+    },
+    {
+      "id": "future_plan",
+      "group": "tools",
+      "task": "thought",
+      "system": "You translate what Velumi Kieselglanz did in the text into tool calls. You never write prose. Act only on the character’s text, not on a request alone. Use only the tools offered in this turn, with their exact names and input shapes. Emit each call separately, with no surrounding text.\nTool-call syntax (one example):\n<tool name=\"TalkTo\">{\"name\": \"Lumira Fennelglanz\", \"message\": \"Kommst du mit?\"}</tool>\nWrite NONE when the text shows no action and no plan marker is needed.\nAlso write plan markers when the character takes on a plan for later, advances an open plan or finishes it:\n[INTENT: <title> | <description> | when=<standing|now|in:2h|at:10:00|at:tomorrow 10:00|at_location:Place> | prio=<1-5> | by=<player|self>]\n  when: standing=ongoing; now=the character sets off to do it on its own right after this exchange — never for something the reply already does; in:2h=in 2 hours (or in:30m / in:1d); at:10:00=next 10:00; at:tomorrow 10:00=tomorrow at 10:00; at_location:<Place>=on the next arrival at that place\n  prio: 1=critical, 3=normal, 5=background\n  by: player=the OTHER person explicitly asked the character to do it — the request stands in THEIR words. self=everything else, even when it concerns the other person. When in doubt: self. Left out it counts as self.\nOnly for something still to be done AFTER this reply — never for hypothetical or past actions. What the reply itself already does (showing, handing over, answering, a feeling, a wish about how something should go) is never an intent.\nIf an open plan listed in this prompt covers it, even in other words, never create a new [INTENT:]. Use [INTENT_PROGRESS: <id> | <note>] only for a real step towards a plan still open: one note for ONE plan, never the same note on several plans, never repeat a note already listed. Once its goal is reached, write [INTENT_DONE: <id>] instead.\nA time or day belongs in when=, never in the title or description: \"tomorrow at 10\" → when=at:tomorrow 10:00; \"in two hours\" → when=in:2h.",
+      "user": "Character’s text:\nSpaeter werde ich die Laterne aus dem Lager holen.\nNobody else is here.\n\nTools offered this turn:\n- Sleep: Go to sleep; JSON {}.\n\nOpen plans (id | title):\na1b2c3d4 | Die Laterne holen",
+      "allowed_tools": [
+        "Sleep"
+      ],
+      "sets": {},
+      "expect": {
+        "tools": {},
+        "markers": {
+          "intent": true
+        },
+        "none": false,
+        "forbid_tools": [
+          "SetActivity"
+        ]
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "fmt": "tool"
+    },
+    {
+      "id": "finished_plan",
+      "group": "tools",
+      "task": "thought",
+      "system": "You translate what Velumi Kieselglanz did in the text into tool calls. You never write prose. Act only on the character’s text, not on a request alone. Use only the tools offered in this turn, with their exact names and input shapes. Emit each call separately, with no surrounding text.\nTool-call syntax (one example):\n<tool name=\"TalkTo\">{\"name\": \"Lumira Fennelglanz\", \"message\": \"Kommst du mit?\"}</tool>\nWrite NONE when the text shows no action and no plan marker is needed.\nAlso write plan markers when the character takes on a plan for later, advances an open plan or finishes it:\n[INTENT: <title> | <description> | when=<standing|now|in:2h|at:10:00|at:tomorrow 10:00|at_location:Place> | prio=<1-5> | by=<player|self>]\n  when: standing=ongoing; now=the character sets off to do it on its own right after this exchange — never for something the reply already does; in:2h=in 2 hours (or in:30m / in:1d); at:10:00=next 10:00; at:tomorrow 10:00=tomorrow at 10:00; at_location:<Place>=on the next arrival at that place\n  prio: 1=critical, 3=normal, 5=background\n  by: player=the OTHER person explicitly asked the character to do it — the request stands in THEIR words. self=everything else, even when it concerns the other person. When in doubt: self. Left out it counts as self.\nOnly for something still to be done AFTER this reply — never for hypothetical or past actions. What the reply itself already does (showing, handing over, answering, a feeling, a wish about how something should go) is never an intent.\nIf an open plan listed in this prompt covers it, even in other words, never create a new [INTENT:]. Use [INTENT_PROGRESS: <id> | <note>] only for a real step towards a plan still open: one note for ONE plan, never the same note on several plans, never repeat a note already listed. Once its goal is reached, write [INTENT_DONE: <id>] instead.\nA time or day belongs in when=, never in the title or description: \"tomorrow at 10\" → when=at:tomorrow 10:00; \"in two hours\" → when=in:2h.",
+      "user": "Character’s text:\nIch habe die Laterne wie geplant geholt. Mein Vorhaben ist erledigt.\nNobody else is here.\n\nTools offered this turn:\n- Sleep: Go to sleep; JSON {}.\n\nOpen plans (id | title):\na1b2c3d4 | Die Laterne holen",
+      "allowed_tools": [
+        "Sleep"
+      ],
+      "sets": {},
+      "expect": {
+        "tools": {},
+        "markers": {
+          "intent_done": "a1b2c3d4"
+        },
+        "none": false,
+        "forbid_tools": [
+          "SetActivity"
+        ]
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "fmt": "tool"
+    },
+    {
+      "id": "armchair_stop",
+      "group": "tools",
+      "task": "thought",
+      "system": "You translate what Velumi Kieselglanz did in the text into tool calls. You never write prose. Act only on the character’s text, not on a request alone. Use only the tools offered in this turn, with their exact names and input shapes. Emit each call separately, with no surrounding text.\nTool-call syntax (one example):\n<tool name=\"TalkTo\">{\"name\": \"Lumira Fennelglanz\", \"message\": \"Kommst du mit?\"}</tool>\nWrite NONE when the text shows no action and no plan marker is needed.\nAlso write plan markers when the character takes on a plan for later, advances an open plan or finishes it:\n[INTENT: <title> | <description> | when=<standing|now|in:2h|at:10:00|at:tomorrow 10:00|at_location:Place> | prio=<1-5> | by=<player|self>]\n  when: standing=ongoing; now=the character sets off to do it on its own right after this exchange — never for something the reply already does; in:2h=in 2 hours (or in:30m / in:1d); at:10:00=next 10:00; at:tomorrow 10:00=tomorrow at 10:00; at_location:<Place>=on the next arrival at that place\n  prio: 1=critical, 3=normal, 5=background\n  by: player=the OTHER person explicitly asked the character to do it — the request stands in THEIR words. self=everything else, even when it concerns the other person. When in doubt: self. Left out it counts as self.\nOnly for something still to be done AFTER this reply — never for hypothetical or past actions. What the reply itself already does (showing, handing over, answering, a feeling, a wish about how something should go) is never an intent.\nIf an open plan listed in this prompt covers it, even in other words, never create a new [INTENT:]. Use [INTENT_PROGRESS: <id> | <note>] only for a real step towards a plan still open: one note for ONE plan, never the same note on several plans, never repeat a note already listed. Once its goal is reached, write [INTENT_DONE: <id>] instead.\nA time or day belongs in when=, never in the title or description: \"tomorrow at 10\" → when=at:tomorrow 10:00; \"in two hours\" → when=in:2h.",
+      "user": "Character’s text:\nIch stehe aus dem Sessel auf und lasse ihn hinter mir.\nNobody else is here.\n\nTools offered this turn:\n- PropAction: Stop the running furniture action when getting up; JSON {\"stop\":true}.\nPropAction takes these names — copy one exactly:\n- Running action: seated in the armchair; stop is available.\n\nOpen plans (id | title):\na1b2c3d4 | Die Laterne holen",
+      "allowed_tools": [
+        "PropAction"
+      ],
+      "sets": {},
+      "expect": {
+        "tools": {
+          "PropAction": {
+            "required": [
+              "stop"
+            ],
+            "values": {
+              "stop": true
+            }
+          }
+        },
+        "none": false,
+        "forbid_tools": [
+          "SetActivity"
+        ]
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "fmt": "tool"
+    },
+    {
+      "id": "state_extraction",
+      "group": "helpers",
+      "task": "extraction_chat_state",
+      "fmt": "json",
+      "system": "Return only valid JSON with the requested fields.",
+      "user": "Velumi steht ruhig auf. Gib pose (stand oder sit), detail, feeling und stat_results als Liste aus. Freitext auf Deutsch.",
+      "sets": {
+        "pose_keys": [
+          "stand",
+          "sit"
+        ]
+      },
+      "expect": {
+        "json_fields": [
+          "pose",
+          "detail",
+          "feeling",
+          "stat_results"
+        ],
+        "in_sets": {
+          "pose": "pose_keys"
+        },
+        "types": {
+          "stat_results": "array"
+        },
+        "text_fields": {
+          "detail": {
+            "lang": "de",
+            "min": 1,
+            "max": 1000
+          },
+          "feeling": {
+            "lang": "de",
+            "min": 1,
+            "max": 1000
+          }
+        }
+      },
+      "repeats": 3,
+      "reviewed": true
+    },
+    {
+      "id": "facts_only",
+      "group": "helpers",
+      "task": "extraction",
+      "fmt": "json",
+      "system": "Return only valid JSON with the requested fields.",
+      "user": "Die Laterne steht neben der Tuer. Extrahiere Fakten als memories-Liste mit memory_type semantic und content auf Deutsch. Keine commitments oder completed_ids.",
+      "sets": {
+        "memory_types": [
+          "semantic"
+        ]
+      },
+      "expect": {
+        "json_fields": [
+          "memories"
+        ],
+        "forbid_fields": [
+          "commitments",
+          "completed_ids"
+        ],
+        "types": {
+          "memories": "array"
+        },
+        "min_items": {
+          "memories": 1
+        },
+        "items_fields": {
+          "memories": {
+            "required": [
+              "memory_type",
+              "content"
+            ],
+            "in_sets": {
+              "memory_type": "memory_types"
+            },
+            "text_fields": {
+              "content": {
+                "lang": "de",
+                "min": 1,
+                "max": 1000
+              }
+            }
+          }
+        }
+      },
+      "repeats": 3,
+      "reviewed": true
+    },
+    {
+      "id": "npc_room",
+      "group": "helpers",
+      "task": "npc_action",
+      "fmt": "json",
+      "system": "Return only valid JSON with the requested fields.",
+      "user": "Velumi geht zum Lesen ins Lesezimmer. Gib room (reading_room oder hall), pose (sit oder stand) und activity auf Deutsch aus.",
+      "sets": {
+        "room_ids": [
+          "reading_room",
+          "hall"
+        ],
+        "pose_keys": [
+          "sit",
+          "stand"
+        ]
+      },
+      "expect": {
+        "json_fields": [
+          "room",
+          "activity",
+          "pose"
+        ],
+        "in_sets": {
+          "room": "room_ids",
+          "pose": "pose_keys"
+        },
+        "text_fields": {
+          "activity": {
+            "lang": "de",
+            "min": 1,
+            "max": 1000
+          }
+        }
+      },
+      "repeats": 3,
+      "reviewed": true
+    },
+    {
+      "id": "vision_analysis",
+      "group": "vision",
+      "task": "image_analysis",
+      "fmt": "json",
+      "system": "Return only valid JSON with the requested fields.",
+      "user": "Describe the attached image as JSON: description. Use German.",
+      "sets": {},
+      "expect": {
+        "json_fields": [
+          "description"
+        ],
+        "text_fields": {
+          "description": {
+            "lang": "de",
+            "min": 1,
+            "max": 1000
+          }
+        }
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "image": "worlds/demo/props/bench-c8540c/source.png"
+    },
+    {
+      "id": "vision_recognition",
+      "group": "vision",
+      "task": "image_recognition",
+      "fmt": "json",
+      "system": "Return only valid JSON with the requested fields.",
+      "user": "Describe the attached image as JSON: objects, description. Use English. objects must be a non-empty list of strings.",
+      "sets": {},
+      "expect": {
+        "json_fields": [
+          "objects",
+          "description"
+        ],
+        "text_fields": {
+          "objects": {
+            "lang": "en",
+            "min": 1,
+            "max": 1000
+          },
+          "description": {
+            "lang": "en",
+            "min": 1,
+            "max": 1000
+          }
+        },
+        "types": {
+          "objects": "array"
+        }
+      },
+      "repeats": 3,
+      "reviewed": true,
+      "image": "worlds/demo/props/lantern-8f652b/source.png"
+    }
+  ]
+}

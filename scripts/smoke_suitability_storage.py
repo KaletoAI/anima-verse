@@ -6,10 +6,12 @@ Shared JSON must contain none of those answers. One missing-image case causes
 zero invokes and adds zero to the score denominator. A subsequent infrastructure
 failure must still save local evidence, but must not replace a quality result.
 Two quality saves preserve the previous record. Legacy raw strings never become
-full rescored verdicts. Migration is non-destructive and refuses in-place writes.
+full rescored verdicts. Captures exclude old rows and require explicit review before structural scoring.
 """
 import copy
 import json
+import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -17,8 +19,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import paths
-from app.core.suitability_scoring import semantic_cases, fixture_version, score_case
-from scripts.suitability_migrate_fixtures import migrate
+from app.core.suitability_scoring import curated_cases, fixture_version, score_case
+from scripts.smoke_suitability_semantics import ANSWERS
 from scripts.suitability_offline_rescore import rescore
 
 
@@ -27,22 +29,10 @@ def main():
         paths.init(tmp)
         from app.core import model_suitability as suit, model_capabilities as caps
         root = Path(tmp)
-        source = root / 'fixtures.json'
-        cases = semantic_cases()
-        source.write_text(json.dumps({'cases': cases}))
-        original = source.read_bytes()
-        migrated = migrate(source)
-        assert source.read_bytes() == original and migrated != source
-        for output in (source, migrated):
-            try:
-                migrate(source, output)
-            except (ValueError, FileExistsError):
-                pass
-            else:
-                raise AssertionError('Migration overwrote existing data')
-        case = copy.deepcopy(cases[-1])
+        cases = curated_cases()
+        case = copy.deepcopy(cases[0])
         case['repeats'] = 3
-        answer = case['test_good']
+        answer = ANSWERS[case['id']][0]
         long_answer = answer + '\n' + (' ' * 900)
         fake_client = SimpleNamespace(invoke=lambda messages: SimpleNamespace(
             content=long_answer, reasoning='synthetic reasoning', finish_reason='stop',
@@ -79,10 +69,10 @@ def main():
         assert result['kind'] == 'offline_rescore'
         assert all(r['verdict'] == 'undecidable' for r in result['checks'])
         # Future normal fixture input includes logs; the scorer adds synthetic cases.
-        full = semantic_cases()
+        full = curated_cases()
         hashes = fixture_version(full)
         payload = {'outputs': {'fake::demo': {'fixture_version': hashes, 'cases': {
-            c['id']: [{'content': c['test_good'], 'finish_reason': 'stop'} for _ in range(3)] for c in full}}}}
+            c['id']: [{'content': ANSWERS[c['id']][0], 'finish_reason': 'stop'} for _ in range(3)] for c in full}}}}
         current = {'suitability': {'fake::demo': {'tested_suitability': {'checks': [{'id': c['id']} for c in full]}}}}
         scored = rescore({'cases': []}, current, payload, 'fake::demo')
         assert all(c['verdict'] == 'rescored' for c in scored['checks'])
@@ -95,15 +85,52 @@ def main():
         # Builder must not infer the catalog or semantic truth from goldens.
         logged = root / 'calls.jsonl'
         long_golden = 'synthetic preamble ' + 'x' * 700 + answer
-        logged.write_text(json.dumps({'task': 'thought', 'prompt': {'system': case['system'], 'user': 'demo action'}, 'response': long_golden}) + '\n')
+        logged.write_text(json.dumps({'task': 'thought', 'prompt': {'system': case['system'], 'user': case['user']}, 'response': long_golden}) + '\n')
         suit.build_cases_from_log(logged)
         built = json.loads((root / 'suitability_cases.json').read_text())
         assert built['cases'][0]['golden'] == long_golden
-        assert 'GoToCharacter' in built['cases'][0]['allowed_tools']
-        assert 'semantic' not in built['cases'][0]['expect']
+        assert 'ChangeOutfit' in built['cases'][0]['allowed_tools']
+        assert built['cases'][0]['reviewed'] is False
+        base = {'task': 'thought', 'prompt': {'system': case['system'], 'user': case['user']},
+                'response': answer}
+        logged.write_text('\n'.join(json.dumps(row) for row in [
+            {**base, 'starttime': '2026-10-30T23:59:59Z'},
+            {**base, 'starttime': '2026-10-31T00:00:00Z', 'reviewed': True,
+             'expect': case['expect'], 'sets': case['sets']},
+            {**base, 'starttime': '2026-10-31T01:00:00Z',
+             'prompt': {'system': case['system'], 'user': case['user'] + '\nAnother turn'}},
+            {**base, 'timestamp': 'bad'},
+        ]) + '\n')
+        summary = suit.build_cases_from_log(logged, since='2026-10-31T00:00:00Z')
+        assert summary['total'] == 2
+        captured = json.loads((root / 'suitability_cases.json').read_text())['cases']
+        assert [c['reviewed'] for c in captured] == [True, False]
+        assert captured[0]['expect'] == case['expect']
+        assert score_case(captured[1], ANSWERS[case['id']][1])['ok'] is True
+        try:
+            suit.build_cases_from_log(logged, since='not-an-iso-date')
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('Invalid cutoff accepted')
         loaded = suit.load_cases()
-        assert len(loaded['cases']) == 1 + len(semantic_cases())
+        assert len(loaded['cases']) == 2 + len(curated_cases())
         assert loaded['fixture_version'] == fixture_version(loaded['cases'])
+
+        # Exercise capture and explicit review through the real CLI, in temp storage.
+        command = [sys.executable, 'scripts/suitability_capture_cases.py']
+        env = {**os.environ, 'STORAGE_DIR': tmp}
+        captured_cli = subprocess.run(
+            command + ['--since', '2026-10-31T00:00:00Z', '--log', str(logged)],
+            env=env, text=True, capture_output=True, timeout=20, check=True)
+        assert 'log_thought_2' in captured_cli.stdout and '"reviewed": false' in captured_cli.stdout
+        subprocess.run(command + ['--review', 'log_thought_2'], env=env,
+                       text=True, capture_output=True, timeout=20, check=True)
+        reviewed_cli = json.loads((root / 'suitability_cases.json').read_text())
+        assert all(c['reviewed'] for c in reviewed_cli['cases'])
+        (root / 'suitability_cases.json').unlink()
+        curated_only = suit.load_cases(auto_build=False)
+        assert curated_only['curated_only'] and len(curated_only['cases']) == 14
 
         # Mixed checked semantics are evidence, not an untested run.
         r = {'category': 'tool', 'ok': False, 'hallucinated': False, 'dimensions': {'decision_correct': 'mixed'}, 'run_checks': [{'decision_correct': True}, {'decision_correct': False}]}

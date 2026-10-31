@@ -1,20 +1,16 @@
-"""Deterministic suitability evidence; independent of providers and world state.
-
-True/False mean checked; ``not_tested`` means no evidence. ``ok`` is the
-conjunction of checked quality dimensions, or None for invalid input. Semantic
-quality is never inferred from format, a golden answer, or a tool name alone.
-"""
+"""Structural suitability evidence, independent of providers and world state."""
 import copy
 import hashlib
 import json
 import re
 from pathlib import Path
 
-SCORER_VERSION = 'suitability-2'
+SCORER_VERSION = 'suitability-3'
 NOT_TESTED = 'not_tested'
+ROOT = Path(__file__).resolve().parents[2]
+# Regex parses protocol syntax only; free text is never matched against a golden.
 TAG = re.compile(r'<tool\s+name="(\w+)">([\s\S]*?)</tool>')
-PLACEHOLDER = re.compile(r'^\s*(?:\[[^\]\n]*\]|<[^>\n]*>|\.\.\.|…|input|example)?\s*$', re.I)
-MARKERS = re.compile(r'\*\*I (?:feel|do|am at) [^*\n]+\*\*|\[INTENT(?:_DONE|_PROGRESS)?:[^\]\n]+\]|\[EVENT_RESOLVED:[^\]\n]+\]', re.I)
+MARKERS = re.compile(r'\[INTENT(?:_DONE|_PROGRESS)?:[^\]\n]+\]')
 DIMENSIONS = ('format_valid', 'tool_available', 'args_valid', 'decision_correct',
               'required_action_missing', 'forbidden_extra_action', 'correct_abstention',
               'refusal', 'infra_error', 'invalid_input', 'truncated', 'fixture_conflict', 'semantic')
@@ -25,59 +21,19 @@ def fixture_version(cases):
 
 
 def prepare_case(case):
-    """Derive catalog/contracts exclusively from the frozen prompt, not examples."""
+    """Normalize metadata; availability comes from declarations, never answers."""
     c = copy.deepcopy(case)
-    if c.get('category') != 'tool':
-        return c
-    system = c.get('system', '')
-    sections = re.findall(r'=== AVAILABLE TOOLS ===\s*([\s\S]*?)(?=\n===|\Z)', system)
-    if len(sections) != 1:
-        c['fixture_error'] = 'ambiguous or missing catalog section'
-        return c
-    entries = re.findall(r'^- (\w+):\s*([\s\S]*?)(?=\n- \w+:|\Z)', sections[0], re.M)
-    names = [n for n, _ in entries]
-    if not names or len(names) != len(set(names)) or 'ToolName' in names:
-        c['fixture_error'] = 'ambiguous or empty catalog'
-        return c
-    c['allowed_tools'] = names
-    contracts = {}
-    for name, desc in entries:
-        json_input = 'JSON' in desc or name == 'Act'
-        plain = bool(re.search(r"plain|cleartext|free.text|Klartext|Input: target character name|or JSON|\(b\) just", desc, re.I))
-        example = re.search(r'JSON\s*:?\s*(\{[^}]*\})', desc)
-        fields = re.findall(r"[\"'](\w+)[\"']\s*:", example.group(1)) if example else []
-        if name == 'Act':
-            fields = ['text']
-        if name == 'RecordVideo':
-            fields = ['prompt', 'action_prompt']
-        contracts[name] = {'format': 'json_or_text' if json_input and plain else 'json' if json_input else 'text',
-                           'keys': list(dict.fromkeys(fields)) if json_input and not plain else [],
-                           'json_keys': fields[:2] if name in ('TalkTo', 'SendMessage') else [],
-                           'text_pattern': r'^\s*[^,]+,\s*\S[\s\S]*$' if re.search(r"(?:name, comma, message|CharacterName, message)", desc) else None}
-    c['arg_contracts'] = contracts
-    # Keep conflicting examples separate from candidate argument mistakes.
-    # Format-template placeholders such as ``[input]`` are not examples.
-    examples = [(n, body) for n, body in TAG.findall(system)
-                if n in contracts and not PLACEHOLDER.match(body)]
-    conflicts = {n for n, body in examples
-                 if contracts[n]['format'] == 'json' and not _json_value(body)[0]}
-    if re.search(r'(?:all|every) tool (?:inputs?|arguments?).{0,30}(?:must|only).{0,20}JSON', system, re.I):
-        conflicts.update(n for n, body in examples if not _json_value(body)[0])
-    c['fixture_conflicts'] = sorted(conflicts)
-    c['fixture_conflict'] = bool(conflicts)
-    c.pop('fixture_error', None)
-    semantic = c.get('expect', {}).get('semantic')
-    if semantic is not None:
-        try:
-            for group in ('required', 'forbidden', 'allow_extra'):
-                for rule in semantic.get(group, []):
-                    if rule['tool'] not in names:
-                        raise ValueError('semantic tool absent from catalog')
-                    for patterns in rule.get('args_match', {}).values():
-                        for pattern in patterns if isinstance(patterns, list) else [patterns]:
-                            re.compile(pattern)
-        except (KeyError, TypeError, ValueError, re.error):
-            c['fixture_error'] = 'invalid semantic expectations'
+    group = c.setdefault('group', 'tools' if c.get('category') == 'tool' else
+                         'vision' if c.get('task') in ('image_analysis', 'image_recognition') else 'helpers')
+    c['category'] = 'tool' if group == 'tools' else 'helper'
+    c.setdefault('label', c.get('id', c.get('task', 'case')))
+    c.setdefault('repeats', 3)
+    if group == 'tools' and 'allowed_tools' not in c:
+        prompt = c.get('system', '') + '\n' + c.get('user', '')
+        section = prompt.split('Tools offered this turn:', 1)[-1] if 'Tools offered this turn:' in prompt else prompt.split('=== AVAILABLE TOOLS ===', 1)[-1]
+        c['allowed_tools'] = list(dict.fromkeys(re.findall(r'^- (\w+):', section, re.M)))
+        if not c['allowed_tools'] and 'Tools offered this turn:' not in prompt:
+            c['fixture_error'] = 'missing tool catalog'
     return c
 
 
@@ -88,102 +44,127 @@ def _json_value(text):
         return False, None
 
 
-def _matches(action, rule):
-    name, body = action
-    if name != rule.get('tool'):
+def _text_valid(value, rule):
+    values = value if isinstance(value, list) else [value]
+    if not values:
         return False
-    valid, obj = _json_value(body)
-    for key, pattern in rule.get('args_match', {}).items():
-        value = body if key == '$text' else obj.get(key, '') if valid and isinstance(obj, dict) else ''
-        patterns = pattern if isinstance(pattern, list) else [pattern]
-        if not any(re.search(p, str(value), re.I) for p in patterns):
+    for text in values:
+        if not isinstance(text, str) or not rule.get('min', 1) <= len(text.strip()) <= rule.get('max', 2000):
             return False
+        lang = rule.get('lang')
+        if lang:
+            words = {''.join(ch for ch in word.lower() if ch.isalpha()) for word in text.split()}
+            # A conservative language signal, not a topic or wording expectation.
+            signals = {'de': {'der', 'die', 'das', 'ein', 'eine', 'sie', 'ich', 'ist', 'und', 'mit', 'steht', 'sind'},
+                       'en': {'the', 'a', 'an', 'is', 'are', 'with', 'and', 'it', 'there'}}
+            if lang not in signals or not words.intersection(signals[lang]):
+                return False
     return True
 
 
+def _fields_valid(obj, rule, sets):
+    if not isinstance(obj, dict) or not all(key in obj for key in rule.get('required', rule.get('json_fields', []))):
+        return False
+    if any(key in obj for key in rule.get('forbid_fields', [])):
+        return False
+    for key, set_name in rule.get('in_sets', {}).items():
+        value = obj.get(key)
+        values = value if isinstance(value, list) else [value]
+        if set_name not in sets or any(v not in sets[set_name] for v in values):
+            return False
+    for key, expected in rule.get('values', {}).items():
+        if type(obj.get(key)) is not type(expected) or obj[key] != expected:
+            return False
+    for key, field_type in rule.get('types', {}).items():
+        types = {'array': list, 'object': dict, 'string': str, 'boolean': bool}
+        if field_type not in types or not isinstance(obj.get(key), types[field_type]):
+            return False
+    for key, minimum in rule.get('min_items', {}).items():
+        if not isinstance(obj.get(key), list) or len(obj[key]) < minimum:
+            return False
+    for key, item_rule in rule.get('items_fields', {}).items():
+        if not isinstance(obj.get(key), list) or not all(_fields_valid(item, item_rule, sets) for item in obj[key]):
+            return False
+    return all(_text_valid(obj.get(key), text_rule) for key, text_rule in rule.get('text_fields', {}).items())
+
+
 def score_case(case, content, *, finish_reason=None, infra_error=False):
-    """Score only supplied evidence. No image payload is sent by this runner."""
-    r = {k: NOT_TESTED for k in DIMENSIONS}
+    """Check declared structure and offered sets; unreviewed logs prove format only."""
+    case = prepare_case(case)
+    r = {key: NOT_TESTED for key in DIMENSIONS}
     r.update(ok=None, hallucinated=False, infra=bool(infra_error), detail='')
-    invalid = ('infra_error' if infra_error else 'missing_input' if case.get('task') == 'image_analysis'
-               else 'invalid_fixture' if case.get('fixture_error') else None)
+    image = case.get('image')
+    invalid = ('infra_error' if infra_error else 'invalid_fixture' if case.get('fixture_error') else
+               'missing_input' if case['group'] == 'vision' and (not image or not (ROOT / image).is_file()) else None)
     if invalid:
         r.update(invalid_input=invalid, infra_error=bool(infra_error), detail=invalid)
         return r
-    if finish_reason == 'length':
-        # The model did not finish within the budget: a failure, but neither a
-        # refusal nor a hallucination, and never excluded from the denominator.
-        r.update(infra_error=False, invalid_input=False, truncated=True, ok=False,
-                 detail='truncated (finish_reason=length)')
+    r.update(infra_error=False, invalid_input=False, truncated=finish_reason == 'length', refusal=finish_reason == 'content_filter')
+    if r['refusal']:
+        r.update(ok=False, detail='refused (finish_reason=content_filter)')
         return r
-    r['infra_error'] = False
-    r['invalid_input'] = False
-    r['truncated'] = False
-    text = content or ''
-    refusal_text = MARKERS.sub('', TAG.sub('', text)) if case.get('category') == 'tool' else text
-    r['refusal'] = bool(re.search(r"\b(?:as an ai|i cannot|i can't|i'm sorry, but|als ki|ich kann (?:das|dies) nicht|leider kann ich nicht)\b", refusal_text, re.I))
-    if case.get('category') == 'tool':
+    if r['truncated']:
+        r.update(ok=False, detail='truncated (finish_reason=length)')
+        return r
+    text = content if isinstance(content, str) else ''
+    expect = case.get('expect', {}) if case.get('reviewed', True) else {}
+    sets = case.get('sets', {})
+    if case['group'] == 'tools':
         actions = TAG.findall(text)
+        markers = MARKERS.findall(text)
         residual = MARKERS.sub('', TAG.sub('', text)).strip()
-        abstain = residual in ('NONE', 'SKIP')
-        r['format_valid'] = bool((actions or abstain or MARKERS.search(text)) and (not residual or abstain) and not (abstain and actions))
-        allowed = case.get('allowed_tools')
-        if allowed is None:
-            return score_case(prepare_case(case), content, finish_reason=finish_reason, infra_error=infra_error)
-        r['tool_available'] = all(n in allowed for n, _ in actions) if actions else NOT_TESTED
-        r['hallucinated'] = r['tool_available'] is False
-        arg_checks = []
+        none = residual == 'NONE'
+        r['format_valid'] = bool(actions or markers or none) and (not residual or none) and not (none and actions)
+        r['tool_available'] = all(name in case['allowed_tools'] for name, _ in actions)
+        r['hallucinated'] = not r['tool_available']
+        checks = []
+        rules = expect.get('tools', {})
         for name, body in actions:
-            contract = case.get('arg_contracts', {}).get(name)
-            if contract is None or name in case.get('fixture_conflicts', []):
-                continue
-            valid, obj = _json_value(body)
-            if contract['format'] == 'json':
-                arg_checks.append(valid and isinstance(obj, dict) and all(
-                    isinstance(obj.get(k), str) and (bool(obj[k].strip()) or k == 'detail')
-                    for k in contract.get('keys', []))
-                    and (name != 'Act' or obj.get('scope', 'here') in ('here', 'location')))
-            elif contract['format'] == 'json_or_text' and body.lstrip().startswith('{'):
-                arg_checks.append(valid and isinstance(obj, dict) and bool(obj) and all(
-                    isinstance(obj.get(k), str) and bool(obj[k].strip()) for k in contract.get('json_keys', [])))
+            rule = rules.get(name)
+            if rule is not None:
+                valid, obj = _json_value(body)
+                normalized = {**rule, 'in_sets': dict(rule.get('in_sets', {}))}
+                for key, set_name in rule.items():
+                    if key.endswith('_in'):
+                        normalized['in_sets'][key[:-3]] = set_name
+                checks.append(valid and _fields_valid(obj, normalized, sets))
             else:
-                arg_checks.append(bool(re.match(contract['text_pattern'], body)) if contract.get('text_pattern') else bool(body.strip()))
-        r['args_valid'] = (False if any(v is False for v in arg_checks) else
-                           True if actions and len(arg_checks) == len(actions) else NOT_TESTED)
-        r['fixture_conflict'] = bool(case.get('fixture_conflict'))
-        semantic = case.get('expect', {}).get('semantic')
-        if semantic is not None:
-            required = semantic.get('required', [])
-            remaining = list(actions)
-            missing = False
-            for rule in required:
-                match = next((i for i, a in enumerate(remaining) if _matches(a, rule)), None)
-                if match is None:
-                    missing = True
-                else:
-                    remaining.pop(match)
-            forbidden = any(_matches(a, rule) for a in actions for rule in semantic.get('forbidden', []))
-            extra = any(not any(_matches(a, rule) for rule in semantic.get('allow_extra', [])) for a in remaining)
-            r.update(required_action_missing=missing, forbidden_extra_action=forbidden or extra,
-                     decision_correct=not (missing or forbidden or extra),
-                     correct_abstention=not actions if not required else NOT_TESTED,
-                     semantic=not (missing or forbidden or extra))
+                checks.append(bool(body.strip()))
+        r['format_valid'] = r['format_valid'] and all(bool(body.strip()) for _, body in actions)
+        if expect:
+            r['args_valid'] = all(checks)
+        if expect:
+            names = [name for name, _ in actions]
+            missing = any(name not in names for name in rules)
+            extra = len(names) != len(set(names)) or any(name not in rules or name in expect.get('forbid_tools', []) for name in names)
+            marker_rules = expect.get('markers', {})
+            parsed = [m[1:-1].split(':', 1) for m in markers]
+            marker_ok = len(parsed) == len(marker_rules)
+            for key, expected in marker_rules.items():
+                matches = [body.strip() for kind, body in parsed if kind.lower() == key]
+                marker_ok = marker_ok and len(matches) == 1 and (bool(matches[0]) if expected is True else matches[0].split('|', 1)[0].strip() == expected)
+            abstention = none == expect.get('none', False)
+            r.update(required_action_missing=missing, forbidden_extra_action=extra,
+                     correct_abstention=abstention,
+                     decision_correct=not missing and not extra and marker_ok and abstention)
+            r['semantic'] = r['decision_correct']
     else:
-        if case.get('fmt') == 'json':
-            # Match the helper's documented extraction contract, without claiming semantics.
-            from app.core.model_suitability import _v_json
-            r['format_valid'] = _v_json(text, case.get('expect', {}), [])[0]
+        wants_json = case.get('fmt') == 'json' or 'json_fields' in expect
+        if wants_json:
+            valid, obj = _json_value(text)
+            r['format_valid'] = valid
+            if expect:
+                rule = {**expect, 'json_fields': expect.get('json_fields', expect.get('keys', []))}
+                r['args_valid'] = valid and _fields_valid(obj, rule, sets)
         else:
-            r['format_valid'] = bool(text.strip()) and not TAG.search(text)
+            r['format_valid'] = _text_valid(text, expect) and not TAG.search(text)
     checked = [r[k] for k in ('format_valid', 'tool_available', 'args_valid', 'decision_correct') if isinstance(r[k], bool)]
-    # A prompt conflict only suspends the argument check of the conflicting
-    # tools (flagged above); format, availability and decisions still count.
-    r['ok'] = bool(checked) and all(checked) and not r['refusal']
-    r['detail'] = '; '.join(f'{k}={r[k]}' for k in DIMENSIONS)
+    r['ok'] = bool(checked) and all(checked)
+    r['detail'] = '; '.join(f'{key}={r[key]}' for key in DIMENSIONS)
     return r
 
 
-def semantic_cases():
-    """Minimal synthetic prompts use the same catalog/tag/marker contract."""
-    path = Path(__file__).resolve().parents[2] / 'shared/config/suitability_semantic_cases.json'
-    return [prepare_case(c) for c in json.loads(path.read_text())['cases']]
+def curated_cases():
+    """Load tracked SFW prompts; real-world log candidates stay world-local."""
+    path = ROOT / 'shared/config/suitability_curated_cases.json'
+    return [prepare_case(c) for c in json.loads(path.read_text(encoding='utf-8'))['cases']]

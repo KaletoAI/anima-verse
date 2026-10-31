@@ -29,7 +29,7 @@ from app.core.log import get_logger
 from app.core.paths import get_storage_dir
 from app.core.timeutils import utc_now
 from app.core.suitability_scoring import (SCORER_VERSION, DIMENSIONS, prepare_case,
-                                          score_case, semantic_cases, fixture_version)
+                                          score_case, curated_cases, fixture_version)
 
 logger = get_logger("model_suitability")
 
@@ -41,14 +41,12 @@ _TAG_RE = re.compile(r'<tool\s+name="(\w+)">([\s\S]*?)</tool>')
 _TOOL_TASKS = {"thought", "intent"}
 # Case counts per task, and whether the case runs repeatedly for consistency.
 _SELECT = [
-    ("thought", 8),
-    ("intent", 4),
-    ("tool", 2),
-    ("extraction", 4),
-    ("relationship_summary", 3),
-    ("image_prompt", 3),
-    ("consolidation", 3),
-    ("image_analysis", 2),
+    ("thought", 8), ("intent", 4), ("tool", 2),
+    ("extraction_chat_state", 4), ("extraction", 4), ("npc_action", 3),
+    ("relationship_summary", 3), ("image_prompt", 3), ("consolidation", 3),
+    ("furnish", 1), ("building_layout", 1), ("outfit_generation", 1),
+    ("story_arc_generation", 1), ("story_arc_advancement", 1), ("random_event", 1), ("secret_generation", 1),
+    ("image_analysis", 2), ("image_recognition", 2),
 ]
 _TOOL_REPEATS = 3
 
@@ -118,123 +116,100 @@ def _build_expect(fmt: str, golden: str) -> Dict[str, Any]:
     return {}
 
 
-def build_cases_from_log(log_path: Optional[Path] = None) -> Dict[str, Any]:
-    """Extract frozen fixtures from the LLM log and save them under storage;
-    return a summary of the resulting cases."""
-    path = log_path or _LOG_PATH
-    rows: List[dict] = []
+def build_cases_from_log(log_path=None, *, since: str | None = None) -> Dict[str, Any]:
+    """Capture world-local candidates; only explicitly reviewed rules are scored."""
+    from app.core.timeutils import parse_iso
+    try:
+        cutoff = parse_iso(since) if since is not None else None
+    except (ValueError, TypeError) as error:
+        raise ValueError("Invalid --since ISO timestamp") from error
+    path = Path(log_path) if log_path is not None else _LOG_PATH
+    rows = []
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
             try:
-                rows.append(json.loads(line))
-            except Exception:
+                row = json.loads(line)
+            except (ValueError, TypeError):
                 continue
-
-    # Pass 1: gather more than n candidates per task to skip invalid goldens.
-    pool: Dict[str, List[tuple]] = {}
-    for task, n in _SELECT:
-        seen = set()
-        cand: List[tuple] = []
-        for e in rows:
-            if len(cand) >= n * 5:
-                break
-            if e.get("task") != task or e.get("error"):
+            if not isinstance(row, dict):
                 continue
-            system, user = _prompt_of(e)
-            golden = (e.get("response") or "").strip()
-            if not (system and golden):
-                continue
-            key = hash(system[:200] + user[:100])
-            if key in seen:
-                continue
-            fmt = _detect_fmt(golden)
-            seen.add(key)
-            cand.append((system, user, golden, fmt))
-        pool[task] = cand
-
-    # Hardened JSON keys: intersection across ALL JSON goldens of a task;
-    # drops idiosyncratic keys such as 'action' found in only one golden.
-    task_keys: Dict[str, List[str]] = {}
-    for task, cand in pool.items():
-        keysets = []
-        for (_s, _u, g, fmt) in cand:
-            if fmt == "json":
-                obj = _first_json(g, array=False)
-                if isinstance(obj, dict):
-                    keysets.append(set(obj.keys()))
-        if keysets:
-            inter = set.intersection(*keysets) if len(keysets) > 1 else keysets[0]
-            task_keys[task] = sorted(inter)
-
-    # Tool goldens are examples, never semantic truth. Helpers retain format
-    # filtering only; per-case catalogs always come from frozen prompts.
-    cases: List[Dict[str, Any]] = []
+            if cutoff is not None:
+                try:
+                    stamp = parse_iso(row.get("starttime") or row.get("ts") or row.get("timestamp") or "")
+                except (ValueError, TypeError):
+                    continue
+                if stamp < cutoff:
+                    continue
+            rows.append(row)
+    cases = []
     skipped = 0
-    for task, n in _SELECT:
-        category = "tool" if task in _TOOL_TASKS else "helper"
+    for task, count in _SELECT:
+        seen = set()
         picked = 0
-        for (system, user, golden, fmt) in pool.get(task, []):
-            if picked >= n:
+        for row in rows:
+            if picked >= count:
                 break
-            expect = _build_expect(fmt, golden)
-            if fmt == "json" and task in task_keys:
-                expect["keys"] = task_keys[task]
-            g_ok = True if category == "tool" else (_v_json(golden, expect, [])[0] if fmt == "json" else bool(golden.strip()))
-            if not g_ok:
+            if row.get("task") != task or row.get("error"):
+                continue
+            system, user = _prompt_of(row)
+            golden = row.get("response") or ""
+            if not isinstance(golden, str) or not system or not golden.strip():
                 skipped += 1
                 continue
+            identity = (system, user)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            group = ("tools" if task in _TOOL_TASKS else
+                     "vision" if task in ("image_analysis", "image_recognition") else "helpers")
+            reviewed = row.get("reviewed") is True
             picked += 1
-            cases.append(prepare_case({
-                "id": f"{task}_{picked}",
-                "task": task,
-                "label": f"{task} #{picked} ({fmt})",
-                "category": category,
-                "fmt": fmt,
-                "system": system,
-                "user": user,
-                "golden": golden,
-                "expect": expect,
-                "repeats": _TOOL_REPEATS if category == "tool" else 1,
-            }))
-
-    data = {
-        "built_at": utc_now().isoformat(timespec="seconds"),
-        "fixture_version": fixture_version(cases),
-        "cases": cases,
-    }
-    p = _cases_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    by_task: Dict[str, int] = {}
-    for c in cases:
-        by_task[c["task"]] = by_task.get(c["task"], 0) + 1
-    logger.info("Built %d suitability cases from log (%s); %d invalid goldens skipped",
-                len(cases), by_task, skipped)
+            case = prepare_case({
+                "id": f"log_{task}_{picked}", "task": task, "group": group,
+                "system": system, "user": user, "golden": golden,
+                "fmt": _detect_fmt(golden), "repeats": 3,
+                "reviewed": reviewed,
+                "sets": row.get("sets", {}),
+                "expect": row.get("expect", {}) if reviewed else {},
+                **({"image": row["image"]} if isinstance(row.get("image"), str) else {}),
+            })
+            cases.append(case)
+    data = {"built_at": utc_now().isoformat(timespec="seconds"),
+            "fixture_version": fixture_version(cases), "cases": cases}
+    target = _cases_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    by_task = {}
+    for case in cases:
+        by_task[case["task"]] = by_task.get(case["task"], 0) + 1
     return {"total": len(cases), "by_task": by_task, "skipped": skipped,
             "built_at": data["built_at"]}
 
 
 def load_cases(auto_build: bool = True) -> Dict[str, Any]:
-    p = _cases_path()
-    if not p.exists():
-        if auto_build:
-            build_cases_from_log()
-        else:
-            return {"allowed_tools": [], "cases": []}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        data.pop("allowed_tools", None)
-        prepared = [prepare_case(c) for c in data.get("cases", [])]
-        ids = {c["id"] for c in prepared}
-        data["cases"] = prepared + [c for c in semantic_cases() if c["id"] not in ids]
-        data["fixture_version"] = fixture_version(data["cases"])
-        return data
-    except Exception as e:
-        logger.error("Failed to load suitability cases: %s", e)
-        return {"allowed_tools": [], "cases": []}
+    """Combine world-local candidates with tracked curated cases in every world."""
+    path = _cases_path()
+    if not path.exists() and auto_build:
+        build_cases_from_log()
+    data = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as error:
+            logger.error("Failed to load suitability cases: %s", error)
+    curated = curated_cases()
+    curated_ids = {case["id"] for case in curated}
+    prepared = []
+    for case in data.get("cases", []):
+        if case.get("id") in curated_ids:
+            continue
+        candidate = {**case, "reviewed": case.get("reviewed") is True}
+        prepared.append(prepare_case(candidate))
+    data.pop("allowed_tools", None)
+    data["cases"] = prepared + curated
+    data["curated_only"] = not prepared
+    data["fixture_version"] = fixture_version(data["cases"])
+    return data
 
 
 def cases_info() -> Dict[str, Any]:

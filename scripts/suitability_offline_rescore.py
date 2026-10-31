@@ -10,13 +10,13 @@ import re
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app.core.suitability_scoring import SCORER_VERSION, prepare_case, score_case, fixture_version, semantic_cases, TAG, MARKERS
+from app.core.suitability_scoring import SCORER_VERSION, prepare_case, score_case, fixture_version, curated_cases, TAG, MARKERS
 
 
 def rescore(fixtures, capabilities, outputs, model):
-    prepared = [prepare_case(c) for c in fixtures['cases']]
+    prepared = [prepare_case({**c, 'reviewed': c.get('reviewed') is True}) for c in fixtures['cases']]
     ids = {c['id'] for c in prepared}
-    prepared += [c for c in semantic_cases() if c['id'] not in ids]
+    prepared += [c for c in curated_cases() if c['id'] not in ids]
     cases = {c['id']: c for c in prepared}
     old = capabilities.get('suitability', {}).get(model.lower(), {})
     raw = outputs.get('outputs', {}).get(model.lower(), {})
@@ -46,8 +46,8 @@ def rescore(fixtures, capabilities, outputs, model):
                 row['observed_analysis_prefix'] = case.get('category') == 'tool' and bool(prefix and not prefix.startswith(('<tool', 'NONE', 'SKIP', '[', '**I ')))
                 row['observed_malformed_marker'] = bool(re.search(r'\*\*I (?:do|feel)\*\*', saved))
                 row['observed_none_tool_conflict'] = case.get('category') == 'tool' and bool(TAG.search(saved) and re.search(r'\bNONE\b', prefix))
-            if case.get('task') == 'image_analysis':
-                row.update(classification='evaluation_error', reason='missing_input: no image was sent')
+            if any(o['invalid_input'] == 'missing_input' for o in row['observations']):
+                row.update(classification='evaluation_error', reason='missing_input: image file unavailable')
             elif not versioned:
                 row.update(reason='legacy: selected response only; possibly capped at 600 chars; missing repeats, finish metadata and original fixture version')
                 if row['observed_analysis_prefix'] or row['observed_none_tool_conflict'] or row['observed_malformed_marker']:
