@@ -3,7 +3,8 @@
 Usage: ./.venv/bin/python scripts/smoke_suitability_speed.py
 
 Hand-derived: six one-second calls at three workers take two seconds (<3).
-One routing lane caps three requested workers to one. Thought/state/facts
+A provider max_concurrent of 1 caps three requested workers to one; an
+unreviewed log candidate is never sent. Thought/state/facts
 medians 6+4+5 = 15 seconds: passes 20, fails 10. One passing vision case
 out of three is below 70%. Running and unfrozen means live play. A JPEG
 case sends one image; a missing file sends zero requests; WEBP keeps its MIME.
@@ -38,7 +39,8 @@ def main():
         def run(cases, lanes=3, concurrency=3, limit=20):
             with patch.object(suit, "load_cases", return_value={"cases": cases}), \
                  patch("app.core.config.get", side_effect=lambda key, default=None:
-                       limit if key == "model_test.max_turn_seconds" else default):
+                       limit if key == "model_test.max_turn_seconds" else
+                       [{"name": "fake", "max_concurrent": lanes}] if key == "providers" else default):
                 return list(suit.iter_suitability_results("fake::demo", concurrency=concurrency,
                     routing_entry={"provider": "fake", "model": "demo", "max_concurrent": lanes}))[-1]["summary"]
 
@@ -56,7 +58,13 @@ def main():
                 assert summary["concurrency"] == 3
             print("[1] Six one-second calls run in under three seconds OK")
             assert run([base], lanes=1)["concurrency"] == 1
-            print("[2] Routing lane caps effective concurrency OK")
+            print("[2] Provider max_concurrent caps effective concurrency OK")
+            sent = []
+            with patch.object(client, "invoke", side_effect=lambda m: sent.append(m) or SimpleNamespace(
+                    content=answer, finish_reason="stop", usage={"completion_tokens": 12})):
+                done = run([base, {**base, "id": "log_x", "reviewed": False}])
+            assert len(sent) == 1 and [c["id"] for c in done["checks"]] == [base["id"]], done["checks"]
+            print("[2b] Unreviewed log candidate is not sent OK")
             # Repetitions of a single case can occupy all three workers.
             barrier = threading.Barrier(3)
             def repeated(messages):

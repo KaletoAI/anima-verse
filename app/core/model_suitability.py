@@ -259,10 +259,16 @@ def iter_suitability_results(
 ) -> Iterator[Dict[str, Any]]:
     """Run frozen fixture cases against a model and yield NDJSON events."""
     from app.core.llm_router import create_llm_instance
-    data = load_cases(auto_build=True)
-    cases = data.get("cases", [])
+    data = load_cases(auto_build=False)
+    # Only curated cases and log candidates a person has reviewed are run;
+    # unreviewed candidates (possibly from an older prompt layout) wait for
+    # review in scripts/suitability_capture_cases.py.
+    cases = [case for case in data.get("cases", []) if case.get("reviewed", True) is True]
+    curated_ids = {case["id"] for case in curated_cases()}
+    data = {**data, "cases": cases, "fixture_version": fixture_version(cases),
+            "curated_only": all(case.get("id") in curated_ids for case in cases)}
     if not cases:
-        yield {"type": "error", "message": "No test cases — is logs/llm_calls.jsonl present?"}
+        yield {"type": "error", "message": "No test cases"}
         return
 
     inst = create_llm_instance("suitability_test", model_full,
@@ -281,15 +287,21 @@ def iter_suitability_results(
         return
 
     from app.core import config
-    from app.core.llm_lanes import lane_count_in
     from app.core.agent_loop import get_agent_loop
     from app.models.world import is_world_frozen
     from app.core.vision_message import image_user_content
     from app.core.suitability_scoring import ROOT
 
     provider, _, model = model_full.partition("::")
-    routing = [routing_entry] if routing_entry is not None else config.get("llm_routing", [])
-    concurrency = max(1, min(concurrency, lane_count_in(routing, provider, model) or 1))
+    # Tests go straight to the provider, past the queue and its lanes; the
+    # provider's own parallel-request limit is the bound.
+    provider_cap = next((p.get("max_concurrent") for p in config.get("providers", []) or []
+                         if p.get("name") == (getattr(inst, "provider_name", "") or provider)), None)
+    try:
+        provider_cap = int(provider_cap) if provider_cap else concurrency
+    except (TypeError, ValueError):
+        provider_cap = concurrency
+    concurrency = max(1, min(concurrency, provider_cap))
     live_play = bool(get_agent_loop().status()["running"] and not is_world_frozen())
     cases = [prepare_case(case) for case in cases]
 
