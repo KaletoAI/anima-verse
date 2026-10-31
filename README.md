@@ -337,6 +337,11 @@ stops acting autonomously).
   preview mode and a per-kit filter), then generate an image and mesh for each prop in the
   **Props** tab. Set the room types and use **Furnish from kit** or **Furnish empty rooms from kit**.
   To export a kit as a marketplace collection, use the CollectionBuilder tag filter `kit:<id>`.
+- **Furniture actions** (sit, lie down, sleep, make coffee, pair actions) are authored per prop in
+  the **Props** tab and use every matching place automatically. A skill package can add actions of
+  its own to every matching piece of furniture at runtime; they are never stored in the prop, so an
+  exported prop carries only its own actions, and the prop editor can switch a package action off
+  per prop or per place (`docs/plugins.md`, "Möbel-Aktionen").
 - Optional **Blender refinement** of generated meshes (headless, no manual modelling).
 
 ### Text-to-speech
