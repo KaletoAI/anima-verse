@@ -190,7 +190,7 @@ it for its own direct calls.
 |---|---|
 | `blocked_reason(name, skill_id, *, profile=None, rules=None) -> str` | Rule message or cost shortfall; `""` = allowed |
 | `blocked_skills(name, skill_ids) -> dict` | Reasons for the blocked ids only (one rules load) |
-| `run_gated(name, skill_id, call) -> result` | Recheck, run, charge the cost after a non-error result; blocked → `"Error: <reason>"` |
+| `run_gated(name, skill_id, call, *, tool_input="", source="", tool_name="") -> result` | Recheck, run, charge the cost after a non-error result; blocked → `"Error: <reason>"`. The keywords feed the tool-call log |
 | `charge(name, skill_id) -> dict` | Deduct the configured cost (source `skill:<id>`) |
 | `stat_costs_shortfall(profile, costs) -> str|None` | Generic "needs N <stat>" check; stats the character lacks are free |
 
@@ -746,7 +746,7 @@ Zustimmung ist immer ein Tool-Call, nie ein Keyword-Match auf Prosa.
 
 | Funktion | Semantik |
 |---|---|
-| `partner_poses() -> List[Tuple[str, str]]` | Welche Paar-Posen es gibt (Key + Anzeige) |
+| `partner_poses() -> List[Tuple[str, str]]` | Free pair capabilities (pose key + animation kind) |
 | `get_interaction(character_name, profile=None)` | Läuft gerade eine? |
 | `create_invite(inviter, invitee, pose_key, *, request_id=None) -> Optional[str]` | Ask through the ordinary consent flow. A supplied id atomically creates/reuses only the exact inviter/invitee/pose row, emits the offer once, and never replaces another pending question. A mismatching existing id is rejected. Ordinary same-pose repeats reuse the fresh question; replacements mark old questions cancelled instead of deleting their identity |
 | `resolve_invite(invite_id, accept) -> Dict` | Answer an invitation. `status` `cannot` ends an accepted yes as `failed` with its saved reason |
@@ -1427,7 +1427,7 @@ return `None` to offer the tool, or a short English reason to hide it for
 this turn. Keep this a cheap state check. Incoming invitations must remain
 answerable even after their senders leave. Do not mutate tool configuration.
 
-`streaming.turn_tools(tools, facts, rp_first=...)` returns `(offered, hidden)`:
+`app.core.streaming.turn_tools(tools, facts, rp_first=...)` returns `(offered, hidden)`:
 a list preserving input order and a tool-name-to-reason dictionary. It first
 applies `decision_tools` (in-person suppression when a respond partner is
 present), then pose-setter exclusion in rp_first, inactive `cleared_by` flag
@@ -1435,3 +1435,25 @@ exclusion, then each package availability hook. `inactive_clearing_tools`
 reads flag declarations generically; a clearing verb stays available if any
 state it clears is active. Existing `decision_tools` mapping callers keep
 receiving mappings; list callers receive lists. The core names no skill.
+
+
+### Read-only tool-menu validation sources
+
+`app.core.prop_actions.offers(actor, *, lang="en") -> list[dict]` returns
+same-room furniture actions with exact `prop_label` and `label`. A solo row
+is requestable when `enabled`; a `required_partner` row needs an enabled
+entry in `available_targets` (which names `partner`). These are also the
+rows used by the named-request validator. Repeated placements may share names.
+`piece_label(target, lang="en") -> str` reads the furniture display name.
+`app.core.prop_action_engine.state_for(actor) -> dict` scopes `current`,
+`outgoing`, `incoming` and `recent_results` to the participant. Current and
+outgoing rows include `target` and action `label`; incoming invitations belong
+in the open-questions block, not the proposal menu.
+
+`app.core.interaction_engine.check_can_pair(actor, partner) -> str` returns
+an empty string when two distinct characters are awake, present and free to
+receive a proposal, otherwise a refusal reason. Combine it with
+`app.models.character.list_available_characters()` and `partner_poses()` for
+proposal menus. The latter returns `(pose_key, animation_kind)`, not display
+labels; only free pair clips qualify. Pending invitations are answered through
+the separate question flow and must not be copied into proposal menus.

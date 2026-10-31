@@ -86,6 +86,17 @@ class InteractSkill(PluginSkill):
         except Exception:
             return False
 
+    def decision_menu(self, character_name: str) -> list[str]:
+        """Free pair keys, only when a partner can receive a proposal now."""
+        from app.core.interaction_engine import partner_poses, check_can_pair
+        from app.models.character import list_available_characters
+
+        if not any(name != character_name and not check_can_pair(character_name, name)
+                   for name in list_available_characters()):
+            return []
+        # The second tuple member is an animation kind, not a display label.
+        return list(dict.fromkeys(key for key, _kind in partner_poses()))[:20]
+
     def as_tool(self, **kwargs) -> ToolSpec:
         try:
             from app.core.interaction_engine import partner_poses

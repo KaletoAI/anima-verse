@@ -33,6 +33,29 @@ class PropActionSkill(PluginSkill):
                 return None
         return "no requestable furniture action or own running action"
 
+    def decision_menu(self, character_name: str) -> list[str]:
+        """Exact requestable names, plus the participant's own stop action."""
+        from app.core.prop_actions import offers, piece_label
+        from app.core.prop_action_engine import state_for
+
+        lines = []
+        state = state_for(character_name)
+        for run in state["current"] + state["outgoing"]:
+            piece = piece_label(run["target"]) or "Furniture"
+            lines.append(f"running: {piece} | {run['label']} - to get up or leave it: "
+                         '{"stop": true}')
+        for row in offers(character_name):
+            pair = row["required_partner"]
+            usable = (any(target["enabled"] for target in row["available_targets"])
+                      if pair else row["enabled"])
+            if usable:
+                line = f"{row['prop_label'] or 'Furniture'} | {row['label']}"
+                if pair:
+                    line += " | with partner"
+                if line not in lines:
+                    lines.append(line)
+        return lines[:20]
+
     def execute(self, raw_input):
         if not self.enabled:
             return json.dumps({"status": "refused", "reason": "skill_disabled", "execution_id": ""})
