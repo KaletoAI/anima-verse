@@ -220,6 +220,7 @@ def _build_models_html() -> str:
                 <th class="sortable" data-sort="tool_calling" onclick="sortBy('tool_calling')">Tool-Calling<span class="sort-arrow" id="arrow-tool_calling"></span></th>
                 <th class="sortable" data-sort="vision" onclick="sortBy('vision')">Vision<span class="sort-arrow" id="arrow-vision"></span></th>
                 <th class="sortable" data-sort="tested_score" onclick="sortBy('tested_score')">Test<span class="sort-arrow" id="arrow-tested_score"></span></th>
+                <th class="sortable" data-sort="speed" onclick="sortBy('speed')" title="Projected non-RP time per thought turn, from the last test">Speed<span class="sort-arrow" id="arrow-speed"></span></th>
                 <th class="sortable" data-sort="notes_de" onclick="sortBy('notes_de')">Notes<span class="sort-arrow" id="arrow-notes_de"></span></th>
                 <th></th>
             </tr>

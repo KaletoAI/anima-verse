@@ -73,6 +73,11 @@ function getSortValue(m, field) {
         const parts = s.split('/');
         return parts.length === 2 ? parseInt(parts[0]) || 0 : -1;
     }
+    if (field === 'speed') {
+        // Untested models sort after every measured one.
+        const t = ((m.capabilities || {}).tested_suitability || {}).projected_turn_s;
+        return t == null ? Number.MAX_VALUE : Number(t);
+    }
     if (field === 'notes_de') return ((m.capabilities || {}).notes_de || '').toLowerCase();
     if (field === 'size_gb') return m.size_gb || 0;
     return (m[field] || '').toLowerCase();
@@ -131,6 +136,7 @@ function renderModels(models) {
             <td>${capToggle(m.name, 'tool_calling', caps.tool_calling)}</td>
             <td>${capToggle(m.name, 'vision', caps.vision)}</td>
             <td>${testBadge(caps, m.name)}</td>
+            <td>${speedCell(caps)}</td>
             <td><input class="notes-input" data-model="${esc(m.name)}" value="${esc(caps.notes_de || '')}"
                 onchange="saveRow(this)" onblur="saveRow(this)" /></td>
             <td>
@@ -145,7 +151,7 @@ function renderModels(models) {
         detailRow.className = 'instruction-row';
         detailRow.id = instrId;
         detailRow.innerHTML = `
-            <td colspan="8">
+            <td colspan="9">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
                     <label style="font-size:11px;color:#8b949e;">Tool Instruction (leer = Default):</label>
                     <button class="btn-insert-default" onclick="insertDefault(this)" title="Default-Text einfuegen">Default einfuegen</button>
@@ -216,7 +222,6 @@ function testBadge(caps) {
     const vision = result.vision || {};
     const speed = result.speed || {};
     const visionText = vision.rate == null ? 'not tested' : Math.round(vision.rate * 100) + '%';
-    const turn = result.projected_turn_s == null ? '' : ' · ' + Number(result.projected_turn_s).toFixed(0) + ' s/turn';
     const tooltip = 'Tools ' + (result.tool || '-') + ' · Helpers ' + (result.helper || '-')
         + ' · Vision ' + visionText + '\n'
         + ['tools', 'helpers', 'vision'].map(g => g + ' median ' + ((speed[g] || {}).median_latency_s ?? '-') + ' s').join(' · ')
@@ -225,7 +230,24 @@ function testBadge(caps) {
     return '<span class="test-badge ' + (verdict === 'yes' ? 'ok' : 'fail') + '" style="cursor:pointer;"'
         + ' title="' + esc(tooltip) + '"'
         + (key ? ' onclick="suitShowSaved(\'' + escJs(key) + '\')"' : '') + '>'
-        + esc((caps.tested_score || result.score || '') + ' · ' + verdict + turn) + '</span>';
+        + esc((caps.tested_score || result.score || '') + ' · ' + verdict) + '</span>';
+}
+
+// Speed of the last current test: projected seconds per thought turn, big,
+// red when the verdict failed on speed; the median per group below it.
+function speedCell(caps) {
+    const result = caps.tested_suitability;
+    if (!suitCurrent(result) || result.projected_turn_s == null) return '<span class="test-badge none">-</span>';
+    const slow = result.speed_ok === false
+        || (result.speed_ok == null && String(result.verdict || '').includes('speed'));
+    const limit = result.max_turn_seconds == null ? '' : ' (limit ' + result.max_turn_seconds + ' s)';
+    const speed = result.speed || {};
+    const groups = ['tools', 'helpers', 'vision']
+        .filter(g => (speed[g] || {}).median_latency_s != null)
+        .map(g => g + ' ' + speed[g].median_latency_s + ' s');
+    return '<span class="speed-turn ' + (slow ? 'slow' : 'fast') + '" title="Projected non-RP time per thought turn' + esc(limit) + '">'
+        + esc(Number(result.projected_turn_s).toFixed(1)) + ' s/turn</span>'
+        + (groups.length ? '<div class="speed-groups">' + esc(groups.join(' · ')) + '</div>' : '');
 }
 
 // Open a saved result (model table badge) in the test detail view.

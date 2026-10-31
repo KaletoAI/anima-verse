@@ -449,7 +449,8 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
         runs = timings([r for r in eligible if r.get("task") == task])
         task_medians.append(median([r["duration_s"] for r in runs]) if runs else None)
     projected = sum(task_medians) if all(v is not None for v in task_medians) else None
-    speed_ok = projected is not None and projected <= config.get("model_test.max_turn_seconds", 20)
+    max_turn = config.get("model_test.max_turn_seconds", 20)
+    speed_ok = projected is not None and projected <= max_turn
     verdict = next(("no — " + name for name, ok in
                     (("tools", tool_ok), ("helpers", helper_ok), ("vision", vision_ok), ("speed", speed_ok))
                     if ok is not True), "yes")
@@ -464,6 +465,10 @@ def _summarize(model_full: str, results: List[Dict[str, Any]]) -> Dict[str, Any]
         "verdict": verdict,
         "vision": {"rate": vision_rate, "verdict": vision_ok},
         "projected_turn_s": projected,
+        # The verdict names only the first failed dimension; speed is kept on
+        # its own so the model table can mark a slow model that also failed tools.
+        "speed_ok": speed_ok,
+        "max_turn_seconds": max_turn,
         "helper_evidence": "format only; semantic not_tested",
         "tool_evidence": "conjunction of checked dimensions; uncurated decisions not_tested",
         "speed": speed,

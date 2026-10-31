@@ -89,6 +89,7 @@ def main():
             with patch("app.core.config.get", return_value=20):
                 summary = copy.deepcopy(suit._summarize("fake::demo", records))
                 assert summary["projected_turn_s"] == 15 and summary["verdict"] == "yes"
+                assert summary["speed_ok"] is True and summary["max_turn_seconds"] == 20
                 assert summary["speed"]["helpers"]["median_latency_s"] == 4.5
                 assert summary["speed"]["helpers"]["tok_s"] == 6.7
             with patch("app.core.config.get", return_value=10):
@@ -97,6 +98,10 @@ def main():
             summary.update(concurrency=3, live_play=True)
             records += [record("vision", "image_analysis", 2, False) for _ in range(2)]
             assert suit._summarize("fake::demo", records)["verdict"] == "no — vision"
+            # The verdict names vision first; speed_ok still records the slow turn.
+            with patch("app.core.config.get", return_value=10):
+                slow = suit._summarize("fake::demo", records)
+            assert slow["verdict"] == "no — vision" and slow["speed_ok"] is False, slow["verdict"]
             print("[4] Vision one out of three fails single-helper verdict OK")
             assert run([base])["live_play"] is True
             with patch("app.models.world.is_world_frozen", return_value=True):

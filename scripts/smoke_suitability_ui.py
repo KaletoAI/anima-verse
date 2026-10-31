@@ -94,7 +94,15 @@ assert(ctx.testBadge({tested_score:'1/1',tested_verdict:'yes',tested_suitability
 assert(ctx.testBadge({tested_score:'1/1',tested_suitability:{scorer_version:'suitability-4'}}).includes('none'));
 const rich = ctx.testBadge({tested_score:'13/16',tested_verdict:'no - tools',tested_suitability:{scorer_version:'suitability-5',
     model:'Evo::gemma',tool:'9/11',helper:'2/3',vision:{rate:1},projected_turn_s:18.7,speed:{tools:{median_latency_s:3.8}}}});
-assert(rich.includes('13/16 · no - tools · 19 s/turn'), rich);
+assert(rich.includes('13/16 · no - tools'), rich);
+const fast = ctx.speedCell({tested_suitability:{scorer_version:'suitability-5',verdict:'no - tools',projected_turn_s:18.74,
+    speed:{tools:{median_latency_s:3.8},helpers:{median_latency_s:6.97}}}});
+assert(fast.includes('speed-turn fast') && fast.includes('18.7 s/turn') && fast.includes('tools 3.8 s · helpers 6.97 s'), fast);
+assert(ctx.speedCell({tested_suitability:{scorer_version:'suitability-5',verdict:'no - speed',projected_turn_s:107}}).includes('speed-turn slow'));
+const both = ctx.speedCell({tested_suitability:{scorer_version:'suitability-5',verdict:'no - tools',speed_ok:false,max_turn_seconds:20,projected_turn_s:31}});
+assert(both.includes('speed-turn slow') && both.includes('limit 20 s'), both);
+assert(ctx.speedCell({tested_suitability:{scorer_version:'suitability-4',projected_turn_s:5}}).includes('none'));
+assert.strictEqual(ctx.getSortValue({capabilities:{}}, 'speed'), Number.MAX_VALUE);
 assert(rich.includes('Tools 9/11 · Helpers 2/3 · Vision 100%'), rich);
 assert(rich.includes("suitShowSaved('Evo::gemma')"), rich);
 ctx.suitRenderJob({status:'done',summary:{scorer_version:'suitability-5',verdict:'no - tools',checks:[{ok:false,group:'tools',task:'thought',prompt:{system:'<system>',user:'user text'},runs:[{content:'<answer>'}]}]}});
