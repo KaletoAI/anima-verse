@@ -59,6 +59,21 @@ class SetLocationSkill(PluginSkill):
         # name/description/action_hint come from templates/llm/skills/set_location.md
         self._defaults = {}
 
+    def decision_menu(self, character_name: str) -> list[str]:
+        """Known places, plus exact room destinations at the current place."""
+        from app.models.world import list_locations_for_character
+
+        locations = list_locations_for_character(character_name) or []
+        lines = [loc["name"] for loc in locations if loc.get("name")]
+        current_id = get_character_current_location(character_name)
+        current = get_location_by_id(current_id) if current_id else None
+        if current and current.get("name"):
+            lines.extend(
+                f"{current['name']}, {room['name']}"
+                for room in get_location_rooms(current) if room.get("name")
+            )
+        return lines
+
     def thought_context_block(self, character_name: str) -> str:
         """'Places you can go' — the visibility-filtered travel-target list
         plus the SetLocation instruction (package-owned prompt section)."""
