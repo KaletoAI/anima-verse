@@ -467,19 +467,10 @@ async function suitCasesInfo() {
     try {
         const r = await fetch('/admin/settings/llm-suitability-cases');
         const i = await r.json();
-        const bt = i.by_task || {};
-        const parts = Object.keys(bt).map(k => k + ':' + bt[k]);
-        el.innerHTML = esc(i.total || 0) + ' frozen log + synthetic test cases'
-            + (parts.length ? ' (' + esc(parts.join(', ')) + ')' : '')
-            + (i.built_at ? ' · built ' + esc(i.built_at) : '')
-            + ' <button class="btn" style="margin-left:6px;" onclick="suitRebuild()">Rebuild from log</button>';
+        const groups = i.by_group || {};
+        const parts = ['tools', 'helpers', 'vision'].filter(g => groups[g]).map(g => groups[g] + ' ' + g);
+        el.textContent = (i.total || 0) + ' test cases' + (parts.length ? ': ' + parts.join(', ') : '');
     } catch (e) { el.textContent = 'Could not load test cases'; }
-}
-async function suitRebuild() {
-    const el = document.getElementById('suitCases');
-    if (el) el.textContent = 'Rebuilding from log…';
-    try { await fetch('/admin/settings/llm-suitability-cases/rebuild', { method: 'POST' }); } catch (e) { /* ignore */ }
-    suitCasesInfo();
 }
 async function suitLoadModels() {
     const prov = document.getElementById('suitProvider').value;

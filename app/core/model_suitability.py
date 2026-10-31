@@ -1,4 +1,4 @@
-"""Versioned model suitability evidence from frozen logs and synthetic cases.
+"""Versioned model suitability evidence from curated cases (plus reviewed log cases).
 
 Tool format, catalog availability, arguments and curated semantics are scored
 separately. Log goldens are examples only. Helper scores measure format, never
@@ -214,15 +214,19 @@ def load_cases(auto_build: bool = True) -> Dict[str, Any]:
     return data
 
 
+def runnable_cases() -> List[Dict[str, Any]]:
+    """The cases a test sends: the curated set plus log candidates a person
+    reviewed (scripts/suitability_capture_cases.py --review)."""
+    return [case for case in load_cases(auto_build=False).get("cases", [])
+            if case.get("reviewed", True) is True]
+
+
 def cases_info() -> Dict[str, Any]:
-    data = load_cases(auto_build=False)
-    cases = data.get("cases", [])
-    by_task: Dict[str, int] = {}
-    for c in cases:
-        by_task[c.get("task", "?")] = by_task.get(c.get("task", "?"), 0) + 1
-    return {"total": len(cases), "by_task": by_task,
-            "built_at": data.get("built_at", ""),
-            "allowed_tools": data.get("allowed_tools", [])}
+    """Counts of the cases a test runs, by group (tools / helpers / vision)."""
+    by_group: Dict[str, int] = {}
+    for case in runnable_cases():
+        by_group[case.get("group", "?")] = by_group.get(case.get("group", "?"), 0) + 1
+    return {"total": sum(by_group.values()), "by_group": by_group}
 
 
 # ---------------------------------------------------------------------------
@@ -260,10 +264,9 @@ def iter_suitability_results(
     """Run frozen fixture cases against a model and yield NDJSON events."""
     from app.core.llm_router import create_llm_instance
     data = load_cases(auto_build=False)
-    # Only curated cases and log candidates a person has reviewed are run;
-    # unreviewed candidates (possibly from an older prompt layout) wait for
-    # review in scripts/suitability_capture_cases.py.
-    cases = [case for case in data.get("cases", []) if case.get("reviewed", True) is True]
+    # Unreviewed log candidates (possibly from an older prompt layout) wait
+    # for review in scripts/suitability_capture_cases.py.
+    cases = runnable_cases()
     curated_ids = {case["id"] for case in curated_cases()}
     data = {**data, "cases": cases, "fixture_version": fixture_version(cases),
             "curated_only": all(case.get("id") in curated_ids for case in cases)}

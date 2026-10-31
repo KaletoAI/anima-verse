@@ -1666,16 +1666,9 @@ def providers_list(user=Depends(require_admin)):
 
 @router.get("/settings/llm-suitability-cases")
 def llm_suitability_cases(user=Depends(require_admin)):
-    """Describe the frozen fixture set (case counts, tasks, build time)."""
+    """Count the cases a test runs, by group."""
     from app.core.model_suitability import cases_info
     return cases_info()
-
-
-@router.post("/settings/llm-suitability-cases/rebuild")
-async def llm_suitability_cases_rebuild(user=Depends(require_admin)):
-    """Rebuild the fixture set from logs/llm_calls.jsonl."""
-    from app.core.model_suitability import build_cases_from_log
-    return await asyncio.to_thread(build_cases_from_log)
 
 
 @router.post("/settings/llm-suitability-test/start")

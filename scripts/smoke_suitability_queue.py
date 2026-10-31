@@ -78,7 +78,10 @@ def main():
             # A subsequent job is a barrier proving the cancelled runner exited.
             end = suit.enqueue_test('A')
             wait_for(lambda: suit.get_job(end['job_id'])['status'] == 'done')
-            assert calls.count('C') == 1 and 'C' not in persisted
+            # C runs its two cases two at a time (concurrency 2, no provider
+            # cap in this sandbox), so the second may already be in flight when
+            # the cancel lands; [5] covers a cancel that stops further cases.
+            assert 1 <= calls.count('C') <= 2 and 'C' not in persisted
             assert not suit.cancel_test(end['job_id'])
             assert not suit.cancel_test('missing')
             # Also cancel after the final case, before summary persistence.
