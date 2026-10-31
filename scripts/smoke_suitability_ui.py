@@ -6,6 +6,7 @@ under the write lock, preserve capabilities and current history, and remove
 obsolete raw answers. Node exercises actual rendering and start serialization.
 """
 import json
+from types import SimpleNamespace
 import subprocess
 import tempfile
 import sys
@@ -77,6 +78,36 @@ with tempfile.TemporaryDirectory() as directory:
             caps, "get_all_suitability", return_value={"P::m": {"tested_suitability": summary}}):
         listed = [j["job_id"] for j in routes.llm_suitability_test_jobs(user=None)["jobs"]]
     assert listed == ["run", "wait", "fresh", "err"], listed
+    # Model table: what a llama-swap /models entry reports, name-derived
+    # parameter size, and the fill order stored > last test > provider.
+    from app.core.provider import _reported_capabilities, _parameter_size_from_name
+    swap = {"id": "gemma-4-26b-a4b-it-q6-k", "capabilities": {"function_calling": True, "vision": True},
+            "meta": {"llamaswap": {"quantization": "q6-k"}}}
+    assert _reported_capabilities(swap) == {"vision": True, "tool_calling": True, "quantization": "q6-k"}
+    text_only = {"id": "granite-switch-4.1-8b-bf16", "architecture": {"input_modalities": ["text"]}}
+    assert _reported_capabilities(text_only) == {"vision": False, "tool_calling": None, "quantization": ""}
+    assert _reported_capabilities({"id": "x", "supported_parameters": ["tools"]})["tool_calling"] is True
+    assert _reported_capabilities({"id": "gpt-4o"}) == {"vision": None, "tool_calling": None, "quantization": ""}
+    for name, size in (("gemma-4-26b-a4b-it", "26B-A4B"), ("granite-switch-4.1-8b-bf16", "8B"),
+                       ("together/Qwen/Qwen3.5-9B", "9B"), ("lfm3-1.7b-bf16", "1.7B"), ("gpt-4o", "")):
+        assert _parameter_size_from_name(name) == size, (name, _parameter_size_from_name(name))
+    stored_no = {"vision": False, "tool_calling": None}
+    assert caps.prefill_from_provider(stored_no, {"vision": True, "tool_calling": True}) == ["tool_calling"]
+    assert stored_no == {"vision": False, "tool_calling": True}
+    from app.routes import admin as admin_routes
+    listed = {"P": {"models": [
+        {"name": "seen-images", "vision": False, "tool_calling": None},
+        {"name": "text-only", "vision": False, "tool_calling": True}]}}
+    suits = {"p::seen-images": {"tested_suitability": {"scorer_version": "suitability-5", "vision": {"rate": 1.0}}}}
+    manager = SimpleNamespace(list_all_models=lambda: listed)
+    with patch.object(admin_routes, "get_provider_manager", return_value=manager), patch.object(
+            admin_routes, "get_all_suitability", return_value=suits), patch.object(
+            admin_routes, "get_model_capabilities", side_effect=lambda name: {"vision": None, "tool_calling": None}), patch.object(
+            admin_routes, "get_all_capabilities", return_value={}):
+        rows = {m["name"]: m for m in admin_routes.model_capabilities_data()["models"]}
+    assert rows["seen-images"]["capabilities"]["vision"] is True and rows["seen-images"]["reported"] == {"vision": "test"}
+    assert rows["text-only"]["capabilities"]["vision"] is False
+    assert rows["text-only"]["reported"] == {"vision": "provider", "tool_calling": "provider"}
 print("Suitability UI old-result filtering, deletion and exact diagnostic identity OK")
 subprocess.run(["node", "--check", "static/admin/models.js"], check=True)
 source = Path("static/admin/models.js").read_text()
@@ -103,6 +134,10 @@ const both = ctx.speedCell({tested_suitability:{scorer_version:'suitability-5',v
 assert(both.includes('speed-turn slow') && both.includes('limit 20 s'), both);
 assert(ctx.speedCell({tested_suitability:{scorer_version:'suitability-4',projected_turn_s:5}}).includes('none'));
 assert.strictEqual(ctx.getSortValue({capabilities:{}}, 'speed'), Number.MAX_VALUE);
+const shown = ctx.capToggle('m', 'vision', false, 'provider');
+assert(shown.includes('cap-reported') && shown.includes('Reported by the provider') && shown.includes('data-value="true"'), shown);
+assert(ctx.capToggle('m', 'vision', true, 'test').includes('From the last test'));
+assert(!ctx.capToggle('m', 'vision', true).includes('cap-reported'));
 assert(rich.includes('Tools 9/11 · Helpers 2/3 · Vision 100%'), rich);
 assert(rich.includes("suitShowSaved('Evo::gemma')"), rich);
 ctx.suitRenderJob({status:'done',summary:{scorer_version:'suitability-5',verdict:'no - tools',checks:[{ok:false,group:'tools',task:'thought',prompt:{system:'<system>',user:'user text'},runs:[{content:'<answer>'}]}]}});

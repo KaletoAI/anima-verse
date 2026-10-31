@@ -124,17 +124,18 @@ function renderModels(models) {
         const row = document.createElement('tr');
         row.className = m.has_result ? 'row-documented' : 'row-unknown';
         const caps = m.capabilities || {};
-        const sizeStr = m.size_gb ? esc(m.size_gb) + ' GB' : '';
-        const paramStr = m.parameter_size ? ' (' + esc(m.parameter_size) + ')' : '';
+        const sizeStr = [m.size_gb ? m.size_gb + ' GB' : '', m.parameter_size, m.quantization]
+            .filter(Boolean).map(esc).join(' · ');
+        const reported = m.reported || {};
         const hasInstr = caps.tool_instruction ? ' has-instruction' : '';
         const instrId = 'instr-' + cssId(m.name);
 
         row.innerHTML = `
             <td><span class="badge-provider">${esc(m.provider)}</span></td>
             <td><strong>${esc(m.name)}</strong></td>
-            <td><span class="badge-size">${sizeStr}${paramStr}</span></td>
-            <td>${capToggle(m.name, 'tool_calling', caps.tool_calling)}</td>
-            <td>${capToggle(m.name, 'vision', caps.vision)}</td>
+            <td><span class="badge-size">${sizeStr}</span></td>
+            <td>${capToggle(m.name, 'tool_calling', caps.tool_calling, reported.tool_calling)}</td>
+            <td>${capToggle(m.name, 'vision', caps.vision, reported.vision)}</td>
             <td>${testBadge(caps, m.name)}</td>
             <td>${speedCell(caps)}</td>
             <td><input class="notes-input" data-model="${esc(m.name)}" value="${esc(caps.notes_de || '')}"
@@ -225,7 +226,7 @@ function testBadge(caps) {
     const tooltip = 'Tools ' + (result.tool || '-') + ' · Helpers ' + (result.helper || '-')
         + ' · Vision ' + visionText + '\n'
         + ['tools', 'helpers', 'vision'].map(g => g + ' median ' + ((speed[g] || {}).median_latency_s ?? '-') + ' s').join(' · ')
-        + '\n' + (result.date || '') + ' · ' + result.scorer_version + ' · click for details';
+        + '\n' + (caps.tested_date || '') + ' · ' + result.scorer_version + ' · click for details';
     const key = result.model || '';
     return '<span class="test-badge ' + (verdict === 'yes' ? 'ok' : 'fail') + '" style="cursor:pointer;"'
         + ' title="' + esc(tooltip) + '"'
@@ -262,12 +263,23 @@ function suitCurrent(result) {
     return !!match && Number(match[1]) >= 5;
 }
 
-function capToggle(modelName, field, value) {
+// reported = where an unstored value comes from ('provider' = its model
+// list, 'test' = the last test answered images): shown dimmed with a
+// tooltip; a click stores it for real.
+function capToggle(modelName, field, value, reported = '') {
     let cls, label;
     if (value === true) { cls = 'cap-yes'; label = 'Yes'; }
     else if (value === false) { cls = 'cap-no'; label = 'No'; }
     else { cls = 'cap-unknown'; label = '?'; }
-    return `<span class="cap-toggle ${cls}" data-model="${esc(modelName)}" data-field="${field}" data-value="${esc(value)}" onclick="toggleCap(this)">${label}</span>`;
+    const source = reported ? ' cap-reported" title="' + (reported === 'test' ? 'From the last test' : 'Reported by the provider')
+        + ' — click to store a value' : '';
+    return `<span class="cap-toggle ${cls}${source}" data-model="${esc(modelName)}" data-field="${field}" data-value="${esc(reported ? capPredecessor(value) : value)}" onclick="toggleCap(this)">${label}</span>`;
+}
+
+// The cycle is Yes -> No -> ? -> Yes; a reported value carries its
+// predecessor so that the first click stores exactly what is shown.
+function capPredecessor(value) {
+    return value === true ? 'null' : value === false ? 'true' : 'false';
 }
 
 function toggleCap(el) {
@@ -278,6 +290,7 @@ function toggleCap(el) {
     else next = true;
 
     el.setAttribute('data-value', String(next));
+    el.removeAttribute('title');
     if (next === true) { el.className = 'cap-toggle cap-yes'; el.textContent = 'Yes'; }
     else if (next === false) { el.className = 'cap-toggle cap-no'; el.textContent = 'No'; }
     else { el.className = 'cap-toggle cap-unknown'; el.textContent = '?'; }

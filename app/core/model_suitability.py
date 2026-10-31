@@ -532,7 +532,8 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
             "helper": summary["helper"],
             "verdict": summary["verdict"],
             "speed": summary.get("speed"),
-            **{key: summary.get(key) for key in ("concurrency", "live_play", "projected_turn_s", "vision", "curated_only")},
+            **{key: summary.get(key) for key in ("concurrency", "live_play", "projected_turn_s", "speed_ok",
+                                                      "max_turn_seconds", "vision", "curated_only")},
             "checks": stored_checks,
         },
     }

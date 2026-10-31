@@ -98,6 +98,18 @@ def get_all_suitability() -> Dict[str, Any]:
     return {key: value for key, value in _load_suit().items() if current_suitability(value)}
 
 
+def prefill_from_provider(caps: Dict[str, Any], model: Dict[str, Any]) -> list[str]:
+    """Fill vision / tool_calling the admin left unknown (None) from what the
+    provider's model list reports; return the fields filled. A stored Yes/No
+    always wins; the provider claim is never written back."""
+    filled = []
+    for field in ("vision", "tool_calling"):
+        if caps.get(field) is None and isinstance(model.get(field), bool):
+            caps[field] = model[field]
+            filled.append(field)
+    return filled
+
+
 def current_suitability(result: Dict[str, Any]) -> bool:
     """Only scorer generation 5 or later is current (earlier ones scored
     stricter than the game: own tool regex, exact names, bare JSON only)."""

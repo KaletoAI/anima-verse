@@ -135,3 +135,4 @@ tr:hover { background: #161b22; }
 .speed-turn.fast { color: #3fb950; }
 .speed-turn.slow { color: #f85149; }
 .speed-groups { font-size: 11px; color: #8b949e; white-space: nowrap; }
+.cap-toggle.cap-reported { opacity: 0.6; font-style: italic; }

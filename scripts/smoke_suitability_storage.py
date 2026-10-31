@@ -48,6 +48,9 @@ def main():
             done = events[-1]['summary']
             assert done['saved'] and done['score'] == '1/1' and done['helper'] == '0/0'
             shared = json.loads(caps_path.read_text())
+            stored = shared['suitability']['fake::demo']['tested_suitability']
+            # The Speed column reads these from the saved record.
+            assert 'speed_ok' in stored and 'max_turn_seconds' in stored, sorted(stored)
             assert long_answer not in caps_path.read_text() and 'synthetic reasoning' not in caps_path.read_text()
             raw = json.loads(outs_path.read_text())['outputs']['fake::demo']
             saved = raw['cases'][case['id']]

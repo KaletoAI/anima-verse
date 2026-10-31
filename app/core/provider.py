@@ -3,6 +3,7 @@
 Multiple LLM instances can share one provider. Each provider has its own queue
 and concurrency settings.
 """
+import re
 import time
 import requests
 from dataclasses import dataclass, field
@@ -11,6 +12,38 @@ from typing import Any, Dict, List, Optional
 from app.core.log import get_logger
 
 logger = get_logger("provider")
+
+
+def _reported_capabilities(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """What an OpenAI-style /models entry states about itself.
+
+    llama-swap (and OpenRouter-style catalogs) carry ``capabilities``
+    (function_calling / vision), ``architecture.input_modalities`` and
+    ``supported_parameters``. ``None`` = the entry says nothing.
+    """
+    caps = entry.get("capabilities") if isinstance(entry.get("capabilities"), dict) else {}
+    arch = entry.get("architecture") if isinstance(entry.get("architecture"), dict) else {}
+    inputs = arch.get("input_modalities")
+    params = entry.get("supported_parameters")
+    vision = caps.get("vision") if isinstance(caps.get("vision"), bool) else None
+    if vision is None and isinstance(inputs, list):
+        vision = "image" in inputs
+    tools = caps.get("function_calling") if isinstance(caps.get("function_calling"), bool) else None
+    if tools is None and isinstance(params, list):
+        tools = "tools" in params
+    meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+    swap = meta.get("llamaswap") if isinstance(meta.get("llamaswap"), dict) else {}
+    return {"vision": vision, "tool_calling": tools,
+            "quantization": str(swap.get("quantization") or "")}
+
+
+def _parameter_size_from_name(model_id: str) -> str:
+    """'gemma-4-26b-a4b-it' -> '26B-A4B', 'granite-4.1-8b' -> '8B'; '' if absent."""
+    match = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)b(?:-a(\d+(?:\.\d+)?)b)?(?![a-z0-9])",
+                      model_id.lower().rsplit("/", 1)[-1])
+    if not match:
+        return ""
+    return f"{match.group(1)}B" + (f"-A{match.group(2)}B" if match.group(2) else "")
 
 
 @dataclass
@@ -234,16 +267,22 @@ class Provider:
                                 continue
 
                         # Keep vision/VL/OCR models for image tasks and flag them
-                        # so the UI can mark them as "(vision)".
+                        # so the UI can mark them as "(vision)". A server that
+                        # reports capabilities (llama-swap: capabilities,
+                        # architecture.input_modalities, supported_parameters)
+                        # decides; otherwise the name can only confirm vision.
                         mid = m.get("id", "").lower()
                         display = m.get("display_name", "").lower()
-                        is_vision = any(tag in mid or tag in display for tag in
-                                        ("-vl-", "-vl ", "vl-", "/vl-", "-ocr", "vision"))
+                        reported = _reported_capabilities(m)
+                        is_vision = reported["vision"]
+                        if is_vision is None and any(tag in mid or tag in display for tag in
+                                                     ("-vl-", "-vl ", "vl-", "/vl-", "-ocr", "vision")):
+                            is_vision = True
 
                         # Extract pricing for display
                         price_in = pricing.get("input", 0) if isinstance(pricing, dict) else 0
                         price_out = pricing.get("output", 0) if isinstance(pricing, dict) else 0
-                        ctx_len = m.get("context_length", 0)
+                        ctx_len = m.get("context_length", 0) or (m.get("meta") or {}).get("n_ctx", 0)
                         display_name = m.get("display_name", "") or m.get("id", "")
 
                         models.append({
@@ -251,11 +290,12 @@ class Provider:
                             "display_name": display_name,
                             "size": 0,
                             "size_gb": 0,
-                            "parameter_size": "",
+                            "parameter_size": _parameter_size_from_name(m.get("id", "")),
                             "family": m.get("organization", ""),
-                            "quantization": "",
+                            "quantization": reported["quantization"],
                             "context_length": ctx_len,
                             "vision": is_vision,
+                            "tool_calling": reported["tool_calling"],
                             "pricing": {"input": price_in, "output": price_out},
                         })
 

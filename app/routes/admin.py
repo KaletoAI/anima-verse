@@ -8,6 +8,7 @@ from app.core.model_capabilities import (
     get_all_capabilities,
     get_model_capabilities,
     get_all_suitability,
+    prefill_from_provider,
     save_model_capability,
     delete_model_capability)
 from app.core.model_capabilities_migration import has_capability_info
@@ -80,8 +81,16 @@ def model_capabilities_data() -> Dict[str, Any]:
             # anybody tested or documented here. Otherwise every vision model
             # would look documented and the short list would be pointless.
             has_result = has_capability_info(caps) or bool(sd)
-            if caps.get("vision") is None and m.get("vision"):
+            # A vision answer in the last test beats the provider's claim
+            # (DX10-02 lists qwen3.5-9b-heretic-v2-nvfp4 as text-only, yet it
+            # answers images); a stored Yes/No beats both.
+            vision_rate = (((sd or {}).get("tested_suitability") or {}).get("vision") or {}).get("rate")
+            tested_vision = caps.get("vision") is None and bool(vision_rate)
+            if tested_vision:
                 caps["vision"] = True
+            reported = {field: "provider" for field in prefill_from_provider(caps, m)}
+            if tested_vision:
+                reported["vision"] = "test"
             if sd:
                 caps.update(sd)
             default_caps = all_caps.get("_default", {})
@@ -95,6 +104,7 @@ def model_capabilities_data() -> Dict[str, Any]:
                 "family": m.get("family", ""),
                 "quantization": m.get("quantization", ""),
                 "capabilities": caps,
+                "reported": reported,
                 "has_custom_entry": has_custom,
                 "has_result": has_result,
             })

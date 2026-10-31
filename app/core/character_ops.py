@@ -1059,18 +1059,17 @@ def build_available_models() -> Dict[str, Any]:
     providers = pm.list_all_models()
     suit_all = get_all_suitability()  # Key: "provider::model" (lowercased)
 
-    # Attach capabilities to each model. Pre-fill the vision column: if nothing
-    # is stored (None) and the name identifies a vision model, pre-fill with
-    # True. (The name heuristic can only confirm vision, not rule it out
-    # -> for non-vision names it stays unknown.) COPY the caps, otherwise the
+    # Attach capabilities to each model. Vision / tool calling left unknown
+    # (None) are pre-filled from what the provider reports (a name heuristic
+    # can only confirm vision). COPY the caps, otherwise the
     # cached _default/substring entry would be mutated.
     # The suitability test (HW-dependent) is merged EXACTLY per full
     # provider::model -> the same model on different hardware gets its own values.
     for provider_name, provider_data in providers.items():
         for model in provider_data.get("models", []):
             caps = dict(get_model_capabilities(model.get("name", "")))
-            if caps.get("vision") is None and model.get("vision"):
-                caps["vision"] = True
+            from app.core.model_capabilities import prefill_from_provider
+            prefill_from_provider(caps, model)
             sd = suit_all.get(f"{provider_name}::{model.get('name', '')}".lower())
             if sd:
                 caps.update(sd)
