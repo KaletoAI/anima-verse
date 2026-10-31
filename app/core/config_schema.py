@@ -859,7 +859,7 @@ SECTIONS = {
                     "5. Visual style: photographic, illustrated, 3D render, anime, etc. "
                     "Camera angle, depth of field, color palette.\n\n"
                     "Rules:\n"
-                    "- Respond in fluent, descriptive English prose.\n"
+                    "- Respond in fluent, descriptive prose, in the language the system message asks for.\n"
                     "- If something is ambiguous or partially visible, describe it as such.\n"
                     "- Plain text only — no markdown."
                 ),

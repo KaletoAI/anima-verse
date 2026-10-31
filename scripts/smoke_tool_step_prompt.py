@@ -70,7 +70,10 @@ def main():
             assert first.system == second.system
             assert prose not in first.system and 'Tool0' not in first.system
             assert first.offered == [s.name for s in tools] and first.hidden == {}
-            print('[1] PASS stable system')
+            assert '<tool name="ToolName">{"key": "value"}</tool>' in first.system
+            assert 'The example shows syntax only.' in first.system
+            assert 'Kommst du mit?' not in first.system and 'TalkTo' not in first.system
+            print('[1] PASS stable system and syntax-only example')
             plan_mock.return_value = plans
             menu = streaming.decision_menu_note('Ada Example', skills, indent='')
             tool_lines = [f'- {s.name}: {s.brief}' for s in tools]
@@ -102,7 +105,10 @@ def main():
             assert plans not in constrained.user
             print('[7] PASS constrained plans')
             for fmt in ('natural_en', 'natural_de'):
-                assert '<tool name=' not in build(fmt=fmt).system
+                natural = build(fmt=fmt).system
+                assert '<tool name=' not in natural
+                prefix = 'Use ToolName for:' if fmt == 'natural_en' else 'Ich nutze ToolName für:'
+                assert prefix + ' {"key": "value"}' in natural
             refusal.return_value = 'has_movement_verb'
             template_overrides.set_override('chat/tool_step_turn.md', 'OVERRIDE {{ rp_response }}', '')
             assert build().user == 'OVERRIDE ' + prose

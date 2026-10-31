@@ -5,7 +5,9 @@ import json
 import re
 from pathlib import Path
 
-SCORER_VERSION = 'suitability-3'
+from app.core.tool_formats import TOOL_FORMATS, find_tool_calls, get_format
+
+SCORER_VERSION = 'suitability-4'
 NOT_TESTED = 'not_tested'
 ROOT = Path(__file__).resolve().parents[2]
 # Regex parses protocol syntax only; free text is never matched against a golden.
@@ -53,16 +55,87 @@ def _text_valid(value, rule):
             return False
         lang = rule.get('lang')
         if lang:
-            words = {''.join(ch for ch in word.lower() if ch.isalpha()) for word in text.split()}
-            # A conservative language signal, not a topic or wording expectation.
-            signals = {'de': {'der', 'die', 'das', 'ein', 'eine', 'sie', 'ich', 'ist', 'und', 'mit', 'steht', 'sind'},
-                       'en': {'the', 'a', 'an', 'is', 'are', 'with', 'and', 'it', 'there'}}
-            if lang not in signals or not words.intersection(signals[lang]):
+            words = re.findall(r'[^\W\d_]+', text.lower())
+            # Function words only: this signal does not constrain subject matter.
+            signals = {
+                'de': set('der die das den dem des ein eine einer einen einem eines ich du er sie es wir ihr ist sind war waren und oder aber auch auf in im am an zu zum zur mit von vom für bei aus nach vor über unter durch ohne um als wie nicht nur noch schon so sich mich dich mir dir'.split()),
+                'en': set('the a an this that these those i you he she it we they is are was were be been being and or but also on in at to with from for by of as if then than not only still so itself myself your our their its his her into over under through without about'.split()),
+            }
+            hits = {key: sum(word in stopwords for word in words)
+                    for key, stopwords in signals.items()}
+            hits['de'] += bool(re.search('[äöüß]', text.lower()))
+            if lang not in hits or hits[lang] <= max(v for key, v in hits.items() if key != lang):
                 return False
     return True
 
 
-def _fields_valid(obj, rule, sets):
+def _in_set(value, entries, *, outfit=False, person=False):
+    if not isinstance(value, str):
+        return value in entries
+    token = value.strip().lower()
+    if outfit:
+        return any(token == name.strip().lower() or len(token) >= 3 and
+                   (token in name.strip().lower() or name.strip().lower() in token)
+                   for name in entries)
+    if person:
+        return any(token == name.lower() for name in entries)
+    return value in entries
+
+
+def _place_valid(body, entries):
+    valid, obj = _json_value(body)
+    if valid:
+        if not isinstance(obj, dict) or len(obj) != 1 or not isinstance(next(iter(obj.values())), str):
+            return False
+        body = next(iter(obj.values()))
+    requested = body.split(',', 1)[0].strip().lower()
+    return bool(requested) and any(requested in name.lower() or name.lower() in requested
+                                   for name in entries)
+
+
+def _tool_residual(text, format_name, known_tools, actions):
+    """Mirror the parser's format priority and strip every accepted call span."""
+    patterns = [get_format(format_name)['pattern']]
+    patterns += [fmt['pattern'] for name, fmt in TOOL_FORMATS.items() if name != format_name]
+    if known_tools:
+        names = '|'.join(re.escape(name) for name in known_tools)
+        patterns += [rf'(?:[Nn]utze|[Uu]se)\s+({names})\s+(?:f(?:ü|ue)r|for):\s*(.*?)(?:\n|$)',
+                     rf'<({names})>([\s\S]*?)</\1>']
+    spans = []
+    discarded_calls = False
+    for pattern in patterns:
+        matches = list(re.finditer(pattern, text, re.I))
+        if matches:
+            for match in matches:
+                accepted = find_tool_calls(format_name, match.group(), known_tools)
+                if accepted and any(name == match.group(1) for name, _ in actions):
+                    spans.append(match.span())
+                elif accepted:
+                    # Identical repeated calls are discarded by the game parser.
+                    # Preserve that failure as extra-action evidence, not success.
+                    discarded_calls = True
+            break
+    # The parser also recovers the final unclosed standard tag, even when
+    # another format matched. JSON recovery ends at the first balanced object.
+    opens = list(re.finditer(r'<tool\s+name="(\w+)">', text, re.I))
+    if opens and '</tool>' not in text[opens[-1].end():]:
+        match = opens[-1]
+        tail = text[match.end():]
+        if any(name == match.group(1) for name, _ in actions):
+            end = len(text)
+            if tail.lstrip().startswith('{'):
+                try:
+                    _, offset = json.JSONDecoder().raw_decode(tail.lstrip())
+                    end = match.end() + len(tail) - len(tail.lstrip()) + offset
+                except ValueError:
+                    pass
+            spans.append((match.start(), end))
+    for start, end in sorted(spans, reverse=True):
+        text = text[:start] + ' ' * (end - start) + text[end:]
+    return MARKERS.sub('', text).strip(), discarded_calls
+
+
+def _fields_valid(obj, rule, sets, tool=None):
     if not isinstance(obj, dict) or not all(key in obj for key in rule.get('required', rule.get('json_fields', []))):
         return False
     if any(key in obj for key in rule.get('forbid_fields', [])):
@@ -70,7 +143,9 @@ def _fields_valid(obj, rule, sets):
     for key, set_name in rule.get('in_sets', {}).items():
         value = obj.get(key)
         values = value if isinstance(value, list) else [value]
-        if set_name not in sets or any(v not in sets[set_name] for v in values):
+        if set_name not in sets or any(not _in_set(v, sets[set_name],
+                outfit=tool == 'ChangeOutfit' and key == 'equip',
+                person=tool in ('TalkTo', 'InteractWith') and key in ('name', 'partner')) for v in values):
             return False
     for key, expected in rule.get('values', {}).items():
         if type(obj.get(key)) is not type(expected) or obj[key] != expected:
@@ -110,9 +185,11 @@ def score_case(case, content, *, finish_reason=None, infra_error=False):
     expect = case.get('expect', {}) if case.get('reviewed', True) else {}
     sets = case.get('sets', {})
     if case['group'] == 'tools':
-        actions = TAG.findall(text)
+        format_name = case.get('tool_format', case.get('fmt') if case.get('fmt') in TOOL_FORMATS else 'tag')
+        known_tools = dict.fromkeys(case['allowed_tools'])
+        actions = find_tool_calls(format_name, text, known_tools)
         markers = MARKERS.findall(text)
-        residual = MARKERS.sub('', TAG.sub('', text)).strip()
+        residual, discarded_calls = _tool_residual(text, format_name, known_tools, actions)
         none = residual == 'NONE'
         r['format_valid'] = bool(actions or markers or none) and (not residual or none) and not (none and actions)
         r['tool_available'] = all(name in case['allowed_tools'] for name, _ in actions)
@@ -123,14 +200,14 @@ def score_case(case, content, *, finish_reason=None, infra_error=False):
             rule = rules.get(name)
             if rule is not None and 'text_in' in rule:
                 # Some real verbs (movement) take a plain-text menu entry.
-                checks.append(body.strip() in sets.get(rule['text_in'], []))
+                checks.append(_place_valid(body.strip(), sets.get(rule['text_in'], [])))
             elif rule is not None:
                 valid, obj = _json_value(body)
                 normalized = {**rule, 'in_sets': dict(rule.get('in_sets', {}))}
                 for key, set_name in rule.items():
                     if key.endswith('_in'):
                         normalized['in_sets'][key[:-3]] = set_name
-                checks.append(valid and _fields_valid(obj, normalized, sets))
+                checks.append(valid and _fields_valid(obj, normalized, sets, name))
             else:
                 checks.append(bool(body.strip()))
         r['format_valid'] = r['format_valid'] and all(bool(body.strip()) for _, body in actions)
@@ -139,7 +216,7 @@ def score_case(case, content, *, finish_reason=None, infra_error=False):
         if expect:
             names = [name for name, _ in actions]
             missing = any(name not in names for name in rules)
-            extra = len(names) != len(set(names)) or any(name not in rules or name in expect.get('forbid_tools', []) for name in names)
+            extra = discarded_calls or len(names) != len(set(names)) or any(name not in rules or name in expect.get('forbid_tools', []) for name in names)
             marker_rules = expect.get('markers', {})
             parsed = [m[1:-1].split(':', 1) for m in markers]
             marker_ok = len(parsed) == len(marker_rules)

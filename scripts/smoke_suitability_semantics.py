@@ -6,7 +6,7 @@ in-person reply and idle thought need NONE. Future plans need INTENT, finished
 plans the listed DONE id, getting up stop=true. Walking copies Bachgarten;
 bedtime needs Sleep. State extraction needs a solo key and S0/T0 deltas; facts
 need semantic memories, NPCs a listed room. Vision needs German prose of
-80-1200 characters, never a JSON wrapper or a tool call. Each bad answer
+1-2400 characters, never a JSON wrapper or a tool call. Each bad answer
 violates that case's structural contract; no free-text wording is a golden.
 
 Usage: ./.venv/bin/python scripts/smoke_suitability_semantics.py
@@ -37,13 +37,35 @@ ANSWERS = {
 'vision_recognition': ('Eine Laterne mit einem Griff ist im Bild zu sehen. Sie hat einen festen Sockel und ein durchsichtiges Gehäuse.', 'A lantern with a handle is visible in the image. It has a sturdy base and a transparent casing.'),
 }
 
+GOOD_VARIANTS = {
+    'outfit_names_from_inventory': [
+        '<ChangeOutfit>{"equip":["Blue Jacket"]}</ChangeOutfit>',
+        '<tool name="ChangeOutfit">{"equip":["Blue Jacket (upper_body)"]}</tool>'],
+    'known_place_walk': ['<tool name="SetLocation">{"name": "Bachgarten"}</tool>'],
+    'npc_room': ['{"room":"reading_room","activity":"Sortiert Bücher auf den Regalen.","pose":"sit"}'],
+}
+BAD_VARIANTS = {
+    'pair_action': [
+        '<tool name="TalkTo">{"name":"Lumira Fennelglanz","message":"Kommst du mit?"}</tool>',
+        '<tool name="InteractWith">{"partner":"Lumira Fennelglanz","action":"pair key"}</tool>',
+        '<tool name="InteractWith">{"partner":"Lumira","action":"high_five"}</tool>'],
+    'no_action': ['<tool name="SetLocation">Bachgarten</tool>'],
+    'armchair_stop': ['<tool name="PropAction">{"furniture":"Lesesessel | Ausruhen","action":"stop"}</tool>'],
+    'vision_analysis': ['A bench with a broad seat stands in the image. The backrest and the legs are clearly visible.'],
+    'state_extraction': [ANSWERS['state_extraction'][0].replace('hält die Laterne', 'holds a lantern')],
+}
+
 def main():
-    assert SCORER_VERSION == 'suitability-3'
+    assert SCORER_VERSION == 'suitability-4'
     cases = curated_cases()
     assert {c['id'] for c in cases} == set(ANSWERS)
     assert [sum(c['group'] == g for c in cases) for g in ('tools', 'helpers', 'vision')] == [11, 3, 2]
     for case in cases:
         good, bad = ANSWERS[case['id']]
+        for answer in GOOD_VARIANTS.get(case['id'], []):
+            assert score_case(case, answer)['ok'] is True, (case['id'], answer, score_case(case, answer))
+        for answer in BAD_VARIANTS.get(case['id'], []):
+            assert score_case(case, answer)['ok'] is False, (case['id'], answer, score_case(case, answer))
         assert score_case(case, good)['ok'] is True, (case['id'], score_case(case, good))
         assert score_case(case, bad)['ok'] is False, (case['id'], score_case(case, bad))
         assert score_case(case, good, finish_reason='length')['ok'] is False
@@ -53,7 +75,10 @@ def main():
             assert result['invalid_input'] and result['ok'] is None
     for case in (c for c in cases if c['group'] == 'vision'):
         good = ANSWERS[case['id']][0]
-        for bad in ('', 'Kurz.', good * 20, '<tool name="Sleep">{}</tool>',
+        assert score_case(case, good * 12)['ok'] is True
+        assert score_case(case, 'Die Bank steht vor einer grauen Wand im Licht.')['ok'] is True
+        assert score_case(case, 'Die Bank.')['ok'] is False
+        for bad in ('', 'Kurz.', good * (case['expect']['max'] // len(good) + 1), '<tool name="Sleep">{}</tool>',
                     '[' + json.dumps(good) + ']', '```' + good + '```'):
             assert score_case(case, bad)['ok'] is False, (case['id'], bad)
     outfit = cases[0]
@@ -62,12 +87,36 @@ def main():
     assert result['ok'] is True and result['decision_correct'] == 'not_tested'
     assert score_case(unreviewed, '<tool name="Invented">{}</tool>')['ok'] is False
     assert score_case(outfit, ANSWERS[outfit['id']][0] * 2)['ok'] is False
+    good = ANSWERS['outfit_names_from_inventory'][0]
+    for fmt, answer in (
+        ('tag', good),
+        ('natural_en', 'Use ChangeOutfit for: {"equip":["Blue Jacket"]}'),
+        ('natural_de', 'Ich nutze ChangeOutfit für: {"equip":["Blue Jacket"]}'),
+        ('tag', 'Use ChangeOutfit for: {"equip":["Blue Jacket"]}'),
+        ('natural_en', good),
+        ('tag', good.removesuffix('</tool>')),
+        ('tag', '<TOOL NAME="ChangeOutfit">{"equip":["Blue Jacket"]}</TOOL>'),
+    ):
+        assert score_case({**outfit, 'tool_format': fmt}, answer)['ok'] is True, answer
+        assert score_case({**outfit, 'tool_format': fmt}, answer + '\nNONE')['ok'] is False
+    two_tools = {**outfit, 'allowed_tools': ['ChangeOutfit', 'Sleep'],
+                 'expect': {'tools': {**outfit['expect']['tools'], 'Sleep': {}}}}
+    assert score_case(two_tools, good + '\n<tool name="Sleep">{}</tool>')['ok'] is True
+    assert score_case(outfit, good + '\nunconsumed prose')['ok'] is False
+    for token in ('blue jacket', 'Blue Jacket (upper_body)', 'Jacket'):
+        assert score_case(outfit, good.replace('Blue Jacket', token))['ok'] is True
+    assert score_case(outfit, good.replace('Blue Jacket', 'Bl'))['ok'] is False
+    place = next(c for c in cases if c['id'] == 'known_place_walk')
+    for token in ('bachgarten', 'Bachgarten, Laube', 'Ich gehe zum Bachgarten'):
+        assert score_case(place, '<tool name="SetLocation">' + token + '</tool>')['ok'] is True
+    for token in ('{"name": 42}', '{"name":"Bachgarten","other":"Bachgarten"}'):
+        assert score_case(place, '<tool name="SetLocation">' + token + '</tool>')['ok'] is False
     speech = next(c for c in cases if c['id'] == 'autonomous_speech')
     alternate = ANSWERS['autonomous_speech'][0].replace('Der Tee ist fertig.', 'Hier steht eine warme Tasse.')
     assert score_case(speech, alternate)['ok'] is True
     assert score_case(speech, alternate.replace('Hier steht eine warme Tasse.', 'The tea is ready.'))['ok'] is False
     assert score_case(outfit, 'NONE', infra_error=True)['ok'] is None
-    print('Suitability semantics: 16 good/bad pairs and structural guards PASS.')
+    print('Suitability semantics: 16 good/bad pairs, 4 accepted variants, 7 failure variants and structural guards PASS.')
 
 if __name__ == '__main__':
     main()

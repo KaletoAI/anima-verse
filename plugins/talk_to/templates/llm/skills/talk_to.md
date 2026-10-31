@@ -1,6 +1,6 @@
 ---
 name: TalkTo
-brief: Speak to someone present; {"name":"exact name","message":"spoken words","volume":"normal|whisper|shout"}. In respond turns, only address third persons.
+brief: Speak to someone present; {"name":"<exact full name>","message":"<the spoken words>","volume":"normal|whisper|shout"}. In respond turns, only address third persons.
 action_hint: Character speaks to someone within earshot
 ---
 Speak face-to-face to a character who can HEAR you — someone in your current room, or, when you are out in the open with no building around you, someone standing near enough to hear you. Input: JSON {"name": "CharacterName", "message": "the spoken words"} — optionally add "volume": "whisper" (only the addressee hears the words) or "volume": "shout" (carries location-wide indoors; out in the open it reaches the same people as normal speech). Plain 'CharacterName, message' also works (normal volume). In an ACTIVE CHAT, never use this for the person you are already talking to — they receive your words through the RP itself; TalkTo is only for THIRD characters present. In an AUTONOMOUS turn (no active conversation) the opposite holds: your narrative prose is NOT delivered to anyone — TalkTo is the ONLY way your spoken words reach someone near you, so route every spoken line through it. Do NOT use it for anyone who is out of earshot — go to them first (SetLocation), or use SendMessage for remote contact.

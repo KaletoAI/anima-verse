@@ -441,6 +441,13 @@ def find_tool_calls(format_name: str, text: str,
                 logger.debug("Fallback pattern detected a tool: %s", matches)
                 raw_matches = [(name, inp.strip()) for name, inp in matches]
 
+    # Named XML tags are accepted only for tools actually offered this turn.
+    if not raw_matches and known_tools:
+        names = "|".join(re.escape(name) for name in known_tools)
+        pattern = rf'<({names})>([\s\S]*?)</\1>'
+        raw_matches = [(name, inp.strip()) for name, inp in
+                       re.findall(pattern, text, re.IGNORECASE)]
+
     # Open end tag: LLMs often drop the closing </tool> on the LAST
     # <tool name="X"> (especially on a JSON-heavy final tag). The closed
     # pattern above loses it entirely, so recover the last unclosed tag

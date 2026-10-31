@@ -179,7 +179,9 @@ def build():
             assert len(messages) == 2, ident
             cases.append(dict(id=ident, task=task, group='vision', fmt='text', image=image,
                 system=messages[0]['content'], user=messages[1]['content'][0]['text'], sets={},
-                expect={'min': 80, 'max': 1200, 'lang': 'de', 'plain_text': True}, repeats=3, reviewed=True))
+                # The analysis prompt caps tokens (300), not characters; allow
+                # up to eight characters per token and a one-sentence minimum.
+                expect={'min': 40, 'max': 2400, 'lang': 'de', 'plain_text': True}, repeats=3, reviewed=True))
         return {'cases': cases}
 
 
