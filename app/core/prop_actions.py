@@ -1,5 +1,6 @@
 """Prop action authoring contract. Validation is read-only and never executes actions."""
 import math
+import re
 from collections import OrderedDict
 from copy import deepcopy
 from threading import RLock
@@ -60,8 +61,15 @@ def derive_bindings(document: dict, variant: dict, *, poses: dict | None = None)
     return result
 
 
-def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue]:
-    """Return issues; optional read-only catalog snapshot avoids world DB getters."""
+def validate_document(prop: dict, *, catalogs: dict | None = None, pack: bool = False) -> list[Issue]:
+    """Return issues; optional read-only catalog snapshot avoids world DB getters.
+
+    The ``pack-`` id prefix is reserved for package actions: an author action
+    may not use it, ``pack`` validates a package's own definition, and the
+    runtime document (:func:`effective_document`) names its package actions in
+    ``action_sources``. An exclusion may name a package action that is not
+    loaded right now — the package may be off in this world."""
+    from app.core.prop_action_sources import PACK_PREFIX
     if not isinstance(prop, dict):
         return [dict(path='', code='invalid_type', message='Expected an object', severity='error')]
     from app.models.character_template import list_templates, get_template
@@ -119,11 +127,18 @@ def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue
         p = f'actions.{i}'
         if not isinstance(action, dict):
             continue
+        # ``name_<lang>`` / ``description_<lang>``: the localized data-field
+        # convention (``i18n.localized``) — a package names its actions so.
         fields(action, {'id', 'name', 'description', 'enabled', 'ability', 'pose_key',
                         'participants', 'presence', 'interrupt_on_presence_change',
-                        'phases', 'requirements', 'effects'}, p)
+                        'phases', 'requirements', 'effects'}
+               | {k for k in action if isinstance(k, str) and re.fullmatch(r'(name|description)_[a-z]{2}', k)
+                  and isinstance(action[k], str)}, p)
         if text(action.get('id')):
             action_map[action['id']] = action
+            if (action['id'].startswith(PACK_PREFIX) and not pack
+                    and action['id'] not in (prop.get('action_sources') or {})):
+                issue(p + '.id', 'invalid_id', 'The pack- prefix is reserved for package actions')
         for field in ('name',):
             if not text(action.get(field)):
                 issue(p + '.' + field, 'invalid_text', 'A name is required')
@@ -202,6 +217,11 @@ def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue
                         issue(q, 'invalid_effect', 'Condition addition requires duration and repeat policy')
                 else:
                     issue(q + '.type', 'invalid_effect', 'Unknown effect type')
+    # Package actions this prop does not want (a throne that is no seat for
+    # them); only package ids — an own action is switched off with ``enabled``.
+    if any(not isinstance(aid, str) or not aid.startswith(PACK_PREFIX)
+           for aid in rows(prop.get('exclude_actions', []), 'exclude_actions')):
+        issue('exclude_actions', 'invalid_action_reference', 'Only package actions can be excluded here')
     from app.core.pose_catalog import get_catalog
     pose_catalog = (get_catalog('pose') if catalogs is None else catalogs['poses']) if actions else {}
     seen_uids = set()
@@ -224,7 +244,8 @@ def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue
             if not isinstance(marker, dict):
                 continue
             exclusions = rows(marker.get('exclude_actions', []), f'{p}.markers.{marker_index}.exclude_actions')
-            if any(not isinstance(aid, str) or aid not in action_map for aid in exclusions):
+            if any(not isinstance(aid, str) or (aid not in action_map and not aid.startswith(PACK_PREFIX))
+                   for aid in exclusions):
                 issue(f'{p}.markers.{marker_index}.exclude_actions', 'invalid_action_reference', 'Unknown excluded action')
             if 'access' not in marker:
                 continue
@@ -248,6 +269,29 @@ def validate_document(prop: dict, *, catalogs: dict | None = None) -> list[Issue
             issues.append(dict(path=f'actions.{i}', code='no_matching_place',
                                message='No matching place on any variant', severity='warning'))
     return issues
+
+
+def effective_document(document: dict) -> dict:
+    """The prop as the RUNTIME sees it: its own actions plus every loaded
+    package action whose ``match`` admits it and that it does not exclude
+    (``exclude_actions``), with ``action_sources`` = ``{action id: package}``.
+    The same object back when nothing is added — so a world without package
+    actions sees exactly its raw documents and revisions. Authoring, save
+    validation and every export read the RAW document (plan-pack-prop-actions.md)."""
+    from app.core.prop_action_sources import _current, matches
+    packs = _current()[0]
+    if not packs or not isinstance(document, dict):
+        return document
+    excluded = document.get('exclude_actions') if isinstance(document.get('exclude_actions'), list) else []
+    own = {a.get('id') for a in document.get('actions') or [] if isinstance(a, dict)}
+    added = [p for p in packs if p['action']['id'] not in own and p['action']['id'] not in excluded
+             and matches(p['match'], document)]
+    if not added:
+        return document
+    result = dict(document)
+    result['actions'] = [*(document.get('actions') or []), *(deepcopy(p['action']) for p in added)]
+    result['action_sources'] = {p['action']['id']: p['owner'] for p in added}
+    return result
 
 
 _OFFERS_TTL_S = 3.0
@@ -281,7 +325,7 @@ def _offers_key(actor, lang, location, room, query, version):
     This covers claims even from another server process, profiles, occupancy,
     frozen state, item bonuses and world catalog edits without polling runs.
     """
-    from app.core import paths, scene_recipe, terrain_types, door_models
+    from app.core import paths, scene_recipe, terrain_types, door_models, prop_action_sources
     from app.core.timeutils import game_time
     from app.models import character, world, world_props, terrain
     from app.core import places
@@ -301,6 +345,7 @@ def _offers_key(actor, lang, location, room, query, version):
             location, room, world.world_generation(), world_props.world_props_generation(),
             terrain.terrain_generation(), terrain_types.types_generation(), door_models.generation(),
             scene_recipe.prop_lib_token(), scene_recipe.season_token(), files,
+            prop_action_sources.signature(),
             str(game_time()) if timed else None)
 
 
@@ -357,7 +402,8 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
             result.append(dict(action_id=action["id"], definition_revision=revision,
                                placement_id=target["placement_id"], variant_uid=target["variant_uid"],
                                prop_label=localized(document, "name", lang) or pid,
-                               target=target, label=action["name"], description=action.get("description", ""),
+                               target=target, label=localized(action, "name", lang) or action["name"],
+                               description=localized(action, "description", lang) or action.get("description", ""),
                                enabled=checked["enabled"], reason=checked["reason"], required_partner=pair,
                                available_targets=targets, effects=action.get("effects", [])))
     # Capture the entire key before reading; a concurrent mutation must never

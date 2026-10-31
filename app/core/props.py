@@ -6081,6 +6081,15 @@ def _prop_record(prop_id: str, meta: Dict[str, Any], *, full: bool,
             rec["bbox"] = meta["bbox"]
     rec["revision"] = _document_revision(meta)
     rec["actions"] = meta.get("actions", [])
+    # What the RUNTIME offers and checks against: the document plus the
+    # package actions it admits (prop_actions.effective_document). Equal to
+    # ``revision`` while no package adds anything; ``revision`` stays the
+    # author's save base, ``actions`` the author's own list.
+    from app.core.prop_actions import effective_document
+    effective = effective_document(meta)
+    rec["action_revision"] = rec["revision"] if effective is meta else _document_revision(effective)
+    if isinstance(meta.get("exclude_actions"), list):
+        rec["exclude_actions"] = meta["exclude_actions"]
     from app.core.prop_actions import derive_bindings
     matched = {b["action_id"] for v in meta.get("model_variants", []) if v.get("active", True)
                for b in derive_bindings(meta, v) if b["marker_ids"]}

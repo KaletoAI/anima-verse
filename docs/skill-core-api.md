@@ -766,6 +766,30 @@ That exact provenance can recover a lost start hook or identify cancellation;
 matching pose/participants alone is never ownership. An actual end can correlate
 by this invitation identity before the intent's start receipt is written.
 
+## Möbel-Aktionen aus Paketen — `app.core.prop_action_sources` ✅
+
+Ein Paket bringt Möbel-Aktionen mit, ohne ein Prop zu verändern: Es meldet beim
+Laden (`on_load`) eine Quelle an, und der Kern hängt deren Definitionen zur
+LAUFZEIT an jedes passende Möbel (`prop_actions.effective_document`). Die
+`sidecar.json`, die Autoren-Revision und jeder Export bleiben unverändert — fehlt
+das Paket, ist die Aktion weg (plan-pack-prop-actions.md).
+
+| Funktion | Semantik |
+|---|---|
+| `register_source(owner, fn)` | Quelle des Pakets `owner` anmelden/ersetzen. `fn` liefert eine Liste von Definitionen, läuft bei jedem Laufzeit-Lesen und muss billig sein (geladene Config, keine Datei, keine DB). Wirkt nur, solange das Paket geladen ist |
+| `unregister_source(owner)` | Quelle abmelden |
+| `pack_action_id(owner, key) -> str` | Die stabile ID einer Paket-Aktion (`pack-` + UUIDv5): gleiche Eingabe, gleiche ID über Neustarts. Das Präfix ist für Paket-Aktionen reserviert |
+| `pack_actions() -> List[dict]` | Alle gültigen Definitionen aller geladenen Quellen als `{owner, action, match}` (Kopien) |
+| `signature() -> str` | Ändert sich mit jeder Änderung der Paket-Aktionen; leer ohne welche |
+
+Eine Definition hat genau das Schema einer Autoren-Aktion (`validate_document`,
+auch `name_<lang>`/`description_<lang>`) plus optional
+`match = {"categories": [...], "tags": [...]}` gegen `category`/`tags` des Props
+(leer = jedes Möbel mit passendem Platz). Eine ungültige Definition wird einmal
+geloggt und übersprungen. Ein Prop schließt eine Paket-Aktion mit
+`exclude_actions: [id]` auf Dokument-Ebene aus, ein Platz mit dem
+`exclude_actions` seines Markers; beides darf IDs eines gerade inaktiven Pakets nennen.
+
 ## Pose — `app.models.character` ✅ (set_pose-Paket)
 
 | Funktion | Semantik |

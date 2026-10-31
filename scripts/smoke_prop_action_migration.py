@@ -718,7 +718,7 @@ class MigrationTests(unittest.TestCase):
         variant = doc["model_variants"][1]
         variant["markers"][0]["access"] = {"actor": {"x": 0, "z": 1.6, "yaw": 180}}
         machine = {"name": "Coffee", "has_model": True, "bbox": [2, 1, 1],
-                   "revision": "revision-coffee", "actions": doc["actions"],
+                   "revision": "revision-coffee", "action_revision": "revision-coffee", "actions": doc["actions"],
                    "width_m": 2, "depth_m": 1, "height_m": 1,
                    "variant_tiers": [{**variant, "dims": {"width_m": 2, "depth_m": 1, "height_m": 1}}]}
         table = {"name": "Table", "height_m": 1, "width_m": 3, "depth_m": 2}

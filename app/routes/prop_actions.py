@@ -183,7 +183,9 @@ def check_targets(prop_id: str, location_id: str, user=Depends(require_admin)):
                               placements=[dict(target=target) for target in targets.values()],
                               persons=[dict(name=name, sleeping=bool(is_character_sleeping(name)))
                                        for name, _ in places._present(location_id, room_id)]))
-    return dict(revision=props._document_revision(document), rooms=rooms)
+    # The runtime revision a request is checked against (with package actions).
+    from app.core.prop_actions import effective_document
+    return dict(revision=props._document_revision(effective_document(document)), rooms=rooms)
 
 
 @router.post("/world/props/{prop_id}/validate")

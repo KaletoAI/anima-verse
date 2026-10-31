@@ -7630,6 +7630,23 @@ out. Unknown excluded IDs are errors. Enabled actions with no matching marker
 on any active variant produce the warning "No matching place on any variant".
 Changes to actions, markers or exclusions change the author revision.
 
+**Package actions** (2026-10-31, plan-pack-prop-actions.md): a loaded package
+may contribute actions through `app.core.prop_action_sources`. They exist at
+RUNTIME only — `prop_actions.effective_document(document)` adds every admitted
+definition (`match` on category/tags, not in the document's `exclude_actions`)
+behind the prop's own actions and names its package in `action_sources`. Every
+runtime reader goes through it: `places._GeometryQuery.prop_document`, the
+composed bindings, offers, requests and their revalidation. The sidecar, the
+editor's save base and every export stay raw. Hence two revisions on the prop
+record: `revision` (raw document — the author save base and a placement's stored
+provenance) and `action_revision` (the runtime document — what bindings, the
+scene's `definition_revision`, offers and requests carry). Without package
+actions both are equal. The scene fingerprint, the places cache and the offers
+key carry `prop_action_sources.signature()`, so a changed package setting needs
+no restart; a running action whose runtime revision is gone ends with
+`stale_definition`. Ids of package actions carry the reserved prefix `pack-`.
+Proof: `scripts/smoke_prop_action_pack.py`.
+
 The validate endpoint returns `derived_bindings` keyed by variant UUID, alongside
 `issues`, `valid` and `access_previews`. The editor renders these server results
 for its current draft; it never maintains another matching rule. Composed runtime

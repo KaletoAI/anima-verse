@@ -51,7 +51,7 @@ PAIR_SLOT = "pair"
 _CACHE_TTL_S = 300.0          # belt and braces — every writer invalidates anyway
 
 _lock = threading.Lock()      # guards ``_cache`` only, never held around a compose
-_cache: Dict[str, Tuple[Any, Dict[str, List[Place]]]] = {}   # location_id -> (stamp, {room_id: places})
+_cache: Dict[str, Tuple[Any, Dict[str, List[Place]], str]] = {}   # location_id -> (stamp, {room_id: places}, pack signature)
 _warned_outside: set = set()  # place ids already reported as lying outside their location
 _composed: Dict[str, Tuple[Any, Dict[str, List[Place]]]] = {}  # location_id -> (fingerprint key, places)
 
@@ -192,9 +192,12 @@ class _GeometryQuery:
         return self._rooms[key]
 
     def prop_document(self, prop_id: str) -> dict:
+        """The RUNTIME document: the sidecar plus the package actions it
+        admits (``prop_actions.effective_document``)."""
         from app.core.props import read_sidecar
+        from app.core.prop_actions import effective_document
         if prop_id not in self._documents:
-            self._documents[prop_id] = read_sidecar(prop_id, read_only=True)
+            self._documents[prop_id] = effective_document(read_sidecar(prop_id, read_only=True))
         return self._documents[prop_id]
 
 
@@ -204,10 +207,14 @@ def room_places(location_id: str, room_id: str) -> List[Place]:
     places rather than no poses."""
     if not location_id or not room_id:
         return []
+    from app.core.prop_action_sources import signature
     now = utc_now()
+    # Package actions change the bindings without a writer: their signature
+    # is part of the entry (captured before the compose reads anything).
+    pack = signature()
     with _lock:
         hit = _cache.get(location_id)
-        if hit and (now - hit[0]).total_seconds() < _CACHE_TTL_S:
+        if hit and hit[2] == pack and (now - hit[0]).total_seconds() < _CACHE_TTL_S:
             return list(hit[1].get(room_id) or [])
     try:
         by_room = _compose(location_id)
@@ -215,7 +222,7 @@ def room_places(location_id: str, room_id: str) -> List[Place]:
         logger.warning("places: compose failed for %s: %s", location_id, e)
         return []
     with _lock:
-        _cache[location_id] = (now, by_room)
+        _cache[location_id] = (now, by_room, pack)
     return list(by_room.get(room_id) or [])
 
 

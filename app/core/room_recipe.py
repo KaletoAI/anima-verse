@@ -904,13 +904,15 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         _carry_ground_offset(entry, prop, entry.get("variant"))
         published = _variant_entry(prop, entry.get("variant")) or {}
         entry["variant_uid"] = published.get("uid", "")
-        entry["definition_revision"] = prop.get("revision", "")
+        # The RUNTIME revision (with package actions) — what offers and
+        # requests carry; a placement's stored provenance is the author one.
+        entry["definition_revision"] = prop.get("action_revision", "")
         entry["support_reason"] = placement.get("support_reason") or composed["reason"]
         entry["action_dependency_invalid"] = bool(
             placement.get("action_dependency_invalid")
             or (placement.get("variant_uid") and placement["variant_uid"] != entry["variant_uid"])
             or (placement.get("definition_revision")
-                and placement["definition_revision"] != entry["definition_revision"]))
+                and placement["definition_revision"] not in (prop.get("revision"), entry["definition_revision"])))
         entry["has_model"] = bool(prop.get("has_model"))
         if prop.get("has_model"):
             # Which resolution tiers the prop has, plus the change key of its
@@ -936,6 +938,9 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
         # …under the orientation fix of that same variant's FILE (v2 E1):
         # the fix is a fact of the mesh the marker sits on.
         published = _variant_entry(prop, entry.get("variant")) or {}
+        # The prop plus the package actions it admits — once per placement.
+        from app.core.prop_actions import effective_document
+        runtime_document = effective_document(prop)
         for marker in _placement_markers(prop, entry.get("variant")):
             composed = compose_prop_marker(
                 bbox=bbox, rotation=published.get("rotation"), dims=dims,
@@ -958,7 +963,7 @@ def _join_placements(lay: Dict[str, Any], place: Any, room_yaw: float,
             composed["action_bindings"] = [
                 compose_binding(binding, placement=entry,
                                 revision=entry["definition_revision"], marker_id=composed["id"])
-                for binding in derive_bindings(prop, published)
+                for binding in derive_bindings(runtime_document, published)
                 if marker.get("id") in binding.get("marker_ids", [])]
             if entry["action_dependency_invalid"] or entry["support_reason"]:
                 for binding in composed["action_bindings"]:

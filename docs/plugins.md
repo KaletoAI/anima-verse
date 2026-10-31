@@ -958,6 +958,17 @@ den Zustand: `flag_lifecycle.decision_state_lines` schreibt für jedes Flag, des
 die nie begonnen hatten. Ein Flag ohne `cleared_by` oder mit nicht angebotenem
 Verb erscheint dort nicht.
 
+### Möbel-Aktionen (Paket-Aktionen)
+
+Ein Paket kann jedem passenden Möbel Aktionen geben, ohne ein Prop anzufassen:
+`on_load` meldet mit `prop_action_sources.register_source(<paket-id>, fn)` eine
+Quelle an, `fn` liefert Definitionen im Schema einer Autoren-Aktion mit IDs aus
+`pack_action_id(<paket-id>, <schlüssel>)` (Referenz: `docs/skill-core-api.md`).
+Sie gelten nur zur Laufzeit; die `sidecar.json` und jeder Export kennen sie nicht.
+So bleibt eine Aktion, die nicht ins öffentliche Repo gehört, im Paket — ist es
+nicht aktiv, ist sie weg (Löschtest). Namen stehen im Paket (`name_<lang>`), nie in
+`shared/languages/*.json`.
+
 ## Skill-Klasse
 
 ```python

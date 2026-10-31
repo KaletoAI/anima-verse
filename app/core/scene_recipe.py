@@ -5096,6 +5096,9 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
         their tier files and their baked lattices all live flat in that one
         directory per prop. This is the only input with no signature of its
         own, and the one the finding named.
+    ``pack actions``
+        ``prop_action_sources.signature()`` — package actions bind to markers
+        without a sidecar write (plan-pack-prop-actions.md).
     ``door_models``
         ``door_models.generation()`` changes after a background door build,
         so a completed model replaces the flat leaf on the next poll.
@@ -5137,6 +5140,10 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
     def _props() -> str:
         return prop_lib_token()
 
+    def _pack_actions() -> str:
+        from app.core.prop_action_sources import signature
+        return signature()
+
     def _models() -> str:
         from app.core.location_model3d import _model_dir, _owner_id
         owner = _owner_id(location_id) if location_id else ""
@@ -5160,6 +5167,7 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
         _safe(_surface_library),
         _safe(_place_types),
         _safe(_props),
+        _safe(_pack_actions),
         _safe(_models),
         _safe(door_generation),
     ]
