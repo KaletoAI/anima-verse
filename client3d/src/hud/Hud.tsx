@@ -269,7 +269,9 @@ export function Hud({ avatar, username, role }: {
   useEffect(() => {
     const selector = '.hud-scene-tile, .hud-scene-icon, .hud-rail, .hud-dock, .hud-panel, .hud-mode, .hud-party, '
       + '.hud-travel, .hud-talk, .hud-elevator, .hud-plaque, .hud-minimap, .ga-toast, '
-      + '.hud-top, .info-panel, .open-view-badge, .hud-notices';
+      // The notice banner's root is zero-height by design: measure its rows,
+      // or a native/iframe host passes the click on × through to the scene.
+      + '.hud-top, .info-panel, .open-view-badge, .hud-notices .player-notice';
     let frame = 0;
     const observed = new Set<Element>();
     const measure = () => {

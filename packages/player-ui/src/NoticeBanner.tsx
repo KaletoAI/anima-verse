@@ -5,6 +5,9 @@
  * membership is NOT shown here: the HUD's PartyStrip is its one place.
  * A notification is marked read with a click (POST /notifications/{id}/read);
  * "Mark all as read" clears them in one go (POST /notifications/read-all).
+ * Every visible row carries `player-notice`: a host that routes input by
+ * measured surfaces (the 3D client's hitRects, the native overlay) measures
+ * those, because the banner's own root is zero-height by design.
  */
 import { SYNC_ENDPOINTS } from './syncEndpoints'
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
@@ -99,19 +102,19 @@ export function NoticeBanner() {
           width: 'min(560px, 70vw)', maxWidth: '100%',
         }}>
           {n.leave_blocked && (
-            <div style={row('#e05656')}>
+            <div className="player-notice" style={row('#e05656')}>
               <span>🚫</span>
               <span style={{ flex: 1 }}>{t('You cannot leave')}: {n.leave_blocked}</span>
             </div>
           )}
           {n.events.map((e) => (
-            <div key={e.id} style={row('#e6963c')}>
+            <div key={e.id} className="player-notice" style={row('#e6963c')}>
               <span>⚠️</span>
               <span style={{ flex: 1 }}>{e.text}</span>
             </div>
           ))}
           {n.notifications.map((it) => (
-            <div key={it.id} style={row('#78aaff')}>
+            <div key={it.id} className="player-notice" style={row('#78aaff')}>
               <span>🔔</span>
               <span style={{ flex: 1 }}>{it.body}</span>
               <button onClick={() => dismiss(it.id)} title={t('Mark as read')}
@@ -120,7 +123,7 @@ export function NoticeBanner() {
             </div>
           ))}
           {n.notifications.length > 1 && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
+            <div className="player-notice" style={{ display: 'flex', justifyContent: 'flex-end', pointerEvents: 'auto' }}>
               <button onClick={dismissAll}
                 style={{ border: '1px solid rgba(255,255,255,0.22)', background: 'rgba(16,18,24,0.94)',
                          color: 'var(--text, #e6edf3)', cursor: 'pointer', borderRadius: 6,

@@ -728,6 +728,19 @@
 }
 .ga-input:focus { outline: none; border-color: var(--accent, #6aa9ff); }
 
+/* EVERY option list of the HUD, whatever class its select wears: Chromium
+   paints an open list in the select's background COLOUR, and a chip's bare
+   gradient or `background: none` leaves that transparent — white. Fixed per
+   class before (.ga-input), it came back with the next class (.player-chip on
+   the furniture-action select); the options themselves carry the colour now. */
+#hud option,
+#hud optgroup,
+#hud ~ .ga-modal-backdrop option,
+#hud ~ .ga-modal-backdrop optgroup {
+  background-color: var(--bg, #0d1117);
+  color: var(--text, #c9d1d9);
+}
+
 /* The stage-6 panels (inventory, mind, phone, news, tasks) act through
    .ga-btn and explain themselves with .ga-hint — both defined only in the
    frontend's game-admin.css, so without these the buttons would be unstyled
@@ -1446,7 +1459,8 @@
 #hud .hud-minimap canvas { pointer-events: auto; cursor: pointer; }
 
 /* Notices clear the status line, mode chip and party strip above them.
-   The banner overflows its zero-height root; hitRects measures its children. */
+   The banner overflows its zero-height root; hitRects measures its
+   `.player-notice` rows (measuring the root found nothing to click). */
 #hud .hud-notices {
   position: absolute;
   top: 130px;
