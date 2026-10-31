@@ -20,7 +20,8 @@ Failure semantics mirror the busy/cooldown contract in ``base.py``:
     error -> ``GatewayRejectedError`` (terminal, no cooldown — the reason is
     the client's, not the backend's)
   * a gateway-side cancelled job -> ``GenerationCancelled`` (terminal,
-    no retry, fallback or cooldown)
+    no retry, fallback or cooldown) — also when the gateway reports it as
+    ``failed`` with the error "cancelled by user"
   * a started job fails with "park timeout" / "backend busy" ->
     ``BackendBusyError`` (load, no cooldown)
   * gateway loses the job (repeated 404) or keeps failing the poll (5xx /
@@ -72,6 +73,10 @@ _TERMINAL_JOB_ERROR = re.compile(r"expected\s+np\.ndarray.*?NoneType",
                                  re.IGNORECASE | re.DOTALL)
 _TERMINAL_JOB_HINT = ("the input mesh has no UVs/texture, so the re-bake step "
                       "got nothing to read — permanent, a retry cannot help")
+# A job cancelled on the gateway (its UI) can come back as status "failed"
+# with this error instead of status "cancelled" (2026-10-31: a user cancel put
+# the backend in cooldown and re-ran the occasion on the next one).
+_CANCELLED_JOB_ERROR = re.compile(r"\s*cancel+ed\b", re.IGNORECASE)
 
 
 def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
@@ -291,6 +296,10 @@ def poll_job(backend: ImageBackend, job_id: str, *,
                 raise GenerationCancelled(job_id)
             if status in ("failed", "error"):
                 detail = str(sd.get("error") or sd)
+                if _CANCELLED_JOB_ERROR.match(detail):
+                    logger.info("%s: job %s was cancelled on the gateway: %s",
+                                backend.name, job_id, detail[:200])
+                    raise GenerationCancelled(job_id)
                 if _TERMINAL_JOB_ERROR.search(detail):
                     logger.error("%s: Job %s scheiterte am EINGANG, nicht am "
                                  "Backend — %s (%s)", backend.name, job_id,
