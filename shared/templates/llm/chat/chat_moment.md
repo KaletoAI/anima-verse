@@ -23,6 +23,10 @@
      focused_items — items the person you talk to drew attention to
      known_activities — the room's place offer (free places with poses, busy
        ones by name, the free-text hint as the tail)
+     prop_actions_block — the furniture actions requestable now; filled by the
+       renderer (prompt_templates): the executable PropAction contract when
+       the chat LLM calls tools itself, a plain name list (no ids, no syntax)
+       when it does not (prop_actions_executable false, the rp_first reply)
      events_section, assignment_section, recent_activity_section
      memory_section, relationships_section
      reply_shape_section — "This moment" facts
@@ -38,6 +42,8 @@
      addressed_to_me: bool, addressed_names: str — room mode, who the triggering
        line was meant for
      winding_down, respond_opportunity — the SKIP rules, always last
+     prop_actions_executable: bool — read by the renderer, not by this text:
+       false = the furniture block above as names only
 #}
 [SCENE STATE — how things stand right now. Nobody said this.]
 {% if situation_block %}

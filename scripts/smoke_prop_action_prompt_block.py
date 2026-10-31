@@ -15,6 +15,17 @@ b. No row carries enabled / reason / available_targets / placement_id /
    variant_uid (target holds the last two), and empty description/effects
    are left out; action_id, definition_revision and target stay.
 c. The words "blocked reasons" are gone from the instruction text.
+d. narrative_block (the rp_first roleplay reply, which calls no tool), with
+   sit and pair-a on "Chair" placement p plus sit on a second "Chair"
+   placement q and "Bed" lie-down: exactly
+       Furniture here (just describe what you do with it):
+       - Chair (2): sit, pair-a (with Mia)
+       - Bed: lie-down
+   — no id, no revision, no "{" anywhere; nothing requestable -> "".
+e. The renderer's context for chat/chat_moment.md: prop_actions_executable
+   False takes the contract out of known_activities ("Places here: x" stays)
+   and puts the name list in prop_actions_block; True (or absent) keeps the
+   executable contract there.
 """
 import json
 from pathlib import Path
@@ -45,10 +56,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix="prompt-block-") as tmp:
         from app.core import paths
         paths.init(tmp)
-        from app.core import prop_actions, prop_action_engine
-        with patch.object(prop_actions, "offers", lambda actor: json.loads(json.dumps(ROWS))), \
-                patch.object(prop_action_engine, "state_for", lambda actor: {}):
-            block = prop_actions.prompt_block("Kai")
+        checks()
+
+
+def checks():
+    from app.core import prop_actions, prop_action_engine
+    with patch.object(prop_actions, "offers", lambda actor: json.loads(json.dumps(ROWS))), \
+            patch.object(prop_action_engine, "state_for", lambda actor: {}):
+        block = prop_actions.prompt_block("Kai")
     listed = json.loads(block.split("offers=", 1)[1].split("\nown_state=", 1)[0])
     assert [row["action_id"] for row in listed] == ["sit", "pair-a"], listed
     assert listed[1]["partners"] == ["Mia"] and "partners" not in listed[0]
@@ -61,6 +76,38 @@ def main():
     print("PASS b: each fact once, nothing empty")
     assert "blocked reasons" not in block
     print("PASS c: the instruction no longer speaks of blocked offers")
+
+    second = offer("sit", True)
+    second["target"] = dict(second["target"], placement_id="q")
+    bed = offer("lie-down", True)
+    bed["prop_label"] = "Bed"
+    bed["target"] = dict(bed["target"], placement_id="b")
+    rows = ROWS + [second, bed]
+    with patch.object(prop_actions, "offers", lambda actor: json.loads(json.dumps(rows))):
+        prose = prop_actions.narrative_block("Kai")
+    assert prose == ("Furniture here (just describe what you do with it):\n"
+                     "- Chair (2): sit, pair-a (with Mia)\n"
+                     "- Bed: lie-down"), prose
+    assert "{" not in prose and "rev" not in prose
+    with patch.object(prop_actions, "offers", lambda actor: [offer("lie", False)]):
+        assert prop_actions.narrative_block("Kai") == ""
+    print("PASS d: the roleplay reply gets furniture names, no syntax")
+
+    from app.core import prompt_templates
+    with patch.object(prop_actions, "offers", lambda actor: json.loads(json.dumps(ROWS))), \
+            patch.object(prop_action_engine, "state_for", lambda actor: {}):
+        contract = prop_actions.prompt_block("Kai")
+        known = "Places here: x\n" + contract
+        narrative, nblock = prompt_templates._prop_action_context(
+            "chat/chat_moment.md", dict(character_name="Kai", known_activities=known,
+                                        prop_actions_executable=False))
+        executable, eblock = prompt_templates._prop_action_context(
+            "chat/chat_moment.md", dict(character_name="Kai", known_activities=known))
+    assert narrative["known_activities"].strip() == "Places here: x", narrative["known_activities"]
+    assert narrative["prop_actions_block"] == nblock and nblock.startswith("Furniture here")
+    assert "prop_actions_contract" not in nblock and "PropAction" not in nblock
+    assert executable["prop_actions_block"] == eblock == contract
+    print("PASS e: chat_moment carries the contract only for a tool-calling chat LLM")
 
 
 if __name__ == "__main__":

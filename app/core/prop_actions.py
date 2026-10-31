@@ -449,14 +449,13 @@ def offers(actor: str, *, lang: str = "en") -> list[dict]:
     return result
 
 
-def prompt_block(actor: str) -> str:
-    """Mandatory executable context shared by every real LLM consumer."""
-    import json
-    from app.core.prop_action_engine import state_for
-    # Only what can be requested NOW, and each fact once. Blocked offers stay
-    # out: a room with a few chairs and a package's pair poses lists hundreds
-    # of them (every partner, every place), which once grew this block past
-    # 200 KB per call. The player panel still shows them with their reason.
+def _requestable(actor: str) -> list:
+    """The offers ``actor`` can request NOW, each fact once: a pair offer
+    with its enabled ``partners``, no enabled/reason/available_targets, the
+    target fields only inside ``target``. Blocked offers stay out: a room
+    with a few chairs and a package's pair poses lists hundreds of them
+    (every partner, every place), which once grew a prompt past 200 KB per
+    call. The player panel still shows them with their reason."""
     rows = []
     for offer in offers(actor):
         if offer["required_partner"]:
@@ -471,6 +470,43 @@ def prompt_block(actor: str) -> str:
         if offer["required_partner"]:
             row["partners"] = partners
         rows.append(row)
+    return rows
+
+
+def narrative_block(actor: str) -> str:
+    """The same offers for a reader that writes prose and calls no tool —
+    the roleplay reply of ``rp_first``, whose separate tool LLM turns the
+    prose into the action afterwards. Names only, no ids and no syntax::
+
+        Furniture here (just describe what you do with it):
+        - Wooden Stool (9): Sit, Eat
+        - Bed: Lie down, Cuddle (with Mia)
+
+    One line per furniture name in offer order, the count when several
+    pieces carry it; ``""`` when nothing can be requested."""
+    pieces: dict = {}
+    for row in _requestable(actor):
+        entry = pieces.setdefault(row.get("prop_label") or "Furniture", ({}, set()))
+        entry[1].add(row["target"].get("placement_id", ""))
+        label = row.get("label") or ""
+        partners = entry[0].setdefault(label, [])
+        partners += [p for p in row.get("partners", []) if p not in partners]
+    if not pieces:
+        return ""
+    lines = ["Furniture here (just describe what you do with it):"]
+    for prop_label, (labels, placements) in pieces.items():
+        count = f" ({len(placements)})" if len(placements) > 1 else ""
+        lines.append(f"- {prop_label}{count}: " + ", ".join(
+            f"{label} (with {', '.join(partners)})" if partners else label
+            for label, partners in labels.items()))
+    return "\n".join(lines)
+
+
+def prompt_block(actor: str) -> str:
+    """Mandatory executable context shared by every real LLM consumer."""
+    import json
+    from app.core.prop_action_engine import state_for
+    rows = _requestable(actor)
     return ("<prop_actions_contract>\n"
             "Use PropAction for furniture actions, never SetActivity or a raw pose. "
             "The offers below are exactly what can be requested now; a pair offer only with one of its partners. "

@@ -8318,7 +8318,11 @@ target fields once — a room with a package's pair poses once grew it past 200 
 `scripts/smoke_prop_action_prompt_block.py`), effect timing and exact executable signatures, even when the
 legacy activity-marker switch is off. If an override drops mandatory context,
 the renderer preserves its custom text, logs a repair warning and appends the
-real runtime block. Missing actor context raises instead of silently omitting it.
+real runtime block. Missing actor context raises instead of silently omitting it. A `chat_moment` rendered for
+a chat LLM that calls no tool (`rp_first` roleplay reply, `prop_actions_executable`
+false) carries the furniture names and action labels instead
+(`prop_actions.narrative_block`): no ids, no JSON — its rp_first tool decision keeps
+the executable contract and makes the action from the prose.
 Raw SetActivity never allocates a prop or bypasses action rules; room-owned
 markers/free body poses remain. Implicit chat marker/context adoption does not
 interrupt an explicitly owned semantic action. Explicit tools, movement and stop

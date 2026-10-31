@@ -252,6 +252,14 @@ def _prop_action_context(path, variables):
         if start >= 0 and end >= 0:
             block = text[start:end + len("</prop_actions_contract>")]
             variables[key] = text[:start] + text[end + len("</prop_actions_contract>"):]
+    if variables.get("prop_actions_executable") is False:
+        # A reader that calls no tool (the rp_first roleplay reply): ids,
+        # revisions and JSON syntax are noise there, its prose is turned into
+        # the action by the tool LLM afterwards — the names alone.
+        from app.core.prop_actions import narrative_block
+        block = narrative_block(actor)
+        variables["prop_actions_block"] = block
+        return variables, block
     if not block:
         from app.core.prop_actions import prompt_block
         block = prompt_block(actor)

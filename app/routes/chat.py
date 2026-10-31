@@ -1611,6 +1611,9 @@ def _build_chat_prompt(character_name: str,
     moment = render(
         "chat/chat_moment.md",
         character_name=character_name,
+        # Only a chat LLM that calls tools itself gets the executable
+        # furniture contract; the rp_first roleplay reply gets names.
+        prop_actions_executable=bool(tools_enabled and not has_tool_llm),
         partner_mode=partner_mode,
         partner_name=_partner_name,
         partner_state_lines=_partner_state_lines,
