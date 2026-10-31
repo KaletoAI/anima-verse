@@ -10,6 +10,8 @@ in once by ``model_capabilities_migration``.
 """
 import json
 import threading
+from copy import deepcopy
+from uuid import uuid4
 from typing import Any, Dict, Optional
 
 from app.core.log import get_logger
@@ -38,7 +40,9 @@ def _load() -> Dict[str, Any]:
     try:
         with open(_caps_path(), "r", encoding="utf-8") as f:
             data = json.load(f)
-        _cache = data.get("models", {})
+        _cache = {key: {field: value for field, value in caps.items()
+                        if not field.startswith("tested_") or current_suitability(caps)}
+                  for key, caps in data.get("models", {}).items()}
     except Exception as e:
         logger.error("Failed to load %s: %s", _caps_path(), e)
         _cache = {}
@@ -91,7 +95,63 @@ def _load_suit() -> Dict[str, Any]:
 
 def get_all_suitability() -> Dict[str, Any]:
     """All suitability results (key = 'provider::model' lowercased)."""
-    return dict(_load_suit())
+    return {key: value for key, value in _load_suit().items() if current_suitability(value)}
+
+
+def current_suitability(result: Dict[str, Any]) -> bool:
+    """Only structural scorer generation 3 or later is current."""
+    version = (result.get("tested_suitability") or result).get("scorer_version", "")
+    prefix, _, number = str(version).rpartition("-")
+    return prefix == "suitability" and number.isdigit() and int(number) >= 3
+
+
+def delete_old_suitability() -> int:
+    """Remove obsolete results and diagnostics using fresh, locked disk reads."""
+    with _write_lock:
+        data = _load_full_file()
+        results = data.setdefault("suitability", {})
+        obsolete = [key for key, value in results.items() if not current_suitability(value)]
+        for key in obsolete:
+            del results[key]
+        history = data.get("suitability_history", {})
+        for key in list(history):
+            history[key] = [item for item in history[key] if current_suitability(item)] if key not in obsolete else []
+            if not history[key]:
+                del history[key]
+        # Legacy tests also stored tested_* fields inside capability patterns.
+        for value in data.get("models", {}).values():
+            if not current_suitability(value):
+                for field in list(value):
+                    if field.startswith("tested_"):
+                        del value[field]
+        raw = _load_outputs_file()
+        for section in ("outputs", "history"):
+            entries = raw.get(section, {})
+            for key in list(entries):
+                if section == "history":
+                    entries[key] = [item for item in entries[key] if current_suitability(item)] if key not in obsolete else []
+                    keep = bool(entries[key])
+                else:
+                    keep = key not in obsolete and current_suitability(entries[key])
+                if not keep:
+                    del entries[key]
+        if _outputs_path().exists():
+            with open(_outputs_path(), "w", encoding="utf-8") as stream:
+                json.dump(raw, stream, indent=2, ensure_ascii=False)
+        _save_full_file(data)
+        return len(obsolete)
+
+
+def get_suitability_outputs(model_full: str, run_id: str = "") -> Dict[str, Any]:
+    """Look up a run in the local sidecar, including superseded diagnostics."""
+    with _write_lock:
+        data = _load_outputs_file()
+        key = model_full.lower()
+        latest = data.get("outputs", {}).get(key, {})
+        if not run_id or latest.get("run_id") == run_id:
+            return latest
+        return next((item for item in reversed(data.get("history", {}).get(key, []))
+                     if item.get("run_id") == run_id), {})
 
 
 def save_suitability(model_full: str, result: Dict[str, Any]) -> None:
@@ -105,6 +165,10 @@ def save_suitability(model_full: str, result: Dict[str, Any]) -> None:
         previous = data.setdefault("suitability", {}).get(key)
         if previous is not None:
             data.setdefault("suitability_history", {}).setdefault(key, []).append(previous)
+        result = deepcopy(result)
+        if isinstance(result.get("tested_suitability"), dict):
+            result["tested_suitability"]["diagnostic_run_id"] = (
+                _load_outputs_file().get("outputs", {}).get(key, {}).get("run_id"))
         data["suitability"][key] = result
         _save_full_file(data)
 
@@ -131,6 +195,16 @@ def save_raw_outputs(model_full: str, outputs: Dict[str, Any]) -> None:
     """Stores the raw answers of one test run in the local sidecar file."""
     if not outputs:
         return
+    # Keep prompt text local beside the answers, never in the shared results.
+    from app.core.model_suitability import load_cases
+    outputs = dict(outputs)
+    outputs["run_id"] = uuid4().hex
+    fixture = load_cases(auto_build=False)
+    outputs["prompts"] = {
+        case["id"]: {"system": case.get("system", ""), "user": case.get("user", "")}
+        for case in fixture.get("cases", [])
+        if fixture.get("fixture_version") == outputs.get("fixture_version") and case["id"] in outputs.get("cases", {})
+    }
     with _write_lock:
         data = _load_outputs_file()
         key = (model_full or "").lower()

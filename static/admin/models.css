@@ -125,3 +125,8 @@ tr:hover { background: #161b22; }
 .test-badge.none { color: #8b949e; font-weight: normal; }
 .test-date { color: #484f58; font-size: 10px; display: block; margin-top: 1px; }
 .test-detail { color: #8b949e; font-size: 10px; cursor: help; }
+
+#suitConcurrency { width: 60px; }
+.suit-case { padding: 8px 0; border-bottom: 1px solid #30363d; }
+.suit-case pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+.suit-case summary { cursor: pointer; margin-top: 6px; }

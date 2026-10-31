@@ -1705,6 +1705,10 @@ def _llm_suitability_test_start_sync(user, body: Any):
     model = str(body.get("model") or "").strip()
     if not model:
         raise HTTPException(400, "model required")
+    concurrency = body.get("concurrency", 3)
+    if not isinstance(concurrency, int) or isinstance(concurrency, bool):
+        raise HTTPException(400, "concurrency must be an integer")
+    concurrency = max(1, min(3, concurrency))
     extra_params = None
     if "extra_params" in body:
         try:
@@ -1737,7 +1741,7 @@ def _llm_suitability_test_start_sync(user, body: Any):
         selected = deepcopy(routing[index])
     full = f"{provider}::{model}" if provider else model
     return enqueue_test(full, extra_params=extra_params, routing_entry=selected,
-                        entry_index=index)
+                        entry_index=index, concurrency=concurrency)
 
 
 @router.post("/settings/llm-suitability-test/cancel")
@@ -1758,9 +1762,39 @@ def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
     from app.core.model_suitability import get_job
     if not job_id:
         raise HTTPException(400, "job_id required")
-    job = get_job(job_id)
+    from app.core.model_capabilities import get_all_suitability, get_suitability_outputs
+    if job_id.startswith("saved:"):
+        model = job_id[6:]
+        record = get_all_suitability().get(model)
+        summary = dict(record.get("tested_suitability", {})) if record else {}
+        job = {"job_id": job_id, "model": model, "status": "done", "summary": summary} if record else None
+    else:
+        job = get_job(job_id)
     if job is None:
         raise HTTPException(404, "Test job not found")
+    from app.core.model_suitability import load_cases
+    from copy import deepcopy
+    job = deepcopy(job)
+    summary = job.get("summary") or {}
+    job["max_turn_seconds"] = config.get("model_test.max_turn_seconds", 20)
+    fixture = load_cases(auto_build=False)
+    cases = {case["id"]: case for case in fixture.get("cases", [])}
+    fixture_matches = bool(summary.get("fixture_version") and
+                           fixture.get("fixture_version") == summary.get("fixture_version"))
+    diagnostics = get_suitability_outputs(job.get("model", ""), summary.get("diagnostic_run_id") or "")
+    # The latest sidecar can belong to an unsaved infrastructure-failed rerun.
+    matches = bool(summary.get("diagnostic_run_id") and
+                   diagnostics.get("run_id") == summary.get("diagnostic_run_id"))
+    raw = diagnostics.get("cases", {}) if matches and job_id.startswith("saved:") else {}
+    checks = summary.get("checks", job.get("checks", []))
+    for check in checks:
+        if check.get("ok") is False:
+            case = cases.get(check.get("id"), {}) if fixture_matches else {}
+            check["prompt"] = (diagnostics.get("prompts", {}).get(check.get("id")) if matches else None) or {
+                "system": case.get("system", ""), "user": case.get("user", "")}
+            check["prompt_source"] = "local test fixtures"
+            if "runs" not in check:
+                check["runs"] = raw.get(check.get("id"), [])
     return job
 
 
@@ -1768,9 +1802,12 @@ def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
 def llm_suitability_test_jobs(user=Depends(require_admin)):
     """Return all known test jobs for the running tests list, with short status."""
     from app.core.model_suitability import list_jobs
+    from app.core.model_capabilities import current_suitability
     jobs = []
     for j in list_jobs():
         s = j.get("summary") or {}
+        if j.get("status") == "done" and not current_suitability(s):
+            continue
         jobs.append({
             "job_id": j["job_id"],
             "position": j["position"],
@@ -1781,9 +1818,22 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
             "entry_index": j.get("entry_index"),
             "entry_name": j.get("entry_name", ""),
             "score": s.get("score", ""),
-            "verdict": s.get("verdict") or {},
+            "verdict": s.get("verdict") or "",
         })
+    from app.core.model_capabilities import get_all_suitability
+    for model, record in get_all_suitability().items():
+        summary = record.get("tested_suitability", {})
+        jobs.append({"job_id": "saved:" + model, "model": model, "status": "done",
+                     "entry_name": "Saved result", "position": 0,
+                     "score": record.get("tested_score", ""),
+                     "verdict": summary.get("verdict", "")})
     return {"jobs": jobs}
+
+
+@router.post("/settings/llm-suitability-test/delete-old")
+def llm_suitability_delete_old(user=Depends(require_admin)):
+    from app.core.model_capabilities import delete_old_suitability
+    return {"deleted": delete_old_suitability()}
 
 
 @router.post("/settings/validate")

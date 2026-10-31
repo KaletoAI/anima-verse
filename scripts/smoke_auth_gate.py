@@ -272,6 +272,10 @@ check("user POST /templates/human-roleplay",
 check("user DELETE /characters/Mara", status("DELETE", "/characters/Mara", "user"), 403)
 check("user DELETE /characters/Mara/images/x/animation",
       status("DELETE", "/characters/Mara/images/x/animation", "user"), 200)
+check("user POST suitability delete-old",
+      status("POST", "/admin/settings/llm-suitability-test/delete-old", "user"), 403)
+check("anon POST suitability delete-old",
+      status("POST", "/admin/settings/llm-suitability-test/delete-old"), 401)
 check("user GET /admin/settings", status("GET", "/admin/settings", "user"), 403)
 check("user GET /admin/world-settings", status("GET", "/admin/world-settings", "user"), 403)
 check("user PUT /admin/world-settings", status("PUT", "/admin/world-settings", "user"), 403)

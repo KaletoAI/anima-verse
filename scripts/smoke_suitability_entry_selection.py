@@ -187,7 +187,21 @@ def selection_on_wire():
             assert listed["entry_index"] == 0 and listed["entry_name"] == "Precise"
 
 
+def concurrency_input():
+    for bad in ("2", 2.5, None, True, [], {}):
+        assert "integer" in expect_bad_request({"provider": "P", "model": "test", "concurrency": bad})
+    with patch("app.routes.admin_settings.config.get", return_value=[]), patch.object(
+            model_suitability, "enqueue_test", return_value={"job_id": "fake"}) as enqueue:
+        for requested, expected in ((-5, 1), (1, 1), (2, 2), (3, 3), (99, 3)):
+            _llm_suitability_test_start_sync(None, {"provider": "P", "model": "test", "concurrency": requested})
+            assert enqueue.call_args.kwargs["concurrency"] == expected
+        _llm_suitability_test_start_sync(None, {"provider": "P", "model": "test"})
+        assert enqueue.call_args.kwargs["concurrency"] == 3
+    print("Suitability concurrency defaults, integer validation and clamping OK")
+
+
 def main():
+    concurrency_input()
     finite_parameters()
     selection_on_wire()
     print("Suitability entry selection and finite parameters OK")

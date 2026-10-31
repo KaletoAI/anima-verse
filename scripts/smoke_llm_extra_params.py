@@ -316,7 +316,7 @@ def main():
                 "provider": "P", "model": "test", "extra_params": {}
             }) == {"status": "running"}
             start.assert_called_once_with("P::test", extra_params={},
-                                          routing_entry=None, entry_index=None)
+                                          routing_entry=None, entry_index=None, concurrency=3)
     rejecting_wire = httpx.MockTransport(rejecting_stream_options)
     with patch.object(openai, "AsyncOpenAI", side_effect=lambda **kw: real_async_openai(
             **kw, http_client=httpx.AsyncClient(transport=rejecting_wire))):

@@ -209,75 +209,17 @@ function renderUnmatched(entries) {
     });
 }
 
-function testBadge(caps, modelName) {
-    const score = caps.tested_score;
-    if (!score) return '<span class="test-badge none">-</span>';
+function testBadge(caps) {
+    const result = caps.tested_suitability;
+    if (!suitCurrent(result)) return '<span class="test-badge none">-</span>';
+    const verdict = caps.tested_verdict || result.verdict || '';
+    return '<span class="test-badge ' + (verdict === 'yes' ? 'ok' : 'fail')
+        + '" title="' + esc(result.scorer_version) + '">' + esc(verdict) + '</span>';
+}
 
-    const parts = score.split('/');
-    const ok = parseInt(parts[0]) || 0;
-    const total = parseInt(parts[1]) || 0;
-    const hall = caps.tested_hallucinations || 0;
-    const date = caps.tested_date || '';
-    const visionResp = caps.tested_vision_responses || {};
-    const bestFmt = caps.tested_best_format || '';
-    const toolScore = caps.tested_tool_score || '';
-    const helperScore = caps.tested_helper_score || '';
-    const suit = caps.tested_suitability || null;
-    const verdict = caps.tested_verdict || null;
-
-    let cls = 'ok';
-    if (ok === 0) cls = 'fail';
-    else if (hall > 0) cls = 'warn';
-    // Verdict takes precedence: a model failing the strict tool test is not
-    // marked green even when its raw score is high.
-    if (verdict && verdict.tool === false) cls = (hall > 0 ? 'fail' : 'warn');
-
-    // Which model was ACTUALLY tested? Substring matching can inherit results
-    // from another model. testedBare omits the provider prefix.
-    const testedFull = (suit && suit.model) ? suit.model : '';
-    const testedBare = testedFull.indexOf('::') >= 0 ? testedFull.split('::').pop() : testedFull;
-    const inherited = !!(testedBare && modelName && testedBare.toLowerCase() !== modelName.toLowerCase());
-
-    const scorerLabel = suit && suit.scorer_version ? suit.scorer_version + ' / fixture ' + (suit.fixture_version || 'unknown') : 'legacy scorer';
-    let tooltip = 'Score: ' + score + '\n' + scorerLabel + '\nHelper evidence: format only; semantic not_tested';
-    if (testedFull) tooltip += '\nTested as: ' + testedFull
-        + (inherited ? '  \u26a0 INHERITED — this model was NOT tested itself' : '');
-    if (verdict) tooltip += '\nVerdict tool: ' + suitabilityVerdict(verdict.tool, 'checked dimensions') +
-        ' / helper: ' + suitabilityVerdict(verdict.helper, 'format only');
-    if (toolScore) tooltip += '\nTool: ' + toolScore;
-    if (helperScore) tooltip += '\nHelper: ' + helperScore;
-    const sp = caps.tested_speed || null;
-    if (sp && (sp.tok_per_s || sp.avg_latency_s)) tooltip += '\nSpeed: '
-        + (sp.tok_per_s ? sp.tok_per_s + ' tok/s' : '')
-        + (sp.avg_latency_s ? ' · Ø ' + sp.avg_latency_s + 's/Call' : '');
-    if (hall > 0) tooltip += '\n' + hall + ' with hallucination';
-    if (bestFmt) tooltip += '\nBest format: ' + bestFmt;
-    if (visionResp.red) tooltip += '\nVision red: ' + visionResp.red;
-    if (visionResp.blue) tooltip += '\nVision blue: ' + visionResp.blue;
-    if (date) tooltip += '\nTested: ' + date;
-    if (suit && Array.isArray(suit.checks)) {
-        tooltip += '\n———';
-        suit.checks.forEach(function(c){
-            const mark = c.ok == null ? '—' : c.ok ? '\u2713' : (c.hallucinated ? '!' : '\u2717');
-            tooltip += '\n' + mark + ' ' + c.label + ' \u2014 ' + (c.detail || '') + ' ' + suitabilityDimensions(c);
-        });
-    }
-
-    let html = '<span class="test-badge ' + cls + '" title="' + esc(tooltip) + '">' + esc(score)
-        + (inherited ? ' *' : '');
-    if (hall > 0) html += ' <span class="test-detail">(' + esc(hall) + ' warn)</span>';
-    html += '</span>';
-    if (inherited) html += '<span class="test-date" style="color:#d29922;" title="' + esc(testedFull) + '">\u21aa inherited: ' + esc(testedBare) + '</span>';
-    if (verdict) {
-        const tcol = verdict.tool === 'not_tested' ? '#8b949e' : verdict.tool === true ? '#3fb950' : '#f85149';
-        const tlab = suitabilityVerdict(verdict.tool, 'TOOL checks');
-        html += '<span class="test-date" style="color:' + tcol + ';">' + tlab + '</span>';
-    }
-    if (toolScore || helperScore) html += '<span class="test-date">T ' + esc(toolScore) + ' \u00b7 H ' + esc(helperScore) + '</span>';
-    if (sp && sp.tok_per_s) html += '<span class="test-date">\u26a1 ' + esc(sp.tok_per_s) + ' tok/s</span>';
-    html += '<span class="test-date">' + esc(scorerLabel) + '</span>';
-    if (date) html += '<span class="test-date">' + esc(date) + '</span>';
-    return html;
+function suitCurrent(result) {
+    const match = /^suitability-(\d+)$/.exec(result && result.scorer_version || '');
+    return !!match && Number(match[1]) >= 3;
 }
 
 function capToggle(modelName, field, value) {
@@ -438,6 +380,15 @@ let suitLoadErr = '';         // error text from loading the model list
 let suitJobsTimer = null;
 
 async function suitInit() {
+    const start = document.getElementById('suitStartBtn');
+    start.insertAdjacentHTML('beforebegin', '<label for="suitConcurrency">Concurrency</label> '
+        + '<input type="number" id="suitConcurrency" min="1" max="3" step="1" value="3"> ');
+    document.getElementById('suitJobs').id = 'suitQueue';
+    document.getElementById('suitQueue').insertAdjacentHTML('beforebegin',
+        '<button type="button" class="btn" onclick="suitDeleteOld(this)">Delete old test results</button>');
+    document.querySelector('#suitBox h2').textContent = 'Single helper model suitability test';
+    document.querySelector('#suitBox p').textContent = 'Tests tools, helpers, vision and speed using logged and curated structural cases. Tests run in a FIFO queue, one model at a time, with up to three requests inside a test. Results are saved; the queue survives page reloads.';
+
     try {
         const r = await fetch('/admin/settings/providers-list');
         const d = await r.json();
@@ -451,7 +402,7 @@ async function suitInit() {
 // List ALL test jobs (running and completed).
 async function suitJobsRefresh() {
     if (suitJobsTimer) { clearTimeout(suitJobsTimer); suitJobsTimer = null; }
-    const el = document.getElementById('suitJobs');
+    const el = document.getElementById('suitQueue');
     if (!el) return;
     let jobs = [];
     try {
@@ -464,24 +415,26 @@ async function suitJobsRefresh() {
         el.innerHTML = '<div class="info-text" style="margin-bottom:4px;">Test jobs ('
             + running.length + ' running):</div>'
             + jobs.map(j => {
-                const v = j.verdict || {};
+                const v = j.verdict || '';
                 let st, col;
                 if (j.status === 'running') { st = (j.done || 0) + '/' + (j.total || '?'); col = '#58a6ff'; }
                 else if (j.status === 'queued') { st = 'Queued · position ' + j.position; col = '#8b949e'; }
                 else if (j.status === 'done') {
-                    st = (j.score || '') + ' · ' + suitabilityVerdict(v.tool, 'TOOL checks'); col = v.tool === true ? '#3fb950' : '#d29922';
+                    st = (j.score || '') + ' · ' + v; col = v === 'yes' ? '#3fb950' : '#d29922';
                 } else if (j.status === 'error') { st = 'Error'; col = '#f85149'; }
                 else { st = j.status || ''; col = '#8b949e'; }
                 const dot = j.status === 'running' ? '⏳' : (j.status === 'error' ? '❌' : '✔');
                 return '<div style="padding:2px 0; cursor:pointer; font-size:13px;" '
                     + 'onclick="suitSelectJob(\'' + escJs(j.job_id) + '\')" title="Show details">'
-                    + dot + ' <b>' + esc(j.model) + '</b> '
+                    + esc(j.position || 0) + ' · ' + dot + ' <b>' + esc(j.model) + '</b> '
                     + (j.entry_name ? '<span class="info-text">(' + esc(j.entry_name) + ')</span> ' : '')
-                    + '<span style="color:' + col + ';">' + esc(st) + '</span></div>';
+                     + '<span style="color:' + col + ';">' + esc(j.status) + ' · ' + esc(st) + '</span>'
+                    + (['queued', 'running'].includes(j.status) ? ' <button type="button" class="btn" onclick="event.stopPropagation();suitCancel(\'' + escJs(j.job_id) + '\',this)">Cancel</button>' : '') + '</div>';
             }).join('');
     }
-    // While something is running poll often, otherwise slowly (finished jobs).
-    suitJobsTimer = setTimeout(suitJobsRefresh, running.length ? 2000 : 8000);
+    if (!suitCur.job_id && running.length) suitSelectJob(running[0].job_id);
+    // Refresh active queues often, and completed results less often.
+    suitJobsTimer = setTimeout(suitJobsRefresh, jobs.some(j => ['queued', 'running'].includes(j.status)) ? 2000 : 8000);
 }
 
 // Show a selected job in the detail view.
@@ -581,7 +534,7 @@ async function suitOnModelChange() {
         const full = suitCur.provider ? suitCur.provider + '::' + suitCur.model : suitCur.model;
         try {
             const response = await fetch('/admin/settings/llm-suitability-test/jobs');
-            const jobs = ((await response.json()).jobs || []).filter(j => j.model === full);
+            const jobs = ((await response.json()).jobs || []).filter(j => j.model.toLowerCase() === full.toLowerCase());
             const job = jobs.find(j => j.status === 'running' || j.status === 'queued') || jobs[jobs.length - 1];
             const current = suitCur.provider ? suitCur.provider + '::' + suitCur.model : suitCur.model;
             if (job && current === full) { suitCur = job; suitPoll(); }
@@ -629,6 +582,11 @@ async function suitStart() {
         status.textContent = 'Please select an LLM entry';
         return;
     }
+    const concurrency = Number(document.getElementById('suitConcurrency').value);
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 3) {
+        status.textContent = 'Concurrency must be an integer from 1 to 3';
+        return;
+    }
     const override = document.getElementById('suitOverride').checked;
     const extraParams = suitValidateExtraParams();
     if (override && extraParams === null) { status.textContent = 'Fix temporary request parameters before starting.'; return; }
@@ -639,7 +597,7 @@ async function suitStart() {
     try {
         const r = await fetch('/admin/settings/llm-suitability-test/start', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider, model,
+            body: JSON.stringify({ provider, model, concurrency,
                 ...(matches.length ? {
                     entry_index: Number(entry.value),
                     routing_revision: suitRoutingRevision,
@@ -658,54 +616,86 @@ async function suitStart() {
         document.getElementById('suitStartBtn').disabled = false;
     }
 }
-function suitabilityVerdict(value, label) {
-    if (value === 'not_tested' || value == null) return label + ': not_tested';
-    return label + ': ' + (value === true ? 'checks passed' : 'checks failed');
+async function suitCancel(jobId, button) {
+    button.disabled = true;
+    try {
+        const response = await fetch('/admin/settings/llm-suitability-test/cancel', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({job_id: jobId}),
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        document.getElementById('suitStatus').textContent = 'Cancellation requested';
+        suitJobsRefresh();
+    } catch (error) {
+        document.getElementById('suitStatus').textContent = 'Cancel failed: ' + error.message;
+        button.disabled = false;
+    }
 }
-function suitabilityDimensions(c) {
-    return c.dimensions ? Object.entries(c.dimensions).map(([k, v]) => k + '=' + v).join('; ') : 'legacy scorer';
+
+async function suitDeleteOld(button) {
+    button.disabled = true;
+    try {
+        const response = await fetch('/admin/settings/llm-suitability-test/delete-old', {method: 'POST'});
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const result = await response.json();
+        document.getElementById('suitStatus').textContent = 'Deleted old test results: ' + result.deleted;
+        await loadData();
+        suitJobsRefresh();
+    } catch (error) {
+        document.getElementById('suitStatus').textContent = 'Delete failed: ' + error.message;
+    } finally { button.disabled = false; }
 }
+
 function suitRenderJob(job) {
     const status = document.getElementById('suitStatus');
     const prog = document.getElementById('suitProgress');
-    const checks = job.checks || [];
-    if (job.status === 'queued') {
-        document.getElementById('suitStartBtn').disabled = true;
-        status.textContent = 'Queued · position ' + job.position;
-    } else if (job.status === 'cancelled') {
-        status.textContent = 'Cancelled';
+    // Starting another model is allowed while the current job waits or runs.
+    document.getElementById('suitStartBtn').disabled = false;
+    const summary = job.summary || {};
+    let checks = summary.checks || job.checks || [];
+    if (job.status === 'done') {
+        if (!suitCurrent(summary)) { status.textContent = ''; prog.innerHTML = ''; return; }
+        const speed = summary.speed || {};
+        const vision = summary.vision || {};
+        const limit = job.max_turn_seconds == null ? 20 : job.max_turn_seconds;
+        const number = value => value == null ? 'not tested' : String(value);
+        status.innerHTML = '<b>' + esc(job.model || summary.model || '') + '</b> · Finished'
+            + '<div>Tools: ' + esc(summary.tool || 'not tested')
+            + ' · Helpers: ' + esc(summary.helper || 'not tested')
+            + ' · Vision: ' + esc(vision.verdict === 'not_tested' || vision.rate == null ? 'not tested' : (vision.rate * 100).toFixed(1) + '%') + '</div>'
+            + '<div>Concurrency: ' + esc(number(summary.concurrency))
+            + (summary.live_play ? ' · measured under live play' : '') + '</div>'
+            + '<div>' + ['tools', 'helpers', 'vision'].map(group => {
+                const measured = speed[group] || {};
+                return esc(group) + ': median ' + esc(number(measured.median_latency_s)) + ' s · '
+                    + esc(number(measured.tok_s)) + ' tok/s';
+            }).join(' | ') + '</div>'
+            + '<div>Projected non-RP time per thought turn: ' + esc(number(summary.projected_turn_s))
+            + ' s / maximum ' + esc(limit) + ' s</div>'
+            + '<div>Suitable as the single helper model: <b>' + esc(summary.verdict || 'not tested') + '</b></div>'
+            + (summary.saved === false || summary.infra ? '<div>Quality result not saved; inspect diagnostics.</div>' : '')
+            + (summary.curated_only ? '<div>Curated cases only; no logged cases.</div>' : '');
+        checks = checks.filter(check => check.ok === false);
+        if (!checks.length) { prog.innerHTML = '<div>No failing cases.</div>'; return; }
     } else if (job.status === 'running') {
-        document.getElementById('suitStartBtn').disabled = true;
-        status.textContent = 'Running' + (job.entry_name ? ' ' + job.entry_name : '') +
-            '… (' + (job.done || 0) + '/' + (job.total || '?') + ')';
-    } else if (job.status === 'done') {
-        const s = job.summary || {}; const v = s.verdict || {}; const sp = s.speed || {};
-        const speedTxt = (sp.tok_per_s ? ' · ⚡ ' + esc(sp.tok_per_s) + ' tok/s' : '')
-            + (sp.avg_latency_s ? ' · Ø ' + esc(sp.avg_latency_s) + 's/Call' : '');
-        const infraTxt = (s.infra || s.saved === false)
-            ? ' <span style="color:#d29922;">⚠ Quality result not saved; inspect local diagnostics</span>'
-            : '';
-        status.innerHTML = 'Finished ✔' + (job.entry_name ? ' (' + esc(job.entry_name) + ')' : '') + ' — Tool: '
-            + esc(suitabilityVerdict(v.tool, 'checked dimensions'))
-            + ' · Helper: ' + esc(suitabilityVerdict(v.helper, 'format only; semantic not_tested'))
-            + ' · ' + esc(s.scorer_version || 'legacy scorer') + ' / fixture ' + esc(s.fixture_version || 'unknown')
-            + ' · Score ' + esc(s.score || '') + ' (Tool ' + esc(s.tool || '') + ', Helper ' + esc(s.helper || '')
-            + ', Hallucinations ' + esc(s.hallucinations || 0) + ')' + speedTxt + infraTxt;
-    } else if (job.status === 'error') {
-        status.innerHTML = '<span style="color:#f85149;">Error: ' + esc(job.error || '') + '</span>';
+        status.textContent = 'Running ' + (job.model || '') + ' · ' + (job.entry_name || '')
+            + ' (' + (job.done || 0) + '/' + (job.total || '?') + ')';
+    } else if (job.status === 'queued') {
+        status.textContent = 'Queued · position ' + job.position;
     } else {
-        status.textContent = '';
+        status.textContent = job.status === 'error' ? 'Error: ' + (job.error || '') : job.status;
     }
-    prog.innerHTML = checks.map(c => {
-        const icon = c.ok == null ? '➖' : c.infra ? '🔌' : (c.ok ? '✅' : (c.hallucinated ? '⚠️' : '❌'));
-        const color = c.ok == null ? '#8b949e' : c.infra ? '#8b949e' : (c.ok ? '#3fb950' : (c.hallucinated ? '#d29922' : '#f85149'));
-        const spd = (c.duration_s ? ' <span style="opacity:.5;">' + esc(c.duration_s) + 's'
-            + (c.tok_s ? ', ' + esc(c.tok_s) + ' tok/s' : '') + '</span>' : '');
-        return '<div style="padding:2px 0; border-bottom:1px solid #21262d; font-size:13px;">'
-            + '<span style="color:' + color + ';">' + icon + '</span> '
-            + '<span style="opacity:.6;">[' + esc(c.category) + ']</span> '
-            + '<b>' + esc(c.label) + '</b> <span style="opacity:.7;">— ' + esc(c.detail || '') + ' ' + esc(suitabilityDimensions(c)) + '</span>'
-            + spd + '</div>';
+    prog.innerHTML = checks.map(check => {
+        const prompt = check.prompt || {};
+        const runs = check.runs || [];
+        return '<div class="suit-case"><b>' + esc(check.ok === false ? 'Failed' : check.ok ? 'Passed' : 'Excluded')
+            + ' · ' + esc(check.group || '') + ' · ' + esc(check.task || check.label || check.id || '') + '</b>'
+            + '<div>' + esc(check.detail || '') + '</div>'
+            + (check.ok === false ? '<details><summary>Prompt (system + user)</summary><h4>System</h4><pre>'
+                + esc(prompt.system || 'Prompt unavailable') + '</pre><h4>User</h4><pre>' + esc(prompt.user || '')
+                + '</pre></details><details open><summary>Model answer(s)</summary>'
+                + (runs.length ? runs.map((run, index) => '<h4>Run ' + (index + 1) + '</h4><pre>'
+                    + esc(run.content || run.error || '(empty answer)') + '</pre>').join('') : '<p>Raw answer unavailable.</p>')
+                + '</details>' : '') + '</div>';
     }).join('');
 }
 async function suitPoll() {

@@ -460,6 +460,7 @@ DELETED = [
     ("GET", "/play/journal"),
 ]
 KEPT = [
+    ("POST", "/admin/settings/llm-suitability-test/delete-old"),
     ("GET", "/characters/{character_name}/outfit-lock"),
     ("POST", "/characters/{character_name}/outfit-lock"),
     ("POST", "/characters/{character_name}/place-on-map"),
@@ -570,6 +571,10 @@ def dependency_names(route):
         stack.extend(getattr(dep, "dependencies", []) or [])
     return names
 
+
+delete_old_route = ROUTE_BY_PAIR.get(("POST", "/admin/settings/llm-suitability-test/delete-old"))
+check("suitability delete-old depends on require_admin",
+      delete_old_route is not None and "require_admin" in dependency_names(delete_old_route))
 
 place_route = ROUTE_BY_PAIR.get(("POST", "/characters/{character_name}/place-on-map"))
 lock_route = ROUTE_BY_PAIR.get(("POST", "/characters/{character_name}/outfit-lock"))
