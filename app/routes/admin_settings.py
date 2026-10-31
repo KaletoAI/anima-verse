@@ -1800,13 +1800,17 @@ def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
 
 @router.get("/settings/llm-suitability-test/jobs")
 def llm_suitability_test_jobs(user=Depends(require_admin)):
-    """Return all known test jobs for the running tests list, with short status."""
+    """The test queue: waiting and running jobs, plus jobs that ended in the
+    last ten minutes. Saved results live in the model table, not here."""
     from app.core.model_suitability import list_jobs
     from app.core.model_capabilities import current_suitability
     jobs = []
     for j in list_jobs():
         s = j.get("summary") or {}
         if j.get("status") == "done" and not current_suitability(s):
+            continue
+        ago = j.get("finished_ago_s")
+        if j.get("status") not in ("queued", "running") and (ago is None or ago > 600):
             continue
         jobs.append({
             "job_id": j["job_id"],
@@ -1820,13 +1824,6 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
             "score": s.get("score", ""),
             "verdict": s.get("verdict") or "",
         })
-    from app.core.model_capabilities import get_all_suitability
-    for model, record in get_all_suitability().items():
-        summary = record.get("tested_suitability", {})
-        jobs.append({"job_id": "saved:" + model, "model": model, "status": "done",
-                     "entry_name": "Saved result", "position": 0,
-                     "score": record.get("tested_score", ""),
-                     "verdict": summary.get("verdict", "")})
     return {"jobs": jobs}
 
 

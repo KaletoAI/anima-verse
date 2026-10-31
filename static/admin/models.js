@@ -213,8 +213,26 @@ function testBadge(caps) {
     const result = caps.tested_suitability;
     if (!suitCurrent(result)) return '<span class="test-badge none">-</span>';
     const verdict = caps.tested_verdict || result.verdict || '';
-    return '<span class="test-badge ' + (verdict === 'yes' ? 'ok' : 'fail')
-        + '" title="' + esc(result.scorer_version) + '">' + esc(verdict) + '</span>';
+    const vision = result.vision || {};
+    const speed = result.speed || {};
+    const visionText = vision.rate == null ? 'not tested' : Math.round(vision.rate * 100) + '%';
+    const turn = result.projected_turn_s == null ? '' : ' · ' + Number(result.projected_turn_s).toFixed(0) + ' s/turn';
+    const tooltip = 'Tools ' + (result.tool || '-') + ' · Helpers ' + (result.helper || '-')
+        + ' · Vision ' + visionText + '\n'
+        + ['tools', 'helpers', 'vision'].map(g => g + ' median ' + ((speed[g] || {}).median_latency_s ?? '-') + ' s').join(' · ')
+        + '\n' + (result.date || '') + ' · ' + result.scorer_version + ' · click for details';
+    const key = result.model || '';
+    return '<span class="test-badge ' + (verdict === 'yes' ? 'ok' : 'fail') + '" style="cursor:pointer;"'
+        + ' title="' + esc(tooltip) + '"'
+        + (key ? ' onclick="suitShowSaved(\'' + escJs(key) + '\')"' : '') + '>'
+        + esc((caps.tested_score || result.score || '') + ' · ' + verdict + turn) + '</span>';
+}
+
+// Open a saved result (model table badge) in the test detail view.
+function suitShowSaved(model) {
+    suitSelectJob('saved:' + model);
+    const target = document.getElementById('suitStatus');
+    if (target) target.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 function suitCurrent(result) {
@@ -399,7 +417,7 @@ async function suitInit() {
     suitJobsRefresh();  // starts its own polling loop
 }
 
-// List ALL test jobs (running and completed).
+// The test queue: waiting and running jobs plus those ended in the last ten minutes.
 async function suitJobsRefresh() {
     if (suitJobsTimer) { clearTimeout(suitJobsTimer); suitJobsTimer = null; }
     const el = document.getElementById('suitQueue');
@@ -537,7 +555,10 @@ async function suitOnModelChange() {
             const jobs = ((await response.json()).jobs || []).filter(j => j.model.toLowerCase() === full.toLowerCase());
             const job = jobs.find(j => j.status === 'running' || j.status === 'queued') || jobs[jobs.length - 1];
             const current = suitCur.provider ? suitCur.provider + '::' + suitCur.model : suitCur.model;
-            if (job && current === full) { suitCur = job; suitPoll(); }
+            if (current !== full) return;
+            // No job in the queue: show the model's saved result, if any.
+            suitCur = job || { job_id: 'saved:' + full };
+            suitPoll();
         } catch (e) { /* The jobs list will retry on its next refresh. */ }
     }
 }
@@ -704,6 +725,11 @@ async function suitPoll() {
     try {
         const q = 'job_id=' + encodeURIComponent(suitCur.job_id);
         const r = await fetch('/admin/settings/llm-suitability-test/status?' + q);
+        if (r.status === 404) {  // No saved result for this model yet.
+            document.getElementById('suitStatus').textContent = '';
+            document.getElementById('suitProgress').innerHTML = '';
+            return;
+        }
         const job = await r.json();
         suitRenderJob(job);
         if (job.status === 'running' || job.status === 'queued') {

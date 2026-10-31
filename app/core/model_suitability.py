@@ -537,6 +537,8 @@ def _snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
     result = deepcopy({k: v for k, v in job.items() if not k.startswith("_")})
     waiting = [j["job_id"] for j in _JOBS.values() if j["status"] == "queued"]
     result["position"] = waiting.index(job["job_id"]) + 1 if job["status"] == "queued" else 0
+    finished = job.get("_finished")
+    result["finished_ago_s"] = round(time.monotonic() - finished, 1) if finished else None
     return result
 
 
@@ -573,6 +575,7 @@ def _run_job(job: Dict[str, Any]) -> None:
             elif job["status"] == "running":
                 job["status"] = "error"
                 job["error"] = "Runner ended without a result"
+            job["_finished"] = time.monotonic()
 
 
 def _worker() -> None:
@@ -625,6 +628,7 @@ def cancel_test(job_id: str) -> bool:
         job["_cancel"].set()
         if job["status"] == "queued":
             job["status"] = "cancelled"
+            job["_finished"] = time.monotonic()
         return True
 
 

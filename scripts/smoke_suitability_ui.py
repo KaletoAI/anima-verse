@@ -66,6 +66,17 @@ with tempfile.TemporaryDirectory() as directory:
         raw["prompts"]["failure"] = {"system": "actual system", "user": "actual user"}
         status = routes.llm_suitability_test_status("saved:new", user=None)
         assert status["summary"]["checks"][0]["prompt"]["system"] == "actual system"
+    # The queue lists waiting/running jobs and those ended within ten minutes;
+    # saved results are no queue rows (they open from the model table).
+    jobs = [{"job_id": j, "position": 0, "model": "m", "status": st, "finished_ago_s": ago,
+             "summary": {"scorer_version": "suitability-5"} if st == "done" else {}}
+            for j, st, ago in (("run", "running", None), ("wait", "queued", None),
+                               ("fresh", "done", 599.0), ("stale", "done", 601.0),
+                               ("err", "error", 30.0))]
+    with patch("app.core.model_suitability.list_jobs", return_value=jobs), patch.object(
+            caps, "get_all_suitability", return_value={"P::m": {"tested_suitability": summary}}):
+        listed = [j["job_id"] for j in routes.llm_suitability_test_jobs(user=None)["jobs"]]
+    assert listed == ["run", "wait", "fresh", "err"], listed
 print("Suitability UI old-result filtering, deletion and exact diagnostic identity OK")
 subprocess.run(["node", "--check", "static/admin/models.js"], check=True)
 source = Path("static/admin/models.js").read_text()
@@ -81,6 +92,11 @@ assert(el('suitStatus').innerHTML.includes('no - speed'));
 assert(el('suitStatus').innerHTML.includes('measured under live play'));
 assert(ctx.testBadge({tested_score:'1/1',tested_verdict:'yes',tested_suitability:{scorer_version:'suitability-5'}}).includes('yes'));
 assert(ctx.testBadge({tested_score:'1/1',tested_suitability:{scorer_version:'suitability-4'}}).includes('none'));
+const rich = ctx.testBadge({tested_score:'13/16',tested_verdict:'no - tools',tested_suitability:{scorer_version:'suitability-5',
+    model:'Evo::gemma',tool:'9/11',helper:'2/3',vision:{rate:1},projected_turn_s:18.7,speed:{tools:{median_latency_s:3.8}}}});
+assert(rich.includes('13/16 · no - tools · 19 s/turn'), rich);
+assert(rich.includes('Tools 9/11 · Helpers 2/3 · Vision 100%'), rich);
+assert(rich.includes("suitShowSaved('Evo::gemma')"), rich);
 ctx.suitRenderJob({status:'done',summary:{scorer_version:'suitability-5',verdict:'no - tools',checks:[{ok:false,group:'tools',task:'thought',prompt:{system:'<system>',user:'user text'},runs:[{content:'<answer>'}]}]}});
 assert(el('suitProgress').innerHTML.includes('&lt;system&gt;'));
 assert(el('suitProgress').innerHTML.includes('&lt;answer&gt;'));
